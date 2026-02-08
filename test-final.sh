@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# ai Final Test Script
+# This script tests the complete tool system
+
+cd "$(dirname "$0")"
+
+echo "=========================================="
+echo "  ai - Tool System Test"
+echo "=========================================="
+echo ""
+echo "Phase 3 已完成！实现了 4 个核心工具："
+echo "  - read:  文件读取"
+echo "  - bash:  命令执行"
+echo "  - write: 文件写入"
+echo "  - grep:  文件搜索"
+echo ""
+echo "测试方法："
+echo ""
+echo "1. 使用 OpenAI API 测试："
+echo "   export ZAI_BASE_URL=https://api.openai.com/v1"
+echo "   export ZAI_API_KEY=sk-your-openai-key"
+echo "   ./bin/ai"
+echo ""
+echo "2. 在另一个终端发送命令："
+echo "   echo '{\"type\":\"prompt\",\"message\":\"Read README.md\"}' | ./bin/ai"
+echo ""
+echo "3. 测试工具调用："
+echo "   echo '{\"type\":\"prompt\",\"message\":\"List files using ls\"}' | ./bin/ai"
+echo "   echo '{\"type\":\"prompt\",\"message\":\"Create hello.txt with content Hello\"}' | ./bin/ai"
+echo "   echo '{\"type\":\"prompt\",\"message\":\"Search for main in Go files\"}' | ./bin/ai"
+echo ""
+echo "4. 获取状态："
+echo "   echo '{\"type\":\"get_state\"}' | ./bin/ai"
+echo ""
+echo "=========================================="
+echo "工具系统实现完成！"
+echo "=========================================="

@@ -1,0 +1,348 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/tiancaiamao/ai/pkg/llm"
+)
+
+// LoopConfig contains configuration for the agent loop.
+type LoopConfig struct {
+	Model    llm.Model
+	APIKey   string
+	Executor *ExecutorPool // Tool executor with concurrency control
+}
+
+// RunLoop starts a new agent loop with the given prompts.
+func RunLoop(
+	ctx context.Context,
+	prompts []AgentMessage,
+	agentCtx *AgentContext,
+	config *LoopConfig,
+) *llm.EventStream[AgentEvent, []AgentMessage] {
+	stream := llm.NewEventStream[AgentEvent, []AgentMessage](
+		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+		func(e AgentEvent) []AgentMessage { return e.Messages },
+	)
+
+	go func() {
+		defer stream.End(nil)
+
+		newMessages := append([]AgentMessage{}, prompts...)
+		currentCtx := &AgentContext{
+			SystemPrompt: agentCtx.SystemPrompt,
+			Messages:     append(agentCtx.Messages, prompts...),
+			Tools:        agentCtx.Tools,
+		}
+
+		stream.Push(NewAgentStartEvent())
+		stream.Push(NewTurnStartEvent())
+
+		for _, msg := range prompts {
+			stream.Push(NewMessageStartEvent(msg))
+			stream.Push(NewMessageEndEvent(msg))
+		}
+
+		runInnerLoop(ctx, currentCtx, newMessages, config, stream)
+	}()
+
+	return stream
+}
+
+// runInnerLoop contains the core loop logic.
+func runInnerLoop(
+	ctx context.Context,
+	agentCtx *AgentContext,
+	newMessages []AgentMessage,
+	config *LoopConfig,
+	stream *llm.EventStream[AgentEvent, []AgentMessage],
+) {
+	for {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			return
+		default:
+		}
+
+		// Stream assistant response
+		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
+		if err != nil {
+			log.Printf("Error streaming response: %v", err)
+			stream.Push(NewTurnEndEvent(msg, nil))
+			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			return
+		}
+
+		if msg == nil {
+			// Message was nil (aborted)
+			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			return
+		}
+
+		newMessages = append(newMessages, *msg)
+
+		// Check for error or abort
+		if msg.StopReason == "error" || msg.StopReason == "aborted" {
+			stream.Push(NewTurnEndEvent(msg, nil))
+			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			return
+		}
+
+		// Check for tool calls
+		toolCalls := msg.ExtractToolCalls()
+		hasMoreToolCalls := len(toolCalls) > 0
+
+		var toolResults []AgentMessage
+		if hasMoreToolCalls {
+			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor)
+			for _, result := range toolResults {
+				agentCtx.Messages = append(agentCtx.Messages, result)
+				newMessages = append(newMessages, result)
+			}
+		}
+
+		stream.Push(NewTurnEndEvent(msg, toolResults))
+
+		// If no more tool calls, end the conversation
+		if !hasMoreToolCalls {
+			break
+		}
+	}
+
+	stream.Push(NewAgentEndEvent(agentCtx.Messages))
+}
+
+// streamAssistantResponse streams the assistant's response from the LLM.
+func streamAssistantResponse(
+	ctx context.Context,
+	agentCtx *AgentContext,
+	config *LoopConfig,
+	stream *llm.EventStream[AgentEvent, []AgentMessage],
+) (*AgentMessage, error) {
+	// Convert messages to LLM format
+	llmMessages := ConvertMessagesToLLM(agentCtx.Messages)
+
+	log.Printf("[Loop] Sending %d messages to LLM", len(llmMessages))
+
+	// Convert tools to LLM format
+	llmTools := ConvertToolsToLLM(agentCtx.Tools)
+
+	// Build LLM context
+	llmCtx := llm.LLMContext{
+		SystemPrompt: agentCtx.SystemPrompt,
+		Messages:     llmMessages,
+		Tools:        llmTools,
+	}
+
+	// Stream LLM response
+	llmStream := llm.StreamLLM(ctx, config.Model, llmCtx, config.APIKey)
+
+	type toolCallState struct {
+		id        string
+		name      string
+		callType  string
+		arguments string
+	}
+
+	var partialMessage *AgentMessage
+	var textBuilder strings.Builder
+	toolCalls := map[int]*toolCallState{}
+
+	buildContent := func(text string, calls map[int]*toolCallState) []ContentBlock {
+		content := make([]ContentBlock, 0, 1+len(calls))
+		if text != "" {
+			content = append(content, TextContent{
+				Type: "text",
+				Text: text,
+			})
+		}
+
+		if len(calls) == 0 {
+			return content
+		}
+
+		indexes := make([]int, 0, len(calls))
+		for idx := range calls {
+			indexes = append(indexes, idx)
+		}
+		sort.Ints(indexes)
+
+		for _, idx := range indexes {
+			call := calls[idx]
+			argsMap := make(map[string]any)
+			if call.arguments != "" {
+				if err := json.Unmarshal([]byte(call.arguments), &argsMap); err != nil {
+					argsMap = make(map[string]any)
+				}
+			}
+
+			content = append(content, ToolCallContent{
+				ID:        call.id,
+				Type:      "toolCall",
+				Name:      call.name,
+				Arguments: argsMap,
+			})
+		}
+
+		return content
+	}
+
+	for event := range llmStream.Iterator(ctx) {
+		if event.Done {
+			break
+		}
+
+		switch e := event.Value.(type) {
+		case llm.LLMStartEvent:
+			partialMessage = new(AgentMessage)
+			*partialMessage = NewAssistantMessage()
+			textBuilder.Reset()
+			toolCalls = map[int]*toolCallState{}
+			stream.Push(NewMessageStartEvent(*partialMessage))
+			stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+				Type:         "text_start",
+				ContentIndex: 0,
+			}))
+
+		case llm.LLMTextDeltaEvent:
+			if partialMessage != nil {
+				textBuilder.WriteString(e.Delta)
+				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
+				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+					Type:         "text_delta",
+					ContentIndex: e.Index,
+					Delta:        e.Delta,
+				}))
+			}
+
+		case llm.LLMToolCallDeltaEvent:
+			if partialMessage != nil {
+				call, ok := toolCalls[e.Index]
+				if !ok {
+					call = &toolCallState{}
+					toolCalls[e.Index] = call
+				}
+
+				if e.ToolCall.ID != "" {
+					call.id = e.ToolCall.ID
+				}
+				if e.ToolCall.Type != "" {
+					call.callType = e.ToolCall.Type
+				}
+				if e.ToolCall.Function.Name != "" {
+					call.name = e.ToolCall.Function.Name
+				}
+				if e.ToolCall.Function.Arguments != "" {
+					call.arguments += e.ToolCall.Function.Arguments
+				}
+
+				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
+				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+					Type:         "toolcall_delta",
+					ContentIndex: e.Index,
+				}))
+			}
+
+		case llm.LLMDoneEvent:
+			if partialMessage != nil && textBuilder.Len() > 0 {
+				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+					Type:         "text_end",
+					ContentIndex: 0,
+				}))
+			}
+			var finalMessage AgentMessage
+			if e.Message != nil {
+				finalMessage = ConvertLLMMessageToAgent(*e.Message)
+			} else if partialMessage != nil {
+				finalMessage = *partialMessage
+			} else {
+				finalMessage = NewAssistantMessage()
+			}
+
+			finalMessage.API = config.Model.API
+			finalMessage.Provider = config.Model.Provider
+			finalMessage.Model = config.Model.ID
+			finalMessage.Timestamp = time.Now().UnixMilli()
+			finalMessage.StopReason = e.StopReason
+			finalMessage.Usage = &Usage{
+				InputTokens:  e.Usage.InputTokens,
+				OutputTokens: e.Usage.OutputTokens,
+				TotalTokens:  e.Usage.TotalTokens,
+			}
+
+			stream.Push(NewMessageEndEvent(finalMessage))
+			return &finalMessage, nil
+
+		case llm.LLMErrorEvent:
+			return nil, e.Error
+		}
+	}
+
+	return partialMessage, nil
+}
+
+// executeToolCalls executes tool calls from an assistant message.
+func executeToolCalls(
+	ctx context.Context,
+	tools []Tool,
+	assistantMsg *AgentMessage,
+	stream *llm.EventStream[AgentEvent, []AgentMessage],
+	executor *ExecutorPool,
+) []AgentMessage {
+	toolCalls := assistantMsg.ExtractToolCalls()
+	results := make([]AgentMessage, 0, len(toolCalls))
+
+	for _, tc := range toolCalls {
+		stream.Push(NewToolExecutionStartEvent(tc.ID, tc.Name, tc.Arguments))
+
+		// Find tool
+		var tool Tool
+		for _, t := range tools {
+			if t.Name() == tc.Name {
+				tool = t
+				break
+			}
+		}
+
+		if tool == nil {
+			result := NewToolResultMessage(tc.ID, tc.Name, []ContentBlock{
+				TextContent{Type: "text", Text: "Tool not found"},
+			}, true)
+			results = append(results, result)
+			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
+			continue
+		}
+
+		// Execute tool with concurrency control
+		var content []ContentBlock
+		var err error
+
+		if executor != nil {
+			content, err = executor.Execute(ctx, tool, tc.Arguments)
+		} else {
+			// Fallback to direct execution
+			content, err = tool.Execute(ctx, tc.Arguments)
+		}
+
+		if err != nil {
+			result := NewToolResultMessage(tc.ID, tc.Name, []ContentBlock{
+				TextContent{Type: "text", Text: err.Error()},
+			}, true)
+			results = append(results, result)
+			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
+		} else {
+			result := NewToolResultMessage(tc.ID, tc.Name, content, false)
+			results = append(results, result)
+			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, false))
+		}
+	}
+
+	return results
+}
