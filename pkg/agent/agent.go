@@ -41,6 +41,7 @@ type Agent struct {
 	compactor     Compactor     // Optional compactor for automatic context compression
 	followUpQueue chan string   // Queue for follow-up messages
 	executor      *ExecutorPool // Tool executor with concurrency control
+	metrics       *Metrics      // Performance and usage metrics
 }
 
 // NewAgent creates a new agent.
@@ -63,6 +64,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		cancel:        cancel,
 		followUpQueue: make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
 		executor:      NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
+		metrics:       NewMetrics(),
 	}
 }
 
@@ -370,4 +372,9 @@ func (a *Agent) clearFollowUps() {
 			return
 		}
 	}
+}
+
+// GetMetrics returns the agent's metrics collector.
+func (a *Agent) GetMetrics() *Metrics {
+	return a.metrics
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -23,16 +24,16 @@ func TestFollowUpQueue(t *testing.T) {
 		t.Fatalf("Failed to add second follow-up: %v", err)
 	}
 
-	// Verify queue has capacity
+	// Verify queue has capacity (100 total)
 	// Can't directly access channel, but we can verify by adding more
-	for i := 0; i < 8; i++ {
-		err = agent.FollowUp("Additional follow-up")
+	for i := 0; i < 98; i++ {
+		err = agent.FollowUp(fmt.Sprintf("Additional follow-up %d", i))
 		if err != nil {
 			t.Fatalf("Failed to add follow-up %d: %v", i, err)
 		}
 	}
 
-	// Queue should be full now (capacity is 10)
+	// Queue should be full now (capacity is 100)
 	err = agent.FollowUp("Should fail")
 	if err == nil {
 		t.Error("Expected error when queue is full, got nil")

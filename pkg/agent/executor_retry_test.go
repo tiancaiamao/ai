@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 // MockTool for testing retry logic
@@ -65,10 +63,10 @@ func (m *MockTool) Reset() {
 
 func TestToolExecutorRetryOnFailure(t *testing.T) {
 	tests := []struct {
-		name        string
-		tool        *MockTool
-		maxRetries  int
-		expectError bool
+		name          string
+		tool          *MockTool
+		maxRetries    int
+		expectError   bool
 		expectedCalls int
 	}{
 		{
@@ -78,8 +76,8 @@ func TestToolExecutorRetryOnFailure(t *testing.T) {
 				maxFailures: 0,
 				failMessage: "temporary failure",
 			},
-			maxRetries:  3,
-			expectError: false,
+			maxRetries:    3,
+			expectError:   false,
 			expectedCalls: 1,
 		},
 		{
@@ -89,8 +87,8 @@ func TestToolExecutorRetryOnFailure(t *testing.T) {
 				maxFailures: 1,
 				failMessage: "temporary failure",
 			},
-			maxRetries:  3,
-			expectError: false,
+			maxRetries:    3,
+			expectError:   false,
 			expectedCalls: 2,
 		},
 		{
@@ -100,8 +98,8 @@ func TestToolExecutorRetryOnFailure(t *testing.T) {
 				maxFailures: 5,
 				failMessage: "persistent failure",
 			},
-			maxRetries:  3,
-			expectError: true,
+			maxRetries:    3,
+			expectError:   true,
 			expectedCalls: 4, // 1 initial + 3 retries
 		},
 	}
@@ -110,7 +108,13 @@ func TestToolExecutorRetryOnFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.tool.Reset()
 
-			executor := NewToolExecutorWithRetry(1, 30, 60, tt.maxRetries, 1, 2, 4)
+			executor := NewToolExecutor(1, 30, 60)
+			executor.SetRetryConfig(&RetryConfig{
+				MaxRetries:    tt.maxRetries,
+				InitialDelay:  1 * time.Second,
+				MaxDelay:      5 * time.Second,
+				RetryableErrs: []string{"temporary", "persistent", "timeout", "fail"},
+			})
 
 			ctx := context.Background()
 			args := map[string]any{"input": "test"}
@@ -141,8 +145,13 @@ func TestToolExecutorRetryWithExponentialBackoff(t *testing.T) {
 		execDelayMs: 100,
 	}
 
-	backoffDelays := []int{100, 200, 400} // 100ms, 200ms, 400ms
-	executor := NewToolExecutorWithRetry(1, 30, 60, 3, backoffDelays...)
+	executor := NewToolExecutor(1, 30, 60)
+	executor.SetRetryConfig(&RetryConfig{
+		MaxRetries:    3,
+		InitialDelay:  100 * time.Millisecond,
+		MaxDelay:      1000 * time.Millisecond,
+		RetryableErrs: []string{"temporary", "timeout"},
+	})
 
 	ctx := context.Background()
 	args := map[string]any{"input": "test"}
@@ -175,8 +184,13 @@ func TestToolExecutorNoRetryOnContextCancel(t *testing.T) {
 		execDelayMs: 500,
 	}
 
-	backoffDelays := []int{5000, 5000, 5000}
-	executor := NewToolExecutorWithRetry(1, 30, 60, 3, backoffDelays...)
+	executor := NewToolExecutor(1, 30, 60)
+	executor.SetRetryConfig(&RetryConfig{
+		MaxRetries:    3,
+		InitialDelay:  5 * time.Second,
+		MaxDelay:      10 * time.Second,
+		RetryableErrs: []string{"fail"},
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	args := map[string]any{"input": "test"}
@@ -205,18 +219,31 @@ func TestToolExecutorNoRetryOnContextCancel(t *testing.T) {
 }
 
 func TestExecutorPoolRetryPerTool(t *testing.T) {
-	pool := NewExecutorPoolWithRetry(map[string]int{
+	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 3,
 		"toolTimeout":        30,
 		"queueTimeout":       60,
-	}, 3, []int{100, 200, 400})
+	})
 
 	// Configure different retry policies per tool
 	toolA := &MockTool{name: "tool-a", maxFailures: 1, failMessage: "fail"}
 	toolB := &MockTool{name: "tool-b", maxFailures: 0, failMessage: "fail"}
 
-	executorA := NewToolExecutorWithRetry(1, 30, 60, 2, []int{100, 200})
-	executorB := NewToolExecutorWithRetry(1, 30, 60, 0, []int{})
+	executorA := NewToolExecutor(1, 30, 60)
+	executorA.SetRetryConfig(&RetryConfig{
+		MaxRetries:    2,
+		InitialDelay:  100 * time.Millisecond,
+		MaxDelay:      500 * time.Millisecond,
+		RetryableErrs: []string{"fail"},
+	})
+
+	executorB := NewToolExecutor(1, 30, 60)
+	executorB.SetRetryConfig(&RetryConfig{
+		MaxRetries:    0,
+		InitialDelay:  0,
+		MaxDelay:      0,
+		RetryableErrs: []string{},
+	})
 
 	pool.SetExecutor("tool-a", executorA)
 	pool.SetExecutor("tool-b", executorB)

@@ -81,6 +81,9 @@ func main() {
 	}
 
 	if err := handler.Run(); err != nil {
+		if *debug {
+			log.Printf("REPL error: %v", err)
+		}
 		fmt.Fprintf(os.Stderr, "REPL error: %v\n", err)
 		os.Exit(1)
 	}

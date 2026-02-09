@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -305,6 +308,7 @@ func collectSessionUsage(messages []agent.AgentMessage) (int, int, int, int, rpc
 func main() {
 	mode := flag.String("mode", "rpc", "Run mode (rpc only)")
 	sessionPathFlag := flag.String("session", "", "Session file path")
+	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	flag.Parse()
 
 	// Load configuration
@@ -1081,6 +1085,40 @@ func main() {
 		"model": model.ID,
 		"tools": []string{"read", "bash", "write", "grep", "edit"},
 	})
+
+	// Start debug server if enabled
+	if *debugAddr != "" {
+		go func() {
+			// Register metrics endpoint on DefaultServeMux
+			http.HandleFunc("/debug/metrics", func(w http.ResponseWriter, r *http.Request) {
+				metrics := ag.GetMetrics()
+				if metrics == nil {
+					http.Error(w, "Metrics not available", http.StatusServiceUnavailable)
+					return
+				}
+
+				fullMetrics := metrics.GetFullMetrics()
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(fullMetrics); err != nil {
+					log.Errorf("Failed to encode metrics: %v", err)
+					http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
+				}
+			})
+
+			log.Infof("Debug server listening on %s", *debugAddr)
+			log.Infof("Debug endpoints available at:")
+			log.Infof("  - http://%s/debug/pprof/          (profiling index)", *debugAddr)
+			log.Infof("  - http://%s/debug/pprof/profile   (CPU profile)", *debugAddr)
+			log.Infof("  - http://%s/debug/pprof/heap       (memory profile)", *debugAddr)
+			log.Infof("  - http://%s/debug/pprof/goroutine  (goroutine dump)", *debugAddr)
+			log.Infof("  - http://%s/debug/pprof/trace      (execution trace)", *debugAddr)
+			log.Infof("  - http://%s/debug/metrics         (agent metrics)", *debugAddr)
+
+			if err := http.ListenAndServe(*debugAddr, nil); err != nil {
+				log.Errorf("Debug server error: %v", err)
+			}
+		}()
+	}
 
 	// Run RPC server
 	log.Infof("RPC server started (model: %s, cwd: %s)", model.ID, cwd)

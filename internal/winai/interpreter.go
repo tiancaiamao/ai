@@ -31,6 +31,7 @@ type AiInterpreter struct {
 	cmdPath string
 	cmdArgs []string
 	debug   bool
+	startCtx context.Context
 
 	// adClient is the client for communicating with ad (used for minibuffer, etc.)
 	adClient *ad.Client
@@ -261,11 +262,17 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		return fmt.Errorf("ai already started")
 	}
 
+	p.startCtx = ctx
+
 	childCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 
-	args := append([]string{"--mode", "rpc"}, p.cmdArgs...)
+	args := append([]string{}, p.cmdArgs...)
+	if !hasFlag(args, "-http") && !hasFlag(args, "--http") {
+		args = append(args, "-http", ":6060")
+	}
 	cmd := exec.Command(p.cmdPath, args...)
+
 	cmd.Env = os.Environ()
 
 	stdin, err := cmd.StdinPipe()
@@ -289,6 +296,7 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 	p.stdout = stdout
 	p.stderr = stderr
 
+	log.Printf("[AI-CMD] %s", p.cmd.String())
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("start ai: %w", err)
 	}
@@ -308,41 +316,162 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 
 	go p.readStdout(childCtx)
 	go p.readStderr(childCtx)
-	go func() {
-		_ = p.cmd.Wait()
-	}()
+	go p.waitForExit(cmd)
 
 	return nil
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop terminates the ai subprocess.
 func (p *AiInterpreter) Stop() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	cmd := p.cmd
+	stdin := p.stdin
+	stdout := p.stdout
+	stderr := p.stderr
+	cancel := p.cancel
+	p.cmd = nil
+	p.stdin = nil
+	p.stdout = nil
+	p.stderr = nil
+	p.cancel = nil
+	p.mu.Unlock()
 
-	if p.cancel != nil {
-		p.cancel()
-	}
-
-	if p.stdin != nil {
-		p.stdin.Close()
-		p.stdin = nil
-	}
-	if p.stdout != nil {
-		p.stdout.Close()
-		p.stdout = nil
-	}
-	if p.stderr != nil {
-		p.stderr.Close()
-		p.stderr = nil
+	if cancel != nil {
+		cancel()
 	}
 
-	if p.cmd != nil && p.cmd.Process != nil {
-		if err := p.cmd.Process.Kill(); err != nil {
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if stdout != nil {
+		_ = stdout.Close()
+	}
+	if stderr != nil {
+		_ = stderr.Close()
+	}
+
+	if cmd != nil && cmd.Process != nil {
+		if err := cmd.Process.Kill(); err != nil {
 			return fmt.Errorf("kill ai: %w", err)
 		}
 	}
 
+	p.resetAiState()
+	return nil
+}
+
+func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
+	err := cmd.Wait()
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	if !p.resetProcessForCmd(cmd, "process exited") {
+		return
+	}
+
+	if p.debug {
+		if err != nil {
+			log.Printf("[AI-EXIT] code=%d err=%v", exitCode, err)
+		} else {
+			log.Printf("[AI-EXIT] code=%d", exitCode)
+		}
+	}
+
+	msg := "ai: process exited"
+	if exitCode >= 0 {
+		msg = fmt.Sprintf("ai: process exited (code=%d)", exitCode)
+	}
+	p.writeStatus(msg)
+}
+
+func (p *AiInterpreter) resetProcess(reason string) {
+	p.mu.Lock()
+	cmd := p.cmd
+	p.mu.Unlock()
+	if cmd == nil {
+		return
+	}
+	_ = p.resetProcessForCmd(cmd, reason)
+}
+
+func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
+	p.mu.Lock()
+	if p.cmd != cmd {
+		p.mu.Unlock()
+		return false
+	}
+	stdin := p.stdin
+	stdout := p.stdout
+	stderr := p.stderr
+	cancel := p.cancel
+	p.cmd = nil
+	p.stdin = nil
+	p.stdout = nil
+	p.stderr = nil
+	p.cancel = nil
+	p.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if stdout != nil {
+		_ = stdout.Close()
+	}
+	if stderr != nil {
+		_ = stderr.Close()
+	}
+
+	p.resetAiState()
+
+	if p.debug && reason != "" {
+		log.Printf("[AI-RESET] %s", reason)
+	}
+	return true
+}
+
+func (p *AiInterpreter) resetAiState() {
+	p.stateMu.Lock()
+	p.aiPID = 0
+	p.aiLogPath = ""
+	p.aiWorkingDir = ""
+	p.pendingStateRequests = make(map[string]stateRequestInfo)
+	p.stateMu.Unlock()
+
+	p.setStreaming(false)
+}
+
+func (p *AiInterpreter) restartAI(reason string) error {
+	if reason != "" {
+		p.writeStatus(fmt.Sprintf("ai: %s; restarting...", reason))
+	}
+
+	p.mu.Lock()
+	ctx := p.startCtx
+	p.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return fmt.Errorf("ai not running")
+	}
+
+	if err := p.Start(ctx); err != nil {
+		if strings.Contains(err.Error(), "ai already started") {
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 
@@ -693,21 +822,48 @@ func (p *AiInterpreter) sendStateRequest(show bool, kind string, quiet bool) err
 }
 
 func (p *AiInterpreter) sendRaw(jsonLine string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.stdin == nil {
-		return fmt.Errorf("ai stdin not available")
-	}
-	if _, err := p.stdin.Write([]byte(jsonLine)); err != nil {
-		return fmt.Errorf("write stdin: %w", err)
-	}
-	if !strings.HasSuffix(jsonLine, "\n") {
-		if _, err := p.stdin.Write([]byte("\n")); err != nil {
-			return fmt.Errorf("write stdin newline: %w", err)
+	for attempt := 0; attempt < 2; attempt++ {
+		p.mu.Lock()
+		stdin := p.stdin
+		if stdin == nil {
+			p.mu.Unlock()
+			if attempt == 0 {
+				if err := p.restartAI("stdin unavailable"); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("ai stdin not available")
 		}
+
+		if _, err := stdin.Write([]byte(jsonLine)); err != nil {
+			p.mu.Unlock()
+			if attempt == 0 && isClosedPipe(err) {
+				p.resetProcess("stdin closed")
+				if err := p.restartAI("stdin closed"); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("write stdin: %w", err)
+		}
+		if !strings.HasSuffix(jsonLine, "\n") {
+			if _, err := stdin.Write([]byte("\n")); err != nil {
+				p.mu.Unlock()
+				if attempt == 0 && isClosedPipe(err) {
+					p.resetProcess("stdin closed")
+					if err := p.restartAI("stdin closed"); err != nil {
+						return err
+					}
+					continue
+				}
+				return fmt.Errorf("write stdin newline: %w", err)
+			}
+		}
+		p.mu.Unlock()
+		return nil
 	}
-	return nil
+	return fmt.Errorf("ai stdin not available")
 }
 
 func (p *AiInterpreter) sendJSON(payload any) error {
@@ -716,6 +872,19 @@ func (p *AiInterpreter) sendJSON(payload any) error {
 		return fmt.Errorf("marshal command: %w", err)
 	}
 	return p.sendRaw(string(data))
+}
+
+func isClosedPipe(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "file already closed") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "closed pipe")
 }
 
 func (p *AiInterpreter) nextID() string {
@@ -1601,7 +1770,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /show settings
   /show usage
   /thinking [on|off|toggle]
-  /tools <off|on|verbose|toggle>
+  /tools [off|on|verbose|toggle]
   /prefix [on|off|toggle]
   /model-select
   /models

@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	defaultMaxRetries     = 3                  // Maximum retry attempts
-	defaultInitialDelay  = 1 * time.Second   // Initial delay before retry
+	defaultToolMaxRetries = 3                  // Maximum retry attempts for tools
+	defaultInitialDelay   = 1 * time.Second    // Initial delay before retry
 	defaultMaxDelay       = 10 * time.Second   // Maximum delay between retries
 )
 
@@ -25,7 +25,7 @@ type RetryConfig struct {
 // DefaultRetryConfig creates a default retry configuration.
 func DefaultRetryConfig() *RetryConfig {
 	return &RetryConfig{
-		MaxRetries:    defaultMaxRetries,
+		MaxRetries:    defaultToolMaxRetries,
 		InitialDelay:  defaultInitialDelay,
 		MaxDelay:      defaultMaxDelay,
 		RetryableErrs: []string{
@@ -108,7 +108,7 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args m
 			// Exponential backoff with jitter
 			delay = min(delay*2, e.retryConfig.MaxDelay)
 			// Add jitter (±25%)
-			jitter := time.Duration(float64(delay) * (0.75 + 0.5*(time.Now().UnixNano()%100)/100.0))
+			jitter := time.Duration(float64(delay) * (0.75 + 0.5*float64(time.Now().UnixNano()%100)/100.0))
 			delay = jitter
 		}
 

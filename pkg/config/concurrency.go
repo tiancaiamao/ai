@@ -1,25 +1,9 @@
 package config
 
 import (
-	"fmt"
-	"time"
+	"os"
+	"strconv"
 )
-
-// ConcurrencyConfig controls concurrent execution behavior.
-type ConcurrencyConfig struct {
-	MaxConcurrentTools int           `json:"maxConcurrentTools"` // Maximum tools running concurrently
-	ToolTimeout        time.Duration `json:"toolTimeout"`        // Per-tool execution timeout
-	QueueTimeout       time.Duration `json:"queueTimeout"`       // Wait timeout for queue slot
-}
-
-// DefaultConcurrencyConfig returns a default concurrency configuration.
-func DefaultConcurrencyConfig() *ConcurrencyConfig {
-	return &ConcurrencyConfig{
-		MaxConcurrentTools: 3,
-		ToolTimeout:        30 * time.Second,
-		QueueTimeout:       60 * time.Second,
-	}
-}
 
 // ResolveConcurrencyConfig loads concurrency config from environment.
 func ResolveConcurrencyConfig() *ConcurrencyConfig {
@@ -30,10 +14,10 @@ func ResolveConcurrencyConfig() *ConcurrencyConfig {
 		cfg.MaxConcurrentTools = max
 	}
 	if timeout := GetEnvInt("ZAI_TOOL_TIMEOUT", 0); timeout > 0 {
-		cfg.ToolTimeout = time.Duration(timeout) * time.Second
+		cfg.ToolTimeout = timeout
 	}
 	if queue := GetEnvInt("ZAI_QUEUE_TIMEOUT", 0); queue > 0 {
-		cfg.QueueTimeout = time.Duration(queue) * time.Second
+		cfg.QueueTimeout = queue
 	}
 
 	return cfg

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	defaultMaxRetries      = 1
-	defaultRetryBaseDelay = 1 * time.Second
+	defaultLLMMaxRetries  = 1                   // Maximum retry attempts for LLM calls
+	defaultRetryBaseDelay = 1 * time.Second     // Base delay for exponential backoff
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -135,7 +135,7 @@ func streamAssistantResponseWithRetry(
 ) (*AgentMessage, error) {
 	maxRetries := config.MaxLLMRetries
 	if maxRetries < 0 {
-		maxRetries = defaultMaxRetries
+		maxRetries = defaultLLMMaxRetries
 	}
 	baseDelay := config.RetryBaseDelay
 	if baseDelay < defaultRetryBaseDelay {
