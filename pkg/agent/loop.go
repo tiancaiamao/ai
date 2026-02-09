@@ -126,6 +126,11 @@ func streamAssistantResponse(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) (*AgentMessage, error) {
+	// Create timeout context for LLM calls
+	llmTimeout := 120 * time.Second
+	llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
+	defer llmCancel()
+
 	// Convert messages to LLM format
 	llmMessages := ConvertMessagesToLLM(agentCtx.Messages)
 
@@ -135,14 +140,14 @@ func streamAssistantResponse(
 	llmTools := ConvertToolsToLLM(agentCtx.Tools)
 
 	// Build LLM context
-	llmCtx := llm.LLMContext{
+	llmCtxParams := llm.LLMContext{
 		SystemPrompt: agentCtx.SystemPrompt,
 		Messages:     llmMessages,
 		Tools:        llmTools,
 	}
 
 	// Stream LLM response
-	llmStream := llm.StreamLLM(ctx, config.Model, llmCtx, config.APIKey)
+	llmStream := llm.StreamLLM(llmCtx, config.Model, llmCtxParams, config.APIKey)
 
 	type toolCallState struct {
 		id        string

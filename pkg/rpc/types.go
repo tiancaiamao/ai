@@ -44,6 +44,7 @@ const (
 	CommandGetLastAssistantText = "get_last_assistant_text"
 	CommandGetForkMessages      = "get_fork_messages"
 	CommandFork                 = "fork"
+	CommandPing                 = "ping"
 )
 
 // SessionState represents the current session state.

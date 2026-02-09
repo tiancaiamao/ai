@@ -553,6 +553,13 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, result)
 
+	case CommandPing:
+		// Health check - always succeeds
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{
+			"status":    "ok",
+			"timestamp":  s.ctx,
+		})
+
 	default:
 		return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Unknown command: %s", cmd.Type))
 	}

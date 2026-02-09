@@ -28,8 +28,8 @@ type BashTool struct {
 func NewBashTool(cwd string) *BashTool {
 	return &BashTool{
 		cwd:         cwd,
-		timeout:     30 * time.Second,
-		execTimeout: 5 * time.Second,
+		timeout:     60 * time.Second,    // Increased from 30s
+		execTimeout: 30 * time.Second,    // Increased from 5s to allow longer commands
 	}
 }
 

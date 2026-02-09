@@ -7,8 +7,13 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+)
+
+const (
+	agentBusyTimeout = 60 * time.Second // Wait timeout for agent lock
 )
 
 // ErrAgentBusy is returned when the agent is already processing a request.
@@ -56,13 +61,17 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		eventChan:     make(chan AgentEvent, 100),
 		ctx:           ctx,
 		cancel:        cancel,
-		followUpQueue: make(chan string, 10), // Buffer up to 10 follow-up messages
+		followUpQueue: make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
 		executor:      NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
 	}
 }
 
 // Prompt sends a user message to the agent and waits for completion.
+// Waits up to agentBusyTimeout for the agent to become available.
 func (a *Agent) Prompt(message string) error {
+	timer := time.NewTimer(agentBusyTimeout)
+	defer timer.Stop()
+
 	select {
 	case a.mu <- struct{}{}:
 		a.wg.Add(1)
@@ -86,8 +95,8 @@ func (a *Agent) Prompt(message string) error {
 			}
 		}()
 		return nil
-	default:
-		return ErrAgentBusy
+	case <-timer.C:
+		return fmt.Errorf("agent busy timeout after %v", agentBusyTimeout)
 	}
 }
 
