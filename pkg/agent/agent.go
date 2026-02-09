@@ -104,12 +104,19 @@ func (a *Agent) Prompt(message string) error {
 
 // processPrompt handles a single prompt (shared by Prompt and follow-up).
 func (a *Agent) processPrompt(message string) {
+	promptStart := time.Now()
+	hadError := false
+	if a.metrics != nil {
+		a.metrics.RecordPromptStart()
+	}
+
 	prompts := []AgentMessage{NewUserMessage(message)}
 
 	config := &LoopConfig{
 		Model:    a.model,
 		APIKey:   a.apiKey,
 		Executor: a.executor,
+		Metrics:  a.metrics,
 	}
 
 	log.Printf("[Agent] Starting RunLoop...")
@@ -128,6 +135,28 @@ func (a *Agent) processPrompt(message string) {
 
 		eventCount++
 		log.Printf("[Agent] Got event: %s", event.Value.Type)
+
+		if a.metrics != nil {
+			switch event.Value.Type {
+			case EventMessageEnd:
+				if event.Value.Message != nil {
+					a.metrics.RecordMessage(event.Value.Message.Role)
+				}
+			case EventToolExecutionStart:
+				a.metrics.RecordToolCall()
+			case EventToolExecutionEnd:
+				a.metrics.RecordToolResult()
+				if event.Value.IsError {
+					hadError = true
+				}
+			case EventTurnEnd:
+				if event.Value.Message == nil {
+					hadError = true
+				} else if event.Value.Message.StopReason == "error" || event.Value.Message.StopReason == "aborted" {
+					hadError = true
+				}
+			}
+		}
 
 		// Update context with new messages
 		if event.Value.Type == EventMessageEnd {
@@ -150,6 +179,13 @@ func (a *Agent) processPrompt(message string) {
 
 		// Send to event channel
 		a.emitEvent(event.Value)
+	}
+	if a.metrics != nil {
+		var err error
+		if hadError {
+			err = errors.New("prompt failed")
+		}
+		a.metrics.RecordPrompt(time.Since(promptStart), err)
 	}
 	log.Printf("[Agent] Prompt completed")
 }

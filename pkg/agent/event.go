@@ -1,8 +1,12 @@
 package agent
 
+import "time"
+
 // AgentEvent represents an event emitted during agent execution.
 type AgentEvent struct {
 	Type string `json:"type"` // Event type discriminator
+	// EventAt is when the event was created (UnixNano).
+	EventAt int64 `json:"eventAt,omitempty"`
 
 	// Common fields
 	Message  *AgentMessage  `json:"message,omitempty"`
@@ -63,6 +67,7 @@ type CompactionInfo struct {
 func NewCompactionStartEvent(info CompactionInfo) AgentEvent {
 	return AgentEvent{
 		Type:       EventCompactionStart,
+		EventAt:    time.Now().UnixNano(),
 		Compaction: &info,
 	}
 }
@@ -71,32 +76,35 @@ func NewCompactionStartEvent(info CompactionInfo) AgentEvent {
 func NewCompactionEndEvent(info CompactionInfo) AgentEvent {
 	return AgentEvent{
 		Type:       EventCompactionEnd,
+		EventAt:    time.Now().UnixNano(),
 		Compaction: &info,
 	}
 }
 
 // NewAgentStartEvent creates an agent_start event.
 func NewAgentStartEvent() AgentEvent {
-	return AgentEvent{Type: EventAgentStart}
+	return AgentEvent{Type: EventAgentStart, EventAt: time.Now().UnixNano()}
 }
 
 // NewAgentEndEvent creates an agent_end event.
 func NewAgentEndEvent(messages []AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:     EventAgentEnd,
+		EventAt:  time.Now().UnixNano(),
 		Messages: messages,
 	}
 }
 
 // NewTurnStartEvent creates a turn_start event.
 func NewTurnStartEvent() AgentEvent {
-	return AgentEvent{Type: EventTurnStart}
+	return AgentEvent{Type: EventTurnStart, EventAt: time.Now().UnixNano()}
 }
 
 // NewTurnEndEvent creates a turn_end event.
 func NewTurnEndEvent(message *AgentMessage, toolResults []AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:        EventTurnEnd,
+		EventAt:     time.Now().UnixNano(),
 		Message:     message,
 		ToolResults: toolResults,
 	}
@@ -106,6 +114,7 @@ func NewTurnEndEvent(message *AgentMessage, toolResults []AgentMessage) AgentEve
 func NewMessageStartEvent(message AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:    EventMessageStart,
+		EventAt: time.Now().UnixNano(),
 		Message: &message,
 	}
 }
@@ -114,6 +123,7 @@ func NewMessageStartEvent(message AgentMessage) AgentEvent {
 func NewMessageEndEvent(message AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:    EventMessageEnd,
+		EventAt: time.Now().UnixNano(),
 		Message: &message,
 	}
 }
@@ -122,6 +132,7 @@ func NewMessageEndEvent(message AgentMessage) AgentEvent {
 func NewMessageUpdateEvent(message AgentMessage, assistantEvent interface{}) AgentEvent {
 	return AgentEvent{
 		Type:                  EventMessageUpdate,
+		EventAt:               time.Now().UnixNano(),
 		Message:               &message,
 		AssistantMessageEvent: assistantEvent,
 	}
@@ -131,6 +142,7 @@ func NewMessageUpdateEvent(message AgentMessage, assistantEvent interface{}) Age
 func NewToolExecutionStartEvent(toolCallID, toolName string, args map[string]interface{}) AgentEvent {
 	return AgentEvent{
 		Type:       EventToolExecutionStart,
+		EventAt:    time.Now().UnixNano(),
 		ToolCallID: toolCallID,
 		ToolName:   toolName,
 		Args:       args,
@@ -141,6 +153,7 @@ func NewToolExecutionStartEvent(toolCallID, toolName string, args map[string]int
 func NewToolExecutionEndEvent(toolCallID, toolName string, result *AgentMessage, isError bool) AgentEvent {
 	return AgentEvent{
 		Type:       EventToolExecutionEnd,
+		EventAt:    time.Now().UnixNano(),
 		ToolCallID: toolCallID,
 		ToolName:   toolName,
 		Result:     result,

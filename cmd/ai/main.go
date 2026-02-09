@@ -992,6 +992,7 @@ func main() {
 	// Start event emitter
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
+	metrics := ag.GetMetrics()
 	go func() {
 		defer close(eventEmitterDone)
 		for {
@@ -1019,6 +1020,13 @@ func main() {
 					stateMu.Unlock()
 				}
 
+				emitAt := time.Now()
+				if event.EventAt == 0 {
+					event.EventAt = emitAt.UnixNano()
+				}
+				if metrics != nil {
+					metrics.RecordEventEmit(event.Type, time.Unix(0, event.EventAt), emitAt)
+				}
 				server.EmitEvent(event)
 
 				// Auto-save on agent_end
@@ -1060,6 +1068,13 @@ func main() {
 							stateMu.Unlock()
 						}
 
+						emitAt := time.Now()
+						if event.EventAt == 0 {
+							event.EventAt = emitAt.UnixNano()
+						}
+						if metrics != nil {
+							metrics.RecordEventEmit(event.Type, time.Unix(0, event.EventAt), emitAt)
+						}
 						server.EmitEvent(event)
 						if event.Type == "agent_end" {
 							go func() {

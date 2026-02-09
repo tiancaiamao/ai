@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -12,8 +13,8 @@ import (
 )
 
 const (
-	defaultLLMMaxRetries  = 1                   // Maximum retry attempts for LLM calls
-	defaultRetryBaseDelay = 1 * time.Second     // Base delay for exponential backoff
+	defaultLLMMaxRetries  = 1               // Maximum retry attempts for LLM calls
+	defaultRetryBaseDelay = 1 * time.Second // Base delay for exponential backoff
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -21,6 +22,7 @@ type LoopConfig struct {
 	Model          llm.Model
 	APIKey         string
 	Executor       *ExecutorPool // Tool executor with concurrency control
+	Metrics        *Metrics      // Metrics collector
 	MaxLLMRetries  int           // Maximum number of retries for LLM calls
 	RetryBaseDelay time.Duration // Base delay for exponential backoff
 }
@@ -108,7 +110,7 @@ func runInnerLoop(
 
 		var toolResults []AgentMessage
 		if hasMoreToolCalls {
-			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor)
+			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor, config.Metrics)
 			for _, result := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
@@ -203,6 +205,19 @@ func streamAssistantResponse(
 	}
 
 	// Stream LLM response
+	llmStart := time.Now()
+	if config.Metrics != nil {
+		config.Metrics.RecordLLMStart()
+	}
+	recorded := false
+	firstTokenRecorded := false
+	firstTokenLatency := time.Duration(0)
+	defer func() {
+		if config.Metrics != nil && !recorded && ctx.Err() != nil {
+			config.Metrics.RecordLLMCall(0, 0, 0, 0, time.Since(llmStart), firstTokenLatency, ctx.Err())
+		}
+	}()
+
 	llmStream := llm.StreamLLM(llmCtx, config.Model, llmCtxParams, config.APIKey)
 
 	type toolCallState struct {
@@ -274,6 +289,10 @@ func streamAssistantResponse(
 
 		case llm.LLMTextDeltaEvent:
 			if partialMessage != nil {
+				if !firstTokenRecorded {
+					firstTokenRecorded = true
+					firstTokenLatency = time.Since(llmStart)
+				}
 				textBuilder.WriteString(e.Delta)
 				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
@@ -285,6 +304,10 @@ func streamAssistantResponse(
 
 		case llm.LLMThinkingDeltaEvent:
 			if partialMessage != nil {
+				if !firstTokenRecorded {
+					firstTokenRecorded = true
+					firstTokenLatency = time.Since(llmStart)
+				}
 				// Add thinking content to the message
 				thinkingContent := ThinkingContent{
 					Type:     "thinking",
@@ -300,6 +323,10 @@ func streamAssistantResponse(
 
 		case llm.LLMToolCallDeltaEvent:
 			if partialMessage != nil {
+				if !firstTokenRecorded {
+					firstTokenRecorded = true
+					firstTokenLatency = time.Since(llmStart)
+				}
 				call, ok := toolCalls[e.Index]
 				if !ok {
 					call = &toolCallState{}
@@ -327,6 +354,18 @@ func streamAssistantResponse(
 			}
 
 		case llm.LLMDoneEvent:
+			if config.Metrics != nil && !recorded {
+				config.Metrics.RecordLLMCall(
+					e.Usage.InputTokens,
+					e.Usage.OutputTokens,
+					0,
+					0,
+					time.Since(llmStart),
+					firstTokenLatency,
+					nil,
+				)
+				recorded = true
+			}
 			if partialMessage != nil && textBuilder.Len() > 0 {
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "text_end",
@@ -357,6 +396,10 @@ func streamAssistantResponse(
 			return &finalMessage, nil
 
 		case llm.LLMErrorEvent:
+			if config.Metrics != nil && !recorded {
+				config.Metrics.RecordLLMCall(0, 0, 0, 0, time.Since(llmStart), firstTokenLatency, e.Error)
+				recorded = true
+			}
 			return nil, e.Error
 		}
 	}
@@ -371,6 +414,7 @@ func executeToolCalls(
 	assistantMsg *AgentMessage,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 	executor *ExecutorPool,
+	metrics *Metrics,
 ) []AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
 	results := make([]AgentMessage, 0, len(toolCalls))
@@ -388,6 +432,9 @@ func executeToolCalls(
 		}
 
 		if tool == nil {
+			if metrics != nil {
+				metrics.RecordToolExecution(tc.Name, 0, fmt.Errorf("tool not found"), 0)
+			}
 			result := NewToolResultMessage(tc.ID, tc.Name, []ContentBlock{
 				TextContent{Type: "text", Text: "Tool not found"},
 			}, true)
@@ -400,11 +447,15 @@ func executeToolCalls(
 		var content []ContentBlock
 		var err error
 
+		start := time.Now()
 		if executor != nil {
 			content, err = executor.Execute(ctx, tool, tc.Arguments)
 		} else {
 			// Fallback to direct execution
 			content, err = tool.Execute(ctx, tc.Arguments)
+		}
+		if metrics != nil {
+			metrics.RecordToolExecution(tc.Name, time.Since(start), err, 0)
 		}
 
 		if err != nil {

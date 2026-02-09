@@ -28,9 +28,9 @@ const sectionLine = "═══════════════════�
 // AiInterpreter bridges win and the ai RPC process.
 type AiInterpreter struct {
 	*repl.BaseInterpreter
-	cmdPath string
-	cmdArgs []string
-	debug   bool
+	cmdPath  string
+	cmdArgs  []string
+	debug    bool
 	startCtx context.Context
 
 	// adClient is the client for communicating with ad (used for minibuffer, etc.)
@@ -67,6 +67,8 @@ type AiInterpreter struct {
 	aiPID                 int
 	aiLogPath             string
 	aiWorkingDir          string
+	pipelineMu            sync.Mutex
+	pipeline              pipelineMetrics
 	pendingModelList      bool
 	pendingModelListUsage bool
 	pendingModelSet       string
@@ -211,6 +213,7 @@ type assistantMessageEvent struct {
 
 type agentEvent struct {
 	Type                  string                 `json:"type"`
+	EventAt               int64                  `json:"eventAt,omitempty"`
 	Message               *agent.AgentMessage    `json:"message,omitempty"`
 	Messages              []agent.AgentMessage   `json:"messages,omitempty"`
 	ToolResults           []agent.AgentMessage   `json:"toolResults,omitempty"`
@@ -227,6 +230,25 @@ type serverStartEvent struct {
 	Type  string   `json:"type"`
 	Model string   `json:"model"`
 	Tools []string `json:"tools"`
+}
+
+type pipelineMetrics struct {
+	EventCount    int64
+	EventLastType string
+	EventLastAt   time.Time
+	EventLastRecv time.Time
+	EventLagTotal time.Duration
+	EventLagMax   time.Duration
+	EventLagLast  time.Duration
+
+	WriteCount  int64
+	WriteTotal  time.Duration
+	WriteLast   time.Duration
+	WriteMax    time.Duration
+	WriteLastAt time.Time
+
+	StdoutLastAt time.Time
+	StderrLastAt time.Time
 }
 
 // NewAiInterpreter creates a new ai interpreter.
@@ -901,10 +923,12 @@ func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	switch parts[0] {
 	case "settings":
 		p.showSettings(fromControl)
+	case "pipeline":
+		p.showPipeline(fromControl)
 	case "usage":
 		return p.sendCommand("get_session_stats", nil, "")
 	default:
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|usage")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|pipeline|usage")
 	}
 	return nil
 }
@@ -1248,6 +1272,7 @@ func (p *AiInterpreter) readStdout(ctx context.Context) {
 		if line == "" {
 			continue
 		}
+		p.noteStdout()
 		p.handleStdoutLine([]byte(line))
 
 		select {
@@ -1269,6 +1294,7 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		p.noteStderr()
 		if p.debug {
 			log.Printf("[AI-STDERR] %s", line)
 		}
@@ -1376,6 +1402,7 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		}
 		return
 	}
+	p.recordEventMetrics(evt)
 
 	switch evt.Type {
 	case "server_start":
@@ -1747,7 +1774,9 @@ func (p *AiInterpreter) writeRaw(text string) {
 	if writer == nil {
 		return
 	}
+	start := time.Now()
 	_ = writer.Write(text)
+	p.recordWriteMetrics(time.Since(start))
 }
 
 func (p *AiInterpreter) scrollToBottom() {
@@ -1756,6 +1785,54 @@ func (p *AiInterpreter) scrollToBottom() {
 		return
 	}
 	_ = writer.ScrollToBottom()
+}
+
+func (p *AiInterpreter) recordEventMetrics(evt agentEvent) {
+	recvAt := time.Now()
+	eventAt := recvAt
+	if evt.EventAt > 0 {
+		eventAt = time.Unix(0, evt.EventAt)
+	}
+	lag := recvAt.Sub(eventAt)
+
+	p.pipelineMu.Lock()
+	p.pipeline.EventCount++
+	p.pipeline.EventLastType = evt.Type
+	p.pipeline.EventLastAt = eventAt
+	p.pipeline.EventLastRecv = recvAt
+	p.pipeline.EventLagLast = lag
+	p.pipeline.EventLagTotal += lag
+	if lag > p.pipeline.EventLagMax {
+		p.pipeline.EventLagMax = lag
+	}
+	p.pipelineMu.Unlock()
+}
+
+func (p *AiInterpreter) recordWriteMetrics(d time.Duration) {
+	now := time.Now()
+	p.pipelineMu.Lock()
+	p.pipeline.WriteCount++
+	p.pipeline.WriteTotal += d
+	p.pipeline.WriteLast = d
+	if d > p.pipeline.WriteMax {
+		p.pipeline.WriteMax = d
+	}
+	p.pipeline.WriteLastAt = now
+	p.pipelineMu.Unlock()
+}
+
+func (p *AiInterpreter) noteStdout() {
+	now := time.Now()
+	p.pipelineMu.Lock()
+	p.pipeline.StdoutLastAt = now
+	p.pipelineMu.Unlock()
+}
+
+func (p *AiInterpreter) noteStderr() {
+	now := time.Now()
+	p.pipelineMu.Lock()
+	p.pipeline.StderrLastAt = now
+	p.pipelineMu.Unlock()
 }
 
 func (p *AiInterpreter) showHelp(fromControl bool) {
@@ -1768,6 +1845,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /tree
   /commands
   /show settings
+  /show pipeline
   /show usage
   /thinking [on|off|toggle]
   /tools [off|on|verbose|toggle]
@@ -1851,6 +1929,62 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		compactionMaxMessages,
 		compactionMaxTokens,
 		compactionKeepRecent,
+	))
+}
+
+func (p *AiInterpreter) showPipeline(fromControl bool) {
+	p.pipelineMu.Lock()
+	pm := p.pipeline
+	p.pipelineMu.Unlock()
+
+	avgLag := time.Duration(0)
+	if pm.EventCount > 0 {
+		avgLag = pm.EventLagTotal / time.Duration(pm.EventCount)
+	}
+	avgWrite := time.Duration(0)
+	if pm.WriteCount > 0 {
+		avgWrite = pm.WriteTotal / time.Duration(pm.WriteCount)
+	}
+	stdoutIdle := time.Duration(0)
+	if !pm.StdoutLastAt.IsZero() {
+		stdoutIdle = time.Since(pm.StdoutLastAt)
+	}
+	stderrIdle := time.Duration(0)
+	if !pm.StderrLastAt.IsZero() {
+		stderrIdle = time.Since(pm.StderrLastAt)
+	}
+	eventIdle := time.Duration(0)
+	if !pm.EventLastRecv.IsZero() {
+		eventIdle = time.Since(pm.EventLastRecv)
+	}
+	writeIdle := time.Duration(0)
+	if !pm.WriteLastAt.IsZero() {
+		writeIdle = time.Since(pm.WriteLastAt)
+	}
+
+	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Pipeline Metrics:
+  events: count=%d lastType=%s lastLag=%s avgLag=%s maxLag=%s
+  events: lastEventAt=%s lastRecvAt=%s idle=%s
+  writes: count=%d last=%s avg=%s max=%s lastAt=%s idle=%s
+  io: lastStdout=%s idle=%s lastStderr=%s idle=%s`,
+		pm.EventCount,
+		orUnknown(pm.EventLastType),
+		formatDuration(pm.EventLagLast),
+		formatDuration(avgLag),
+		formatDuration(pm.EventLagMax),
+		formatTime(pm.EventLastAt),
+		formatTime(pm.EventLastRecv),
+		formatDuration(eventIdle),
+		pm.WriteCount,
+		formatDuration(pm.WriteLast),
+		formatDuration(avgWrite),
+		formatDuration(pm.WriteMax),
+		formatTime(pm.WriteLastAt),
+		formatDuration(writeIdle),
+		formatTime(pm.StdoutLastAt),
+		formatDuration(stdoutIdle),
+		formatTime(pm.StderrLastAt),
+		formatDuration(stderrIdle),
 	))
 }
 
@@ -2442,6 +2576,20 @@ func orUnknown(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0"
+	}
+	return d.String()
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 func formatIntOrUnknown(value int) string {
