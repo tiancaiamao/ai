@@ -1188,10 +1188,8 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		p.handleCompactResult(resp.Data)
 	case "prompt":
 		// Silently ignore prompt success - we'll see the results via events
-	case "steer":
-		// Silently ignore steer success
 	case "abort":
-		// Silently ignore abort success
+		p.writeStatus("ai: aborted")
 	}
 }
 

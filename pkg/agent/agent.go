@@ -29,6 +29,7 @@ type Agent struct {
 	context       *AgentContext
 	eventChan     chan AgentEvent
 	currentStream *llm.EventStream[AgentEvent, []AgentMessage]
+	streamMu      sync.RWMutex
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -101,12 +102,14 @@ func (a *Agent) processPrompt(message string) {
 	}
 
 	log.Printf("[Agent] Starting RunLoop...")
-	a.currentStream = RunLoop(a.ctx, prompts, a.context, config)
+	stream := RunLoop(a.ctx, prompts, a.context, config)
+	a.setCurrentStream(stream)
+	defer a.setCurrentStream(nil)
 
 	// Emit events to channel
 	log.Printf("[Agent] Starting event iteration...")
 	eventCount := 0
-	for event := range a.currentStream.Iterator(a.ctx) {
+	for event := range stream.Iterator(a.ctx) {
 		if event.Done {
 			log.Printf("[Agent] Event stream done, total events: %d", eventCount)
 			break
@@ -180,6 +183,10 @@ func (a *Agent) Abort() {
 	log.Printf("[Agent] Abort called, canceling context...")
 	if a.cancel != nil {
 		a.cancel()
+	}
+	aborted := a.abortCurrentStream()
+	if aborted {
+		a.clearFollowUps()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.ctx = ctx
@@ -319,5 +326,39 @@ func (a *Agent) emitEvent(event AgentEvent) {
 	case a.eventChan <- event:
 	default:
 		log.Println("Event channel full, dropping event")
+	}
+}
+
+func (a *Agent) setCurrentStream(stream *llm.EventStream[AgentEvent, []AgentMessage]) {
+	a.streamMu.Lock()
+	a.currentStream = stream
+	a.streamMu.Unlock()
+}
+
+func (a *Agent) getCurrentStream() *llm.EventStream[AgentEvent, []AgentMessage] {
+	a.streamMu.RLock()
+	stream := a.currentStream
+	a.streamMu.RUnlock()
+	return stream
+}
+
+func (a *Agent) abortCurrentStream() bool {
+	stream := a.getCurrentStream()
+	if stream == nil || stream.IsDone() {
+		return false
+	}
+	// Force an agent_end event so UI state can reset even if the iterator stops on ctx cancel.
+	stream.Push(NewAgentEndEvent(a.context.Messages))
+	a.emitEvent(NewAgentEndEvent(a.context.Messages))
+	return true
+}
+
+func (a *Agent) clearFollowUps() {
+	for {
+		select {
+		case <-a.followUpQueue:
+		default:
+			return
+		}
 	}
 }
