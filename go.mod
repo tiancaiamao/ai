@@ -9,4 +9,4 @@ require (
 
 require 9fans.net/go v0.0.7 // indirect
 
-replace github.com/sminez/ad/win => ../ad/win
+replace github.com/sminez/ad/win => github.com/tiancaiamao/ad/win v0.0.0-20260209021311-88cf15802e5f
