@@ -11,11 +11,18 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
+const (
+	defaultMaxRetries      = 1
+	defaultRetryBaseDelay = 1 * time.Second
+)
+
 // LoopConfig contains configuration for the agent loop.
 type LoopConfig struct {
-	Model    llm.Model
-	APIKey   string
-	Executor *ExecutorPool // Tool executor with concurrency control
+	Model          llm.Model
+	APIKey         string
+	Executor       *ExecutorPool // Tool executor with concurrency control
+	MaxLLMRetries  int           // Maximum number of retries for LLM calls
+	RetryBaseDelay time.Duration // Base delay for exponential backoff
 }
 
 // RunLoop starts a new agent loop with the given prompts.
@@ -71,8 +78,8 @@ func runInnerLoop(
 		default:
 		}
 
-		// Stream assistant response
-		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
+		// Stream assistant response with retry logic
+		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
 			log.Printf("Error streaming response: %v", err)
 			stream.Push(NewTurnEndEvent(msg, nil))
@@ -117,6 +124,55 @@ func runInnerLoop(
 	}
 
 	stream.Push(NewAgentEndEvent(agentCtx.Messages))
+}
+
+// streamAssistantResponseWithRetry streams the assistant's response with retry logic.
+func streamAssistantResponseWithRetry(
+	ctx context.Context,
+	agentCtx *AgentContext,
+	config *LoopConfig,
+	stream *llm.EventStream[AgentEvent, []AgentMessage],
+) (*AgentMessage, error) {
+	maxRetries := config.MaxLLMRetries
+	if maxRetries < 0 {
+		maxRetries = defaultMaxRetries
+	}
+	baseDelay := config.RetryBaseDelay
+	if baseDelay < defaultRetryBaseDelay {
+		baseDelay = defaultRetryBaseDelay
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * time.Duration(1<<(attempt-1))
+			log.Printf("[Loop] Retrying LLM call (attempt %d/%d) after %v delay",
+				attempt, maxRetries, delay)
+
+			select {
+			case <-time.After(delay):
+				// Continue with retry
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
+		if err == nil {
+			return msg, nil
+		}
+
+		lastErr = err
+		log.Printf("[Loop] LLM call failed (attempt %d/%d): %v", attempt, maxRetries, err)
+
+		// Don't retry on context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+
+	// All retries exhausted
+	return nil, lastErr
 }
 
 // streamAssistantResponse streams the assistant's response from the LLM.
@@ -340,7 +396,7 @@ func executeToolCalls(
 			continue
 		}
 
-		// Execute tool with concurrency control
+		// Execute tool with concurrency control and retry
 		var content []ContentBlock
 		var err error
 
