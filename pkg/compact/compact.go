@@ -2,8 +2,10 @@ package compact
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -12,37 +14,44 @@ import (
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages int  // Maximum messages before compression
-	MaxTokens   int  // Approximate token limit before compression
-	KeepRecent  int  // Number of recent messages to keep
-	AutoCompact bool // Whether to automatically compact
+	MaxMessages   int  // Maximum messages before compression
+	MaxTokens     int  // Approximate token limit before compression
+	KeepRecent    int  // Number of recent messages to keep
+	ReserveTokens int  // Tokens to reserve when using context window
+	AutoCompact   bool // Whether to automatically compact
 }
 
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMessages: 50,   // Compact after 50 messages
-		MaxTokens:   8000, // Compact after ~8000 tokens
-		KeepRecent:  5,    // Keep last 5 messages uncompressed
-		AutoCompact: true,
+		MaxMessages:   50,    // Compact after 50 messages
+		MaxTokens:     8000,  // Compact after ~8000 tokens (fallback)
+		KeepRecent:    5,     // Keep last 5 messages uncompressed
+		ReserveTokens: 16384, // Reserve tokens for responses when using context window
+		AutoCompact:   true,
 	}
 }
 
 // Compactor handles context compression.
 type Compactor struct {
-	config       *Config
-	model        llm.Model
-	apiKey       string
-	systemPrompt string
+	config        *Config
+	model         llm.Model
+	apiKey        string
+	systemPrompt  string
+	contextWindow int
 }
 
 // NewCompactor creates a new Compactor.
-func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string) *Compactor {
+func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int) *Compactor {
+	if config == nil {
+		config = DefaultConfig()
+	}
 	return &Compactor{
-		config:       config,
-		model:        model,
-		apiKey:       apiKey,
-		systemPrompt: systemPrompt,
+		config:        config,
+		model:         model,
+		apiKey:        apiKey,
+		systemPrompt:  systemPrompt,
+		contextWindow: contextWindow,
 	}
 }
 
@@ -52,17 +61,16 @@ func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
 		return false
 	}
 
-	// Check message count
-	if len(messages) >= c.config.MaxMessages {
-		return true
+	// Prefer token limit when available (context window or max tokens)
+	if tokenLimit, _ := c.EffectiveTokenLimit(); tokenLimit > 0 {
+		tokens := c.EstimateContextTokens(messages)
+		return tokens >= tokenLimit
 	}
 
-	// Check token count (rough estimation)
-	tokens := c.EstimateTokens(messages)
-	if tokens >= c.config.MaxTokens {
+	// Check message count (fallback)
+	if c.config.MaxMessages > 0 && len(messages) >= c.config.MaxMessages {
 		return true
 	}
-
 	return false
 }
 
@@ -163,16 +171,62 @@ Summary:`, conversation.String())
 	return result, nil
 }
 
+// ContextWindow returns the configured model context window.
+func (c *Compactor) ContextWindow() int {
+	return c.contextWindow
+}
+
+// SetContextWindow updates the model context window used for compaction.
+func (c *Compactor) SetContextWindow(window int) {
+	c.contextWindow = window
+}
+
+// ReserveTokens returns the effective reserve tokens setting.
+func (c *Compactor) ReserveTokens() int {
+	if c.config == nil || c.config.ReserveTokens <= 0 {
+		return DefaultConfig().ReserveTokens
+	}
+	return c.config.ReserveTokens
+}
+
+// EffectiveTokenLimit returns the token limit for compaction and its source.
+func (c *Compactor) EffectiveTokenLimit() (int, string) {
+	if c == nil {
+		return 0, "none"
+	}
+	if c.contextWindow > 0 {
+		reserve := c.ReserveTokens()
+		limit := c.contextWindow - reserve
+		if limit > 0 {
+			return limit, "context_window"
+		}
+	}
+	if c.config != nil && c.config.MaxTokens > 0 {
+		return c.config.MaxTokens, "max_tokens"
+	}
+	return 0, "none"
+}
+
 // EstimateTokens provides a rough estimation of token count.
 func (c *Compactor) EstimateTokens(messages []agent.AgentMessage) int {
-	// Rough estimation: ~4 characters per token
-	totalChars := 0
+	totalTokens := 0
 	for _, msg := range messages {
-		totalChars += len(msg.ExtractText())
-		totalChars += 50 // Overhead per message
+		totalTokens += estimateMessageTokens(msg)
 	}
+	return totalTokens
+}
 
-	return totalChars / 4
+// EstimateContextTokens estimates context tokens using usage when available.
+func (c *Compactor) EstimateContextTokens(messages []agent.AgentMessage) int {
+	usageTokens, lastIndex := lastAssistantUsageTokens(messages)
+	if lastIndex >= 0 {
+		trailingTokens := 0
+		for i := lastIndex + 1; i < len(messages); i++ {
+			trailingTokens += estimateMessageTokens(messages[i])
+		}
+		return usageTokens + trailingTokens
+	}
+	return c.EstimateTokens(messages)
 }
 
 // CompactIfNeeded compacts the context if it exceeds limits.
@@ -181,4 +235,61 @@ func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage) ([]agent.Agen
 		return c.Compact(messages)
 	}
 	return messages, nil
+}
+
+func lastAssistantUsageTokens(messages []agent.AgentMessage) (int, int) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "assistant" || msg.Usage == nil {
+			continue
+		}
+		stopReason := strings.ToLower(strings.TrimSpace(msg.StopReason))
+		if stopReason == "aborted" || stopReason == "error" {
+			continue
+		}
+		tokens := usageTotalTokens(msg.Usage)
+		if tokens > 0 {
+			return tokens, i
+		}
+	}
+	return 0, -1
+}
+
+func usageTotalTokens(usage *agent.Usage) int {
+	if usage == nil {
+		return 0
+	}
+	if usage.TotalTokens > 0 {
+		return usage.TotalTokens
+	}
+	return usage.InputTokens + usage.OutputTokens + usage.CacheRead + usage.CacheWrite
+}
+
+func estimateMessageTokens(msg agent.AgentMessage) int {
+	charCount := 0
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case agent.TextContent:
+			charCount += len(b.Text)
+		case agent.ThinkingContent:
+			charCount += len(b.Thinking)
+		case agent.ToolCallContent:
+			charCount += len(b.Name)
+			if b.Arguments != nil {
+				if argBytes, err := json.Marshal(b.Arguments); err == nil {
+					charCount += len(argBytes)
+				}
+			}
+		case agent.ImageContent:
+			// Roughly estimate images as 1200 tokens (4800 chars).
+			charCount += 4800
+		}
+	}
+	if charCount == 0 {
+		charCount = len(msg.ExtractText())
+	}
+	if charCount == 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(charCount) / 4.0))
 }

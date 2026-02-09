@@ -45,6 +45,7 @@ func main() {
 
 	extraArgs := strings.Fields(*aiArgs)
 	interpreter := winai.NewAiInterpreter(*aiCmd, extraArgs, *debug)
+	interpreter.SetAdClient(client) // Set ad client for minibuffer interactions
 	defer interpreter.Stop()
 
 	name := *windowName

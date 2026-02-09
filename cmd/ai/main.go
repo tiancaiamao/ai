@@ -114,6 +114,33 @@ func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
 	}
 }
 
+func resolveActiveModelSpec(cfg *config.Config) (config.ModelSpec, error) {
+	specs, modelsPath, err := loadModelSpecs(cfg)
+	if err != nil {
+		return modelSpecFromConfig(cfg), fmt.Errorf("load models from %s: %w", modelsPath, err)
+	}
+	if spec, ok := findModelSpec(specs, cfg.Model.Provider, cfg.Model.ID); ok {
+		return spec, nil
+	}
+	return modelSpecFromConfig(cfg), nil
+}
+
+func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *rpc.CompactionState {
+	if cfg == nil || compactor == nil {
+		return nil
+	}
+	limit, source := compactor.EffectiveTokenLimit()
+	return &rpc.CompactionState{
+		MaxMessages:      cfg.MaxMessages,
+		MaxTokens:        cfg.MaxTokens,
+		KeepRecent:       cfg.KeepRecent,
+		ReserveTokens:    compactor.ReserveTokens(),
+		ContextWindow:    compactor.ContextWindow(),
+		TokenLimit:       limit,
+		TokenLimitSource: source,
+	}
+}
+
 func loadModelSpecs(cfg *config.Config) ([]config.ModelSpec, string, error) {
 	modelsPath, err := config.ResolveModelsPath()
 	if err != nil {
@@ -318,9 +345,16 @@ func main() {
 	// Log model info
 	log.Info("Model: %s, Provider: %s, BaseURL: %s", model.ID, model.Provider, model.BaseURL)
 	if cfg.Compactor != nil {
-		log.Info("Compactor: MaxMessages=%d, MaxTokens=%d",
-			cfg.Compactor.MaxMessages, cfg.Compactor.MaxTokens)
+		log.Info("Compactor: MaxMessages=%d, MaxTokens=%d, ReserveTokens=%d",
+			cfg.Compactor.MaxMessages, cfg.Compactor.MaxTokens, cfg.Compactor.ReserveTokens)
 	}
+
+	activeSpec, err := resolveActiveModelSpec(cfg)
+	if err != nil {
+		log.Infof("Model spec fallback: %v", err)
+	}
+	currentModelInfo := modelInfoFromSpec(activeSpec)
+	currentContextWindow := activeSpec.ContextWindow
 
 	sessionPath, err := normalizeSessionPath(*sessionPathFlag)
 	if err != nil {
@@ -443,6 +477,7 @@ func main() {
 		model,
 		apiKey,
 		"You are a helpful coding assistant.",
+		currentContextWindow,
 	)
 
 	// Enable automatic compression
@@ -646,7 +681,7 @@ func main() {
 
 	server.SetGetStateHandler(func() (*rpc.SessionState, error) {
 		log.Info("Received get_state")
-		modelInfo := modelInfoFromModel(ag.GetModel())
+		compactionState := buildCompactionState(compactorConfig, compactor)
 		stateMu.Lock()
 		currentSessionID := sessionID
 		currentSessionName := sessionName
@@ -654,6 +689,7 @@ func main() {
 		compacting := isCompacting
 		thinkingLevel := currentThinkingLevel
 		autoCompact := autoCompactionEnabled
+		modelInfo := currentModelInfo
 		stateMu.Unlock()
 
 		return &rpc.SessionState{
@@ -669,6 +705,7 @@ func main() {
 			AutoCompactionEnabled: autoCompact,
 			MessageCount:          len(ag.GetMessages()),
 			PendingMessageCount:   ag.GetPendingFollowUps(),
+			Compaction:            compactionState,
 		}, nil
 	})
 
@@ -790,7 +827,7 @@ func main() {
 		ag.SetAPIKey(apiKey)
 
 		// Recreate compactor with new model
-		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt)
+		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, spec.ContextWindow)
 		ag.SetCompactor(compactor)
 
 		if err := config.SaveConfig(cfg, configPath); err != nil {
@@ -798,6 +835,10 @@ func main() {
 		}
 
 		info := modelInfoFromSpec(spec)
+		stateMu.Lock()
+		currentModelInfo = info
+		currentContextWindow = spec.ContextWindow
+		stateMu.Unlock()
 		return &info, nil
 	})
 

@@ -48,18 +48,30 @@ const (
 
 // SessionState represents the current session state.
 type SessionState struct {
-	Model                 *ModelInfo `json:"model,omitempty"`
-	ThinkingLevel         string     `json:"thinkingLevel"`
-	IsStreaming           bool       `json:"isStreaming"`
-	IsCompacting          bool       `json:"isCompacting"`
-	SteeringMode          string     `json:"steeringMode"`
-	FollowUpMode          string     `json:"followUpMode"`
-	SessionFile           string     `json:"sessionFile,omitempty"`
-	SessionID             string     `json:"sessionId,omitempty"`
-	SessionName           string     `json:"sessionName,omitempty"`
-	AutoCompactionEnabled bool       `json:"autoCompactionEnabled"`
-	MessageCount          int        `json:"messageCount"`
-	PendingMessageCount   int        `json:"pendingMessageCount"`
+	Model                 *ModelInfo       `json:"model,omitempty"`
+	ThinkingLevel         string           `json:"thinkingLevel"`
+	IsStreaming           bool             `json:"isStreaming"`
+	IsCompacting          bool             `json:"isCompacting"`
+	SteeringMode          string           `json:"steeringMode"`
+	FollowUpMode          string           `json:"followUpMode"`
+	SessionFile           string           `json:"sessionFile,omitempty"`
+	SessionID             string           `json:"sessionId,omitempty"`
+	SessionName           string           `json:"sessionName,omitempty"`
+	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
+	MessageCount          int              `json:"messageCount"`
+	PendingMessageCount   int              `json:"pendingMessageCount"`
+	Compaction            *CompactionState `json:"compaction,omitempty"`
+}
+
+// CompactionState represents compaction thresholds and settings.
+type CompactionState struct {
+	MaxMessages      int    `json:"maxMessages,omitempty"`
+	MaxTokens        int    `json:"maxTokens,omitempty"`
+	KeepRecent       int    `json:"keepRecent,omitempty"`
+	ReserveTokens    int    `json:"reserveTokens,omitempty"`
+	ContextWindow    int    `json:"contextWindow,omitempty"`
+	TokenLimit       int    `json:"tokenLimit,omitempty"`
+	TokenLimitSource string `json:"tokenLimitSource,omitempty"`
 }
 
 // ModelInfo represents a model description for RPC clients.

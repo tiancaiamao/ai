@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -10,12 +11,12 @@ import (
 func TestShouldCompact(t *testing.T) {
 	config := &Config{
 		MaxMessages: 10,
-		MaxTokens:   1000,
+		MaxTokens:   0,
 		KeepRecent:  2,
 		AutoCompact: true,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test")
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	// Test with few messages - should not compact
 	fewMessages := make([]agent.AgentMessage, 5)
@@ -38,9 +39,30 @@ func TestShouldCompact(t *testing.T) {
 	}
 }
 
+func TestShouldCompactTokenLimit(t *testing.T) {
+	config := &Config{
+		MaxMessages: 0,
+		MaxTokens:   50,
+		KeepRecent:  2,
+		AutoCompact: true,
+	}
+
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
+
+	longText := strings.Repeat("a", 400) // ~100 tokens
+	messages := []agent.AgentMessage{
+		agent.NewUserMessage(longText),
+		agent.NewAssistantMessage(),
+	}
+
+	if !compactor.ShouldCompact(messages) {
+		t.Error("Should compact when token limit is exceeded")
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test")
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	messages := []agent.AgentMessage{
 		agent.NewUserMessage("Hello world"),
@@ -63,7 +85,7 @@ func TestCompactDisabled(t *testing.T) {
 		AutoCompact: false,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test")
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	messages := make([]agent.AgentMessage, 100)
 	for i := 0; i < 100; i++ {
@@ -77,7 +99,7 @@ func TestCompactDisabled(t *testing.T) {
 
 func TestCompactFewMessages(t *testing.T) {
 	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test")
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	// With fewer messages than KeepRecent, should return as-is
 	messages := []agent.AgentMessage{

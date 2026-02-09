@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sminez/ad/win/pkg/ad"
 	"github.com/sminez/ad/win/pkg/repl"
 	"github.com/tiancaiamao/ai/pkg/agent"
 )
@@ -30,6 +31,9 @@ type AiInterpreter struct {
 	cmdPath string
 	cmdArgs []string
 	debug   bool
+
+	// adClient is the client for communicating with ad (used for minibuffer, etc.)
+	adClient *ad.Client
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -58,6 +62,7 @@ type AiInterpreter struct {
 	currentThinkingLevel  string
 	busyMode              string
 	autoCompactionEnabled bool
+	compactionState       *CompactionState
 	pendingModelList      bool
 	pendingModelListUsage bool
 	pendingModelSet       string
@@ -69,8 +74,21 @@ type AiInterpreter struct {
 	isStreaming           bool
 	deferStatus           bool
 	pendingStatus         []string
+	pendingStateRequests  map[string]stateRequestInfo
+	heartbeatStop         chan struct{}
+	heartbeatInterval     time.Duration
+	heartbeatQuiet        bool
+	lastHeartbeat         time.Time
+	lastHeartbeatLatency  time.Duration
 	rpcSequence           int64
 	workingDir            string
+}
+
+type stateRequestInfo struct {
+	started time.Time
+	show    bool
+	kind    string
+	quiet   bool
 }
 
 type Model struct {
@@ -85,18 +103,29 @@ type Model struct {
 }
 
 type SessionState struct {
-	Model                 *Model `json:"model"`
-	ThinkingLevel         string `json:"thinkingLevel"`
-	IsStreaming           bool   `json:"isStreaming"`
-	IsCompacting          bool   `json:"isCompacting"`
-	SteeringMode          string `json:"steeringMode"`
-	FollowUpMode          string `json:"followUpMode"`
-	SessionFile           string `json:"sessionFile"`
-	SessionID             string `json:"sessionId"`
-	SessionName           string `json:"sessionName"`
-	AutoCompactionEnabled bool   `json:"autoCompactionEnabled"`
-	MessageCount          int    `json:"messageCount"`
-	PendingMessageCount   int    `json:"pendingMessageCount"`
+	Model                 *Model           `json:"model"`
+	ThinkingLevel         string           `json:"thinkingLevel"`
+	IsStreaming           bool             `json:"isStreaming"`
+	IsCompacting          bool             `json:"isCompacting"`
+	SteeringMode          string           `json:"steeringMode"`
+	FollowUpMode          string           `json:"followUpMode"`
+	SessionFile           string           `json:"sessionFile"`
+	SessionID             string           `json:"sessionId"`
+	SessionName           string           `json:"sessionName"`
+	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
+	MessageCount          int              `json:"messageCount"`
+	PendingMessageCount   int              `json:"pendingMessageCount"`
+	Compaction            *CompactionState `json:"compaction"`
+}
+
+type CompactionState struct {
+	MaxMessages      int    `json:"maxMessages"`
+	MaxTokens        int    `json:"maxTokens"`
+	KeepRecent       int    `json:"keepRecent"`
+	ReserveTokens    int    `json:"reserveTokens"`
+	ContextWindow    int    `json:"contextWindow"`
+	TokenLimit       int    `json:"tokenLimit"`
+	TokenLimitSource string `json:"tokenLimitSource"`
 }
 
 type SlashCommand struct {
@@ -158,6 +187,7 @@ type rpcEnvelope struct {
 }
 
 type rpcResponse struct {
+	ID      string          `json:"id"`
 	Type    string          `json:"type"`
 	Command string          `json:"command"`
 	Success bool            `json:"success"`
@@ -195,17 +225,25 @@ type serverStartEvent struct {
 // NewAiInterpreter creates a new ai interpreter.
 func NewAiInterpreter(cmdPath string, cmdArgs []string, debug bool) *AiInterpreter {
 	return &AiInterpreter{
-		BaseInterpreter:  repl.NewBaseInterpreter(true),
-		cmdPath:          cmdPath,
-		cmdArgs:          cmdArgs,
-		debug:            debug,
-		showAssistant:    true,
-		showThinking:     true,
-		showTools:        false,
-		showToolsVerbose: false,
-		showPrefixes:     true,
-		busyMode:         "steer",
+		BaseInterpreter:      repl.NewBaseInterpreter(true),
+		cmdPath:              cmdPath,
+		cmdArgs:              cmdArgs,
+		debug:                debug,
+		showAssistant:        true,
+		showThinking:         true,
+		showTools:            false,
+		showToolsVerbose:     false,
+		showPrefixes:         true,
+		busyMode:             "steer",
+		pendingStateRequests: make(map[string]stateRequestInfo),
 	}
+}
+
+// SetAdClient sets the ad client for minibuffer interactions.
+func (p *AiInterpreter) SetAdClient(client *ad.Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.adClient = client
 }
 
 // Start starts the ai subprocess and begins streaming output.
@@ -327,7 +365,7 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 	if streaming {
 		switch busyMode {
 		case "follow-up":
-			if err := p.sendCommand("follow_up", nil, raw); err != nil {
+			if err := p.sendMessageCommand("follow_up", raw); err != nil {
 				p.writeStatus(fmt.Sprintf("ai: %v", err))
 			}
 			return nil
@@ -335,7 +373,7 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 			p.writeStatus("ai: agent is busy")
 			return nil
 		default: // "steer"
-			if err := p.sendCommand("steer", nil, raw); err != nil {
+			if err := p.sendMessageCommand("steer", raw); err != nil {
 				p.writeStatus(fmt.Sprintf("ai: %v", err))
 			}
 			return nil
@@ -393,6 +431,68 @@ func (p *AiInterpreter) handleInput(input string, fromControl bool) (bool, error
 	return false, nil
 }
 
+func (p *AiInterpreter) handleModelSelect() (bool, error) {
+	// Send request to get available models
+	if err := p.sendCommand("get_available_models", nil, ""); err != nil {
+		return false, err
+	}
+
+	// Wait for the models to arrive
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			p.writeStatus("ai: timeout waiting for model list")
+			return false, nil
+		case <-ticker.C:
+			p.stateMu.Lock()
+			models := append([]Model(nil), p.availableModels...)
+			p.stateMu.Unlock()
+
+			if len(models) > 0 {
+				// Convert models to selection format
+				options := make([]string, len(models))
+				for i, m := range models {
+					ref := fmt.Sprintf("%s/%s", m.Provider, m.ID)
+					name := m.Name
+					if name == "" {
+						name = m.ID
+					}
+					options[i] = fmt.Sprintf("%s - %s", ref, name)
+				}
+
+				// Use ad's minibuffer for interactive selection
+				if p.adClient != nil {
+					selection, err := p.adClient.MinibufferSelect("Select model:", options)
+					if err != nil {
+						p.writeStatus(fmt.Sprintf("ai: model selection error: %v", err))
+						return true, nil
+					}
+					if selection != "" {
+						// Parse the selection - it should be one of the model references
+						// The selection format is "provider/id - name"
+						parts := strings.SplitN(selection, " - ", 2)
+						if len(parts) > 0 {
+							modelRef := strings.TrimSpace(parts[0])
+							if err := p.setModelFromInput(modelRef); err != nil {
+								p.writeStatus(fmt.Sprintf("ai: %v", err))
+							}
+						}
+					}
+					return true, nil
+				}
+
+				// Fall back to showing the list
+				p.showModelList(models, true)
+				return true, nil
+			}
+		}
+	}
+}
+
 func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, error) {
 	if cmdLine == "" {
 		return false, nil
@@ -417,7 +517,9 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 	case "abort":
 		return true, p.sendCommand("abort", nil, "")
 	case "session":
-		return true, p.sendCommand("get_state", nil, "")
+		return true, p.sendStateRequest(true, "session", false)
+	case "ping":
+		return true, p.sendStateRequest(false, "ping", false)
 	case "messages":
 		return true, p.sendCommand("get_messages", nil, "")
 	case "tree":
@@ -433,9 +535,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 	case "prefix":
 		return true, p.handleToggle("prefix", args, fromControl)
 	case "model-select":
-		p.pendingModelList = true
-		p.pendingModelListUsage = true
-		return true, p.sendCommand("get_available_models", nil, "")
+		return p.handleModelSelect()
 	case "models":
 		p.pendingModelList = true
 		p.pendingModelListUsage = false
@@ -487,18 +587,20 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
 		return true, p.handleFork(args)
+	case "heartbeat":
+		return true, p.handleHeartbeat(args, fromControl)
 	case "steer":
 		if strings.TrimSpace(args) == "" {
 			p.writeStatusMaybeDefer(fromControl, "ai: usage: /steer <message>")
 			return true, nil
 		}
-		return true, p.sendCommand("steer", nil, strings.TrimSpace(args))
+		return true, p.sendMessageCommand("steer", strings.TrimSpace(args))
 	case "follow-up", "followup":
 		if strings.TrimSpace(args) == "" {
 			p.writeStatusMaybeDefer(fromControl, "ai: usage: /follow-up <message>")
 			return true, nil
 		}
-		return true, p.sendCommand("follow_up", nil, strings.TrimSpace(args))
+		return true, p.sendMessageCommand("follow_up", strings.TrimSpace(args))
 	case "busy-mode":
 		mode := strings.TrimSpace(args)
 		if mode == "" {
@@ -541,6 +643,11 @@ func (p *AiInterpreter) sendPrompt(message string) error {
 }
 
 func (p *AiInterpreter) sendCommand(cmdType string, data any, message string) error {
+	_, err := p.sendCommandWithID(cmdType, data, message)
+	return err
+}
+
+func (p *AiInterpreter) sendCommandWithID(cmdType string, data any, message string) (string, error) {
 	payload := map[string]any{
 		"type": cmdType,
 	}
@@ -550,8 +657,33 @@ func (p *AiInterpreter) sendCommand(cmdType string, data any, message string) er
 	if data != nil {
 		payload["data"] = data
 	}
-	payload["id"] = p.nextID()
-	return p.sendJSON(payload)
+	id := p.nextID()
+	payload["id"] = id
+	return id, p.sendJSON(payload)
+}
+
+func (p *AiInterpreter) sendMessageCommand(cmdType, message string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return fmt.Errorf("empty message")
+	}
+	return p.sendCommand(cmdType, map[string]any{"message": message}, "")
+}
+
+func (p *AiInterpreter) sendStateRequest(show bool, kind string, quiet bool) error {
+	id, err := p.sendCommandWithID("get_state", nil, "")
+	if err != nil {
+		return err
+	}
+	p.stateMu.Lock()
+	p.pendingStateRequests[id] = stateRequestInfo{
+		started: time.Now(),
+		show:    show,
+		kind:    kind,
+		quiet:   quiet,
+	}
+	p.stateMu.Unlock()
+	return nil
 }
 
 func (p *AiInterpreter) sendRaw(jsonLine string) error {
@@ -693,6 +825,101 @@ func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: tools %s", toolsMode(showTools, showVerbose)))
 	return nil
+}
+
+func (p *AiInterpreter) handleHeartbeat(args string, fromControl bool) error {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /heartbeat <on|off|status> [interval] [quiet]")
+		return nil
+	}
+
+	switch fields[0] {
+	case "on":
+		interval := 5 * time.Second
+		quiet := false
+		for _, field := range fields[1:] {
+			switch field {
+			case "quiet", "silent":
+				quiet = true
+			default:
+				if parsed, err := parseHeartbeatInterval(field); err == nil {
+					interval = parsed
+				} else {
+					p.writeStatusMaybeDefer(fromControl, "ai: invalid heartbeat interval")
+					return nil
+				}
+			}
+		}
+		p.startHeartbeat(interval, quiet)
+		mode := "on"
+		if quiet {
+			mode = "quiet"
+		}
+		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: heartbeat %s (%s)", mode, interval))
+		return nil
+	case "off":
+		p.stopHeartbeat()
+		p.writeStatusMaybeDefer(fromControl, "ai: heartbeat off")
+		return nil
+	case "status":
+		p.stateMu.Lock()
+		active := p.heartbeatStop != nil
+		interval := p.heartbeatInterval
+		quiet := p.heartbeatQuiet
+		last := p.lastHeartbeat
+		latency := p.lastHeartbeatLatency
+		p.stateMu.Unlock()
+		if !active {
+			p.writeStatusMaybeDefer(fromControl, "ai: heartbeat off")
+			return nil
+		}
+		line := fmt.Sprintf("ai: heartbeat on (%s)", interval)
+		if quiet {
+			line = fmt.Sprintf("ai: heartbeat quiet (%s)", interval)
+		}
+		if !last.IsZero() {
+			line = fmt.Sprintf("%s last=%s latency=%s", line, last.Format(time.RFC3339), latency)
+		}
+		p.writeStatusMaybeDefer(fromControl, line)
+		return nil
+	default:
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /heartbeat <on|off|status> [interval] [quiet]")
+		return nil
+	}
+}
+
+func (p *AiInterpreter) startHeartbeat(interval time.Duration, quiet bool) {
+	p.stopHeartbeat()
+	stop := make(chan struct{})
+	p.stateMu.Lock()
+	p.heartbeatStop = stop
+	p.heartbeatInterval = interval
+	p.heartbeatQuiet = quiet
+	p.stateMu.Unlock()
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = p.sendStateRequest(false, "heartbeat", quiet)
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (p *AiInterpreter) stopHeartbeat() {
+	p.stateMu.Lock()
+	stop := p.heartbeatStop
+	p.heartbeatStop = nil
+	p.stateMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 }
 
 func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) error {
@@ -908,6 +1135,16 @@ func (p *AiInterpreter) handleStdoutLine(line []byte) {
 
 func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 	if !resp.Success {
+		if resp.Command == "get_state" {
+			info, ok := p.takeStateRequestInfo(resp.ID)
+			if ok && !info.quiet {
+				label := "ping"
+				if info.kind == "heartbeat" {
+					label = "heartbeat"
+				}
+				p.writeStatus(fmt.Sprintf("ai: %s failed: %s", label, resp.Error))
+			}
+		}
 		if resp.Error == "" {
 			p.writeStatus(fmt.Sprintf("ai: %s failed", resp.Command))
 			return
@@ -922,7 +1159,7 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 	case "set_model":
 		p.handleSetModel(resp.Data)
 	case "get_state":
-		p.handleState(resp.Data)
+		p.handleStateResponse(resp)
 	case "get_session_stats":
 		p.handleSessionStats(resp.Data)
 	case "get_commands":
@@ -1352,6 +1589,8 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, `Commands:
   /help
   /session
+  /ping
+  /heartbeat <on|off|status> [interval] [quiet]
   /messages
   /tree
   /commands
@@ -1389,11 +1628,27 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 	thinkingLevel := p.currentThinkingLevel
 	autoCompact := p.autoCompactionEnabled
 	busyMode := p.busyMode
+	compaction := p.compactionState
 	p.stateMu.Unlock()
 
 	model := modelID
 	if modelProvider != "" {
 		model = fmt.Sprintf("%s/%s", modelProvider, modelID)
+	}
+
+	compactionContext := "unknown"
+	compactionReserve := "unknown"
+	compactionLimit := "unknown"
+	compactionMaxMessages := "disabled"
+	compactionMaxTokens := "disabled"
+	compactionKeepRecent := "unknown"
+	if compaction != nil {
+		compactionContext = formatIntOrUnknown(compaction.ContextWindow)
+		compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
+		compactionLimit = formatTokenLimit(compaction)
+		compactionMaxMessages = formatLimit(compaction.MaxMessages)
+		compactionMaxTokens = formatLimit(compaction.MaxTokens)
+		compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
 	}
 
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
@@ -1403,7 +1658,13 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
   prefix: %s
   thinking-level: %s
   busy-mode: %s
-  auto-compaction: %s`,
+  auto-compaction: %s
+  compaction-context-window: %s
+  compaction-reserve-tokens: %s
+  compaction-token-limit: %s
+  compaction-max-messages: %s
+  compaction-max-tokens: %s
+  compaction-keep-recent: %s`,
 		model,
 		onOff(showThinking),
 		toolsMode(showTools, showToolsVerbose),
@@ -1411,6 +1672,12 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		orUnknown(thinkingLevel),
 		orUnknown(busyMode),
 		onOff(autoCompact),
+		compactionContext,
+		compactionReserve,
+		compactionLimit,
+		compactionMaxMessages,
+		compactionMaxTokens,
+		compactionKeepRecent,
 	))
 }
 
@@ -1521,13 +1788,39 @@ func (p *AiInterpreter) handleSetModel(data json.RawMessage) {
 	p.writeStatus(fmt.Sprintf("ai: model set to %s", label))
 }
 
-func (p *AiInterpreter) handleState(data json.RawMessage) {
-	var state SessionState
-	if err := json.Unmarshal(data, &state); err != nil {
+func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
+	info, ok := p.takeStateRequestInfo(resp.ID)
+	state, err := p.decodeState(resp.Data)
+	if err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid state response: %v", err))
 		return
 	}
+	p.applyState(state)
 
+	if ok {
+		if info.show {
+			p.showState(state)
+			return
+		}
+		p.reportStatePing(info, state)
+		return
+	}
+
+	p.showState(state)
+}
+
+func (p *AiInterpreter) decodeState(data json.RawMessage) (*SessionState, error) {
+	var state SessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (p *AiInterpreter) applyState(state *SessionState) {
+	if state == nil {
+		return
+	}
 	p.stateMu.Lock()
 	if state.Model != nil {
 		p.currentModelID = state.Model.ID
@@ -1535,8 +1828,15 @@ func (p *AiInterpreter) handleState(data json.RawMessage) {
 	}
 	p.currentThinkingLevel = state.ThinkingLevel
 	p.autoCompactionEnabled = state.AutoCompactionEnabled
+	p.isStreaming = state.IsStreaming
+	p.compactionState = state.Compaction
 	p.stateMu.Unlock()
+}
 
+func (p *AiInterpreter) showState(state *SessionState) {
+	if state == nil {
+		return
+	}
 	model := "unknown"
 	if state.Model != nil {
 		model = state.Model.ID
@@ -1545,26 +1845,87 @@ func (p *AiInterpreter) handleState(data json.RawMessage) {
 		}
 	}
 
+	compactionContext := "unknown"
+	compactionLimit := "unknown"
+	compactionReserve := "unknown"
+	compactionKeepRecent := "unknown"
+	if state.Compaction != nil {
+		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
+		compactionLimit = formatTokenLimit(state.Compaction)
+		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
+		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
+	}
+
 	p.writeStatus(fmt.Sprintf(`Session:
   id: %s
   name: %s
   file: %s
   model: %s
+  context-window: %s
+  compaction-limit: %s
+  compaction-reserve: %s
+  compaction-keep-recent: %s
   thinking-level: %s
   auto-compaction: %s
   messages: %d
   pending: %d
-  streaming: %s`,
+  streaming: %s
+  compacting: %s`,
 		orUnknown(state.SessionID),
 		orUnknown(state.SessionName),
 		orUnknown(state.SessionFile),
 		model,
+		compactionContext,
+		compactionLimit,
+		compactionReserve,
+		compactionKeepRecent,
 		orUnknown(state.ThinkingLevel),
 		onOff(state.AutoCompactionEnabled),
 		state.MessageCount,
 		state.PendingMessageCount,
 		onOff(state.IsStreaming),
+		onOff(state.IsCompacting),
 	))
+}
+
+func (p *AiInterpreter) takeStateRequestInfo(id string) (stateRequestInfo, bool) {
+	if strings.TrimSpace(id) == "" {
+		return stateRequestInfo{}, false
+	}
+	p.stateMu.Lock()
+	info, ok := p.pendingStateRequests[id]
+	if ok {
+		delete(p.pendingStateRequests, id)
+	}
+	p.stateMu.Unlock()
+	return info, ok
+}
+
+func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *SessionState) {
+	latency := time.Since(info.started)
+	p.stateMu.Lock()
+	p.lastHeartbeat = time.Now()
+	p.lastHeartbeatLatency = latency
+	p.stateMu.Unlock()
+
+	if info.quiet {
+		return
+	}
+
+	label := "pong"
+	if info.kind == "heartbeat" {
+		label = "heartbeat"
+	}
+	streaming := "unknown"
+	compacting := "unknown"
+	pending := 0
+	if state != nil {
+		streaming = onOff(state.IsStreaming)
+		compacting = onOff(state.IsCompacting)
+		pending = state.PendingMessageCount
+	}
+	p.writeStatus(fmt.Sprintf("ai: %s %s (streaming=%s compacting=%s pending=%d)",
+		label, latency.Round(time.Millisecond), streaming, compacting, pending))
 }
 
 func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
@@ -1889,11 +2250,66 @@ func orUnknown(value string) string {
 	return value
 }
 
+func formatIntOrUnknown(value int) string {
+	if value <= 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(value)
+}
+
+func formatLimit(value int) string {
+	if value <= 0 {
+		return "disabled"
+	}
+	return strconv.Itoa(value)
+}
+
+func formatTokenLimit(state *CompactionState) string {
+	if state == nil || state.TokenLimit <= 0 {
+		return "unknown"
+	}
+	source := formatTokenLimitSource(state.TokenLimitSource)
+	if source == "" {
+		return strconv.Itoa(state.TokenLimit)
+	}
+	return fmt.Sprintf("%d (%s)", state.TokenLimit, source)
+}
+
+func formatTokenLimitSource(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "context_window":
+		return "context-window"
+	case "max_tokens":
+		return "max-tokens"
+	case "none":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
 func truncate(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
 	return text[:limit-3] + "..."
+}
+
+func parseHeartbeatInterval(input string) (time.Duration, error) {
+	if input == "" {
+		return 0, fmt.Errorf("empty interval")
+	}
+	if strings.HasSuffix(input, "s") || strings.HasSuffix(input, "m") || strings.HasSuffix(input, "h") {
+		return time.ParseDuration(input)
+	}
+	seconds, err := strconv.Atoi(input)
+	if err != nil {
+		return 0, err
+	}
+	if seconds <= 0 {
+		return 0, fmt.Errorf("invalid interval")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 func summarizeToolArgs(toolName string, args map[string]interface{}) string {

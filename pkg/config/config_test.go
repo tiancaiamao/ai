@@ -343,6 +343,10 @@ func TestCompactorDefaults(t *testing.T) {
 		t.Errorf("Expected KeepRecent 5, got %d", compactorConfig.KeepRecent)
 	}
 
+	if compactorConfig.ReserveTokens != 16384 {
+		t.Errorf("Expected ReserveTokens 16384, got %d", compactorConfig.ReserveTokens)
+	}
+
 	if !compactorConfig.AutoCompact {
 		t.Error("Expected AutoCompact to be true")
 	}
