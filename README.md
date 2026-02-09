@@ -2,6 +2,11 @@
 
 `ai` 是一个 Go 实现的核心 Agent Loop，面向 `stdin/stdout` RPC 使用方式，适合编辑器集成。
 
+## 定位说明
+
+- 本仓库只提供 **RPC 模式** 的 Agent 核心，不包含 TUI 模块。
+- 在 ad 编辑器中使用的方式是 `win-ai`（由 ad 的 win 库驱动），位于 `github.com/tiancaiamao/ad` 的集成路径中。
+
 ## 构建与运行
 
 ```bash
@@ -13,6 +18,12 @@ go build -o bin/ai ./cmd/ai
 # 默认使用 ZAI
 export ZAI_API_KEY=your-zai-api-key
 ./bin/ai --mode rpc
+```
+
+构建 win-ai（供 ad 编辑器使用）：
+
+```bash
+go build -o bin/win-ai ./cmd/win-ai
 ```
 
 加载指定会话文件：

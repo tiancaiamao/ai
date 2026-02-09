@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -79,6 +80,94 @@ func modelInfoFromModel(model llm.Model) rpc.ModelInfo {
 		API:      model.API,
 		Input:    []string{"text"},
 	}
+}
+
+func modelInfoFromSpec(spec config.ModelSpec) rpc.ModelInfo {
+	name := spec.Name
+	if name == "" {
+		name = spec.ID
+	}
+	input := spec.Input
+	if len(input) == 0 {
+		input = []string{"text"}
+	}
+	return rpc.ModelInfo{
+		ID:            spec.ID,
+		Name:          name,
+		Provider:      spec.Provider,
+		API:           spec.API,
+		Reasoning:     spec.Reasoning,
+		Input:         input,
+		ContextWindow: spec.ContextWindow,
+		MaxTokens:     spec.MaxTokens,
+	}
+}
+
+func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
+	return config.ModelSpec{
+		ID:       cfg.Model.ID,
+		Name:     cfg.Model.ID,
+		Provider: cfg.Model.Provider,
+		BaseURL:  cfg.Model.BaseURL,
+		API:      cfg.Model.API,
+		Input:    []string{"text"},
+	}
+}
+
+func loadModelSpecs(cfg *config.Config) ([]config.ModelSpec, string, error) {
+	modelsPath, err := config.ResolveModelsPath()
+	if err != nil {
+		return nil, "", err
+	}
+
+	specs, err := config.LoadModelSpecs(modelsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []config.ModelSpec{modelSpecFromConfig(cfg)}, modelsPath, nil
+		}
+		return nil, modelsPath, err
+	}
+
+	if len(specs) == 0 {
+		return nil, modelsPath, fmt.Errorf("no models defined in %s", modelsPath)
+	}
+
+	return specs, modelsPath, nil
+}
+
+func filterModelSpecsWithKeys(specs []config.ModelSpec) []config.ModelSpec {
+	available := make(map[string]bool)
+	filtered := make([]config.ModelSpec, 0, len(specs))
+	for _, spec := range specs {
+		provider := strings.TrimSpace(spec.Provider)
+		if provider == "" || strings.TrimSpace(spec.ID) == "" {
+			continue
+		}
+		ok, seen := available[provider]
+		if !seen {
+			if _, err := config.ResolveAPIKey(provider); err == nil {
+				ok = true
+			} else {
+				ok = false
+			}
+			available[provider] = ok
+		}
+		if ok {
+			filtered = append(filtered, spec)
+		}
+	}
+	return filtered
+}
+
+func findModelSpec(specs []config.ModelSpec, provider, modelID string) (config.ModelSpec, bool) {
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	for _, spec := range specs {
+		if strings.EqualFold(spec.Provider, provider) && spec.ID == modelID {
+			return spec, true
+		}
+	}
+	return config.ModelSpec{}, false
 }
 
 func buildSkillCommands(skills []skill.Skill) []rpc.SlashCommand {
@@ -629,8 +718,22 @@ func main() {
 
 	server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
 		log.Info("Received get_available_models")
-		modelInfo := modelInfoFromModel(ag.GetModel())
-		return []rpc.ModelInfo{modelInfo}, nil
+		specs, modelsPath, err := loadModelSpecs(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+		}
+
+		specs = filterModelSpecsWithKeys(specs)
+		if len(specs) == 0 {
+			authPath, _ := config.GetDefaultAuthPath()
+			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+		}
+
+		models := make([]rpc.ModelInfo, 0, len(specs))
+		for _, spec := range specs {
+			models = append(models, modelInfoFromSpec(spec))
+		}
+		return models, nil
 	})
 
 	server.SetSetModelHandler(func(provider, modelID string) (*rpc.ModelInfo, error) {
@@ -639,15 +742,44 @@ func main() {
 			return nil, fmt.Errorf("provider and modelId are required")
 		}
 
-		model = llm.Model{
-			ID:       modelID,
-			Provider: provider,
-			BaseURL:  cfg.Model.BaseURL,
-			API:      cfg.Model.API,
+		specs, modelsPath, err := loadModelSpecs(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
 		}
-		cfg.Model.ID = modelID
-		cfg.Model.Provider = provider
+		filtered := filterModelSpecsWithKeys(specs)
+		spec, ok := findModelSpec(filtered, provider, modelID)
+		if !ok {
+			if _, exists := findModelSpec(specs, provider, modelID); exists {
+				authPath, _ := config.GetDefaultAuthPath()
+				envVar := strings.ToUpper(strings.TrimSpace(provider)) + "_API_KEY"
+				return nil, fmt.Errorf("no API key for %q (set %s or update %s)", provider, envVar, authPath)
+			}
+			return nil, fmt.Errorf("model not found: %s/%s (edit %s)", provider, modelID, modelsPath)
+		}
+		if strings.TrimSpace(spec.BaseURL) == "" || strings.TrimSpace(spec.API) == "" {
+			return nil, fmt.Errorf("model %s/%s missing baseUrl or api in %s", spec.Provider, spec.ID, modelsPath)
+		}
+
+		newAPIKey, err := config.ResolveAPIKey(spec.Provider)
+		if err != nil {
+			return nil, err
+		}
+
+		model = llm.Model{
+			ID:       spec.ID,
+			Provider: spec.Provider,
+			BaseURL:  spec.BaseURL,
+			API:      spec.API,
+		}
+		apiKey = newAPIKey
+
+		cfg.Model.ID = spec.ID
+		cfg.Model.Provider = spec.Provider
+		cfg.Model.BaseURL = spec.BaseURL
+		cfg.Model.API = spec.API
+
 		ag.SetModel(model)
+		ag.SetAPIKey(apiKey)
 
 		// Recreate compactor with new model
 		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt)
@@ -657,7 +789,7 @@ func main() {
 			log.Infof("Failed to save config: %v", err)
 		}
 
-		info := modelInfoFromModel(model)
+		info := modelInfoFromSpec(spec)
 		return &info, nil
 	})
 

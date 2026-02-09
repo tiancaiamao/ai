@@ -198,6 +198,11 @@ func (a *Agent) SetModel(model llm.Model) {
 	a.model = model
 }
 
+// SetAPIKey updates the API key for the active model.
+func (a *Agent) SetAPIKey(apiKey string) {
+	a.apiKey = apiKey
+}
+
 // GetModel returns the active model configuration.
 func (a *Agent) GetModel() llm.Model {
 	return a.model
