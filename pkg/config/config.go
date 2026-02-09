@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -62,7 +64,7 @@ func DefaultLogConfig() *LogConfig {
 	homeDir, _ := os.UserHomeDir()
 	return &LogConfig{
 		Level:  "info",
-		File:   filepath.Join(homeDir, ".ai", "ai.log"),
+		File:   filepath.Join(homeDir, ".ai", "ai-{pid}.log"),
 		Prefix: "[ai] ",
 	}
 }
@@ -73,15 +75,40 @@ func (c *LogConfig) CreateLogger() (*logger.Logger, error) {
 		c = DefaultLogConfig()
 	}
 
+	logPath := resolveLogPath(c)
+
 	cfg := &logger.Config{
 		Level:    logger.ParseLogLevel(c.Level),
 		Prefix:   c.Prefix,
 		Console:  true,
-		File:     c.File != "",
-		FilePath: c.File,
+		File:     logPath != "",
+		FilePath: logPath,
 	}
 
 	return logger.NewLogger(cfg)
+}
+
+// ResolveLogPath returns the resolved log file path with PID expansion.
+func ResolveLogPath(c *LogConfig) string {
+	return resolveLogPath(c)
+}
+
+func resolveLogPath(c *LogConfig) string {
+	if c == nil {
+		c = DefaultLogConfig()
+	}
+	path := strings.TrimSpace(c.File)
+	if path == "" {
+		return ""
+	}
+	return expandLogPath(path)
+}
+
+func expandLogPath(path string) string {
+	pid := strconv.Itoa(os.Getpid())
+	path = strings.ReplaceAll(path, "{pid}", pid)
+	path = strings.ReplaceAll(path, "{PID}", pid)
+	return path
 }
 
 // LoadConfig loads configuration from file and merges with environment variables.

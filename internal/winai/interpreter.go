@@ -63,6 +63,9 @@ type AiInterpreter struct {
 	busyMode              string
 	autoCompactionEnabled bool
 	compactionState       *CompactionState
+	aiPID                 int
+	aiLogPath             string
+	aiWorkingDir          string
 	pendingModelList      bool
 	pendingModelListUsage bool
 	pendingModelSet       string
@@ -112,6 +115,9 @@ type SessionState struct {
 	SessionFile           string           `json:"sessionFile"`
 	SessionID             string           `json:"sessionId"`
 	SessionName           string           `json:"sessionName"`
+	AIPid                 int              `json:"aiPid"`
+	AILogPath             string           `json:"aiLogPath"`
+	AIWorkingDir          string           `json:"aiWorkingDir"`
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	MessageCount          int              `json:"messageCount"`
 	PendingMessageCount   int              `json:"pendingMessageCount"`
@@ -1828,6 +1834,9 @@ func (p *AiInterpreter) applyState(state *SessionState) {
 	p.autoCompactionEnabled = state.AutoCompactionEnabled
 	p.isStreaming = state.IsStreaming
 	p.compactionState = state.Compaction
+	p.aiPID = state.AIPid
+	p.aiLogPath = state.AILogPath
+	p.aiWorkingDir = state.AIWorkingDir
 	p.stateMu.Unlock()
 }
 
@@ -1847,17 +1856,32 @@ func (p *AiInterpreter) showState(state *SessionState) {
 	compactionLimit := "unknown"
 	compactionReserve := "unknown"
 	compactionKeepRecent := "unknown"
+	aiPID := "unknown"
+	aiLogPath := "unknown"
+	aiWorkingDir := "unknown"
 	if state.Compaction != nil {
 		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
 		compactionLimit = formatTokenLimit(state.Compaction)
 		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
 		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
 	}
+	if state.AIPid > 0 {
+		aiPID = formatIntOrUnknown(state.AIPid)
+	}
+	if strings.TrimSpace(state.AILogPath) != "" {
+		aiLogPath = state.AILogPath
+	}
+	if strings.TrimSpace(state.AIWorkingDir) != "" {
+		aiWorkingDir = state.AIWorkingDir
+	}
 
 	p.writeStatus(fmt.Sprintf(`Session:
   id: %s
   name: %s
   file: %s
+  ai-pid: %s
+  ai-log: %s
+  ai-cwd: %s
   model: %s
   context-window: %s
   compaction-limit: %s
@@ -1872,6 +1896,9 @@ func (p *AiInterpreter) showState(state *SessionState) {
 		orUnknown(state.SessionID),
 		orUnknown(state.SessionName),
 		orUnknown(state.SessionFile),
+		aiPID,
+		orUnknown(aiLogPath),
+		orUnknown(aiWorkingDir),
 		model,
 		compactionContext,
 		compactionLimit,

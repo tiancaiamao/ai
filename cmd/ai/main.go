@@ -326,6 +326,10 @@ func main() {
 		logger.NewDefaultLogger().Fatalf("Failed to create logger: %v", err)
 	}
 	defer log.Close()
+	aiLogPath := config.ResolveLogPath(cfg.Log)
+	if aiLogPath != "" {
+		log.Infof("Log file: %s", aiLogPath)
+	}
 
 	if *mode != "rpc" {
 		log.Fatalf("Unsupported mode: %s (only --mode rpc is supported)", *mode)
@@ -702,6 +706,9 @@ func main() {
 			SessionFile:           sess.GetPath(),
 			SessionID:             currentSessionID,
 			SessionName:           currentSessionName,
+			AIPid:                 os.Getpid(),
+			AILogPath:             aiLogPath,
+			AIWorkingDir:          cwd,
 			AutoCompactionEnabled: autoCompact,
 			MessageCount:          len(ag.GetMessages()),
 			PendingMessageCount:   ag.GetPendingFollowUps(),

@@ -58,6 +58,9 @@ type SessionState struct {
 	SessionFile           string           `json:"sessionFile,omitempty"`
 	SessionID             string           `json:"sessionId,omitempty"`
 	SessionName           string           `json:"sessionName,omitempty"`
+	AIPid                 int              `json:"aiPid,omitempty"`
+	AILogPath             string           `json:"aiLogPath,omitempty"`
+	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"`
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	MessageCount          int              `json:"messageCount"`
 	PendingMessageCount   int              `json:"pendingMessageCount"`
