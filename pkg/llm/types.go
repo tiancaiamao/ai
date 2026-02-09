@@ -114,6 +114,14 @@ type LLMTextDeltaEvent struct {
 
 func (e LLMTextDeltaEvent) GetEventType() string { return "text_delta" }
 
+// LLMThinkingDeltaEvent is emitted for thinking content deltas.
+type LLMThinkingDeltaEvent struct {
+	Delta string
+	Index int
+}
+
+func (e LLMThinkingDeltaEvent) GetEventType() string { return "thinking_delta" }
+
 // LLMToolCallDeltaEvent is emitted for tool call deltas.
 type LLMToolCallDeltaEvent struct {
 	Index    int
@@ -143,6 +151,7 @@ type PartialMessage struct {
 	mu          sync.Mutex
 	Role        string
 	Content     strings.Builder
+	Thinking    strings.Builder
 	ToolCalls   map[int]*ToolCall
 	CurrentTool *ToolCall
 }
@@ -160,6 +169,13 @@ func (pm *PartialMessage) AppendText(delta string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.Content.WriteString(delta)
+}
+
+// AppendThinking appends thinking content to the message.
+func (pm *PartialMessage) AppendThinking(delta string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.Thinking.WriteString(delta)
 }
 
 // AppendToolCall appends or updates a tool call.

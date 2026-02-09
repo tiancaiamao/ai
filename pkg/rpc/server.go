@@ -271,15 +271,17 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		if s.onSteer == nil {
 			return s.errorResponse(cmd.ID, cmd.Type, "No steer handler registered")
 		}
-		var data struct {
-			Message string `json:"message"`
-		}
-		if len(cmd.Data) > 0 {
+		message := cmd.Message
+		if message == "" && len(cmd.Data) > 0 {
+			var data struct {
+				Message string `json:"message"`
+			}
 			if err := json.Unmarshal(cmd.Data, &data); err != nil {
 				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
 			}
+			message = data.Message
 		}
-		if err := s.onSteer(data.Message); err != nil {
+		if err := s.onSteer(message); err != nil {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, nil)
@@ -288,15 +290,17 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		if s.onFollowUp == nil {
 			return s.errorResponse(cmd.ID, cmd.Type, "No follow_up handler registered")
 		}
-		var data struct {
-			Message string `json:"message"`
-		}
-		if len(cmd.Data) > 0 {
+		message := cmd.Message
+		if message == "" && len(cmd.Data) > 0 {
+			var data struct {
+				Message string `json:"message"`
+			}
 			if err := json.Unmarshal(cmd.Data, &data); err != nil {
 				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
 			}
+			message = data.Message
 		}
-		if err := s.onFollowUp(data.Message); err != nil {
+		if err := s.onFollowUp(message); err != nil {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, nil)

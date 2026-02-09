@@ -222,6 +222,21 @@ func streamAssistantResponse(
 				}))
 			}
 
+		case llm.LLMThinkingDeltaEvent:
+			if partialMessage != nil {
+				// Add thinking content to the message
+				thinkingContent := ThinkingContent{
+					Type:     "thinking",
+					Thinking: e.Delta,
+				}
+				partialMessage.Content = append(partialMessage.Content, thinkingContent)
+				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+					Type:         "thinking_delta",
+					ContentIndex: e.Index,
+					Delta:        e.Delta,
+				}))
+			}
+
 		case llm.LLMToolCallDeltaEvent:
 			if partialMessage != nil {
 				call, ok := toolCalls[e.Index]

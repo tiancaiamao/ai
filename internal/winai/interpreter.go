@@ -41,10 +41,11 @@ type AiInterpreter struct {
 	stateMu sync.Mutex
 	writeMu sync.Mutex
 
-	showAssistant bool
-	showThinking  bool
-	showTools     bool
-	showPrefixes  bool
+	showAssistant    bool
+	showThinking     bool
+	showTools        bool
+	showToolsVerbose bool
+	showPrefixes     bool
 
 	currentMessageRole     string
 	currentMessageStreamed bool
@@ -55,6 +56,7 @@ type AiInterpreter struct {
 	currentModelID        string
 	currentModelProvider  string
 	currentThinkingLevel  string
+	busyMode              string
 	autoCompactionEnabled bool
 	pendingModelList      bool
 	pendingModelListUsage bool
@@ -64,6 +66,9 @@ type AiInterpreter struct {
 	pendingForkList       bool
 	pendingForkSelect     string
 	lastAiActivity        time.Time
+	isStreaming           bool
+	deferStatus           bool
+	pendingStatus         []string
 	rpcSequence           int64
 	workingDir            string
 }
@@ -178,6 +183,7 @@ type agentEvent struct {
 	Result                *agent.AgentMessage    `json:"result,omitempty"`
 	IsError               bool                   `json:"isError,omitempty"`
 	AssistantMessageEvent *assistantMessageEvent `json:"assistantMessageEvent,omitempty"`
+	Compaction            *agent.CompactionInfo  `json:"compaction,omitempty"`
 }
 
 type serverStartEvent struct {
@@ -189,14 +195,16 @@ type serverStartEvent struct {
 // NewAiInterpreter creates a new ai interpreter.
 func NewAiInterpreter(cmdPath string, cmdArgs []string, debug bool) *AiInterpreter {
 	return &AiInterpreter{
-		BaseInterpreter: repl.NewBaseInterpreter(true),
-		cmdPath:         cmdPath,
-		cmdArgs:         cmdArgs,
-		debug:           debug,
-		showAssistant:   true,
-		showThinking:    true,
-		showTools:       false,
-		showPrefixes:    true,
+		BaseInterpreter:  repl.NewBaseInterpreter(true),
+		cmdPath:          cmdPath,
+		cmdArgs:          cmdArgs,
+		debug:            debug,
+		showAssistant:    true,
+		showThinking:     true,
+		showTools:        false,
+		showToolsVerbose: false,
+		showPrefixes:     true,
+		busyMode:         "steer",
 	}
 }
 
@@ -311,6 +319,29 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 		return nil
 	}
 
+	p.stateMu.Lock()
+	streaming := p.isStreaming
+	busyMode := p.busyMode
+	p.stateMu.Unlock()
+
+	if streaming {
+		switch busyMode {
+		case "follow-up":
+			if err := p.sendCommand("follow_up", nil, raw); err != nil {
+				p.writeStatus(fmt.Sprintf("ai: %v", err))
+			}
+			return nil
+		case "reject":
+			p.writeStatus("ai: agent is busy")
+			return nil
+		default: // "steer"
+			if err := p.sendCommand("steer", nil, raw); err != nil {
+				p.writeStatus(fmt.Sprintf("ai: %v", err))
+			}
+			return nil
+		}
+	}
+
 	if err := p.sendPrompt(raw); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: %v", err))
 	}
@@ -343,14 +374,26 @@ func (p *AiInterpreter) handleInput(input string, fromControl bool) (bool, error
 
 	if strings.HasPrefix(input, "/") {
 		cmdLine := strings.TrimSpace(strings.TrimPrefix(input, "/"))
-		handled, err := p.handleCommand(cmdLine)
+		p.stateMu.Lock()
+		if fromControl && p.isStreaming {
+			p.deferStatus = true
+		}
+		p.stateMu.Unlock()
+		handled, err := p.handleCommand(cmdLine, fromControl)
+		if fromControl {
+			p.stateMu.Lock()
+			if !p.isStreaming {
+				p.deferStatus = false
+			}
+			p.stateMu.Unlock()
+		}
 		return handled, err
 	}
 
 	return false, nil
 }
 
-func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
+func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, error) {
 	if cmdLine == "" {
 		return false, nil
 	}
@@ -365,7 +408,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 
 	switch cmd {
 	case "help":
-		p.showHelp()
+		p.showHelp(fromControl)
 		return true, nil
 	case "quit":
 		p.writeStatus("ai: quitting")
@@ -382,13 +425,13 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 	case "commands":
 		return true, p.sendCommand("get_commands", nil, "")
 	case "show":
-		return true, p.handleShow(args)
+		return true, p.handleShow(args, fromControl)
 	case "thinking":
-		return true, p.handleToggle("thinking", args)
+		return true, p.handleToggle("thinking", args, fromControl)
 	case "tools":
-		return true, p.handleToggle("tools", args)
+		return true, p.handleTools(args, fromControl)
 	case "prefix":
-		return true, p.handleToggle("prefix", args)
+		return true, p.handleToggle("prefix", args, fromControl)
 	case "model-select":
 		p.pendingModelList = true
 		p.pendingModelListUsage = true
@@ -399,7 +442,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 		return true, p.sendCommand("get_available_models", nil, "")
 	case "model":
 		if args == "" {
-			p.writeStatus("ai: usage: /model <number|provider/model-id>")
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /model <number|provider/model-id>")
 			return true, nil
 		}
 		if err := p.setModelFromInput(args); err != nil {
@@ -407,7 +450,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 				p.pendingModelSet = strings.TrimSpace(args)
 				return true, p.sendCommand("get_available_models", nil, "")
 			}
-			p.writeStatus(fmt.Sprintf("ai: %v", err))
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
 			return true, nil
 		}
 		return true, nil
@@ -428,7 +471,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 				p.pendingSessionSwitch = strings.TrimSpace(args)
 				return true, p.sendCommand("list_sessions", nil, "")
 			}
-			p.writeStatus(fmt.Sprintf("ai: %v", err))
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
 			return true, nil
 		}
 		return true, nil
@@ -437,13 +480,42 @@ func (p *AiInterpreter) handleCommand(cmdLine string) (bool, error) {
 	case "copy":
 		return true, p.sendCommand("get_last_assistant_text", nil, "")
 	case "auto-compaction":
-		return true, p.handleAutoCompaction(args)
+		return true, p.handleAutoCompaction(args, fromControl)
 	case "thinking-level":
-		return true, p.handleThinkingLevel(args)
+		return true, p.handleThinkingLevel(args, fromControl)
 	case "cycle-thinking-level":
 		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
 		return true, p.handleFork(args)
+	case "steer":
+		if strings.TrimSpace(args) == "" {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /steer <message>")
+			return true, nil
+		}
+		return true, p.sendCommand("steer", nil, strings.TrimSpace(args))
+	case "follow-up", "followup":
+		if strings.TrimSpace(args) == "" {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /follow-up <message>")
+			return true, nil
+		}
+		return true, p.sendCommand("follow_up", nil, strings.TrimSpace(args))
+	case "busy-mode":
+		mode := strings.TrimSpace(args)
+		if mode == "" {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /busy-mode <steer|follow-up|reject>")
+			return true, nil
+		}
+		switch mode {
+		case "steer", "follow-up", "reject":
+			p.stateMu.Lock()
+			p.busyMode = mode
+			p.stateMu.Unlock()
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: busy-mode %s", mode))
+			return true, nil
+		default:
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /busy-mode <steer|follow-up|reject>")
+			return true, nil
+		}
 	default:
 		return false, nil
 	}
@@ -513,24 +585,24 @@ func (p *AiInterpreter) nextID() string {
 	return fmt.Sprintf("%d", seq)
 }
 
-func (p *AiInterpreter) handleShow(args string) error {
+func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	parts := strings.Fields(args)
 	if len(parts) == 0 {
-		p.writeStatus("ai: usage: /show settings|usage")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|usage")
 		return nil
 	}
 	switch parts[0] {
 	case "settings":
-		p.showSettings()
+		p.showSettings(fromControl)
 	case "usage":
 		return p.sendCommand("get_session_stats", nil, "")
 	default:
-		p.writeStatus("ai: usage: /show settings|usage")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|usage")
 	}
 	return nil
 }
 
-func (p *AiInterpreter) handleToggle(kind, args string) error {
+func (p *AiInterpreter) handleToggle(kind, args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
 	if mode == "" {
 		mode = "toggle"
@@ -542,8 +614,6 @@ func (p *AiInterpreter) handleToggle(kind, args string) error {
 	switch kind {
 	case "thinking":
 		value = p.showThinking
-	case "tools":
-		value = p.showTools
 	case "prefix":
 		value = p.showPrefixes
 	default:
@@ -565,7 +635,7 @@ func (p *AiInterpreter) handleToggle(kind, args string) error {
 	}
 
 	if !ok {
-		p.writeStatus(fmt.Sprintf("ai: usage: /%s [on|off|toggle]", kind))
+		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /%s [on|off|toggle]", kind))
 		return nil
 	}
 
@@ -573,21 +643,62 @@ func (p *AiInterpreter) handleToggle(kind, args string) error {
 	switch kind {
 	case "thinking":
 		p.showThinking = value
-	case "tools":
-		p.showTools = value
 	case "prefix":
 		p.showPrefixes = value
 	}
 	p.stateMu.Unlock()
 
-	p.writeStatus(fmt.Sprintf("ai: %s %s", kind, onOff(value)))
+	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %s %s", kind, onOff(value)))
 	return nil
 }
 
-func (p *AiInterpreter) handleAutoCompaction(args string) error {
+func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
 	if mode == "" {
-		p.writeStatus("ai: usage: /auto-compaction <on|off>")
+		mode = "toggle"
+	}
+
+	p.stateMu.Lock()
+	showTools := p.showTools
+	showVerbose := p.showToolsVerbose
+	p.stateMu.Unlock()
+
+	switch mode {
+	case "on":
+		showTools = true
+		showVerbose = false
+	case "off":
+		showTools = false
+		showVerbose = false
+	case "verbose":
+		showTools = true
+		showVerbose = true
+	case "toggle":
+		if showTools {
+			showTools = false
+			showVerbose = false
+		} else {
+			showTools = true
+			showVerbose = false
+		}
+	default:
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /tools <off|on|verbose|toggle>")
+		return nil
+	}
+
+	p.stateMu.Lock()
+	p.showTools = showTools
+	p.showToolsVerbose = showVerbose
+	p.stateMu.Unlock()
+
+	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: tools %s", toolsMode(showTools, showVerbose)))
+	return nil
+}
+
+func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) error {
+	mode := strings.TrimSpace(args)
+	if mode == "" {
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /auto-compaction <on|off>")
 		return nil
 	}
 	var enabled bool
@@ -597,16 +708,16 @@ func (p *AiInterpreter) handleAutoCompaction(args string) error {
 	case "off":
 		enabled = false
 	default:
-		p.writeStatus("ai: usage: /auto-compaction <on|off>")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /auto-compaction <on|off>")
 		return nil
 	}
 	return p.sendCommand("set_auto_compaction", map[string]any{"enabled": enabled}, "")
 }
 
-func (p *AiInterpreter) handleThinkingLevel(args string) error {
+func (p *AiInterpreter) handleThinkingLevel(args string, fromControl bool) error {
 	level := strings.TrimSpace(args)
 	if level == "" {
-		p.writeStatus("ai: usage: /thinking-level <off|minimal|low|medium|high|xhigh>")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /thinking-level <off|minimal|low|medium|high|xhigh>")
 		return nil
 	}
 	return p.sendCommand("set_thinking_level", map[string]any{"level": level}, "")
@@ -838,8 +949,12 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		p.handleForkResult(resp.Data)
 	case "compact":
 		p.handleCompactResult(resp.Data)
-	default:
-		p.writeStatus(fmt.Sprintf("ai: %s ok", resp.Command))
+	case "prompt":
+		// Silently ignore prompt success - we'll see the results via events
+	case "steer":
+		// Silently ignore steer success
+	case "abort":
+		// Silently ignore abort success
 	}
 }
 
@@ -863,8 +978,10 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 			p.stateMu.Unlock()
 		}
 	case "agent_start":
+		p.setStreaming(true)
 		p.noteAiActivity()
 	case "agent_end":
+		p.setStreaming(false)
 		p.noteAiActivity()
 	case "turn_start":
 		p.noteAiActivity()
@@ -886,8 +1003,12 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		}
 	case "thinking_delta":
 		if evt.Message != nil {
-			p.writeStream("thinking", evt.Message.ExtractText(), p.showThinking)
+			p.writeStream("thinking", evt.Message.ExtractThinking(), p.showThinking)
 		}
+	case "compaction_start":
+		p.handleCompactionEvent(true, evt.Compaction)
+	case "compaction_end":
+		p.handleCompactionEvent(false, evt.Compaction)
 	case "tool_call_delta":
 		// ignore
 	default:
@@ -937,25 +1058,60 @@ func (p *AiInterpreter) handleMessageEnd(evt agentEvent) {
 	p.noteAiActivity()
 }
 
+func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.CompactionInfo) {
+	label := "compaction"
+	if info != nil && info.Auto {
+		label = "auto-compaction"
+	}
+	if start {
+		if info != nil && info.Before > 0 {
+			p.writeStatus(fmt.Sprintf("ai: %s started (%d messages)", label, info.Before))
+		} else {
+			p.writeStatus(fmt.Sprintf("ai: %s started", label))
+		}
+		return
+	}
+	if info != nil && info.Error != "" {
+		p.writeStatus(fmt.Sprintf("ai: %s failed: %s", label, info.Error))
+		return
+	}
+	if info != nil && info.Before > 0 && info.After > 0 {
+		p.writeStatus(fmt.Sprintf("ai: %s done (%d -> %d messages)", label, info.Before, info.After))
+		return
+	}
+	p.writeStatus(fmt.Sprintf("ai: %s done", label))
+}
+
 func (p *AiInterpreter) handleToolStart(evt agentEvent) {
 	p.stateMu.Lock()
 	showTools := p.showTools
+	showVerbose := p.showToolsVerbose
 	p.stateMu.Unlock()
 	if !showTools {
 		return
 	}
 	p.endStream(false)
-	args := ""
-	if len(evt.Args) > 0 {
-		encoded, _ := json.Marshal(evt.Args)
-		args = string(encoded)
-	}
 	label := "tool"
 	if evt.ToolName != "" {
 		label = fmt.Sprintf("tool %s", evt.ToolName)
 	}
-	if args != "" {
-		p.writePrefixedLine("tool", fmt.Sprintf("%s args: %s", label, args))
+	if showVerbose {
+		args := ""
+		if len(evt.Args) > 0 {
+			encoded, _ := json.Marshal(evt.Args)
+			args = string(encoded)
+		}
+		if args != "" {
+			p.writePrefixedLine("tool", fmt.Sprintf("%s args: %s", label, args))
+		} else {
+			p.writePrefixedLine("tool", fmt.Sprintf("%s start", label))
+		}
+		return
+	}
+
+	summary := summarizeToolArgs(evt.ToolName, evt.Args)
+	if summary != "" {
+		p.writePrefixedLine("tool", fmt.Sprintf("%s start (%s)", label, summary))
 	} else {
 		p.writePrefixedLine("tool", fmt.Sprintf("%s start", label))
 	}
@@ -964,6 +1120,7 @@ func (p *AiInterpreter) handleToolStart(evt agentEvent) {
 func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 	p.stateMu.Lock()
 	showTools := p.showTools
+	showVerbose := p.showToolsVerbose
 	p.stateMu.Unlock()
 	if !showTools {
 		return
@@ -973,17 +1130,34 @@ func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 	if evt.ToolName != "" {
 		label = fmt.Sprintf("tool %s", evt.ToolName)
 	}
-	text := ""
-	if evt.Result != nil {
-		text = renderMessageText(evt.Result)
+	if showVerbose {
+		text := ""
+		if evt.Result != nil {
+			text = renderMessageText(evt.Result)
+		}
+		if text == "" {
+			text = "(no output)"
+		}
+		if evt.IsError {
+			p.writePrefixedLine("tool", fmt.Sprintf("%s error: %s", label, text))
+		} else {
+			p.writePrefixedLine("tool", fmt.Sprintf("%s result: %s", label, text))
+		}
+		p.scrollToBottom()
+		return
 	}
-	if text == "" {
-		text = "(no output)"
-	}
+
 	if evt.IsError {
-		p.writePrefixedLine("tool", fmt.Sprintf("%s error: %s", label, text))
+		msg := "error"
+		if evt.Result != nil {
+			errText := renderMessageText(evt.Result)
+			if errText != "" {
+				msg = fmt.Sprintf("error: %s", truncate(errText, 200))
+			}
+		}
+		p.writePrefixedLine("tool", fmt.Sprintf("%s %s", label, msg))
 	} else {
-		p.writePrefixedLine("tool", fmt.Sprintf("%s result: %s", label, text))
+		p.writePrefixedLine("tool", fmt.Sprintf("%s done", label))
 	}
 	p.scrollToBottom()
 }
@@ -1111,6 +1285,16 @@ func (p *AiInterpreter) writePrefixedLine(role, text string) {
 }
 
 func (p *AiInterpreter) writeStatus(text string) {
+	p.stateMu.Lock()
+	deferStatus := p.deferStatus
+	streaming := p.isStreaming
+	if deferStatus && streaming {
+		p.pendingStatus = append(p.pendingStatus, text)
+		p.stateMu.Unlock()
+		return
+	}
+	p.stateMu.Unlock()
+
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 
@@ -1120,6 +1304,32 @@ func (p *AiInterpreter) writeStatus(text string) {
 	}
 	p.writeRaw(line)
 	p.scrollToBottom()
+}
+
+func (p *AiInterpreter) writeStatusMaybeDefer(fromControl bool, text string) {
+	if !fromControl {
+		p.writeStatus(text)
+		return
+	}
+	p.writeStatus(text)
+}
+
+func (p *AiInterpreter) setStreaming(streaming bool) {
+	var pending []string
+	p.stateMu.Lock()
+	p.isStreaming = streaming
+	if !streaming && len(p.pendingStatus) > 0 {
+		pending = append([]string(nil), p.pendingStatus...)
+		p.pendingStatus = nil
+	}
+	if !streaming {
+		p.deferStatus = false
+	}
+	p.stateMu.Unlock()
+
+	for _, msg := range pending {
+		p.writeStatus(msg)
+	}
 }
 
 func (p *AiInterpreter) writeRaw(text string) {
@@ -1138,8 +1348,8 @@ func (p *AiInterpreter) scrollToBottom() {
 	_ = writer.ScrollToBottom()
 }
 
-func (p *AiInterpreter) showHelp() {
-	p.writeStatus(`Commands:
+func (p *AiInterpreter) showHelp(fromControl bool) {
+	p.writeStatusMaybeDefer(fromControl, `Commands:
   /help
   /session
   /messages
@@ -1148,7 +1358,7 @@ func (p *AiInterpreter) showHelp() {
   /show settings
   /show usage
   /thinking [on|off|toggle]
-  /tools [on|off|toggle]
+  /tools <off|on|verbose|toggle>
   /prefix [on|off|toggle]
   /model-select
   /models
@@ -1161,19 +1371,24 @@ func (p *AiInterpreter) showHelp() {
   /thinking-level <off|minimal|low|medium|high|xhigh>
   /cycle-thinking-level
   /fork [entry-id|index]
+  /steer <message>
+  /follow-up <message>
+  /busy-mode <steer|follow-up|reject>
   /abort
   /quit`)
 }
 
-func (p *AiInterpreter) showSettings() {
+func (p *AiInterpreter) showSettings(fromControl bool) {
 	p.stateMu.Lock()
 	showThinking := p.showThinking
 	showTools := p.showTools
+	showToolsVerbose := p.showToolsVerbose
 	showPrefixes := p.showPrefixes
 	modelID := p.currentModelID
 	modelProvider := p.currentModelProvider
 	thinkingLevel := p.currentThinkingLevel
 	autoCompact := p.autoCompactionEnabled
+	busyMode := p.busyMode
 	p.stateMu.Unlock()
 
 	model := modelID
@@ -1181,18 +1396,20 @@ func (p *AiInterpreter) showSettings() {
 		model = fmt.Sprintf("%s/%s", modelProvider, modelID)
 	}
 
-	p.writeStatus(fmt.Sprintf(`Display Settings:
+	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
   model: %s
   thinking: %s
   tools: %s
   prefix: %s
   thinking-level: %s
+  busy-mode: %s
   auto-compaction: %s`,
 		model,
 		onOff(showThinking),
-		onOff(showTools),
+		toolsMode(showTools, showToolsVerbose),
 		onOff(showPrefixes),
 		orUnknown(thinkingLevel),
+		orUnknown(busyMode),
 		onOff(autoCompact),
 	))
 }
@@ -1655,6 +1872,16 @@ func onOff(value bool) string {
 	return "off"
 }
 
+func toolsMode(showTools, showVerbose bool) string {
+	if !showTools {
+		return "off"
+	}
+	if showVerbose {
+		return "verbose"
+	}
+	return "on"
+}
+
 func orUnknown(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "unknown"
@@ -1667,6 +1894,38 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return text[:limit-3] + "..."
+}
+
+func summarizeToolArgs(toolName string, args map[string]interface{}) string {
+	if len(args) == 0 {
+		return ""
+	}
+	type candidate struct {
+		key   string
+		label string
+	}
+	candidates := []candidate{
+		{key: "command", label: "command"},
+		{key: "cmd", label: "command"},
+		{key: "path", label: "path"},
+		{key: "file", label: "file"},
+		{key: "pattern", label: "pattern"},
+		{key: "query", label: "query"},
+	}
+	for _, c := range candidates {
+		if value, ok := args[c.key]; ok {
+			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+				return fmt.Sprintf("%s=%s", c.label, truncate(s, 120))
+			}
+		}
+	}
+
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return fmt.Sprintf("args=%s", strings.Join(keys, ","))
 }
 
 func copyToClipboard(text string) error {

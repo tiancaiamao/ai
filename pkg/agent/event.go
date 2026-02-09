@@ -20,6 +20,9 @@ type AgentEvent struct {
 
 	// message_update
 	AssistantMessageEvent interface{} `json:"assistantMessageEvent,omitempty"`
+
+	// compaction events
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
 }
 
 // AssistantMessageEvent provides a stable, json-tagged shape for streaming updates.
@@ -44,7 +47,33 @@ const (
 	EventTextDelta          = "text_delta"
 	EventToolCallDelta      = "tool_call_delta"
 	EventThinkingDelta      = "thinking_delta"
+	EventCompactionStart    = "compaction_start"
+	EventCompactionEnd      = "compaction_end"
 )
+
+// CompactionInfo describes a compaction event.
+type CompactionInfo struct {
+	Auto   bool   `json:"auto,omitempty"`
+	Before int    `json:"before,omitempty"`
+	After  int    `json:"after,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// NewCompactionStartEvent creates a compaction_start event.
+func NewCompactionStartEvent(info CompactionInfo) AgentEvent {
+	return AgentEvent{
+		Type:       EventCompactionStart,
+		Compaction: &info,
+	}
+}
+
+// NewCompactionEndEvent creates a compaction_end event.
+func NewCompactionEndEvent(info CompactionInfo) AgentEvent {
+	return AgentEvent{
+		Type:       EventCompactionEnd,
+		Compaction: &info,
+	}
+}
 
 // NewAgentStartEvent creates an agent_start event.
 func NewAgentStartEvent() AgentEvent {

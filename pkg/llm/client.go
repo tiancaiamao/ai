@@ -127,8 +127,10 @@ func StreamLLM(
 			var chunk struct {
 				Choices []struct {
 					Delta struct {
-						Content   string            `json:"content,omitempty"`
-						ToolCalls []json.RawMessage `json:"tool_calls,omitempty"`
+						Content          string            `json:"content,omitempty"`
+						ReasoningContent string            `json:"reasoning_content,omitempty"`
+						Thinking         string            `json:"thinking,omitempty"`
+						ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
 					} `json:"delta"`
 					FinishReason *string `json:"finish_reason"`
 				} `json:"choices"`
@@ -149,6 +151,18 @@ func StreamLLM(
 			if choice.Delta.Content != "" {
 				partial.AppendText(choice.Delta.Content)
 				stream.Push(LLMTextDeltaEvent{Delta: choice.Delta.Content})
+			}
+
+			// Reasoning delta (Z.AI uses reasoning_content)
+			if choice.Delta.ReasoningContent != "" {
+				partial.AppendThinking(choice.Delta.ReasoningContent)
+				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.ReasoningContent})
+			}
+
+			// Thinking delta
+			if choice.Delta.Thinking != "" {
+				partial.AppendThinking(choice.Delta.Thinking)
+				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.Thinking})
 			}
 
 			// Tool calls

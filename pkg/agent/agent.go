@@ -2,12 +2,17 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
+
+// ErrAgentBusy is returned when the agent is already processing a request.
+var ErrAgentBusy = errors.New("agent is busy")
 
 // Compactor interface for context compression.
 type Compactor interface {
@@ -81,7 +86,7 @@ func (a *Agent) Prompt(message string) error {
 		}()
 		return nil
 	default:
-		return fmt.Errorf("agent is busy")
+		return ErrAgentBusy
 	}
 }
 
@@ -130,11 +135,7 @@ func (a *Agent) processPrompt(message string) {
 		}
 
 		// Send to event channel
-		select {
-		case a.eventChan <- event.Value:
-		default:
-			log.Println("Event channel full, dropping event")
-		}
+		a.emitEvent(event.Value)
 	}
 	log.Printf("[Agent] Prompt completed")
 }
@@ -146,6 +147,12 @@ func (a *Agent) Wait() {
 
 // Steer interrupts the current execution and sends a new message.
 func (a *Agent) Steer(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		log.Printf("[Agent] Steer called with empty message")
+		return
+	}
+
 	// Cancel current execution
 	if a.cancel != nil {
 		a.cancel()
@@ -157,14 +164,27 @@ func (a *Agent) Steer(message string) {
 	a.cancel = cancel
 
 	// Send prompt with steering message
-	a.Prompt(message)
+	if err := a.Prompt(message); err != nil {
+		if errors.Is(err, ErrAgentBusy) {
+			if followErr := a.FollowUp(message); followErr != nil {
+				log.Printf("[Agent] Steer follow-up failed: %v", followErr)
+			}
+			return
+		}
+		log.Printf("[Agent] Steer prompt failed: %v", err)
+	}
 }
 
 // Abort stops the current execution.
 func (a *Agent) Abort() {
+	log.Printf("[Agent] Abort called, canceling context...")
 	if a.cancel != nil {
 		a.cancel()
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.ctx = ctx
+	a.cancel = cancel
+	log.Printf("[Agent] Context canceled, waiting for agent to finish...")
 }
 
 // FollowUp adds a message to be processed after the current prompt completes.
@@ -269,12 +289,35 @@ func (a *Agent) tryAutoCompact() {
 
 	messages := a.context.Messages
 	if a.compactor.ShouldCompact(messages) {
-		log.Printf("[Agent] Auto-compacting %d messages...", len(messages))
+		before := len(messages)
+		log.Printf("[Agent] Auto-compacting %d messages...", before)
+		a.emitEvent(NewCompactionStartEvent(CompactionInfo{
+			Auto:   true,
+			Before: before,
+		}))
 		if err := a.Compact(a.compactor); err != nil {
 			log.Printf("[Agent] Auto-compact failed: %v", err)
+			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
+				Auto:   true,
+				Before: before,
+				Error:  err.Error(),
+			}))
 		} else {
-			log.Printf("[Agent] Auto-compact successful: %d -> %d messages",
-				len(messages), len(a.context.Messages))
+			after := len(a.context.Messages)
+			log.Printf("[Agent] Auto-compact successful: %d -> %d messages", before, after)
+			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
+				Auto:   true,
+				Before: before,
+				After:  after,
+			}))
 		}
+	}
+}
+
+func (a *Agent) emitEvent(event AgentEvent) {
+	select {
+	case a.eventChan <- event:
+	default:
+		log.Println("Event channel full, dropping event")
 	}
 }

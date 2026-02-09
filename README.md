@@ -98,4 +98,4 @@ echo '{"type":"get_messages"}' | ./bin/ai
 
 ## 许可证
 
-与原项目保持一致（基于 pi-mono 的核心实现）。
+与原项目保持一致（基于 [pi-mono](https://github.com/badlogic/pi-mono) 的核心实现）。

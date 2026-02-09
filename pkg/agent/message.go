@@ -127,6 +127,17 @@ func (m *AgentMessage) ExtractText() string {
 	return b.String()
 }
 
+// ExtractThinking extracts all thinking content from a message.
+func (m *AgentMessage) ExtractThinking() string {
+	var b strings.Builder
+	for _, block := range m.Content {
+		if tc, ok := block.(ThinkingContent); ok {
+			b.WriteString(tc.Thinking)
+		}
+	}
+	return b.String()
+}
+
 // ExtractToolCalls extracts all tool calls from an assistant message.
 func (m *AgentMessage) ExtractToolCalls() []ToolCallContent {
 	calls := make([]ToolCallContent, 0)

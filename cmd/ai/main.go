@@ -476,6 +476,7 @@ func main() {
 	server := rpc.NewServer()
 	stateMu := sync.Mutex{}
 	isStreaming := false
+	isCompacting := false
 	currentThinkingLevel := "medium"
 	autoCompactionEnabled := compactorConfig.AutoCompact
 
@@ -487,12 +488,18 @@ func main() {
 
 	server.SetSteerHandler(func(message string) error {
 		log.Infof("Received steer: %s", message)
+		if strings.TrimSpace(message) == "" {
+			return fmt.Errorf("empty steer message")
+		}
 		ag.Steer(message)
 		return nil
 	})
 
 	server.SetFollowUpHandler(func(message string) error {
 		log.Infof("Received follow_up: %s", message)
+		if strings.TrimSpace(message) == "" {
+			return fmt.Errorf("empty follow-up message")
+		}
 		return ag.FollowUp(message)
 	})
 
@@ -644,6 +651,7 @@ func main() {
 		currentSessionID := sessionID
 		currentSessionName := sessionName
 		streaming := isStreaming
+		compacting := isCompacting
 		thinkingLevel := currentThinkingLevel
 		autoCompact := autoCompactionEnabled
 		stateMu.Unlock()
@@ -652,7 +660,7 @@ func main() {
 			Model:                 &modelInfo,
 			ThinkingLevel:         thinkingLevel,
 			IsStreaming:           streaming,
-			IsCompacting:          false,
+			IsCompacting:          compacting,
 			SteeringMode:          "off",
 			FollowUpMode:          "queue",
 			SessionFile:           sess.GetPath(),
@@ -945,6 +953,17 @@ func main() {
 				if event.Type == "agent_end" {
 					stateMu.Lock()
 					isStreaming = false
+					isCompacting = false
+					stateMu.Unlock()
+				}
+				if event.Type == "compaction_start" {
+					stateMu.Lock()
+					isCompacting = true
+					stateMu.Unlock()
+				}
+				if event.Type == "compaction_end" {
+					stateMu.Lock()
+					isCompacting = false
 					stateMu.Unlock()
 				}
 
@@ -975,6 +994,17 @@ func main() {
 						if event.Type == "agent_end" {
 							stateMu.Lock()
 							isStreaming = false
+							isCompacting = false
+							stateMu.Unlock()
+						}
+						if event.Type == "compaction_start" {
+							stateMu.Lock()
+							isCompacting = true
+							stateMu.Unlock()
+						}
+						if event.Type == "compaction_end" {
+							stateMu.Lock()
+							isCompacting = false
 							stateMu.Unlock()
 						}
 
