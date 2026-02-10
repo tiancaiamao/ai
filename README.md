@@ -83,7 +83,7 @@ echo '{"type":"get_messages"}' | ./bin/ai
 
 - 配置：`~/.ai/config.json`
 - 日志：`~/.ai/ai.log`
-- 会话：`~/.ai/*.jsonl`
+- 会话：`~/.ai/sessions/--<cwd>--/*.jsonl`（按工作目录隔离）
 - 全局技能：`~/.ai/skills/`
 - 项目技能：`.ai/skills/`
 

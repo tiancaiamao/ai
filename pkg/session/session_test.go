@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -203,7 +204,8 @@ func TestSessionPersistence(t *testing.T) {
 
 // TestGetDefaultSessionPath tests getting default session path.
 func TestGetDefaultSessionPath(t *testing.T) {
-	path, err := GetDefaultSessionPath()
+	cwd := filepath.Join(os.TempDir(), "ai-session-test", "project")
+	path, err := GetDefaultSessionPath(cwd)
 	if err != nil {
 		t.Fatalf("Failed to get default session path: %v", err)
 	}
@@ -212,8 +214,9 @@ func TestGetDefaultSessionPath(t *testing.T) {
 		t.Error("Path should not be empty")
 	}
 
-	// Should contain .ai
-	if filepath.Base(filepath.Dir(path)) != ".ai" {
-		t.Errorf("Expected path to contain .ai, got %s", path)
+	// Should contain .ai/sessions
+	expected := filepath.Join(".ai", "sessions")
+	if !strings.Contains(path, expected) {
+		t.Errorf("Expected path to contain %s, got %s", expected, path)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -155,14 +156,35 @@ func (s *Session) save() error {
 	return nil
 }
 
-// GetDefaultSessionPath returns the default session file path.
-func GetDefaultSessionPath() (string, error) {
+// GetDefaultSessionsDir returns the default sessions directory for a working directory.
+func GetDefaultSessionsDir(cwd string) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(homeDir, ".ai", "session.jsonl"), nil
+	safePath := sanitizeSessionPath(cwd)
+	return filepath.Join(homeDir, ".ai", "sessions", safePath), nil
+}
+
+// GetDefaultSessionPath returns the default session file path for a working directory.
+func GetDefaultSessionPath(cwd string) (string, error) {
+	dir, err := GetDefaultSessionsDir(cwd)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "session.jsonl"), nil
+}
+
+func sanitizeSessionPath(cwd string) string {
+	clean := filepath.Clean(cwd)
+	trimmed := strings.TrimPrefix(clean, string(os.PathSeparator))
+	replaced := strings.NewReplacer(
+		string(os.PathSeparator), "-",
+		"\\", "-",
+		":", "-",
+	).Replace(trimmed)
+	return fmt.Sprintf("--%s--", replaced)
 }
 
 // splitLines splits data into lines.

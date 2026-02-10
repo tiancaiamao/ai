@@ -369,19 +369,23 @@ func main() {
 	currentModelInfo := modelInfoFromSpec(activeSpec)
 	currentContextWindow := activeSpec.ContextWindow
 
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("Failed to get working directory: %v", err)
+	}
+
 	sessionPath, err := normalizeSessionPath(*sessionPathFlag)
 	if err != nil {
 		log.Fatalf("Failed to normalize session path: %v", err)
 	}
 
 	// Initialize session manager
-	sessionsDir, err := session.GetDefaultSessionPath()
+	sessionsDir, err := session.GetDefaultSessionsDir(cwd)
 	if err != nil {
 		log.Fatalf("Failed to get sessions path: %v", err)
 	}
 
-	// Extract directory from session path
-	sessionsDir = filepath.Dir(sessionsDir)
 	if sessionPath != "" {
 		sessionsDir = filepath.Dir(sessionPath)
 	}
@@ -414,12 +418,6 @@ func main() {
 		}
 		sessionName = resolveSessionName(sessionMgr, sessionID)
 		log.Infof("Loaded session '%s' with %d messages", sessionID, len(sess.GetMessages()))
-	}
-
-	// Get current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Failed to get working directory: %v", err)
 	}
 
 	// Create tool registry and register tools
