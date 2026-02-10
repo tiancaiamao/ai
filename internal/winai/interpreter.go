@@ -72,9 +72,6 @@ type AiInterpreter struct {
 	aiWorkingDir          string
 	pipelineMu            sync.Mutex
 	pipeline              pipelineMetrics
-	pendingModelList      bool
-	pendingModelListUsage bool
-	pendingModelSet       string
 	pendingSessionList    bool
 	pendingSessionSwitch  string
 	pendingForkList       bool
@@ -742,24 +739,6 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.handleToggle("prefix", args, fromControl)
 	case "model-select":
 		return p.handleModelSelect()
-	case "models":
-		p.pendingModelList = true
-		p.pendingModelListUsage = false
-		return true, p.sendCommand("get_available_models", nil, "")
-	case "model":
-		if args == "" {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /model <number|provider/model-id>")
-			return true, nil
-		}
-		if err := p.setModelFromInput(args); err != nil {
-			if errors.Is(err, errModelListRequired) {
-				p.pendingModelSet = strings.TrimSpace(args)
-				return true, p.sendCommand("get_available_models", nil, "")
-			}
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
-			return true, nil
-		}
-		return true, nil
 	case "new":
 		data := map[string]any{}
 		if strings.TrimSpace(args) != "" {
@@ -1797,8 +1776,6 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /tools [off|on|verbose|toggle]
   /prefix [on|off|toggle]
   /model-select
-  /models
-  /model <number|provider/model-id>
   /new [name]
   /resume [id|path|index]
   /compact
@@ -1949,9 +1926,6 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 
 	p.stateMu.Lock()
 	p.availableModels = payload.Models
-	pendingList := p.pendingModelList
-	showUsage := p.pendingModelListUsage
-	pendingSet := p.pendingModelSet
 	if p.currentModelProvider == "" && p.currentModelID != "" {
 		for _, model := range payload.Models {
 			if model.ID == p.currentModelID {
@@ -1960,21 +1934,7 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 			}
 		}
 	}
-	p.pendingModelList = false
-	p.pendingModelListUsage = false
-	p.pendingModelSet = ""
 	p.stateMu.Unlock()
-
-	if pendingSet != "" {
-		if err := p.setModelFromInput(pendingSet); err != nil {
-			p.writeStatus(fmt.Sprintf("ai: %v", err))
-		}
-		return
-	}
-
-	if pendingList {
-		p.showModelList(payload.Models, showUsage)
-	}
 }
 
 func (p *AiInterpreter) showModelList(models []Model, showUsage bool) {
