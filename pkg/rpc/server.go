@@ -17,6 +17,8 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	writer sync.Mutex
+	output *bufio.Writer
 
 	// Callbacks for handling commands
 	onPrompt               func(message string) error
@@ -209,20 +211,26 @@ func (s *Server) SetDeleteSessionHandler(handler func(id string) error) {
 // Run starts the RPC server, reading commands from stdin and writing responses to stdout.
 // This method blocks until an error occurs or stdin is closed.
 func (s *Server) Run() error {
-	scanner := bufio.NewScanner(os.Stdin)
-	writer := bufio.NewWriter(os.Stdout)
+	return s.RunWithIO(os.Stdin, os.Stdout)
+}
+
+// RunWithIO starts the RPC server using the provided reader and writer.
+// This method blocks until an error occurs or the reader is closed.
+func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
+	scanner := bufio.NewScanner(reader)
+	s.setOutput(writer)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
 		var cmd RPCCommand
 		if err := json.Unmarshal(line, &cmd); err != nil {
-			s.sendError(writer, "", fmt.Sprintf("Failed to parse command: %v", err))
+			s.sendError("", fmt.Sprintf("Failed to parse command: %v", err))
 			continue
 		}
 
 		resp := s.handleCommand(cmd)
-		s.sendResponse(writer, resp)
+		s.sendResponse(resp)
 	}
 
 	// Wait for all background tasks to complete
@@ -557,7 +565,7 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		// Health check - always succeeds
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{
 			"status":    "ok",
-			"timestamp":  s.ctx,
+			"timestamp": s.ctx,
 		})
 
 	default:
@@ -588,20 +596,18 @@ func (s *Server) errorResponse(id, command, errMsg string) RPCResponse {
 }
 
 // sendResponse writes a response to stdout.
-func (s *Server) sendResponse(writer *bufio.Writer, resp RPCResponse) {
+func (s *Server) sendResponse(resp RPCResponse) {
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return
 	}
-	writer.Write(data)
-	writer.WriteByte('\n')
-	writer.Flush()
+	s.writeJSON(data)
 }
 
 // sendError writes an error response to stdout.
-func (s *Server) sendError(writer *bufio.Writer, cmdID, errMsg string) {
+func (s *Server) sendError(cmdID, errMsg string) {
 	resp := s.errorResponse(cmdID, "", errMsg)
-	s.sendResponse(writer, resp)
+	s.sendResponse(resp)
 }
 
 // EmitEvent emits an event to stdout as JSON.
@@ -610,7 +616,34 @@ func (s *Server) EmitEvent(event any) {
 	if err != nil {
 		return
 	}
-	fmt.Println(string(data))
+	s.writeJSON(data)
+}
+
+// SetOutput sets the writer used for responses and events.
+func (s *Server) SetOutput(writer io.Writer) {
+	s.setOutput(writer)
+}
+
+func (s *Server) setOutput(writer io.Writer) {
+	s.writer.Lock()
+	defer s.writer.Unlock()
+	if writer == nil {
+		s.output = nil
+		return
+	}
+	s.output = bufio.NewWriter(writer)
+}
+
+func (s *Server) writeJSON(data []byte) {
+	s.writer.Lock()
+	defer s.writer.Unlock()
+	if s.output == nil {
+		fmt.Println(string(data))
+		return
+	}
+	_, _ = s.output.Write(data)
+	_ = s.output.WriteByte('\n')
+	_ = s.output.Flush()
 }
 
 // Context returns the server's context.

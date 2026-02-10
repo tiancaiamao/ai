@@ -4,8 +4,8 @@
 
 ## 定位说明
 
-- 本仓库只提供 **RPC 模式** 的 Agent 核心，不包含 TUI 模块。
-- 在 ad 编辑器中使用的方式是 `win-ai`（由 ad 的 win 库驱动），位于 `github.com/tiancaiamao/ad` 的集成路径中。
+- 本仓库提供 **RPC 模式** 的 Agent 核心，并内置 **win 模式**（供 ad 的 win 库驱动）。
+- 在 ad 编辑器中使用时可将该二进制命名为 `win-ai`（默认启动 win 模式）。
 
 ## 构建与运行
 
@@ -15,15 +15,14 @@ go build -o bin/ai ./cmd/ai
 ```
 
 ```bash
-# 默认使用 ZAI
-export ZAI_API_KEY=your-zai-api-key
-./bin/ai --mode rpc
+# 默认启动 win 模式（给 ad 使用）
+./bin/ai
 ```
 
-构建 win-ai（供 ad 编辑器使用）：
-
 ```bash
-go build -o bin/win-ai ./cmd/win-ai
+# 启动 RPC 模式
+export ZAI_API_KEY=your-zai-api-key
+./bin/ai --mode rpc
 ```
 
 加载指定会话文件：
@@ -52,9 +51,9 @@ go build -o bin/win-ai ./cmd/win-ai
 ## RPC 使用示例
 
 ```bash
-echo '{"type":"prompt","message":"Hello!"}' | ./bin/ai
-echo '{"type":"get_state"}' | ./bin/ai
-echo '{"type":"get_messages"}' | ./bin/ai
+echo '{"type":"prompt","message":"Hello!"}' | ./bin/ai --mode rpc
+echo '{"type":"get_state"}' | ./bin/ai --mode rpc
+echo '{"type":"get_messages"}' | ./bin/ai --mode rpc
 ```
 
 ## 已实现的 RPC 命令
@@ -93,7 +92,7 @@ echo '{"type":"get_messages"}' | ./bin/ai
 
 ## 备注
 
-- 仅支持 `--mode rpc`。
+- 不带参数默认启动 win 模式；RPC 模式用 `--mode rpc`。
 - `ai` 采用 OpenAI 兼容的 Chat Completions 协议对接 ZAI。
 
 ## 许可证

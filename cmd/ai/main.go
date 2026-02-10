@@ -5,6 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	stdlog "log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -23,9 +25,17 @@ import (
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
+
+	"github.com/sminez/ad/win/pkg/ad"
+	"github.com/sminez/ad/win/pkg/repl"
+	"github.com/tiancaiamao/ai/internal/winai"
 )
 
 var log *logger.Logger
+
+const (
+	sendPrefix = ";; "
+)
 
 func normalizeSessionPath(sessionPath string) (string, error) {
 	if sessionPath == "" {
@@ -307,15 +317,30 @@ func collectSessionUsage(messages []agent.AgentMessage) (int, int, int, int, rpc
 }
 
 func main() {
-	mode := flag.String("mode", "rpc", "Run mode (rpc only)")
-	sessionPathFlag := flag.String("session", "", "Session file path")
+	mode := flag.String("mode", "", "Run mode (rpc|win). Default: win")
+	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win mode)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
+	windowName := flag.String("name", "", "window name (default +ai)")
+	debug := flag.Bool("debug", false, "enable debug logging (win mode)")
 	flag.Parse()
 
+	if *mode != "rpc" {
+		if err := runWinAI(*windowName, *debug, *sessionPathFlag, *debugAddr); err != nil {
+			stdlog.Fatalf("win-ai error: %v", err)
+		}
+		return
+	}
+
+	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
+		stdlog.Fatalf("rpc error: %v", err)
+	}
+}
+
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
-		logger.NewDefaultLogger().Fatalf("Failed to get config path: %v", err)
+		return fmt.Errorf("failed to get config path: %w", err)
 	}
 
 	cfg, err := config.LoadConfig(configPath)
@@ -328,16 +353,12 @@ func main() {
 	// Initialize logger from config
 	log, err = cfg.Log.CreateLogger()
 	if err != nil {
-		logger.NewDefaultLogger().Fatalf("Failed to create logger: %v", err)
+		return fmt.Errorf("failed to create logger: %w", err)
 	}
 	defer log.Close()
 	aiLogPath := config.ResolveLogPath(cfg.Log)
 	if aiLogPath != "" {
 		log.Infof("Log file: %s", aiLogPath)
-	}
-
-	if *mode != "rpc" {
-		log.Fatalf("Unsupported mode: %s (only --mode rpc is supported)", *mode)
 	}
 
 	// Convert config to llm.Model
@@ -348,7 +369,7 @@ func main() {
 
 	apiKey, err := config.ResolveAPIKey(model.Provider)
 	if err != nil {
-		log.Fatalf("Missing API key: %v", err)
+		return fmt.Errorf("missing API key: %w", err)
 	}
 
 	// Log model info
@@ -372,18 +393,18 @@ func main() {
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("Failed to get working directory: %v", err)
+		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	sessionPath, err := normalizeSessionPath(*sessionPathFlag)
+	sessionPath, err = normalizeSessionPath(sessionPath)
 	if err != nil {
-		log.Fatalf("Failed to normalize session path: %v", err)
+		return fmt.Errorf("failed to normalize session path: %w", err)
 	}
 
 	// Initialize session manager
 	sessionsDir, err := session.GetDefaultSessionsDir(cwd)
 	if err != nil {
-		log.Fatalf("Failed to get sessions path: %v", err)
+		return fmt.Errorf("failed to get sessions path: %w", err)
 	}
 
 	if sessionPath != "" {
@@ -398,7 +419,7 @@ func main() {
 	if sessionPath != "" {
 		sess, err = session.LoadSession(sessionPath)
 		if err != nil {
-			log.Fatalf("Failed to load session from %s: %v", sessionPath, err)
+			return fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
 		}
 		sessionID = sessionIDFromPath(sessionPath)
 		sessionName = resolveSessionName(sessionMgr, sessionID)
@@ -413,7 +434,7 @@ func main() {
 			log.Infof("Warning: Failed to load current session: %v", err)
 			sess, sessionID, err = sessionMgr.LoadCurrent()
 			if err != nil {
-				log.Fatalf("Failed to create default session: %v", err)
+				return fmt.Errorf("failed to create default session: %w", err)
 			}
 		}
 		sessionName = resolveSessionName(sessionMgr, sessionID)
@@ -433,7 +454,7 @@ func main() {
 	// Load skills
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("Failed to get home directory: %v", err)
+		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	agentDir := filepath.Join(homeDir, ".ai")
@@ -532,6 +553,7 @@ func main() {
 
 	// Create RPC server
 	server := rpc.NewServer()
+	server.SetOutput(output)
 	stateMu := sync.Mutex{}
 	isStreaming := false
 	isCompacting := false
@@ -1117,7 +1139,7 @@ func main() {
 	})
 
 	// Start debug server if enabled
-	if *debugAddr != "" {
+	if debugAddr != "" {
 		go func() {
 			// Register metrics endpoint on DefaultServeMux
 			http.HandleFunc("/debug/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -1135,16 +1157,16 @@ func main() {
 				}
 			})
 
-			log.Infof("Debug server listening on %s", *debugAddr)
+			log.Infof("Debug server listening on %s", debugAddr)
 			log.Infof("Debug endpoints available at:")
-			log.Infof("  - http://%s/debug/pprof/          (profiling index)", *debugAddr)
-			log.Infof("  - http://%s/debug/pprof/profile   (CPU profile)", *debugAddr)
-			log.Infof("  - http://%s/debug/pprof/heap       (memory profile)", *debugAddr)
-			log.Infof("  - http://%s/debug/pprof/goroutine  (goroutine dump)", *debugAddr)
-			log.Infof("  - http://%s/debug/pprof/trace      (execution trace)", *debugAddr)
-			log.Infof("  - http://%s/debug/metrics         (agent metrics)", *debugAddr)
+			log.Infof("  - http://%s/debug/pprof/          (profiling index)", debugAddr)
+			log.Infof("  - http://%s/debug/pprof/profile   (CPU profile)", debugAddr)
+			log.Infof("  - http://%s/debug/pprof/heap       (memory profile)", debugAddr)
+			log.Infof("  - http://%s/debug/pprof/goroutine  (goroutine dump)", debugAddr)
+			log.Infof("  - http://%s/debug/pprof/trace      (execution trace)", debugAddr)
+			log.Infof("  - http://%s/debug/metrics         (agent metrics)", debugAddr)
 
-			if err := http.ListenAndServe(*debugAddr, nil); err != nil {
+			if err := http.ListenAndServe(debugAddr, nil); err != nil {
 				log.Errorf("Debug server error: %v", err)
 			}
 		}()
@@ -1153,9 +1175,7 @@ func main() {
 	// Run RPC server
 	log.Infof("RPC server started (model: %s, cwd: %s)", model.ID, cwd)
 	log.Info("Waiting for commands...")
-	if err := server.Run(); err != nil {
-		log.Fatalf("RPC server error: %v", err)
-	}
+	runErr := server.RunWithIO(input, output)
 
 	// Server stopped, event emitter will exit automatically
 	log.Info("RPC server stopped, waiting for cleanup...")
@@ -1168,4 +1188,84 @@ func main() {
 	<-eventEmitterDone
 
 	log.Info("Agent completed, exiting...")
+	return runErr
+}
+
+func runWinAI(windowName string, debug bool, sessionPath string, debugAddr string) error {
+	if debug {
+		stdlog.SetFlags(stdlog.Ltime | stdlog.Lshortfile)
+		stdlog.Println("Starting win-ai REPL with debug logging")
+	}
+
+	rpcInReader, rpcInWriter := io.Pipe()
+	rpcOutReader, rpcOutWriter := io.Pipe()
+	rpcErrReader, rpcErrWriter := io.Pipe()
+	_ = rpcErrWriter.Close()
+
+	go func() {
+		defer rpcOutWriter.Close()
+		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
+			stdlog.Printf("rpc error: %v", err)
+		}
+	}()
+
+	client, err := ad.NewClient()
+	if err != nil {
+		return fmt.Errorf("unable to connect to ad: %w", err)
+	}
+	defer func() {
+		if debug {
+			stdlog.Println("Closing client connection")
+		}
+		client.Close()
+	}()
+
+	if debug {
+		stdlog.Println("Connected to ad successfully")
+	}
+
+	interpreter := winai.NewAiInterpreterWithIO(rpcInWriter, rpcOutReader, rpcErrReader, debug)
+	interpreter.SetAdClient(client)
+	defer interpreter.Stop()
+
+	name := windowName
+	if name == "" {
+		name = "+ai"
+	}
+
+	cfg := repl.Config{
+		Prompt:     "",
+		WindowName: name,
+		WelcomeMessage: `# Ai REPL
+#
+# Use send-to-win to send prompts (prefix ";; ").
+# Controls: use win-ctl or send /command via send-to-win.
+#
+`,
+		SendPrefix:            sendPrefix,
+		InputPrefix:           "",
+		EchoSendInput:         true,
+		EnableKeyboardExecute: false,
+		EnableExecute:         false,
+		Debug:                 debug,
+		LogPath:               "/tmp/ai-repl.log",
+	}
+
+	handler, err := repl.NewHandler(cfg, client, interpreter)
+	if err != nil {
+		return fmt.Errorf("unable to create REPL handler: %w", err)
+	}
+
+	if debug {
+		stdlog.Println("Starting REPL...")
+	}
+
+	if err := handler.Run(); err != nil {
+		if debug {
+			stdlog.Printf("REPL error: %v", err)
+		}
+		return fmt.Errorf("REPL error: %w", err)
+	}
+
+	return nil
 }

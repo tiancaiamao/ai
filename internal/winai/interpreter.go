@@ -36,11 +36,13 @@ type AiInterpreter struct {
 	// adClient is the client for communicating with ad (used for minibuffer, etc.)
 	adClient *ad.Client
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-	cancel context.CancelFunc
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.ReadCloser
+	stderr  io.ReadCloser
+	cancel  context.CancelFunc
+	inProc  bool
+	started bool
 
 	mu      sync.Mutex
 	stateMu sync.Mutex
@@ -254,10 +256,25 @@ type pipelineMetrics struct {
 
 // NewAiInterpreter creates a new ai interpreter.
 func NewAiInterpreter(cmdPath string, cmdArgs []string, debug bool) *AiInterpreter {
+	interp := newBaseInterpreter(debug)
+	interp.cmdPath = cmdPath
+	interp.cmdArgs = cmdArgs
+	return interp
+}
+
+// NewAiInterpreterWithIO creates an interpreter backed by in-process IO pipes.
+func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.ReadCloser, debug bool) *AiInterpreter {
+	interp := newBaseInterpreter(debug)
+	interp.inProc = true
+	interp.stdin = stdin
+	interp.stdout = stdout
+	interp.stderr = stderr
+	return interp
+}
+
+func newBaseInterpreter(debug bool) *AiInterpreter {
 	return &AiInterpreter{
 		BaseInterpreter:      repl.NewBaseInterpreter(true),
-		cmdPath:              cmdPath,
-		cmdArgs:              cmdArgs,
 		debug:                debug,
 		showAssistant:        true,
 		showThinking:         true,
@@ -281,7 +298,7 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.cmd != nil {
+	if p.started {
 		return fmt.Errorf("ai already started")
 	}
 
@@ -289,6 +306,29 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 
 	childCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
+
+	if p.inProc {
+		if p.stdin == nil || p.stdout == nil {
+			return fmt.Errorf("ai pipes not configured")
+		}
+		p.started = true
+		if wd, err := os.Getwd(); err == nil {
+			p.stateMu.Lock()
+			p.workingDir = wd
+			p.stateMu.Unlock()
+			if p.debug {
+				log.Printf("[AI-START] Working directory: %s", wd)
+			}
+		}
+		if p.debug {
+			log.Printf("[AI-START] ai started in-process")
+		}
+		go p.readStdout(childCtx)
+		if p.stderr != nil {
+			go p.readStderr(childCtx)
+		}
+		return nil
+	}
 
 	args := append([]string{}, p.cmdArgs...)
 	if !hasFlag(args, "-http") && !hasFlag(args, "--http") {
@@ -318,9 +358,11 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 	p.stdin = stdin
 	p.stdout = stdout
 	p.stderr = stderr
+	p.started = true
 
 	log.Printf("[AI-CMD] %s", p.cmd.String())
 	if err := p.cmd.Start(); err != nil {
+		p.started = false
 		return fmt.Errorf("start ai: %w", err)
 	}
 
@@ -361,11 +403,13 @@ func (p *AiInterpreter) Stop() error {
 	stdout := p.stdout
 	stderr := p.stderr
 	cancel := p.cancel
+	inProc := p.inProc
 	p.cmd = nil
 	p.stdin = nil
 	p.stdout = nil
 	p.stderr = nil
 	p.cancel = nil
+	p.started = false
 	p.mu.Unlock()
 
 	if cancel != nil {
@@ -382,7 +426,7 @@ func (p *AiInterpreter) Stop() error {
 		_ = stderr.Close()
 	}
 
-	if cmd != nil && cmd.Process != nil {
+	if !inProc && cmd != nil && cmd.Process != nil {
 		if err := cmd.Process.Kill(); err != nil {
 			return fmt.Errorf("kill ai: %w", err)
 		}
@@ -438,6 +482,7 @@ func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
 	stdout := p.stdout
 	stderr := p.stderr
 	cancel := p.cancel
+	p.started = false
 	p.cmd = nil
 	p.stdin = nil
 	p.stdout = nil
@@ -478,6 +523,13 @@ func (p *AiInterpreter) resetAiState() {
 }
 
 func (p *AiInterpreter) restartAI(reason string) error {
+	p.mu.Lock()
+	inProc := p.inProc
+	p.mu.Unlock()
+	if inProc {
+		return fmt.Errorf("ai in-process session cannot be restarted")
+	}
+
 	if reason != "" {
 		p.writeStatus(fmt.Sprintf("ai: %s; restarting...", reason))
 	}
