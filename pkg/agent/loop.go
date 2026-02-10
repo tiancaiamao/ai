@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
+
+	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
@@ -84,7 +85,7 @@ func runInnerLoop(
 		// Stream assistant response with retry logic
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
-			log.Printf("Error streaming response: %v", err)
+			slog.Error("Error streaming response", "error", err)
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
@@ -149,8 +150,10 @@ func streamAssistantResponseWithRetry(
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := baseDelay * time.Duration(1<<(attempt-1))
-			log.Printf("[Loop] Retrying LLM call (attempt %d/%d) after %v delay",
-				attempt, maxRetries, delay)
+			slog.Info("[Loop] Retrying LLM call",
+				"attempt", attempt,
+				"maxRetries", maxRetries,
+				"delay", delay)
 
 			select {
 			case <-time.After(delay):
@@ -166,7 +169,7 @@ func streamAssistantResponseWithRetry(
 		}
 
 		lastErr = err
-		log.Printf("[Loop] LLM call failed (attempt %d/%d): %v", attempt, maxRetries, err)
+		slog.Error("[Loop] LLM call failed", "attempt", attempt, "maxRetries", maxRetries, "error", err)
 
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
@@ -193,7 +196,7 @@ func streamAssistantResponse(
 	// Convert messages to LLM format
 	llmMessages := ConvertMessagesToLLM(agentCtx.Messages)
 
-	log.Printf("[Loop] Sending %d messages to LLM", len(llmMessages))
+	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
 
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(agentCtx.Tools)

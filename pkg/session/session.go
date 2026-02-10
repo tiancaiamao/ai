@@ -54,15 +54,12 @@ func LoadSession(filePath string) (*Session, error) {
 
 		var msg agent.AgentMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			// Log error but continue
-			fmt.Fprintf(os.Stderr, "[Session] Failed to parse line: %v\n", err)
+			// Skip malformed lines silently
 			continue
 		}
 
 		sess.messages = append(sess.messages, msg)
 	}
-
-	fmt.Fprintf(os.Stderr, "[Session] Loaded %d messages from %s\n", len(sess.messages), filePath)
 
 	return sess, nil
 }

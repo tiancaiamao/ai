@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"log/slog"
+
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/logger"
@@ -87,7 +89,7 @@ func DefaultLogConfig() *LogConfig {
 }
 
 // CreateLogger creates a logger from the log configuration.
-func (c *LogConfig) CreateLogger() (*logger.Logger, error) {
+func (c *LogConfig) CreateLogger() (*slog.Logger, error) {
 	if c == nil {
 		c = DefaultLogConfig()
 	}
@@ -97,7 +99,7 @@ func (c *LogConfig) CreateLogger() (*logger.Logger, error) {
 	cfg := &logger.Config{
 		Level:    logger.ParseLogLevel(c.Level),
 		Prefix:   c.Prefix,
-		Console:  true,
+		Console:  false, // Disable console output - logs only go to file
 		File:     logPath != "",
 		FilePath: logPath,
 	}

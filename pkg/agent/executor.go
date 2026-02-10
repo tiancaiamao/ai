@@ -3,9 +3,10 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	"log/slog"
 )
 
 const (
@@ -95,8 +96,11 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args m
 		}
 
 		if attempt > 0 {
-			log.Printf("[Executor] Retry attempt %d/%d for tool '%s' after %v delay",
-				attempt, e.retryConfig.MaxRetries, tool.Name(), delay)
+			slog.Info("[Executor] Retry attempt",
+				"attempt", attempt,
+				"maxRetries", e.retryConfig.MaxRetries,
+				"tool", tool.Name(),
+				"delay", delay)
 
 			// Wait before retry
 			select {
@@ -128,27 +132,32 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args m
 			if result.err == nil {
 				// Success
 				if attempt > 0 {
-					log.Printf("[Executor] Tool '%s' succeeded on attempt %d", tool.Name(), attempt+1)
+					slog.Info("[Executor] Tool succeeded on attempt", "tool", tool.Name(), "attempt", attempt+1)
 				}
 				return result.content, nil
 			}
 
 			// Check if error is retryable
 			if !e.isRetryable(result.err) {
-				log.Printf("[Executor] Tool '%s' failed with non-retryable error: %v", tool.Name(), result.err)
+				slog.Error("[Executor] Tool failed with non-retryable error", "tool", tool.Name(), "error", result.err)
 				return nil, result.err
 			}
 
 			// Error is retryable, will retry
 			lastErr = result.err
-			log.Printf("[Executor] Tool '%s' failed (attempt %d/%d): %v",
-				tool.Name(), attempt+1, e.retryConfig.MaxRetries+1, result.err)
+			slog.Warn("[Executor] Tool failed, will retry",
+				"tool", tool.Name(),
+				"attempt", attempt+1,
+				"maxAttempts", e.retryConfig.MaxRetries+1,
+				"error", result.err)
 
 		case <-timeoutCtx.Done():
 			// Timeout is always retryable
 			lastErr = fmt.Errorf("tool execution timeout after %v", e.toolTimeout)
-			log.Printf("[Executor] Tool '%s' timed out (attempt %d/%d)",
-				tool.Name(), attempt+1, e.retryConfig.MaxRetries+1)
+			slog.Warn("[Executor] Tool timed out, will retry",
+				"tool", tool.Name(),
+				"attempt", attempt+1,
+				"maxAttempts", e.retryConfig.MaxRetries+1)
 		}
 	}
 
@@ -290,8 +299,10 @@ func (p *ExecutorPool) SetRetryConfig(toolName string, config *RetryConfig) {
 // Execute runs a tool using the appropriate executor.
 func (p *ExecutorPool) Execute(ctx context.Context, tool Tool, args map[string]interface{}) ([]ContentBlock, error) {
 	executor := p.GetExecutor(tool.Name())
-	log.Printf("[Executor] Executing tool '%s' (concurrency limit: %d, retries: %d)",
-		tool.Name(), cap(executor.semaphore), executor.retryConfig.MaxRetries)
+	slog.Debug("[Executor] Executing tool",
+		"tool", tool.Name(),
+		"concurrencyLimit", cap(executor.semaphore),
+		"maxRetries", executor.retryConfig.MaxRetries)
 
 	return executor.Execute(ctx, tool, args)
 }

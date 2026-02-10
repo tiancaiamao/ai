@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	stdlog "log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -16,11 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"log/slog"
+
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/logger"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -30,8 +30,6 @@ import (
 	"github.com/sminez/ad/win/pkg/repl"
 	"github.com/tiancaiamao/ai/internal/winai"
 )
-
-var log *logger.Logger
 
 const (
 	sendPrefix = ";; "
@@ -326,13 +324,15 @@ func main() {
 
 	if *mode != "rpc" {
 		if err := runWinAI(*windowName, *debug, *sessionPathFlag, *debugAddr); err != nil {
-			stdlog.Fatalf("win-ai error: %v", err)
+			slog.Error("win-ai error", "error", err)
+			os.Exit(1)
 		}
 		return
 	}
 
-	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
-		stdlog.Fatalf("rpc error: %v", err)
+	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, io.Discard); err != nil {
+		slog.Error("rpc error", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -345,20 +345,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		logger.NewDefaultLogger().Warnf("Failed to load config from %s: %v", configPath, err)
+		slog.Warn("Failed to load config", "path", configPath, "error", err)
 		// Use defaults - LoadConfig already provides defaults
 		cfg, _ = config.LoadConfig(configPath)
 	}
 
 	// Initialize logger from config
-	log, err = cfg.Log.CreateLogger()
+	log, err := cfg.Log.CreateLogger()
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
-	defer log.Close()
+
+	// Set the default slog logger
+	slog.SetDefault(log)
+
 	aiLogPath := config.ResolveLogPath(cfg.Log)
 	if aiLogPath != "" {
-		log.Infof("Log file: %s", aiLogPath)
+		slog.Info("Log file", "path", aiLogPath)
 	}
 
 	// Convert config to llm.Model
@@ -373,19 +376,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Log model info
-	log.Info("Model: %s, Provider: %s, BaseURL: %s", model.ID, model.Provider, model.BaseURL)
+	slog.Info("Model", "id", model.ID, "provider", model.Provider, "baseURL", model.BaseURL)
 	if cfg.Compactor != nil {
-		log.Info("Compactor: MaxMessages=%d, MaxTokens=%d, KeepRecent=%d, KeepRecentTokens=%d, ReserveTokens=%d",
-			cfg.Compactor.MaxMessages,
-			cfg.Compactor.MaxTokens,
-			cfg.Compactor.KeepRecent,
-			cfg.Compactor.KeepRecentTokens,
-			cfg.Compactor.ReserveTokens)
+		slog.Info("Compactor", "maxMessages", cfg.Compactor.MaxMessages, "maxTokens", cfg.Compactor.MaxTokens,
+			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
+			"reserveTokens", cfg.Compactor.ReserveTokens)
 	}
 
 	activeSpec, err := resolveActiveModelSpec(cfg)
 	if err != nil {
-		log.Infof("Model spec fallback: %v", err)
+		slog.Info("Model spec fallback", "error", err)
 	}
 	currentModelInfo := modelInfoFromSpec(activeSpec)
 	currentContextWindow := activeSpec.ContextWindow
@@ -425,20 +425,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = resolveSessionName(sessionMgr, sessionID)
 		_ = sessionMgr.SetCurrent(sessionID)
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			log.Infof("Failed to save session pointer: %v", err)
+			slog.Info("Failed to save session pointer:", "value", err)
 		}
-		log.Infof("Loaded session from '%s' with %d messages", sessionPath, len(sess.GetMessages()))
+		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
 	} else {
 		sess, sessionID, err = sessionMgr.LoadCurrent()
 		if err != nil {
-			log.Infof("Warning: Failed to load current session: %v", err)
+			slog.Info("Warning: Failed to load current session:", "value", err)
 			sess, sessionID, err = sessionMgr.LoadCurrent()
 			if err != nil {
 				return fmt.Errorf("failed to create default session: %w", err)
 			}
 		}
 		sessionName = resolveSessionName(sessionMgr, sessionID)
-		log.Infof("Loaded session '%s' with %d messages", sessionID, len(sess.GetMessages()))
+		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
 
 	// Create tool registry and register tools
@@ -449,7 +449,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	log.Infof("Registered %d tools: read, bash, write, grep, edit", len(registry.All()))
+	slog.Info("Registered  tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
@@ -468,19 +468,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Log skill diagnostics
 	if len(skillResult.Diagnostics) > 0 {
-		log.Infof("Skill loading: %d diagnostics", len(skillResult.Diagnostics))
+		slog.Info("Skill loading:  diagnostics", "count", len(skillResult.Diagnostics))
 		for _, diag := range skillResult.Diagnostics {
 			if diag.Type == "error" {
-				log.Errorf("  [%s] %s: %s", diag.Type, diag.Path, diag.Message)
+				slog.Error("Skill error", "type", diag.Type, "path", diag.Path, "message", diag.Message)
 			} else {
-				log.Warnf("  [%s] %s: %s", diag.Type, diag.Path, diag.Message)
+				slog.Warn("Skill warning", "type", diag.Type, "path", diag.Path, "message", diag.Message)
 			}
 		}
 	}
 
-	log.Infof("Loaded %d skills", len(skillResult.Skills))
+	slog.Info("Loaded  skills", "count", len(skillResult.Skills))
 	for _, s := range skillResult.Skills {
-		log.Debugf("  - %s: %s", s.Name, s.Description)
+		slog.Debug("Skill", "name", s.Name, "description", s.Description)
 	}
 
 	// Create agent with skills
@@ -514,9 +514,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Enable automatic compression
 	ag.SetCompactor(compactor)
-	log.Infof("Auto-compact enabled: MaxMessages=%d, MaxTokens=%d",
-		compactorConfig.MaxMessages,
-		compactorConfig.MaxTokens)
+	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	// Set up executor with concurrency control
 	concurrencyConfig := cfg.Concurrency
@@ -530,9 +528,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"queueTimeout":       concurrencyConfig.QueueTimeout,
 	})
 	ag.SetExecutor(executor)
-	log.Infof("Concurrency control enabled: MaxConcurrentTools=%d, ToolTimeout=%ds",
-		concurrencyConfig.MaxConcurrentTools,
-		concurrencyConfig.ToolTimeout)
+	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 
 	toolOutputConfig := cfg.ToolOutput
 	if toolOutputConfig == nil {
@@ -542,9 +538,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		MaxLines: toolOutputConfig.MaxLines,
 		MaxBytes: toolOutputConfig.MaxBytes,
 	})
-	log.Infof("Tool output truncation: MaxLines=%d, MaxBytes=%d",
-		toolOutputConfig.MaxLines,
-		toolOutputConfig.MaxBytes)
+	slog.Info("Tool output truncation", "maxLines", toolOutputConfig.MaxLines, "maxBytes", toolOutputConfig.MaxBytes)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {
@@ -557,17 +551,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	stateMu := sync.Mutex{}
 	isStreaming := false
 	isCompacting := false
-	currentThinkingLevel := "medium"
+	currentThinkingLevel := "high"
 	autoCompactionEnabled := compactorConfig.AutoCompact
 
 	// Set up handlers
 	server.SetPromptHandler(func(message string) error {
-		log.Infof("Received prompt: %s", message)
+		slog.Info("Received prompt:", "value", message)
 		return ag.Prompt(message)
 	})
 
 	server.SetSteerHandler(func(message string) error {
-		log.Infof("Received steer: %s", message)
+		slog.Info("Received steer:", "value", message)
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
@@ -576,7 +570,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetFollowUpHandler(func(message string) error {
-		log.Infof("Received follow_up: %s", message)
+		slog.Info("Received follow_up:", "value", message)
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty follow-up message")
 		}
@@ -584,24 +578,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetAbortHandler(func() error {
-		log.Info("Received abort")
+		slog.Info("Received abort")
 		ag.Abort()
 		return nil
 	})
 
 	server.SetClearSessionHandler(func() error {
-		log.Info("Received clear_session")
+		slog.Info("Received clear_session")
 		if err := sess.Clear(); err != nil {
 			return err
 		}
 		// Clear agent context
 		ag.SetContext(createBaseContext())
-		log.Info("Session cleared")
+		slog.Info("Session cleared")
 		return nil
 	})
 
 	server.SetNewSessionHandler(func(name, title string) (string, error) {
-		log.Infof("Received new_session: name=%s, title=%s", name, title)
+		slog.Info("Received new_session", "name", name, "title", title)
 		if strings.TrimSpace(name) == "" {
 			name = time.Now().Format("20060102-150405")
 		}
@@ -624,7 +618,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		// Save the current session pointer
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			log.Infof("Failed to save session pointer: %v", err)
+			slog.Info("Failed to save session pointer:", "value", err)
 		}
 
 		sess = newSess
@@ -635,12 +629,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = name
 		stateMu.Unlock()
 
-		log.Infof("Created new session '%s' (id: %s)", name, newSessionID)
+		slog.Info("Created new session", "name", name, "id", newSessionID)
 		return newSessionID, nil
 	})
 
 	server.SetListSessionsHandler(func() ([]any, error) {
-		log.Info("Received list_sessions")
+		slog.Info("Received list_sessions")
 		sessions, err := sessionMgr.ListSessions()
 		if err != nil {
 			return nil, err
@@ -654,7 +648,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetSwitchSessionHandler(func(id string) error {
-		log.Infof("Received switch_session: id=%s", id)
+		slog.Info("Received switch_session: id=", "id", id)
 		if id == "" {
 			return fmt.Errorf("session id is required")
 		}
@@ -674,7 +668,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionMgr = session.NewSessionManager(sessionsDir)
 			_ = sessionMgr.SetCurrent(newSessionID)
 			if err := sessionMgr.SaveCurrent(); err != nil {
-				log.Infof("Failed to save session pointer: %v", err)
+				slog.Info("Failed to save session pointer:", "value", err)
 			}
 
 			// Clear agent context and load new messages
@@ -689,7 +683,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionName = resolveSessionName(sessionMgr, newSessionID)
 			stateMu.Unlock()
 
-			log.Infof("Switched to session '%s' with %d messages", newSessionID, len(newSess.GetMessages()))
+			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 			return nil
 		}
 
@@ -715,17 +709,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = resolveSessionName(sessionMgr, newSessionID)
 		stateMu.Unlock()
 
-		log.Infof("Switched to session '%s' with %d messages", newSessionID, len(newSess.GetMessages()))
+		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 		return nil
 	})
 
 	server.SetDeleteSessionHandler(func(id string) error {
-		log.Infof("Received delete_session: id=%s", id)
+		slog.Info("Received delete_session: id=", "id", id)
 		return sessionMgr.DeleteSession(id)
 	})
 
 	server.SetGetStateHandler(func() (*rpc.SessionState, error) {
-		log.Info("Received get_state")
+		slog.Info("Received get_state")
 		compactionState := buildCompactionState(compactorConfig, compactor)
 		stateMu.Lock()
 		currentSessionID := sessionID
@@ -758,7 +752,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetGetMessagesHandler(func() ([]any, error) {
-		log.Info("Received get_messages")
+		slog.Info("Received get_messages")
 		messages := ag.GetMessages()
 		result := make([]any, len(messages))
 		for i, msg := range messages {
@@ -768,13 +762,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetCompactHandler(func() (*rpc.CompactResult, error) {
-		log.Info("Received compact")
+		slog.Info("Received compact")
 		beforeMessages := ag.GetMessages()
 		beforeCount := len(beforeMessages)
 		tokensBefore := compactor.EstimateTokens(beforeMessages)
 		compacted, err := compactor.Compact(beforeMessages)
 		if err != nil {
-			log.Infof("Compact failed: %v", err)
+			slog.Info("Compact failed:", "value", err)
 			return nil, err
 		}
 
@@ -783,7 +777,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		// Save compacted session
 		if err := sess.SaveMessages(compacted); err != nil {
-			log.Infof("Failed to save compacted session: %v", err)
+			slog.Info("Failed to save compacted session:", "value", err)
 		}
 
 		afterCount := len(compacted)
@@ -800,7 +794,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			firstKept = forkEntryID(compacted[1], 1)
 		}
 
-		log.Infof("Compact successful: %d -> %d messages", beforeCount, afterCount)
+		slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
 		return &rpc.CompactResult{
 			Summary:          summary,
 			FirstKeptEntryID: firstKept,
@@ -810,7 +804,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
-		log.Info("Received get_available_models")
+		slog.Info("Received get_available_models")
 		specs, modelsPath, err := loadModelSpecs(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
@@ -830,7 +824,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetSetModelHandler(func(provider, modelID string) (*rpc.ModelInfo, error) {
-		log.Infof("Received set_model: provider=%s, modelId=%s", provider, modelID)
+		slog.Info("Received set_model", "provider", provider, "modelId", modelID)
 		if strings.TrimSpace(provider) == "" || strings.TrimSpace(modelID) == "" {
 			return nil, fmt.Errorf("provider and modelId are required")
 		}
@@ -879,7 +873,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		ag.SetCompactor(compactor)
 
 		if err := config.SaveConfig(cfg, configPath); err != nil {
-			log.Infof("Failed to save config: %v", err)
+			slog.Info("Failed to save config:", "value", err)
 		}
 
 		info := modelInfoFromSpec(spec)
@@ -892,12 +886,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	skillCommands := buildSkillCommands(skillResult.Skills)
 	server.SetGetCommandsHandler(func() ([]rpc.SlashCommand, error) {
-		log.Info("Received get_commands")
+		slog.Info("Received get_commands")
 		return skillCommands, nil
 	})
 
 	server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
-		log.Info("Received get_session_stats")
+		slog.Info("Received get_session_stats")
 		messages := ag.GetMessages()
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
 		stateMu.Lock()
@@ -917,7 +911,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetSetAutoCompactionHandler(func(enabled bool) error {
-		log.Infof("Received set_auto_compaction: enabled=%v", enabled)
+		slog.Info("Received set_auto_compaction: enabled=", "value", enabled)
 		compactorConfig.AutoCompact = enabled
 		stateMu.Lock()
 		autoCompactionEnabled = enabled
@@ -966,7 +960,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetGetLastAssistantTextHandler(func() (string, error) {
-		log.Info("Received get_last_assistant_text")
+		slog.Info("Received get_last_assistant_text")
 		messages := ag.GetMessages()
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role == "assistant" {
@@ -977,12 +971,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	server.SetGetForkMessagesHandler(func() ([]rpc.ForkMessage, error) {
-		log.Info("Received get_fork_messages")
+		slog.Info("Received get_fork_messages")
 		return buildForkMessages(ag.GetMessages()), nil
 	})
 
 	server.SetForkHandler(func(entryID string) (*rpc.ForkResult, error) {
-		log.Infof("Received fork: entryId=%s", entryID)
+		slog.Info("Received fork: entryId=", "value", entryID)
 		messages := ag.GetMessages()
 		targetIndex, text, err := resolveForkEntry(entryID, messages)
 		if err != nil {
@@ -1008,7 +1002,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, err
 		}
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			log.Infof("Failed to save session pointer: %v", err)
+			slog.Info("Failed to save session pointer:", "value", err)
 		}
 
 		sess = newSess
@@ -1022,7 +1016,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = name
 		stateMu.Unlock()
 
-		log.Infof("Forked to new session '%s' (id: %s)", name, newSessionID)
+		slog.Info("Forked to new session", "name", name, "id", newSessionID)
 		return &rpc.ForkResult{Cancelled: false, Text: text}, nil
 	})
 
@@ -1072,9 +1066,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					go func() {
 						messages := ag.GetMessages()
 						if err := sess.SaveMessages(messages); err != nil {
-							log.Infof("Failed to save session: %v", err)
+							slog.Info("Failed to save session:", "value", err)
 						} else {
-							log.Infof("Session saved: %d messages", len(messages))
+							slog.Info("Session saved:  messages", "value", len(messages))
 						}
 					}()
 				}
@@ -1117,9 +1111,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 							go func() {
 								messages := ag.GetMessages()
 								if err := sess.SaveMessages(messages); err != nil {
-									log.Infof("Failed to save session: %v", err)
+									slog.Info("Failed to save session:", "value", err)
 								} else {
-									log.Infof("Session saved: %d messages", len(messages))
+									slog.Info("Session saved:  messages", "value", len(messages))
 								}
 							}()
 						}
@@ -1152,49 +1146,75 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				fullMetrics := metrics.GetFullMetrics()
 				w.Header().Set("Content-Type", "application/json")
 				if err := json.NewEncoder(w).Encode(fullMetrics); err != nil {
-					log.Errorf("Failed to encode metrics: %v", err)
+					slog.Error("Failed to encode metrics:", "value", err)
 					http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
 				}
 			})
 
-			log.Infof("Debug server listening on %s", debugAddr)
-			log.Infof("Debug endpoints available at:")
-			log.Infof("  - http://%s/debug/pprof/          (profiling index)", debugAddr)
-			log.Infof("  - http://%s/debug/pprof/profile   (CPU profile)", debugAddr)
-			log.Infof("  - http://%s/debug/pprof/heap       (memory profile)", debugAddr)
-			log.Infof("  - http://%s/debug/pprof/goroutine  (goroutine dump)", debugAddr)
-			log.Infof("  - http://%s/debug/pprof/trace      (execution trace)", debugAddr)
-			log.Infof("  - http://%s/debug/metrics         (agent metrics)", debugAddr)
+			slog.Info("Debug server listening on", "value", debugAddr)
+			slog.Info("Debug endpoints available at:")
+			slog.Info("- http:///debug/pprof/          (profiling index)", "value", debugAddr)
+			slog.Info("- http:///debug/pprof/profile   (CPU profile)", "value", debugAddr)
+			slog.Info("- http:///debug/pprof/heap       (memory profile)", "value", debugAddr)
+			slog.Info("- http:///debug/pprof/goroutine  (goroutine dump)", "value", debugAddr)
+			slog.Info("- http:///debug/pprof/trace      (execution trace)", "value", debugAddr)
+			slog.Info("- http:///debug/metrics         (agent metrics)", "value", debugAddr)
 
 			if err := http.ListenAndServe(debugAddr, nil); err != nil {
-				log.Errorf("Debug server error: %v", err)
+				slog.Error("Debug server error:", "error", err)
 			}
 		}()
 	}
 
 	// Run RPC server
-	log.Infof("RPC server started (model: %s, cwd: %s)", model.ID, cwd)
-	log.Info("Waiting for commands...")
+	slog.Info("RPC server started", "model", model.ID, "cwd", cwd)
+	slog.Info("Waiting for commands...")
 	runErr := server.RunWithIO(input, output)
 
 	// Server stopped, event emitter will exit automatically
-	log.Info("RPC server stopped, waiting for cleanup...")
+	slog.Info("RPC server stopped, waiting for cleanup...")
 
 	// Wait for agent to complete
-	log.Info("Waiting for agent to complete...")
+	slog.Info("Waiting for agent to complete...")
 	ag.Wait()
 
 	close(shutdownEmitter)
 	<-eventEmitterDone
 
-	log.Info("Agent completed, exiting...")
+	slog.Info("Agent completed, exiting...")
 	return runErr
 }
 
 func runWinAI(windowName string, debug bool, sessionPath string, debugAddr string) error {
+	// Initialize logger early so all slog calls go to the log file
+	configPath, err := config.GetDefaultConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to get config path: %w", err)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		// Continue with defaults if config loading fails
+		cfg, _ = config.LoadConfig(configPath)
+	}
+
+	// Initialize logger from config
+	log, err := cfg.Log.CreateLogger()
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %w", err)
+	}
+
+	// Set the default slog logger to use our configured logger
+	// This ensures all slog.Info/Error/etc calls go to the log file
+	slog.SetDefault(log)
+
+	aiLogPath := config.ResolveLogPath(cfg.Log)
+	if aiLogPath != "" {
+		slog.Info("Log file:", "value", aiLogPath)
+	}
+
 	if debug {
-		stdlog.SetFlags(stdlog.Ltime | stdlog.Lshortfile)
-		stdlog.Println("Starting win-ai REPL with debug logging")
+		slog.Info("Starting win-ai REPL with debug logging")
 	}
 
 	rpcInReader, rpcInWriter := io.Pipe()
@@ -1205,7 +1225,7 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 	go func() {
 		defer rpcOutWriter.Close()
 		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
-			stdlog.Printf("rpc error: %v", err)
+			slog.Error("rpc error", "error", err)
 		}
 	}()
 
@@ -1215,13 +1235,13 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 	}
 	defer func() {
 		if debug {
-			stdlog.Println("Closing client connection")
+			slog.Info("Closing client connection")
 		}
 		client.Close()
 	}()
 
 	if debug {
-		stdlog.Println("Connected to ad successfully")
+		slog.Info("Connected to ad successfully")
 	}
 
 	interpreter := winai.NewAiInterpreterWithIO(rpcInWriter, rpcOutReader, rpcErrReader, debug)
@@ -1233,7 +1253,7 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		name = "+ai"
 	}
 
-	cfg := repl.Config{
+	replCfg := repl.Config{
 		Prompt:     "",
 		WindowName: name,
 		WelcomeMessage: `# Ai REPL
@@ -1251,18 +1271,18 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		LogPath:               "/tmp/ai-repl.log",
 	}
 
-	handler, err := repl.NewHandler(cfg, client, interpreter)
+	handler, err := repl.NewHandler(replCfg, client, interpreter)
 	if err != nil {
 		return fmt.Errorf("unable to create REPL handler: %w", err)
 	}
 
 	if debug {
-		stdlog.Println("Starting REPL...")
+		slog.Info("Starting REPL...")
 	}
 
 	if err := handler.Run(); err != nil {
 		if debug {
-			stdlog.Printf("REPL error: %v", err)
+			slog.Error("REPL error", "error", err)
 		}
 		return fmt.Errorf("REPL error: %w", err)
 	}

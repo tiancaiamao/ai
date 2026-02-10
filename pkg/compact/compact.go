@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"strings"
+
+	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -90,13 +91,13 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 		if len(oldMessages) == 0 {
 			return messages, nil
 		}
-		log.Printf("[Compact] Compressing %d messages (keeping ~%d tokens)", len(messages), keepRecentTokens)
+		slog.Info("[Compact] Compressing messages", "count", len(messages), "keepTokens", keepRecentTokens)
 	} else {
 		keepCount := c.keepRecentMessages()
 		if len(messages) <= keepCount {
 			return messages, nil
 		}
-		log.Printf("[Compact] Compressing %d messages (keeping %d recent)", len(messages), keepCount)
+		slog.Info("[Compact] Compressing messages", "count", len(messages), "keepRecent", keepCount)
 		splitIndex := len(messages) - keepCount
 		oldMessages = messages[:splitIndex]
 		recentMessages = messages[splitIndex:]
@@ -108,7 +109,7 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	log.Printf("[Compact] Generated summary: %d chars", len(summary))
+	slog.Debug("[Compact] Generated summary", "chars", len(summary))
 
 	// Create new context with summary + recent messages
 	newMessages := []agent.AgentMessage{
@@ -117,7 +118,7 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 
 	newMessages = append(newMessages, recentMessages...)
 
-	log.Printf("[Compact] Compressed to %d messages", len(newMessages))
+	slog.Info("[Compact] Compressed to messages", "count", len(newMessages))
 
 	return newMessages, nil
 }

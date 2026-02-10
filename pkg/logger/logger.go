@@ -1,12 +1,16 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
-	"time"
+
+	"gopkg.in/natefinch/lumberjack.v2"
+	"log/slog"
 )
 
 // LogLevel represents the severity level of a log message.
@@ -39,6 +43,22 @@ func (l LogLevel) String() string {
 	}
 }
 
+// toSlogLevel converts LogLevel to slog.Level.
+func (l LogLevel) toSlogLevel() slog.Level {
+	switch l {
+	case DEBUG:
+		return slog.LevelDebug
+	case INFO:
+		return slog.LevelInfo
+	case WARN:
+		return slog.LevelWarn
+	case ERROR:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // ParseLogLevel parses a string to LogLevel.
 func ParseLogLevel(level string) LogLevel {
 	switch level {
@@ -55,17 +75,6 @@ func ParseLogLevel(level string) LogLevel {
 	}
 }
 
-// Logger is a thread-safe logger with level filtering and multiple outputs.
-type Logger struct {
-	mu            sync.Mutex
-	level         LogLevel
-	prefix        string
-	consoleWriter io.Writer
-	fileWriter    io.Writer
-	consoleEnable bool
-	fileEnable    bool
-}
-
 // Config contains logger configuration.
 type Config struct {
 	Level      LogLevel // Minimum log level to output
@@ -73,21 +82,23 @@ type Config struct {
 	Console    bool     // Enable console output
 	File       bool     // Enable file output
 	FilePath   string   // Path to log file
-	MaxSize    int64    // Maximum log file size in bytes (0 = unlimited)
+	MaxSize    int64    // Maximum log file size in MB (0 = unlimited)
 	MaxBackups int      // Maximum number of backup files (0 = no rotation)
+	MaxAge     int      // Maximum number of days to retain old log files
+	Compress   bool     // Compress rotated files
 }
 
-// NewLogger creates a new logger with the given configuration.
-func NewLogger(cfg *Config) (*Logger, error) {
-	l := &Logger{
-		level:         cfg.Level,
-		prefix:        cfg.Prefix,
-		consoleWriter: os.Stderr,
-		consoleEnable: cfg.Console,
-		fileEnable:    cfg.File,
+// NewLogger creates a new slog.Logger with the given configuration.
+// The returned logger uses a custom text handler with the format:
+// [LEVEL] 2006-01-02T15:04:05.999 file.go:42 "message" key=value
+func NewLogger(cfg *Config) (*slog.Logger, error) {
+	// Create writers
+	var writers []io.Writer
+
+	if cfg.Console {
+		writers = append(writers, os.Stderr)
 	}
 
-	// Setup file output if enabled
 	if cfg.File && cfg.FilePath != "" {
 		// Ensure directory exists
 		dir := filepath.Dir(cfg.FilePath)
@@ -95,20 +106,39 @@ func NewLogger(cfg *Config) (*Logger, error) {
 			return nil, fmt.Errorf("failed to create log directory: %w", err)
 		}
 
-		// Open log file in append mode
-		file, err := os.OpenFile(cfg.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open log file: %w", err)
+		// Use lumberjack for log rotation
+		lj := &lumberjack.Logger{
+			Filename:   cfg.FilePath,
+			MaxSize:    int(cfg.MaxSize),
+			MaxBackups: cfg.MaxBackups,
+			MaxAge:     cfg.MaxAge,
+			Compress:   cfg.Compress,
 		}
-
-		l.fileWriter = file
+		writers = append(writers, lj)
 	}
 
-	return l, nil
+	// Create multi-writer if needed
+	var writer io.Writer
+	if len(writers) == 0 {
+		writer = io.Discard
+	} else if len(writers) == 1 {
+		writer = writers[0]
+	} else {
+		writer = io.MultiWriter(writers...)
+	}
+
+	// Create custom handler with source code location (file:line)
+	opts := &slog.HandlerOptions{
+		Level: cfg.Level.toSlogLevel(),
+	}
+	handler := NewTextHandler(writer, opts, cfg.Prefix)
+
+	// Create and return logger
+	return slog.New(handler), nil
 }
 
 // NewDefaultLogger creates a logger with default settings.
-func NewDefaultLogger() *Logger {
+func NewDefaultLogger() *slog.Logger {
 	l, _ := NewLogger(&Config{
 		Level:   INFO,
 		Prefix:  "[ai] ",
@@ -118,137 +148,123 @@ func NewDefaultLogger() *Logger {
 	return l
 }
 
-// SetLevel sets the minimum log level.
-func (l *Logger) SetLevel(level LogLevel) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = level
+// textHandler is a custom slog.Handler that formats log messages.
+type textHandler struct {
+	opts   *slog.HandlerOptions
+	mu     sync.Mutex
+	out    io.Writer
+	prefix string
 }
 
-// GetLevel returns the current minimum log level.
-func (l *Logger) GetLevel() LogLevel {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.level
+// NewTextHandler creates a new custom text handler.
+func NewTextHandler(out io.Writer, opts *slog.HandlerOptions, prefix string) slog.Handler {
+	if opts == nil {
+		opts = &slog.HandlerOptions{}
+	}
+	return &textHandler{out: out, opts: opts, prefix: prefix}
 }
 
-// SetConsoleEnabled enables or disables console output.
-func (l *Logger) SetConsoleEnabled(enabled bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.consoleEnable = enabled
+// Enabled reports whether the handler handles records at the given level.
+func (h *textHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	minLevel := slog.LevelInfo
+	if h.opts.Level != nil {
+		minLevel = h.opts.Level.Level()
+	}
+	return level >= minLevel
 }
 
-// SetFileEnabled enables or disables file output.
-func (l *Logger) SetFileEnabled(enabled bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.fileEnable = enabled
+// Handle handles a log record.
+func (h *textHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Format: [LEVEL] 2006-01-02T15:04:05.999 file.go:42 "message" key=value
+	// Get level string
+	levelStr := levelToString(r.Level)
+
+	// Format time without timezone
+	timestamp := r.Time.Format("2006-01-02T15:04:05.999")
+
+	// Get file and line - use r.PC
+	var file, line string
+	if r.PC != 0 {
+		frames := runtime.CallersFrames([]uintptr{r.PC})
+		frame, _ := frames.Next()
+		file = filepath.Base(frame.File)
+		line = fmt.Sprintf("%d", frame.Line)
+	}
+
+	// Build the log line
+	buf := make([]byte, 0, 256)
+	buf = append(buf, '[')
+	buf = append(buf, levelStr...)
+	buf = append(buf, "] "...)
+	buf = append(buf, timestamp...)
+	buf = append(buf, ' ')
+	if file != "" {
+		buf = append(buf, file...)
+		buf = append(buf, ':')
+		buf = append(buf, line...)
+		buf = append(buf, ' ')
+	}
+
+	// Add message
+	buf = append(buf, '"')
+	msg := r.Message
+	if h.prefix != "" {
+		msg = h.prefix + msg
+	}
+	buf = append(buf, msg...)
+	buf = append(buf, '"')
+
+	// Add attributes
+	r.Attrs(func(a slog.Attr) bool {
+		buf = append(buf, ' ')
+		buf = append(buf, a.Key...)
+		buf = append(buf, '=')
+		buf = append(buf, quoteIfNeeded(a.Value.String())...)
+		return true
+	})
+
+	buf = append(buf, '\n')
+
+	_, err := h.out.Write(buf)
+	return err
 }
 
-// Close closes any open file handles.
-func (l *Logger) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+// WithAttrs returns a handler with the given attributes.
+func (h *textHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &textHandler{out: h.out, opts: h.opts, prefix: h.prefix}
+}
 
-	if l.fileWriter != nil {
-		if closer, ok := l.fileWriter.(io.Closer); ok {
-			return closer.Close()
+// WithGroup returns a handler with a group.
+func (h *textHandler) WithGroup(name string) slog.Handler {
+	return &textHandler{out: h.out, opts: h.opts, prefix: h.prefix}
+}
+
+// levelToString converts slog.Level to string.
+func levelToString(level slog.Level) string {
+	switch {
+	case level < slog.LevelInfo:
+		return "DEBUG"
+	case level < slog.LevelWarn:
+		return "INFO"
+	case level < slog.LevelError:
+		return "WARN"
+	default:
+		return "ERROR"
+	}
+}
+
+// quoteIfNeeded adds quotes around a string if it contains spaces.
+func quoteIfNeeded(s string) string {
+	if len(s) == 0 {
+		return `""`
+	}
+	for _, c := range s {
+		if c <= ' ' || c == '"' || c == '\\' {
+			return fmt.Sprintf("%q", s)
 		}
 	}
-
-	return nil
-}
-
-// log is the internal logging method.
-func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
-	if level < l.level {
-		return
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// Format message
-	msg := fmt.Sprintf(format, args...)
-
-	// Add timestamp and level
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logLine := fmt.Sprintf("%s%s%s %s\n", l.prefix, timestamp, " ["+level.String()+"]", msg)
-
-	// Write to console
-	if l.consoleEnable && l.consoleWriter != nil {
-		l.consoleWriter.Write([]byte(logLine))
-	}
-
-	// Write to file
-	if l.fileEnable && l.fileWriter != nil {
-		l.fileWriter.Write([]byte(logLine))
-	}
-}
-
-// Debug logs a debug message.
-func (l *Logger) Debug(format string, args ...interface{}) {
-	l.log(DEBUG, format, args...)
-}
-
-// Info logs an info message.
-func (l *Logger) Info(format string, args ...interface{}) {
-	l.log(INFO, format, args...)
-}
-
-// Warn logs a warning message.
-func (l *Logger) Warn(format string, args ...interface{}) {
-	l.log(WARN, format, args...)
-}
-
-// Error logs an error message.
-func (l *Logger) Error(format string, args ...interface{}) {
-	l.log(ERROR, format, args...)
-}
-
-// Debugf logs a debug message (alias for Debug).
-func (l *Logger) Debugf(format string, args ...interface{}) {
-	l.Debug(format, args...)
-}
-
-// Infof logs an info message (alias for Info).
-func (l *Logger) Infof(format string, args ...interface{}) {
-	l.Info(format, args...)
-}
-
-// Warnf logs a warning message (alias for Warn).
-func (l *Logger) Warnf(format string, args ...interface{}) {
-	l.Warn(format, args...)
-}
-
-// Errorf logs an error message (alias for Error).
-func (l *Logger) Errorf(format string, args ...interface{}) {
-	l.Error(format, args...)
-}
-
-// Fatal logs an error message and exits the application.
-func (l *Logger) Fatal(format string, args ...interface{}) {
-	l.Error(format, args...)
-	os.Exit(1)
-}
-
-// Fatalf logs an error message and exits the application (alias for Fatal).
-func (l *Logger) Fatalf(format string, args ...interface{}) {
-	l.Fatal(format, args...)
-}
-
-// WithPrefix returns a new logger with the given prefix.
-func (l *Logger) WithPrefix(prefix string) *Logger {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	return &Logger{
-		level:         l.level,
-		prefix:        prefix,
-		consoleWriter: l.consoleWriter,
-		fileWriter:    l.fileWriter,
-		consoleEnable: l.consoleEnable,
-		fileEnable:    l.fileEnable,
-	}
+	return s
 }

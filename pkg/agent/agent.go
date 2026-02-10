@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
@@ -82,7 +83,7 @@ func (a *Agent) Prompt(message string) error {
 		go func() {
 			defer func() { <-a.mu }()
 			defer a.wg.Done()
-			log.Printf("[Agent] Starting prompt: %s", message)
+			slog.Info("[Agent] Starting prompt", "message", message)
 
 			a.processPrompt(message)
 
@@ -90,7 +91,7 @@ func (a *Agent) Prompt(message string) error {
 			for {
 				select {
 				case followUpMsg := <-a.followUpQueue:
-					log.Printf("[Agent] Processing follow-up: %s", followUpMsg)
+					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
 					a.processPrompt(followUpMsg)
 				default:
 					// No more follow-up messages
@@ -122,22 +123,22 @@ func (a *Agent) processPrompt(message string) {
 		ToolOutput: a.toolOutput,
 	}
 
-	log.Printf("[Agent] Starting RunLoop...")
+	slog.Info("[Agent] Starting RunLoop")
 	stream := RunLoop(a.ctx, prompts, a.context, config)
 	a.setCurrentStream(stream)
 	defer a.setCurrentStream(nil)
 
 	// Emit events to channel
-	log.Printf("[Agent] Starting event iteration...")
+	slog.Info("[Agent] Starting event iteration")
 	eventCount := 0
 	for event := range stream.Iterator(a.ctx) {
 		if event.Done {
-			log.Printf("[Agent] Event stream done, total events: %d", eventCount)
+			slog.Info("[Agent] Event stream done", "totalEvents", eventCount)
 			break
 		}
 
 		eventCount++
-		log.Printf("[Agent] Got event: %s", event.Value.Type)
+		slog.Debug("[Agent] Got event", "type", event.Value.Type)
 
 		if a.metrics != nil {
 			switch event.Value.Type {
@@ -190,7 +191,7 @@ func (a *Agent) processPrompt(message string) {
 		}
 		a.metrics.RecordPrompt(time.Since(promptStart), err)
 	}
-	log.Printf("[Agent] Prompt completed")
+	slog.Info("[Agent] Prompt completed")
 }
 
 // Wait waits for all agent operations to complete.
@@ -202,7 +203,7 @@ func (a *Agent) Wait() {
 func (a *Agent) Steer(message string) {
 	message = strings.TrimSpace(message)
 	if message == "" {
-		log.Printf("[Agent] Steer called with empty message")
+		slog.Warn("[Agent] Steer called with empty message")
 		return
 	}
 
@@ -220,17 +221,17 @@ func (a *Agent) Steer(message string) {
 	if err := a.Prompt(message); err != nil {
 		if errors.Is(err, ErrAgentBusy) {
 			if followErr := a.FollowUp(message); followErr != nil {
-				log.Printf("[Agent] Steer follow-up failed: %v", followErr)
+				slog.Error("[Agent] Steer follow-up failed", "error", followErr)
 			}
 			return
 		}
-		log.Printf("[Agent] Steer prompt failed: %v", err)
+		slog.Error("[Agent] Steer prompt failed", "error", err)
 	}
 }
 
 // Abort stops the current execution.
 func (a *Agent) Abort() {
-	log.Printf("[Agent] Abort called, canceling context...")
+	slog.Info("[Agent] Abort called, canceling context")
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -241,14 +242,14 @@ func (a *Agent) Abort() {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.ctx = ctx
 	a.cancel = cancel
-	log.Printf("[Agent] Context canceled, waiting for agent to finish...")
+	slog.Info("[Agent] Context canceled, waiting for agent to finish")
 }
 
 // FollowUp adds a message to be processed after the current prompt completes.
 func (a *Agent) FollowUp(message string) error {
 	select {
 	case a.followUpQueue <- message:
-		log.Printf("[Agent] Follow-up queued: %s", message)
+		slog.Debug("[Agent] Follow-up queued", "message", message)
 		return nil
 	default:
 		return fmt.Errorf("follow-up queue full")
@@ -352,13 +353,13 @@ func (a *Agent) tryAutoCompact() {
 	messages := a.context.Messages
 	if a.compactor.ShouldCompact(messages) {
 		before := len(messages)
-		log.Printf("[Agent] Auto-compacting %d messages...", before)
+		slog.Info("[Agent] Auto-compacting", "beforeCount", before)
 		a.emitEvent(NewCompactionStartEvent(CompactionInfo{
 			Auto:   true,
 			Before: before,
 		}))
 		if err := a.Compact(a.compactor); err != nil {
-			log.Printf("[Agent] Auto-compact failed: %v", err)
+			slog.Error("[Agent] Auto-compact failed", "error", err)
 			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
 				Auto:   true,
 				Before: before,
@@ -366,7 +367,7 @@ func (a *Agent) tryAutoCompact() {
 			}))
 		} else {
 			after := len(a.context.Messages)
-			log.Printf("[Agent] Auto-compact successful: %d -> %d messages", before, after)
+			slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
 			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
 				Auto:   true,
 				Before: before,
@@ -380,7 +381,7 @@ func (a *Agent) emitEvent(event AgentEvent) {
 	select {
 	case a.eventChan <- event:
 	default:
-		log.Println("Event channel full, dropping event")
+		slog.Warn("[Agent] Event channel full, dropping event")
 	}
 }
 

@@ -6,9 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"sync"
+
+	"log/slog"
 )
 
 // Server handles RPC communication via stdin/stdout.
@@ -234,9 +235,9 @@ func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
 	}
 
 	// Wait for all background tasks to complete
-	log.Println("[RPC] Waiting for agent to complete...")
+	slog.Info("[RPC] Waiting for agent to complete...")
 	s.wg.Wait()
-	log.Println("[RPC] All tasks completed")
+	slog.Info("[RPC] All tasks completed")
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		return err
@@ -638,12 +639,17 @@ func (s *Server) writeJSON(data []byte) {
 	s.writer.Lock()
 	defer s.writer.Unlock()
 	if s.output == nil {
-		fmt.Println(string(data))
+		slog.Debug("[RPC] writeJSON with nil output", "data", string(data))
 		return
 	}
+
+	// Write to output (will be discarded if output is io.Discard)
 	_, _ = s.output.Write(data)
 	_ = s.output.WriteByte('\n')
 	_ = s.output.Flush()
+
+	// Log all RPC JSON to file (use Info level to ensure it's written)
+	slog.Info("[RPC] Response", "json", string(data))
 }
 
 // Context returns the server's context.

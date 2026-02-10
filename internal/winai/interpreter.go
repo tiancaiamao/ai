@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"log/slog"
 
 	"github.com/sminez/ad/win/pkg/ad"
 	"github.com/sminez/ad/win/pkg/repl"
@@ -83,11 +84,6 @@ type AiInterpreter struct {
 	deferStatus           bool
 	pendingStatus         []string
 	pendingStateRequests  map[string]stateRequestInfo
-	heartbeatStop         chan struct{}
-	heartbeatInterval     time.Duration
-	heartbeatQuiet        bool
-	lastHeartbeat         time.Time
-	lastHeartbeatLatency  time.Duration
 	rpcSequence           int64
 	workingDir            string
 }
@@ -317,11 +313,11 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 			p.workingDir = wd
 			p.stateMu.Unlock()
 			if p.debug {
-				log.Printf("[AI-START] Working directory: %s", wd)
+				slog.Info("[AI-START] Working directory", "dir", wd)
 			}
 		}
 		if p.debug {
-			log.Printf("[AI-START] ai started in-process")
+			slog.Info("[AI-START] ai started in-process")
 		}
 		go p.readStdout(childCtx)
 		if p.stderr != nil {
@@ -360,7 +356,7 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 	p.stderr = stderr
 	p.started = true
 
-	log.Printf("[AI-CMD] %s", p.cmd.String())
+	slog.Info("[AI-CMD]", "cmd", p.cmd.String())
 	if err := p.cmd.Start(); err != nil {
 		p.started = false
 		return fmt.Errorf("start ai: %w", err)
@@ -371,12 +367,12 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		p.workingDir = wd
 		p.stateMu.Unlock()
 		if p.debug {
-			log.Printf("[AI-START] Working directory: %s", wd)
+			slog.Info("[AI-START] Working directory", "dir", wd)
 		}
 	}
 
 	if p.debug {
-		log.Printf("[AI-START] ai started with PID %d", p.cmd.Process.Pid)
+		slog.Info("[AI-START] ai started with PID", "pid", p.cmd.Process.Pid)
 	}
 
 	go p.readStdout(childCtx)
@@ -449,9 +445,9 @@ func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
 
 	if p.debug {
 		if err != nil {
-			log.Printf("[AI-EXIT] code=%d err=%v", exitCode, err)
+			slog.Info("[AI-EXIT]", "code", exitCode, "error", err)
 		} else {
-			log.Printf("[AI-EXIT] code=%d", exitCode)
+			slog.Info("[AI-EXIT]", "code", exitCode)
 		}
 	}
 
@@ -506,7 +502,7 @@ func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
 	p.resetAiState()
 
 	if p.debug && reason != "" {
-		log.Printf("[AI-RESET] %s", reason)
+		slog.Info("[AI-RESET]", "reason", reason)
 	}
 	return true
 }
@@ -797,8 +793,6 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
 		return true, p.handleFork(args)
-	case "heartbeat":
-		return true, p.handleHeartbeat(args, fromControl)
 	case "steer":
 		if strings.TrimSpace(args) == "" {
 			p.writeStatusMaybeDefer(fromControl, "ai: usage: /steer <message>")
@@ -1079,101 +1073,6 @@ func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 	return nil
 }
 
-func (p *AiInterpreter) handleHeartbeat(args string, fromControl bool) error {
-	fields := strings.Fields(args)
-	if len(fields) == 0 {
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /heartbeat <on|off|status> [interval] [quiet]")
-		return nil
-	}
-
-	switch fields[0] {
-	case "on":
-		interval := 5 * time.Second
-		quiet := false
-		for _, field := range fields[1:] {
-			switch field {
-			case "quiet", "silent":
-				quiet = true
-			default:
-				if parsed, err := parseHeartbeatInterval(field); err == nil {
-					interval = parsed
-				} else {
-					p.writeStatusMaybeDefer(fromControl, "ai: invalid heartbeat interval")
-					return nil
-				}
-			}
-		}
-		p.startHeartbeat(interval, quiet)
-		mode := "on"
-		if quiet {
-			mode = "quiet"
-		}
-		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: heartbeat %s (%s)", mode, interval))
-		return nil
-	case "off":
-		p.stopHeartbeat()
-		p.writeStatusMaybeDefer(fromControl, "ai: heartbeat off")
-		return nil
-	case "status":
-		p.stateMu.Lock()
-		active := p.heartbeatStop != nil
-		interval := p.heartbeatInterval
-		quiet := p.heartbeatQuiet
-		last := p.lastHeartbeat
-		latency := p.lastHeartbeatLatency
-		p.stateMu.Unlock()
-		if !active {
-			p.writeStatusMaybeDefer(fromControl, "ai: heartbeat off")
-			return nil
-		}
-		line := fmt.Sprintf("ai: heartbeat on (%s)", interval)
-		if quiet {
-			line = fmt.Sprintf("ai: heartbeat quiet (%s)", interval)
-		}
-		if !last.IsZero() {
-			line = fmt.Sprintf("%s last=%s latency=%s", line, last.Format(time.RFC3339), latency)
-		}
-		p.writeStatusMaybeDefer(fromControl, line)
-		return nil
-	default:
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /heartbeat <on|off|status> [interval] [quiet]")
-		return nil
-	}
-}
-
-func (p *AiInterpreter) startHeartbeat(interval time.Duration, quiet bool) {
-	p.stopHeartbeat()
-	stop := make(chan struct{})
-	p.stateMu.Lock()
-	p.heartbeatStop = stop
-	p.heartbeatInterval = interval
-	p.heartbeatQuiet = quiet
-	p.stateMu.Unlock()
-
-	ticker := time.NewTicker(interval)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				_ = p.sendStateRequest(false, "heartbeat", quiet)
-			case <-stop:
-				return
-			}
-		}
-	}()
-}
-
-func (p *AiInterpreter) stopHeartbeat() {
-	p.stateMu.Lock()
-	stop := p.heartbeatStop
-	p.heartbeatStop = nil
-	p.stateMu.Unlock()
-	if stop != nil {
-		close(stop)
-	}
-}
-
 func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
 	if mode == "" {
@@ -1336,7 +1235,7 @@ func (p *AiInterpreter) readStdout(ctx context.Context) {
 	}
 
 	if err := scanner.Err(); err != nil && p.debug {
-		log.Printf("[AI-STDOUT] scanner error: %v", err)
+		slog.Error("[AI-STDOUT] scanner error", "error", err)
 	}
 }
 
@@ -1349,7 +1248,7 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 		line := scanner.Text()
 		p.noteStderr()
 		if p.debug {
-			log.Printf("[AI-STDERR] %s", line)
+			slog.Info("[AI-STDERR]", "line", line)
 		}
 
 		select {
@@ -1360,7 +1259,7 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 	}
 
 	if err := scanner.Err(); err != nil && p.debug {
-		log.Printf("[AI-STDERR] scanner error: %v", err)
+		slog.Error("[AI-STDERR] scanner error", "error", err)
 	}
 }
 
@@ -1368,7 +1267,7 @@ func (p *AiInterpreter) handleStdoutLine(line []byte) {
 	var env rpcEnvelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		if p.debug {
-			log.Printf("[AI-STDOUT] invalid JSON: %s", string(line))
+			slog.Warn("[AI-STDOUT] invalid JSON", "json", string(line))
 		}
 		p.writeStatus(fmt.Sprintf("ai: %s", string(line)))
 		return
@@ -1392,11 +1291,7 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		if resp.Command == "get_state" {
 			info, ok := p.takeStateRequestInfo(resp.ID)
 			if ok && !info.quiet {
-				label := "ping"
-				if info.kind == "heartbeat" {
-					label = "heartbeat"
-				}
-				p.writeStatus(fmt.Sprintf("ai: %s failed: %s", label, resp.Error))
+				p.writeStatus(fmt.Sprintf("ai: ping failed: %s", resp.Error))
 			}
 		}
 		if resp.Error == "" {
@@ -1451,7 +1346,7 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 	var evt agentEvent
 	if err := json.Unmarshal(line, &evt); err != nil {
 		if p.debug {
-			log.Printf("[AI-EVENT] invalid event: %v", err)
+			slog.Warn("[AI-EVENT] invalid event", "error", err)
 		}
 		return
 	}
@@ -1503,7 +1398,7 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		// ignore
 	default:
 		if p.debug {
-			log.Printf("[AI-EVENT] %s", string(line))
+			slog.Debug("[AI-EVENT]", "line", string(line))
 		}
 	}
 }
@@ -1892,8 +1787,6 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, `Commands:
   /help
   /session
-  /ping
-  /heartbeat <on|off|status> [interval] [quiet]
   /messages
   /tree
   /commands
@@ -2292,19 +2185,12 @@ func (p *AiInterpreter) takeStateRequestInfo(id string) (stateRequestInfo, bool)
 
 func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *SessionState) {
 	latency := time.Since(info.started)
-	p.stateMu.Lock()
-	p.lastHeartbeat = time.Now()
-	p.lastHeartbeatLatency = latency
-	p.stateMu.Unlock()
 
 	if info.quiet {
 		return
 	}
 
 	label := "pong"
-	if info.kind == "heartbeat" {
-		label = "heartbeat"
-	}
 	streaming := "unknown"
 	compacting := "unknown"
 	pending := 0
@@ -2696,23 +2582,6 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return text[:limit-3] + "..."
-}
-
-func parseHeartbeatInterval(input string) (time.Duration, error) {
-	if input == "" {
-		return 0, fmt.Errorf("empty interval")
-	}
-	if strings.HasSuffix(input, "s") || strings.HasSuffix(input, "m") || strings.HasSuffix(input, "h") {
-		return time.ParseDuration(input)
-	}
-	seconds, err := strconv.Atoi(input)
-	if err != nil {
-		return 0, err
-	}
-	if seconds <= 0 {
-		return 0, fmt.Errorf("invalid interval")
-	}
-	return time.Duration(seconds) * time.Second, nil
 }
 
 func summarizeToolArgs(toolName string, args map[string]interface{}) string {
