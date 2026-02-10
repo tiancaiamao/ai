@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,24 +53,16 @@ func (sm *SessionManager) ListSessions() ([]SessionMeta, error) {
 			continue
 		}
 
-		// Skip non-.meta.json files
-		if filepath.Ext(entry.Name()) != ".json" {
+		// Only consider session files
+		if filepath.Ext(entry.Name()) != ".jsonl" {
 			continue
 		}
 
-		// Skip current.json pointer file
-		if entry.Name() == "current.json" {
-			continue
-		}
-
-		// Load metadata
-		metaPath := filepath.Join(sm.sessionsDir, entry.Name())
-		meta, err := sm.loadMeta(metaPath)
+		sessionPath := filepath.Join(sm.sessionsDir, entry.Name())
+		meta, err := sm.createMetaFromSession(sessionPath)
 		if err != nil {
-			// Skip invalid metadata files
 			continue
 		}
-
 		sessions = append(sessions, *meta)
 	}
 
@@ -90,6 +83,11 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 	// Create session
 	sess := NewSession(sessPath)
 
+	// Store session info inside the session file
+	if _, err := sess.AppendSessionInfo(name, title); err != nil {
+		return nil, fmt.Errorf("failed to write session info: %w", err)
+	}
+
 	// Create metadata
 	meta := &SessionMeta{
 		ID:        id,
@@ -107,6 +105,64 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 	return sess, nil
 }
 
+// ForkSessionFrom creates a new session from a branch of the source session.
+// leafID specifies the entry to use as the branch leaf (nil means current leaf).
+func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name, title string) (*Session, error) {
+	if source == nil {
+		return nil, fmt.Errorf("source session is nil")
+	}
+	if err := os.MkdirAll(sm.sessionsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create sessions directory: %w", err)
+	}
+
+	id := uuid.New().String()
+	sessPath := sm.getSessionPath(id)
+	newSess := NewSession(sessPath)
+	newSess.header.ParentSession = source.GetPath()
+
+	branchEntries := []SessionEntry{}
+	if leafID != nil {
+		branchEntries = source.GetBranch(*leafID)
+	}
+
+	newSess.entries = make([]*SessionEntry, 0, len(branchEntries)+1)
+	newSess.byID = make(map[string]*SessionEntry)
+	newSess.leafID = nil
+
+	for _, entry := range branchEntries {
+		copy := entry
+		newSess.addEntry(&copy)
+	}
+
+	infoEntry := &SessionEntry{
+		Type:      EntryTypeSessionInfo,
+		ID:        generateEntryID(newSess.byID),
+		ParentID:  newSess.leafID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Name:      strings.TrimSpace(name),
+		Title:     strings.TrimSpace(title),
+	}
+	newSess.addEntry(infoEntry)
+
+	if err := newSess.rewriteFile(); err != nil {
+		return nil, err
+	}
+
+	meta := &SessionMeta{
+		ID:           id,
+		Name:         name,
+		Title:        title,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+		MessageCount: len(newSess.GetMessages()),
+	}
+	if err := sm.saveMeta(id, meta); err != nil {
+		return nil, fmt.Errorf("failed to save metadata: %w", err)
+	}
+
+	return newSess, nil
+}
+
 // GetSession retrieves a session by ID.
 func (sm *SessionManager) GetSession(id string) (*Session, error) {
 	sessPath := sm.getSessionPath(id)
@@ -116,7 +172,17 @@ func (sm *SessionManager) GetSession(id string) (*Session, error) {
 // GetMeta retrieves session metadata by ID.
 func (sm *SessionManager) GetMeta(id string) (*SessionMeta, error) {
 	metaPath := sm.getMetaPath(id)
-	return sm.loadMeta(metaPath)
+	meta, err := sm.loadMeta(metaPath)
+	if err == nil {
+		return meta, nil
+	}
+
+	// Fallback: try to build from session file
+	sessPath := sm.getSessionPath(id)
+	if _, statErr := os.Stat(sessPath); statErr == nil {
+		return sm.createMetaFromSession(sessPath)
+	}
+	return nil, err
 }
 
 // DeleteSession deletes a session by ID.
@@ -286,17 +352,33 @@ func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, 
 	id := filepath.Base(sessPath)
 	id = id[:len(id)-6] // Remove .jsonl extension
 
-	// Get file info
 	info, err := os.Stat(sessPath)
 	if err != nil {
 		return nil, err
 	}
 
+	header := sess.GetHeader()
+	createdAt := info.ModTime()
+	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			createdAt = parsed
+		}
+	}
+
+	name := sess.GetSessionName()
+	if name == "" {
+		name = id
+	}
+	title := sess.GetSessionTitle()
+	if title == "" {
+		title = "Session"
+	}
+
 	return &SessionMeta{
 		ID:           id,
-		Name:         id,
-		Title:        "Session",
-		CreatedAt:    info.ModTime(),
+		Name:         name,
+		Title:        title,
+		CreatedAt:    createdAt,
 		UpdatedAt:    info.ModTime(),
 		MessageCount: len(sess.GetMessages()),
 	}, nil

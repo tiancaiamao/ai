@@ -123,45 +123,111 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 	return newMessages, nil
 }
 
-// GenerateSummary generates a summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(messages []agent.AgentMessage) (string, error) {
-	// Extract conversation text
-	var conversation strings.Builder
-	conversation.WriteString("Previous conversation:\n")
+const summarizationSystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
 
-	for _, msg := range messages {
-		switch msg.Role {
-		case "user":
-			conversation.WriteString(fmt.Sprintf("User: %s\n", msg.ExtractText()))
-		case "assistant":
-			conversation.WriteString(fmt.Sprintf("Assistant: %s\n", msg.ExtractText()))
-		case "toolResult":
-			// Skip tool results in summary
-		}
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`
+
+const summarizationPrompt = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`
+
+const updateSummarizationPrompt = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`
+
+// GenerateSummary generates a structured summary of messages using the LLM.
+func (c *Compactor) GenerateSummary(messages []agent.AgentMessage) (string, error) {
+	return c.GenerateSummaryWithPrevious(messages, "")
+}
+
+// GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
+func (c *Compactor) GenerateSummaryWithPrevious(messages []agent.AgentMessage, previousSummary string) (string, error) {
+	if len(messages) == 0 {
+		return "", fmt.Errorf("no messages to summarize")
 	}
 
-	// Build prompt
-	prompt := fmt.Sprintf(`Please provide a concise summary of the following conversation. Focus on:
-- Key topics discussed
-- Important decisions made
-- Files or code modified
-- Any action items or next steps
+	conversationText := serializeConversation(messages)
+	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
+	basePrompt := summarizationPrompt
+	if previousSummary != "" {
+		promptText += fmt.Sprintf("<previous-summary>\\n%s\\n</previous-summary>\\n\\n", previousSummary)
+		basePrompt = updateSummarizationPrompt
+	}
+	promptText += basePrompt
 
-%s
-
-Summary:`, conversation.String())
-
-	// Create temporary LLM context for summarization
 	llmMessages := []llm.LLMMessage{
-		{Role: "system", Content: c.systemPrompt},
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: promptText},
 	}
 
 	llmCtx := llm.LLMContext{
-		Messages: llmMessages,
+		SystemPrompt: summarizationSystemPrompt,
+		Messages:     llmMessages,
 	}
 
-	// Stream LLM response
 	ctx := context.Background()
 	llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey)
 
@@ -180,7 +246,7 @@ Summary:`, conversation.String())
 	}
 
 	result := summary.String()
-	if result == "" {
+	if strings.TrimSpace(result) == "" {
 		return "", fmt.Errorf("empty summary generated")
 	}
 
@@ -203,6 +269,16 @@ func (c *Compactor) ReserveTokens() int {
 		return DefaultConfig().ReserveTokens
 	}
 	return c.config.ReserveTokens
+}
+
+// KeepRecentMessages returns the effective keep-recent message count.
+func (c *Compactor) KeepRecentMessages() int {
+	return c.keepRecentMessages()
+}
+
+// KeepRecentTokens returns the effective keep-recent token budget.
+func (c *Compactor) KeepRecentTokens() int {
+	return c.effectiveKeepRecentTokens()
 }
 
 func (c *Compactor) keepRecentMessages() int {
@@ -333,6 +409,11 @@ func estimateMessageTokens(msg agent.AgentMessage) int {
 	return int(math.Ceil(float64(charCount) / 4.0))
 }
 
+// EstimateMessageTokens estimates token usage for a single message.
+func EstimateMessageTokens(msg agent.AgentMessage) int {
+	return estimateMessageTokens(msg)
+}
+
 func splitMessagesByTokenBudget(
 	messages []agent.AgentMessage,
 	tokenBudget int,
@@ -363,4 +444,71 @@ func splitMessagesByTokenBudget(
 		return messages[:len(messages)-1], messages[len(messages)-1:]
 	}
 	return messages[:start], messages[start:]
+}
+
+func serializeConversation(messages []agent.AgentMessage) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			if text := extractText(msg); text != "" {
+				parts = append(parts, "[User]: "+text)
+			}
+		case "assistant":
+			textParts := make([]string, 0)
+			thinkingParts := make([]string, 0)
+			toolCalls := make([]string, 0)
+			for _, block := range msg.Content {
+				switch b := block.(type) {
+				case agent.TextContent:
+					if b.Text != "" {
+						textParts = append(textParts, b.Text)
+					}
+				case agent.ThinkingContent:
+					if b.Thinking != "" {
+						thinkingParts = append(thinkingParts, b.Thinking)
+					}
+				case agent.ToolCallContent:
+					args := ""
+					if b.Arguments != nil {
+						if raw, err := json.Marshal(b.Arguments); err == nil {
+							args = string(raw)
+						}
+					}
+					if args != "" {
+						toolCalls = append(toolCalls, fmt.Sprintf("%s(%s)", b.Name, args))
+					} else {
+						toolCalls = append(toolCalls, fmt.Sprintf("%s()", b.Name))
+					}
+				}
+			}
+			if len(thinkingParts) > 0 {
+				parts = append(parts, "[Assistant thinking]: "+strings.Join(thinkingParts, "\n"))
+			}
+			if len(textParts) > 0 {
+				parts = append(parts, "[Assistant]: "+strings.Join(textParts, "\n"))
+			}
+			if len(toolCalls) > 0 {
+				parts = append(parts, "[Assistant tool calls]: "+strings.Join(toolCalls, "; "))
+			}
+		case "toolResult":
+			if text := extractText(msg); text != "" {
+				parts = append(parts, "[Tool result]: "+text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func extractText(msg agent.AgentMessage) string {
+	var b strings.Builder
+	for _, block := range msg.Content {
+		if tc, ok := block.(agent.TextContent); ok && tc.Text != "" {
+			b.WriteString(tc.Text)
+		}
+	}
+	if b.Len() == 0 {
+		return msg.ExtractText()
+	}
+	return b.String()
 }

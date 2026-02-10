@@ -1,19 +1,17 @@
 #!/bin/bash
+# Live test script for ai
 
-cd "$(dirname "$0")"
+# Source common test utilities
+source scripts/test-common.sh
 
-AUTH_FILE="${AI_AUTH_FILE:-$HOME/.ai/auth.json}"
-if [ -z "$ZAI_API_KEY" ] && [ ! -f "$AUTH_FILE" ]; then
-	echo "Error: ZAI_API_KEY is not set and $AUTH_FILE not found"
-	echo "Set ZAI_API_KEY or create an auth file with provider credentials"
-	exit 1
-fi
+# Check prerequisites
+check_ai_binary
+check_api_key true
 
-echo "=== Testing ai Tool System ==="
-echo ""
+print_header "ai Live Test"
 
-echo "Test 1: Simple prompt (no abort, wait for completion)"
-(printf '{"type":"prompt","message":"Say hi"}\n'; sleep 60) | timeout 65 ./bin/ai 2>&1 | head -100 &
+print_section "Test 1" "Simple prompt (no abort, wait for completion)"
+(printf '{"type":"prompt","message":"Say hi"}\n'; sleep 60) | timeout 65 "$AI_BIN" 2>&1 | head -100 &
 PID=$!
 
 # Wait for output

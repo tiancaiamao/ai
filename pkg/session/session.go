@@ -2,73 +2,148 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
-// Session represents a conversation session.
+// Session represents a conversation session backed by an append-only JSONL file.
 type Session struct {
 	mu       sync.Mutex
-	messages []agent.AgentMessage
 	filePath string
+	header   SessionHeader
+	entries  []*SessionEntry
+	byID     map[string]*SessionEntry
+	leafID   *string
+	flushed  bool
+	persist  bool
+}
+
+// ForkMessage represents a user message candidate for forking.
+type ForkMessage struct {
+	EntryID string
+	Text    string
 }
 
 // NewSession creates a new session with the given file path.
 func NewSession(filePath string) *Session {
-	return &Session{
-		messages: make([]agent.AgentMessage, 0),
+	sess := &Session{
 		filePath: filePath,
+		entries:  make([]*SessionEntry, 0),
+		byID:     make(map[string]*SessionEntry),
+		persist:  filePath != "",
 	}
+
+	id := sessionIDFromFilePath(filePath)
+	cwd, _ := os.Getwd()
+	sess.header = newSessionHeader(id, cwd, "")
+	return sess
 }
 
 // LoadSession loads a session from the given file path.
 func LoadSession(filePath string) (*Session, error) {
 	sess := &Session{
-		messages: make([]agent.AgentMessage, 0),
 		filePath: filePath,
+		entries:  make([]*SessionEntry, 0),
+		byID:     make(map[string]*SessionEntry),
+		persist:  filePath != "",
 	}
 
-	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// File doesn't exist, return empty session
+	if filePath == "" {
+		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil
 	}
 
-	// Read file
 	data, err := os.ReadFile(filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			id := sessionIDFromFilePath(filePath)
+			cwd, _ := os.Getwd()
+			sess.header = newSessionHeader(id, cwd, "")
+			return sess, nil
+		}
 		return nil, err
 	}
 
-	// Parse JSONL (one JSON object per line)
 	lines := splitLines(data)
+	if len(lines) == 0 {
+		id := sessionIDFromFilePath(filePath)
+		cwd, _ := os.Getwd()
+		sess.header = newSessionHeader(id, cwd, "")
+		return sess, nil
+	}
+
+	firstLine := firstNonEmptyLine(lines)
+	header, headerErr := decodeSessionHeader(firstLine)
+	if headerErr == nil && header != nil {
+		sess.header = *header
+		for _, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+			if headerLine(line) {
+				continue
+			}
+			entry, err := decodeSessionEntry(line)
+			if err != nil || entry == nil {
+				continue
+			}
+			sess.addEntry(entry)
+		}
+		sess.flushed = true
+		return sess, nil
+	}
+
+	// Legacy format: JSONL of AgentMessage objects.
+	legacyMessages := make([]agent.AgentMessage, 0)
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
-
 		var msg agent.AgentMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			// Skip malformed lines silently
 			continue
 		}
-
-		sess.messages = append(sess.messages, msg)
+		legacyMessages = append(legacyMessages, msg)
 	}
 
+	id := sessionIDFromFilePath(filePath)
+	cwd, _ := os.Getwd()
+	sess.header = newSessionHeader(id, cwd, "")
+	var parentID *string
+	for _, msg := range legacyMessages {
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		if msg.Timestamp != 0 {
+			ts = time.UnixMilli(msg.Timestamp).UTC().Format(time.RFC3339Nano)
+		}
+		entry := &SessionEntry{
+			Type:      EntryTypeMessage,
+			ID:        generateEntryID(sess.byID),
+			ParentID:  parentID,
+			Timestamp: ts,
+			Message:   &msg,
+		}
+		sess.addEntry(entry)
+		parentID = &entry.ID
+	}
+	if err := sess.rewriteFile(); err != nil {
+		return nil, err
+	}
 	return sess, nil
 }
 
-// GetMessages returns all messages in the session.
+// GetMessages returns the current session context messages.
 func (s *Session) GetMessages() []agent.AgentMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.messages
+	return buildSessionContext(s.entries, s.leafID, s.byID)
 }
 
 // GetPath returns the file path of the session.
@@ -78,13 +153,180 @@ func (s *Session) GetPath() string {
 	return s.filePath
 }
 
-// SaveMessages replaces all messages and saves to disk.
+// GetID returns the session ID from the header.
+func (s *Session) GetID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.header.ID
+}
+
+// GetHeader returns a copy of the session header.
+func (s *Session) GetHeader() SessionHeader {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.header
+}
+
+// GetEntries returns a shallow copy of session entries (excluding header).
+func (s *Session) GetEntries() []SessionEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries := make([]SessionEntry, 0, len(s.entries))
+	for _, entry := range s.entries {
+		entries = append(entries, *entry)
+	}
+	return entries
+}
+
+// GetEntry returns a copy of an entry by ID.
+func (s *Session) GetEntry(id string) (*SessionEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.byID[id]
+	if !ok {
+		return nil, false
+	}
+	copy := *entry
+	return &copy, true
+}
+
+// GetLeafID returns the current leaf ID.
+func (s *Session) GetLeafID() *string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leafID
+}
+
+// GetBranch returns entries along the path from the root to the given entry ID.
+// If id is empty, it uses the current leaf.
+func (s *Session) GetBranch(id string) []SessionEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getBranchLocked(id)
+}
+
+// Branch sets the leaf pointer to the given entry ID.
+func (s *Session) Branch(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.byID[id]
+	if !ok {
+		return fmt.Errorf("entry %s not found", id)
+	}
+	s.leafID = &entry.ID
+	return nil
+}
+
+// ResetLeaf clears the leaf pointer (before any entries).
+func (s *Session) ResetLeaf() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leafID = nil
+}
+
+// AppendMessage appends a message entry and persists it.
+func (s *Session) AppendMessage(message agent.AgentMessage) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry := &SessionEntry{
+		Type:      EntryTypeMessage,
+		ID:        generateEntryID(s.byID),
+		ParentID:  s.leafID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Message:   &message,
+	}
+
+	s.addEntry(entry)
+	return entry.ID, s.persistEntry(entry)
+}
+
+// AppendSessionInfo appends a session info entry.
+func (s *Session) AppendSessionInfo(name, title string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry := &SessionEntry{
+		Type:      EntryTypeSessionInfo,
+		ID:        generateEntryID(s.byID),
+		ParentID:  s.leafID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Name:      strings.TrimSpace(name),
+		Title:     strings.TrimSpace(title),
+	}
+
+	s.addEntry(entry)
+	return entry.ID, s.persistEntry(entry)
+}
+
+// GetSessionName returns the latest session name if available.
+func (s *Session) GetSessionName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		entry := s.entries[i]
+		if entry.Type == EntryTypeSessionInfo && strings.TrimSpace(entry.Name) != "" {
+			return strings.TrimSpace(entry.Name)
+		}
+	}
+	return ""
+}
+
+// GetSessionTitle returns the latest session title if available.
+func (s *Session) GetSessionTitle() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		entry := s.entries[i]
+		if entry.Type == EntryTypeSessionInfo && strings.TrimSpace(entry.Title) != "" {
+			return strings.TrimSpace(entry.Title)
+		}
+	}
+	return ""
+}
+
+// GetUserMessagesForForking returns user messages along the current branch.
+func (s *Session) GetUserMessagesForForking() []ForkMessage {
+	entries := s.GetBranch("")
+	results := make([]ForkMessage, 0)
+	for _, entry := range entries {
+		if entry.Type != EntryTypeMessage || entry.Message == nil {
+			continue
+		}
+		if entry.Message.Role != "user" {
+			continue
+		}
+		results = append(results, ForkMessage{
+			EntryID: entry.ID,
+			Text:    entry.Message.ExtractText(),
+		})
+	}
+	return results
+}
+
+// SaveMessages replaces all messages and saves to disk as a new linear session.
 func (s *Session) SaveMessages(messages []agent.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = messages
-	return s.save()
+	s.entries = make([]*SessionEntry, 0, len(messages))
+	s.byID = make(map[string]*SessionEntry)
+	s.leafID = nil
+
+	var parentID *string
+	for _, msg := range messages {
+		entry := &SessionEntry{
+			Type:      EntryTypeMessage,
+			ID:        generateEntryID(s.byID),
+			ParentID:  parentID,
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Message:   &msg,
+		}
+		s.addEntry(entry)
+		parentID = &entry.ID
+	}
+
+	return s.rewriteFile()
 }
 
 // AddMessages adds new messages to the session.
@@ -92,65 +334,215 @@ func (s *Session) AddMessages(messages ...agent.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = append(s.messages, messages...)
-
-	// Save to file
-	if err := s.save(); err != nil {
-		// Rollback
-		s.messages = s.messages[:len(s.messages)-len(messages)]
-		return err
+	for _, msg := range messages {
+		entry := &SessionEntry{
+			Type:      EntryTypeMessage,
+			ID:        generateEntryID(s.byID),
+			ParentID:  s.leafID,
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Message:   &msg,
+		}
+		s.addEntry(entry)
+		if err := s.persistEntry(entry); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// Clear clears all messages from the session.
+// Clear clears all messages from the session and deletes the file.
 func (s *Session) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.messages = make([]agent.AgentMessage, 0)
+	s.entries = make([]*SessionEntry, 0)
+	s.byID = make(map[string]*SessionEntry)
+	s.leafID = nil
+	s.header.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 
-	// Delete the file
+	if s.filePath == "" {
+		return nil
+	}
+
 	if _, err := os.Stat(s.filePath); err == nil {
 		if err := os.Remove(s.filePath); err != nil {
 			return err
 		}
 	}
-
+	s.flushed = false
 	return nil
 }
 
-// Save saves the current session to file.
-func (s *Session) save() error {
-	// Ensure directory exists
+func (s *Session) addEntry(entry *SessionEntry) {
+	s.entries = append(s.entries, entry)
+	s.byID[entry.ID] = entry
+	s.leafID = &entry.ID
+}
+
+func (s *Session) persistEntry(entry *SessionEntry) error {
+	if !s.persist || s.filePath == "" {
+		return nil
+	}
+
+	if !s.flushed {
+		if err := s.rewriteFile(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	file, err := os.OpenFile(s.filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Session) rewriteFile() error {
+	if !s.persist || s.filePath == "" {
+		s.flushed = true
+		return nil
+	}
+
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	// Create temp file
-	tmpPath := s.filePath + ".tmp"
-	file, err := os.Create(tmpPath)
+	file, err := os.Create(s.filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	// Write messages as JSONL
 	encoder := json.NewEncoder(file)
-	for _, msg := range s.messages {
-		if err := encoder.Encode(msg); err != nil {
+	if err := encoder.Encode(s.header); err != nil {
+		return err
+	}
+
+	for _, entry := range s.entries {
+		if err := encoder.Encode(entry); err != nil {
 			return err
 		}
 	}
 
-	// Atomic rename
-	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		return err
+	s.flushed = true
+	return nil
+}
+
+func (s *Session) getBranchLocked(id string) []SessionEntry {
+	var start *SessionEntry
+	if id != "" {
+		start = s.byID[id]
+	} else if s.leafID != nil {
+		start = s.byID[*s.leafID]
 	}
 
+	path := make([]*SessionEntry, 0)
+	current := start
+	for current != nil {
+		path = append(path, current)
+		if current.ParentID == nil {
+			break
+		}
+		current = s.byID[*current.ParentID]
+	}
+
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	entries := make([]SessionEntry, 0, len(path))
+	for _, entry := range path {
+		entries = append(entries, *entry)
+	}
+	return entries
+}
+
+func generateEntryID(existing map[string]*SessionEntry) string {
+	for i := 0; i < 100; i++ {
+		candidate := strings.ReplaceAll(uuid.NewString(), "-", "")
+		if len(candidate) > 8 {
+			candidate = candidate[:8]
+		}
+		if _, ok := existing[candidate]; !ok {
+			return candidate
+		}
+	}
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func decodeSessionEntry(line []byte) (*SessionEntry, error) {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &probe); err != nil {
+		return nil, err
+	}
+	if probe.Type == EntryTypeSession {
+		return nil, nil
+	}
+	if probe.Type == "" {
+		return nil, errors.New("missing type")
+	}
+	var entry SessionEntry
+	if err := json.Unmarshal(line, &entry); err != nil {
+		return nil, err
+	}
+	if entry.ID == "" {
+		return nil, errors.New("missing entry id")
+	}
+	return &entry, nil
+}
+
+func headerLine(line []byte) bool {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &probe); err != nil {
+		return false
+	}
+	return probe.Type == EntryTypeSession
+}
+
+func sessionIDFromFilePath(path string) string {
+	if path == "" {
+		return uuid.NewString()
+	}
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	if ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	if base == "" {
+		return uuid.NewString()
+	}
+	return base
+}
+
+func firstNonEmptyLine(lines [][]byte) []byte {
+	for _, line := range lines {
+		if len(bytesTrimSpace(line)) == 0 {
+			continue
+		}
+		return line
+	}
 	return nil
+}
+
+func bytesTrimSpace(data []byte) []byte {
+	return []byte(strings.TrimSpace(string(data)))
 }
 
 // GetDefaultSessionsDir returns the default sessions directory for a working directory.
@@ -196,7 +588,6 @@ func splitLines(data []byte) [][]byte {
 		}
 	}
 
-	// Add last line if not empty
 	if start < len(data) {
 		lines = append(lines, data[start:])
 	}

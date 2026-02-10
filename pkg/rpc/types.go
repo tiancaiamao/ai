@@ -44,6 +44,8 @@ const (
 	CommandGetLastAssistantText = "get_last_assistant_text"
 	CommandGetForkMessages      = "get_fork_messages"
 	CommandFork                 = "fork"
+	CommandGetTree              = "get_tree"
+	CommandResumeOnBranch       = "resume_on_branch"
 	CommandPing                 = "ping"
 )
 
@@ -126,6 +128,18 @@ type SessionStats struct {
 type ForkMessage struct {
 	EntryID string `json:"entryId"`
 	Text    string `json:"text"`
+}
+
+// TreeEntry represents a session entry in tree order for navigation.
+type TreeEntry struct {
+	EntryID   string  `json:"entryId"`
+	ParentID  *string `json:"parentId,omitempty"`
+	Type      string  `json:"type"`
+	Role      string  `json:"role,omitempty"`
+	Text      string  `json:"text,omitempty"`
+	Timestamp string  `json:"timestamp,omitempty"`
+	Depth     int     `json:"depth"`
+	Leaf      bool    `json:"leaf,omitempty"`
 }
 
 // ForkResult represents the result of a fork operation.

@@ -225,6 +225,7 @@ func TestEmitEvent(t *testing.T) {
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	server.SetOutput(w)
 
 	// Emit event
 	server.EmitEvent(map[string]any{

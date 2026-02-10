@@ -44,6 +44,8 @@ type Server struct {
 	onGetLastAssistantText func() (string, error)
 	onGetForkMessages      func() ([]ForkMessage, error)
 	onFork                 func(entryID string) (*ForkResult, error)
+	onGetTree              func() ([]TreeEntry, error)
+	onResumeOnBranch       func(entryID string) error
 }
 
 // NewServer creates a new RPC server.
@@ -179,6 +181,20 @@ func (s *Server) SetForkHandler(handler func(entryID string) (*ForkResult, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onFork = handler
+}
+
+// SetGetTreeHandler sets the handler for get_tree commands.
+func (s *Server) SetGetTreeHandler(handler func() ([]TreeEntry, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onGetTree = handler
+}
+
+// SetResumeOnBranchHandler sets the handler for resume_on_branch commands.
+func (s *Server) SetResumeOnBranchHandler(handler func(entryID string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onResumeOnBranch = handler
 }
 
 // SetNewSessionHandler sets the handler for new_session commands.
@@ -562,12 +578,32 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, result)
 
-	case CommandPing:
-		// Health check - always succeeds
-		return s.successResponse(cmd.ID, cmd.Type, map[string]any{
-			"status":    "ok",
-			"timestamp": s.ctx,
-		})
+	case CommandGetTree:
+		if s.onGetTree == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No get_tree handler registered")
+		}
+		entries, err := s.onGetTree()
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"entries": entries})
+
+	case CommandResumeOnBranch:
+		if s.onResumeOnBranch == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No resume_on_branch handler registered")
+		}
+		var data struct {
+			EntryID string `json:"entryId"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onResumeOnBranch(data.EntryID); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"switched": true})
 
 	default:
 		return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Unknown command: %s", cmd.Type))
@@ -649,7 +685,7 @@ func (s *Server) writeJSON(data []byte) {
 	_ = s.output.Flush()
 
 	// Log all RPC JSON to file (use Info level to ensure it's written)
-	slog.Info("[RPC] Response", "json", string(data))
+	slog.Debug("[RPC] Response", "json", string(data))
 }
 
 // Context returns the server's context.

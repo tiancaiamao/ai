@@ -22,6 +22,7 @@ import (
 	"github.com/sminez/ad/win/pkg/ad"
 	"github.com/sminez/ad/win/pkg/repl"
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
 const sectionLine = "═════════════════════════════════════"
@@ -58,15 +59,16 @@ type AiInterpreter struct {
 	currentMessageRole     string
 	currentMessageStreamed bool
 
-	availableModels       []Model
+	availableModels       []rpc.ModelInfo
 	availableSessions     []SessionMeta
-	availableForkMessages []ForkMessage
+	availableForkMessages []rpc.ForkMessage
+	availableTreeEntries  []rpc.TreeEntry
 	currentModelID        string
 	currentModelProvider  string
 	currentThinkingLevel  string
 	busyMode              string
 	autoCompactionEnabled bool
-	compactionState       *CompactionState
+	compactionState       *rpc.CompactionState
 	aiPID                 int
 	aiLogPath             string
 	aiWorkingDir          string
@@ -76,6 +78,8 @@ type AiInterpreter struct {
 	pendingSessionSwitch  string
 	pendingForkList       bool
 	pendingForkSelect     string
+	pendingTreeList       bool
+	pendingTreeSelect     string
 	lastAiActivity        time.Time
 	isStreaming           bool
 	deferStatus           bool
@@ -90,101 +94,6 @@ type stateRequestInfo struct {
 	show    bool
 	kind    string
 	quiet   bool
-}
-
-type Model struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Provider      string   `json:"provider"`
-	API           string   `json:"api"`
-	Reasoning     bool     `json:"reasoning"`
-	Input         []string `json:"input"`
-	ContextWindow int      `json:"contextWindow"`
-	MaxTokens     int      `json:"maxTokens"`
-}
-
-type SessionState struct {
-	Model                 *Model           `json:"model"`
-	ThinkingLevel         string           `json:"thinkingLevel"`
-	IsStreaming           bool             `json:"isStreaming"`
-	IsCompacting          bool             `json:"isCompacting"`
-	SteeringMode          string           `json:"steeringMode"`
-	FollowUpMode          string           `json:"followUpMode"`
-	SessionFile           string           `json:"sessionFile"`
-	SessionID             string           `json:"sessionId"`
-	SessionName           string           `json:"sessionName"`
-	AIPid                 int              `json:"aiPid"`
-	AILogPath             string           `json:"aiLogPath"`
-	AIWorkingDir          string           `json:"aiWorkingDir"`
-	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
-	MessageCount          int              `json:"messageCount"`
-	PendingMessageCount   int              `json:"pendingMessageCount"`
-	Compaction            *CompactionState `json:"compaction"`
-}
-
-type CompactionState struct {
-	MaxMessages      int    `json:"maxMessages"`
-	MaxTokens        int    `json:"maxTokens"`
-	KeepRecent       int    `json:"keepRecent"`
-	KeepRecentTokens int    `json:"keepRecentTokens"`
-	ReserveTokens    int    `json:"reserveTokens"`
-	ContextWindow    int    `json:"contextWindow"`
-	TokenLimit       int    `json:"tokenLimit"`
-	TokenLimitSource string `json:"tokenLimitSource"`
-}
-
-type SlashCommand struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"`
-	Location    string `json:"location"`
-	Path        string `json:"path"`
-}
-
-type SessionTokenStats struct {
-	Input      int `json:"input"`
-	Output     int `json:"output"`
-	CacheRead  int `json:"cacheRead"`
-	CacheWrite int `json:"cacheWrite"`
-	Total      int `json:"total"`
-}
-
-type SessionStats struct {
-	SessionFile       string            `json:"sessionFile"`
-	SessionID         string            `json:"sessionId"`
-	UserMessages      int               `json:"userMessages"`
-	AssistantMessages int               `json:"assistantMessages"`
-	ToolCalls         int               `json:"toolCalls"`
-	ToolResults       int               `json:"toolResults"`
-	TotalMessages     int               `json:"totalMessages"`
-	Tokens            SessionTokenStats `json:"tokens"`
-	Cost              float64           `json:"cost"`
-}
-
-type SessionMeta struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Title        string    `json:"title"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	MessageCount int       `json:"messageCount"`
-}
-
-type ForkMessage struct {
-	EntryID string `json:"entryId"`
-	Text    string `json:"text"`
-}
-
-type ForkResult struct {
-	Cancelled bool   `json:"cancelled"`
-	Text      string `json:"text"`
-}
-
-type CompactResult struct {
-	Summary          string `json:"summary"`
-	FirstKeptEntryID string `json:"firstKeptEntryId"`
-	TokensBefore     int    `json:"tokensBefore"`
-	TokensAfter      int    `json:"tokensAfter"`
 }
 
 type rpcEnvelope struct {
@@ -206,6 +115,27 @@ type assistantMessageEvent struct {
 	Delta        string `json:"delta"`
 	Content      string `json:"content"`
 }
+// Use rpc types from pkg/rpc for RPC communication:
+// - rpc.ModelInfo (was Model)
+// - rpc.SessionState
+// - rpc.CompactionState
+// - rpc.SlashCommand
+// - rpc.SessionTokenStats
+// - rpc.SessionStats
+// - rpc.ForkMessage
+// - rpc.TreeEntry
+// - rpc.ForkResult
+// - rpc.CompactResult
+
+type SessionMeta struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Title        string    `json:"title"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	MessageCount int       `json:"messageCount"`
+}
+
 
 type agentEvent struct {
 	Type                  string                 `json:"type"`
@@ -652,7 +582,7 @@ func (p *AiInterpreter) handleModelSelect() (bool, error) {
 			return false, nil
 		case <-ticker.C:
 			p.stateMu.Lock()
-			models := append([]Model(nil), p.availableModels...)
+			models := append([]rpc.ModelInfo(nil), p.availableModels...)
 			p.stateMu.Unlock()
 
 			if len(models) > 0 {
@@ -726,7 +656,19 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 	case "messages":
 		return true, p.sendCommand("get_messages", nil, "")
 	case "tree":
-		return true, p.sendCommand("get_messages", nil, "")
+		if strings.TrimSpace(args) == "" {
+			p.pendingTreeList = true
+			return true, p.sendCommand("get_tree", nil, "")
+		}
+		if err := p.resumeOnBranchFromInput(strings.TrimSpace(args)); err != nil {
+			if errors.Is(err, errTreeListRequired) {
+				p.pendingTreeSelect = strings.TrimSpace(args)
+				return true, p.sendCommand("get_tree", nil, "")
+			}
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
+			return true, nil
+		}
+		return true, nil
 	case "commands":
 		return true, p.sendCommand("get_commands", nil, "")
 	case "show":
@@ -772,6 +714,20 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
 		return true, p.handleFork(args)
+	case "resume-on-branch":
+		if strings.TrimSpace(args) == "" {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /resume-on-branch <index|entry-id>")
+			return true, nil
+		}
+		if err := p.resumeOnBranchFromInput(strings.TrimSpace(args)); err != nil {
+			if errors.Is(err, errTreeListRequired) {
+				p.pendingTreeSelect = strings.TrimSpace(args)
+				return true, p.sendCommand("get_tree", nil, "")
+			}
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
+			return true, nil
+		}
+		return true, nil
 	case "steer":
 		if strings.TrimSpace(args) == "" {
 			p.writeStatusMaybeDefer(fromControl, "ai: usage: /steer <message>")
@@ -809,6 +765,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 var errModelListRequired = errors.New("model list required")
 var errSessionListRequired = errors.New("session list required")
 var errForkListRequired = errors.New("fork list required")
+var errTreeListRequired = errors.New("tree list required")
 
 func (p *AiInterpreter) handleRawRPC(input string) error {
 	payload := strings.TrimSpace(strings.TrimPrefix(input, "::rpc"))
@@ -1116,6 +1073,35 @@ func (p *AiInterpreter) resolveForkInput(input string) (string, error) {
 	return input, nil
 }
 
+func (p *AiInterpreter) resolveTreeInput(input string) (string, error) {
+	if input == "" {
+		return "", fmt.Errorf("missing tree entry id")
+	}
+	if strings.EqualFold(input, "root") {
+		return "root", nil
+	}
+	if idx, err := strconv.Atoi(input); err == nil {
+		p.stateMu.Lock()
+		defer p.stateMu.Unlock()
+		if len(p.availableTreeEntries) == 0 {
+			return "", errTreeListRequired
+		}
+		if idx < 0 || idx >= len(p.availableTreeEntries) {
+			return "", fmt.Errorf("tree index out of range")
+		}
+		return p.availableTreeEntries[idx].EntryID, nil
+	}
+	return input, nil
+}
+
+func (p *AiInterpreter) resumeOnBranchFromInput(input string) error {
+	entryID, err := p.resolveTreeInput(input)
+	if err != nil {
+		return err
+	}
+	return p.sendCommand("resume_on_branch", map[string]any{"entryId": entryID}, "")
+}
+
 func (p *AiInterpreter) setModelFromInput(input string) error {
 	model, err := p.resolveModelInput(strings.TrimSpace(input))
 	if err != nil {
@@ -1124,13 +1110,13 @@ func (p *AiInterpreter) setModelFromInput(input string) error {
 	return p.sendCommand("set_model", map[string]any{"provider": model.Provider, "modelId": model.ID}, "")
 }
 
-func (p *AiInterpreter) resolveModelInput(input string) (*Model, error) {
+func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) {
 	if input == "" {
 		return nil, fmt.Errorf("missing model id")
 	}
 
 	p.stateMu.Lock()
-	models := append([]Model(nil), p.availableModels...)
+	models := append([]rpc.ModelInfo(nil), p.availableModels...)
 	currentProvider := p.currentModelProvider
 	p.stateMu.Unlock()
 
@@ -1149,12 +1135,12 @@ func (p *AiInterpreter) resolveModelInput(input string) (*Model, error) {
 		if parts[0] == "" || parts[1] == "" {
 			return nil, fmt.Errorf("invalid model: %s", input)
 		}
-		return &Model{Provider: parts[0], ID: parts[1]}, nil
+		return &rpc.ModelInfo{Provider: parts[0], ID: parts[1]}, nil
 	}
 
 	if len(models) == 0 {
 		if currentProvider != "" {
-			return &Model{Provider: currentProvider, ID: input}, nil
+			return &rpc.ModelInfo{Provider: currentProvider, ID: input}, nil
 		}
 		return nil, errModelListRequired
 	}
@@ -1166,7 +1152,7 @@ func (p *AiInterpreter) resolveModelInput(input string) (*Model, error) {
 	}
 
 	if currentProvider != "" {
-		return &Model{Provider: currentProvider, ID: input}, nil
+		return &rpc.ModelInfo{Provider: currentProvider, ID: input}, nil
 	}
 	return nil, fmt.Errorf("unknown model: %s", input)
 }
@@ -1194,9 +1180,12 @@ func (p *AiInterpreter) switchSessionFromInput(input string) error {
 }
 
 func (p *AiInterpreter) readStdout(ctx context.Context) {
+	if p.debug {
+		slog.Info("[AI-STDOUT] reader started")
+	}
 	scanner := bufio.NewScanner(p.stdout)
-	buf := make([]byte, 0, 256*1024)
-	scanner.Buffer(buf, 10*1024*1024)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 64*1024*1024)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -1213,7 +1202,7 @@ func (p *AiInterpreter) readStdout(ctx context.Context) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil && p.debug {
+	if err := scanner.Err(); err != nil {
 		slog.Error("[AI-STDOUT] scanner error", "error", err)
 	}
 }
@@ -1312,6 +1301,10 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		p.handleForkMessages(resp.Data)
 	case "fork":
 		p.handleForkResult(resp.Data)
+	case "get_tree":
+		p.handleTreeEntries(resp.Data)
+	case "resume_on_branch":
+		p.writeStatus("ai: branch updated")
 	case "compact":
 		p.handleCompactResult(resp.Data)
 	case "prompt":
@@ -1653,6 +1646,7 @@ func (p *AiInterpreter) writeStatus(text string) {
 	deferStatus := p.deferStatus
 	streaming := p.isStreaming
 	if deferStatus && streaming {
+		slog.Debug("[AI-STATUS] deferred", "bytes", len(text))
 		p.pendingStatus = append(p.pendingStatus, text)
 		p.stateMu.Unlock()
 		return
@@ -1699,11 +1693,22 @@ func (p *AiInterpreter) setStreaming(streaming bool) {
 func (p *AiInterpreter) writeRaw(text string) {
 	writer := p.GetOutputWriter()
 	if writer == nil {
+		slog.Warn("[AI-OUTPUT] writer is nil", "bytes", len(text))
 		return
 	}
-	start := time.Now()
-	_ = writer.Write(text)
-	p.recordWriteMetrics(time.Since(start))
+	const maxChunkSize = 4096
+	for len(text) > 0 {
+		chunk := text
+		if len(chunk) > maxChunkSize {
+			chunk = chunk[:maxChunkSize]
+		}
+		start := time.Now()
+		if err := writer.Write(chunk); err != nil && p.debug {
+			slog.Error("[AI-OUTPUT] write failed", "error", err, "bytes", len(chunk))
+		}
+		p.recordWriteMetrics(time.Since(start))
+		text = text[len(chunk):]
+	}
 }
 
 func (p *AiInterpreter) scrollToBottom() {
@@ -1768,6 +1773,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /session
   /messages
   /tree
+  /resume-on-branch <index|entry-id>
   /commands
   /show settings
   /show pipeline
@@ -1917,7 +1923,7 @@ func (p *AiInterpreter) showPipeline(fromControl bool) {
 
 func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 	var payload struct {
-		Models []Model `json:"models"`
+		Models []rpc.ModelInfo `json:"models"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid models response: %v", err))
@@ -1937,7 +1943,7 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 	p.stateMu.Unlock()
 }
 
-func (p *AiInterpreter) showModelList(models []Model, showUsage bool) {
+func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
 	if len(models) == 0 {
 		p.writeStatus("ai: no models available")
 		return
@@ -1987,7 +1993,7 @@ Usage:
 }
 
 func (p *AiInterpreter) handleSetModel(data json.RawMessage) {
-	var model Model
+	var model rpc.ModelInfo
 	if err := json.Unmarshal(data, &model); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid set_model response: %v", err))
 		return
@@ -2026,15 +2032,15 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 	p.showState(state)
 }
 
-func (p *AiInterpreter) decodeState(data json.RawMessage) (*SessionState, error) {
-	var state SessionState
+func (p *AiInterpreter) decodeState(data json.RawMessage) (*rpc.SessionState, error) {
+	var state rpc.SessionState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, err
 	}
 	return &state, nil
 }
 
-func (p *AiInterpreter) applyState(state *SessionState) {
+func (p *AiInterpreter) applyState(state *rpc.SessionState) {
 	if state == nil {
 		return
 	}
@@ -2053,7 +2059,7 @@ func (p *AiInterpreter) applyState(state *SessionState) {
 	p.stateMu.Unlock()
 }
 
-func (p *AiInterpreter) showState(state *SessionState) {
+func (p *AiInterpreter) showState(state *rpc.SessionState) {
 	if state == nil {
 		return
 	}
@@ -2143,7 +2149,7 @@ func (p *AiInterpreter) takeStateRequestInfo(id string) (stateRequestInfo, bool)
 	return info, ok
 }
 
-func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *SessionState) {
+func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *rpc.SessionState) {
 	latency := time.Since(info.started)
 
 	if info.quiet {
@@ -2164,7 +2170,7 @@ func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *SessionSta
 }
 
 func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
-	var stats SessionStats
+	var stats rpc.SessionStats
 	if err := json.Unmarshal(data, &stats); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid usage response: %v", err))
 		return
@@ -2193,7 +2199,7 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 
 func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 	var payload struct {
-		Commands []SlashCommand `json:"commands"`
+		Commands []rpc.SlashCommand `json:"commands"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid commands response: %v", err))
@@ -2227,12 +2233,30 @@ func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 }
 
 func (p *AiInterpreter) handleMessages(data json.RawMessage) {
+	if p.debug {
+		writerOK := p.GetOutputWriter() != nil
+		p.stateMu.Lock()
+		streaming := p.isStreaming
+		deferStatus := p.deferStatus
+		p.stateMu.Unlock()
+		slog.Info("[AI] handleMessages",
+			"dataBytes", len(data),
+			"writer", writerOK,
+			"streaming", streaming,
+			"deferStatus", deferStatus,
+		)
+	}
 	var payload struct {
 		Messages []agent.AgentMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		p.writeStatus(fmt.Sprintf("ai: invalid messages response: %v", err))
-		return
+		// get_messages may return a raw array in some versions
+		var messages []agent.AgentMessage
+		if err2 := json.Unmarshal(data, &messages); err2 != nil {
+			p.writeStatus(fmt.Sprintf("ai: invalid messages response: %v", err))
+			return
+		}
+		payload.Messages = messages
 	}
 
 	if len(payload.Messages) == 0 {
@@ -2240,15 +2264,28 @@ func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 		return
 	}
 
+	const maxMessages = 10
+	total := len(payload.Messages)
+	display := payload.Messages
+	baseIndex := 0
+	if total > maxMessages {
+		baseIndex = total - maxMessages
+		display = payload.Messages[baseIndex:]
+	}
+
 	var b strings.Builder
-	b.WriteString("Messages:\n")
-	for i, msg := range payload.Messages {
+	if total > maxMessages {
+		b.WriteString(fmt.Sprintf("Messages (last %d of %d):\n", maxMessages, total))
+	} else {
+		b.WriteString("Messages:\n")
+	}
+	for i, msg := range display {
 		text := strings.TrimSpace(renderMessageText(&msg))
 		if text == "" {
 			text = "(no text)"
 		}
 		text = truncate(text, 120)
-		b.WriteString(fmt.Sprintf("  [%d] %s: %s\n", i, msg.Role, text))
+		b.WriteString(fmt.Sprintf("  [%d] %s: %s\n", baseIndex+i, msg.Role, text))
 	}
 	p.writeStatus(strings.TrimRight(b.String(), "\n"))
 }
@@ -2375,7 +2412,7 @@ func (p *AiInterpreter) handleLastAssistantText(data json.RawMessage) {
 
 func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 	var payload struct {
-		Messages []ForkMessage `json:"messages"`
+		Messages []rpc.ForkMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid fork messages response: %v", err))
@@ -2424,8 +2461,67 @@ func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 	p.scrollToBottom()
 }
 
+func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
+	var payload struct {
+		Entries []rpc.TreeEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		var entries []rpc.TreeEntry
+		if err2 := json.Unmarshal(data, &entries); err2 != nil {
+			p.writeStatus(fmt.Sprintf("ai: invalid tree response: %v", err))
+			return
+		}
+		payload.Entries = entries
+	}
+
+	p.stateMu.Lock()
+	p.availableTreeEntries = payload.Entries
+	pendingList := p.pendingTreeList
+	pendingSelect := p.pendingTreeSelect
+	p.pendingTreeList = false
+	p.pendingTreeSelect = ""
+	p.stateMu.Unlock()
+
+	if pendingSelect != "" {
+		if entryID, err := p.resolveTreeInput(pendingSelect); err == nil {
+			if err := p.sendCommand("resume_on_branch", map[string]any{"entryId": entryID}, ""); err != nil {
+				p.writeStatus(fmt.Sprintf("ai: %v", err))
+			}
+		} else {
+			p.writeStatus(fmt.Sprintf("ai: %v", err))
+		}
+		return
+	}
+
+	if !pendingList {
+		return
+	}
+
+	if len(payload.Entries) == 0 {
+		p.writeStatus("ai: no tree entries available")
+		return
+	}
+
+	p.writeRaw(sectionLine + "\n")
+	p.writeRaw("Session Tree\n")
+	p.writeRaw(sectionLine + "\n\n")
+
+	for i, entry := range payload.Entries {
+		indent := strings.Repeat("  ", entry.Depth)
+		label := formatTreeLabel(entry)
+		if entry.Leaf {
+			label = "[current] " + label
+		}
+		p.writeRaw(fmt.Sprintf("[%d] %s%s\n", i, indent, label))
+		p.writeRaw(fmt.Sprintf("    Entry ID: %s\n\n", entry.EntryID))
+	}
+	p.writeRaw(sectionLine + "\n")
+	p.writeRaw("Usage:\n  - /resume-on-branch <index|entry-id>\n")
+	p.scrollToBottom()
+}
+
 func (p *AiInterpreter) handleForkResult(data json.RawMessage) {
-	var result ForkResult
+	var result rpc.ForkResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid fork response: %v", err))
 		return
@@ -2442,7 +2538,7 @@ func (p *AiInterpreter) handleForkResult(data json.RawMessage) {
 }
 
 func (p *AiInterpreter) handleCompactResult(data json.RawMessage) {
-	var result CompactResult
+	var result rpc.CompactResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		p.writeStatus("ai: compacted")
 		return
@@ -2513,7 +2609,7 @@ func formatLimit(value int) string {
 	return strconv.Itoa(value)
 }
 
-func formatTokenLimit(state *CompactionState) string {
+func formatTokenLimit(state *rpc.CompactionState) string {
 	if state == nil || state.TokenLimit <= 0 {
 		return "unknown"
 	}
@@ -2542,6 +2638,18 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return text[:limit-3] + "..."
+}
+
+func formatTreeLabel(entry rpc.TreeEntry) string {
+	label := entry.Type
+	if strings.TrimSpace(entry.Role) != "" {
+		label = entry.Role
+	}
+	text := strings.TrimSpace(entry.Text)
+	if text == "" {
+		return label
+	}
+	return fmt.Sprintf("%s: %s", label, truncate(text, 120))
 }
 
 func summarizeToolArgs(toolName string, args map[string]interface{}) string {

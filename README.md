@@ -2,11 +2,6 @@
 
 `ai` 是一个 Go 实现的核心 Agent Loop，面向 `stdin/stdout` RPC 使用方式，适合编辑器集成。
 
-## 定位说明
-
-- 本仓库提供 **RPC 模式** 的 Agent 核心，并内置 **win 模式**（供 ad 的 win 库驱动）。
-- 在 ad 编辑器中使用时可将该二进制命名为 `win-ai`（默认启动 win 模式）。
-
 ## 构建与运行
 
 ```bash
@@ -15,7 +10,7 @@ go build -o bin/ai ./cmd/ai
 ```
 
 ```bash
-# 默认启动 win 模式（给 ad 使用）
+# 默认启动 win 模式,给 ad 编辑器使用(github.com/tiancaiamao/ad)
 ./bin/ai
 ```
 
@@ -97,4 +92,4 @@ echo '{"type":"get_messages"}' | ./bin/ai --mode rpc
 
 ## 许可证
 
-与原项目保持一致（基于 [pi-mono](https://github.com/badlogic/pi-mono) 的核心实现）。
+与原项目保持一致（参考 [pi-mono](https://github.com/badlogic/pi-mono) 的核心实现）。
