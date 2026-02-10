@@ -116,3 +116,24 @@ func TestCompactFewMessages(t *testing.T) {
 		t.Errorf("Expected %d messages, got %d", len(messages), len(result))
 	}
 }
+
+func TestSplitMessagesByTokenBudget(t *testing.T) {
+	messages := []agent.AgentMessage{
+		agent.NewUserMessage("aaaa"),
+		agent.NewUserMessage("bbbb"),
+		agent.NewUserMessage("cccc"),
+		agent.NewUserMessage("dddd"),
+		agent.NewUserMessage("eeee"),
+	}
+
+	oldMessages, recentMessages := splitMessagesByTokenBudget(messages, 2)
+	if len(recentMessages) != 2 {
+		t.Errorf("Expected 2 recent messages, got %d", len(recentMessages))
+	}
+	if len(oldMessages) != 3 {
+		t.Errorf("Expected 3 old messages, got %d", len(oldMessages))
+	}
+	if recentMessages[0].ExtractText() != "dddd" || recentMessages[1].ExtractText() != "eeee" {
+		t.Errorf("Unexpected recent messages order")
+	}
+}

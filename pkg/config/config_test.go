@@ -36,6 +36,20 @@ func TestLoadConfigDefaults(t *testing.T) {
 		if cfg.Compactor.MaxTokens != 8000 {
 			t.Errorf("Expected default MaxTokens 8000, got %d", cfg.Compactor.MaxTokens)
 		}
+		if cfg.Compactor.KeepRecentTokens != 20000 {
+			t.Errorf("Expected default KeepRecentTokens 20000, got %d", cfg.Compactor.KeepRecentTokens)
+		}
+	}
+
+	if cfg.ToolOutput == nil {
+		t.Error("Expected tool output config to be initialized")
+	} else {
+		if cfg.ToolOutput.MaxLines != 2000 {
+			t.Errorf("Expected default tool output MaxLines 2000, got %d", cfg.ToolOutput.MaxLines)
+		}
+		if cfg.ToolOutput.MaxBytes != 50*1024 {
+			t.Errorf("Expected default tool output MaxBytes 51200, got %d", cfg.ToolOutput.MaxBytes)
+		}
 	}
 }
 
@@ -56,7 +70,12 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"maxMessages": 100,
 			"maxTokens": 5000,
 			"keepRecent": 10,
+			"keepRecentTokens": 12000,
 			"autoCompact": false
+		},
+		"toolOutput": {
+			"maxLines": 500,
+			"maxBytes": 8192
 		},
 		"log": {
 			"level": "debug"
@@ -93,9 +112,23 @@ func TestLoadConfigFromFile(t *testing.T) {
 	if cfg.Compactor.MaxTokens != 5000 {
 		t.Errorf("Expected MaxTokens 5000, got %d", cfg.Compactor.MaxTokens)
 	}
+	if cfg.Compactor.KeepRecentTokens != 12000 {
+		t.Errorf("Expected KeepRecentTokens 12000, got %d", cfg.Compactor.KeepRecentTokens)
+	}
 
 	if cfg.Compactor.AutoCompact != false {
 		t.Error("Expected AutoCompact to be false")
+	}
+
+	if cfg.ToolOutput == nil {
+		t.Error("Expected tool output config to be initialized")
+	} else {
+		if cfg.ToolOutput.MaxLines != 500 {
+			t.Errorf("Expected tool output MaxLines 500, got %d", cfg.ToolOutput.MaxLines)
+		}
+		if cfg.ToolOutput.MaxBytes != 8192 {
+			t.Errorf("Expected tool output MaxBytes 8192, got %d", cfg.ToolOutput.MaxBytes)
+		}
 	}
 
 	if cfg.Log == nil || cfg.Log.Level != "debug" {
@@ -341,6 +374,9 @@ func TestCompactorDefaults(t *testing.T) {
 
 	if compactorConfig.KeepRecent != 5 {
 		t.Errorf("Expected KeepRecent 5, got %d", compactorConfig.KeepRecent)
+	}
+	if compactorConfig.KeepRecentTokens != 20000 {
+		t.Errorf("Expected KeepRecentTokens 20000, got %d", compactorConfig.KeepRecentTokens)
 	}
 
 	if compactorConfig.ReserveTokens != 16384 {

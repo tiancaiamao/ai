@@ -137,6 +137,7 @@ func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *rp
 		MaxMessages:      cfg.MaxMessages,
 		MaxTokens:        cfg.MaxTokens,
 		KeepRecent:       cfg.KeepRecent,
+		KeepRecentTokens: cfg.KeepRecentTokens,
 		ReserveTokens:    compactor.ReserveTokens(),
 		ContextWindow:    compactor.ContextWindow(),
 		TokenLimit:       limit,
@@ -353,8 +354,12 @@ func main() {
 	// Log model info
 	log.Info("Model: %s, Provider: %s, BaseURL: %s", model.ID, model.Provider, model.BaseURL)
 	if cfg.Compactor != nil {
-		log.Info("Compactor: MaxMessages=%d, MaxTokens=%d, ReserveTokens=%d",
-			cfg.Compactor.MaxMessages, cfg.Compactor.MaxTokens, cfg.Compactor.ReserveTokens)
+		log.Info("Compactor: MaxMessages=%d, MaxTokens=%d, KeepRecent=%d, KeepRecentTokens=%d, ReserveTokens=%d",
+			cfg.Compactor.MaxMessages,
+			cfg.Compactor.MaxTokens,
+			cfg.Compactor.KeepRecent,
+			cfg.Compactor.KeepRecentTokens,
+			cfg.Compactor.ReserveTokens)
 	}
 
 	activeSpec, err := resolveActiveModelSpec(cfg)
@@ -509,6 +514,18 @@ func main() {
 	log.Infof("Concurrency control enabled: MaxConcurrentTools=%d, ToolTimeout=%ds",
 		concurrencyConfig.MaxConcurrentTools,
 		concurrencyConfig.ToolTimeout)
+
+	toolOutputConfig := cfg.ToolOutput
+	if toolOutputConfig == nil {
+		toolOutputConfig = config.DefaultToolOutputConfig()
+	}
+	ag.SetToolOutputLimits(agent.ToolOutputLimits{
+		MaxLines: toolOutputConfig.MaxLines,
+		MaxBytes: toolOutputConfig.MaxBytes,
+	})
+	log.Infof("Tool output truncation: MaxLines=%d, MaxBytes=%d",
+		toolOutputConfig.MaxLines,
+		toolOutputConfig.MaxBytes)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

@@ -24,6 +24,9 @@ type Config struct {
 	// Concurrency configuration
 	Concurrency *ConcurrencyConfig `json:"concurrency,omitempty"`
 
+	// Tool output configuration
+	ToolOutput *ToolOutputConfig `json:"toolOutput,omitempty"`
+
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 }
@@ -50,12 +53,26 @@ type ConcurrencyConfig struct {
 	QueueTimeout       int `json:"queueTimeout"`       // Queue wait timeout in seconds
 }
 
+// ToolOutputConfig contains tool output truncation settings.
+type ToolOutputConfig struct {
+	MaxLines int `json:"maxLines,omitempty"` // Maximum lines to keep (0 = unlimited)
+	MaxBytes int `json:"maxBytes,omitempty"` // Maximum bytes to keep (0 = unlimited)
+}
+
 // DefaultConcurrencyConfig returns default concurrency configuration.
 func DefaultConcurrencyConfig() *ConcurrencyConfig {
 	return &ConcurrencyConfig{
 		MaxConcurrentTools: 3,
 		ToolTimeout:        30,
 		QueueTimeout:       60,
+	}
+}
+
+// DefaultToolOutputConfig returns default tool output truncation configuration.
+func DefaultToolOutputConfig() *ToolOutputConfig {
+	return &ToolOutputConfig{
+		MaxLines: 2000,
+		MaxBytes: 50 * 1024,
 	}
 }
 
@@ -124,6 +141,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		},
 		Compactor:   compact.DefaultConfig(),
 		Concurrency: DefaultConcurrencyConfig(),
+		ToolOutput:  DefaultToolOutputConfig(),
 		Log:         DefaultLogConfig(),
 	}
 

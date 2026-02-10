@@ -72,6 +72,7 @@ type CompactionState struct {
 	MaxMessages      int    `json:"maxMessages,omitempty"`
 	MaxTokens        int    `json:"maxTokens,omitempty"`
 	KeepRecent       int    `json:"keepRecent,omitempty"`
+	KeepRecentTokens int    `json:"keepRecentTokens,omitempty"`
 	ReserveTokens    int    `json:"reserveTokens,omitempty"`
 	ContextWindow    int    `json:"contextWindow,omitempty"`
 	TokenLimit       int    `json:"tokenLimit,omitempty"`

@@ -23,6 +23,7 @@ type LoopConfig struct {
 	APIKey         string
 	Executor       *ExecutorPool // Tool executor with concurrency control
 	Metrics        *Metrics      // Metrics collector
+	ToolOutput     ToolOutputLimits
 	MaxLLMRetries  int           // Maximum number of retries for LLM calls
 	RetryBaseDelay time.Duration // Base delay for exponential backoff
 }
@@ -110,7 +111,7 @@ func runInnerLoop(
 
 		var toolResults []AgentMessage
 		if hasMoreToolCalls {
-			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor, config.Metrics)
+			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor, config.Metrics, config.ToolOutput)
 			for _, result := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
@@ -415,6 +416,7 @@ func executeToolCalls(
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 	executor *ExecutorPool,
 	metrics *Metrics,
+	toolOutputLimits ToolOutputLimits,
 ) []AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
 	results := make([]AgentMessage, 0, len(toolCalls))
@@ -435,9 +437,10 @@ func executeToolCalls(
 			if metrics != nil {
 				metrics.RecordToolExecution(tc.Name, 0, fmt.Errorf("tool not found"), 0)
 			}
-			result := NewToolResultMessage(tc.ID, tc.Name, []ContentBlock{
+			content := truncateToolContent([]ContentBlock{
 				TextContent{Type: "text", Text: "Tool not found"},
-			}, true)
+			}, toolOutputLimits)
+			result := NewToolResultMessage(tc.ID, tc.Name, content, true)
 			results = append(results, result)
 			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
 			continue
@@ -459,12 +462,14 @@ func executeToolCalls(
 		}
 
 		if err != nil {
-			result := NewToolResultMessage(tc.ID, tc.Name, []ContentBlock{
+			content := truncateToolContent([]ContentBlock{
 				TextContent{Type: "text", Text: err.Error()},
-			}, true)
+			}, toolOutputLimits)
+			result := NewToolResultMessage(tc.ID, tc.Name, content, true)
 			results = append(results, result)
 			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
 		} else {
+			content = truncateToolContent(content, toolOutputLimits)
 			result := NewToolResultMessage(tc.ID, tc.Name, content, false)
 			results = append(results, result)
 			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, false))

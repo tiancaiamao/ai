@@ -23,7 +23,12 @@ The default configuration file is located at:
     "maxMessages": 50,
     "maxTokens": 8000,
     "keepRecent": 5,
+    "keepRecentTokens": 20000,
     "autoCompact": true
+  },
+  "toolOutput": {
+    "maxLines": 2000,
+    "maxBytes": 51200
   },
   "concurrency": {
     "maxConcurrentTools": 3,
@@ -50,7 +55,14 @@ The default configuration file is located at:
 - `maxMessages` (int): Maximum messages before auto-compaction (default: 50)
 - `maxTokens` (int): Approximate token limit before auto-compaction (default: 8000)
 - `keepRecent` (int): Number of recent messages to keep uncompressed (default: 5)
+- `keepRecentTokens` (int): Token budget to keep from the most recent messages (default: 20000)
 - `autoCompact` (bool): Enable/disable automatic compression (default: true)
+
+When `keepRecentTokens` is set to a positive value, compaction keeps recent context by token budget and `keepRecent` is used only as a fallback.
+
+#### toolOutput
+- `maxLines` (int): Maximum lines to keep in tool output (default: 2000)
+- `maxBytes` (int): Maximum bytes to keep in tool output (default: 51200)
 
 #### concurrency
 - `maxConcurrentTools` (int): Maximum number of tools running concurrently (default: 3)
@@ -109,7 +121,12 @@ If no configuration file exists, the following defaults are used:
     "maxMessages": 50,
     "maxTokens": 8000,
     "keepRecent": 5,
+    "keepRecentTokens": 20000,
     "autoCompact": true
+  },
+  "toolOutput": {
+    "maxLines": 2000,
+    "maxBytes": 51200
   },
   "concurrency": {
     "maxConcurrentTools": 3,

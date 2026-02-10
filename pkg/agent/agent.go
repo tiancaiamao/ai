@@ -42,6 +42,7 @@ type Agent struct {
 	followUpQueue chan string   // Queue for follow-up messages
 	executor      *ExecutorPool // Tool executor with concurrency control
 	metrics       *Metrics      // Performance and usage metrics
+	toolOutput    ToolOutputLimits
 }
 
 // NewAgent creates a new agent.
@@ -65,6 +66,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		followUpQueue: make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
 		executor:      NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
 		metrics:       NewMetrics(),
+		toolOutput:    DefaultToolOutputLimits(),
 	}
 }
 
@@ -113,10 +115,11 @@ func (a *Agent) processPrompt(message string) {
 	prompts := []AgentMessage{NewUserMessage(message)}
 
 	config := &LoopConfig{
-		Model:    a.model,
-		APIKey:   a.apiKey,
-		Executor: a.executor,
-		Metrics:  a.metrics,
+		Model:      a.model,
+		APIKey:     a.apiKey,
+		Executor:   a.executor,
+		Metrics:    a.metrics,
+		ToolOutput: a.toolOutput,
 	}
 
 	log.Printf("[Agent] Starting RunLoop...")
@@ -315,6 +318,11 @@ func (a *Agent) SetExecutor(executor *ExecutorPool) {
 // GetExecutor returns the current tool executor.
 func (a *Agent) GetExecutor() *ExecutorPool {
 	return a.executor
+}
+
+// SetToolOutputLimits sets truncation limits for tool output.
+func (a *Agent) SetToolOutputLimits(limits ToolOutputLimits) {
+	a.toolOutput = limits
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

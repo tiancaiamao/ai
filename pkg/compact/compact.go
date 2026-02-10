@@ -14,21 +14,23 @@ import (
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages   int  // Maximum messages before compression
-	MaxTokens     int  // Approximate token limit before compression
-	KeepRecent    int  // Number of recent messages to keep
-	ReserveTokens int  // Tokens to reserve when using context window
-	AutoCompact   bool // Whether to automatically compact
+	MaxMessages      int  // Maximum messages before compression
+	MaxTokens        int  // Approximate token limit before compression
+	KeepRecent       int  // Number of recent messages to keep
+	KeepRecentTokens int  // Token budget to keep from the most recent messages
+	ReserveTokens    int  // Tokens to reserve when using context window
+	AutoCompact      bool // Whether to automatically compact
 }
 
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMessages:   50,    // Compact after 50 messages
-		MaxTokens:     8000,  // Compact after ~8000 tokens (fallback)
-		KeepRecent:    5,     // Keep last 5 messages uncompressed
-		ReserveTokens: 16384, // Reserve tokens for responses when using context window
-		AutoCompact:   true,
+		MaxMessages:      50,    // Compact after 50 messages
+		MaxTokens:        8000,  // Compact after ~8000 tokens (fallback)
+		KeepRecent:       5,     // Keep last 5 messages uncompressed
+		KeepRecentTokens: 20000, // Keep ~20k tokens from the recent context
+		ReserveTokens:    16384, // Reserve tokens for responses when using context window
+		AutoCompact:      true,
 	}
 }
 
@@ -76,16 +78,29 @@ func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
 
 // Compact compresses the context by summarizing old messages.
 func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
-	if len(messages) <= c.config.KeepRecent {
+	if len(messages) == 0 {
 		return messages, nil
 	}
 
-	log.Printf("[Compact] Compressing %d messages (keeping %d recent)", len(messages), c.config.KeepRecent)
-
-	// Split messages into old (to compress) and recent (to keep)
-	splitIndex := len(messages) - c.config.KeepRecent
-	oldMessages := messages[:splitIndex]
-	recentMessages := messages[splitIndex:]
+	keepRecentTokens := c.effectiveKeepRecentTokens()
+	var oldMessages []agent.AgentMessage
+	var recentMessages []agent.AgentMessage
+	if keepRecentTokens > 0 {
+		oldMessages, recentMessages = splitMessagesByTokenBudget(messages, keepRecentTokens)
+		if len(oldMessages) == 0 {
+			return messages, nil
+		}
+		log.Printf("[Compact] Compressing %d messages (keeping ~%d tokens)", len(messages), keepRecentTokens)
+	} else {
+		keepCount := c.keepRecentMessages()
+		if len(messages) <= keepCount {
+			return messages, nil
+		}
+		log.Printf("[Compact] Compressing %d messages (keeping %d recent)", len(messages), keepCount)
+		splitIndex := len(messages) - keepCount
+		oldMessages = messages[:splitIndex]
+		recentMessages = messages[splitIndex:]
+	}
 
 	// Generate summary of old messages
 	summary, err := c.GenerateSummary(oldMessages)
@@ -187,6 +202,29 @@ func (c *Compactor) ReserveTokens() int {
 		return DefaultConfig().ReserveTokens
 	}
 	return c.config.ReserveTokens
+}
+
+func (c *Compactor) keepRecentMessages() int {
+	if c.config == nil || c.config.KeepRecent <= 0 {
+		return DefaultConfig().KeepRecent
+	}
+	return c.config.KeepRecent
+}
+
+func (c *Compactor) effectiveKeepRecentTokens() int {
+	if c == nil || c.config == nil || c.config.KeepRecentTokens <= 0 {
+		return 0
+	}
+
+	keep := c.config.KeepRecentTokens
+	if limit, _ := c.EffectiveTokenLimit(); limit > 0 {
+		maxKeep := limit / 2
+		if maxKeep > 0 && keep > maxKeep {
+			keep = maxKeep
+		}
+	}
+
+	return keep
 }
 
 // EffectiveTokenLimit returns the token limit for compaction and its source.
@@ -292,4 +330,36 @@ func estimateMessageTokens(msg agent.AgentMessage) int {
 		return 0
 	}
 	return int(math.Ceil(float64(charCount) / 4.0))
+}
+
+func splitMessagesByTokenBudget(
+	messages []agent.AgentMessage,
+	tokenBudget int,
+) ([]agent.AgentMessage, []agent.AgentMessage) {
+	if len(messages) == 0 {
+		return messages, nil
+	}
+	if tokenBudget <= 0 {
+		return messages[:len(messages)-1], messages[len(messages)-1:]
+	}
+
+	used := 0
+	start := len(messages)
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgTokens := estimateMessageTokens(messages[i])
+		if used+msgTokens > tokenBudget && start != len(messages) {
+			break
+		}
+		used += msgTokens
+		start = i
+	}
+
+	if start <= 0 {
+		return nil, messages
+	}
+	if start >= len(messages) {
+		return messages[:len(messages)-1], messages[len(messages)-1:]
+	}
+	return messages[:start], messages[start:]
 }

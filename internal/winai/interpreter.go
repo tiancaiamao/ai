@@ -131,6 +131,7 @@ type CompactionState struct {
 	MaxMessages      int    `json:"maxMessages"`
 	MaxTokens        int    `json:"maxTokens"`
 	KeepRecent       int    `json:"keepRecent"`
+	KeepRecentTokens int    `json:"keepRecentTokens"`
 	ReserveTokens    int    `json:"reserveTokens"`
 	ContextWindow    int    `json:"contextWindow"`
 	TokenLimit       int    `json:"tokenLimit"`
@@ -1893,6 +1894,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 	compactionMaxMessages := "disabled"
 	compactionMaxTokens := "disabled"
 	compactionKeepRecent := "unknown"
+	compactionKeepRecentTokens := "unknown"
 	if compaction != nil {
 		compactionContext = formatIntOrUnknown(compaction.ContextWindow)
 		compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
@@ -1900,6 +1902,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		compactionMaxMessages = formatLimit(compaction.MaxMessages)
 		compactionMaxTokens = formatLimit(compaction.MaxTokens)
 		compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
+		compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
 	}
 
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
@@ -1915,7 +1918,8 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
   compaction-token-limit: %s
   compaction-max-messages: %s
   compaction-max-tokens: %s
-  compaction-keep-recent: %s`,
+  compaction-keep-recent: %s
+  compaction-keep-recent-tokens: %s`,
 		model,
 		onOff(showThinking),
 		toolsMode(showTools, showToolsVerbose),
@@ -1929,6 +1933,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		compactionMaxMessages,
 		compactionMaxTokens,
 		compactionKeepRecent,
+		compactionKeepRecentTokens,
 	))
 }
 
@@ -2159,6 +2164,7 @@ func (p *AiInterpreter) showState(state *SessionState) {
 	compactionLimit := "unknown"
 	compactionReserve := "unknown"
 	compactionKeepRecent := "unknown"
+	compactionKeepRecentTokens := "unknown"
 	aiPID := "unknown"
 	aiLogPath := "unknown"
 	aiWorkingDir := "unknown"
@@ -2167,6 +2173,7 @@ func (p *AiInterpreter) showState(state *SessionState) {
 		compactionLimit = formatTokenLimit(state.Compaction)
 		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
 		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
+		compactionKeepRecentTokens = formatIntOrUnknown(state.Compaction.KeepRecentTokens)
 	}
 	if state.AIPid > 0 {
 		aiPID = formatIntOrUnknown(state.AIPid)
@@ -2190,6 +2197,7 @@ func (p *AiInterpreter) showState(state *SessionState) {
   compaction-limit: %s
   compaction-reserve: %s
   compaction-keep-recent: %s
+  compaction-keep-recent-tokens: %s
   thinking-level: %s
   auto-compaction: %s
   messages: %d
@@ -2207,6 +2215,7 @@ func (p *AiInterpreter) showState(state *SessionState) {
 		compactionLimit,
 		compactionReserve,
 		compactionKeepRecent,
+		compactionKeepRecentTokens,
 		orUnknown(state.ThinkingLevel),
 		onOff(state.AutoCompactionEnabled),
 		state.MessageCount,
