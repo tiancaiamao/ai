@@ -57,8 +57,11 @@ type ConcurrencyConfig struct {
 
 // ToolOutputConfig contains tool output truncation settings.
 type ToolOutputConfig struct {
-	MaxLines int `json:"maxLines,omitempty"` // Maximum lines to keep (0 = unlimited)
-	MaxBytes int `json:"maxBytes,omitempty"` // Maximum bytes to keep (0 = unlimited)
+	MaxLines             int    `json:"maxLines,omitempty"`             // Maximum lines to keep (0 = unlimited)
+	MaxBytes             int    `json:"maxBytes,omitempty"`             // Maximum bytes to keep (0 = unlimited)
+	MaxChars             int    `json:"maxChars,omitempty"`             // Maximum runes to keep (0 = unlimited)
+	LargeOutputThreshold int    `json:"largeOutputThreshold,omitempty"` // Spill outputs above this size in chars (0 = disabled)
+	TruncateMode         string `json:"truncateMode,omitempty"`         // head or head_tail
 }
 
 // DefaultConcurrencyConfig returns default concurrency configuration.
@@ -73,8 +76,11 @@ func DefaultConcurrencyConfig() *ConcurrencyConfig {
 // DefaultToolOutputConfig returns default tool output truncation configuration.
 func DefaultToolOutputConfig() *ToolOutputConfig {
 	return &ToolOutputConfig{
-		MaxLines: 2000,
-		MaxBytes: 50 * 1024,
+		MaxLines:             2000,
+		MaxBytes:             50 * 1024,
+		MaxChars:             200 * 1024,
+		LargeOutputThreshold: 200 * 1024,
+		TruncateMode:         "head_tail",
 	}
 }
 

@@ -218,8 +218,11 @@ Do not include chain-of-thought or <think> tags in your output.`
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxLines: toolOutputConfig.MaxLines,
-		MaxBytes: toolOutputConfig.MaxBytes,
+		MaxLines:             toolOutputConfig.MaxLines,
+		MaxBytes:             toolOutputConfig.MaxBytes,
+		MaxChars:             toolOutputConfig.MaxChars,
+		LargeOutputThreshold: toolOutputConfig.LargeOutputThreshold,
+		TruncateMode:         toolOutputConfig.TruncateMode,
 	})
 
 	// Subscribe to all events and write them as JSON Lines

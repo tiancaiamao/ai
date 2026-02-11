@@ -249,10 +249,19 @@ Do not include chain-of-thought or <think> tags in your output.`
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxLines: toolOutputConfig.MaxLines,
-		MaxBytes: toolOutputConfig.MaxBytes,
+		MaxLines:             toolOutputConfig.MaxLines,
+		MaxBytes:             toolOutputConfig.MaxBytes,
+		MaxChars:             toolOutputConfig.MaxChars,
+		LargeOutputThreshold: toolOutputConfig.LargeOutputThreshold,
+		TruncateMode:         toolOutputConfig.TruncateMode,
 	})
-	slog.Info("Tool output truncation", "maxLines", toolOutputConfig.MaxLines, "maxBytes", toolOutputConfig.MaxBytes)
+	slog.Info("Tool output truncation",
+		"maxLines", toolOutputConfig.MaxLines,
+		"maxBytes", toolOutputConfig.MaxBytes,
+		"maxChars", toolOutputConfig.MaxChars,
+		"largeOutputThreshold", toolOutputConfig.LargeOutputThreshold,
+		"truncateMode", toolOutputConfig.TruncateMode,
+	)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

@@ -50,6 +50,15 @@ func TestLoadConfigDefaults(t *testing.T) {
 		if cfg.ToolOutput.MaxBytes != 50*1024 {
 			t.Errorf("Expected default tool output MaxBytes 51200, got %d", cfg.ToolOutput.MaxBytes)
 		}
+		if cfg.ToolOutput.MaxChars != 200*1024 {
+			t.Errorf("Expected default tool output MaxChars 204800, got %d", cfg.ToolOutput.MaxChars)
+		}
+		if cfg.ToolOutput.LargeOutputThreshold != 200*1024 {
+			t.Errorf("Expected default LargeOutputThreshold 204800, got %d", cfg.ToolOutput.LargeOutputThreshold)
+		}
+		if cfg.ToolOutput.TruncateMode != "head_tail" {
+			t.Errorf("Expected default TruncateMode head_tail, got %q", cfg.ToolOutput.TruncateMode)
+		}
 	}
 }
 
@@ -75,7 +84,10 @@ func TestLoadConfigFromFile(t *testing.T) {
 		},
 		"toolOutput": {
 			"maxLines": 500,
-			"maxBytes": 8192
+			"maxBytes": 8192,
+			"maxChars": 10000,
+			"largeOutputThreshold": 15000,
+			"truncateMode": "head"
 		},
 		"log": {
 			"level": "debug"
@@ -128,6 +140,15 @@ func TestLoadConfigFromFile(t *testing.T) {
 		}
 		if cfg.ToolOutput.MaxBytes != 8192 {
 			t.Errorf("Expected tool output MaxBytes 8192, got %d", cfg.ToolOutput.MaxBytes)
+		}
+		if cfg.ToolOutput.MaxChars != 10000 {
+			t.Errorf("Expected tool output MaxChars 10000, got %d", cfg.ToolOutput.MaxChars)
+		}
+		if cfg.ToolOutput.LargeOutputThreshold != 15000 {
+			t.Errorf("Expected tool output LargeOutputThreshold 15000, got %d", cfg.ToolOutput.LargeOutputThreshold)
+		}
+		if cfg.ToolOutput.TruncateMode != "head" {
+			t.Errorf("Expected tool output TruncateMode head, got %q", cfg.ToolOutput.TruncateMode)
 		}
 	}
 
