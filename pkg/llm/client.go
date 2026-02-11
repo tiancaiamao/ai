@@ -37,6 +37,10 @@ func StreamLLM(
 
 		debugEnabled := slog.Default().Enabled(ctx, slog.LevelDebug)
 		logChunks := debugEnabled && os.Getenv("AI_LOG_LLM_CHUNKS") == "1"
+		logRequests := debugEnabled
+		if val := strings.TrimSpace(os.Getenv("AI_LOG_LLM_REQUESTS")); val != "" {
+			logRequests = val == "1"
+		}
 
 		// Get API key from environment if not provided
 		if apiKey == "" {
@@ -75,6 +79,9 @@ func StreamLLM(
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: err})
 			return
+		}
+		if logRequests {
+			slog.Debug("[LLM] request", "model", model.ID, "provider", model.Provider, "bytes", len(jsonBody), "json", truncateLine(string(jsonBody), 65536))
 		}
 
 		// Build URL

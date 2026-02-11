@@ -122,16 +122,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
 	} else {
-		sess, sessionID, err = sessionMgr.LoadCurrent()
+		// If no session path specified, create a new session
+		name := time.Now().Format("20060102-150405")
+		sess, err = sessionMgr.CreateSession(name, name)
 		if err != nil {
-			slog.Info("Warning: Failed to load current session:", "value", err)
-			sess, sessionID, err = sessionMgr.LoadCurrent()
-			if err != nil {
-				return fmt.Errorf("failed to create default session: %w", err)
-			}
+			return fmt.Errorf("failed to create new session: %w", err)
 		}
-		sessionName = resolveSessionName(sessionMgr, sessionID)
-		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
+		sessionID = sess.GetID()
+		sessionName = name
+		if err := sessionMgr.SetCurrent(sessionID); err != nil {
+			slog.Info("Failed to save session pointer:", "value", err)
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to save session pointer:", "value", err)
+		}
+		slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
 
 	// Create tool registry and register tools
