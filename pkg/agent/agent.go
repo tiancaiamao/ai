@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,17 @@ import (
 const (
 	agentBusyTimeout = 60 * time.Second // Wait timeout for agent lock
 )
+
+var logStreamEvents = os.Getenv("AI_LOG_STREAM_EVENTS") == "1"
+
+func shouldLogAgentEvent(eventType string) bool {
+	switch eventType {
+	case EventMessageUpdate, EventTextDelta, EventThinkingDelta, EventToolCallDelta:
+		return logStreamEvents
+	default:
+		return true
+	}
+}
 
 // ErrAgentBusy is returned when the agent is already processing a request.
 var ErrAgentBusy = errors.New("agent is busy")
@@ -138,7 +150,9 @@ func (a *Agent) processPrompt(message string) {
 		}
 
 		eventCount++
-		slog.Debug("[Agent] Got event", "type", event.Value.Type)
+		if shouldLogAgentEvent(event.Value.Type) {
+			slog.Debug("[Agent] Got event", "type", event.Value.Type)
+		}
 
 		if a.metrics != nil {
 			switch event.Value.Type {

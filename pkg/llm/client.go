@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -33,6 +34,9 @@ func StreamLLM(
 
 	go func() {
 		defer stream.End(LLMMessage{})
+
+		debugEnabled := slog.Default().Enabled(ctx, slog.LevelDebug)
+		logChunks := debugEnabled && os.Getenv("AI_LOG_LLM_CHUNKS") == "1"
 
 		// Get API key from environment if not provided
 		if apiKey == "" {
@@ -64,6 +68,7 @@ func StreamLLM(
 
 		if len(llmCtx.Tools) > 0 {
 			reqBody["tools"] = llmCtx.Tools
+			reqBody["tool_choice"] = "auto"
 		}
 
 		jsonBody, err := json.Marshal(reqBody)
@@ -121,6 +126,9 @@ func StreamLLM(
 			data := strings.TrimPrefix(line, "data: ")
 			if data == "[DONE]" {
 				break
+			}
+			if logChunks {
+				slog.Debug("[LLM] stream chunk", "json", truncateLine(data, 8192), "bytes", len(data))
 			}
 
 			// Parse JSON chunk
@@ -220,4 +228,14 @@ func StreamLLM(
 	}()
 
 	return stream
+}
+
+func truncateLine(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }

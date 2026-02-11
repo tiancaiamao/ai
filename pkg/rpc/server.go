@@ -22,7 +22,7 @@ type Server struct {
 	output *bufio.Writer
 
 	// Callbacks for handling commands
-	onPrompt               func(message string) error
+	onPrompt               func(req PromptRequest) error
 	onSteer                func(message string) error
 	onFollowUp             func(message string) error
 	onAbort                func() error
@@ -36,6 +36,7 @@ type Server struct {
 	onCompact              func() (*CompactResult, error)
 	onGetAvailableModels   func() ([]ModelInfo, error)
 	onSetModel             func(provider, modelID string) (*ModelInfo, error)
+	onCycleModel           func() (*CycleModelResult, error)
 	onGetCommands          func() ([]SlashCommand, error)
 	onGetSessionStats      func() (*SessionStats, error)
 	onSetAutoCompaction    func(enabled bool) error
@@ -46,7 +47,17 @@ type Server struct {
 	onFork                 func(entryID string) (*ForkResult, error)
 	onGetTree              func() ([]TreeEntry, error)
 	onResumeOnBranch       func(entryID string) error
+	onSetSteeringMode      func(mode string) error
+	onSetFollowUpMode      func(mode string) error
+	onSetSessionName       func(name string) error
+	onSetAutoRetry         func(enabled bool) error
+	onAbortRetry           func() error
+	onBash                 func(command string) (*BashResult, error)
+	onAbortBash            func() error
+	onExportHTML           func(path string) (string, error)
 }
+
+var logStreamEvents = os.Getenv("AI_LOG_STREAM_EVENTS") == "1"
 
 // NewServer creates a new RPC server.
 func NewServer() *Server {
@@ -58,7 +69,7 @@ func NewServer() *Server {
 }
 
 // SetPromptHandler sets the handler for prompt commands.
-func (s *Server) SetPromptHandler(handler func(message string) error) {
+func (s *Server) SetPromptHandler(handler func(req PromptRequest) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onPrompt = handler
@@ -125,6 +136,13 @@ func (s *Server) SetSetModelHandler(handler func(provider, modelID string) (*Mod
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onSetModel = handler
+}
+
+// SetCycleModelHandler sets the handler for cycle_model commands.
+func (s *Server) SetCycleModelHandler(handler func() (*CycleModelResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onCycleModel = handler
 }
 
 // SetGetCommandsHandler sets the handler for get_commands commands.
@@ -195,6 +213,62 @@ func (s *Server) SetResumeOnBranchHandler(handler func(entryID string) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onResumeOnBranch = handler
+}
+
+// SetSetSteeringModeHandler sets the handler for set_steering_mode commands.
+func (s *Server) SetSetSteeringModeHandler(handler func(mode string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetSteeringMode = handler
+}
+
+// SetSetFollowUpModeHandler sets the handler for set_follow_up_mode commands.
+func (s *Server) SetSetFollowUpModeHandler(handler func(mode string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetFollowUpMode = handler
+}
+
+// SetSetSessionNameHandler sets the handler for set_session_name commands.
+func (s *Server) SetSetSessionNameHandler(handler func(name string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetSessionName = handler
+}
+
+// SetSetAutoRetryHandler sets the handler for set_auto_retry commands.
+func (s *Server) SetSetAutoRetryHandler(handler func(enabled bool) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetAutoRetry = handler
+}
+
+// SetAbortRetryHandler sets the handler for abort_retry commands.
+func (s *Server) SetAbortRetryHandler(handler func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onAbortRetry = handler
+}
+
+// SetBashHandler sets the handler for bash commands.
+func (s *Server) SetBashHandler(handler func(command string) (*BashResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onBash = handler
+}
+
+// SetAbortBashHandler sets the handler for abort_bash commands.
+func (s *Server) SetAbortBashHandler(handler func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onAbortBash = handler
+}
+
+// SetExportHTMLHandler sets the handler for export_html commands.
+func (s *Server) SetExportHTMLHandler(handler func(path string) (string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onExportHTML = handler
 }
 
 // SetNewSessionHandler sets the handler for new_session commands.
@@ -273,20 +347,30 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 			return s.errorResponse(cmd.ID, cmd.Type, "No prompt handler registered")
 		}
 
-		// Prefer direct message field, fall back to data object
-		message := cmd.Message
-		if message == "" && len(cmd.Data) > 0 {
-			var data struct {
-				Message string `json:"message"`
-			}
+		// Prefer direct message field, fall back to data object.
+		var data struct {
+			Message           string            `json:"message"`
+			StreamingBehavior string            `json:"streamingBehavior"`
+			Images            []json.RawMessage `json:"images"`
+		}
+		if len(cmd.Data) > 0 {
 			if err := json.Unmarshal(cmd.Data, &data); err != nil {
 				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
 			}
+		}
+		message := cmd.Message
+		if message == "" {
 			message = data.Message
 		}
 
+		req := PromptRequest{
+			Message:           message,
+			StreamingBehavior: data.StreamingBehavior,
+			Images:            data.Images,
+		}
+
 		// Execute prompt (already async in Agent)
-		if err := s.onPrompt(message); err != nil {
+		if err := s.onPrompt(req); err != nil {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 
@@ -475,6 +559,19 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, model)
 
+	case CommandCycleModel:
+		if s.onCycleModel == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No cycle_model handler registered")
+		}
+		result, err := s.onCycleModel()
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		if result == nil {
+			return s.successResponse(cmd.ID, cmd.Type, nil)
+		}
+		return s.successResponse(cmd.ID, cmd.Type, result)
+
 	case CommandGetCommands:
 		if s.onGetCommands == nil {
 			return s.errorResponse(cmd.ID, cmd.Type, "No get_commands handler registered")
@@ -540,6 +637,40 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"level": level})
 
+	case CommandSetSteeringMode:
+		if s.onSetSteeringMode == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_steering_mode handler registered")
+		}
+		var data struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetSteeringMode(data.Mode); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
+	case CommandSetFollowUpMode:
+		if s.onSetFollowUpMode == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_follow_up_mode handler registered")
+		}
+		var data struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetFollowUpMode(data.Mode); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
 	case CommandGetLastAssistantText:
 		if s.onGetLastAssistantText == nil {
 			return s.errorResponse(cmd.ID, cmd.Type, "No get_last_assistant_text handler registered")
@@ -578,6 +709,23 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, result)
 
+	case CommandSetSessionName:
+		if s.onSetSessionName == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_session_name handler registered")
+		}
+		var data struct {
+			Name string `json:"name"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetSessionName(data.Name); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
 	case CommandGetTree:
 		if s.onGetTree == nil {
 			return s.errorResponse(cmd.ID, cmd.Type, "No get_tree handler registered")
@@ -604,6 +752,80 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"switched": true})
+
+	case CommandSetAutoRetry:
+		if s.onSetAutoRetry == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_auto_retry handler registered")
+		}
+		var data struct {
+			Enabled bool `json:"enabled"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetAutoRetry(data.Enabled); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
+	case CommandAbortRetry:
+		if s.onAbortRetry == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No abort_retry handler registered")
+		}
+		if err := s.onAbortRetry(); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
+	case CommandBash:
+		if s.onBash == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No bash handler registered")
+		}
+		var data struct {
+			Command string `json:"command"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		result, err := s.onBash(data.Command)
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, result)
+
+	case CommandAbortBash:
+		if s.onAbortBash == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No abort_bash handler registered")
+		}
+		if err := s.onAbortBash(); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, nil)
+
+	case CommandExportHTML:
+		if s.onExportHTML == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No export_html handler registered")
+		}
+		var data struct {
+			OutputPath string `json:"outputPath"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		path, err := s.onExportHTML(data.OutputPath)
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"path": path})
+
+	case CommandPing:
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"ok": true})
 
 	default:
 		return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Unknown command: %s", cmd.Type))
@@ -684,11 +906,30 @@ func (s *Server) writeJSON(data []byte) {
 	_ = s.output.WriteByte('\n')
 	_ = s.output.Flush()
 
-	// Log all RPC JSON to file (use Info level to ensure it's written)
-	slog.Debug("[RPC] Response", "json", string(data))
+	if shouldLogRPCJSON(data) {
+		slog.Debug("[RPC] Response", "json", string(data))
+	}
 }
 
 // Context returns the server's context.
 func (s *Server) Context() context.Context {
 	return s.ctx
+}
+
+func shouldLogRPCJSON(data []byte) bool {
+	if logStreamEvents {
+		return true
+	}
+	var env struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return true
+	}
+	switch env.Type {
+	case "message_update", "text_delta", "thinking_delta", "tool_call_delta":
+		return false
+	default:
+		return true
+	}
 }

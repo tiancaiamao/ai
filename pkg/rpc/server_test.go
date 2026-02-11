@@ -27,7 +27,7 @@ func TestRPCServerCommands(t *testing.T) {
 	compactCalled := false
 
 	// Set up handlers
-	server.SetPromptHandler(func(message string) error {
+	server.SetPromptHandler(func(req PromptRequest) error {
 		promptCalled = true
 		commandCount++
 		return nil
@@ -353,7 +353,7 @@ func TestConcurrentCommands(t *testing.T) {
 	server := NewServer()
 
 	promptCount := 0
-	server.SetPromptHandler(func(message string) error {
+	server.SetPromptHandler(func(req PromptRequest) error {
 		promptCount++
 		time.Sleep(10 * time.Millisecond) // Simulate work
 		return nil
@@ -388,8 +388,8 @@ func TestCommandWithDataField(t *testing.T) {
 	server := NewServer()
 
 	var receivedMessage string
-	server.SetPromptHandler(func(message string) error {
-		receivedMessage = message
+	server.SetPromptHandler(func(req PromptRequest) error {
+		receivedMessage = req.Message
 		return nil
 	})
 
@@ -444,7 +444,7 @@ func TestErrorHandlingInHandlers(t *testing.T) {
 	server := NewServer()
 
 	// Handler that returns an error
-	server.SetPromptHandler(func(message string) error {
+	server.SetPromptHandler(func(req PromptRequest) error {
 		return context.DeadlineExceeded
 	})
 

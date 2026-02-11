@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,7 +25,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 )
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
+
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, debug bool) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -35,6 +38,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 		// Use defaults - LoadConfig already provides defaults
 		cfg, _ = config.LoadConfig(configPath)
+	}
+	if debug {
+		cfg.Log.Level = "debug"
 	}
 
 	// Initialize logger from config
@@ -171,7 +177,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create agent with skills
-	systemPrompt := "You are a helpful coding assistant."
+	systemPrompt := `You are a helpful coding assistant.
+You have access to tools: read, write, grep, bash, edit.
+When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
+Do not include chain-of-thought or <think> tags in your output.`
 	createBaseContext := func() *agent.AgentContext {
 		if len(skillResult.Skills) > 0 {
 			return agent.NewAgentContextWithSkills(systemPrompt, skillResult.Skills)
@@ -224,6 +233,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetExecutor(executor)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 
+	bashRunner := newBashRunner()
+	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
+	if bashTimeout <= 0 {
+		bashTimeout = 30 * time.Second
+	}
+
 	toolOutputConfig := cfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
@@ -247,10 +262,53 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	isCompacting := false
 	currentThinkingLevel := "high"
 	autoCompactionEnabled := compactorConfig.AutoCompact
+	steeringMode := "all"
+	followUpMode := "one-at-a-time"
+	pendingSteer := false
 
 	// Set up handlers
-	server.SetPromptHandler(func(message string) error {
-		slog.Info("Received prompt:", "value", message)
+	server.SetPromptHandler(func(req rpc.PromptRequest) error {
+		slog.Info("Received prompt:", "value", req.Message)
+		message := strings.TrimSpace(req.Message)
+		if message == "" {
+			return fmt.Errorf("empty prompt message")
+		}
+		if len(req.Images) > 0 {
+			return fmt.Errorf("images are not supported in this RPC implementation")
+		}
+
+		stateMu.Lock()
+		streaming := isStreaming
+		mode := steeringMode
+		followMode := followUpMode
+		pending := pendingSteer
+		stateMu.Unlock()
+
+		if streaming {
+			behavior := strings.TrimSpace(req.StreamingBehavior)
+			if behavior == "" {
+				return fmt.Errorf("agent is streaming; specify streamingBehavior")
+			}
+			switch behavior {
+			case "steer":
+				if mode == "one-at-a-time" && pending {
+					return fmt.Errorf("steer already pending")
+				}
+				stateMu.Lock()
+				pendingSteer = true
+				stateMu.Unlock()
+				ag.Steer(message)
+				return nil
+			case "followUp", "follow_up":
+				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
+					return fmt.Errorf("follow-up queue already has a pending message")
+				}
+				return ag.FollowUp(message)
+			default:
+				return fmt.Errorf("invalid streamingBehavior: %s", behavior)
+			}
+		}
+
 		return ag.Prompt(message)
 	})
 
@@ -259,6 +317,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
+		stateMu.Lock()
+		mode := steeringMode
+		pending := pendingSteer
+		stateMu.Unlock()
+		if mode == "one-at-a-time" && pending {
+			return fmt.Errorf("steer already pending")
+		}
+		stateMu.Lock()
+		pendingSteer = true
+		stateMu.Unlock()
 		ag.Steer(message)
 		return nil
 	})
@@ -267,6 +335,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Received follow_up:", "value", message)
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty follow-up message")
+		}
+		stateMu.Lock()
+		mode := followUpMode
+		stateMu.Unlock()
+		if mode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
+			return fmt.Errorf("follow-up queue already has a pending message")
 		}
 		return ag.FollowUp(message)
 	})
@@ -413,6 +487,27 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return sessionMgr.DeleteSession(id)
 	})
 
+	server.SetSetSessionNameHandler(func(name string) error {
+		slog.Info("Received set_session_name", "name", name)
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return fmt.Errorf("session name cannot be empty")
+		}
+		if _, err := sess.AppendSessionInfo(trimmed, ""); err != nil {
+			return err
+		}
+		if err := sessionMgr.UpdateSessionName(sessionID, trimmed, ""); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to save session pointer:", "value", err)
+		}
+		stateMu.Lock()
+		sessionName = trimmed
+		stateMu.Unlock()
+		return nil
+	})
+
 	server.SetGetStateHandler(func() (*rpc.SessionState, error) {
 		slog.Info("Received get_state")
 		compactionState := buildCompactionState(compactorConfig, compactor)
@@ -423,6 +518,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compacting := isCompacting
 		thinkingLevel := currentThinkingLevel
 		autoCompact := autoCompactionEnabled
+		currentSteeringMode := steeringMode
+		currentFollowUpMode := followUpMode
 		modelInfo := currentModelInfo
 		stateMu.Unlock()
 
@@ -431,8 +528,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			ThinkingLevel:         thinkingLevel,
 			IsStreaming:           streaming,
 			IsCompacting:          compacting,
-			SteeringMode:          "off",
-			FollowUpMode:          "queue",
+			SteeringMode:          currentSteeringMode,
+			FollowUpMode:          currentFollowUpMode,
 			SessionFile:           sess.GetPath(),
 			SessionID:             currentSessionID,
 			SessionName:           currentSessionName,
@@ -560,6 +657,76 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return &info, nil
 	})
 
+	server.SetCycleModelHandler(func() (*rpc.CycleModelResult, error) {
+		slog.Info("Received cycle_model")
+		specs, modelsPath, err := loadModelSpecs(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+		}
+		filtered := filterModelSpecsWithKeys(specs)
+		if len(filtered) == 0 {
+			authPath, _ := config.GetDefaultAuthPath()
+			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+		}
+		if len(filtered) == 1 {
+			return nil, nil
+		}
+
+		index := -1
+		for i, spec := range filtered {
+			if spec.Provider == model.Provider && spec.ID == model.ID {
+				index = i
+				break
+			}
+		}
+		next := filtered[0]
+		if index >= 0 {
+			next = filtered[(index+1)%len(filtered)]
+		}
+
+		newAPIKey, err := config.ResolveAPIKey(next.Provider)
+		if err != nil {
+			return nil, err
+		}
+
+		model = llm.Model{
+			ID:       next.ID,
+			Provider: next.Provider,
+			BaseURL:  next.BaseURL,
+			API:      next.API,
+		}
+		apiKey = newAPIKey
+
+		cfg.Model.ID = next.ID
+		cfg.Model.Provider = next.Provider
+		cfg.Model.BaseURL = next.BaseURL
+		cfg.Model.API = next.API
+
+		ag.SetModel(model)
+		ag.SetAPIKey(apiKey)
+
+		// Recreate compactor with new model
+		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, next.ContextWindow)
+		sessionComp.Update(sess, compactor)
+		ag.SetCompactor(sessionComp)
+
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
+
+		info := modelInfoFromSpec(next)
+		stateMu.Lock()
+		currentModelInfo = info
+		currentContextWindow = next.ContextWindow
+		stateMu.Unlock()
+
+		return &rpc.CycleModelResult{
+			Model:         info,
+			ThinkingLevel: currentThinkingLevel,
+			IsScoped:      false,
+		}, nil
+	})
+
 	skillCommands := buildSkillCommands(skillResult.Skills)
 	server.SetGetCommandsHandler(func() ([]rpc.SlashCommand, error) {
 		slog.Info("Received get_commands")
@@ -586,11 +753,69 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
+	server.SetBashHandler(func(command string) (*rpc.BashResult, error) {
+		slog.Info("Received bash")
+		return bashRunner.Run(cwd, command, bashTimeout)
+	})
+
+	server.SetAbortBashHandler(func() error {
+		slog.Info("Received abort_bash")
+		return bashRunner.Abort()
+	})
+
+	server.SetSetAutoRetryHandler(func(enabled bool) error {
+		slog.Info("Received set_auto_retry", "enabled", enabled)
+		return fmt.Errorf("auto-retry is not supported")
+	})
+
+	server.SetAbortRetryHandler(func() error {
+		slog.Info("Received abort_retry")
+		return fmt.Errorf("auto-retry is not supported")
+	})
+
+	server.SetExportHTMLHandler(func(outputPath string) (string, error) {
+		slog.Info("Received export_html", "outputPath", outputPath)
+		return "", fmt.Errorf("export_html is not supported")
+	})
+
 	server.SetSetAutoCompactionHandler(func(enabled bool) error {
 		slog.Info("Received set_auto_compaction: enabled=", "value", enabled)
 		compactorConfig.AutoCompact = enabled
 		stateMu.Lock()
 		autoCompactionEnabled = enabled
+		stateMu.Unlock()
+		return nil
+	})
+
+	validSteeringModes := map[string]bool{
+		"all":           true,
+		"one-at-a-time": true,
+	}
+	validFollowUpModes := map[string]bool{
+		"all":           true,
+		"one-at-a-time": true,
+	}
+
+	server.SetSetSteeringModeHandler(func(mode string) error {
+		slog.Info("Received set_steering_mode", "mode", mode)
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if !validSteeringModes[mode] {
+			return fmt.Errorf("invalid steering mode")
+		}
+		stateMu.Lock()
+		steeringMode = mode
+		stateMu.Unlock()
+		return nil
+	})
+
+	server.SetSetFollowUpModeHandler(func(mode string) error {
+		slog.Info("Received set_follow_up_mode", "mode", mode)
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if !validFollowUpModes[mode] {
+			return fmt.Errorf("invalid follow-up mode")
+		}
+		stateMu.Lock()
+		followUpMode = mode
 		stateMu.Unlock()
 		return nil
 	})
@@ -757,6 +982,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					stateMu.Lock()
 					isStreaming = false
 					isCompacting = false
+					pendingSteer = false
 					stateMu.Unlock()
 				}
 				if event.Type == "compaction_start" {
@@ -811,6 +1037,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 							stateMu.Lock()
 							isStreaming = false
 							isCompacting = false
+							pendingSteer = false
 							stateMu.Unlock()
 						}
 						if event.Type == "compaction_start" {
@@ -918,3 +1145,84 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	return runErr
 }
 
+type bashRunner struct {
+	mu      sync.Mutex
+	running bool
+	cancel  context.CancelFunc
+}
+
+func newBashRunner() *bashRunner {
+	return &bashRunner{}
+}
+
+func (b *bashRunner) Run(cwd, command string, timeout time.Duration) (*rpc.BashResult, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+
+	b.mu.Lock()
+	if b.running {
+		b.mu.Unlock()
+		return nil, fmt.Errorf("bash already running")
+	}
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	b.running = true
+	b.cancel = cancel
+	b.mu.Unlock()
+
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Dir = cwd
+	output, err := cmd.CombinedOutput()
+	ctxErr := ctx.Err()
+
+	b.mu.Lock()
+	b.running = false
+	b.cancel = nil
+	b.mu.Unlock()
+	cancel()
+
+	result := &rpc.BashResult{
+		Output: string(output),
+	}
+	if ctxErr == context.DeadlineExceeded {
+		result.ExitCode = -1
+		result.Error = "command timed out"
+		return result, nil
+	}
+	if ctxErr == context.Canceled {
+		result.ExitCode = -1
+		result.Error = "command cancelled"
+		return result, nil
+	}
+	if err != nil {
+		result.Error = err.Error()
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = -1
+		}
+		return result, nil
+	}
+	result.ExitCode = 0
+	return result, nil
+}
+
+func (b *bashRunner) Abort() error {
+	b.mu.Lock()
+	cancel := b.cancel
+	running := b.running
+	b.mu.Unlock()
+	if !running || cancel == nil {
+		return fmt.Errorf("no bash command running")
+	}
+	cancel()
+	return nil
+}

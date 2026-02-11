@@ -54,7 +54,7 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 
 	go func() {
 		defer rpcOutWriter.Close()
-		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
+		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter, debug); err != nil {
 			slog.Error("rpc error", "error", err)
 		}
 	}()

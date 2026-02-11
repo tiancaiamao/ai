@@ -396,6 +396,10 @@ func streamAssistantResponse(
 				TotalTokens:  e.Usage.TotalTokens,
 			}
 
+			if updated, ok := injectToolCallsFromTaggedText(finalMessage); ok {
+				finalMessage = updated
+			}
+
 			stream.Push(NewMessageEndEvent(finalMessage))
 			return &finalMessage, nil
 
@@ -425,12 +429,24 @@ func executeToolCalls(
 	results := make([]AgentMessage, 0, len(toolCalls))
 
 	for _, tc := range toolCalls {
-		stream.Push(NewToolExecutionStartEvent(tc.ID, tc.Name, tc.Arguments))
+		normalized := normalizeToolCall(tc)
+		args, argErr := coerceToolArguments(normalized.Name, normalized.Arguments)
+		if argErr != nil {
+			result := NewToolResultMessage(normalized.ID, normalized.Name, []ContentBlock{
+				TextContent{Type: "text", Text: fmt.Sprintf("Invalid tool arguments: %v", argErr)},
+			}, true)
+			results = append(results, result)
+			stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
+			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			continue
+		}
+		normalized.Arguments = args
+		stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
 
 		// Find tool
 		var tool Tool
 		for _, t := range tools {
-			if t.Name() == tc.Name {
+			if t.Name() == normalized.Name {
 				tool = t
 				break
 			}
@@ -438,14 +454,14 @@ func executeToolCalls(
 
 		if tool == nil {
 			if metrics != nil {
-				metrics.RecordToolExecution(tc.Name, 0, fmt.Errorf("tool not found"), 0)
+				metrics.RecordToolExecution(normalized.Name, 0, fmt.Errorf("tool not found"), 0)
 			}
 			content := truncateToolContent([]ContentBlock{
 				TextContent{Type: "text", Text: "Tool not found"},
 			}, toolOutputLimits)
-			result := NewToolResultMessage(tc.ID, tc.Name, content, true)
+			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			results = append(results, result)
-			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
+			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			continue
 		}
 
@@ -455,27 +471,27 @@ func executeToolCalls(
 
 		start := time.Now()
 		if executor != nil {
-			content, err = executor.Execute(ctx, tool, tc.Arguments)
+			content, err = executor.Execute(ctx, tool, normalized.Arguments)
 		} else {
 			// Fallback to direct execution
-			content, err = tool.Execute(ctx, tc.Arguments)
+			content, err = tool.Execute(ctx, normalized.Arguments)
 		}
 		if metrics != nil {
-			metrics.RecordToolExecution(tc.Name, time.Since(start), err, 0)
+			metrics.RecordToolExecution(normalized.Name, time.Since(start), err, 0)
 		}
 
 		if err != nil {
 			content := truncateToolContent([]ContentBlock{
 				TextContent{Type: "text", Text: err.Error()},
 			}, toolOutputLimits)
-			result := NewToolResultMessage(tc.ID, tc.Name, content, true)
+			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			results = append(results, result)
-			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, true))
+			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 		} else {
 			content = truncateToolContent(content, toolOutputLimits)
-			result := NewToolResultMessage(tc.ID, tc.Name, content, false)
+			result := NewToolResultMessage(normalized.ID, normalized.Name, content, false)
 			results = append(results, result)
-			stream.Push(NewToolExecutionEndEvent(tc.ID, tc.Name, &result, false))
+			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, false))
 		}
 	}
 

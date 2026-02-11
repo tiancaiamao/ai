@@ -10,6 +10,13 @@ type RPCCommand struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+// PromptRequest captures prompt fields beyond the message body.
+type PromptRequest struct {
+	Message           string            `json:"message"`
+	StreamingBehavior string            `json:"streamingBehavior,omitempty"`
+	Images            []json.RawMessage `json:"images,omitempty"`
+}
+
 // RPCResponse represents a response sent to stdout.
 type RPCResponse struct {
 	ID      string `json:"id,omitempty"`
@@ -36,6 +43,7 @@ const (
 	CommandCompact              = "compact"
 	CommandGetAvailableModels   = "get_available_models"
 	CommandSetModel             = "set_model"
+	CommandCycleModel           = "cycle_model"
 	CommandGetCommands          = "get_commands"
 	CommandGetSessionStats      = "get_session_stats"
 	CommandSetAutoCompaction    = "set_auto_compaction"
@@ -46,6 +54,14 @@ const (
 	CommandFork                 = "fork"
 	CommandGetTree              = "get_tree"
 	CommandResumeOnBranch       = "resume_on_branch"
+	CommandSetSteeringMode      = "set_steering_mode"
+	CommandSetFollowUpMode      = "set_follow_up_mode"
+	CommandSetSessionName       = "set_session_name"
+	CommandSetAutoRetry         = "set_auto_retry"
+	CommandAbortRetry           = "abort_retry"
+	CommandBash                 = "bash"
+	CommandAbortBash            = "abort_bash"
+	CommandExportHTML           = "export_html"
 	CommandPing                 = "ping"
 )
 
@@ -146,6 +162,21 @@ type TreeEntry struct {
 type ForkResult struct {
 	Cancelled bool   `json:"cancelled"`
 	Text      string `json:"text,omitempty"`
+}
+
+// CycleModelResult represents a cycle_model response payload.
+type CycleModelResult struct {
+	Model          ModelInfo `json:"model"`
+	ThinkingLevel  string    `json:"thinkingLevel,omitempty"`
+	IsScoped       bool      `json:"isScoped,omitempty"`
+	ScopedProvider string    `json:"scopedProvider,omitempty"`
+}
+
+// BashResult represents a shell execution result.
+type BashResult struct {
+	ExitCode int    `json:"exitCode"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
 }
 
 // CompactResult represents the result of a compaction operation.

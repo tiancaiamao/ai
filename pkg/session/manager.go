@@ -295,6 +295,31 @@ func (sm *SessionManager) SaveCurrent() error {
 	return nil
 }
 
+// UpdateSessionName updates the session name/title metadata.
+func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+	meta, err := sm.GetMeta(id)
+	if err != nil {
+		return err
+	}
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return fmt.Errorf("session name cannot be empty")
+	}
+	meta.Name = trimmedName
+	trimmedTitle := strings.TrimSpace(title)
+	if trimmedTitle != "" {
+		meta.Title = trimmedTitle
+	} else if strings.TrimSpace(meta.Title) == "" {
+		meta.Title = trimmedName
+	}
+	meta.UpdatedAt = time.Now()
+	return sm.saveMeta(id, meta)
+}
+
 // getSessionPath returns the session file path for a given ID.
 func (sm *SessionManager) getSessionPath(id string) string {
 	return filepath.Join(sm.sessionsDir, id+".jsonl")
