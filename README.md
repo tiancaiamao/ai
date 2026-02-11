@@ -56,8 +56,8 @@ echo '{"type":"get_messages"}' | ./bin/ai --mode rpc
 - 基础交互：`prompt`, `steer`, `follow_up`, `abort`
 - 会话：`new_session`, `switch_session`, `delete_session`, `list_sessions`, `clear_session`
 - 状态与统计：`get_state`, `get_messages`, `get_session_stats`, `get_last_assistant_text`
-- 模型：`get_available_models`, `set_model`
-- 压缩与思考级别：`compact`, `set_auto_compaction`, `set_thinking_level`, `cycle_thinking_level`
+- 模型：`get_available_models`, `set_model`, `cycle_model`
+- 压缩与思考级别：`compact`, `set_auto_compaction`, `set_tool_call_cutoff`, `set_tool_summary_strategy`, `set_thinking_level`, `cycle_thinking_level`
 - 分叉：`get_fork_messages`, `fork`
 - 命令列表：`get_commands`（当前返回已加载的 skills）
 

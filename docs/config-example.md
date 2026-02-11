@@ -24,11 +24,17 @@ The default configuration file is located at:
     "maxTokens": 8000,
     "keepRecent": 5,
     "keepRecentTokens": 20000,
+    "reserveTokens": 16384,
+    "toolCallCutoff": 10,
+    "toolSummaryStrategy": "llm",
     "autoCompact": true
   },
   "toolOutput": {
     "maxLines": 2000,
-    "maxBytes": 51200
+    "maxBytes": 51200,
+    "maxChars": 204800,
+    "largeOutputThreshold": 204800,
+    "truncateMode": "head_tail"
   },
   "concurrency": {
     "maxConcurrentTools": 3,
@@ -56,6 +62,9 @@ The default configuration file is located at:
 - `maxTokens` (int): Approximate token limit before auto-compaction (default: 8000)
 - `keepRecent` (int): Number of recent messages to keep uncompressed (default: 5)
 - `keepRecentTokens` (int): Token budget to keep from the most recent messages (default: 20000)
+- `reserveTokens` (int): Reserved response tokens used when calculating effective token limit from model context window (default: 16384)
+- `toolCallCutoff` (int): Maximum number of agent-visible tool result messages before oldest outputs are summarized (default: 10; `0` disables this behavior)
+- `toolSummaryStrategy` (string): Strategy for tool-output summarization: `llm`, `heuristic`, `off` (default: `llm`)
 - `autoCompact` (bool): Enable/disable automatic compression (default: true)
 
 When `keepRecentTokens` is set to a positive value, compaction keeps recent context by token budget and `keepRecent` is used only as a fallback.
@@ -63,6 +72,9 @@ When `keepRecentTokens` is set to a positive value, compaction keeps recent cont
 #### toolOutput
 - `maxLines` (int): Maximum lines to keep in tool output (default: 2000)
 - `maxBytes` (int): Maximum bytes to keep in tool output (default: 51200)
+- `maxChars` (int): Maximum runes to keep in tool output (default: 204800)
+- `largeOutputThreshold` (int): Spill very large tool output to temp files above this rune threshold (default: 204800)
+- `truncateMode` (string): Truncation mode: `head` or `head_tail` (default: `head_tail`)
 
 #### concurrency
 - `maxConcurrentTools` (int): Maximum number of tools running concurrently (default: 3)
@@ -122,11 +134,17 @@ If no configuration file exists, the following defaults are used:
     "maxTokens": 8000,
     "keepRecent": 5,
     "keepRecentTokens": 20000,
+    "reserveTokens": 16384,
+    "toolCallCutoff": 10,
+    "toolSummaryStrategy": "llm",
     "autoCompact": true
   },
   "toolOutput": {
     "maxLines": 2000,
-    "maxBytes": 51200
+    "maxBytes": 51200,
+    "maxChars": 204800,
+    "largeOutputThreshold": 204800,
+    "truncateMode": "head_tail"
   },
   "concurrency": {
     "maxConcurrentTools": 3,
@@ -159,7 +177,18 @@ cat > ~/.ai/config.json <<'EOF'
     "maxMessages": 50,
     "maxTokens": 8000,
     "keepRecent": 5,
+    "keepRecentTokens": 20000,
+    "reserveTokens": 16384,
+    "toolCallCutoff": 10,
+    "toolSummaryStrategy": "llm",
     "autoCompact": true
+  },
+  "toolOutput": {
+    "maxLines": 2000,
+    "maxBytes": 51200,
+    "maxChars": 204800,
+    "largeOutputThreshold": 204800,
+    "truncateMode": "head_tail"
   },
   "concurrency": {
     "maxConcurrentTools": 3,
