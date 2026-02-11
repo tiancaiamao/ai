@@ -1,0 +1,92 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/llm"
+)
+
+func TestMaybeSummarizeToolResultsAboveCutoff(t *testing.T) {
+	orig := summarizeToolResultFn
+	defer func() { summarizeToolResultFn = orig }()
+
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, result AgentMessage) (string, error) {
+		return "summary for " + result.ToolName, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = []AgentMessage{
+		NewUserMessage("start"),
+		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "first"}}, false),
+		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "second"}}, false),
+	}
+
+	cfg := &LoopConfig{ToolCallCutoff: 1}
+	maybeSummarizeToolResults(context.Background(), agentCtx, cfg)
+
+	if got := countVisibleToolResults(agentCtx.Messages); got != 1 {
+		t.Fatalf("expected 1 visible tool result, got %d", got)
+	}
+
+	archived := agentCtx.Messages[1]
+	if archived.IsAgentVisible() {
+		t.Fatal("expected oldest tool result to be archived from agent-visible context")
+	}
+	if archived.Metadata == nil || archived.Metadata.Kind != "tool_result_archived" {
+		t.Fatalf("expected archived kind, got %+v", archived.Metadata)
+	}
+
+	last := agentCtx.Messages[len(agentCtx.Messages)-1]
+	if last.Metadata == nil || last.Metadata.Kind != "tool_summary" {
+		t.Fatalf("expected tool_summary message, got %+v", last.Metadata)
+	}
+	if !last.IsAgentVisible() || last.IsUserVisible() {
+		t.Fatal("expected tool_summary to be agent-visible and user-hidden")
+	}
+	if !strings.Contains(last.ExtractText(), "summary for read") {
+		t.Fatalf("expected generated summary text, got %q", last.ExtractText())
+	}
+}
+
+func TestMaybeSummarizeToolResultsCutoffDisabled(t *testing.T) {
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = []AgentMessage{
+		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "one"}}, false),
+		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "two"}}, false),
+	}
+
+	before := len(agentCtx.Messages)
+	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{ToolCallCutoff: 0})
+
+	if len(agentCtx.Messages) != before {
+		t.Fatalf("expected no mutation when cutoff=0, before=%d after=%d", before, len(agentCtx.Messages))
+	}
+	if got := countVisibleToolResults(agentCtx.Messages); got != 2 {
+		t.Fatalf("expected all tool results visible, got %d", got)
+	}
+}
+
+func TestMaybeSummarizeToolResultsFallbackOnError(t *testing.T) {
+	orig := summarizeToolResultFn
+	defer func() { summarizeToolResultFn = orig }()
+
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ AgentMessage) (string, error) {
+		return "", errors.New("summary failed")
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = []AgentMessage{
+		NewToolResultMessage("call-1", "bash", []ContentBlock{TextContent{Type: "text", Text: "line1\nline2"}}, true),
+		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "line3"}}, false),
+	}
+
+	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{ToolCallCutoff: 1})
+
+	last := agentCtx.Messages[len(agentCtx.Messages)-1]
+	if !strings.Contains(last.ExtractText(), "Tool \"bash\" finished with status error") {
+		t.Fatalf("expected fallback summary content, got %q", last.ExtractText())
+	}
+}

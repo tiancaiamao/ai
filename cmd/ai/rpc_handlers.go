@@ -222,6 +222,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 		writer:    sessionWriter,
 	}
 	ag.SetCompactor(sessionComp)
+	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	// Set up executor with concurrency control

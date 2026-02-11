@@ -26,11 +26,13 @@ type LoopConfig struct {
 	Metrics        *Metrics      // Metrics collector
 	ToolOutput     ToolOutputLimits
 	Compactor      Compactor     // Optional compactor for context-length recovery
+	ToolCallCutoff int           // Summarize oldest tool outputs when visible tool results exceed this
 	MaxLLMRetries  int           // Maximum number of retries for LLM calls
 	RetryBaseDelay time.Duration // Base delay for exponential backoff
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
+var summarizeToolResultFn = summarizeToolResultWithLLM
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -152,6 +154,7 @@ func runInnerLoop(
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
 			}
+			maybeSummarizeToolResults(ctx, agentCtx, config)
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))

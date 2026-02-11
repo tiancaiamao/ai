@@ -195,6 +195,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 		writer:    sessionWriter,
 	}
 	ag.SetCompactor(sessionComp)
+	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

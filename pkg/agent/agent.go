@@ -40,22 +40,23 @@ type Compactor interface {
 
 // Agent represents an AI agent.
 type Agent struct {
-	mu            chan struct{}
-	model         llm.Model
-	apiKey        string
-	systemPrompt  string
-	context       *AgentContext
-	eventChan     chan AgentEvent
-	currentStream *llm.EventStream[AgentEvent, []AgentMessage]
-	streamMu      sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	compactor     Compactor     // Optional compactor for automatic context compression
-	followUpQueue chan string   // Queue for follow-up messages
-	executor      *ExecutorPool // Tool executor with concurrency control
-	metrics       *Metrics      // Performance and usage metrics
-	toolOutput    ToolOutputLimits
+	mu             chan struct{}
+	model          llm.Model
+	apiKey         string
+	systemPrompt   string
+	context        *AgentContext
+	eventChan      chan AgentEvent
+	currentStream  *llm.EventStream[AgentEvent, []AgentMessage]
+	streamMu       sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	compactor      Compactor     // Optional compactor for automatic context compression
+	followUpQueue  chan string   // Queue for follow-up messages
+	executor       *ExecutorPool // Tool executor with concurrency control
+	metrics        *Metrics      // Performance and usage metrics
+	toolOutput     ToolOutputLimits
+	toolCallCutoff int
 }
 
 // NewAgent creates a new agent.
@@ -68,18 +69,19 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Agent{
-		mu:            make(chan struct{}, 1),
-		model:         model,
-		apiKey:        apiKey,
-		systemPrompt:  agentCtx.SystemPrompt,
-		context:       agentCtx,
-		eventChan:     make(chan AgentEvent, 100),
-		ctx:           ctx,
-		cancel:        cancel,
-		followUpQueue: make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:      NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
-		metrics:       NewMetrics(),
-		toolOutput:    DefaultToolOutputLimits(),
+		mu:             make(chan struct{}, 1),
+		model:          model,
+		apiKey:         apiKey,
+		systemPrompt:   agentCtx.SystemPrompt,
+		context:        agentCtx,
+		eventChan:      make(chan AgentEvent, 100),
+		ctx:            ctx,
+		cancel:         cancel,
+		followUpQueue:  make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
+		executor:       NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
+		metrics:        NewMetrics(),
+		toolOutput:     DefaultToolOutputLimits(),
+		toolCallCutoff: 10,
 	}
 }
 
@@ -128,12 +130,13 @@ func (a *Agent) processPrompt(message string) {
 	prompts := []AgentMessage{NewUserMessage(message)}
 
 	config := &LoopConfig{
-		Model:      a.model,
-		APIKey:     a.apiKey,
-		Executor:   a.executor,
-		Metrics:    a.metrics,
-		ToolOutput: a.toolOutput,
-		Compactor:  a.compactor,
+		Model:          a.model,
+		APIKey:         a.apiKey,
+		Executor:       a.executor,
+		Metrics:        a.metrics,
+		ToolOutput:     a.toolOutput,
+		Compactor:      a.compactor,
+		ToolCallCutoff: a.toolCallCutoff,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -339,6 +342,14 @@ func (a *Agent) GetExecutor() *ExecutorPool {
 // SetToolOutputLimits sets truncation limits for tool output.
 func (a *Agent) SetToolOutputLimits(limits ToolOutputLimits) {
 	a.toolOutput = limits
+}
+
+// SetToolCallCutoff sets threshold for automatic tool output summarization.
+func (a *Agent) SetToolCallCutoff(cutoff int) {
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	a.toolCallCutoff = cutoff
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

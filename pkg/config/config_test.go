@@ -403,6 +403,9 @@ func TestCompactorDefaults(t *testing.T) {
 	if compactorConfig.ReserveTokens != 16384 {
 		t.Errorf("Expected ReserveTokens 16384, got %d", compactorConfig.ReserveTokens)
 	}
+	if compactorConfig.ToolCallCutoff != 10 {
+		t.Errorf("Expected ToolCallCutoff 10, got %d", compactorConfig.ToolCallCutoff)
+	}
 
 	if !compactorConfig.AutoCompact {
 		t.Error("Expected AutoCompact to be true")
