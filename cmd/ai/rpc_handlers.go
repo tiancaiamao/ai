@@ -283,6 +283,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 	steeringMode := "all"
 	followUpMode := "one-at-a-time"
 	pendingSteer := false
+	ag.SetThinkingLevel(currentThinkingLevel)
 
 	// Set up handlers
 	server.SetPromptHandler(func(req rpc.PromptRequest) error {
@@ -889,6 +890,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 		stateMu.Lock()
 		currentThinkingLevel = level
 		stateMu.Unlock()
+		ag.SetThinkingLevel(level)
 		return level, nil
 	})
 
@@ -908,6 +910,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 		stateMu.Lock()
 		currentThinkingLevel = next
 		stateMu.Unlock()
+		ag.SetThinkingLevel(next)
 		return next, nil
 	})
 

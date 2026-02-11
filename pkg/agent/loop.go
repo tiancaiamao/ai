@@ -28,12 +28,43 @@ type LoopConfig struct {
 	Compactor           Compactor     // Optional compactor for context-length recovery
 	ToolCallCutoff      int           // Summarize oldest tool outputs when visible tool results exceed this
 	ToolSummaryStrategy string        // llm, heuristic, off
+	ThinkingLevel       string        // off, minimal, low, medium, high, xhigh
 	MaxLLMRetries       int           // Maximum number of retries for LLM calls
 	RetryBaseDelay      time.Duration // Base delay for exponential backoff
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
 var summarizeToolResultFn = summarizeToolResultWithLLM
+
+func normalizeThinkingLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "off", "minimal", "low", "medium", "high", "xhigh":
+		return strings.ToLower(strings.TrimSpace(level))
+	case "":
+		return "high"
+	default:
+		return "high"
+	}
+}
+
+func thinkingInstruction(level string) string {
+	switch normalizeThinkingLevel(level) {
+	case "off":
+		return "Thinking level is off. Do not emit reasoning/thinking content. Respond directly with concise results and tool calls when needed."
+	case "minimal":
+		return "Thinking level is minimal. Keep reasoning very brief and only include what is strictly necessary."
+	case "low":
+		return "Thinking level is low. Keep reasoning concise and focused."
+	case "medium":
+		return "Thinking level is medium. Use balanced reasoning depth."
+	case "high":
+		return "Thinking level is high. Use thorough reasoning where needed."
+	case "xhigh":
+		return "Thinking level is xhigh. Use very thorough reasoning before final answers and tool calls."
+	default:
+		return ""
+	}
+}
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -231,6 +262,8 @@ func streamAssistantResponse(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) (*AgentMessage, error) {
+	thinkingLevel := normalizeThinkingLevel(config.ThinkingLevel)
+
 	// Create timeout context for LLM calls
 	llmTimeout := 120 * time.Second
 	llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
@@ -245,8 +278,16 @@ func streamAssistantResponse(
 	llmTools := ConvertToolsToLLM(agentCtx.Tools)
 
 	// Build LLM context
+	systemPrompt := agentCtx.SystemPrompt
+	if instruction := thinkingInstruction(thinkingLevel); instruction != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = instruction
+		} else {
+			systemPrompt = systemPrompt + "\n\n" + instruction
+		}
+	}
 	llmCtxParams := llm.LLMContext{
-		SystemPrompt: agentCtx.SystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     llmMessages,
 		Tools:        llmTools,
 	}
@@ -351,6 +392,9 @@ func streamAssistantResponse(
 
 		case llm.LLMThinkingDeltaEvent:
 			if partialMessage != nil {
+				if thinkingLevel == "off" {
+					break
+				}
 				if !firstTokenRecorded {
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)

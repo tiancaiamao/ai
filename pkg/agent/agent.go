@@ -58,6 +58,7 @@ type Agent struct {
 	toolOutput      ToolOutputLimits
 	toolCallCutoff  int
 	toolSummaryMode string
+	thinkingLevel   string
 }
 
 // NewAgent creates a new agent.
@@ -84,6 +85,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		toolOutput:      DefaultToolOutputLimits(),
 		toolCallCutoff:  10,
 		toolSummaryMode: "llm",
+		thinkingLevel:   "high",
 	}
 }
 
@@ -140,6 +142,7 @@ func (a *Agent) processPrompt(message string) {
 		Compactor:           a.compactor,
 		ToolCallCutoff:      a.toolCallCutoff,
 		ToolSummaryStrategy: a.toolSummaryMode,
+		ThinkingLevel:       a.thinkingLevel,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -359,6 +362,12 @@ func (a *Agent) SetToolCallCutoff(cutoff int) {
 // Accepted values: llm, heuristic, off.
 func (a *Agent) SetToolSummaryStrategy(strategy string) {
 	a.toolSummaryMode = normalizeToolSummaryStrategy(strategy)
+}
+
+// SetThinkingLevel controls reasoning depth instructions sent to the model.
+// Accepted values: off, minimal, low, medium, high, xhigh.
+func (a *Agent) SetThinkingLevel(level string) {
+	a.thinkingLevel = normalizeThinkingLevel(level)
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.
