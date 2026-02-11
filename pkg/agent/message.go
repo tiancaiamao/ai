@@ -66,12 +66,21 @@ type Cost struct {
 	Total      float64 `json:"total"`
 }
 
+// MessageMetadata controls visibility and routing hints for a message.
+type MessageMetadata struct {
+	AgentVisible *bool    `json:"agentVisible,omitempty"`
+	UserVisible  *bool    `json:"userVisible,omitempty"`
+	Priority     *float64 `json:"priority,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
+}
+
 // AgentMessage represents a message in the conversation.
 type AgentMessage struct {
 	// Common fields
-	Role      string         `json:"role"` // "user", "assistant", "toolResult"
-	Content   []ContentBlock `json:"content"`
-	Timestamp int64          `json:"timestamp"`
+	Role      string           `json:"role"` // "user", "assistant", "toolResult"
+	Content   []ContentBlock   `json:"content"`
+	Timestamp int64            `json:"timestamp"`
+	Metadata  *MessageMetadata `json:"metadata,omitempty"`
 
 	// AssistantMessage fields
 	API        string `json:"api,omitempty"`
@@ -92,6 +101,7 @@ func NewUserMessage(text string) AgentMessage {
 		Role:      "user",
 		Content:   []ContentBlock{TextContent{Type: "text", Text: text}},
 		Timestamp: time.Now().UnixMilli(),
+		Metadata:  &MessageMetadata{Kind: "user"},
 	}
 }
 
@@ -101,6 +111,7 @@ func NewAssistantMessage() AgentMessage {
 		Role:      "assistant",
 		Content:   []ContentBlock{},
 		Timestamp: time.Now().UnixMilli(),
+		Metadata:  &MessageMetadata{Kind: "assistant"},
 	}
 }
 
@@ -113,6 +124,7 @@ func NewToolResultMessage(toolCallID, toolName string, content []ContentBlock, i
 		ToolCallID: toolCallID,
 		ToolName:   toolName,
 		IsError:    isError,
+		Metadata:   &MessageMetadata{Kind: "tool_result"},
 	}
 }
 
@@ -149,6 +161,50 @@ func (m *AgentMessage) ExtractToolCalls() []ToolCallContent {
 	return calls
 }
 
+// IsAgentVisible returns true if the message should be sent to the model.
+func (m AgentMessage) IsAgentVisible() bool {
+	if m.Metadata == nil || m.Metadata.AgentVisible == nil {
+		return true
+	}
+	return *m.Metadata.AgentVisible
+}
+
+// IsUserVisible returns true if the message should be shown to users.
+func (m AgentMessage) IsUserVisible() bool {
+	if m.Metadata == nil || m.Metadata.UserVisible == nil {
+		return true
+	}
+	return *m.Metadata.UserVisible
+}
+
+// WithVisibility returns a copy of the message with explicit visibility flags.
+func (m AgentMessage) WithVisibility(agentVisible, userVisible bool) AgentMessage {
+	copyMsg := m
+	copyMsg.ensureMetadata()
+	copyMsg.Metadata.AgentVisible = boolPtr(agentVisible)
+	copyMsg.Metadata.UserVisible = boolPtr(userVisible)
+	return copyMsg
+}
+
+// WithKind returns a copy with the given metadata kind.
+func (m AgentMessage) WithKind(kind string) AgentMessage {
+	copyMsg := m
+	copyMsg.ensureMetadata()
+	copyMsg.Metadata.Kind = kind
+	return copyMsg
+}
+
+func (m *AgentMessage) ensureMetadata() {
+	if m.Metadata == nil {
+		m.Metadata = &MessageMetadata{}
+	}
+}
+
+func boolPtr(v bool) *bool {
+	b := v
+	return &b
+}
+
 // UnmarshalJSON custom unmarshaling for AgentMessage to handle ContentBlock interface.
 func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	// Define a raw type for unmarshaling
@@ -156,6 +212,7 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 		Role       string            `json:"role"`
 		Content    []json.RawMessage `json:"content"`
 		Timestamp  int64             `json:"timestamp"`
+		Metadata   *MessageMetadata  `json:"metadata,omitempty"`
 		API        string            `json:"api,omitempty"`
 		Provider   string            `json:"provider,omitempty"`
 		Model      string            `json:"model,omitempty"`
@@ -174,6 +231,7 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	// Copy simple fields
 	m.Role = raw.Role
 	m.Timestamp = raw.Timestamp
+	m.Metadata = raw.Metadata
 	m.API = raw.API
 	m.Provider = raw.Provider
 	m.Model = raw.Model

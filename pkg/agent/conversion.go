@@ -11,6 +11,10 @@ func ConvertMessagesToLLM(messages []AgentMessage) []llm.LLMMessage {
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
 
 	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+
 		role := msg.Role
 		if role == "toolResult" {
 			role = "tool"
