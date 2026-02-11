@@ -9,13 +9,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
+	// 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"log/slog"
 
@@ -115,17 +116,6 @@ type assistantMessageEvent struct {
 	Delta        string `json:"delta"`
 	Content      string `json:"content"`
 }
-// Use rpc types from pkg/rpc for RPC communication:
-// - rpc.ModelInfo (was Model)
-// - rpc.SessionState
-// - rpc.CompactionState
-// - rpc.SlashCommand
-// - rpc.SessionTokenStats
-// - rpc.SessionStats
-// - rpc.ForkMessage
-// - rpc.TreeEntry
-// - rpc.ForkResult
-// - rpc.CompactResult
 
 type SessionMeta struct {
 	ID           string    `json:"id"`
@@ -135,7 +125,6 @@ type SessionMeta struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 	MessageCount int       `json:"messageCount"`
 }
-
 
 type agentEvent struct {
 	Type                  string                 `json:"type"`
@@ -201,7 +190,7 @@ func newBaseInterpreter(debug bool) *AiInterpreter {
 		debug:                debug,
 		showAssistant:        true,
 		showThinking:         true,
-		showTools:            false,
+		showTools:            true,
 		showToolsVerbose:     false,
 		showPrefixes:         true,
 		busyMode:             "steer",
@@ -1180,9 +1169,7 @@ func (p *AiInterpreter) switchSessionFromInput(input string) error {
 }
 
 func (p *AiInterpreter) readStdout(ctx context.Context) {
-	if p.debug {
-		slog.Info("[AI-STDOUT] reader started")
-	}
+	slog.Debug("[AI-STDOUT] reader started")
 	scanner := bufio.NewScanner(p.stdout)
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 64*1024*1024)
@@ -1234,9 +1221,7 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 func (p *AiInterpreter) handleStdoutLine(line []byte) {
 	var env rpcEnvelope
 	if err := json.Unmarshal(line, &env); err != nil {
-		if p.debug {
-			slog.Warn("[AI-STDOUT] invalid JSON", "json", string(line))
-		}
+		slog.Warn("[AI-STDOUT] invalid JSON", "json", string(line))
 		p.writeStatus(fmt.Sprintf("ai: %s", string(line)))
 		return
 	}
@@ -1369,9 +1354,7 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 	case "tool_call_delta":
 		// ignore
 	default:
-		if p.debug {
-			slog.Debug("[AI-EVENT]", "line", string(line))
-		}
+		slog.Debug("[AI-EVENT]", "line", string(line))
 	}
 }
 
@@ -1697,17 +1680,31 @@ func (p *AiInterpreter) writeRaw(text string) {
 		return
 	}
 	const maxChunkSize = 4096
-	for len(text) > 0 {
-		chunk := text
-		if len(chunk) > maxChunkSize {
-			chunk = chunk[:maxChunkSize]
+	data := []byte(text)
+	for len(data) > 0 {
+		chunkSize := len(data)
+		if chunkSize > maxChunkSize {
+			chunkSize = maxChunkSize
 		}
+		if chunkSize < len(data) {
+			for chunkSize > 0 && !utf8.Valid(data[:chunkSize]) {
+				chunkSize--
+			}
+			if chunkSize == 0 {
+				_, size := utf8.DecodeRune(data)
+				if size <= 0 {
+					size = 1
+				}
+				chunkSize = size
+			}
+		}
+		chunk := string(data[:chunkSize])
 		start := time.Now()
 		if err := writer.Write(chunk); err != nil && p.debug {
 			slog.Error("[AI-OUTPUT] write failed", "error", err, "bytes", len(chunk))
 		}
 		p.recordWriteMetrics(time.Since(start))
-		text = text[len(chunk):]
+		data = data[chunkSize:]
 	}
 }
 
@@ -1788,7 +1785,6 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /copy
   /auto-compaction <on|off>
   /thinking-level <off|minimal|low|medium|high|xhigh>
-  /cycle-thinking-level
   /fork [entry-id|index]
   /steer <message>
   /follow-up <message>
@@ -2704,21 +2700,21 @@ func copyToClipboard(text string) error {
 	return cmd.Wait()
 }
 
-func (p *AiInterpreter) resolveWorkingDir(path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
-		}
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	return abs
-}
+// func (p *AiInterpreter) resolveWorkingDir(path string) string {
+// 	if path == "" {
+// 		return ""
+// 	}
+// 	if strings.HasPrefix(path, "~") {
+// 		if home, err := os.UserHomeDir(); err == nil {
+// 			path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+// 		}
+// 	}
+// 	abs, err := filepath.Abs(path)
+// 	if err != nil {
+// 		return path
+// 	}
+// 	return abs
+// }
 
 var _ repl.Interpreter = (*AiInterpreter)(nil)
 var _ repl.AsyncInterpreter = (*AiInterpreter)(nil)

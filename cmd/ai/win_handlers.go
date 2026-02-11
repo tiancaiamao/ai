@@ -66,6 +66,9 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		client.Close()
 	}()
 
+	// Pass the configured logger to the ad client
+	client.SetLogger(log)
+
 	if debug {
 		slog.Info("Connected to ad successfully")
 	}
