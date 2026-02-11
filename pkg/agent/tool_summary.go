@@ -13,6 +13,11 @@ import (
 const (
 	toolSummaryInputMaxChars  = 12000
 	toolSummaryOutputMaxRunes = 1200
+
+	toolSummaryBatchPerItemMaxChars = 4000
+	toolSummaryBatchInputMaxChars   = 24000
+	toolSummaryBatchOutputMaxRunes  = 2200
+	toolSummaryThinkingLevel        = "low"
 )
 
 const toolSummarySystemPrompt = `You summarize tool execution output for continuation context in a coding agent.
@@ -32,6 +37,22 @@ Tool: %s
 Call ID: %s
 Status: %s
 Output:
+%s`
+
+const toolSummaryBatchSystemPrompt = `You summarize multiple tool execution outputs for continuation context in a coding agent.
+Return concise factual notes only.
+Do not invent information.
+Do not add instructions or policy text.`
+
+const toolSummaryBatchUserPromptTemplate = `Summarize these tool execution results for future turns.
+
+Requirements:
+- Produce one bullet per tool call.
+- Include call ID and tool name in each bullet.
+- Include status (ok/error) and critical facts.
+- Mention important artifacts (files, symbols, commands, errors) when present.
+
+Tool results:
 %s`
 
 func maybeSummarizeToolResults(
@@ -122,7 +143,7 @@ func summarizeToolResultWithLLM(
 	defer cancel()
 
 	llmCtx := llm.LLMContext{
-		SystemPrompt: toolSummarySystemPrompt,
+		SystemPrompt: toolSummarySystemPrompt + "\n" + thinkingInstruction(toolSummaryThinkingLevel),
 		Messages: []llm.LLMMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -209,6 +230,121 @@ func fallbackToolSummary(result AgentMessage) string {
 		status,
 		text,
 	)
+}
+
+func summarizeToolResultsBatchWithLLM(
+	ctx context.Context,
+	model llm.Model,
+	apiKey string,
+	results []AgentMessage,
+) (string, error) {
+	if len(results) == 0 {
+		return "", errors.New("no tool results to summarize")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return "", errors.New("empty API key")
+	}
+
+	var b strings.Builder
+	for i, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		raw := strings.TrimSpace(result.ExtractText())
+		if raw == "" {
+			raw = "(empty output)"
+		}
+		raw = trimTextWithTail(raw, toolSummaryBatchPerItemMaxChars)
+
+		fmt.Fprintf(
+			&b,
+			"[%d]\nTool: %s\nCall ID: %s\nStatus: %s\nOutput:\n%s\n\n",
+			i+1,
+			strings.TrimSpace(result.ToolName),
+			strings.TrimSpace(result.ToolCallID),
+			status,
+			raw,
+		)
+	}
+
+	payload := trimTextWithTail(strings.TrimSpace(b.String()), toolSummaryBatchInputMaxChars)
+	prompt := fmt.Sprintf(toolSummaryBatchUserPromptTemplate, payload)
+
+	summaryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	llmCtx := llm.LLMContext{
+		SystemPrompt: toolSummaryBatchSystemPrompt + "\n" + thinkingInstruction(toolSummaryThinkingLevel),
+		Messages: []llm.LLMMessage{
+			{Role: "user", Content: prompt},
+		},
+	}
+
+	stream := llm.StreamLLM(summaryCtx, model, llmCtx, apiKey)
+	var out strings.Builder
+	for event := range stream.Iterator(summaryCtx) {
+		if event.Done {
+			break
+		}
+		switch e := event.Value.(type) {
+		case llm.LLMTextDeltaEvent:
+			out.WriteString(e.Delta)
+		case llm.LLMErrorEvent:
+			return "", e.Error
+		}
+	}
+
+	text := strings.TrimSpace(out.String())
+	if text == "" {
+		return "", errors.New("empty batch summary")
+	}
+	return trimRunes(text, toolSummaryBatchOutputMaxRunes), nil
+}
+
+func fallbackToolSummaryBatch(results []AgentMessage) string {
+	lines := make([]string, 0, len(results))
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		name := strings.TrimSpace(result.ToolName)
+		if name == "" {
+			name = "unknown"
+		}
+		callID := strings.TrimSpace(result.ToolCallID)
+		if callID == "" {
+			callID = "n/a"
+		}
+		text := strings.TrimSpace(result.ExtractText())
+		if text == "" {
+			text = "(empty output)"
+		}
+		text = strings.ReplaceAll(text, "\n", " ")
+		text = trimRunes(text, 220)
+		lines = append(lines, fmt.Sprintf("- [%s] %s (%s): %s", callID, name, status, text))
+	}
+	if len(lines) == 0 {
+		return "(no tool results)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func newToolBatchSummaryMessage(results []AgentMessage, summary string) AgentMessage {
+	callIDs := make([]string, 0, len(results))
+	for _, result := range results {
+		if id := strings.TrimSpace(result.ToolCallID); id != "" {
+			callIDs = append(callIDs, id)
+		}
+	}
+
+	header := fmt.Sprintf("[Tool outputs summary]\nCount: %d", len(results))
+	if len(callIDs) > 0 {
+		header += "\nCall IDs: " + strings.Join(callIDs, ", ")
+	}
+	text := header + "\n" + strings.TrimSpace(summary)
+	return NewUserMessage(text).WithVisibility(true, false).WithKind("tool_summary")
 }
 
 func trimRunes(input string, limit int) string {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -35,6 +36,7 @@ type LoopConfig struct {
 
 var streamAssistantResponseFn = streamAssistantResponse
 var summarizeToolResultFn = summarizeToolResultWithLLM
+var summarizeToolResultsBatchFn = summarizeToolResultsBatchWithLLM
 
 func normalizeThinkingLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
@@ -112,8 +114,16 @@ func runInnerLoop(
 ) {
 	const maxCompactionRecoveries = 1
 	compactionRecoveries := 0
+	asyncSummarizer := newAsyncToolSummarizer(ctx, config)
+	if asyncSummarizer != nil {
+		defer asyncSummarizer.Close()
+	}
 
 	for {
+		if asyncSummarizer != nil {
+			asyncSummarizer.applyReady(agentCtx)
+		}
+
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
@@ -186,7 +196,12 @@ func runInnerLoop(
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
 			}
-			maybeSummarizeToolResults(ctx, agentCtx, config)
+			if asyncSummarizer != nil {
+				asyncSummarizer.schedule(agentCtx)
+				asyncSummarizer.applyReady(agentCtx)
+			} else {
+				maybeSummarizeToolResults(ctx, agentCtx, config)
+			}
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
@@ -522,66 +537,48 @@ func executeToolCalls(
 	toolOutputLimits ToolOutputLimits,
 ) []AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
-	results := make([]AgentMessage, 0, len(toolCalls))
+	if len(toolCalls) == 0 {
+		return nil
+	}
 
-	for _, tc := range toolCalls {
+	type toolExecutionPlan struct {
+		index      int
+		normalized ToolCallContent
+		tool       Tool
+	}
+	type toolExecutionOutcome struct {
+		plan     toolExecutionPlan
+		content  []ContentBlock
+		err      error
+		duration time.Duration
+	}
+
+	resultsByIndex := make([]*AgentMessage, len(toolCalls))
+	plans := make([]toolExecutionPlan, 0, len(toolCalls))
+	toolsByName := make(map[string]Tool, len(tools))
+	for _, tool := range tools {
+		toolsByName[tool.Name()] = tool
+	}
+
+	for i, tc := range toolCalls {
 		normalized := normalizeToolCall(tc)
 		args, argErr := coerceToolArguments(normalized.Name, normalized.Arguments)
 		if argErr != nil {
-			// Provide helpful error message with format guidance
-			errorMsg := fmt.Sprintf("Invalid tool arguments for '%s': %v\n\nCorrect format:\n",
-				normalized.Name, argErr)
-
-			switch normalized.Name {
-			case "read":
-				errorMsg += `<read>
-  <path>file.txt</path>
-</read>`
-			case "write":
-				errorMsg += `<write>
-  <path>file.txt</path>
-  <content>content here</content>
-</write>`
-			case "edit":
-				errorMsg += `<edit>
-  <path>file.txt</path>
-  <oldText>old text</oldText>
-  <newText>new text</newText>
-</edit>`
-			case "bash":
-				errorMsg += `<bash>
-  <command>your command here</command>
-</bash>
-
-Alternatively:
-<bash>command here</bash>`
-			case "grep":
-				errorMsg += `<grep>
-  <pattern>search pattern</pattern>
-  <path>optional path</path>
-</grep>`
-			}
-
+			errorMsg := buildInvalidToolArgsMessage(normalized.Name, argErr)
 			result := NewToolResultMessage(normalized.ID, normalized.Name, []ContentBlock{
 				TextContent{Type: "text", Text: errorMsg},
 			}, true)
-			results = append(results, result)
 			stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			resultCopy := result
+			resultsByIndex[i] = &resultCopy
 			continue
 		}
+
 		normalized.Arguments = args
 		stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
 
-		// Find tool
-		var tool Tool
-		for _, t := range tools {
-			if t.Name() == normalized.Name {
-				tool = t
-				break
-			}
-		}
-
+		tool := toolsByName[normalized.Name]
 		if tool == nil {
 			if metrics != nil {
 				metrics.RecordToolExecution(normalized.Name, 0, fmt.Errorf("tool not found"), 0)
@@ -590,40 +587,116 @@ Alternatively:
 				TextContent{Type: "text", Text: "Tool not found"},
 			}, toolOutputLimits)
 			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
-			results = append(results, result)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			resultCopy := result
+			resultsByIndex[i] = &resultCopy
 			continue
 		}
 
-		// Execute tool with concurrency control and retry
-		var content []ContentBlock
-		var err error
-
-		start := time.Now()
-		if executor != nil {
-			content, err = executor.Execute(ctx, tool, normalized.Arguments)
-		} else {
-			// Fallback to direct execution
-			content, err = tool.Execute(ctx, normalized.Arguments)
-		}
-		if metrics != nil {
-			metrics.RecordToolExecution(normalized.Name, time.Since(start), err, 0)
-		}
-
-		if err != nil {
-			content := truncateToolContent([]ContentBlock{
-				TextContent{Type: "text", Text: err.Error()},
-			}, toolOutputLimits)
-			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
-			results = append(results, result)
-			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
-		} else {
-			content = truncateToolContent(content, toolOutputLimits)
-			result := NewToolResultMessage(normalized.ID, normalized.Name, content, false)
-			results = append(results, result)
-			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, false))
-		}
+		plans = append(plans, toolExecutionPlan{
+			index:      i,
+			normalized: normalized,
+			tool:       tool,
+		})
 	}
 
+	outcomes := make(chan toolExecutionOutcome, len(plans))
+	var wg sync.WaitGroup
+
+	for _, plan := range plans {
+		wg.Add(1)
+		go func(plan toolExecutionPlan) {
+			defer wg.Done()
+			start := time.Now()
+			var content []ContentBlock
+			var err error
+			if executor != nil {
+				content, err = executor.Execute(ctx, plan.tool, plan.normalized.Arguments)
+			} else {
+				content, err = plan.tool.Execute(ctx, plan.normalized.Arguments)
+			}
+			outcomes <- toolExecutionOutcome{
+				plan:     plan,
+				content:  content,
+				err:      err,
+				duration: time.Since(start),
+			}
+		}(plan)
+	}
+
+	wg.Wait()
+	close(outcomes)
+
+	outcomeByIndex := make(map[int]toolExecutionOutcome, len(plans))
+	for outcome := range outcomes {
+		outcomeByIndex[outcome.plan.index] = outcome
+	}
+
+	for _, plan := range plans {
+		outcome, ok := outcomeByIndex[plan.index]
+		if !ok {
+			continue
+		}
+		if metrics != nil {
+			metrics.RecordToolExecution(plan.normalized.Name, outcome.duration, outcome.err, 0)
+		}
+
+		var result AgentMessage
+		if outcome.err != nil {
+			content := truncateToolContent([]ContentBlock{
+				TextContent{Type: "text", Text: outcome.err.Error()},
+			}, toolOutputLimits)
+			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
+			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, true))
+		} else {
+			content := truncateToolContent(outcome.content, toolOutputLimits)
+			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
+			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, false))
+		}
+
+		resultCopy := result
+		resultsByIndex[plan.index] = &resultCopy
+	}
+
+	results := make([]AgentMessage, 0, len(toolCalls))
+	for _, result := range resultsByIndex {
+		if result != nil {
+			results = append(results, *result)
+		}
+	}
 	return results
+}
+
+func buildInvalidToolArgsMessage(toolName string, argErr error) string {
+	errorMsg := fmt.Sprintf("Invalid tool arguments for '%s': %v\n\nCorrect format:\n", toolName, argErr)
+	switch toolName {
+	case "read":
+		errorMsg += `<read>
+  <path>file.txt</path>
+</read>`
+	case "write":
+		errorMsg += `<write>
+  <path>file.txt</path>
+  <content>content here</content>
+</write>`
+	case "edit":
+		errorMsg += `<edit>
+  <path>file.txt</path>
+  <oldText>old text</oldText>
+  <newText>new text</newText>
+</edit>`
+	case "bash":
+		errorMsg += `<bash>
+  <command>your command here</command>
+</bash>
+
+Alternatively:
+<bash>command here</bash>`
+	case "grep":
+		errorMsg += `<grep>
+  <pattern>search pattern</pattern>
+  <path>optional path</path>
+</grep>`
+	}
+	return errorMsg
 }

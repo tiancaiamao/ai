@@ -184,15 +184,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create agent with skills
-	systemPrompt := `You are a helpful coding assistant.
-You have access to tools: read, write, grep, bash, edit.
-When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
-Do not include chain-of-thought or <think> tags in your output.`
+    systemPrompt := `You are a helpful AI coding assistant.
+- Always output JSON objects as specified by the task schema.
+- Never output free text or markdown explanations.
+- You have access to limited tools: read, write, grep, bash, edit; but you can learn skills.
+- If you cannot answer the request, return an empty JSON with error field.
+- Do not hallucinate or add unnecessary commentary.`
 	createBaseContext := func() *agent.AgentContext {
 		if len(skillResult.Skills) > 0 {
 			return agent.NewAgentContextWithSkills(systemPrompt, skillResult.Skills)
 		}
-		return agent.NewAgentContext(systemPrompt)
+		return agent.NewAgentContext(systemPropt)
 	}
 	agentCtx := createBaseContext()
 
