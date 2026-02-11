@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
+	"unicode/utf8"
 
 	"log/slog"
 
@@ -113,12 +115,71 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		slog.Info("Starting REPL...")
 	}
 
-	if err := handler.Run(); err != nil {
+	if err := handler.Start(); err != nil {
 		if debug {
-			slog.Error("REPL error", "error", err)
+			slog.Error("REPL start error", "error", err)
+		}
+		return fmt.Errorf("repl start: %w", err)
+	}
+	defer func() {
+		if err := handler.Stop(); err != nil && debug {
+			slog.Error("REPL stop error", "error", err)
+		}
+	}()
+
+	eventHandler := &recoveringEventHandler{
+		inner:      handler.NewEventHandler(),
+		client:     client,
+		bufferID:   handler.BufferID(),
+		sendPrefix: sendPrefix,
+	}
+	if err := client.RunEventFilter(handler.BufferID(), eventHandler); err != nil {
+		if debug {
+			slog.Error("REPL event loop error", "error", err)
 		}
 		return fmt.Errorf("REPL error: %w", err)
 	}
 
 	return nil
+}
+
+// recoveringEventHandler wraps repl event handling and restores full send-to-win input
+// when ad's event txt payload is truncated.
+type recoveringEventHandler struct {
+	inner      ad.EventHandler
+	client     *ad.Client
+	bufferID   string
+	sendPrefix string
+}
+
+func (h *recoveringEventHandler) HandleInsert(source ad.EventSource, from, to int, txt string, client *ad.Client) (ad.Outcome, error) {
+	if source == ad.SourceFsys && strings.HasPrefix(txt, h.sendPrefix) {
+		eventChars := utf8.RuneCountInString(txt)
+		if to > from && (to-from) > eventChars {
+			if recovered, err := h.readBodyRange(from, to); err == nil && strings.HasPrefix(recovered, h.sendPrefix) {
+				txt = recovered
+			}
+		}
+	}
+	return h.inner.HandleInsert(source, from, to, txt, client)
+}
+
+func (h *recoveringEventHandler) HandleDelete(source ad.EventSource, from, to int, client *ad.Client) (ad.Outcome, error) {
+	return h.inner.HandleDelete(source, from, to, client)
+}
+
+func (h *recoveringEventHandler) HandleExecute(source ad.EventSource, from, to int, txt string, client *ad.Client) (ad.Outcome, error) {
+	return h.inner.HandleExecute(source, from, to, txt, client)
+}
+
+func (h *recoveringEventHandler) readBodyRange(from, to int) (string, error) {
+	body, err := h.client.ReadBody(h.bufferID)
+	if err != nil {
+		return "", err
+	}
+	runes := []rune(body)
+	if from < 0 || to < from || to > len(runes) {
+		return "", fmt.Errorf("invalid range %d..%d (body=%d)", from, to, len(runes))
+	}
+	return string(runes[from:to]), nil
 }
