@@ -25,6 +25,8 @@ func TestRPCServerCommands(t *testing.T) {
 	getStateCalled := false
 	getMessagesCalled := false
 	compactCalled := false
+	setToolCallCutoffCalled := false
+	setToolSummaryStrategyCalled := false
 
 	// Set up handlers
 	server.SetPromptHandler(func(req PromptRequest) error {
@@ -75,6 +77,18 @@ func TestRPCServerCommands(t *testing.T) {
 		compactCalled = true
 		commandCount++
 		return &CompactResult{TokensBefore: 1}, nil
+	})
+
+	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
+		setToolCallCutoffCalled = cutoff == 7
+		commandCount++
+		return nil
+	})
+
+	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
+		setToolSummaryStrategyCalled = strategy == "heuristic"
+		commandCount++
+		return nil
 	})
 
 	// Test prompt command
@@ -168,9 +182,31 @@ func TestRPCServerCommands(t *testing.T) {
 		t.Error("Compact handler was not called")
 	}
 
+	// Test set_tool_call_cutoff command
+	cmd = RPCCommand{Type: CommandSetToolCallCutoff}
+	cmd.Data, _ = json.Marshal(map[string]int{"cutoff": 7})
+	resp = server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("set_tool_call_cutoff command failed: %s", resp.Error)
+	}
+	if !setToolCallCutoffCalled {
+		t.Error("set_tool_call_cutoff handler was not called with expected value")
+	}
+
+	// Test set_tool_summary_strategy command
+	cmd = RPCCommand{Type: CommandSetToolSummaryStrategy}
+	cmd.Data, _ = json.Marshal(map[string]string{"strategy": "heuristic"})
+	resp = server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("set_tool_summary_strategy command failed: %s", resp.Error)
+	}
+	if !setToolSummaryStrategyCalled {
+		t.Error("set_tool_summary_strategy handler was not called with expected value")
+	}
+
 	// Verify total command count
-	if commandCount != 6 {
-		t.Errorf("Expected 6 commands to be called, got %d", commandCount)
+	if commandCount != 8 {
+		t.Errorf("Expected 8 commands to be called, got %d", commandCount)
 	}
 }
 

@@ -80,6 +80,8 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"maxTokens": 5000,
 			"keepRecent": 10,
 			"keepRecentTokens": 12000,
+			"toolCallCutoff": 6,
+			"toolSummaryStrategy": "heuristic",
 			"autoCompact": false
 		},
 		"toolOutput": {
@@ -126,6 +128,12 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.Compactor.KeepRecentTokens != 12000 {
 		t.Errorf("Expected KeepRecentTokens 12000, got %d", cfg.Compactor.KeepRecentTokens)
+	}
+	if cfg.Compactor.ToolCallCutoff != 6 {
+		t.Errorf("Expected ToolCallCutoff 6, got %d", cfg.Compactor.ToolCallCutoff)
+	}
+	if cfg.Compactor.ToolSummaryStrategy != "heuristic" {
+		t.Errorf("Expected ToolSummaryStrategy heuristic, got %q", cfg.Compactor.ToolSummaryStrategy)
 	}
 
 	if cfg.Compactor.AutoCompact != false {
@@ -405,6 +413,9 @@ func TestCompactorDefaults(t *testing.T) {
 	}
 	if compactorConfig.ToolCallCutoff != 10 {
 		t.Errorf("Expected ToolCallCutoff 10, got %d", compactorConfig.ToolCallCutoff)
+	}
+	if compactorConfig.ToolSummaryStrategy != "llm" {
+		t.Errorf("Expected ToolSummaryStrategy llm, got %q", compactorConfig.ToolSummaryStrategy)
 	}
 
 	if !compactorConfig.AutoCompact {

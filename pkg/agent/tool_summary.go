@@ -42,6 +42,10 @@ func maybeSummarizeToolResults(
 	if agentCtx == nil || config == nil || config.ToolCallCutoff <= 0 {
 		return
 	}
+	strategy := normalizeToolSummaryStrategy(config.ToolSummaryStrategy)
+	if strategy == "off" {
+		return
+	}
 
 	for {
 		count := countVisibleToolResults(agentCtx.Messages)
@@ -55,13 +59,33 @@ func maybeSummarizeToolResults(
 		}
 
 		original := agentCtx.Messages[idx]
-		summary, err := summarizeToolResultFn(ctx, config.Model, config.APIKey, original)
-		if err != nil {
+		summary := ""
+		if strategy == "heuristic" {
 			summary = fallbackToolSummary(original)
+		} else {
+			text, err := summarizeToolResultFn(ctx, config.Model, config.APIKey, original)
+			if err != nil {
+				summary = fallbackToolSummary(original)
+			} else {
+				summary = text
+			}
 		}
 
 		agentCtx.Messages[idx] = archiveToolResult(original)
 		agentCtx.Messages = append(agentCtx.Messages, newToolSummaryMessage(original, summary))
+	}
+}
+
+func normalizeToolSummaryStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "", "llm":
+		return "llm"
+	case "heuristic":
+		return "heuristic"
+	case "off":
+		return "off"
+	default:
+		return "llm"
 	}
 }
 

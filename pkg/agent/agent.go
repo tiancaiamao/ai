@@ -40,23 +40,24 @@ type Compactor interface {
 
 // Agent represents an AI agent.
 type Agent struct {
-	mu             chan struct{}
-	model          llm.Model
-	apiKey         string
-	systemPrompt   string
-	context        *AgentContext
-	eventChan      chan AgentEvent
-	currentStream  *llm.EventStream[AgentEvent, []AgentMessage]
-	streamMu       sync.RWMutex
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	compactor      Compactor     // Optional compactor for automatic context compression
-	followUpQueue  chan string   // Queue for follow-up messages
-	executor       *ExecutorPool // Tool executor with concurrency control
-	metrics        *Metrics      // Performance and usage metrics
-	toolOutput     ToolOutputLimits
-	toolCallCutoff int
+	mu              chan struct{}
+	model           llm.Model
+	apiKey          string
+	systemPrompt    string
+	context         *AgentContext
+	eventChan       chan AgentEvent
+	currentStream   *llm.EventStream[AgentEvent, []AgentMessage]
+	streamMu        sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	compactor       Compactor     // Optional compactor for automatic context compression
+	followUpQueue   chan string   // Queue for follow-up messages
+	executor        *ExecutorPool // Tool executor with concurrency control
+	metrics         *Metrics      // Performance and usage metrics
+	toolOutput      ToolOutputLimits
+	toolCallCutoff  int
+	toolSummaryMode string
 }
 
 // NewAgent creates a new agent.
@@ -69,19 +70,20 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Agent{
-		mu:             make(chan struct{}, 1),
-		model:          model,
-		apiKey:         apiKey,
-		systemPrompt:   agentCtx.SystemPrompt,
-		context:        agentCtx,
-		eventChan:      make(chan AgentEvent, 100),
-		ctx:            ctx,
-		cancel:         cancel,
-		followUpQueue:  make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:       NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
-		metrics:        NewMetrics(),
-		toolOutput:     DefaultToolOutputLimits(),
-		toolCallCutoff: 10,
+		mu:              make(chan struct{}, 1),
+		model:           model,
+		apiKey:          apiKey,
+		systemPrompt:    agentCtx.SystemPrompt,
+		context:         agentCtx,
+		eventChan:       make(chan AgentEvent, 100),
+		ctx:             ctx,
+		cancel:          cancel,
+		followUpQueue:   make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
+		executor:        NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
+		metrics:         NewMetrics(),
+		toolOutput:      DefaultToolOutputLimits(),
+		toolCallCutoff:  10,
+		toolSummaryMode: "llm",
 	}
 }
 
@@ -130,13 +132,14 @@ func (a *Agent) processPrompt(message string) {
 	prompts := []AgentMessage{NewUserMessage(message)}
 
 	config := &LoopConfig{
-		Model:          a.model,
-		APIKey:         a.apiKey,
-		Executor:       a.executor,
-		Metrics:        a.metrics,
-		ToolOutput:     a.toolOutput,
-		Compactor:      a.compactor,
-		ToolCallCutoff: a.toolCallCutoff,
+		Model:               a.model,
+		APIKey:              a.apiKey,
+		Executor:            a.executor,
+		Metrics:             a.metrics,
+		ToolOutput:          a.toolOutput,
+		Compactor:           a.compactor,
+		ToolCallCutoff:      a.toolCallCutoff,
+		ToolSummaryStrategy: a.toolSummaryMode,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -350,6 +353,12 @@ func (a *Agent) SetToolCallCutoff(cutoff int) {
 		cutoff = 0
 	}
 	a.toolCallCutoff = cutoff
+}
+
+// SetToolSummaryStrategy controls automatic tool summarization behavior.
+// Accepted values: llm, heuristic, off.
+func (a *Agent) SetToolSummaryStrategy(strategy string) {
+	a.toolSummaryMode = normalizeToolSummaryStrategy(strategy)
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

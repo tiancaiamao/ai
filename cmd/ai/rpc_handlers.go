@@ -73,7 +73,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	if cfg.Compactor != nil {
 		slog.Info("Compactor", "maxMessages", cfg.Compactor.MaxMessages, "maxTokens", cfg.Compactor.MaxTokens,
 			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
-			"reserveTokens", cfg.Compactor.ReserveTokens)
+			"reserveTokens", cfg.Compactor.ReserveTokens,
+			"toolCallCutoff", cfg.Compactor.ToolCallCutoff,
+			"toolSummaryStrategy", cfg.Compactor.ToolSummaryStrategy)
 	}
 
 	activeSpec, err := resolveActiveModelSpec(cfg)
@@ -223,6 +225,7 @@ Do not include chain-of-thought or <think> tags in your output.`
 	}
 	ag.SetCompactor(sessionComp)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
+	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	// Set up executor with concurrency control
@@ -799,6 +802,39 @@ Do not include chain-of-thought or <think> tags in your output.`
 		stateMu.Lock()
 		autoCompactionEnabled = enabled
 		stateMu.Unlock()
+		return nil
+	})
+
+	validToolSummaryStrategies := map[string]bool{
+		"llm":       true,
+		"heuristic": true,
+		"off":       true,
+	}
+
+	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
+		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
+		if cutoff < 0 {
+			return fmt.Errorf("cutoff must be >= 0")
+		}
+		compactorConfig.ToolCallCutoff = cutoff
+		ag.SetToolCallCutoff(cutoff)
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
+		return nil
+	})
+
+	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
+		strategy = strings.ToLower(strings.TrimSpace(strategy))
+		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
+		if !validToolSummaryStrategies[strategy] {
+			return fmt.Errorf("invalid tool summary strategy")
+		}
+		compactorConfig.ToolSummaryStrategy = strategy
+		ag.SetToolSummaryStrategy(strategy)
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
 		return nil
 	})
 

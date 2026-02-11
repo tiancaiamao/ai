@@ -29,40 +29,42 @@ type RPCResponse struct {
 
 // Command type constants
 const (
-	CommandPrompt               = "prompt"
-	CommandSteer                = "steer"
-	CommandFollowUp             = "follow_up"
-	CommandAbort                = "abort"
-	CommandNewSession           = "new_session"
-	CommandClearSession         = "clear_session"
-	CommandListSessions         = "list_sessions"
-	CommandSwitchSession        = "switch_session"
-	CommandDeleteSession        = "delete_session"
-	CommandGetState             = "get_state"
-	CommandGetMessages          = "get_messages"
-	CommandCompact              = "compact"
-	CommandGetAvailableModels   = "get_available_models"
-	CommandSetModel             = "set_model"
-	CommandCycleModel           = "cycle_model"
-	CommandGetCommands          = "get_commands"
-	CommandGetSessionStats      = "get_session_stats"
-	CommandSetAutoCompaction    = "set_auto_compaction"
-	CommandSetThinkingLevel     = "set_thinking_level"
-	CommandCycleThinkingLevel   = "cycle_thinking_level"
-	CommandGetLastAssistantText = "get_last_assistant_text"
-	CommandGetForkMessages      = "get_fork_messages"
-	CommandFork                 = "fork"
-	CommandGetTree              = "get_tree"
-	CommandResumeOnBranch       = "resume_on_branch"
-	CommandSetSteeringMode      = "set_steering_mode"
-	CommandSetFollowUpMode      = "set_follow_up_mode"
-	CommandSetSessionName       = "set_session_name"
-	CommandSetAutoRetry         = "set_auto_retry"
-	CommandAbortRetry           = "abort_retry"
-	CommandBash                 = "bash"
-	CommandAbortBash            = "abort_bash"
-	CommandExportHTML           = "export_html"
-	CommandPing                 = "ping"
+	CommandPrompt                 = "prompt"
+	CommandSteer                  = "steer"
+	CommandFollowUp               = "follow_up"
+	CommandAbort                  = "abort"
+	CommandNewSession             = "new_session"
+	CommandClearSession           = "clear_session"
+	CommandListSessions           = "list_sessions"
+	CommandSwitchSession          = "switch_session"
+	CommandDeleteSession          = "delete_session"
+	CommandGetState               = "get_state"
+	CommandGetMessages            = "get_messages"
+	CommandCompact                = "compact"
+	CommandGetAvailableModels     = "get_available_models"
+	CommandSetModel               = "set_model"
+	CommandCycleModel             = "cycle_model"
+	CommandGetCommands            = "get_commands"
+	CommandGetSessionStats        = "get_session_stats"
+	CommandSetAutoCompaction      = "set_auto_compaction"
+	CommandSetToolCallCutoff      = "set_tool_call_cutoff"
+	CommandSetToolSummaryStrategy = "set_tool_summary_strategy"
+	CommandSetThinkingLevel       = "set_thinking_level"
+	CommandCycleThinkingLevel     = "cycle_thinking_level"
+	CommandGetLastAssistantText   = "get_last_assistant_text"
+	CommandGetForkMessages        = "get_fork_messages"
+	CommandFork                   = "fork"
+	CommandGetTree                = "get_tree"
+	CommandResumeOnBranch         = "resume_on_branch"
+	CommandSetSteeringMode        = "set_steering_mode"
+	CommandSetFollowUpMode        = "set_follow_up_mode"
+	CommandSetSessionName         = "set_session_name"
+	CommandSetAutoRetry           = "set_auto_retry"
+	CommandAbortRetry             = "abort_retry"
+	CommandBash                   = "bash"
+	CommandAbortBash              = "abort_bash"
+	CommandExportHTML             = "export_html"
+	CommandPing                   = "ping"
 )
 
 // SessionState represents the current session state.
@@ -87,14 +89,16 @@ type SessionState struct {
 
 // CompactionState represents compaction thresholds and settings.
 type CompactionState struct {
-	MaxMessages      int    `json:"maxMessages,omitempty"`
-	MaxTokens        int    `json:"maxTokens,omitempty"`
-	KeepRecent       int    `json:"keepRecent,omitempty"`
-	KeepRecentTokens int    `json:"keepRecentTokens,omitempty"`
-	ReserveTokens    int    `json:"reserveTokens,omitempty"`
-	ContextWindow    int    `json:"contextWindow,omitempty"`
-	TokenLimit       int    `json:"tokenLimit,omitempty"`
-	TokenLimitSource string `json:"tokenLimitSource,omitempty"`
+	MaxMessages         int    `json:"maxMessages,omitempty"`
+	MaxTokens           int    `json:"maxTokens,omitempty"`
+	KeepRecent          int    `json:"keepRecent,omitempty"`
+	KeepRecentTokens    int    `json:"keepRecentTokens,omitempty"`
+	ReserveTokens       int    `json:"reserveTokens,omitempty"`
+	ToolCallCutoff      int    `json:"toolCallCutoff,omitempty"`
+	ToolSummaryStrategy string `json:"toolSummaryStrategy,omitempty"`
+	ContextWindow       int    `json:"contextWindow,omitempty"`
+	TokenLimit          int    `json:"tokenLimit,omitempty"`
+	TokenLimitSource    string `json:"tokenLimitSource,omitempty"`
 }
 
 // ModelInfo represents a model description for RPC clients.

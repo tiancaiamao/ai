@@ -20,15 +20,16 @@ const (
 
 // LoopConfig contains configuration for the agent loop.
 type LoopConfig struct {
-	Model          llm.Model
-	APIKey         string
-	Executor       *ExecutorPool // Tool executor with concurrency control
-	Metrics        *Metrics      // Metrics collector
-	ToolOutput     ToolOutputLimits
-	Compactor      Compactor     // Optional compactor for context-length recovery
-	ToolCallCutoff int           // Summarize oldest tool outputs when visible tool results exceed this
-	MaxLLMRetries  int           // Maximum number of retries for LLM calls
-	RetryBaseDelay time.Duration // Base delay for exponential backoff
+	Model               llm.Model
+	APIKey              string
+	Executor            *ExecutorPool // Tool executor with concurrency control
+	Metrics             *Metrics      // Metrics collector
+	ToolOutput          ToolOutputLimits
+	Compactor           Compactor     // Optional compactor for context-length recovery
+	ToolCallCutoff      int           // Summarize oldest tool outputs when visible tool results exceed this
+	ToolSummaryStrategy string        // llm, heuristic, off
+	MaxLLMRetries       int           // Maximum number of retries for LLM calls
+	RetryBaseDelay      time.Duration // Base delay for exponential backoff
 }
 
 var streamAssistantResponseFn = streamAssistantResponse

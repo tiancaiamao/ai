@@ -90,3 +90,46 @@ func TestMaybeSummarizeToolResultsFallbackOnError(t *testing.T) {
 		t.Fatalf("expected fallback summary content, got %q", last.ExtractText())
 	}
 }
+
+func TestMaybeSummarizeToolResultsHeuristicStrategy(t *testing.T) {
+	orig := summarizeToolResultFn
+	defer func() { summarizeToolResultFn = orig }()
+
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ AgentMessage) (string, error) {
+		t.Fatal("llm summarizer should not be called in heuristic strategy")
+		return "", nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = []AgentMessage{
+		NewToolResultMessage("call-1", "bash", []ContentBlock{TextContent{Type: "text", Text: "line1"}}, false),
+		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "line2"}}, false),
+	}
+
+	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
+		ToolCallCutoff:      1,
+		ToolSummaryStrategy: "heuristic",
+	})
+
+	last := agentCtx.Messages[len(agentCtx.Messages)-1]
+	if !strings.Contains(last.ExtractText(), "Tool \"bash\" finished with status ok") {
+		t.Fatalf("expected heuristic summary, got %q", last.ExtractText())
+	}
+}
+
+func TestNormalizeToolSummaryStrategy(t *testing.T) {
+	cases := map[string]string{
+		"":          "llm",
+		"llm":       "llm",
+		"LLM":       "llm",
+		"heuristic": "heuristic",
+		"off":       "off",
+		"unknown":   "llm",
+	}
+
+	for input, expected := range cases {
+		if got := normalizeToolSummaryStrategy(input); got != expected {
+			t.Fatalf("normalizeToolSummaryStrategy(%q)=%q, want %q", input, got, expected)
+		}
+	}
+}

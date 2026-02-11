@@ -15,25 +15,27 @@ import (
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages      int  // Maximum messages before compression
-	MaxTokens        int  // Approximate token limit before compression
-	KeepRecent       int  // Number of recent messages to keep
-	KeepRecentTokens int  // Token budget to keep from the most recent messages
-	ReserveTokens    int  // Tokens to reserve when using context window
-	ToolCallCutoff   int  // Summarize oldest tool outputs when visible tool calls exceed this
-	AutoCompact      bool // Whether to automatically compact
+	MaxMessages         int    // Maximum messages before compression
+	MaxTokens           int    // Approximate token limit before compression
+	KeepRecent          int    // Number of recent messages to keep
+	KeepRecentTokens    int    // Token budget to keep from the most recent messages
+	ReserveTokens       int    // Tokens to reserve when using context window
+	ToolCallCutoff      int    // Summarize oldest tool outputs when visible tool calls exceed this
+	ToolSummaryStrategy string // llm, heuristic, off
+	AutoCompact         bool   // Whether to automatically compact
 }
 
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMessages:      50,    // Compact after 50 messages
-		MaxTokens:        8000,  // Compact after ~8000 tokens (fallback)
-		KeepRecent:       5,     // Keep last 5 messages uncompressed
-		KeepRecentTokens: 20000, // Keep ~20k tokens from the recent context
-		ReserveTokens:    16384, // Reserve tokens for responses when using context window
-		ToolCallCutoff:   10,    // Summarize tool outputs after 10 visible tool results
-		AutoCompact:      true,
+		MaxMessages:         50,    // Compact after 50 messages
+		MaxTokens:           8000,  // Compact after ~8000 tokens (fallback)
+		KeepRecent:          5,     // Keep last 5 messages uncompressed
+		KeepRecentTokens:    20000, // Keep ~20k tokens from the recent context
+		ReserveTokens:       16384, // Reserve tokens for responses when using context window
+		ToolCallCutoff:      10,    // Summarize tool outputs after 10 visible tool results
+		ToolSummaryStrategy: "llm",
+		AutoCompact:         true,
 	}
 }
 

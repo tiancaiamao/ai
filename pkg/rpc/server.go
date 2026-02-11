@@ -22,39 +22,41 @@ type Server struct {
 	output *bufio.Writer
 
 	// Callbacks for handling commands
-	onPrompt               func(req PromptRequest) error
-	onSteer                func(message string) error
-	onFollowUp             func(message string) error
-	onAbort                func() error
-	onNewSession           func(name, title string) (string, error)
-	onClearSession         func() error
-	onListSessions         func() ([]any, error)
-	onSwitchSession        func(id string) error
-	onDeleteSession        func(id string) error
-	onGetState             func() (*SessionState, error)
-	onGetMessages          func() ([]any, error)
-	onCompact              func() (*CompactResult, error)
-	onGetAvailableModels   func() ([]ModelInfo, error)
-	onSetModel             func(provider, modelID string) (*ModelInfo, error)
-	onCycleModel           func() (*CycleModelResult, error)
-	onGetCommands          func() ([]SlashCommand, error)
-	onGetSessionStats      func() (*SessionStats, error)
-	onSetAutoCompaction    func(enabled bool) error
-	onSetThinkingLevel     func(level string) (string, error)
-	onCycleThinkingLevel   func() (string, error)
-	onGetLastAssistantText func() (string, error)
-	onGetForkMessages      func() ([]ForkMessage, error)
-	onFork                 func(entryID string) (*ForkResult, error)
-	onGetTree              func() ([]TreeEntry, error)
-	onResumeOnBranch       func(entryID string) error
-	onSetSteeringMode      func(mode string) error
-	onSetFollowUpMode      func(mode string) error
-	onSetSessionName       func(name string) error
-	onSetAutoRetry         func(enabled bool) error
-	onAbortRetry           func() error
-	onBash                 func(command string) (*BashResult, error)
-	onAbortBash            func() error
-	onExportHTML           func(path string) (string, error)
+	onPrompt                 func(req PromptRequest) error
+	onSteer                  func(message string) error
+	onFollowUp               func(message string) error
+	onAbort                  func() error
+	onNewSession             func(name, title string) (string, error)
+	onClearSession           func() error
+	onListSessions           func() ([]any, error)
+	onSwitchSession          func(id string) error
+	onDeleteSession          func(id string) error
+	onGetState               func() (*SessionState, error)
+	onGetMessages            func() ([]any, error)
+	onCompact                func() (*CompactResult, error)
+	onGetAvailableModels     func() ([]ModelInfo, error)
+	onSetModel               func(provider, modelID string) (*ModelInfo, error)
+	onCycleModel             func() (*CycleModelResult, error)
+	onGetCommands            func() ([]SlashCommand, error)
+	onGetSessionStats        func() (*SessionStats, error)
+	onSetAutoCompaction      func(enabled bool) error
+	onSetToolCallCutoff      func(cutoff int) error
+	onSetToolSummaryStrategy func(strategy string) error
+	onSetThinkingLevel       func(level string) (string, error)
+	onCycleThinkingLevel     func() (string, error)
+	onGetLastAssistantText   func() (string, error)
+	onGetForkMessages        func() ([]ForkMessage, error)
+	onFork                   func(entryID string) (*ForkResult, error)
+	onGetTree                func() ([]TreeEntry, error)
+	onResumeOnBranch         func(entryID string) error
+	onSetSteeringMode        func(mode string) error
+	onSetFollowUpMode        func(mode string) error
+	onSetSessionName         func(name string) error
+	onSetAutoRetry           func(enabled bool) error
+	onAbortRetry             func() error
+	onBash                   func(command string) (*BashResult, error)
+	onAbortBash              func() error
+	onExportHTML             func(path string) (string, error)
 }
 
 var logStreamEvents = os.Getenv("AI_LOG_STREAM_EVENTS") == "1"
@@ -164,6 +166,20 @@ func (s *Server) SetSetAutoCompactionHandler(handler func(enabled bool) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onSetAutoCompaction = handler
+}
+
+// SetSetToolCallCutoffHandler sets the handler for set_tool_call_cutoff commands.
+func (s *Server) SetSetToolCallCutoffHandler(handler func(cutoff int) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetToolCallCutoff = handler
+}
+
+// SetSetToolSummaryStrategyHandler sets the handler for set_tool_summary_strategy commands.
+func (s *Server) SetSetToolSummaryStrategyHandler(handler func(strategy string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetToolSummaryStrategy = handler
 }
 
 // SetSetThinkingLevelHandler sets the handler for set_thinking_level commands.
@@ -608,6 +624,40 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, nil)
+
+	case CommandSetToolCallCutoff:
+		if s.onSetToolCallCutoff == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_tool_call_cutoff handler registered")
+		}
+		var data struct {
+			Cutoff int `json:"cutoff"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetToolCallCutoff(data.Cutoff); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"cutoff": data.Cutoff})
+
+	case CommandSetToolSummaryStrategy:
+		if s.onSetToolSummaryStrategy == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_tool_summary_strategy handler registered")
+		}
+		var data struct {
+			Strategy string `json:"strategy"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetToolSummaryStrategy(data.Strategy); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"strategy": data.Strategy})
 
 	case CommandSetThinkingLevel:
 		if s.onSetThinkingLevel == nil {
