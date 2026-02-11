@@ -1518,7 +1518,20 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agent.AgentMessage) {
 	if content == "" {
 		return
 	}
-	p.writeStream("assistant", content, showAssistant)
+	role := strings.TrimSpace(msg.Role)
+	if role == "" {
+		role = "assistant"
+	}
+	enabled := true
+	switch role {
+	case "assistant":
+		enabled = showAssistant
+	case "thinking":
+		enabled = showThinking
+	case "tool":
+		enabled = showTools
+	}
+	p.writeStream(role, content, enabled)
 }
 
 func renderMessageContent(msg *agent.AgentMessage, showThinking bool, showTools bool) string {
@@ -1678,6 +1691,12 @@ func (p *AiInterpreter) writeRaw(text string) {
 	if writer == nil {
 		slog.Warn("[AI-OUTPUT] writer is nil", "bytes", len(text))
 		return
+	}
+	if text == "" {
+		return
+	}
+	if !utf8.ValidString(text) {
+		text = strings.ToValidUTF8(text, "\uFFFD")
 	}
 	const maxChunkSize = 4096
 	data := []byte(text)

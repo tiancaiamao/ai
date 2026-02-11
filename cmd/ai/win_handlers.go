@@ -11,6 +11,7 @@ import (
 	"github.com/tiancaiamao/ai/internal/winai"
 	"github.com/tiancaiamao/ai/pkg/config"
 )
+
 func runWinAI(windowName string, debug bool, sessionPath string, debugAddr string) error {
 	// Initialize logger early so all slog calls go to the log file
 	configPath, err := config.GetDefaultConfigPath()
@@ -22,6 +23,9 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 	if err != nil {
 		// Continue with defaults if config loading fails
 		cfg, _ = config.LoadConfig(configPath)
+	}
+	if debug {
+		cfg.Log.Level = "debug"
 	}
 
 	// Initialize logger from config
@@ -93,7 +97,7 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 `,
 		SendPrefix:            sendPrefix,
 		InputPrefix:           "",
-		EchoSendInput:         true,
+		EchoSendInput:         false,
 		EnableKeyboardExecute: false,
 		EnableExecute:         false,
 		Debug:                 debug,
