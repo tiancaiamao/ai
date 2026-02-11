@@ -57,10 +57,11 @@ const (
 
 // CompactionInfo describes a compaction event.
 type CompactionInfo struct {
-	Auto   bool   `json:"auto,omitempty"`
-	Before int    `json:"before,omitempty"`
-	After  int    `json:"after,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Auto    bool   `json:"auto,omitempty"`
+	Before  int    `json:"before,omitempty"`
+	After   int    `json:"after,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // NewCompactionStartEvent creates a compaction_start event.

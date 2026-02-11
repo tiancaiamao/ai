@@ -25,9 +25,12 @@ type LoopConfig struct {
 	Executor       *ExecutorPool // Tool executor with concurrency control
 	Metrics        *Metrics      // Metrics collector
 	ToolOutput     ToolOutputLimits
+	Compactor      Compactor     // Optional compactor for context-length recovery
 	MaxLLMRetries  int           // Maximum number of retries for LLM calls
 	RetryBaseDelay time.Duration // Base delay for exponential backoff
 }
+
+var streamAssistantResponseFn = streamAssistantResponse
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -73,6 +76,9 @@ func runInnerLoop(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) {
+	const maxCompactionRecoveries = 1
+	compactionRecoveries := 0
+
 	for {
 		// Check for context cancellation
 		select {
@@ -85,6 +91,35 @@ func runInnerLoop(
 		// Stream assistant response with retry logic
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
+			if llm.IsContextLengthExceeded(err) && config.Compactor != nil && compactionRecoveries < maxCompactionRecoveries {
+				before := len(agentCtx.Messages)
+				stream.Push(NewCompactionStartEvent(CompactionInfo{
+					Auto:    true,
+					Before:  before,
+					Trigger: "context_limit_recovery",
+				}))
+				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
+				if compactErr != nil {
+					slog.Error("Compaction recovery failed", "error", compactErr)
+					stream.Push(NewCompactionEndEvent(CompactionInfo{
+						Auto:    true,
+						Before:  before,
+						Error:   compactErr.Error(),
+						Trigger: "context_limit_recovery",
+					}))
+				} else {
+					compactionRecoveries++
+					agentCtx.Messages = compacted
+					stream.Push(NewCompactionEndEvent(CompactionInfo{
+						Auto:    true,
+						Before:  before,
+						After:   len(compacted),
+						Trigger: "context_limit_recovery",
+					}))
+					continue
+				}
+			}
+
 			slog.Error("Error streaming response", "error", err)
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
@@ -163,9 +198,13 @@ func streamAssistantResponseWithRetry(
 			}
 		}
 
-		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
+		msg, err := streamAssistantResponseFn(ctx, agentCtx, config, stream)
 		if err == nil {
 			return msg, nil
+		}
+
+		if llm.IsContextLengthExceeded(err) {
+			return nil, err
 		}
 
 		lastErr = err

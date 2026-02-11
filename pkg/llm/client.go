@@ -113,7 +113,7 @@ func StreamLLM(
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("API error: %s", string(body))})
+			stream.Push(LLMErrorEvent{Error: ClassifyAPIError(resp.StatusCode, string(body))})
 			return
 		}
 
@@ -150,10 +150,23 @@ func StreamLLM(
 					FinishReason *string `json:"finish_reason"`
 				} `json:"choices"`
 				Usage *Usage `json:"usage"`
+				Error *struct {
+					Message string `json:"message,omitempty"`
+					Type    string `json:"type,omitempty"`
+				} `json:"error,omitempty"`
 			}
 
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue
+			}
+
+			if chunk.Error != nil {
+				msg := strings.TrimSpace(chunk.Error.Message)
+				if msg == "" {
+					msg = strings.TrimSpace(chunk.Error.Type)
+				}
+				stream.Push(LLMErrorEvent{Error: ClassifyAPIError(resp.StatusCode, msg)})
+				return
 			}
 
 			if len(chunk.Choices) == 0 {

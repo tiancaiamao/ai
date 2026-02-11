@@ -133,6 +133,7 @@ func (a *Agent) processPrompt(message string) {
 		Executor:   a.executor,
 		Metrics:    a.metrics,
 		ToolOutput: a.toolOutput,
+		Compactor:  a.compactor,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
