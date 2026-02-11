@@ -118,6 +118,7 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 		agent.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
 	}
 
+	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newMessages = append(newMessages, recentMessages...)
 
 	slog.Info("[Compact] Compressed to messages", "count", len(newMessages))
@@ -212,7 +213,15 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agent.AgentMessage, p
 		return "", fmt.Errorf("no messages to summarize")
 	}
 
-	conversationText := serializeConversation(messages)
+	projected := projectMessagesForSummary(messages)
+	if len(projected) == 0 {
+		if strings.TrimSpace(previousSummary) != "" {
+			return previousSummary, nil
+		}
+		return "", fmt.Errorf("no agent-visible messages to summarize")
+	}
+
+	conversationText := serializeConversation(projected)
 	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
 	basePrompt := summarizationPrompt
 	if previousSummary != "" {
@@ -328,6 +337,9 @@ func (c *Compactor) EffectiveTokenLimit() (int, string) {
 func (c *Compactor) EstimateTokens(messages []agent.AgentMessage) int {
 	totalTokens := 0
 	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
 		totalTokens += estimateMessageTokens(msg)
 	}
 	return totalTokens
@@ -357,6 +369,9 @@ func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage) ([]agent.Agen
 func lastAssistantUsageTokens(messages []agent.AgentMessage) (int, int) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
+		if !msg.IsAgentVisible() {
+			continue
+		}
 		if msg.Role != "assistant" || msg.Usage == nil {
 			continue
 		}
@@ -383,6 +398,10 @@ func usageTotalTokens(usage *agent.Usage) int {
 }
 
 func estimateMessageTokens(msg agent.AgentMessage) int {
+	if !msg.IsAgentVisible() {
+		return 0
+	}
+
 	charCount := 0
 	for _, block := range msg.Content {
 		switch b := block.(type) {
@@ -451,6 +470,10 @@ func splitMessagesByTokenBudget(
 func serializeConversation(messages []agent.AgentMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+
 		switch msg.Role {
 		case "user":
 			if text := extractText(msg); text != "" {
@@ -495,11 +518,127 @@ func serializeConversation(messages []agent.AgentMessage) string {
 			}
 		case "toolResult":
 			if text := extractText(msg); text != "" {
-				parts = append(parts, "[Tool result]: "+text)
+				toolName := strings.TrimSpace(msg.ToolName)
+				if toolName == "" {
+					parts = append(parts, "[Tool result]: "+text)
+				} else {
+					parts = append(parts, "[Tool result "+toolName+"]: "+text)
+				}
 			}
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func projectMessagesForSummary(messages []agent.AgentMessage) []agent.AgentMessage {
+	projected := make([]agent.AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+
+		if msg.Role != "toolResult" {
+			projected = append(projected, msg)
+			continue
+		}
+
+		copyMsg := msg
+		toolText := strings.TrimSpace(extractText(msg))
+		if toolText == "" {
+			toolText = "(empty output)"
+		}
+		toolText = trimTextWithTail(toolText, 1800)
+		copyMsg.Content = []agent.ContentBlock{
+			agent.TextContent{Type: "text", Text: toolText},
+		}
+		projected = append(projected, copyMsg)
+	}
+	return projected
+}
+
+func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []agent.AgentMessage {
+	if cutoff <= 0 || len(messages) == 0 {
+		return messages
+	}
+
+	visibleToolIndexes := make([]int, 0)
+	for i, msg := range messages {
+		if msg.Role == "toolResult" && msg.IsAgentVisible() {
+			visibleToolIndexes = append(visibleToolIndexes, i)
+		}
+	}
+
+	excess := len(visibleToolIndexes) - cutoff
+	if excess <= 0 {
+		return messages
+	}
+
+	compacted := append([]agent.AgentMessage{}, messages...)
+	lines := make([]string, 0, excess)
+
+	for i := 0; i < excess; i++ {
+		idx := visibleToolIndexes[i]
+		original := compacted[idx]
+		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
+		lines = append(lines, compactionToolDigestLine(original))
+	}
+
+	digest := "[Compaction tool digest]\n" + strings.Join(lines, "\n")
+	compacted = append(compacted, agent.NewUserMessage(digest).WithVisibility(true, false).WithKind("tool_summary"))
+	return compacted
+}
+
+func compactionToolDigestLine(msg agent.AgentMessage) string {
+	status := "ok"
+	if msg.IsError {
+		status = "error"
+	}
+
+	name := strings.TrimSpace(msg.ToolName)
+	if name == "" {
+		name = "unknown"
+	}
+
+	text := strings.TrimSpace(extractText(msg))
+	if text == "" {
+		text = "(empty output)"
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = trimRunes(text, 200)
+
+	return fmt.Sprintf("- %s (%s): %s", name, status, text)
+}
+
+func trimRunes(input string, limit int) string {
+	if limit <= 0 {
+		return input
+	}
+	runes := []rune(input)
+	if len(runes) <= limit {
+		return input
+	}
+	return string(runes[:limit])
+}
+
+func trimTextWithTail(input string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return input
+	}
+	runes := []rune(input)
+	if len(runes) <= maxRunes {
+		return input
+	}
+
+	head := maxRunes * 2 / 3
+	tail := maxRunes - head
+	if head < 1 {
+		head = 1
+	}
+	if tail < 1 {
+		tail = 1
+	}
+
+	return string(runes[:head]) + "\n... (truncated) ...\n" + string(runes[len(runes)-tail:])
 }
 
 func extractText(msg agent.AgentMessage) string {
