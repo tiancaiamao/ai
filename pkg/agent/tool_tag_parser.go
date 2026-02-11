@@ -26,13 +26,35 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 	if msg.Role != "assistant" {
 		return msg, false
 	}
-	if len(msg.ExtractToolCalls()) > 0 {
-		return msg, false
-	}
 
 	text := msg.ExtractText()
 	if text == "" || !strings.Contains(text, "<") {
 		return msg, false
+	}
+
+	// Check if existing tool calls are valid
+	// Only skip if we have valid tool calls with names and arguments
+	existingCalls := msg.ExtractToolCalls()
+	hasValidToolCalls := false
+	for _, tc := range existingCalls {
+		if tc.Name != "" && len(tc.Arguments) > 0 {
+			hasValidToolCalls = true
+			break
+		}
+	}
+
+	if hasValidToolCalls {
+		slog.Debug("[Loop] skipping tag parsing, valid tool calls exist",
+			"count", len(existingCalls),
+			"first_tool", existingCalls[0].Name)
+		return msg, false
+	}
+
+	// Log when we're attempting to parse tags despite having tool_calls field
+	if len(existingCalls) > 0 && !hasValidToolCalls {
+		slog.Debug("[Loop] attempting tag parsing despite empty/invalid tool_calls field",
+			"field_count", len(existingCalls),
+			"text_preview", truncateLine(text, 100))
 	}
 
 	normalized := thinkTagRegex.ReplaceAllString(text, "")
@@ -269,4 +291,81 @@ func tagValue(body, name string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
+}
+
+// truncateLine truncates a string to a maximum length for logging.
+func truncateLine(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}
+
+// DetectIncompleteToolCalls detects incomplete or malformed tool call patterns in text.
+// Returns a list of detected issues for debugging purposes.
+func DetectIncompleteToolCalls(text string) []string {
+	issues := []string{}
+
+	// Check for unclosed tool tags (opening tag without closing)
+	// We do this by counting opening and closing tags for each tool
+	toolNames := []string{"read_file", "read", "write", "edit", "bash", "grep"}
+	for _, toolName := range toolNames {
+		// Match exact tool name boundaries using word boundaries in regex
+		openPattern := regexp.MustCompile(`<` + regexp.QuoteMeta(toolName) + `>`)
+		closePattern := regexp.MustCompile(`</` + regexp.QuoteMeta(toolName) + `>`)
+		openCount := len(openPattern.FindAllStringIndex(text, -1))
+		closeCount := len(closePattern.FindAllStringIndex(text, -1))
+		if openCount > closeCount {
+			issues = append(issues, fmt.Sprintf("detected unclosed <%s> tag", toolName))
+		} else if closeCount > openCount {
+			issues = append(issues, fmt.Sprintf("detected closing </%s> tag without opening tag", toolName))
+		}
+	}
+
+	// Check for malformed tool call patterns (like <Read instead of <read>)
+	malformedRegex := regexp.MustCompile(`<[A-Z][a-z]+[>\s]`)
+	if malformedRegex.MatchString(text) {
+		issues = append(issues, "detected tool call with uppercase letters (should use lowercase)")
+	}
+
+	return issues
+}
+
+// ValidateToolCallArgs validates that required parameters are present for a tool call.
+func ValidateToolCallArgs(toolName string, args map[string]any) error {
+	switch toolName {
+	case "read":
+		if args["path"] == nil {
+			return fmt.Errorf("read tool requires 'path' parameter")
+		}
+	case "write":
+		if args["path"] == nil {
+			return fmt.Errorf("write tool requires 'path' parameter")
+		}
+		if args["content"] == nil {
+			return fmt.Errorf("write tool requires 'content' parameter")
+		}
+	case "edit":
+		if args["path"] == nil {
+			return fmt.Errorf("edit tool requires 'path' parameter")
+		}
+		if args["oldText"] == nil && args["old"] == nil {
+			return fmt.Errorf("edit tool requires 'oldText' parameter")
+		}
+		if args["newText"] == nil && args["new"] == nil {
+			return fmt.Errorf("edit tool requires 'newText' parameter")
+		}
+	case "bash":
+		if args["command"] == nil && args["cmd"] == nil {
+			return fmt.Errorf("bash tool requires 'command' parameter")
+		}
+	case "grep":
+		if args["pattern"] == nil && args["query"] == nil {
+			return fmt.Errorf("grep tool requires 'pattern' parameter")
+		}
+	}
+	return nil
 }

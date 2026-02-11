@@ -439,8 +439,17 @@ func streamAssistantResponse(
 				TotalTokens:  e.Usage.TotalTokens,
 			}
 
+			// Try to inject tool calls from tagged text
 			if updated, ok := injectToolCallsFromTaggedText(finalMessage); ok {
 				finalMessage = updated
+			} else {
+				// Check for incomplete tool calls and log for debugging
+				text := finalMessage.ExtractText()
+				if len(text) > 0 && strings.Contains(text, "<") {
+					slog.Debug("[Loop] assistant response contains tags but no tool calls injected",
+						"text_preview", truncateLine(text, 200),
+						"stop_reason", e.StopReason)
+				}
 			}
 
 			stream.Push(NewMessageEndEvent(finalMessage))
@@ -475,8 +484,42 @@ func executeToolCalls(
 		normalized := normalizeToolCall(tc)
 		args, argErr := coerceToolArguments(normalized.Name, normalized.Arguments)
 		if argErr != nil {
+			// Provide helpful error message with format guidance
+			errorMsg := fmt.Sprintf("Invalid tool arguments for '%s': %v\n\nCorrect format:\n",
+				normalized.Name, argErr)
+
+			switch normalized.Name {
+			case "read":
+				errorMsg += `<read>
+  <path>file.txt</path>
+</read>`
+			case "write":
+				errorMsg += `<write>
+  <path>file.txt</path>
+  <content>content here</content>
+</write>`
+			case "edit":
+				errorMsg += `<edit>
+  <path>file.txt</path>
+  <oldText>old text</oldText>
+  <newText>new text</newText>
+</edit>`
+			case "bash":
+				errorMsg += `<bash>
+  <command>your command here</command>
+</bash>
+
+Alternatively:
+<bash>command here</bash>`
+			case "grep":
+				errorMsg += `<grep>
+  <pattern>search pattern</pattern>
+  <path>optional path</path>
+</grep>`
+			}
+
 			result := NewToolResultMessage(normalized.ID, normalized.Name, []ContentBlock{
-				TextContent{Type: "text", Text: fmt.Sprintf("Invalid tool arguments: %v", argErr)},
+				TextContent{Type: "text", Text: errorMsg},
 			}, true)
 			results = append(results, result)
 			stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
