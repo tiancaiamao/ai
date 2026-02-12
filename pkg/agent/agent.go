@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 const (
@@ -367,7 +368,7 @@ func (a *Agent) SetToolSummaryStrategy(strategy string) {
 // SetThinkingLevel controls reasoning depth instructions sent to the model.
 // Accepted values: off, minimal, low, medium, high, xhigh.
 func (a *Agent) SetThinkingLevel(level string) {
-	a.thinkingLevel = normalizeThinkingLevel(level)
+	a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

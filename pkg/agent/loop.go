@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 const (
@@ -37,36 +38,6 @@ type LoopConfig struct {
 var streamAssistantResponseFn = streamAssistantResponse
 var summarizeToolResultFn = summarizeToolResultWithLLM
 var summarizeToolResultsBatchFn = summarizeToolResultsBatchWithLLM
-
-func normalizeThinkingLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "off", "minimal", "low", "medium", "high", "xhigh":
-		return strings.ToLower(strings.TrimSpace(level))
-	case "":
-		return "high"
-	default:
-		return "high"
-	}
-}
-
-func thinkingInstruction(level string) string {
-	switch normalizeThinkingLevel(level) {
-	case "off":
-		return "Thinking level is off. Do not emit reasoning/thinking content. Respond directly with concise results and tool calls when needed."
-	case "minimal":
-		return "Thinking level is minimal. Keep reasoning very brief and only include what is strictly necessary."
-	case "low":
-		return "Thinking level is low. Keep reasoning concise and focused."
-	case "medium":
-		return "Thinking level is medium. Use balanced reasoning depth."
-	case "high":
-		return "Thinking level is high. Use thorough reasoning where needed."
-	case "xhigh":
-		return "Thinking level is xhigh. Use very thorough reasoning before final answers and tool calls."
-	default:
-		return ""
-	}
-}
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -277,7 +248,7 @@ func streamAssistantResponse(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) (*AgentMessage, error) {
-	thinkingLevel := normalizeThinkingLevel(config.ThinkingLevel)
+	thinkingLevel := prompt.NormalizeThinkingLevel(config.ThinkingLevel)
 
 	// Create timeout context for LLM calls
 	llmTimeout := 120 * time.Second
@@ -294,7 +265,7 @@ func streamAssistantResponse(
 
 	// Build LLM context
 	systemPrompt := agentCtx.SystemPrompt
-	if instruction := thinkingInstruction(thinkingLevel); instruction != "" {
+	if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
 		if strings.TrimSpace(systemPrompt) == "" {
 			systemPrompt = instruction
 		} else {

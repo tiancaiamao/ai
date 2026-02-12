@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+	agentprompt "github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 const (
@@ -143,7 +144,7 @@ func summarizeToolResultWithLLM(
 	defer cancel()
 
 	llmCtx := llm.LLMContext{
-		SystemPrompt: toolSummarySystemPrompt + "\n" + thinkingInstruction(toolSummaryThinkingLevel),
+		SystemPrompt: toolSummarySystemPrompt + "\n" + agentprompt.ThinkingInstruction(toolSummaryThinkingLevel),
 		Messages: []llm.LLMMessage{
 			{Role: "user", Content: prompt},
 		},
@@ -275,7 +276,7 @@ func summarizeToolResultsBatchWithLLM(
 	defer cancel()
 
 	llmCtx := llm.LLMContext{
-		SystemPrompt: toolSummaryBatchSystemPrompt + "\n" + thinkingInstruction(toolSummaryThinkingLevel),
+		SystemPrompt: toolSummaryBatchSystemPrompt + "\n" + agentprompt.ThinkingInstruction(toolSummaryThinkingLevel),
 		Messages: []llm.LLMMessage{
 			{Role: "user", Content: prompt},
 		},

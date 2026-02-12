@@ -14,6 +14,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
@@ -157,15 +158,18 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		IncludeDefaults: true,
 	})
 
-	// Create agent with skills
-	systemPrompt := `You are a helpful coding assistant.
-You have access to tools: read, write, grep, bash, edit.
+	// Create agent with skills using structured prompt builder
+	basePrompt := `You are a helpful coding assistant.
 When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
-Do not include chain-of-thought or <think> tags in your output.`
+Do not include chain-of-thought or <thinking> tags in your output.`
+
+	// Build the full system prompt
+	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+	systemPrompt := promptBuilder.Build()
+
+	// Helper function to create a new agent context
 	createBaseContext := func() *agent.AgentContext {
-		if len(skillResult.Skills) > 0 {
-			return agent.NewAgentContextWithSkills(systemPrompt, skillResult.Skills)
-		}
 		return agent.NewAgentContext(systemPrompt)
 	}
 	agentCtx := createBaseContext()

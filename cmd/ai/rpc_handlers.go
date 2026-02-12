@@ -20,6 +20,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -183,19 +184,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Debug("Skill", "name", s.Name, "description", s.Description)
 	}
 
-	// Create agent with skills
-    systemPrompt := `You are a helpful AI coding assistant.
+	// Create agent with skills using structured prompt builder
+	basePrompt := `You are a helpful AI coding assistant.
 - Always output JSON objects as specified by the task schema.
 - Never output free text or markdown explanations.
-- You have access to limited tools: read, write, grep, bash, edit; but you can learn skills.
 - If you cannot answer the request, return an empty JSON with error field.
 - Do not hallucinate or add unnecessary commentary.`
+
+	// Build the full system prompt (used for agent and compactor)
+	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+	systemPrompt := promptBuilder.Build()
+
+	// Helper function to create a new agent context
 	createBaseContext := func() *agent.AgentContext {
-		if len(skillResult.Skills) > 0 {
-			return agent.NewAgentContextWithSkills(systemPrompt, skillResult.Skills)
-		}
-		return agent.NewAgentContext(systemPropt)
+		return agent.NewAgentContext(systemPrompt)
 	}
+
 	agentCtx := createBaseContext()
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
