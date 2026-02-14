@@ -12,7 +12,7 @@ func main() {
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json mode)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
-	debug := flag.Bool("debug", false, "enable debug logging")
+	debug := flag.Bool("debug", false, "enable debug mode")
 	flag.Parse()
 
 	switch *mode {

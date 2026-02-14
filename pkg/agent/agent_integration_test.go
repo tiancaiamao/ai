@@ -38,7 +38,7 @@ func TestExecutorRetryMechanism(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, content)
-		assert.Equal(t, 3, tool.calls) // Should have been called 3 times (initial + 2 retries)
+		assert.Equal(t, 3, tool.calls)                  // Should have been called 3 times (initial + 2 retries)
 		assert.True(t, elapsed >= 100*time.Millisecond) // At least 100ms backoff
 	})
 

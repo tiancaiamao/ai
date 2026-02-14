@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
@@ -91,17 +92,29 @@ func (s *asyncToolSummarizer) worker() {
 		case <-s.ctx.Done():
 			return
 		case job := <-s.jobs:
+			summarySpan := traceevent.StartSpan(s.ctx, "tool_summary_batch", traceevent.CategoryTool,
+				traceevent.Field{Key: "mode", Value: "batch"},
+				traceevent.Field{Key: "strategy", Value: s.strategy},
+				traceevent.Field{Key: "batch_size", Value: len(job.messages)},
+			)
 			summary := ""
+			fallback := false
 			if s.strategy == "heuristic" {
 				summary = fallbackToolSummaryBatch(job.messages)
+				fallback = true
 			} else {
 				text, err := summarizeToolResultsBatchFn(s.ctx, s.model, s.apiKey, job.messages)
 				if err != nil {
 					summary = fallbackToolSummaryBatch(job.messages)
+					fallback = true
+					summarySpan.AddField("llm_error", err.Error())
 				} else {
 					summary = text
 				}
 			}
+			summarySpan.AddField("fallback", fallback)
+			summarySpan.AddField("summary_chars", len([]rune(summary)))
+			summarySpan.End()
 
 			result := asyncToolSummaryResult{
 				keys:     append([]string(nil), job.keys...),
@@ -269,6 +282,10 @@ func (s *asyncToolSummarizer) applyReady(agentCtx *AgentContext) {
 	s.mu.Unlock()
 
 	for _, batch := range ready {
+		applySpan := traceevent.StartSpan(s.ctx, "tool_summary_batch", traceevent.CategoryTool,
+			traceevent.Field{Key: "mode", Value: "batch_apply"},
+			traceevent.Field{Key: "batch_size", Value: len(batch.keys)},
+		)
 		archived := make([]AgentMessage, 0, len(batch.keys))
 		for _, key := range batch.keys {
 			for i, msg := range agentCtx.Messages {
@@ -287,6 +304,9 @@ func (s *asyncToolSummarizer) applyReady(agentCtx *AgentContext) {
 		if len(archived) > 0 {
 			agentCtx.Messages = append(agentCtx.Messages, newToolBatchSummaryMessage(archived, batch.summary))
 		}
+		applySpan.AddField("archived_count", len(archived))
+		applySpan.AddField("summary_chars", len([]rune(batch.summary)))
+		applySpan.End()
 
 		s.mu.Lock()
 		for _, key := range batch.keys {

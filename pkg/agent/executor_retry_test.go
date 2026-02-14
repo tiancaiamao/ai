@@ -9,12 +9,12 @@ import (
 
 // MockTool for testing retry logic
 type MockTool struct {
-	name          string
-	failCount     int
-	maxFailures   int
-	failMessage   string
-	calls         int
-	execDelayMs   int
+	name        string
+	failCount   int
+	maxFailures int
+	failMessage string
+	calls       int
+	execDelayMs int
 }
 
 func (m *MockTool) Name() string {

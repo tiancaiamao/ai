@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +18,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 func normalizeSessionPath(sessionPath string) (string, error) {
@@ -210,6 +213,59 @@ func buildSkillCommands(skills []skill.Skill) []rpc.SlashCommand {
 		})
 	}
 	return commands
+}
+
+func initTraceFileHandler() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	tracesDir := filepath.Join(homeDir, ".ai", "traces")
+	handler, err := traceevent.NewFileHandler(tracesDir)
+	if err != nil {
+		return tracesDir, err
+	}
+	traceevent.SetHandler(handler)
+	return tracesDir, nil
+}
+
+// runDetachedTraceSpan executes a non-prompt operation as an independent trace segment.
+// It creates a fresh trace ID, records a span, and finalizes to disk before returning.
+func runDetachedTraceSpan(
+	name string,
+	category traceevent.TraceCategory,
+	fields []traceevent.Field,
+	run func(ctx context.Context, span *traceevent.Span) error,
+) error {
+	ctx := context.Background()
+	tb := traceevent.GetTraceBuf(ctx)
+	if tb != nil {
+		if err := tb.DiscardOrFlush(ctx); err != nil {
+			slog.Warn("Failed to finalize previous trace segment", "error", err)
+		}
+		tb.SetTraceID(traceevent.GenerateTraceID("session", 0))
+		defer func() {
+			if err := tb.DiscardOrFlush(ctx); err != nil {
+				slog.Warn("Failed to finalize detached trace segment", "error", err)
+			}
+			// Switch to a fresh ID so later logs don't overwrite this finalized file.
+			tb.SetTraceID(traceevent.GenerateTraceID("session", 0))
+		}()
+	}
+
+	span := traceevent.StartSpan(ctx, name, category, fields...)
+	defer span.End()
+
+	if run == nil {
+		return nil
+	}
+
+	err := run(span.Context(), span)
+	if err != nil {
+		span.AddField("error", true)
+		span.AddField("error_message", err.Error())
+	}
+	return err
 }
 
 func forkEntryID(msg agent.AgentMessage, index int) string {

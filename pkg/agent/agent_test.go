@@ -105,7 +105,7 @@ func TestCompactorInterface(t *testing.T) {
 	agent.SetCompactor(mockCompactor)
 
 	// Trigger auto-compact check
-	agent.tryAutoCompact()
+	agent.tryAutoCompact(context.Background())
 
 	if !mockCompactor.called {
 		t.Error("Expected compactor to be called")
@@ -169,6 +169,16 @@ func TestAgentContext(t *testing.T) {
 	retrievedCtx := agent.GetContext()
 	if retrievedCtx.SystemPrompt != "new system prompt" {
 		t.Errorf("Expected system prompt 'new system prompt', got '%s'", retrievedCtx.SystemPrompt)
+	}
+
+	// Existing tools should not be dropped when replacing context.
+	agent.AddTool(&mockTool{name: "ctx_tool"})
+	agent.SetContext(NewAgentContext("another prompt"))
+	if len(agent.GetContext().Tools) != 1 {
+		t.Fatalf("expected tools to be preserved on SetContext, got %d", len(agent.GetContext().Tools))
+	}
+	if agent.GetContext().Tools[0].Name() != "ctx_tool" {
+		t.Fatalf("expected preserved tool ctx_tool, got %s", agent.GetContext().Tools[0].Name())
 	}
 }
 

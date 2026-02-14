@@ -12,6 +12,12 @@ var toolCallSeq uint64
 func normalizeToolCall(tc ToolCallContent) ToolCallContent {
 	normalized := tc
 	normalized.Name = normalizeToolCallName(tc.Name)
+	if isGenericToolName(normalized.Name) {
+		if inferredName, inferredArgs, ok := inferToolFromArgs(tc.Arguments); ok {
+			normalized.Name = inferredName
+			normalized.Arguments = inferredArgs
+		}
+	}
 	normalized.ID = ensureToolCallID(tc.ID)
 	if normalized.Arguments == nil {
 		normalized.Arguments = map[string]any{}
@@ -33,6 +39,65 @@ func normalizeToolCallName(name string) string {
 		return "grep"
 	default:
 		return strings.ToLower(strings.TrimSpace(name))
+	}
+}
+
+func isGenericToolName(name string) bool {
+	switch normalizeToolCallName(name) {
+	case "", "tool", "tool_call", "call_tool", "function", "function_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferToolFromArgs(args map[string]any) (string, map[string]any, bool) {
+	argSource := args
+	if argSource == nil {
+		argSource = map[string]any{}
+	}
+
+	// Wrapper payload: {"name":"read","arguments":{...}}
+	if nested := getMapArg(argSource, "arguments", "args", "input"); nested != nil {
+		argSource = nested
+	}
+
+	// Name provided in argument payload.
+	if hintedName := getStringArg(args, "name", "tool", "tool_name", "function", "function_name"); hintedName != "" {
+		normalized := normalizeToolCallName(hintedName)
+		if !isGenericToolName(normalized) {
+			return normalized, argSource, true
+		}
+	}
+
+	// Heuristic fallback based on argument shape.
+	command := getStringArg(argSource, "command", "cmd")
+	pattern := getStringArg(argSource, "pattern", "query")
+	path := getStringArg(argSource, "path", "file")
+	content := getStringArg(argSource, "content", "text")
+	oldText := getStringArg(argSource, "oldText", "old_text", "old")
+	newText := getStringArg(argSource, "newText", "new_text", "new")
+
+	switch {
+	case command != "":
+		return "bash", map[string]any{"command": command}, true
+	case pattern != "":
+		inferred := map[string]any{"pattern": pattern}
+		if p := getStringArg(argSource, "path"); p != "" {
+			inferred["path"] = p
+		}
+		if fp := getStringArg(argSource, "filePattern", "file_pattern"); fp != "" {
+			inferred["filePattern"] = fp
+		}
+		return "grep", inferred, true
+	case path != "" && content != "":
+		return "write", map[string]any{"path": path, "content": content}, true
+	case path != "" && oldText != "" && newText != "":
+		return "edit", map[string]any{"path": path, "oldText": oldText, "newText": newText}, true
+	case path != "":
+		return "read", map[string]any{"path": path}, true
+	default:
+		return "", nil, false
 	}
 }
 
@@ -140,4 +205,20 @@ func getStringArg(args map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func getMapArg(args map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case map[string]any:
+			if len(v) > 0 {
+				return v
+			}
+		}
+	}
+	return nil
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, debug bool) error {
@@ -40,10 +41,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		// Use defaults - LoadConfig already provides defaults
 		cfg, _ = config.LoadConfig(configPath)
 	}
-	if debug {
-		cfg.Log.Level = "debug"
-	}
-
 	// Initialize logger from config
 	log, err := cfg.Log.CreateLogger()
 	if err != nil {
@@ -52,11 +49,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Set the default slog logger
 	slog.SetDefault(log)
-
-	aiLogPath := config.ResolveLogPath(cfg.Log)
-	if aiLogPath != "" {
-		slog.Info("Log file", "path", aiLogPath)
-	}
+	_ = debug
+	traceOutputPath := ""
 
 	// Convert config to llm.Model
 	model := cfg.GetLLMModel()
@@ -153,12 +147,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Registered  tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
 	// Load skills
+	traceOutputPath, err = initTraceFileHandler()
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
+	} else {
+		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	agentDir := filepath.Join(homeDir, ".ai")
+
 	skillLoader := skill.NewLoader(agentDir)
 	skillResult := skillLoader.Load(&skill.LoadOptions{
 		CWD:             cwd,
@@ -185,9 +187,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create agent with skills using structured prompt builder
+
+	// - Always output JSON objects as specified by the task schema.
+	// - Never output free text or markdown explanations.
+
 	basePrompt := `You are a helpful AI coding assistant.
-- Always output JSON objects as specified by the task schema.
-- Never output free text or markdown explanations.
 - If you cannot answer the request, return an empty JSON with error field.
 - Do not hallucinate or add unnecessary commentary.`
 
@@ -198,15 +202,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Helper function to create a new agent context
 	createBaseContext := func() *agent.AgentContext {
-		return agent.NewAgentContext(systemPrompt)
+		ctx := agent.NewAgentContext(systemPrompt)
+		for _, tool := range registry.All() {
+			ctx.AddTool(tool)
+		}
+		return ctx
 	}
 
 	agentCtx := createBaseContext()
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
-	for _, tool := range registry.All() {
-		ag.AddTool(tool)
-	}
+	defer ag.Shutdown()
 
 	// Create compactor for context compression
 	compactorConfig := cfg.Compactor
@@ -292,6 +298,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	pendingSteer := false
 	ag.SetThinkingLevel(currentThinkingLevel)
 
+	// Helper function to expand /skill:name commands
+	expandSkillCommands := func(text string) string {
+		return skill.ExpandCommand(text, skillResult.Skills)
+	}
+
 	// Set up handlers
 	server.SetPromptHandler(func(req rpc.PromptRequest) error {
 		slog.Info("Received prompt:", "value", req.Message)
@@ -301,6 +312,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		if len(req.Images) > 0 {
 			return fmt.Errorf("images are not supported in this RPC implementation")
+		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
 		}
 
 		stateMu.Lock()
@@ -323,19 +340,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				stateMu.Lock()
 				pendingSteer = true
 				stateMu.Unlock()
-				ag.Steer(message)
+				ag.Steer(expandedMessage)
 				return nil
 			case "followUp", "follow_up":
 				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
 					return fmt.Errorf("follow-up queue already has a pending message")
 				}
-				return ag.FollowUp(message)
+				return ag.FollowUp(expandedMessage)
 			default:
 				return fmt.Errorf("invalid streamingBehavior: %s", behavior)
 			}
 		}
 
-		return ag.Prompt(message)
+		return ag.Prompt(expandedMessage)
 	})
 
 	server.SetSteerHandler(func(message string) error {
@@ -343,6 +360,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
+		}
+
 		stateMu.Lock()
 		mode := steeringMode
 		pending := pendingSteer
@@ -353,7 +377,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Lock()
 		pendingSteer = true
 		stateMu.Unlock()
-		ag.Steer(message)
+		ag.Steer(expandedMessage)
 		return nil
 	})
 
@@ -362,13 +386,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty follow-up message")
 		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command in follow_up", "original", message, "skill", skill.ExtractSkillName(message))
+		}
+
 		stateMu.Lock()
 		mode := followUpMode
 		stateMu.Unlock()
 		if mode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
 			return fmt.Errorf("follow-up queue already has a pending message")
 		}
-		return ag.FollowUp(message)
+		return ag.FollowUp(expandedMessage)
 	})
 
 	server.SetAbortHandler(func() error {
@@ -560,7 +591,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			SessionID:             currentSessionID,
 			SessionName:           currentSessionName,
 			AIPid:                 os.Getpid(),
-			AILogPath:             aiLogPath,
+			AILogPath:             traceOutputPath,
 			AIWorkingDir:          cwd,
 			AutoCompactionEnabled: autoCompact,
 			MessageCount:          len(ag.GetMessages()),
@@ -582,23 +613,60 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	server.SetCompactHandler(func() (*rpc.CompactResult, error) {
 		slog.Info("Received compact")
 		beforeCount := len(ag.GetMessages())
-		result, err := sess.Compact(compactor)
+		compactionInfo := agent.CompactionInfo{
+			Auto:    false,
+			Before:  beforeCount,
+			Trigger: "manual_command",
+		}
+		stateMu.Lock()
+		isCompacting = true
+		stateMu.Unlock()
+		server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
+		defer func() {
+			stateMu.Lock()
+			isCompacting = false
+			stateMu.Unlock()
+			server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
+		}()
+
+		var response *rpc.CompactResult
+		err := runDetachedTraceSpan(
+			"compaction",
+			traceevent.CategoryEvent,
+			[]traceevent.Field{{Key: "source", Value: "manual"}},
+			func(_ context.Context, span *traceevent.Span) error {
+				span.AddField("before_messages", beforeCount)
+
+				result, err := sess.Compact(compactor)
+				if err != nil {
+					slog.Info("Compact failed:", "value", err)
+					return err
+				}
+
+				// Replace messages with compacted version
+				ag.GetContext().Messages = sess.GetMessages()
+
+				afterCount := len(ag.GetMessages())
+				span.AddField("after_messages", afterCount)
+				span.AddField("tokens_before", result.TokensBefore)
+				span.AddField("tokens_after", result.TokensAfter)
+				compactionInfo.After = afterCount
+
+				slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
+				response = &rpc.CompactResult{
+					Summary:          result.Summary,
+					FirstKeptEntryID: result.FirstKeptEntryID,
+					TokensBefore:     result.TokensBefore,
+					TokensAfter:      result.TokensAfter,
+				}
+				return nil
+			},
+		)
 		if err != nil {
-			slog.Info("Compact failed:", "value", err)
+			compactionInfo.Error = err.Error()
 			return nil, err
 		}
-
-		// Replace messages with compacted version
-		ag.GetContext().Messages = sess.GetMessages()
-
-		afterCount := len(ag.GetMessages())
-		slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
-		return &rpc.CompactResult{
-			Summary:          result.Summary,
-			FirstKeptEntryID: result.FirstKeptEntryID,
-			TokensBefore:     result.TokensBefore,
-			TokensAfter:      result.TokensAfter,
-		}, nil
+		return response, nil
 	})
 
 	server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
@@ -832,6 +900,82 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil
 	})
 
+	server.SetSetTraceEventsHandler(func(events []string) ([]string, error) {
+		slog.Info("Received set_trace_events", "events", events)
+
+		if len(events) == 0 {
+			// Empty array means reset to default set.
+			return traceevent.ResetToDefaultEvents(), nil
+		}
+
+		normalized := make([]string, 0, len(events))
+		for _, e := range events {
+			e = strings.ToLower(strings.TrimSpace(e))
+			if e == "" {
+				continue
+			}
+			normalized = append(normalized, e)
+		}
+		if len(normalized) == 0 {
+			return traceevent.ResetToDefaultEvents(), nil
+		}
+
+		applyExpanded := func(expanded []string, replace bool) []string {
+			if replace {
+				traceevent.DisableAllEvents()
+			}
+			for _, eventName := range expanded {
+				traceevent.EnableEvent(eventName)
+			}
+			return traceevent.GetEnabledEvents()
+		}
+
+		op := normalized[0]
+		switch op {
+		case "default":
+			return traceevent.ResetToDefaultEvents(), nil
+		case "all":
+			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
+			return applyExpanded(expanded, true), nil
+		case "off", "none":
+			traceevent.DisableAllEvents()
+			return []string{}, nil
+		case "enable":
+			if len(normalized) == 1 {
+				return nil, fmt.Errorf("trace-events enable requires at least one selector")
+			}
+			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+			if len(unknown) > 0 {
+				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+			}
+			return applyExpanded(expanded, false), nil
+		case "disable":
+			if len(normalized) == 1 {
+				return nil, fmt.Errorf("trace-events disable requires at least one selector")
+			}
+			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+			if len(unknown) > 0 {
+				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+			}
+			for _, eventName := range expanded {
+				traceevent.DisableEvent(eventName)
+			}
+			return traceevent.GetEnabledEvents(), nil
+		default:
+			// Backward-compatible absolute set.
+			expanded, unknown := traceevent.ExpandEventSelectors(normalized)
+			if len(unknown) > 0 {
+				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+			}
+			return applyExpanded(expanded, true), nil
+		}
+	})
+
+	server.SetGetTraceEventsHandler(func() ([]string, error) {
+		slog.Info("Received get_trace_events")
+		return traceevent.GetEnabledEvents(), nil
+	})
+
 	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
 		strategy = strings.ToLower(strings.TrimSpace(strategy))
 		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
@@ -1028,7 +1172,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Start event emitter
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
-	metrics := ag.GetMetrics()
 	go func() {
 		defer close(eventEmitterDone)
 		for {
@@ -1071,9 +1214,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				emitAt := time.Now()
 				if event.EventAt == 0 {
 					event.EventAt = emitAt.UnixNano()
-				}
-				if metrics != nil {
-					metrics.RecordEventEmit(event.Type, time.Unix(0, event.EventAt), emitAt)
 				}
 				server.EmitEvent(event)
 
@@ -1126,9 +1266,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 						emitAt := time.Now()
 						if event.EventAt == 0 {
 							event.EventAt = emitAt.UnixNano()
-						}
-						if metrics != nil {
-							metrics.RecordEventEmit(event.Type, time.Unix(0, event.EventAt), emitAt)
 						}
 						server.EmitEvent(event)
 						if event.Type == "agent_end" {

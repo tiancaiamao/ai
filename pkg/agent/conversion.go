@@ -1,13 +1,18 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // ConvertMessagesToLLM converts agent messages to LLM messages.
-func ConvertMessagesToLLM(messages []AgentMessage) []llm.LLMMessage {
+func ConvertMessagesToLLM(ctx context.Context, messages []AgentMessage) []llm.LLMMessage {
+	span := traceevent.StartSpan(ctx, "ConvertMessagesToLLM", traceevent.CategoryEvent)
+	defer span.End()
+
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
 
 	for _, msg := range messages {
@@ -107,18 +112,30 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) AgentMessage {
 }
 
 // ConvertToolsToLLM converts agent tools to LLM tools.
-func ConvertToolsToLLM(tools []Tool) []llm.LLMTool {
-	llmTools := make([]llm.LLMTool, len(tools))
+func ConvertToolsToLLM(ctx context.Context, tools []Tool) []llm.LLMTool {
+	span := traceevent.StartSpan(ctx, "ConvertToolsToLLM", traceevent.CategoryEvent)
+	defer span.End()
 
-	for i, tool := range tools {
-		llmTools[i] = llm.LLMTool{
+	llmTools := make([]llm.LLMTool, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		name := tool.Name()
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		llmTools = append(llmTools, llm.LLMTool{
 			Type: "function",
 			Function: llm.ToolFunction{
-				Name:        tool.Name(),
+				Name:        name,
 				Description: tool.Description(),
 				Parameters:  tool.Parameters(),
 			},
-		}
+		})
 	}
 
 	return llmTools

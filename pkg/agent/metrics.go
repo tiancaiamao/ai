@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
@@ -23,12 +27,6 @@ type Metrics struct {
 	promptStartNs     atomic.Int64
 	lastPromptStartNs atomic.Int64
 	lastPromptEndNs   atomic.Int64
-	eventCount        atomic.Int64
-	eventLastAtNs     atomic.Int64
-	eventLastEmitNs   atomic.Int64
-	eventLagTotalNs   atomic.Int64
-	eventLagMaxNs     atomic.Int64
-	eventLastType     atomic.Value
 	sessionStart      time.Time
 	lastFlush         time.Time
 	flushInterval     time.Duration
@@ -215,28 +213,100 @@ func (m *Metrics) RecordPrompt(duration time.Duration, err error) {
 	m.lastPromptEndNs.Store(time.Now().UnixNano())
 }
 
-// RecordEventEmit tracks event emission latency.
-func (m *Metrics) RecordEventEmit(eventType string, eventAt, emitAt time.Time) {
-	if eventAt.IsZero() {
-		eventAt = emitAt
+// RecordTraceEvent derives metrics from a unified trace event stream.
+func (m *Metrics) RecordTraceEvent(event traceevent.TraceEvent) {
+	switch canonicalTraceName(event.Name) {
+	case "prompt":
+		if event.Phase == traceevent.PhaseBegin {
+			nowNs := event.Timestamp.UnixNano()
+			m.promptInFlight.Store(1)
+			m.promptStartNs.Store(nowNs)
+			m.lastPromptStartNs.Store(nowNs)
+		}
+		if event.Phase == traceevent.PhaseEnd {
+			durationMs := traceFieldInt64(event.Fields, "duration_ms")
+			errFlag := traceFieldBool(event.Fields, "error")
+			var err error
+			if errFlag {
+				err = errors.New("prompt failed")
+			}
+			m.RecordPrompt(time.Duration(durationMs)*time.Millisecond, err)
+		}
+	case "llm_call":
+		if event.Phase == traceevent.PhaseBegin {
+			nowNs := event.Timestamp.UnixNano()
+			m.llmCalls.InFlight.Store(1)
+			m.llmCalls.StartNs.Store(nowNs)
+			m.llmCalls.LastStartNs.Store(nowNs)
+		}
+		if event.Phase == traceevent.PhaseEnd {
+			inputTokens := int(traceFieldInt64(event.Fields, "input_tokens"))
+			outputTokens := int(traceFieldInt64(event.Fields, "output_tokens"))
+			cacheRead := int(traceFieldInt64(event.Fields, "cache_read"))
+			cacheWrite := int(traceFieldInt64(event.Fields, "cache_write"))
+			durationMs := traceFieldInt64(event.Fields, "duration_ms")
+			firstTokenMs := traceFieldInt64(event.Fields, "first_token_ms")
+			errValue := traceFieldString(event.Fields, "error")
+			var err error
+			if errValue != "" {
+				err = errors.New(errValue)
+			}
+			m.RecordLLMCall(
+				inputTokens,
+				outputTokens,
+				cacheRead,
+				cacheWrite,
+				time.Duration(durationMs)*time.Millisecond,
+				time.Duration(firstTokenMs)*time.Millisecond,
+				err,
+			)
+		}
+	case "tool_execution":
+		if event.Phase == traceevent.PhaseBegin {
+			m.messageCounts.ToolCalls.Add(1)
+		}
+		if event.Phase == traceevent.PhaseEnd {
+			m.messageCounts.ToolResults.Add(1)
+			toolName := traceFieldString(event.Fields, "tool")
+			if toolName == "" {
+				toolName = "unknown"
+			}
+			durationMs := traceFieldInt64(event.Fields, "duration_ms")
+			errFlag := traceFieldBool(event.Fields, "error")
+			errMsg := traceFieldString(event.Fields, "error_message")
+			var err error
+			if errFlag {
+				if errMsg == "" {
+					errMsg = "tool execution failed"
+				}
+				err = errors.New(errMsg)
+			}
+			m.RecordToolExecution(toolName, time.Duration(durationMs)*time.Millisecond, err, 0)
+		}
+	case "message_end":
+		if event.Phase == traceevent.PhaseInstant {
+			role := traceFieldString(event.Fields, "role")
+			if role != "" {
+				m.RecordMessage(role)
+			}
+		}
 	}
-	lag := emitAt.Sub(eventAt)
-	m.eventCount.Add(1)
-	m.eventLastAtNs.Store(eventAt.UnixNano())
-	m.eventLastEmitNs.Store(emitAt.UnixNano())
-	m.eventLagTotalNs.Add(lag.Nanoseconds())
+}
 
-	for {
-		prev := m.eventLagMaxNs.Load()
-		if lag.Nanoseconds() <= prev {
-			break
-		}
-		if m.eventLagMaxNs.CompareAndSwap(prev, lag.Nanoseconds()) {
-			break
-		}
-	}
-	if eventType != "" {
-		m.eventLastType.Store(eventType)
+func canonicalTraceName(name string) string {
+	switch name {
+	case "prompt_start", "prompt_end":
+		return "prompt"
+	case "llm_call_start", "llm_call_end":
+		return "llm_call"
+	case "tool_execution_start", "tool_execution_end":
+		return "tool_execution"
+	case "event_loop_start", "event_loop_end":
+		return "event_loop"
+	case "assistant_text_start", "assistant_text_end":
+		return "assistant_text"
+	default:
+		return name
 	}
 }
 
@@ -344,39 +414,6 @@ func (m *Metrics) GetPromptMetrics() PromptMetricsSnapshot {
 	}
 }
 
-// GetEventMetrics returns event emission latency snapshot.
-func (m *Metrics) GetEventMetrics() EventMetricsSnapshot {
-	count := m.eventCount.Load()
-	totalLag := time.Duration(m.eventLagTotalNs.Load())
-	maxLag := time.Duration(m.eventLagMaxNs.Load())
-	avgLag := time.Duration(0)
-	if count > 0 {
-		avgLag = totalLag / time.Duration(count)
-	}
-	lastAt := time.Unix(0, m.eventLastAtNs.Load())
-	lastEmit := time.Unix(0, m.eventLastEmitNs.Load())
-	idle := time.Duration(0)
-	if !lastEmit.IsZero() {
-		idle = time.Since(lastEmit)
-	}
-	lastType := ""
-	if v := m.eventLastType.Load(); v != nil {
-		if s, ok := v.(string); ok {
-			lastType = s
-		}
-	}
-	return EventMetricsSnapshot{
-		Count:        count,
-		LastType:     lastType,
-		LastEventAt:  lastAt,
-		LastEmitAt:   lastEmit,
-		TotalLag:     totalLag,
-		AvgLag:       avgLag,
-		MaxLag:       maxLag,
-		IdleDuration: idle,
-	}
-}
-
 // GetSessionUptime returns the session uptime.
 func (m *Metrics) GetSessionUptime() time.Duration {
 	return time.Since(m.sessionStart)
@@ -399,12 +436,6 @@ func (m *Metrics) Reset() {
 	m.llmCalls.StartNs.Store(0)
 	m.llmCalls.LastStartNs.Store(0)
 	m.llmCalls.LastEndNs.Store(0)
-	m.eventCount.Store(0)
-	m.eventLastAtNs.Store(0)
-	m.eventLastEmitNs.Store(0)
-	m.eventLagTotalNs.Store(0)
-	m.eventLagMaxNs.Store(0)
-	m.eventLastType.Store("")
 	m.sessionStart = time.Now()
 }
 
@@ -471,18 +502,6 @@ type PromptMetricsSnapshot struct {
 	LastEnd          time.Time     `json:"lastEnd"`
 }
 
-// EventMetricsSnapshot represents a snapshot of event emission latency.
-type EventMetricsSnapshot struct {
-	Count        int64         `json:"count"`
-	LastType     string        `json:"lastType"`
-	LastEventAt  time.Time     `json:"lastEventAt"`
-	LastEmitAt   time.Time     `json:"lastEmitAt"`
-	TotalLag     time.Duration `json:"totalLag"`
-	AvgLag       time.Duration `json:"avgLag"`
-	MaxLag       time.Duration `json:"maxLag"`
-	IdleDuration time.Duration `json:"idleDuration"`
-}
-
 // GetFullMetrics returns a complete metrics snapshot.
 func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 	m.mu.RLock()
@@ -499,7 +518,6 @@ func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 		LLMMetrics:    m.GetLLMMetrics(),
 		MessageCounts: m.GetMessageCounts(),
 		PromptMetrics: m.GetPromptMetrics(),
-		EventMetrics:  m.GetEventMetrics(),
 	}
 }
 
@@ -510,7 +528,6 @@ type FullMetricsSnapshot struct {
 	LLMMetrics    LLMMetricsSnapshot    `json:"llmMetrics"`
 	MessageCounts MessageCountsSnapshot `json:"messageCounts"`
 	PromptMetrics PromptMetricsSnapshot `json:"promptMetrics"`
-	EventMetrics  EventMetricsSnapshot  `json:"eventMetrics"`
 }
 
 func timeFromNs(ns int64) time.Time {
@@ -525,4 +542,63 @@ func inFlightDuration(startNs int64) time.Duration {
 		return 0
 	}
 	return time.Since(time.Unix(0, startNs))
+}
+
+func traceFieldString(fields []traceevent.Field, key string) string {
+	for _, f := range fields {
+		if f.Key != key || f.Value == nil {
+			continue
+		}
+		switch v := f.Value.(type) {
+		case string:
+			return v
+		default:
+			return fmt.Sprint(v)
+		}
+	}
+	return ""
+}
+
+func traceFieldInt64(fields []traceevent.Field, key string) int64 {
+	for _, f := range fields {
+		if f.Key != key || f.Value == nil {
+			continue
+		}
+		switch v := f.Value.(type) {
+		case int:
+			return int64(v)
+		case int64:
+			return v
+		case uint64:
+			return int64(v)
+		case float64:
+			return int64(v)
+		case time.Duration:
+			return v.Milliseconds()
+		case string:
+			var parsed int64
+			_, _ = fmt.Sscan(v, &parsed)
+			return parsed
+		}
+	}
+	return 0
+}
+
+func traceFieldBool(fields []traceevent.Field, key string) bool {
+	for _, f := range fields {
+		if f.Key != key || f.Value == nil {
+			continue
+		}
+		switch v := f.Value.(type) {
+		case bool:
+			return v
+		case string:
+			return v == "true" || v == "1"
+		case int:
+			return v != 0
+		case int64:
+			return v != 0
+		}
+	}
+	return false
 }

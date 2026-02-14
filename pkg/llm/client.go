@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // StreamLLM streams a completion from the LLM.
@@ -34,13 +35,6 @@ func StreamLLM(
 
 	go func() {
 		defer stream.End(LLMMessage{})
-
-		debugEnabled := slog.Default().Enabled(ctx, slog.LevelDebug)
-		logChunks := debugEnabled && os.Getenv("AI_LOG_LLM_CHUNKS") == "1"
-		logRequests := debugEnabled
-		if val := strings.TrimSpace(os.Getenv("AI_LOG_LLM_REQUESTS")); val != "" {
-			logRequests = val == "1"
-		}
 
 		// Get API key from environment if not provided
 		if apiKey == "" {
@@ -80,9 +74,13 @@ func StreamLLM(
 			stream.Push(LLMErrorEvent{Error: err})
 			return
 		}
-		if logRequests {
-			slog.Debug("[LLM] request", "model", model.ID, "provider", model.Provider, "bytes", len(jsonBody), "json", truncateLine(string(jsonBody), 65536))
-		}
+		traceevent.Log(ctx, traceevent.CategoryLLM, "llm_request_json",
+			traceevent.Field{Key: "model", Value: model.ID},
+			traceevent.Field{Key: "provider", Value: model.Provider},
+			traceevent.Field{Key: "api", Value: model.API},
+			traceevent.Field{Key: "bytes", Value: len(jsonBody)},
+			traceevent.Field{Key: "json", Value: string(jsonBody)},
+		)
 
 		// Build URL
 		url := model.BaseURL + "/chat/completions"
@@ -113,6 +111,11 @@ func StreamLLM(
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_response_json",
+				traceevent.Field{Key: "status_code", Value: resp.StatusCode},
+				traceevent.Field{Key: "http_error", Value: true},
+				traceevent.Field{Key: "json", Value: string(body)},
+			)
 			stream.Push(LLMErrorEvent{Error: ClassifyAPIError(resp.StatusCode, string(body))})
 			return
 		}
@@ -122,6 +125,7 @@ func StreamLLM(
 		stream.Push(LLMStartEvent{Partial: partial})
 
 		scanner := bufio.NewScanner(resp.Body)
+		chunkIndex := 0
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -131,11 +135,13 @@ func StreamLLM(
 			}
 
 			data := strings.TrimPrefix(line, "data: ")
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_response_json",
+				traceevent.Field{Key: "chunk_index", Value: chunkIndex},
+				traceevent.Field{Key: "json", Value: data},
+			)
+			chunkIndex++
 			if data == "[DONE]" {
 				break
-			}
-			if logChunks {
-				slog.Debug("[LLM] stream chunk", "json", truncateLine(data, 8192), "bytes", len(data))
 			}
 
 			// Parse JSON chunk
@@ -248,14 +254,4 @@ func StreamLLM(
 	}()
 
 	return stream
-}
-
-func truncateLine(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
-	}
-	if limit <= 3 {
-		return value[:limit]
-	}
-	return value[:limit-3] + "..."
 }

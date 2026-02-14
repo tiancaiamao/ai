@@ -64,6 +64,8 @@ const (
 	CommandBash                   = "bash"
 	CommandAbortBash              = "abort_bash"
 	CommandExportHTML             = "export_html"
+	CommandSetTraceEvents         = "set_trace_events"
+	CommandGetTraceEvents         = "get_trace_events"
 	CommandPing                   = "ping"
 )
 

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
@@ -38,6 +41,10 @@ type LoopConfig struct {
 var streamAssistantResponseFn = streamAssistantResponse
 var summarizeToolResultFn = summarizeToolResultWithLLM
 var summarizeToolResultsBatchFn = summarizeToolResultsBatchWithLLM
+
+type llmAttemptKeyType struct{}
+
+var llmAttemptKey = llmAttemptKeyType{}
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -83,6 +90,9 @@ func runInnerLoop(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) {
+	span := traceevent.StartSpan(ctx, "runInnerLoop", traceevent.CategoryEvent)
+	defer span.End()
+
 	const maxCompactionRecoveries = 1
 	compactionRecoveries := 0
 	asyncSummarizer := newAsyncToolSummarizer(ctx, config)
@@ -108,6 +118,12 @@ func runInnerLoop(
 		if err != nil {
 			if llm.IsContextLengthExceeded(err) && config.Compactor != nil && compactionRecoveries < maxCompactionRecoveries {
 				before := len(agentCtx.Messages)
+				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+					traceevent.Field{Key: "source", Value: "context_limit_recovery"},
+					traceevent.Field{Key: "auto", Value: true},
+					traceevent.Field{Key: "before_messages", Value: before},
+					traceevent.Field{Key: "trigger", Value: "context_limit_recovery"},
+				)
 				stream.Push(NewCompactionStartEvent(CompactionInfo{
 					Auto:    true,
 					Before:  before,
@@ -116,6 +132,9 @@ func runInnerLoop(
 				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
 				if compactErr != nil {
 					slog.Error("Compaction recovery failed", "error", compactErr)
+					compactionSpan.AddField("error", true)
+					compactionSpan.AddField("error_message", compactErr.Error())
+					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
@@ -125,6 +144,8 @@ func runInnerLoop(
 				} else {
 					compactionRecoveries++
 					agentCtx.Messages = compacted
+					compactionSpan.AddField("after_messages", len(compacted))
+					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
@@ -193,6 +214,9 @@ func streamAssistantResponseWithRetry(
 	config *LoopConfig,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 ) (*AgentMessage, error) {
+	span := traceevent.StartSpan(ctx, "streamAssistantResponseWithRetry", traceevent.CategoryEvent)
+	defer span.End()
+
 	maxRetries := config.MaxLLMRetries
 	if maxRetries < 0 {
 		maxRetries = defaultLLMMaxRetries
@@ -219,7 +243,8 @@ func streamAssistantResponseWithRetry(
 			}
 		}
 
-		msg, err := streamAssistantResponseFn(ctx, agentCtx, config, stream)
+		attemptCtx := context.WithValue(ctx, llmAttemptKey, attempt)
+		msg, err := streamAssistantResponseFn(attemptCtx, agentCtx, config, stream)
 		if err == nil {
 			return msg, nil
 		}
@@ -256,12 +281,12 @@ func streamAssistantResponse(
 	defer llmCancel()
 
 	// Convert messages to LLM format
-	llmMessages := ConvertMessagesToLLM(agentCtx.Messages)
+	llmMessages := ConvertMessagesToLLM(ctx, agentCtx.Messages)
 
 	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
 
 	// Convert tools to LLM format
-	llmTools := ConvertToolsToLLM(agentCtx.Tools)
+	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
 
 	// Build LLM context
 	systemPrompt := agentCtx.SystemPrompt
@@ -277,20 +302,18 @@ func streamAssistantResponse(
 		Messages:     llmMessages,
 		Tools:        llmTools,
 	}
+	//	emitLLMRequestSnapshot(ctx, config.Model, llmCtxParams)
 
 	// Stream LLM response
 	llmStart := time.Now()
-	if config.Metrics != nil {
-		config.Metrics.RecordLLMStart()
-	}
-	recorded := false
+	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
+		traceevent.Field{Key: "model", Value: config.Model.ID},
+		traceevent.Field{Key: "provider", Value: config.Model.Provider},
+		traceevent.Field{Key: "api", Value: config.Model.API},
+	)
+	defer llmSpan.End()
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
-	defer func() {
-		if config.Metrics != nil && !recorded && ctx.Err() != nil {
-			config.Metrics.RecordLLMCall(0, 0, 0, 0, time.Since(llmStart), firstTokenLatency, ctx.Err())
-		}
-	}()
 
 	llmStream := llm.StreamLLM(llmCtx, config.Model, llmCtxParams, config.APIKey)
 
@@ -367,6 +390,10 @@ func streamAssistantResponse(
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
+				traceevent.Log(ctx, traceevent.CategoryLLM, "text_delta",
+					traceevent.Field{Key: "content_index", Value: e.Index},
+					traceevent.Field{Key: "delta", Value: e.Delta},
+				)
 				textBuilder.WriteString(e.Delta)
 				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
@@ -385,6 +412,10 @@ func streamAssistantResponse(
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
+				traceevent.Log(ctx, traceevent.CategoryLLM, "thinking_delta",
+					traceevent.Field{Key: "content_index", Value: e.Index},
+					traceevent.Field{Key: "delta", Value: e.Delta},
+				)
 				// Add thinking content to the message
 				thinkingContent := ThinkingContent{
 					Type:     "thinking",
@@ -404,6 +435,11 @@ func streamAssistantResponse(
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
+				traceevent.Log(ctx, traceevent.CategoryLLM, "tool_call_delta",
+					traceevent.Field{Key: "content_index", Value: e.Index},
+					traceevent.Field{Key: "tool_call_id", Value: e.ToolCall.ID},
+					traceevent.Field{Key: "tool_name", Value: e.ToolCall.Function.Name},
+				)
 				call, ok := toolCalls[e.Index]
 				if !ok {
 					call = &toolCallState{}
@@ -431,19 +467,14 @@ func streamAssistantResponse(
 			}
 
 		case llm.LLMDoneEvent:
-			if config.Metrics != nil && !recorded {
-				config.Metrics.RecordLLMCall(
-					e.Usage.InputTokens,
-					e.Usage.OutputTokens,
-					0,
-					0,
-					time.Since(llmStart),
-					firstTokenLatency,
-					nil,
-				)
-				recorded = true
+			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
+			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
+			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
+			llmSpan.AddField("stop_reason", e.StopReason)
+			if firstTokenLatency > 0 {
+				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
-			if partialMessage != nil && textBuilder.Len() > 0 {
+			if partialMessage != nil {
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "text_end",
 					ContentIndex: 0,
@@ -476,9 +507,17 @@ func streamAssistantResponse(
 				// Check for incomplete tool calls and log for debugging
 				text := finalMessage.ExtractText()
 				if len(text) > 0 && strings.Contains(text, "<") {
+					issues := DetectIncompleteToolCalls(text)
+					traceevent.Log(ctx, traceevent.CategoryTool, "assistant_tool_tag_parse_failed",
+						traceevent.Field{Key: "stop_reason", Value: e.StopReason},
+						traceevent.Field{Key: "text_preview", Value: truncateLine(text, 500)},
+						traceevent.Field{Key: "issues", Value: issues},
+						traceevent.Field{Key: "issue_count", Value: len(issues)},
+					)
 					slog.Debug("[Loop] assistant response contains tags but no tool calls injected",
 						"text_preview", truncateLine(text, 200),
-						"stop_reason", e.StopReason)
+						"stop_reason", e.StopReason,
+						"issues", issues)
 				}
 			}
 
@@ -486,15 +525,132 @@ func streamAssistantResponse(
 			return &finalMessage, nil
 
 		case llm.LLMErrorEvent:
-			if config.Metrics != nil && !recorded {
-				config.Metrics.RecordLLMCall(0, 0, 0, 0, time.Since(llmStart), firstTokenLatency, e.Error)
-				recorded = true
+			llmSpan.AddField("error", e.Error.Error())
+			if firstTokenLatency > 0 {
+				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
 			return nil, e.Error
 		}
 	}
 
 	return partialMessage, nil
+}
+
+type llmRequestSnapshot struct {
+	Attempt           int
+	RequestHash       string
+	MessagesHash      string
+	ToolsHash         string
+	SystemPromptHash  string
+	MessageCount      int
+	UserMessages      int
+	AssistantMessages int
+	ToolMessages      int
+	SystemChars       int
+	LastRole          string
+	LastMessageHash   string
+	LastUserHash      string
+}
+
+func emitLLMRequestSnapshot(ctx context.Context, model llm.Model, llmCtx llm.LLMContext) {
+	snapshot := buildLLMRequestSnapshot(ctx, model, llmCtx)
+	traceevent.Log(ctx, traceevent.CategoryLLM, "llm_request_snapshot",
+		traceevent.Field{Key: "attempt", Value: snapshot.Attempt},
+		traceevent.Field{Key: "request_hash", Value: snapshot.RequestHash},
+		traceevent.Field{Key: "messages_hash", Value: snapshot.MessagesHash},
+		traceevent.Field{Key: "tools_hash", Value: snapshot.ToolsHash},
+		traceevent.Field{Key: "system_prompt_hash", Value: snapshot.SystemPromptHash},
+		traceevent.Field{Key: "message_count", Value: snapshot.MessageCount},
+		traceevent.Field{Key: "user_messages", Value: snapshot.UserMessages},
+		traceevent.Field{Key: "assistant_messages", Value: snapshot.AssistantMessages},
+		traceevent.Field{Key: "tool_messages", Value: snapshot.ToolMessages},
+		traceevent.Field{Key: "system_chars", Value: snapshot.SystemChars},
+		traceevent.Field{Key: "last_role", Value: snapshot.LastRole},
+		traceevent.Field{Key: "last_message_hash", Value: snapshot.LastMessageHash},
+		traceevent.Field{Key: "last_user_hash", Value: snapshot.LastUserHash},
+	)
+	slog.Debug("[Loop] LLM request snapshot",
+		"attempt", snapshot.Attempt,
+		"requestHash", snapshot.RequestHash,
+		"messagesHash", snapshot.MessagesHash,
+		"toolsHash", snapshot.ToolsHash,
+		"messageCount", snapshot.MessageCount,
+		"lastRole", snapshot.LastRole)
+}
+
+func buildLLMRequestSnapshot(ctx context.Context, model llm.Model, llmCtx llm.LLMContext) llmRequestSnapshot {
+	snapshot := llmRequestSnapshot{
+		Attempt:          llmAttemptFromContext(ctx),
+		MessagesHash:     hashAny(llmCtx.Messages),
+		ToolsHash:        hashAny(llmCtx.Tools),
+		SystemPromptHash: hashAny(llmCtx.SystemPrompt),
+		MessageCount:     len(llmCtx.Messages),
+		SystemChars:      len(llmCtx.SystemPrompt),
+	}
+
+	for _, msg := range llmCtx.Messages {
+		switch msg.Role {
+		case "user":
+			snapshot.UserMessages++
+		case "assistant":
+			snapshot.AssistantMessages++
+		case "tool":
+			snapshot.ToolMessages++
+		}
+	}
+
+	if n := len(llmCtx.Messages); n > 0 {
+		last := llmCtx.Messages[n-1]
+		snapshot.LastRole = last.Role
+		snapshot.LastMessageHash = hashAny(last)
+	}
+	for i := len(llmCtx.Messages) - 1; i >= 0; i-- {
+		if llmCtx.Messages[i].Role == "user" {
+			snapshot.LastUserHash = hashAny(llmCtx.Messages[i])
+			break
+		}
+	}
+
+	reqMessages := llmCtx.Messages
+	if strings.TrimSpace(llmCtx.SystemPrompt) != "" {
+		systemMsg := llm.LLMMessage{
+			Role:    "system",
+			Content: llmCtx.SystemPrompt,
+		}
+		reqMessages = append([]llm.LLMMessage{systemMsg}, reqMessages...)
+	}
+
+	reqBody := map[string]any{
+		"model":    model.ID,
+		"messages": reqMessages,
+		"stream":   true,
+	}
+	if len(llmCtx.Tools) > 0 {
+		reqBody["tools"] = llmCtx.Tools
+		reqBody["tool_choice"] = "auto"
+	}
+	snapshot.RequestHash = hashAny(reqBody)
+	return snapshot
+}
+
+func llmAttemptFromContext(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	value := ctx.Value(llmAttemptKey)
+	if attempt, ok := value.(int); ok {
+		return attempt
+	}
+	return 0
+}
+
+func hashAny(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // executeToolCalls executes tool calls from an assistant message.
@@ -504,7 +660,7 @@ func executeToolCalls(
 	assistantMsg *AgentMessage,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 	executor *ExecutorPool,
-	metrics *Metrics,
+	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
 ) []AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
@@ -516,6 +672,7 @@ func executeToolCalls(
 		index      int
 		normalized ToolCallContent
 		tool       Tool
+		span       *traceevent.Span
 	}
 	type toolExecutionOutcome struct {
 		plan     toolExecutionPlan
@@ -530,17 +687,71 @@ func executeToolCalls(
 	for _, tool := range tools {
 		toolsByName[tool.Name()] = tool
 	}
+	availableToolNames := make([]string, 0, len(toolsByName))
+	for name := range toolsByName {
+		availableToolNames = append(availableToolNames, name)
+	}
+	sort.Strings(availableToolNames)
 
 	for i, tc := range toolCalls {
+		rawName := strings.ToLower(strings.TrimSpace(tc.Name))
 		normalized := normalizeToolCall(tc)
+		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+			traceevent.Field{Key: "tool", Value: normalized.Name},
+			traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+			traceevent.Field{Key: "raw_name", Value: rawName},
+		)
+		if normalized.Name != rawName {
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_normalized",
+				traceevent.Field{Key: "raw_name", Value: rawName},
+				traceevent.Field{Key: "normalized_name", Value: normalized.Name},
+				traceevent.Field{Key: "raw_args", Value: tc.Arguments},
+				traceevent.Field{Key: "normalized_args", Value: normalized.Arguments},
+			)
+		}
+		if isGenericToolName(normalized.Name) {
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
+				traceevent.Field{Key: "raw_name", Value: rawName},
+				traceevent.Field{Key: "normalized_name", Value: normalized.Name},
+				traceevent.Field{Key: "args", Value: normalized.Arguments},
+				traceevent.Field{Key: "available_tools", Value: availableToolNames},
+			)
+			slog.Warn("[Loop] unresolved tool call name",
+				"rawName", rawName,
+				"normalizedName", normalized.Name,
+				"availableTools", availableToolNames)
+		}
 		args, argErr := coerceToolArguments(normalized.Name, normalized.Arguments)
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+			traceevent.Field{Key: "tool", Value: normalized.Name},
+			traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+			traceevent.Field{Key: "args", Value: normalized.Arguments},
+		)
 		if argErr != nil {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", argErr.Error())
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_invalid_args",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "raw_name", Value: rawName},
+				traceevent.Field{Key: "raw_args", Value: tc.Arguments},
+				traceevent.Field{Key: "args", Value: normalized.Arguments},
+				traceevent.Field{Key: "error", Value: argErr.Error()},
+			)
 			errorMsg := buildInvalidToolArgsMessage(normalized.Name, argErr)
 			result := NewToolResultMessage(normalized.ID, normalized.Name, []ContentBlock{
 				TextContent{Type: "text", Text: errorMsg},
 			}, true)
 			stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "duration_ms", Value: 0},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: argErr.Error()},
+			)
 			resultCopy := result
 			resultsByIndex[i] = &resultCopy
 			continue
@@ -551,14 +762,32 @@ func executeToolCalls(
 
 		tool := toolsByName[normalized.Name]
 		if tool == nil {
-			if metrics != nil {
-				metrics.RecordToolExecution(normalized.Name, 0, fmt.Errorf("tool not found"), 0)
-			}
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", "tool not found")
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
+				traceevent.Field{Key: "raw_name", Value: rawName},
+				traceevent.Field{Key: "normalized_name", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "args", Value: normalized.Arguments},
+				traceevent.Field{Key: "available_tools", Value: availableToolNames},
+			)
+			slog.Warn("[Loop] tool not registered",
+				"tool", normalized.Name,
+				"rawName", rawName,
+				"availableTools", availableToolNames)
 			content := truncateToolContent([]ContentBlock{
 				TextContent{Type: "text", Text: "Tool not found"},
 			}, toolOutputLimits)
 			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "duration_ms", Value: 0},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: "tool not found"},
+			)
 			resultCopy := result
 			resultsByIndex[i] = &resultCopy
 			continue
@@ -568,6 +797,7 @@ func executeToolCalls(
 			index:      i,
 			normalized: normalized,
 			tool:       tool,
+			span:       toolSpan,
 		})
 	}
 
@@ -608,10 +838,6 @@ func executeToolCalls(
 		if !ok {
 			continue
 		}
-		if metrics != nil {
-			metrics.RecordToolExecution(plan.normalized.Name, outcome.duration, outcome.err, 0)
-		}
-
 		var result AgentMessage
 		if outcome.err != nil {
 			content := truncateToolContent([]ContentBlock{
@@ -619,10 +845,28 @@ func executeToolCalls(
 			}, toolOutputLimits)
 			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, true))
+			plan.span.AddField("error", true)
+			plan.span.AddField("error_message", outcome.err.Error())
+			plan.span.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: plan.normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: plan.normalized.ID},
+				traceevent.Field{Key: "duration_ms", Value: outcome.duration.Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: outcome.err.Error()},
+			)
 		} else {
 			content := truncateToolContent(outcome.content, toolOutputLimits)
 			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, false))
+			plan.span.AddField("error", false)
+			plan.span.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: plan.normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: plan.normalized.ID},
+				traceevent.Field{Key: "duration_ms", Value: outcome.duration.Milliseconds()},
+				traceevent.Field{Key: "error", Value: false},
+			)
 		}
 
 		resultCopy := result

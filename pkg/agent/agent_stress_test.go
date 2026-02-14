@@ -34,7 +34,7 @@ func TestStressConcurrentRequests(t *testing.T) {
 			name:        fmt.Sprintf("tool-%d", i),
 			maxFailures: 0,
 			failMessage: "success",
-			execDelayMs: 500 + (i % 5)*200, // Varying delays: 500-1500ms
+			execDelayMs: 500 + (i%5)*200, // Varying delays: 500-1500ms
 		})
 	}
 

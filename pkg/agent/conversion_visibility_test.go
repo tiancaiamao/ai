@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -13,7 +14,7 @@ func TestConvertMessagesToLLMFiltersAgentInvisible(t *testing.T) {
 		TextContent{Type: "text", Text: "ok"},
 	}
 
-	llmMessages := ConvertMessagesToLLM([]AgentMessage{visible, hidden, assistant})
+	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{visible, hidden, assistant})
 	if len(llmMessages) != 2 {
 		t.Fatalf("expected 2 LLM messages, got %d", len(llmMessages))
 	}
@@ -22,6 +23,23 @@ func TestConvertMessagesToLLMFiltersAgentInvisible(t *testing.T) {
 	}
 	if llmMessages[1].Content != "ok" {
 		t.Fatalf("unexpected second content: %q", llmMessages[1].Content)
+	}
+}
+
+func TestConvertToolsToLLMDeduplicatesByName(t *testing.T) {
+	t1 := &mockTool{name: "read"}
+	t2 := &mockTool{name: "bash"}
+	t3 := &mockTool{name: "read"} // duplicate name
+
+	tools := ConvertToolsToLLM(context.Background(), []Tool{t1, t2, t3})
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 unique tools, got %d", len(tools))
+	}
+	if tools[0].Function.Name != "read" {
+		t.Fatalf("expected first tool read, got %q", tools[0].Function.Name)
+	}
+	if tools[1].Function.Name != "bash" {
+		t.Fatalf("expected second tool bash, got %q", tools[1].Function.Name)
 	}
 }
 

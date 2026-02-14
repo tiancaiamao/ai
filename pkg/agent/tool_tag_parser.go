@@ -19,6 +19,7 @@ type toolTagCall struct {
 var (
 	toolTagRegex   = regexp.MustCompile(`(?is)<(read_file|read|write|edit|bash|grep)>\s*(.*?)\s*</(read_file|read|write|edit|bash|grep)>`)
 	argKeyValRegex = regexp.MustCompile(`(?is)<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>`)
+	argToolOpenTag = regexp.MustCompile(`(?is)<\s*(tool_call|tool|read_file|read|write|edit|bash|grep)\b[^>]*>`)
 	thinkTagRegex  = regexp.MustCompile(`(?is)</?think>`)
 )
 
@@ -37,7 +38,8 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 	existingCalls := msg.ExtractToolCalls()
 	hasValidToolCalls := false
 	for _, tc := range existingCalls {
-		if tc.Name != "" && len(tc.Arguments) > 0 {
+		normalizedName := normalizeToolCallName(tc.Name)
+		if normalizedName != "" && !isGenericToolName(normalizedName) && len(tc.Arguments) > 0 {
 			hasValidToolCalls = true
 			break
 		}
@@ -204,11 +206,19 @@ func parseArgKeyValueToolCall(text string) (toolTagCall, bool) {
 	}
 
 	first := matches[0]
-	toolStart := strings.LastIndex(text[:first[0]], "<")
+	prefix := text[:first[0]]
+	toolStart := -1
+	toolTagMatches := argToolOpenTag.FindAllStringSubmatchIndex(prefix, -1)
+	if len(toolTagMatches) > 0 {
+		toolStart = toolTagMatches[len(toolTagMatches)-1][0]
+	}
+	if toolStart < 0 {
+		toolStart = strings.LastIndex(prefix, "<")
+	}
 	if toolStart < 0 {
 		return toolTagCall{}, false
 	}
-	toolName := extractToolName(text[toolStart+1 : first[0]])
+	toolName := extractToolNameFromArgFragment(text[toolStart+1 : first[0]])
 	if toolName == "" {
 		return toolTagCall{}, false
 	}
@@ -256,6 +266,31 @@ func parseArgKeyValueToolCall(text string) (toolTagCall, bool) {
 		end:      end,
 		consumed: true,
 	}, true
+}
+
+func extractToolNameFromArgFragment(fragment string) string {
+	base := extractToolName(fragment)
+	if base == "" {
+		return ""
+	}
+	if !isGenericToolName(base) {
+		return base
+	}
+
+	afterTag := fragment
+	if idx := strings.Index(fragment, ">"); idx >= 0 && idx+1 < len(fragment) {
+		afterTag = strings.TrimSpace(fragment[idx+1:])
+	}
+
+	if explicit := firstTagValue(afterTag, "name", "tool", "tool_name", "function", "function_name"); explicit != "" {
+		return strings.ToLower(strings.TrimSpace(explicit))
+	}
+
+	if inline := extractToolName(afterTag); inline != "" && !isGenericToolName(inline) {
+		return inline
+	}
+
+	return base
 }
 
 func extractToolName(fragment string) string {

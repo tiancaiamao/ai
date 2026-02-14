@@ -35,9 +35,11 @@ type Config struct {
 
 // LogConfig contains logging configuration.
 type LogConfig struct {
-	Level  string `json:"level,omitempty"`  // Log level: debug, info, warn, error
-	File   string `json:"file,omitempty"`   // Log file path (empty = no file logging)
-	Prefix string `json:"prefix,omitempty"` // Log prefix
+	Level       string `json:"level,omitempty"`       // Log level: debug, info, warn, error
+	File        string `json:"file,omitempty"`        // Log file path (empty = no file logging)
+	Prefix      string `json:"prefix,omitempty"`      // Log prefix
+	TraceBridge bool   `json:"traceBridge,omitempty"` // Enable slog to trace event bridging (default: true)
+	Console     bool   `json:"console,omitempty"`     // Enable console output (default: false)
 }
 
 // ModelConfig contains model configuration.
@@ -88,9 +90,11 @@ func DefaultToolOutputConfig() *ToolOutputConfig {
 func DefaultLogConfig() *LogConfig {
 	homeDir, _ := os.UserHomeDir()
 	return &LogConfig{
-		Level:  "info",
-		File:   filepath.Join(homeDir, ".ai", "ai-{pid}.log"),
-		Prefix: "[ai] ",
+		Level:       "info",
+		File:        filepath.Join(homeDir, ".ai", "ai-{pid}.log"),
+		Prefix:      "[ai] ",
+		TraceBridge: true, // Enable slog to trace event bridging by default
+		Console:     false,
 	}
 }
 
@@ -100,15 +104,7 @@ func (c *LogConfig) CreateLogger() (*slog.Logger, error) {
 		c = DefaultLogConfig()
 	}
 
-	logPath := resolveLogPath(c)
-
-	cfg := &logger.Config{
-		Level:    logger.ParseLogLevel(c.Level),
-		Prefix:   c.Prefix,
-		Console:  false, // Disable console output - logs only go to file
-		File:     logPath != "",
-		FilePath: logPath,
-	}
+	cfg := &logger.Config{}
 
 	return logger.NewLogger(cfg)
 }

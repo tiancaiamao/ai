@@ -38,20 +38,19 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 		cfg, _ = config.LoadConfig(configPath)
 	}
-	if debug {
-		cfg.Log.Level = "debug"
-	}
-
 	// Initialize logger from config
 	log, err := cfg.Log.CreateLogger()
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
 	slog.SetDefault(log)
+	_ = debug
 
-	aiLogPath := config.ResolveLogPath(cfg.Log)
-	if aiLogPath != "" {
-		slog.Info("Log file", "path", aiLogPath)
+	traceOutputPath, err := initTraceFileHandler()
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
+	} else {
+		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
 	}
 
 	// Convert config to llm.Model
@@ -170,14 +169,16 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 
 	// Helper function to create a new agent context
 	createBaseContext := func() *agent.AgentContext {
-		return agent.NewAgentContext(systemPrompt)
+		ctx := agent.NewAgentContext(systemPrompt)
+		for _, tool := range registry.All() {
+			ctx.AddTool(tool)
+		}
+		return ctx
 	}
 	agentCtx := createBaseContext()
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
-	for _, tool := range registry.All() {
-		ag.AddTool(tool)
-	}
+	defer ag.Shutdown()
 
 	// Create compactor
 	compactorConfig := cfg.Compactor

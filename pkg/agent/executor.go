@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	defaultToolMaxRetries = 3                  // Maximum retry attempts for tools
-	defaultInitialDelay   = 1 * time.Second    // Initial delay before retry
-	defaultMaxDelay       = 10 * time.Second   // Maximum delay between retries
+	defaultToolMaxRetries = 3                // Maximum retry attempts for tools
+	defaultInitialDelay   = 1 * time.Second  // Initial delay before retry
+	defaultMaxDelay       = 10 * time.Second // Maximum delay between retries
 )
 
 // RetryConfig configures retry behavior.
@@ -20,15 +20,15 @@ type RetryConfig struct {
 	MaxRetries    int           // Maximum number of retry attempts
 	InitialDelay  time.Duration // Initial delay before first retry
 	MaxDelay      time.Duration // Maximum delay between retries
-	RetryableErrs []string       // Error messages that are retryable
+	RetryableErrs []string      // Error messages that are retryable
 }
 
 // DefaultRetryConfig creates a default retry configuration.
 func DefaultRetryConfig() *RetryConfig {
 	return &RetryConfig{
-		MaxRetries:    defaultToolMaxRetries,
-		InitialDelay:  defaultInitialDelay,
-		MaxDelay:      defaultMaxDelay,
+		MaxRetries:   defaultToolMaxRetries,
+		InitialDelay: defaultInitialDelay,
+		MaxDelay:     defaultMaxDelay,
 		RetryableErrs: []string{
 			"timeout",
 			"connection refused",
@@ -205,7 +205,7 @@ func min(a, b time.Duration) time.Duration {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) &&
 		(s[:len(substr)] == substr ||
-		 containsIgnoreCase(s, substr))
+			containsIgnoreCase(s, substr))
 }
 
 func containsIgnoreCase(s, substr string) bool {

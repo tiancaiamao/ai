@@ -90,7 +90,6 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 	return b
 }
 
-
 // Build generates the final system prompt.
 func (b *Builder) Build() string {
 	sections := []string{}
@@ -123,7 +122,6 @@ func (b *Builder) Build() string {
 	}
 
 	result := joinSections(sections)
-
 
 	return result
 }
@@ -167,18 +165,23 @@ func (b *Builder) buildToolingSection() string {
 	return joinLines(lines)
 }
 
-// Bootstrap files to search for in workspace
+// Bootstrap files to search for in workspace.
+// Priority rule: when AGENTS.md exists, CLAUDE.md is skipped to avoid duplicate instructions.
 var bootstrapFiles = []string{
-	"CLAUDE.md",   // Project guidelines
 	"AGENTS.md",   // Agent identity and behavior
+	"CLAUDE.md",   // Project guidelines (fallback when AGENTS.md is absent)
 	"TOOLS.md",    // Tool usage instructions
 	"IDENTITY.md", // User/owner identity
 }
 
 func (b *Builder) buildProjectContext() string {
 	contexts := []string{}
+	hasAgents := b.loadBootstrapFile("AGENTS.md") != ""
 
 	for _, filename := range bootstrapFiles {
+		if filename == "CLAUDE.md" && hasAgents {
+			continue
+		}
 		content := b.loadBootstrapFile(filename)
 		if content != "" {
 			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
@@ -258,4 +261,3 @@ func NormalizeThinkingLevel(level string) string {
 func normalizeThinkingLevel(level string) string {
 	return NormalizeThinkingLevel(level)
 }
-

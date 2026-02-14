@@ -4,27 +4,45 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
 	agentBusyTimeout = 60 * time.Second // Wait timeout for agent lock
+	traceFlushEvery  = 256
+	traceFlushWindow = 1 * time.Second
+	traceFlushTick   = 200 * time.Millisecond
 )
 
-var logStreamEvents = os.Getenv("AI_LOG_STREAM_EVENTS") == "1"
-
 func shouldLogAgentEvent(eventType string) bool {
+	if !traceevent.IsEventEnabled("log:agent_event_stream") {
+		return false
+	}
 	switch eventType {
 	case EventMessageUpdate, EventTextDelta, EventThinkingDelta, EventToolCallDelta:
-		return logStreamEvents
+		// Keep high-frequency agent stream logs additionally gated by event type switches.
+		if eventType == EventMessageUpdate && !traceevent.IsEventEnabled("message_update") {
+			return false
+		}
+		if eventType == EventTextDelta && !traceevent.IsEventEnabled("text_delta") {
+			return false
+		}
+		if eventType == EventThinkingDelta && !traceevent.IsEventEnabled("thinking_delta") {
+			return false
+		}
+		if eventType == EventToolCallDelta && !traceevent.IsEventEnabled("tool_call_delta") {
+			return false
+		}
+		return true
 	default:
 		return true
 	}
@@ -41,15 +59,15 @@ type Compactor interface {
 
 // Agent represents an AI agent.
 type Agent struct {
-	mu              chan struct{}
-	model           llm.Model
-	apiKey          string
-	systemPrompt    string
-	context         *AgentContext
-	eventChan       chan AgentEvent
-	currentStream   *llm.EventStream[AgentEvent, []AgentMessage]
-	streamMu        sync.RWMutex
-	ctx             context.Context
+	mu            chan struct{}
+	model         llm.Model
+	apiKey        string
+	systemPrompt  string
+	context       *AgentContext
+	eventChan     chan AgentEvent
+	currentStream *llm.EventStream[AgentEvent, []AgentMessage]
+	streamMu      sync.RWMutex
+	// 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	compactor       Compactor     // Optional compactor for automatic context compression
@@ -60,6 +78,11 @@ type Agent struct {
 	toolCallCutoff  int
 	toolSummaryMode string
 	thinkingLevel   string
+	traceBuf        *traceevent.TraceBuf
+	traceStop       chan struct{}
+	traceDone       chan struct{}
+	shutdownOnce    sync.Once
+	traceSeq        atomic.Uint64
 }
 
 // NewAgent creates a new agent.
@@ -69,25 +92,39 @@ func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
 
 // NewAgentWithContext creates a new agent with a custom context.
 func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext) *Agent {
-	ctx, cancel := context.WithCancel(context.Background())
+	metrics := NewMetrics()
+	traceBuf := traceevent.NewTraceBuf()
+	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
+	traceBuf.SetFlushEvery(traceFlushEvery)
+	traceBuf.SetFlushInterval(traceFlushWindow)
+	traceBuf.AddSink(func(event traceevent.TraceEvent) {
+		metrics.RecordTraceEvent(event)
+	})
+	traceevent.SetActiveTraceBuf(traceBuf)
 
-	return &Agent{
-		mu:              make(chan struct{}, 1),
-		model:           model,
-		apiKey:          apiKey,
-		systemPrompt:    agentCtx.SystemPrompt,
-		context:         agentCtx,
-		eventChan:       make(chan AgentEvent, 100),
-		ctx:             ctx,
-		cancel:          cancel,
+	a := &Agent{
+		mu:           make(chan struct{}, 1),
+		model:        model,
+		apiKey:       apiKey,
+		systemPrompt: agentCtx.SystemPrompt,
+		context:      agentCtx,
+		eventChan:    make(chan AgentEvent, 100),
+		// 		ctx:             ctx,
+		// 		cancel:          cancel,
 		followUpQueue:   make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
 		executor:        NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
-		metrics:         NewMetrics(),
+		metrics:         metrics,
 		toolOutput:      DefaultToolOutputLimits(),
 		toolCallCutoff:  10,
 		toolSummaryMode: "llm",
 		thinkingLevel:   "high",
+		traceBuf:        traceBuf,
+		traceStop:       make(chan struct{}),
+		traceDone:       make(chan struct{}),
 	}
+
+	go a.runTraceFlusher()
+	return a
 }
 
 // Prompt sends a user message to the agent and waits for completion.
@@ -95,6 +132,10 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 func (a *Agent) Prompt(message string) error {
 	timer := time.NewTimer(agentBusyTimeout)
 	defer timer.Stop()
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := traceevent.WithTraceBuf(baseCtx, a.traceBuf)
+	a.cancel = cancel
 
 	select {
 	case a.mu <- struct{}{}:
@@ -104,14 +145,14 @@ func (a *Agent) Prompt(message string) error {
 			defer a.wg.Done()
 			slog.Info("[Agent] Starting prompt", "message", message)
 
-			a.processPrompt(message)
+			a.processPrompt(ctx, message)
 
 			// Check for follow-up messages
 			for {
 				select {
 				case followUpMsg := <-a.followUpQueue:
 					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
-					a.processPrompt(followUpMsg)
+					a.processPrompt(ctx, followUpMsg)
 				default:
 					// No more follow-up messages
 					return
@@ -125,12 +166,21 @@ func (a *Agent) Prompt(message string) error {
 }
 
 // processPrompt handles a single prompt (shared by Prompt and follow-up).
-func (a *Agent) processPrompt(message string) {
-	promptStart := time.Now()
+func (a *Agent) processPrompt(ctx context.Context, message string) {
 	hadError := false
-	if a.metrics != nil {
-		a.metrics.RecordPromptStart()
-	}
+
+	a.rotateTraceForPrompt(ctx)
+	defer a.finalizeTraceForPrompt(ctx)
+
+	// Create span for prompt processing - auto-records begin/end
+	span := traceevent.StartSpan(ctx, "prompt", traceevent.CategoryEvent,
+		traceevent.Field{Key: "message", Value: message})
+	defer span.End()
+
+	// Create child span for event iteration
+	eventLoopSpan := span.StartChild("event_loop",
+		traceevent.Field{Key: "turn_count", Value: len(a.context.Messages)})
+	defer eventLoopSpan.End()
 
 	prompts := []AgentMessage{NewUserMessage(message)}
 
@@ -147,17 +197,50 @@ func (a *Agent) processPrompt(message string) {
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
-	stream := RunLoop(a.ctx, prompts, a.context, config)
+	stream := RunLoop(ctx, prompts, a.context, config)
 	a.setCurrentStream(stream)
 	defer a.setCurrentStream(nil)
 
 	// Emit events to channel
 	slog.Info("[Agent] Starting event iteration")
 	eventCount := 0
-	for event := range stream.Iterator(a.ctx) {
+	for event := range stream.Iterator(ctx) {
 		if event.Done {
 			slog.Info("[Agent] Event stream done", "totalEvents", eventCount)
 			break
+		}
+
+		traceFields := []traceevent.Field{
+			{Key: "event_at", Value: event.Value.EventAt},
+		}
+		if event.Value.Message != nil {
+			traceFields = append(traceFields,
+				traceevent.Field{Key: "role", Value: event.Value.Message.Role},
+				traceevent.Field{Key: "stop_reason", Value: event.Value.Message.StopReason},
+			)
+		}
+		if event.Value.ToolName != "" {
+			traceFields = append(traceFields,
+				traceevent.Field{Key: "tool_name", Value: event.Value.ToolName},
+				traceevent.Field{Key: "tool_call_id", Value: event.Value.ToolCallID},
+			)
+		}
+
+		traceevent.Log(ctx, traceevent.CategoryEvent, event.Value.Type, traceFields...)
+
+		if update, ok := event.Value.AssistantMessageEvent.(AssistantMessageEvent); ok {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "message_update",
+				traceevent.Field{Key: "update_type", Value: update.Type},
+				traceevent.Field{Key: "content_index", Value: update.ContentIndex},
+			)
+			switch update.Type {
+			case "text_start":
+				traceevent.Log(ctx, traceevent.CategoryLLM, "assistant_text",
+					traceevent.Field{Key: "state", Value: "start"})
+			case "text_end":
+				traceevent.Log(ctx, traceevent.CategoryLLM, "assistant_text",
+					traceevent.Field{Key: "state", Value: "end"})
+			}
 		}
 
 		eventCount++
@@ -165,25 +248,16 @@ func (a *Agent) processPrompt(message string) {
 			slog.Debug("[Agent] Got event", "type", event.Value.Type)
 		}
 
-		if a.metrics != nil {
-			switch event.Value.Type {
-			case EventMessageEnd:
-				if event.Value.Message != nil {
-					a.metrics.RecordMessage(event.Value.Message.Role)
-				}
-			case EventToolExecutionStart:
-				a.metrics.RecordToolCall()
-			case EventToolExecutionEnd:
-				a.metrics.RecordToolResult()
-				if event.Value.IsError {
-					hadError = true
-				}
-			case EventTurnEnd:
-				if event.Value.Message == nil {
-					hadError = true
-				} else if event.Value.Message.StopReason == "error" || event.Value.Message.StopReason == "aborted" {
-					hadError = true
-				}
+		switch event.Value.Type {
+		case EventToolExecutionEnd:
+			if event.Value.IsError {
+				hadError = true
+			}
+		case EventTurnEnd:
+			if event.Value.Message == nil {
+				hadError = true
+			} else if event.Value.Message.StopReason == "error" || event.Value.Message.StopReason == "aborted" {
+				hadError = true
 			}
 		}
 
@@ -203,25 +277,82 @@ func (a *Agent) processPrompt(message string) {
 				a.context.AddMessage(tr)
 			}
 			// Try automatic compression after each turn
-			a.tryAutoCompact()
+			a.tryAutoCompact(ctx)
 		}
 
 		// Send to event channel
 		a.emitEvent(event.Value)
 	}
-	if a.metrics != nil {
-		var err error
-		if hadError {
-			err = errors.New("prompt failed")
-		}
-		a.metrics.RecordPrompt(time.Since(promptStart), err)
+	span.AddField("error", hadError)
+	if hadError {
+		span.AddField("error_message", errors.New("prompt failed").Error())
 	}
+
 	slog.Info("[Agent] Prompt completed")
+}
+
+func (a *Agent) rotateTraceForPrompt(ctx context.Context) {
+	if a.traceBuf == nil {
+		return
+	}
+	if err := a.traceBuf.DiscardOrFlush(ctx); err != nil {
+		slog.Error("[Agent] Failed to rotate trace file", "error", err)
+	}
+	seq := int(a.traceSeq.Add(1))
+	a.traceBuf.SetTraceID(traceevent.GenerateTraceID("session", seq))
+}
+
+func (a *Agent) finalizeTraceForPrompt(ctx context.Context) {
+	if a.traceBuf == nil {
+		return
+	}
+	if err := a.traceBuf.DiscardOrFlush(ctx); err != nil {
+		slog.Error("[Agent] Failed to finalize trace file", "error", err)
+	}
+	// Move to a fresh trace ID so post-prompt logs don't overwrite finalized prompt traces.
+	seq := int(a.traceSeq.Add(1))
+	a.traceBuf.SetTraceID(traceevent.GenerateTraceID("session", seq))
+}
+
+func (a *Agent) runTraceFlusher() {
+	ticker := time.NewTicker(traceFlushTick)
+	defer ticker.Stop()
+	defer close(a.traceDone)
+	for {
+		select {
+		case <-a.traceStop:
+			return
+		case <-ticker.C:
+			if a.traceBuf != nil {
+				_ = a.traceBuf.FlushIfNeeded(context.Background())
+			}
+		}
+	}
+}
+
+func (a *Agent) shutdownTracing() {
+	a.shutdownOnce.Do(func() {
+		if a.traceStop != nil {
+			close(a.traceStop)
+			<-a.traceDone
+		}
+		if a.traceBuf != nil {
+			if err := a.traceBuf.DiscardOrFlush(context.Background()); err != nil {
+				slog.Error("[Agent] Failed to flush trace", "error", err)
+			}
+			traceevent.ClearActiveTraceBuf(a.traceBuf)
+		}
+	})
 }
 
 // Wait waits for all agent operations to complete.
 func (a *Agent) Wait() {
 	a.wg.Wait()
+}
+
+// Shutdown flushes and finalizes trace output.
+func (a *Agent) Shutdown() {
+	a.shutdownTracing()
 }
 
 // Steer interrupts the current execution and sends a new message.
@@ -239,7 +370,10 @@ func (a *Agent) Steer(message string) {
 
 	// Create new context
 	ctx, cancel := context.WithCancel(context.Background())
-	a.ctx = ctx
+	if a.traceBuf != nil {
+		ctx = traceevent.WithTraceBuf(ctx, a.traceBuf)
+	}
+	// 	a.ctx = ctx
 	a.cancel = cancel
 
 	// Send prompt with steering message
@@ -259,14 +393,18 @@ func (a *Agent) Abort() {
 	slog.Info("[Agent] Abort called, canceling context")
 	if a.cancel != nil {
 		a.cancel()
+		a.cancel = nil
 	}
 	aborted := a.abortCurrentStream()
 	if aborted {
 		a.clearFollowUps()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.ctx = ctx
-	a.cancel = cancel
+	// 	ctx, cancel := context.WithCancel(context.Background())
+	// 	if a.traceBuf != nil {
+	// 		ctx = traceevent.WithTraceBuf(ctx, a.traceBuf)
+	// 	}
+	// 	a.ctx = ctx
+	// 	a.cancel = cancel
 	slog.Info("[Agent] Context canceled, waiting for agent to finish")
 }
 
@@ -323,6 +461,9 @@ func (a *Agent) AddTool(tool Tool) {
 
 // SetContext sets the agent context.
 func (a *Agent) SetContext(ctx *AgentContext) {
+	if ctx != nil && len(ctx.Tools) == 0 && a.context != nil && len(a.context.Tools) > 0 {
+		ctx.Tools = append(ctx.Tools, a.context.Tools...)
+	}
 	a.context = ctx
 }
 
@@ -390,7 +531,7 @@ func (a *Agent) Compact(compactor Compactor) error {
 }
 
 // tryAutoCompact attempts automatic compression if thresholds exceeded.
-func (a *Agent) tryAutoCompact() {
+func (a *Agent) tryAutoCompact(ctx context.Context) {
 	if a.compactor == nil {
 		return
 	}
@@ -399,24 +540,38 @@ func (a *Agent) tryAutoCompact() {
 	if a.compactor.ShouldCompact(messages) {
 		before := len(messages)
 		slog.Info("[Agent] Auto-compacting", "beforeCount", before)
+		compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+			traceevent.Field{Key: "source", Value: "auto_threshold"},
+			traceevent.Field{Key: "auto", Value: true},
+			traceevent.Field{Key: "before_messages", Value: before},
+			traceevent.Field{Key: "trigger", Value: "threshold"},
+		)
 		a.emitEvent(NewCompactionStartEvent(CompactionInfo{
-			Auto:   true,
-			Before: before,
+			Auto:    true,
+			Before:  before,
+			Trigger: "threshold",
 		}))
 		if err := a.Compact(a.compactor); err != nil {
 			slog.Error("[Agent] Auto-compact failed", "error", err)
+			compactSpan.AddField("error", true)
+			compactSpan.AddField("error_message", err.Error())
+			compactSpan.End()
 			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-				Auto:   true,
-				Before: before,
-				Error:  err.Error(),
+				Auto:    true,
+				Before:  before,
+				Error:   err.Error(),
+				Trigger: "threshold",
 			}))
 		} else {
 			after := len(a.context.Messages)
 			slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
+			compactSpan.AddField("after_messages", after)
+			compactSpan.End()
 			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-				Auto:   true,
-				Before: before,
-				After:  after,
+				Auto:    true,
+				Before:  before,
+				After:   after,
+				Trigger: "threshold",
 			}))
 		}
 	}

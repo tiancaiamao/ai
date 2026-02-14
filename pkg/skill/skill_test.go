@@ -379,3 +379,157 @@ func TestResolvePath(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSkillCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"valid skill command", "/skill:test", true},
+		{"with leading space", "  /skill:test", true},
+		{"with arguments", "/skill:test with args", true},
+		{"not a skill command", "regular text", false},
+		{"different slash command", "/other:command", false},
+		{"empty string", "", false},
+		{"just prefix", "/skill:", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsSkillCommand(tt.input)
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestExtractSkillName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"basic", "/skill:test-skill", "test-skill"},
+		{"with args", "/skill:test-skill some arguments", "test-skill"},
+		{"with space before args", "/skill:test-skill   with args", "test-skill"},
+		{"with tab", "/skill:test-skill\twith args", "test-skill"},
+		{"empty name", "/skill:", ""},
+		{"not a command", "regular text", ""},
+		{"just prefix", "/skill:", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractSkillName(tt.input)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestExpandCommand(t *testing.T) {
+	skills := []Skill{
+		{
+			Name:        "test-skill",
+			Description: "A test skill",
+			FilePath:    "/path/to/test-skill/SKILL.md",
+			BaseDir:     "/path/to/test-skill",
+			Content:     "This is the skill content.\nIt has multiple lines.",
+		},
+		{
+			Name:        "another-skill",
+			Description: "Another skill",
+			FilePath:    "/path/to/another/SKILL.md",
+			BaseDir:     "/path/to/another",
+			Content:     "Simple content",
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		contains []string
+	}{
+		{
+			name:  "expand skill without args",
+			input: "/skill:test-skill",
+			contains: []string{
+				`<skill name="test-skill"`,
+				`location="/path/to/test-skill/SKILL.md"`,
+				`References are relative to /path/to/test-skill`,
+				`This is the skill content.`,
+				`</skill>`,
+			},
+		},
+		{
+			name:  "expand skill with args",
+			input: "/skill:test-skill some extra arguments here",
+			contains: []string{
+				`<skill name="test-skill"`,
+				`This is the skill content.`,
+				`some extra arguments here`,
+			},
+		},
+		{
+			name:  "expand another skill",
+			input: "/skill:another-skill",
+			contains: []string{
+				`<skill name="another-skill"`,
+				`Simple content`,
+			},
+		},
+		{
+			name:     "unknown skill returns original",
+			input:    "/skill:unknown-skill",
+			contains: []string{"/skill:unknown-skill"},
+		},
+		{
+			name:     "non-command returns original",
+			input:    "just regular text",
+			contains: []string{"just regular text"},
+		},
+		{
+			name:     "empty skill name returns original",
+			input:    "/skill:",
+			contains: []string{"/skill:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExpandCommand(tt.input, skills)
+			for _, expected := range tt.contains {
+				if !strings.Contains(result, expected) {
+					t.Errorf("expected result to contain %q\ngot: %s", expected, result)
+				}
+			}
+		})
+	}
+}
+
+func TestExpandCommandWithSpecialCharacters(t *testing.T) {
+	skills := []Skill{
+		{
+			Name:        "test-skill",
+			Description: "A test skill",
+			FilePath:    "/path/with<>/test-SKILL.md",
+			BaseDir:     "/path/base",
+			Content:     "Content with & < > \" ' characters",
+		},
+	}
+
+	result := ExpandCommand("/skill:test-skill", skills)
+
+	// Check XML attributes are escaped
+	if !strings.Contains(result, "/path/with&lt;&gt;/test-SKILL.md") {
+		t.Error("expected < and > in file path to be escaped")
+	}
+
+	// Content is included as-is (not escaped, as per pi-mono behavior)
+	if !strings.Contains(result, "Content with & < > \" ' characters") {
+		t.Error("expected content to be included as-is")
+	}
+}

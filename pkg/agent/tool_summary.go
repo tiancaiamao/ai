@@ -9,6 +9,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 	agentprompt "github.com/tiancaiamao/ai/pkg/prompt"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
@@ -81,20 +82,33 @@ func maybeSummarizeToolResults(
 		}
 
 		original := agentCtx.Messages[idx]
+		summarySpan := traceevent.StartSpan(ctx, "tool_summary", traceevent.CategoryTool,
+			traceevent.Field{Key: "mode", Value: "single"},
+			traceevent.Field{Key: "strategy", Value: strategy},
+			traceevent.Field{Key: "tool", Value: strings.TrimSpace(original.ToolName)},
+			traceevent.Field{Key: "tool_call_id", Value: strings.TrimSpace(original.ToolCallID)},
+		)
 		summary := ""
+		fallback := false
 		if strategy == "heuristic" {
 			summary = fallbackToolSummary(original)
+			fallback = true
 		} else {
 			text, err := summarizeToolResultFn(ctx, config.Model, config.APIKey, original)
 			if err != nil {
 				summary = fallbackToolSummary(original)
+				fallback = true
+				summarySpan.AddField("llm_error", err.Error())
 			} else {
 				summary = text
 			}
 		}
+		summarySpan.AddField("fallback", fallback)
+		summarySpan.AddField("summary_chars", len([]rune(summary)))
 
 		agentCtx.Messages[idx] = archiveToolResult(original)
 		agentCtx.Messages = append(agentCtx.Messages, newToolSummaryMessage(original, summary))
+		summarySpan.End()
 	}
 }
 

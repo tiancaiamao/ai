@@ -57,9 +57,9 @@ type Server struct {
 	onBash                   func(command string) (*BashResult, error)
 	onAbortBash              func() error
 	onExportHTML             func(path string) (string, error)
+	onSetTraceEvents         func(events []string) ([]string, error)
+	onGetTraceEvents         func() ([]string, error)
 }
-
-var logStreamEvents = os.Getenv("AI_LOG_STREAM_EVENTS") == "1"
 
 // NewServer creates a new RPC server.
 func NewServer() *Server {
@@ -285,6 +285,20 @@ func (s *Server) SetExportHTMLHandler(handler func(path string) (string, error))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onExportHTML = handler
+}
+
+// SetSetTraceEventsHandler sets the handler for set_trace_events commands.
+func (s *Server) SetSetTraceEventsHandler(handler func(events []string) ([]string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetTraceEvents = handler
+}
+
+// SetGetTraceEventsHandler sets the handler for get_trace_events commands.
+func (s *Server) SetGetTraceEventsHandler(handler func() ([]string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onGetTraceEvents = handler
 }
 
 // SetNewSessionHandler sets the handler for new_session commands.
@@ -874,6 +888,34 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 		}
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"path": path})
 
+	case CommandSetTraceEvents:
+		if s.onSetTraceEvents == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_trace_events handler registered")
+		}
+		var data struct {
+			Events []string `json:"events"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		enabledEvents, err := s.onSetTraceEvents(data.Events)
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"events": enabledEvents})
+
+	case CommandGetTraceEvents:
+		if s.onGetTraceEvents == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No get_trace_events handler registered")
+		}
+		enabledEvents, err := s.onGetTraceEvents()
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"events": enabledEvents})
+
 	case CommandPing:
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"ok": true})
 
@@ -955,31 +997,9 @@ func (s *Server) writeJSON(data []byte) {
 	_, _ = s.output.Write(data)
 	_ = s.output.WriteByte('\n')
 	_ = s.output.Flush()
-
-	if shouldLogRPCJSON(data) {
-		slog.Debug("[RPC] Response", "json", string(data))
-	}
 }
 
 // Context returns the server's context.
 func (s *Server) Context() context.Context {
 	return s.ctx
-}
-
-func shouldLogRPCJSON(data []byte) bool {
-	if logStreamEvents {
-		return true
-	}
-	var env struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &env); err != nil {
-		return true
-	}
-	switch env.Type {
-	case "message_update", "text_delta", "thinking_delta", "tool_call_delta":
-		return false
-	default:
-		return true
-	}
 }

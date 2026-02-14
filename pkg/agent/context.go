@@ -62,6 +62,18 @@ func (c *AgentContext) AddMessage(message AgentMessage) {
 
 // AddTool adds a tool to the context.
 func (c *AgentContext) AddTool(tool Tool) {
+	if tool == nil {
+		return
+	}
+	name := tool.Name()
+	for _, existing := range c.Tools {
+		if existing == nil {
+			continue
+		}
+		if existing.Name() == name {
+			return
+		}
+	}
 	c.Tools = append(c.Tools, tool)
 }
 

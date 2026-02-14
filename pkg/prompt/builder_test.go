@@ -1,6 +1,8 @@
 package prompt
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -165,7 +167,7 @@ func TestThinkingInstruction(t *testing.T) {
 		{"medium", "Thinking level is medium"},
 		{"high", "Thinking level is high"},
 		{"xhigh", "Thinking level is xhigh"},
-		{"", "Thinking level is high"}, // default
+		{"", "Thinking level is high"},        // default
 		{"invalid", "Thinking level is high"}, // default for invalid
 	}
 
@@ -192,7 +194,7 @@ func TestNormalizeThinkingLevel(t *testing.T) {
 		{"medium", "medium"},
 		{"high", "high"},
 		{"xhigh", "xhigh"},
-		{"", "high"}, // default
+		{"", "high"},        // default
 		{"invalid", "high"}, // default for invalid
 	}
 
@@ -241,6 +243,40 @@ func TestConvertToolsNonSlice(t *testing.T) {
 
 	if result != nil {
 		t.Errorf("convertTools(\"not a slice\") = %v, want nil", result)
+	}
+}
+
+func TestProjectContextPrefersAgentsOverClaude(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+
+	b := NewBuilder("base", cwd)
+	result := b.Build()
+
+	if !contains(result, "### AGENTS.md") {
+		t.Fatalf("expected AGENTS.md in project context")
+	}
+	if contains(result, "### CLAUDE.md") {
+		t.Fatalf("expected CLAUDE.md to be skipped when AGENTS.md exists")
+	}
+}
+
+func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+
+	b := NewBuilder("base", cwd)
+	result := b.Build()
+
+	if !contains(result, "### CLAUDE.md") {
+		t.Fatalf("expected CLAUDE.md in project context when AGENTS.md is missing")
 	}
 }
 

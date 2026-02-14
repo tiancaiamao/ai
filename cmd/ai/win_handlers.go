@@ -15,7 +15,7 @@ import (
 )
 
 func runWinAI(windowName string, debug bool, sessionPath string, debugAddr string) error {
-	// Initialize logger early so all slog calls go to the log file
+	// Initialize logger early so all slog calls become trace events.
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
 		return fmt.Errorf("failed to get config path: %w", err)
@@ -26,24 +26,17 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		// Continue with defaults if config loading fails
 		cfg, _ = config.LoadConfig(configPath)
 	}
-	if debug {
-		cfg.Log.Level = "debug"
-	}
-
 	// Initialize logger from config
 	log, err := cfg.Log.CreateLogger()
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
 
-	// Set the default slog logger to use our configured logger
-	// This ensures all slog.Info/Error/etc calls go to the log file
+	// Set the default slog logger to use our configured logger.
+	// This ensures all slog.Info/Error/etc calls are bridged into trace events.
 	slog.SetDefault(log)
 
 	aiLogPath := config.ResolveLogPath(cfg.Log)
-	if aiLogPath != "" {
-		slog.Info("Log file:", "value", aiLogPath)
-	}
 
 	if debug {
 		slog.Info("Starting win-ai REPL with debug logging")

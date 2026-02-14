@@ -699,6 +699,8 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.handleAutoCompaction(args, fromControl)
 	case "thinking-level":
 		return true, p.handleThinkingLevel(args, fromControl)
+	case "trace-events":
+		return true, p.handleTraceEvents(args, fromControl)
 	case "cycle-thinking-level":
 		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
@@ -1026,6 +1028,70 @@ func (p *AiInterpreter) handleThinkingLevel(args string, fromControl bool) error
 	return p.sendCommand("set_thinking_level", map[string]any{"level": level}, "")
 }
 
+func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+		return nil
+	}
+
+	parts := strings.Fields(args)
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "all":
+		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"all"}}, "")
+	case "default":
+		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"default"}}, "")
+	case "off":
+		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"none"}}, "")
+	case "list":
+		return p.sendCommand("get_trace_events", nil, "")
+	case "enable", "disable":
+		rawSelectors := strings.TrimSpace(args[len(parts[0]):])
+		selectors := parseTraceEventSelectors(rawSelectors)
+		if len(selectors) == 0 {
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /trace-events %s <selectors>", cmd))
+			return nil
+		}
+		events := append([]string{cmd}, selectors...)
+		return p.sendCommand("set_trace_events", map[string]any{"events": events}, "")
+	default:
+		// Backward-compatible absolute set.
+		selectors := parseTraceEventSelectors(args)
+		if len(selectors) == 0 {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+			return nil
+		}
+		return p.sendCommand("set_trace_events", map[string]any{"events": selectors}, "")
+	}
+}
+
+func parseTraceEventSelectors(raw string) []string {
+	tokens := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ' ', '\t', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0, len(tokens))
+	seen := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		t := strings.ToLower(strings.TrimSpace(token))
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
 func (p *AiInterpreter) handleFork(args string) error {
 	arg := strings.TrimSpace(args)
 	if arg == "" {
@@ -1296,6 +1362,10 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		// Silently ignore prompt success - we'll see the results via events
 	case "abort":
 		p.writeStatus("ai: aborted")
+	case "set_trace_events":
+		p.handleTraceEventsResponse(resp.Data)
+	case "get_trace_events":
+		p.handleTraceEventsList(resp.Data)
 	}
 }
 
@@ -1804,6 +1874,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /copy
   /auto-compaction <on|off>
   /thinking-level <off|minimal|low|medium|high|xhigh>
+  /trace-events <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
   /steer <message>
   /follow-up <message>
@@ -2404,6 +2475,39 @@ func (p *AiInterpreter) handleThinkingLevelResponse(data json.RawMessage) {
 		return
 	}
 	p.writeStatus(fmt.Sprintf("ai: thinking level set to %s", payload.Level))
+}
+
+func (p *AiInterpreter) handleTraceEventsResponse(data json.RawMessage) {
+	var payload struct {
+		Events []string `json:"events"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		p.writeStatus(fmt.Sprintf("ai: invalid trace events response: %v", err))
+		return
+	}
+
+	if len(payload.Events) == 0 {
+		p.writeStatus("ai: trace events set to: <none>")
+		return
+	}
+	p.writeStatus(fmt.Sprintf("ai: trace events set to: %s", strings.Join(payload.Events, ", ")))
+}
+
+func (p *AiInterpreter) handleTraceEventsList(data json.RawMessage) {
+	var payload struct {
+		Events []string `json:"events"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		p.writeStatus(fmt.Sprintf("ai: invalid trace events list response: %v", err))
+		return
+	}
+
+	if len(payload.Events) == 0 {
+		p.writeStatus("ai: no trace events enabled")
+		return
+	}
+
+	p.writeStatus(fmt.Sprintf("ai: enabled trace events: %s", strings.Join(payload.Events, ", ")))
 }
 
 func (p *AiInterpreter) handleLastAssistantText(data json.RawMessage) {

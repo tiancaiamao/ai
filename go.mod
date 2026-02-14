@@ -6,7 +6,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/sminez/ad/win v0.0.0
 	github.com/stretchr/testify v1.11.1
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (

@@ -48,6 +48,24 @@ func TestInjectToolCallsFromTaggedText_Basic(t *testing.T) {
 			callName: "write",
 		},
 		{
+			name: "tool_call wrapper with inline name",
+			input: AgentMessage{
+				Role:    "assistant",
+				Content: []ContentBlock{TextContent{Type: "text", Text: "<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"}},
+			},
+			wantCall: true,
+			callName: "read",
+		},
+		{
+			name: "tool wrapper with name tag",
+			input: AgentMessage{
+				Role:    "assistant",
+				Content: []ContentBlock{TextContent{Type: "text", Text: "<tool><name>bash</name><arg_key>command</arg_key><arg_value>ls -la</arg_value></tool>"}},
+			},
+			wantCall: true,
+			callName: "bash",
+		},
+		{
 			name: "text without tags",
 			input: AgentMessage{
 				Role:    "assistant",
@@ -109,12 +127,34 @@ func TestInjectToolCallsFromTaggedText_WithExistingToolCalls(t *testing.T) {
 	}
 }
 
+func TestInjectToolCallsFromTaggedText_GenericExistingToolCallDoesNotBlockParsing(t *testing.T) {
+	msg := AgentMessage{
+		Role: "assistant",
+		Content: []ContentBlock{
+			TextContent{Type: "text", Text: "Use tool: <tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+			ToolCallContent{ID: "generic", Name: "tool_call", Arguments: map[string]any{"path": "wrong.txt"}},
+		},
+	}
+
+	result, injected := injectToolCallsFromTaggedText(msg)
+	if !injected {
+		t.Fatalf("expected tagged tool call to be injected")
+	}
+	calls := result.ExtractToolCalls()
+	if len(calls) == 0 {
+		t.Fatalf("expected injected call")
+	}
+	if calls[0].Name != "read" {
+		t.Fatalf("expected injected call name read, got %s", calls[0].Name)
+	}
+}
+
 func TestDetectIncompleteToolCalls(t *testing.T) {
 	tests := []struct {
-		name        string
-		text        string
-		wantIssues  int
-		shouldHave  string
+		name       string
+		text       string
+		wantIssues int
+		shouldHave string
 	}{
 		{
 			name:       "complete tool call",
@@ -171,33 +211,33 @@ func TestValidateToolCallArgs(t *testing.T) {
 		wantError bool
 	}{
 		{
-			name:     "valid read",
-			toolName: "read",
-			args:     map[string]any{"path": "file.txt"},
+			name:      "valid read",
+			toolName:  "read",
+			args:      map[string]any{"path": "file.txt"},
 			wantError: false,
 		},
 		{
-			name:     "read missing path",
-			toolName: "read",
-			args:     map[string]any{},
+			name:      "read missing path",
+			toolName:  "read",
+			args:      map[string]any{},
 			wantError: true,
 		},
 		{
-			name:     "valid bash",
-			toolName: "bash",
-			args:     map[string]any{"command": "ls -la"},
+			name:      "valid bash",
+			toolName:  "bash",
+			args:      map[string]any{"command": "ls -la"},
 			wantError: false,
 		},
 		{
-			name:     "bash missing command",
-			toolName: "bash",
-			args:     map[string]any{},
+			name:      "bash missing command",
+			toolName:  "bash",
+			args:      map[string]any{},
 			wantError: true,
 		},
 		{
-			name:     "valid write",
-			toolName: "write",
-			args:     map[string]any{"path": "file.txt", "content": "hello"},
+			name:      "valid write",
+			toolName:  "write",
+			args:      map[string]any{"path": "file.txt", "content": "hello"},
 			wantError: false,
 		},
 	}
@@ -211,4 +251,3 @@ func TestValidateToolCallArgs(t *testing.T) {
 		})
 	}
 }
-

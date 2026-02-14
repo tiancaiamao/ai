@@ -11,6 +11,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // Config contains configuration for context compression.
@@ -574,6 +575,13 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 	if excess <= 0 {
 		return messages
 	}
+	ctx := context.Background()
+	summarySpan := traceevent.StartSpan(ctx, "tool_summary_batch", traceevent.CategoryTool,
+		traceevent.Field{Key: "mode", Value: "compaction_digest"},
+		traceevent.Field{Key: "visible_tool_results", Value: len(visibleToolIndexes)},
+		traceevent.Field{Key: "cutoff", Value: cutoff},
+		traceevent.Field{Key: "archived_count", Value: excess},
+	)
 
 	compacted := append([]agent.AgentMessage{}, messages...)
 	lines := make([]string, 0, excess)
@@ -587,6 +595,8 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 
 	digest := "[Compaction tool digest]\n" + strings.Join(lines, "\n")
 	compacted = append(compacted, agent.NewUserMessage(digest).WithVisibility(true, false).WithKind("tool_summary"))
+	summarySpan.AddField("summary_chars", len([]rune(digest)))
+	summarySpan.End()
 	return compacted
 }
 
