@@ -246,7 +246,7 @@ var defaultEnabledEvents = []string{
 	"agent_end",
 	"message_start",
 	"message_end",
-	"message_update",
+//	"message_update",
 	"assistant_text",
 	"text_delta",
 	"thinking_delta",

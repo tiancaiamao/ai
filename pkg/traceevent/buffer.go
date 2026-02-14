@@ -185,6 +185,41 @@ func (tb *TraceBuf) FlushIfNeeded(ctx context.Context) error {
 	return nil
 }
 
+// Flush writes current buffered events without finalizing the trace stream.
+func (tb *TraceBuf) Flush(ctx context.Context) error {
+	handler := GetHandler()
+	if handler == nil {
+		return nil
+	}
+
+	now := time.Now()
+	tb.mu.Lock()
+	events := make([]TraceEvent, len(tb.events))
+	copy(events, tb.events)
+	dropped := tb.dropped
+	if len(events) == 0 && dropped == 0 {
+		tb.mu.Unlock()
+		return nil
+	}
+	tb.events = tb.events[:0]
+	tb.dropped = 0
+	tb.mu.Unlock()
+
+	events = appendOverflowEvent(events, dropped, tb.maxEvents)
+	if err := flushToHandler(ctx, handler, tb.traceID, events, false); err != nil {
+		tb.mu.Lock()
+		tb.events = append(events, tb.events...)
+		tb.mu.Unlock()
+		return err
+	}
+
+	tb.mu.Lock()
+	tb.streamingOpen = true
+	tb.lastFlushAt = now
+	tb.mu.Unlock()
+	return nil
+}
+
 // DiscardOrFlush flushes remaining events and finalizes streaming traces.
 func (tb *TraceBuf) DiscardOrFlush(ctx context.Context) error {
 	handler := GetHandler()

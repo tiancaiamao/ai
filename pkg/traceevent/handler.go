@@ -24,19 +24,24 @@ type ChunkTraceHandler interface {
 
 // FileHandler writes traces to perfetto-compatible JSON files.
 type FileHandler struct {
-	outputDir string
-	mu        sync.Mutex
-	streams   map[string]*traceStream
+	outputDir        string
+	maxFileSizeBytes int64
+	mu               sync.Mutex
+	streams          map[string]*traceStream
 }
 
 type traceStream struct {
+	traceID     string
+	part        int
 	file        *os.File
 	path        string
 	pid         int
 	hasAnyEvent bool
+	dataEvents  int
 }
 
 const traceJSONSuffix = "]}\n"
+const defaultTraceMaxFileSizeBytes int64 = 4 * 1024 * 1024
 
 // NewFileHandler creates a new file handler.
 func NewFileHandler(outputDir string) (*FileHandler, error) {
@@ -44,9 +49,19 @@ func NewFileHandler(outputDir string) (*FileHandler, error) {
 		return nil, err
 	}
 	return &FileHandler{
-		outputDir: outputDir,
-		streams:   make(map[string]*traceStream),
+		outputDir:        outputDir,
+		maxFileSizeBytes: defaultTraceMaxFileSizeBytes,
+		streams:          make(map[string]*traceStream),
 	}, nil
+}
+
+// SetMaxFileSizeBytes configures the max bytes per output trace file.
+// When the limit is exceeded, subsequent events are written to a new part file.
+// A value <= 0 disables size-based splitting.
+func (h *FileHandler) SetMaxFileSizeBytes(maxBytes int64) {
+	h.mu.Lock()
+	h.maxFileSizeBytes = maxBytes
+	h.mu.Unlock()
 }
 
 // Handle writes trace events to a file.
@@ -66,34 +81,16 @@ func (h *FileHandler) HandleChunk(_ context.Context, traceID []byte, events []Tr
 			return nil
 		}
 
-		filename := fmt.Sprintf("trace-%s.perfetto.json", traceIDStr)
-		path := filepath.Join(h.outputDir, filename)
-		file, err := os.Create(path)
+		var err error
+		stream, err = h.createTraceStream(traceIDStr, processIDForTrace(traceID), 0)
 		if err != nil {
 			return err
 		}
-
-		stream = &traceStream{
-			file: file,
-			path: path,
-			pid:  processIDForTrace(traceID),
-		}
 		h.streams[traceIDStr] = stream
-
-		if _, err := stream.file.WriteString("{\"displayTimeUnit\":\"ms\",\"traceEvents\":[" + traceJSONSuffix); err != nil {
-			_ = stream.file.Close()
-			delete(h.streams, traceIDStr)
-			return err
-		}
-		if err := h.appendObject(stream, processMetadataEvent(stream.pid)); err != nil {
-			_ = stream.file.Close()
-			delete(h.streams, traceIDStr)
-			return err
-		}
 	}
 
 	for _, event := range events {
-		if err := h.appendObject(stream, buildTraceEventJSON(stream.pid, event)); err != nil {
+		if err := h.appendEventWithRotation(stream, buildTraceEventJSON(stream.pid, event)); err != nil {
 			_ = stream.file.Close()
 			delete(h.streams, traceIDStr)
 			return err
@@ -121,11 +118,33 @@ func (h *FileHandler) HandleChunk(_ context.Context, traceID []byte, events []Tr
 	return nil
 }
 
-func (h *FileHandler) appendObject(stream *traceStream, obj map[string]any) error {
+func (h *FileHandler) appendEventWithRotation(stream *traceStream, obj map[string]any) error {
 	blob, err := json.Marshal(obj)
 	if err != nil {
 		return err
 	}
+
+	if h.maxFileSizeBytes > 0 && stream.dataEvents > 0 {
+		size, err := stream.file.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+		// Appending replaces closing suffix in-place, so net growth is comma+payload.
+		predictedSize := size + int64(len(blob))
+		if stream.hasAnyEvent {
+			predictedSize++
+		}
+		if predictedSize > h.maxFileSizeBytes {
+			if err := h.rotateStream(stream); err != nil {
+				return err
+			}
+		}
+	}
+
+	return h.appendObject(stream, blob, true)
+}
+
+func (h *FileHandler) appendObject(stream *traceStream, blob []byte, dataEvent bool) error {
 	suffixLen := int64(len(traceJSONSuffix))
 	size, err := stream.file.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -149,7 +168,65 @@ func (h *FileHandler) appendObject(stream *traceStream, obj map[string]any) erro
 		return err
 	}
 	stream.hasAnyEvent = true
+	if dataEvent {
+		stream.dataEvents++
+	}
 	return nil
+}
+
+func (h *FileHandler) createTraceStream(traceID string, pid, part int) (*traceStream, error) {
+	path := h.traceFilePath(traceID, part)
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	stream := &traceStream{
+		traceID: traceID,
+		part:    part,
+		file:    file,
+		path:    path,
+		pid:     pid,
+	}
+	if _, err := stream.file.WriteString("{\"displayTimeUnit\":\"ms\",\"traceEvents\":[" + traceJSONSuffix); err != nil {
+		_ = stream.file.Close()
+		return nil, err
+	}
+	metaBlob, err := json.Marshal(processMetadataEvent(stream.pid))
+	if err != nil {
+		_ = stream.file.Close()
+		return nil, err
+	}
+	if err := h.appendObject(stream, metaBlob, false); err != nil {
+		_ = stream.file.Close()
+		return nil, err
+	}
+	return stream, nil
+}
+
+func (h *FileHandler) rotateStream(stream *traceStream) error {
+	if err := stream.file.Close(); err != nil {
+		return err
+	}
+	nextPart := stream.part + 1
+	next, err := h.createTraceStream(stream.traceID, stream.pid, nextPart)
+	if err != nil {
+		return err
+	}
+	stream.part = next.part
+	stream.file = next.file
+	stream.path = next.path
+	stream.hasAnyEvent = next.hasAnyEvent
+	stream.dataEvents = next.dataEvents
+	return nil
+}
+
+func (h *FileHandler) traceFilePath(traceID string, part int) string {
+	if part <= 0 {
+		filename := fmt.Sprintf("trace-%s.perfetto.json", traceID)
+		return filepath.Join(h.outputDir, filename)
+	}
+	filename := fmt.Sprintf("trace-%s-part-%d.perfetto.json", traceID, part)
+	return filepath.Join(h.outputDir, filename)
 }
 
 func sanitizeFilenameComponent(s string) string {

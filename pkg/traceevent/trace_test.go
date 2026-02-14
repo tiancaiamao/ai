@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -710,5 +711,68 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 	}
 	if doc.TraceEvents[1]["name"] != "prompt" || doc.TraceEvents[2]["name"] != "prompt" {
 		t.Fatalf("expected prompt span pair, got %v and %v", doc.TraceEvents[1]["name"], doc.TraceEvents[2]["name"])
+	}
+}
+
+func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
+	tmp := t.TempDir()
+	h, err := NewFileHandler(tmp)
+	if err != nil {
+		t.Fatalf("NewFileHandler failed: %v", err)
+	}
+	h.SetMaxFileSizeBytes(700)
+
+	traceID := []byte("split-trace")
+	largeText := strings.Repeat("x", 350)
+	events := []TraceEvent{
+		{
+			Timestamp: time.Now(),
+			Name:      "log:info",
+			Phase:     PhaseInstant,
+			Category:  CategoryLog,
+			Fields:    []Field{{Key: "msg", Value: largeText}},
+		},
+		{
+			Timestamp: time.Now().Add(1 * time.Millisecond),
+			Name:      "log:info",
+			Phase:     PhaseInstant,
+			Category:  CategoryLog,
+			Fields:    []Field{{Key: "msg", Value: largeText}},
+		},
+		{
+			Timestamp: time.Now().Add(2 * time.Millisecond),
+			Name:      "log:info",
+			Phase:     PhaseInstant,
+			Category:  CategoryLog,
+			Fields:    []Field{{Key: "msg", Value: largeText}},
+		},
+	}
+
+	if err := h.HandleChunk(context.Background(), traceID, events, true); err != nil {
+		t.Fatalf("HandleChunk split failed: %v", err)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(tmp, "trace-split-trace*.perfetto.json"))
+	if err != nil {
+		t.Fatalf("Glob failed: %v", err)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("expected split output files, got %d", len(paths))
+	}
+
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile failed for %s: %v", path, err)
+		}
+		var doc struct {
+			TraceEvents []map[string]any `json:"traceEvents"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("trace file %s is not valid JSON: %v", path, err)
+		}
+		if len(doc.TraceEvents) == 0 {
+			t.Fatalf("trace file %s should contain at least metadata event", path)
+		}
 	}
 }

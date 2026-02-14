@@ -306,12 +306,9 @@ func (a *Agent) finalizeTraceForPrompt(ctx context.Context) {
 	if a.traceBuf == nil {
 		return
 	}
-	if err := a.traceBuf.DiscardOrFlush(ctx); err != nil {
-		slog.Error("[Agent] Failed to finalize trace file", "error", err)
+	if err := a.traceBuf.Flush(ctx); err != nil {
+		slog.Error("[Agent] Failed to flush prompt trace", "error", err)
 	}
-	// Move to a fresh trace ID so post-prompt logs don't overwrite finalized prompt traces.
-	seq := int(a.traceSeq.Add(1))
-	a.traceBuf.SetTraceID(traceevent.GenerateTraceID("session", seq))
 }
 
 func (a *Agent) runTraceFlusher() {

@@ -230,7 +230,7 @@ func initTraceFileHandler() (string, error) {
 }
 
 // runDetachedTraceSpan executes a non-prompt operation as an independent trace segment.
-// It creates a fresh trace ID, records a span, and finalizes to disk before returning.
+// It creates a fresh trace ID, records a span, and flushes events before returning.
 func runDetachedTraceSpan(
 	name string,
 	category traceevent.TraceCategory,
@@ -245,11 +245,9 @@ func runDetachedTraceSpan(
 		}
 		tb.SetTraceID(traceevent.GenerateTraceID("session", 0))
 		defer func() {
-			if err := tb.DiscardOrFlush(ctx); err != nil {
-				slog.Warn("Failed to finalize detached trace segment", "error", err)
+			if err := tb.Flush(ctx); err != nil {
+				slog.Warn("Failed to flush detached trace segment", "error", err)
 			}
-			// Switch to a fresh ID so later logs don't overwrite this finalized file.
-			tb.SetTraceID(traceevent.GenerateTraceID("session", 0))
 		}()
 	}
 
