@@ -27,6 +27,9 @@ type AgentEvent struct {
 
 	// compaction events
 	Compaction *CompactionInfo `json:"compaction,omitempty"`
+
+	// loop guard events
+	LoopGuard *LoopGuardInfo `json:"loopGuard,omitempty"`
 }
 
 // AssistantMessageEvent provides a stable, json-tagged shape for streaming updates.
@@ -53,6 +56,7 @@ const (
 	EventThinkingDelta      = "thinking_delta"
 	EventCompactionStart    = "compaction_start"
 	EventCompactionEnd      = "compaction_end"
+	EventLoopGuardTriggered = "loop_guard_triggered"
 )
 
 // CompactionInfo describes a compaction event.
@@ -62,6 +66,11 @@ type CompactionInfo struct {
 	After   int    `json:"after,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
+}
+
+// LoopGuardInfo describes why tool-loop protection interrupted a turn.
+type LoopGuardInfo struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 // NewCompactionStartEvent creates a compaction_start event.
@@ -79,6 +88,15 @@ func NewCompactionEndEvent(info CompactionInfo) AgentEvent {
 		Type:       EventCompactionEnd,
 		EventAt:    time.Now().UnixNano(),
 		Compaction: &info,
+	}
+}
+
+// NewLoopGuardTriggeredEvent creates a loop_guard_triggered event.
+func NewLoopGuardTriggeredEvent(info LoopGuardInfo) AgentEvent {
+	return AgentEvent{
+		Type:      EventLoopGuardTriggered,
+		EventAt:   time.Now().UnixNano(),
+		LoopGuard: &info,
 	}
 }
 

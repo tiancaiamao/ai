@@ -22,7 +22,7 @@ const (
 	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
 	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
 	defaultLoopMaxConsecutiveToolCalls = 6
-	defaultLoopMaxToolCallsPerName     = 20
+	defaultLoopMaxToolCallsPerName     = 60
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -232,6 +232,7 @@ func runInnerLoop(
 		if hasMoreToolCalls && loopGuard != nil {
 			if blocked, reason := loopGuard.Observe(toolCalls); blocked {
 				slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
+				stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: reason}))
 				traceevent.Log(ctx, traceevent.CategoryEvent, "tool_loop_guard_triggered",
 					traceevent.Field{Key: "reason", Value: reason},
 					traceevent.Field{Key: "call_count", Value: len(toolCalls)},

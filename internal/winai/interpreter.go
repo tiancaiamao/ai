@@ -138,6 +138,7 @@ type agentEvent struct {
 	IsError               bool                   `json:"isError,omitempty"`
 	AssistantMessageEvent *assistantMessageEvent `json:"assistantMessageEvent,omitempty"`
 	Compaction            *agent.CompactionInfo  `json:"compaction,omitempty"`
+	LoopGuard             *agent.LoopGuardInfo   `json:"loopGuard,omitempty"`
 }
 
 type serverStartEvent struct {
@@ -1389,6 +1390,8 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		p.handleCompactionEvent(true, evt.Compaction)
 	case "compaction_end":
 		p.handleCompactionEvent(false, evt.Compaction)
+	case "loop_guard_triggered":
+		p.handleLoopGuardEvent(evt.LoopGuard)
 	case "tool_call_delta":
 		// ignore
 	default:
@@ -1458,6 +1461,14 @@ func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.Compaction
 		return
 	}
 	p.writeStatus(fmt.Sprintf("ai: %s done", label))
+}
+
+func (p *AiInterpreter) handleLoopGuardEvent(info *agent.LoopGuardInfo) {
+	reason := "possible infinite tool loop detected"
+	if info != nil && strings.TrimSpace(info.Reason) != "" {
+		reason = strings.TrimSpace(info.Reason)
+	}
+	p.writeStatus(fmt.Sprintf("ai: loop guard triggered: %s", reason))
 }
 
 func (p *AiInterpreter) handleToolStart(evt agentEvent) {

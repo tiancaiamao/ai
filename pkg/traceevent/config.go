@@ -246,11 +246,11 @@ var defaultEnabledEvents = []string{
 	"agent_end",
 	"message_start",
 	"message_end",
-//	"message_update",
+	// "message_update",    // high frequency
 	"assistant_text",
-	"text_delta",
-	"thinking_delta",
-	"tool_call_delta",
+	// "text_delta",        // high frequency, enable via -trace or config
+	// "thinking_delta",    // high frequency, enable via -trace or config
+	// "tool_call_delta",   // high frequency, enable via -trace or config
 	"compaction",
 	"trace_overflow",
 	"tool_call_normalized",

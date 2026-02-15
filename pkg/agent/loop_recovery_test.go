@@ -178,9 +178,13 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	}
 
 	var sawGuardedTurn bool
+	var sawGuardEvent bool
 	for item := range stream.Iterator(context.Background()) {
 		if item.Done {
 			break
+		}
+		if item.Value.Type == EventLoopGuardTriggered && item.Value.LoopGuard != nil && strings.TrimSpace(item.Value.LoopGuard.Reason) != "" {
+			sawGuardEvent = true
 		}
 		if item.Value.Type != EventTurnEnd || item.Value.Message == nil {
 			continue
@@ -193,6 +197,9 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 
 	if !sawGuardedTurn {
 		t.Fatal("expected guarded turn_end message without tool calls")
+	}
+	if !sawGuardEvent {
+		t.Fatal("expected loop_guard_triggered event")
 	}
 }
 
