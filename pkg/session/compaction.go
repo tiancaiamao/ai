@@ -8,6 +8,11 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
+var (
+	ErrNothingToCompact = errors.New("nothing to compact")
+	ErrAlreadyCompacted = errors.New("already compacted")
+)
+
 // CompactionResult describes a session compaction operation.
 type CompactionResult struct {
 	Summary          string
@@ -22,6 +27,51 @@ type messageRef struct {
 	Cuttable bool
 }
 
+// IsNonActionableCompactionError reports whether a compaction error means
+// there is simply no current compaction work to perform.
+func IsNonActionableCompactionError(err error) bool {
+	return errors.Is(err, ErrNothingToCompact) || errors.Is(err, ErrAlreadyCompacted)
+}
+
+// CanCompact checks whether the current branch has enough cuttable context
+// to produce a compaction entry.
+func (s *Session) CanCompact(compactor *compact.Compactor) bool {
+	if compactor == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return canCompactLocked(s, compactor)
+}
+
+func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
+	path := s.getBranchLocked("")
+	if len(path) == 0 {
+		return false
+	}
+	if path[len(path)-1].Type == EntryTypeCompaction {
+		return false
+	}
+
+	prevCompactionIndex := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i].Type == EntryTypeCompaction {
+			prevCompactionIndex = i
+			break
+		}
+	}
+
+	boundaryStart := prevCompactionIndex + 1
+	refs := buildMessageRefs(path[boundaryStart:])
+	if len(refs) == 0 {
+		return false
+	}
+
+	firstKeptIndex := findFirstKeptIndex(refs, compactor)
+	return firstKeptIndex > 0
+}
+
 // Compact compacts the current session branch and appends a compaction entry.
 func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, error) {
 	if compactor == nil {
@@ -33,10 +83,10 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 
 	path := s.getBranchLocked("")
 	if len(path) == 0 {
-		return nil, errors.New("nothing to compact")
+		return nil, ErrNothingToCompact
 	}
 	if path[len(path)-1].Type == EntryTypeCompaction {
-		return nil, errors.New("already compacted")
+		return nil, ErrAlreadyCompacted
 	}
 
 	prevCompactionIndex := -1
@@ -52,7 +102,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	boundaryStart := prevCompactionIndex + 1
 	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
-		return nil, errors.New("nothing to compact")
+		return nil, ErrNothingToCompact
 	}
 
 	messages := refsToMessages(refs)
@@ -60,7 +110,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 
 	firstKeptIndex := findFirstKeptIndex(refs, compactor)
 	if firstKeptIndex <= 0 {
-		return nil, errors.New("nothing to compact")
+		return nil, ErrNothingToCompact
 	}
 
 	messagesToSummarize := refsToMessages(refs[:firstKeptIndex])

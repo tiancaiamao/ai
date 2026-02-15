@@ -19,23 +19,27 @@ import (
 )
 
 const (
-	defaultLLMMaxRetries  = 1               // Maximum retry attempts for LLM calls
-	defaultRetryBaseDelay = 1 * time.Second // Base delay for exponential backoff
+	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
+	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
+	defaultLoopMaxConsecutiveToolCalls = 6
+	defaultLoopMaxToolCallsPerName     = 20
 )
 
 // LoopConfig contains configuration for the agent loop.
 type LoopConfig struct {
-	Model               llm.Model
-	APIKey              string
-	Executor            *ExecutorPool // Tool executor with concurrency control
-	Metrics             *Metrics      // Metrics collector
-	ToolOutput          ToolOutputLimits
-	Compactor           Compactor     // Optional compactor for context-length recovery
-	ToolCallCutoff      int           // Summarize oldest tool outputs when visible tool results exceed this
-	ToolSummaryStrategy string        // llm, heuristic, off
-	ThinkingLevel       string        // off, minimal, low, medium, high, xhigh
-	MaxLLMRetries       int           // Maximum number of retries for LLM calls
-	RetryBaseDelay      time.Duration // Base delay for exponential backoff
+	Model                   llm.Model
+	APIKey                  string
+	Executor                *ExecutorPool // Tool executor with concurrency control
+	Metrics                 *Metrics      // Metrics collector
+	ToolOutput              ToolOutputLimits
+	Compactor               Compactor     // Optional compactor for context-length recovery
+	ToolCallCutoff          int           // Summarize oldest tool outputs when visible tool results exceed this
+	ToolSummaryStrategy     string        // llm, heuristic, off
+	ThinkingLevel           string        // off, minimal, low, medium, high, xhigh
+	MaxLLMRetries           int           // Maximum number of retries for LLM calls
+	RetryBaseDelay          time.Duration // Base delay for exponential backoff
+	MaxConsecutiveToolCalls int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
+	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -95,6 +99,7 @@ func runInnerLoop(
 
 	const maxCompactionRecoveries = 1
 	compactionRecoveries := 0
+	loopGuard := newToolLoopGuard(config)
 	asyncSummarizer := newAsyncToolSummarizer(ctx, config)
 	if asyncSummarizer != nil {
 		defer asyncSummarizer.Close()
@@ -224,6 +229,18 @@ func runInnerLoop(
 		// Check for tool calls
 		toolCalls := msg.ExtractToolCalls()
 		hasMoreToolCalls := len(toolCalls) > 0
+		if hasMoreToolCalls && loopGuard != nil {
+			if blocked, reason := loopGuard.Observe(toolCalls); blocked {
+				slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "tool_loop_guard_triggered",
+					traceevent.Field{Key: "reason", Value: reason},
+					traceevent.Field{Key: "call_count", Value: len(toolCalls)},
+				)
+				sanitizeMessageForToolLoopGuard(msg, reason)
+				newMessages[len(newMessages)-1] = *msg
+				hasMoreToolCalls = false
+			}
+		}
 
 		var toolResults []AgentMessage
 		if hasMoreToolCalls {
@@ -249,6 +266,90 @@ func runInnerLoop(
 	}
 
 	stream.Push(NewAgentEndEvent(agentCtx.Messages))
+}
+
+type toolLoopGuard struct {
+	maxConsecutive int
+	maxPerToolName int
+
+	lastSignature  string
+	consecutiveRun int
+	toolCallTotals map[string]int
+}
+
+func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
+	if config == nil {
+		return nil
+	}
+	maxConsecutive := resolveLoopGuardLimit(config.MaxConsecutiveToolCalls, defaultLoopMaxConsecutiveToolCalls)
+	maxPerToolName := resolveLoopGuardLimit(config.MaxToolCallsPerName, defaultLoopMaxToolCallsPerName)
+	if maxConsecutive == 0 && maxPerToolName == 0 {
+		return nil
+	}
+	return &toolLoopGuard{
+		maxConsecutive: maxConsecutive,
+		maxPerToolName: maxPerToolName,
+		toolCallTotals: make(map[string]int),
+	}
+}
+
+func resolveLoopGuardLimit(value, defaultValue int) int {
+	if value < 0 {
+		return 0
+	}
+	if value == 0 {
+		return defaultValue
+	}
+	return value
+}
+
+func (g *toolLoopGuard) Observe(toolCalls []ToolCallContent) (bool, string) {
+	for _, tc := range toolCalls {
+		name := strings.ToLower(strings.TrimSpace(tc.Name))
+		if name == "" {
+			name = "unknown"
+		}
+		signature := name + ":" + hashAny(tc.Arguments)
+
+		if signature == g.lastSignature {
+			g.consecutiveRun++
+		} else {
+			g.lastSignature = signature
+			g.consecutiveRun = 1
+		}
+
+		if g.maxConsecutive > 0 && g.consecutiveRun > g.maxConsecutive {
+			return true, fmt.Sprintf("detected %d consecutive identical tool calls (%s)", g.consecutiveRun, name)
+		}
+
+		g.toolCallTotals[name]++
+		if g.maxPerToolName > 0 && g.toolCallTotals[name] > g.maxPerToolName {
+			return true, fmt.Sprintf("tool %q called %d times in one run", name, g.toolCallTotals[name])
+		}
+	}
+	return false, ""
+}
+
+func sanitizeMessageForToolLoopGuard(msg *AgentMessage, reason string) {
+	if msg == nil {
+		return
+	}
+
+	filtered := make([]ContentBlock, 0, len(msg.Content)+1)
+	for _, block := range msg.Content {
+		switch block.(type) {
+		case ToolCallContent:
+			continue
+		default:
+			filtered = append(filtered, block)
+		}
+	}
+	filtered = append(filtered, TextContent{
+		Type: "text",
+		Text: "\n\n[Loop guard] Stopped repeated tool execution to prevent an infinite loop.\nReason: " + strings.TrimSpace(reason),
+	})
+	msg.Content = filtered
+	msg.StopReason = "aborted"
 }
 
 // streamAssistantResponseWithRetry streams the assistant's response with retry logic.

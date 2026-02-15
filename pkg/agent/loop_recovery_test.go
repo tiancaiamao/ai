@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -136,6 +137,62 @@ func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
 	}
 	if !sawStart || !sawEnd {
 		t.Fatalf("expected pre-LLM compaction start/end events, got start=%v end=%v", sawStart, sawEnd)
+	}
+}
+
+func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		msg.Content = []ContentBlock{
+			ToolCallContent{
+				ID:        "call-repeat",
+				Type:      "toolCall",
+				Name:      "read",
+				Arguments: map[string]any{"path": "/tmp/a.txt"},
+			},
+		}
+		msg.StopReason = "tool_calls"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
+		MaxConsecutiveToolCalls: 2,
+		MaxToolCallsPerName:     100,
+	}, stream)
+
+	if callCount != 3 {
+		t.Fatalf("expected loop guard to stop on third repeated call, got %d calls", callCount)
+	}
+
+	var sawGuardedTurn bool
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type != EventTurnEnd || item.Value.Message == nil {
+			continue
+		}
+		msg := item.Value.Message
+		if msg.StopReason == "aborted" && strings.Contains(msg.ExtractText(), "[Loop guard]") && len(msg.ExtractToolCalls()) == 0 {
+			sawGuardedTurn = true
+		}
+	}
+
+	if !sawGuardedTurn {
+		t.Fatal("expected guarded turn_end message without tool calls")
 	}
 }
 

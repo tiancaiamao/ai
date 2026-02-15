@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -29,12 +30,19 @@ func (sc *sessionCompactor) Update(sess *session.Session, comp *compact.Compacto
 
 func (sc *sessionCompactor) ShouldCompact(messages []agent.AgentMessage) bool {
 	sc.mu.Lock()
+	sess := sc.session
 	comp := sc.compactor
 	sc.mu.Unlock()
 	if comp == nil {
 		return false
 	}
-	return comp.ShouldCompact(messages)
+	if !comp.ShouldCompact(messages) {
+		return false
+	}
+	if sess == nil {
+		return false
+	}
+	return sess.CanCompact(comp)
 }
 
 func (sc *sessionCompactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
@@ -49,6 +57,9 @@ func (sc *sessionCompactor) Compact(messages []agent.AgentMessage) ([]agent.Agen
 	if writer != nil {
 		compacted, err := writer.Compact(sess, comp)
 		if err != nil {
+			if session.IsNonActionableCompactionError(err) {
+				return messages, nil
+			}
 			return nil, err
 		}
 		if compacted != nil {
@@ -56,6 +67,9 @@ func (sc *sessionCompactor) Compact(messages []agent.AgentMessage) ([]agent.Agen
 		}
 	}
 	if _, err := sess.Compact(comp); err != nil {
+		if session.IsNonActionableCompactionError(err) {
+			return messages, nil
+		}
 		return nil, err
 	}
 	return sess.GetMessages(), nil
@@ -94,6 +108,11 @@ func newSessionWriter(buffer int) *sessionWriter {
 					resp.messages = nil
 				} else {
 					if _, err := req.sess.Compact(req.comp); err != nil {
+						if session.IsNonActionableCompactionError(err) || errors.Is(err, session.ErrNothingToCompact) {
+							resp.messages = req.sess.GetMessages()
+							req.response <- resp
+							continue
+						}
 						resp.err = err
 					} else {
 						resp.messages = req.sess.GetMessages()
