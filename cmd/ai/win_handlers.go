@@ -14,7 +14,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/config"
 )
 
-func runWinAI(windowName string, debug bool, sessionPath string, debugAddr string) error {
+func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 	// Initialize logger early so all slog calls become trace events.
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -38,10 +38,6 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 
 	aiLogPath := config.ResolveLogPath(cfg.Log)
 
-	if debug {
-		slog.Info("Starting win-ai REPL with debug logging")
-	}
-
 	rpcInReader, rpcInWriter := io.Pipe()
 	rpcOutReader, rpcOutWriter := io.Pipe()
 	rpcErrReader, rpcErrWriter := io.Pipe()
@@ -49,7 +45,7 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 
 	go func() {
 		defer rpcOutWriter.Close()
-		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter, debug); err != nil {
+		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
 			slog.Error("rpc error", "error", err)
 		}
 	}()
@@ -58,21 +54,12 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 	if err != nil {
 		return fmt.Errorf("unable to connect to ad: %w", err)
 	}
-	defer func() {
-		if debug {
-			slog.Info("Closing client connection")
-		}
-		client.Close()
-	}()
+	defer client.Close()
 
 	// Pass the configured logger to the ad client
 	client.SetLogger(log)
 
-	if debug {
-		slog.Info("Connected to ad successfully")
-	}
-
-	interpreter := winai.NewAiInterpreterWithIO(rpcInWriter, rpcOutReader, rpcErrReader, debug)
+	interpreter := winai.NewAiInterpreterWithIO(rpcInWriter, rpcOutReader, rpcErrReader)
 	interpreter.SetAdClient(client)
 	defer interpreter.Stop()
 
@@ -95,7 +82,6 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		EchoSendInput:         false,
 		EnableKeyboardExecute: false,
 		EnableExecute:         false,
-		Debug:                 debug,
 		LogPath:               aiLogPath,
 	}
 
@@ -104,21 +90,10 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		return fmt.Errorf("unable to create REPL handler: %w", err)
 	}
 
-	if debug {
-		slog.Info("Starting REPL...")
-	}
-
 	if err := handler.Start(); err != nil {
-		if debug {
-			slog.Error("REPL start error", "error", err)
-		}
 		return fmt.Errorf("repl start: %w", err)
 	}
-	defer func() {
-		if err := handler.Stop(); err != nil && debug {
-			slog.Error("REPL stop error", "error", err)
-		}
-	}()
+	defer handler.Stop()
 
 	eventHandler := &recoveringEventHandler{
 		inner:      handler.NewEventHandler(),
@@ -127,9 +102,6 @@ func runWinAI(windowName string, debug bool, sessionPath string, debugAddr strin
 		sendPrefix: sendPrefix,
 	}
 	if err := client.RunEventFilter(handler.BufferID(), eventHandler); err != nil {
-		if debug {
-			slog.Error("REPL event loop error", "error", err)
-		}
 		return fmt.Errorf("REPL error: %w", err)
 	}
 

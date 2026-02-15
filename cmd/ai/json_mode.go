@@ -22,7 +22,7 @@ import (
 
 // runJSON implements --mode json: single-shot execution with JSON Lines output.
 // Based on pi-mono's print-mode.ts behavior.
-func runJSON(sessionPath string, debugAddr string, prompts []string, output io.Writer, debug bool) error {
+func runJSON(sessionPath string, debugAddr string, prompts []string, output io.Writer) error {
 	if len(prompts) == 0 {
 		return fmt.Errorf("at least one prompt argument is required for --mode json")
 	}
@@ -44,7 +44,6 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
 	slog.SetDefault(log)
-	_ = debug
 
 	traceOutputPath, err := initTraceFileHandler()
 	if err != nil {

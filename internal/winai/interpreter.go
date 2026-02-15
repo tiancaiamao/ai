@@ -33,7 +33,6 @@ type AiInterpreter struct {
 	*repl.BaseInterpreter
 	cmdPath  string
 	cmdArgs  []string
-	debug    bool
 	startCtx context.Context
 
 	// adClient is the client for communicating with ad (used for minibuffer, etc.)
@@ -167,16 +166,16 @@ type pipelineMetrics struct {
 }
 
 // NewAiInterpreter creates a new ai interpreter.
-func NewAiInterpreter(cmdPath string, cmdArgs []string, debug bool) *AiInterpreter {
-	interp := newBaseInterpreter(debug)
+func NewAiInterpreter(cmdPath string, cmdArgs []string) *AiInterpreter {
+	interp := newBaseInterpreter()
 	interp.cmdPath = cmdPath
 	interp.cmdArgs = cmdArgs
 	return interp
 }
 
 // NewAiInterpreterWithIO creates an interpreter backed by in-process IO pipes.
-func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.ReadCloser, debug bool) *AiInterpreter {
-	interp := newBaseInterpreter(debug)
+func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.ReadCloser) *AiInterpreter {
+	interp := newBaseInterpreter()
 	interp.inProc = true
 	interp.stdin = stdin
 	interp.stdout = stdout
@@ -184,10 +183,9 @@ func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr i
 	return interp
 }
 
-func newBaseInterpreter(debug bool) *AiInterpreter {
+func newBaseInterpreter() *AiInterpreter {
 	return &AiInterpreter{
 		BaseInterpreter:      repl.NewBaseInterpreter(true),
-		debug:                debug,
 		showAssistant:        true,
 		showThinking:         true,
 		showTools:            true,
@@ -228,12 +226,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 			p.stateMu.Lock()
 			p.workingDir = wd
 			p.stateMu.Unlock()
-			if p.debug {
-				slog.Info("[AI-START] Working directory", "dir", wd)
-			}
-		}
-		if p.debug {
-			slog.Info("[AI-START] ai started in-process")
 		}
 		go p.readStdout(childCtx)
 		if p.stderr != nil {
@@ -282,13 +274,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		p.stateMu.Lock()
 		p.workingDir = wd
 		p.stateMu.Unlock()
-		if p.debug {
-			slog.Info("[AI-START] Working directory", "dir", wd)
-		}
-	}
-
-	if p.debug {
-		slog.Info("[AI-START] ai started with PID", "pid", p.cmd.Process.Pid)
 	}
 
 	go p.readStdout(childCtx)
@@ -349,7 +334,7 @@ func (p *AiInterpreter) Stop() error {
 }
 
 func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
-	err := cmd.Wait()
+	_ = cmd.Wait()
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
@@ -357,14 +342,6 @@ func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
 
 	if !p.resetProcessForCmd(cmd, "process exited") {
 		return
-	}
-
-	if p.debug {
-		if err != nil {
-			slog.Info("[AI-EXIT]", "code", exitCode, "error", err)
-		} else {
-			slog.Info("[AI-EXIT]", "code", exitCode)
-		}
 	}
 
 	msg := "ai: process exited"
@@ -416,10 +393,6 @@ func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
 	}
 
 	p.resetAiState()
-
-	if p.debug && reason != "" {
-		slog.Info("[AI-RESET]", "reason", reason)
-	}
 	return true
 }
 
@@ -1268,9 +1241,7 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		p.noteStderr()
-		if p.debug {
-			slog.Info("[AI-STDERR]", "line", line)
-		}
+		_ = line // stderr line captured for debugging
 
 		select {
 		case <-ctx.Done():
@@ -1279,8 +1250,8 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil && p.debug {
-		slog.Error("[AI-STDERR] scanner error", "error", err)
+	if err := scanner.Err(); err != nil {
+		_ = err // stderr scanner error captured for debugging
 	}
 }
 
@@ -1372,9 +1343,6 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 func (p *AiInterpreter) handleEvent(line []byte) {
 	var evt agentEvent
 	if err := json.Unmarshal(line, &evt); err != nil {
-		if p.debug {
-			slog.Warn("[AI-EVENT] invalid event", "error", err)
-		}
 		return
 	}
 	p.recordEventMetrics(evt)
@@ -1789,8 +1757,8 @@ func (p *AiInterpreter) writeRaw(text string) {
 		}
 		chunk := string(data[:chunkSize])
 		start := time.Now()
-		if err := writer.Write(chunk); err != nil && p.debug {
-			slog.Error("[AI-OUTPUT] write failed", "error", err, "bytes", len(chunk))
+		if err := writer.Write(chunk); err != nil {
+			_ = err // write error captured for debugging
 		}
 		p.recordWriteMetrics(time.Since(start))
 		data = data[chunkSize:]
@@ -2319,19 +2287,6 @@ func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 }
 
 func (p *AiInterpreter) handleMessages(data json.RawMessage) {
-	if p.debug {
-		writerOK := p.GetOutputWriter() != nil
-		p.stateMu.Lock()
-		streaming := p.isStreaming
-		deferStatus := p.deferStatus
-		p.stateMu.Unlock()
-		slog.Info("[AI] handleMessages",
-			"dataBytes", len(data),
-			"writer", writerOK,
-			"streaming", streaming,
-			"deferStatus", deferStatus,
-		)
-	}
 	var payload struct {
 		Messages []agent.AgentMessage `json:"messages"`
 	}

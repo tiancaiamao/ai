@@ -12,23 +12,22 @@ func main() {
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json mode)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
-	debug := flag.Bool("debug", false, "enable debug mode")
 	flag.Parse()
 
 	switch *mode {
 	case "rpc":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, *debug); err != nil {
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
 	case "json":
 		prompts := flag.Args()
-		if err := runJSON(*sessionPathFlag, *debugAddr, prompts, os.Stdout, *debug); err != nil {
+		if err := runJSON(*sessionPathFlag, *debugAddr, prompts, os.Stdout); err != nil {
 			slog.Error("json error", "error", err)
 			os.Exit(1)
 		}
 	case "win", "":
-		if err := runWinAI(*windowName, *debug, *sessionPathFlag, *debugAddr); err != nil {
+		if err := runWinAI(*windowName, *sessionPathFlag, *debugAddr); err != nil {
 			slog.Error("win-ai error", "error", err)
 			os.Exit(1)
 		}

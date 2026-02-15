@@ -28,7 +28,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, debug bool) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -49,7 +49,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Set the default slog logger
 	slog.SetDefault(log)
-	_ = debug
 	traceOutputPath := ""
 
 	// Convert config to llm.Model

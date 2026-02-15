@@ -23,7 +23,7 @@ var traceIDSeq atomic.Uint64
 // - 2: Tool operations (base)
 // - 3: Agent events
 // - 4: Metrics counters
-// - 2000-2499: Individual tool calls (base*1000 + hash)
+// - 2000..(2000+1e9): Individual tool calls (stable hash(tool_call_id))
 // - 5000-9999: Individual metric series (base*1000 + hash)
 const (
 	tidLog     = 0
@@ -32,7 +32,8 @@ const (
 	tidEvent   = 3
 	tidMetrics = 4
 
-	tidToolCallBase     = 2000 // Tool calls: 2000-2499
+	tidToolCallBase     = 2000
+	tidToolCallHashSpan = 1_000_000_000
 	tidMetricSeriesBase = 5000 // Metric series: 5000-9999
 )
 
@@ -201,7 +202,7 @@ func threadIDForToolCall(args map[string]any) (int, bool) {
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
-	return tidToolCallBase + int(h.Sum32()%500), true
+	return tidToolCallBase + int(h.Sum32()%tidToolCallHashSpan), true
 }
 
 func toStableString(v any) string {
