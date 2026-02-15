@@ -225,7 +225,7 @@ func newToolSummaryMessage(result AgentMessage, summary string) AgentMessage {
 		strings.TrimSpace(summary),
 	)
 
-	return NewUserMessage(text).WithVisibility(true, false).WithKind("tool_summary")
+	return newToolSummaryContextMessage(text)
 }
 
 func fallbackToolSummary(result AgentMessage) string {
@@ -359,7 +359,15 @@ func newToolBatchSummaryMessage(results []AgentMessage, summary string) AgentMes
 		header += "\nCall IDs: " + strings.Join(callIDs, ", ")
 	}
 	text := header + "\n" + strings.TrimSpace(summary)
-	return NewUserMessage(text).WithVisibility(true, false).WithKind("tool_summary")
+	return newToolSummaryContextMessage(text)
+}
+
+func newToolSummaryContextMessage(text string) AgentMessage {
+	msg := NewAssistantMessage()
+	msg.Content = []ContentBlock{
+		TextContent{Type: "text", Text: text},
+	}
+	return msg.WithVisibility(true, false).WithKind("tool_summary")
 }
 
 func trimRunes(input string, limit int) string {

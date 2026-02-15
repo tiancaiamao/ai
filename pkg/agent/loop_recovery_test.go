@@ -9,11 +9,12 @@ import (
 )
 
 type recoveryCompactor struct {
-	calls int
+	calls         int
+	shouldCompact bool
 }
 
 func (c *recoveryCompactor) ShouldCompact(_ []AgentMessage) bool {
-	return true
+	return c.shouldCompact
 }
 
 func (c *recoveryCompactor) Compact(messages []AgentMessage) ([]AgentMessage, error) {
@@ -90,6 +91,54 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	}
 }
 
+func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	compactor := &recoveryCompactor{shouldCompact: true}
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: compactor}, stream)
+
+	var sawStart, sawEnd bool
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventCompactionStart && item.Value.Compaction != nil && item.Value.Compaction.Trigger == "pre_llm_threshold" {
+			sawStart = true
+		}
+		if item.Value.Type == EventCompactionEnd && item.Value.Compaction != nil && item.Value.Compaction.Trigger == "pre_llm_threshold" {
+			sawEnd = true
+		}
+	}
+
+	if compactor.calls != 1 {
+		t.Fatalf("expected compactor to be called once, got %d", compactor.calls)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected assistant streaming to be called once, got %d", callCount)
+	}
+	if !sawStart || !sawEnd {
+		t.Fatalf("expected pre-LLM compaction start/end events, got start=%v end=%v", sawStart, sawEnd)
+	}
+}
+
 func TestStreamAssistantResponseWithRetrySkipsRetryForContextLengthError(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()
@@ -161,7 +210,7 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 type failingCompactor struct{}
 
 func (f *failingCompactor) ShouldCompact(_ []AgentMessage) bool {
-	return true
+	return false
 }
 
 func (f *failingCompactor) Compact(_ []AgentMessage) ([]AgentMessage, error) {

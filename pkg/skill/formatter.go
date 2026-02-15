@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+const (
+	maxPromptSkills          = 24
+	maxSkillDescriptionRunes = 220
+)
+
 // FormatForPrompt formats skills for inclusion in a system prompt.
 // Uses XML format per Agent Skills standard.
 // See: https://agentskills.io/integrate-skills
@@ -24,6 +29,12 @@ func FormatForPrompt(skills []Skill) string {
 		return ""
 	}
 
+	omitted := 0
+	if len(visibleSkills) > maxPromptSkills {
+		omitted = len(visibleSkills) - maxPromptSkills
+		visibleSkills = visibleSkills[:maxPromptSkills]
+	}
+
 	lines := []string{
 		"## Skills",
 		"The following skills provide specialized instructions for additional capabilities.",
@@ -39,14 +50,18 @@ func FormatForPrompt(skills []Skill) string {
 	}
 
 	for _, skill := range visibleSkills {
+		description := trimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
 		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapeXML(skill.Name)))
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(skill.Description)))
+		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(description)))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(skill.FilePath)))
 		lines = append(lines, "  </skill>")
 	}
 
 	lines = append(lines, "</available_skills>")
+	if omitted > 0 {
+		lines = append(lines, fmt.Sprintf("Note: %d additional skills omitted for brevity.", omitted))
+	}
 
 	return strings.Join(lines, "\n")
 }
@@ -59,4 +74,15 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "\"", "&quot;")
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
+}
+
+func trimRunes(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
 }

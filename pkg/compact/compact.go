@@ -69,15 +69,15 @@ func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
 		return false
 	}
 
-	// Prefer token limit when available (context window or max tokens)
+	// Message-count and token-limit checks are both valid triggers.
+	if c.config.MaxMessages > 0 && len(messages) >= c.config.MaxMessages {
+		return true
+	}
+
+	// Token limit (context window or explicit max tokens)
 	if tokenLimit, _ := c.EffectiveTokenLimit(); tokenLimit > 0 {
 		tokens := c.EstimateContextTokens(messages)
 		return tokens >= tokenLimit
-	}
-
-	// Check message count (fallback)
-	if c.config.MaxMessages > 0 && len(messages) >= c.config.MaxMessages {
-		return true
 	}
 	return false
 }
@@ -350,15 +350,20 @@ func (c *Compactor) EstimateTokens(messages []agent.AgentMessage) int {
 
 // EstimateContextTokens estimates context tokens using usage when available.
 func (c *Compactor) EstimateContextTokens(messages []agent.AgentMessage) int {
+	systemPromptTokens := 0
+	if c != nil && strings.TrimSpace(c.systemPrompt) != "" {
+		systemPromptTokens = int(math.Ceil(float64(len(c.systemPrompt)) / 4.0))
+	}
+
 	usageTokens, lastIndex := lastAssistantUsageTokens(messages)
 	if lastIndex >= 0 {
 		trailingTokens := 0
 		for i := lastIndex + 1; i < len(messages); i++ {
 			trailingTokens += estimateMessageTokens(messages[i])
 		}
-		return usageTokens + trailingTokens
+		return usageTokens + trailingTokens + systemPromptTokens
 	}
-	return c.EstimateTokens(messages)
+	return c.EstimateTokens(messages) + systemPromptTokens
 }
 
 // CompactIfNeeded compacts the context if it exceeds limits.
@@ -594,10 +599,18 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 	}
 
 	digest := "[Compaction tool digest]\n" + strings.Join(lines, "\n")
-	compacted = append(compacted, agent.NewUserMessage(digest).WithVisibility(true, false).WithKind("tool_summary"))
+	compacted = append(compacted, newToolSummaryContextMessage(digest))
 	summarySpan.AddField("summary_chars", len([]rune(digest)))
 	summarySpan.End()
 	return compacted
+}
+
+func newToolSummaryContextMessage(text string) agent.AgentMessage {
+	msg := agent.NewAssistantMessage()
+	msg.Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: text},
+	}
+	return msg.WithVisibility(true, false).WithKind("tool_summary")
 }
 
 func compactionToolDigestLine(msg agent.AgentMessage) string {

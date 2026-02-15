@@ -60,6 +60,26 @@ func TestShouldCompactTokenLimit(t *testing.T) {
 	}
 }
 
+func TestShouldCompactMessageLimitEvenWithContextWindow(t *testing.T) {
+	config := &Config{
+		MaxMessages: 3,
+		MaxTokens:   8000,
+		AutoCompact: true,
+	}
+
+	// Large context window means token threshold likely won't be hit for short messages.
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 200000)
+	messages := []agent.AgentMessage{
+		agent.NewUserMessage("a"),
+		agent.NewAssistantMessage(),
+		agent.NewUserMessage("b"),
+	}
+
+	if !compactor.ShouldCompact(messages) {
+		t.Fatal("expected compaction to trigger on message count even when context window is configured")
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	config := DefaultConfig()
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)

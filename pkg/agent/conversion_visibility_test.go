@@ -66,3 +66,55 @@ func TestAgentMessageMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("expected kind to round-trip, got %+v", decoded.Metadata)
 	}
 }
+
+func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
+	msgs := []AgentMessage{
+		NewUserMessage("do work"),
+		NewToolResultMessage("call-1", "read", []ContentBlock{
+			TextContent{Type: "text", Text: "old output"},
+		}, false),
+		NewToolResultMessage("call-1", "read", []ContentBlock{
+			TextContent{Type: "text", Text: "new output"},
+		}, false),
+	}
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
+	if len(llmMessages) != 2 {
+		t.Fatalf("expected 2 messages after dedupe, got %d", len(llmMessages))
+	}
+	if llmMessages[1].Role != "tool" {
+		t.Fatalf("expected second message role=tool, got %q", llmMessages[1].Role)
+	}
+	if llmMessages[1].ToolCallID != "call-1" {
+		t.Fatalf("expected toolCallID call-1, got %q", llmMessages[1].ToolCallID)
+	}
+	if llmMessages[1].Content != "new output" {
+		t.Fatalf("expected newest tool output to be kept, got %q", llmMessages[1].Content)
+	}
+}
+
+func TestConvertMessagesToLLMDedupesToolSummaryByContent(t *testing.T) {
+	summaryA := NewAssistantMessage()
+	summaryA.Content = []ContentBlock{TextContent{Type: "text", Text: "summary text"}}
+	summaryA = summaryA.WithVisibility(true, false).WithKind("tool_summary")
+
+	summaryB := NewAssistantMessage()
+	summaryB.Content = []ContentBlock{TextContent{Type: "text", Text: "summary text"}}
+	summaryB = summaryB.WithVisibility(true, false).WithKind("tool_summary")
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
+		NewUserMessage("start"),
+		summaryA,
+		summaryB,
+	})
+
+	if len(llmMessages) != 2 {
+		t.Fatalf("expected deduped summary messages, got %d entries", len(llmMessages))
+	}
+	if llmMessages[1].Role != "assistant" {
+		t.Fatalf("expected deduped summary as assistant role, got %q", llmMessages[1].Role)
+	}
+	if llmMessages[1].Content != "summary text" {
+		t.Fatalf("unexpected summary content: %q", llmMessages[1].Content)
+	}
+}

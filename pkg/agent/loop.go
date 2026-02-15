@@ -113,6 +113,50 @@ func runInnerLoop(
 		default:
 		}
 
+		// Compact before each LLM request so long-running tool loops do not keep
+		// carrying stale outputs into the next turn.
+		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
+			before := len(agentCtx.Messages)
+			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
+				traceevent.Field{Key: "auto", Value: true},
+				traceevent.Field{Key: "before_messages", Value: before},
+				traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
+			)
+			stream.Push(NewCompactionStartEvent(CompactionInfo{
+				Auto:    true,
+				Before:  before,
+				Trigger: "pre_llm_threshold",
+			}))
+
+			compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
+			if compactErr != nil {
+				slog.Error("Pre-LLM compaction failed", "error", compactErr)
+				compactionSpan.AddField("error", true)
+				compactionSpan.AddField("error_message", compactErr.Error())
+				compactionSpan.End()
+				stream.Push(NewCompactionEndEvent(CompactionInfo{
+					Auto:    true,
+					Before:  before,
+					Error:   compactErr.Error(),
+					Trigger: "pre_llm_threshold",
+				}))
+			} else {
+				if compacted != nil {
+					agentCtx.Messages = compacted
+				}
+				after := len(agentCtx.Messages)
+				compactionSpan.AddField("after_messages", after)
+				compactionSpan.End()
+				stream.Push(NewCompactionEndEvent(CompactionInfo{
+					Auto:    true,
+					Before:  before,
+					After:   after,
+					Trigger: "pre_llm_threshold",
+				}))
+			}
+		}
+
 		// Stream assistant response with retry logic
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
