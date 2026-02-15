@@ -8,7 +8,8 @@ import (
 )
 
 func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
-	m := NewMetrics()
+	buf := traceevent.NewTraceBuf()
+	m := NewMetrics(buf)
 	now := time.Now()
 
 	m.RecordTraceEvent(traceevent.TraceEvent{
@@ -97,7 +98,8 @@ func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
 }
 
 func TestRecordTraceEventLegacySpanAliases(t *testing.T) {
-	m := NewMetrics()
+	buf := traceevent.NewTraceBuf()
+	m := NewMetrics(buf)
 	now := time.Now()
 
 	m.RecordTraceEvent(traceevent.TraceEvent{

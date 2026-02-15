@@ -92,13 +92,14 @@ func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
 
 // NewAgentWithContext creates a new agent with a custom context.
 func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext) *Agent {
-	metrics := NewMetrics()
 	traceBuf := traceevent.NewTraceBuf()
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
 	traceBuf.SetFlushInterval(traceFlushWindow)
-	traceBuf.AddSink(func(event traceevent.TraceEvent) {
-		metrics.RecordTraceEvent(event)
+
+	metrics := NewMetrics(traceBuf)
+	traceBuf.AddSink(func(_ traceevent.TraceEvent) {
+		metrics.InvalidateCache()
 	})
 	traceevent.SetActiveTraceBuf(traceBuf)
 

@@ -776,3 +776,42 @@ func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTraceEventJSONToolCallTidStableForSpanPair(t *testing.T) {
+	toolCallID := "call_123"
+	begin := TraceEvent{
+		Timestamp: time.Now(),
+		Name:      "tool_execution",
+		Phase:     PhaseBegin,
+		Category:  CategoryTool,
+		Fields: []Field{
+			{Key: "tool_call_id", Value: toolCallID},
+			{Key: "tool", Value: "read"},
+		},
+	}
+	end := TraceEvent{
+		Timestamp: time.Now().Add(1 * time.Millisecond),
+		Name:      "tool_execution",
+		Phase:     PhaseEnd,
+		Category:  CategoryTool,
+		Fields: []Field{
+			{Key: "tool_call_id", Value: toolCallID},
+			{Key: "tool", Value: "read"},
+		},
+	}
+
+	beginJSON := buildTraceEventJSON(1, begin)
+	endJSON := buildTraceEventJSON(1, end)
+
+	beginTid, ok := beginJSON["tid"].(int)
+	if !ok {
+		t.Fatalf("expected begin tid to be int, got %T", beginJSON["tid"])
+	}
+	endTid, ok := endJSON["tid"].(int)
+	if !ok {
+		t.Fatalf("expected end tid to be int, got %T", endJSON["tid"])
+	}
+	if beginTid != endTid {
+		t.Fatalf("expected same tid for span pair, got begin=%d end=%d", beginTid, endTid)
+	}
+}

@@ -17,6 +17,25 @@ type PerfettoFile struct {
 
 var traceIDSeq atomic.Uint64
 
+// Thread ID allocation following unified observability principles:
+// - 0: Log and Metrics (metadata)
+// - 1: LLM operations
+// - 2: Tool operations (base)
+// - 3: Agent events
+// - 4: Metrics counters
+// - 2000-2499: Individual tool calls (base*1000 + hash)
+// - 5000-9999: Individual metric series (base*1000 + hash)
+const (
+	tidLog     = 0
+	tidLLM     = 1
+	tidTool    = 2
+	tidEvent   = 3
+	tidMetrics = 4
+
+	tidToolCallBase     = 2000 // Tool calls: 2000-2499
+	tidMetricSeriesBase = 5000 // Metric series: 5000-9999
+)
+
 // NewPerfettoFile creates a new perfetto trace file.
 func NewPerfettoFile(path string) (*PerfettoFile, error) {
 	f, err := os.Create(path)
@@ -71,15 +90,31 @@ func buildTraceEventJSON(pid int, event TraceEvent) map[string]any {
 		"tid":  threadIDForCategory(event.Category),
 	}
 	args := fieldsToArgs(event.Fields)
-	if tid, ok := threadIDFromArgs(event.Category, args); ok {
-		item["tid"] = tid
+
+	// Override tid based on event-specific identifiers
+	switch event.Category {
+	case CategoryTool:
+		if tid, ok := threadIDForToolCall(args); ok {
+			item["tid"] = tid
+		}
+	case CategoryMetrics:
+		if tid, ok := threadIDForMetricSeries(event.Name, args); ok {
+			item["tid"] = tid
+		}
 	}
+
 	if len(args) > 0 {
 		item["args"] = args
 	}
+
 	switch event.Phase {
 	case PhaseInstant:
 		item["s"] = "t" // thread scoped instant event
+	case PhaseCounter:
+		// Counter events for real-time metrics
+		if v, ok := args["value"]; ok {
+			item["args"] = map[string]any{"value": v}
+		}
 	case PhaseComplete:
 		if v, ok := args["duration_ms"]; ok {
 			if durUs, ok := toDurationMicroseconds(v); ok {
@@ -124,13 +159,17 @@ func processIDForTrace(traceID []byte) int {
 func threadIDForCategory(c TraceCategory) int {
 	switch c {
 	case CategoryLLM:
-		return 1
+		return tidLLM
 	case CategoryTool:
-		return 2
+		return tidTool
 	case CategoryEvent:
-		return 4
+		return tidEvent
+	case CategoryMetrics:
+		return tidMetrics
+	case CategoryLog:
+		return tidLog
 	default:
-		return 0
+		return tidLog
 	}
 }
 
@@ -146,23 +185,43 @@ func fieldsToArgs(fields []Field) map[string]any {
 	return args
 }
 
-// threadIDFromArgs extracts thread ID from args (for tool calls).
-func threadIDFromArgs(category TraceCategory, args map[string]any) (int, bool) {
+// threadIDForToolCall generates a stable thread ID for a tool call.
+// Same tool_call_id must map to the same tid so B/E span events pair correctly in Perfetto.
+func threadIDForToolCall(args map[string]any) (int, bool) {
 	if len(args) == 0 {
 		return 0, false
 	}
-	raw, ok := args["tool_call_id"]
+	rawID, ok := args["tool_call_id"]
 	if !ok {
 		return 0, false
 	}
-	id, ok := raw.(string)
-	if !ok || strings.TrimSpace(id) == "" {
+	id := strings.TrimSpace(toStableString(rawID))
+	if id == "" {
 		return 0, false
 	}
-	base := threadIDForCategory(category)
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
-	return base*1000 + int(h.Sum32()%500), true
+	return tidToolCallBase + int(h.Sum32()%500), true
+}
+
+func toStableString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	default:
+		return ""
+	}
+}
+
+// threadIDForMetricSeries generates a thread ID for a metric series.
+// Metrics with the same name get the same tid to show them in one track.
+func threadIDForMetricSeries(metricName string, args map[string]any) (int, bool) {
+	// Hash metric name to get consistent tid in range 5000-9999
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(metricName))
+	return tidMetricSeriesBase + int(h.Sum32()%5000), true
 }
 
 // toDurationMicroseconds converts a duration value to microseconds.
