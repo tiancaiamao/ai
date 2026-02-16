@@ -94,7 +94,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	var sess *session.Session
 	sessionID := ""
 	if sessionPath != "" {
-		sess, err = session.LoadSession(sessionPath)
+		sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
 		if err != nil {
 			return fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
 		}

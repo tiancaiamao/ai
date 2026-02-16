@@ -131,6 +131,11 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	s.addEntry(entry)
+
+	// Update header with compaction info for fast resume
+	s.header.LastCompactionID = entry.ID
+	s.header.ResumeOffset = 0 // File will be rewritten, so offset resets
+
 	if err := s.persistEntry(entry); err != nil {
 		return nil, err
 	}

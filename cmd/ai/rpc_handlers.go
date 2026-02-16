@@ -106,7 +106,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	sessionID := ""
 	sessionName := ""
 	if sessionPath != "" {
-		sess, err = session.LoadSession(sessionPath)
+		sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
 		if err != nil {
 			return fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
 		}
@@ -559,7 +559,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if err != nil {
 				return err
 			}
-			newSess, err := session.LoadSession(sessionPath)
+			newSess, err := session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
 			if err != nil {
 				return err
 			}

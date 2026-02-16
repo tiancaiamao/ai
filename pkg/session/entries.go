@@ -31,6 +31,10 @@ type SessionHeader struct {
 	Timestamp     string `json:"timestamp"`
 	Cwd           string `json:"cwd"`
 	ParentSession string `json:"parentSession,omitempty"`
+
+	// Resume optimization fields
+	LastCompactionID string `json:"lastCompactionId,omitempty"` // Most recent compaction entry ID
+	ResumeOffset     int64  `json:"resumeOffset,omitempty"`     // File offset for fast resume
 }
 
 type SessionEntry struct {
