@@ -84,3 +84,47 @@ func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
 		t.Fatal("expected session to be non-compactable without cuttable user boundary")
 	}
 }
+
+func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
+	sess := NewSession("")
+	comp := compact.NewCompactor(&compact.Config{
+		AutoCompact:      true,
+		KeepRecent:       5,
+		KeepRecentTokens: 0,
+		MaxMessages:      1,
+		MaxTokens:        0,
+	}, llm.Model{}, "", "sys", 0)
+
+	appendAssistant := func(text string) {
+		msg := agent.NewAssistantMessage()
+		msg.Content = []agent.ContentBlock{
+			agent.TextContent{Type: "text", Text: text},
+		}
+		if _, err := sess.AppendMessage(msg); err != nil {
+			t.Fatalf("append assistant message: %v", err)
+		}
+	}
+
+	for i := 0; i < 10; i++ {
+		appendAssistant("assistant prefix")
+	}
+	if _, err := sess.AppendMessage(agent.NewUserMessage("latest user boundary")); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		appendAssistant("assistant suffix")
+	}
+
+	if !sess.CanCompact(comp) {
+		t.Fatal("expected session to be compactable with forward cuttable boundary")
+	}
+
+	refs := buildMessageRefs(sess.GetBranch(""))
+	cutIdx := findFirstKeptIndex(refs, comp)
+	if cutIdx <= 0 {
+		t.Fatalf("expected forward cuttable boundary, got index=%d", cutIdx)
+	}
+	if refs[cutIdx].Message.Role != "user" {
+		t.Fatalf("expected cut index to land on user message, got role=%q", refs[cutIdx].Message.Role)
+	}
+}

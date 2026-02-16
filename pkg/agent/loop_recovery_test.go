@@ -203,6 +203,71 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	}
 }
 
+func TestRunInnerLoopPersistsAssistantMessagesInContext(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		if callCount == 1 {
+			msg := NewAssistantMessage()
+			msg.Content = []ContentBlock{
+				ToolCallContent{
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/a.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		msg := NewAssistantMessage()
+		msg.Content = []ContentBlock{
+			TextContent{Type: "text", Text: "done"},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	if callCount != 2 {
+		t.Fatalf("expected two assistant turns, got %d", callCount)
+	}
+
+	var sawToolCallAssistant bool
+	var sawFinalAssistant bool
+	for _, msg := range agentCtx.Messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		if len(msg.ExtractToolCalls()) > 0 {
+			sawToolCallAssistant = true
+		}
+		if strings.Contains(msg.ExtractText(), "done") {
+			sawFinalAssistant = true
+		}
+	}
+
+	if !sawToolCallAssistant {
+		t.Fatal("expected assistant tool-call message to be persisted in context")
+	}
+	if !sawFinalAssistant {
+		t.Fatal("expected final assistant message to be persisted in context")
+	}
+}
+
 func TestStreamAssistantResponseWithRetrySkipsRetryForContextLengthError(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()

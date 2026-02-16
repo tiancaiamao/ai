@@ -217,6 +217,7 @@ func runInnerLoop(
 			return
 		}
 
+		agentCtx.Messages = append(agentCtx.Messages, *msg)
 		newMessages = append(newMessages, *msg)
 
 		// Check for error or abort
@@ -238,6 +239,7 @@ func runInnerLoop(
 					traceevent.Field{Key: "call_count", Value: len(toolCalls)},
 				)
 				sanitizeMessageForToolLoopGuard(msg, reason)
+				agentCtx.Messages[len(agentCtx.Messages)-1] = *msg
 				newMessages[len(newMessages)-1] = *msg
 				hasMoreToolCalls = false
 			}

@@ -226,10 +226,23 @@ func findFirstKeptIndex(refs []messageRef, compactor *compact.Compactor) int {
 }
 
 func adjustToCuttable(refs []messageRef, idx int) int {
-	if idx <= 0 {
+	if len(refs) == 0 || idx <= 0 {
 		return 0
 	}
+
+	if idx >= len(refs) {
+		idx = len(refs) - 1
+	}
+
 	for i := idx; i >= 0; i-- {
+		if refs[i].Cuttable {
+			return i
+		}
+	}
+
+	// If there is no cuttable message at or before idx, keep searching
+	// forward so long assistant/tool-heavy tails can still compact.
+	for i := idx + 1; i < len(refs); i++ {
 		if refs[i].Cuttable {
 			return i
 		}

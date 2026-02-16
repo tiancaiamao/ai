@@ -302,6 +302,78 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return skill.ExpandCommand(text, skillResult.Skills)
 	}
 
+	// Trigger automatic compaction right before a new request is executed
+	// (prompt/idle-steer), instead of during resume operations.
+	compactBeforeRequest := func(trigger string) {
+		if compactor == nil || sess == nil {
+			return
+		}
+
+		messages := ag.GetMessages()
+		if !compactor.ShouldCompact(messages) {
+			return
+		}
+		if !sess.CanCompact(compactor) {
+			slog.Info("Pre-request compaction skipped: session not compactable",
+				"trigger", trigger,
+				"messages", len(messages),
+				"estimatedTokens", compactor.EstimateContextTokens(messages))
+			return
+		}
+
+		beforeCount := len(messages)
+		compactionInfo := agent.CompactionInfo{
+			Auto:    true,
+			Before:  beforeCount,
+			Trigger: trigger,
+		}
+
+		stateMu.Lock()
+		isCompacting = true
+		stateMu.Unlock()
+		server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
+
+		err := runDetachedTraceSpan(
+			"compaction",
+			traceevent.CategoryEvent,
+			[]traceevent.Field{
+				{Key: "source", Value: "pre_request"},
+				{Key: "auto", Value: true},
+				{Key: "trigger", Value: trigger},
+				{Key: "before_messages", Value: beforeCount},
+			},
+			func(_ context.Context, span *traceevent.Span) error {
+				result, err := sess.Compact(compactor)
+				if err != nil {
+					return err
+				}
+
+				ag.GetContext().Messages = sess.GetMessages()
+				afterCount := len(ag.GetMessages())
+				compactionInfo.After = afterCount
+
+				span.AddField("after_messages", afterCount)
+				span.AddField("tokens_before", result.TokensBefore)
+				span.AddField("tokens_after", result.TokensAfter)
+				return nil
+			},
+		)
+
+		stateMu.Lock()
+		isCompacting = false
+		stateMu.Unlock()
+
+		if err != nil {
+			compactionInfo.Error = err.Error()
+			if session.IsNonActionableCompactionError(err) {
+				slog.Info("Pre-request compaction skipped", "trigger", trigger, "reason", err)
+			} else {
+				slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
+			}
+		}
+		server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
+	}
+
 	// Set up handlers
 	server.SetPromptHandler(func(req rpc.PromptRequest) error {
 		slog.Info("Received prompt:", "value", req.Message)
@@ -351,6 +423,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
+		compactBeforeRequest("pre_request_prompt")
 		return ag.Prompt(expandedMessage)
 	})
 
@@ -369,9 +442,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Lock()
 		mode := steeringMode
 		pending := pendingSteer
+		streaming := isStreaming
 		stateMu.Unlock()
 		if mode == "one-at-a-time" && pending {
 			return fmt.Errorf("steer already pending")
+		}
+		if !streaming {
+			compactBeforeRequest("pre_request_steer")
 		}
 		stateMu.Lock()
 		pendingSteer = true
@@ -612,6 +689,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	server.SetCompactHandler(func() (*rpc.CompactResult, error) {
 		slog.Info("Received compact")
 		beforeCount := len(ag.GetMessages())
+
+		// Estimate current context usage
+		estimatedTokens := compactor.EstimateContextTokens(ag.GetMessages())
+		keepTokens := compactor.KeepRecentTokens()
+
+		// Check if compaction is possible before starting
+		if !sess.CanCompact(compactor) {
+			if estimatedTokens < keepTokens {
+				return nil, fmt.Errorf("all %d messages (%d tokens) fit within keep-recent budget (%d tokens); no compaction needed",
+					beforeCount, estimatedTokens, keepTokens)
+			}
+			return nil, fmt.Errorf("no messages available for compaction (all within retention window)")
+		}
+
 		compactionInfo := agent.CompactionInfo{
 			Auto:    false,
 			Before:  beforeCount,
