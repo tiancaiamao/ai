@@ -1,111 +1,214 @@
 package agent
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestTruncateToolContentByLines(t *testing.T) {
-	content := []ContentBlock{
-		TextContent{Type: "text", Text: "line1\nline2\nline3"},
-	}
-	limits := ToolOutputLimits{MaxLines: 2, MaxBytes: 0}
+func TestProcessOutput_Full(t *testing.T) {
+	processor := NewToolOutputProcessor(nil, 50000)
 
-	truncated := truncateToolContent(content, limits)
-	text := extractTextFromBlocks(truncated)
+	// Test read tool - should use full strategy
+	longOutput := strings.Repeat("line\n", 1000)
+	result := processor.ProcessOutput("read", longOutput, false)
 
-	if !strings.HasPrefix(text, "line1\nline2") {
-		t.Fatalf("expected output to keep first two lines, got: %q", text)
-	}
-	if !strings.Contains(text, "tool output truncated") {
-		t.Fatalf("expected truncation notice, got: %q", text)
+	// Should be truncated due to max chars limit (8000 tokens * 4 = 32000 chars)
+	if len(result) > 33000 {
+		t.Errorf("Full strategy should still cap output, got %d chars", len(result))
 	}
 }
 
-func TestTruncateToolContentHeadTailMode(t *testing.T) {
-	content := []ContentBlock{
-		TextContent{Type: "text", Text: "l1\nl2\nl3\nl4\nl5\nl6"},
+func TestProcessOutput_Digest(t *testing.T) {
+	// Create processor with small limit to trigger compression
+	policies := map[string]OutputPolicy{
+		"bash": {
+			ToolName:  "bash",
+			MaxTokens: 100, // 400 chars limit
+			Strategy:  StrategyDigest,
+			KeepTail:  5,
+		},
 	}
-	limits := ToolOutputLimits{
-		MaxLines:     4,
-		MaxBytes:     0,
-		MaxChars:     0,
-		TruncateMode: "head_tail",
+	processor := NewToolOutputProcessor(policies, 1000)
+
+	// Create output that exceeds the limit
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, "Building module "+string(rune('A'+i%26)))
+	}
+	lines = append(lines, "error: undefined variable in main.go:42")
+	for i := 0; i < 50; i++ {
+		lines = append(lines, "more output line "+string(rune('0'+i%10)))
 	}
 
-	truncated := truncateToolContent(content, limits)
-	text := extractTextFromBlocks(truncated)
+	output := strings.Join(lines, "\n")
 
-	if !strings.Contains(text, "l1\nl2") {
-		t.Fatalf("expected head lines in output, got: %q", text)
+	result := processor.ProcessOutput("bash", output, true)
+
+	// Should extract error line
+	if !strings.Contains(result, "error:") {
+		t.Error("Digest should extract error lines")
 	}
-	if !strings.Contains(text, "l5\nl6") {
-		t.Fatalf("expected tail lines in output, got: %q", text)
-	}
-	if !strings.Contains(text, "truncated 2 lines") {
-		t.Fatalf("expected head-tail marker, got: %q", text)
+
+	// Should be much shorter (digest extracts key info)
+	if len(result) >= len(output) {
+		t.Errorf("Digest should compress output, got %d vs %d", len(result), len(output))
 	}
 }
 
-func TestTruncateToolContentSpillsLargeOutputToFile(t *testing.T) {
-	content := []ContentBlock{
-		TextContent{Type: "text", Text: strings.Repeat("a", 64)},
+func TestProcessOutput_Extract(t *testing.T) {
+	// Create processor with small limit to trigger compression
+	policies := map[string]OutputPolicy{
+		"grep": {
+			ToolName:  "grep",
+			MaxTokens: 100, // 400 chars limit
+			Strategy:  StrategyExtract,
+		},
 	}
-	limits := ToolOutputLimits{
-		MaxLines:             0,
-		MaxBytes:             0,
-		MaxChars:             0,
-		LargeOutputThreshold: 32,
+	processor := NewToolOutputProcessor(policies, 1000)
+
+	// Create large output to trigger extraction
+	var lines []string
+	for i := 0; i < 20; i++ {
+		lines = append(lines, "main.go:"+string(rune('0'+i%10))+": func main"+string(rune('A'+i))+"() {}")
+	}
+	for i := 0; i < 20; i++ {
+		lines = append(lines, "utils.go:"+string(rune('0'+i%10))+": func helper"+string(rune('A'+i))+"() {}")
 	}
 
-	truncated := truncateToolContent(content, limits)
-	text := extractTextFromBlocks(truncated)
+	output := strings.Join(lines, "\n")
 
-	if !strings.Contains(text, "tool output too large") || !strings.Contains(text, "Saved to: ") {
-		t.Fatalf("expected spill notice, got: %q", text)
+	result := processor.ProcessOutput("grep", output, false)
+
+	// Should preserve file information
+	if !strings.Contains(result, "main.go") {
+		t.Error("Extract should preserve file information")
 	}
 
-	lines := strings.Split(text, "\n")
-	var savedPath string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Saved to: ") {
-			savedPath = strings.TrimSpace(strings.TrimPrefix(line, "Saved to: "))
+	// Should be shorter due to extraction
+	if len(result) >= len(output) {
+		t.Errorf("Extract should reduce output size, got %d vs %d", len(result), len(output))
+	}
+}
+
+func TestProcessOutput_Truncate(t *testing.T) {
+	// Create processor with small limit to trigger truncation
+	policies := map[string]OutputPolicy{
+		"test": {
+			ToolName:  "test",
+			MaxTokens: 100, // 400 chars limit
+			Strategy:  StrategyTruncate,
+			KeepHead:  5,
+			KeepTail:  5,
+		},
+	}
+	processor := NewToolOutputProcessor(policies, 1000)
+
+	// Create large output to trigger truncation
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, "line "+string(rune('0'+i%10))+" with some additional content")
+	}
+	output := strings.Join(lines, "\n")
+
+	result := processor.ProcessOutput("test", output, false)
+
+	// Should contain truncation marker
+	if !strings.Contains(result, "...") && !strings.Contains(result, "truncated") {
+		t.Error("Truncate should add truncation marker")
+	}
+
+	// Should be shorter
+	if len(result) >= len(output) {
+		t.Errorf("Truncate should reduce output size, got %d vs %d", len(result), len(output))
+	}
+}
+
+func TestProcessOutput_SmallOutput(t *testing.T) {
+	processor := NewToolOutputProcessor(nil, 50000)
+
+	smallOutput := "just a small output"
+	result := processor.ProcessOutput("bash", smallOutput, false)
+
+	// Should return unchanged
+	if result != smallOutput {
+		t.Errorf("Small output should be unchanged, got: %s", result)
+	}
+}
+
+func TestProcessOutput_Empty(t *testing.T) {
+	processor := NewToolOutputProcessor(nil, 50000)
+
+	result := processor.ProcessOutput("bash", "", false)
+	if result != "" {
+		t.Errorf("Empty output should remain empty, got: %s", result)
+	}
+}
+
+func TestDefaultToolPolicies(t *testing.T) {
+	policies := DefaultToolPolicies()
+
+	// Verify all expected tools have policies
+	expectedTools := []string{"read", "write", "edit", "bash", "grep"}
+	for _, tool := range expectedTools {
+		if _, ok := policies[tool]; !ok {
+			t.Errorf("Missing policy for tool: %s", tool)
 		}
 	}
-	if savedPath == "" {
-		t.Fatalf("expected saved path in spill notice, got: %q", text)
+
+	// Verify read uses full strategy
+	if policies["read"].Strategy != StrategyFull {
+		t.Error("read tool should use StrategyFull")
 	}
 
-	if !filepath.IsAbs(savedPath) {
-		t.Fatalf("expected absolute saved path, got: %s", savedPath)
+	// Verify bash uses digest strategy
+	if policies["bash"].Strategy != StrategyDigest {
+		t.Error("bash tool should use StrategyDigest")
 	}
 
-	info, err := os.Stat(savedPath)
-	if err != nil {
-		t.Fatalf("expected spilled file to exist: %v", err)
+	// Verify grep uses extract strategy
+	if policies["grep"].Strategy != StrategyExtract {
+		t.Error("grep tool should use StrategyExtract")
 	}
-	if info.Size() == 0 {
-		t.Fatalf("expected spilled file to be non-empty")
-	}
-
-	_ = os.Remove(savedPath)
 }
 
-func TestTruncateToolContentByBytes(t *testing.T) {
-	content := []ContentBlock{
-		TextContent{Type: "text", Text: "123456789"},
+func TestContainsErrorPattern(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"error: something went wrong", true},
+		{"ERROR: critical failure", true},
+		{"Failed to connect", true},
+		{"Exception in thread main", true},
+		{"exit code 1", true},
+		{"This is fine", false},
+		{"Normal output", false},
 	}
-	limits := ToolOutputLimits{MaxLines: 0, MaxBytes: 5}
 
-	truncated := truncateToolContent(content, limits)
-	text := extractTextFromBlocks(truncated)
-
-	if !strings.HasPrefix(text, "12345") {
-		t.Fatalf("expected output to be byte-truncated, got: %q", text)
+	for _, tt := range tests {
+		result := containsErrorPattern(strings.ToLower(tt.input))
+		if result != tt.expected {
+			t.Errorf("containsErrorPattern(%q) = %v, want %v", tt.input, result, tt.expected)
+		}
 	}
-	if !strings.Contains(text, "tool output truncated") {
-		t.Fatalf("expected truncation notice, got: %q", text)
+}
+
+func TestExtractFilePath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"main.go:10: code here", "main.go"},
+		{"pkg/agent/loop.go:245: func run()", "pkg/agent/loop.go"},
+		{"src/utils.py:5: def help()", "src/utils.py"},
+		{"no file here", ""},
+		{"just text: no path", ""},
+	}
+
+	for _, tt := range tests {
+		result := extractFilePath(tt.input)
+		if result != tt.expected {
+			t.Errorf("extractFilePath(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
 	}
 }

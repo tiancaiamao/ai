@@ -75,11 +75,91 @@ func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
 	}
 
 	// Token limit (context window or explicit max tokens)
-	if tokenLimit, _ := c.EffectiveTokenLimit(); tokenLimit > 0 {
+	threshold := c.calculateDynamicThreshold()
+	if threshold > 0 {
 		tokens := c.EstimateContextTokens(messages)
-		return tokens >= tokenLimit
+		return tokens >= threshold
 	}
 	return false
+}
+
+// calculateDynamicThreshold calculates the compaction threshold based on context window.
+// For models with large context windows (e.g., 128k), this allows much more context
+// before triggering compaction, rather than using a fixed 8000 token limit.
+func (c *Compactor) calculateDynamicThreshold() int {
+	// If context window is known, calculate dynamic threshold
+	if c.contextWindow > 0 {
+		// Reserve tokens for:
+		// - System prompt (~5k estimated)
+		// - Tool definitions (~3k estimated)
+		// - Output generation (16k reserve)
+		// - Safety margin (20% of available)
+
+		systemTokens := estimateStringTokens(c.systemPrompt)
+		toolTokens := 3000 // Average tool definitions
+		reserveTokens := c.ReserveTokens()
+
+		overhead := systemTokens + toolTokens + reserveTokens
+		available := c.contextWindow - overhead
+
+		if available <= 0 {
+			// Fallback to configured max tokens if window is too small
+			return c.config.MaxTokens
+		}
+
+		// Use 75% of available as compaction threshold
+		// This leaves 25% buffer before hitting context limit
+		threshold := int(float64(available) * 0.75)
+
+		// Ensure minimum threshold
+		minThreshold := 4000
+		if threshold < minThreshold {
+			threshold = minThreshold
+		}
+
+		return threshold
+	}
+
+	// Fallback to configured max tokens
+	return c.config.MaxTokens
+}
+
+// calculateKeepRecentBudget calculates the token budget for keeping recent messages.
+// This scales with the context window rather than using a fixed value.
+func (c *Compactor) calculateKeepRecentBudget() int {
+	// If a fixed budget is configured, respect it (but cap it)
+	if c.config.KeepRecentTokens > 0 {
+		budget := c.config.KeepRecentTokens
+
+		// Don't let keep-recent exceed 30% of available context
+		if threshold := c.calculateDynamicThreshold(); threshold > 0 {
+			maxKeep := int(float64(threshold) * 0.3)
+			if budget > maxKeep && maxKeep > 0 {
+				budget = maxKeep
+			}
+		}
+
+		return budget
+	}
+
+	// Calculate based on threshold
+	threshold := c.calculateDynamicThreshold()
+	if threshold > 0 {
+		// Keep 25% of threshold as recent context
+		return int(float64(threshold) * 0.25)
+	}
+
+	// Fallback to default
+	return 20000
+}
+
+// estimateStringTokens provides a rough token estimation for a string.
+func estimateStringTokens(s string) int {
+	if len(s) == 0 {
+		return 0
+	}
+	// Rough approximation: 1 token per 4 characters
+	return int(float64(len(s)) / 4.0)
 }
 
 // Compact compresses the context by summarizing old messages.
@@ -88,7 +168,8 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 		return messages, nil
 	}
 
-	keepRecentTokens := c.effectiveKeepRecentTokens()
+	// Use dynamic keep-recent budget
+	keepRecentTokens := c.calculateKeepRecentBudget()
 	var oldMessages []agent.AgentMessage
 	var recentMessages []agent.AgentMessage
 	if keepRecentTokens > 0 {
@@ -96,13 +177,20 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 		if len(oldMessages) == 0 {
 			return messages, nil
 		}
-		slog.Info("[Compact] Compressing messages", "count", len(messages), "keepTokens", keepRecentTokens)
+		slog.Info("[Compact] Compressing messages",
+			"count", len(messages),
+			"keepTokens", keepRecentTokens,
+			"threshold", c.calculateDynamicThreshold(),
+			"contextWindow", c.contextWindow)
 	} else {
 		keepCount := c.keepRecentMessages()
 		if len(messages) <= keepCount {
 			return messages, nil
 		}
-		slog.Info("[Compact] Compressing messages", "count", len(messages), "keepRecent", keepCount)
+		slog.Info("[Compact] Compressing messages",
+			"count", len(messages),
+			"keepRecent", keepCount,
+			"threshold", c.calculateDynamicThreshold())
 		splitIndex := len(messages) - keepCount
 		oldMessages = messages[:splitIndex]
 		recentMessages = messages[splitIndex:]
@@ -129,81 +217,83 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 	return newMessages, nil
 }
 
-const summarizationSystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+const summarizationSystemPrompt = `You are a context summarization assistant for a coding agent. Your task is to extract and preserve CRITICAL information from a conversation for continuation.
 
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`
+CRITICAL INFORMATION (preserve at all costs):
+- EXACT file paths (e.g., "pkg/agent/loop.go:245")
+- EXACT error messages and stack traces
+- EXACT function/variable/class names
+- EXACT commands executed
+- User's explicit requirements and constraints
 
-const summarizationPrompt = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+DISCARDABLE INFORMATION:
+- Pleasantries ("sure!", "I'll help you with that")
+- Redundant explanations
+- Failed approaches that were abandoned
+- Intermediate thinking that led to successful outcomes
 
-Use this EXACT format:
+Output ONLY the structured summary. Do NOT continue the conversation.`
 
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+const summarizationPrompt = `Summarize this coding conversation for context preservation.
 
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
+## Current Task (MOST IMPORTANT)
+[What is being actively worked on RIGHT NOW? Be specific about the exact goal.]
 
-## Progress
-### Done
-- [x] [Completed tasks/changes]
+## Files Involved
+[List EXACT file paths with brief notes:]
+- path/to/file.go: [what was done/read/needs to be done]
+- path/to/another.py: [status]
 
-### In Progress
-- [ ] [Current work]
+## Key Code Elements
+[Important names discovered/created:]
+- Functions: [names and purposes]
+- Variables: [names and types if relevant]
+- Classes/Types: [names and purposes]
 
-### Blocked
-- [Issues preventing progress, if any]
+## Errors Encountered
+[If any errors occurred:]
+- Error: [EXACT error message]
+- Cause: [what caused it]
+- Fix: [how it was fixed, if fixed]
+- Status: [resolved/unresolved]
 
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`
-
-const updateSummarizationPrompt = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
-
-Update the existing structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
-- ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
-- UPDATE "Next Steps" based on what was accomplished
-- PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
-
-Use this EXACT format:
-
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
-
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+## Decisions Made
+[Important technical choices:]
+- Decision: [what was decided]
+- Reason: [why - crucial for continuity]
 
 ## Next Steps
-1. [Update based on current state]
+[Ordered list of immediate actions:]
+1. [specific next action]
+2. [following action]
 
-## Critical Context
-- [Preserve important context, add new if needed]
+## User Requirements
+[Any explicit requirements or constraints from the user]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`
+Rules:
+- Preserve EXACT text for paths, errors, names (use quotes if needed)
+- Keep under 800 tokens
+- Omit pleasantries and redundant explanations`
+
+const updateSummarizationPrompt = `Update the existing summary with NEW conversation messages.
+
+PREVIOUS SUMMARY:
+<previous-summary>
+%s
+</previous-summary>
+
+NEW MESSAGES:
+%s
+
+UPDATE RULES:
+1. PRESERVE all existing information (especially exact paths, errors, names)
+2. ADD new files, errors, decisions discovered
+3. UPDATE "Current Task" if focus changed
+4. MOVE completed items in "Next Steps" to appropriate sections
+5. MARK errors as resolved if fixed in new messages
+6. PRESERVE exact text - do not paraphrase paths, errors, or code elements
+
+Output the updated summary using the same format.`
 
 // GenerateSummary generates a structured summary of messages using the LLM.
 func (c *Compactor) GenerateSummary(messages []agent.AgentMessage) (string, error) {

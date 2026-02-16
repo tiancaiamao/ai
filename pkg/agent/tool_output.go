@@ -1,285 +1,66 @@
 package agent
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
-	"unicode/utf8"
 )
 
-const (
-	defaultToolOutputMaxLines          = 2000
-	defaultToolOutputMaxBytes          = 50 * 1024
-	defaultToolOutputMaxChars          = 200 * 1024
-	defaultLargeOutputThresholdChars   = 200 * 1024
-	defaultToolOutputTruncateMode      = "head"
-	defaultToolOutputTruncateModeSplit = "head_tail"
-)
+// ============================================================================
+// Legacy Types - kept for backward compatibility
+// ============================================================================
 
-// ToolOutputLimits controls truncation for tool result text.
+// ToolOutputLimits defines truncation limits for tool output (legacy).
+// Deprecated: Use ToolOutputProcessor with OutputPolicy instead.
 type ToolOutputLimits struct {
 	MaxLines             int
 	MaxBytes             int
 	MaxChars             int
 	LargeOutputThreshold int
-	TruncateMode         string // "head" or "head_tail"
+	TruncateMode         string
 }
 
-// DefaultToolOutputLimits returns the default tool output limits.
+// DefaultToolOutputLimits returns default truncation limits (legacy).
+// Deprecated: Use NewToolOutputProcessor instead.
 func DefaultToolOutputLimits() ToolOutputLimits {
 	return ToolOutputLimits{
-		MaxLines:             defaultToolOutputMaxLines,
-		MaxBytes:             defaultToolOutputMaxBytes,
-		MaxChars:             defaultToolOutputMaxChars,
-		LargeOutputThreshold: defaultLargeOutputThresholdChars,
-		TruncateMode:         defaultToolOutputTruncateModeSplit,
+		MaxLines:             2000,
+		MaxBytes:             51200,
+		MaxChars:             51200,
+		LargeOutputThreshold: 10000,
+		TruncateMode:         "middle",
 	}
 }
 
-type toolTruncationStats struct {
-	truncated   bool
-	truncatedBy string
-	totalLines  int
-	totalBytes  int
-	totalChars  int
-	outputLines int
-	outputBytes int
-	outputChars int
-}
-
+// truncateToolContent truncates tool content based on limits (legacy).
+// This is kept for backward compatibility and delegates to ToolOutputProcessor.
 func truncateToolContent(content []ContentBlock, limits ToolOutputLimits) []ContentBlock {
 	if len(content) == 0 {
 		return content
 	}
 
-	text := extractTextFromBlocks(content)
-	if text == "" {
-		return content
-	}
+	// Create a processor with default policies
+	processor := NewToolOutputProcessor(nil, limits.MaxChars)
 
-	effective := normalizeToolOutputLimits(limits)
-	maxLines := effective.MaxLines
-	maxBytes := effective.MaxBytes
-	maxChars := effective.MaxChars
-
-	totalChars := countRunes(text)
-	if effective.LargeOutputThreshold > 0 && totalChars > effective.LargeOutputThreshold {
-		path, checksum, err := spillToolOutputToFile(text)
-		if err == nil {
-			notice := fmt.Sprintf(
-				"[tool output too large: %d chars]\nSaved to: %s\nSHA256: %s",
-				totalChars,
-				path,
-				checksum,
-			)
-			return []ContentBlock{
-				TextContent{
-					Type: "text",
-					Text: notice,
-				},
-			}
-		}
-		text = fmt.Sprintf("[tool output spill failed: %v]\n\n%s", err, text)
-	}
-
-	if maxLines <= 0 && maxBytes <= 0 && maxChars <= 0 {
-		return content
-	}
-
-	truncatedText, stats := truncateToolText(text, maxLines, maxBytes, maxChars, effective.TruncateMode)
-	if !stats.truncated {
-		if text == extractTextFromBlocks(content) {
-			return content
-		}
-		return []ContentBlock{
-			TextContent{
-				Type: "text",
-				Text: truncatedText,
-			},
-		}
-	}
-
-	notice := fmt.Sprintf(
-		"\n\n[tool output truncated: showing %d/%d lines, %s/%s bytes, %d/%d chars]",
-		stats.outputLines,
-		stats.totalLines,
-		formatBytes(stats.outputBytes),
-		formatBytes(stats.totalBytes),
-		stats.outputChars,
-		stats.totalChars,
-	)
-
-	return []ContentBlock{
-		TextContent{
-			Type: "text",
-			Text: truncatedText + notice,
-		},
-	}
-}
-
-func extractTextFromBlocks(content []ContentBlock) string {
-	var b strings.Builder
+	// Process each content block
+	result := make([]ContentBlock, 0, len(content))
 	for _, block := range content {
-		if tc, ok := block.(TextContent); ok {
-			b.WriteString(tc.Text)
+		switch b := block.(type) {
+		case TextContent:
+			// Apply truncation to text content
+			processed := processor.ProcessOutput("", b.Text, false)
+			result = append(result, TextContent{
+				Type: "text",
+				Text: processed,
+			})
+		default:
+			result = append(result, block)
 		}
 	}
-	return b.String()
+
+	return result
 }
 
-func truncateToolText(text string, maxLines, maxBytes, maxChars int, truncateMode string) (string, toolTruncationStats) {
-	totalLines := countLines(text)
-	totalBytes := len([]byte(text))
-	totalChars := countRunes(text)
-	stats := toolTruncationStats{
-		truncated:  false,
-		totalLines: totalLines,
-		totalBytes: totalBytes,
-		totalChars: totalChars,
-	}
-
-	linesLimit := maxLines
-	if linesLimit <= 0 {
-		linesLimit = totalLines
-	}
-	bytesLimit := maxBytes
-	if bytesLimit <= 0 {
-		bytesLimit = int(^uint(0) >> 1)
-	}
-	charsLimit := maxChars
-	if charsLimit <= 0 {
-		charsLimit = int(^uint(0) >> 1)
-	}
-
-	if totalLines <= linesLimit && totalBytes <= bytesLimit && totalChars <= charsLimit {
-		stats.outputLines = totalLines
-		stats.outputBytes = totalBytes
-		stats.outputChars = totalChars
-		return text, stats
-	}
-
-	output := truncateByLinesMode(text, linesLimit, truncateMode)
-	truncatedBy := ""
-	if output != text {
-		truncatedBy = "lines"
-	}
-
-	output = truncateStringByRunes(output, charsLimit)
-	if countRunes(output) < totalChars && truncatedBy == "" {
-		truncatedBy = "chars"
-	}
-
-	output = truncateStringByBytes(output, bytesLimit)
-	if len([]byte(output)) < totalBytes && truncatedBy == "" {
-		truncatedBy = "bytes"
-	}
-
-	outputBytes := len([]byte(output))
-	outputLines := countLines(output)
-	outputChars := countRunes(output)
-
-	stats.truncated = true
-	stats.truncatedBy = truncatedBy
-	stats.outputLines = outputLines
-	stats.outputBytes = outputBytes
-	stats.outputChars = outputChars
-
-	return output, stats
-}
-
-func truncateByLinesMode(text string, linesLimit int, truncateMode string) string {
-	if linesLimit <= 0 {
-		return text
-	}
-	lines := strings.Split(text, "\n")
-	if len(lines) <= linesLimit {
-		return text
-	}
-
-	mode := strings.ToLower(strings.TrimSpace(truncateMode))
-	if mode == "" {
-		mode = defaultToolOutputTruncateMode
-	}
-	if mode != defaultToolOutputTruncateModeSplit || linesLimit < 4 {
-		return strings.Join(lines[:linesLimit], "\n")
-	}
-
-	headCount := linesLimit / 2
-	tailCount := linesLimit - headCount
-	if headCount == 0 || tailCount == 0 || headCount+tailCount > len(lines) {
-		return strings.Join(lines[:linesLimit], "\n")
-	}
-
-	head := lines[:headCount]
-	tail := lines[len(lines)-tailCount:]
-	marker := fmt.Sprintf("... [truncated %d lines] ...", len(lines)-linesLimit)
-	out := make([]string, 0, len(head)+len(tail)+1)
-	out = append(out, head...)
-	out = append(out, marker)
-	out = append(out, tail...)
-	return strings.Join(out, "\n")
-}
-
-func truncateStringByBytes(s string, maxBytes int) string {
-	if maxBytes <= 0 {
-		return ""
-	}
-	if len(s) <= maxBytes {
-		return s
-	}
-
-	limit := maxBytes
-	if limit > len(s) {
-		limit = len(s)
-	}
-
-	for limit > 0 && !utf8.ValidString(s[:limit]) {
-		limit--
-	}
-	if limit <= 0 {
-		return ""
-	}
-	return s[:limit]
-}
-
-func truncateStringByRunes(s string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	if countRunes(s) <= maxRunes {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxRunes])
-}
-
-func countLines(s string) int {
-	if s == "" {
-		return 0
-	}
-	return strings.Count(s, "\n") + 1
-}
-
-func countRunes(s string) int {
-	return utf8.RuneCountInString(s)
-}
-
-func formatBytes(bytes int) string {
-	if bytes < 1024 {
-		return fmt.Sprintf("%dB", bytes)
-	}
-	kb := float64(bytes) / 1024.0
-	if kb < 1024 {
-		return fmt.Sprintf("%.1fKB", kb)
-	}
-	mb := kb / 1024.0
-	return fmt.Sprintf("%.1fMB", mb)
-}
-
+// minInt returns the minimum of two integers (helper for legacy code).
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -287,30 +68,371 @@ func minInt(a, b int) int {
 	return b
 }
 
-func normalizeToolOutputLimits(limits ToolOutputLimits) ToolOutputLimits {
-	defaults := DefaultToolOutputLimits()
-	if limits.TruncateMode == "" {
-		limits.TruncateMode = defaults.TruncateMode
-	}
-	if limits.LargeOutputThreshold < 0 {
-		limits.LargeOutputThreshold = defaults.LargeOutputThreshold
-	}
-	return limits
+// ============================================================================
+// New Tool Output Processing System
+// ============================================================================
+
+// OutputStrategy defines how to process tool output.
+type OutputStrategy int
+
+const (
+	// StrategyFull keeps the complete output (for critical tools like read)
+	StrategyFull OutputStrategy = iota
+	// StrategyTruncate keeps head and tail with truncation marker
+	StrategyTruncate
+	// StrategyDigest extracts key information (for bash commands)
+	StrategyDigest
+	// StrategyExtract extracts specific patterns (for grep)
+	StrategyExtract
+)
+
+// OutputPolicy defines how to process a tool's output.
+type OutputPolicy struct {
+	ToolName   string
+	MaxTokens  int
+	Strategy   OutputStrategy
+	KeepTail   int    // For StrategyTruncate/Digest - keep last N lines
+	KeepHead   int    // For StrategyTruncate - keep first N lines
+	DetectLang string // For code blocks - try to detect language
 }
 
-func spillToolOutputToFile(text string) (string, string, error) {
-	sum := sha256.Sum256([]byte(text))
-	checksum := hex.EncodeToString(sum[:])
+// DefaultToolPolicies returns the default output processing policies.
+func DefaultToolPolicies() map[string]OutputPolicy {
+	return map[string]OutputPolicy{
+		"read": {
+			ToolName:  "read",
+			MaxTokens: 8000,
+			Strategy:  StrategyFull,
+		},
+		"write": {
+			ToolName:  "write",
+			MaxTokens: 1000,
+			Strategy:  StrategyDigest,
+			KeepTail:  5,
+		},
+		"edit": {
+			ToolName:  "edit",
+			MaxTokens: 1000,
+			Strategy:  StrategyDigest,
+			KeepTail:  10,
+		},
+		"bash": {
+			ToolName:  "bash",
+			MaxTokens: 2000,
+			Strategy:  StrategyDigest,
+			KeepTail:  50,
+		},
+		"grep": {
+			ToolName:  "grep",
+			MaxTokens: 3000,
+			Strategy:  StrategyExtract,
+		},
+	}
+}
 
-	dir := filepath.Join(os.TempDir(), "ai_tool_outputs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
+// ToolOutputProcessor processes tool outputs according to policies.
+type ToolOutputProcessor struct {
+	policies      map[string]OutputPolicy
+	defaultPolicy OutputPolicy
+	maxChars      int // Fallback max chars when policy not found
+}
+
+// NewToolOutputProcessor creates a new processor with given policies.
+func NewToolOutputProcessor(policies map[string]OutputPolicy, maxChars int) *ToolOutputProcessor {
+	if policies == nil {
+		policies = DefaultToolPolicies()
 	}
 
-	name := fmt.Sprintf("tool_output_%d.txt", time.Now().UnixNano())
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		return "", "", err
+	return &ToolOutputProcessor{
+		policies: policies,
+		defaultPolicy: OutputPolicy{
+			MaxTokens: 2000,
+			Strategy:  StrategyTruncate,
+			KeepTail:  30,
+		},
+		maxChars: maxChars,
 	}
-	return path, checksum, nil
+}
+
+// ProcessOutput processes a tool output according to its policy.
+func (p *ToolOutputProcessor) ProcessOutput(toolName, output string, isError bool) string {
+	if output == "" {
+		return output
+	}
+
+	policy, hasPolicy := p.policies[toolName]
+	if !hasPolicy {
+		policy = p.defaultPolicy
+	}
+
+	// Convert token limit to char limit (rough: 1 token ≈ 4 chars)
+	maxChars := policy.MaxTokens * 4
+	if maxChars <= 0 {
+		maxChars = p.maxChars
+	}
+
+	// If output fits, return as-is
+	if len(output) <= maxChars {
+		return output
+	}
+
+	switch policy.Strategy {
+	case StrategyFull:
+		// Even full strategy needs a cap
+		if len(output) > maxChars {
+			return output[:maxChars] + "\n... (output truncated due to size limit)"
+		}
+		return output
+
+	case StrategyDigest:
+		return p.digestOutput(output, maxChars, policy.KeepTail, isError)
+
+	case StrategyExtract:
+		return p.extractOutput(output, maxChars)
+
+	case StrategyTruncate:
+		fallthrough
+	default:
+		return p.truncateOutput(output, maxChars, policy.KeepHead, policy.KeepTail)
+	}
+}
+
+// digestOutput extracts key information from command output.
+func (p *ToolOutputProcessor) digestOutput(output string, maxChars int, keepTail int, isError bool) string {
+	lines := strings.Split(output, "\n")
+
+	// For errors, preserve more context
+	if isError {
+		keepTail = keepTail * 2
+	}
+
+	var result []string
+	var errorLines []string
+	var importantLines []string
+
+	// Scan for important information
+	for _, line := range lines {
+		lowerLine := strings.ToLower(line)
+
+		// Error patterns
+		if containsErrorPattern(lowerLine) {
+			errorLines = append(errorLines, line)
+			continue
+		}
+
+		// Important patterns (warnings, success indicators, etc.)
+		if containsImportantPattern(lowerLine) {
+			importantLines = append(importantLines, line)
+		}
+	}
+
+	// Build digest
+	maxDigestLines := maxChars / 40 // Rough estimate: 40 chars per line
+
+	// Add error lines first (most important)
+	if len(errorLines) > 0 {
+		result = append(result, "=== ERRORS ===")
+		for i, line := range errorLines {
+			if i >= maxDigestLines/3 {
+				result = append(result, fmt.Sprintf("... (%d more error lines)", len(errorLines)-i))
+				break
+			}
+			result = append(result, line)
+		}
+	}
+
+	// Add important lines
+	if len(importantLines) > 0 && len(result) < maxDigestLines/2 {
+		result = append(result, "=== IMPORTANT ===")
+		for i, line := range importantLines {
+			if i >= maxDigestLines/3 {
+				break
+			}
+			result = append(result, line)
+		}
+	}
+
+	// Always keep tail (most recent output)
+	if keepTail > 0 && len(lines) > keepTail {
+		result = append(result, fmt.Sprintf("=== LAST %d LINES ===", keepTail))
+		tailStart := len(lines) - keepTail
+		result = append(result, lines[tailStart:]...)
+	} else if len(lines) <= keepTail {
+		// Output is small enough, just return it
+		return output
+	}
+
+	digest := strings.Join(result, "\n")
+
+	// Final safety check
+	if len(digest) > maxChars {
+		digest = digest[:maxChars] + "\n... (digest truncated)"
+	}
+
+	return digest
+}
+
+// extractOutput extracts structured information from grep-like output.
+func (p *ToolOutputProcessor) extractOutput(output string, maxChars int) string {
+	lines := strings.Split(output, "\n")
+
+	// Track matches per file for deduplication
+	fileMatches := make(map[string][]string)
+	maxPerFile := 10
+	totalLimit := maxChars / 30 // Rough: 30 chars per line
+
+	totalLines := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		// Extract file path (before first colon or at start)
+		filePath := extractFilePath(line)
+		if filePath == "" {
+			filePath = "(general)"
+		}
+
+		// Limit matches per file
+		if len(fileMatches[filePath]) >= maxPerFile {
+			continue
+		}
+
+		fileMatches[filePath] = append(fileMatches[filePath], line)
+		totalLines++
+
+		if totalLines >= totalLimit {
+			break
+		}
+	}
+
+	// Build result
+	var result []string
+	for file, matches := range fileMatches {
+		if len(matches) > 0 {
+			if len(fileMatches) > 1 {
+				result = append(result, fmt.Sprintf("[%s]", file))
+			}
+			result = append(result, matches...)
+			if len(matches) >= maxPerFile {
+				result = append(result, fmt.Sprintf("  ... (%d more matches in this file)",
+					countFileMatches(lines, file)-maxPerFile))
+			}
+		}
+	}
+
+	extracted := strings.Join(result, "\n")
+
+	// Safety check
+	if len(extracted) > maxChars {
+		extracted = extracted[:maxChars] + "\n... (output truncated)"
+	}
+
+	return extracted
+}
+
+// truncateOutput keeps head and tail with truncation marker.
+func (p *ToolOutputProcessor) truncateOutput(output string, maxChars int, keepHead, keepTail int) string {
+	if keepHead == 0 {
+		keepHead = 10
+	}
+	if keepTail == 0 {
+		keepTail = 30
+	}
+
+	lines := strings.Split(output, "\n")
+
+	if len(lines) <= keepHead+keepTail {
+		return output
+	}
+
+	head := lines[:keepHead]
+	tail := lines[len(lines)-keepTail:]
+
+	result := strings.Join(head, "\n")
+	result += fmt.Sprintf("\n\n... (%d lines truncated) ...\n\n", len(lines)-keepHead-keepTail)
+	result += strings.Join(tail, "\n")
+
+	if len(result) > maxChars {
+		// Reduce tail if still too long
+		result = result[:maxChars] + "\n... (further truncated)"
+	}
+
+	return result
+}
+
+// Helper functions
+
+func containsErrorPattern(line string) bool {
+	errorPatterns := []string{
+		"error:", "error:", "failed", "exception",
+		"cannot", "unable to", "not found",
+		"exit code", "fatal", "panic:",
+		"undefined", "unexpected", "invalid",
+	}
+
+	for _, pattern := range errorPatterns {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsImportantPattern(line string) bool {
+	importantPatterns := []string{
+		"warning:", "warn:", "deprecated",
+		"success", "completed", "created",
+		"updated", "deleted", "installed",
+		"built", "finished", "done",
+	}
+
+	for _, pattern := range importantPatterns {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractFilePath tries to extract a file path from a line.
+func extractFilePath(line string) string {
+	// Pattern: "path/to/file:line:col: content"
+	// or "path/to/file: content"
+
+	// Try to find the first colon-separated segment that looks like a path
+	parts := strings.SplitN(line, ":", 3)
+	if len(parts) >= 2 {
+		candidate := parts[0]
+		// Check if it looks like a file path
+		if strings.Contains(candidate, "/") ||
+			strings.Contains(candidate, "\\") ||
+			strings.HasSuffix(candidate, ".go") ||
+			strings.HasSuffix(candidate, ".js") ||
+			strings.HasSuffix(candidate, ".ts") ||
+			strings.HasSuffix(candidate, ".py") ||
+			strings.HasSuffix(candidate, ".rs") {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func countFileMatches(lines []string, file string) int {
+	count := 0
+	for _, line := range lines {
+		if extractFilePath(line) == file {
+			count++
+		}
+	}
+	return count
+}
+
+// Simple max helper
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

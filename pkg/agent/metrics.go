@@ -263,19 +263,19 @@ func (m *Metrics) GetLLMMetrics() LLMMetricsSnapshot {
 	}
 
 	return LLMMetricsSnapshot{
-		CallCount:               totalCalls,
-		TokenInput:              m.cachedLLMStats.TokenInput,
-		TokenOutput:             m.cachedLLMStats.TokenOutput,
-		CacheRead:               m.cachedLLMStats.CacheRead,
-		CacheWrite:              m.cachedLLMStats.CacheWrite,
-		ErrorCount:              m.cachedLLMStats.ErrorCount,
-		SuccessRate:             successRate,
-		AvgTokensPerCall:        avgTokens,
-		TotalDuration:           time.Duration(m.cachedLLMStats.TotalDurationNs),
-		AvgDurationPerCall:      time.Duration(m.cachedLLMStats.TotalDurationNs / int64(totalCalls)),
-		AvgFirstTokenDuration:   time.Duration(avgFirstTokenMs) * time.Millisecond,
-		LastStart:               timeFromNs(m.cachedLLMStats.LastStartNs),
-		LastEnd:                 timeFromNs(m.cachedLLMStats.LastEndNs),
+		CallCount:             totalCalls,
+		TokenInput:            m.cachedLLMStats.TokenInput,
+		TokenOutput:           m.cachedLLMStats.TokenOutput,
+		CacheRead:             m.cachedLLMStats.CacheRead,
+		CacheWrite:            m.cachedLLMStats.CacheWrite,
+		ErrorCount:            m.cachedLLMStats.ErrorCount,
+		SuccessRate:           successRate,
+		AvgTokensPerCall:      avgTokens,
+		TotalDuration:         time.Duration(m.cachedLLMStats.TotalDurationNs),
+		AvgDurationPerCall:    time.Duration(m.cachedLLMStats.TotalDurationNs / int64(totalCalls)),
+		AvgFirstTokenDuration: time.Duration(avgFirstTokenMs) * time.Millisecond,
+		LastStart:             timeFromNs(m.cachedLLMStats.LastStartNs),
+		LastEnd:               timeFromNs(m.cachedLLMStats.LastEndNs),
 	}
 }
 
@@ -293,9 +293,9 @@ func (m *Metrics) GetPromptMetrics() PromptMetricsSnapshot {
 	}
 
 	return PromptMetricsSnapshot{
-		CallCount:    totalCalls,
-		ErrorCount:   m.cachedPromptStats.ErrorCount,
-		SuccessRate:  successRate,
+		CallCount:     totalCalls,
+		ErrorCount:    m.cachedPromptStats.ErrorCount,
+		SuccessRate:   successRate,
 		TotalDuration: time.Duration(m.cachedPromptStats.TotalDurationNs),
 		AvgDuration:   time.Duration(m.cachedPromptStats.TotalDurationNs / int64(totalCalls)),
 		LastStart:     timeFromNs(m.cachedPromptStats.LastStartNs),
