@@ -21,9 +21,9 @@ import (
 
 // runHeadless executes prompts in headless mode, outputting only the final result.
 // No intermediate events are streamed - just a single JSON output at the end.
-func runHeadless(sessionPath string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
-	slog.Info("Starting headless mode", "prompts", len(prompts))
+	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools)
 
 	if len(prompts) == 0 {
 		return writeHeadlessError(output, "at least one prompt argument is required for --mode headless")
@@ -64,35 +64,44 @@ func runHeadless(sessionPath string, prompts []string, output io.Writer) error {
 	}
 
 	// Initialize session manager
-	sessionsDir, err := session.GetDefaultSessionsDir(cwd)
-	if err != nil {
-		return writeHeadlessError(output, fmt.Sprintf("failed to get sessions path: %v", err))
-	}
-	if sessionPath != "" {
-		sessionsDir = filepath.Dir(sessionPath)
-	}
-	sessionMgr := session.NewSessionManager(sessionsDir)
-
-	// Load or create session
 	var sess *session.Session
-	sessionID := ""
-	if sessionPath != "" {
-		sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
-		if err != nil {
-			return writeHeadlessError(output, fmt.Sprintf("failed to load session from %s: %v", sessionPath, err))
-		}
+	var sessionID string
+	var sessionMgr *session.SessionManager
+
+	if noSession {
+		// Create a new temporary session without persistence
+		sess = session.NewSession("") // Empty path = no persistence
 		sessionID = sess.GetID()
-		_ = sessionMgr.SetCurrent(sessionID)
+		slog.Info("Created temporary session (no persistence)", "id", sessionID)
 	} else {
-		sess, sessionID, err = sessionMgr.LoadCurrent()
+		// Normal session handling with persistence
+		sessionsDir, err := session.GetDefaultSessionsDir(cwd)
 		if err != nil {
+			return writeHeadlessError(output, fmt.Sprintf("failed to get sessions path: %v", err))
+		}
+		if sessionPath != "" {
+			sessionsDir = filepath.Dir(sessionPath)
+		}
+		sessionMgr = session.NewSessionManager(sessionsDir)
+
+		if sessionPath != "" {
+			sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
+			if err != nil {
+				return writeHeadlessError(output, fmt.Sprintf("failed to load session from %s: %v", sessionPath, err))
+			}
+			sessionID = sess.GetID()
+			_ = sessionMgr.SetCurrent(sessionID)
+		} else {
 			sess, sessionID, err = sessionMgr.LoadCurrent()
 			if err != nil {
-				return writeHeadlessError(output, fmt.Sprintf("failed to create default session: %v", err))
+				sess, sessionID, err = sessionMgr.LoadCurrent()
+				if err != nil {
+					return writeHeadlessError(output, fmt.Sprintf("failed to create default session: %v", err))
+				}
 			}
 		}
+		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
-	slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 
 	// Create tool registry and register tools
 	registry := tools.NewRegistry()
@@ -129,13 +138,37 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 
 	// Create agent context
 	agentCtx := agent.NewAgentContext(systemPrompt)
-	for _, tool := range registry.All() {
-		agentCtx.AddTool(tool)
+
+	// Add tools, optionally filtering by whitelist
+	allTools := registry.All()
+	if len(allowedTools) > 0 {
+		// Filter tools by whitelist
+		whitelist := make(map[string]bool)
+		for _, name := range allowedTools {
+			whitelist[name] = true
+		}
+		for _, tool := range allTools {
+			if whitelist[tool.Name()] {
+				agentCtx.AddTool(tool)
+			}
+		}
+		slog.Info("Tool whitelist applied", "allowed", allowedTools)
+	} else {
+		// Add all tools
+		for _, tool := range allTools {
+			agentCtx.AddTool(tool)
+		}
 	}
 
 	// Create agent
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
 	defer ag.Shutdown()
+
+	// Set max turns if specified
+	if maxTurns > 0 {
+		ag.SetMaxTurns(maxTurns)
+		slog.Info("Max turns limit set", "max_turns", maxTurns)
+	}
 
 	// Create compactor
 	compactorConfig := cfg.Compactor
@@ -205,7 +238,7 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 				if event.Type == "tool_execution_end" && event.Result != nil {
 					sessionWriter.Append(sess, *event.Result)
 				}
-				if event.Type == "agent_end" {
+				if event.Type == "agent_end" && !noSession {
 					if err := sessionMgr.SaveCurrent(); err != nil {
 						slog.Info("Failed to update session metadata:", "value", err)
 					}
@@ -221,7 +254,7 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 						if event.Type == "tool_execution_end" && event.Result != nil {
 							sessionWriter.Append(sess, *event.Result)
 						}
-						if event.Type == "agent_end" {
+						if event.Type == "agent_end" && !noSession {
 							if err := sessionMgr.SaveCurrent(); err != nil {
 								slog.Info("Failed to update session metadata:", "value", err)
 							}
@@ -251,8 +284,10 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 	<-eventEmitterDone
 
 	sessionWriter.Close()
-	if err := sessionMgr.SaveCurrent(); err != nil {
-		slog.Info("Failed to update session metadata:", "value", err)
+	if !noSession {
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
 	}
 
 	// Get all messages from the session
