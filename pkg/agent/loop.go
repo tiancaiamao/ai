@@ -40,6 +40,7 @@ type LoopConfig struct {
 	RetryBaseDelay          time.Duration // Base delay for exponential backoff
 	MaxConsecutiveToolCalls int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
+	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -105,6 +106,9 @@ func runInnerLoop(
 		defer asyncSummarizer.Close()
 	}
 
+	// Turn counter for MaxTurns limit
+	turnCount := 0
+
 	for {
 		if asyncSummarizer != nil {
 			asyncSummarizer.applyReady(agentCtx)
@@ -117,6 +121,16 @@ func runInnerLoop(
 			return
 		default:
 		}
+
+		// Check for max turns limit
+		if config.MaxTurns > 0 && turnCount >= config.MaxTurns {
+			slog.Info("[Loop] max turns limit reached",
+				"turns", turnCount,
+				"maxTurns", config.MaxTurns)
+			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			return
+		}
+		turnCount++
 
 		// Compact before each LLM request so long-running tool loops do not keep
 		// carrying stale outputs into the next turn.
@@ -206,6 +220,7 @@ func runInnerLoop(
 			}
 
 			slog.Error("Error streaming response", "error", err)
+			stream.Push(NewErrorEvent(err))
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
@@ -247,7 +262,7 @@ func runInnerLoop(
 
 		var toolResults []AgentMessage
 		if hasMoreToolCalls {
-			toolResults = executeToolCalls(ctx, agentCtx.Tools, msg, stream, config.Executor, config.Metrics, config.ToolOutput)
+			toolResults = executeToolCalls(ctx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
 			for _, result := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
@@ -805,6 +820,7 @@ func hashAny(value any) string {
 func executeToolCalls(
 	ctx context.Context,
 	tools []Tool,
+	allowedTools map[string]bool,
 	assistantMsg *AgentMessage,
 	stream *llm.EventStream[AgentEvent, []AgentMessage],
 	executor *ExecutorPool,
@@ -935,6 +951,36 @@ func executeToolCalls(
 				traceevent.Field{Key: "duration_ms", Value: 0},
 				traceevent.Field{Key: "error", Value: true},
 				traceevent.Field{Key: "error_message", Value: "tool not found"},
+			)
+			resultCopy := result
+			resultsByIndex[i] = &resultCopy
+			continue
+		}
+
+		// Check if tool is allowed by whitelist
+		if allowedTools != nil && !allowedTools[normalized.Name] {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", "tool not allowed")
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_not_allowed",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "args", Value: normalized.Arguments},
+			)
+			slog.Warn("[Loop] tool not allowed by whitelist",
+				"tool", normalized.Name,
+				"toolCallID", normalized.ID)
+			content := truncateToolContent([]ContentBlock{
+				TextContent{Type: "text", Text: fmt.Sprintf("Tool %q is not allowed in this context", normalized.Name)},
+			}, toolOutputLimits)
+			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
+			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "duration_ms", Value: 0},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: "tool not allowed"},
 			)
 			resultCopy := result
 			resultsByIndex[i] = &resultCopy

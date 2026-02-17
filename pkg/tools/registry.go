@@ -51,3 +51,10 @@ func (r *Registry) ToLLMTools() []map[string]any {
 	}
 	return tools
 }
+
+// RegisterSubagent registers the subagent tool with the given runner function.
+// This is a convenience method that handles the dependency injection.
+func (r *Registry) RegisterSubagent(cwd string, runSubagent RunSubagentFunc) {
+	tool := NewSubagentTool(cwd, nil, r, runSubagent)
+	r.Register(tool)
+}

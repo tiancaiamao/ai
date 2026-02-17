@@ -59,6 +59,7 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 	results := executeToolCalls(
 		context.Background(),
 		tools,
+		nil, // allowedTools - nil means all tools allowed
 		&assistant,
 		newLoopTestEventStream(),
 		nil,
@@ -93,6 +94,7 @@ func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
 	results := executeToolCalls(
 		context.Background(),
 		tools,
+		nil, // allowedTools - nil means all tools allowed
 		&assistant,
 		newLoopTestEventStream(),
 		nil,

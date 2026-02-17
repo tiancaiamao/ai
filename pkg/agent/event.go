@@ -8,6 +8,9 @@ type AgentEvent struct {
 	// EventAt is when the event was created (UnixNano).
 	EventAt int64 `json:"eventAt,omitempty"`
 
+	// error
+	Error string `json:"error,omitempty"`
+
 	// Common fields
 	Message  *AgentMessage  `json:"message,omitempty"`
 	Messages []AgentMessage `json:"messages,omitempty"`
@@ -57,6 +60,7 @@ const (
 	EventCompactionStart    = "compaction_start"
 	EventCompactionEnd      = "compaction_end"
 	EventLoopGuardTriggered = "loop_guard_triggered"
+	EventError              = "error"
 )
 
 // CompactionInfo describes a compaction event.
@@ -97,6 +101,19 @@ func NewLoopGuardTriggeredEvent(info LoopGuardInfo) AgentEvent {
 		Type:      EventLoopGuardTriggered,
 		EventAt:   time.Now().UnixNano(),
 		LoopGuard: &info,
+	}
+}
+
+// NewErrorEvent creates an error event.
+func NewErrorEvent(err error) AgentEvent {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	return AgentEvent{
+		Type:    EventError,
+		EventAt: time.Now().UnixNano(),
+		Error:   message,
 	}
 }
 

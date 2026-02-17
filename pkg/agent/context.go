@@ -12,6 +12,10 @@ type AgentContext struct {
 	Messages     []AgentMessage `json:"messages"`
 	Tools        []Tool         `json:"tools,omitempty"`
 	Skills       []skill.Skill  `json:"skills,omitempty"` // Loaded skills
+
+	// allowedTools restricts which tools can be executed.
+	// nil means all tools are allowed, non-nil is a whitelist.
+	allowedTools map[string]bool `json:"-"`
 }
 
 // Tool represents a tool that can be called by the agent.
@@ -85,4 +89,45 @@ func (c *AgentContext) GetTool(name string) Tool {
 		}
 	}
 	return nil
+}
+
+// SetAllowedTools sets the whitelist of allowed tools.
+// Pass nil to allow all tools (default behavior).
+func (c *AgentContext) SetAllowedTools(tools []string) {
+	if tools == nil {
+		c.allowedTools = nil
+		return
+	}
+	c.allowedTools = make(map[string]bool)
+	for _, name := range tools {
+		c.allowedTools[name] = true
+	}
+}
+
+// IsToolAllowed checks if a tool is allowed to be executed.
+// Returns true if allowedTools is nil (all allowed) or if the tool is in the whitelist.
+func (c *AgentContext) IsToolAllowed(name string) bool {
+	if c.allowedTools == nil {
+		return true
+	}
+	return c.allowedTools[name]
+}
+
+// GetAllowedTools returns the list of allowed tool names.
+// Returns nil if all tools are allowed.
+func (c *AgentContext) GetAllowedTools() []string {
+	if c.allowedTools == nil {
+		return nil
+	}
+	result := make([]string, 0, len(c.allowedTools))
+	for name := range c.allowedTools {
+		result = append(result, name)
+	}
+	return result
+}
+
+// GetAllowedToolsMap returns the internal allowed tools map for efficient lookup.
+// Returns nil if all tools are allowed.
+func (c *AgentContext) GetAllowedToolsMap() map[string]bool {
+	return c.allowedTools
 }

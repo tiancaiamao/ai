@@ -336,6 +336,47 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 	}
 }
 
+func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		return nil, errors.New("API error (429): Rate limit reached for requests")
+	}
+
+	stream := newTestAgentEventStream()
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	var sawErrorEvent bool
+	var sawAgentEnd bool
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventError && strings.Contains(item.Value.Error, "Rate limit reached") {
+			sawErrorEvent = true
+		}
+		if item.Value.Type == EventAgentEnd {
+			sawAgentEnd = true
+		}
+	}
+
+	if !sawErrorEvent {
+		t.Fatal("expected error event with streaming failure reason")
+	}
+	if !sawAgentEnd {
+		t.Fatal("expected agent end event after streaming failure")
+	}
+}
+
 type failingCompactor struct{}
 
 func (f *failingCompactor) ShouldCompact(_ []AgentMessage) bool {
@@ -344,4 +385,110 @@ func (f *failingCompactor) ShouldCompact(_ []AgentMessage) bool {
 
 func (f *failingCompactor) Compact(_ []AgentMessage) ([]AgentMessage, error) {
 	return nil, errors.New("compaction failed")
+}
+
+// TestRunInnerLoopMaxTurnsLimit tests that the loop stops when max turns is reached
+func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		// Always return a tool call to keep the loop going
+		msg.Content = []ContentBlock{
+			ToolCallContent{
+				ID:        "tc-" + string(rune('0'+callCount)),
+				Type:      "toolCall",
+				Name:      "test-tool",
+				Arguments: map[string]any{},
+			},
+		}
+		msg.StopReason = "tool_calls"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	executor := NewExecutorPool(map[string]int{
+		"maxConcurrentTools": 1,
+		"toolTimeout":        5,
+		"queueTimeout":       10,
+	})
+
+	config := &LoopConfig{
+		Compactor:      &recoveryCompactor{},
+		Executor:       executor,
+		MaxTurns:       3, // Limit to 3 turns
+	}
+
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, config, stream)
+
+	// Should have exactly 3 LLM calls (one per turn)
+	if callCount != 3 {
+		t.Errorf("expected 3 LLM calls with MaxTurns=3, got %d", callCount)
+	}
+}
+
+// TestRunInnerLoopMaxTurnsUnlimited tests that MaxTurns=0 means unlimited
+func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		if callCount >= 5 {
+			// After 5 calls, stop with text response (no tool calls)
+			msg.Content = []ContentBlock{
+				TextContent{Type: "text", Text: "done"},
+			}
+			msg.StopReason = "stop"
+			return &msg, nil
+		}
+		// Return tool call to keep loop going
+		msg.Content = []ContentBlock{
+			ToolCallContent{
+				ID:        "tc-" + string(rune('0'+callCount)),
+				Type:      "toolCall",
+				Name:      "test-tool",
+				Arguments: map[string]any{},
+			},
+		}
+		msg.StopReason = "tool_calls"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	executor := NewExecutorPool(map[string]int{
+		"maxConcurrentTools": 1,
+		"toolTimeout":        5,
+		"queueTimeout":       10,
+	})
+
+	config := &LoopConfig{
+		Compactor:      &recoveryCompactor{},
+		Executor:       executor,
+		MaxTurns:       0, // Unlimited
+	}
+
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, config, stream)
+
+	// With MaxTurns=0, should continue until LLM returns text without tool calls
+	if callCount != 5 {
+		t.Errorf("expected 5 LLM calls with MaxTurns=0 (unlimited), got %d", callCount)
+	}
 }

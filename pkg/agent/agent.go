@@ -78,6 +78,7 @@ type Agent struct {
 	toolCallCutoff  int
 	toolSummaryMode string
 	thinkingLevel   string
+	maxTurns        int // Maximum conversation turns (0 = unlimited)
 	traceBuf        *traceevent.TraceBuf
 	traceStop       chan struct{}
 	traceDone       chan struct{}
@@ -195,6 +196,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		ToolCallCutoff:      a.toolCallCutoff,
 		ToolSummaryStrategy: a.toolSummaryMode,
 		ThinkingLevel:       a.thinkingLevel,
+		MaxTurns:            a.maxTurns,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -254,6 +256,8 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			if event.Value.IsError {
 				hadError = true
 			}
+		case EventError:
+			hadError = true
 		case EventTurnEnd:
 			if event.Value.Message == nil {
 				hadError = true
@@ -508,6 +512,15 @@ func (a *Agent) SetToolSummaryStrategy(strategy string) {
 // Accepted values: off, minimal, low, medium, high, xhigh.
 func (a *Agent) SetThinkingLevel(level string) {
 	a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
+}
+
+// SetMaxTurns sets the maximum number of conversation turns.
+// Set to 0 for unlimited turns (default).
+func (a *Agent) SetMaxTurns(maxTurns int) {
+	if maxTurns < 0 {
+		maxTurns = 0
+	}
+	a.maxTurns = maxTurns
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

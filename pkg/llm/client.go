@@ -125,7 +125,9 @@ func StreamLLM(
 		stream.Push(LLMStartEvent{Partial: partial})
 
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		chunkIndex := 0
+		lastUsage := Usage{}
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -141,7 +143,16 @@ func StreamLLM(
 			)
 			chunkIndex++
 			if data == "[DONE]" {
-				break
+				// Some providers may terminate with [DONE] without emitting a final
+				// chunk that includes finish_reason. Emit a synthetic done event so
+				// upper layers can continue the loop instead of ending silently.
+				finalMsg := partial.ToLLMMessage()
+				stream.Push(LLMDoneEvent{
+					Message:    &finalMsg,
+					Usage:      lastUsage,
+					StopReason: "stop",
+				})
+				return
 			}
 
 			// Parse JSON chunk
@@ -180,6 +191,9 @@ func StreamLLM(
 			}
 
 			choice := chunk.Choices[0]
+			if chunk.Usage != nil {
+				lastUsage = *chunk.Usage
+			}
 
 			// Text delta
 			if choice.Delta.Content != "" {
@@ -233,10 +247,7 @@ func StreamLLM(
 			// Finish
 			if choice.FinishReason != nil {
 				finalMsg := partial.ToLLMMessage()
-				usage := Usage{}
-				if chunk.Usage != nil {
-					usage = *chunk.Usage
-				}
+				usage := lastUsage
 
 				stream.Push(LLMDoneEvent{
 					Message:    &finalMsg,

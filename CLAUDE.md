@@ -77,11 +77,59 @@ The codebase follows a clean separation of concerns with clear package boundarie
    - `interpreter.go` - Win interpreter (2,707 lines) - REPL for ad editor integration
 
 6. **Supporting packages:**
-   - `pkg/tools/` - Built-in tools (read, write, edit, bash, grep)
+   - `pkg/tools/` - Built-in tools (read, write, edit, bash, grep, subagent)
    - `pkg/skill/` - Skills system (Markdown-based, extensible)
    - `pkg/config/` - Configuration management
    - `pkg/compact/` - Context compression
    - `pkg/session/` - Session management
+
+### Built-in Tools
+
+The agent has access to the following tools:
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents |
+| `write` | Write/create files |
+| `edit` | Make precise edits to files |
+| `bash` | Execute shell commands |
+| `grep` | Search file contents |
+| `subagent` | Spawn isolated subagents for delegated tasks |
+
+### Subagent Tool
+
+The `subagent` tool allows spawning child agents with isolated context:
+
+```json
+{
+  "tool": "subagent",
+  "task": "Analyze src/auth for security issues",
+  "config": {
+    "tools": ["read", "grep"],
+    "max_turns": 10,
+    "timeout": 120
+  }
+}
+```
+
+**Parallel execution:**
+```json
+{
+  "tool": "subagent",
+  "tasks": [
+    "Analyze authentication flow",
+    "Check database queries",
+    "Review access control"
+  ]
+}
+```
+
+Key features:
+- Isolated message context (no parent history)
+- Configurable tool whitelist
+- Turn and timeout limits
+- Parallel task execution
+- No nesting (subagent cannot spawn subagent)
 
 ## Interaction Modes
 
@@ -92,8 +140,38 @@ The codebase follows a clean separation of concerns with clear package boundarie
 # Win Mode (REPL for ad editor)
 ./bin/ai  # or ./bin/ai --mode win
 
-# JSON Mode (one-shot JSON response)
+# JSON Mode (streaming JSON Lines output)
 ./bin/ai --mode json "prompt"
+
+# Headless Mode (single JSON output - ideal for subagent calls)
+./bin/ai --mode headless "prompt"
+```
+
+### Headless Mode
+
+Headless mode outputs only the final result as a single JSON line, making it ideal for programmatic use and subagent calls:
+
+```bash
+./bin/ai --mode headless "Read README.md and summarize it"
+```
+
+Output format:
+```json
+{
+  "text": "The README describes...",
+  "usage": {"input_tokens": 150, "output_tokens": 50, "total_tokens": 200},
+  "exit_code": 0
+}
+```
+
+Error case:
+```json
+{
+  "text": "",
+  "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+  "error": "timeout exceeded",
+  "exit_code": 1
+}
 ```
 
 ## Configuration

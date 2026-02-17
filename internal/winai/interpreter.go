@@ -128,6 +128,7 @@ type SessionMeta struct {
 type agentEvent struct {
 	Type                  string                 `json:"type"`
 	EventAt               int64                  `json:"eventAt,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
 	Message               *agent.AgentMessage    `json:"message,omitempty"`
 	Messages              []agent.AgentMessage   `json:"messages,omitempty"`
 	ToolResults           []agent.AgentMessage   `json:"toolResults,omitempty"`
@@ -1392,6 +1393,8 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		p.handleCompactionEvent(false, evt.Compaction)
 	case "loop_guard_triggered":
 		p.handleLoopGuardEvent(evt.LoopGuard)
+	case "error":
+		p.handleAgentErrorEvent(evt.Error)
 	case "tool_call_delta":
 		// ignore
 	default:
@@ -1469,6 +1472,10 @@ func (p *AiInterpreter) handleLoopGuardEvent(info *agent.LoopGuardInfo) {
 		reason = strings.TrimSpace(info.Reason)
 	}
 	p.writeStatus(fmt.Sprintf("ai: loop guard triggered: %s", reason))
+}
+
+func (p *AiInterpreter) handleAgentErrorEvent(raw string) {
+	p.writeStatus(formatAgentErrorStatus(raw))
 }
 
 func (p *AiInterpreter) handleToolStart(evt agentEvent) {
@@ -2723,6 +2730,45 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return text[:limit-3] + "..."
+}
+
+func formatAgentErrorStatus(raw string) string {
+	reason := strings.TrimSpace(raw)
+	if reason == "" {
+		return "ai: request failed: unknown error"
+	}
+
+	normalized := strings.Join(strings.Fields(reason), " ")
+	display := truncate(normalized, 260)
+	lower := strings.ToLower(normalized)
+
+	switch {
+	case containsAny(lower, "rate limit", "429"):
+		return fmt.Sprintf("ai: request failed (rate limit): %s; retry after a short wait.", display)
+	case containsAny(lower, "401", "unauthorized", "authentication", "invalid api key", "api key not set"):
+		return fmt.Sprintf("ai: request failed (authentication): %s; check API key and auth config.", display)
+	case containsAny(lower, "403", "forbidden", "permission denied"):
+		return fmt.Sprintf("ai: request failed (permission): %s; verify account/tool permissions.", display)
+	case containsAny(lower, "context length", "context window", "too many tokens", "token limit"):
+		return fmt.Sprintf("ai: request failed (context limit): %s; try /compact or send a shorter prompt.", display)
+	case containsAny(lower, "timeout", "timed out", "deadline exceeded"):
+		return fmt.Sprintf("ai: request failed (timeout): %s; retry the request.", display)
+	case containsAny(lower, "dns error", "no such host", "connection error", "connection refused", "connection reset", "broken pipe", "eof", "dial tcp"):
+		return fmt.Sprintf("ai: request failed (network): %s; check network and API base URL.", display)
+	case containsAny(lower, "api error (500)", "api error (502)", "api error (503)", "api error (504)", "service unavailable", "bad gateway", "gateway timeout"):
+		return fmt.Sprintf("ai: request failed (server): %s; retry later.", display)
+	default:
+		return fmt.Sprintf("ai: request failed: %s", display)
+	}
+}
+
+func containsAny(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatTreeLabel(entry rpc.TreeEntry) string {

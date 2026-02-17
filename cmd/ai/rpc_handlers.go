@@ -143,7 +143,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	slog.Info("Registered  tools: read, bash, write, grep, edit", "count", len(registry.All()))
+	// Create subagent runner and register subagent tool
+	subagentRunner := NewSubagentRunner(cfg, model, apiKey, cwd, registry)
+	registry.RegisterSubagent(cwd, subagentRunner.Run)
+
+	slog.Info("Registered  tools: read, bash, write, grep, edit, subagent", "count", len(registry.All()))
 
 	// Load skills
 	traceOutputPath, err = initTraceFileHandler()
