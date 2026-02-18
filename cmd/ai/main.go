@@ -29,6 +29,7 @@ func main() {
 	noSessionFlag := flag.Bool("no-session", false, "Run without session persistence (headless mode only)")
 	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, headless mode only)")
 	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
+	subagentFlag := flag.Bool("subagent", false, "Run as subagent with focused system prompt (headless mode only)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
@@ -48,7 +49,7 @@ func main() {
 	case "headless":
 		prompts := flag.Args()
 		tools := parseToolsFlag(*toolsFlag)
-		if err := runHeadless(*sessionPathFlag, *noSessionFlag, *maxTurnsFlag, tools, prompts, os.Stdout); err != nil {
+		if err := runHeadless(*sessionPathFlag, *noSessionFlag, *maxTurnsFlag, tools, *subagentFlag, prompts, os.Stdout); err != nil {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}

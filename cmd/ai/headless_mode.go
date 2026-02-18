@@ -21,9 +21,9 @@ import (
 
 // runHeadless executes prompts in headless mode, outputting only the final result.
 // No intermediate events are streamed - just a single JSON output at the end.
-func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, prompts []string, output io.Writer) error {
 	startTime := time.Now()
-	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools)
+	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent)
 
 	if len(prompts) == 0 {
 		return writeHeadlessError(output, "at least one prompt argument is required for --mode headless")
@@ -130,6 +130,14 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	basePrompt := `You are a helpful coding assistant.
 When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
 Do not include chain-of-thought or <thinking> tags in your output.`
+
+	// Use focused subagent prompt if running as subagent
+	if isSubagent {
+		basePrompt = `You are a focused subagent executing a specific task.
+Complete the task efficiently and report your findings.
+Do not include chain-of-thought or <thinking> tags in your output.
+Be concise and focused on the task at hand.`
+	}
 
 	// Build the full system prompt
 	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
