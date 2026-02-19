@@ -7,6 +7,35 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+func TestGetFullMetricsDoesNotDeadlock(t *testing.T) {
+	buf := traceevent.NewTraceBuf()
+	m := NewMetrics(buf)
+	now := time.Now()
+
+	m.RecordTraceEvent(traceevent.TraceEvent{
+		Timestamp: now,
+		Name:      "llm_call",
+		Phase:     traceevent.PhaseEnd,
+		Fields: []traceevent.Field{
+			{Key: "input_tokens", Value: 5},
+			{Key: "output_tokens", Value: 7},
+			{Key: "duration_ms", Value: int64(10)},
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		_ = m.GetFullMetrics()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetFullMetrics timed out, possible lock deadlock")
+	}
+}
+
 func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
 	buf := traceevent.NewTraceBuf()
 	m := NewMetrics(buf)
@@ -86,6 +115,15 @@ func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
 	}
 	if llm.TokenInput != 10 || llm.TokenOutput != 20 {
 		t.Fatalf("expected llm tokens 10/20, got %d/%d", llm.TokenInput, llm.TokenOutput)
+	}
+	if llm.TokenTotal != 30 {
+		t.Fatalf("expected llm total tokens 30, got %d", llm.TokenTotal)
+	}
+	if llm.ActiveTotalTokensPerSec <= 0 {
+		t.Fatalf("expected active token rate > 0, got %f", llm.ActiveTotalTokensPerSec)
+	}
+	if llm.LastTotalTokensPerSec <= 0 {
+		t.Fatalf("expected last-call token rate > 0, got %f", llm.LastTotalTokensPerSec)
 	}
 
 	msg := m.GetMessageCounts()

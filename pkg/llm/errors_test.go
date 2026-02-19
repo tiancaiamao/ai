@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestClassifyAPIErrorContextLength(t *testing.T) {
@@ -40,5 +41,23 @@ func TestIsContextLengthExceeded(t *testing.T) {
 	}
 	if IsContextLengthExceeded(errors.New("permission denied")) {
 		t.Fatal("expected non-context error to not match")
+	}
+}
+
+func TestClassifyAPIErrorRateLimit(t *testing.T) {
+	err := ClassifyAPIErrorWithRetryAfter(429, `{"error":{"message":"Rate limit reached"}}`, 3*time.Second)
+
+	var rlErr *RateLimitError
+	if !errors.As(err, &rlErr) {
+		t.Fatalf("expected RateLimitError, got %T (%v)", err, err)
+	}
+	if rlErr.RetryAfter != 3*time.Second {
+		t.Fatalf("expected retry-after 3s, got %v", rlErr.RetryAfter)
+	}
+	if !IsRateLimit(err) {
+		t.Fatalf("expected IsRateLimit=true for %v", err)
+	}
+	if RetryAfter(err) != 3*time.Second {
+		t.Fatalf("expected RetryAfter=3s, got %v", RetryAfter(err))
 	}
 }

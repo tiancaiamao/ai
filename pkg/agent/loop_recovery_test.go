@@ -301,6 +301,74 @@ func TestStreamAssistantResponseWithRetrySkipsRetryForContextLengthError(t *test
 	}
 }
 
+func TestStreamAssistantResponseWithRetryPrefersLastLLMErrorOverContextCancel(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		cancel()
+		return nil, errors.New("API error (429): Rate limit reached for requests")
+	}
+
+	stream := newTestAgentEventStream()
+	_, err := streamAssistantResponseWithRetry(
+		ctx,
+		NewAgentContext("sys"),
+		&LoopConfig{MaxLLMRetries: 3},
+		stream,
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "Rate limit reached") {
+		t.Fatalf("expected original 429 error, got %v", err)
+	}
+	if strings.TrimSpace(ErrorStack(err)) == "" {
+		t.Fatalf("expected wrapped error stack, got empty stack for: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected one call before cancellation, got %d", callCount)
+	}
+}
+
+func TestStreamAssistantResponseWithRetrySkipsRetryForNonRetryable4xx(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		return nil, &llm.APIError{StatusCode: 401, Message: "unauthorized"}
+	}
+
+	stream := newTestAgentEventStream()
+	_, err := streamAssistantResponseWithRetry(
+		context.Background(),
+		NewAgentContext("sys"),
+		&LoopConfig{MaxLLMRetries: 3},
+		stream,
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if callCount != 1 {
+		t.Fatalf("expected no retries for 4xx non-rate-limit errors, got %d calls", callCount)
+	}
+}
+
 func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()
@@ -356,6 +424,7 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
 	var sawErrorEvent bool
+	var sawErrorStack bool
 	var sawAgentEnd bool
 	for item := range stream.Iterator(context.Background()) {
 		if item.Done {
@@ -363,6 +432,9 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 		}
 		if item.Value.Type == EventError && strings.Contains(item.Value.Error, "Rate limit reached") {
 			sawErrorEvent = true
+			if strings.TrimSpace(item.Value.ErrorStack) != "" {
+				sawErrorStack = true
+			}
 		}
 		if item.Value.Type == EventAgentEnd {
 			sawAgentEnd = true
@@ -374,6 +446,9 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 	}
 	if !sawAgentEnd {
 		t.Fatal("expected agent end event after streaming failure")
+	}
+	if !sawErrorStack {
+		t.Fatal("expected error stack in streaming failure event")
 	}
 }
 
@@ -422,9 +497,9 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	})
 
 	config := &LoopConfig{
-		Compactor:      &recoveryCompactor{},
-		Executor:       executor,
-		MaxTurns:       3, // Limit to 3 turns
+		Compactor: &recoveryCompactor{},
+		Executor:  executor,
+		MaxTurns:  3, // Limit to 3 turns
 	}
 
 	stream := newTestAgentEventStream()
@@ -479,9 +554,9 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	})
 
 	config := &LoopConfig{
-		Compactor:      &recoveryCompactor{},
-		Executor:       executor,
-		MaxTurns:       0, // Unlimited
+		Compactor: &recoveryCompactor{},
+		Executor:  executor,
+		MaxTurns:  0, // Unlimited
 	}
 
 	stream := newTestAgentEventStream()

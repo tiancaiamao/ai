@@ -924,6 +924,25 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Lock()
 		currentSessionID := sessionID
 		stateMu.Unlock()
+		var tokenRate *rpc.TokenRateStats
+		if metrics := ag.GetMetrics(); metrics != nil {
+			llmMetrics := metrics.GetLLMMetrics()
+			tokenRate = &rpc.TokenRateStats{
+				ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
+				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
+				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
+				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
+				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
+				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
+				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
+				LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
+				RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
+				RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
+				RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
+				RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
+			}
+		}
 		return &rpc.SessionStats{
 			SessionFile:       sess.GetPath(),
 			SessionID:         currentSessionID,
@@ -933,6 +952,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			ToolResults:       toolResults,
 			TotalMessages:     len(messages),
 			Tokens:            tokens,
+			TokenRate:         tokenRate,
 			Cost:              cost,
 		}, nil
 	})

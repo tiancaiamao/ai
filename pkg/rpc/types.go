@@ -143,7 +143,25 @@ type SessionStats struct {
 	ToolResults       int               `json:"toolResults"`
 	TotalMessages     int               `json:"totalMessages"`
 	Tokens            SessionTokenStats `json:"tokens"`
+	TokenRate         *TokenRateStats   `json:"tokenRate,omitempty"`
 	Cost              float64           `json:"cost"`
+}
+
+// TokenRateStats summarizes token throughput derived from runtime metrics.
+type TokenRateStats struct {
+	ActiveInputPerSec   float64 `json:"activeInputPerSec"`
+	ActiveOutputPerSec  float64 `json:"activeOutputPerSec"`
+	ActiveTotalPerSec   float64 `json:"activeTotalPerSec"`
+	WallInputPerSec     float64 `json:"wallInputPerSec"`
+	WallOutputPerSec    float64 `json:"wallOutputPerSec"`
+	WallTotalPerSec     float64 `json:"wallTotalPerSec"`
+	LastInputPerSec     float64 `json:"lastInputPerSec"`
+	LastOutputPerSec    float64 `json:"lastOutputPerSec"`
+	LastTotalPerSec     float64 `json:"lastTotalPerSec"`
+	RecentWindowSeconds int64   `json:"recentWindowSeconds"`
+	RecentInputPerSec   float64 `json:"recentInputPerSec"`
+	RecentOutputPerSec  float64 `json:"recentOutputPerSec"`
+	RecentTotalPerSec   float64 `json:"recentTotalPerSec"`
 }
 
 // ForkMessage represents a message candidate for forking.

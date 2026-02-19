@@ -8,6 +8,8 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+const defaultLLMRecentWindow = 60 * time.Second
+
 // Metrics aggregates statistics from trace events.
 // Following unified observability: traces are the source of truth,
 // metrics are derived views over trace events.
@@ -39,16 +41,37 @@ type toolStatsCache struct {
 
 // llmStatsCache holds aggregated LLM statistics
 type llmStatsCache struct {
-	CallCount         int64
-	TokenInput        int64
-	TokenOutput       int64
-	CacheRead         int64
-	CacheWrite        int64
-	ErrorCount        int64
-	TotalDurationNs   int64
-	FirstTokenTotalNs int64
-	LastEndNs         int64
-	LastStartNs       int64
+	CallCount              int64
+	TokenInput             int64
+	TokenOutput            int64
+	CacheRead              int64
+	CacheWrite             int64
+	ErrorCount             int64
+	TotalDurationNs        int64
+	FirstTokenTotalNs      int64
+	LastEndNs              int64
+	LastStartNs            int64
+	FirstStartNs           int64
+	LastDurationNs         int64
+	LastInputTokens        int64
+	LastOutputTokens       int64
+	LastTotalTokens        int64
+	LastFirstTokenNs       int64
+	RecentWindowSeconds    int64
+	RecentWindowStartNs    int64
+	RecentWindowEndNs      int64
+	RecentWindowInput      int64
+	RecentWindowOutput     int64
+	RecentWindowTotal      int64
+	RecentWindowDurationNs int64
+	samples                []llmTokenSample
+}
+
+type llmTokenSample struct {
+	endNs        int64
+	inputTokens  int64
+	outputTokens int64
+	totalTokens  int64
 }
 
 // promptStatsCache holds aggregated prompt statistics
@@ -75,7 +98,7 @@ func NewMetrics(buf *traceevent.TraceBuf) *Metrics {
 		sessionStart:       time.Now(),
 		flushInterval:      5 * time.Second,
 		cachedToolStats:    make(map[string]*toolStatsCache),
-		cachedLLMStats:     &llmStatsCache{},
+		cachedLLMStats:     &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())},
 		cachedPromptStats:  &promptStatsCache{},
 		cachedMessageStats: &messageStatsCache{},
 	}
@@ -99,7 +122,7 @@ func (m *Metrics) refreshAggregations() {
 
 	// Reset caches
 	m.cachedToolStats = make(map[string]*toolStatsCache)
-	m.cachedLLMStats = &llmStatsCache{}
+	m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
 	m.cachedPromptStats = &promptStatsCache{}
 	m.cachedMessageStats = &messageStatsCache{}
 
@@ -108,9 +131,44 @@ func (m *Metrics) refreshAggregations() {
 	for _, event := range events {
 		m.aggregateEvent(event)
 	}
+	m.finalizeLLMWindowStats()
 
 	m.cacheValid = true
 	m.lastFlush = time.Now()
+}
+
+func (m *Metrics) finalizeLLMWindowStats() {
+	stats := m.cachedLLMStats
+	if stats == nil {
+		return
+	}
+	if stats.RecentWindowSeconds <= 0 {
+		stats.RecentWindowSeconds = int64(defaultLLMRecentWindow.Seconds())
+	}
+	if stats.LastEndNs == 0 || len(stats.samples) == 0 {
+		return
+	}
+
+	windowNs := stats.RecentWindowSeconds * int64(time.Second)
+	cutoffNs := stats.LastEndNs - windowNs
+	firstInWindow := int64(0)
+	for _, sample := range stats.samples {
+		if sample.endNs < cutoffNs {
+			continue
+		}
+		if firstInWindow == 0 {
+			firstInWindow = sample.endNs
+		}
+		stats.RecentWindowInput += sample.inputTokens
+		stats.RecentWindowOutput += sample.outputTokens
+		stats.RecentWindowTotal += sample.totalTokens
+	}
+	if firstInWindow == 0 {
+		return
+	}
+	stats.RecentWindowStartNs = firstInWindow
+	stats.RecentWindowEndNs = stats.LastEndNs
+	stats.RecentWindowDurationNs = stats.RecentWindowEndNs - stats.RecentWindowStartNs
 }
 
 // aggregateEvent incorporates a single trace event into the aggregation.
@@ -147,18 +205,36 @@ func (m *Metrics) aggregatePrompt(event traceevent.TraceEvent) {
 // aggregateLLM processes LLM-related events
 func (m *Metrics) aggregateLLM(event traceevent.TraceEvent) {
 	if event.Phase == traceevent.PhaseEnd {
+		inputTokens := traceFieldInt64(event.Fields, "input_tokens")
+		outputTokens := traceFieldInt64(event.Fields, "output_tokens")
+		totalTokens := traceFieldInt64(event.Fields, "total_tokens")
+		if totalTokens == 0 {
+			totalTokens = inputTokens + outputTokens
+		}
 		m.cachedLLMStats.CallCount++
-		m.cachedLLMStats.TokenInput += traceFieldInt64(event.Fields, "input_tokens")
-		m.cachedLLMStats.TokenOutput += traceFieldInt64(event.Fields, "output_tokens")
+		m.cachedLLMStats.TokenInput += inputTokens
+		m.cachedLLMStats.TokenOutput += outputTokens
 		m.cachedLLMStats.CacheRead += traceFieldInt64(event.Fields, "cache_read")
 		m.cachedLLMStats.CacheWrite += traceFieldInt64(event.Fields, "cache_write")
 		durationMs := traceFieldInt64(event.Fields, "duration_ms")
-		m.cachedLLMStats.TotalDurationNs += durationMs * 1_000_000
+		durationNs := durationMs * 1_000_000
+		m.cachedLLMStats.TotalDurationNs += durationNs
 		m.cachedLLMStats.LastEndNs = event.Timestamp.UnixNano()
+		m.cachedLLMStats.LastDurationNs = durationNs
+		m.cachedLLMStats.LastInputTokens = inputTokens
+		m.cachedLLMStats.LastOutputTokens = outputTokens
+		m.cachedLLMStats.LastTotalTokens = totalTokens
+		m.cachedLLMStats.samples = append(m.cachedLLMStats.samples, llmTokenSample{
+			endNs:        event.Timestamp.UnixNano(),
+			inputTokens:  inputTokens,
+			outputTokens: outputTokens,
+			totalTokens:  totalTokens,
+		})
 
 		firstTokenMs := traceFieldInt64(event.Fields, "first_token_ms")
 		if firstTokenMs > 0 {
 			m.cachedLLMStats.FirstTokenTotalNs += firstTokenMs * 1_000_000
+			m.cachedLLMStats.LastFirstTokenNs = firstTokenMs * 1_000_000
 		}
 
 		if traceFieldString(event.Fields, "error") != "" {
@@ -166,7 +242,11 @@ func (m *Metrics) aggregateLLM(event traceevent.TraceEvent) {
 		}
 	}
 	if event.Phase == traceevent.PhaseBegin {
-		m.cachedLLMStats.LastStartNs = event.Timestamp.UnixNano()
+		startNs := event.Timestamp.UnixNano()
+		m.cachedLLMStats.LastStartNs = startNs
+		if m.cachedLLMStats.FirstStartNs == 0 || startNs < m.cachedLLMStats.FirstStartNs {
+			m.cachedLLMStats.FirstStartNs = startNs
+		}
 	}
 }
 
@@ -233,8 +313,8 @@ func (m *Metrics) GetToolMetrics(toolName string) ToolMetricsSnapshot {
 		CallCount:         cache.CallCount,
 		SuccessCount:      cache.SuccessCount,
 		FailCount:         cache.FailCount,
-		SuccessRate:       float64(cache.SuccessCount) / float64(cache.CallCount),
-		AverageDurationMs: cache.TotalDurationNs / cache.CallCount / 1_000_000,
+		SuccessRate:       safeRatio(cache.SuccessCount, cache.CallCount),
+		AverageDurationMs: safeDurationMillis(cache.TotalDurationNs, cache.CallCount),
 		LastCall:          cache.LastCall,
 	}
 }
@@ -246,6 +326,10 @@ func (m *Metrics) GetLLMMetrics() LLMMetricsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	return m.llmMetricsSnapshotLocked()
+}
+
+func (m *Metrics) llmMetricsSnapshotLocked() LLMMetricsSnapshot {
 	totalCalls := m.cachedLLMStats.CallCount
 	successRate := 0.0
 	if totalCalls > 0 {
@@ -262,20 +346,70 @@ func (m *Metrics) GetLLMMetrics() LLMMetricsSnapshot {
 		avgFirstTokenMs = m.cachedLLMStats.FirstTokenTotalNs / totalCalls / 1_000_000
 	}
 
+	avgDurationPerCall := time.Duration(0)
+	if totalCalls > 0 {
+		avgDurationPerCall = time.Duration(m.cachedLLMStats.TotalDurationNs / totalCalls)
+	}
+
+	activeInputTPS := ratePerSecond(m.cachedLLMStats.TokenInput, m.cachedLLMStats.TotalDurationNs)
+	activeOutputTPS := ratePerSecond(m.cachedLLMStats.TokenOutput, m.cachedLLMStats.TotalDurationNs)
+	activeTotalTPS := ratePerSecond(m.cachedLLMStats.TokenInput+m.cachedLLMStats.TokenOutput, m.cachedLLMStats.TotalDurationNs)
+
+	wallDurationNs := int64(0)
+	if m.cachedLLMStats.FirstStartNs > 0 && m.cachedLLMStats.LastEndNs > m.cachedLLMStats.FirstStartNs {
+		wallDurationNs = m.cachedLLMStats.LastEndNs - m.cachedLLMStats.FirstStartNs
+	}
+	wallInputTPS := ratePerSecond(m.cachedLLMStats.TokenInput, wallDurationNs)
+	wallOutputTPS := ratePerSecond(m.cachedLLMStats.TokenOutput, wallDurationNs)
+	wallTotalTPS := ratePerSecond(m.cachedLLMStats.TokenInput+m.cachedLLMStats.TokenOutput, wallDurationNs)
+
+	lastInputTPS := ratePerSecond(m.cachedLLMStats.LastInputTokens, m.cachedLLMStats.LastDurationNs)
+	lastOutputTPS := ratePerSecond(m.cachedLLMStats.LastOutputTokens, m.cachedLLMStats.LastDurationNs)
+	lastTotalTPS := ratePerSecond(m.cachedLLMStats.LastTotalTokens, m.cachedLLMStats.LastDurationNs)
+
+	recentInputTPS := ratePerSecond(m.cachedLLMStats.RecentWindowInput, m.cachedLLMStats.RecentWindowDurationNs)
+	recentOutputTPS := ratePerSecond(m.cachedLLMStats.RecentWindowOutput, m.cachedLLMStats.RecentWindowDurationNs)
+	recentTotalTPS := ratePerSecond(m.cachedLLMStats.RecentWindowTotal, m.cachedLLMStats.RecentWindowDurationNs)
+
 	return LLMMetricsSnapshot{
-		CallCount:             totalCalls,
-		TokenInput:            m.cachedLLMStats.TokenInput,
-		TokenOutput:           m.cachedLLMStats.TokenOutput,
-		CacheRead:             m.cachedLLMStats.CacheRead,
-		CacheWrite:            m.cachedLLMStats.CacheWrite,
-		ErrorCount:            m.cachedLLMStats.ErrorCount,
-		SuccessRate:           successRate,
-		AvgTokensPerCall:      avgTokens,
-		TotalDuration:         time.Duration(m.cachedLLMStats.TotalDurationNs),
-		AvgDurationPerCall:    time.Duration(m.cachedLLMStats.TotalDurationNs / int64(totalCalls)),
-		AvgFirstTokenDuration: time.Duration(avgFirstTokenMs) * time.Millisecond,
-		LastStart:             timeFromNs(m.cachedLLMStats.LastStartNs),
-		LastEnd:               timeFromNs(m.cachedLLMStats.LastEndNs),
+		CallCount:                totalCalls,
+		TokenInput:               m.cachedLLMStats.TokenInput,
+		TokenOutput:              m.cachedLLMStats.TokenOutput,
+		TokenTotal:               m.cachedLLMStats.TokenInput + m.cachedLLMStats.TokenOutput,
+		CacheRead:                m.cachedLLMStats.CacheRead,
+		CacheWrite:               m.cachedLLMStats.CacheWrite,
+		ErrorCount:               m.cachedLLMStats.ErrorCount,
+		SuccessRate:              successRate,
+		AvgTokensPerCall:         avgTokens,
+		TotalDuration:            time.Duration(m.cachedLLMStats.TotalDurationNs),
+		AvgDurationPerCall:       avgDurationPerCall,
+		LastDuration:             time.Duration(m.cachedLLMStats.LastDurationNs),
+		LastInputTokens:          m.cachedLLMStats.LastInputTokens,
+		LastOutputTokens:         m.cachedLLMStats.LastOutputTokens,
+		LastTotalTokens:          m.cachedLLMStats.LastTotalTokens,
+		LastInputTokensPerSec:    lastInputTPS,
+		LastOutputTokensPerSec:   lastOutputTPS,
+		LastTotalTokensPerSec:    lastTotalTPS,
+		ActiveInputTokensPerSec:  activeInputTPS,
+		ActiveOutputTokensPerSec: activeOutputTPS,
+		ActiveTotalTokensPerSec:  activeTotalTPS,
+		WallDuration:             time.Duration(wallDurationNs),
+		WallInputTokensPerSec:    wallInputTPS,
+		WallOutputTokensPerSec:   wallOutputTPS,
+		WallTotalTokensPerSec:    wallTotalTPS,
+		RecentWindowSeconds:      m.cachedLLMStats.RecentWindowSeconds,
+		RecentWindowInputTokens:  m.cachedLLMStats.RecentWindowInput,
+		RecentWindowOutputTokens: m.cachedLLMStats.RecentWindowOutput,
+		RecentWindowTotalTokens:  m.cachedLLMStats.RecentWindowTotal,
+		RecentWindowDuration:     time.Duration(m.cachedLLMStats.RecentWindowDurationNs),
+		RecentInputTokensPerSec:  recentInputTPS,
+		RecentOutputTokensPerSec: recentOutputTPS,
+		RecentTotalTokensPerSec:  recentTotalTPS,
+		FirstTokenTotalDuration:  time.Duration(m.cachedLLMStats.FirstTokenTotalNs),
+		LastFirstTokenDuration:   time.Duration(m.cachedLLMStats.LastFirstTokenNs),
+		AvgFirstTokenDuration:    time.Duration(avgFirstTokenMs) * time.Millisecond,
+		LastStart:                timeFromNs(m.cachedLLMStats.LastStartNs),
+		LastEnd:                  timeFromNs(m.cachedLLMStats.LastEndNs),
 	}
 }
 
@@ -286,6 +420,10 @@ func (m *Metrics) GetPromptMetrics() PromptMetricsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	return m.promptMetricsSnapshotLocked()
+}
+
+func (m *Metrics) promptMetricsSnapshotLocked() PromptMetricsSnapshot {
 	totalCalls := m.cachedPromptStats.CallCount
 	successRate := 0.0
 	if totalCalls > 0 {
@@ -297,7 +435,7 @@ func (m *Metrics) GetPromptMetrics() PromptMetricsSnapshot {
 		ErrorCount:    m.cachedPromptStats.ErrorCount,
 		SuccessRate:   successRate,
 		TotalDuration: time.Duration(m.cachedPromptStats.TotalDurationNs),
-		AvgDuration:   time.Duration(m.cachedPromptStats.TotalDurationNs / int64(totalCalls)),
+		AvgDuration:   safeDuration(m.cachedPromptStats.TotalDurationNs, totalCalls),
 		LastStart:     timeFromNs(m.cachedPromptStats.LastStartNs),
 		LastEnd:       timeFromNs(m.cachedPromptStats.LastEndNs),
 	}
@@ -310,6 +448,10 @@ func (m *Metrics) GetMessageCounts() MessageCountsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	return m.messageCountsSnapshotLocked()
+}
+
+func (m *Metrics) messageCountsSnapshotLocked() MessageCountsSnapshot {
 	return MessageCountsSnapshot{
 		UserMessages:      m.cachedMessageStats.UserMessages,
 		AssistantMessages: m.cachedMessageStats.AssistantMessages,
@@ -346,8 +488,8 @@ func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 			CallCount:         cache.CallCount,
 			SuccessCount:      cache.SuccessCount,
 			FailCount:         cache.FailCount,
-			SuccessRate:       float64(cache.SuccessCount) / float64(cache.CallCount),
-			AverageDurationMs: cache.TotalDurationNs / cache.CallCount / 1_000_000,
+			SuccessRate:       safeRatio(cache.SuccessCount, cache.CallCount),
+			AverageDurationMs: safeDurationMillis(cache.TotalDurationNs, cache.CallCount),
 			LastCall:          cache.LastCall,
 		})
 	}
@@ -355,9 +497,9 @@ func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 	return FullMetricsSnapshot{
 		SessionUptime: time.Since(m.sessionStart),
 		ToolMetrics:   toolSnapshots,
-		LLMMetrics:    m.GetLLMMetrics(),
-		MessageCounts: m.GetMessageCounts(),
-		PromptMetrics: m.GetPromptMetrics(),
+		LLMMetrics:    m.llmMetricsSnapshotLocked(),
+		MessageCounts: m.messageCountsSnapshotLocked(),
+		PromptMetrics: m.promptMetricsSnapshotLocked(),
 	}
 }
 
@@ -372,7 +514,7 @@ func (m *Metrics) Reset() {
 	defer m.mu.Unlock()
 
 	m.cachedToolStats = make(map[string]*toolStatsCache)
-	m.cachedLLMStats = &llmStatsCache{}
+	m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
 	m.cachedPromptStats = &promptStatsCache{}
 	m.cachedMessageStats = &messageStatsCache{}
 	m.cacheValid = false
@@ -472,6 +614,34 @@ func timeFromNs(ns int64) time.Time {
 	return time.Unix(0, ns)
 }
 
+func safeRatio(num, den int64) float64 {
+	if den <= 0 {
+		return 0
+	}
+	return float64(num) / float64(den)
+}
+
+func safeDuration(totalNs, calls int64) time.Duration {
+	if calls <= 0 {
+		return 0
+	}
+	return time.Duration(totalNs / calls)
+}
+
+func safeDurationMillis(totalNs, calls int64) int64 {
+	if calls <= 0 {
+		return 0
+	}
+	return totalNs / calls / 1_000_000
+}
+
+func ratePerSecond(tokens, durationNs int64) float64 {
+	if tokens <= 0 || durationNs <= 0 {
+		return 0
+	}
+	return float64(tokens) * float64(time.Second) / float64(durationNs)
+}
+
 // Snapshot types (exported for RPC handlers)
 
 type ToolMetricsSnapshot struct {
@@ -486,23 +656,46 @@ type ToolMetricsSnapshot struct {
 }
 
 type LLMMetricsSnapshot struct {
-	CallCount               int64         `json:"callCount"`
-	TokenInput              int64         `json:"tokenInput"`
-	TokenOutput             int64         `json:"tokenOutput"`
-	CacheRead               int64         `json:"cacheRead"`
-	CacheWrite              int64         `json:"cacheWrite"`
-	ErrorCount              int64         `json:"errorCount"`
-	SuccessRate             float64       `json:"successRate"`
-	AvgTokensPerCall        int64         `json:"avgTokensPerCall"`
-	TotalDuration           time.Duration `json:"totalDuration"`
-	AvgDurationPerCall      time.Duration `json:"avgDurationPerCall"`
-	FirstTokenTotalDuration time.Duration `json:"firstTokenTotalDuration"`
-	LastFirstTokenDuration  time.Duration `json:"lastFirstTokenDuration"`
-	AvgFirstTokenDuration   time.Duration `json:"avgFirstTokenDuration"`
-	InFlight                bool          `json:"inFlight"`
-	InFlightDuration        time.Duration `json:"inFlightDuration"`
-	LastStart               time.Time     `json:"lastStart"`
-	LastEnd                 time.Time     `json:"lastEnd"`
+	CallCount                int64         `json:"callCount"`
+	TokenInput               int64         `json:"tokenInput"`
+	TokenOutput              int64         `json:"tokenOutput"`
+	TokenTotal               int64         `json:"tokenTotal"`
+	CacheRead                int64         `json:"cacheRead"`
+	CacheWrite               int64         `json:"cacheWrite"`
+	ErrorCount               int64         `json:"errorCount"`
+	SuccessRate              float64       `json:"successRate"`
+	AvgTokensPerCall         int64         `json:"avgTokensPerCall"`
+	TotalDuration            time.Duration `json:"totalDuration"`
+	AvgDurationPerCall       time.Duration `json:"avgDurationPerCall"`
+	LastDuration             time.Duration `json:"lastDuration"`
+	LastInputTokens          int64         `json:"lastInputTokens"`
+	LastOutputTokens         int64         `json:"lastOutputTokens"`
+	LastTotalTokens          int64         `json:"lastTotalTokens"`
+	LastInputTokensPerSec    float64       `json:"lastInputTokensPerSec"`
+	LastOutputTokensPerSec   float64       `json:"lastOutputTokensPerSec"`
+	LastTotalTokensPerSec    float64       `json:"lastTotalTokensPerSec"`
+	ActiveInputTokensPerSec  float64       `json:"activeInputTokensPerSec"`
+	ActiveOutputTokensPerSec float64       `json:"activeOutputTokensPerSec"`
+	ActiveTotalTokensPerSec  float64       `json:"activeTotalTokensPerSec"`
+	WallDuration             time.Duration `json:"wallDuration"`
+	WallInputTokensPerSec    float64       `json:"wallInputTokensPerSec"`
+	WallOutputTokensPerSec   float64       `json:"wallOutputTokensPerSec"`
+	WallTotalTokensPerSec    float64       `json:"wallTotalTokensPerSec"`
+	RecentWindowSeconds      int64         `json:"recentWindowSeconds"`
+	RecentWindowInputTokens  int64         `json:"recentWindowInputTokens"`
+	RecentWindowOutputTokens int64         `json:"recentWindowOutputTokens"`
+	RecentWindowTotalTokens  int64         `json:"recentWindowTotalTokens"`
+	RecentWindowDuration     time.Duration `json:"recentWindowDuration"`
+	RecentInputTokensPerSec  float64       `json:"recentInputTokensPerSec"`
+	RecentOutputTokensPerSec float64       `json:"recentOutputTokensPerSec"`
+	RecentTotalTokensPerSec  float64       `json:"recentTotalTokensPerSec"`
+	FirstTokenTotalDuration  time.Duration `json:"firstTokenTotalDuration"`
+	LastFirstTokenDuration   time.Duration `json:"lastFirstTokenDuration"`
+	AvgFirstTokenDuration    time.Duration `json:"avgFirstTokenDuration"`
+	InFlight                 bool          `json:"inFlight"`
+	InFlightDuration         time.Duration `json:"inFlightDuration"`
+	LastStart                time.Time     `json:"lastStart"`
+	LastEnd                  time.Time     `json:"lastEnd"`
 }
 
 type MessageCountsSnapshot struct {

@@ -9,7 +9,8 @@ type AgentEvent struct {
 	EventAt int64 `json:"eventAt,omitempty"`
 
 	// error
-	Error string `json:"error,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ErrorStack string `json:"errorStack,omitempty"`
 
 	// Common fields
 	Message  *AgentMessage  `json:"message,omitempty"`
@@ -106,14 +107,18 @@ func NewLoopGuardTriggeredEvent(info LoopGuardInfo) AgentEvent {
 
 // NewErrorEvent creates an error event.
 func NewErrorEvent(err error) AgentEvent {
+	err = WithErrorStack(err)
 	message := ""
+	stack := ""
 	if err != nil {
 		message = err.Error()
+		stack = ErrorStack(err)
 	}
 	return AgentEvent{
-		Type:    EventError,
-		EventAt: time.Now().UnixNano(),
-		Error:   message,
+		Type:       EventError,
+		EventAt:    time.Now().UnixNano(),
+		Error:      message,
+		ErrorStack: stack,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -50,6 +51,42 @@ var summarizeToolResultsBatchFn = summarizeToolResultsBatchWithLLM
 type llmAttemptKeyType struct{}
 
 var llmAttemptKey = llmAttemptKeyType{}
+
+func shouldRetryLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if llm.IsContextLengthExceeded(err) {
+		return false
+	}
+	if llm.IsRateLimit(err) {
+		return true
+	}
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+			return false
+		}
+	}
+	return true
+}
+
+func jitterDelay(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return delay
+	}
+	// +/-20% deterministic jitter from clock to avoid retry bursts.
+	span := delay / 5
+	if span <= 0 {
+		return delay
+	}
+	offset := time.Duration(time.Now().UnixNano()%int64(2*span)) - span
+	jittered := delay + offset
+	if jittered <= 0 {
+		return delay
+	}
+	return jittered
+}
 
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
@@ -150,9 +187,13 @@ func runInnerLoop(
 
 			compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
 			if compactErr != nil {
+				compactErr = WithErrorStack(compactErr)
 				slog.Error("Pre-LLM compaction failed", "error", compactErr)
 				compactionSpan.AddField("error", true)
 				compactionSpan.AddField("error_message", compactErr.Error())
+				if stack := ErrorStack(compactErr); stack != "" {
+					compactionSpan.AddField("error_stack", stack)
+				}
 				compactionSpan.End()
 				stream.Push(NewCompactionEndEvent(CompactionInfo{
 					Auto:    true,
@@ -194,9 +235,13 @@ func runInnerLoop(
 				}))
 				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
 				if compactErr != nil {
+					compactErr = WithErrorStack(compactErr)
 					slog.Error("Compaction recovery failed", "error", compactErr)
 					compactionSpan.AddField("error", true)
 					compactionSpan.AddField("error_message", compactErr.Error())
+					if stack := ErrorStack(compactErr); stack != "" {
+						compactionSpan.AddField("error_stack", stack)
+					}
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
@@ -220,6 +265,13 @@ func runInnerLoop(
 			}
 
 			slog.Error("Error streaming response", "error", err)
+			traceFields := []traceevent.Field{
+				{Key: "error_message", Value: err.Error()},
+			}
+			if stack := ErrorStack(err); stack != "" {
+				traceFields = append(traceFields, traceevent.Field{Key: "error_stack", Value: stack})
+			}
+			traceevent.Log(ctx, traceevent.CategoryEvent, "run_loop_error", traceFields...)
 			stream.Push(NewErrorEvent(err))
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
@@ -393,16 +445,35 @@ func streamAssistantResponseWithRetry(
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := baseDelay * time.Duration(1<<(attempt-1))
+			if llm.IsRateLimit(lastErr) {
+				// Respect provider backoff hint when available.
+				retryAfter := llm.RetryAfter(lastErr)
+				if retryAfter > delay {
+					delay = retryAfter
+				}
+				if delay < 2*time.Second {
+					delay = 2 * time.Second
+				}
+				delay = jitterDelay(delay)
+			}
 			slog.Info("[Loop] Retrying LLM call",
 				"attempt", attempt,
 				"maxRetries", maxRetries,
-				"delay", delay)
+				"delay", delay,
+				"rateLimit", llm.IsRateLimit(lastErr))
 
 			select {
 			case <-time.After(delay):
 				// Continue with retry
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				if lastErr != nil {
+					return nil, lastErr
+				}
+				cause := context.Cause(ctx)
+				if cause == nil {
+					cause = ctx.Err()
+				}
+				return nil, WithErrorStack(cause)
 			}
 		}
 
@@ -413,15 +484,18 @@ func streamAssistantResponseWithRetry(
 		}
 
 		if llm.IsContextLengthExceeded(err) {
-			return nil, err
+			return nil, WithErrorStack(err)
 		}
 
-		lastErr = err
+		lastErr = WithErrorStack(err)
 		slog.Error("[Loop] LLM call failed", "attempt", attempt, "maxRetries", maxRetries, "error", err)
 
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, lastErr
+		}
+		if !shouldRetryLLMError(lastErr) {
+			return nil, lastErr
 		}
 	}
 
@@ -634,6 +708,13 @@ func streamAssistantResponse(
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
 			llmSpan.AddField("stop_reason", e.StopReason)
+			elapsed := time.Since(llmStart)
+			if elapsed > 0 {
+				seconds := elapsed.Seconds()
+				llmSpan.AddField("input_tokens_per_sec", float64(e.Usage.InputTokens)/seconds)
+				llmSpan.AddField("output_tokens_per_sec", float64(e.Usage.OutputTokens)/seconds)
+				llmSpan.AddField("total_tokens_per_sec", float64(e.Usage.TotalTokens)/seconds)
+			}
 			if firstTokenLatency > 0 {
 				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
@@ -688,11 +769,15 @@ func streamAssistantResponse(
 			return &finalMessage, nil
 
 		case llm.LLMErrorEvent:
-			llmSpan.AddField("error", e.Error.Error())
+			wrappedErr := WithErrorStack(e.Error)
+			llmSpan.AddField("error", wrappedErr.Error())
+			if stack := ErrorStack(wrappedErr); stack != "" {
+				llmSpan.AddField("error_stack", stack)
+			}
 			if firstTokenLatency > 0 {
 				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
-			return nil, e.Error
+			return nil, wrappedErr
 		}
 	}
 

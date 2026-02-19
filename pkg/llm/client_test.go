@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStreamLLMEmitsDoneOnBareDoneFrame(t *testing.T) {
@@ -98,5 +99,18 @@ func TestStreamLLMHandlesLargeSSELine(t *testing.T) {
 
 	if len(doneContent) != len(largeText) {
 		t.Fatalf("unexpected done content length: got %d want %d", len(doneContent), len(largeText))
+	}
+}
+
+func TestParseRetryAfterHeader(t *testing.T) {
+	if got := parseRetryAfterHeader("5"); got != 5*time.Second {
+		t.Fatalf("expected 5s from integer header, got %v", got)
+	}
+	future := time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfterHeader(future); got <= 0 {
+		t.Fatalf("expected positive duration from http-date header, got %v", got)
+	}
+	if got := parseRetryAfterHeader("invalid"); got != 0 {
+		t.Fatalf("expected 0 from invalid header, got %v", got)
 	}
 }

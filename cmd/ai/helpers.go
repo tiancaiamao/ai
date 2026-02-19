@@ -260,8 +260,12 @@ func runDetachedTraceSpan(
 
 	err := run(span.Context(), span)
 	if err != nil {
+		err = agent.WithErrorStack(err)
 		span.AddField("error", true)
 		span.AddField("error_message", err.Error())
+		if stack := agent.ErrorStack(err); stack != "" {
+			span.AddField("error_stack", stack)
+		}
 	}
 	return err
 }

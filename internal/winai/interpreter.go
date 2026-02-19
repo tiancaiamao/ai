@@ -129,6 +129,7 @@ type agentEvent struct {
 	Type                  string                 `json:"type"`
 	EventAt               int64                  `json:"eventAt,omitempty"`
 	Error                 string                 `json:"error,omitempty"`
+	ErrorStack            string                 `json:"errorStack,omitempty"`
 	Message               *agent.AgentMessage    `json:"message,omitempty"`
 	Messages              []agent.AgentMessage   `json:"messages,omitempty"`
 	ToolResults           []agent.AgentMessage   `json:"toolResults,omitempty"`
@@ -2248,11 +2249,37 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 		return
 	}
 
+	rateLine := "  token-rate: unavailable"
+	recentLine := "  token-rate-recent: unavailable"
+	lastLine := "  token-rate-last: unavailable"
+	if stats.TokenRate != nil {
+		rateLine = fmt.Sprintf("  token-rate: active in %.1f/s, out %.1f/s, total %.1f/s | wall total %.1f/s",
+			stats.TokenRate.ActiveInputPerSec,
+			stats.TokenRate.ActiveOutputPerSec,
+			stats.TokenRate.ActiveTotalPerSec,
+			stats.TokenRate.WallTotalPerSec,
+		)
+		recentLine = fmt.Sprintf("  token-rate-recent(%ds): in %.1f/s, out %.1f/s, total %.1f/s",
+			stats.TokenRate.RecentWindowSeconds,
+			stats.TokenRate.RecentInputPerSec,
+			stats.TokenRate.RecentOutputPerSec,
+			stats.TokenRate.RecentTotalPerSec,
+		)
+		lastLine = fmt.Sprintf("  token-rate-last: in %.1f/s, out %.1f/s, total %.1f/s",
+			stats.TokenRate.LastInputPerSec,
+			stats.TokenRate.LastOutputPerSec,
+			stats.TokenRate.LastTotalPerSec,
+		)
+	}
+
 	p.writeStatus(fmt.Sprintf(`Usage:
   session: %s
   messages: %d (user %d, assistant %d)
   tools: %d calls, %d results
   tokens: in %d, out %d, cache read %d, cache write %d, total %d
+%s
+%s
+%s
   cost: %.4f`,
 		orUnknown(stats.SessionID),
 		stats.TotalMessages,
@@ -2265,6 +2292,9 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 		stats.Tokens.CacheRead,
 		stats.Tokens.CacheWrite,
 		stats.Tokens.Total,
+		rateLine,
+		recentLine,
+		lastLine,
 		stats.Cost,
 	))
 }

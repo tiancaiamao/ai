@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // APIError represents a generic non-200 API response.
@@ -43,8 +44,36 @@ func (e *ContextLengthExceededError) Error() string {
 	return "context length exceeded: " + msg
 }
 
+// RateLimitError indicates request throttling by provider.
+type RateLimitError struct {
+	StatusCode int
+	Message    string
+	Body       string
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		msg = "rate limit exceeded"
+	}
+	if e.RetryAfter > 0 {
+		msg = fmt.Sprintf("%s (retry after %s)", msg, e.RetryAfter.Round(time.Second))
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("API error (%d): %s", e.StatusCode, msg)
+	}
+	return "API error: " + msg
+}
+
 // ClassifyAPIError converts an API response payload into a typed error.
 func ClassifyAPIError(statusCode int, payload string) error {
+	return ClassifyAPIErrorWithRetryAfter(statusCode, payload, 0)
+}
+
+// ClassifyAPIErrorWithRetryAfter converts an API response payload into a typed error,
+// preserving Retry-After when available.
+func ClassifyAPIErrorWithRetryAfter(statusCode int, payload string, retryAfter time.Duration) error {
 	payload = strings.TrimSpace(payload)
 	message := extractAPIErrorMessage(payload)
 	if message == "" {
@@ -59,6 +88,15 @@ func ClassifyAPIError(statusCode int, payload string) error {
 			StatusCode: statusCode,
 			Message:    message,
 			Body:       payload,
+		}
+	}
+
+	if statusCode == 429 || looksLikeRateLimit(message) || looksLikeRateLimit(payload) {
+		return &RateLimitError{
+			StatusCode: statusCode,
+			Message:    message,
+			Body:       payload,
+			RetryAfter: retryAfter,
 		}
 	}
 
@@ -79,6 +117,30 @@ func IsContextLengthExceeded(err error) bool {
 		return true
 	}
 	return looksLikeContextLengthExceeded(err.Error())
+}
+
+// IsRateLimit reports whether an error is due to provider throttling.
+func IsRateLimit(err error) bool {
+	if err == nil {
+		return false
+	}
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return true
+	}
+	return looksLikeRateLimit(err.Error())
+}
+
+// RetryAfter returns provider suggested retry delay for rate-limit errors.
+func RetryAfter(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return rle.RetryAfter
+	}
+	return 0
 }
 
 func extractAPIErrorMessage(payload string) string {
@@ -142,6 +204,27 @@ func looksLikeContextLengthExceeded(s string) bool {
 		"context_window_exceeded",
 		"contextwindowexceeded",
 		"finishreasonlength",
+	}
+	for _, needle := range needles {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeRateLimit(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return false
+	}
+	needles := []string{
+		"rate limit",
+		"too many requests",
+		"status code: 429",
+		"api error (429)",
+		"throttle",
+		"quota exceeded",
 	}
 	for _, needle := range needles {
 		if strings.Contains(s, needle) {

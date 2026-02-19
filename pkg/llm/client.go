@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -116,7 +118,8 @@ func StreamLLM(
 				traceevent.Field{Key: "http_error", Value: true},
 				traceevent.Field{Key: "json", Value: string(body)},
 			)
-			stream.Push(LLMErrorEvent{Error: ClassifyAPIError(resp.StatusCode, string(body))})
+			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
 			return
 		}
 
@@ -265,4 +268,21 @@ func StreamLLM(
 	}()
 
 	return stream
+}
+
+func parseRetryAfterHeader(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		d := time.Until(at)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
 }

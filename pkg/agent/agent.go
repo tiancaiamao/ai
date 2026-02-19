@@ -170,6 +170,8 @@ func (a *Agent) Prompt(message string) error {
 // processPrompt handles a single prompt (shared by Prompt and follow-up).
 func (a *Agent) processPrompt(ctx context.Context, message string) {
 	hadError := false
+	promptErrorMessage := ""
+	promptErrorStack := ""
 
 	a.rotateTraceForPrompt(ctx)
 	defer a.finalizeTraceForPrompt(ctx)
@@ -228,6 +230,14 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 				traceevent.Field{Key: "tool_call_id", Value: event.Value.ToolCallID},
 			)
 		}
+		if event.Value.Type == EventError {
+			if event.Value.Error != "" {
+				traceFields = append(traceFields, traceevent.Field{Key: "error_message", Value: event.Value.Error})
+			}
+			if event.Value.ErrorStack != "" {
+				traceFields = append(traceFields, traceevent.Field{Key: "error_stack", Value: event.Value.ErrorStack})
+			}
+		}
 
 		traceevent.Log(ctx, traceevent.CategoryEvent, event.Value.Type, traceFields...)
 
@@ -258,6 +268,12 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			}
 		case EventError:
 			hadError = true
+			if event.Value.Error != "" {
+				promptErrorMessage = event.Value.Error
+			}
+			if event.Value.ErrorStack != "" {
+				promptErrorStack = event.Value.ErrorStack
+			}
 		case EventTurnEnd:
 			if event.Value.Message == nil {
 				hadError = true
@@ -290,7 +306,13 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	}
 	span.AddField("error", hadError)
 	if hadError {
-		span.AddField("error_message", errors.New("prompt failed").Error())
+		if promptErrorMessage == "" {
+			promptErrorMessage = "prompt failed"
+		}
+		span.AddField("error_message", promptErrorMessage)
+		if promptErrorStack != "" {
+			span.AddField("error_stack", promptErrorStack)
+		}
 	}
 
 	slog.Info("[Agent] Prompt completed")
@@ -563,9 +585,13 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 			Trigger: "threshold",
 		}))
 		if err := a.Compact(a.compactor); err != nil {
+			err = WithErrorStack(err)
 			slog.Error("[Agent] Auto-compact failed", "error", err)
 			compactSpan.AddField("error", true)
 			compactSpan.AddField("error_message", err.Error())
+			if stack := ErrorStack(err); stack != "" {
+				compactSpan.AddField("error_stack", stack)
+			}
 			compactSpan.End()
 			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
 				Auto:    true,
