@@ -78,6 +78,8 @@ type Agent struct {
 	toolCallCutoff  int
 	toolSummaryMode string
 	thinkingLevel   string
+	maxLLMRetries   int
+	retryBaseDelay  time.Duration
 	maxTurns        int // Maximum conversation turns (0 = unlimited)
 	traceBuf        *traceevent.TraceBuf
 	traceStop       chan struct{}
@@ -120,6 +122,8 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		toolCallCutoff:  10,
 		toolSummaryMode: "llm",
 		thinkingLevel:   "high",
+		maxLLMRetries:   defaultLLMMaxRetries,
+		retryBaseDelay:  defaultRetryBaseDelay,
 		traceBuf:        traceBuf,
 		traceStop:       make(chan struct{}),
 		traceDone:       make(chan struct{}),
@@ -198,6 +202,8 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		ToolCallCutoff:      a.toolCallCutoff,
 		ToolSummaryStrategy: a.toolSummaryMode,
 		ThinkingLevel:       a.thinkingLevel,
+		MaxLLMRetries:       a.maxLLMRetries,
+		RetryBaseDelay:      a.retryBaseDelay,
 		MaxTurns:            a.maxTurns,
 	}
 
@@ -534,6 +540,37 @@ func (a *Agent) SetToolSummaryStrategy(strategy string) {
 // Accepted values: off, minimal, low, medium, high, xhigh.
 func (a *Agent) SetThinkingLevel(level string) {
 	a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
+}
+
+// SetAutoRetry enables/disables LLM automatic retry behavior.
+func (a *Agent) SetAutoRetry(enabled bool) {
+	if enabled {
+		if a.maxLLMRetries <= 0 {
+			a.maxLLMRetries = defaultLLMMaxRetries
+		}
+		if a.retryBaseDelay <= 0 {
+			a.retryBaseDelay = defaultRetryBaseDelay
+		}
+		return
+	}
+	a.maxLLMRetries = 0
+}
+
+// AutoRetryEnabled reports whether LLM auto retry is currently enabled.
+func (a *Agent) AutoRetryEnabled() bool {
+	return a.maxLLMRetries > 0
+}
+
+// SetLLMRetryConfig configures LLM retry count and base delay.
+func (a *Agent) SetLLMRetryConfig(maxRetries int, baseDelay time.Duration) {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if baseDelay <= 0 {
+		baseDelay = defaultRetryBaseDelay
+	}
+	a.maxLLMRetries = maxRetries
+	a.retryBaseDelay = baseDelay
 }
 
 // SetMaxTurns sets the maximum number of conversation turns.

@@ -229,6 +229,9 @@ var eventNameToBit = map[string]int{
 	"llm_response_json":               35,
 	"tool_summary":                    36,
 	"tool_summary_batch":              37,
+	"llm_retry_scheduled":             38,
+	"llm_retry_aborted":               39,
+	"llm_retry_exhausted":             40,
 }
 
 var defaultEnabledEvents = []string{
@@ -258,6 +261,9 @@ var defaultEnabledEvents = []string{
 	"tool_call_invalid_args",
 	"assistant_tool_tag_parse_failed",
 	"llm_request_snapshot",
+	"llm_retry_scheduled",
+	"llm_retry_aborted",
+	"llm_retry_exhausted",
 	"tool_summary",
 	"tool_summary_batch",
 	// Default log events
@@ -276,6 +282,9 @@ var eventSelectorGroups = map[string][]string{
 		"llm_request_snapshot",
 		"llm_request_json",
 		"llm_response_json",
+		"llm_retry_scheduled",
+		"llm_retry_aborted",
+		"llm_retry_exhausted",
 	},
 	"tool": {
 		"tool_execution",

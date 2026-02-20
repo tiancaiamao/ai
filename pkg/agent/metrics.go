@@ -26,6 +26,11 @@ type Metrics struct {
 	cachedPromptStats  *promptStatsCache
 	cachedMessageStats *messageStatsCache
 	cacheValid         bool
+
+	// Incremental aggregation state
+	lastAggregatedCount int       // Number of events aggregated last time
+	lastAggregatedTime  time.Time // Timestamp of last aggregated event
+	bufferResetDetected bool      // Whether buffer was flushed/reset
 }
 
 // toolStatsCache holds aggregated tool statistics
@@ -47,6 +52,20 @@ type llmStatsCache struct {
 	CacheRead              int64
 	CacheWrite             int64
 	ErrorCount             int64
+	RetryCount             int64
+	ErrorRateLimitCount    int64
+	ErrorTimeoutCount      int64
+	ErrorContextLimitCount int64
+	ErrorNetworkCount      int64
+	ErrorServerCount       int64
+	ErrorClientCount       int64
+	ErrorCanceledCount     int64
+	ErrorUnknownCount      int64
+	LastErrorType          string
+	LastErrorMessage       string
+	LastErrorStatusCode    int64
+	LastErrorAtNs          int64
+	LastRetryAfterNs       int64
 	TotalDurationNs        int64
 	FirstTokenTotalNs      int64
 	LastEndNs              int64
@@ -94,47 +113,104 @@ type messageStatsCache struct {
 // NewMetrics creates a new metrics collector attached to a trace buffer.
 func NewMetrics(buf *traceevent.TraceBuf) *Metrics {
 	return &Metrics{
-		buf:                buf,
-		sessionStart:       time.Now(),
-		flushInterval:      5 * time.Second,
-		cachedToolStats:    make(map[string]*toolStatsCache),
-		cachedLLMStats:     &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())},
-		cachedPromptStats:  &promptStatsCache{},
-		cachedMessageStats: &messageStatsCache{},
+		buf:                 buf,
+		sessionStart:        time.Now(),
+		flushInterval:       5 * time.Second,
+		cachedToolStats:     make(map[string]*toolStatsCache),
+		cachedLLMStats:      &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())},
+		cachedPromptStats:   &promptStatsCache{},
+		cachedMessageStats:  &messageStatsCache{},
+		lastAggregatedCount: 0,
+		lastAggregatedTime:  time.Time{},
+		bufferResetDetected: false,
 	}
 }
 
 // InvalidateCache marks the cached aggregations as stale.
+// Also detects if the trace buffer was flushed/reset.
 func (m *Metrics) InvalidateCache() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Keep invalidation O(1) because it runs for every trace event.
+	// Buffer reset detection happens in refreshAggregations where we already need a snapshot.
 	m.cacheValid = false
 }
 
 // refreshAggregations recomputes metrics from trace events if cache is stale.
+// Uses incremental aggregation: only processes new events since last refresh.
 func (m *Metrics) refreshAggregations() {
+	m.mu.RLock()
+	if m.cacheValid {
+		m.mu.RUnlock()
+		return
+	}
+	m.mu.RUnlock()
+
+	// Snapshot outside the metrics lock to avoid lock-order contention with trace writes.
+	events := m.buf.Snapshot()
+	currentCount := len(events)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	if m.cacheValid {
 		return
 	}
 
-	// Reset caches
-	m.cachedToolStats = make(map[string]*toolStatsCache)
-	m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
-	m.cachedPromptStats = &promptStatsCache{}
-	m.cachedMessageStats = &messageStatsCache{}
-
-	// Aggregate from trace events
-	events := m.buf.Snapshot()
-	for _, event := range events {
-		m.aggregateEvent(event)
+	var newestEventTime time.Time
+	if currentCount > 0 {
+		newestEventTime = events[currentCount-1].Timestamp
 	}
-	m.finalizeLLMWindowStats()
+	newestWentBackward := !newestEventTime.IsZero() && !m.lastAggregatedTime.IsZero() && newestEventTime.Before(m.lastAggregatedTime)
+	// If count is unchanged but newest timestamp advanced, events were overwritten in-place.
+	// This happens when TraceBuf runs as a ring buffer after reaching maxEvents.
+	bufferOverwroteEvents := currentCount == m.lastAggregatedCount &&
+		!newestEventTime.IsZero() &&
+		!m.lastAggregatedTime.IsZero() &&
+		newestEventTime.After(m.lastAggregatedTime)
 
+	// Detect buffer reset/overwrite and fall back to full re-aggregation.
+	needsFullAggregation := m.bufferResetDetected ||
+		currentCount < m.lastAggregatedCount ||
+		newestWentBackward ||
+		bufferOverwroteEvents
+
+	if needsFullAggregation {
+		// Full aggregation: reset all caches and process all events
+		m.cachedToolStats = make(map[string]*toolStatsCache)
+		m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
+		m.cachedPromptStats = &promptStatsCache{}
+		m.cachedMessageStats = &messageStatsCache{}
+
+		for _, event := range events {
+			m.aggregateEvent(event)
+		}
+	} else {
+		// Incremental aggregation: only process new events
+		startIdx := m.lastAggregatedCount
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		// Process only the new events
+		for i := startIdx; i < currentCount; i++ {
+			m.aggregateEvent(events[i])
+		}
+	}
+
+	// Update incremental state
+	m.finalizeLLMWindowStats()
 	m.cacheValid = true
 	m.lastFlush = time.Now()
+	m.lastAggregatedCount = currentCount
+	m.bufferResetDetected = false
+
+	// Track the timestamp of the last aggregated event
+	if !newestEventTime.IsZero() {
+		m.lastAggregatedTime = newestEventTime
+	} else {
+		m.lastAggregatedTime = time.Time{}
+	}
 }
 
 func (m *Metrics) finalizeLLMWindowStats() {
@@ -142,6 +218,12 @@ func (m *Metrics) finalizeLLMWindowStats() {
 	if stats == nil {
 		return
 	}
+	stats.RecentWindowStartNs = 0
+	stats.RecentWindowEndNs = 0
+	stats.RecentWindowInput = 0
+	stats.RecentWindowOutput = 0
+	stats.RecentWindowTotal = 0
+	stats.RecentWindowDurationNs = 0
 	if stats.RecentWindowSeconds <= 0 {
 		stats.RecentWindowSeconds = int64(defaultLLMRecentWindow.Seconds())
 	}
@@ -152,9 +234,13 @@ func (m *Metrics) finalizeLLMWindowStats() {
 	windowNs := stats.RecentWindowSeconds * int64(time.Second)
 	cutoffNs := stats.LastEndNs - windowNs
 	firstInWindow := int64(0)
-	for _, sample := range stats.samples {
+	keepIdx := len(stats.samples)
+	for i, sample := range stats.samples {
 		if sample.endNs < cutoffNs {
 			continue
+		}
+		if keepIdx == len(stats.samples) {
+			keepIdx = i
 		}
 		if firstInWindow == 0 {
 			firstInWindow = sample.endNs
@@ -162,6 +248,10 @@ func (m *Metrics) finalizeLLMWindowStats() {
 		stats.RecentWindowInput += sample.inputTokens
 		stats.RecentWindowOutput += sample.outputTokens
 		stats.RecentWindowTotal += sample.totalTokens
+	}
+	if keepIdx > 0 && keepIdx < len(stats.samples) {
+		copy(stats.samples, stats.samples[keepIdx:])
+		stats.samples = stats.samples[:len(stats.samples)-keepIdx]
 	}
 	if firstInWindow == 0 {
 		return
@@ -224,6 +314,9 @@ func (m *Metrics) aggregateLLM(event traceevent.TraceEvent) {
 		m.cachedLLMStats.LastInputTokens = inputTokens
 		m.cachedLLMStats.LastOutputTokens = outputTokens
 		m.cachedLLMStats.LastTotalTokens = totalTokens
+		if traceFieldInt64(event.Fields, "attempt") > 0 {
+			m.cachedLLMStats.RetryCount++
+		}
 		m.cachedLLMStats.samples = append(m.cachedLLMStats.samples, llmTokenSample{
 			endNs:        event.Timestamp.UnixNano(),
 			inputTokens:  inputTokens,
@@ -237,8 +330,37 @@ func (m *Metrics) aggregateLLM(event traceevent.TraceEvent) {
 			m.cachedLLMStats.LastFirstTokenNs = firstTokenMs * 1_000_000
 		}
 
-		if traceFieldString(event.Fields, "error") != "" {
+		if errMessage := traceFieldString(event.Fields, "error"); errMessage != "" {
 			m.cachedLLMStats.ErrorCount++
+			errType := normalizeLLMErrorType(traceFieldString(event.Fields, "error_type"))
+			if errType == llmErrorTypeUnknown {
+				errType = inferLLMErrorTypeFromMessage(errMessage)
+			}
+			switch errType {
+			case llmErrorTypeRateLimit:
+				m.cachedLLMStats.ErrorRateLimitCount++
+			case llmErrorTypeTimeout:
+				m.cachedLLMStats.ErrorTimeoutCount++
+			case llmErrorTypeContextLimit:
+				m.cachedLLMStats.ErrorContextLimitCount++
+			case llmErrorTypeNetwork:
+				m.cachedLLMStats.ErrorNetworkCount++
+			case llmErrorTypeServer:
+				m.cachedLLMStats.ErrorServerCount++
+			case llmErrorTypeClient:
+				m.cachedLLMStats.ErrorClientCount++
+			case llmErrorTypeCanceled:
+				m.cachedLLMStats.ErrorCanceledCount++
+			default:
+				m.cachedLLMStats.ErrorUnknownCount++
+			}
+			m.cachedLLMStats.LastErrorType = errType
+			m.cachedLLMStats.LastErrorMessage = errMessage
+			m.cachedLLMStats.LastErrorStatusCode = traceFieldInt64(event.Fields, "error_status_code")
+			m.cachedLLMStats.LastErrorAtNs = event.Timestamp.UnixNano()
+			if retryAfterMs := traceFieldInt64(event.Fields, "retry_after_ms"); retryAfterMs > 0 {
+				m.cachedLLMStats.LastRetryAfterNs = retryAfterMs * 1_000_000
+			}
 		}
 	}
 	if event.Phase == traceevent.PhaseBegin {
@@ -379,6 +501,20 @@ func (m *Metrics) llmMetricsSnapshotLocked() LLMMetricsSnapshot {
 		CacheRead:                m.cachedLLMStats.CacheRead,
 		CacheWrite:               m.cachedLLMStats.CacheWrite,
 		ErrorCount:               m.cachedLLMStats.ErrorCount,
+		RetryCount:               m.cachedLLMStats.RetryCount,
+		ErrorRateLimitCount:      m.cachedLLMStats.ErrorRateLimitCount,
+		ErrorTimeoutCount:        m.cachedLLMStats.ErrorTimeoutCount,
+		ErrorContextLimitCount:   m.cachedLLMStats.ErrorContextLimitCount,
+		ErrorNetworkCount:        m.cachedLLMStats.ErrorNetworkCount,
+		ErrorServerCount:         m.cachedLLMStats.ErrorServerCount,
+		ErrorClientCount:         m.cachedLLMStats.ErrorClientCount,
+		ErrorCanceledCount:       m.cachedLLMStats.ErrorCanceledCount,
+		ErrorUnknownCount:        m.cachedLLMStats.ErrorUnknownCount,
+		LastErrorType:            m.cachedLLMStats.LastErrorType,
+		LastErrorMessage:         m.cachedLLMStats.LastErrorMessage,
+		LastErrorStatusCode:      int(m.cachedLLMStats.LastErrorStatusCode),
+		LastErrorAt:              timeFromNs(m.cachedLLMStats.LastErrorAtNs),
+		LastRetryAfter:           time.Duration(m.cachedLLMStats.LastRetryAfterNs),
 		SuccessRate:              successRate,
 		AvgTokensPerCall:         avgTokens,
 		TotalDuration:            time.Duration(m.cachedLLMStats.TotalDurationNs),
@@ -519,6 +655,11 @@ func (m *Metrics) Reset() {
 	m.cachedMessageStats = &messageStatsCache{}
 	m.cacheValid = false
 	m.sessionStart = time.Now()
+
+	// Reset incremental aggregation state
+	m.lastAggregatedCount = 0
+	m.lastAggregatedTime = time.Time{}
+	m.bufferResetDetected = false
 }
 
 // RecordTraceEvent records a trace event to the buffer and invalidates cache.
@@ -663,6 +804,20 @@ type LLMMetricsSnapshot struct {
 	CacheRead                int64         `json:"cacheRead"`
 	CacheWrite               int64         `json:"cacheWrite"`
 	ErrorCount               int64         `json:"errorCount"`
+	RetryCount               int64         `json:"retryCount"`
+	ErrorRateLimitCount      int64         `json:"errorRateLimitCount"`
+	ErrorTimeoutCount        int64         `json:"errorTimeoutCount"`
+	ErrorContextLimitCount   int64         `json:"errorContextLimitCount"`
+	ErrorNetworkCount        int64         `json:"errorNetworkCount"`
+	ErrorServerCount         int64         `json:"errorServerCount"`
+	ErrorClientCount         int64         `json:"errorClientCount"`
+	ErrorCanceledCount       int64         `json:"errorCanceledCount"`
+	ErrorUnknownCount        int64         `json:"errorUnknownCount"`
+	LastErrorType            string        `json:"lastErrorType"`
+	LastErrorMessage         string        `json:"lastErrorMessage"`
+	LastErrorStatusCode      int           `json:"lastErrorStatusCode"`
+	LastErrorAt              time.Time     `json:"lastErrorAt"`
+	LastRetryAfter           time.Duration `json:"lastRetryAfter"`
 	SuccessRate              float64       `json:"successRate"`
 	AvgTokensPerCall         int64         `json:"avgTokensPerCall"`
 	TotalDuration            time.Duration `json:"totalDuration"`

@@ -182,6 +182,24 @@ func TestAgentContext(t *testing.T) {
 	}
 }
 
+func TestAgentAutoRetryDefaultsAndToggle(t *testing.T) {
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+
+	if !ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry enabled by default")
+	}
+
+	ag.SetAutoRetry(false)
+	if ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry disabled")
+	}
+
+	ag.SetAutoRetry(true)
+	if !ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry re-enabled")
+	}
+}
+
 // TestAgentWithTools tests adding tools to agent.
 func TestAgentWithTools(t *testing.T) {
 	agent := NewAgent(llm.Model{}, "test-key", "test")

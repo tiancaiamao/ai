@@ -22,8 +22,8 @@ import (
 const (
 	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
 	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
-	defaultLoopMaxConsecutiveToolCalls = 6
-	defaultLoopMaxToolCallsPerName     = 60
+	defaultLoopMaxConsecutiveToolCalls = 0               // Disabled (was 6)
+	defaultLoopMaxToolCallsPerName     = 0               // Disabled (was 60)
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -86,6 +86,66 @@ func jitterDelay(delay time.Duration) time.Duration {
 		return delay
 	}
 	return jittered
+}
+
+type llmErrorMeta struct {
+	ErrorType  string
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func classifyLLMError(err error) llmErrorMeta {
+	meta := llmErrorMeta{ErrorType: llmErrorTypeUnknown}
+	if err == nil {
+		return meta
+	}
+
+	var rateErr *llm.RateLimitError
+	if errors.As(err, &rateErr) {
+		meta.ErrorType = llmErrorTypeRateLimit
+		meta.StatusCode = rateErr.StatusCode
+		meta.RetryAfter = rateErr.RetryAfter
+		return meta
+	}
+
+	var ctxErr *llm.ContextLengthExceededError
+	if errors.As(err, &ctxErr) {
+		meta.ErrorType = llmErrorTypeContextLimit
+		meta.StatusCode = ctxErr.StatusCode
+		return meta
+	}
+
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		meta.StatusCode = apiErr.StatusCode
+		switch {
+		case apiErr.StatusCode >= 500:
+			meta.ErrorType = llmErrorTypeServer
+		case apiErr.StatusCode >= 400:
+			meta.ErrorType = llmErrorTypeClient
+		}
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		meta.ErrorType = llmErrorTypeTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		meta.ErrorType = llmErrorTypeCanceled
+	}
+	if llm.IsRateLimit(err) {
+		meta.ErrorType = llmErrorTypeRateLimit
+		if meta.RetryAfter <= 0 {
+			meta.RetryAfter = llm.RetryAfter(err)
+		}
+	}
+	if llm.IsContextLengthExceeded(err) {
+		meta.ErrorType = llmErrorTypeContextLimit
+	}
+
+	if meta.ErrorType == llmErrorTypeUnknown {
+		meta.ErrorType = inferLLMErrorTypeFromMessage(err.Error())
+	}
+	return meta
 }
 
 // RunLoop starts a new agent loop with the given prompts.
@@ -456,6 +516,22 @@ func streamAssistantResponseWithRetry(
 				}
 				delay = jitterDelay(delay)
 			}
+			meta := classifyLLMError(lastErr)
+			retryFields := []traceevent.Field{
+				{Key: "attempt", Value: attempt},
+				{Key: "max_retries", Value: maxRetries},
+				{Key: "delay_ms", Value: delay.Milliseconds()},
+				{Key: "error_type", Value: meta.ErrorType},
+				{Key: "error_message", Value: lastErr.Error()},
+			}
+			if meta.StatusCode > 0 {
+				retryFields = append(retryFields, traceevent.Field{Key: "error_status_code", Value: meta.StatusCode})
+			}
+			if meta.RetryAfter > 0 {
+				retryFields = append(retryFields, traceevent.Field{Key: "retry_after_ms", Value: meta.RetryAfter.Milliseconds()})
+			}
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_scheduled", retryFields...)
+
 			slog.Info("[Loop] Retrying LLM call",
 				"attempt", attempt,
 				"maxRetries", maxRetries,
@@ -466,6 +542,11 @@ func streamAssistantResponseWithRetry(
 			case <-time.After(delay):
 				// Continue with retry
 			case <-ctx.Done():
+				traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+					traceevent.Field{Key: "attempt", Value: attempt},
+					traceevent.Field{Key: "max_retries", Value: maxRetries},
+					traceevent.Field{Key: "reason", Value: "context_done"},
+				)
 				if lastErr != nil {
 					return nil, lastErr
 				}
@@ -492,14 +573,39 @@ func streamAssistantResponseWithRetry(
 
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+				traceevent.Field{Key: "attempt", Value: attempt},
+				traceevent.Field{Key: "max_retries", Value: maxRetries},
+				traceevent.Field{Key: "reason", Value: "context_done_after_error"},
+			)
 			return nil, lastErr
 		}
 		if !shouldRetryLLMError(lastErr) {
+			meta := classifyLLMError(lastErr)
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+				traceevent.Field{Key: "attempt", Value: attempt},
+				traceevent.Field{Key: "max_retries", Value: maxRetries},
+				traceevent.Field{Key: "reason", Value: "non_retryable"},
+				traceevent.Field{Key: "error_type", Value: meta.ErrorType},
+				traceevent.Field{Key: "error_message", Value: lastErr.Error()},
+			)
 			return nil, lastErr
 		}
 	}
 
 	// All retries exhausted
+	if lastErr != nil {
+		meta := classifyLLMError(lastErr)
+		exhaustedFields := []traceevent.Field{
+			{Key: "max_retries", Value: maxRetries},
+			{Key: "error_type", Value: meta.ErrorType},
+			{Key: "error_message", Value: lastErr.Error()},
+		}
+		if meta.StatusCode > 0 {
+			exhaustedFields = append(exhaustedFields, traceevent.Field{Key: "error_status_code", Value: meta.StatusCode})
+		}
+		traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_exhausted", exhaustedFields...)
+	}
 	return nil, lastErr
 }
 
@@ -547,6 +653,8 @@ func streamAssistantResponse(
 		traceevent.Field{Key: "model", Value: config.Model.ID},
 		traceevent.Field{Key: "provider", Value: config.Model.Provider},
 		traceevent.Field{Key: "api", Value: config.Model.API},
+		traceevent.Field{Key: "attempt", Value: llmAttemptFromContext(ctx)},
+		traceevent.Field{Key: "timeout_ms", Value: llmTimeout.Milliseconds()},
 	)
 	defer llmSpan.End()
 	firstTokenRecorded := false
@@ -769,8 +877,24 @@ func streamAssistantResponse(
 			return &finalMessage, nil
 
 		case llm.LLMErrorEvent:
-			wrappedErr := WithErrorStack(e.Error)
+			errVal := e.Error
+			if errVal == nil {
+				errVal = errors.New("unknown llm error")
+			}
+			if errors.Is(errVal, context.DeadlineExceeded) {
+				errVal = fmt.Errorf("llm request timeout after %s: %w", llmTimeout, errVal)
+			}
+			wrappedErr := WithErrorStack(errVal)
+			meta := classifyLLMError(wrappedErr)
 			llmSpan.AddField("error", wrappedErr.Error())
+			llmSpan.AddField("error_type", meta.ErrorType)
+			if meta.StatusCode > 0 {
+				llmSpan.AddField("error_status_code", meta.StatusCode)
+			}
+			if meta.RetryAfter > 0 {
+				llmSpan.AddField("retry_after_ms", meta.RetryAfter.Milliseconds())
+			}
+			llmSpan.AddField("retryable", shouldRetryLLMError(wrappedErr))
 			if stack := ErrorStack(wrappedErr); stack != "" {
 				llmSpan.AddField("error_stack", stack)
 			}

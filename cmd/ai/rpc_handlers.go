@@ -969,12 +969,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.SetSetAutoRetryHandler(func(enabled bool) error {
 		slog.Info("Received set_auto_retry", "enabled", enabled)
-		return fmt.Errorf("auto-retry is not supported")
+		ag.SetAutoRetry(enabled)
+		return nil
 	})
 
 	server.SetAbortRetryHandler(func() error {
 		slog.Info("Received abort_retry")
-		return fmt.Errorf("auto-retry is not supported")
+		ag.Abort()
+		return nil
 	})
 
 	server.SetExportHTMLHandler(func(outputPath string) (string, error) {
