@@ -50,7 +50,9 @@ Create `plan.md` with:
 1. **Read spec.md** for requirements
 2. **Explore codebase** to understand existing patterns
 3. **Write plan.md**
-4. **Get user approval** before proceeding
+4. **🔷 PHASE GATE**: Present key decisions, discuss trade-offs, get explicit approval
+
+**Do NOT auto-proceed to task generation without user confirmation.**
 
 ---
 

@@ -34,6 +34,9 @@ type AgentEvent struct {
 
 	// loop guard events
 	LoopGuard *LoopGuardInfo `json:"loopGuard,omitempty"`
+
+	// tool-call recovery events
+	ToolCallRecovery *ToolCallRecoveryInfo `json:"toolCallRecovery,omitempty"`
 }
 
 // AssistantMessageEvent provides a stable, json-tagged shape for streaming updates.
@@ -61,6 +64,7 @@ const (
 	EventCompactionStart    = "compaction_start"
 	EventCompactionEnd      = "compaction_end"
 	EventLoopGuardTriggered = "loop_guard_triggered"
+	EventToolCallRecovery   = "tool_call_recovery"
 	EventError              = "error"
 )
 
@@ -199,5 +203,20 @@ func NewToolExecutionEndEvent(toolCallID, toolName string, result *AgentMessage,
 		ToolName:   toolName,
 		Result:     result,
 		IsError:    isError,
+	}
+}
+
+// ToolCallRecoveryInfo describes a malformed tool-call recovery event.
+type ToolCallRecoveryInfo struct {
+	Reason  string `json:"reason,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+}
+
+// NewToolCallRecoveryEvent creates a tool_call_recovery event.
+func NewToolCallRecoveryEvent(info ToolCallRecoveryInfo) AgentEvent {
+	return AgentEvent{
+		Type:             EventToolCallRecovery,
+		EventAt:          time.Now().UnixNano(),
+		ToolCallRecovery: &info,
 	}
 }

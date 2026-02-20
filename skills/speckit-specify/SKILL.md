@@ -44,10 +44,12 @@ Brief description of the feature.
 
 ## Process
 
-1. **Gather requirements** from user
-2. **Ask clarifying questions** if unclear
+1. **Gather requirements** from $ARGUMENTS
+2. **Ask clarifying questions** - dig deep, be curious
 3. **Write spec.md**
-4. **Get user approval** before proceeding
+4. **🔷 PHASE GATE**: Present summary, get explicit approval before proceeding
+
+**Do NOT auto-proceed to planning without user confirmation.**
 
 ---
 

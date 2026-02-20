@@ -312,6 +312,10 @@ func TestDefaultEnabledEvents(t *testing.T) {
 			t.Errorf("expected '%s' to be enabled by default", name)
 		}
 	}
+
+	if !IsEventEnabled("llm_request_json") {
+		t.Errorf("expected 'llm_request_json' to be enabled by default")
+	}
 }
 
 func TestDiscardOrFlush(t *testing.T) {

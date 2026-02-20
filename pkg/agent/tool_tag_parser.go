@@ -21,6 +21,7 @@ var (
 	argKeyValRegex = regexp.MustCompile(`(?is)<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>`)
 	argToolOpenTag = regexp.MustCompile(`(?is)<\s*(tool_call|tool|read_file|read|write|edit|bash|grep)\b[^>]*>`)
 	thinkTagRegex  = regexp.MustCompile(`(?is)</?think>`)
+	toolHintRegex  = regexp.MustCompile(`(?im)\b(?:tool|function|call)\s*[:=]\s*([a-z_]+)\b`)
 )
 
 func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
@@ -61,6 +62,9 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 
 	normalized := thinkTagRegex.ReplaceAllString(text, "")
 	if call, ok := parseArgKeyValueToolCall(normalized); ok {
+		return buildToolCallMessage(msg, normalized, []toolTagCall{call}), true
+	}
+	if call, ok := parseLooseArgKeyValueToolCall(normalized); ok {
 		return buildToolCallMessage(msg, normalized, []toolTagCall{call}), true
 	}
 	matches := toolTagRegex.FindAllStringSubmatchIndex(normalized, -1)
@@ -403,4 +407,123 @@ func ValidateToolCallArgs(toolName string, args map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func injectToolCallsFromThinking(msg AgentMessage) (AgentMessage, bool) {
+	if msg.Role != "assistant" {
+		return msg, false
+	}
+	if len(msg.ExtractToolCalls()) > 0 {
+		return msg, false
+	}
+
+	thinking := strings.TrimSpace(msg.ExtractThinking())
+	if thinking == "" || !strings.Contains(thinking, "<") {
+		return msg, false
+	}
+
+	probe := NewAssistantMessage()
+	probe.Content = []ContentBlock{
+		TextContent{Type: "text", Text: thinking},
+	}
+
+	parsed, ok := injectToolCallsFromTaggedText(probe)
+	if !ok {
+		return msg, false
+	}
+
+	calls := parsed.ExtractToolCalls()
+	if len(calls) == 0 {
+		return msg, false
+	}
+
+	updated := msg
+	updated.Content = append([]ContentBlock{}, msg.Content...)
+	for _, call := range calls {
+		updated.Content = append(updated.Content, call)
+	}
+
+	slog.Debug("[Loop] injected tool calls from thinking text", "count", len(calls))
+	return updated, true
+}
+
+func parseLooseArgKeyValueToolCall(text string) (toolTagCall, bool) {
+	matches := argKeyValRegex.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return toolTagCall{}, false
+	}
+
+	args := make(map[string]any)
+	firstStart := matches[0][0]
+	lastEnd := matches[len(matches)-1][1]
+	for _, match := range matches {
+		if len(match) < 6 {
+			continue
+		}
+		key := strings.TrimSpace(text[match[2]:match[3]])
+		value := strings.TrimSpace(text[match[4]:match[5]])
+		if key == "" {
+			continue
+		}
+		args[key] = value
+		if match[1] > lastEnd {
+			lastEnd = match[1]
+		}
+	}
+	if len(args) == 0 {
+		return toolTagCall{}, false
+	}
+
+	prefix := text[:firstStart]
+	toolName := inferToolNameFromPrefix(prefix)
+	normalizedName := normalizeToolCallName(toolName)
+	normalizedArgs := args
+	if isGenericToolName(normalizedName) {
+		if inferredName, inferredArgs, ok := inferToolFromArgs(args); ok {
+			normalizedName = inferredName
+			normalizedArgs = inferredArgs
+		}
+	}
+	if normalizedName == "" || isGenericToolName(normalizedName) {
+		return toolTagCall{}, false
+	}
+
+	coercedArgs, err := coerceToolArguments(normalizedName, normalizedArgs)
+	if err != nil {
+		return toolTagCall{}, false
+	}
+
+	return toolTagCall{
+		name:     normalizedName,
+		args:     coercedArgs,
+		start:    firstStart,
+		end:      lastEnd,
+		consumed: true,
+	}, true
+}
+
+func inferToolNameFromPrefix(prefix string) string {
+	candidate := strings.TrimSpace(prefix)
+	if candidate == "" {
+		return ""
+	}
+	if len(candidate) > 240 {
+		candidate = candidate[len(candidate)-240:]
+	}
+
+	match := toolHintRegex.FindStringSubmatch(candidate)
+	if len(match) > 1 {
+		name := normalizeToolCallName(strings.TrimSpace(match[1]))
+		if !isGenericToolName(name) {
+			return name
+		}
+	}
+
+	for _, name := range []string{"read", "write", "edit", "bash", "grep"} {
+		if strings.Contains(strings.ToLower(candidate), name) {
+			return name
+		}
+	}
+
+	return ""
 }

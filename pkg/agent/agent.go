@@ -100,8 +100,13 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 	traceBuf.SetFlushEvery(traceFlushEvery)
 	traceBuf.SetFlushInterval(traceFlushWindow)
 
-	metrics := NewMetrics(traceBuf)
-	traceBuf.AddSink(func(_ traceevent.TraceEvent) {
+	// Metrics should not depend on the primary trace buffer lifecycle because
+	// the primary buffer is flushed/rotated for trace exporting.
+	metricsBuf := traceevent.NewTraceBuf()
+	metricsBuf.SetMaxEvents(200_000)
+	metrics := NewMetrics(metricsBuf)
+	traceBuf.AddSink(func(event traceevent.TraceEvent) {
+		metricsBuf.Record(event)
 		metrics.InvalidateCache()
 	})
 	traceevent.SetActiveTraceBuf(traceBuf)

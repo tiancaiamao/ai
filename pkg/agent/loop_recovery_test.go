@@ -567,3 +567,167 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 		t.Errorf("expected 5 LLM calls with MaxTurns=0 (unlimited), got %d", callCount)
 	}
 }
+
+func TestRunInnerLoopRecoversMalformedToolCallResponse(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		if callCount == 1 {
+			msg.Content = []ContentBlock{
+				TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	if callCount != 2 {
+		t.Fatalf("expected malformed tool-call recovery to trigger another LLM turn, got %d", callCount)
+	}
+
+	var sawRepairPrompt bool
+	for _, msg := range agentCtx.Messages {
+		if msg.Role != "user" || msg.Metadata == nil || msg.Metadata.Kind != "tool_call_repair" {
+			continue
+		}
+		if msg.IsUserVisible() {
+			t.Fatal("expected tool_call_repair prompt to be hidden from user")
+		}
+		if !msg.IsAgentVisible() {
+			t.Fatal("expected tool_call_repair prompt to be visible to agent")
+		}
+		sawRepairPrompt = true
+	}
+	if !sawRepairPrompt {
+		t.Fatal("expected hidden tool_call_repair prompt in context")
+	}
+}
+
+func TestRunInnerLoopMalformedToolCallRecoveryRespectsLimit(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		msg.Content = []ContentBlock{
+			TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+		}
+		msg.StopReason = "tool_calls"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	if callCount != defaultMalformedToolCallRecoveries+1 {
+		t.Fatalf("expected %d LLM calls (recoveries + final stop), got %d", defaultMalformedToolCallRecoveries+1, callCount)
+	}
+}
+
+func TestRunInnerLoopRecoversWhenToolCallOnlyInThinking(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		if callCount == 1 {
+			msg.Content = []ContentBlock{
+				ThinkingContent{Type: "thinking", Thinking: "<tool_call><arg_key>command</arg_key><arg_value>pwd</arg_value></tool_call>"},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	if callCount != 2 {
+		t.Fatalf("expected loop to continue after thinking-only malformed tool call, got %d calls", callCount)
+	}
+}
+
+func TestRunInnerLoopEmitsToolCallRecoveryEvent(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []AgentMessage],
+	) (*AgentMessage, error) {
+		callCount++
+		msg := NewAssistantMessage()
+		if callCount == 1 {
+			msg.Content = []ContentBlock{
+				TextContent{Type: "text", Text: "tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	var sawRecovery bool
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventToolCallRecovery && item.Value.ToolCallRecovery != nil {
+			if item.Value.ToolCallRecovery.Attempt < 1 {
+				t.Fatalf("expected recovery attempt > 0, got %d", item.Value.ToolCallRecovery.Attempt)
+			}
+			sawRecovery = true
+		}
+	}
+	if !sawRecovery {
+		t.Fatal("expected tool_call_recovery event")
+	}
+}

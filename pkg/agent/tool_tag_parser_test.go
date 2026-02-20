@@ -251,3 +251,75 @@ func TestValidateToolCallArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestInjectToolCallsFromTaggedText_LooseArgPairsWithToolHint(t *testing.T) {
+	msg := AgentMessage{
+		Role: "assistant",
+		Content: []ContentBlock{
+			TextContent{Type: "text", Text: "权限错误，tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
+		},
+	}
+
+	result, injected := injectToolCallsFromTaggedText(msg)
+	if !injected {
+		t.Fatal("expected loose arg-key/value call to be injected")
+	}
+	calls := result.ExtractToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one call, got %d", len(calls))
+	}
+	if calls[0].Name != "bash" {
+		t.Fatalf("expected bash call, got %q", calls[0].Name)
+	}
+	if got := calls[0].Arguments["command"]; got != "make debug-asan" {
+		t.Fatalf("expected command arg, got %v", got)
+	}
+}
+
+func TestInjectToolCallsFromTaggedText_LooseArgPairsInferByArgs(t *testing.T) {
+	msg := AgentMessage{
+		Role: "assistant",
+		Content: []ContentBlock{
+			TextContent{Type: "text", Text: "<arg_key>path</arg_key><arg_value>README.md</arg_value>"},
+		},
+	}
+
+	result, injected := injectToolCallsFromTaggedText(msg)
+	if !injected {
+		t.Fatal("expected arg-shape inference to inject call")
+	}
+	calls := result.ExtractToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one call, got %d", len(calls))
+	}
+	if calls[0].Name != "read" {
+		t.Fatalf("expected read call, got %q", calls[0].Name)
+	}
+	if got := calls[0].Arguments["path"]; got != "README.md" {
+		t.Fatalf("expected path arg, got %v", got)
+	}
+}
+
+func TestInjectToolCallsFromTaggedText_ToolCallTagWithInlineName(t *testing.T) {
+	msg := AgentMessage{
+		Role: "assistant",
+		Content: []ContentBlock{
+			TextContent{Type: "text", Text: "我需要查看正确的行。让我使用 sed 命令来查看第1370-1385行：\n<tool_call>bash\n<arg_key>command</arg_key>\n<arg_value>sed -n '1370,1385p' Client/GameInit.cpp</arg_value>\n</tool_call>"},
+		},
+	}
+
+	result, injected := injectToolCallsFromTaggedText(msg)
+	if !injected {
+		t.Fatal("expected tool_call tag with inline name to be injected")
+	}
+	calls := result.ExtractToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one call, got %d", len(calls))
+	}
+	if calls[0].Name != "bash" {
+		t.Fatalf("expected bash call, got %q", calls[0].Name)
+	}
+	if got := calls[0].Arguments["command"]; got != "sed -n '1370,1385p' Client/GameInit.cpp" {
+		t.Fatalf("expected command arg, got %v", got)
+	}
+}

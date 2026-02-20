@@ -24,6 +24,7 @@ const (
 	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
 	defaultLoopMaxConsecutiveToolCalls = 0               // Disabled (was 6)
 	defaultLoopMaxToolCallsPerName     = 0               // Disabled (was 60)
+	defaultMalformedToolCallRecoveries = 2
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -202,6 +203,7 @@ func runInnerLoop(
 	if asyncSummarizer != nil {
 		defer asyncSummarizer.Close()
 	}
+	malformedToolCallRecoveries := 0
 
 	// Turn counter for MaxTurns limit
 	turnCount := 0
@@ -357,6 +359,9 @@ func runInnerLoop(
 		// Check for tool calls
 		toolCalls := msg.ExtractToolCalls()
 		hasMoreToolCalls := len(toolCalls) > 0
+		if hasMoreToolCalls {
+			malformedToolCallRecoveries = 0
+		}
 		if hasMoreToolCalls && loopGuard != nil {
 			if blocked, reason := loopGuard.Observe(toolCalls); blocked {
 				slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
@@ -391,6 +396,9 @@ func runInnerLoop(
 
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
+			if maybeRecoverMalformedToolCall(ctx, agentCtx, &newMessages, stream, msg, &malformedToolCallRecoveries) {
+				continue
+			}
 			break
 		}
 	}
@@ -480,6 +488,107 @@ func sanitizeMessageForToolLoopGuard(msg *AgentMessage, reason string) {
 	})
 	msg.Content = filtered
 	msg.StopReason = "aborted"
+}
+
+func maybeRecoverMalformedToolCall(
+	ctx context.Context,
+	agentCtx *AgentContext,
+	newMessages *[]AgentMessage,
+	stream *llm.EventStream[AgentEvent, []AgentMessage],
+	msg *AgentMessage,
+	recoveryCount *int,
+) bool {
+	if msg == nil || agentCtx == nil || recoveryCount == nil {
+		return false
+	}
+	shouldRecover, reason := shouldRecoverMalformedToolCall(msg)
+	if !shouldRecover {
+		return false
+	}
+	if *recoveryCount >= defaultMalformedToolCallRecoveries {
+		slog.Warn("[Loop] malformed tool-call recovery limit reached",
+			"recoveryCount", *recoveryCount,
+			"reason", reason)
+		return false
+	}
+
+	*recoveryCount = *recoveryCount + 1
+	recoveryMsg := buildMalformedToolCallRecoveryMessage(reason, *recoveryCount)
+	agentCtx.Messages = append(agentCtx.Messages, recoveryMsg)
+	if newMessages != nil {
+		*newMessages = append(*newMessages, recoveryMsg)
+	}
+	if stream != nil {
+		stream.Push(NewToolCallRecoveryEvent(ToolCallRecoveryInfo{
+			Reason:  reason,
+			Attempt: *recoveryCount,
+		}))
+	}
+	traceevent.Log(ctx, traceevent.CategoryTool, "malformed_tool_call_recovery",
+		traceevent.Field{Key: "attempt", Value: *recoveryCount},
+		traceevent.Field{Key: "reason", Value: reason},
+	)
+	slog.Warn("[Loop] malformed tool call recovered",
+		"attempt", *recoveryCount,
+		"reason", reason)
+	return true
+}
+
+func shouldRecoverMalformedToolCall(msg *AgentMessage) (bool, string) {
+	if msg == nil || len(msg.ExtractToolCalls()) > 0 {
+		return false, ""
+	}
+
+	if msg.StopReason == "tool_calls" {
+		return true, "stop_reason=tool_calls but no parsable tool call was produced"
+	}
+
+	text := strings.TrimSpace(msg.ExtractText())
+	thinking := strings.TrimSpace(msg.ExtractThinking())
+
+	candidates := []struct {
+		source string
+		text   string
+	}{
+		{source: "text", text: text},
+		{source: "thinking", text: thinking},
+	}
+
+	for _, candidate := range candidates {
+		body := strings.TrimSpace(candidate.text)
+		if body == "" {
+			continue
+		}
+
+		issues := DetectIncompleteToolCalls(body)
+		if len(issues) > 0 {
+			return true, fmt.Sprintf("%s: %s", candidate.source, strings.Join(issues, "; "))
+		}
+
+		lower := strings.ToLower(body)
+		if strings.Contains(lower, "<tool_call") ||
+			strings.Contains(lower, "<tool>") ||
+			strings.Contains(lower, "<arg_key>") ||
+			strings.Contains(lower, "<arg_value>") {
+			return true, fmt.Sprintf("%s: detected tool-call markup without a valid parsed tool call", candidate.source)
+		}
+	}
+
+	return false, ""
+}
+
+func buildMalformedToolCallRecoveryMessage(reason string, attempt int) AgentMessage {
+	cleanReason := strings.TrimSpace(reason)
+	if cleanReason == "" {
+		cleanReason = "unknown parse failure"
+	}
+
+	text := fmt.Sprintf(
+		"[Tool-call recovery, attempt %d] Your previous response attempted a tool invocation but the tool call format was invalid (%s). Re-emit the intended call using valid tool/function-call syntax only. If no tool is needed, provide the final answer directly.",
+		attempt,
+		truncateLine(cleanReason, 220),
+	)
+	return NewUserMessage(text).WithVisibility(true, false).WithKind("tool_call_repair")
 }
 
 // streamAssistantResponseWithRetry streams the assistant's response with retry logic.
@@ -833,10 +942,12 @@ func streamAssistantResponse(
 				}))
 			}
 			var finalMessage AgentMessage
-			if e.Message != nil {
-				finalMessage = ConvertLLMMessageToAgent(*e.Message)
-			} else if partialMessage != nil {
+			if partialMessage != nil {
+				// Prefer the incrementally built message so thinking/tool-tag content
+				// emitted via deltas is not lost when done payload omits it.
 				finalMessage = *partialMessage
+			} else if e.Message != nil {
+				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
 				finalMessage = NewAssistantMessage()
 			}
@@ -854,6 +965,8 @@ func streamAssistantResponse(
 
 			// Try to inject tool calls from tagged text
 			if updated, ok := injectToolCallsFromTaggedText(finalMessage); ok {
+				finalMessage = updated
+			} else if updated, ok := injectToolCallsFromThinking(finalMessage); ok {
 				finalMessage = updated
 			} else {
 				// Check for incomplete tool calls and log for debugging

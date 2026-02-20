@@ -56,6 +56,9 @@ Create `tasks.md` with:
 2. **Break down** into small, testable tasks
 3. **Order by dependency** (foundation first)
 4. **Write tasks.md**
+5. **🔷 PHASE GATE**: Present task summary, get explicit approval to start implementation
+
+**Do NOT auto-proceed to implementation without user confirmation.**
 
 ## Guidelines
 

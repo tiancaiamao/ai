@@ -126,21 +126,22 @@ type SessionMeta struct {
 }
 
 type agentEvent struct {
-	Type                  string                 `json:"type"`
-	EventAt               int64                  `json:"eventAt,omitempty"`
-	Error                 string                 `json:"error,omitempty"`
-	ErrorStack            string                 `json:"errorStack,omitempty"`
-	Message               *agent.AgentMessage    `json:"message,omitempty"`
-	Messages              []agent.AgentMessage   `json:"messages,omitempty"`
-	ToolResults           []agent.AgentMessage   `json:"toolResults,omitempty"`
-	ToolCallID            string                 `json:"toolCallId,omitempty"`
-	ToolName              string                 `json:"toolName,omitempty"`
-	Args                  map[string]interface{} `json:"args,omitempty"`
-	Result                *agent.AgentMessage    `json:"result,omitempty"`
-	IsError               bool                   `json:"isError,omitempty"`
-	AssistantMessageEvent *assistantMessageEvent `json:"assistantMessageEvent,omitempty"`
-	Compaction            *agent.CompactionInfo  `json:"compaction,omitempty"`
-	LoopGuard             *agent.LoopGuardInfo   `json:"loopGuard,omitempty"`
+	Type                  string                      `json:"type"`
+	EventAt               int64                       `json:"eventAt,omitempty"`
+	Error                 string                      `json:"error,omitempty"`
+	ErrorStack            string                      `json:"errorStack,omitempty"`
+	Message               *agent.AgentMessage         `json:"message,omitempty"`
+	Messages              []agent.AgentMessage        `json:"messages,omitempty"`
+	ToolResults           []agent.AgentMessage        `json:"toolResults,omitempty"`
+	ToolCallID            string                      `json:"toolCallId,omitempty"`
+	ToolName              string                      `json:"toolName,omitempty"`
+	Args                  map[string]interface{}      `json:"args,omitempty"`
+	Result                *agent.AgentMessage         `json:"result,omitempty"`
+	IsError               bool                        `json:"isError,omitempty"`
+	AssistantMessageEvent *assistantMessageEvent      `json:"assistantMessageEvent,omitempty"`
+	Compaction            *agent.CompactionInfo       `json:"compaction,omitempty"`
+	LoopGuard             *agent.LoopGuardInfo        `json:"loopGuard,omitempty"`
+	ToolCallRecovery      *agent.ToolCallRecoveryInfo `json:"toolCallRecovery,omitempty"`
 }
 
 type serverStartEvent struct {
@@ -1394,6 +1395,8 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 		p.handleCompactionEvent(false, evt.Compaction)
 	case "loop_guard_triggered":
 		p.handleLoopGuardEvent(evt.LoopGuard)
+	case "tool_call_recovery":
+		p.handleToolCallRecoveryEvent(evt.ToolCallRecovery)
 	case "error":
 		p.handleAgentErrorEvent(evt.Error)
 	case "tool_call_delta":
@@ -1473,6 +1476,22 @@ func (p *AiInterpreter) handleLoopGuardEvent(info *agent.LoopGuardInfo) {
 		reason = strings.TrimSpace(info.Reason)
 	}
 	p.writeStatus(fmt.Sprintf("ai: loop guard triggered: %s", reason))
+}
+
+func (p *AiInterpreter) handleToolCallRecoveryEvent(info *agent.ToolCallRecoveryInfo) {
+	reason := "malformed tool-call markup"
+	attempt := 0
+	if info != nil {
+		if strings.TrimSpace(info.Reason) != "" {
+			reason = strings.TrimSpace(info.Reason)
+		}
+		attempt = info.Attempt
+	}
+	if attempt > 0 {
+		p.writeStatus(fmt.Sprintf("ai: recovered malformed tool call (attempt %d): %s", attempt, truncate(reason, 220)))
+		return
+	}
+	p.writeStatus(fmt.Sprintf("ai: recovered malformed tool call: %s", truncate(reason, 220)))
 }
 
 func (p *AiInterpreter) handleAgentErrorEvent(raw string) {
