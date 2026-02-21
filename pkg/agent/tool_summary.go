@@ -346,19 +346,10 @@ func fallbackToolSummaryBatch(results []AgentMessage) string {
 	return strings.Join(lines, "\n")
 }
 
-func newToolBatchSummaryMessage(results []AgentMessage, summary string) AgentMessage {
-	callIDs := make([]string, 0, len(results))
-	for _, result := range results {
-		if id := strings.TrimSpace(result.ToolCallID); id != "" {
-			callIDs = append(callIDs, id)
-		}
-	}
-
-	header := fmt.Sprintf("[Tool outputs summary]\nCount: %d", len(results))
-	if len(callIDs) > 0 {
-		header += "\nCall IDs: " + strings.Join(callIDs, ", ")
-	}
-	text := header + "\n" + strings.TrimSpace(summary)
+func newToolBatchSummaryMessage(_ []AgentMessage, summary string) AgentMessage {
+	// Changed format to not look like LLM output
+	// This prevents the LLM from learning to imitate this format
+	text := fmt.Sprintf("[ARCHIVED_TOOL_CONTEXT: %s]", strings.TrimSpace(summary))
 	return newToolSummaryContextMessage(text)
 }
 

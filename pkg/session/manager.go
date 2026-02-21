@@ -231,22 +231,8 @@ func (sm *SessionManager) GetCurrentSession() (*Session, error) {
 // LoadCurrent loads the current session from disk.
 func (sm *SessionManager) LoadCurrent() (*Session, string, error) {
 	if sm.currentID == "" {
-		// Try to load from pointer file
-		ptrPath := sm.getPointerPath()
-		data, err := os.ReadFile(ptrPath)
-		if err != nil {
-			// No pointer file, create default session
-			return sm.createDefaultSession()
-		}
-
-		var ptr struct {
-			CurrentID string `json:"current"`
-		}
-		if err := json.Unmarshal(data, &ptr); err != nil {
-			return sm.createDefaultSession()
-		}
-
-		sm.currentID = ptr.CurrentID
+		// No persisted current pointer. Each process starts with a new session.
+		return sm.createDefaultSession()
 	}
 
 	sess, err := sm.GetSession(sm.currentID)
@@ -257,7 +243,7 @@ func (sm *SessionManager) LoadCurrent() (*Session, string, error) {
 	return sess, sm.currentID, nil
 }
 
-// SaveCurrent saves the current session pointer.
+// SaveCurrent updates metadata for the current session.
 func (sm *SessionManager) SaveCurrent() error {
 	if sm.currentID == "" {
 		return fmt.Errorf("no current session")
@@ -273,23 +259,6 @@ func (sm *SessionManager) SaveCurrent() error {
 			meta.UpdatedAt = time.Now()
 			_ = sm.saveMeta(sm.currentID, meta)
 		}
-	}
-
-	// Save pointer
-	ptr := struct {
-		Current string `json:"current"`
-	}{
-		Current: sm.currentID,
-	}
-
-	data, err := json.Marshal(ptr)
-	if err != nil {
-		return err
-	}
-
-	ptrPath := sm.getPointerPath()
-	if err := os.WriteFile(ptrPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write pointer: %w", err)
 	}
 
 	return nil
@@ -333,11 +302,6 @@ func (sm *SessionManager) getMetaPath(id string) string {
 		id = id[:len(id)-6]    // Remove .jsonl extension
 	}
 	return filepath.Join(sm.sessionsDir, id+".meta.json")
-}
-
-// getPointerPath returns the current session pointer file path.
-func (sm *SessionManager) getPointerPath() string {
-	return filepath.Join(sm.sessionsDir, "current.json")
 }
 
 // saveMeta saves session metadata.
@@ -423,7 +387,6 @@ func (sm *SessionManager) createDefaultSession() (*Session, string, error) {
 
 	// Set current ID to just the ID, not the full path
 	sm.currentID = id
-	_ = sm.SaveCurrent()
 
 	return sess, id, nil
 }

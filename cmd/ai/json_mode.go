@@ -101,18 +101,23 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		sessionID = sess.GetID()
 		_ = sessionMgr.SetCurrent(sessionID)
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
 	} else {
-		sess, sessionID, err = sessionMgr.LoadCurrent()
+		name := time.Now().Format("20060102-150405")
+		sess, err = sessionMgr.CreateSession(name, name)
 		if err != nil {
-			sess, sessionID, err = sessionMgr.LoadCurrent()
-			if err != nil {
-				return fmt.Errorf("failed to create default session: %w", err)
-			}
+			return fmt.Errorf("failed to create new session: %w", err)
 		}
-		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
+		sessionID = sess.GetID()
+		if err := sessionMgr.SetCurrent(sessionID); err != nil {
+			slog.Info("Failed to set current session:", "value", err)
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+		slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
 
 	// Output session header (JSON Lines format)

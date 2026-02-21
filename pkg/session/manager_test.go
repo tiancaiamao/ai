@@ -105,8 +105,11 @@ func TestSessionManager(t *testing.T) {
 			t.Fatalf("Failed to save current: %v", err)
 		}
 
-		// Create new manager and load current
+		// Create new manager, set in-memory current, then load current
 		sm2 := NewSessionManager(tempDir)
+		if err := sm2.SetCurrent(targetID); err != nil {
+			t.Fatalf("Failed to set current session on second manager: %v", err)
+		}
 		sess, sessionID, err := sm2.LoadCurrent()
 		if err != nil {
 			t.Fatalf("Failed to load current: %v", err)
@@ -229,11 +232,7 @@ func TestSessionManagerCreateDefaultSession(t *testing.T) {
 		t.Errorf("Expected current ID '%s', got '%s'", sessionID, currentID)
 	}
 
-	// Verify pointer file exists
-	ptrPath := sm.getPointerPath()
-	if _, err := os.Stat(ptrPath); os.IsNotExist(err) {
-		t.Errorf("Pointer file not created: %s", ptrPath)
-	}
+	// No persisted pointer file. Current session is process-local state.
 }
 
 func TestCreateMetaFromSession(t *testing.T) {

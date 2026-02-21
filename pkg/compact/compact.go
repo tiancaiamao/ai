@@ -688,7 +688,7 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 		lines = append(lines, compactionToolDigestLine(original))
 	}
 
-	digest := "[Compaction tool digest]\n" + strings.Join(lines, "\n")
+	digest := "[ARCHIVED_TOOL_CONTEXT: " + strings.Join(lines, " ") + "]"
 	compacted = append(compacted, newToolSummaryContextMessage(digest))
 	summarySpan.AddField("summary_chars", len([]rune(digest)))
 	summarySpan.End()

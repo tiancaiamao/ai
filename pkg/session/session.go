@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -365,10 +366,15 @@ func (s *Session) Clear() error {
 		return nil
 	}
 
-	if _, err := os.Stat(s.filePath); err == nil {
-		if err := os.Remove(s.filePath); err != nil {
-			return err
+	if err := s.withFileWriteLock(func() error {
+		if _, err := os.Stat(s.filePath); err == nil {
+			if err := os.Remove(s.filePath); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	s.flushed = false
 	return nil
@@ -385,8 +391,21 @@ func (s *Session) persistEntry(entry *SessionEntry) error {
 		return nil
 	}
 
+	return s.withFileWriteLock(func() error {
+		return s.persistEntryLocked(entry)
+	})
+}
+
+func (s *Session) persistEntryLocked(entry *SessionEntry) error {
 	if !s.flushed {
-		if err := s.rewriteFile(); err != nil {
+		if err := s.rewriteFileLocked(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if info, err := os.Stat(s.filePath); err != nil || info.Size() == 0 {
+		if err := s.rewriteFileLocked(); err != nil {
 			return err
 		}
 		return nil
@@ -406,6 +425,9 @@ func (s *Session) persistEntry(entry *SessionEntry) error {
 	if _, err := file.Write(data); err != nil {
 		return err
 	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -415,16 +437,26 @@ func (s *Session) rewriteFile() error {
 		return nil
 	}
 
+	return s.withFileWriteLock(func() error {
+		return s.rewriteFileLocked()
+	})
+}
+
+func (s *Session) rewriteFileLocked() error {
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	file, err := os.Create(s.filePath)
+	tmpPath := fmt.Sprintf("%s.tmp-%d-%d", s.filePath, os.Getpid(), time.Now().UnixNano())
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+	}()
 
 	encoder := json.NewEncoder(file)
 	if err := encoder.Encode(s.header); err != nil {
@@ -436,9 +468,44 @@ func (s *Session) rewriteFile() error {
 			return err
 		}
 	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, s.filePath); err != nil {
+		return err
+	}
 
 	s.flushed = true
 	return nil
+}
+
+func (s *Session) withFileWriteLock(run func() error) error {
+	if !s.persist || s.filePath == "" {
+		return run()
+	}
+
+	lockPath := s.filePath + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
+		return err
+	}
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	}()
+
+	return run()
 }
 
 func (s *Session) getBranchLocked(id string) []SessionEntry {

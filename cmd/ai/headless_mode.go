@@ -91,13 +91,21 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 			}
 			sessionID = sess.GetID()
 			_ = sessionMgr.SetCurrent(sessionID)
+			if err := sessionMgr.SaveCurrent(); err != nil {
+				slog.Info("Failed to update session metadata:", "value", err)
+			}
 		} else {
-			sess, sessionID, err = sessionMgr.LoadCurrent()
+			name := time.Now().Format("20060102-150405")
+			sess, err = sessionMgr.CreateSession(name, name)
 			if err != nil {
-				sess, sessionID, err = sessionMgr.LoadCurrent()
-				if err != nil {
-					return writeHeadlessError(output, fmt.Sprintf("failed to create default session: %v", err))
-				}
+				return writeHeadlessError(output, fmt.Sprintf("failed to create new session: %v", err))
+			}
+			sessionID = sess.GetID()
+			if err := sessionMgr.SetCurrent(sessionID); err != nil {
+				slog.Info("Failed to set current session:", "value", err)
+			}
+			if err := sessionMgr.SaveCurrent(); err != nil {
+				slog.Info("Failed to update session metadata:", "value", err)
 			}
 		}
 		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))

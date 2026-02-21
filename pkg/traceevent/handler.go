@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // TraceHandler handles trace events.
@@ -25,13 +26,14 @@ type ChunkTraceHandler interface {
 // FileHandler writes traces to perfetto-compatible JSON files.
 type FileHandler struct {
 	outputDir        string
+	processID        int
 	maxFileSizeBytes int64
 	mu               sync.Mutex
 	streams          map[string]*traceStream
 }
 
 type traceStream struct {
-	traceID     string
+	baseName    string
 	part        int
 	file        *os.File
 	path        string
@@ -50,6 +52,7 @@ func NewFileHandler(outputDir string) (*FileHandler, error) {
 	}
 	return &FileHandler{
 		outputDir:        outputDir,
+		processID:        os.Getpid(),
 		maxFileSizeBytes: defaultTraceMaxFileSizeBytes,
 		streams:          make(map[string]*traceStream),
 	}, nil
@@ -82,7 +85,8 @@ func (h *FileHandler) HandleChunk(_ context.Context, traceID []byte, events []Tr
 		}
 
 		var err error
-		stream, err = h.createTraceStream(traceIDStr, processIDForTrace(traceID), 0)
+		baseName := h.traceBaseName(traceIDStr, time.Now())
+		stream, err = h.createTraceStream(baseName, processIDForTrace(traceID), 0)
 		if err != nil {
 			return err
 		}
@@ -174,18 +178,18 @@ func (h *FileHandler) appendObject(stream *traceStream, blob []byte, dataEvent b
 	return nil
 }
 
-func (h *FileHandler) createTraceStream(traceID string, pid, part int) (*traceStream, error) {
-	path := h.traceFilePath(traceID, part)
+func (h *FileHandler) createTraceStream(baseName string, pid, part int) (*traceStream, error) {
+	path := h.traceFilePath(baseName, part)
 	file, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
 	stream := &traceStream{
-		traceID: traceID,
-		part:    part,
-		file:    file,
-		path:    path,
-		pid:     pid,
+		baseName: baseName,
+		part:     part,
+		file:     file,
+		path:     path,
+		pid:      pid,
 	}
 	if _, err := stream.file.WriteString("{\"displayTimeUnit\":\"ms\",\"traceEvents\":[" + traceJSONSuffix); err != nil {
 		_ = stream.file.Close()
@@ -208,7 +212,7 @@ func (h *FileHandler) rotateStream(stream *traceStream) error {
 		return err
 	}
 	nextPart := stream.part + 1
-	next, err := h.createTraceStream(stream.traceID, stream.pid, nextPart)
+	next, err := h.createTraceStream(stream.baseName, stream.pid, nextPart)
 	if err != nil {
 		return err
 	}
@@ -220,13 +224,18 @@ func (h *FileHandler) rotateStream(stream *traceStream) error {
 	return nil
 }
 
-func (h *FileHandler) traceFilePath(traceID string, part int) string {
+func (h *FileHandler) traceFilePath(baseName string, part int) string {
 	if part <= 0 {
-		filename := fmt.Sprintf("trace-%s.perfetto.json", traceID)
+		filename := fmt.Sprintf("%s.perfetto.json", baseName)
 		return filepath.Join(h.outputDir, filename)
 	}
-	filename := fmt.Sprintf("trace-%s-part-%d.perfetto.json", traceID, part)
+	filename := fmt.Sprintf("%s-part-%d.perfetto.json", baseName, part)
 	return filepath.Join(h.outputDir, filename)
+}
+
+func (h *FileHandler) traceBaseName(traceID string, createdAt time.Time) string {
+	ts := createdAt.UTC().Format("20060102T150405.000Z")
+	return fmt.Sprintf("pid%d-%s-%s", h.processID, ts, traceID)
 }
 
 func sanitizeFilenameComponent(s string) string {

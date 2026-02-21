@@ -114,7 +114,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = resolveSessionName(sessionMgr, sessionID)
 		_ = sessionMgr.SetCurrent(sessionID)
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
 	} else {
@@ -127,10 +127,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionID = sess.GetID()
 		sessionName = name
 		if err := sessionMgr.SetCurrent(sessionID); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to set current session:", "value", err)
 		}
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
@@ -515,9 +515,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return "", err
 		}
 
-		// Save the current session pointer
+		// Update current session metadata
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 
 		sess = newSess
@@ -568,7 +568,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionMgr = session.NewSessionManager(sessionsDir)
 			_ = sessionMgr.SetCurrent(newSessionID)
 			if err := sessionMgr.SaveCurrent(); err != nil {
-				slog.Info("Failed to save session pointer:", "value", err)
+				slog.Info("Failed to update session metadata:", "value", err)
 			}
 
 			// Clear agent context and load new messages
@@ -593,9 +593,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		// Load the new session
-		newSess, newSessionID, err := sessionMgr.LoadCurrent()
+		newSess, err := sessionMgr.GetSession(id)
 		if err != nil {
 			return err
+		}
+		newSessionID := newSess.GetID()
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 
 		// Clear agent context and load new messages
@@ -633,7 +637,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		stateMu.Lock()
 		sessionName = trimmed
@@ -1262,7 +1266,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, err
 		}
 		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to save session pointer:", "value", err)
+			slog.Info("Failed to update session metadata:", "value", err)
 		}
 
 		sess = newSess
