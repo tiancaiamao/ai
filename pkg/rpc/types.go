@@ -142,6 +142,7 @@ type SessionStats struct {
 	ToolCalls         int               `json:"toolCalls"`
 	ToolResults       int               `json:"toolResults"`
 	TotalMessages     int               `json:"totalMessages"`
+	CompactionCount   int               `json:"compactionCount"`
 	Tokens            SessionTokenStats `json:"tokens"`
 	TokenRate         *TokenRateStats   `json:"tokenRate,omitempty"`
 	Cost              float64           `json:"cost"`

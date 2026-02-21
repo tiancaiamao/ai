@@ -959,6 +959,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			ToolCalls:         toolCalls,
 			ToolResults:       toolResults,
 			TotalMessages:     len(messages),
+			CompactionCount:   sess.GetCompactionCount(),
 			Tokens:            tokens,
 			TokenRate:         tokenRate,
 			Cost:              cost,

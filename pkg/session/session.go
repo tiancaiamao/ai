@@ -308,6 +308,21 @@ func (s *Session) GetLastCompactionSummary() string {
 	return ""
 }
 
+// GetCompactionCount returns the number of compaction entries along the current branch.
+func (s *Session) GetCompactionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.getBranchLocked("")
+	count := 0
+	for _, entry := range path {
+		if entry.Type == EntryTypeCompaction {
+			count++
+		}
+	}
+	return count
+}
+
 // GetUserMessagesForForking returns user messages along the current branch.
 func (s *Session) GetUserMessagesForForking() []ForkMessage {
 	entries := s.GetBranch("")

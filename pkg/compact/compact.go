@@ -247,22 +247,30 @@ func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary strin
 	}, nil
 }
 
-const summarizationSystemPrompt = `You are a context summarization assistant for a coding agent. Your task is to extract and preserve CRITICAL information from a conversation for continuation.
+const summarizationSystemPrompt = `You are a context summarization assistant for a coding agent.
 
-CRITICAL INFORMATION (preserve at all costs):
-- EXACT file paths (e.g., "pkg/agent/loop.go:245")
-- EXACT error messages and stack traces
-- EXACT function/variable/class names
-- EXACT commands executed
-- User's explicit requirements and constraints
+<critical>
+MANDATORY SECTIONS — Every summary MUST contain these sections:
+- Current Task (MOST IMPORTANT)
+- Files Involved (exact paths)
+- Key Code Elements (names, purposes)
+- Errors Encountered (exact messages, status)
+- Decisions Made (what + why)
+- What's Complete (finished items)
+- Next Steps (immediate actions)
+- User Requirements (explicit constraints)
 
-DISCARDABLE INFORMATION:
-- Pleasantries ("sure!", "I'll help you with that")
-- Redundant explanations
-- Failed approaches that were abandoned
-- Intermediate thinking that led to successful outcomes
+MUST PRESERVE:
+- EXACT file paths, error messages, function names
+- Decisions with reasons (crucial for continuity)
+- Completed items (never drop "What's Complete")
+- User's explicit requirements
 
-Output ONLY the structured summary. Do NOT continue the conversation.`
+DISCARD:
+- Pleasantries, redundant explanations, abandoned approaches
+</critical>
+
+Output ONLY the structured summary. Do NOT continue the conversation. This matters.`
 
 const summarizationPrompt = `Summarize this coding conversation for context preservation.
 
@@ -270,60 +278,67 @@ const summarizationPrompt = `Summarize this coding conversation for context pres
 [What is being actively worked on RIGHT NOW? Be specific about the exact goal.]
 
 ## Files Involved
-[List EXACT file paths with brief notes:]
-- path/to/file.go: [what was done/read/needs to be done]
-- path/to/another.py: [status]
+- path/to/file: [status/changes]
+- path/to/another: [status/changes]
 
 ## Key Code Elements
-[Important names discovered/created:]
 - Functions: [names and purposes]
-- Variables: [names and types if relevant]
+- Variables: [names and types]
 - Classes/Types: [names and purposes]
 
 ## Errors Encountered
-[If any errors occurred:]
-- Error: [EXACT error message]
-- Cause: [what caused it]
-- Fix: [how it was fixed, if fixed]
-- Status: [resolved/unresolved]
+- Error: [EXACT message] — Status: [resolved/unresolved]
 
 ## Decisions Made
-[Important technical choices:]
-- Decision: [what was decided]
-- Reason: [why - crucial for continuity]
+- Decision: [what] — Reason: [why]
+
+## What's Complete
+[Finished items - DO NOT omit this section]
+1. [completed task]
+2. [completed task]
 
 ## Next Steps
-[Ordered list of immediate actions:]
-1. [specific next action]
+1. [immediate action]
 2. [following action]
 
 ## User Requirements
-[Any explicit requirements or constraints from the user]
+[Explicit constraints from user]
 
-Rules:
-- Preserve EXACT text for paths, errors, names (use quotes if needed)
+<critical>
+- Preserve EXACT paths, errors, names (use quotes)
+- Keep "What's Complete" even if empty
 - Keep under 800 tokens
-- Omit pleasantries and redundant explanations`
+- Omit pleasantries
+</critical>`
 
 const updateSummarizationPrompt = `Update the existing summary with NEW conversation messages.
 
-PREVIOUS SUMMARY:
 <previous-summary>
 %s
 </previous-summary>
 
-NEW MESSAGES:
+<new-messages>
 %s
+</new-messages>
+
+<critical>
+MANDATORY — ALWAYS preserve these sections from previous summary:
+- "Decisions Made" — NEVER drop, ADD new decisions
+- "What's Complete" — NEVER drop, ADD new completions
+- "Files Involved" — ADD new files, UPDATE statuses
+- "Errors Encountered" — UPDATE statuses, ADD new errors
 
 UPDATE RULES:
-1. PRESERVE all existing information (especially exact paths, errors, names)
-2. ADD new files, errors, decisions discovered
+1. ADD new discoveries, errors, decisions to existing sections
+2. MOVE completed "Next Steps" to "What's Complete"
 3. UPDATE "Current Task" if focus changed
-4. MOVE completed items in "Next Steps" to appropriate sections
-5. MARK errors as resolved if fixed in new messages
-6. PRESERVE exact text - do not paraphrase paths, errors, or code elements
+4. MARK errors as "resolved" if fixed
+5. PRESERVE exact paths, errors, names — do NOT paraphrase
 
-Output the updated summary using the same format.`
+Keep ALL sections. If empty, write "None yet."
+</critical>
+
+Output the updated summary using the same format. This matters.`
 
 // GenerateSummary generates a structured summary of messages using the LLM.
 func (c *Compactor) GenerateSummary(messages []agent.AgentMessage) (string, error) {

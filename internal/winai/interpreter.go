@@ -2295,6 +2295,7 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
   session: %s
   messages: %d (user %d, assistant %d)
   tools: %d calls, %d results
+  compactions: %d
   tokens: in %d, out %d, cache read %d, cache write %d, total %d
 %s
 %s
@@ -2306,6 +2307,7 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 		stats.AssistantMessages,
 		stats.ToolCalls,
 		stats.ToolResults,
+		stats.CompactionCount,
 		stats.Tokens.Input,
 		stats.Tokens.Output,
 		stats.Tokens.CacheRead,
