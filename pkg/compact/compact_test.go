@@ -127,13 +127,13 @@ func TestCompactFewMessages(t *testing.T) {
 		agent.NewAssistantMessage(),
 	}
 
-	result, err := compactor.Compact(messages)
+	result, err := compactor.Compact(messages, "")
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}
 
-	if len(result) != len(messages) {
-		t.Errorf("Expected %d messages, got %d", len(messages), len(result))
+	if len(result.Messages) != len(messages) {
+		t.Errorf("Expected %d messages, got %d", len(messages), len(result.Messages))
 	}
 }
 

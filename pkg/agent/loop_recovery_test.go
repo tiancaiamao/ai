@@ -18,11 +18,14 @@ func (c *recoveryCompactor) ShouldCompact(_ []AgentMessage) bool {
 	return c.shouldCompact
 }
 
-func (c *recoveryCompactor) Compact(messages []AgentMessage) ([]AgentMessage, error) {
+func (c *recoveryCompactor) Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error) {
 	c.calls++
-	return []AgentMessage{
-		NewUserMessage("[summary]"),
-		NewUserMessage("latest request"),
+	return &CompactionResult{
+		Summary: "[summary]",
+		Messages: []AgentMessage{
+			NewUserMessage("[summary]"),
+			NewUserMessage("latest request"),
+		},
 	}, nil
 }
 
@@ -458,7 +461,7 @@ func (f *failingCompactor) ShouldCompact(_ []AgentMessage) bool {
 	return false
 }
 
-func (f *failingCompactor) Compact(_ []AgentMessage) ([]AgentMessage, error) {
+func (f *failingCompactor) Compact(_ []AgentMessage, previousSummary string) (*CompactionResult, error) {
 	return nil, errors.New("compaction failed")
 }
 

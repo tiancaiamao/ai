@@ -247,7 +247,7 @@ func runInnerLoop(
 				Trigger: "pre_llm_threshold",
 			}))
 
-			compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
+			compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
 			if compactErr != nil {
 				compactErr = WithErrorStack(compactErr)
 				slog.Error("Pre-LLM compaction failed", "error", compactErr)
@@ -265,7 +265,8 @@ func runInnerLoop(
 				}))
 			} else {
 				if compacted != nil {
-					agentCtx.Messages = compacted
+					agentCtx.Messages = compacted.Messages
+					agentCtx.LastCompactionSummary = compacted.Summary
 				}
 				after := len(agentCtx.Messages)
 				compactionSpan.AddField("after_messages", after)
@@ -295,7 +296,7 @@ func runInnerLoop(
 					Before:  before,
 					Trigger: "context_limit_recovery",
 				}))
-				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages)
+				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
 				if compactErr != nil {
 					compactErr = WithErrorStack(compactErr)
 					slog.Error("Compaction recovery failed", "error", compactErr)
@@ -313,13 +314,16 @@ func runInnerLoop(
 					}))
 				} else {
 					compactionRecoveries++
-					agentCtx.Messages = compacted
-					compactionSpan.AddField("after_messages", len(compacted))
+					if compacted != nil {
+						agentCtx.Messages = compacted.Messages
+						agentCtx.LastCompactionSummary = compacted.Summary
+					}
+					compactionSpan.AddField("after_messages", len(compacted.Messages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
-						After:   len(compacted),
+						After:   len(compacted.Messages),
 						Trigger: "context_limit_recovery",
 					}))
 					continue

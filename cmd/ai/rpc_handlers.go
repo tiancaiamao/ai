@@ -578,6 +578,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			for _, msg := range newSess.GetMessages() {
 				ag.GetContext().AddMessage(msg)
 			}
+			// Restore last compaction summary if available
+			ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
 			stateMu.Lock()
 			sessionID = newSessionID
@@ -609,6 +611,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		for _, msg := range newSess.GetMessages() {
 			ag.GetContext().AddMessage(msg)
 		}
+		// Restore last compaction summary if available
+		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
 		stateMu.Lock()
 		sessionID = newSessionID

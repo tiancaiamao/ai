@@ -162,10 +162,23 @@ func estimateStringTokens(s string) int {
 	return int(float64(len(s)) / 4.0)
 }
 
+// CompactionResult contains the result of a compaction operation.
+type CompactionResult struct {
+	Summary      string                // The generated summary
+	Messages     []agent.AgentMessage  // The compressed message list
+	TokensBefore int                   // Token count before compaction
+	TokensAfter  int                   // Token count after compaction
+}
+
 // Compact compresses the context by summarizing old messages.
-func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+// If previousSummary is non-empty, it will be used to incrementally update the summary.
+func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	if len(messages) == 0 {
-		return messages, nil
+		return &CompactionResult{
+			Messages:     messages,
+			TokensBefore: 0,
+			TokensAfter:  0,
+		}, nil
 	}
 
 	// Use dynamic keep-recent budget
@@ -175,34 +188,45 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 	if keepRecentTokens > 0 {
 		oldMessages, recentMessages = splitMessagesByTokenBudget(messages, keepRecentTokens)
 		if len(oldMessages) == 0 {
-			return messages, nil
+			return &CompactionResult{
+				Messages:     messages,
+				TokensBefore: c.EstimateContextTokens(messages),
+				TokensAfter:  c.EstimateContextTokens(messages),
+			}, nil
 		}
 		slog.Info("[Compact] Compressing messages",
 			"count", len(messages),
 			"keepTokens", keepRecentTokens,
 			"threshold", c.calculateDynamicThreshold(),
-			"contextWindow", c.contextWindow)
+			"contextWindow", c.contextWindow,
+			"hasPreviousSummary", previousSummary != "")
 	} else {
 		keepCount := c.keepRecentMessages()
 		if len(messages) <= keepCount {
-			return messages, nil
+			return &CompactionResult{
+				Messages:     messages,
+				TokensBefore: c.EstimateContextTokens(messages),
+				TokensAfter:  c.EstimateContextTokens(messages),
+			}, nil
 		}
 		slog.Info("[Compact] Compressing messages",
 			"count", len(messages),
 			"keepRecent", keepCount,
-			"threshold", c.calculateDynamicThreshold())
+			"threshold", c.calculateDynamicThreshold(),
+			"hasPreviousSummary", previousSummary != "")
 		splitIndex := len(messages) - keepCount
 		oldMessages = messages[:splitIndex]
 		recentMessages = messages[splitIndex:]
 	}
 
-	// Generate summary of old messages
-	summary, err := c.GenerateSummary(oldMessages)
+	// Generate summary of old messages (with previous summary for incremental update)
+	tokensBefore := c.EstimateContextTokens(messages)
+	summary, err := c.GenerateSummaryWithPrevious(oldMessages, previousSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	slog.Debug("[Compact] Generated summary", "chars", len(summary))
+	slog.Debug("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
 
 	// Create new context with summary + recent messages
 	newMessages := []agent.AgentMessage{
@@ -212,9 +236,15 @@ func (c *Compactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newMessages = append(newMessages, recentMessages...)
 
+	tokensAfter := c.EstimateContextTokens(newMessages)
 	slog.Info("[Compact] Compressed to messages", "count", len(newMessages))
 
-	return newMessages, nil
+	return &CompactionResult{
+		Summary:      summary,
+		Messages:     newMessages,
+		TokensBefore: tokensBefore,
+		TokensAfter:  tokensAfter,
+	}, nil
 }
 
 const summarizationSystemPrompt = `You are a context summarization assistant for a coding agent. Your task is to extract and preserve CRITICAL information from a conversation for continuation.
@@ -457,11 +487,16 @@ func (c *Compactor) EstimateContextTokens(messages []agent.AgentMessage) int {
 }
 
 // CompactIfNeeded compacts the context if it exceeds limits.
-func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+// Returns the compacted messages and the summary (if compaction occurred).
+func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage, previousSummary string) ([]agent.AgentMessage, *CompactionResult, error) {
 	if c.ShouldCompact(messages) {
-		return c.Compact(messages)
+		result, err := c.Compact(messages, previousSummary)
+		if err != nil {
+			return nil, nil, err
+		}
+		return result.Messages, result, nil
 	}
-	return messages, nil
+	return messages, nil, nil
 }
 
 func lastAssistantUsageTokens(messages []agent.AgentMessage) (int, int) {

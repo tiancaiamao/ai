@@ -90,6 +90,7 @@ func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
 
 	seenToolResults := make(map[string]struct{}, len(messages))
 	seenSummaries := make(map[string]struct{}, len(messages))
+	seenAssistantToolCalls := make(map[string]struct{}, len(messages))
 	keptReverse := make([]AgentMessage, 0, len(messages))
 
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -110,6 +111,23 @@ func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
 				continue
 			}
 			seenSummaries[key] = struct{}{}
+		}
+
+		// Deduplicate assistant messages with duplicate tool calls
+		if msg.Role == "assistant" {
+			toolCalls := msg.ExtractToolCalls()
+			if len(toolCalls) > 0 {
+				// Use the first tool call ID as deduplication key
+				// (assistant messages typically have one tool call per message in streaming mode)
+				firstID := strings.TrimSpace(toolCalls[0].ID)
+				if firstID != "" {
+					if _, seen := seenAssistantToolCalls[firstID]; seen {
+						// Skip this assistant message - we already have one with this tool call ID
+						continue
+					}
+					seenAssistantToolCalls[firstID] = struct{}{}
+				}
+			}
 		}
 
 		keptReverse = append(keptReverse, msg)

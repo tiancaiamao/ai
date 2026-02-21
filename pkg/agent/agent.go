@@ -54,7 +54,15 @@ var ErrAgentBusy = errors.New("agent is busy")
 // Compactor interface for context compression.
 type Compactor interface {
 	ShouldCompact(messages []AgentMessage) bool
-	Compact(messages []AgentMessage) ([]AgentMessage, error)
+	Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error)
+}
+
+// CompactionResult contains the result of a compaction operation.
+type CompactionResult struct {
+	Summary      string       // The generated summary
+	Messages     []AgentMessage // The compressed message list
+	TokensBefore int          // Token count before compaction
+	TokensAfter  int          // Token count after compaction
 }
 
 // Agent represents an AI agent.
@@ -595,13 +603,16 @@ func (a *Agent) GetPendingFollowUps() int {
 // Compact compacts the agent's context messages using the provided compactor.
 func (a *Agent) Compact(compactor Compactor) error {
 	messages := a.context.Messages
-	compacted, err := compactor.Compact(messages)
+	compacted, err := compactor.Compact(messages, a.context.LastCompactionSummary)
 	if err != nil {
 		return fmt.Errorf("failed to compact: %w", err)
 	}
 
-	// Replace messages with compacted version
-	a.context.Messages = compacted
+	// Replace messages with compacted version and save summary
+	if compacted != nil {
+		a.context.Messages = compacted.Messages
+		a.context.LastCompactionSummary = compacted.Summary
+	}
 	return nil
 }
 

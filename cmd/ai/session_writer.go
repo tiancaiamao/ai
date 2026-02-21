@@ -45,20 +45,20 @@ func (sc *sessionCompactor) ShouldCompact(messages []agent.AgentMessage) bool {
 	return sess.CanCompact(comp)
 }
 
-func (sc *sessionCompactor) Compact(messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+func (sc *sessionCompactor) Compact(messages []agent.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
 	writer := sc.writer
 	sc.mu.Unlock()
 	if sess == nil || comp == nil {
-		return messages, nil
+		return &agent.CompactionResult{Messages: messages}, nil
 	}
 	if writer != nil {
 		compacted, err := writer.Compact(sess, comp)
 		if err != nil {
 			if session.IsNonActionableCompactionError(err) {
-				return messages, nil
+				return &agent.CompactionResult{Messages: messages}, nil
 			}
 			return nil, err
 		}
@@ -66,13 +66,22 @@ func (sc *sessionCompactor) Compact(messages []agent.AgentMessage) ([]agent.Agen
 			return compacted, nil
 		}
 	}
-	if _, err := sess.Compact(comp); err != nil {
+	// Session layer handles previousSummary internally via compaction entries
+	sessionResult, err := sess.Compact(comp)
+	if err != nil {
 		if session.IsNonActionableCompactionError(err) {
-			return messages, nil
+			return &agent.CompactionResult{Messages: messages}, nil
 		}
 		return nil, err
 	}
-	return sess.GetMessages(), nil
+	// Convert session.CompactionResult to agent.CompactionResult
+	result := &agent.CompactionResult{
+		Summary:      sessionResult.Summary,
+		Messages:     sess.GetMessages(),
+		TokensBefore: sessionResult.TokensBefore,
+		TokensAfter:  sessionResult.TokensAfter,
+	}
+	return result, nil
 }
 
 type sessionWriteRequest struct {
@@ -84,6 +93,7 @@ type sessionWriteRequest struct {
 
 type sessionCompactResponse struct {
 	messages []agent.AgentMessage
+	summary  string
 	err      error
 }
 
@@ -107,7 +117,8 @@ func newSessionWriter(buffer int) *sessionWriter {
 				if req.sess == nil || req.comp == nil {
 					resp.messages = nil
 				} else {
-					if _, err := req.sess.Compact(req.comp); err != nil {
+					result, err := req.sess.Compact(req.comp)
+					if err != nil {
 						if session.IsNonActionableCompactionError(err) || errors.Is(err, session.ErrNothingToCompact) {
 							resp.messages = req.sess.GetMessages()
 							req.response <- resp
@@ -116,6 +127,7 @@ func newSessionWriter(buffer int) *sessionWriter {
 						resp.err = err
 					} else {
 						resp.messages = req.sess.GetMessages()
+						resp.summary = result.Summary
 					}
 				}
 				req.response <- resp
@@ -139,7 +151,7 @@ func (w *sessionWriter) Append(sess *session.Session, message agent.AgentMessage
 	w.enqueue(sessionWriteRequest{sess: sess, message: &message})
 }
 
-func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) ([]agent.AgentMessage, error) {
+func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) (*agent.CompactionResult, error) {
 	if w == nil || sess == nil || comp == nil {
 		return nil, nil
 	}
@@ -148,7 +160,13 @@ func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) 
 		return nil, nil
 	}
 	result := <-response
-	return result.messages, result.err
+	if result.err != nil {
+		return nil, result.err
+	}
+	return &agent.CompactionResult{
+		Summary:  result.summary,
+		Messages: result.messages,
+	}, nil
 }
 
 func (w *sessionWriter) Close() {

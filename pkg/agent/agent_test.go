@@ -123,10 +123,13 @@ func (m *mockCompactor) ShouldCompact(messages []AgentMessage) bool {
 	return m.shouldCompact
 }
 
-func (m *mockCompactor) Compact(messages []AgentMessage) ([]AgentMessage, error) {
+func (m *mockCompactor) Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error) {
 	// Return simplified messages
-	return []AgentMessage{
-		NewUserMessage("[Summary]"),
+	return &CompactionResult{
+		Summary: "[Summary]",
+		Messages: []AgentMessage{
+			NewUserMessage("[Summary]"),
+		},
 	}, nil
 }
 

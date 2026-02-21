@@ -286,6 +286,28 @@ func (s *Session) GetSessionTitle() string {
 	return ""
 }
 
+// GetLastCompactionSummary returns the summary from the most recent compaction entry
+// along the current branch, or empty string if none exists.
+func (s *Session) GetLastCompactionSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Get the current branch path
+	path := s.getBranchLocked("")
+	if len(path) == 0 {
+		return ""
+	}
+
+	// Search backwards for the last compaction entry
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i].Type == EntryTypeCompaction {
+			return path[i].Summary
+		}
+	}
+
+	return ""
+}
+
 // GetUserMessagesForForking returns user messages along the current branch.
 func (s *Session) GetUserMessagesForForking() []ForkMessage {
 	entries := s.GetBranch("")

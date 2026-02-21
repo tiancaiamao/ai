@@ -8,10 +8,11 @@ import (
 
 // AgentContext represents the context for agent execution.
 type AgentContext struct {
-	SystemPrompt string         `json:"systemPrompt,omitempty"`
-	Messages     []AgentMessage `json:"messages"`
-	Tools        []Tool         `json:"tools,omitempty"`
-	Skills       []skill.Skill  `json:"skills,omitempty"` // Loaded skills
+	SystemPrompt             string                `json:"systemPrompt,omitempty"`
+	Messages                 []AgentMessage        `json:"messages"`
+	Tools                    []Tool                `json:"tools,omitempty"`
+	Skills                   []skill.Skill         `json:"skills,omitempty"` // Loaded skills
+	LastCompactionSummary    string                `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
 
 	// allowedTools restricts which tools can be executed.
 	// nil means all tools are allowed, non-nil is a whitelist.
