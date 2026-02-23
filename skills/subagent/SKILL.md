@@ -93,6 +93,48 @@ wait && cat /tmp/auth.txt /tmp/api.txt
 - ❌ Don't use for simple single-file reads (use `read` tool)
 - ❌ Don't nest subagents
 
+## Agent Profiles
+
+For specialized tasks, use tool restrictions to create focused agent profiles:
+
+| Profile | Tools | Purpose | Example |
+|---------|-------|---------|---------|
+| **Explorer** | `read,grep` | Read-only analysis, code exploration | `ai --mode headless --subagent --tools read,grep "Analyze auth flow"` |
+| **Reviewer** | `read,grep` | Code review, validation | `ai --mode headless --subagent --tools read,grep "Review for security issues"` |
+| **Builder** | `read,write,edit,bash` | Implementation, file changes | `ai --mode headless --subagent --tools read,write,edit,bash "Implement feature X"` |
+| **Tester** | `read,bash,grep` | Test execution, debugging | `ai --mode headless --subagent --tools read,bash,grep "Run tests and report failures"` |
+| **General** | (all) | Full capability tasks | `ai --mode headless --subagent "Complex task requiring all tools"` |
+
+### Profile Selection Guide
+
+| Task Type | Use Profile | Why |
+|-----------|-------------|-----|
+| Code analysis / architecture review | Explorer | No writes needed, fastest execution |
+| Security / style review | Reviewer | Read-only prevents accidental changes |
+| Feature implementation | Builder | Needs write access + bash for tests |
+| Test triage / debugging | Tester | Needs to run tests but not modify code |
+| Unknown / complex | General | Full tool access for flexibility |
+
+### Profile Examples
+
+```bash
+# Explorer: Analyze codebase structure
+ai --mode headless --subagent --tools read,grep --max-turns 5 \
+  "List all API endpoints in src/api/"
+
+# Reviewer: Security-focused review
+ai --mode headless --subagent --tools read,grep --max-turns 8 \
+  "Review auth.go for SQL injection vulnerabilities"
+
+# Builder: Feature with testing
+ai --mode headless --subagent --tools read,write,edit,bash --max-turns 15 \
+  "Implement user registration with tests"
+
+# Tester: Diagnose failures
+ai --mode headless --subagent --tools read,bash,grep --max-turns 10 \
+  "Run go test ./auth and diagnose any failures"
+```
+
 ## Important Notes
 
 1. **No nesting**: Subagent cannot spawn another subagent

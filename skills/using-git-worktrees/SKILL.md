@@ -216,3 +216,86 @@ Ready to implement auth feature
 
 **Pairs with:**
 - **finishing-a-development-branch** - REQUIRED for cleanup after work complete
+- **subagent** - Combine for persistent, observable task execution
+
+## Subagent Worktrees
+
+Combine git worktrees with subagents for persistent, observable task execution in isolated environments.
+
+### When to Use
+
+| Scenario | Approach | Why |
+|----------|----------|-----|
+| Long-running analysis | Worktree + subagent | Results persist in worktree after completion |
+| Parallel feature work | Multiple worktrees | Isolated branches, no conflicts |
+| Code review before merge | Worktree + Explorer profile | Read-only review in isolated environment |
+| Experimental changes | Worktree + Builder profile | Safely iterate without affecting main branch |
+
+### Workflow
+
+```bash
+# 1. Create worktree for the task
+git worktree add .worktrees/review-auth -b review/auth
+cd .worktrees/review-auth
+
+# 2. Run subagent in the worktree
+ai --mode headless --no-session --subagent --tools read,grep \
+  "Review auth changes for security issues"
+
+# 3. Results remain in worktree for inspection
+# Original worktree remains untouched
+```
+
+### Pattern: Persistent Review Session
+
+```bash
+# Create a persistent review worktree
+git worktree add .worktrees/review-feature-x -b review/feature-x
+
+# Run reviewer subagent
+cd .worktrees/review-feature-x
+ai --mode headless --subagent --tools read,grep --max-turns 10 \
+  "Review changes against main: security, correctness, style"
+
+# Worktree stays available for:
+# - Manual inspection of changes
+# - Additional review passes
+# - Testing in isolated environment
+```
+
+### Pattern: Parallel Feature Branches
+
+```bash
+# Create multiple worktrees for parallel work
+git worktree add .worktrees/feature-auth -b feature/auth
+git worktree add .worktrees/feature-api -b feature/api
+
+# Run builders in parallel
+cd .worktrees/feature-auth
+ai --mode headless --subagent --tools read,write,edit,bash \
+  "Implement authentication" &
+
+cd ../.worktrees/feature-api
+ai --mode headless --subagent --tools read,write,edit,bash \
+  "Implement API endpoints" &
+
+wait
+
+# Both worktrees have isolated changes
+# Merge independently when ready
+```
+
+### Benefits Over Temporary Subagents
+
+| Temporary Subagent | Worktree Subagent |
+|-------------------|-------------------|
+| Results lost after completion | Results persist in worktree |
+| Hard to inspect intermediate state | Full git history available |
+| Difficult to debug failures | Can attach and investigate |
+| Single-shot execution | Can iterate and re-run |
+
+### Cleanup
+
+After task completion, use the `finishing-a-development-branch` skill to clean up worktrees.
+
+**See also:** `subagent` skill for headless mode details and Agent Profiles
