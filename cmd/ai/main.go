@@ -24,13 +24,16 @@ func parseToolsFlag(toolsFlag string) []string {
 }
 
 func main() {
-	mode := flag.String("mode", "", "Run mode (rpc|win|json|headless). Default: win")
+	mode := flag.String("mode", "", "Run mode (rpc|win|json|headless|http|qq). Default: win")
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json/headless mode)")
 	noSessionFlag := flag.Bool("no-session", false, "Run without session persistence (headless mode only)")
 	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, headless mode only)")
 	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
 	subagentFlag := flag.Bool("subagent", false, "Run as subagent with focused system prompt (headless mode only)")
-	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
+	debugAddr := flag.String("debug", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
+	httpAddr := flag.String("http-addr", ":8080", "HTTP server address for http mode (default: ':8080')")
+	onebotURL := flag.String("onebot-url", "", "OneBot API URL for QQ bot mode (e.g., 'http://localhost:3000')")
+	onebotSecret := flag.String("onebot-secret", "", "OneBot secret for webhook verification (optional)")
 	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
 
@@ -53,13 +56,23 @@ func main() {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}
+	case "http":
+		if err := runHTTP(*httpAddr, *sessionPathFlag, *debugAddr); err != nil {
+			slog.Error("http error", "error", err)
+			os.Exit(1)
+		}
+	case "qq":
+		if err := runQQBot(*onebotURL, *onebotSecret, *sessionPathFlag); err != nil {
+			slog.Error("qq bot error", "error", err)
+			os.Exit(1)
+		}
 	case "win", "":
 		if err := runWinAI(*windowName, *sessionPathFlag, *debugAddr); err != nil {
 			slog.Error("win-ai error", "error", err)
 			os.Exit(1)
 		}
 	default:
-		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win|json|headless")
+		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win|json|headless|http|qq")
 		os.Exit(1)
 	}
 }

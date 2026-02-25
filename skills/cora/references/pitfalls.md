@@ -124,3 +124,182 @@ Most Cora errors come from syntax confusion with other Lisps.
 ;; CORRECT
 (+ (+ 1 2) 3)
 ```
+
+### 11. `display` requires `cora/lib/io`
+
+```lisp
+;; WRONG
+(display "hello")  ;; may crash as undefined symbol/value
+
+;; CORRECT
+(import "cora/lib/io")
+(display "hello")
+```
+
+### 12. `[]` in source is `(list ...)` in AST
+
+```lisp
+;; source
+[a b c]
+
+;; reader output shape (before evaluation)
+(list a b c)
+```
+
+When writing static passes (type checker, resolver, macro transforms), do not
+assume bracket lists arrive as nested `cons` trees.
+
+### 13. `do` is fixed-arity (exactly 2)
+
+```lisp
+;; CORRECT
+(do a b)
+
+;; CORRECT (3+ expressions)
+(begin a b c)
+
+;; WRONG
+(do a b c)
+```
+
+### 14. Don't mix resolver errors into type checker
+
+```lisp
+;; WRONG mental model
+;; "type checker should reject all module visibility / symbol resolution /
+;; structural protocol issues"
+
+;; CORRECT layering
+;; - type checker: type consistency on core forms
+;; - resolver/lowering/runtime: visibility, module closure, non-type structure checks
+```
+
+### 15. Resolver now owns some literal structural guards
+
+```lisp
+;; These are resolver-phase errors (not type-check errors):
+;; - try handler literal lambda arity must be 2
+;; - cora/lib/cml#perform literal op must be a 3-slot tuple
+;; - cora/lib/cml#wrap literal mapper lambda arity must be 1
+;;
+;; Keep checks "definite only":
+;; literal mismatch => reject early
+;; dynamic expression => allow (defer to later phase/runtime)
+```
+
+### 16. Resolver in REPL/script is per-form, not whole-module
+
+```lisp
+;; If resolver is applied expression-by-expression, it cannot infer
+;; cross-form import context reliably.
+;;
+;; Prefer resolver checks in module/compile pipeline (whole source unit),
+;; not per-form REPL interception.
+```
+
+### 17. Avoid top-level helper name `check` in scripts
+
+```lisp
+;; Fragile in some source-compile paths:
+(defun check (exp typ) ...)
+
+;; Safer:
+(defun tc-check (exp typ) ...)
+```
+
+`check` can collide with existing global symbols in mixed import/source-compile
+contexts and cause "attempt to call a non-function object" at runtime.
+
+### 18. `tc` is compile-unit scoped (do not assume import inheritance)
+
+```lisp
+;; A.cora
+(import "cora/lib/infer")
+(tc true)
+(load "B.cora")
+
+;; B.cora (no tc directive)
+;; => default tc OFF for B
+```
+
+Type-check enablement is decided per source unit during compile.
+A unit without explicit `(tc true|false)` does not inherit caller/importer setting.
+
+### 19. In `(package ...)`, keep `import`/`export` before other forms
+
+```lisp
+;; BAD: `tc` before export breaks package parsing shape
+(package "cora/lib/x"
+  (import "cora/lib/infer")
+  (tc true)
+  (export f)
+  ...)
+
+;; GOOD
+(package "cora/lib/x"
+  (import "cora/lib/infer")
+  (export f)
+  (tc true)
+  ...)
+```
+
+`package` parsing only consumes leading `import`/`export` forms.
+If other forms appear first, later `export` is treated as normal code and may fail.
+
+### 20. `define-record` expansion is not yet tc-clean under module-wide `tc true`
+
+```lisp
+(package "cora/lib/x"
+  (import "cora/lib/define-record")
+  (export ...)
+  (tc true)   ;; may trigger false-positive type failures in expanded low-level forms
+  (define-record <x> ...)
+  ...)
+```
+
+For now, keep declarations in such modules, but enable module-wide `tc true` only after
+macro expansion typing/lowering rules are aligned.
+
+### 21. `(:declare ...)` currently depends on unit `tc` enablement
+
+```lisp
+;; If tc is OFF for this compilation unit,
+;; :declare forms are not injected by current split/generate pipeline.
+
+(:declare 'f `(int -> int))
+```
+
+Use `(:declare ...)` in units already on `(tc true)`.
+For units not yet tc-clean (e.g. macro-heavy modules), keep runtime `declare` calls
+so downstream modules can still consume their exported type signatures.
+
+### 22. `(tc true|false)` should be compile directive inside modules, not runtime side effect
+
+```lisp
+;; In package/body compilation, strip tc directive forms from emitted runtime code.
+;; Otherwise module init mutates global *typecheck* and leaks into unrelated modules.
+```
+
+Use tc to control compile-unit checking only. Do not let imported module init change
+another module's compile mode.
+
+### 23. Keep standalone `(tc true|false)` executable in REPL/script mode
+
+```lisp
+;; REPL/script reads one form at a time.
+;; If split pass strips standalone `(tc true)` to empty begin, tc never flips on.
+```
+
+When preprocessing single toplevel form, preserve literal tc directive as expression.
+For package/begin body compilation, still strip directive from emitted runtime code.
+
+### 24. Editing `lib/toc.cora` requires syncing `lib/toc.c` immediately
+
+```lisp
+;; If toc.cora is newer than toc.so, import may fallback to toc.cora source compile.
+;; But compiling toc.cora itself needs `cora/lib/toc#compile-to-c` already loaded.
+;; This can deadlock bootstrap.
+```
+
+After changing `lib/toc.cora`, regenerate `lib/toc.c` and rebuild `lib/toc.so` in one step.
+Also invalidate stale generated `.so` files for affected cora modules if compiler semantics changed.

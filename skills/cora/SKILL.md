@@ -20,6 +20,10 @@ Use this skill when:
 1. **Before writing code**: Check [pitfalls.md](references/pitfalls.md) for common mistakes
 2. **Syntax reference**: Use [cora.md](references/cora.md) for complete language spec
 3. **When in doubt**: Test incrementally, Cora errors can be cryptic
+4. **Import hygiene**: Before using common helpers (`display`, file I/O), verify required imports are present (e.g. `(import "cora/lib/io")`)
+5. **AST hygiene for checkers/macros**: `[]` is reader sugar and appears as `(list ...)` / `(list-rest ...)` before evaluation, not nested `cons` data.
+6. **Sequencing forms**: `do` is fixed-arity and only accepts exactly 2 expressions; use `begin` for 3+ expressions.
+7. **Checker scope hygiene**: Type checker should report type errors on core forms; symbol visibility, module closure, and non-type structural validation belong to resolver/lowering/runtime layers.
 
 ### Key Syntax Differences from Other Lisps
 
