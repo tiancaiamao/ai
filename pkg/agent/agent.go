@@ -89,6 +89,7 @@ type Agent struct {
 	maxLLMRetries   int
 	retryBaseDelay  time.Duration
 	maxTurns        int // Maximum conversation turns (0 = unlimited)
+	contextWindow   int // Context window for the model (0 = use default 128000)
 	traceBuf        *traceevent.TraceBuf
 	traceStop       chan struct{}
 	traceDone       chan struct{}
@@ -218,6 +219,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		MaxLLMRetries:       a.maxLLMRetries,
 		RetryBaseDelay:      a.retryBaseDelay,
 		MaxTurns:            a.maxTurns,
+		ContextWindow:       a.contextWindow,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -593,6 +595,15 @@ func (a *Agent) SetMaxTurns(maxTurns int) {
 		maxTurns = 0
 	}
 	a.maxTurns = maxTurns
+}
+
+// SetContextWindow sets the context window for the model.
+// Set to 0 to use the default (128000).
+func (a *Agent) SetContextWindow(contextWindow int) {
+	if contextWindow < 0 {
+		contextWindow = 0
+	}
+	a.contextWindow = contextWindow
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

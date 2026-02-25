@@ -43,6 +43,7 @@ type LoopConfig struct {
 	MaxConsecutiveToolCalls int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
+	ContextWindow           int           // Context window for the model (0=use default 128000)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -358,8 +359,8 @@ func runInnerLoop(
 		if agentCtx.WorkingMemory != nil && msg.Usage != nil {
 			// Use context window from config if available, otherwise use a default
 			tokensMax := 128000 // default context window
-			if config.Model.ContextWindow > 0 {
-				tokensMax = config.Model.ContextWindow
+			if config.ContextWindow > 0 {
+				tokensMax = config.ContextWindow
 			}
 			agentCtx.WorkingMemory.UpdateMeta(
 				msg.Usage.TotalTokens,
@@ -779,8 +780,8 @@ func streamAssistantResponse(
 		// Update meta with current message count before getting it
 		// This ensures the first request has meaningful data
 		tokensMax := 128000 // default context window
-		if config.Model.ContextWindow > 0 {
-			tokensMax = config.Model.ContextWindow
+		if config.ContextWindow > 0 {
+			tokensMax = config.ContextWindow
 		}
 		agentCtx.WorkingMemory.UpdateMeta(
 			agentCtx.WorkingMemory.GetMeta().TokensUsed, // keep existing tokens_used if any
@@ -788,10 +789,11 @@ func streamAssistantResponse(
 			len(agentCtx.Messages),
 		)
 
-		// Inject context_meta
+		// Inject context_meta at the END of messages (not beginning)
+		// to preserve prompt caching for system prompt and earlier messages
 		meta := agentCtx.WorkingMemory.GetMeta()
 		contextMetaMsg := buildContextMetaMessage(meta)
-		llmMessages = append([]llm.LLMMessage{contextMetaMsg}, llmMessages...)
+		llmMessages = append(llmMessages, contextMetaMsg)
 	}
 
 	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
@@ -1205,7 +1207,9 @@ func buildContextMetaMessage(meta ContextMeta) llm.LLMMessage {
 	}
 	content := fmt.Sprintf(`<context_meta>
 %s
-</context_meta>`, string(metaJSON))
+</context_meta>
+
+💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.`, string(metaJSON))
 	return llm.LLMMessage{
 		Role:    "user",
 		Content: content,

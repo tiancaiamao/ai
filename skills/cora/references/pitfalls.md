@@ -334,20 +334,21 @@ fail during expansion with low-signal runtime errors.
 Keep the core HM machinery generic. Domain types should be expressed as pluggable
 rules so new features do not destabilize baseline inference/checking behavior.
 
-### 27. `eval` bootstrap bindings are not tc-ready as-is
+### 27. For bootstrap function bindings, use symbol values (not zero-arg calls)
 
 ```lisp
-;; Example pattern in eval.cora:
+;; GOOD
+(set 'car car)
+
+;; BAD
 (set 'car (car))
 ```
 
-With module-level `(tc true)`, this currently fails in `infer` because the RHS is
-typed as partial-application shape `(-> (A -> B))`, while bootstrap `set` usage
-expects direct function value `(A -> B)`.
+With module-level `(tc true)`, zero-arg call form is typed as a partial-application
+shape `(-> (A -> B))`, while bootstrap binding usually expects direct function value
+`(A -> B)`.
 
-Treat `cora/lib/eval` as staged exception for now (tc-off) unless:
-1. bootstrap binding forms are normalized to tc-friendly shapes, or
-2. checker policy is widened in a deliberate, tested way.
+Use direct symbol values for these bindings (`car`, `cdr`, `+`, `symbol?`, etc.).
 
 ### 28. Keep `sys.so` newer than `sys.cora` during bootstrap experiments
 

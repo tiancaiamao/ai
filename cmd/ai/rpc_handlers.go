@@ -254,6 +254,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		writer:    sessionWriter,
 	}
 	ag.SetCompactor(sessionComp)
+	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
@@ -854,6 +855,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, spec.ContextWindow)
 		sessionComp.Update(sess, compactor)
 		ag.SetCompactor(sessionComp)
+		ag.SetContextWindow(spec.ContextWindow)
 
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
@@ -919,6 +921,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, next.ContextWindow)
 		sessionComp.Update(sess, compactor)
 		ag.SetCompactor(sessionComp)
+		ag.SetContextWindow(next.ContextWindow)
 
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)

@@ -210,7 +210,15 @@ Be concise and focused on the task at hand.`
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
 	}
-	currentContextWindow := 128000 // default context window
+	// Get context window from model spec
+	activeSpec, err := resolveActiveModelSpec(cfg)
+	if err != nil {
+		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
+	}
+	currentContextWindow := activeSpec.ContextWindow
+	if currentContextWindow <= 0 {
+		currentContextWindow = 128000 // default context window
+	}
 	compactor := compact.NewCompactor(
 		compactorConfig,
 		model,
@@ -226,6 +234,7 @@ Be concise and focused on the task at hand.`
 		writer:    sessionWriter,
 	}
 	ag.SetCompactor(sessionComp)
+	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
 

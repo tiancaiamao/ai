@@ -333,6 +333,11 @@ func (p *ToolOutputProcessor) extractOutput(output string, maxChars int) string 
 
 // truncateOutput keeps head and tail with truncation marker.
 func (p *ToolOutputProcessor) truncateOutput(output string, maxChars int, keepHead, keepTail int) string {
+	// First check: if output fits within maxChars, return as-is
+	if len(output) <= maxChars {
+		return output
+	}
+
 	if keepHead == 0 {
 		keepHead = 10
 	}
@@ -342,7 +347,23 @@ func (p *ToolOutputProcessor) truncateOutput(output string, maxChars int, keepHe
 
 	lines := strings.Split(output, "\n")
 
+	// If few lines but large content (e.g., one very long JSON line),
+	// truncate by characters instead of lines
 	if len(lines) <= keepHead+keepTail {
+		// Keep what we can, with truncation marker
+		if len(output) > maxChars {
+			headChars := maxChars / 2
+			tailChars := maxChars - headChars - 50 // reserve space for marker
+			if tailChars < 0 {
+				tailChars = 0
+			}
+			result := output[:headChars]
+			result += fmt.Sprintf("\n\n... (%d chars truncated, output was %d chars in %d lines) ...\n\n", len(output)-headChars-tailChars, len(output), len(lines))
+			if tailChars > 0 {
+				result += output[len(output)-tailChars:]
+			}
+			return result
+		}
 		return output
 	}
 

@@ -212,3 +212,71 @@ func TestExtractFilePath(t *testing.T) {
 		}
 	}
 }
+
+func TestTruncateOutput_LongLine(t *testing.T) {
+	// Test the fix for long single-line output (e.g., jq JSON output)
+	// This was a bug: output with few lines but huge content was not truncated
+	policies := map[string]OutputPolicy{
+		"bash": {
+			ToolName:  "bash",
+			MaxTokens: 100, // 400 chars limit
+			Strategy:  StrategyTruncate,
+			KeepHead:  10,
+			KeepTail:  30,
+		},
+	}
+	processor := NewToolOutputProcessor(policies, 500)
+
+	// Simulate a very long single line (like jq JSON output)
+	longLine := strings.Repeat("{\"key\":\"value with lots of content\"},", 1000) // ~50KB
+
+	result := processor.ProcessOutput("bash", longLine, false)
+
+	// Should be truncated despite being only 1 line
+	if len(result) > 600 {
+		t.Errorf("Long single line should be truncated, got %d chars", len(result))
+	}
+
+	// Should contain truncation marker
+	if !strings.Contains(result, "truncated") {
+		t.Error("Truncated output should contain truncation marker")
+	}
+
+	// Original should be much larger
+	if len(longLine) <= 600 {
+		t.Errorf("Test setup error: longLine should be > 600 chars, got %d", len(longLine))
+	}
+}
+
+func TestTruncateOutput_FewLinesHugeContent(t *testing.T) {
+	// Test output with few lines but each line is very long
+	policies := map[string]OutputPolicy{
+		"test": {
+			ToolName:  "test",
+			MaxTokens: 100, // 400 chars limit
+			Strategy:  StrategyTruncate,
+			KeepHead:  10,
+			KeepTail:  30,
+		},
+	}
+	processor := NewToolOutputProcessor(policies, 500)
+
+	// 35 lines, each with lots of content (total ~35KB)
+	var lines []string
+	for i := 0; i < 35; i++ {
+		lines = append(lines, strings.Repeat("x", 1000))
+	}
+	output := strings.Join(lines, "\n")
+
+	result := processor.ProcessOutput("test", output, false)
+
+	// Should be truncated (35 lines < 40, but content is huge)
+	if len(result) > 600 {
+		t.Errorf("Few lines with huge content should be truncated, got %d chars", len(result))
+	}
+
+	// Should contain truncation marker
+	if !strings.Contains(result, "truncated") {
+		t.Error("Truncated output should contain truncation marker")
+	}
+}

@@ -167,20 +167,26 @@ func (b *Builder) buildWorkingMemorySection() string {
 	overviewPath := b.workingMemory.GetPath()
 	detailDir := b.workingMemory.GetDetailDir()
 
-	return fmt.Sprintf(`## Working Memory
+	return fmt.Sprintf(`## Working Memory ⚠️ IMPORTANT
 
-You have an external memory file that persists across conversations. Use it to:
-- Track current tasks and progress
-- Remember key decisions and why you made them
-- Store important information about the project
+You have an external memory file that persists across conversations.
+
+**⚠️ CRITICAL: You MUST actively maintain this memory.**
+- Update it when tasks progress, decisions are made, or context changes
+- Review and compress it when context_meta shows high token usage
+- Use it to track what matters - YOU control what you remember
 
 **File Path**: %s
 **Detail Directory**: %s (for storing detailed notes)
 
-To update your memory, use the write tool to modify the file at the path above.
+To update: use the write tool to modify the file at the path above.
 Your updated content will be loaded in the next request.
 
-The current content of your working memory is provided in each request.`, overviewPath, detailDir)
+**When to update:**
+- After completing a task or making progress
+- After making important decisions
+- When starting a new session (read current state)
+- When context_meta shows tokens > 50%%`, overviewPath, detailDir)
 }
 
 func (b *Builder) buildToolingSection() string {

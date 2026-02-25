@@ -204,6 +204,7 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 		writer:    sessionWriter,
 	}
 	ag.SetCompactor(sessionComp)
+	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
 
