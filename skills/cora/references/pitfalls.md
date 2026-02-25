@@ -303,3 +303,59 @@ For package/begin body compilation, still strip directive from emitted runtime c
 
 After changing `lib/toc.cora`, regenerate `lib/toc.c` and rebuild `lib/toc.so` in one step.
 Also invalidate stale generated `.so` files for affected cora modules if compiler semantics changed.
+
+### 25. Prefer `func ... where` over `match ... where`
+
+```lisp
+;; BETTER
+(func f
+  x => ... where (number? x)
+  _ => ...)
+
+;; AVOID in checker/hot paths
+(match x
+  y where (number? y) ...
+  _ ...)
+```
+
+Some source-compile paths currently handle guarded `match` clauses poorly and can
+fail during expansion with low-signal runtime errors.
+
+### 26. Extend type checker with `deftype`, not core unifier hacks
+
+```lisp
+;; BETTER
+(deftype 'op type-check-for-op)
+
+;; AVOID
+;; adding ad-hoc 'op branches directly in unify/occur?/apply-subst
+```
+
+Keep the core HM machinery generic. Domain types should be expressed as pluggable
+rules so new features do not destabilize baseline inference/checking behavior.
+
+### 27. `eval` bootstrap bindings are not tc-ready as-is
+
+```lisp
+;; Example pattern in eval.cora:
+(set 'car (car))
+```
+
+With module-level `(tc true)`, this currently fails in `infer` because the RHS is
+typed as partial-application shape `(-> (A -> B))`, while bootstrap `set` usage
+expects direct function value `(A -> B)`.
+
+Treat `cora/lib/eval` as staged exception for now (tc-off) unless:
+1. bootstrap binding forms are normalized to tc-friendly shapes, or
+2. checker policy is widened in a deliberate, tested way.
+
+### 28. Keep `sys.so` newer than `sys.cora` during bootstrap experiments
+
+```lisp
+;; If sys.cora mtime > sys.so, loader may recompile sys from source.
+;; In unstable tc experiments this can pull in broken bootstrap states.
+```
+
+After any temporary `sys.cora` experiment, either:
+1. rebuild/sync `sys.so` immediately, or
+2. update `sys.so` mtime so loader uses the known-good shared object path.

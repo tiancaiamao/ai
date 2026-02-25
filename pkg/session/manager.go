@@ -49,17 +49,14 @@ func (sm *SessionManager) ListSessions() ([]SessionMeta, error) {
 
 	var sessions []SessionMeta
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// Only consider directories (new session format)
+		if !entry.IsDir() {
 			continue
 		}
 
-		// Only consider session files
-		if filepath.Ext(entry.Name()) != ".jsonl" {
-			continue
-		}
-
-		sessionPath := filepath.Join(sm.sessionsDir, entry.Name())
-		meta, err := sm.createMetaFromSession(sessionPath)
+		// Check if it's a valid session directory (has messages.jsonl or meta.json)
+		sessionDir := filepath.Join(sm.sessionsDir, entry.Name())
+		meta, err := sm.createMetaFromSessionDir(sessionDir)
 		if err != nil {
 			continue
 		}
@@ -78,10 +75,15 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 
 	// Generate unique ID
 	id := uuid.New().String()
-	sessPath := sm.getSessionPath(id)
+	sessDir := sm.getSessionPath(id)
+
+	// Create session directory
+	if err := os.MkdirAll(sessDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create session directory: %w", err)
+	}
 
 	// Create session
-	sess := NewSession(sessPath)
+	sess := NewSession(sessDir)
 
 	// Store session info inside the session file
 	if _, err := sess.AppendSessionInfo(name, title); err != nil {
@@ -102,6 +104,11 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
+	// Create working-memory structure
+	if _, err := EnsureWorkingMemory(sessDir); err != nil {
+		return nil, fmt.Errorf("failed to create working memory: %w", err)
+	}
+
 	return sess, nil
 }
 
@@ -116,8 +123,14 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 	}
 
 	id := uuid.New().String()
-	sessPath := sm.getSessionPath(id)
-	newSess := NewSession(sessPath)
+	sessDir := sm.getSessionPath(id)
+
+	// Create session directory
+	if err := os.MkdirAll(sessDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create session directory: %w", err)
+	}
+
+	newSess := NewSession(sessDir)
 	newSess.header.ParentSession = source.GetPath()
 
 	branchEntries := []SessionEntry{}
@@ -160,7 +173,48 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
+	// Copy working-memory from source session
+	sourceDir := source.GetDir()
+	srcWM := filepath.Join(sourceDir, WorkingMemoryDir)
+	dstWM := filepath.Join(sessDir, WorkingMemoryDir)
+	if _, err := os.Stat(srcWM); err == nil {
+		if err := copyDir(srcWM, dstWM); err != nil {
+			// Log but don't fail - working memory copy is not critical
+			fmt.Fprintf(os.Stderr, "warning: failed to copy working memory: %v\n", err)
+		}
+	} else {
+		// Create fresh working-memory if source doesn't have one
+		if _, err := EnsureWorkingMemory(sessDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to create working memory: %v\n", err)
+		}
+	}
+
 	return newSess, nil
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dstPath, data, info.Mode())
+	})
 }
 
 // GetSession retrieves a session by ID.
@@ -289,19 +343,14 @@ func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
 	return sm.saveMeta(id, meta)
 }
 
-// getSessionPath returns the session file path for a given ID.
+// getSessionPath returns the session directory path for a given ID.
 func (sm *SessionManager) getSessionPath(id string) string {
-	return filepath.Join(sm.sessionsDir, id+".jsonl")
+	return filepath.Join(sm.sessionsDir, id)
 }
 
 // getMetaPath returns the metadata file path for a given ID.
 func (sm *SessionManager) getMetaPath(id string) string {
-	// Extract ID from full path if needed
-	if filepath.Ext(id) == ".jsonl" {
-		id = filepath.Base(id) // Extract just the filename
-		id = id[:len(id)-6]    // Remove .jsonl extension
-	}
-	return filepath.Join(sm.sessionsDir, id+".meta.json")
+	return filepath.Join(sm.sessionsDir, id, "meta.json")
 }
 
 // saveMeta saves session metadata.
@@ -330,9 +379,64 @@ func (sm *SessionManager) loadMeta(metaPath string) (*SessionMeta, error) {
 	return &meta, nil
 }
 
-// createMetaFromSession creates metadata from an existing session file.
+// createMetaFromSessionDir creates metadata from an existing session directory.
+func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta, error) {
+	// Try to load metadata file first
+	id := filepath.Base(sessDir)
+	metaPath := filepath.Join(sessDir, "meta.json")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta SessionMeta
+		if err := json.Unmarshal(data, &meta); err == nil {
+			return &meta, nil
+		}
+	}
+
+	// Fallback: create from session file
+	sess, err := LoadSession(sessDir)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(sessDir)
+	if err != nil {
+		return nil, err
+	}
+
+	header := sess.GetHeader()
+	createdAt := info.ModTime()
+	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			createdAt = parsed
+		}
+	}
+
+	name := sess.GetSessionName()
+	if name == "" {
+		name = id
+	}
+	title := sess.GetSessionTitle()
+	if title == "" {
+		title = "Session"
+	}
+
+	return &SessionMeta{
+		ID:           id,
+		Name:         name,
+		Title:        title,
+		CreatedAt:    createdAt,
+		UpdatedAt:    info.ModTime(),
+		MessageCount: len(sess.GetMessages()),
+	}, nil
+}
+
+// createMetaFromSession creates metadata from an existing session file path (legacy).
 func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, error) {
-	sess, err := LoadSession(sessPath)
+	// If it's a directory, use the new method
+	if info, err := os.Stat(sessPath); err == nil && info.IsDir() {
+		return sm.createMetaFromSessionDir(sessPath)
+	}
+
+	sess, err := LoadSession(filepath.Dir(sessPath))
 	if err != nil {
 		return nil, err
 	}

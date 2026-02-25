@@ -15,6 +15,13 @@ type ToolInfo interface {
 	Description() string
 }
 
+// WorkingMemoryInfo provides working memory content for prompt generation.
+type WorkingMemoryInfo interface {
+	Load() (string, error)
+	GetPath() string
+	GetDetailDir() string
+}
+
 // Builder constructs system prompts with structured sections.
 type Builder struct {
 	// Base system prompt (identity, core behavior)
@@ -34,6 +41,9 @@ type Builder struct {
 
 	// Skills (for Skills section)
 	skills []skill.Skill
+
+	// Working memory (for Working Memory section)
+	workingMemory WorkingMemoryInfo
 }
 
 // NewBuilder creates a new prompt builder.
@@ -90,6 +100,12 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 	return b
 }
 
+// SetWorkingMemory sets the working memory for the prompt.
+func (b *Builder) SetWorkingMemory(wm WorkingMemoryInfo) *Builder {
+	b.workingMemory = wm
+	return b
+}
+
 // Build generates the final system prompt.
 func (b *Builder) Build() string {
 	sections := []string{}
@@ -102,19 +118,24 @@ func (b *Builder) Build() string {
 	// 2. Workspace (always included)
 	sections = append(sections, b.buildWorkspaceSection())
 
-	// 3. Tooling (always included)
+	// 3. Working Memory (if available)
+	if wm := b.buildWorkingMemorySection(); wm != "" {
+		sections = append(sections, wm)
+	}
+
+	// 4. Tooling (always included)
 	if tooling := b.buildToolingSection(); tooling != "" {
 		sections = append(sections, tooling)
 	}
 
-	// 4. Skills (only when not minimal and skills exist)
+	// 5. Skills (only when not minimal and skills exist)
 	if !b.minimal && len(b.skills) > 0 {
 		if skillsText := skill.FormatForPrompt(b.skills); skillsText != "" {
 			sections = append(sections, skillsText)
 		}
 	}
 
-	// 5. Project Context (bootstrap files)
+	// 6. Project Context (bootstrap files)
 	if !b.minimal {
 		if context := b.buildProjectContext(); context != "" {
 			sections = append(sections, context)
@@ -134,6 +155,32 @@ func (b *Builder) buildWorkspaceSection() string {
 	return fmt.Sprintf(`## Workspace
 Your working directory is: %s
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.cwd, notes)
+}
+
+func (b *Builder) buildWorkingMemorySection() string {
+	if b.workingMemory == nil {
+		return ""
+	}
+
+	// Build the system prompt section explaining the working memory mechanism
+	// This tells the LLM WHERE the file is and HOW to update it
+	overviewPath := b.workingMemory.GetPath()
+	detailDir := b.workingMemory.GetDetailDir()
+
+	return fmt.Sprintf(`## Working Memory
+
+You have an external memory file that persists across conversations. Use it to:
+- Track current tasks and progress
+- Remember key decisions and why you made them
+- Store important information about the project
+
+**File Path**: %s
+**Detail Directory**: %s (for storing detailed notes)
+
+To update your memory, use the write tool to modify the file at the path above.
+Your updated content will be loaded in the next request.
+
+The current content of your working memory is provided in each request.`, overviewPath, detailDir)
 }
 
 func (b *Builder) buildToolingSection() string {

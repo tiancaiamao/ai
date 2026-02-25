@@ -166,9 +166,10 @@ func RunLoop(
 
 		newMessages := append([]AgentMessage{}, prompts...)
 		currentCtx := &AgentContext{
-			SystemPrompt: agentCtx.SystemPrompt,
-			Messages:     append(agentCtx.Messages, prompts...),
-			Tools:        agentCtx.Tools,
+			SystemPrompt:  agentCtx.SystemPrompt,
+			Messages:      append(agentCtx.Messages, prompts...),
+			Tools:         agentCtx.Tools,
+			WorkingMemory: agentCtx.WorkingMemory,
 		}
 
 		stream.Push(NewAgentStartEvent())
@@ -352,6 +353,22 @@ func runInnerLoop(
 
 		agentCtx.Messages = append(agentCtx.Messages, *msg)
 		newMessages = append(newMessages, *msg)
+
+		// Update WorkingMemory meta after successful LLM response
+		if agentCtx.WorkingMemory != nil && msg.Usage != nil {
+			// Use context window from config if available, otherwise use a default
+			tokensMax := 128000 // default context window
+			if config.Model.ContextWindow > 0 {
+				tokensMax = config.Model.ContextWindow
+			}
+			agentCtx.WorkingMemory.UpdateMeta(
+				msg.Usage.TotalTokens,
+				tokensMax,
+				len(agentCtx.Messages),
+			)
+			// Invalidate cache so next Load() will re-read
+			agentCtx.WorkingMemory.InvalidateCache()
+		}
 
 		// Check for error or abort
 		if msg.StopReason == "error" || msg.StopReason == "aborted" {
@@ -738,6 +755,44 @@ func streamAssistantResponse(
 
 	// Convert messages to LLM format
 	llmMessages := ConvertMessagesToLLM(ctx, agentCtx.Messages)
+
+	// Inject working memory content if available
+	// This is done before each LLM call so AI sees updates it made
+	if agentCtx.WorkingMemory != nil {
+		// Invalidate cache to ensure we read the latest content
+		agentCtx.WorkingMemory.InvalidateCache()
+		content, err := agentCtx.WorkingMemory.Load()
+		if err != nil {
+			slog.Warn("[Loop] Failed to load working memory", "error", err)
+		} else if content != "" {
+			slog.Debug("[Loop] Injecting working memory content", "length", len(content))
+			wmMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: fmt.Sprintf("<working_memory>\n%s\n</working_memory>", content),
+			}
+			llmMessages = append([]llm.LLMMessage{wmMsg}, llmMessages...)
+		}
+	}
+
+	// Update meta and inject context_meta if WorkingMemory is available
+	if agentCtx.WorkingMemory != nil {
+		// Update meta with current message count before getting it
+		// This ensures the first request has meaningful data
+		tokensMax := 128000 // default context window
+		if config.Model.ContextWindow > 0 {
+			tokensMax = config.Model.ContextWindow
+		}
+		agentCtx.WorkingMemory.UpdateMeta(
+			agentCtx.WorkingMemory.GetMeta().TokensUsed, // keep existing tokens_used if any
+			tokensMax,
+			len(agentCtx.Messages),
+		)
+
+		// Inject context_meta
+		meta := agentCtx.WorkingMemory.GetMeta()
+		contextMetaMsg := buildContextMetaMessage(meta)
+		llmMessages = append([]llm.LLMMessage{contextMetaMsg}, llmMessages...)
+	}
 
 	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
 
@@ -1140,6 +1195,21 @@ func hashAny(value any) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// buildContextMetaMessage creates a system message with context metadata.
+func buildContextMetaMessage(meta ContextMeta) llm.LLMMessage {
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		metaJSON = []byte("{}")
+	}
+	content := fmt.Sprintf(`<context_meta>
+%s
+</context_meta>`, string(metaJSON))
+	return llm.LLMMessage{
+		Role:    "user",
+		Content: content,
+	}
 }
 
 // executeToolCalls executes tool calls from an assistant message.

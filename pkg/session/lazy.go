@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/google/uuid"
 )
@@ -43,8 +44,8 @@ func FullLoadOptions() LoadOptions {
 // 1. Using ResumeOffset if available (fast path)
 // 2. Scanning from end to find compaction entry (fallback)
 // 3. Only loading recent messages + compaction summary
-func LoadSessionLazy(filePath string, opts LoadOptions) (*Session, error) {
-	if filePath == "" {
+func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
+	if sessionDir == "" {
 		sess := &Session{
 			entries: make([]*SessionEntry, 0),
 			byID:    make(map[string]*SessionEntry),
@@ -55,19 +56,20 @@ func LoadSessionLazy(filePath string, opts LoadOptions) (*Session, error) {
 
 	// Non-lazy mode: use original LoadSession
 	if !opts.Lazy {
-		return LoadSession(filePath)
+		return LoadSession(sessionDir)
 	}
 
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			id := sessionIDFromFilePath(filePath)
+			id := sessionIDFromDirPath(sessionDir)
 			cwd, _ := os.Getwd()
 			sess := &Session{
-				filePath: filePath,
-				entries:  make([]*SessionEntry, 0),
-				byID:     make(map[string]*SessionEntry),
-				persist:  true,
+				sessionDir: sessionDir,
+				entries:    make([]*SessionEntry, 0),
+				byID:       make(map[string]*SessionEntry),
+				persist:    true,
 			}
 			sess.header = newSessionHeader(id, cwd, "")
 			return sess, nil
@@ -80,15 +82,15 @@ func LoadSessionLazy(filePath string, opts LoadOptions) (*Session, error) {
 	header, err := readHeaderFromFile(f)
 	if err != nil {
 		// Fallback to full load if header parsing fails
-		return LoadSession(filePath)
+		return LoadSession(sessionDir)
 	}
 
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		header:   *header,
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		header:     *header,
+		persist:    true,
 	}
 
 	// Fast path: use ResumeOffset

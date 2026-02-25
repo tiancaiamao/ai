@@ -12,14 +12,14 @@ import (
 // BenchmarkLoadSession compares lazy vs full loading performance
 func BenchmarkLoadSession_Lazy(b *testing.B) {
 	tmpDir := b.TempDir()
-	filePath := filepath.Join(tmpDir, "large-session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "large-session")
 
 	// Create a large session file with 500 messages
-	createLargeSessionFile(filePath, 500)
+	createLargeSessionFile(sessionDir, 500)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+		_, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -28,14 +28,14 @@ func BenchmarkLoadSession_Lazy(b *testing.B) {
 
 func BenchmarkLoadSession_Full(b *testing.B) {
 	tmpDir := b.TempDir()
-	filePath := filepath.Join(tmpDir, "large-session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "large-session")
 
 	// Create a large session file with 500 messages
-	createLargeSessionFile(filePath, 500)
+	createLargeSessionFile(sessionDir, 500)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(filePath)
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -44,14 +44,14 @@ func BenchmarkLoadSession_Full(b *testing.B) {
 
 func BenchmarkLoadSession_Lazy_1000(b *testing.B) {
 	tmpDir := b.TempDir()
-	filePath := filepath.Join(tmpDir, "large-session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "large-session")
 
 	// Create a large session file with 1000 messages
-	createLargeSessionFile(filePath, 1000)
+	createLargeSessionFile(sessionDir, 1000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+		_, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -60,14 +60,14 @@ func BenchmarkLoadSession_Lazy_1000(b *testing.B) {
 
 func BenchmarkLoadSession_Full_1000(b *testing.B) {
 	tmpDir := b.TempDir()
-	filePath := filepath.Join(tmpDir, "large-session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "large-session")
 
 	// Create a large session file with 1000 messages
-	createLargeSessionFile(filePath, 1000)
+	createLargeSessionFile(sessionDir, 1000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(filePath)
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -75,12 +75,14 @@ func BenchmarkLoadSession_Full_1000(b *testing.B) {
 }
 
 // createLargeSessionFile creates a session file with n messages
-func createLargeSessionFile(filePath string, n int) {
+func createLargeSessionFile(sessionDir string, n int) {
+	os.MkdirAll(sessionDir, 0755)
+
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  false,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    false,
 	}
 	sess.header = newSessionHeader("benchmark-session", "/test", "")
 
@@ -97,6 +99,7 @@ func createLargeSessionFile(filePath string, n int) {
 		sess.AddMessages(msg)
 	}
 
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
 	os.WriteFile(filePath, data, 0644)
 }

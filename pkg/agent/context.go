@@ -17,6 +17,9 @@ type AgentContext struct {
 	// allowedTools restricts which tools can be executed.
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
+
+	// WorkingMemory is the agent's working memory for context management.
+	WorkingMemory *WorkingMemory `json:"-"`
 }
 
 // Tool represents a tool that can be called by the agent.

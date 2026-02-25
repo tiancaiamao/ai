@@ -150,10 +150,29 @@ Be concise and focused on the task at hand.`
 	// Build the full system prompt
 	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+
+	// Set working memory for system prompt explanation (tells LLM about the mechanism)
+	// The actual content is injected dynamically in the agent loop
+	if sess != nil {
+		sessionDir := sess.GetDir()
+		if sessionDir != "" {
+		wm := agent.NewWorkingMemory(sessionDir)
+		promptBuilder.SetWorkingMemory(wm)
+	}
+	}
 	systemPrompt := promptBuilder.Build()
 
 	// Create agent context
 	agentCtx := agent.NewAgentContext(systemPrompt)
+
+	// Initialize working memory from session directory (for dynamic injection)
+	if sess != nil {
+		sessionDir := sess.GetDir()
+		if sessionDir != "" {
+		wm := agent.NewWorkingMemory(sessionDir)
+		agentCtx.WorkingMemory = wm
+		}
+	}
 
 	// Add tools, optionally filtering by whitelist
 	allTools := registry.All()

@@ -36,10 +36,10 @@ func TestLoadSessionLazyEmptyPath(t *testing.T) {
 
 func TestLoadSessionLazyNonExistent(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "nonexistent.jsonl")
+	sessionDir := filepath.Join(tmpDir, "nonexistent")
 
 	opts := DefaultLoadOptions()
-	sess, err := LoadSessionLazy(filePath, opts)
+	sess, err := LoadSessionLazy(sessionDir, opts)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.NotEmpty(t, sess.header.ID)
@@ -48,26 +48,31 @@ func TestLoadSessionLazyNonExistent(t *testing.T) {
 
 func TestLoadSessionLazyEmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "empty.jsonl")
-	err := os.WriteFile(filePath, []byte{}, 0644)
+	sessionDir := filepath.Join(tmpDir, "empty")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	err = os.WriteFile(filePath, []byte{}, 0644)
 	require.NoError(t, err)
 
 	opts := DefaultLoadOptions()
-	sess, err := LoadSessionLazy(filePath, opts)
+	sess, err := LoadSessionLazy(sessionDir, opts)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 }
 
 func TestLoadSessionLazyWithMessages(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
 
 	// Create a session file with header and messages
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
 	}
 	sess.header = newSessionHeader("test-session", "/test", "")
 
@@ -84,12 +89,13 @@ func TestLoadSessionLazyWithMessages(t *testing.T) {
 	}
 
 	// Persist to file using actual session format
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
-	err := os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
 	// Test lazy loading with default options (should load ~50 messages)
-	loaded, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -101,14 +107,16 @@ func TestLoadSessionLazyWithMessages(t *testing.T) {
 
 func TestLoadSessionLazyWithCompaction(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
 
 	// Create a session file with header, compaction, and messages
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
 	}
 	sess.header = newSessionHeader("test-session", "/test", "")
 
@@ -146,12 +154,13 @@ func TestLoadSessionLazyWithCompaction(t *testing.T) {
 	}
 
 	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
-	err := os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
 	// Test lazy loading
-	loaded, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -169,14 +178,16 @@ func TestLoadSessionLazyWithCompaction(t *testing.T) {
 
 func TestLoadSessionLazyFullLoad(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
 
 	// Create a session file
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
 	}
 	sess.header = newSessionHeader("test-session", "/test", "")
 
@@ -193,12 +204,13 @@ func TestLoadSessionLazyFullLoad(t *testing.T) {
 	}
 
 	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
-	err := os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
 	// Test full loading (non-lazy)
-	loaded, err := LoadSessionLazy(filePath, FullLoadOptions())
+	loaded, err := LoadSessionLazy(sessionDir, FullLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -209,14 +221,16 @@ func TestLoadSessionLazyFullLoad(t *testing.T) {
 
 func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
 
 	// Create a session file
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
 	}
 	sess.header = newSessionHeader("test-session", "/test", "")
 
@@ -233,8 +247,9 @@ func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
 	}
 
 	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
-	err := os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
 	// Get file size
@@ -250,7 +265,7 @@ func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lazy loading - should use ResumeOffset
-	loaded, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -261,14 +276,16 @@ func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
 
 func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "legacy-session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "legacy-session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
 
 	// Create a session file without ResumeOffset
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  true,
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
 	}
 	sess.header = newSessionHeader("legacy-session", "/test", "")
 
@@ -285,12 +302,13 @@ func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 	}
 
 	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
-	err := os.WriteFile(filePath, data, 0644)
+	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
 	// Test lazy loading - should work without ResumeOffset
-	loaded, err := LoadSessionLazy(filePath, DefaultLoadOptions())
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "legacy-session", loaded.header.ID)

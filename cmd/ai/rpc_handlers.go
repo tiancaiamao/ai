@@ -197,6 +197,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Build the full system prompt (used for agent and compactor)
 	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+
+	// Set working memory for system prompt explanation (tells LLM about the mechanism)
+	// The actual content is injected dynamically in the agent loop
+	if sess != nil {
+		sessionDir := sess.GetDir()
+		if sessionDir != "" {
+			wm := agent.NewWorkingMemory(sessionDir)
+			promptBuilder.SetWorkingMemory(wm)
+		}
+	}
 	systemPrompt := promptBuilder.Build()
 
 	// Helper function to create a new agent context
@@ -204,6 +214,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		ctx := agent.NewAgentContext(systemPrompt)
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
+		}
+		// Initialize working memory from session directory
+		if sess != nil {
+			sessionDir := sess.GetDir()
+			if sessionDir != "" {
+				wm := agent.NewWorkingMemory(sessionDir)
+				ctx.WorkingMemory = wm
+			}
 		}
 		return ctx
 	}

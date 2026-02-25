@@ -24,6 +24,8 @@ Use this skill when:
 5. **AST hygiene for checkers/macros**: `[]` is reader sugar and appears as `(list ...)` / `(list-rest ...)` before evaluation, not nested `cons` data.
 6. **Sequencing forms**: `do` is fixed-arity and only accepts exactly 2 expressions; use `begin` for 3+ expressions.
 7. **Checker scope hygiene**: Type checker should report type errors on core forms; symbol visibility, module closure, and non-type structural validation belong to resolver/lowering/runtime layers.
+8. **Pattern guard placement**: Use `where` guards with `func` clauses; avoid `match` clauses with `where` guards in checker codegen paths.
+9. **Custom type extension**: Add domain-specific types via `deftype` rules (e.g. `op`) instead of hardcoding constructors into core unification/substitution machinery.
 
 ### Key Syntax Differences from Other Lisps
 

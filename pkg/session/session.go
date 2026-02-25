@@ -17,14 +17,14 @@ import (
 
 // Session represents a conversation session backed by an append-only JSONL file.
 type Session struct {
-	mu       sync.Mutex
-	filePath string
-	header   SessionHeader
-	entries  []*SessionEntry
-	byID     map[string]*SessionEntry
-	leafID   *string
-	flushed  bool
-	persist  bool
+	mu         sync.Mutex
+	sessionDir string // session directory path
+	header     SessionHeader
+	entries    []*SessionEntry
+	byID       map[string]*SessionEntry
+	leafID     *string
+	flushed    bool
+	persist    bool
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -33,39 +33,40 @@ type ForkMessage struct {
 	Text    string
 }
 
-// NewSession creates a new session with the given file path.
-func NewSession(filePath string) *Session {
+// NewSession creates a new session with the given directory path.
+func NewSession(sessionDir string) *Session {
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  filePath != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
-	id := sessionIDFromFilePath(filePath)
+	id := sessionIDFromDirPath(sessionDir)
 	cwd, _ := os.Getwd()
 	sess.header = newSessionHeader(id, cwd, "")
 	return sess
 }
 
-// LoadSession loads a session from the given file path.
-func LoadSession(filePath string) (*Session, error) {
+// LoadSession loads a session from the given directory path.
+func LoadSession(sessionDir string) (*Session, error) {
 	sess := &Session{
-		filePath: filePath,
-		entries:  make([]*SessionEntry, 0),
-		byID:     make(map[string]*SessionEntry),
-		persist:  filePath != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
-	if filePath == "" {
+	if sessionDir == "" {
 		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil
 	}
 
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			id := sessionIDFromFilePath(filePath)
+			id := sessionIDFromDirPath(sessionDir)
 			cwd, _ := os.Getwd()
 			sess.header = newSessionHeader(id, cwd, "")
 			return sess, nil
@@ -75,7 +76,7 @@ func LoadSession(filePath string) (*Session, error) {
 
 	lines := splitLines(data)
 	if len(lines) == 0 {
-		id := sessionIDFromFilePath(filePath)
+		id := sessionIDFromDirPath(sessionDir)
 		cwd, _ := os.Getwd()
 		sess.header = newSessionHeader(id, cwd, "")
 		return sess, nil
@@ -147,11 +148,23 @@ func (s *Session) GetMessages() []agent.AgentMessage {
 	return buildSessionContext(s.entries, s.leafID, s.byID)
 }
 
-// GetPath returns the file path of the session.
+// GetDir returns the session directory path.
+func (s *Session) GetDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionDir
+}
+
+// GetPath returns the messages.jsonl file path of the session.
 func (s *Session) GetPath() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.filePath
+	return s.filePath()
+}
+
+// filePath returns the messages.jsonl path (internal, must hold lock).
+func (s *Session) filePath() string {
+	return filepath.Join(s.sessionDir, "messages.jsonl")
 }
 
 // GetID returns the session ID from the header.
@@ -399,13 +412,14 @@ func (s *Session) Clear() error {
 	s.leafID = nil
 	s.header.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 
-	if s.filePath == "" {
+	if s.sessionDir == "" {
 		return nil
 	}
 
+	filePath := s.filePath()
 	if err := s.withFileWriteLock(func() error {
-		if _, err := os.Stat(s.filePath); err == nil {
-			if err := os.Remove(s.filePath); err != nil {
+		if _, err := os.Stat(filePath); err == nil {
+			if err := os.Remove(filePath); err != nil {
 				return err
 			}
 		}
@@ -424,7 +438,7 @@ func (s *Session) addEntry(entry *SessionEntry) {
 }
 
 func (s *Session) persistEntry(entry *SessionEntry) error {
-	if !s.persist || s.filePath == "" {
+	if !s.persist || s.sessionDir == "" {
 		return nil
 	}
 
@@ -441,7 +455,8 @@ func (s *Session) persistEntryLocked(entry *SessionEntry) error {
 		return nil
 	}
 
-	if info, err := os.Stat(s.filePath); err != nil || info.Size() == 0 {
+	filePath := s.filePath()
+	if info, err := os.Stat(filePath); err != nil || info.Size() == 0 {
 		if err := s.rewriteFileLocked(); err != nil {
 			return err
 		}
@@ -454,7 +469,7 @@ func (s *Session) persistEntryLocked(entry *SessionEntry) error {
 	}
 	data = append(data, '\n')
 
-	file, err := os.OpenFile(s.filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -469,7 +484,7 @@ func (s *Session) persistEntryLocked(entry *SessionEntry) error {
 }
 
 func (s *Session) rewriteFile() error {
-	if !s.persist || s.filePath == "" {
+	if !s.persist || s.sessionDir == "" {
 		s.flushed = true
 		return nil
 	}
@@ -480,12 +495,13 @@ func (s *Session) rewriteFile() error {
 }
 
 func (s *Session) rewriteFileLocked() error {
-	dir := filepath.Dir(s.filePath)
+	filePath := s.filePath()
+	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	tmpPath := fmt.Sprintf("%s.tmp-%d-%d", s.filePath, os.Getpid(), time.Now().UnixNano())
+	tmpPath := fmt.Sprintf("%s.tmp-%d-%d", filePath, os.Getpid(), time.Now().UnixNano())
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -511,7 +527,7 @@ func (s *Session) rewriteFileLocked() error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, s.filePath); err != nil {
+	if err := os.Rename(tmpPath, filePath); err != nil {
 		return err
 	}
 
@@ -520,11 +536,12 @@ func (s *Session) rewriteFileLocked() error {
 }
 
 func (s *Session) withFileWriteLock(run func() error) error {
-	if !s.persist || s.filePath == "" {
+	if !s.persist || s.sessionDir == "" {
 		return run()
 	}
 
-	lockPath := s.filePath + ".lock"
+	filePath := s.filePath()
+	lockPath := filePath + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
 		return err
 	}
@@ -630,6 +647,18 @@ func sessionIDFromFilePath(path string) string {
 		base = strings.TrimSuffix(base, ext)
 	}
 	if base == "" {
+		return uuid.NewString()
+	}
+	return base
+}
+
+// sessionIDFromDirPath extracts session ID from directory path.
+func sessionIDFromDirPath(path string) string {
+	if path == "" {
+		return uuid.NewString()
+	}
+	base := filepath.Base(path)
+	if base == "" || base == "." || base == "/" {
 		return uuid.NewString()
 	}
 	return base
