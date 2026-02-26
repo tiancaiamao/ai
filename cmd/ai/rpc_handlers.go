@@ -220,22 +220,28 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 - Do not hallucinate or add unnecessary commentary.`
 
 	// Build the full system prompt (used for agent and compactor)
-	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
-	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+	buildSystemPrompt := func(currentSess *session.Session) string {
+		promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
-	// Set working memory for system prompt explanation (tells LLM about the mechanism)
-	// The actual content is injected dynamically in the agent loop
-	if sess != nil {
-		sessionDir := sess.GetDir()
-		if sessionDir != "" {
-			wm := agent.NewWorkingMemory(sessionDir)
-			promptBuilder.SetWorkingMemory(wm)
+		// Set working memory for system prompt explanation (tells LLM about the mechanism)
+		// The actual content is injected dynamically in the agent loop.
+		if currentSess != nil {
+			sessionDir := currentSess.GetDir()
+			if sessionDir != "" {
+				wm := agent.NewWorkingMemory(sessionDir)
+				promptBuilder.SetWorkingMemory(wm)
+			}
 		}
+		return promptBuilder.Build()
 	}
-	systemPrompt := promptBuilder.Build()
+	systemPrompt := buildSystemPrompt(sess)
 
 	// Helper function to create a new agent context
 	createBaseContext := func() *agent.AgentContext {
+		// Rebuild system prompt from the current session so working-memory paths
+		// stay in sync after /resume, /new, /fork, and branch resume operations.
+		systemPrompt = buildSystemPrompt(sess)
 		ctx := agent.NewAgentContext(systemPrompt)
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)

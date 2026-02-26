@@ -187,7 +187,7 @@ func (b *Builder) buildWorkingMemorySection() string {
 %s
 </context_meta>
 
-💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.`, b.contextMeta)
+💡 Remember to update your working memory to track progress and compress context if needed.`, b.contextMeta)
 	}
 
 	return fmt.Sprintf(`## Working Memory
