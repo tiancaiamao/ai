@@ -314,6 +314,124 @@ func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 	assert.Equal(t, "legacy-session", loaded.header.ID)
 }
 
+// TestLoadSessionLazyMessageChain tests that message chain is properly linked
+// when lazy loading truncates the history (fix for /resume history not loading)
+func TestLoadSessionLazyMessageChain(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+
+	// Create a session file with many messages (> 50)
+	sess := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	sess.header = newSessionHeader("test-session", "/test", "")
+
+	// Add 100 messages
+	for i := 0; i < 100; i++ {
+		msg := agent.AgentMessage{
+			Role: "user",
+			Content: []agent.ContentBlock{
+				agent.TextContent{Type: "text", Text: "message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	data := serializeSessionForTest(sess)
+	err = os.WriteFile(filePath, data, 0644)
+	require.NoError(t, err)
+
+	// Test lazy loading with maxMessages = 10 to force truncation
+	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
+		MaxMessages:    10,
+		IncludeSummary: false,
+		Lazy:          true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// GetMessages should return exactly 10 messages (not 0 or 1)
+	// This tests that the message chain is properly linked
+	messages := loaded.GetMessages()
+	assert.Len(t, messages, 10, "Should return exactly 10 messages with proper chain linking")
+}
+
+// TestLoadSessionLazyMessageChainWithCompaction tests message chain with compaction
+func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+
+	sess := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	sess.header = newSessionHeader("test-session", "/test", "")
+
+	// Add 30 old messages
+	for i := 0; i < 30; i++ {
+		msg := agent.AgentMessage{
+			Role: "user",
+			Content: []agent.ContentBlock{
+				agent.TextContent{Type: "text", Text: "old message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Add compaction entry
+	compaction := &SessionEntry{
+		Type:      EntryTypeCompaction,
+		ID:        "compaction-1",
+		Timestamp: "2024-01-01T00:00:00Z",
+		Summary:   "Previous conversation summary",
+	}
+	sess.addEntry(compaction)
+
+	// Add 30 recent messages
+	for i := 0; i < 30; i++ {
+		msg := agent.AgentMessage{
+			Role: "user",
+			Content: []agent.ContentBlock{
+				agent.TextContent{Type: "text", Text: "recent message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	data := serializeSessionForTest(sess)
+	err = os.WriteFile(filePath, data, 0644)
+	require.NoError(t, err)
+
+	// Test lazy loading with maxMessages = 10
+	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
+		MaxMessages:    10,
+		IncludeSummary: true,
+		Lazy:          true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Should return: compaction summary + 10 recent messages = 11 messages
+	messages := loaded.GetMessages()
+	assert.Len(t, messages, 11, "Should return compaction summary + 10 recent messages")
+}
+
 // Helper to serialize session to bytes (matches actual file format)
 func serializeSessionForTest(s *Session) []byte {
 	var data []byte

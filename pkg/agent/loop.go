@@ -1643,7 +1643,14 @@ func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason str
 	}
 
 	if !injectHistory {
-		return extractActiveTurnMessages(agentCtx.Messages, defaultHistoryFallbackTokenBudget), "active_turn_only"
+		// Even when full history injection is disabled, keep a bounded recent
+		// history window so resumed sessions still retain conversation context.
+		budget := historyFallbackTokenBudget(contextWindow)
+		recent := extractRecentMessages(agentCtx.Messages, budget)
+		if len(recent) > 0 {
+			return recent, "recent_history_window_no_inject"
+		}
+		return extractActiveTurnMessages(agentCtx.Messages, budget), "active_turn_fallback_empty_history"
 	}
 
 	// Explicit compatibility toggle: keep full history behavior.

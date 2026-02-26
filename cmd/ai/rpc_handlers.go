@@ -118,21 +118,29 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
 	} else {
-		// If no session path specified, create a new session
-		name := time.Now().Format("20060102-150405")
-		sess, err = sessionMgr.CreateSession(name, name)
+		// If no session path specified, try to restore the current session
+		sess, sessionID, err = sessionMgr.LoadCurrent()
 		if err != nil {
-			return fmt.Errorf("failed to create new session: %w", err)
+			// No current session or failed to load, create a new one
+			name := time.Now().Format("20060102-150405")
+			sess, err = sessionMgr.CreateSession(name, name)
+			if err != nil {
+				return fmt.Errorf("failed to create new session: %w", err)
+			}
+			sessionID = sess.GetID()
+			sessionName = name
+			if err := sessionMgr.SetCurrent(sessionID); err != nil {
+				slog.Info("Failed to set current session:", "value", err)
+			}
+			if err := sessionMgr.SaveCurrent(); err != nil {
+				slog.Info("Failed to update session metadata:", "value", err)
+			}
+			slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
+		} else {
+			// Successfully restored previous session
+			sessionName = resolveSessionName(sessionMgr, sessionID)
+			slog.Info("Restored previous session", "id", sessionID, "name", sessionName, "count", len(sess.GetMessages()))
 		}
-		sessionID = sess.GetID()
-		sessionName = name
-		if err := sessionMgr.SetCurrent(sessionID); err != nil {
-			slog.Info("Failed to set current session:", "value", err)
-		}
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
 
 	// Create tool registry and register tools
@@ -310,11 +318,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"largeOutputThreshold", toolOutputConfig.LargeOutputThreshold,
 		"truncateMode", toolOutputConfig.TruncateMode,
 	)
-
-	// Load previous messages into agent context
-	for _, msg := range sess.GetMessages() {
-		ag.GetContext().AddMessage(msg)
-	}
 
 	// Create RPC server
 	server := rpc.NewServer()
@@ -619,9 +622,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sess = newSess
 			sessionComp.Update(sess, compactor)
 			setAgentContext(createBaseContext())
-			for _, msg := range newSess.GetMessages() {
-				ag.GetContext().AddMessage(msg)
-			}
 			// Restore last compaction summary if available
 			ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
@@ -652,9 +652,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sess = newSess
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
-		for _, msg := range newSess.GetMessages() {
-			ag.GetContext().AddMessage(msg)
-		}
 		// Restore last compaction summary if available
 		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
@@ -1286,9 +1283,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		setAgentContext(createBaseContext())
-		for _, msg := range sess.GetMessages() {
-			ag.GetContext().AddMessage(msg)
-		}
 
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
@@ -1323,9 +1317,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sess = newSess
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
-		for _, msg := range newSess.GetMessages() {
-			ag.GetContext().AddMessage(msg)
-		}
 
 		stateMu.Lock()
 		sessionID = newSessionID

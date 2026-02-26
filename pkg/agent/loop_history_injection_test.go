@@ -115,3 +115,25 @@ func TestSelectMessagesForLLM_ForcedKeepsFullHistory(t *testing.T) {
 		t.Fatalf("expected full history in forced mode: selected=%d total=%d", len(selected), len(agentCtx.Messages))
 	}
 }
+
+func TestSelectMessagesForLLM_NoInjectKeepsRecentHistoryWindow(t *testing.T) {
+	agentCtx := NewAgentContext("sys")
+	oldAssistant := NewAssistantMessage()
+	oldAssistant.Content = []ContentBlock{TextContent{Type: "text", Text: "old-assistant"}}
+	agentCtx.Messages = append(agentCtx.Messages,
+		NewUserMessage("old-user"),
+		oldAssistant,
+		NewUserMessage("new-user"),
+	)
+
+	selected, mode := selectMessagesForLLM(agentCtx, false, "working_memory_content_confirmed", 128000)
+	if mode != "recent_history_window_no_inject" {
+		t.Fatalf("expected recent_history_window_no_inject mode, got %q", mode)
+	}
+	if len(selected) < 2 {
+		t.Fatalf("expected recent history window to keep prior context, got %d message(s)", len(selected))
+	}
+	if selected[0].ExtractText() != "old-user" {
+		t.Fatalf("expected oldest selected message to preserve history, got %q", selected[0].ExtractText())
+	}
+}

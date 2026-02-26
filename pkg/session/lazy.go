@@ -250,24 +250,47 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 			break
 		}
 
-		// Collect recent entries (in reverse order)
-		switch entry.Type {
-		case EntryTypeMessage:
-			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
-			messageCount++
-		case EntryTypeBranchSummary:
-			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+		// Collect recent entries (in reverse order) only if we haven't reached the limit
+		if messageCount < maxMessages {
+			switch entry.Type {
+			case EntryTypeMessage:
+				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+				messageCount++
+			case EntryTypeBranchSummary:
+				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+			}
 		}
 
-		// Stop if we have enough messages
-		if messageCount >= maxMessages {
+		// Stop if we have enough messages AND we don't need to find compaction
+		// If IncludeSummary is true, continue scanning to find compaction entry
+		if messageCount >= maxMessages && !opts.IncludeSummary {
 			break
 		}
 	}
 
 	// Build final entries list
 	if compactionEntry != nil && opts.IncludeSummary {
+		// Compaction entry's parent is likely not loaded, break the chain here
+		compactionEntry.ParentID = nil
 		sess.addEntry(compactionEntry)
+	}
+
+	// Fix message chain: if the first entry's parent is not in byID, set it to nil
+	// or point to compaction entry if available
+	if len(recentEntries) > 0 {
+		firstEntry := recentEntries[0]
+		if firstEntry.ParentID != nil {
+			_, parentExists := sess.byID[*firstEntry.ParentID]
+			if !parentExists {
+				// Parent not loaded, break the chain here
+				// If we have a compaction entry, link to it; otherwise set to nil
+				if compactionEntry != nil && opts.IncludeSummary {
+					firstEntry.ParentID = &compactionEntry.ID
+				} else {
+					firstEntry.ParentID = nil
+				}
+			}
+		}
 	}
 
 	for _, entry := range recentEntries {
