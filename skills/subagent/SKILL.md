@@ -71,7 +71,7 @@ Single JSON line:
 ```json
 {
   "tool": "bash",
-  "command": "./bin/ai --mode headless --no-session --subagent --tools read,grep --max-turns 8 \"Review src/auth for security vulnerabilities\""
+  "command": "ai --mode headless --no-session --subagent --tools read,grep --max-turns 8 \"Review src/auth for security vulnerabilities\""
 }
 ```
 
