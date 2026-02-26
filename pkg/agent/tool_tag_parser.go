@@ -47,7 +47,7 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 	}
 
 	if hasValidToolCalls {
-		slog.Debug("[Loop] skipping tag parsing, valid tool calls exist",
+		slog.Info("[Loop] skipping tag parsing, valid tool calls exist",
 			"count", len(existingCalls),
 			"first_tool", existingCalls[0].Name)
 		return msg, false
@@ -55,7 +55,7 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 
 	// Log when we're attempting to parse tags despite having tool_calls field
 	if len(existingCalls) > 0 && !hasValidToolCalls {
-		slog.Debug("[Loop] attempting tag parsing despite empty/invalid tool_calls field",
+		slog.Info("[Loop] attempting tag parsing despite empty/invalid tool_calls field",
 			"field_count", len(existingCalls),
 			"text_preview", truncateLine(text, 100))
 	}
@@ -124,7 +124,7 @@ func buildToolCallMessage(msg AgentMessage, normalized string, calls []toolTagCa
 	}
 
 	msg.Content = content
-	slog.Debug("[Loop] injected tool calls from tagged text", "count", len(calls))
+	slog.Info("[Loop] injected tool calls from tagged text", "count", len(calls))
 	return msg
 }
 
@@ -443,7 +443,7 @@ func injectToolCallsFromThinking(msg AgentMessage) (AgentMessage, bool) {
 		updated.Content = append(updated.Content, call)
 	}
 
-	slog.Debug("[Loop] injected tool calls from thinking text", "count", len(calls))
+	slog.Info("[Loop] injected tool calls from thinking text", "count", len(calls))
 	return updated, true
 }
 

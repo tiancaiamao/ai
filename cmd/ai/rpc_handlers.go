@@ -199,7 +199,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	slog.Info("Loaded  skills", "count", len(skillResult.Skills))
 	for _, s := range skillResult.Skills {
-		slog.Debug("Skill", "name", s.Name, "description", s.Description)
+		slog.Info("Skill", "name", s.Name, "description", s.Description)
 	}
 
 	// Create agent with skills using structured prompt builder

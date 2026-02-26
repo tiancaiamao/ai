@@ -222,7 +222,7 @@ func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary strin
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	slog.Debug("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
+	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
 
 	// Create new context with summary + recent messages
 	newMessages := []agent.AgentMessage{

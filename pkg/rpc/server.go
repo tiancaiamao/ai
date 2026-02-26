@@ -989,7 +989,7 @@ func (s *Server) writeJSON(data []byte) {
 	s.writer.Lock()
 	defer s.writer.Unlock()
 	if s.output == nil {
-		slog.Debug("[RPC] writeJSON with nil output", "data", string(data))
+		slog.Info("[RPC] writeJSON with nil output", "data", string(data))
 		return
 	}
 

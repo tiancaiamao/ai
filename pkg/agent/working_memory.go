@@ -266,6 +266,8 @@ func (wm *WorkingMemory) InvalidateCache() {
 
 // MarkUpdated marks that the working memory has been updated by the user.
 // This resets the roundsSinceUpdate counter.
+// MarkUpdated marks that working memory has been updated.
+// This resets the roundsSinceUpdate counter.
 func (wm *WorkingMemory) MarkUpdated() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
@@ -274,46 +276,64 @@ func (wm *WorkingMemory) MarkUpdated() {
 	wm.roundsSinceUpdate = 0
 }
 
-// checkUpdateNeeded checks if a reminder should be shown about updating working memory.
-// Returns (shouldShowReminder, reminderMessage).
-func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
+// IncrementRound increments the round counter.
+// This should be called from the agent loop on each LLM request.
+// Call MarkUpdated() when the LLM actually updates working memory.
+func (wm *WorkingMemory) IncrementRound() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
-	// First check - just initialize counter
-	if wm.lastCheckTime.IsZero() {
-		wm.lastCheckTime = time.Now()
-		wm.roundsSinceUpdate = 1
+	wm.roundsSinceUpdate++
+}
+
+// GetRoundsSinceUpdate returns the number of rounds since the last update.
+func (wm *WorkingMemory) GetRoundsSinceUpdate() int {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+	return wm.roundsSinceUpdate
+}
+
+// checkUpdateNeeded checks if a reminder should be shown about updating working memory.
+// Returns (shouldShowReminder, reminderMessage).
+// NOTE: This method does NOT auto-increment the round counter.
+// Round tracking should be done via IncrementRound() from the agent loop.
+func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
+	wm.mu.Lock()
+	rounds := wm.roundsSinceUpdate
+	wm.mu.Unlock()
+
+	// Don't check if we haven't tracked any rounds yet
+	if rounds <= 0 {
 		return false, ""
 	}
-
-	wm.roundsSinceUpdate++
-	wm.lastCheckTime = time.Now()
 
 	// Don't check before minimum rounds
-	if wm.roundsSinceUpdate < minRoundsBeforeCheck {
+	if rounds < minRoundsBeforeCheck {
 		return false, ""
 	}
 
-	// Check if we need to remind
+	// Get meta for token-based thresholds
+	meta := wm.GetMeta()
+
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	// Check if we need to remind based on rounds
 	if wm.roundsSinceUpdate > maxRoundsWithoutUpdate {
-		return true, wm.buildReminder()
+		return true, wm.buildReminderHTML(meta)
 	}
 
 	// Optional: remind based on token usage
-	meta := wm.GetMeta()
 	if meta.TokensPercent > 70 && wm.roundsSinceUpdate > 3 {
-		return true, wm.buildReminder()
+		return true, wm.buildReminderHTML(meta)
 	}
 
 	return false, ""
 }
 
-// buildReminder builds a reminder message to update working memory.
-func (wm *WorkingMemory) buildReminder() string {
-	meta := wm.GetMeta()
-
-	reminder := fmt.Sprintf(`
+// buildReminderHTML builds an HTML comment reminder (appended to working memory content).
+func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
+	return fmt.Sprintf(`
 
 <!--
 ⚠️ WORKING MEMORY UPDATE NEEDED
@@ -331,7 +351,6 @@ func (wm *WorkingMemory) buildReminder() string {
 4. 将详细讨论移到 detail/ 目录
 
 使用 write tool 更新: %s
-下次请求时，你会看到更新后的内容。
 -->`,
 		wm.roundsSinceUpdate,
 		meta.TokensPercent,
@@ -341,6 +360,42 @@ func (wm *WorkingMemory) buildReminder() string {
 		float64(meta.WorkingMemorySize)/1024,
 		wm.detailPath,
 		wm.overviewPath)
+}
 
-	return reminder
+// NeedsReminderMessage checks if a reminder message should be injected.
+// This is a separate check from checkUpdateNeeded() to allow for different thresholds.
+func (wm *WorkingMemory) NeedsReminderMessage() bool {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+
+	// Require more rounds before injecting a separate message
+	return wm.roundsSinceUpdate >= maxRoundsWithoutUpdate
+}
+
+// GetReminderUserMessage builds a user message reminder to inject into the conversation.
+// The message is clearly marked as agent-generated, not from a real user.
+func (wm *WorkingMemory) GetReminderUserMessage() string {
+	meta := wm.GetMeta()
+
+	wm.mu.RLock()
+	rounds := wm.roundsSinceUpdate
+	wm.mu.RUnlock()
+
+	return fmt.Sprintf(`[system message by agent, not from real user]
+
+💡 Remember to update your working memory to track progress and compress context if needed.
+
+<context_meta>
+tokens_used: %d
+tokens_max: %d
+tokens_percent: %.0f%%
+messages_in_history: %d
+rounds_since_update: %d
+</context_meta>
+
+Working memory path: %s
+Detail directory: %s
+
+To update: use the write tool to modify the working memory file.
+This reminder will stop appearing once you update your working memory.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory, rounds, wm.overviewPath, wm.detailPath)
 }

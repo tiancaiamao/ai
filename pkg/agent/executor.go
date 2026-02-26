@@ -299,7 +299,7 @@ func (p *ExecutorPool) SetRetryConfig(toolName string, config *RetryConfig) {
 // Execute runs a tool using the appropriate executor.
 func (p *ExecutorPool) Execute(ctx context.Context, tool Tool, args map[string]interface{}) ([]ContentBlock, error) {
 	executor := p.GetExecutor(tool.Name())
-	slog.Debug("[Executor] Executing tool",
+	slog.Info("[Executor] Executing tool",
 		"tool", tool.Name(),
 		"concurrencyLimit", cap(executor.semaphore),
 		"maxRetries", executor.retryConfig.MaxRetries)

@@ -279,7 +279,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 		eventCount++
 		if shouldLogAgentEvent(event.Value.Type) {
-			slog.Debug("[Agent] Got event", "type", event.Value.Type)
+			slog.Info("[Agent] Got event", "type", event.Value.Type)
 		}
 
 		switch event.Value.Type {
@@ -457,7 +457,7 @@ func (a *Agent) Abort() {
 func (a *Agent) FollowUp(message string) error {
 	select {
 	case a.followUpQueue <- message:
-		slog.Debug("[Agent] Follow-up queued", "message", message)
+		slog.Info("[Agent] Follow-up queued", "message", message)
 		return nil
 	default:
 		return fmt.Errorf("follow-up queue full")

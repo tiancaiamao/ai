@@ -783,7 +783,7 @@ func streamAssistantResponse(
 	injectHistory, historyDecisionReason := shouldInjectHistory(agentCtx, config)
 	selectedMessages, selectionMode := selectMessagesForLLM(agentCtx, injectHistory, historyDecisionReason, config.ContextWindow)
 	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
-	slog.Debug("[Loop] history injection decision",
+	slog.Info("[Loop] history injection decision",
 		"inject_history", injectHistory,
 		"reason", historyDecisionReason,
 		"selection_mode", selectionMode,
@@ -804,6 +804,9 @@ func streamAssistantResponse(
 	// injected right after system prompt. Keeping system prompt stable improves
 	// provider-side prompt caching opportunities.
 	if agentCtx.WorkingMemory != nil {
+		// Track that we're starting a new LLM request round
+		agentCtx.WorkingMemory.IncrementRound()
+
 		// Invalidate cache to ensure we read the latest content
 		agentCtx.WorkingMemory.InvalidateCache()
 		content, err := agentCtx.WorkingMemory.Load()
@@ -833,14 +836,26 @@ func streamAssistantResponse(
 				llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
 			}
 
-			slog.Debug("[Loop] Injecting runtime state as leading user message",
+			slog.Info("[Loop] Injecting runtime state as leading user message",
 				"wm_length", len(content),
 				"runtime_meta_refreshed", runtimeRefreshed,
 				"messages_sent", len(llmMessages))
 		}
 	}
 
-	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
+	// Inject working memory reminder if LLM hasn't updated it for too many rounds
+	if agentCtx.WorkingMemory != nil && agentCtx.WorkingMemory.NeedsReminderMessage() {
+		reminderContent := agentCtx.WorkingMemory.GetReminderUserMessage()
+		reminderMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: reminderContent,
+		}
+		llmMessages = append(llmMessages, reminderMsg)
+		slog.Info("[Loop] Injected working memory reminder message",
+			"rounds_since_update", agentCtx.WorkingMemory.GetRoundsSinceUpdate())
+	}
+
+	slog.Info("[Loop] Sending messages to LLM", "count", len(llmMessages))
 
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
@@ -1075,7 +1090,7 @@ func streamAssistantResponse(
 						traceevent.Field{Key: "issues", Value: issues},
 						traceevent.Field{Key: "issue_count", Value: len(issues)},
 					)
-					slog.Debug("[Loop] assistant response contains tags but no tool calls injected",
+					slog.Info("[Loop] assistant response contains tags but no tool calls injected",
 						"text_preview", truncateLine(text, 200),
 						"stop_reason", e.StopReason,
 						"issues", issues)
@@ -1150,7 +1165,7 @@ func emitLLMRequestSnapshot(ctx context.Context, model llm.Model, llmCtx llm.LLM
 		traceevent.Field{Key: "last_message_hash", Value: snapshot.LastMessageHash},
 		traceevent.Field{Key: "last_user_hash", Value: snapshot.LastUserHash},
 	)
-	slog.Debug("[Loop] LLM request snapshot",
+	slog.Info("[Loop] LLM request snapshot",
 		"attempt", snapshot.Attempt,
 		"requestHash", snapshot.RequestHash,
 		"messagesHash", snapshot.MessagesHash,

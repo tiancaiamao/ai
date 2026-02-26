@@ -1212,7 +1212,7 @@ func (p *AiInterpreter) switchSessionFromInput(input string) error {
 }
 
 func (p *AiInterpreter) readStdout(ctx context.Context) {
-	slog.Debug("[AI-STDOUT] reader started")
+//	slog.Debug("[AI-STDOUT] reader started")
 	scanner := bufio.NewScanner(p.stdout)
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 64*1024*1024)
@@ -1402,7 +1402,7 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 	case "tool_call_delta":
 		// ignore
 	default:
-		slog.Debug("[AI-EVENT]", "line", string(line))
+//		slog.Debug("[AI-EVENT]", "line", string(line))
 	}
 }
 
@@ -1718,7 +1718,7 @@ func (p *AiInterpreter) writeStatus(text string) {
 	deferStatus := p.deferStatus
 	streaming := p.isStreaming
 	if deferStatus && streaming {
-		slog.Debug("[AI-STATUS] deferred", "bytes", len(text))
+//		slog.Debug("[AI-STATUS] deferred", "bytes", len(text))
 		p.pendingStatus = append(p.pendingStatus, text)
 		p.stateMu.Unlock()
 		return
