@@ -1,18 +1,11 @@
----
-name: speckit-implement
-description: INTERNAL - Used by speckit. Do not invoke directly. Execute tasks from tasks.md checklist.
-license: MIT
----
-
 # Task Implementation
 
-⚠️ **This is an internal phase of speckit. Use `speckit` command instead of invoking this directly.**
+## Purpose
 
-You are implementing tasks from a checklist. This is the execution phase of the spec-driven development workflow.
+Execute tasks from `tasks.md` checklist systematically. This is the execution phase of the spec-driven development workflow.
 
 ## Prerequisites
 
-Ensure you have:
 - A task file (`tasks.md`) with checklist items
 - Implementation plan (`plan.md`) for technical guidance
 - Feature specification (`spec.md`) for requirements context
@@ -86,6 +79,11 @@ If you encounter blockers:
 2. **Skip if safe**: Move to next independent task
 3. **Ask for help**: If blocking, pause and request clarification
 
+**Stop and ask** if:
+- Blocked by unclear requirement
+- Found unexpected issue
+- Major decision needed
+
 ## Completion
 
 When all tasks are complete:
@@ -95,8 +93,11 @@ When all tasks are complete:
 3. Update documentation
 4. Create summary of changes
 
----
+## Common Mistakes
 
-**User's Task File:**
-
-$ARGUMENTS
+- ❌ Skipping validation and starting implementation directly
+- ❌ Not running tests after each task
+- ❌ Making changes out of dependency order
+- ❌ Not verifying spec requirements during implementation
+- ❌ Forgetting to mark tasks as complete
+- ❌ Not documenting blockers or edge cases
