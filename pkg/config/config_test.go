@@ -414,8 +414,8 @@ func TestCompactorDefaults(t *testing.T) {
 	if compactorConfig.ToolCallCutoff != 10 {
 		t.Errorf("Expected ToolCallCutoff 10, got %d", compactorConfig.ToolCallCutoff)
 	}
-	if compactorConfig.ToolSummaryStrategy != "llm" {
-		t.Errorf("Expected ToolSummaryStrategy llm, got %q", compactorConfig.ToolSummaryStrategy)
+	if compactorConfig.ToolSummaryStrategy != "off" {
+		t.Errorf("Expected ToolSummaryStrategy off, got %q", compactorConfig.ToolSummaryStrategy)
 	}
 
 	if !compactorConfig.AutoCompact {

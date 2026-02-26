@@ -10,32 +10,33 @@ import (
 
 func TestShouldCompact(t *testing.T) {
 	config := &Config{
-		MaxMessages: 10,
-		MaxTokens:   0,
+		MaxMessages: 10, // ignored in manual mode fallback
+		MaxTokens:   50,
 		KeepRecent:  2,
 		AutoCompact: true,
 	}
 
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
-	// Test with few messages - should not compact
+	// Test with few messages - should not compact (token threshold not reached)
 	fewMessages := make([]agent.AgentMessage, 5)
 	for i := 0; i < 5; i++ {
 		fewMessages[i] = agent.NewUserMessage("test message")
 	}
 
 	if compactor.ShouldCompact(fewMessages) {
-		t.Error("Should not compact with only 5 messages (threshold is 10)")
+		t.Error("Should not compact when token threshold is not reached")
 	}
 
-	// Test with many messages - should compact
-	manyMessages := make([]agent.AgentMessage, 15)
-	for i := 0; i < 15; i++ {
-		manyMessages[i] = agent.NewUserMessage("test message")
+	// Test with high token content - should compact
+	longText := strings.Repeat("a", 400) // ~100 tokens
+	manyMessages := []agent.AgentMessage{
+		agent.NewUserMessage(longText),
+		agent.NewAssistantMessage(),
 	}
 
 	if !compactor.ShouldCompact(manyMessages) {
-		t.Error("Should compact with 15 messages (threshold is 10)")
+		t.Error("Should compact when token threshold is exceeded")
 	}
 }
 
@@ -60,7 +61,7 @@ func TestShouldCompactTokenLimit(t *testing.T) {
 	}
 }
 
-func TestShouldCompactMessageLimitEvenWithContextWindow(t *testing.T) {
+func TestShouldCompactMessageLimitDoesNotTriggerWithContextWindow(t *testing.T) {
 	config := &Config{
 		MaxMessages: 3,
 		MaxTokens:   8000,
@@ -75,8 +76,8 @@ func TestShouldCompactMessageLimitEvenWithContextWindow(t *testing.T) {
 		agent.NewUserMessage("b"),
 	}
 
-	if !compactor.ShouldCompact(messages) {
-		t.Fatal("expected compaction to trigger on message count even when context window is configured")
+	if compactor.ShouldCompact(messages) {
+		t.Fatal("expected message-count alone not to trigger compaction in manual mode fallback")
 	}
 }
 

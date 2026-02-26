@@ -32,10 +32,7 @@ func TestSessionManager(t *testing.T) {
 			t.Fatal("Session is nil")
 		}
 
-		// Extract session ID from path
-		sessPath := sess.GetPath()
-		sessionID := filepath.Base(sessPath)
-		sessionID = sessionID[:len(sessionID)-6] // Remove .jsonl extension
+		sessionID := sess.GetID()
 		sessionIDs = append(sessionIDs, sessionID)
 
 		// Verify metadata file exists
@@ -65,14 +62,10 @@ func TestSessionManager(t *testing.T) {
 		sess2, _ := sm.CreateSession("session-2", "Session 2")
 
 		// Extract IDs
-		sess1Path := sess1.GetPath()
-		id1 := filepath.Base(sess1Path)
-		id1 = id1[:len(id1)-6]
+		id1 := sess1.GetID()
 		sessionIDs = append(sessionIDs, id1)
 
-		sess2Path := sess2.GetPath()
-		id2 := filepath.Base(sess2Path)
-		id2 = id2[:len(id2)-6]
+		id2 := sess2.GetID()
 		sessionIDs = append(sessionIDs, id2)
 
 		sessions, err := sm.ListSessions()
@@ -150,10 +143,7 @@ func TestSessionManager(t *testing.T) {
 		// Create a session to delete
 		sess, _ := sm.CreateSession("to-delete", "To Delete")
 
-		// Extract ID
-		sessPath := sess.GetPath()
-		deleteID := filepath.Base(sessPath)
-		deleteID = deleteID[:len(deleteID)-6]
+		deleteID := sess.GetID()
 
 		// Set current to something else
 		if len(sessionIDs) > 0 {
@@ -184,7 +174,7 @@ func TestSessionManager(t *testing.T) {
 		// Verify session file is deleted
 		sessFilePath := sm.getSessionPath(deleteID)
 		if _, err := os.Stat(sessFilePath); !os.IsNotExist(err) {
-			t.Error("Session file should be deleted")
+			t.Error("Session directory should be deleted")
 		}
 	})
 
@@ -243,16 +233,15 @@ func TestCreateMetaFromSession(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Create a session file manually
+	// Create a legacy session file manually
 	sessID := uuid.New().String()
 	sessPath := filepath.Join(tempDir, sessID+".jsonl")
-	sess := NewSession(sessPath)
-
-	// Add some messages
-	sess.AddMessages(
-		agent.AgentMessage{Role: "user", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "Hello"}}},
-		agent.AgentMessage{Role: "assistant", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "Hi"}}},
-	)
+	legacyData := `{"role":"user","content":[{"type":"text","text":"Hello"}]}
+{"role":"assistant","content":[{"type":"text","text":"Hi"}]}
+`
+	if err := os.WriteFile(sessPath, []byte(legacyData), 0644); err != nil {
+		t.Fatalf("Failed to write legacy session file: %v", err)
+	}
 
 	// Create session manager and test createMetaFromSession
 	sm := NewSessionManager(tempDir)
@@ -291,9 +280,7 @@ func TestSessionManagerSaveCurrentUpdatesMeta(t *testing.T) {
 	}
 
 	// Extract session ID
-	sessPath := sess.GetPath()
-	sessionID := filepath.Base(sessPath)
-	sessionID = sessionID[:len(sessionID)-6] // Remove .jsonl extension
+	sessionID := sess.GetID()
 
 	// Set as current
 	sm.SetCurrent(sessionID)

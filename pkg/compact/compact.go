@@ -35,8 +35,8 @@ func DefaultConfig() *Config {
 		KeepRecentTokens:    20000, // Keep ~20k tokens from the recent context
 		ReserveTokens:       16384, // Reserve tokens for responses when using context window
 		ToolCallCutoff:      10,    // Summarize tool outputs after 10 visible tool results
-		ToolSummaryStrategy: "llm",
-		AutoCompact:         true,
+		ToolSummaryStrategy: "off", // Phase 2: LLM manages tool summaries via compact_history tool
+		AutoCompact:         true,  // Phase 2: Keep enabled as fallback (75% threshold)
 	}
 }
 
@@ -69,12 +69,8 @@ func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
 		return false
 	}
 
-	// Message-count and token-limit checks are both valid triggers.
-	if c.config.MaxMessages > 0 && len(messages) >= c.config.MaxMessages {
-		return true
-	}
-
-	// Token limit (context window or explicit max tokens)
+	// Phase 2 manual mode: only token-pressure fallback triggers auto compaction.
+	// Message-count based compaction is intentionally disabled.
 	threshold := c.calculateDynamicThreshold()
 	if threshold > 0 {
 		tokens := c.EstimateContextTokens(messages)
@@ -164,10 +160,10 @@ func estimateStringTokens(s string) int {
 
 // CompactionResult contains the result of a compaction operation.
 type CompactionResult struct {
-	Summary      string                // The generated summary
-	Messages     []agent.AgentMessage  // The compressed message list
-	TokensBefore int                   // Token count before compaction
-	TokensAfter  int                   // Token count after compaction
+	Summary      string               // The generated summary
+	Messages     []agent.AgentMessage // The compressed message list
+	TokensBefore int                  // Token count before compaction
+	TokensAfter  int                  // Token count after compaction
 }
 
 // Compact compresses the context by summarizing old messages.

@@ -143,7 +143,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
+	// Create compactor early so compact_history is present when building the system prompt.
+	compactorConfig := cfg.Compactor
+	if compactorConfig == nil {
+		compactorConfig = compact.DefaultConfig()
+	}
+	compactor := compact.NewCompactor(
+		compactorConfig,
+		model,
+		apiKey,
+		"You are a helpful coding assistant.",
+		currentContextWindow,
+	)
+
+	// Register compact_history before prompt build so LLM sees it in Tooling section.
+	compactHistoryTool := tools.NewCompactHistoryTool(nil, compactor, model, apiKey, "")
+	registry.Register(compactHistoryTool)
+
+	slog.Info("Registered tools: read, bash, write, grep, edit, compact_history", "count", len(registry.All()))
 
 	// Load skills
 	traceOutputPath, err = initTraceFileHandler()
@@ -227,23 +244,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	agentCtx := createBaseContext()
+	compactHistoryTool.SetAgentContext(agentCtx)
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
 	defer ag.Shutdown()
-
-	// Create compactor for context compression
-	compactorConfig := cfg.Compactor
-	if compactorConfig == nil {
-		compactorConfig = compact.DefaultConfig()
-	}
-
-	compactor := compact.NewCompactor(
-		compactorConfig,
-		model,
-		apiKey,
-		"You are a helpful coding assistant.",
-		currentContextWindow,
-	)
 
 	// Enable automatic compression
 	sessionWriter := newSessionWriter(256)
@@ -258,6 +262,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
+
+	slog.Info("compact_history tool enabled for LLM-driven context management")
+
+	setAgentContext := func(ctx *agent.AgentContext) {
+		ag.SetContext(ctx)
+		compactHistoryTool.SetAgentContext(ag.GetContext())
+	}
 
 	// Set up executor with concurrency control
 	concurrencyConfig := cfg.Concurrency
@@ -509,7 +520,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return err
 		}
 		// Clear agent context
-		ag.SetContext(createBaseContext())
+		setAgentContext(createBaseContext())
 		slog.Info("Session cleared")
 		return nil
 	})
@@ -541,7 +552,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		ag.SetContext(createBaseContext())
+		setAgentContext(createBaseContext())
 
 		stateMu.Lock()
 		sessionID = newSessionID
@@ -578,12 +589,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if err != nil {
 				return err
 			}
-			newSess, err := session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
+			// LoadSessionLazy expects session directory, not file path
+			// Extract directory if sessionPath points to messages.jsonl
+			sessionDir := sessionPath
+			if strings.HasSuffix(sessionPath, ".jsonl") {
+				info, err := os.Stat(sessionPath)
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() {
+					sessionDir = filepath.Dir(sessionPath)
+				}
+			}
+			newSess, err := session.LoadSessionLazy(sessionDir, session.DefaultLoadOptions())
 			if err != nil {
 				return err
 			}
 			newSessionID := newSess.GetID()
-			sessionsDir = filepath.Dir(sessionPath)
+			sessionsDir = sessionDir
 			sessionMgr = session.NewSessionManager(sessionsDir)
 			_ = sessionMgr.SetCurrent(newSessionID)
 			if err := sessionMgr.SaveCurrent(); err != nil {
@@ -593,7 +616,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			// Clear agent context and load new messages
 			sess = newSess
 			sessionComp.Update(sess, compactor)
-			ag.SetContext(createBaseContext())
+			setAgentContext(createBaseContext())
 			for _, msg := range newSess.GetMessages() {
 				ag.GetContext().AddMessage(msg)
 			}
@@ -626,7 +649,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		// Clear agent context and load new messages
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		ag.SetContext(createBaseContext())
+		setAgentContext(createBaseContext())
 		for _, msg := range newSess.GetMessages() {
 			ag.GetContext().AddMessage(msg)
 		}
@@ -1260,7 +1283,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
-		ag.SetContext(createBaseContext())
+		setAgentContext(createBaseContext())
 		for _, msg := range sess.GetMessages() {
 			ag.GetContext().AddMessage(msg)
 		}
@@ -1297,7 +1320,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		ag.SetContext(createBaseContext())
+		setAgentContext(createBaseContext())
 		for _, msg := range newSess.GetMessages() {
 			ag.GetContext().AddMessage(msg)
 		}

@@ -146,6 +146,21 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
+	// Create compactor early so compact_history appears in prompt tooling.
+	compactorConfig := cfg.Compactor
+	if compactorConfig == nil {
+		compactorConfig = compact.DefaultConfig()
+	}
+	compactor := compact.NewCompactor(
+		compactorConfig,
+		model,
+		apiKey,
+		"You are a helpful coding assistant.",
+		currentContextWindow,
+	)
+	compactHistoryTool := tools.NewCompactHistoryTool(nil, compactor, model, apiKey, "")
+	registry.Register(compactHistoryTool)
+
 	// Load skills
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -180,22 +195,11 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 		return ctx
 	}
 	agentCtx := createBaseContext()
+	compactHistoryTool.SetAgentContext(agentCtx)
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
 	defer ag.Shutdown()
 
-	// Create compactor
-	compactorConfig := cfg.Compactor
-	if compactorConfig == nil {
-		compactorConfig = compact.DefaultConfig()
-	}
-	compactor := compact.NewCompactor(
-		compactorConfig,
-		model,
-		apiKey,
-		"You are a helpful coding assistant.",
-		currentContextWindow,
-	)
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{

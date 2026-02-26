@@ -219,12 +219,20 @@ func copyDir(src, dst string) error {
 
 // GetSession retrieves a session by ID.
 func (sm *SessionManager) GetSession(id string) (*Session, error) {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
 	sessPath := sm.getSessionPath(id)
 	return LoadSession(sessPath)
 }
 
 // GetMeta retrieves session metadata by ID.
 func (sm *SessionManager) GetMeta(id string) (*SessionMeta, error) {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
 	metaPath := sm.getMetaPath(id)
 	meta, err := sm.loadMeta(metaPath)
 	if err == nil {
@@ -241,6 +249,11 @@ func (sm *SessionManager) GetMeta(id string) (*SessionMeta, error) {
 
 // DeleteSession deletes a session by ID.
 func (sm *SessionManager) DeleteSession(id string) error {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+
 	// Don't allow deleting current session
 	if sm.currentID == id {
 		return fmt.Errorf("cannot delete current session")
@@ -249,14 +262,32 @@ func (sm *SessionManager) DeleteSession(id string) error {
 	sessPath := sm.getSessionPath(id)
 	metaPath := sm.getMetaPath(id)
 
-	// Delete session file
-	if err := os.Remove(sessPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to delete session file: %w", err)
+	// Delete session directory (new format) or file (legacy fallback).
+	if info, err := os.Stat(sessPath); err == nil {
+		if info.IsDir() {
+			if err := os.RemoveAll(sessPath); err != nil {
+				return fmt.Errorf("failed to delete session directory: %w", err)
+			}
+		} else if err := os.Remove(sessPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to delete session file: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to stat session path: %w", err)
 	}
 
-	// Delete metadata
+	// Delete metadata (for legacy/session-file fallback cases).
 	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete metadata: %w", err)
+	}
+
+	legacySessionPath := filepath.Join(sm.sessionsDir, id+".jsonl")
+	if err := os.Remove(legacySessionPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete legacy session file: %w", err)
+	}
+
+	legacyMetaPath := filepath.Join(sm.sessionsDir, id+".meta.json")
+	if err := os.Remove(legacyMetaPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete legacy metadata file: %w", err)
 	}
 
 	return nil
@@ -264,6 +295,10 @@ func (sm *SessionManager) DeleteSession(id string) error {
 
 // SetCurrent sets the current session ID.
 func (sm *SessionManager) SetCurrent(id string) error {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
 	sm.currentID = id
 	return nil
 }
@@ -320,7 +355,7 @@ func (sm *SessionManager) SaveCurrent() error {
 
 // UpdateSessionName updates the session name/title metadata.
 func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
-	id = strings.TrimSpace(id)
+	id = normalizeSessionID(id)
 	if id == "" {
 		return fmt.Errorf("session id is required")
 	}
@@ -345,17 +380,20 @@ func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
 
 // getSessionPath returns the session directory path for a given ID.
 func (sm *SessionManager) getSessionPath(id string) string {
-	return filepath.Join(sm.sessionsDir, id)
+	return filepath.Join(sm.sessionsDir, normalizeSessionID(id))
 }
 
 // getMetaPath returns the metadata file path for a given ID.
 func (sm *SessionManager) getMetaPath(id string) string {
-	return filepath.Join(sm.sessionsDir, id, "meta.json")
+	return filepath.Join(sm.sessionsDir, normalizeSessionID(id), "meta.json")
 }
 
 // saveMeta saves session metadata.
 func (sm *SessionManager) saveMeta(id string, meta *SessionMeta) error {
 	metaPath := sm.getMetaPath(id)
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
@@ -436,35 +474,41 @@ func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, 
 		return sm.createMetaFromSessionDir(sessPath)
 	}
 
-	sess, err := LoadSession(filepath.Dir(sessPath))
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract ID from filename
-	id := filepath.Base(sessPath)
-	id = id[:len(id)-6] // Remove .jsonl extension
+	// Extract ID from filename (legacy file format).
+	id := sessionIDFromFilePath(sessPath)
 
 	info, err := os.Stat(sessPath)
 	if err != nil {
 		return nil, err
 	}
 
-	header := sess.GetHeader()
-	createdAt := info.ModTime()
-	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
-		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			createdAt = parsed
-		}
+	// Best-effort load from new directory format if it exists.
+	var sess *Session
+	if dirInfo, dirErr := os.Stat(sm.getSessionPath(id)); dirErr == nil && dirInfo.IsDir() {
+		sess, _ = LoadSession(sm.getSessionPath(id))
 	}
 
-	name := sess.GetSessionName()
-	if name == "" {
-		name = id
-	}
-	title := sess.GetSessionTitle()
-	if title == "" {
-		title = "Session"
+	messageCount := 0
+	createdAt := info.ModTime()
+	name := id
+	title := "Session"
+
+	if sess != nil {
+		header := sess.GetHeader()
+		if ts := strings.TrimSpace(header.Timestamp); ts != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				createdAt = parsed
+			}
+		}
+		messageCount = len(sess.GetMessages())
+		if sessionName := sess.GetSessionName(); sessionName != "" {
+			name = sessionName
+		}
+		if sessionTitle := sess.GetSessionTitle(); sessionTitle != "" {
+			title = sessionTitle
+		}
+	} else {
+		messageCount = countLegacyMessages(sessPath)
 	}
 
 	return &SessionMeta{
@@ -473,7 +517,7 @@ func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, 
 		Title:        title,
 		CreatedAt:    createdAt,
 		UpdatedAt:    info.ModTime(),
-		MessageCount: len(sess.GetMessages()),
+		MessageCount: messageCount,
 	}, nil
 }
 
@@ -484,15 +528,47 @@ func (sm *SessionManager) createDefaultSession() (*Session, string, error) {
 		return nil, "", err
 	}
 
-	// Extract ID from session file path
-	sessPath := sess.GetPath()
-	id := filepath.Base(sessPath)
-	id = id[:len(id)-6] // Remove .jsonl extension
+	id := normalizeSessionID(sess.GetID())
 
 	// Set current ID to just the ID, not the full path
 	sm.currentID = id
 
 	return sess, id, nil
+}
+
+func normalizeSessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	base := filepath.Base(id)
+	if strings.HasSuffix(base, ".jsonl") {
+		return strings.TrimSuffix(base, ".jsonl")
+	}
+	return base
+}
+
+func countLegacyMessages(sessPath string) int {
+	data, err := os.ReadFile(sessPath)
+	if err != nil {
+		return 0
+	}
+
+	count := 0
+	for _, line := range splitLines(data) {
+		line = bytesTrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+		if _, ok := msg["role"]; ok {
+			count++
+		}
+	}
+	return count
 }
 
 // GetSessionsDir returns the sessions directory path.

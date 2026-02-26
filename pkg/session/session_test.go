@@ -13,9 +13,10 @@ import (
 func TestSaveMessages(t *testing.T) {
 	// Create temp file
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "test_session.jsonl")
+	sessionDir := filepath.Join(tmpDir, "test_session")
+	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionPath)
+	sess := NewSession(sessionDir)
 
 	// Create test messages
 	messages := []agent.AgentMessage{
@@ -35,7 +36,7 @@ func TestSaveMessages(t *testing.T) {
 	}
 
 	// Load and verify
-	loadedSess, err := LoadSession(sessionPath)
+	loadedSess, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load session: %v", err)
 	}
@@ -49,9 +50,9 @@ func TestSaveMessages(t *testing.T) {
 // TestLoadEmptySession tests loading a non-existent session.
 func TestLoadEmptySession(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "non_existent.jsonl")
+	sessionDir := filepath.Join(tmpDir, "non_existent")
 
-	sess, err := LoadSession(sessionPath)
+	sess, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load non-existent session: %v", err)
 	}
@@ -68,9 +69,10 @@ func TestLoadEmptySession(t *testing.T) {
 // TestAddMessages tests adding messages to session.
 func TestAddMessages(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "test_add.jsonl")
+	sessionDir := filepath.Join(tmpDir, "test_add")
+	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionPath)
+	sess := NewSession(sessionDir)
 
 	// Add messages
 	messages := []agent.AgentMessage{
@@ -97,9 +99,10 @@ func TestAddMessages(t *testing.T) {
 // TestClearSession tests clearing a session.
 func TestClearSession(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "test_clear.jsonl")
+	sessionDir := filepath.Join(tmpDir, "test_clear")
+	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionPath)
+	sess := NewSession(sessionDir)
 
 	// Add some messages first
 	messages := []agent.AgentMessage{
@@ -127,9 +130,9 @@ func TestClearSession(t *testing.T) {
 // TestSaveMessagesOverwrite tests that SaveMessages overwrites existing data.
 func TestSaveMessagesOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "test_overwrite.jsonl")
+	sessionDir := filepath.Join(tmpDir, "test_overwrite")
 
-	sess := NewSession(sessionPath)
+	sess := NewSession(sessionDir)
 
 	// Save initial messages
 	initialMessages := []agent.AgentMessage{
@@ -166,10 +169,10 @@ func TestSaveMessagesOverwrite(t *testing.T) {
 // TestSessionPersistence tests session persistence across loads.
 func TestSessionPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, "test_persist.jsonl")
+	sessionDir := filepath.Join(tmpDir, "test_persist")
 
 	// Create and save session
-	sess1 := NewSession(sessionPath)
+	sess1 := NewSession(sessionDir)
 	messages := []agent.AgentMessage{
 		agent.NewUserMessage("Message 1"),
 		agent.NewAssistantMessage(),
@@ -181,7 +184,7 @@ func TestSessionPersistence(t *testing.T) {
 	}
 
 	// Load session in a new instance
-	sess2, err := LoadSession(sessionPath)
+	sess2, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load: %v", err)
 	}

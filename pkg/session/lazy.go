@@ -108,7 +108,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	// Fallback: scan from end to find compaction entry
 	if err := loadFromEnd(f, sess, opts); err != nil {
 		// If lazy loading fails, fall back to full load
-		return LoadSession(filePath)
+		return LoadSession(sessionDir)
 	}
 
 	sess.flushed = true

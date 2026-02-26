@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,10 @@ const (
 	defaultLoopMaxConsecutiveToolCalls = 0               // Disabled (was 6)
 	defaultLoopMaxToolCallsPerName     = 0               // Disabled (was 60)
 	defaultMalformedToolCallRecoveries = 2
+	defaultRuntimeMetaHeartbeatTurns   = 6
+	defaultHistoryFallbackTokenBudget  = 20000
+	minHistoryFallbackTokenBudget      = 12000
+	maxHistoryFallbackTokenBudget      = 32000
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -44,6 +49,7 @@ type LoopConfig struct {
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 	ContextWindow           int           // Context window for the model (0=use default 128000)
+	InjectHistory           bool          // Phase 2: Whether to inject history messages into prompt (default: false)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -412,6 +418,24 @@ func runInnerLoop(
 			} else {
 				maybeSummarizeToolResults(ctx, agentCtx, config)
 			}
+
+			// Check if working memory was updated
+			if agentCtx.WorkingMemory != nil {
+				toolCalls := msg.ExtractToolCalls()
+				for _, tc := range toolCalls {
+					if strings.EqualFold(tc.Name, "write") {
+						// Check if the path matches working memory overview
+						if path, ok := tc.Arguments["path"].(string); ok {
+							// Convert to absolute path for comparison
+							absPath := filepath.Clean(path)
+							wmPath := agentCtx.WorkingMemory.GetPath()
+							if absPath == wmPath || filepath.Base(absPath) == overviewFile {
+								agentCtx.WorkingMemory.MarkUpdated()
+							}
+						}
+					}
+				}
+			}
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
@@ -754,54 +778,19 @@ func streamAssistantResponse(
 	llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
 	defer llmCancel()
 
-	// Convert messages to LLM format
-	llmMessages := ConvertMessagesToLLM(ctx, agentCtx.Messages)
+	var llmMessages []llm.LLMMessage
 
-	// Inject working memory content if available
-	// This is done before each LLM call so AI sees updates it made
-	if agentCtx.WorkingMemory != nil {
-		// Invalidate cache to ensure we read the latest content
-		agentCtx.WorkingMemory.InvalidateCache()
-		content, err := agentCtx.WorkingMemory.Load()
-		if err != nil {
-			slog.Warn("[Loop] Failed to load working memory", "error", err)
-		} else if content != "" {
-			slog.Debug("[Loop] Injecting working memory content", "length", len(content))
-			wmMsg := llm.LLMMessage{
-				Role:    "user",
-				Content: fmt.Sprintf("<working_memory>\n%s\n</working_memory>", content),
-			}
-			llmMessages = append([]llm.LLMMessage{wmMsg}, llmMessages...)
-		}
-	}
+	injectHistory, historyDecisionReason := shouldInjectHistory(agentCtx, config)
+	selectedMessages, selectionMode := selectMessagesForLLM(agentCtx, injectHistory, historyDecisionReason, config.ContextWindow)
+	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
+	slog.Debug("[Loop] history injection decision",
+		"inject_history", injectHistory,
+		"reason", historyDecisionReason,
+		"selection_mode", selectionMode,
+		"messages_total", len(agentCtx.Messages),
+		"messages_sent", len(llmMessages),
+	)
 
-	// Update meta and inject context_meta if WorkingMemory is available
-	if agentCtx.WorkingMemory != nil {
-		// Update meta with current message count before getting it
-		// This ensures the first request has meaningful data
-		tokensMax := 128000 // default context window
-		if config.ContextWindow > 0 {
-			tokensMax = config.ContextWindow
-		}
-		agentCtx.WorkingMemory.UpdateMeta(
-			agentCtx.WorkingMemory.GetMeta().TokensUsed, // keep existing tokens_used if any
-			tokensMax,
-			len(agentCtx.Messages),
-		)
-
-		// Inject context_meta at the END of messages (not beginning)
-		// to preserve prompt caching for system prompt and earlier messages
-		meta := agentCtx.WorkingMemory.GetMeta()
-		contextMetaMsg := buildContextMetaMessage(meta)
-		llmMessages = append(llmMessages, contextMetaMsg)
-	}
-
-	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
-
-	// Convert tools to LLM format
-	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
-
-	// Build LLM context
 	systemPrompt := agentCtx.SystemPrompt
 	if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
 		if strings.TrimSpace(systemPrompt) == "" {
@@ -810,6 +799,52 @@ func streamAssistantResponse(
 			systemPrompt = systemPrompt + "\n\n" + instruction
 		}
 	}
+
+	// Build runtime appendix (working memory + context meta) as a user message
+	// injected right after system prompt. Keeping system prompt stable improves
+	// provider-side prompt caching opportunities.
+	if agentCtx.WorkingMemory != nil {
+		// Invalidate cache to ensure we read the latest content
+		agentCtx.WorkingMemory.InvalidateCache()
+		content, err := agentCtx.WorkingMemory.Load()
+		if err != nil {
+			slog.Warn("[Loop] Failed to load working memory", "error", err)
+		} else {
+			// Refresh meta from approximate current context state.
+			tokensMax := 128000 // default context window
+			if config.ContextWindow > 0 {
+				tokensMax = config.ContextWindow
+			}
+			tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
+			agentCtx.WorkingMemory.UpdateMeta(
+				tokensUsedApprox,
+				tokensMax,
+				len(agentCtx.Messages),
+			)
+
+			meta := agentCtx.WorkingMemory.GetMeta()
+			runtimeMetaSnapshot, runtimeRefreshed := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
+			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
+			if runtimeAppendix != "" {
+				runtimeMsg := llm.LLMMessage{
+					Role:    "user",
+					Content: runtimeAppendix,
+				}
+				llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
+			}
+
+			slog.Debug("[Loop] Injecting runtime state as leading user message",
+				"wm_length", len(content),
+				"runtime_meta_refreshed", runtimeRefreshed,
+				"messages_sent", len(llmMessages))
+		}
+	}
+
+	slog.Debug("[Loop] Sending messages to LLM", "count", len(llmMessages))
+
+	// Convert tools to LLM format
+	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
+
 	llmCtxParams := llm.LLMContext{
 		SystemPrompt: systemPrompt,
 		Messages:     llmMessages,
@@ -1199,23 +1234,6 @@ func hashAny(value any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// buildContextMetaMessage creates a system message with context metadata.
-func buildContextMetaMessage(meta ContextMeta) llm.LLMMessage {
-	metaJSON, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		metaJSON = []byte("{}")
-	}
-	content := fmt.Sprintf(`<context_meta>
-%s
-</context_meta>
-
-💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.`, string(metaJSON))
-	return llm.LLMMessage{
-		Role:    "user",
-		Content: content,
-	}
-}
-
 // executeToolCalls executes tool calls from an assistant message.
 func executeToolCalls(
 	ctx context.Context,
@@ -1508,4 +1526,463 @@ Alternatively:
 </grep>`
 	}
 	return errorMsg
+}
+
+// extractRecentMessages extracts recent messages from the message list.
+// It keeps messages within the token budget, starting from the most recent.
+func extractRecentMessages(messages []AgentMessage, tokenBudget int) []AgentMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	// First, filter to only agent-visible messages
+	visible := make([]AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.IsAgentVisible() {
+			visible = append(visible, msg)
+		}
+	}
+
+	if len(visible) == 0 {
+		return nil
+	}
+
+	// If budget is 0 or negative, return last message only
+	if tokenBudget <= 0 {
+		return visible[len(visible)-1:]
+	}
+
+	// Count tokens from the end, keeping messages within budget
+	used := 0
+	start := len(visible)
+
+	for i := len(visible) - 1; i >= 0; i-- {
+		msgTokens := estimateMessageTokens(visible[i])
+		if used+msgTokens > tokenBudget && start != len(visible) {
+			break
+		}
+		used += msgTokens
+		start = i
+	}
+
+	if start >= len(visible) {
+		return visible
+	}
+
+	result := visible[start:]
+
+	// Skip leading tool/toolResult messages to ensure valid message sequence.
+	// Tool messages must follow an assistant message with tool_calls.
+	// If we truncated in the middle of a tool call sequence, drop the orphaned tool results.
+	for len(result) > 0 && (result[0].Role == "tool" || result[0].Role == "toolResult") {
+		result = result[1:]
+	}
+
+	return result
+}
+
+func estimateConversationTokens(messages []AgentMessage) int {
+	total := 0
+	for _, msg := range messages {
+		total += estimateMessageTokens(msg)
+	}
+	return total
+}
+
+// extractActiveTurnMessages returns only messages in the active turn window.
+// The window starts from the most recent agent-visible user message so prior
+// history is excluded while current tool-call protocol context is preserved.
+func extractActiveTurnMessages(messages []AgentMessage, tokenBudget int) []AgentMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	visible := make([]AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.IsAgentVisible() {
+			visible = append(visible, msg)
+		}
+	}
+	if len(visible) == 0 {
+		return nil
+	}
+
+	start := len(visible) - 1
+	for i := len(visible) - 1; i >= 0; i-- {
+		if strings.EqualFold(visible[i].Role, "user") {
+			start = i
+			break
+		}
+	}
+
+	active := visible[start:]
+	if tokenBudget <= 0 {
+		return active
+	}
+	return extractRecentMessages(active, tokenBudget)
+}
+
+func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason string, contextWindow int) ([]AgentMessage, string) {
+	if agentCtx == nil {
+		return nil, "empty_context"
+	}
+
+	if !injectHistory {
+		return extractActiveTurnMessages(agentCtx.Messages, defaultHistoryFallbackTokenBudget), "active_turn_only"
+	}
+
+	// Explicit compatibility toggle: keep full history behavior.
+	if reason == "inject_history_forced" {
+		return agentCtx.Messages, "full_history_forced"
+	}
+
+	// While working memory is not confirmed, keep a bounded recent history window
+	// to avoid huge resume payloads.
+	budget := historyFallbackTokenBudget(contextWindow)
+	recent := extractRecentMessages(agentCtx.Messages, budget)
+	if len(recent) == 0 {
+		return agentCtx.Messages, "full_history_fallback_empty"
+	}
+	return recent, "recent_history_window"
+}
+
+func historyFallbackTokenBudget(contextWindow int) int {
+	if contextWindow <= 0 {
+		return defaultHistoryFallbackTokenBudget
+	}
+	budget := contextWindow / 4
+	if budget < minHistoryFallbackTokenBudget {
+		return minHistoryFallbackTokenBudget
+	}
+	if budget > maxHistoryFallbackTokenBudget {
+		return maxHistoryFallbackTokenBudget
+	}
+	return budget
+}
+
+// shouldInjectHistory decides whether full history should be included.
+// Default behavior is conservative: keep history until working memory is
+// confirmed as maintained to avoid context loss.
+func shouldInjectHistory(agentCtx *AgentContext, config *LoopConfig) (bool, string) {
+	if config != nil && config.InjectHistory {
+		return true, "inject_history_forced"
+	}
+	if agentCtx == nil {
+		return true, "agent_context_missing"
+	}
+	if agentCtx.WorkingMemory == nil {
+		return true, "working_memory_unavailable"
+	}
+
+	confirmed, reason := isWorkingMemoryConfirmed(agentCtx)
+	if !confirmed {
+		return true, reason
+	}
+	return false, reason
+}
+
+func isWorkingMemoryConfirmed(agentCtx *AgentContext) (bool, string) {
+	if agentCtx == nil || agentCtx.WorkingMemory == nil {
+		return false, "working_memory_unavailable"
+	}
+
+	agentCtx.WorkingMemory.InvalidateCache()
+	content, err := agentCtx.WorkingMemory.Load()
+	if err != nil {
+		slog.Warn("[Loop] Failed to probe working memory state", "error", err)
+		return false, "working_memory_probe_failed"
+	}
+
+	template := GetOverviewTemplate(agentCtx.WorkingMemory.GetPath(), agentCtx.WorkingMemory.GetDetailDir())
+	if normalizeWorkingMemoryContent(content) == normalizeWorkingMemoryContent(template) {
+		return false, "working_memory_not_maintained"
+	}
+
+	if !hasSubstantiveWorkingMemoryContent(content) {
+		return false, "working_memory_not_maintained"
+	}
+
+	overviewPath := agentCtx.WorkingMemory.GetPath()
+	if hasSuccessfulWorkingMemoryWrite(agentCtx.Messages, overviewPath) {
+		return true, "working_memory_tool_write_confirmed"
+	}
+
+	// Allow persisted sessions that already have meaningful overview content.
+	return true, "working_memory_content_confirmed"
+}
+
+func hasSubstantiveWorkingMemoryContent(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+
+	withoutComments := stripHTMLComments(trimmed)
+	lines := strings.Split(withoutComments, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func stripHTMLComments(input string) string {
+	if input == "" {
+		return ""
+	}
+
+	remaining := input
+	var b strings.Builder
+	for {
+		start := strings.Index(remaining, "<!--")
+		if start < 0 {
+			b.WriteString(remaining)
+			break
+		}
+		b.WriteString(remaining[:start])
+
+		afterStart := remaining[start+4:]
+		end := strings.Index(afterStart, "-->")
+		if end < 0 {
+			break
+		}
+		remaining = afterStart[end+3:]
+	}
+	return b.String()
+}
+
+func hasSuccessfulWorkingMemoryWrite(messages []AgentMessage, overviewPath string) bool {
+	targetAbs := normalizePathForContains(overviewPath)
+	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(workingMemoryDir, overviewFile)))
+	allowRelativeFallback := targetAbs == "" && targetRel != ""
+	if targetAbs == "" && !allowRelativeFallback {
+		return false
+	}
+
+	for _, msg := range messages {
+		if msg.Role != "toolResult" || msg.IsError {
+			continue
+		}
+		tool := strings.ToLower(strings.TrimSpace(msg.ToolName))
+		if tool != "write" && tool != "edit" {
+			continue
+		}
+		body := normalizePathForContains(msg.ExtractText())
+		if body == "" {
+			continue
+		}
+		if targetAbs != "" && strings.Contains(body, targetAbs) {
+			return true
+		}
+		if allowRelativeFallback && strings.Contains(body, targetRel) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeWorkingMemoryContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.TrimSpace(content)
+	lines := strings.Split(content, "\n")
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		normalized = append(normalized, strings.TrimRight(line, " \t"))
+	}
+	return strings.Join(normalized, "\n")
+}
+
+func normalizePathForContains(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.Clean(value)
+	value = strings.ReplaceAll(value, "\\", "/")
+	return strings.ToLower(value)
+}
+
+func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) string {
+	sections := make([]string, 0, 3)
+	if strings.TrimSpace(workingMemoryContent) != "" {
+		sections = append(sections, fmt.Sprintf("<working_memory>\n%s\n</working_memory>", workingMemoryContent))
+	}
+	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
+		sections = append(sections, runtimeMetaSnapshot)
+	}
+	if len(sections) == 0 {
+		return ""
+	}
+	sections = append(sections, "Remember: runtime_state is telemetry, not user intent.")
+	return strings.Join(sections, "\n\n")
+}
+
+// buildRuntimeSystemAppendix is kept for backward-compatible tests/helpers.
+// Runtime state is now injected as a user message, not appended to system prompt.
+func buildRuntimeSystemAppendix(workingMemoryContent, runtimeMetaSnapshot string) string {
+	return buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot)
+}
+
+func updateRuntimeMetaSnapshot(agentCtx *AgentContext, meta ContextMeta, heartbeatTurns int) (string, bool) {
+	if agentCtx == nil {
+		return "", false
+	}
+	if heartbeatTurns <= 0 {
+		heartbeatTurns = defaultRuntimeMetaHeartbeatTurns
+	}
+
+	agentCtx.runtimeMetaTurns++
+	band := runtimeTokenBand(meta.TokensPercent)
+
+	shouldRefresh := strings.TrimSpace(agentCtx.runtimeMetaSnapshot) == "" ||
+		agentCtx.runtimeMetaBand != band ||
+		agentCtx.runtimeMetaTurns >= heartbeatTurns
+
+	if !shouldRefresh {
+		return agentCtx.runtimeMetaSnapshot, false
+	}
+
+	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
+	snapshot := fmt.Sprintf(`<runtime_state>
+context_meta:
+  tokens_band: %s
+  action_hint: %s
+  tokens_used_approx: %d
+  tokens_max: %d
+  messages_in_history_bucket: %s
+  working_memory_size_bucket: %s
+guidance:
+  - Use this for context management decisions only.
+  - Call compact_history when action_hint is not normal.
+</runtime_state>`,
+		band,
+		runtimeActionHint(band),
+		tokensUsedApprox,
+		meta.TokensMax,
+		runtimeMessageBucket(meta.MessagesInHistory),
+		runtimeSizeBucket(meta.WorkingMemorySize),
+	)
+
+	agentCtx.runtimeMetaSnapshot = snapshot
+	agentCtx.runtimeMetaBand = band
+	agentCtx.runtimeMetaTurns = 0
+
+	return snapshot, true
+}
+
+func runtimeTokenBand(percent float64) string {
+	switch {
+	case percent < 20:
+		return "0-20"
+	case percent < 40:
+		return "20-40"
+	case percent < 60:
+		return "40-60"
+	case percent < 75:
+		return "60-75"
+	default:
+		return "75+"
+	}
+}
+
+func runtimeActionHint(band string) string {
+	switch band {
+	case "0-20":
+		return "normal"
+	case "20-40":
+		return "light_compression"
+	case "40-60":
+		return "medium_compression"
+	case "60-75":
+		return "heavy_compression"
+	default:
+		return "emergency_compression"
+	}
+}
+
+func runtimeMessageBucket(count int) string {
+	switch {
+	case count <= 0:
+		return "0"
+	case count <= 10:
+		return "1-10"
+	case count <= 25:
+		return "11-25"
+	case count <= 50:
+		return "26-50"
+	case count <= 100:
+		return "51-100"
+	default:
+		return "100+"
+	}
+}
+
+func runtimeSizeBucket(size int) string {
+	switch {
+	case size <= 0:
+		return "0"
+	case size <= 1024:
+		return "0-1KB"
+	case size <= 4*1024:
+		return "1-4KB"
+	case size <= 16*1024:
+		return "4-16KB"
+	case size <= 64*1024:
+		return "16-64KB"
+	default:
+		return "64KB+"
+	}
+}
+
+func normalizeApprox(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value < 1000 {
+		return value
+	}
+	return (value / 1000) * 1000
+}
+
+// estimateMessageTokens estimates token count for a message.
+func estimateMessageTokens(msg AgentMessage) int {
+	if !msg.IsAgentVisible() {
+		return 0
+	}
+
+	charCount := 0
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case TextContent:
+			charCount += len(b.Text)
+		case ThinkingContent:
+			charCount += len(b.Thinking)
+		case ToolCallContent:
+			charCount += len(b.Name)
+			if b.Arguments != nil {
+				if argBytes, err := json.Marshal(b.Arguments); err == nil {
+					charCount += len(argBytes)
+				}
+			}
+		case ImageContent:
+			// Roughly estimate images as 1200 tokens (4800 chars)
+			charCount += 4800
+		}
+	}
+
+	if charCount == 0 {
+		charCount = len(msg.ExtractText())
+	}
+	if charCount == 0 {
+		return 0
+	}
+
+	// Rough approximation: 1 token per 4 characters
+	return (charCount + 3) / 4
 }

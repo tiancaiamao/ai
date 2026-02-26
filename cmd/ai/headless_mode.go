@@ -119,6 +119,30 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
+	// Resolve context window and create compactor early so compact_history is
+	// included in the prompt tooling list.
+	activeSpec, err := resolveActiveModelSpec(cfg)
+	if err != nil {
+		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
+	}
+	currentContextWindow := activeSpec.ContextWindow
+	if currentContextWindow <= 0 {
+		currentContextWindow = 128000 // default context window
+	}
+	compactorConfig := cfg.Compactor
+	if compactorConfig == nil {
+		compactorConfig = compact.DefaultConfig()
+	}
+	compactor := compact.NewCompactor(
+		compactorConfig,
+		model,
+		apiKey,
+		"You are a helpful coding assistant.",
+		currentContextWindow,
+	)
+	compactHistoryTool := tools.NewCompactHistoryTool(nil, compactor, model, apiKey, "")
+	registry.Register(compactHistoryTool)
+
 	// Load skills
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -156,21 +180,22 @@ Be concise and focused on the task at hand.`
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-		wm := agent.NewWorkingMemory(sessionDir)
-		promptBuilder.SetWorkingMemory(wm)
-	}
+			wm := agent.NewWorkingMemory(sessionDir)
+			promptBuilder.SetWorkingMemory(wm)
+		}
 	}
 	systemPrompt := promptBuilder.Build()
 
 	// Create agent context
 	agentCtx := agent.NewAgentContext(systemPrompt)
+	compactHistoryTool.SetAgentContext(agentCtx)
 
 	// Initialize working memory from session directory (for dynamic injection)
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-		wm := agent.NewWorkingMemory(sessionDir)
-		agentCtx.WorkingMemory = wm
+			wm := agent.NewWorkingMemory(sessionDir)
+			agentCtx.WorkingMemory = wm
 		}
 	}
 
@@ -205,27 +230,6 @@ Be concise and focused on the task at hand.`
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
 
-	// Create compactor
-	compactorConfig := cfg.Compactor
-	if compactorConfig == nil {
-		compactorConfig = compact.DefaultConfig()
-	}
-	// Get context window from model spec
-	activeSpec, err := resolveActiveModelSpec(cfg)
-	if err != nil {
-		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
-	}
-	currentContextWindow := activeSpec.ContextWindow
-	if currentContextWindow <= 0 {
-		currentContextWindow = 128000 // default context window
-	}
-	compactor := compact.NewCompactor(
-		compactorConfig,
-		model,
-		apiKey,
-		"You are a helpful coding assistant.",
-		currentContextWindow,
-	)
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{

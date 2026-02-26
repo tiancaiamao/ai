@@ -8,11 +8,11 @@ import (
 
 // AgentContext represents the context for agent execution.
 type AgentContext struct {
-	SystemPrompt             string                `json:"systemPrompt,omitempty"`
-	Messages                 []AgentMessage        `json:"messages"`
-	Tools                    []Tool                `json:"tools,omitempty"`
-	Skills                   []skill.Skill         `json:"skills,omitempty"` // Loaded skills
-	LastCompactionSummary    string                `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
+	SystemPrompt          string         `json:"systemPrompt,omitempty"`
+	Messages              []AgentMessage `json:"messages"`
+	Tools                 []Tool         `json:"tools,omitempty"`
+	Skills                []skill.Skill  `json:"skills,omitempty"`                // Loaded skills
+	LastCompactionSummary string         `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
 
 	// allowedTools restricts which tools can be executed.
 	// nil means all tools are allowed, non-nil is a whitelist.
@@ -20,6 +20,11 @@ type AgentContext struct {
 
 	// WorkingMemory is the agent's working memory for context management.
 	WorkingMemory *WorkingMemory `json:"-"`
+
+	// Runtime meta snapshot state for stable system-tail injection.
+	runtimeMetaSnapshot string `json:"-"`
+	runtimeMetaBand     string `json:"-"`
+	runtimeMetaTurns    int    `json:"-"`
 }
 
 // Tool represents a tool that can be called by the agent.

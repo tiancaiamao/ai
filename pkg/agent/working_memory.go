@@ -12,6 +12,10 @@ const (
 	workingMemoryDir = "working-memory"
 	overviewFile     = "overview.md"
 	detailDir        = "detail"
+
+	// Update tracking thresholds
+	maxRoundsWithoutUpdate = 5 // Maximum rounds without update before reminder
+	minRoundsBeforeCheck   = 3 // Minimum rounds before checking for update
 )
 
 // ContextMeta contains metadata about the current context state.
@@ -24,7 +28,7 @@ type ContextMeta struct {
 }
 
 // WorkingMemory manages the agent's working memory (overview.md).
-// It provides caching based on file modification time.
+// It provides caching based on file modification time and update tracking.
 type WorkingMemory struct {
 	mu sync.RWMutex
 
@@ -41,6 +45,11 @@ type WorkingMemory struct {
 	tokensUsed    int
 	tokensMax     int
 	messagesCount int
+
+	// Update tracking
+	lastUpdateTime    time.Time
+	lastCheckTime     time.Time
+	roundsSinceUpdate int
 }
 
 // NewWorkingMemory creates a new WorkingMemory for the given session directory.
@@ -139,7 +148,25 @@ func (wm *WorkingMemory) ensureWorkingMemory() error {
 }
 
 // Load loads the overview.md content with mtime-based caching.
+// It also checks if a reminder about updating working memory should be shown.
 func (wm *WorkingMemory) Load() (string, error) {
+	content, err := wm.loadContent()
+	if err != nil {
+		return "", err
+	}
+
+	// Check if we need to show a reminder
+	needsUpdate, reminder := wm.checkUpdateNeeded()
+	if needsUpdate {
+		content = content + reminder
+	}
+
+	return content, nil
+}
+
+// loadContent loads the overview.md content with mtime-based caching.
+// This is an internal method that only handles file loading.
+func (wm *WorkingMemory) loadContent() (string, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -235,4 +262,85 @@ func (wm *WorkingMemory) InvalidateCache() {
 
 	wm.overviewContent = ""
 	wm.overviewModTime = time.Time{}
+}
+
+// MarkUpdated marks that the working memory has been updated by the user.
+// This resets the roundsSinceUpdate counter.
+func (wm *WorkingMemory) MarkUpdated() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	wm.lastUpdateTime = time.Now()
+	wm.roundsSinceUpdate = 0
+}
+
+// checkUpdateNeeded checks if a reminder should be shown about updating working memory.
+// Returns (shouldShowReminder, reminderMessage).
+func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	// First check - just initialize counter
+	if wm.lastCheckTime.IsZero() {
+		wm.lastCheckTime = time.Now()
+		wm.roundsSinceUpdate = 1
+		return false, ""
+	}
+
+	wm.roundsSinceUpdate++
+	wm.lastCheckTime = time.Now()
+
+	// Don't check before minimum rounds
+	if wm.roundsSinceUpdate < minRoundsBeforeCheck {
+		return false, ""
+	}
+
+	// Check if we need to remind
+	if wm.roundsSinceUpdate > maxRoundsWithoutUpdate {
+		return true, wm.buildReminder()
+	}
+
+	// Optional: remind based on token usage
+	meta := wm.GetMeta()
+	if meta.TokensPercent > 70 && wm.roundsSinceUpdate > 3 {
+		return true, wm.buildReminder()
+	}
+
+	return false, ""
+}
+
+// buildReminder builds a reminder message to update working memory.
+func (wm *WorkingMemory) buildReminder() string {
+	meta := wm.GetMeta()
+
+	reminder := fmt.Sprintf(`
+
+<!--
+⚠️ WORKING MEMORY UPDATE NEEDED
+
+你已经连续 %d 轮没有更新 working memory 了。
+当前上下文状态:
+- Token 使用: %.0f%% (%d / %d)
+- 历史消息: %d 条
+- Working Memory 大小: %.2f KB
+
+建议操作:
+1. 总结已完成的任务，归档到 %s
+2. 更新"当前任务"状态和进度
+3. 删除过时信息，保留最近决策
+4. 将详细讨论移到 detail/ 目录
+
+使用 write tool 更新: %s
+下次请求时，你会看到更新后的内容。
+-->`,
+		wm.roundsSinceUpdate,
+		meta.TokensPercent,
+		meta.TokensUsed,
+		meta.TokensMax,
+		meta.MessagesInHistory,
+		float64(meta.WorkingMemorySize)/1024,
+		wm.detailPath,
+		wm.overviewPath)
+
+	return reminder
 }

@@ -44,6 +44,9 @@ type Builder struct {
 
 	// Working memory (for Working Memory section)
 	workingMemory WorkingMemoryInfo
+
+	// Context meta (for Working Memory section, set by agent loop)
+	contextMeta string
 }
 
 // NewBuilder creates a new prompt builder.
@@ -103,6 +106,12 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 // SetWorkingMemory sets the working memory for the prompt.
 func (b *Builder) SetWorkingMemory(wm WorkingMemoryInfo) *Builder {
 	b.workingMemory = wm
+	return b
+}
+
+// SetContextMeta sets the context metadata string.
+func (b *Builder) SetContextMeta(meta string) *Builder {
+	b.contextMeta = meta
 	return b
 }
 
@@ -167,26 +176,59 @@ func (b *Builder) buildWorkingMemorySection() string {
 	overviewPath := b.workingMemory.GetPath()
 	detailDir := b.workingMemory.GetDetailDir()
 
+	// Use context meta if available
+	contextMetaSection := ""
+	if b.contextMeta != "" {
+		contextMetaSection = fmt.Sprintf(`
+
+---
+
+<context_meta>
+%s
+</context_meta>
+
+💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.`, b.contextMeta)
+	}
+
 	return fmt.Sprintf(`## Working Memory ⚠️ IMPORTANT
 
 You have an external memory file that persists across conversations.
 
 **⚠️ CRITICAL: You MUST actively maintain this memory.**
 - Update it when tasks progress, decisions are made, or context changes
-- Review and compress it when context_meta shows high token usage
+- Review and compress it when runtime_state/context_meta shows high token usage
 - Use it to track what matters - YOU control what you remember
+- Prior history is not automatically injected (except active-turn protocol context)
+- Maintain working-memory/overview.md proactively.
 
 **File Path**: %s
-**Detail Directory**: %s (for storing detailed notes)
+**Detail Directory**: %s
 
 To update: use the write tool to modify the file at the path above.
 Your updated content will be loaded in the next request.
 
-**When to update:**
-- After completing a task or making progress
-- After making important decisions
-- When starting a new session (read current state)
-- When context_meta shows tokens > 50%%`, overviewPath, detailDir)
+**Context Management Responsibility:**
+- Check runtime_state/context_meta every turn
+- Decide when to compress conversation or tool outputs
+- Use compact_history tool for compression and archive
+
+**Compression Strategy Guide:**
+- 0-20%%: normal operation, no compression needed
+- 20-40%%: light compression (summarize completed tasks, trim redundant tool output)
+- 40-60%%: medium compression (archive detailed discussion to detail/)
+- 60-75%%: heavy compression (keep only key decisions + current task)
+- 75%%+: emergency compression (system fallback may trigger; compress immediately)
+
+**compact_history Tool Usage:**
+- target: conversation | tools | all
+- strategy: summarize | archive (if omitted: auto-selects; conversation/all with working memory defaults to archive)
+- keep_recent: preserve last N items (recommend 3-5)
+- archive_to: optional path (defaults to detail/ auto file when strategy=archive)
+
+**Always Preserve:**
+- Last 3-5 turn protocol context
+- Current task status and next actions
+- Key decisions and rationale%s`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {
