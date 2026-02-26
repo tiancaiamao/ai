@@ -232,13 +232,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
 		}
-		// Initialize working memory from session directory
+		// Initialize working memory and restore messages from session
 		if sess != nil {
 			sessionDir := sess.GetDir()
 			if sessionDir != "" {
 				wm := agent.NewWorkingMemory(sessionDir)
 				ctx.WorkingMemory = wm
 			}
+			// Restore conversation history from session
+			ctx.Messages = sess.GetMessages()
 		}
 		return ctx
 	}
