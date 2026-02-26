@@ -46,21 +46,15 @@ func FormatForPrompt(skills []Skill) string {
 		"Use the read tool to load a skill's file when the task matches its description.",
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
-		"<available_skills>",
 	}
 
 	for _, skill := range visibleSkills {
 		description := trimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapeXML(skill.Name)))
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(description)))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(skill.FilePath)))
-		lines = append(lines, "  </skill>")
+		lines = append(lines, fmt.Sprintf("- **%s**: %s (%s)", skill.Name, description, skill.FilePath))
 	}
 
-	lines = append(lines, "</available_skills>")
 	if omitted > 0 {
-		lines = append(lines, fmt.Sprintf("Note: %d additional skills omitted for brevity.", omitted))
+		lines = append(lines, fmt.Sprintf("*Note: %d additional skills omitted for brevity.*", omitted))
 	}
 
 	return strings.Join(lines, "\n")

@@ -190,45 +190,24 @@ func (b *Builder) buildWorkingMemorySection() string {
 💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.`, b.contextMeta)
 	}
 
-	return fmt.Sprintf(`## Working Memory ⚠️ IMPORTANT
+	return fmt.Sprintf(`## Working Memory
 
-You have an external memory file that persists across conversations.
+External memory file persisting across conversations. **YOU control what you remember.**
 
-**⚠️ CRITICAL: You MUST actively maintain this memory.**
-- Update it when tasks progress, decisions are made, or context changes
-- Review and compress it when runtime_state/context_meta shows high token usage
-- Use it to track what matters - YOU control what you remember
-- Prior history is not automatically injected (except active-turn protocol context)
-- Maintain working-memory/overview.md proactively.
+**Path**: %s
+**Detail dir**: %s
 
-**File Path**: %s
-**Detail Directory**: %s
+**Maintenance:**
+- Update when tasks progress, decisions made, or context changes
+- Use compact_history when token usage > 40%% (check runtime_state/context_meta)
 
-To update: use the write tool to modify the file at the path above.
-Your updated content will be loaded in the next request.
-
-**Context Management Responsibility:**
-- Check runtime_state/context_meta every turn
-- Decide when to compress conversation or tool outputs
-- Use compact_history tool for compression and archive
-
-**Compression Strategy Guide:**
-- 0-20%%: normal operation, no compression needed
-- 20-40%%: light compression (summarize completed tasks, trim redundant tool output)
-- 40-60%%: medium compression (archive detailed discussion to detail/)
-- 60-75%%: heavy compression (keep only key decisions + current task)
-- 75%%+: emergency compression (system fallback may trigger; compress immediately)
-
-**compact_history Tool Usage:**
-- target: conversation | tools | all
-- strategy: summarize | archive (if omitted: auto-selects; conversation/all with working memory defaults to archive)
-- keep_recent: preserve last N items (recommend 3-5)
-- archive_to: optional path (defaults to detail/ auto file when strategy=archive)
+**Compression Thresholds:**
+- 20-40%%: summarize completed tasks, trim redundant output
+- 40-60%%: archive detailed discussion to detail/
+- 60%%+: keep only key decisions + current task
 
 **Always Preserve:**
-- Last 3-5 turn protocol context
-- Current task status and next actions
-- Key decisions and rationale%s`, overviewPath, detailDir, contextMetaSection)
+- Last 3-5 turns, current task, key decisions%s`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {

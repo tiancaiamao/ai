@@ -14,7 +14,7 @@ const (
 	detailDir        = "detail"
 
 	// Update tracking thresholds
-	maxRoundsWithoutUpdate = 5 // Maximum rounds without update before reminder
+	maxRoundsWithoutUpdate = 10 // Maximum rounds without update before reminder
 	minRoundsBeforeCheck   = 3 // Minimum rounds before checking for update
 )
 
