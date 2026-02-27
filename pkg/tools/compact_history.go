@@ -85,6 +85,7 @@ When to use:
 
 Returns:
 - summary of what was compacted and current token status
+- strategy_selected/strategy_reason: which strategy was used and why
 - memory_sync_required: whether you must update overview.md now
 - overview_update_hint/detail_refs/post_actions: follow-up actions for memory sync`
 }
@@ -133,11 +134,13 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 
 	strategy := "summarize"
 	strategyProvided := false
+	strategyReason := "auto_default"
 	if s, ok := args["strategy"].(string); ok {
 		strategy = s
 		strategyProvided = true
+		strategyReason = "caller_provided"
 	} else {
-		strategy = t.defaultStrategy(target)
+		strategy, strategyReason = t.defaultStrategyWithReason(target)
 	}
 	if strategy != "summarize" && strategy != "archive" {
 		return nil, fmt.Errorf("invalid strategy '%s': must be 'summarize' or 'archive'", strategy)
@@ -167,6 +170,8 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 
 	// Execute compaction
 	result := t.compact(ctx, target, strategy, keepRecent, archiveTo)
+	result.StrategySelected = strategy
+	result.StrategyReason = strategyReason
 	if !strategyProvided && strategy == "archive" {
 		result.Summary = strings.TrimSpace(result.Summary + "\n- Strategy auto-selected: archive (working memory detected)")
 	}
@@ -187,6 +192,8 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 
 // CompactResult represents the result of compaction
 type CompactResult struct {
+	StrategySelected   string         `json:"strategy_selected,omitempty"`
+	StrategyReason     string         `json:"strategy_reason,omitempty"`
 	Target             string         `json:"target"`
 	Compacted          map[string]int `json:"compacted"`
 	KeptRecent         int            `json:"kept_recent"`
@@ -276,6 +283,12 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 		} else {
 			result.ArchivedTo = archivedPath
 			result.Summary = strings.TrimSpace(result.Summary + "\n- Archived to: " + archivedPath)
+			if indexPath, err := t.updateDetailIndex(archivedPath, result, agentCtx); err != nil {
+				result.Summary = strings.TrimSpace(result.Summary + "\n- Detail index update failed: " + err.Error())
+			} else if strings.TrimSpace(indexPath) != "" {
+				result.DetailRefs = append(result.DetailRefs, indexPath)
+				result.Summary = strings.TrimSpace(result.Summary + "\n- Detail index updated: " + indexPath)
+			}
 		}
 	}
 
@@ -400,14 +413,19 @@ func (t *CompactHistoryTool) generateSummary(result *CompactResult) string {
 }
 
 func (t *CompactHistoryTool) defaultStrategy(target string) string {
+	strategy, _ := t.defaultStrategyWithReason(target)
+	return strategy
+}
+
+func (t *CompactHistoryTool) defaultStrategyWithReason(target string) (string, string) {
 	agentCtx := t.getAgentContext()
 	if agentCtx == nil || agentCtx.WorkingMemory == nil {
-		return "summarize"
+		return "summarize", "working_memory_unavailable"
 	}
 	if target == "conversation" || target == "all" {
-		return "archive"
+		return "archive", "working_memory_available_for_long_term_storage"
 	}
-	return "summarize"
+	return "summarize", "tools_target_prefers_inline_summary"
 }
 
 func (t *CompactHistoryTool) populateMemorySyncGuidance(result *CompactResult, strategy string) {
@@ -446,7 +464,22 @@ func (t *CompactHistoryTool) populateMemorySyncGuidance(result *CompactResult, s
 	if strings.TrimSpace(result.ArchivedTo) != "" {
 		result.PostActions = append(result.PostActions, "record_archive_reference")
 		result.PostActions = append(result.PostActions, "read_detail_on_demand")
+		result.PostActions = append(result.PostActions, "refresh_detail_index")
 	}
+}
+
+type detailIndex struct {
+	Version int                `json:"version"`
+	Entries []detailIndexEntry `json:"entries"`
+}
+
+type detailIndexEntry struct {
+	CreatedAt             string `json:"created_at"`
+	FilePath              string `json:"file_path"`
+	Target                string `json:"target"`
+	CompactedConversation int    `json:"compacted_conversation"`
+	CompactedTools        int    `json:"compacted_tools"`
+	SummaryPreview        string `json:"summary_preview"`
 }
 
 func (t *CompactHistoryTool) archiveResult(result *CompactResult, archiveTo string, agentCtx *agent.AgentContext) (string, error) {
@@ -463,6 +496,56 @@ func (t *CompactHistoryTool) archiveResult(result *CompactResult, archiveTo stri
 		return "", fmt.Errorf("write archive file: %w", err)
 	}
 	return archivePath, nil
+}
+
+func (t *CompactHistoryTool) updateDetailIndex(archivePath string, result *CompactResult, agentCtx *agent.AgentContext) (string, error) {
+	if agentCtx == nil || agentCtx.WorkingMemory == nil {
+		return "", nil
+	}
+
+	detailDir := strings.TrimSpace(agentCtx.WorkingMemory.GetDetailDir())
+	if detailDir == "" {
+		return "", nil
+	}
+	indexPath := filepath.Join(detailDir, "index.json")
+
+	idx := detailIndex{Version: 1, Entries: make([]detailIndexEntry, 0, 16)}
+	if raw, err := os.ReadFile(indexPath); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &idx)
+		if idx.Version == 0 {
+			idx.Version = 1
+		}
+		if idx.Entries == nil {
+			idx.Entries = make([]detailIndexEntry, 0, 16)
+		}
+	}
+
+	preview := strings.TrimSpace(result.Summary)
+	if len(preview) > 180 {
+		preview = preview[:180] + "..."
+	}
+
+	idx.Entries = append(idx.Entries, detailIndexEntry{
+		CreatedAt:             time.Now().UTC().Format(time.RFC3339),
+		FilePath:              archivePath,
+		Target:                result.Target,
+		CompactedConversation: result.Compacted["conversation"],
+		CompactedTools:        result.Compacted["tools"],
+		SummaryPreview:        preview,
+	})
+	if len(idx.Entries) > 200 {
+		idx.Entries = idx.Entries[len(idx.Entries)-200:]
+	}
+
+	data, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal detail index: %w", err)
+	}
+	if err := os.WriteFile(indexPath, data, 0644); err != nil {
+		return "", fmt.Errorf("write detail index: %w", err)
+	}
+
+	return indexPath, nil
 }
 
 func (t *CompactHistoryTool) resolveArchivePath(archiveTo string, agentCtx *agent.AgentContext) string {

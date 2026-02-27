@@ -337,6 +337,18 @@ func TestCompactHistoryTool_Execute_ArchiveWritesFile(t *testing.T) {
 	if filepath.Dir(archivedTo) != wm.GetDetailDir() {
 		t.Fatalf("expected archive in detail dir %s, got %s", wm.GetDetailDir(), filepath.Dir(archivedTo))
 	}
+
+	detailRefs, ok := parsed["detail_refs"].([]any)
+	if !ok || len(detailRefs) == 0 {
+		t.Fatalf("expected detail_refs to include index path, got: %v", parsed["detail_refs"])
+	}
+	indexPath, ok := detailRefs[len(detailRefs)-1].(string)
+	if !ok || indexPath == "" {
+		t.Fatalf("expected index path in detail_refs, got: %v", detailRefs)
+	}
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("detail index file not found at %s: %v", indexPath, err)
+	}
 }
 
 func TestCompactHistoryTool_Execute_DefaultArchiveWhenWorkingMemoryPresent(t *testing.T) {
@@ -385,6 +397,13 @@ func TestCompactHistoryTool_Execute_DefaultArchiveWhenWorkingMemoryPresent(t *te
 	}
 	if _, err := os.Stat(archivedTo); err != nil {
 		t.Fatalf("archive file not found at %s: %v", archivedTo, err)
+	}
+
+	if got, _ := parsed["strategy_selected"].(string); got != "archive" {
+		t.Fatalf("expected strategy_selected=archive, got %v", parsed["strategy_selected"])
+	}
+	if got, _ := parsed["strategy_reason"].(string); got == "" {
+		t.Fatalf("expected strategy_reason to be non-empty")
 	}
 }
 

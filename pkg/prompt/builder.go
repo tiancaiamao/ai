@@ -200,9 +200,9 @@ Treat it as the source of truth between turns.
 
 **Turn Protocol (run every turn):**
 1. Read runtime_state and decide compression urgency.
-2. If action_hint is not normal, call compact_history before continuing.
-3. Decide whether overview.md must be updated.
-4. If compact_history returns memory_sync_required=true, update overview.md in this same turn.
+2. Fast path: if fast_path_allowed=yes and no task state changed, answer directly.
+3. Otherwise, if action_hint is not normal, call compact_history before continuing.
+4. If compaction happened or task state changed, update overview.md in this same turn.
 5. If overview points to detail files needed for current task, read them explicitly.
 6. Then answer the user.
 
@@ -227,7 +227,7 @@ Treat it as the source of truth between turns.
 
 **Hard Rules:**
 - Never assume memory was updated unless tool result confirms success.
-- After compaction, reflect the outcome in overview.md in the same turn.
+- After compact_history executes, reflect the outcome in overview.md in the same turn.
 - Keep overview concise; store large logs/details under detail/.%s`, overviewPath, detailDir, contextMetaSection)
 }
 

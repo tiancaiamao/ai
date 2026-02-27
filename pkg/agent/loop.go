@@ -1845,7 +1845,8 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 Before finishing this turn, decide and act on both:
 1) whether compact_history is required from action_hint/tokens_band
 2) whether overview.md needs an update
-If compact_history returns memory_sync_required=true, updating overview.md is mandatory in the same turn.
+Fast path: if fast_path_allowed=yes and task state is unchanged, you may skip compaction and memory write.
+If compact_history executes, follow post_actions and update overview.md in the same turn.
 If overview references detail files relevant to the current task, read them explicitly before deciding.
 Path authority: always use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples (e.g. working-memory/overview.md).`)
 	return strings.Join(sections, "\n\n")
@@ -1877,6 +1878,9 @@ func updateRuntimeMetaSnapshot(agentCtx *AgentContext, meta ContextMeta, heartbe
 	}
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
+	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
+	actionHint := runtimeActionHint(band)
+	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
 	snapshot := fmt.Sprintf(`<runtime_state>
 context_meta:
   tokens_band: %s
@@ -1885,16 +1889,28 @@ context_meta:
   tokens_max: %d
   messages_in_history_bucket: %s
   working_memory_size_bucket: %s
+tool_output_pressure:
+  stale_tool_outputs_bucket: %s
+  large_tool_outputs_bucket: %s
+  largest_tool_output_bucket: %s
+decision:
+  fast_path_allowed: %s
 guidance:
   - Use this for context management decisions only.
+  - If fast_path_allowed is yes and task state is unchanged, you may skip compaction and memory write.
+  - Prefer compact_history target=tools when stale_tool_outputs_bucket is not 0.
   - Call compact_history when action_hint is not normal.
 </runtime_state>`,
 		band,
-		runtimeActionHint(band),
+		actionHint,
 		tokensUsedApprox,
 		meta.TokensMax,
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.WorkingMemorySize),
+		runtimeCountBucket(toolPressure.StaleCount),
+		runtimeCountBucket(toolPressure.LargeCount),
+		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
+		yesNo(fastPathAllowed),
 	)
 
 	agentCtx.runtimeMetaSnapshot = snapshot
@@ -1902,6 +1918,53 @@ guidance:
 	agentCtx.runtimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+type runtimeToolPressure struct {
+	StaleCount   int
+	LargeCount   int
+	LargestChars int
+}
+
+func collectRuntimeToolPressure(messages []AgentMessage) runtimeToolPressure {
+	pressure := runtimeToolPressure{}
+	if len(messages) == 0 {
+		return pressure
+	}
+
+	activeStart := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !msg.IsAgentVisible() {
+			continue
+		}
+		if strings.EqualFold(msg.Role, "user") {
+			activeStart = i
+			break
+		}
+	}
+	if activeStart == len(messages) {
+		activeStart = 0
+	}
+
+	const largeOutputThresholdChars = 2000
+	for i, msg := range messages {
+		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
+			continue
+		}
+		size := len(msg.ExtractText())
+		if size > pressure.LargestChars {
+			pressure.LargestChars = size
+		}
+		if size >= largeOutputThresholdChars {
+			pressure.LargeCount++
+		}
+		if i < activeStart {
+			pressure.StaleCount++
+		}
+	}
+
+	return pressure
 }
 
 func runtimeTokenBand(percent float64) string {
@@ -1966,6 +2029,43 @@ func runtimeSizeBucket(size int) string {
 	default:
 		return "64KB+"
 	}
+}
+
+func runtimeCountBucket(count int) string {
+	switch {
+	case count <= 0:
+		return "0"
+	case count <= 2:
+		return "1-2"
+	case count <= 5:
+		return "3-5"
+	case count <= 10:
+		return "6-10"
+	default:
+		return "10+"
+	}
+}
+
+func runtimeToolOutputSizeBucket(chars int) string {
+	switch {
+	case chars <= 0:
+		return "0"
+	case chars <= 512:
+		return "1-512c"
+	case chars <= 2048:
+		return "513-2Kc"
+	case chars <= 8192:
+		return "2K-8Kc"
+	default:
+		return "8Kc+"
+	}
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func normalizeApprox(value int) int {
