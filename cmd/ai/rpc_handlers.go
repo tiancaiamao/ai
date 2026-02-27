@@ -286,6 +286,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	setAgentContext := func(ctx *agent.AgentContext) {
 		ag.SetContext(ctx)
 		compactHistoryTool.SetAgentContext(ag.GetContext())
+		compactHistoryTool.SetSession(sess)
 	}
 
 	// Set up executor with concurrency control

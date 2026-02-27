@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,12 +17,14 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	agentprompt "github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/pkg/session"
 )
 
 // CompactHistoryTool allows LLM to compact conversation history and tool outputs
 type CompactHistoryTool struct {
 	mu           sync.RWMutex
 	agentCtx     *agent.AgentContext
+	session      *session.Session
 	compactor    *compact.Compactor
 	model        llm.Model
 	apiKey       string
@@ -59,6 +62,12 @@ func (t *CompactHistoryTool) SetAgentContext(agentCtx *agent.AgentContext) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.agentCtx = agentCtx
+}
+
+func (t *CompactHistoryTool) SetSession(sess *session.Session) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.session = sess
 }
 
 func (t *CompactHistoryTool) getAgentContext() *agent.AgentContext {
@@ -398,6 +407,33 @@ func (t *CompactHistoryTool) compactConversation(ctx context.Context, agentCtx *
 	if agentCtx != nil {
 		agentCtx.Messages = newMessages
 		agentCtx.LastCompactionSummary = summary
+	}
+
+	// Persist compaction to session layer
+	if t.session != nil {
+		// Debug: check session state before compact
+		sessMessages := t.session.GetMessages()
+		fmt.Fprintf(os.Stderr, "[DEBUG] sess != nil: true\n")
+		fmt.Fprintf(os.Stderr, "[DEBUG] sessMessages: %d\n", len(sessMessages))
+		fmt.Fprintf(os.Stderr, "[DEBUG] agentCtxMessages: %d\n", len(agentCtx.Messages))
+
+		canCompact := t.session.CanCompact(t.compactor)
+		fmt.Fprintf(os.Stderr, "[DEBUG] CanCompact: %v\n", canCompact)
+
+		slog.Info("Before sess.Compact", "sessMessages", len(sessMessages), "agentCtxMessages", len(agentCtx.Messages))
+		slog.Info("CanCompact", "result", canCompact)
+
+		result, err := t.session.Compact(t.compactor)
+		if err != nil {
+			// Log but don't fail - the in-memory compaction is still valid
+			fmt.Fprintf(os.Stderr, "[DEBUG] sess.Compact error: %v\n", err)
+			slog.Error("Failed to persist compaction to session", "error", err, "result", result)
+		} else {
+			fmt.Fprintf(os.Stderr, "[DEBUG] sess.Compact success: tokensBefore=%d tokensAfter=%d\n", result.TokensBefore, result.TokensAfter)
+			slog.Info("Session compact successful", "tokensBefore", result.TokensBefore, "tokensAfter", result.TokensAfter)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[DEBUG] sess is nil!\n")
 	}
 
 	return compactedConversation, summary
