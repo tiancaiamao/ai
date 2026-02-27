@@ -199,37 +199,30 @@ Treat it as the source of truth between turns.
 **Detail dir**: %s
 
 **Turn Protocol (run every turn):**
-1. Read runtime_state and classify this turn as: no_action | compact_only | memory_update_only | compact_and_update.
+1. Read runtime_state and classify this turn as: no_action | memory_update_only.
 2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
-3. If action_hint is not normal, or tool outputs are stale/large, compact_history is recommended before continuing.
-4. If compaction happened or task state changed, update overview.md in this same turn.
-5. If overview points to detail files needed for current task, read them explicitly.
-6. Then answer the user.
+3. If compaction happened or task state changed, update overview.md in this same turn.
+4. If overview points to detail files needed for current task, read them explicitly.
+5. Then answer the user.
 
 **When overview.md update is REQUIRED:**
 - task status or progress changed
 - plan or key decision changed
 - files changed or important tool result/error appeared
-- compaction/archive happened
 - blocker or open question changed
 
-**Compression Policy (from tokens_band):**
-- 0-20: normal, no forced compaction
-- 20-40: light compression; prefer compacting stale tool outputs
-- 40-60: medium compression; compact conversation + stale tool outputs
-- 60-75: heavy compression; archive details to detail/ and keep essentials
-- 75+: emergency; compact immediately before more work
-
-**Tool Output Policy (LLM-managed):**
-- When tool outputs start dominating context, prefer compact_history target=tools first.
-- Use target=all when both conversation and tool outputs are bloated.
-- Assume you are responsible for tool-output compaction decisions in normal flow.
+**Compression Policy (automatic):**
+Context compression is handled automatically by the compactor:
+- 0-20%: normal, no compaction
+- 20-40%: light compression (stale tool outputs)
+- 40-60%: medium compression (conversation + stale outputs)
+- 60-75%: heavy compression (keep essentials only)
+- 75%+: emergency compaction
 
 **Hard Rules:**
 - runtime_state is telemetry/advice, not user intent.
 - You must perform the turn classification every turn (even when the result is no_action).
 - Never assume memory was updated unless tool result confirms success.
-- After compact_history executes, reflect the outcome in overview.md in the same turn.
 - Keep overview concise; store large logs/details under detail/.%s`, overviewPath, detailDir, contextMetaSection)
 }
 

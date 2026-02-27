@@ -130,8 +130,6 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		systemPrompt: agentCtx.SystemPrompt,
 		context:      agentCtx,
 		eventChan:    make(chan AgentEvent, 100),
-		// 		ctx:             ctx,
-		// 		cancel:          cancel,
 		followUpQueue:         make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
 		executor:              NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
 		metrics:               metrics,
@@ -328,7 +326,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		}
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
-			// (e.g. compact_history target=tools/all editing older messages).
+			// (e.g. auto-compaction editing older messages).
 			a.context.Messages = append([]AgentMessage(nil), event.Value.Messages...)
 		}
 

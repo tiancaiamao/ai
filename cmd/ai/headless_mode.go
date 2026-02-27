@@ -119,8 +119,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	// Resolve context window and create compactor early so compact_history is
-	// included in the prompt tooling list.
+	// Resolve context window and create compactor for automatic context compression
 	activeSpec, err := resolveActiveModelSpec(cfg)
 	if err != nil {
 		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
@@ -140,8 +139,6 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		"You are a helpful coding assistant.",
 		currentContextWindow,
 	)
-	compactHistoryTool := tools.NewCompactHistoryTool(nil, compactor, model, apiKey, "")
-	registry.Register(compactHistoryTool)
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
@@ -188,7 +185,6 @@ Be concise and focused on the task at hand.`
 
 	// Create agent context
 	agentCtx := agent.NewAgentContext(systemPrompt)
-	compactHistoryTool.SetAgentContext(agentCtx)
 
 	// Initialize working memory from session directory (for dynamic injection)
 	if sess != nil {

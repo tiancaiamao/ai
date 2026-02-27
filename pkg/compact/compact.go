@@ -40,9 +40,9 @@ func DefaultConfig() *Config {
 		KeepRecentTokens:      20000, // Keep ~20k tokens from the recent context
 		ReserveTokens:         16384, // Reserve tokens for responses when using context window
 		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
-		ToolSummaryStrategy:   "off", // Phase 2: LLM manages tool summaries via compact_history tool
-		ToolSummaryAutomation: "off", // LLM-managed by default; background tool summary disabled unless explicitly enabled.
-		AutoCompact:           true,  // Phase 2: Keep enabled as fallback (75% threshold)
+		ToolSummaryStrategy:   "off", // Tool summary strategy (llm, heuristic, off)
+		ToolSummaryAutomation: "off", // Automatic tool-output summary (off, fallback, always)
+		AutoCompact:           true,  // Automatic context compression at 75% threshold
 	}
 }
 

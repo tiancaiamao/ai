@@ -152,7 +152,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	// Create compactor early so compact_history is present when building the system prompt.
+	// Create compactor for automatic context compression
 	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
@@ -165,11 +165,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentContextWindow,
 	)
 
-	// Register compact_history before prompt build so LLM sees it in Tooling section.
-	compactHistoryTool := tools.NewCompactHistoryTool(nil, compactor, model, apiKey, "")
-	registry.Register(compactHistoryTool)
-
-	slog.Info("Registered tools: read, bash, write, grep, edit, compact_history", "count", len(registry.All()))
+	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
 	// Load skills
 	traceOutputPath, err = initTraceFileHandler()
@@ -261,7 +257,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	agentCtx := createBaseContext()
-	compactHistoryTool.SetAgentContext(agentCtx)
 
 	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
 	defer ag.Shutdown()
@@ -281,12 +276,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
-	slog.Info("compact_history tool enabled for LLM-driven context management")
-
 	setAgentContext := func(ctx *agent.AgentContext) {
 		ag.SetContext(ctx)
-		compactHistoryTool.SetAgentContext(ag.GetContext())
-		compactHistoryTool.SetSession(sess)
 	}
 
 	// Set up executor with concurrency control

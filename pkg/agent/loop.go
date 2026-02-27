@@ -1848,7 +1848,6 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
 Follow the Turn Protocol defined in the system prompt.
-If compact_history executes, update overview.md in this same turn.
 Path authority: use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples.`)
 	return strings.Join(sections, "\n\n")
 }
@@ -1899,7 +1898,6 @@ decision:
 guidance:
   - Use this for context management decisions only.
   - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
-  - Prefer compact_history target=tools when stale_tool_outputs_bucket is not 0.
   - When action_hint is not normal, compaction is usually recommended.
 </runtime_state>`,
 		band,
