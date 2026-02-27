@@ -192,22 +192,43 @@ func (b *Builder) buildWorkingMemorySection() string {
 
 	return fmt.Sprintf(`## Working Memory
 
-External memory file persisting across conversations. **YOU control what you remember.**
+This is persistent operational state for this session.
+Treat it as the source of truth between turns.
 
 **Path**: %s
 **Detail dir**: %s
 
-**Maintenance:**
-- Update when tasks progress, decisions made, or context changes
-- Use compact_history when token usage > 40%% (check runtime_state/context_meta)
+**Turn Protocol (run every turn):**
+1. Read runtime_state and decide compression urgency.
+2. If action_hint is not normal, call compact_history before continuing.
+3. Decide whether overview.md must be updated.
+4. If compact_history returns memory_sync_required=true, update overview.md in this same turn.
+5. If overview points to detail files needed for current task, read them explicitly.
+6. Then answer the user.
 
-**Compression Thresholds:**
-- 20-40%%: summarize completed tasks, trim redundant output
-- 40-60%%: archive detailed discussion to detail/
-- 60%%+: keep only key decisions + current task
+**When overview.md update is REQUIRED:**
+- task status or progress changed
+- plan or key decision changed
+- files changed or important tool result/error appeared
+- compaction/archive happened
+- blocker or open question changed
 
-**Always Preserve:**
-- Last 3-5 turns, current task, key decisions%s`, overviewPath, detailDir, contextMetaSection)
+**Compression Policy (from tokens_band):**
+- 0-20: normal, no forced compaction
+- 20-40: light compression; prefer compacting stale tool outputs
+- 40-60: medium compression; compact conversation + stale tool outputs
+- 60-75: heavy compression; archive details to detail/ and keep essentials
+- 75+: emergency; compact immediately before more work
+
+**Tool Output Policy (LLM-managed):**
+- When tool outputs start dominating context, prefer compact_history target=tools first.
+- Use target=all when both conversation and tool outputs are bloated.
+- Treat automatic/system tool-output compression as fallback; you should act first.
+
+**Hard Rules:**
+- Never assume memory was updated unless tool result confirms success.
+- After compaction, reflect the outcome in overview.md in the same turn.
+- Keep overview concise; store large logs/details under detail/.%s`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {

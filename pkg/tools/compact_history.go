@@ -83,7 +83,10 @@ When to use:
 - context_meta shows tokens > 60%: heavy compression (keep only essentials)
 - Always preserve: recent 3-5 turns, current task, key decisions
 
-Returns: summary of what was compacted and current token status`
+Returns:
+- summary of what was compacted and current token status
+- memory_sync_required: whether you must update overview.md now
+- overview_update_hint/detail_refs/post_actions: follow-up actions for memory sync`
 }
 
 // Parameters returns the JSON Schema for the tool parameters
@@ -184,12 +187,17 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 
 // CompactResult represents the result of compaction
 type CompactResult struct {
-	Target      string         `json:"target"`
-	Compacted   map[string]int `json:"compacted"`
-	KeptRecent  int            `json:"kept_recent"`
-	TokenStatus TokenStatus    `json:"token_status"`
-	ArchivedTo  string         `json:"archived_to,omitempty"`
-	Summary     string         `json:"summary,omitempty"`
+	Target             string         `json:"target"`
+	Compacted          map[string]int `json:"compacted"`
+	KeptRecent         int            `json:"kept_recent"`
+	TokenStatus        TokenStatus    `json:"token_status"`
+	ArchivedTo         string         `json:"archived_to,omitempty"`
+	Summary            string         `json:"summary,omitempty"`
+	MemorySyncRequired bool           `json:"memory_sync_required"`
+	MemorySyncReason   string         `json:"memory_sync_reason,omitempty"`
+	OverviewUpdateHint string         `json:"overview_update_hint,omitempty"`
+	DetailRefs         []string       `json:"detail_refs,omitempty"`
+	PostActions        []string       `json:"post_actions,omitempty"`
 }
 
 // TokenStatus represents token usage status
@@ -202,9 +210,10 @@ type TokenStatus struct {
 // compact performs the actual compaction
 func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy string, keepRecent int, archiveTo string) *CompactResult {
 	result := &CompactResult{
-		Target:     target,
-		Compacted:  make(map[string]int),
-		KeptRecent: keepRecent,
+		Target:      target,
+		Compacted:   make(map[string]int),
+		KeptRecent:  keepRecent,
+		PostActions: make([]string, 0, 3),
 		TokenStatus: TokenStatus{
 			Before:  0,
 			After:   0,
@@ -277,6 +286,7 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 		contextWindow = 128000
 	}
 	result.TokenStatus.Percent = float64(result.TokenStatus.After) / float64(contextWindow) * 100
+	t.populateMemorySyncGuidance(result, strategy)
 
 	return result
 }
@@ -398,6 +408,45 @@ func (t *CompactHistoryTool) defaultStrategy(target string) string {
 		return "archive"
 	}
 	return "summarize"
+}
+
+func (t *CompactHistoryTool) populateMemorySyncGuidance(result *CompactResult, strategy string) {
+	if result == nil {
+		return
+	}
+
+	compactedConversation := result.Compacted["conversation"]
+	compactedTools := result.Compacted["tools"]
+	totalCompacted := compactedConversation + compactedTools
+	if totalCompacted <= 0 && strings.TrimSpace(result.ArchivedTo) == "" {
+		return
+	}
+
+	result.MemorySyncRequired = true
+	result.MemorySyncReason = "context changed by compaction; synchronize working memory now"
+
+	hintParts := make([]string, 0, 6)
+	hintParts = append(hintParts, "Update overview.md in this same turn.")
+	if compactedConversation > 0 {
+		hintParts = append(hintParts, fmt.Sprintf("Record conversation compaction result (%d item(s)).", compactedConversation))
+	}
+	if compactedTools > 0 {
+		hintParts = append(hintParts, fmt.Sprintf("Record tool-output compaction result (%d item(s)).", compactedTools))
+	}
+	if strings.TrimSpace(result.ArchivedTo) != "" {
+		hintParts = append(hintParts, "Add archive reference so it can be reopened later.")
+		result.DetailRefs = append(result.DetailRefs, result.ArchivedTo)
+	}
+	if strategy == "archive" {
+		hintParts = append(hintParts, "Keep overview concise; move details to detail/ and keep only pointers.")
+	}
+	result.OverviewUpdateHint = strings.Join(hintParts, " ")
+
+	result.PostActions = append(result.PostActions, "update_overview_now")
+	if strings.TrimSpace(result.ArchivedTo) != "" {
+		result.PostActions = append(result.PostActions, "record_archive_reference")
+		result.PostActions = append(result.PostActions, "read_detail_on_demand")
+	}
 }
 
 func (t *CompactHistoryTool) archiveResult(result *CompactResult, archiveTo string, agentCtx *agent.AgentContext) (string, error) {

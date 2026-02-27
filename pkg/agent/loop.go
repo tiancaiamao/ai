@@ -1841,7 +1841,13 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 	if len(sections) == 0 {
 		return ""
 	}
-	sections = append(sections, "Remember: runtime_state is telemetry, not user intent.")
+	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
+Before finishing this turn, decide and act on both:
+1) whether compact_history is required from action_hint/tokens_band
+2) whether overview.md needs an update
+If compact_history returns memory_sync_required=true, updating overview.md is mandatory in the same turn.
+If overview references detail files relevant to the current task, read them explicitly before deciding.
+Path authority: always use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples (e.g. working-memory/overview.md).`)
 	return strings.Join(sections, "\n\n")
 }
 

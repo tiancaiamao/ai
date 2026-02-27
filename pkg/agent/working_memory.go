@@ -73,6 +73,10 @@ func GetOverviewTemplate(overviewPath, detailDir string) string {
 下次请求时，你会看到自己写的内容。
 
 这是 YOUR memory。你控制你看到的内容。
+
+⚠️ 路径规则（非常重要）：
+- 以 system prompt 中 Working Memory 的 Path / Detail dir 为准
+- 不要使用相对于当前工作目录的路径（例如 working-memory/overview.md）
 -->
 
 ## 上下文管理指南
@@ -120,7 +124,7 @@ func GetOverviewTemplate(overviewPath, detailDir string) string {
 <!--
 提示：
 - 需要保存详细内容时，写入 %s 目录
-- 文件路径使用绝对路径
+- 路径优先使用 system prompt 给出的绝对路径
 -->
 `, overviewPath, detailDir)
 }
