@@ -42,6 +42,27 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) ([]ContentBlock, error)
 }
 
+type toolExecutionAgentContextKey struct{}
+
+// WithToolExecutionAgentContext stores the current loop AgentContext in ctx so
+// tools can mutate the active turn state instead of stale outer pointers.
+func WithToolExecutionAgentContext(ctx context.Context, agentCtx *AgentContext) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, toolExecutionAgentContextKey{}, agentCtx)
+}
+
+// ToolExecutionAgentContext returns the active loop AgentContext for the
+// current tool execution when available.
+func ToolExecutionAgentContext(ctx context.Context) *AgentContext {
+	if ctx == nil {
+		return nil
+	}
+	agentCtx, _ := ctx.Value(toolExecutionAgentContextKey{}).(*AgentContext)
+	return agentCtx
+}
+
 // NewAgentContext creates a new AgentContext with the given system prompt.
 func NewAgentContext(systemPrompt string) *AgentContext {
 	return &AgentContext{

@@ -118,3 +118,50 @@ func TestConvertMessagesToLLMDedupesToolSummaryByContent(t *testing.T) {
 		t.Fatalf("unexpected summary content: %q", llmMessages[1].Content)
 	}
 }
+
+func TestConvertMessagesToLLMDedupesAssistantToolCallsByFullSet(t *testing.T) {
+	a1 := NewAssistantMessage()
+	a1.Content = []ContentBlock{
+		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
+	}
+	a2 := NewAssistantMessage()
+	a2.Content = []ContentBlock{
+		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
+	}
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
+		NewUserMessage("start"),
+		a1,
+		a2,
+	})
+	if len(llmMessages) != 2 {
+		t.Fatalf("expected duplicate assistant tool-call set to dedupe, got %d", len(llmMessages))
+	}
+	if len(llmMessages[1].ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls after dedupe, got %d", len(llmMessages[1].ToolCalls))
+	}
+}
+
+func TestConvertMessagesToLLMKeepsAssistantToolCallsWhenSetDiffers(t *testing.T) {
+	a1 := NewAssistantMessage()
+	a1.Content = []ContentBlock{
+		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo one"}},
+	}
+	a2 := NewAssistantMessage()
+	a2.Content = []ContentBlock{
+		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		ToolCallContent{ID: "call-3", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
+	}
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
+		NewUserMessage("start"),
+		a1,
+		a2,
+	})
+	if len(llmMessages) != 3 {
+		t.Fatalf("expected both assistant tool-call sets to be kept, got %d", len(llmMessages))
+	}
+}

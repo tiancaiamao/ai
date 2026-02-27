@@ -1395,6 +1395,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 						sessionWriter.Append(sess, *event.Result)
 					}
 				}
+				if event.Type == "agent_end" && sessionWriter != nil {
+					if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+						slog.Info("Failed to replace session messages on agent_end:", "value", err)
+					}
+				}
 
 				emitAt := time.Now()
 				if event.EventAt == 0 {
@@ -1445,6 +1450,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 						if event.Type == "tool_execution_end" && event.Result != nil {
 							if sessionWriter != nil {
 								sessionWriter.Append(sess, *event.Result)
+							}
+						}
+						if event.Type == "agent_end" && sessionWriter != nil {
+							if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+								slog.Info("Failed to replace session messages on agent_end:", "value", err)
 							}
 						}
 

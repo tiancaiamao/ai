@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -113,21 +114,12 @@ func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
 			seenSummaries[key] = struct{}{}
 		}
 
-		// Deduplicate assistant messages with duplicate tool calls
-		if msg.Role == "assistant" {
-			toolCalls := msg.ExtractToolCalls()
-			if len(toolCalls) > 0 {
-				// Use the first tool call ID as deduplication key
-				// (assistant messages typically have one tool call per message in streaming mode)
-				firstID := strings.TrimSpace(toolCalls[0].ID)
-				if firstID != "" {
-					if _, seen := seenAssistantToolCalls[firstID]; seen {
-						// Skip this assistant message - we already have one with this tool call ID
-						continue
-					}
-					seenAssistantToolCalls[firstID] = struct{}{}
-				}
+		// Deduplicate assistant messages with duplicate tool call sets.
+		if key, ok := assistantToolCallsDedupKey(msg); ok {
+			if _, seen := seenAssistantToolCalls[key]; seen {
+				continue
 			}
+			seenAssistantToolCalls[key] = struct{}{}
 		}
 
 		keptReverse = append(keptReverse, msg)
@@ -163,6 +155,35 @@ func toolSummaryDedupKey(msg AgentMessage) (string, bool) {
 		return "", false
 	}
 	return hashString(text), true
+}
+
+func assistantToolCallsDedupKey(msg AgentMessage) (string, bool) {
+	if msg.Role != "assistant" {
+		return "", false
+	}
+
+	toolCalls := msg.ExtractToolCalls()
+	if len(toolCalls) == 0 {
+		return "", false
+	}
+
+	parts := make([]string, 0, len(toolCalls))
+	for i, tc := range toolCalls {
+		callID := strings.TrimSpace(tc.ID)
+		if callID != "" {
+			parts = append(parts, "id:"+callID)
+			continue
+		}
+
+		argsJSON, _ := json.Marshal(tc.Arguments)
+		parts = append(parts, fmt.Sprintf(
+			"idx:%d|name:%s|args:%s",
+			i,
+			strings.TrimSpace(tc.Name),
+			string(argsJSON),
+		))
+	}
+	return strings.Join(parts, ";"), true
 }
 
 func hashString(input string) string {

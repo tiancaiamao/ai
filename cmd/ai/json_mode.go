@@ -256,6 +256,11 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 				if event.Type == "tool_execution_end" && event.Result != nil {
 					sessionWriter.Append(sess, *event.Result)
 				}
+				if event.Type == "agent_end" {
+					if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+						slog.Info("Failed to replace session messages on agent_end:", "value", err)
+					}
+				}
 
 				if event.EventAt == 0 {
 					event.EventAt = time.Now().UnixNano()
@@ -278,6 +283,11 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 						}
 						if event.Type == "tool_execution_end" && event.Result != nil {
 							sessionWriter.Append(sess, *event.Result)
+						}
+						if event.Type == "agent_end" {
+							if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+								slog.Info("Failed to replace session messages on agent_end:", "value", err)
+							}
 						}
 
 						if event.EventAt == 0 {

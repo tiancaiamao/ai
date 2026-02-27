@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ const (
 	toolCompactionSummaryPerItemMaxRunes = 3000
 	toolCompactionSummaryInputMaxRunes   = 24000
 	toolCompactionSummaryOutputMaxRunes  = 2200
+	toolCompactionFallbackSummaryMaxRows = 24
 	toolCompactionSummaryRequestTimeout  = 30 * time.Second
 )
 
@@ -63,6 +65,13 @@ func (t *CompactHistoryTool) getAgentContext() *agent.AgentContext {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.agentCtx
+}
+
+func (t *CompactHistoryTool) getExecutionAgentContext(ctx context.Context) *agent.AgentContext {
+	if current := agent.ToolExecutionAgentContext(ctx); current != nil {
+		return current
+	}
+	return t.getAgentContext()
 }
 
 // Name returns the tool name
@@ -162,7 +171,11 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 	}
 
 	keepRecent := 5
-	switch k := args["keep_recent"].(type) {
+	rawKeepRecent, hasKeepRecent := args["keep_recent"]
+	if !hasKeepRecent {
+		rawKeepRecent = args["keepRecent"]
+	}
+	switch k := rawKeepRecent.(type) {
 	case float64:
 		keepRecent = int(k)
 	case int:
@@ -172,6 +185,10 @@ func (t *CompactHistoryTool) Execute(ctx context.Context, args map[string]any) (
 	case json.Number:
 		if parsed, err := k.Int64(); err == nil {
 			keepRecent = int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(k)); err == nil {
+			keepRecent = parsed
 		}
 	}
 	if keepRecent < 0 {
@@ -244,7 +261,7 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 	}
 
 	// Handle nil agent context
-	agentCtx := t.getAgentContext()
+	agentCtx := t.getExecutionAgentContext(ctx)
 	if agentCtx == nil {
 		result.Summary = "Cannot compact: no agent context available"
 		return result
@@ -266,22 +283,25 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 
 	switch target {
 	case "conversation":
-		compacted, summary := t.compactConversation(ctx, messages, keepRecent, strategy)
+		compacted, summary := t.compactConversation(ctx, agentCtx, messages, keepRecent, strategy)
 		result.Compacted["conversation"] = compacted
 		if summary != "" {
 			result.Summary = summary
 		}
 
 	case "tools":
-		compacted, summary := t.compactToolOutputs(ctx, messages, keepRecent)
+		compacted, summary := t.compactToolOutputs(ctx, agentCtx, messages, keepRecent)
 		result.Compacted["tools"] = compacted
 		if summary != "" {
 			result.Summary = summary
 		}
 
 	case "all":
-		compactedConv, summary := t.compactConversation(ctx, messages, keepRecent, strategy)
-		compactedTools, toolSummary := t.compactToolOutputs(ctx, messages, keepRecent)
+		compactedConv, summary := t.compactConversation(ctx, agentCtx, messages, keepRecent, strategy)
+		if len(agentCtx.Messages) > 0 {
+			messages = agentCtx.Messages
+		}
+		compactedTools, toolSummary := t.compactToolOutputs(ctx, agentCtx, messages, keepRecent)
 		result.Compacted["conversation"] = compactedConv
 		result.Compacted["tools"] = compactedTools
 		switch {
@@ -328,51 +348,70 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 }
 
 // compactConversation compacts conversation messages using the Compactor
-func (t *CompactHistoryTool) compactConversation(ctx context.Context, messages []agent.AgentMessage, keepRecent int, strategy string) (int, string) {
+func (t *CompactHistoryTool) compactConversation(ctx context.Context, agentCtx *agent.AgentContext, messages []agent.AgentMessage, keepRecent int, strategy string) (int, string) {
 	if len(messages) <= keepRecent {
 		return 0, ""
 	}
+	splitIndex := len(messages) - keepRecent
+	if splitIndex <= 0 {
+		return 0, ""
+	}
+	oldMessages := messages[:splitIndex]
+	recentMessages := append([]agent.AgentMessage(nil), messages[splitIndex:]...)
+	compactedConversation := countConversationMessages(oldMessages)
 
-	// Use the existing Compactor to compact messages
-	// The Compactor will handle generating summaries and managing the compaction
+	// Build a dedicated compactor instance that respects keepRecent exactly.
+	// The default compactor keeps a large recent-token window, which can make
+	// explicit compact_history calls appear ineffective for short histories.
+	conversationConfig := compact.DefaultConfig()
+	conversationConfig.KeepRecent = keepRecent
+	conversationConfig.KeepRecentTokens = 0
+	conversationConfig.ReserveTokens = t.compactor.ReserveTokens()
+	conversationCompactor := compact.NewCompactor(
+		conversationConfig,
+		t.model,
+		t.apiKey,
+		t.systemPrompt,
+		t.compactor.ContextWindow(),
+	)
+
 	lastSummary := ""
-	if currentCtx := t.getAgentContext(); currentCtx != nil {
-		lastSummary = currentCtx.LastCompactionSummary
+	if agentCtx != nil {
+		lastSummary = agentCtx.LastCompactionSummary
 	}
-	result, err := t.compactor.Compact(messages, lastSummary)
-	if err != nil {
-		// Fallback: just count messages that would be compacted
-		compacted := 0
-		for i := 0; i < len(messages)-keepRecent; i++ {
-			if messages[i].Role == "user" || messages[i].Role == "assistant" {
-				compacted++
-			}
-		}
-		return compacted, fmt.Sprintf("Compaction attempted but encountered error: %v", err)
+	summary, err := conversationCompactor.GenerateSummaryWithPrevious(oldMessages, lastSummary)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		summary = fallbackConversationSummary(oldMessages, err)
 	}
 
-	// Update agent context with compacted messages
-	if result != nil && len(result.Messages) > 0 {
-		if ctx := t.getAgentContext(); ctx != nil {
-			ctx.Messages = result.Messages
-			if result.Summary != "" {
-				ctx.LastCompactionSummary = result.Summary
-			}
-		}
-		return len(messages) - len(result.Messages), result.Summary
+	// Ensure compacted conversation remains protocol-safe if keep_recent starts
+	// in the middle of tool call/result pairs.
+	for len(recentMessages) > 0 && (recentMessages[0].Role == "toolResult" || recentMessages[0].Role == "tool") {
+		recentMessages = recentMessages[1:]
 	}
 
-	return 0, ""
+	newMessages := []agent.AgentMessage{
+		agent.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
+	}
+	newMessages = append(newMessages, recentMessages...)
+
+	if agentCtx != nil {
+		agentCtx.Messages = newMessages
+		agentCtx.LastCompactionSummary = summary
+	}
+
+	return compactedConversation, summary
 }
 
 // compactToolOutputs compacts tool outputs by summarizing old tool result messages
-func (t *CompactHistoryTool) compactToolOutputs(ctx context.Context, messages []agent.AgentMessage, keepRecent int) (int, string) {
+func (t *CompactHistoryTool) compactToolOutputs(ctx context.Context, agentCtx *agent.AgentContext, messages []agent.AgentMessage, keepRecent int) (int, string) {
 	if len(messages) <= keepRecent {
 		return 0, ""
 	}
 
 	indices := make([]int, 0, 8)
 	results := make([]agent.AgentMessage, 0, 8)
+	compactedToolCallIDs := make(map[string]struct{}, 8)
 	for i := 0; i < len(messages)-keepRecent; i++ {
 		msg := messages[i]
 		if msg.Role != "toolResult" || !msg.IsAgentVisible() {
@@ -380,6 +419,10 @@ func (t *CompactHistoryTool) compactToolOutputs(ctx context.Context, messages []
 		}
 		indices = append(indices, i)
 		results = append(results, msg)
+		callID := strings.TrimSpace(msg.ToolCallID)
+		if callID != "" {
+			compactedToolCallIDs[callID] = struct{}{}
+		}
 	}
 	if len(indices) == 0 {
 		return 0, ""
@@ -389,10 +432,26 @@ func (t *CompactHistoryTool) compactToolOutputs(ctx context.Context, messages []
 	for _, idx := range indices {
 		messages[idx] = archiveToolResult(messages[idx])
 	}
+	if len(compactedToolCallIDs) > 0 {
+		for i := 0; i < len(messages)-keepRecent; i++ {
+			msg := messages[i]
+			if msg.Role != "assistant" || !msg.IsAgentVisible() {
+				continue
+			}
+			updated, removed := stripCompactedToolCalls(msg, compactedToolCallIDs)
+			if removed == 0 {
+				continue
+			}
+			if len(updated.Content) == 0 {
+				updated = updated.WithVisibility(false, updated.IsUserVisible()).WithKind("assistant_tool_calls_archived")
+			}
+			messages[i] = updated
+		}
+	}
 	messages = append(messages, newToolSummaryContextMessage(summary))
 
-	if current := t.getAgentContext(); current != nil {
-		current.Messages = messages
+	if agentCtx != nil {
+		agentCtx.Messages = messages
 	}
 
 	header := fmt.Sprintf(
@@ -526,7 +585,84 @@ func fallbackToolOutputsSummary(results []agent.AgentMessage) string {
 	if len(lines) == 0 {
 		return "(no tool outputs)"
 	}
-	return strings.Join(lines, "\n")
+	if len(lines) > toolCompactionFallbackSummaryMaxRows {
+		omitted := len(lines) - toolCompactionFallbackSummaryMaxRows
+		lines = append(lines[:toolCompactionFallbackSummaryMaxRows], fmt.Sprintf("- ... omitted %d older tool output(s)", omitted))
+	}
+	return trimRunes(strings.Join(lines, "\n"), toolCompactionSummaryOutputMaxRunes)
+}
+
+func fallbackConversationSummary(messages []agent.AgentMessage, cause error) string {
+	lines := make([]string, 0, 12)
+	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+		if msg.Role != "user" && msg.Role != "assistant" {
+			continue
+		}
+		text := strings.TrimSpace(msg.ExtractText())
+		if text == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, "\n", " ")
+		text = trimRunes(text, 160)
+		lines = append(lines, fmt.Sprintf("- %s: %s", msg.Role, text))
+		if len(lines) >= 10 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "- (no user/assistant text available)")
+	}
+
+	header := "Conversation compacted with fallback summary (LLM summarizer unavailable)."
+	if cause != nil {
+		header = header + " Cause: " + trimRunes(strings.TrimSpace(cause.Error()), 160)
+	}
+	return trimRunes(header+"\n"+strings.Join(lines, "\n"), toolCompactionSummaryOutputMaxRunes)
+}
+
+func countConversationMessages(messages []agent.AgentMessage) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == "user" || msg.Role == "assistant" {
+			count++
+		}
+	}
+	return count
+}
+
+func stripCompactedToolCalls(msg agent.AgentMessage, compactedToolCallIDs map[string]struct{}) (agent.AgentMessage, int) {
+	if msg.Role != "assistant" || len(compactedToolCallIDs) == 0 {
+		return msg, 0
+	}
+
+	filtered := make([]agent.ContentBlock, 0, len(msg.Content))
+	removed := 0
+	for _, block := range msg.Content {
+		toolCall, ok := block.(agent.ToolCallContent)
+		if !ok {
+			filtered = append(filtered, block)
+			continue
+		}
+		callID := strings.TrimSpace(toolCall.ID)
+		if callID == "" {
+			filtered = append(filtered, block)
+			continue
+		}
+		if _, exists := compactedToolCallIDs[callID]; exists {
+			removed++
+			continue
+		}
+		filtered = append(filtered, block)
+	}
+	if removed == 0 {
+		return msg, 0
+	}
+
+	msg.Content = filtered
+	return msg, removed
 }
 
 func newToolSummaryContextMessage(text string) agent.AgentMessage {

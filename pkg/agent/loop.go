@@ -408,7 +408,7 @@ func runInnerLoop(
 
 		var toolResults []AgentMessage
 		if hasMoreToolCalls {
-			toolResults = executeToolCalls(ctx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
+			toolResults = executeToolCalls(ctx, agentCtx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
 			for _, result := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
@@ -1255,6 +1255,7 @@ func hashAny(value any) string {
 // executeToolCalls executes tool calls from an assistant message.
 func executeToolCalls(
 	ctx context.Context,
+	agentCtx *AgentContext,
 	tools []Tool,
 	allowedTools map[string]bool,
 	assistantMsg *AgentMessage,
@@ -1433,6 +1434,7 @@ func executeToolCalls(
 
 	outcomes := make(chan toolExecutionOutcome, len(plans))
 	var wg sync.WaitGroup
+	toolExecCtx := WithToolExecutionAgentContext(ctx, agentCtx)
 
 	for _, plan := range plans {
 		wg.Add(1)
@@ -1442,9 +1444,9 @@ func executeToolCalls(
 			var content []ContentBlock
 			var err error
 			if executor != nil {
-				content, err = executor.Execute(ctx, plan.tool, plan.normalized.Arguments)
+				content, err = executor.Execute(toolExecCtx, plan.tool, plan.normalized.Arguments)
 			} else {
-				content, err = plan.tool.Execute(ctx, plan.normalized.Arguments)
+				content, err = plan.tool.Execute(toolExecCtx, plan.normalized.Arguments)
 			}
 			outcomes <- toolExecutionOutcome{
 				plan:     plan,
@@ -1845,13 +1847,9 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 		return ""
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
-Before finishing this turn, perform an explicit context-management decision:
-1) choose one: no_action | compact_only | memory_update_only | compact_and_update
-2) decide whether overview.md needs an update
-Fast path: if fast_path_allowed=yes and task state is unchanged, no_action is acceptable.
-If compact_history executes, follow post_actions and update overview.md in the same turn.
-If overview references detail files relevant to the current task, read them explicitly before deciding.
-Path authority: always use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples (e.g. working-memory/overview.md).`)
+Follow the Turn Protocol defined in the system prompt.
+If compact_history executes, update overview.md in this same turn.
+Path authority: use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples.`)
 	return strings.Join(sections, "\n\n")
 }
 

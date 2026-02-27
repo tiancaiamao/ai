@@ -287,6 +287,11 @@ Be concise and focused on the task at hand.`
 				if event.Type == "tool_execution_end" && event.Result != nil {
 					sessionWriter.Append(sess, *event.Result)
 				}
+				if event.Type == "agent_end" {
+					if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+						slog.Info("Failed to replace session messages on agent_end:", "value", err)
+					}
+				}
 				if event.Type == "agent_end" && !noSession {
 					if err := sessionMgr.SaveCurrent(); err != nil {
 						slog.Info("Failed to update session metadata:", "value", err)
@@ -302,6 +307,11 @@ Be concise and focused on the task at hand.`
 						}
 						if event.Type == "tool_execution_end" && event.Result != nil {
 							sessionWriter.Append(sess, *event.Result)
+						}
+						if event.Type == "agent_end" {
+							if err := sessionWriter.Replace(sess, event.Messages); err != nil {
+								slog.Info("Failed to replace session messages on agent_end:", "value", err)
+							}
 						}
 						if event.Type == "agent_end" && !noSession {
 							if err := sessionMgr.SaveCurrent(); err != nil {

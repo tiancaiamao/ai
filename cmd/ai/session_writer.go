@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log/slog"
+	"reflect"
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -85,10 +86,12 @@ func (sc *sessionCompactor) Compact(messages []agent.AgentMessage, previousSumma
 }
 
 type sessionWriteRequest struct {
-	sess     *session.Session
-	message  *agent.AgentMessage
-	comp     *compact.Compactor
-	response chan sessionCompactResponse
+	sess            *session.Session
+	message         *agent.AgentMessage
+	replaceMessages []agent.AgentMessage
+	comp            *compact.Compactor
+	response        chan sessionCompactResponse
+	replaceResp     chan error
 }
 
 type sessionCompactResponse struct {
@@ -133,6 +136,19 @@ func newSessionWriter(buffer int) *sessionWriter {
 				req.response <- resp
 				continue
 			}
+			if req.replaceMessages != nil {
+				var err error
+				if req.sess != nil {
+					current := req.sess.GetMessages()
+					if !reflect.DeepEqual(current, req.replaceMessages) {
+						err = req.sess.SaveMessages(req.replaceMessages)
+					}
+				}
+				if req.replaceResp != nil {
+					req.replaceResp <- err
+				}
+				continue
+			}
 			if req.sess == nil || req.message == nil {
 				continue
 			}
@@ -167,6 +183,22 @@ func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) 
 		Summary:  result.summary,
 		Messages: result.messages,
 	}, nil
+}
+
+func (w *sessionWriter) Replace(sess *session.Session, messages []agent.AgentMessage) error {
+	if w == nil || sess == nil {
+		return nil
+	}
+	response := make(chan error, 1)
+	req := sessionWriteRequest{
+		sess:            sess,
+		replaceMessages: append([]agent.AgentMessage(nil), messages...),
+		replaceResp:     response,
+	}
+	if !w.enqueue(req) {
+		return nil
+	}
+	return <-response
 }
 
 func (w *sessionWriter) Close() {

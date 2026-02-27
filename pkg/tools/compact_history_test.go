@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -282,6 +284,250 @@ func TestCompactHistoryTool_Execute_KeepRecentAll(t *testing.T) {
 	// Check that result indicates not enough messages
 	if !contains(textResult.Text, "Not enough messages") {
 		t.Error("Result should indicate not enough messages to compact")
+	}
+}
+
+func TestCompactHistoryTool_Execute_KeepRecentAlias(t *testing.T) {
+	agentCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{
+			{Role: "user", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "m1"}}},
+			{Role: "assistant", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "a1"}}},
+			{Role: "user", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "m2"}}},
+			{Role: "assistant", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "a2"}}},
+		},
+	}
+
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(agentCtx, compactor, llm.Model{}, "", "")
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"target":     "conversation",
+		"keepRecent": 1,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	textResult, ok := result[0].(agent.TextContent)
+	if !ok {
+		t.Fatal("expected text result")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(textResult.Text), &parsed); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+
+	if got, ok := parsed["kept_recent"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("expected kept_recent=1 from keepRecent alias, got %v", parsed["kept_recent"])
+	}
+}
+
+func TestCompactHistoryTool_Execute_PrefersExecutionContext(t *testing.T) {
+	staleCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{
+			agent.NewUserMessage("stale-u1"),
+			agent.NewAssistantMessage(),
+			agent.NewUserMessage("stale-u2"),
+		},
+	}
+	staleCtx.Messages[1].Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "stale-a1"},
+	}
+
+	runCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{
+			agent.NewUserMessage("run-u1"),
+			agent.NewAssistantMessage(),
+			agent.NewUserMessage("run-u2"),
+			agent.NewAssistantMessage(),
+		},
+	}
+	runCtx.Messages[1].Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "run-a1"},
+	}
+	runCtx.Messages[3].Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "run-a2"},
+	}
+
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(staleCtx, compactor, llm.Model{}, "", "")
+
+	execCtx := agent.WithToolExecutionAgentContext(context.Background(), runCtx)
+	_, err := tool.Execute(execCtx, map[string]any{
+		"target":      "conversation",
+		"keep_recent": 1,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(runCtx.Messages) != 2 {
+		t.Fatalf("expected run context to be compacted, got %d messages", len(runCtx.Messages))
+	}
+	if got := runCtx.Messages[0].ExtractText(); !strings.Contains(got, "[Previous conversation summary]") {
+		t.Fatalf("expected run context summary after compaction, got: %q", got)
+	}
+	if len(staleCtx.Messages) != 3 {
+		t.Fatalf("expected stale context to remain unchanged, got %d messages", len(staleCtx.Messages))
+	}
+}
+
+func TestCompactHistoryTool_Execute_ToolFallbackSummaryIsBounded(t *testing.T) {
+	messages := make([]agent.AgentMessage, 0, 80)
+	for i := 0; i < 80; i++ {
+		messages = append(messages, agent.AgentMessage{
+			Role: "toolResult",
+			Content: []agent.ContentBlock{
+				agent.TextContent{Type: "text", Text: "long output " + strings.Repeat("x", 300)},
+			},
+			ToolCallID: fmt.Sprintf("call-%02d", i),
+			ToolName:   "bash",
+		})
+	}
+	agentCtx := &agent.AgentContext{Messages: messages}
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(agentCtx, compactor, llm.Model{}, "", "")
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"target":      "tools",
+		"keep_recent": 0,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	textResult, ok := result[0].(agent.TextContent)
+	if !ok {
+		t.Fatal("expected text result")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(textResult.Text), &parsed); err != nil {
+		t.Fatalf("failed to parse result JSON: %v", err)
+	}
+	summary, _ := parsed["summary"].(string)
+	if len([]rune(summary)) > 2500 {
+		t.Fatalf("expected bounded fallback summary, got len=%d", len([]rune(summary)))
+	}
+}
+
+func TestCompactHistoryTool_Execute_ToolsCompactionRemovesOldAssistantToolCalls(t *testing.T) {
+	oldAssistant := agent.NewAssistantMessage()
+	oldAssistant.Content = []agent.ContentBlock{
+		agent.ToolCallContent{ID: "call-old", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo old"}},
+	}
+	oldResult := agent.NewToolResultMessage("call-old", "bash", []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "old output"},
+	}, false)
+
+	recentAssistant := agent.NewAssistantMessage()
+	recentAssistant.Content = []agent.ContentBlock{
+		agent.ToolCallContent{ID: "call-new", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo new"}},
+	}
+	recentResult := agent.NewToolResultMessage("call-new", "bash", []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "new output"},
+	}, false)
+
+	agentCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{oldAssistant, oldResult, recentAssistant, recentResult},
+	}
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(agentCtx, compactor, llm.Model{}, "", "")
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"target":      "tools",
+		"keep_recent": 2,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if agentCtx.Messages[0].IsAgentVisible() {
+		t.Fatal("expected old assistant tool-call message to be hidden from agent after compaction")
+	}
+	recentCalls := agentCtx.Messages[2].ExtractToolCalls()
+	if len(recentCalls) != 1 || recentCalls[0].ID != "call-new" {
+		t.Fatalf("expected recent tool call to remain, got %+v", recentCalls)
+	}
+}
+
+func TestCompactHistoryTool_Execute_ConversationCompactionRespectsKeepRecent(t *testing.T) {
+	agentCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{
+			agent.NewUserMessage("u1"),
+			agent.NewAssistantMessage(),
+			agent.NewUserMessage("u2"),
+			agent.NewAssistantMessage(),
+			agent.NewUserMessage("u3"),
+			agent.NewAssistantMessage(),
+		},
+	}
+	// Fill assistant message text blocks so summarizer has meaningful content.
+	for i := range agentCtx.Messages {
+		if agentCtx.Messages[i].Role == "assistant" {
+			agentCtx.Messages[i].Content = []agent.ContentBlock{
+				agent.TextContent{Type: "text", Text: "assistant response"},
+			}
+		}
+	}
+
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(agentCtx, compactor, llm.Model{}, "", "")
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"target":      "conversation",
+		"keep_recent": 1,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(agentCtx.Messages) != 2 {
+		t.Fatalf("expected summary + 1 recent message, got %d", len(agentCtx.Messages))
+	}
+	if got := agentCtx.Messages[0].ExtractText(); !strings.Contains(got, "[Previous conversation summary]") {
+		t.Fatalf("expected first message to be conversation summary, got: %q", got)
+	}
+}
+
+func TestCompactHistoryTool_Execute_TargetAllKeepsConversationCompaction(t *testing.T) {
+	assistantWithToolCall := agent.NewAssistantMessage()
+	assistantWithToolCall.Content = []agent.ContentBlock{
+		agent.ToolCallContent{ID: "call-old", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo old"}},
+	}
+	toolResult := agent.NewToolResultMessage("call-old", "bash", []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: strings.Repeat("tool output ", 80)},
+	}, false)
+	recentUser := agent.NewUserMessage("recent-user")
+
+	agentCtx := &agent.AgentContext{
+		Messages: []agent.AgentMessage{
+			agent.NewUserMessage("old-user-1"),
+			agent.NewAssistantMessage().WithKind("assistant"),
+			assistantWithToolCall,
+			toolResult,
+			recentUser,
+		},
+	}
+	// Fill assistant text for deterministic fallback conversation summary.
+	agentCtx.Messages[1].Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: "old-assistant-1"},
+	}
+
+	compactor := compact.NewCompactor(compact.DefaultConfig(), llm.Model{}, "", "", 128000)
+	tool := NewCompactHistoryTool(agentCtx, compactor, llm.Model{}, "", "")
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"target":      "all",
+		"keep_recent": 1,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(agentCtx.Messages) >= 5 {
+		t.Fatalf("expected target=all to reduce message count, got %d", len(agentCtx.Messages))
+	}
+	if got := agentCtx.Messages[0].ExtractText(); !strings.Contains(got, "[Previous conversation summary]") {
+		t.Fatalf("expected first message to remain compacted conversation summary, got: %q", got)
 	}
 }
 
