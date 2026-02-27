@@ -24,7 +24,10 @@ func TestMaybeSummarizeToolResultsAboveCutoff(t *testing.T) {
 		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "second"}}, false),
 	}
 
-	cfg := &LoopConfig{ToolCallCutoff: 1}
+	cfg := &LoopConfig{
+		ToolCallCutoff:        1,
+		ToolSummaryAutomation: "always",
+	}
 	maybeSummarizeToolResults(context.Background(), agentCtx, cfg)
 
 	if got := countVisibleToolResults(agentCtx.Messages); got != 1 {
@@ -59,7 +62,10 @@ func TestMaybeSummarizeToolResultsCutoffDisabled(t *testing.T) {
 	}
 
 	before := len(agentCtx.Messages)
-	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{ToolCallCutoff: 0})
+	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
+		ToolCallCutoff:        0,
+		ToolSummaryAutomation: "always",
+	})
 
 	if len(agentCtx.Messages) != before {
 		t.Fatalf("expected no mutation when cutoff=0, before=%d after=%d", before, len(agentCtx.Messages))
@@ -83,7 +89,10 @@ func TestMaybeSummarizeToolResultsFallbackOnError(t *testing.T) {
 		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "line3"}}, false),
 	}
 
-	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{ToolCallCutoff: 1})
+	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
+		ToolCallCutoff:        1,
+		ToolSummaryAutomation: "always",
+	})
 
 	last := agentCtx.Messages[len(agentCtx.Messages)-1]
 	if !strings.Contains(last.ExtractText(), "Tool \"bash\" finished with status error") {
@@ -107,8 +116,9 @@ func TestMaybeSummarizeToolResultsHeuristicStrategy(t *testing.T) {
 	}
 
 	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
-		ToolCallCutoff:      1,
-		ToolSummaryStrategy: "heuristic",
+		ToolCallCutoff:        1,
+		ToolSummaryStrategy:   "heuristic",
+		ToolSummaryAutomation: "always",
 	})
 
 	last := agentCtx.Messages[len(agentCtx.Messages)-1]
@@ -148,11 +158,11 @@ func (c *summaryDecisionCompactor) Compact(messages []AgentMessage, _ string) (*
 
 func TestNormalizeToolSummaryAutomation(t *testing.T) {
 	cases := map[string]string{
-		"":         "always",
+		"":         "off",
 		"always":   "always",
 		"fallback": "fallback",
 		"off":      "off",
-		"unknown":  "always",
+		"unknown":  "off",
 	}
 
 	for input, expected := range cases {

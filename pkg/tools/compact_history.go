@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	agentprompt "github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 // CompactHistoryTool allows LLM to compact conversation history and tool outputs
@@ -24,6 +26,19 @@ type CompactHistoryTool struct {
 	apiKey       string
 	systemPrompt string
 }
+
+const (
+	toolCompactionSummaryThinkingLevel   = "low"
+	toolCompactionSummaryPerItemMaxRunes = 3000
+	toolCompactionSummaryInputMaxRunes   = 24000
+	toolCompactionSummaryOutputMaxRunes  = 2200
+	toolCompactionSummaryRequestTimeout  = 30 * time.Second
+)
+
+const toolCompactionSummarySystemPrompt = `You summarize tool execution outputs for continuation context in a coding agent.
+Return concise factual notes only.
+Do not invent information.
+Do not add instructions or policy text.`
 
 // NewCompactHistoryTool creates a new CompactHistoryTool
 func NewCompactHistoryTool(agentCtx *agent.AgentContext, compactor *compact.Compactor, model llm.Model, apiKey, systemPrompt string) *CompactHistoryTool {
@@ -258,16 +273,24 @@ func (t *CompactHistoryTool) compact(ctx context.Context, target, strategy strin
 		}
 
 	case "tools":
-		compacted := t.compactToolOutputs(messages, keepRecent)
+		compacted, summary := t.compactToolOutputs(ctx, messages, keepRecent)
 		result.Compacted["tools"] = compacted
+		if summary != "" {
+			result.Summary = summary
+		}
 
 	case "all":
 		compactedConv, summary := t.compactConversation(ctx, messages, keepRecent, strategy)
-		compactedTools := t.compactToolOutputs(messages, keepRecent)
+		compactedTools, toolSummary := t.compactToolOutputs(ctx, messages, keepRecent)
 		result.Compacted["conversation"] = compactedConv
 		result.Compacted["tools"] = compactedTools
-		if summary != "" {
+		switch {
+		case summary != "" && toolSummary != "":
+			result.Summary = strings.TrimSpace(summary + "\n\n" + toolSummary)
+		case summary != "":
 			result.Summary = summary
+		case toolSummary != "":
+			result.Summary = toolSummary
 		}
 	}
 
@@ -343,50 +366,194 @@ func (t *CompactHistoryTool) compactConversation(ctx context.Context, messages [
 }
 
 // compactToolOutputs compacts tool outputs by summarizing old tool result messages
-func (t *CompactHistoryTool) compactToolOutputs(messages []agent.AgentMessage, keepRecent int) int {
+func (t *CompactHistoryTool) compactToolOutputs(ctx context.Context, messages []agent.AgentMessage, keepRecent int) (int, string) {
 	if len(messages) <= keepRecent {
-		return 0
+		return 0, ""
 	}
 
-	compacted := 0
-
-	// Process all messages except recent ones
+	indices := make([]int, 0, 8)
+	results := make([]agent.AgentMessage, 0, 8)
 	for i := 0; i < len(messages)-keepRecent; i++ {
 		msg := messages[i]
+		if msg.Role != "toolResult" || !msg.IsAgentVisible() {
+			continue
+		}
+		indices = append(indices, i)
+		results = append(results, msg)
+	}
+	if len(indices) == 0 {
+		return 0, ""
+	}
 
-		// Check if this is a tool result message
-		if msg.Role == "toolResult" {
-			// Look for text content blocks
-			for j, block := range msg.Content {
-				if textContent, ok := block.(agent.TextContent); ok {
-					// Truncate large tool outputs (simple heuristic for now)
-					// In a more sophisticated implementation, this would use the LLM to summarize
-					if len(textContent.Text) > 2000 {
-						// Create a truncated version
-						truncated := textContent.Text
-						if len(truncated) > 500 {
-							truncated = truncated[:500] + "\n\n... [Tool output truncated for context management. Original length: " + fmt.Sprintf("%d", len(textContent.Text)) + " chars]"
-						}
+	summary, fallbackUsed := t.summarizeToolOutputs(ctx, results)
+	for _, idx := range indices {
+		messages[idx] = archiveToolResult(messages[idx])
+	}
+	messages = append(messages, newToolSummaryContextMessage(summary))
 
-						// Update the content
-						textContent.Text = truncated
-						msg.Content[j] = textContent
-						compacted++
-					}
-				}
-			}
+	if current := t.getAgentContext(); current != nil {
+		current.Messages = messages
+	}
 
-			// Update the message in the slice
-			messages[i] = msg
+	header := fmt.Sprintf(
+		"Tool-output context compacted: archived %d tool result(s), kept %d recent message(s).",
+		len(indices),
+		keepRecent,
+	)
+	if fallbackUsed {
+		header += " (fallback summarizer used)"
+	}
+	return len(indices), strings.TrimSpace(header + "\n\n" + summary)
+}
+
+func (t *CompactHistoryTool) summarizeToolOutputs(ctx context.Context, results []agent.AgentMessage) (string, bool) {
+	if len(results) == 0 {
+		return "(no tool outputs)", false
+	}
+
+	if strings.TrimSpace(t.apiKey) == "" {
+		return fallbackToolOutputsSummary(results), true
+	}
+
+	summary, err := t.summarizeToolOutputsWithLLM(ctx, results)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		return fallbackToolOutputsSummary(results), true
+	}
+	return summary, false
+}
+
+func (t *CompactHistoryTool) summarizeToolOutputsWithLLM(ctx context.Context, results []agent.AgentMessage) (string, error) {
+	if len(results) == 0 {
+		return "", errors.New("no tool outputs to summarize")
+	}
+	if strings.TrimSpace(t.apiKey) == "" {
+		return "", errors.New("empty API key")
+	}
+
+	prompt := buildToolOutputsSummaryPrompt(results)
+	summaryCtx, cancel := context.WithTimeout(ctx, toolCompactionSummaryRequestTimeout)
+	defer cancel()
+
+	llmCtx := llm.LLMContext{
+		SystemPrompt: toolCompactionSummarySystemPrompt + "\n" + agentprompt.ThinkingInstruction(toolCompactionSummaryThinkingLevel),
+		Messages: []llm.LLMMessage{
+			{Role: "user", Content: prompt},
+		},
+	}
+
+	stream := llm.StreamLLM(summaryCtx, t.model, llmCtx, t.apiKey)
+	var b strings.Builder
+	for event := range stream.Iterator(summaryCtx) {
+		if event.Done {
+			break
+		}
+		switch e := event.Value.(type) {
+		case llm.LLMTextDeltaEvent:
+			b.WriteString(e.Delta)
+		case llm.LLMErrorEvent:
+			return "", e.Error
 		}
 	}
 
-	// Update agent context
-	if ctx := t.getAgentContext(); ctx != nil {
-		ctx.Messages = messages
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return "", errors.New("empty summary")
+	}
+	return trimRunes(out, toolCompactionSummaryOutputMaxRunes), nil
+}
+
+func buildToolOutputsSummaryPrompt(results []agent.AgentMessage) string {
+	var b strings.Builder
+	b.WriteString("Summarize these tool execution outputs for future turns.\n\n")
+	b.WriteString("Requirements:\n")
+	b.WriteString("- One bullet per tool call.\n")
+	b.WriteString("- Include call ID and tool name in each bullet.\n")
+	b.WriteString("- Include status (ok/error) and key facts.\n")
+	b.WriteString("- Mention important artifacts (files, symbols, commands, errors).\n\n")
+	b.WriteString("Tool outputs:\n")
+
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		toolName := strings.TrimSpace(result.ToolName)
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		callID := strings.TrimSpace(result.ToolCallID)
+		if callID == "" {
+			callID = "n/a"
+		}
+		output := strings.TrimSpace(result.ExtractText())
+		if output == "" {
+			output = "(empty output)"
+		}
+		output = trimRunes(output, toolCompactionSummaryPerItemMaxRunes)
+
+		b.WriteString(fmt.Sprintf("Tool: %s\nCall ID: %s\nStatus: %s\nOutput:\n%s\n\n", toolName, callID, status, output))
+		if utf8Len(b.String()) > toolCompactionSummaryInputMaxRunes {
+			break
+		}
 	}
 
-	return compacted
+	return trimRunes(strings.TrimSpace(b.String()), toolCompactionSummaryInputMaxRunes)
+}
+
+func fallbackToolOutputsSummary(results []agent.AgentMessage) string {
+	lines := make([]string, 0, len(results))
+	for _, result := range results {
+		status := "ok"
+		if result.IsError {
+			status = "error"
+		}
+		toolName := strings.TrimSpace(result.ToolName)
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		callID := strings.TrimSpace(result.ToolCallID)
+		if callID == "" {
+			callID = "n/a"
+		}
+		output := strings.TrimSpace(result.ExtractText())
+		if output == "" {
+			output = "(empty output)"
+		}
+		output = strings.ReplaceAll(output, "\n", " ")
+		output = trimRunes(output, 220)
+		lines = append(lines, fmt.Sprintf("- [%s] %s (%s): %s", callID, toolName, status, output))
+	}
+	if len(lines) == 0 {
+		return "(no tool outputs)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func newToolSummaryContextMessage(text string) agent.AgentMessage {
+	msg := agent.NewAssistantMessage()
+	msg.Content = []agent.ContentBlock{
+		agent.TextContent{Type: "text", Text: strings.TrimSpace(text)},
+	}
+	return msg.WithVisibility(true, false).WithKind("tool_summary")
+}
+
+func archiveToolResult(msg agent.AgentMessage) agent.AgentMessage {
+	return msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+}
+
+func trimRunes(input string, limit int) string {
+	if limit <= 0 {
+		return input
+	}
+	runes := []rune(input)
+	if len(runes) <= limit {
+		return input
+	}
+	return string(runes[:limit])
+}
+
+func utf8Len(input string) int {
+	return len([]rune(input))
 }
 
 // generateSummary generates a human-readable summary

@@ -219,6 +219,47 @@ func TestAgentWithTools(t *testing.T) {
 	}
 }
 
+func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
+	origRunLoop := runLoopFn
+	defer func() { runLoopFn = origRunLoop }()
+
+	finalMessages := []AgentMessage{
+		NewUserMessage("compacted history state"),
+	}
+
+	runLoopFn = func(_ context.Context, _ []AgentMessage, _ *AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []AgentMessage] {
+		stream := llm.NewEventStream[AgentEvent, []AgentMessage](
+			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+			func(e AgentEvent) []AgentMessage { return e.Messages },
+		)
+		go func() {
+			stream.Push(NewAgentStartEvent())
+			stream.Push(NewAgentEndEvent(finalMessages))
+			stream.End(nil)
+		}()
+		return stream
+	}
+
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+	defer ag.Shutdown()
+	ag.SetContext(&AgentContext{
+		SystemPrompt: "test",
+		Messages: []AgentMessage{
+			NewUserMessage("before-compact"),
+		},
+	})
+
+	ag.processPrompt(context.Background(), "trigger")
+
+	got := ag.GetMessages()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message after sync, got %d", len(got))
+	}
+	if text := got[0].ExtractText(); text != "compacted history state" {
+		t.Fatalf("expected synced message text, got %q", text)
+	}
+}
+
 // mockTool is a test double for Tool.
 type mockTool struct {
 	name string

@@ -1845,10 +1845,10 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 		return ""
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
-Before finishing this turn, decide and act on both:
-1) whether compact_history is required from action_hint/tokens_band
-2) whether overview.md needs an update
-Fast path: if fast_path_allowed=yes and task state is unchanged, you may skip compaction and memory write.
+Before finishing this turn, perform an explicit context-management decision:
+1) choose one: no_action | compact_only | memory_update_only | compact_and_update
+2) decide whether overview.md needs an update
+Fast path: if fast_path_allowed=yes and task state is unchanged, no_action is acceptable.
 If compact_history executes, follow post_actions and update overview.md in the same turn.
 If overview references detail files relevant to the current task, read them explicitly before deciding.
 Path authority: always use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples (e.g. working-memory/overview.md).`)
@@ -1900,9 +1900,9 @@ decision:
   fast_path_allowed: %s
 guidance:
   - Use this for context management decisions only.
-  - If fast_path_allowed is yes and task state is unchanged, you may skip compaction and memory write.
+  - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
   - Prefer compact_history target=tools when stale_tool_outputs_bucket is not 0.
-  - Call compact_history when action_hint is not normal.
+  - When action_hint is not normal, compaction is usually recommended.
 </runtime_state>`,
 		band,
 		actionHint,

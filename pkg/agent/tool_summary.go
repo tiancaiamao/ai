@@ -127,14 +127,16 @@ func normalizeToolSummaryStrategy(strategy string) string {
 
 func normalizeToolSummaryAutomation(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "always":
-		return "always"
+	case "":
+		return "off"
 	case "fallback":
 		return "fallback"
 	case "off":
 		return "off"
-	default:
+	case "always":
 		return "always"
+	default:
+		return "off"
 	}
 }
 

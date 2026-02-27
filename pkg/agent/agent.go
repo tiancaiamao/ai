@@ -98,6 +98,8 @@ type Agent struct {
 	traceSeq              atomic.Uint64
 }
 
+var runLoopFn = RunLoop
+
 // NewAgent creates a new agent.
 func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
 	return NewAgentWithContext(model, apiKey, NewAgentContext(systemPrompt))
@@ -136,7 +138,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		toolOutput:            DefaultToolOutputLimits(),
 		toolCallCutoff:        10,
 		toolSummaryMode:       "llm",
-		toolSummaryAutomation: "fallback",
+		toolSummaryAutomation: "off",
 		thinkingLevel:         "high",
 		maxLLMRetries:         defaultLLMMaxRetries,
 		retryBaseDelay:        defaultRetryBaseDelay,
@@ -226,7 +228,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
-	stream := RunLoop(ctx, prompts, a.context, config)
+	stream := runLoopFn(ctx, prompts, a.context, config)
 	a.setCurrentStream(stream)
 	defer a.setCurrentStream(nil)
 
@@ -323,6 +325,11 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			}
 			// Try automatic compression after each turn
 			a.tryAutoCompact(ctx)
+		}
+		if event.Value.Type == EventAgentEnd {
+			// Keep in-memory context consistent with loop-side mutations
+			// (e.g. compact_history target=tools/all editing older messages).
+			a.context.Messages = append([]AgentMessage(nil), event.Value.Messages...)
 		}
 
 		// Send to event channel

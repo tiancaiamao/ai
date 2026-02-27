@@ -39,10 +39,11 @@ func TestAsyncToolSummarizerSchedulesAndAppliesBatch(t *testing.T) {
 	}
 
 	cfg := &LoopConfig{
-		ToolCallCutoff:      1,
-		ToolSummaryStrategy: "llm",
-		Model:               llm.Model{ID: "m", Provider: "p", BaseURL: "https://example.invalid", API: "openai-completions"},
-		APIKey:              "k",
+		ToolCallCutoff:        1,
+		ToolSummaryStrategy:   "llm",
+		ToolSummaryAutomation: "always",
+		Model:                 llm.Model{ID: "m", Provider: "p", BaseURL: "https://example.invalid", API: "openai-completions"},
+		APIKey:                "k",
 	}
 
 	s := newAsyncToolSummarizer(context.Background(), cfg)
@@ -97,10 +98,11 @@ func TestAsyncToolSummarizerScheduleIsNonBlocking(t *testing.T) {
 	}
 
 	cfg := &LoopConfig{
-		ToolCallCutoff:      1,
-		ToolSummaryStrategy: "llm",
-		Model:               llm.Model{ID: "m", Provider: "p", BaseURL: "https://example.invalid", API: "openai-completions"},
-		APIKey:              "k",
+		ToolCallCutoff:        1,
+		ToolSummaryStrategy:   "llm",
+		ToolSummaryAutomation: "always",
+		Model:                 llm.Model{ID: "m", Provider: "p", BaseURL: "https://example.invalid", API: "openai-completions"},
+		APIKey:                "k",
 	}
 
 	s := newAsyncToolSummarizer(context.Background(), cfg)

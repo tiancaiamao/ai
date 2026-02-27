@@ -34,15 +34,15 @@ type Config struct {
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMessages:           50,         // Compact after 50 messages
-		MaxTokens:             8000,       // Compact after ~8000 tokens (fallback)
-		KeepRecent:            5,          // Keep last 5 messages uncompressed
-		KeepRecentTokens:      20000,      // Keep ~20k tokens from the recent context
-		ReserveTokens:         16384,      // Reserve tokens for responses when using context window
-		ToolCallCutoff:        10,         // Summarize tool outputs after 10 visible tool results
-		ToolSummaryStrategy:   "off",      // Phase 2: LLM manages tool summaries via compact_history tool
-		ToolSummaryAutomation: "fallback", // Background tool summary runs only as context-pressure fallback.
-		AutoCompact:           true,       // Phase 2: Keep enabled as fallback (75% threshold)
+		MaxMessages:           50,    // Compact after 50 messages
+		MaxTokens:             8000,  // Compact after ~8000 tokens (fallback)
+		KeepRecent:            5,     // Keep last 5 messages uncompressed
+		KeepRecentTokens:      20000, // Keep ~20k tokens from the recent context
+		ReserveTokens:         16384, // Reserve tokens for responses when using context window
+		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
+		ToolSummaryStrategy:   "off", // Phase 2: LLM manages tool summaries via compact_history tool
+		ToolSummaryAutomation: "off", // LLM-managed by default; background tool summary disabled unless explicitly enabled.
+		AutoCompact:           true,  // Phase 2: Keep enabled as fallback (75% threshold)
 	}
 }
 

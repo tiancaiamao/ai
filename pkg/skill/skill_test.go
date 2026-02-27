@@ -269,8 +269,9 @@ func TestFormatForPrompt(t *testing.T) {
 		t.Error("hidden-skill should not be in output (disable-model-invocation=true)")
 	}
 
-	if !strings.Contains(result, "<available_skills>") {
-		t.Error("expected <available_skills> tag")
+	// Check for markdown heading instead of XML tag
+	if !strings.Contains(result, "## Skills") {
+		t.Error("expected markdown heading '## Skills'")
 	}
 
 	if !strings.Contains(result, "A test skill") {
