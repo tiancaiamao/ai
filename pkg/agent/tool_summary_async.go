@@ -51,6 +51,9 @@ func newAsyncToolSummarizer(parent context.Context, config *LoopConfig) *asyncTo
 	if config == nil || config.ToolCallCutoff <= 0 {
 		return nil
 	}
+	if normalizeToolSummaryAutomation(config.ToolSummaryAutomation) == "off" {
+		return nil
+	}
 	strategy := normalizeToolSummaryStrategy(config.ToolSummaryStrategy)
 	if strategy == "off" {
 		return nil

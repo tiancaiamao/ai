@@ -62,17 +62,17 @@ func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 	}
 
 	// Increment rounds but not enough
-	for i := 0; i < 4; i++ {
+	for i := 0; i < maxRoundsWithoutUpdate-1; i++ {
 		wm.IncrementRound()
 	}
 	if wm.NeedsReminderMessage() {
-		t.Error("Should not need reminder after 4 rounds")
+		t.Fatalf("Should not need reminder before %d rounds", maxRoundsWithoutUpdate)
 	}
 
 	// Increment to threshold
 	wm.IncrementRound()
 	if !wm.NeedsReminderMessage() {
-		t.Error("Should need reminder after 5 rounds")
+		t.Fatalf("Should need reminder at %d rounds", maxRoundsWithoutUpdate)
 	}
 
 	// Mark updated should reset

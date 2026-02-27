@@ -42,6 +42,7 @@ type LoopConfig struct {
 	Compactor               Compactor     // Optional compactor for context-length recovery
 	ToolCallCutoff          int           // Summarize oldest tool outputs when visible tool results exceed this
 	ToolSummaryStrategy     string        // llm, heuristic, off
+	ToolSummaryAutomation   string        // off, fallback, always
 	ThinkingLevel           string        // off, minimal, low, medium, high, xhigh
 	MaxLLMRetries           int           // Maximum number of retries for LLM calls
 	RetryBaseDelay          time.Duration // Base delay for exponential backoff
@@ -412,11 +413,13 @@ func runInnerLoop(
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
 			}
-			if asyncSummarizer != nil {
-				asyncSummarizer.schedule(agentCtx)
-				asyncSummarizer.applyReady(agentCtx)
-			} else {
-				maybeSummarizeToolResults(ctx, agentCtx, config)
+			if shouldAutoSummarizeToolResults(agentCtx, config) {
+				if asyncSummarizer != nil {
+					asyncSummarizer.schedule(agentCtx)
+					asyncSummarizer.applyReady(agentCtx)
+				} else {
+					maybeSummarizeToolResults(ctx, agentCtx, config)
+				}
 			}
 
 			// Check if working memory was updated

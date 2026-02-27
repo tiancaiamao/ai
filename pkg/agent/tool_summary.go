@@ -62,7 +62,7 @@ func maybeSummarizeToolResults(
 	agentCtx *AgentContext,
 	config *LoopConfig,
 ) {
-	if agentCtx == nil || config == nil || config.ToolCallCutoff <= 0 {
+	if !shouldAutoSummarizeToolResults(agentCtx, config) {
 		return
 	}
 	strategy := normalizeToolSummaryStrategy(config.ToolSummaryStrategy)
@@ -122,6 +122,36 @@ func normalizeToolSummaryStrategy(strategy string) string {
 		return "off"
 	default:
 		return "llm"
+	}
+}
+
+func normalizeToolSummaryAutomation(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "always":
+		return "always"
+	case "fallback":
+		return "fallback"
+	case "off":
+		return "off"
+	default:
+		return "always"
+	}
+}
+
+func shouldAutoSummarizeToolResults(agentCtx *AgentContext, config *LoopConfig) bool {
+	if agentCtx == nil || config == nil || config.ToolCallCutoff <= 0 {
+		return false
+	}
+	switch normalizeToolSummaryAutomation(config.ToolSummaryAutomation) {
+	case "off":
+		return false
+	case "fallback":
+		if config.Compactor == nil {
+			return false
+		}
+		return config.Compactor.ShouldCompact(agentCtx.Messages)
+	default:
+		return true
 	}
 }
 

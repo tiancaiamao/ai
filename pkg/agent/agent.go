@@ -59,10 +59,10 @@ type Compactor interface {
 
 // CompactionResult contains the result of a compaction operation.
 type CompactionResult struct {
-	Summary      string       // The generated summary
+	Summary      string         // The generated summary
 	Messages     []AgentMessage // The compressed message list
-	TokensBefore int          // Token count before compaction
-	TokensAfter  int          // Token count after compaction
+	TokensBefore int            // Token count before compaction
+	TokensAfter  int            // Token count after compaction
 }
 
 // Agent represents an AI agent.
@@ -76,25 +76,26 @@ type Agent struct {
 	currentStream *llm.EventStream[AgentEvent, []AgentMessage]
 	streamMu      sync.RWMutex
 	// 	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	compactor       Compactor     // Optional compactor for automatic context compression
-	followUpQueue   chan string   // Queue for follow-up messages
-	executor        *ExecutorPool // Tool executor with concurrency control
-	metrics         *Metrics      // Performance and usage metrics
-	toolOutput      ToolOutputLimits
-	toolCallCutoff  int
-	toolSummaryMode string
-	thinkingLevel   string
-	maxLLMRetries   int
-	retryBaseDelay  time.Duration
-	maxTurns        int // Maximum conversation turns (0 = unlimited)
-	contextWindow   int // Context window for the model (0 = use default 128000)
-	traceBuf        *traceevent.TraceBuf
-	traceStop       chan struct{}
-	traceDone       chan struct{}
-	shutdownOnce    sync.Once
-	traceSeq        atomic.Uint64
+	cancel                context.CancelFunc
+	wg                    sync.WaitGroup
+	compactor             Compactor     // Optional compactor for automatic context compression
+	followUpQueue         chan string   // Queue for follow-up messages
+	executor              *ExecutorPool // Tool executor with concurrency control
+	metrics               *Metrics      // Performance and usage metrics
+	toolOutput            ToolOutputLimits
+	toolCallCutoff        int
+	toolSummaryMode       string
+	toolSummaryAutomation string
+	thinkingLevel         string
+	maxLLMRetries         int
+	retryBaseDelay        time.Duration
+	maxTurns              int // Maximum conversation turns (0 = unlimited)
+	contextWindow         int // Context window for the model (0 = use default 128000)
+	traceBuf              *traceevent.TraceBuf
+	traceStop             chan struct{}
+	traceDone             chan struct{}
+	shutdownOnce          sync.Once
+	traceSeq              atomic.Uint64
 }
 
 // NewAgent creates a new agent.
@@ -129,18 +130,19 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext)
 		eventChan:    make(chan AgentEvent, 100),
 		// 		ctx:             ctx,
 		// 		cancel:          cancel,
-		followUpQueue:   make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:        NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
-		metrics:         metrics,
-		toolOutput:      DefaultToolOutputLimits(),
-		toolCallCutoff:  10,
-		toolSummaryMode: "llm",
-		thinkingLevel:   "high",
-		maxLLMRetries:   defaultLLMMaxRetries,
-		retryBaseDelay:  defaultRetryBaseDelay,
-		traceBuf:        traceBuf,
-		traceStop:       make(chan struct{}),
-		traceDone:       make(chan struct{}),
+		followUpQueue:         make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
+		executor:              NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
+		metrics:               metrics,
+		toolOutput:            DefaultToolOutputLimits(),
+		toolCallCutoff:        10,
+		toolSummaryMode:       "llm",
+		toolSummaryAutomation: "fallback",
+		thinkingLevel:         "high",
+		maxLLMRetries:         defaultLLMMaxRetries,
+		retryBaseDelay:        defaultRetryBaseDelay,
+		traceBuf:              traceBuf,
+		traceStop:             make(chan struct{}),
+		traceDone:             make(chan struct{}),
 	}
 
 	go a.runTraceFlusher()
@@ -207,19 +209,20 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	prompts := []AgentMessage{NewUserMessage(message)}
 
 	config := &LoopConfig{
-		Model:               a.model,
-		APIKey:              a.apiKey,
-		Executor:            a.executor,
-		Metrics:             a.metrics,
-		ToolOutput:          a.toolOutput,
-		Compactor:           a.compactor,
-		ToolCallCutoff:      a.toolCallCutoff,
-		ToolSummaryStrategy: a.toolSummaryMode,
-		ThinkingLevel:       a.thinkingLevel,
-		MaxLLMRetries:       a.maxLLMRetries,
-		RetryBaseDelay:      a.retryBaseDelay,
-		MaxTurns:            a.maxTurns,
-		ContextWindow:       a.contextWindow,
+		Model:                 a.model,
+		APIKey:                a.apiKey,
+		Executor:              a.executor,
+		Metrics:               a.metrics,
+		ToolOutput:            a.toolOutput,
+		Compactor:             a.compactor,
+		ToolCallCutoff:        a.toolCallCutoff,
+		ToolSummaryStrategy:   a.toolSummaryMode,
+		ToolSummaryAutomation: a.toolSummaryAutomation,
+		ThinkingLevel:         a.thinkingLevel,
+		MaxLLMRetries:         a.maxLLMRetries,
+		RetryBaseDelay:        a.retryBaseDelay,
+		MaxTurns:              a.maxTurns,
+		ContextWindow:         a.contextWindow,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -549,6 +552,12 @@ func (a *Agent) SetToolCallCutoff(cutoff int) {
 // Accepted values: llm, heuristic, off.
 func (a *Agent) SetToolSummaryStrategy(strategy string) {
 	a.toolSummaryMode = normalizeToolSummaryStrategy(strategy)
+}
+
+// SetToolSummaryAutomation controls when background tool summarization can run.
+// Accepted values: off, fallback, always.
+func (a *Agent) SetToolSummaryAutomation(mode string) {
+	a.toolSummaryAutomation = normalizeToolSummaryAutomation(mode)
 }
 
 // SetThinkingLevel controls reasoning depth instructions sent to the model.

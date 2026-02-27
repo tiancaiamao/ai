@@ -22,43 +22,44 @@ type Server struct {
 	output *bufio.Writer
 
 	// Callbacks for handling commands
-	onPrompt                 func(req PromptRequest) error
-	onSteer                  func(message string) error
-	onFollowUp               func(message string) error
-	onAbort                  func() error
-	onNewSession             func(name, title string) (string, error)
-	onClearSession           func() error
-	onListSessions           func() ([]any, error)
-	onSwitchSession          func(id string) error
-	onDeleteSession          func(id string) error
-	onGetState               func() (*SessionState, error)
-	onGetMessages            func() ([]any, error)
-	onCompact                func() (*CompactResult, error)
-	onGetAvailableModels     func() ([]ModelInfo, error)
-	onSetModel               func(provider, modelID string) (*ModelInfo, error)
-	onCycleModel             func() (*CycleModelResult, error)
-	onGetCommands            func() ([]SlashCommand, error)
-	onGetSessionStats        func() (*SessionStats, error)
-	onSetAutoCompaction      func(enabled bool) error
-	onSetToolCallCutoff      func(cutoff int) error
-	onSetToolSummaryStrategy func(strategy string) error
-	onSetThinkingLevel       func(level string) (string, error)
-	onCycleThinkingLevel     func() (string, error)
-	onGetLastAssistantText   func() (string, error)
-	onGetForkMessages        func() ([]ForkMessage, error)
-	onFork                   func(entryID string) (*ForkResult, error)
-	onGetTree                func() ([]TreeEntry, error)
-	onResumeOnBranch         func(entryID string) error
-	onSetSteeringMode        func(mode string) error
-	onSetFollowUpMode        func(mode string) error
-	onSetSessionName         func(name string) error
-	onSetAutoRetry           func(enabled bool) error
-	onAbortRetry             func() error
-	onBash                   func(command string) (*BashResult, error)
-	onAbortBash              func() error
-	onExportHTML             func(path string) (string, error)
-	onSetTraceEvents         func(events []string) ([]string, error)
-	onGetTraceEvents         func() ([]string, error)
+	onPrompt                   func(req PromptRequest) error
+	onSteer                    func(message string) error
+	onFollowUp                 func(message string) error
+	onAbort                    func() error
+	onNewSession               func(name, title string) (string, error)
+	onClearSession             func() error
+	onListSessions             func() ([]any, error)
+	onSwitchSession            func(id string) error
+	onDeleteSession            func(id string) error
+	onGetState                 func() (*SessionState, error)
+	onGetMessages              func() ([]any, error)
+	onCompact                  func() (*CompactResult, error)
+	onGetAvailableModels       func() ([]ModelInfo, error)
+	onSetModel                 func(provider, modelID string) (*ModelInfo, error)
+	onCycleModel               func() (*CycleModelResult, error)
+	onGetCommands              func() ([]SlashCommand, error)
+	onGetSessionStats          func() (*SessionStats, error)
+	onSetAutoCompaction        func(enabled bool) error
+	onSetToolCallCutoff        func(cutoff int) error
+	onSetToolSummaryStrategy   func(strategy string) error
+	onSetToolSummaryAutomation func(mode string) error
+	onSetThinkingLevel         func(level string) (string, error)
+	onCycleThinkingLevel       func() (string, error)
+	onGetLastAssistantText     func() (string, error)
+	onGetForkMessages          func() ([]ForkMessage, error)
+	onFork                     func(entryID string) (*ForkResult, error)
+	onGetTree                  func() ([]TreeEntry, error)
+	onResumeOnBranch           func(entryID string) error
+	onSetSteeringMode          func(mode string) error
+	onSetFollowUpMode          func(mode string) error
+	onSetSessionName           func(name string) error
+	onSetAutoRetry             func(enabled bool) error
+	onAbortRetry               func() error
+	onBash                     func(command string) (*BashResult, error)
+	onAbortBash                func() error
+	onExportHTML               func(path string) (string, error)
+	onSetTraceEvents           func(events []string) ([]string, error)
+	onGetTraceEvents           func() ([]string, error)
 }
 
 // NewServer creates a new RPC server.
@@ -180,6 +181,13 @@ func (s *Server) SetSetToolSummaryStrategyHandler(handler func(strategy string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onSetToolSummaryStrategy = handler
+}
+
+// SetSetToolSummaryAutomationHandler sets the handler for set_tool_summary_automation commands.
+func (s *Server) SetSetToolSummaryAutomationHandler(handler func(mode string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSetToolSummaryAutomation = handler
 }
 
 // SetSetThinkingLevelHandler sets the handler for set_thinking_level commands.
@@ -672,6 +680,23 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"strategy": data.Strategy})
+
+	case CommandSetToolSummaryAutomation:
+		if s.onSetToolSummaryAutomation == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No set_tool_summary_automation handler registered")
+		}
+		var data struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("Invalid data: %v", err))
+			}
+		}
+		if err := s.onSetToolSummaryAutomation(data.Mode); err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"mode": data.Mode})
 
 	case CommandSetThinkingLevel:
 		if s.onSetThinkingLevel == nil {

@@ -241,6 +241,7 @@ Be concise and focused on the task at hand.`
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
+	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

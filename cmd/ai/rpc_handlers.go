@@ -69,7 +69,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
 			"reserveTokens", cfg.Compactor.ReserveTokens,
 			"toolCallCutoff", cfg.Compactor.ToolCallCutoff,
-			"toolSummaryStrategy", cfg.Compactor.ToolSummaryStrategy)
+			"toolSummaryStrategy", cfg.Compactor.ToolSummaryStrategy,
+			"toolSummaryAutomation", cfg.Compactor.ToolSummaryAutomation)
 	}
 
 	activeSpec, err := resolveActiveModelSpec(cfg)
@@ -277,6 +278,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
+	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	slog.Info("compact_history tool enabled for LLM-driven context management")
@@ -1056,6 +1058,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"heuristic": true,
 		"off":       true,
 	}
+	validToolSummaryAutomations := map[string]bool{
+		"off":      true,
+		"fallback": true,
+		"always":   true,
+	}
 
 	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
 		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
@@ -1154,6 +1161,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		compactorConfig.ToolSummaryStrategy = strategy
 		ag.SetToolSummaryStrategy(strategy)
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
+		return nil
+	})
+
+	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		slog.Info("Received set_tool_summary_automation", "mode", mode)
+		if !validToolSummaryAutomations[mode] {
+			return fmt.Errorf("invalid tool summary automation mode")
+		}
+		compactorConfig.ToolSummaryAutomation = mode
+		ag.SetToolSummaryAutomation(mode)
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}

@@ -69,7 +69,6 @@ Level 3: Memory Policy Learning（LLM 自主决策）
           ├── overview.md
           └── detail/
   ```
-- 兼容旧 session 文件（单文件 → 自动迁移或保持只读）
 - Session 切换时正确识别目录结构
 
 **US-2: Working Memory 自动注入**
@@ -301,8 +300,7 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
    - [ ] 模板引导 LLM 如何使用
    - [ ] LLM 能够自主更新 memory（需实测验证）
 
-4. **向后兼容**
-   - [ ] 旧 session 单文件格式可识别
+4. **系统稳定性**
    - [ ] 现有 compaction 逻辑保留（默认启用）
    - [ ] 如果 LLM 管理得当，compaction 不应频繁触发
 
@@ -314,4 +312,4 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
 - 自动从 messages.jsonl 生成 working memory（LLM 自己决定）
 - 多 session 间的 memory 共享
 - Memory 版本控制
-- 旧 session 自动迁移（保持只读兼容即可）
+- 旧 session 自动迁移

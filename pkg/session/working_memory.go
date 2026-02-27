@@ -27,7 +27,7 @@ func GetOverviewTemplate() string {
 - 记住什么信息
 - 丢弃什么历史
 
-使用 write tool 更新此文件：working-memory/overview.md
+使用 write tool 更新本记忆文件（具体路径以 system prompt 给出的绝对路径为准，不要依赖当前目录）
 下次请求时，你会看到自己写的内容。
 
 这是 YOUR memory。你控制你看到的内容。
@@ -62,8 +62,8 @@ func GetOverviewTemplate() string {
 
 <!--
 提示：
-- 需要保存详细内容时，写入 working-memory/detail/ 目录
-- 文件路径相对于 session 目录
+- 需要保存详细内容时，写入 detail/ 目录下的文件
+- 优先使用 system prompt 提供的绝对路径
 -->
 `
 }

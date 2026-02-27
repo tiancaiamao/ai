@@ -133,3 +133,52 @@ func TestNormalizeToolSummaryStrategy(t *testing.T) {
 		}
 	}
 }
+
+type summaryDecisionCompactor struct {
+	shouldCompact bool
+}
+
+func (c *summaryDecisionCompactor) ShouldCompact(_ []AgentMessage) bool {
+	return c.shouldCompact
+}
+
+func (c *summaryDecisionCompactor) Compact(messages []AgentMessage, _ string) (*CompactionResult, error) {
+	return &CompactionResult{Messages: messages}, nil
+}
+
+func TestNormalizeToolSummaryAutomation(t *testing.T) {
+	cases := map[string]string{
+		"":         "always",
+		"always":   "always",
+		"fallback": "fallback",
+		"off":      "off",
+		"unknown":  "always",
+	}
+
+	for input, expected := range cases {
+		if got := normalizeToolSummaryAutomation(input); got != expected {
+			t.Fatalf("normalizeToolSummaryAutomation(%q)=%q, want %q", input, got, expected)
+		}
+	}
+}
+
+func TestShouldAutoSummarizeToolResults_FallbackMode(t *testing.T) {
+	agentCtx := NewAgentContext("sys")
+	agentCtx.Messages = []AgentMessage{
+		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "one"}}, false),
+	}
+
+	cfg := &LoopConfig{
+		ToolCallCutoff:        1,
+		ToolSummaryAutomation: "fallback",
+		Compactor:             &summaryDecisionCompactor{shouldCompact: true},
+	}
+	if !shouldAutoSummarizeToolResults(agentCtx, cfg) {
+		t.Fatal("expected fallback mode to enable auto summary when compactor reports pressure")
+	}
+
+	cfg.Compactor = &summaryDecisionCompactor{shouldCompact: false}
+	if shouldAutoSummarizeToolResults(agentCtx, cfg) {
+		t.Fatal("expected fallback mode to skip auto summary when compactor does not report pressure")
+	}
+}

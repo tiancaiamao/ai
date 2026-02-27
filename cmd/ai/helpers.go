@@ -128,16 +128,17 @@ func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *rp
 	}
 	limit, source := compactor.EffectiveTokenLimit()
 	return &rpc.CompactionState{
-		MaxMessages:         cfg.MaxMessages,
-		MaxTokens:           cfg.MaxTokens,
-		KeepRecent:          cfg.KeepRecent,
-		KeepRecentTokens:    cfg.KeepRecentTokens,
-		ReserveTokens:       compactor.ReserveTokens(),
-		ToolCallCutoff:      cfg.ToolCallCutoff,
-		ToolSummaryStrategy: cfg.ToolSummaryStrategy,
-		ContextWindow:       compactor.ContextWindow(),
-		TokenLimit:          limit,
-		TokenLimitSource:    source,
+		MaxMessages:           cfg.MaxMessages,
+		MaxTokens:             cfg.MaxTokens,
+		KeepRecent:            cfg.KeepRecent,
+		KeepRecentTokens:      cfg.KeepRecentTokens,
+		ReserveTokens:         compactor.ReserveTokens(),
+		ToolCallCutoff:        cfg.ToolCallCutoff,
+		ToolSummaryStrategy:   cfg.ToolSummaryStrategy,
+		ToolSummaryAutomation: cfg.ToolSummaryAutomation,
+		ContextWindow:         compactor.ContextWindow(),
+		TokenLimit:            limit,
+		TokenLimitSource:      source,
 	}
 }
 

@@ -116,3 +116,14 @@ func TestAsyncToolSummarizerScheduleIsNonBlocking(t *testing.T) {
 		t.Fatalf("expected non-blocking schedule, took %v", elapsed)
 	}
 }
+
+func TestNewAsyncToolSummarizerDisabledByAutomationOff(t *testing.T) {
+	cfg := &LoopConfig{
+		ToolCallCutoff:        1,
+		ToolSummaryStrategy:   "llm",
+		ToolSummaryAutomation: "off",
+	}
+	if s := newAsyncToolSummarizer(context.Background(), cfg); s != nil {
+		t.Fatal("expected async summarizer to be disabled when automation mode is off")
+	}
+}

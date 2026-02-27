@@ -27,6 +27,7 @@ func TestRPCServerCommands(t *testing.T) {
 	compactCalled := false
 	setToolCallCutoffCalled := false
 	setToolSummaryStrategyCalled := false
+	setToolSummaryAutomationCalled := false
 
 	// Set up handlers
 	server.SetPromptHandler(func(req PromptRequest) error {
@@ -87,6 +88,12 @@ func TestRPCServerCommands(t *testing.T) {
 
 	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
 		setToolSummaryStrategyCalled = strategy == "heuristic"
+		commandCount++
+		return nil
+	})
+
+	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
+		setToolSummaryAutomationCalled = mode == "fallback"
 		commandCount++
 		return nil
 	})
@@ -204,9 +211,20 @@ func TestRPCServerCommands(t *testing.T) {
 		t.Error("set_tool_summary_strategy handler was not called with expected value")
 	}
 
+	// Test set_tool_summary_automation command
+	cmd = RPCCommand{Type: CommandSetToolSummaryAutomation}
+	cmd.Data, _ = json.Marshal(map[string]string{"mode": "fallback"})
+	resp = server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("set_tool_summary_automation command failed: %s", resp.Error)
+	}
+	if !setToolSummaryAutomationCalled {
+		t.Error("set_tool_summary_automation handler was not called with expected value")
+	}
+
 	// Verify total command count
-	if commandCount != 8 {
-		t.Errorf("Expected 8 commands to be called, got %d", commandCount)
+	if commandCount != 9 {
+		t.Errorf("Expected 9 commands to be called, got %d", commandCount)
 	}
 }
 
