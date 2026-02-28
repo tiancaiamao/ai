@@ -35,7 +35,21 @@ Use this tool when you need to:
 - Recall specific decisions or discussions
 - Look up notes you've written to detail/
 
-Returns: Top matching memory entries with citations.`
+HOW TO USE:
+Call this tool directly with the following parameters:
+  - query (required): The search term or phrase to look for
+  - scope (optional): "all" (default), "detail", or "messages"
+    - "detail": Search only compaction summaries and notes in working-memory/detail/
+    - "messages": Search raw conversation history in messages.jsonl
+    - "all": Search both sources
+  - limit (optional): Maximum number of results (default: 5)
+
+EXAMPLE USAGE:
+  - Query: "auto compact 机制"
+  - Query: "role assistant 落盘" with scope="messages"
+  - Query: "bug diagnosis" with scope="detail", limit=3
+
+Returns: Top matching memory entries with citations for source lookup.`
 }
 
 // Parameters returns the tool parameter schema
