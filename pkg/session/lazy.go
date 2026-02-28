@@ -248,7 +248,12 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 			break
 		}
 
-		// Collect all entries after the most recent compaction
+		// Collect entries after the most recent compaction
+		// If MaxMessages is set, respect the limit; otherwise load all
+		if opts.MaxMessages > 0 && len(recentEntries) >= opts.MaxMessages {
+			continue
+		}
+
 		switch entry.Type {
 		case EntryTypeMessage:
 			recentEntries = append([]*SessionEntry{entry}, recentEntries...)

@@ -1,0 +1,31 @@
+{
+  "model": {
+    "id": "glm-4.5-air",
+    "provider": "zai",
+    "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+    "api": "openai-completions"
+  },
+  "compactor": {
+    "MaxTokens": 8000,
+    "KeepRecent": 5,
+    "KeepRecentTokens": 20000,
+    "ReserveTokens": 16384,
+    "ToolCallCutoff": 10,
+    "ToolSummaryStrategy": "llm",
+    "ToolSummaryAutomation": "off",
+    "AutoCompact": true
+  },
+  "concurrency": {
+    "maxConcurrentTools": 3,
+    "toolTimeout": 30,
+    "queueTimeout": 60
+  },
+  "toolOutput": {
+    "maxChars": 204800
+  },
+  "log": {
+    "level": "info",
+    "file": "~/.ai/ai-{pid}.log",
+    "console": false
+  }
+}

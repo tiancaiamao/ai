@@ -94,15 +94,14 @@ func TestLoadSessionLazyWithMessages(t *testing.T) {
 	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
-	// Test lazy loading with default options (should load ~50 messages)
+	// Test lazy loading with default options (should load all messages)
 	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
-	// Should have loaded recent messages (up to 50 by default)
+	// Should have loaded all messages (no limit by default)
 	msgCount := len(loaded.GetMessages())
-	assert.LessOrEqual(t, msgCount, 52) // 50 messages + potential compaction
-	assert.Greater(t, msgCount, 0)
+	assert.Equal(t, 60, msgCount, "Should load all messages when MaxMessages=0")
 }
 
 func TestLoadSessionLazyWithCompaction(t *testing.T) {
