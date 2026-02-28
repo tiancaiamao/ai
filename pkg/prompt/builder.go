@@ -205,12 +205,12 @@ Treat it as the source of truth between turns.
 4. If overview points to detail files needed for current task, read them explicitly.
 5. Then answer the user.
 
-**External Memory Search (recall_memory tool):**
-Use the recall_memory tool to search past conversations and notes:
-- Searches both detail/ (summaries, notes you've written) and messages.jsonl (raw conversation)
-- Use when you need to recall specific decisions, discussions, or information from earlier
-- Parameters: query (required), scope (all/detail/messages), limit (default 5)
-- Returns matching entries with citations for source lookup
+**External Memory:**
+- **overview.md**: Auto-injected each turn. Keep it concise.
+- **detail/**: Past compaction summaries and notes. Use recall_memory tool to search.
+
+When to use recall_memory:
+- Need to recall specific decisions, discussions, or earlier info
 
 **When overview.md update is REQUIRED:**
 - task status or progress changed

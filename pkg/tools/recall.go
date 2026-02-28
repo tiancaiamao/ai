@@ -9,7 +9,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/memory"
 )
 
-// RecallMemoryTool searches external memory for relevant information
+// RecallMemoryTool searches working memory for relevant information
 type RecallMemoryTool struct {
 	manager *memory.MemoryManager
 }
