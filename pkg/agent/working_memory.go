@@ -442,3 +442,29 @@ META:
 	// Return relative path from session directory
 	return filepath.Join("working-memory", "detail", filename), nil
 }
+
+// WriteContent writes the given content to the overview.md file.
+// This is used to restore working memory from compaction summaries.
+func (wm *WorkingMemory) WriteContent(content string) error {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+
+	// Ensure directory exists
+	if err := wm.ensureWorkingMemory(); err != nil {
+		return err
+	}
+
+	// Write content
+	if err := os.WriteFile(wm.overviewPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write overview.md: %w", err)
+	}
+
+	// Update cache
+	wm.overviewContent = content
+	if info, err := os.Stat(wm.overviewPath); err == nil {
+		wm.overviewModTime = info.ModTime()
+	}
+
+	slog.Info("[WorkingMemory] Updated overview.md from compaction summary", "path", wm.overviewPath)
+	return nil
+}

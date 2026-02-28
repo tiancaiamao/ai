@@ -100,9 +100,9 @@ func readSummaryFromFile(sessionDir, relativePath string) (string, error) {
 	return strings.TrimSpace(contentStr), nil
 }
 
-// getSummaryFromEntry retrieves the summary content from an entry
+// GetSummaryFromEntry retrieves the summary content from an entry
 // either from the referenced file or from the inline Summary field
-func getSummaryFromEntry(sessionDir string, entry *SessionEntry) string {
+func GetSummaryFromEntry(sessionDir string, entry *SessionEntry) string {
 	if entry == nil {
 		return ""
 	}
@@ -142,7 +142,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i].Type == EntryTypeCompaction {
 			prevCompactionIndex = i
-			previousSummary = getSummaryFromEntry(s.sessionDir, &path[i])
+			previousSummary = GetSummaryFromEntry(s.sessionDir, &path[i])
 			break
 		}
 	}
@@ -244,7 +244,7 @@ func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
 				Cuttable: true,
 			})
 		case EntryTypeCompaction:
-			summary := getSummaryFromEntry(sessionDir, &entry)
+			summary := GetSummaryFromEntry(sessionDir, &entry)
 			if summary == "" {
 				continue
 			}

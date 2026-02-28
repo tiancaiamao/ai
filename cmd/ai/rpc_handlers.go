@@ -247,6 +247,32 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	systemPrompt := buildSystemPrompt(sess)
 
 	// Helper function to create a new agent context
+	// restoreWorkingMemoryFromCompaction restores the working memory overview.md
+	// from the latest compaction summary on the current session branch.
+	restoreWorkingMemoryFromCompaction := func(sess *session.Session) {
+		// Get the latest compaction summary
+		summary := sess.GetLastCompactionSummary()
+		if summary == "" {
+			// No compaction summary found, nothing to restore
+			slog.Info("[resume-on-branch] No compaction summary found, skipping working memory restore")
+			return
+		}
+
+		// Get working memory and write the summary
+		sessionDir := sess.GetDir()
+		if sessionDir == "" {
+			slog.Warn("[resume-on-branch] No session directory, cannot restore working memory")
+			return
+		}
+
+		wm := agent.NewWorkingMemory(sessionDir)
+		if err := wm.WriteContent(summary); err != nil {
+			slog.Warn("[resume-on-branch] Failed to restore working memory", "error", err)
+		} else {
+			slog.Info("[resume-on-branch] Restored working memory from compaction summary", "summary_len", len(summary))
+		}
+	}
+
 	createBaseContext := func() *agent.AgentContext {
 		// Rebuild system prompt from the current session so working-memory paths
 		// stay in sync after /resume, /new, /fork, and branch resume operations.
@@ -1325,6 +1351,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		setAgentContext(createBaseContext())
+
+		// Restore working memory from the latest compaction summary on this branch
+		restoreWorkingMemoryFromCompaction(sess)
 
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
