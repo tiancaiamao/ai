@@ -407,19 +407,19 @@ This reminder will stop appearing once you update your working memory.`, meta.To
 
 // SaveCompactionSummary saves a compaction summary to the detail directory.
 // This allows recall_memory to search through past compaction summaries.
-func (wm *WorkingMemory) SaveCompactionSummary(summary string) error {
+func (wm *WorkingMemory) SaveCompactionSummary(summary string) (string, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
 	// Ensure detail directory exists
 	if err := os.MkdirAll(wm.detailPath, 0755); err != nil {
-		return fmt.Errorf("failed to create detail directory: %w", err)
+		return "", fmt.Errorf("failed to create detail directory: %w", err)
 	}
 
 	// Generate filename with timestamp
 	timestamp := time.Now().Format("2006-01-02-150405")
 	filename := fmt.Sprintf("compaction-%s.md", timestamp)
-	filepath := filepath.Join(wm.detailPath, filename)
+	fullpath := filepath.Join(wm.detailPath, filename)
 
 	// Write summary with metadata header
 	content := fmt.Sprintf(`# Compaction Summary
@@ -433,10 +433,12 @@ META:
 %s
 `, time.Now().Format(time.RFC3339), summary)
 
-	if err := os.WriteFile(filepath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write compaction summary: %w", err)
+	if err := os.WriteFile(fullpath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write compaction summary: %w", err)
 	}
 
-	slog.Info("[WorkingMemory] Saved compaction summary", "path", filepath)
-	return nil
+	slog.Info("[WorkingMemory] Saved compaction summary", "path", fullpath)
+
+	// Return relative path from session directory
+	return filepath.Join("working-memory", "detail", filename), nil
 }

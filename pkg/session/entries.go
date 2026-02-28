@@ -45,8 +45,9 @@ type SessionEntry struct {
 
 	Message *agent.AgentMessage `json:"message,omitempty"`
 
-	Summary          string `json:"summary,omitempty"`
-	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
+	Summary          string  `json:"summary,omitempty"`
+	SummaryFile      *string `json:"summaryFile,omitempty"` // Reference to detail/ file for compacted summaries
+	FirstKeptEntryID string  `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
 
 	FromID string `json:"fromId,omitempty"`
