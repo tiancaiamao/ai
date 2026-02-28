@@ -244,11 +244,10 @@ func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
 				Cuttable: true,
 			})
 		case EntryTypeCompaction:
-			summary := GetSummaryFromEntry(sessionDir, &entry)
-			if summary == "" {
+			msg := compactionSummaryMessage(&entry)
+			if msg.Role == "" {
 				continue
 			}
-			msg := compactionSummaryMessage(summary, entry.Timestamp)
 			refs = append(refs, messageRef{
 				EntryID:  entry.ID,
 				Message:  msg,

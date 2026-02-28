@@ -233,11 +233,6 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 	// Scan backwards to find compaction entry and collect recent messages
 	var compactionEntry *SessionEntry
 	var recentEntries []*SessionEntry
-	messageCount := 0
-	maxMessages := opts.MaxMessages
-	if maxMessages == 0 {
-		maxMessages = 50 // default recent messages to keep
-	}
 
 	for i := len(lines) - 1; i >= startIdx; i-- {
 		line := lines[i]
@@ -253,21 +248,12 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 			break
 		}
 
-		// Collect recent entries (in reverse order) only if we haven't reached the limit
-		if messageCount < maxMessages {
-			switch entry.Type {
-			case EntryTypeMessage:
-				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
-				messageCount++
-			case EntryTypeBranchSummary:
-				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
-			}
-		}
-
-		// Stop if we have enough messages AND we don't need to find compaction
-		// If IncludeSummary is true, continue scanning to find compaction entry
-		if messageCount >= maxMessages && !opts.IncludeSummary {
-			break
+		// Collect all entries after the most recent compaction
+		switch entry.Type {
+		case EntryTypeMessage:
+			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+		case EntryTypeBranchSummary:
+			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
 		}
 	}
 

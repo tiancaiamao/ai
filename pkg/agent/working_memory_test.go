@@ -76,7 +76,7 @@ func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 	}
 
 	// Mark updated should reset
-	wm.MarkUpdated()
+	wm.MarkUpdated(0, true)
 	if wm.NeedsReminderMessage() {
 		t.Error("Should not need reminder after update")
 	}
@@ -96,7 +96,7 @@ func TestWorkingMemory_MarkUpdated(t *testing.T) {
 	}
 
 	// Mark updated
-	wm.MarkUpdated()
+	wm.MarkUpdated(0, true)
 
 	if wm.GetRoundsSinceUpdate() != 0 {
 		t.Fatalf("Expected 0 rounds after update, got %d", wm.GetRoundsSinceUpdate())

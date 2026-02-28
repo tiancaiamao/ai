@@ -67,8 +67,19 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 	}
 }
 
-func compactionSummaryMessage(summary, timestamp string) agent.AgentMessage {
-	return summaryMessage(CompactionSummaryPrefix+summary+CompactionSummarySuffix, timestamp)
+func compactionSummaryMessage(entry *SessionEntry) agent.AgentMessage {
+	var text string
+	if entry.SummaryFile != nil {
+		// New format: show file reference
+		text = "The conversation history before this point was compacted into a summary file.\n\n<summary_ref>\n" + *entry.SummaryFile + "\n</summary_ref>"
+	} else if entry.Summary != "" {
+		// Old format: show inline summary
+		text = CompactionSummaryPrefix + entry.Summary + CompactionSummarySuffix
+	} else {
+		// No content
+		return agent.AgentMessage{}
+	}
+	return summaryMessage(text, entry.Timestamp)
 }
 
 func branchSummaryMessage(summary, timestamp string) agent.AgentMessage {
@@ -151,7 +162,10 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 	}
 
 	if compaction != nil {
-		messages = append(messages, compactionSummaryMessage(compaction.Summary, compaction.Timestamp))
+		msg := compactionSummaryMessage(compaction)
+		if msg.Role != "" {
+			messages = append(messages, msg)
+		}
 
 		foundFirstKept := false
 		if compaction.FirstKeptEntryID != "" {

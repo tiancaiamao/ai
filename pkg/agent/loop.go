@@ -27,9 +27,6 @@ const (
 	defaultLoopMaxToolCallsPerName     = 0               // Disabled (was 60)
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
-	defaultHistoryFallbackTokenBudget  = 20000
-	minHistoryFallbackTokenBudget      = 12000
-	maxHistoryFallbackTokenBudget      = 32000
 )
 
 // LoopConfig contains configuration for the agent loop.
@@ -1651,14 +1648,12 @@ func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason str
 	}
 
 	if !injectHistory {
-		// Even when full history injection is disabled, keep a bounded recent
-		// history window so resumed sessions still retain conversation context.
-		budget := historyFallbackTokenBudget(contextWindow)
-		recent := extractRecentMessages(agentCtx.Messages, budget)
-		if len(recent) > 0 {
-			return recent, "recent_history_window_no_inject"
+		// When working memory is maintained, use all available messages
+		// (session lazy loading already limits to messages after last compaction)
+		if len(agentCtx.Messages) > 0 {
+			return agentCtx.Messages, "all_available_messages"
 		}
-		return extractActiveTurnMessages(agentCtx.Messages, budget), "active_turn_fallback_empty_history"
+		return nil, "no_messages"
 	}
 
 	// Explicit compatibility toggle: keep full history behavior.
@@ -1666,125 +1661,18 @@ func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason str
 		return agentCtx.Messages, "full_history_forced"
 	}
 
-	// While working memory is not confirmed, keep a bounded recent history window
-	// to avoid huge resume payloads.
-	budget := historyFallbackTokenBudget(contextWindow)
-	recent := extractRecentMessages(agentCtx.Messages, budget)
-	if len(recent) == 0 {
-		return agentCtx.Messages, "full_history_fallback_empty"
+	// When working memory is confirmed, use all available messages
+	// (session lazy loading already limits to messages after last compaction)
+	if len(agentCtx.Messages) > 0 {
+		return agentCtx.Messages, "all_available_messages"
 	}
-	return recent, "recent_history_window"
+	return nil, "no_messages"
 }
 
-func historyFallbackTokenBudget(contextWindow int) int {
-	if contextWindow <= 0 {
-		return defaultHistoryFallbackTokenBudget
-	}
-	budget := contextWindow / 4
-	if budget < minHistoryFallbackTokenBudget {
-		return minHistoryFallbackTokenBudget
-	}
-	if budget > maxHistoryFallbackTokenBudget {
-		return maxHistoryFallbackTokenBudget
-	}
-	return budget
-}
 
 // shouldInjectHistory decides whether full history should be included.
-// Default behavior is conservative: keep history until working memory is
-// confirmed as maintained to avoid context loss.
 func shouldInjectHistory(agentCtx *AgentContext, config *LoopConfig) (bool, string) {
-	if config != nil && config.InjectHistory {
-		return true, "inject_history_forced"
-	}
-	if agentCtx == nil {
-		return true, "agent_context_missing"
-	}
-	if agentCtx.WorkingMemory == nil {
-		return true, "working_memory_unavailable"
-	}
-
-	confirmed, reason := isWorkingMemoryConfirmed(agentCtx)
-	if !confirmed {
-		return true, reason
-	}
-	return false, reason
-}
-
-func isWorkingMemoryConfirmed(agentCtx *AgentContext) (bool, string) {
-	if agentCtx == nil || agentCtx.WorkingMemory == nil {
-		return false, "working_memory_unavailable"
-	}
-
-	agentCtx.WorkingMemory.InvalidateCache()
-	content, err := agentCtx.WorkingMemory.Load()
-	if err != nil {
-		slog.Warn("[Loop] Failed to probe working memory state", "error", err)
-		return false, "working_memory_probe_failed"
-	}
-
-	template := GetOverviewTemplate(agentCtx.WorkingMemory.GetPath(), agentCtx.WorkingMemory.GetDetailDir())
-	if normalizeWorkingMemoryContent(content) == normalizeWorkingMemoryContent(template) {
-		return false, "working_memory_not_maintained"
-	}
-
-	if !hasSubstantiveWorkingMemoryContent(content) {
-		return false, "working_memory_not_maintained"
-	}
-
-	overviewPath := agentCtx.WorkingMemory.GetPath()
-	if hasSuccessfulWorkingMemoryWrite(agentCtx.Messages, overviewPath) {
-		return true, "working_memory_tool_write_confirmed"
-	}
-
-	// Allow persisted sessions that already have meaningful overview content.
-	return true, "working_memory_content_confirmed"
-}
-
-func hasSubstantiveWorkingMemoryContent(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return false
-	}
-
-	withoutComments := stripHTMLComments(trimmed)
-	lines := strings.Split(withoutComments, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func stripHTMLComments(input string) string {
-	if input == "" {
-		return ""
-	}
-
-	remaining := input
-	var b strings.Builder
-	for {
-		start := strings.Index(remaining, "<!--")
-		if start < 0 {
-			b.WriteString(remaining)
-			break
-		}
-		b.WriteString(remaining[:start])
-
-		afterStart := remaining[start+4:]
-		end := strings.Index(afterStart, "-->")
-		if end < 0 {
-			break
-		}
-		remaining = afterStart[end+3:]
-	}
-	return b.String()
+	return true, "always_inject"
 }
 
 func hasSuccessfulWorkingMemoryWrite(messages []AgentMessage, overviewPath string) bool {
@@ -1815,17 +1703,6 @@ func hasSuccessfulWorkingMemoryWrite(messages []AgentMessage, overviewPath strin
 		}
 	}
 	return false
-}
-
-func normalizeWorkingMemoryContent(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.TrimSpace(content)
-	lines := strings.Split(content, "\n")
-	normalized := make([]string, 0, len(lines))
-	for _, line := range lines {
-		normalized = append(normalized, strings.TrimRight(line, " \t"))
-	}
-	return strings.Join(normalized, "\n")
 }
 
 func normalizePathForContains(value string) string {
