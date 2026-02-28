@@ -276,6 +276,12 @@ func runInnerLoop(
 				if compacted != nil {
 					agentCtx.Messages = compacted.Messages
 					agentCtx.LastCompactionSummary = compacted.Summary
+					// Save compaction summary to detail directory for recall_memory
+					if agentCtx.WorkingMemory != nil && compacted.Summary != "" {
+						if err := agentCtx.WorkingMemory.SaveCompactionSummary(compacted.Summary); err != nil {
+							slog.Warn("[Loop] Failed to save compaction summary to detail", "error", err)
+						}
+					}
 				}
 				after := len(agentCtx.Messages)
 				compactionSpan.AddField("after_messages", after)
@@ -326,6 +332,12 @@ func runInnerLoop(
 					if compacted != nil {
 						agentCtx.Messages = compacted.Messages
 						agentCtx.LastCompactionSummary = compacted.Summary
+						// Save compaction summary to detail directory for recall_memory
+						if agentCtx.WorkingMemory != nil && compacted.Summary != "" {
+							if err := agentCtx.WorkingMemory.SaveCompactionSummary(compacted.Summary); err != nil {
+								slog.Warn("[Loop] Failed to save compaction summary to detail", "error", err)
+							}
+						}
 					}
 					compactionSpan.AddField("after_messages", len(compacted.Messages))
 					compactionSpan.End()

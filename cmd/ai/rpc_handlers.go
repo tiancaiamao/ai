@@ -20,6 +20,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/memory"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -151,6 +152,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewWriteTool(cwd))
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
+
+	// Create memory manager and register recall_memory tool
+	var memoryMgr *memory.MemoryManager
+	memoryMgr, err = memory.NewMemoryManager(sess.GetDir())
+	if err != nil {
+		slog.Warn("Failed to create memory manager, recall_memory tool disabled", "error", err)
+	} else {
+		registry.Register(tools.NewRecallMemoryTool(memoryMgr))
+	}
 
 	// Create compactor for automatic context compression
 	compactorConfig := cfg.Compactor
@@ -557,6 +567,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
+		if memoryMgr != nil {
+			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
+				slog.Warn("Failed to update memory manager session dir", "error", err)
+			}
+		}
 		setAgentContext(createBaseContext())
 
 		stateMu.Lock()
@@ -651,6 +666,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		// Clear agent context and load new messages
 		sess = newSess
 		sessionComp.Update(sess, compactor)
+		if memoryMgr != nil {
+			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
+				slog.Warn("Failed to update memory manager session dir", "error", err)
+			}
+		}
 		setAgentContext(createBaseContext())
 		// Restore last compaction summary if available
 		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
@@ -1335,6 +1355,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
+		if memoryMgr != nil {
+			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
+				slog.Warn("Failed to update memory manager session dir", "error", err)
+			}
+		}
 		setAgentContext(createBaseContext())
 
 		stateMu.Lock()
