@@ -15,8 +15,9 @@ const (
 	detailDir        = "detail"
 
 	// Update tracking thresholds
-	maxRoundsWithoutUpdate = 10 // Maximum rounds without update before reminder
-	minRoundsBeforeCheck   = 3 // Minimum rounds before checking for update
+	baseRoundsBeforeReminder = 10 // Default base threshold for reminders
+	maxRoundsWithoutUpdate   = 10 // Maximum rounds without update before reminder (legacy)
+	minRoundsBeforeCheck     = 3  // Minimum rounds before checking for update
 )
 
 // ContextMeta contains metadata about the current context state.
@@ -48,17 +49,26 @@ type WorkingMemory struct {
 	messagesCount int
 
 	// Update tracking
-	lastUpdateTime    time.Time
-	lastCheckTime     time.Time
-	roundsSinceUpdate int
+	lastUpdateTime        time.Time
+	lastCheckTime         time.Time
+	roundsSinceUpdate     int
+	silentRoundsRemaining int // Rounds to skip reminder after update
+	wasRemindedLastRound  bool // Was reminder injected in the last round?
+
+	// Update statistics for adaptive reminder frequency
+	totalUpdates      int  // Total number of updates
+	autonomousUpdates int  // Updates without prompt (LLM self-initiated)
+	promptedUpdates   int  // Updates after prompt
+	nextReminderRound int  // Dynamic threshold for next reminder (5-30)
 }
 
 // NewWorkingMemory creates a new WorkingMemory for the given session directory.
 func NewWorkingMemory(sessionDir string) *WorkingMemory {
 	return &WorkingMemory{
-		sessionDir:   sessionDir,
-		overviewPath: filepath.Join(sessionDir, workingMemoryDir, overviewFile),
-		detailPath:   filepath.Join(sessionDir, workingMemoryDir, detailDir),
+		sessionDir:         sessionDir,
+		overviewPath:       filepath.Join(sessionDir, workingMemoryDir, overviewFile),
+		detailPath:         filepath.Join(sessionDir, workingMemoryDir, detailDir),
+		nextReminderRound:  baseRoundsBeforeReminder,  // Default threshold
 	}
 }
 
@@ -269,16 +279,45 @@ func (wm *WorkingMemory) InvalidateCache() {
 	wm.overviewModTime = time.Time{}
 }
 
-// MarkUpdated marks that the working memory has been updated by the user.
-// This resets the roundsSinceUpdate counter.
 // MarkUpdated marks that working memory has been updated.
-// This resets the roundsSinceUpdate counter.
-func (wm *WorkingMemory) MarkUpdated() {
+// This resets the roundsSinceUpdate counter and sets a silent period.
+// silentRounds: number of rounds to skip reminder (default 5 if <= 0)
+// autonomous: true if update was self-initiated (not prompted), false if after prompt
+func (wm *WorkingMemory) MarkUpdated(silentRounds int, autonomous bool) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
 	wm.lastUpdateTime = time.Now()
 	wm.roundsSinceUpdate = 0
+
+	// Set silent period
+	if silentRounds <= 0 {
+		silentRounds = 5  // Default silent period
+	}
+	wm.silentRoundsRemaining = silentRounds
+
+	// Update statistics
+	if autonomous {
+		wm.autonomousUpdates++
+	} else {
+		wm.promptedUpdates++
+	}
+	wm.totalUpdates++
+
+	// Adjust threshold based on update type
+	wm.adjustThreshold(autonomous)
+}
+
+// MarkUpdatedAfterToolCall detects if this update was autonomous or prompted.
+// This should be called when a write tool call updates working memory.
+func (wm *WorkingMemory) MarkUpdatedAfterToolCall(silentRounds int) {
+	wm.mu.Lock()
+	wasReminded := wm.wasRemindedLastRound
+	wm.mu.Unlock()
+
+	// If we were reminded, this is a prompted update
+	// Otherwise, it's autonomous
+	wm.MarkUpdated(silentRounds, !wasReminded)
 }
 
 // IncrementRound increments the round counter.
@@ -287,6 +326,12 @@ func (wm *WorkingMemory) MarkUpdated() {
 func (wm *WorkingMemory) IncrementRound() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
+
+	// Skip increment if in silent period
+	if wm.silentRoundsRemaining > 0 {
+		wm.silentRoundsRemaining--
+		return
+	}
 
 	wm.roundsSinceUpdate++
 }
@@ -305,6 +350,7 @@ func (wm *WorkingMemory) GetRoundsSinceUpdate() int {
 func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
 	wm.mu.Lock()
 	rounds := wm.roundsSinceUpdate
+	threshold := wm.nextReminderRound
 	wm.mu.Unlock()
 
 	// Don't check if we haven't tracked any rounds yet
@@ -317,19 +363,9 @@ func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
 		return false, ""
 	}
 
-	// Get meta for token-based thresholds
-	meta := wm.GetMeta()
-
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
-	// Check if we need to remind based on rounds
-	if wm.roundsSinceUpdate > maxRoundsWithoutUpdate {
-		return true, wm.buildReminderHTML(meta)
-	}
-
-	// Optional: remind based on token usage
-	if meta.TokensPercent > 70 && wm.roundsSinceUpdate > 3 {
+	// Check if we need to remind based on dynamic threshold
+	if rounds >= threshold {
+		meta := wm.GetMeta()
 		return true, wm.buildReminderHTML(meta)
 	}
 
@@ -338,16 +374,30 @@ func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
 
 // buildReminderHTML builds an HTML comment reminder (appended to working memory content).
 func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
+	consciousness := wm.GetUpdateConsciousness()
+	consciousnessPercent := int(consciousness * 100)
+	
 	return fmt.Sprintf(`
 
 <!--
 ⚠️ WORKING MEMORY UPDATE NEEDED
 
-你已经连续 %d 轮没有更新 working memory 了。
+你已经连续 %d 轮没有更新 working memory 了（动态阈值：%d 轮）。
 当前上下文状态:
 - Token 使用: %.0f%% (%d / %d)
 - 历史消息: %d 条
 - Working Memory 大小: %.2f KB
+
+💡 自主更新奖励机制：
+- 当前自觉度：%d%%（%d/%d 次更新是自主的）
+- 你更新越自觉，提醒频率越低
+
+  如果继续保持自主更新（提醒前主动更新）：
+  - 下次提醒阈值会提高 → 你可以有更长的"忘记提醒"时间
+  - 阈值范围：5-30 轮
+  
+  如果总是需要提醒才更新：
+  - 下次提醒阈值会降低 → 提醒会更频繁
 
 建议操作:
 1. 总结已完成的任务，归档到 %s
@@ -358,11 +408,15 @@ func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
 使用 write tool 更新: %s
 -->`,
 		wm.roundsSinceUpdate,
+		wm.nextReminderRound,
 		meta.TokensPercent,
 		meta.TokensUsed,
 		meta.TokensMax,
 		meta.MessagesInHistory,
 		float64(meta.WorkingMemorySize)/1024,
+		consciousnessPercent,
+		wm.autonomousUpdates,
+		wm.totalUpdates,
 		wm.detailPath,
 		wm.overviewPath)
 }
@@ -373,8 +427,8 @@ func (wm *WorkingMemory) NeedsReminderMessage() bool {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	// Require more rounds before injecting a separate message
-	return wm.roundsSinceUpdate >= maxRoundsWithoutUpdate
+	// Use dynamic threshold instead of fixed maxRoundsWithoutUpdate
+	return wm.roundsSinceUpdate >= wm.nextReminderRound
 }
 
 // GetReminderUserMessage builds a user message reminder to inject into the conversation.
@@ -467,4 +521,90 @@ func (wm *WorkingMemory) WriteContent(content string) error {
 
 	slog.Info("[WorkingMemory] Updated overview.md from compaction summary", "path", wm.overviewPath)
 	return nil
+}
+
+// adjustThreshold dynamically adjusts the nextReminderRound threshold based on update behavior.
+// autonomous: true for self-initiated updates (increase threshold), false for prompted updates (decrease)
+func (wm *WorkingMemory) adjustThreshold(autonomous bool) {
+	if wm.totalUpdates < 2 {
+		// Not enough data yet, use base threshold
+		wm.nextReminderRound = baseRoundsBeforeReminder
+		return
+	}
+
+	// Calculate consciousness (autonomous update ratio)
+	consciousness := float64(wm.autonomousUpdates) / float64(wm.totalUpdates)
+
+	// Determine delta based on update type and consciousness
+	delta := 0
+	if autonomous {
+		// Autonomous update: increase threshold
+		if consciousness > 0.7 {
+			delta = 3  // Highly conscious: big reward
+		} else if consciousness > 0.4 {
+			delta = 2  // Moderately conscious
+		} else {
+			delta = 1  // Low consciousness: small reward
+		}
+	} else {
+		// Prompted update: decrease threshold
+		if consciousness > 0.6 {
+			delta = -1  // Still fairly conscious: small penalty
+		} else if consciousness > 0.3 {
+			delta = -2  // Moderate penalty
+		} else {
+			delta = -3  // Low consciousness: big penalty
+		}
+	}
+
+	// Apply delta and clamp to range [5, 30]
+	wm.nextReminderRound += delta
+	if wm.nextReminderRound < 5 {
+		wm.nextReminderRound = 5
+	}
+	if wm.nextReminderRound > 30 {
+		wm.nextReminderRound = 30
+
+		slog.Info("[WorkingMemory] Adjusted reminder threshold",
+			"autonomous", autonomous,
+			"consciousness", consciousness,
+			"delta", delta,
+			"new_threshold", wm.nextReminderRound,
+			"autonomous_updates", wm.autonomousUpdates,
+			"prompted_updates", wm.promptedUpdates)
+	}
+}
+
+// GetUpdateConsciousness returns the ratio of autonomous updates (0.0-1.0)
+func (wm *WorkingMemory) GetUpdateConsciousness() float64 {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+
+	if wm.totalUpdates == 0 {
+		return 0.0
+	}
+	return float64(wm.autonomousUpdates) / float64(wm.totalUpdates)
+}
+
+// GetNextReminderRound returns the current dynamic threshold
+func (wm *WorkingMemory) GetNextReminderRound() int {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+	return wm.nextReminderRound
+}
+
+// SetWasReminded marks that a reminder was injected in this round.
+// This helps track whether the next update is autonomous or prompted.
+func (wm *WorkingMemory) SetWasReminded() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.wasRemindedLastRound = true
+}
+
+// ResetReminderFlag clears the "was reminded" flag after checking.
+// This should be called after checking MarkUpdated().
+func (wm *WorkingMemory) ResetReminderFlag() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.wasRemindedLastRound = false
 }

@@ -435,7 +435,7 @@ func runInnerLoop(
 							absPath := filepath.Clean(path)
 							wmPath := agentCtx.WorkingMemory.GetPath()
 							if absPath == wmPath || filepath.Base(absPath) == overviewFile {
-								agentCtx.WorkingMemory.MarkUpdated()
+								agentCtx.WorkingMemory.MarkUpdatedAfterToolCall(10)
 							}
 						}
 					}
@@ -856,6 +856,7 @@ func streamAssistantResponse(
 			Content: reminderContent,
 		}
 		llmMessages = append(llmMessages, reminderMsg)
+		agentCtx.WorkingMemory.SetWasReminded()
 		slog.Info("[Loop] Injected working memory reminder message",
 			"rounds_since_update", agentCtx.WorkingMemory.GetRoundsSinceUpdate())
 	}
