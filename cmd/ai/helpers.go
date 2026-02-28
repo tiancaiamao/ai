@@ -1,6 +1,7 @@
 package main
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"fmt"
@@ -271,14 +272,14 @@ func runDetachedTraceSpan(
 	return err
 }
 
-func forkEntryID(msg agent.AgentMessage, index int) string {
+func forkEntryID(msg agentctx.AgentMessage, index int) string {
 	if msg.Timestamp != 0 {
 		return fmt.Sprintf("msg-%d", msg.Timestamp)
 	}
 	return fmt.Sprintf("idx-%d", index)
 }
 
-func buildForkMessages(messages []agent.AgentMessage) []rpc.ForkMessage {
+func buildForkMessages(messages []agentctx.AgentMessage) []rpc.ForkMessage {
 	results := make([]rpc.ForkMessage, 0)
 	for i, msg := range messages {
 		if msg.Role != "user" {
@@ -417,7 +418,7 @@ func truncateText(text string, limit int) string {
 	return text[:limit-3] + "..."
 }
 
-func resolveForkEntry(entryID string, messages []agent.AgentMessage) (int, string, error) {
+func resolveForkEntry(entryID string, messages []agentctx.AgentMessage) (int, string, error) {
 	if entryID == "" {
 		return -1, "", fmt.Errorf("entryId is required")
 	}
@@ -448,7 +449,7 @@ func resolveForkEntry(entryID string, messages []agent.AgentMessage) (int, strin
 	return -1, "", fmt.Errorf("unknown entryId format: %s", entryID)
 }
 
-func collectSessionUsage(messages []agent.AgentMessage) (int, int, int, int, rpc.SessionTokenStats, float64) {
+func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, rpc.SessionTokenStats, float64) {
 	var userCount int
 	var assistantCount int
 	var toolCalls int

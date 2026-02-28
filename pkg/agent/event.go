@@ -1,6 +1,9 @@
 package agent
 
-import "time"
+import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"time"
+)
 
 // AgentEvent represents an event emitted during agent execution.
 type AgentEvent struct {
@@ -13,17 +16,17 @@ type AgentEvent struct {
 	ErrorStack string `json:"errorStack,omitempty"`
 
 	// Common fields
-	Message  *AgentMessage  `json:"message,omitempty"`
-	Messages []AgentMessage `json:"messages,omitempty"`
+	Message  *agentctx.AgentMessage  `json:"message,omitempty"`
+	Messages []agentctx.AgentMessage `json:"messages,omitempty"`
 
 	// turn_start/turn_end
-	ToolResults []AgentMessage `json:"toolResults,omitempty"`
+	ToolResults []agentctx.AgentMessage `json:"toolResults,omitempty"`
 
 	// tool_execution_start/tool_execution_end
 	ToolCallID string                 `json:"toolCallId,omitempty"`
 	ToolName   string                 `json:"toolName,omitempty"`
 	Args       map[string]interface{} `json:"args,omitempty"`
-	Result     *AgentMessage          `json:"result,omitempty"`
+	Result     *agentctx.AgentMessage          `json:"result,omitempty"`
 	IsError    bool                   `json:"isError,omitempty"`
 
 	// message_update
@@ -132,7 +135,7 @@ func NewAgentStartEvent() AgentEvent {
 }
 
 // NewAgentEndEvent creates an agent_end event.
-func NewAgentEndEvent(messages []AgentMessage) AgentEvent {
+func NewAgentEndEvent(messages []agentctx.AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:     EventAgentEnd,
 		EventAt:  time.Now().UnixNano(),
@@ -146,7 +149,7 @@ func NewTurnStartEvent() AgentEvent {
 }
 
 // NewTurnEndEvent creates a turn_end event.
-func NewTurnEndEvent(message *AgentMessage, toolResults []AgentMessage) AgentEvent {
+func NewTurnEndEvent(message *agentctx.AgentMessage, toolResults []agentctx.AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:        EventTurnEnd,
 		EventAt:     time.Now().UnixNano(),
@@ -156,7 +159,7 @@ func NewTurnEndEvent(message *AgentMessage, toolResults []AgentMessage) AgentEve
 }
 
 // NewMessageStartEvent creates a message_start event.
-func NewMessageStartEvent(message AgentMessage) AgentEvent {
+func NewMessageStartEvent(message agentctx.AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:    EventMessageStart,
 		EventAt: time.Now().UnixNano(),
@@ -165,7 +168,7 @@ func NewMessageStartEvent(message AgentMessage) AgentEvent {
 }
 
 // NewMessageEndEvent creates a message_end event.
-func NewMessageEndEvent(message AgentMessage) AgentEvent {
+func NewMessageEndEvent(message agentctx.AgentMessage) AgentEvent {
 	return AgentEvent{
 		Type:    EventMessageEnd,
 		EventAt: time.Now().UnixNano(),
@@ -174,7 +177,7 @@ func NewMessageEndEvent(message AgentMessage) AgentEvent {
 }
 
 // NewMessageUpdateEvent creates a message_update event.
-func NewMessageUpdateEvent(message AgentMessage, assistantEvent interface{}) AgentEvent {
+func NewMessageUpdateEvent(message agentctx.AgentMessage, assistantEvent interface{}) AgentEvent {
 	return AgentEvent{
 		Type:                  EventMessageUpdate,
 		EventAt:               time.Now().UnixNano(),
@@ -195,7 +198,7 @@ func NewToolExecutionStartEvent(toolCallID, toolName string, args map[string]int
 }
 
 // NewToolExecutionEndEvent creates a tool_execution_end event.
-func NewToolExecutionEndEvent(toolCallID, toolName string, result *AgentMessage, isError bool) AgentEvent {
+func NewToolExecutionEndEvent(toolCallID, toolName string, result *agentctx.AgentMessage, isError bool) AgentEvent {
 	return AgentEvent{
 		Type:       EventToolExecutionEnd,
 		EventAt:    time.Now().UnixNano(),

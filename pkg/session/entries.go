@@ -1,10 +1,10 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 const CurrentSessionVersion = 1
@@ -43,7 +43,7 @@ type SessionEntry struct {
 	ParentID  *string `json:"parentId"`
 	Timestamp string  `json:"timestamp"`
 
-	Message *agent.AgentMessage `json:"message,omitempty"`
+	Message *agentctx.AgentMessage `json:"message,omitempty"`
 
 	Summary          string  `json:"summary,omitempty"`
 	SummaryFile      *string `json:"summaryFile,omitempty"` // Reference to detail/ file for compacted summaries
@@ -67,7 +67,7 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 	}
 }
 
-func compactionSummaryMessage(entry *SessionEntry) agent.AgentMessage {
+func compactionSummaryMessage(entry *SessionEntry) agentctx.AgentMessage {
 	var text string
 	if entry.SummaryFile != nil {
 		// New format: show file reference
@@ -77,20 +77,20 @@ func compactionSummaryMessage(entry *SessionEntry) agent.AgentMessage {
 		text = CompactionSummaryPrefix + entry.Summary + CompactionSummarySuffix
 	} else {
 		// No content
-		return agent.AgentMessage{}
+		return agentctx.AgentMessage{}
 	}
 	return summaryMessage(text, entry.Timestamp)
 }
 
-func branchSummaryMessage(summary, timestamp string) agent.AgentMessage {
+func branchSummaryMessage(summary, timestamp string) agentctx.AgentMessage {
 	return summaryMessage(BranchSummaryPrefix+summary+BranchSummarySuffix, timestamp)
 }
 
-func summaryMessage(text, timestamp string) agent.AgentMessage {
-	return agent.AgentMessage{
+func summaryMessage(text, timestamp string) agentctx.AgentMessage {
+	return agentctx.AgentMessage{
 		Role: "user",
-		Content: []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: text},
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: text},
 		},
 		Timestamp: timestampToMillis(timestamp),
 	}
@@ -107,9 +107,9 @@ func timestampToMillis(ts string) int64 {
 	return parsed.UnixMilli()
 }
 
-func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry) []agent.AgentMessage {
+func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry) []agentctx.AgentMessage {
 	if len(entries) == 0 {
-		return []agent.AgentMessage{}
+		return []agentctx.AgentMessage{}
 	}
 
 	var leaf *SessionEntry
@@ -120,7 +120,7 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 	}
 
 	if leaf == nil {
-		return []agent.AgentMessage{}
+		return []agentctx.AgentMessage{}
 	}
 
 	path := make([]*SessionEntry, 0)
@@ -147,7 +147,7 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		}
 	}
 
-	messages := make([]agent.AgentMessage, 0)
+	messages := make([]agentctx.AgentMessage, 0)
 	appendMessage := func(entry *SessionEntry) {
 		switch entry.Type {
 		case EntryTypeMessage:

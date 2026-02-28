@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 )
 
@@ -21,8 +22,8 @@ type UsageStats struct {
 
 // GetFinalAssistantText returns the text content of the last assistant message.
 // It iterates in reverse to find the most recent assistant message and extracts
-// all TextContent from its content blocks.
-func GetFinalAssistantText(messages []AgentMessage) string {
+// all agentctx.TextContent from its content blocks.
+func GetFinalAssistantText(messages []agentctx.AgentMessage) string {
 	// Iterate in reverse to find the last assistant message
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -35,7 +36,7 @@ func GetFinalAssistantText(messages []AgentMessage) string {
 
 // GetAssistantTexts returns all assistant text content concatenated with newlines.
 // This is useful when you want to see the full conversation output from the assistant.
-func GetAssistantTexts(messages []AgentMessage) string {
+func GetAssistantTexts(messages []agentctx.AgentMessage) string {
 	var texts []string
 	for _, msg := range messages {
 		if msg.Role == "assistant" {
@@ -49,7 +50,7 @@ func GetAssistantTexts(messages []AgentMessage) string {
 }
 
 // GetTotalUsage aggregates usage statistics from all assistant messages.
-func GetTotalUsage(messages []AgentMessage) UsageStats {
+func GetTotalUsage(messages []agentctx.AgentMessage) UsageStats {
 	var total UsageStats
 	for _, msg := range messages {
 		if msg.Role == "assistant" && msg.Usage != nil {
@@ -62,11 +63,11 @@ func GetTotalUsage(messages []AgentMessage) UsageStats {
 }
 
 // extractTextFromContent extracts all text from content blocks.
-func extractTextFromContent(content []ContentBlock) string {
+func extractTextFromContent(content []agentctx.ContentBlock) string {
 	var texts []string
 	for _, block := range content {
 		switch v := block.(type) {
-		case TextContent:
+		case agentctx.TextContent:
 			if v.Text != "" {
 				texts = append(texts, v.Text)
 			}

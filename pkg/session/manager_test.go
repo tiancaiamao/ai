@@ -1,13 +1,13 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 func TestSessionManager(t *testing.T) {
@@ -287,7 +287,7 @@ func TestSessionManagerSaveCurrentUpdatesMeta(t *testing.T) {
 
 	// Add some messages
 	sess.AddMessages(
-		agent.AgentMessage{Role: "user", Content: []agent.ContentBlock{agent.TextContent{Type: "text", Text: "Hello"}}},
+		agentctx.AgentMessage{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "Hello"}}},
 	)
 
 	// Save current (should update metadata)

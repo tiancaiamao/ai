@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"strings"
@@ -20,22 +21,22 @@ func TestAsyncToolSummarizerSchedulesAndAppliesBatch(t *testing.T) {
 
 	callCount := 0
 	lastBatchSize := 0
-	summarizeToolResultsBatchFn = func(_ context.Context, _ llm.Model, _ string, results []AgentMessage) (string, error) {
+	summarizeToolResultsBatchFn = func(_ context.Context, _ llm.Model, _ string, results []agentctx.AgentMessage) (string, error) {
 		callCount++
 		lastBatchSize = len(results)
 		return "batched summary", nil
 	}
-	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ AgentMessage) (string, error) {
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ agentctx.AgentMessage) (string, error) {
 		t.Fatal("single-result summarizer should not be called in batch async path")
 		return "", nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewUserMessage("start"),
-		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "first"}}, false),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "second"}}, false),
-		NewToolResultMessage("call-3", "bash", []ContentBlock{TextContent{Type: "text", Text: "third"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "first"}}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "second"}}, false),
+		agentctx.NewToolResultMessage("call-3", "bash", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "third"}}, false),
 	}
 
 	cfg := &LoopConfig{
@@ -86,15 +87,15 @@ func TestAsyncToolSummarizerScheduleIsNonBlocking(t *testing.T) {
 	origBatch := summarizeToolResultsBatchFn
 	defer func() { summarizeToolResultsBatchFn = origBatch }()
 
-	summarizeToolResultsBatchFn = func(ctx context.Context, _ llm.Model, _ string, _ []AgentMessage) (string, error) {
+	summarizeToolResultsBatchFn = func(ctx context.Context, _ llm.Model, _ string, _ []agentctx.AgentMessage) (string, error) {
 		<-ctx.Done()
 		return "", errors.New("canceled")
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewToolResultMessage("call-1", "bash", []ContentBlock{TextContent{Type: "text", Text: "long output"}}, false),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "next"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "long output"}}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "next"}}, false),
 	}
 
 	cfg := &LoopConfig{

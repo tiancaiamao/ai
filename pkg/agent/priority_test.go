@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestPriorityCalculator_PositionRule(t *testing.T) {
 				TotalMessages: tt.totalMessages,
 			}
 
-			msg := AgentMessage{Role: "assistant"}
+			msg := agentctx.AgentMessage{Role: "assistant"}
 			score := calculator.Calculate(msg, ctx)
 
 			if score < tt.minScore || score > tt.maxScore {
@@ -47,13 +48,13 @@ func TestPriorityCalculator_RoleRule(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		msg      AgentMessage
+		msg      agentctx.AgentMessage
 		minScore float64
 	}{
 		// Note: Final score is weighted across all rules, not just role
-		{"user message", AgentMessage{Role: "user"}, 0.25},
-		{"toolResult", AgentMessage{Role: "toolResult", ToolName: "read"}, 0.20},
-		{"assistant", AgentMessage{Role: "assistant"}, 0.15},
+		{"user message", agentctx.AgentMessage{Role: "user"}, 0.25},
+		{"toolResult", agentctx.AgentMessage{Role: "toolResult", ToolName: "read"}, 0.20},
+		{"assistant", agentctx.AgentMessage{Role: "assistant"}, 0.15},
 	}
 
 	for _, tt := range tests {
@@ -74,15 +75,15 @@ func TestPriorityCalculator_ErrorBoost(t *testing.T) {
 	}
 
 	// Normal message
-	normalMsg := AgentMessage{
+	normalMsg := agentctx.AgentMessage{
 		Role:    "toolResult",
-		Content: []ContentBlock{TextContent{Type: "text", Text: "success output"}},
+		Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "success output"}},
 	}
 
 	// Error message
-	errorMsg := AgentMessage{
+	errorMsg := agentctx.AgentMessage{
 		Role:    "toolResult",
-		Content: []ContentBlock{TextContent{Type: "text", Text: "error: something failed"}},
+		Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "error: something failed"}},
 		IsError: true,
 	}
 
@@ -114,9 +115,9 @@ func TestPriorityCalculator_FilePathDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := AgentMessage{
+			msg := agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: tt.text}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: tt.text}},
 			}
 
 			score := calculator.Calculate(msg, ctx)
@@ -136,9 +137,9 @@ func TestPriorityCalculator_ToolImportance(t *testing.T) {
 	}
 
 	// Write operations should have higher priority than read
-	writeMsg := AgentMessage{Role: "toolResult", ToolName: "write"}
-	readMsg := AgentMessage{Role: "toolResult", ToolName: "read"}
-	grepMsg := AgentMessage{Role: "toolResult", ToolName: "grep"}
+	writeMsg := agentctx.AgentMessage{Role: "toolResult", ToolName: "write"}
+	readMsg := agentctx.AgentMessage{Role: "toolResult", ToolName: "read"}
+	grepMsg := agentctx.AgentMessage{Role: "toolResult", ToolName: "grep"}
 
 	writeScore := calculator.Calculate(writeMsg, ctx)
 	readScore := calculator.Calculate(readMsg, ctx)

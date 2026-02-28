@@ -1,13 +1,13 @@
 package tools
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // BashResult represents the result of a bash command execution.
@@ -58,7 +58,7 @@ func (t *BashTool) Parameters() map[string]any {
 }
 
 // Execute executes the bash command.
-func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agent.ContentBlock, error) {
+func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	command, ok := args["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid command argument")
@@ -106,8 +106,8 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agent.Co
 		outputBuilder.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", result.Error, result.ExitCode))
 	}
 
-	return []agent.ContentBlock{
-		agent.TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: outputBuilder.String(),
 		},

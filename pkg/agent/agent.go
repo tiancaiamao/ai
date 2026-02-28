@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"fmt"
@@ -53,14 +54,14 @@ var ErrAgentBusy = errors.New("agent is busy")
 
 // Compactor interface for context compression.
 type Compactor interface {
-	ShouldCompact(messages []AgentMessage) bool
-	Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error)
+	ShouldCompact(messages []agentctx.AgentMessage) bool
+	Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error)
 }
 
 // CompactionResult contains the result of a compaction operation.
 type CompactionResult struct {
 	Summary      string         // The generated summary
-	Messages     []AgentMessage // The compressed message list
+	Messages     []agentctx.AgentMessage // The compressed message list
 	TokensBefore int            // Token count before compaction
 	TokensAfter  int            // Token count after compaction
 }
@@ -71,16 +72,16 @@ type Agent struct {
 	model         llm.Model
 	apiKey        string
 	systemPrompt  string
-	context       *AgentContext
+	context       *agentctx.AgentContext
 	eventChan     chan AgentEvent
-	currentStream *llm.EventStream[AgentEvent, []AgentMessage]
+	currentStream *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	streamMu      sync.RWMutex
 	// 	ctx             context.Context
 	cancel                context.CancelFunc
 	wg                    sync.WaitGroup
 	compactor             Compactor     // Optional compactor for automatic context compression
 	followUpQueue         chan string   // Queue for follow-up messages
-	executor              *ExecutorPool // Tool executor with concurrency control
+	executor              *ExecutorPool // agentctx.Tool executor with concurrency control
 	metrics               *Metrics      // Performance and usage metrics
 	toolOutput            ToolOutputLimits
 	toolCallCutoff        int
@@ -102,11 +103,11 @@ var runLoopFn = RunLoop
 
 // NewAgent creates a new agent.
 func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
-	return NewAgentWithContext(model, apiKey, NewAgentContext(systemPrompt))
+	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt))
 }
 
 // NewAgentWithContext creates a new agent with a custom context.
-func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *AgentContext) *Agent {
+func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext) *Agent {
 	traceBuf := traceevent.NewTraceBuf()
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
@@ -206,7 +207,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		traceevent.Field{Key: "turn_count", Value: len(a.context.Messages)})
 	defer eventLoopSpan.End()
 
-	prompts := []AgentMessage{NewUserMessage(message)}
+	prompts := []agentctx.AgentMessage{agentctx.NewUserMessage(message)}
 
 	config := &LoopConfig{
 		Model:                 a.model,
@@ -327,7 +328,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
 			// (e.g. auto-compaction editing older messages).
-			a.context.Messages = append([]AgentMessage(nil), event.Value.Messages...)
+			a.context.Messages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
 		}
 
 		// Send to event channel
@@ -503,17 +504,17 @@ func (a *Agent) GetModel() llm.Model {
 }
 
 // GetMessages returns all messages in the context.
-func (a *Agent) GetMessages() []AgentMessage {
+func (a *Agent) GetMessages() []agentctx.AgentMessage {
 	return a.context.Messages
 }
 
 // AddTool adds a tool to the agent.
-func (a *Agent) AddTool(tool Tool) {
+func (a *Agent) AddTool(tool agentctx.Tool) {
 	a.context.AddTool(tool)
 }
 
 // SetContext sets the agent context.
-func (a *Agent) SetContext(ctx *AgentContext) {
+func (a *Agent) SetContext(ctx *agentctx.AgentContext) {
 	if ctx != nil && len(ctx.Tools) == 0 && a.context != nil && len(a.context.Tools) > 0 {
 		ctx.Tools = append(ctx.Tools, a.context.Tools...)
 	}
@@ -521,7 +522,7 @@ func (a *Agent) SetContext(ctx *AgentContext) {
 }
 
 // GetContext returns the agent context.
-func (a *Agent) GetContext() *AgentContext {
+func (a *Agent) GetContext() *agentctx.AgentContext {
 	return a.context
 }
 
@@ -700,13 +701,13 @@ func (a *Agent) emitEvent(event AgentEvent) {
 	}
 }
 
-func (a *Agent) setCurrentStream(stream *llm.EventStream[AgentEvent, []AgentMessage]) {
+func (a *Agent) setCurrentStream(stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage]) {
 	a.streamMu.Lock()
 	a.currentStream = stream
 	a.streamMu.Unlock()
 }
 
-func (a *Agent) getCurrentStream() *llm.EventStream[AgentEvent, []AgentMessage] {
+func (a *Agent) getCurrentStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
 	a.streamMu.RLock()
 	stream := a.currentStream
 	a.streamMu.RUnlock()

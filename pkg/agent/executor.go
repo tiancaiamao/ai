@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"sync"
@@ -65,7 +66,7 @@ func (e *ToolExecutor) SetRetryConfig(config *RetryConfig) {
 }
 
 // Execute runs a tool with concurrency control, timeout, and automatic retries.
-func (e *ToolExecutor) Execute(ctx context.Context, tool Tool, args map[string]interface{}) ([]ContentBlock, error) {
+func (e *ToolExecutor) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
 	// Try to acquire semaphore (slot for execution)
 	select {
 	case e.semaphore <- struct{}{}:
@@ -85,7 +86,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, tool Tool, args map[string]i
 }
 
 // executeWithRetries executes a tool with retry logic.
-func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args map[string]interface{}) ([]ContentBlock, error) {
+func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
 	var lastErr error
 	delay := e.retryConfig.InitialDelay
 
@@ -132,20 +133,20 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args m
 			if result.err == nil {
 				// Success
 				if attempt > 0 {
-					slog.Info("[Executor] Tool succeeded on attempt", "tool", tool.Name(), "attempt", attempt+1)
+					slog.Info("[Executor] agentctx.Tool succeeded on attempt", "tool", tool.Name(), "attempt", attempt+1)
 				}
 				return result.content, nil
 			}
 
 			// Check if error is retryable
 			if !e.isRetryable(result.err) {
-				slog.Error("[Executor] Tool failed with non-retryable error", "tool", tool.Name(), "error", result.err)
+				slog.Error("[Executor] agentctx.Tool failed with non-retryable error", "tool", tool.Name(), "error", result.err)
 				return nil, result.err
 			}
 
 			// Error is retryable, will retry
 			lastErr = result.err
-			slog.Warn("[Executor] Tool failed, will retry",
+			slog.Warn("[Executor] agentctx.Tool failed, will retry",
 				"tool", tool.Name(),
 				"attempt", attempt+1,
 				"maxAttempts", e.retryConfig.MaxRetries+1,
@@ -154,7 +155,7 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool Tool, args m
 		case <-timeoutCtx.Done():
 			// Timeout is always retryable
 			lastErr = fmt.Errorf("tool execution timeout after %v", e.toolTimeout)
-			slog.Warn("[Executor] Tool timed out, will retry",
+			slog.Warn("[Executor] agentctx.Tool timed out, will retry",
 				"tool", tool.Name(),
 				"attempt", attempt+1,
 				"maxAttempts", e.retryConfig.MaxRetries+1)
@@ -189,7 +190,7 @@ func (e *ToolExecutor) isRetryable(err error) bool {
 
 // toolResult wraps tool execution result.
 type toolResult struct {
-	content []ContentBlock
+	content []agentctx.ContentBlock
 	err     error
 }
 
@@ -297,7 +298,7 @@ func (p *ExecutorPool) SetRetryConfig(toolName string, config *RetryConfig) {
 }
 
 // Execute runs a tool using the appropriate executor.
-func (p *ExecutorPool) Execute(ctx context.Context, tool Tool, args map[string]interface{}) ([]ContentBlock, error) {
+func (p *ExecutorPool) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
 	executor := p.GetExecutor(tool.Name())
 	slog.Info("[Executor] Executing tool",
 		"tool", tool.Name(),

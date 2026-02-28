@@ -1,4 +1,4 @@
-package agent
+package context
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 // ContentBlock represents a block of content in a message.
 // Different content types implement this interface.
 type ContentBlock interface {
-	isContentBlock()
+	IsContentBlock()
 }
 
 // TextContent represents plain text content.
@@ -18,7 +18,7 @@ type TextContent struct {
 	Text string `json:"text"`
 }
 
-func (t TextContent) isContentBlock() {}
+func (t TextContent) IsContentBlock() {}
 
 // ImageContent represents image content (base64 encoded).
 type ImageContent struct {
@@ -27,7 +27,7 @@ type ImageContent struct {
 	MimeType string `json:"mimeType"`
 }
 
-func (i ImageContent) isContentBlock() {}
+func (i ImageContent) IsContentBlock() {}
 
 // ToolCallContent represents a tool call from the assistant.
 type ToolCallContent struct {
@@ -37,7 +37,7 @@ type ToolCallContent struct {
 	Arguments map[string]any `json:"arguments"`
 }
 
-func (t ToolCallContent) isContentBlock() {}
+func (t ToolCallContent) IsContentBlock() {}
 
 // ThinkingContent represents thinking content (for reasoning models).
 type ThinkingContent struct {
@@ -45,7 +45,7 @@ type ThinkingContent struct {
 	Thinking string `json:"thinking"`
 }
 
-func (t ThinkingContent) isContentBlock() {}
+func (t ThinkingContent) IsContentBlock() {}
 
 // Usage represents token usage statistics.
 type Usage struct {

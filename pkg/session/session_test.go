@@ -1,12 +1,12 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // TestSaveMessages tests saving messages to session.
@@ -16,12 +16,12 @@ func TestSaveMessages(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_session")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir)
+	sess := NewSession(sessionDir, nil)
 
 	// Create test messages
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("Hello"),
-		agent.NewAssistantMessage(),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Hello"),
+		agentctx.NewAssistantMessage(),
 	}
 
 	// Save messages
@@ -36,7 +36,7 @@ func TestSaveMessages(t *testing.T) {
 	}
 
 	// Load and verify
-	loadedSess, err := LoadSession(sessionDir)
+	loadedSess, err := LoadSession(sessionDir, nil)
 	if err != nil {
 		t.Fatalf("Failed to load session: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestLoadEmptySession(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "non_existent")
 
-	sess, err := LoadSession(sessionDir)
+	sess, err := LoadSession(sessionDir, nil)
 	if err != nil {
 		t.Fatalf("Failed to load non-existent session: %v", err)
 	}
@@ -72,11 +72,11 @@ func TestAddMessages(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_add")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir)
+	sess := NewSession(sessionDir, nil)
 
 	// Add messages
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("First message"),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("First message"),
 	}
 
 	err := sess.AddMessages(messages...)
@@ -102,11 +102,11 @@ func TestClearSession(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_clear")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir)
+	sess := NewSession(sessionDir, nil)
 
 	// Add some messages first
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("Test"),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Test"),
 	}
 	_ = sess.AddMessages(messages...)
 
@@ -132,11 +132,11 @@ func TestSaveMessagesOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "test_overwrite")
 
-	sess := NewSession(sessionDir)
+	sess := NewSession(sessionDir, nil)
 
 	// Save initial messages
-	initialMessages := []agent.AgentMessage{
-		agent.NewUserMessage("Initial"),
+	initialMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Initial"),
 	}
 	err := sess.SaveMessages(initialMessages)
 	if err != nil {
@@ -144,10 +144,10 @@ func TestSaveMessagesOverwrite(t *testing.T) {
 	}
 
 	// Save different messages (should overwrite)
-	newMessages := []agent.AgentMessage{
-		agent.NewUserMessage("New 1"),
-		agent.NewUserMessage("New 2"),
-		agent.NewAssistantMessage(),
+	newMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("New 1"),
+		agentctx.NewUserMessage("New 2"),
+		agentctx.NewAssistantMessage(),
 	}
 	err = sess.SaveMessages(newMessages)
 	if err != nil {
@@ -172,11 +172,11 @@ func TestSessionPersistence(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_persist")
 
 	// Create and save session
-	sess1 := NewSession(sessionDir)
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("Message 1"),
-		agent.NewAssistantMessage(),
-		agent.NewUserMessage("Message 2"),
+	sess1 := NewSession(sessionDir, nil)
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Message 1"),
+		agentctx.NewAssistantMessage(),
+		agentctx.NewUserMessage("Message 2"),
 	}
 	err := sess1.SaveMessages(messages)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestSessionPersistence(t *testing.T) {
 	}
 
 	// Load session in a new instance
-	sess2, err := LoadSession(sessionDir)
+	sess2, err := LoadSession(sessionDir, nil)
 	if err != nil {
 		t.Fatalf("Failed to load: %v", err)
 	}

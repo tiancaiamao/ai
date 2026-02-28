@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"testing"
@@ -37,7 +38,7 @@ func (m *MockTool) Parameters() map[string]any {
 	}
 }
 
-func (m *MockTool) Execute(ctx context.Context, args map[string]any) ([]ContentBlock, error) {
+func (m *MockTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	m.calls++
 
 	if m.calls <= m.maxFailures {
@@ -48,8 +49,8 @@ func (m *MockTool) Execute(ctx context.Context, args map[string]any) ([]ContentB
 		time.Sleep(time.Duration(m.execDelayMs) * time.Millisecond)
 	}
 
-	return []ContentBlock{
-		TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: "success",
 		},
@@ -256,7 +257,7 @@ func TestExecutorPoolRetryPerTool(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Tool A should retry and succeed
+	// agentctx.Tool A should retry and succeed
 	resultA, errA := pool.Execute(ctx, toolA, map[string]any{"input": "test"})
 	if errA != nil {
 		t.Errorf("tool A failed: %v", errA)
@@ -268,7 +269,7 @@ func TestExecutorPoolRetryPerTool(t *testing.T) {
 		t.Errorf("expected tool A to be called 2 times, got %d", toolA.calls)
 	}
 
-	// Tool B should succeed immediately
+	// agentctx.Tool B should succeed immediately
 	resultB, errB := pool.Execute(ctx, toolB, map[string]any{"input": "test"})
 	if errB != nil {
 		t.Errorf("tool B failed: %v", errB)
@@ -280,5 +281,5 @@ func TestExecutorPoolRetryPerTool(t *testing.T) {
 		t.Errorf("expected tool B to be called 1 time, got %d", toolB.calls)
 	}
 
-	t.Logf("Tool A: %d calls, Tool B: %d calls", toolA.calls, toolB.calls)
+	t.Logf("agentctx.Tool A: %d calls, agentctx.Tool B: %d calls", toolA.calls, toolB.calls)
 }

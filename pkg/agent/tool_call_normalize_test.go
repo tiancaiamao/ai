@@ -1,16 +1,19 @@
 package agent
 
-import "testing"
+import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"testing"
+)
 
 func TestNormalizeToolCallInfersGenericWrapperName(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    ToolCallContent
+		input    agentctx.ToolCallContent
 		wantName string
 	}{
 		{
 			name: "infer read from path",
-			input: ToolCallContent{
+			input: agentctx.ToolCallContent{
 				Name:      "tool_call",
 				Arguments: map[string]any{"path": "/tmp/a.txt"},
 			},
@@ -18,7 +21,7 @@ func TestNormalizeToolCallInfersGenericWrapperName(t *testing.T) {
 		},
 		{
 			name: "infer bash from command",
-			input: ToolCallContent{
+			input: agentctx.ToolCallContent{
 				Name:      "tool",
 				Arguments: map[string]any{"command": "ls -la"},
 			},
@@ -26,7 +29,7 @@ func TestNormalizeToolCallInfersGenericWrapperName(t *testing.T) {
 		},
 		{
 			name: "unwrap nested arguments",
-			input: ToolCallContent{
+			input: agentctx.ToolCallContent{
 				Name: "tool_call",
 				Arguments: map[string]any{
 					"name": "write",

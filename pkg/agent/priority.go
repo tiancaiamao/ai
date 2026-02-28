@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"regexp"
 	"strings"
 )
@@ -15,7 +16,7 @@ type PriorityCalculator struct {
 // PriorityRule defines a single priority scoring rule.
 type PriorityRule struct {
 	Name      string
-	Evaluator func(msg AgentMessage, ctx *PriorityContext) float64
+	Evaluator func(msg agentctx.AgentMessage, ctx *PriorityContext) float64
 	Weight    float64
 }
 
@@ -36,7 +37,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 			{
 				Name:   "position",
 				Weight: 0.15,
-				Evaluator: func(msg AgentMessage, ctx *PriorityContext) float64 {
+				Evaluator: func(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 					if ctx.TotalMessages == 0 {
 						return 0.5
 					}
@@ -61,7 +62,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 			{
 				Name:   "role",
 				Weight: 0.20,
-				Evaluator: func(msg AgentMessage, ctx *PriorityContext) float64 {
+				Evaluator: func(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 					switch msg.Role {
 					case "user":
 						return 0.9 // User intent is most important
@@ -80,7 +81,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 			{
 				Name:   "content_features",
 				Weight: 0.35,
-				Evaluator: func(msg AgentMessage, ctx *PriorityContext) float64 {
+				Evaluator: func(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 					text := msg.ExtractText()
 					score := 0.0
 
@@ -104,7 +105,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 						score += 0.2
 					}
 
-					// Tool calls (more important than plain text)
+					// agentctx.Tool calls (more important than plain text)
 					if len(msg.ExtractToolCalls()) > 0 {
 						score += 0.25
 					}
@@ -120,7 +121,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 			{
 				Name:   "error_context",
 				Weight: 0.20,
-				Evaluator: func(msg AgentMessage, ctx *PriorityContext) float64 {
+				Evaluator: func(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 					// If there were previous errors, successful execution is important
 					if msg.Role == "toolResult" && !msg.IsError {
 						if ctx.seenErrors != nil && ctx.seenErrors[msg.ToolName] {
@@ -135,7 +136,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 			{
 				Name:   "file_tracking",
 				Weight: 0.10,
-				Evaluator: func(msg AgentMessage, ctx *PriorityContext) float64 {
+				Evaluator: func(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 					if msg.Role == "toolResult" {
 						filePath := extractFilePathFromMessage(msg)
 						if filePath != "" {
@@ -160,7 +161,7 @@ func NewPriorityCalculator() *PriorityCalculator {
 }
 
 // Calculate computes priority score for a message.
-func (pc *PriorityCalculator) Calculate(msg AgentMessage, ctx *PriorityContext) float64 {
+func (pc *PriorityCalculator) Calculate(msg agentctx.AgentMessage, ctx *PriorityContext) float64 {
 	totalScore := 0.0
 	totalWeight := 0.0
 
@@ -254,7 +255,7 @@ func hasFilePath(text string) bool {
 // Note: containsErrorPattern is defined in tool_output.go to avoid duplication.
 
 // extractFilePathFromMessage extracts file path from tool parameters.
-func extractFilePathFromMessage(msg AgentMessage) string {
+func extractFilePathFromMessage(msg agentctx.AgentMessage) string {
 	// Only for tools that work with files
 	if msg.ToolName != "read" && msg.ToolName != "write" && msg.ToolName != "edit" {
 		return ""
@@ -262,7 +263,7 @@ func extractFilePathFromMessage(msg AgentMessage) string {
 
 	// Extract from tool call content
 	for _, block := range msg.Content {
-		if tc, ok := block.(ToolCallContent); ok {
+		if tc, ok := block.(agentctx.ToolCallContent); ok {
 			if path, ok := tc.Arguments["path"].(string); ok {
 				return path
 			}
@@ -274,14 +275,14 @@ func extractFilePathFromMessage(msg AgentMessage) string {
 
 // ScoredMessage pairs a message with its priority score.
 type ScoredMessage struct {
-	Msg   AgentMessage
+	Msg   agentctx.AgentMessage
 	Score float64
 	Index int
 }
 
 // CalculateMessagePriorities computes priority scores for all messages.
 // Returns messages categorized by priority level.
-func CalculateMessagePriorities(messages []AgentMessage) (highPriority, normal []ScoredMessage) {
+func CalculateMessagePriorities(messages []agentctx.AgentMessage) (highPriority, normal []ScoredMessage) {
 	if len(messages) == 0 {
 		return nil, nil
 	}

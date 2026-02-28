@@ -1,6 +1,7 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"bufio"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // LoadOptions controls session loading behavior.
@@ -21,7 +21,7 @@ type LoadOptions struct {
 	// Lazy enables lazy loading (only load recent entries + compaction summary)
 	Lazy bool
 	// WorkingMemory is the working memory instance for the session
-	WorkingMemory *agent.WorkingMemory
+	WorkingMemory *agentctx.WorkingMemory
 }
 
 // DefaultLoadOptions returns the default load options for lazy loading.

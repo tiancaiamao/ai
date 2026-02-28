@@ -1,12 +1,12 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // BenchmarkLoadSession compares lazy vs full loading performance
@@ -35,7 +35,7 @@ func BenchmarkLoadSession_Full(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(sessionDir)
+		_, err := LoadSession(sessionDir, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func BenchmarkLoadSession_Full_1000(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(sessionDir)
+		_, err := LoadSession(sessionDir, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -87,10 +87,10 @@ func createLargeSessionFile(sessionDir string, n int) {
 	sess.header = newSessionHeader("benchmark-session", "/test", "")
 
 	for i := 0; i < n; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{
 					Type: "text",
 					Text: "This is a longer message content to simulate realistic token usage. It contains enough text to represent a typical coding question or response.",
 				},

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -9,7 +10,7 @@ import (
 
 var toolCallSeq uint64
 
-func normalizeToolCall(tc ToolCallContent) ToolCallContent {
+func normalizeToolCall(tc agentctx.ToolCallContent) agentctx.ToolCallContent {
 	normalized := tc
 	normalized.Name = normalizeToolCallName(tc.Name)
 	if isGenericToolName(normalized.Name) {

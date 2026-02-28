@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"strings"
@@ -13,15 +14,15 @@ func TestMaybeSummarizeToolResultsAboveCutoff(t *testing.T) {
 	orig := summarizeToolResultFn
 	defer func() { summarizeToolResultFn = orig }()
 
-	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, result AgentMessage) (string, error) {
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, result agentctx.AgentMessage) (string, error) {
 		return "summary for " + result.ToolName, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewUserMessage("start"),
-		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "first"}}, false),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "second"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "first"}}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "second"}}, false),
 	}
 
 	cfg := &LoopConfig{
@@ -55,10 +56,10 @@ func TestMaybeSummarizeToolResultsAboveCutoff(t *testing.T) {
 }
 
 func TestMaybeSummarizeToolResultsCutoffDisabled(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "one"}}, false),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "two"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "one"}}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "two"}}, false),
 	}
 
 	before := len(agentCtx.Messages)
@@ -79,14 +80,14 @@ func TestMaybeSummarizeToolResultsFallbackOnError(t *testing.T) {
 	orig := summarizeToolResultFn
 	defer func() { summarizeToolResultFn = orig }()
 
-	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ AgentMessage) (string, error) {
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ agentctx.AgentMessage) (string, error) {
 		return "", errors.New("summary failed")
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewToolResultMessage("call-1", "bash", []ContentBlock{TextContent{Type: "text", Text: "line1\nline2"}}, true),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "line3"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "line1\nline2"}}, true),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "line3"}}, false),
 	}
 
 	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
@@ -95,7 +96,7 @@ func TestMaybeSummarizeToolResultsFallbackOnError(t *testing.T) {
 	})
 
 	last := agentCtx.Messages[len(agentCtx.Messages)-1]
-	if !strings.Contains(last.ExtractText(), "Tool \"bash\" finished with status error") {
+	if !strings.Contains(last.ExtractText(), "agentctx.Tool \"bash\" finished with status error") {
 		t.Fatalf("expected fallback summary content, got %q", last.ExtractText())
 	}
 }
@@ -104,15 +105,15 @@ func TestMaybeSummarizeToolResultsHeuristicStrategy(t *testing.T) {
 	orig := summarizeToolResultFn
 	defer func() { summarizeToolResultFn = orig }()
 
-	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ AgentMessage) (string, error) {
+	summarizeToolResultFn = func(_ context.Context, _ llm.Model, _ string, _ agentctx.AgentMessage) (string, error) {
 		t.Fatal("llm summarizer should not be called in heuristic strategy")
 		return "", nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewToolResultMessage("call-1", "bash", []ContentBlock{TextContent{Type: "text", Text: "line1"}}, false),
-		NewToolResultMessage("call-2", "grep", []ContentBlock{TextContent{Type: "text", Text: "line2"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "line1"}}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "line2"}}, false),
 	}
 
 	maybeSummarizeToolResults(context.Background(), agentCtx, &LoopConfig{
@@ -122,7 +123,7 @@ func TestMaybeSummarizeToolResultsHeuristicStrategy(t *testing.T) {
 	})
 
 	last := agentCtx.Messages[len(agentCtx.Messages)-1]
-	if !strings.Contains(last.ExtractText(), "Tool \"bash\" finished with status ok") {
+	if !strings.Contains(last.ExtractText(), "agentctx.Tool \"bash\" finished with status ok") {
 		t.Fatalf("expected heuristic summary, got %q", last.ExtractText())
 	}
 }
@@ -148,11 +149,11 @@ type summaryDecisionCompactor struct {
 	shouldCompact bool
 }
 
-func (c *summaryDecisionCompactor) ShouldCompact(_ []AgentMessage) bool {
+func (c *summaryDecisionCompactor) ShouldCompact(_ []agentctx.AgentMessage) bool {
 	return c.shouldCompact
 }
 
-func (c *summaryDecisionCompactor) Compact(messages []AgentMessage, _ string) (*CompactionResult, error) {
+func (c *summaryDecisionCompactor) Compact(messages []agentctx.AgentMessage, _ string) (*CompactionResult, error) {
 	return &CompactionResult{Messages: messages}, nil
 }
 
@@ -173,9 +174,9 @@ func TestNormalizeToolSummaryAutomation(t *testing.T) {
 }
 
 func TestShouldAutoSummarizeToolResults_FallbackMode(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = []AgentMessage{
-		NewToolResultMessage("call-1", "read", []ContentBlock{TextContent{Type: "text", Text: "one"}}, false),
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "one"}}, false),
 	}
 
 	cfg := &LoopConfig{

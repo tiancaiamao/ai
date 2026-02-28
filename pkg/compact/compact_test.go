@@ -1,10 +1,10 @@
 package compact
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
@@ -19,9 +19,9 @@ func TestShouldCompact(t *testing.T) {
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	// Test with few messages - should not compact (token threshold not reached)
-	fewMessages := make([]agent.AgentMessage, 5)
+	fewMessages := make([]agentctx.AgentMessage, 5)
 	for i := 0; i < 5; i++ {
-		fewMessages[i] = agent.NewUserMessage("test message")
+		fewMessages[i] = agentctx.NewUserMessage("test message")
 	}
 
 	if compactor.ShouldCompact(fewMessages) {
@@ -30,9 +30,9 @@ func TestShouldCompact(t *testing.T) {
 
 	// Test with high token content - should compact
 	longText := strings.Repeat("a", 400) // ~100 tokens
-	manyMessages := []agent.AgentMessage{
-		agent.NewUserMessage(longText),
-		agent.NewAssistantMessage(),
+	manyMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage(longText),
+		agentctx.NewAssistantMessage(),
 	}
 
 	if !compactor.ShouldCompact(manyMessages) {
@@ -51,9 +51,9 @@ func TestShouldCompactTokenLimit(t *testing.T) {
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	longText := strings.Repeat("a", 400) // ~100 tokens
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage(longText),
-		agent.NewAssistantMessage(),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage(longText),
+		agentctx.NewAssistantMessage(),
 	}
 
 	if !compactor.ShouldCompact(messages) {
@@ -70,10 +70,10 @@ func TestShouldCompactMessageLimitDoesNotTriggerWithContextWindow(t *testing.T) 
 
 	// Large context window means token threshold likely won't be hit for short messages.
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 200000)
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("a"),
-		agent.NewAssistantMessage(),
-		agent.NewUserMessage("b"),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("a"),
+		agentctx.NewAssistantMessage(),
+		agentctx.NewUserMessage("b"),
 	}
 
 	if compactor.ShouldCompact(messages) {
@@ -85,9 +85,9 @@ func TestEstimateTokens(t *testing.T) {
 	config := DefaultConfig()
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("Hello world"),
-		agent.NewAssistantMessage(),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Hello world"),
+		agentctx.NewAssistantMessage(),
 	}
 
 	tokens := compactor.EstimateTokens(messages)
@@ -108,9 +108,9 @@ func TestCompactDisabled(t *testing.T) {
 
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
-	messages := make([]agent.AgentMessage, 100)
+	messages := make([]agentctx.AgentMessage, 100)
 	for i := 0; i < 100; i++ {
-		messages[i] = agent.NewUserMessage("test")
+		messages[i] = agentctx.NewUserMessage("test")
 	}
 
 	if compactor.ShouldCompact(messages) {
@@ -123,9 +123,9 @@ func TestCompactFewMessages(t *testing.T) {
 	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
 
 	// With fewer messages than KeepRecent, should return as-is
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("Hello"),
-		agent.NewAssistantMessage(),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Hello"),
+		agentctx.NewAssistantMessage(),
 	}
 
 	result, err := compactor.Compact(messages, "")
@@ -139,12 +139,12 @@ func TestCompactFewMessages(t *testing.T) {
 }
 
 func TestSplitMessagesByTokenBudget(t *testing.T) {
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("aaaa"),
-		agent.NewUserMessage("bbbb"),
-		agent.NewUserMessage("cccc"),
-		agent.NewUserMessage("dddd"),
-		agent.NewUserMessage("eeee"),
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("aaaa"),
+		agentctx.NewUserMessage("bbbb"),
+		agentctx.NewUserMessage("cccc"),
+		agentctx.NewUserMessage("dddd"),
+		agentctx.NewUserMessage("eeee"),
 	}
 
 	oldMessages, recentMessages := splitMessagesByTokenBudget(messages, 2)

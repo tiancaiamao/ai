@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,8 +27,8 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 	}))
 	defer server.Close()
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("show me lines"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("show me lines"))
 
 	config := &LoopConfig{
 		Model: llm.Model{
@@ -60,7 +61,7 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 
 func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 	if _, err := wm.Load(); err != nil {
 		t.Fatalf("failed to initialize working memory: %v", err)
 	}
@@ -92,9 +93,9 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	}))
 	defer server.Close()
 
-	agentCtx := NewAgentContext("static system prompt")
+	agentCtx := agentctx.NewAgentContext("static system prompt")
 	agentCtx.WorkingMemory = wm
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
 		Model: llm.Model{

@@ -1,6 +1,7 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // Session represents a conversation session backed by an append-only JSONL file.
@@ -25,7 +25,7 @@ type Session struct {
 	leafID        *string
 	flushed       bool
 	persist       bool
-	workingMemory *agent.WorkingMemory // WorkingMemory for saving compaction summaries
+	workingMemory *agentctx.WorkingMemory // WorkingMemory for saving compaction summaries
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -35,7 +35,7 @@ type ForkMessage struct {
 }
 
 // NewSession creates a new session with the given directory path.
-func NewSession(sessionDir string, workingMemory *agent.WorkingMemory) *Session {
+func NewSession(sessionDir string, workingMemory *agentctx.WorkingMemory) *Session {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
@@ -51,7 +51,7 @@ func NewSession(sessionDir string, workingMemory *agent.WorkingMemory) *Session 
 }
 
 // LoadSession loads a session from the given directory path.
-func LoadSession(sessionDir string, workingMemory *agent.WorkingMemory) (*Session, error) {
+func LoadSession(sessionDir string, workingMemory *agentctx.WorkingMemory) (*Session, error) {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
@@ -107,12 +107,12 @@ func LoadSession(sessionDir string, workingMemory *agent.WorkingMemory) (*Sessio
 	}
 
 	// Legacy format: JSONL of AgentMessage objects.
-	legacyMessages := make([]agent.AgentMessage, 0)
+	legacyMessages := make([]agentctx.AgentMessage, 0)
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
-		var msg agent.AgentMessage
+		var msg agentctx.AgentMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
@@ -145,7 +145,7 @@ func LoadSession(sessionDir string, workingMemory *agent.WorkingMemory) (*Sessio
 }
 
 // GetMessages returns the current session context messages.
-func (s *Session) GetMessages() []agent.AgentMessage {
+func (s *Session) GetMessages() []agentctx.AgentMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return buildSessionContext(s.entries, s.leafID, s.byID)
@@ -242,7 +242,7 @@ func (s *Session) ResetLeaf() {
 }
 
 // AppendMessage appends a message entry and persists it.
-func (s *Session) AppendMessage(message agent.AgentMessage) (string, error) {
+func (s *Session) AppendMessage(message agentctx.AgentMessage) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -332,7 +332,7 @@ func (s *Session) GetLastCompactionSummary() string {
 }
 
 // SetWorkingMemory sets the working memory instance for the session.
-func (s *Session) SetWorkingMemory(wm *agent.WorkingMemory) {
+func (s *Session) SetWorkingMemory(wm *agentctx.WorkingMemory) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.workingMemory = wm
@@ -373,7 +373,7 @@ func (s *Session) GetUserMessagesForForking() []ForkMessage {
 }
 
 // SaveMessages replaces all messages and saves to disk as a new linear session.
-func (s *Session) SaveMessages(messages []agent.AgentMessage) error {
+func (s *Session) SaveMessages(messages []agentctx.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -398,7 +398,7 @@ func (s *Session) SaveMessages(messages []agent.AgentMessage) error {
 }
 
 // AddMessages adds new messages to the session.
-func (s *Session) AddMessages(messages ...agent.AgentMessage) error {
+func (s *Session) AddMessages(messages ...agentctx.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

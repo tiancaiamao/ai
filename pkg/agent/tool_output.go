@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
 	"strings"
 )
@@ -33,7 +34,7 @@ func DefaultToolOutputLimits() ToolOutputLimits {
 
 // truncateToolContent truncates tool content based on limits (legacy).
 // This is kept for backward compatibility and delegates to ToolOutputProcessor.
-func truncateToolContent(content []ContentBlock, limits ToolOutputLimits) []ContentBlock {
+func truncateToolContent(content []agentctx.ContentBlock, limits ToolOutputLimits) []agentctx.ContentBlock {
 	if len(content) == 0 {
 		return content
 	}
@@ -42,13 +43,13 @@ func truncateToolContent(content []ContentBlock, limits ToolOutputLimits) []Cont
 	processor := NewToolOutputProcessor(nil, limits.MaxChars)
 
 	// Process each content block
-	result := make([]ContentBlock, 0, len(content))
+	result := make([]agentctx.ContentBlock, 0, len(content))
 	for _, block := range content {
 		switch b := block.(type) {
-		case TextContent:
+		case agentctx.TextContent:
 			// Apply truncation to text content
 			processed := processor.ProcessOutput("", b.Text, false)
-			result = append(result, TextContent{
+			result = append(result, agentctx.TextContent{
 				Type: "text",
 				Text: processed,
 			})
@@ -69,7 +70,7 @@ func minInt(a, b int) int {
 }
 
 // ============================================================================
-// New Tool Output Processing System
+// New agentctx.Tool Output Processing System
 // ============================================================================
 
 // OutputStrategy defines how to process tool output.

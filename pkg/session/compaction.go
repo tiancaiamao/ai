@@ -1,13 +1,13 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
@@ -26,7 +26,7 @@ type CompactionResult struct {
 
 type messageRef struct {
 	EntryID  string
-	Message  agent.AgentMessage
+	Message  agentctx.AgentMessage
 	Cuttable bool
 }
 
@@ -259,8 +259,8 @@ func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
 	return refs
 }
 
-func refsToMessages(refs []messageRef) []agent.AgentMessage {
-	messages := make([]agent.AgentMessage, 0, len(refs))
+func refsToMessages(refs []messageRef) []agentctx.AgentMessage {
+	messages := make([]agentctx.AgentMessage, 0, len(refs))
 	for _, ref := range refs {
 		messages = append(messages, ref.Message)
 	}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"testing"
 	"time"
@@ -27,13 +28,13 @@ func (t *delayTool) Parameters() map[string]any {
 	}
 }
 
-func (t *delayTool) Execute(ctx context.Context, _ map[string]any) ([]ContentBlock, error) {
+func (t *delayTool) Execute(ctx context.Context, _ map[string]any) ([]agentctx.ContentBlock, error) {
 	select {
 	case <-time.After(t.delay):
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return []ContentBlock{TextContent{Type: "text", Text: t.name + " done"}}, nil
+	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: t.name + " done"}}, nil
 }
 
 type contextMutationTool struct {
@@ -54,29 +55,29 @@ func (t *contextMutationTool) Parameters() map[string]any {
 	}
 }
 
-func (t *contextMutationTool) Execute(ctx context.Context, _ map[string]any) ([]ContentBlock, error) {
-	current := ToolExecutionAgentContext(ctx)
+func (t *contextMutationTool) Execute(ctx context.Context, _ map[string]any) ([]agentctx.ContentBlock, error) {
+	current := agentctx.ToolExecutionAgentContext(ctx)
 	if current != nil {
-		current.Messages = append(current.Messages, NewUserMessage("mutated-by-tool"))
+		current.Messages = append(current.Messages, agentctx.NewUserMessage("mutated-by-tool"))
 	}
-	return []ContentBlock{TextContent{Type: "text", Text: "ok"}}, nil
+	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "ok"}}, nil
 }
 
-func newLoopTestEventStream() *llm.EventStream[AgentEvent, []AgentMessage] {
-	return llm.NewEventStream[AgentEvent, []AgentMessage](
+func newLoopTestEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+	return llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
-		func(e AgentEvent) []AgentMessage { return e.Messages },
+		func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
 	)
 }
 
 func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
-	assistant := NewAssistantMessage()
-	assistant.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.txt"}},
-		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "grep", Arguments: map[string]any{"pattern": "abc"}},
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.txt"}},
+		agentctx.ToolCallContent{ID: "call-2", Type: "toolCall", Name: "grep", Arguments: map[string]any{"pattern": "abc"}},
 	}
 
-	tools := []Tool{
+	tools := []agentctx.Tool{
 		&delayTool{name: "read", delay: 160 * time.Millisecond},
 		&delayTool{name: "grep", delay: 160 * time.Millisecond},
 	}
@@ -84,7 +85,7 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 	start := time.Now()
 	results := executeToolCalls(
 		context.Background(),
-		&AgentContext{},
+		&agentctx.AgentContext{},
 		tools,
 		nil, // allowedTools - nil means all tools allowed
 		&assistant,
@@ -108,19 +109,19 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 }
 
 func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
-	assistant := NewAssistantMessage()
-	assistant.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{}}, // invalid
-		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "grep", Arguments: map[string]any{"pattern": "abc"}},
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{}}, // invalid
+		agentctx.ToolCallContent{ID: "call-2", Type: "toolCall", Name: "grep", Arguments: map[string]any{"pattern": "abc"}},
 	}
 
-	tools := []Tool{
+	tools := []agentctx.Tool{
 		&delayTool{name: "grep", delay: 20 * time.Millisecond},
 	}
 
 	results := executeToolCalls(
 		context.Background(),
-		&AgentContext{},
+		&agentctx.AgentContext{},
 		tools,
 		nil, // allowedTools - nil means all tools allowed
 		&assistant,
@@ -145,18 +146,18 @@ func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
 }
 
 func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
-	assistant := NewAssistantMessage()
-	assistant.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "mutate", Arguments: map[string]any{}},
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "mutate", Arguments: map[string]any{}},
 	}
-	loopCtx := &AgentContext{
-		Messages: []AgentMessage{NewUserMessage("before")},
+	loopCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{agentctx.NewUserMessage("before")},
 	}
-	staleCtx := &AgentContext{
-		Messages: []AgentMessage{NewUserMessage("stale")},
+	staleCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{agentctx.NewUserMessage("stale")},
 	}
 
-	tools := []Tool{
+	tools := []agentctx.Tool{
 		&contextMutationTool{name: "mutate"},
 	}
 

@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // TestRPCServerCommands tests RPC command handling.
@@ -70,7 +70,7 @@ func TestRPCServerCommands(t *testing.T) {
 	server.SetGetMessagesHandler(func() ([]any, error) {
 		getMessagesCalled = true
 		return []any{
-			agent.NewUserMessage("test"),
+			agentctx.NewUserMessage("test"),
 		}, nil
 	})
 

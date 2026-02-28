@@ -5,11 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 func TestWorkingMemory_Load(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	content, err := wm.Load()
 	if err != nil {
@@ -24,7 +26,7 @@ func TestWorkingMemory_Load(t *testing.T) {
 
 func TestWorkingMemory_GetReminderUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	// Simulate rounds without update
 	for i := 0; i < 6; i++ {
@@ -54,7 +56,7 @@ func TestWorkingMemory_GetReminderUserMessage(t *testing.T) {
 
 func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	// Initially should not need reminder
 	if wm.NeedsReminderMessage() {
@@ -62,21 +64,21 @@ func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 	}
 
 	// Increment rounds but not enough
-	for i := 0; i < maxRoundsWithoutUpdate-1; i++ {
+	for i := 0; i < agentctx.MaxRoundsWithoutUpdate-1; i++ {
 		wm.IncrementRound()
 	}
 	if wm.NeedsReminderMessage() {
-		t.Fatalf("Should not need reminder before %d rounds", maxRoundsWithoutUpdate)
+		t.Fatalf("Should not need reminder before %d rounds", agentctx.MaxRoundsWithoutUpdate)
 	}
 
 	// Increment to threshold
 	wm.IncrementRound()
 	if !wm.NeedsReminderMessage() {
-		t.Fatalf("Should need reminder at %d rounds", maxRoundsWithoutUpdate)
+		t.Fatalf("Should need reminder at %d rounds", agentctx.MaxRoundsWithoutUpdate)
 	}
 
 	// Mark updated should reset
-	wm.MarkUpdated(0, true)
+	wm.MarkUpdated(0, false)
 	if wm.NeedsReminderMessage() {
 		t.Error("Should not need reminder after update")
 	}
@@ -84,7 +86,7 @@ func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 
 func TestWorkingMemory_MarkUpdated(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	// Simulate rounds
 	for i := 0; i < 6; i++ {
@@ -96,7 +98,7 @@ func TestWorkingMemory_MarkUpdated(t *testing.T) {
 	}
 
 	// Mark updated
-	wm.MarkUpdated(0, true)
+	wm.MarkUpdated(0, false)
 
 	if wm.GetRoundsSinceUpdate() != 0 {
 		t.Fatalf("Expected 0 rounds after update, got %d", wm.GetRoundsSinceUpdate())
@@ -105,7 +107,7 @@ func TestWorkingMemory_MarkUpdated(t *testing.T) {
 
 func TestWorkingMemory_PathMethods(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	expectedOverview := filepath.Join(sessionDir, "working-memory", "overview.md")
 	if wm.GetPath() != expectedOverview {
@@ -120,7 +122,7 @@ func TestWorkingMemory_PathMethods(t *testing.T) {
 
 func TestWorkingMemory_DirectoryCreation(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	// Load should create directories
 	_, err := wm.Load()
@@ -147,7 +149,7 @@ func TestWorkingMemory_DirectoryCreation(t *testing.T) {
 
 func TestWorkingMemory_ContextMeta(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
 	wm.UpdateMeta(50000, 128000, 25)
 

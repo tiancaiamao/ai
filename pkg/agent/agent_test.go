@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"testing"
@@ -118,17 +119,17 @@ type mockCompactor struct {
 	called        bool
 }
 
-func (m *mockCompactor) ShouldCompact(messages []AgentMessage) bool {
+func (m *mockCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 	m.called = true
 	return m.shouldCompact
 }
 
-func (m *mockCompactor) Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (m *mockCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	// Return simplified messages
 	return &CompactionResult{
 		Summary: "[Summary]",
-		Messages: []AgentMessage{
-			NewUserMessage("[Summary]"),
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("[Summary]"),
 		},
 	}, nil
 }
@@ -166,7 +167,7 @@ func TestAgentContext(t *testing.T) {
 	}
 
 	// Test setting context
-	newCtx := NewAgentContext("new system prompt")
+	newCtx := agentctx.NewAgentContext("new system prompt")
 	agent.SetContext(newCtx)
 
 	retrievedCtx := agent.GetContext()
@@ -176,7 +177,7 @@ func TestAgentContext(t *testing.T) {
 
 	// Existing tools should not be dropped when replacing context.
 	agent.AddTool(&mockTool{name: "ctx_tool"})
-	agent.SetContext(NewAgentContext("another prompt"))
+	agent.SetContext(agentctx.NewAgentContext("another prompt"))
 	if len(agent.GetContext().Tools) != 1 {
 		t.Fatalf("expected tools to be preserved on SetContext, got %d", len(agent.GetContext().Tools))
 	}
@@ -223,14 +224,14 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 	origRunLoop := runLoopFn
 	defer func() { runLoopFn = origRunLoop }()
 
-	finalMessages := []AgentMessage{
-		NewUserMessage("compacted history state"),
+	finalMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("compacted history state"),
 	}
 
-	runLoopFn = func(_ context.Context, _ []AgentMessage, _ *AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []AgentMessage] {
-		stream := llm.NewEventStream[AgentEvent, []AgentMessage](
+	runLoopFn = func(_ context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+		stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
-			func(e AgentEvent) []AgentMessage { return e.Messages },
+			func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
 		)
 		go func() {
 			stream.Push(NewAgentStartEvent())
@@ -242,10 +243,10 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 
 	ag := NewAgent(llm.Model{}, "test-key", "test")
 	defer ag.Shutdown()
-	ag.SetContext(&AgentContext{
+	ag.SetContext(&agentctx.AgentContext{
 		SystemPrompt: "test",
-		Messages: []AgentMessage{
-			NewUserMessage("before-compact"),
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("before-compact"),
 		},
 	})
 
@@ -260,7 +261,7 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 	}
 }
 
-// mockTool is a test double for Tool.
+// mockTool is a test double for agentctx.Tool.
 type mockTool struct {
 	name string
 }
@@ -282,9 +283,9 @@ func (m *mockTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (m *mockTool) Execute(ctx context.Context, args map[string]interface{}) ([]ContentBlock, error) {
-	return []ContentBlock{
-		TextContent{Type: "text", Text: "Mock result"},
+func (m *mockTool) Execute(ctx context.Context, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "Mock result"},
 	}, nil
 }
 

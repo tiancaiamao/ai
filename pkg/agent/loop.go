@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,7 +34,7 @@ const (
 type LoopConfig struct {
 	Model                   llm.Model
 	APIKey                  string
-	Executor                *ExecutorPool // Tool executor with concurrency control
+	Executor                *ExecutorPool // agentctx.Tool executor with concurrency control
 	Metrics                 *Metrics      // Metrics collector
 	ToolOutput              ToolOutputLimits
 	Compactor               Compactor     // Optional compactor for context-length recovery
@@ -157,20 +158,20 @@ func classifyLLMError(err error) llmErrorMeta {
 // RunLoop starts a new agent loop with the given prompts.
 func RunLoop(
 	ctx context.Context,
-	prompts []AgentMessage,
-	agentCtx *AgentContext,
+	prompts []agentctx.AgentMessage,
+	agentCtx *agentctx.AgentContext,
 	config *LoopConfig,
-) *llm.EventStream[AgentEvent, []AgentMessage] {
-	stream := llm.NewEventStream[AgentEvent, []AgentMessage](
+) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+	stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
-		func(e AgentEvent) []AgentMessage { return e.Messages },
+		func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
 	)
 
 	go func() {
 		defer stream.End(nil)
 
-		newMessages := append([]AgentMessage{}, prompts...)
-		currentCtx := &AgentContext{
+		newMessages := append([]agentctx.AgentMessage{}, prompts...)
+		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:  agentCtx.SystemPrompt,
 			Messages:      append(agentCtx.Messages, prompts...),
 			Tools:         agentCtx.Tools,
@@ -194,10 +195,10 @@ func RunLoop(
 // runInnerLoop contains the core loop logic.
 func runInnerLoop(
 	ctx context.Context,
-	agentCtx *AgentContext,
-	newMessages []AgentMessage,
+	agentCtx *agentctx.AgentContext,
+	newMessages []agentctx.AgentMessage,
 	config *LoopConfig,
-	stream *llm.EventStream[AgentEvent, []AgentMessage],
+	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 ) {
 	span := traceevent.StartSpan(ctx, "runInnerLoop", traceevent.CategoryEvent)
 	defer span.End()
@@ -361,7 +362,7 @@ func runInnerLoop(
 		agentCtx.Messages = append(agentCtx.Messages, *msg)
 		newMessages = append(newMessages, *msg)
 
-		// Update WorkingMemory meta after successful LLM response
+		// Update agentctx.WorkingMemory meta after successful LLM response
 		if agentCtx.WorkingMemory != nil && msg.Usage != nil {
 			// Use context window from config if available, otherwise use a default
 			tokensMax := 128000 // default context window
@@ -405,7 +406,7 @@ func runInnerLoop(
 			}
 		}
 
-		var toolResults []AgentMessage
+		var toolResults []agentctx.AgentMessage
 		if hasMoreToolCalls {
 			toolResults = executeToolCalls(ctx, agentCtx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
 			for _, result := range toolResults {
@@ -431,7 +432,7 @@ func runInnerLoop(
 							// Convert to absolute path for comparison
 							absPath := filepath.Clean(path)
 							wmPath := agentCtx.WorkingMemory.GetPath()
-							if absPath == wmPath || filepath.Base(absPath) == overviewFile {
+							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
 								agentCtx.WorkingMemory.MarkUpdatedAfterToolCall(10)
 							}
 						}
@@ -489,7 +490,7 @@ func resolveLoopGuardLimit(value, defaultValue int) int {
 	return value
 }
 
-func (g *toolLoopGuard) Observe(toolCalls []ToolCallContent) (bool, string) {
+func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, string) {
 	for _, tc := range toolCalls {
 		name := strings.ToLower(strings.TrimSpace(tc.Name))
 		if name == "" {
@@ -516,21 +517,21 @@ func (g *toolLoopGuard) Observe(toolCalls []ToolCallContent) (bool, string) {
 	return false, ""
 }
 
-func sanitizeMessageForToolLoopGuard(msg *AgentMessage, reason string) {
+func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) {
 	if msg == nil {
 		return
 	}
 
-	filtered := make([]ContentBlock, 0, len(msg.Content)+1)
+	filtered := make([]agentctx.ContentBlock, 0, len(msg.Content)+1)
 	for _, block := range msg.Content {
 		switch block.(type) {
-		case ToolCallContent:
+		case agentctx.ToolCallContent:
 			continue
 		default:
 			filtered = append(filtered, block)
 		}
 	}
-	filtered = append(filtered, TextContent{
+	filtered = append(filtered, agentctx.TextContent{
 		Type: "text",
 		Text: "\n\n[Loop guard] Stopped repeated tool execution to prevent an infinite loop.\nReason: " + strings.TrimSpace(reason),
 	})
@@ -540,10 +541,10 @@ func sanitizeMessageForToolLoopGuard(msg *AgentMessage, reason string) {
 
 func maybeRecoverMalformedToolCall(
 	ctx context.Context,
-	agentCtx *AgentContext,
-	newMessages *[]AgentMessage,
-	stream *llm.EventStream[AgentEvent, []AgentMessage],
-	msg *AgentMessage,
+	agentCtx *agentctx.AgentContext,
+	newMessages *[]agentctx.AgentMessage,
+	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	msg *agentctx.AgentMessage,
 	recoveryCount *int,
 ) bool {
 	if msg == nil || agentCtx == nil || recoveryCount == nil {
@@ -582,7 +583,7 @@ func maybeRecoverMalformedToolCall(
 	return true
 }
 
-func shouldRecoverMalformedToolCall(msg *AgentMessage) (bool, string) {
+func shouldRecoverMalformedToolCall(msg *agentctx.AgentMessage) (bool, string) {
 	if msg == nil || len(msg.ExtractToolCalls()) > 0 {
 		return false, ""
 	}
@@ -625,27 +626,27 @@ func shouldRecoverMalformedToolCall(msg *AgentMessage) (bool, string) {
 	return false, ""
 }
 
-func buildMalformedToolCallRecoveryMessage(reason string, attempt int) AgentMessage {
+func buildMalformedToolCallRecoveryMessage(reason string, attempt int) agentctx.AgentMessage {
 	cleanReason := strings.TrimSpace(reason)
 	if cleanReason == "" {
 		cleanReason = "unknown parse failure"
 	}
 
 	text := fmt.Sprintf(
-		"[Tool-call recovery, attempt %d] Your previous response attempted a tool invocation but the tool call format was invalid (%s). Re-emit the intended call using valid tool/function-call syntax only. If no tool is needed, provide the final answer directly.",
+		"[agentctx.Tool-call recovery, attempt %d] Your previous response attempted a tool invocation but the tool call format was invalid (%s). Re-emit the intended call using valid tool/function-call syntax only. If no tool is needed, provide the final answer directly.",
 		attempt,
 		truncateLine(cleanReason, 220),
 	)
-	return NewUserMessage(text).WithVisibility(true, false).WithKind("tool_call_repair")
+	return agentctx.NewUserMessage(text).WithVisibility(true, false).WithKind("tool_call_repair")
 }
 
 // streamAssistantResponseWithRetry streams the assistant's response with retry logic.
 func streamAssistantResponseWithRetry(
 	ctx context.Context,
-	agentCtx *AgentContext,
+	agentCtx *agentctx.AgentContext,
 	config *LoopConfig,
-	stream *llm.EventStream[AgentEvent, []AgentMessage],
-) (*AgentMessage, error) {
+	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+) (*agentctx.AgentMessage, error) {
 	span := traceevent.StartSpan(ctx, "streamAssistantResponseWithRetry", traceevent.CategoryEvent)
 	defer span.End()
 
@@ -769,10 +770,10 @@ func streamAssistantResponseWithRetry(
 // streamAssistantResponse streams the assistant's response from the LLM.
 func streamAssistantResponse(
 	ctx context.Context,
-	agentCtx *AgentContext,
+	agentCtx *agentctx.AgentContext,
 	config *LoopConfig,
-	stream *llm.EventStream[AgentEvent, []AgentMessage],
-) (*AgentMessage, error) {
+	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+) (*agentctx.AgentMessage, error) {
 	thinkingLevel := prompt.NormalizeThinkingLevel(config.ThinkingLevel)
 
 	// Create timeout context for LLM calls
@@ -892,14 +893,14 @@ func streamAssistantResponse(
 		arguments string
 	}
 
-	var partialMessage *AgentMessage
+	var partialMessage *agentctx.AgentMessage
 	var textBuilder strings.Builder
 	toolCalls := map[int]*toolCallState{}
 
-	buildContent := func(text string, calls map[int]*toolCallState) []ContentBlock {
-		content := make([]ContentBlock, 0, 1+len(calls))
+	buildContent := func(text string, calls map[int]*toolCallState) []agentctx.ContentBlock {
+		content := make([]agentctx.ContentBlock, 0, 1+len(calls))
 		if text != "" {
-			content = append(content, TextContent{
+			content = append(content, agentctx.TextContent{
 				Type: "text",
 				Text: text,
 			})
@@ -924,7 +925,7 @@ func streamAssistantResponse(
 				}
 			}
 
-			content = append(content, ToolCallContent{
+			content = append(content, agentctx.ToolCallContent{
 				ID:        call.id,
 				Type:      "toolCall",
 				Name:      call.name,
@@ -942,8 +943,8 @@ func streamAssistantResponse(
 
 		switch e := event.Value.(type) {
 		case llm.LLMStartEvent:
-			partialMessage = new(AgentMessage)
-			*partialMessage = NewAssistantMessage()
+			partialMessage = new(agentctx.AgentMessage)
+			*partialMessage = agentctx.NewAssistantMessage()
 			textBuilder.Reset()
 			toolCalls = map[int]*toolCallState{}
 			stream.Push(NewMessageStartEvent(*partialMessage))
@@ -985,7 +986,7 @@ func streamAssistantResponse(
 					traceevent.Field{Key: "delta", Value: e.Delta},
 				)
 				// Add thinking content to the message
-				thinkingContent := ThinkingContent{
+				thinkingContent := agentctx.ThinkingContent{
 					Type:     "thinking",
 					Thinking: e.Delta,
 				}
@@ -1055,7 +1056,7 @@ func streamAssistantResponse(
 					ContentIndex: 0,
 				}))
 			}
-			var finalMessage AgentMessage
+			var finalMessage agentctx.AgentMessage
 			if partialMessage != nil {
 				// Prefer the incrementally built message so thinking/tool-tag content
 				// emitted via deltas is not lost when done payload omits it.
@@ -1063,7 +1064,7 @@ func streamAssistantResponse(
 			} else if e.Message != nil {
 				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
-				finalMessage = NewAssistantMessage()
+				finalMessage = agentctx.NewAssistantMessage()
 			}
 
 			finalMessage.API = config.Model.API
@@ -1071,7 +1072,7 @@ func streamAssistantResponse(
 			finalMessage.Model = config.Model.ID
 			finalMessage.Timestamp = time.Now().UnixMilli()
 			finalMessage.StopReason = e.StopReason
-			finalMessage.Usage = &Usage{
+			finalMessage.Usage = &agentctx.Usage{
 				InputTokens:  e.Usage.InputTokens,
 				OutputTokens: e.Usage.OutputTokens,
 				TotalTokens:  e.Usage.TotalTokens,
@@ -1255,15 +1256,15 @@ func hashAny(value any) string {
 // executeToolCalls executes tool calls from an assistant message.
 func executeToolCalls(
 	ctx context.Context,
-	agentCtx *AgentContext,
-	tools []Tool,
+	agentCtx *agentctx.AgentContext,
+	tools []agentctx.Tool,
 	allowedTools map[string]bool,
-	assistantMsg *AgentMessage,
-	stream *llm.EventStream[AgentEvent, []AgentMessage],
+	assistantMsg *agentctx.AgentMessage,
+	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 	executor *ExecutorPool,
 	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
-) []AgentMessage {
+) []agentctx.AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
 	if len(toolCalls) == 0 {
 		return nil
@@ -1271,20 +1272,20 @@ func executeToolCalls(
 
 	type toolExecutionPlan struct {
 		index      int
-		normalized ToolCallContent
-		tool       Tool
+		normalized agentctx.ToolCallContent
+		tool       agentctx.Tool
 		span       *traceevent.Span
 	}
 	type toolExecutionOutcome struct {
 		plan     toolExecutionPlan
-		content  []ContentBlock
+		content  []agentctx.ContentBlock
 		err      error
 		duration time.Duration
 	}
 
-	resultsByIndex := make([]*AgentMessage, len(toolCalls))
+	resultsByIndex := make([]*agentctx.AgentMessage, len(toolCalls))
 	plans := make([]toolExecutionPlan, 0, len(toolCalls))
-	toolsByName := make(map[string]Tool, len(tools))
+	toolsByName := make(map[string]agentctx.Tool, len(tools))
 	for _, tool := range tools {
 		toolsByName[tool.Name()] = tool
 	}
@@ -1341,8 +1342,8 @@ func executeToolCalls(
 				traceevent.Field{Key: "error", Value: argErr.Error()},
 			)
 			errorMsg := buildInvalidToolArgsMessage(normalized.Name, argErr)
-			result := NewToolResultMessage(normalized.ID, normalized.Name, []ContentBlock{
-				TextContent{Type: "text", Text: errorMsg},
+			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: errorMsg},
 			}, true)
 			stream.Push(NewToolExecutionStartEvent(normalized.ID, normalized.Name, normalized.Arguments))
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
@@ -1377,10 +1378,10 @@ func executeToolCalls(
 				"tool", normalized.Name,
 				"rawName", rawName,
 				"availableTools", availableToolNames)
-			content := truncateToolContent([]ContentBlock{
-				TextContent{Type: "text", Text: "Tool not found"},
+			content := truncateToolContent([]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "agentctx.Tool not found"},
 			}, toolOutputLimits)
-			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
+			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 				traceevent.Field{Key: "tool", Value: normalized.Name},
@@ -1407,10 +1408,10 @@ func executeToolCalls(
 			slog.Warn("[Loop] tool not allowed by whitelist",
 				"tool", normalized.Name,
 				"toolCallID", normalized.ID)
-			content := truncateToolContent([]ContentBlock{
-				TextContent{Type: "text", Text: fmt.Sprintf("Tool %q is not allowed in this context", normalized.Name)},
+			content := truncateToolContent([]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("agentctx.Tool %q is not allowed in this context", normalized.Name)},
 			}, toolOutputLimits)
-			result := NewToolResultMessage(normalized.ID, normalized.Name, content, true)
+			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 				traceevent.Field{Key: "tool", Value: normalized.Name},
@@ -1434,14 +1435,14 @@ func executeToolCalls(
 
 	outcomes := make(chan toolExecutionOutcome, len(plans))
 	var wg sync.WaitGroup
-	toolExecCtx := WithToolExecutionAgentContext(ctx, agentCtx)
+	toolExecCtx := agentctx.WithToolExecutionAgentContext(ctx, agentCtx)
 
 	for _, plan := range plans {
 		wg.Add(1)
 		go func(plan toolExecutionPlan) {
 			defer wg.Done()
 			start := time.Now()
-			var content []ContentBlock
+			var content []agentctx.ContentBlock
 			var err error
 			if executor != nil {
 				content, err = executor.Execute(toolExecCtx, plan.tool, plan.normalized.Arguments)
@@ -1470,12 +1471,12 @@ func executeToolCalls(
 		if !ok {
 			continue
 		}
-		var result AgentMessage
+		var result agentctx.AgentMessage
 		if outcome.err != nil {
-			content := truncateToolContent([]ContentBlock{
-				TextContent{Type: "text", Text: outcome.err.Error()},
+			content := truncateToolContent([]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: outcome.err.Error()},
 			}, toolOutputLimits)
-			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
+			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, true))
 			plan.span.AddField("error", true)
 			plan.span.AddField("error_message", outcome.err.Error())
@@ -1489,7 +1490,7 @@ func executeToolCalls(
 			)
 		} else {
 			content := truncateToolContent(outcome.content, toolOutputLimits)
-			result = NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
+			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, false))
 			plan.span.AddField("error", false)
 			plan.span.End()
@@ -1505,7 +1506,7 @@ func executeToolCalls(
 		resultsByIndex[plan.index] = &resultCopy
 	}
 
-	results := make([]AgentMessage, 0, len(toolCalls))
+	results := make([]agentctx.AgentMessage, 0, len(toolCalls))
 	for _, result := range resultsByIndex {
 		if result != nil {
 			results = append(results, *result)
@@ -1550,13 +1551,13 @@ Alternatively:
 
 // extractRecentMessages extracts recent messages from the message list.
 // It keeps messages within the token budget, starting from the most recent.
-func extractRecentMessages(messages []AgentMessage, tokenBudget int) []AgentMessage {
+func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []agentctx.AgentMessage {
 	if len(messages) == 0 {
 		return messages
 	}
 
 	// First, filter to only agent-visible messages
-	visible := make([]AgentMessage, 0, len(messages))
+	visible := make([]agentctx.AgentMessage, 0, len(messages))
 	for _, msg := range messages {
 		if msg.IsAgentVisible() {
 			visible = append(visible, msg)
@@ -1592,7 +1593,7 @@ func extractRecentMessages(messages []AgentMessage, tokenBudget int) []AgentMess
 	result := visible[start:]
 
 	// Skip leading tool/toolResult messages to ensure valid message sequence.
-	// Tool messages must follow an assistant message with tool_calls.
+	// agentctx.Tool messages must follow an assistant message with tool_calls.
 	// If we truncated in the middle of a tool call sequence, drop the orphaned tool results.
 	for len(result) > 0 && (result[0].Role == "tool" || result[0].Role == "toolResult") {
 		result = result[1:]
@@ -1601,7 +1602,7 @@ func extractRecentMessages(messages []AgentMessage, tokenBudget int) []AgentMess
 	return result
 }
 
-func estimateConversationTokens(messages []AgentMessage) int {
+func estimateConversationTokens(messages []agentctx.AgentMessage) int {
 	total := 0
 	for _, msg := range messages {
 		total += estimateMessageTokens(msg)
@@ -1612,12 +1613,12 @@ func estimateConversationTokens(messages []AgentMessage) int {
 // extractActiveTurnMessages returns only messages in the active turn window.
 // The window starts from the most recent agent-visible user message so prior
 // history is excluded while current tool-call protocol context is preserved.
-func extractActiveTurnMessages(messages []AgentMessage, tokenBudget int) []AgentMessage {
+func extractActiveTurnMessages(messages []agentctx.AgentMessage, tokenBudget int) []agentctx.AgentMessage {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	visible := make([]AgentMessage, 0, len(messages))
+	visible := make([]agentctx.AgentMessage, 0, len(messages))
 	for _, msg := range messages {
 		if msg.IsAgentVisible() {
 			visible = append(visible, msg)
@@ -1642,7 +1643,7 @@ func extractActiveTurnMessages(messages []AgentMessage, tokenBudget int) []Agent
 	return extractRecentMessages(active, tokenBudget)
 }
 
-func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason string, contextWindow int) ([]AgentMessage, string) {
+func selectMessagesForLLM(agentCtx *agentctx.AgentContext, injectHistory bool, reason string, contextWindow int) ([]agentctx.AgentMessage, string) {
 	if agentCtx == nil {
 		return nil, "empty_context"
 	}
@@ -1671,13 +1672,16 @@ func selectMessagesForLLM(agentCtx *AgentContext, injectHistory bool, reason str
 
 
 // shouldInjectHistory decides whether full history should be included.
-func shouldInjectHistory(agentCtx *AgentContext, config *LoopConfig) (bool, string) {
+func shouldInjectHistory(agentCtx *agentctx.AgentContext, config *LoopConfig) (bool, string) {
 	return true, "always_inject"
 }
 
-func hasSuccessfulWorkingMemoryWrite(messages []AgentMessage, overviewPath string) bool {
+
+
+
+func hasSuccessfulWorkingMemoryWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
 	targetAbs := normalizePathForContains(overviewPath)
-	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(workingMemoryDir, overviewFile)))
+	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.WorkingMemoryDir, agentctx.OverviewFile)))
 	allowRelativeFallback := targetAbs == "" && targetRel != ""
 	if targetAbs == "" && !allowRelativeFallback {
 		return false
@@ -1703,6 +1707,17 @@ func hasSuccessfulWorkingMemoryWrite(messages []AgentMessage, overviewPath strin
 		}
 	}
 	return false
+}
+
+func normalizeWorkingMemoryContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.TrimSpace(content)
+	lines := strings.Split(content, "\n")
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		normalized = append(normalized, strings.TrimRight(line, " \t"))
+	}
+	return strings.Join(normalized, "\n")
 }
 
 func normalizePathForContains(value string) string {
@@ -1738,7 +1753,7 @@ func buildRuntimeSystemAppendix(workingMemoryContent, runtimeMetaSnapshot string
 	return buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot)
 }
 
-func updateRuntimeMetaSnapshot(agentCtx *AgentContext, meta ContextMeta, heartbeatTurns int) (string, bool) {
+func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.ContextMeta, heartbeatTurns int) (string, bool) {
 	if agentCtx == nil {
 		return "", false
 	}
@@ -1746,15 +1761,15 @@ func updateRuntimeMetaSnapshot(agentCtx *AgentContext, meta ContextMeta, heartbe
 		heartbeatTurns = defaultRuntimeMetaHeartbeatTurns
 	}
 
-	agentCtx.runtimeMetaTurns++
+	agentCtx.RuntimeMetaTurns++
 	band := runtimeTokenBand(meta.TokensPercent)
 
-	shouldRefresh := strings.TrimSpace(agentCtx.runtimeMetaSnapshot) == "" ||
-		agentCtx.runtimeMetaBand != band ||
-		agentCtx.runtimeMetaTurns >= heartbeatTurns
+	shouldRefresh := strings.TrimSpace(agentCtx.RuntimeMetaSnapshot) == "" ||
+		agentCtx.RuntimeMetaBand != band ||
+		agentCtx.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
-		return agentCtx.runtimeMetaSnapshot, false
+		return agentCtx.RuntimeMetaSnapshot, false
 	}
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
@@ -1792,9 +1807,9 @@ guidance:
 		yesNo(fastPathAllowed),
 	)
 
-	agentCtx.runtimeMetaSnapshot = snapshot
-	agentCtx.runtimeMetaBand = band
-	agentCtx.runtimeMetaTurns = 0
+	agentCtx.RuntimeMetaSnapshot = snapshot
+	agentCtx.RuntimeMetaBand = band
+	agentCtx.RuntimeMetaTurns = 0
 
 	return snapshot, true
 }
@@ -1805,7 +1820,7 @@ type runtimeToolPressure struct {
 	LargestChars int
 }
 
-func collectRuntimeToolPressure(messages []AgentMessage) runtimeToolPressure {
+func collectRuntimeToolPressure(messages []agentctx.AgentMessage) runtimeToolPressure {
 	pressure := runtimeToolPressure{}
 	if len(messages) == 0 {
 		return pressure
@@ -1958,7 +1973,7 @@ func normalizeApprox(value int) int {
 }
 
 // estimateMessageTokens estimates token count for a message.
-func estimateMessageTokens(msg AgentMessage) int {
+func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
 	}
@@ -1966,18 +1981,18 @@ func estimateMessageTokens(msg AgentMessage) int {
 	charCount := 0
 	for _, block := range msg.Content {
 		switch b := block.(type) {
-		case TextContent:
+		case agentctx.TextContent:
 			charCount += len(b.Text)
-		case ThinkingContent:
+		case agentctx.ThinkingContent:
 			charCount += len(b.Thinking)
-		case ToolCallContent:
+		case agentctx.ToolCallContent:
 			charCount += len(b.Name)
 			if b.Arguments != nil {
 				if argBytes, err := json.Marshal(b.Arguments); err == nil {
 					charCount += len(argBytes)
 				}
 			}
-		case ImageContent:
+		case agentctx.ImageContent:
 			// Roughly estimate images as 1200 tokens (4800 chars)
 			charCount += 4800
 		}

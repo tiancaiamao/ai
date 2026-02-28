@@ -1,4 +1,4 @@
-package memory
+package context
 
 // MemorySource identifies where a memory entry originates
 type MemorySource string

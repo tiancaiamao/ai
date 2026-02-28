@@ -1,6 +1,7 @@
 package compact
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 
 	"log/slog"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -70,7 +70,7 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 }
 
 // ShouldCompact determines if context should be compressed.
-func (c *Compactor) ShouldCompact(messages []agent.AgentMessage) bool {
+func (c *Compactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 	if !c.config.AutoCompact {
 		return false
 	}
@@ -167,14 +167,14 @@ func estimateStringTokens(s string) int {
 // CompactionResult contains the result of a compaction operation.
 type CompactionResult struct {
 	Summary      string               // The generated summary
-	Messages     []agent.AgentMessage // The compressed message list
+	Messages     []agentctx.AgentMessage // The compressed message list
 	TokensBefore int                  // Token count before compaction
 	TokensAfter  int                  // Token count after compaction
 }
 
 // Compact compresses the context by summarizing old messages.
 // If previousSummary is non-empty, it will be used to incrementally update the summary.
-func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	if len(messages) == 0 {
 		return &CompactionResult{
 			Messages:     messages,
@@ -185,8 +185,8 @@ func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary strin
 
 	// Use dynamic keep-recent budget
 	keepRecentTokens := c.calculateKeepRecentBudget()
-	var oldMessages []agent.AgentMessage
-	var recentMessages []agent.AgentMessage
+	var oldMessages []agentctx.AgentMessage
+	var recentMessages []agentctx.AgentMessage
 	if keepRecentTokens > 0 {
 		oldMessages, recentMessages = splitMessagesByTokenBudget(messages, keepRecentTokens)
 		if len(oldMessages) == 0 {
@@ -231,8 +231,8 @@ func (c *Compactor) Compact(messages []agent.AgentMessage, previousSummary strin
 	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
 
 	// Create new context with summary + recent messages
-	newMessages := []agent.AgentMessage{
-		agent.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
+	newMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
 	}
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
@@ -343,12 +343,12 @@ Keep ALL sections. If empty, write "None yet."
 Output the updated summary using the same format. This matters.`
 
 // GenerateSummary generates a structured summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(messages []agent.AgentMessage) (string, error) {
+func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
 	return c.GenerateSummaryWithPrevious(messages, "")
 }
 
 // GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
-func (c *Compactor) GenerateSummaryWithPrevious(messages []agent.AgentMessage, previousSummary string) (string, error) {
+func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, previousSummary string) (string, error) {
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages to summarize")
 	}
@@ -474,7 +474,7 @@ func (c *Compactor) EffectiveTokenLimit() (int, string) {
 }
 
 // EstimateTokens provides a rough estimation of token count.
-func (c *Compactor) EstimateTokens(messages []agent.AgentMessage) int {
+func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
 	totalTokens := 0
 	for _, msg := range messages {
 		if !msg.IsAgentVisible() {
@@ -486,7 +486,7 @@ func (c *Compactor) EstimateTokens(messages []agent.AgentMessage) int {
 }
 
 // EstimateContextTokens estimates context tokens using usage when available.
-func (c *Compactor) EstimateContextTokens(messages []agent.AgentMessage) int {
+func (c *Compactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
 	systemPromptTokens := 0
 	if c != nil && strings.TrimSpace(c.systemPrompt) != "" {
 		systemPromptTokens = int(math.Ceil(float64(len(c.systemPrompt)) / 4.0))
@@ -505,7 +505,7 @@ func (c *Compactor) EstimateContextTokens(messages []agent.AgentMessage) int {
 
 // CompactIfNeeded compacts the context if it exceeds limits.
 // Returns the compacted messages and the summary (if compaction occurred).
-func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage, previousSummary string) ([]agent.AgentMessage, *CompactionResult, error) {
+func (c *Compactor) CompactIfNeeded(messages []agentctx.AgentMessage, previousSummary string) ([]agentctx.AgentMessage, *CompactionResult, error) {
 	if c.ShouldCompact(messages) {
 		result, err := c.Compact(messages, previousSummary)
 		if err != nil {
@@ -516,7 +516,7 @@ func (c *Compactor) CompactIfNeeded(messages []agent.AgentMessage, previousSumma
 	return messages, nil, nil
 }
 
-func lastAssistantUsageTokens(messages []agent.AgentMessage) (int, int) {
+func lastAssistantUsageTokens(messages []agentctx.AgentMessage) (int, int) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if !msg.IsAgentVisible() {
@@ -537,7 +537,7 @@ func lastAssistantUsageTokens(messages []agent.AgentMessage) (int, int) {
 	return 0, -1
 }
 
-func usageTotalTokens(usage *agent.Usage) int {
+func usageTotalTokens(usage *agentctx.Usage) int {
 	if usage == nil {
 		return 0
 	}
@@ -547,7 +547,7 @@ func usageTotalTokens(usage *agent.Usage) int {
 	return usage.InputTokens + usage.OutputTokens + usage.CacheRead + usage.CacheWrite
 }
 
-func estimateMessageTokens(msg agent.AgentMessage) int {
+func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
 	}
@@ -555,18 +555,18 @@ func estimateMessageTokens(msg agent.AgentMessage) int {
 	charCount := 0
 	for _, block := range msg.Content {
 		switch b := block.(type) {
-		case agent.TextContent:
+		case agentctx.TextContent:
 			charCount += len(b.Text)
-		case agent.ThinkingContent:
+		case agentctx.ThinkingContent:
 			charCount += len(b.Thinking)
-		case agent.ToolCallContent:
+		case agentctx.ToolCallContent:
 			charCount += len(b.Name)
 			if b.Arguments != nil {
 				if argBytes, err := json.Marshal(b.Arguments); err == nil {
 					charCount += len(argBytes)
 				}
 			}
-		case agent.ImageContent:
+		case agentctx.ImageContent:
 			// Roughly estimate images as 1200 tokens (4800 chars).
 			charCount += 4800
 		}
@@ -581,14 +581,14 @@ func estimateMessageTokens(msg agent.AgentMessage) int {
 }
 
 // EstimateMessageTokens estimates token usage for a single message.
-func EstimateMessageTokens(msg agent.AgentMessage) int {
+func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 	return estimateMessageTokens(msg)
 }
 
 func splitMessagesByTokenBudget(
-	messages []agent.AgentMessage,
+	messages []agentctx.AgentMessage,
 	tokenBudget int,
-) ([]agent.AgentMessage, []agent.AgentMessage) {
+) ([]agentctx.AgentMessage, []agentctx.AgentMessage) {
 	if len(messages) == 0 {
 		return messages, nil
 	}
@@ -617,7 +617,7 @@ func splitMessagesByTokenBudget(
 	return messages[:start], messages[start:]
 }
 
-func serializeConversation(messages []agent.AgentMessage) string {
+func serializeConversation(messages []agentctx.AgentMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		if !msg.IsAgentVisible() {
@@ -635,15 +635,15 @@ func serializeConversation(messages []agent.AgentMessage) string {
 			toolCalls := make([]string, 0)
 			for _, block := range msg.Content {
 				switch b := block.(type) {
-				case agent.TextContent:
+				case agentctx.TextContent:
 					if b.Text != "" {
 						textParts = append(textParts, b.Text)
 					}
-				case agent.ThinkingContent:
+				case agentctx.ThinkingContent:
 					if b.Thinking != "" {
 						thinkingParts = append(thinkingParts, b.Thinking)
 					}
-				case agent.ToolCallContent:
+				case agentctx.ToolCallContent:
 					args := ""
 					if b.Arguments != nil {
 						if raw, err := json.Marshal(b.Arguments); err == nil {
@@ -680,8 +680,8 @@ func serializeConversation(messages []agent.AgentMessage) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func projectMessagesForSummary(messages []agent.AgentMessage) []agent.AgentMessage {
-	projected := make([]agent.AgentMessage, 0, len(messages))
+func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	projected := make([]agentctx.AgentMessage, 0, len(messages))
 	for _, msg := range messages {
 		if !msg.IsAgentVisible() {
 			continue
@@ -698,15 +698,15 @@ func projectMessagesForSummary(messages []agent.AgentMessage) []agent.AgentMessa
 			toolText = "(empty output)"
 		}
 		toolText = trimTextWithTail(toolText, 1800)
-		copyMsg.Content = []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: toolText},
+		copyMsg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: toolText},
 		}
 		projected = append(projected, copyMsg)
 	}
 	return projected
 }
 
-func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []agent.AgentMessage {
+func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []agentctx.AgentMessage {
 	if cutoff <= 0 || len(messages) == 0 {
 		return messages
 	}
@@ -730,7 +730,7 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 		traceevent.Field{Key: "archived_count", Value: excess},
 	)
 
-	compacted := append([]agent.AgentMessage{}, messages...)
+	compacted := append([]agentctx.AgentMessage{}, messages...)
 	lines := make([]string, 0, excess)
 
 	for i := 0; i < excess; i++ {
@@ -747,15 +747,15 @@ func compactToolResultsInRecent(messages []agent.AgentMessage, cutoff int) []age
 	return compacted
 }
 
-func newToolSummaryContextMessage(text string) agent.AgentMessage {
-	msg := agent.NewAssistantMessage()
-	msg.Content = []agent.ContentBlock{
-		agent.TextContent{Type: "text", Text: text},
+func newToolSummaryContextMessage(text string) agentctx.AgentMessage {
+	msg := agentctx.NewAssistantMessage()
+	msg.Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: text},
 	}
 	return msg.WithVisibility(true, false).WithKind("tool_summary")
 }
 
-func compactionToolDigestLine(msg agent.AgentMessage) string {
+func compactionToolDigestLine(msg agentctx.AgentMessage) string {
 	status := "ok"
 	if msg.IsError {
 		status = "error"
@@ -808,10 +808,10 @@ func trimTextWithTail(input string, maxRunes int) string {
 	return string(runes[:head]) + "\n... (truncated) ...\n" + string(runes[len(runes)-tail:])
 }
 
-func extractText(msg agent.AgentMessage) string {
+func extractText(msg agentctx.AgentMessage) string {
 	var b strings.Builder
 	for _, block := range msg.Content {
-		if tc, ok := block.(agent.TextContent); ok && tc.Text != "" {
+		if tc, ok := block.(agentctx.TextContent); ok && tc.Text != "" {
 			b.WriteString(tc.Text)
 		}
 	}

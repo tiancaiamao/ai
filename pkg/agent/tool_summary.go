@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"fmt"
@@ -30,12 +31,12 @@ Do not add instructions or policy text.`
 const toolSummaryUserPromptTemplate = `Summarize this tool execution result for future turns.
 
 Format:
-- Tool: <name>
+- agentctx.Tool: <name>
 - Status: <ok|error>
 - Key facts: <2-5 bullets>
 - Important artifacts: <files, symbols, commands, errors>
 
-Tool: %s
+agentctx.Tool: %s
 Call ID: %s
 Status: %s
 Output:
@@ -54,12 +55,12 @@ Requirements:
 - Include status (ok/error) and critical facts.
 - Mention important artifacts (files, symbols, commands, errors) when present.
 
-Tool results:
+agentctx.Tool results:
 %s`
 
 func maybeSummarizeToolResults(
 	ctx context.Context,
-	agentCtx *AgentContext,
+	agentCtx *agentctx.AgentContext,
 	config *LoopConfig,
 ) {
 	if !shouldAutoSummarizeToolResults(agentCtx, config) {
@@ -140,7 +141,7 @@ func normalizeToolSummaryAutomation(mode string) string {
 	}
 }
 
-func shouldAutoSummarizeToolResults(agentCtx *AgentContext, config *LoopConfig) bool {
+func shouldAutoSummarizeToolResults(agentCtx *agentctx.AgentContext, config *LoopConfig) bool {
 	if agentCtx == nil || config == nil || config.ToolCallCutoff <= 0 {
 		return false
 	}
@@ -161,7 +162,7 @@ func summarizeToolResultWithLLM(
 	ctx context.Context,
 	model llm.Model,
 	apiKey string,
-	result AgentMessage,
+	result agentctx.AgentMessage,
 ) (string, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return "", errors.New("empty API key")
@@ -218,7 +219,7 @@ func summarizeToolResultWithLLM(
 	return out, nil
 }
 
-func countVisibleToolResults(messages []AgentMessage) int {
+func countVisibleToolResults(messages []agentctx.AgentMessage) int {
 	count := 0
 	for _, msg := range messages {
 		if msg.Role == "toolResult" && msg.IsAgentVisible() {
@@ -228,7 +229,7 @@ func countVisibleToolResults(messages []AgentMessage) int {
 	return count
 }
 
-func findOldestVisibleToolResult(messages []AgentMessage) int {
+func findOldestVisibleToolResult(messages []agentctx.AgentMessage) int {
 	for i := 0; i < len(messages); i++ {
 		msg := messages[i]
 		if msg.Role == "toolResult" && msg.IsAgentVisible() {
@@ -238,19 +239,19 @@ func findOldestVisibleToolResult(messages []AgentMessage) int {
 	return -1
 }
 
-func archiveToolResult(msg AgentMessage) AgentMessage {
+func archiveToolResult(msg agentctx.AgentMessage) agentctx.AgentMessage {
 	archived := msg.WithVisibility(false, msg.IsUserVisible())
 	return archived.WithKind("tool_result_archived")
 }
 
-func newToolSummaryMessage(result AgentMessage, summary string) AgentMessage {
+func newToolSummaryMessage(result agentctx.AgentMessage, summary string) agentctx.AgentMessage {
 	status := "ok"
 	if result.IsError {
 		status = "error"
 	}
 
 	text := fmt.Sprintf(
-		"[Tool output summary]\nTool: %s\nCall ID: %s\nStatus: %s\n%s",
+		"[agentctx.Tool output summary]\nTool: %s\nCall ID: %s\nStatus: %s\n%s",
 		strings.TrimSpace(result.ToolName),
 		strings.TrimSpace(result.ToolCallID),
 		status,
@@ -260,7 +261,7 @@ func newToolSummaryMessage(result AgentMessage, summary string) AgentMessage {
 	return newToolSummaryContextMessage(text)
 }
 
-func fallbackToolSummary(result AgentMessage) string {
+func fallbackToolSummary(result agentctx.AgentMessage) string {
 	status := "ok"
 	if result.IsError {
 		status = "error"
@@ -272,7 +273,7 @@ func fallbackToolSummary(result AgentMessage) string {
 	text = trimTextWithTail(text, 800)
 
 	return fmt.Sprintf(
-		"Tool %q finished with status %s. Output excerpt:\n%s",
+		"agentctx.Tool %q finished with status %s. Output excerpt:\n%s",
 		strings.TrimSpace(result.ToolName),
 		status,
 		text,
@@ -283,7 +284,7 @@ func summarizeToolResultsBatchWithLLM(
 	ctx context.Context,
 	model llm.Model,
 	apiKey string,
-	results []AgentMessage,
+	results []agentctx.AgentMessage,
 ) (string, error) {
 	if len(results) == 0 {
 		return "", errors.New("no tool results to summarize")
@@ -349,7 +350,7 @@ func summarizeToolResultsBatchWithLLM(
 	return trimRunes(text, toolSummaryBatchOutputMaxRunes), nil
 }
 
-func fallbackToolSummaryBatch(results []AgentMessage) string {
+func fallbackToolSummaryBatch(results []agentctx.AgentMessage) string {
 	lines := make([]string, 0, len(results))
 	for _, result := range results {
 		status := "ok"
@@ -378,17 +379,17 @@ func fallbackToolSummaryBatch(results []AgentMessage) string {
 	return strings.Join(lines, "\n")
 }
 
-func newToolBatchSummaryMessage(_ []AgentMessage, summary string) AgentMessage {
+func newToolBatchSummaryMessage(_ []agentctx.AgentMessage, summary string) agentctx.AgentMessage {
 	// Changed format to not look like LLM output
 	// This prevents the LLM from learning to imitate this format
 	text := fmt.Sprintf("[ARCHIVED_TOOL_CONTEXT: %s]", strings.TrimSpace(summary))
 	return newToolSummaryContextMessage(text)
 }
 
-func newToolSummaryContextMessage(text string) AgentMessage {
-	msg := NewAssistantMessage()
-	msg.Content = []ContentBlock{
-		TextContent{Type: "text", Text: text},
+func newToolSummaryContextMessage(text string) agentctx.AgentMessage {
+	msg := agentctx.NewAssistantMessage()
+	msg.Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: text},
 	}
 	return msg.WithVisibility(true, false).WithKind("tool_summary")
 }

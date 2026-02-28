@@ -155,7 +155,7 @@ func TestStressLongRunningCommands(t *testing.T) {
 			mu.Unlock()
 
 			if err != nil {
-				t.Errorf("Tool %s failed: %v", tool.name, err)
+				t.Errorf("agentctx.Tool %s failed: %v", tool.name, err)
 			}
 		}(i, tool)
 	}
@@ -166,7 +166,7 @@ func TestStressLongRunningCommands(t *testing.T) {
 	t.Logf("Long-running command test completed in %v", elapsed)
 	t.Logf("Individual completion times:")
 	for i, duration := range completionTimes {
-		t.Logf("  Tool %d: %v", i, duration)
+		t.Logf("  agentctx.Tool %d: %v", i, duration)
 	}
 
 	// With 3 concurrent slots and 5 tools:

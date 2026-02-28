@@ -1,14 +1,15 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
 	"os"
 	"testing"
 )
 
 func TestShouldInjectHistory_ForcedByConfig(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
-	agentCtx.WorkingMemory = NewWorkingMemory(t.TempDir())
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.WorkingMemory = agentctx.NewWorkingMemory(t.TempDir())
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{InjectHistory: true})
 	if !inject {
@@ -21,9 +22,9 @@ func TestShouldInjectHistory_ForcedByConfig(t *testing.T) {
 
 func TestShouldInjectHistory_WhenWorkingMemoryNotMaintained(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.WorkingMemory = wm
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{})
@@ -37,7 +38,7 @@ func TestShouldInjectHistory_WhenWorkingMemoryNotMaintained(t *testing.T) {
 
 func TestShouldInjectHistory_StripsAfterWorkingMemoryConfirmed(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := NewWorkingMemory(sessionDir)
+	wm := agentctx.NewWorkingMemory(sessionDir)
 	if _, err := wm.Load(); err != nil {
 		t.Fatalf("failed to initialize working memory: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestShouldInjectHistory_StripsAfterWorkingMemoryConfirmed(t *testing.T) {
 		t.Fatalf("failed to update overview: %v", err)
 	}
 
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.WorkingMemory = wm
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{})
@@ -62,11 +63,11 @@ func TestShouldInjectHistory_StripsAfterWorkingMemoryConfirmed(t *testing.T) {
 
 func TestHasSuccessfulWorkingMemoryWrite(t *testing.T) {
 	target := "/tmp/session/working-memory/overview.md"
-	msg := NewToolResultMessage(
+	msg := agentctx.NewToolResultMessage(
 		"call-1",
 		"write",
-		[]ContentBlock{
-			TextContent{
+		[]agentctx.ContentBlock{
+			agentctx.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("Successfully wrote 99 bytes to %s", target),
 			},
@@ -74,19 +75,19 @@ func TestHasSuccessfulWorkingMemoryWrite(t *testing.T) {
 		false,
 	)
 
-	if !hasSuccessfulWorkingMemoryWrite([]AgentMessage{msg}, target) {
+	if !hasSuccessfulWorkingMemoryWrite([]agentctx.AgentMessage{msg}, target) {
 		t.Fatal("expected successful working memory write to be detected")
 	}
-	if hasSuccessfulWorkingMemoryWrite([]AgentMessage{msg}, "/tmp/another/overview.md") {
+	if hasSuccessfulWorkingMemoryWrite([]agentctx.AgentMessage{msg}, "/tmp/another/overview.md") {
 		t.Fatal("did not expect detection for a different target path")
 	}
 }
 
 func TestSelectMessagesForLLM_UsesRecentWindowWhenWorkingMemoryUnconfirmed(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	longPayload := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for i := 0; i < 700; i++ {
-		agentCtx.Messages = append(agentCtx.Messages, NewUserMessage(fmt.Sprintf("message-%03d %s %s %s %s", i, longPayload, longPayload, longPayload, longPayload)))
+		agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage(fmt.Sprintf("message-%03d %s %s %s %s", i, longPayload, longPayload, longPayload, longPayload)))
 	}
 
 	selected, mode := selectMessagesForLLM(agentCtx, true, "working_memory_not_maintained", 128000)
@@ -102,9 +103,9 @@ func TestSelectMessagesForLLM_UsesRecentWindowWhenWorkingMemoryUnconfirmed(t *te
 }
 
 func TestSelectMessagesForLLM_ForcedKeepsFullHistory(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	for i := 0; i < 50; i++ {
-		agentCtx.Messages = append(agentCtx.Messages, NewUserMessage(fmt.Sprintf("forced-%03d", i)))
+		agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage(fmt.Sprintf("forced-%03d", i)))
 	}
 
 	selected, mode := selectMessagesForLLM(agentCtx, true, "inject_history_forced", 128000)
@@ -117,13 +118,13 @@ func TestSelectMessagesForLLM_ForcedKeepsFullHistory(t *testing.T) {
 }
 
 func TestSelectMessagesForLLM_NoInjectKeepsRecentHistoryWindow(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
-	oldAssistant := NewAssistantMessage()
-	oldAssistant.Content = []ContentBlock{TextContent{Type: "text", Text: "old-assistant"}}
+	agentCtx := agentctx.NewAgentContext("sys")
+	oldAssistant := agentctx.NewAssistantMessage()
+	oldAssistant.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "old-assistant"}}
 	agentCtx.Messages = append(agentCtx.Messages,
-		NewUserMessage("old-user"),
+		agentctx.NewUserMessage("old-user"),
 		oldAssistant,
-		NewUserMessage("new-user"),
+		agentctx.NewUserMessage("new-user"),
 	)
 
 	selected, mode := selectMessagesForLLM(agentCtx, false, "working_memory_content_confirmed", 128000)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -185,8 +186,8 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 	systemPrompt := promptBuilder.Build()
 
 	// Helper function to create a new agent context
-	createBaseContext := func() *agent.AgentContext {
-		ctx := agent.NewAgentContext(systemPrompt)
+	createBaseContext := func() *agentctx.AgentContext {
+		ctx := agentctx.NewAgentContext(systemPrompt)
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
 		}

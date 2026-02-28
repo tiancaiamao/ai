@@ -1,83 +1,84 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 )
 
 func TestInjectToolCallsFromTaggedText_Basic(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    AgentMessage
+		input    agentctx.AgentMessage
 		wantCall bool
 		callName string
 	}{
 		{
 			name: "simple bash command",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<bash>git diff HEAD</bash>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<bash>git diff HEAD</bash>"}},
 			},
 			wantCall: true,
 			callName: "bash",
 		},
 		{
 			name: "nested bash command",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<bash>\n<command>git diff HEAD</command>\n</bash>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<bash>\n<command>git diff HEAD</command>\n</bash>"}},
 			},
 			wantCall: true,
 			callName: "bash",
 		},
 		{
 			name: "read with path",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<read>\n<path>file.txt</path>\n</read>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<read>\n<path>file.txt</path>\n</read>"}},
 			},
 			wantCall: true,
 			callName: "read",
 		},
 		{
 			name: "write with content",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<write>\n<path>file.txt</path>\n<content>hello</content>\n</write>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<write>\n<path>file.txt</path>\n<content>hello</content>\n</write>"}},
 			},
 			wantCall: true,
 			callName: "write",
 		},
 		{
 			name: "tool_call wrapper with inline name",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"}},
 			},
 			wantCall: true,
 			callName: "read",
 		},
 		{
 			name: "tool wrapper with name tag",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<tool><name>bash</name><arg_key>command</arg_key><arg_value>ls -la</arg_value></tool>"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<tool><name>bash</name><arg_key>command</arg_key><arg_value>ls -la</arg_value></tool>"}},
 			},
 			wantCall: true,
 			callName: "bash",
 		},
 		{
 			name: "text without tags",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "Hello, world!"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "Hello, world!"}},
 			},
 			wantCall: false,
 		},
 		{
 			name: "incomplete tag - should not parse",
-			input: AgentMessage{
+			input: agentctx.AgentMessage{
 				Role:    "assistant",
-				Content: []ContentBlock{TextContent{Type: "text", Text: "<bash>git diff HEAD"}},
+				Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "<bash>git diff HEAD"}},
 			},
 			wantCall: false,
 		},
@@ -105,11 +106,11 @@ func TestInjectToolCallsFromTaggedText_Basic(t *testing.T) {
 
 func TestInjectToolCallsFromTaggedText_WithExistingToolCalls(t *testing.T) {
 	// Test that we don't skip tag parsing when existing tool calls are empty/invalid
-	msg := AgentMessage{
+	msg := agentctx.AgentMessage{
 		Role: "assistant",
-		Content: []ContentBlock{
-			TextContent{Type: "text", Text: "Let me run: <bash>ls -la</bash>"},
-			ToolCallContent{ID: "empty", Name: "", Arguments: map[string]any{}}, // Empty tool call
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "Let me run: <bash>ls -la</bash>"},
+			agentctx.ToolCallContent{ID: "empty", Name: "", Arguments: map[string]any{}}, // Empty tool call
 		},
 	}
 
@@ -128,11 +129,11 @@ func TestInjectToolCallsFromTaggedText_WithExistingToolCalls(t *testing.T) {
 }
 
 func TestInjectToolCallsFromTaggedText_GenericExistingToolCallDoesNotBlockParsing(t *testing.T) {
-	msg := AgentMessage{
+	msg := agentctx.AgentMessage{
 		Role: "assistant",
-		Content: []ContentBlock{
-			TextContent{Type: "text", Text: "Use tool: <tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
-			ToolCallContent{ID: "generic", Name: "tool_call", Arguments: map[string]any{"path": "wrong.txt"}},
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "Use tool: <tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+			agentctx.ToolCallContent{ID: "generic", Name: "tool_call", Arguments: map[string]any{"path": "wrong.txt"}},
 		},
 	}
 
@@ -253,10 +254,10 @@ func TestValidateToolCallArgs(t *testing.T) {
 }
 
 func TestInjectToolCallsFromTaggedText_LooseArgPairsWithToolHint(t *testing.T) {
-	msg := AgentMessage{
+	msg := agentctx.AgentMessage{
 		Role: "assistant",
-		Content: []ContentBlock{
-			TextContent{Type: "text", Text: "权限错误，tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "权限错误，tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
 		},
 	}
 
@@ -277,10 +278,10 @@ func TestInjectToolCallsFromTaggedText_LooseArgPairsWithToolHint(t *testing.T) {
 }
 
 func TestInjectToolCallsFromTaggedText_LooseArgPairsInferByArgs(t *testing.T) {
-	msg := AgentMessage{
+	msg := agentctx.AgentMessage{
 		Role: "assistant",
-		Content: []ContentBlock{
-			TextContent{Type: "text", Text: "<arg_key>path</arg_key><arg_value>README.md</arg_value>"},
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "<arg_key>path</arg_key><arg_value>README.md</arg_value>"},
 		},
 	}
 
@@ -301,10 +302,10 @@ func TestInjectToolCallsFromTaggedText_LooseArgPairsInferByArgs(t *testing.T) {
 }
 
 func TestInjectToolCallsFromTaggedText_ToolCallTagWithInlineName(t *testing.T) {
-	msg := AgentMessage{
+	msg := agentctx.AgentMessage{
 		Role: "assistant",
-		Content: []ContentBlock{
-			TextContent{Type: "text", Text: "我需要查看正确的行。让我使用 sed 命令来查看第1370-1385行：\n<tool_call>bash\n<arg_key>command</arg_key>\n<arg_value>sed -n '1370,1385p' Client/GameInit.cpp</arg_value>\n</tool_call>"},
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "我需要查看正确的行。让我使用 sed 命令来查看第1370-1385行：\n<tool_call>bash\n<arg_key>command</arg_key>\n<arg_value>sed -n '1370,1385p' Client/GameInit.cpp</arg_value>\n</tool_call>"},
 		},
 	}
 

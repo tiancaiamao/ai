@@ -1,6 +1,7 @@
 package main
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -29,7 +30,7 @@ func (sc *sessionCompactor) Update(sess *session.Session, comp *compact.Compacto
 	sc.mu.Unlock()
 }
 
-func (sc *sessionCompactor) ShouldCompact(messages []agent.AgentMessage) bool {
+func (sc *sessionCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
@@ -46,7 +47,7 @@ func (sc *sessionCompactor) ShouldCompact(messages []agent.AgentMessage) bool {
 	return sess.CanCompact(comp)
 }
 
-func (sc *sessionCompactor) Compact(messages []agent.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
+func (sc *sessionCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
@@ -87,15 +88,15 @@ func (sc *sessionCompactor) Compact(messages []agent.AgentMessage, previousSumma
 
 type sessionWriteRequest struct {
 	sess            *session.Session
-	message         *agent.AgentMessage
-	replaceMessages []agent.AgentMessage
+	message         *agentctx.AgentMessage
+	replaceMessages []agentctx.AgentMessage
 	comp            *compact.Compactor
 	response        chan sessionCompactResponse
 	replaceResp     chan error
 }
 
 type sessionCompactResponse struct {
-	messages []agent.AgentMessage
+	messages []agentctx.AgentMessage
 	summary  string
 	err      error
 }
@@ -160,7 +161,7 @@ func newSessionWriter(buffer int) *sessionWriter {
 	return writer
 }
 
-func (w *sessionWriter) Append(sess *session.Session, message agent.AgentMessage) {
+func (w *sessionWriter) Append(sess *session.Session, message agentctx.AgentMessage) {
 	if w == nil || sess == nil {
 		return
 	}
@@ -185,14 +186,14 @@ func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) 
 	}, nil
 }
 
-func (w *sessionWriter) Replace(sess *session.Session, messages []agent.AgentMessage) error {
+func (w *sessionWriter) Replace(sess *session.Session, messages []agentctx.AgentMessage) error {
 	if w == nil || sess == nil {
 		return nil
 	}
 	response := make(chan error, 1)
 	req := sessionWriteRequest{
 		sess:            sess,
-		replaceMessages: append([]agent.AgentMessage(nil), messages...),
+		replaceMessages: append([]agentctx.AgentMessage(nil), messages...),
 		replaceResp:     response,
 	}
 	if !w.enqueue(req) {

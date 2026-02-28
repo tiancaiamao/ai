@@ -1,21 +1,21 @@
 package compact
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 	"testing"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
 func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
 	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0)
 
-	visible := agent.NewUserMessage("short visible text")
-	invisible := agent.NewUserMessage(strings.Repeat("X", 8000)).WithVisibility(false, true)
+	visible := agentctx.NewUserMessage("short visible text")
+	invisible := agentctx.NewUserMessage(strings.Repeat("X", 8000)).WithVisibility(false, true)
 
-	withInvisible := []agent.AgentMessage{visible, invisible}
-	withoutInvisible := []agent.AgentMessage{visible}
+	withInvisible := []agentctx.AgentMessage{visible, invisible}
+	withoutInvisible := []agentctx.AgentMessage{visible}
 
 	tokensWithInvisible := compactor.EstimateTokens(withInvisible)
 	tokensWithoutInvisible := compactor.EstimateTokens(withoutInvisible)
@@ -25,13 +25,13 @@ func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
 }
 
 func TestCompactToolResultsInRecent(t *testing.T) {
-	messages := []agent.AgentMessage{
-		agent.NewUserMessage("start"),
-		agent.NewToolResultMessage("call-1", "read", []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: "first output"},
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "first output"},
 		}, false),
-		agent.NewToolResultMessage("call-2", "grep", []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: "second output"},
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "second output"},
 		}, false),
 	}
 
@@ -66,12 +66,12 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 
 func TestProjectMessagesForSummaryTrimsToolOutputs(t *testing.T) {
 	longText := strings.Repeat("a", 5000)
-	messages := []agent.AgentMessage{
-		agent.NewToolResultMessage("call-1", "bash", []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: longText},
+	messages := []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: longText},
 		}, false),
-		agent.NewToolResultMessage("call-2", "grep", []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: "hidden"},
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "hidden"},
 		}, false).WithVisibility(false, true),
 	}
 

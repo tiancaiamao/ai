@@ -1,6 +1,7 @@
 package main
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -177,20 +178,20 @@ Be concise and focused on the task at hand.`
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-			wm := agent.NewWorkingMemory(sessionDir)
+			wm := agentctx.NewWorkingMemory(sessionDir)
 			promptBuilder.SetWorkingMemory(wm)
 		}
 	}
 	systemPrompt := promptBuilder.Build()
 
 	// Create agent context
-	agentCtx := agent.NewAgentContext(systemPrompt)
+	agentCtx := agentctx.NewAgentContext(systemPrompt)
 
 	// Initialize working memory from session directory (for dynamic injection)
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-			wm := agent.NewWorkingMemory(sessionDir)
+			wm := agentctx.NewWorkingMemory(sessionDir)
 			agentCtx.WorkingMemory = wm
 		}
 	}

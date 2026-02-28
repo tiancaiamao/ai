@@ -1,4 +1,4 @@
-package agent
+package context
 
 import (
 	"fmt"
@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	workingMemoryDir = "working-memory"
-	overviewFile     = "overview.md"
-	detailDir        = "detail"
+	WorkingMemoryDir = "working-memory"
+	OverviewFile     = "overview.md"
+	DetailDir        = "detail"
 
 	// Update tracking thresholds
 	baseRoundsBeforeReminder = 10 // Default base threshold for reminders
-	maxRoundsWithoutUpdate   = 10 // Maximum rounds without update before reminder (legacy)
+	MaxRoundsWithoutUpdate = 10 // Maximum rounds without update before reminder (legacy)
 	minRoundsBeforeCheck     = 3  // Minimum rounds before checking for update
 )
 
@@ -66,14 +66,14 @@ type WorkingMemory struct {
 func NewWorkingMemory(sessionDir string) *WorkingMemory {
 	return &WorkingMemory{
 		sessionDir:         sessionDir,
-		overviewPath:       filepath.Join(sessionDir, workingMemoryDir, overviewFile),
-		detailPath:         filepath.Join(sessionDir, workingMemoryDir, detailDir),
+		overviewPath:       filepath.Join(sessionDir, WorkingMemoryDir, OverviewFile),
+		detailPath:         filepath.Join(sessionDir, WorkingMemoryDir, DetailDir),
 		nextReminderRound:  baseRoundsBeforeReminder,  // Default threshold
 	}
 }
 
 // GetOverviewTemplate returns the default template for overview.md with the given path.
-func GetOverviewTemplate(overviewPath, detailDir string) string {
+func GetOverviewTemplate(overviewPath, DetailDir string) string {
 	return fmt.Sprintf(`# Working Memory
 
 <!--
@@ -137,18 +137,18 @@ func GetOverviewTemplate(overviewPath, detailDir string) string {
 - 需要保存详细内容时，写入 %s 目录
 - 路径优先使用 system prompt 给出的绝对路径
 -->
-`, overviewPath, detailDir)
+`, overviewPath, DetailDir)
 }
 
 // ensureWorkingMemory creates the working-memory directory structure if needed.
 func (wm *WorkingMemory) ensureWorkingMemory() error {
-	wmDir := filepath.Join(wm.sessionDir, workingMemoryDir)
+	wmDir := filepath.Join(wm.sessionDir, WorkingMemoryDir)
 	if err := os.MkdirAll(wmDir, 0755); err != nil {
 		return fmt.Errorf("failed to create working-memory directory: %w", err)
 	}
 
-	detailDir := filepath.Join(wmDir, detailDir)
-	if err := os.MkdirAll(detailDir, 0755); err != nil {
+	DetailDir := filepath.Join(wmDir, DetailDir)
+	if err := os.MkdirAll(DetailDir, 0755); err != nil {
 		return fmt.Errorf("failed to create detail directory: %w", err)
 	}
 

@@ -1,16 +1,16 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
 func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
-	sess := NewSession("")
+	sess := NewSession("", nil)
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -21,13 +21,13 @@ func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
 
 	for i := 0; i < 8; i++ {
 		if i%2 == 0 {
-			if _, err := sess.AppendMessage(agent.NewUserMessage("user")); err != nil {
+			if _, err := sess.AppendMessage(agentctx.NewUserMessage("user")); err != nil {
 				t.Fatalf("append user message: %v", err)
 			}
 		} else {
-			msg := agent.NewAssistantMessage()
-			msg.Content = []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "assistant"},
+			msg := agentctx.NewAssistantMessage()
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "assistant"},
 			}
 			if _, err := sess.AppendMessage(msg); err != nil {
 				t.Fatalf("append assistant message: %v", err)
@@ -61,7 +61,7 @@ func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
 }
 
 func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
-	sess := NewSession("")
+	sess := NewSession("", nil)
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -71,9 +71,9 @@ func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
 	}, llm.Model{}, "", "sys", 0)
 
 	for i := 0; i < 4; i++ {
-		msg := agent.NewAssistantMessage()
-		msg.Content = []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: "assistant only"},
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "assistant only"},
 		}
 		if _, err := sess.AppendMessage(msg); err != nil {
 			t.Fatalf("append assistant message: %v", err)
@@ -86,7 +86,7 @@ func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
 }
 
 func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
-	sess := NewSession("")
+	sess := NewSession("", nil)
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       5,
@@ -96,9 +96,9 @@ func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
 	}, llm.Model{}, "", "sys", 0)
 
 	appendAssistant := func(text string) {
-		msg := agent.NewAssistantMessage()
-		msg.Content = []agent.ContentBlock{
-			agent.TextContent{Type: "text", Text: text},
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: text},
 		}
 		if _, err := sess.AppendMessage(msg); err != nil {
 			t.Fatalf("append assistant message: %v", err)
@@ -108,7 +108,7 @@ func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		appendAssistant("assistant prefix")
 	}
-	if _, err := sess.AppendMessage(agent.NewUserMessage("latest user boundary")); err != nil {
+	if _, err := sess.AppendMessage(agentctx.NewUserMessage("latest user boundary")); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	for i := 0; i < 3; i++ {
@@ -119,7 +119,7 @@ func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
 		t.Fatal("expected session to be compactable with forward cuttable boundary")
 	}
 
-	refs := buildMessageRefs(sess.GetBranch(""))
+	refs := buildMessageRefs("", sess.GetBranch(""))
 	cutIdx := findFirstKeptIndex(refs, comp)
 	if cutIdx <= 0 {
 		t.Fatalf("expected forward cuttable boundary, got index=%d", cutIdx)

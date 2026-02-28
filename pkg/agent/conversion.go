@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,7 @@ import (
 )
 
 // ConvertMessagesToLLM converts agent messages to LLM messages.
-func ConvertMessagesToLLM(ctx context.Context, messages []AgentMessage) []llm.LLMMessage {
+func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage) []llm.LLMMessage {
 	span := traceevent.StartSpan(ctx, "ConvertMessagesToLLM", traceevent.CategoryEvent)
 	defer span.End()
 
@@ -36,9 +37,9 @@ func ConvertMessagesToLLM(ctx context.Context, messages []AgentMessage) []llm.LL
 		// Extract content
 		for _, block := range msg.Content {
 			switch b := block.(type) {
-			case TextContent:
+			case agentctx.TextContent:
 				llmMsg.Content = b.Text
-			case ImageContent:
+			case agentctx.ImageContent:
 				// For multimodal, use ContentParts
 				llmMsg.ContentParts = append(llmMsg.ContentParts, llm.ContentPart{
 					Type: "image_url",
@@ -71,7 +72,7 @@ func ConvertMessagesToLLM(ctx context.Context, messages []AgentMessage) []llm.LL
 			}
 		}
 
-		// Tool result message
+		// agentctx.Tool result message
 		if msg.Role == "toolResult" {
 			llmMsg.ToolCallID = msg.ToolCallID
 			// Extract text content
@@ -84,7 +85,7 @@ func ConvertMessagesToLLM(ctx context.Context, messages []AgentMessage) []llm.LL
 	return llmMessages
 }
 
-func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
+func dedupeMessagesForLLM(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	if len(messages) <= 1 {
 		return messages
 	}
@@ -92,7 +93,7 @@ func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
 	seenToolResults := make(map[string]struct{}, len(messages))
 	seenSummaries := make(map[string]struct{}, len(messages))
 	seenAssistantToolCalls := make(map[string]struct{}, len(messages))
-	keptReverse := make([]AgentMessage, 0, len(messages))
+	keptReverse := make([]agentctx.AgentMessage, 0, len(messages))
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -132,7 +133,7 @@ func dedupeMessagesForLLM(messages []AgentMessage) []AgentMessage {
 	return keptReverse
 }
 
-func toolResultDedupKey(msg AgentMessage) (string, bool) {
+func toolResultDedupKey(msg agentctx.AgentMessage) (string, bool) {
 	if msg.Role != "toolResult" {
 		return "", false
 	}
@@ -146,7 +147,7 @@ func toolResultDedupKey(msg AgentMessage) (string, bool) {
 	return "tool_name:" + toolName + "|text_hash:" + hashString(msg.ExtractText()), true
 }
 
-func toolSummaryDedupKey(msg AgentMessage) (string, bool) {
+func toolSummaryDedupKey(msg agentctx.AgentMessage) (string, bool) {
 	if msg.Metadata == nil || msg.Metadata.Kind != "tool_summary" {
 		return "", false
 	}
@@ -157,7 +158,7 @@ func toolSummaryDedupKey(msg AgentMessage) (string, bool) {
 	return hashString(text), true
 }
 
-func assistantToolCallsDedupKey(msg AgentMessage) (string, bool) {
+func assistantToolCallsDedupKey(msg agentctx.AgentMessage) (string, bool) {
 	if msg.Role != "assistant" {
 		return "", false
 	}
@@ -192,13 +193,13 @@ func hashString(input string) string {
 }
 
 // ConvertLLMMessageToAgent converts an LLM message to an agent message.
-func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) AgentMessage {
-	agentMsg := NewAssistantMessage()
-	agentMsg.Content = []ContentBlock{}
+func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) agentctx.AgentMessage {
+	agentMsg := agentctx.NewAssistantMessage()
+	agentMsg.Content = []agentctx.ContentBlock{}
 
 	// Add text content
 	if llmMsg.Content != "" {
-		agentMsg.Content = append(agentMsg.Content, TextContent{
+		agentMsg.Content = append(agentMsg.Content, agentctx.TextContent{
 			Type: "text",
 			Text: llmMsg.Content,
 		})
@@ -211,7 +212,7 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) AgentMessage {
 			var args map[string]any
 			json.Unmarshal([]byte(tc.Function.Arguments), &args)
 
-			agentMsg.Content = append(agentMsg.Content, ToolCallContent{
+			agentMsg.Content = append(agentMsg.Content, agentctx.ToolCallContent{
 				ID:        tc.ID,
 				Type:      "toolCall",
 				Name:      tc.Function.Name,
@@ -224,7 +225,7 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) AgentMessage {
 }
 
 // ConvertToolsToLLM converts agent tools to LLM tools.
-func ConvertToolsToLLM(ctx context.Context, tools []Tool) []llm.LLMTool {
+func ConvertToolsToLLM(ctx context.Context, tools []agentctx.Tool) []llm.LLMTool {
 	span := traceevent.StartSpan(ctx, "ConvertToolsToLLM", traceevent.CategoryEvent)
 	defer span.End()
 

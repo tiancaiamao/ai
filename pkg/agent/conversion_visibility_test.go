@@ -1,20 +1,21 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"testing"
 )
 
 func TestConvertMessagesToLLMFiltersAgentInvisible(t *testing.T) {
-	visible := NewUserMessage("visible")
-	hidden := NewUserMessage("hidden").WithVisibility(false, true)
-	assistant := NewAssistantMessage()
-	assistant.Content = []ContentBlock{
-		TextContent{Type: "text", Text: "ok"},
+	visible := agentctx.NewUserMessage("visible")
+	hidden := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "ok"},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{visible, hidden, assistant})
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{visible, hidden, assistant})
 	if len(llmMessages) != 2 {
 		t.Fatalf("expected 2 LLM messages, got %d", len(llmMessages))
 	}
@@ -31,7 +32,7 @@ func TestConvertToolsToLLMDeduplicatesByName(t *testing.T) {
 	t2 := &mockTool{name: "bash"}
 	t3 := &mockTool{name: "read"} // duplicate name
 
-	tools := ConvertToolsToLLM(context.Background(), []Tool{t1, t2, t3})
+	tools := ConvertToolsToLLM(context.Background(), []agentctx.Tool{t1, t2, t3})
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 unique tools, got %d", len(tools))
 	}
@@ -44,14 +45,14 @@ func TestConvertToolsToLLMDeduplicatesByName(t *testing.T) {
 }
 
 func TestAgentMessageMetadataRoundTrip(t *testing.T) {
-	msg := NewUserMessage("hello").WithVisibility(false, true).WithKind("tool_summary")
+	msg := agentctx.NewUserMessage("hello").WithVisibility(false, true).WithKind("tool_summary")
 
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	var decoded AgentMessage
+	var decoded agentctx.AgentMessage
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
@@ -68,13 +69,13 @@ func TestAgentMessageMetadataRoundTrip(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
-	msgs := []AgentMessage{
-		NewUserMessage("do work"),
-		NewToolResultMessage("call-1", "read", []ContentBlock{
-			TextContent{Type: "text", Text: "old output"},
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("do work"),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "old output"},
 		}, false),
-		NewToolResultMessage("call-1", "read", []ContentBlock{
-			TextContent{Type: "text", Text: "new output"},
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "new output"},
 		}, false),
 	}
 
@@ -94,16 +95,16 @@ func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMDedupesToolSummaryByContent(t *testing.T) {
-	summaryA := NewAssistantMessage()
-	summaryA.Content = []ContentBlock{TextContent{Type: "text", Text: "summary text"}}
+	summaryA := agentctx.NewAssistantMessage()
+	summaryA.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "summary text"}}
 	summaryA = summaryA.WithVisibility(true, false).WithKind("tool_summary")
 
-	summaryB := NewAssistantMessage()
-	summaryB.Content = []ContentBlock{TextContent{Type: "text", Text: "summary text"}}
+	summaryB := agentctx.NewAssistantMessage()
+	summaryB.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "summary text"}}
 	summaryB = summaryB.WithVisibility(true, false).WithKind("tool_summary")
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
-		NewUserMessage("start"),
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
 		summaryA,
 		summaryB,
 	})
@@ -120,19 +121,19 @@ func TestConvertMessagesToLLMDedupesToolSummaryByContent(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMDedupesAssistantToolCallsByFullSet(t *testing.T) {
-	a1 := NewAssistantMessage()
-	a1.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
-		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
+	a1 := agentctx.NewAssistantMessage()
+	a1.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		agentctx.ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
 	}
-	a2 := NewAssistantMessage()
-	a2.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
-		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
+	a2 := agentctx.NewAssistantMessage()
+	a2.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		agentctx.ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo hi"}},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
-		NewUserMessage("start"),
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
 		a1,
 		a2,
 	})
@@ -145,19 +146,19 @@ func TestConvertMessagesToLLMDedupesAssistantToolCallsByFullSet(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMKeepsAssistantToolCallsWhenSetDiffers(t *testing.T) {
-	a1 := NewAssistantMessage()
-	a1.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
-		ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo one"}},
+	a1 := agentctx.NewAssistantMessage()
+	a1.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		agentctx.ToolCallContent{ID: "call-2", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo one"}},
 	}
-	a2 := NewAssistantMessage()
-	a2.Content = []ContentBlock{
-		ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
-		ToolCallContent{ID: "call-3", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
+	a2 := agentctx.NewAssistantMessage()
+	a2.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		agentctx.ToolCallContent{ID: "call-3", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []AgentMessage{
-		NewUserMessage("start"),
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
 		a1,
 		a2,
 	})

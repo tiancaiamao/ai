@@ -1,6 +1,7 @@
 package session
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 func TestDefaultLoadOptions(t *testing.T) {
@@ -78,10 +78,10 @@ func TestLoadSessionLazyWithMessages(t *testing.T) {
 
 	// Add 60 messages
 	for i := 0; i < 60; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "message content"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message content"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -122,10 +122,10 @@ func TestLoadSessionLazyWithCompaction(t *testing.T) {
 
 	// Add some messages
 	for i := 0; i < 30; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "old message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "old message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -143,10 +143,10 @@ func TestLoadSessionLazyWithCompaction(t *testing.T) {
 
 	// Add more recent messages
 	for i := 0; i < 20; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "recent message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "recent message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -193,10 +193,10 @@ func TestLoadSessionLazyFullLoad(t *testing.T) {
 
 	// Add messages
 	for i := 0; i < 100; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -236,10 +236,10 @@ func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
 
 	// Add messages
 	for i := 0; i < 30; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -291,10 +291,10 @@ func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 
 	// Add messages
 	for i := 0; i < 20; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -333,10 +333,10 @@ func TestLoadSessionLazyMessageChain(t *testing.T) {
 
 	// Add 100 messages
 	for i := 0; i < 100; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -381,10 +381,10 @@ func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
 
 	// Add 30 old messages
 	for i := 0; i < 30; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "old message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "old message"},
 			},
 		}
 		err := sess.AddMessages(msg)
@@ -402,10 +402,10 @@ func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
 
 	// Add 30 recent messages
 	for i := 0; i < 30; i++ {
-		msg := agent.AgentMessage{
+		msg := agentctx.AgentMessage{
 			Role: "user",
-			Content: []agent.ContentBlock{
-				agent.TextContent{Type: "text", Text: "recent message"},
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "recent message"},
 			},
 		}
 		err := sess.AddMessages(msg)

@@ -1,13 +1,13 @@
 package tools
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // EditTool edits a file by replacing old text with new text.
@@ -53,7 +53,7 @@ func (t *EditTool) Parameters() map[string]any {
 }
 
 // Execute executes the Edit tool.
-func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agent.ContentBlock, error) {
+func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	// Extract parameters
 	path, ok := args["path"].(string)
 	if !ok {
@@ -101,7 +101,7 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agent.Co
 	// Return success with diff
 	result := fmt.Sprintf("Edited %s\n\nDiff:\n%s", path, diff)
 
-	return []agent.ContentBlock{agent.TextContent{
+	return []agentctx.ContentBlock{agentctx.TextContent{
 		Type: "text",
 		Text: result,
 	}}, nil

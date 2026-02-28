@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"sync"
@@ -259,15 +260,15 @@ func (m *slowTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (m *slowTool) Execute(ctx context.Context, args map[string]interface{}) ([]ContentBlock, error) {
+func (m *slowTool) Execute(ctx context.Context, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
 	if m.executeFunc != nil {
 		m.executeFunc()
 	}
 
 	select {
 	case <-time.After(m.delay):
-		return []ContentBlock{
-			TextContent{Type: "text", Text: "Slow tool completed"},
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "Slow tool completed"},
 		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

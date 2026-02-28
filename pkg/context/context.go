@@ -1,4 +1,4 @@
-package agent
+package context
 
 import (
 	"context"
@@ -22,9 +22,9 @@ type AgentContext struct {
 	WorkingMemory *WorkingMemory `json:"-"`
 
 	// Runtime meta snapshot state for stable system-tail injection.
-	runtimeMetaSnapshot string `json:"-"`
-	runtimeMetaBand     string `json:"-"`
-	runtimeMetaTurns    int    `json:"-"`
+	RuntimeMetaSnapshot string `json:"-"`
+	RuntimeMetaBand     string `json:"-"`
+	RuntimeMetaTurns    int    `json:"-"`
 }
 
 // Tool represents a tool that can be called by the agent.

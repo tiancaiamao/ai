@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -24,7 +25,7 @@ var (
 	toolHintRegex  = regexp.MustCompile(`(?im)\b(?:tool|function|call)\s*[:=]\s*([a-z_]+)\b`)
 )
 
-func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
+func injectToolCallsFromTaggedText(msg agentctx.AgentMessage) (agentctx.AgentMessage, bool) {
 	if msg.Role != "assistant" {
 		return msg, false
 	}
@@ -102,20 +103,20 @@ func injectToolCallsFromTaggedText(msg AgentMessage) (AgentMessage, bool) {
 	return buildToolCallMessage(msg, normalized, calls), true
 }
 
-func buildToolCallMessage(msg AgentMessage, normalized string, calls []toolTagCall) AgentMessage {
+func buildToolCallMessage(msg agentctx.AgentMessage, normalized string, calls []toolTagCall) agentctx.AgentMessage {
 	remaining := stripConsumedRanges(normalized, calls)
 	remaining = strings.TrimSpace(remaining)
 
-	content := make([]ContentBlock, 0, 1+len(calls))
+	content := make([]agentctx.ContentBlock, 0, 1+len(calls))
 	if remaining != "" {
-		content = append(content, TextContent{
+		content = append(content, agentctx.TextContent{
 			Type: "text",
 			Text: remaining,
 		})
 	}
 
 	for i, call := range calls {
-		content = append(content, ToolCallContent{
+		content = append(content, agentctx.ToolCallContent{
 			ID:        fmt.Sprintf("tool_%d_%d", time.Now().UnixNano(), i),
 			Type:      "toolCall",
 			Name:      call.name,
@@ -409,7 +410,7 @@ func ValidateToolCallArgs(toolName string, args map[string]any) error {
 	return nil
 }
 
-func injectToolCallsFromThinking(msg AgentMessage) (AgentMessage, bool) {
+func injectToolCallsFromThinking(msg agentctx.AgentMessage) (agentctx.AgentMessage, bool) {
 	if msg.Role != "assistant" {
 		return msg, false
 	}
@@ -422,9 +423,9 @@ func injectToolCallsFromThinking(msg AgentMessage) (AgentMessage, bool) {
 		return msg, false
 	}
 
-	probe := NewAssistantMessage()
-	probe.Content = []ContentBlock{
-		TextContent{Type: "text", Text: thinking},
+	probe := agentctx.NewAssistantMessage()
+	probe.Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: thinking},
 	}
 
 	parsed, ok := injectToolCallsFromTaggedText(probe)
@@ -438,7 +439,7 @@ func injectToolCallsFromThinking(msg AgentMessage) (AgentMessage, bool) {
 	}
 
 	updated := msg
-	updated.Content = append([]ContentBlock{}, msg.Content...)
+	updated.Content = append([]agentctx.ContentBlock{}, msg.Content...)
 	for _, call := range calls {
 		updated.Content = append(updated.Content, call)
 	}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"strings"
@@ -18,12 +19,12 @@ const (
 
 type asyncToolSummaryJob struct {
 	keys     []string
-	messages []AgentMessage
+	messages []agentctx.AgentMessage
 }
 
 type asyncToolSummaryResult struct {
 	keys     []string
-	original []AgentMessage
+	original []agentctx.AgentMessage
 	summary  string
 }
 
@@ -121,7 +122,7 @@ func (s *asyncToolSummarizer) worker() {
 
 			result := asyncToolSummaryResult{
 				keys:     append([]string(nil), job.keys...),
-				original: append([]AgentMessage(nil), job.messages...),
+				original: append([]agentctx.AgentMessage(nil), job.messages...),
 				summary:  summary,
 			}
 
@@ -153,7 +154,7 @@ func (s *asyncToolSummarizer) collectReady() {
 	}
 }
 
-func (s *asyncToolSummarizer) schedule(agentCtx *AgentContext) {
+func (s *asyncToolSummarizer) schedule(agentCtx *agentctx.AgentContext) {
 	if s == nil || agentCtx == nil {
 		return
 	}
@@ -162,7 +163,7 @@ func (s *asyncToolSummarizer) schedule(agentCtx *AgentContext) {
 	s.pruneStale(agentCtx)
 
 	visible := 0
-	candidates := make([]AgentMessage, 0)
+	candidates := make([]agentctx.AgentMessage, 0)
 
 	s.mu.Lock()
 	queuedSnapshot := make(map[string]struct{}, len(s.queuedKeys))
@@ -204,7 +205,7 @@ func (s *asyncToolSummarizer) schedule(agentCtx *AgentContext) {
 			return
 		}
 
-		batch := append([]AgentMessage(nil), candidates[:size]...)
+		batch := append([]agentctx.AgentMessage(nil), candidates[:size]...)
 		candidates = candidates[size:]
 		keys := make([]string, 0, len(batch))
 		for _, msg := range batch {
@@ -267,7 +268,7 @@ func (s *asyncToolSummarizer) schedule(agentCtx *AgentContext) {
 	}
 }
 
-func (s *asyncToolSummarizer) applyReady(agentCtx *AgentContext) {
+func (s *asyncToolSummarizer) applyReady(agentCtx *agentctx.AgentContext) {
 	if s == nil || agentCtx == nil {
 		return
 	}
@@ -289,7 +290,7 @@ func (s *asyncToolSummarizer) applyReady(agentCtx *AgentContext) {
 			traceevent.Field{Key: "mode", Value: "batch_apply"},
 			traceevent.Field{Key: "batch_size", Value: len(batch.keys)},
 		)
-		archived := make([]AgentMessage, 0, len(batch.keys))
+		archived := make([]agentctx.AgentMessage, 0, len(batch.keys))
 		for _, key := range batch.keys {
 			for i, msg := range agentCtx.Messages {
 				if msg.Role != "toolResult" || !msg.IsAgentVisible() {
@@ -319,7 +320,7 @@ func (s *asyncToolSummarizer) applyReady(agentCtx *AgentContext) {
 	}
 }
 
-func (s *asyncToolSummarizer) pruneStale(agentCtx *AgentContext) {
+func (s *asyncToolSummarizer) pruneStale(agentCtx *agentctx.AgentContext) {
 	if s == nil || agentCtx == nil {
 		return
 	}
@@ -344,7 +345,7 @@ func (s *asyncToolSummarizer) pruneStale(agentCtx *AgentContext) {
 	s.mu.Unlock()
 }
 
-func toolResultKey(msg AgentMessage) string {
+func toolResultKey(msg agentctx.AgentMessage) string {
 	if msg.Role != "toolResult" {
 		return ""
 	}

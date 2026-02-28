@@ -1,6 +1,7 @@
 package agent
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"strings"
@@ -14,25 +15,25 @@ type recoveryCompactor struct {
 	shouldCompact bool
 }
 
-func (c *recoveryCompactor) ShouldCompact(_ []AgentMessage) bool {
+func (c *recoveryCompactor) ShouldCompact(_ []agentctx.AgentMessage) bool {
 	return c.shouldCompact
 }
 
-func (c *recoveryCompactor) Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (c *recoveryCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	c.calls++
 	return &CompactionResult{
 		Summary: "[summary]",
-		Messages: []AgentMessage{
-			NewUserMessage("[summary]"),
-			NewUserMessage("latest request"),
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("[summary]"),
+			agentctx.NewUserMessage("latest request"),
 		},
 	}, nil
 }
 
-func newTestAgentEventStream() *llm.EventStream[AgentEvent, []AgentMessage] {
-	return llm.NewEventStream[AgentEvent, []AgentMessage](
+func newTestAgentEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+	return llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
-		func(e AgentEvent) []AgentMessage { return e.Messages },
+		func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
 	)
 }
 
@@ -44,25 +45,25 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
 		if callCount == 1 {
 			return nil, &llm.ContextLengthExceededError{Message: "maximum context length exceeded"}
 		}
 
-		msg := NewAssistantMessage()
-		msg.Content = []ContentBlock{
-			TextContent{Type: "text", Text: "done"},
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "done"},
 		}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
 		Compactor: compactor,
@@ -103,19 +104,19 @@ func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
-		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: compactor}, stream)
 
@@ -150,14 +151,14 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
-		msg.Content = []ContentBlock{
-			ToolCallContent{
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.ToolCallContent{
 				ID:        "call-repeat",
 				Type:      "toolCall",
 				Name:      "read",
@@ -168,8 +169,8 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
 		MaxConsecutiveToolCalls: 2,
@@ -213,15 +214,15 @@ func TestRunInnerLoopPersistsAssistantMessagesInContext(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
 		if callCount == 1 {
-			msg := NewAssistantMessage()
-			msg.Content = []ContentBlock{
-				ToolCallContent{
+			msg := agentctx.NewAssistantMessage()
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
 					ID:        "call-1",
 					Type:      "toolCall",
 					Name:      "read",
@@ -232,16 +233,16 @@ func TestRunInnerLoopPersistsAssistantMessagesInContext(t *testing.T) {
 			return &msg, nil
 		}
 
-		msg := NewAssistantMessage()
-		msg.Content = []ContentBlock{
-			TextContent{Type: "text", Text: "done"},
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "done"},
 		}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -278,10 +279,10 @@ func TestStreamAssistantResponseWithRetrySkipsRetryForContextLengthError(t *test
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
 		return nil, &llm.ContextLengthExceededError{Message: "context window exceeded"}
 	}
@@ -289,7 +290,7 @@ func TestStreamAssistantResponseWithRetrySkipsRetryForContextLengthError(t *test
 	stream := newTestAgentEventStream()
 	_, err := streamAssistantResponseWithRetry(
 		context.Background(),
-		NewAgentContext("sys"),
+		agentctx.NewAgentContext("sys"),
 		&LoopConfig{MaxLLMRetries: 3},
 		stream,
 	)
@@ -312,10 +313,10 @@ func TestStreamAssistantResponseWithRetryPrefersLastLLMErrorOverContextCancel(t 
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
 		cancel()
 		return nil, errors.New("API error (429): Rate limit reached for requests")
@@ -324,7 +325,7 @@ func TestStreamAssistantResponseWithRetryPrefersLastLLMErrorOverContextCancel(t 
 	stream := newTestAgentEventStream()
 	_, err := streamAssistantResponseWithRetry(
 		ctx,
-		NewAgentContext("sys"),
+		agentctx.NewAgentContext("sys"),
 		&LoopConfig{MaxLLMRetries: 3},
 		stream,
 	)
@@ -349,10 +350,10 @@ func TestStreamAssistantResponseWithRetrySkipsRetryForNonRetryable4xx(t *testing
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
 		return nil, &llm.APIError{StatusCode: 401, Message: "unauthorized"}
 	}
@@ -360,7 +361,7 @@ func TestStreamAssistantResponseWithRetrySkipsRetryForNonRetryable4xx(t *testing
 	stream := newTestAgentEventStream()
 	_, err := streamAssistantResponseWithRetry(
 		context.Background(),
-		NewAgentContext("sys"),
+		agentctx.NewAgentContext("sys"),
 		&LoopConfig{MaxLLMRetries: 3},
 		stream,
 	)
@@ -378,17 +379,17 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		return nil, &llm.ContextLengthExceededError{Message: "context window exceeded"}
 	}
 
 	brokenCompactor := &failingCompactor{}
 	stream := newTestAgentEventStream()
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: brokenCompactor}, stream)
 
@@ -413,16 +414,16 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		return nil, errors.New("API error (429): Rate limit reached for requests")
 	}
 
 	stream := newTestAgentEventStream()
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("hello"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -457,11 +458,11 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 
 type failingCompactor struct{}
 
-func (f *failingCompactor) ShouldCompact(_ []AgentMessage) bool {
+func (f *failingCompactor) ShouldCompact(_ []agentctx.AgentMessage) bool {
 	return false
 }
 
-func (f *failingCompactor) Compact(_ []AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (f *failingCompactor) Compact(_ []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	return nil, errors.New("compaction failed")
 }
 
@@ -473,15 +474,15 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
+		msg := agentctx.NewAssistantMessage()
 		// Always return a tool call to keep the loop going
-		msg.Content = []ContentBlock{
-			ToolCallContent{
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.ToolCallContent{
 				ID:        "tc-" + string(rune('0'+callCount)),
 				Type:      "toolCall",
 				Name:      "test-tool",
@@ -492,7 +493,7 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	executor := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 1,
 		"toolTimeout":        5,
@@ -522,23 +523,23 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
+		msg := agentctx.NewAssistantMessage()
 		if callCount >= 5 {
 			// After 5 calls, stop with text response (no tool calls)
-			msg.Content = []ContentBlock{
-				TextContent{Type: "text", Text: "done"},
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "done"},
 			}
 			msg.StopReason = "stop"
 			return &msg, nil
 		}
 		// Return tool call to keep loop going
-		msg.Content = []ContentBlock{
-			ToolCallContent{
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.ToolCallContent{
 				ID:        "tc-" + string(rune('0'+callCount)),
 				Type:      "toolCall",
 				Name:      "test-tool",
@@ -549,7 +550,7 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
+	agentCtx := agentctx.NewAgentContext("sys")
 	executor := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 1,
 		"toolTimeout":        5,
@@ -578,26 +579,26 @@ func TestRunInnerLoopRecoversMalformedToolCallResponse(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
+		msg := agentctx.NewAssistantMessage()
 		if callCount == 1 {
-			msg.Content = []ContentBlock{
-				TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
 			}
 			msg.StopReason = "tool_calls"
 			return &msg, nil
 		}
-		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -630,21 +631,21 @@ func TestRunInnerLoopMalformedToolCallRecoveryRespectsLimit(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
-		msg.Content = []ContentBlock{
-			TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "<tool_call><arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>"},
 		}
 		msg.StopReason = "tool_calls"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -660,26 +661,26 @@ func TestRunInnerLoopRecoversWhenToolCallOnlyInThinking(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
+		msg := agentctx.NewAssistantMessage()
 		if callCount == 1 {
-			msg.Content = []ContentBlock{
-				ThinkingContent{Type: "thinking", Thinking: "<tool_call><arg_key>command</arg_key><arg_value>pwd</arg_value></tool_call>"},
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ThinkingContent{Type: "thinking", Thinking: "<tool_call><arg_key>command</arg_key><arg_value>pwd</arg_value></tool_call>"},
 			}
 			msg.StopReason = "tool_calls"
 			return &msg, nil
 		}
-		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -695,26 +696,26 @@ func TestRunInnerLoopEmitsToolCallRecoveryEvent(t *testing.T) {
 	callCount := 0
 	streamAssistantResponseFn = func(
 		_ context.Context,
-		_ *AgentContext,
+		_ *agentctx.AgentContext,
 		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []AgentMessage],
-	) (*AgentMessage, error) {
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
 		callCount++
-		msg := NewAssistantMessage()
+		msg := agentctx.NewAssistantMessage()
 		if callCount == 1 {
-			msg.Content = []ContentBlock{
-				TextContent{Type: "text", Text: "tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "tool: bash\n<arg_key>command</arg_key><arg_value>make debug-asan</arg_value>"},
 			}
 			msg.StopReason = "tool_calls"
 			return &msg, nil
 		}
-		msg.Content = []ContentBlock{TextContent{Type: "text", Text: "done"}}
+		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
 		msg.StopReason = "stop"
 		return &msg, nil
 	}
 
-	agentCtx := NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, NewUserMessage("start"))
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 

@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
-	"github.com/tiancaiamao/ai/pkg/memory"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 // RecallMemoryTool searches working memory for relevant information
 type RecallMemoryTool struct {
-	manager *memory.MemoryManager
+	manager *agentctx.MemoryManager
 }
 
 // NewRecallMemoryTool creates a new recall_memory tool
-func NewRecallMemoryTool(manager *memory.MemoryManager) *RecallMemoryTool {
+func NewRecallMemoryTool(manager *agentctx.MemoryManager) *RecallMemoryTool {
 	return &RecallMemoryTool{
 		manager: manager,
 	}
@@ -78,7 +77,7 @@ func (t *RecallMemoryTool) Parameters() map[string]interface{} {
 }
 
 // Execute runs the tool
-func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) ([]agent.ContentBlock, error) {
+func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	query, ok := params["query"].(string)
 	if !ok || query == "" {
 		return nil, fmt.Errorf("query parameter is required")
@@ -95,16 +94,16 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) (
 	}
 
 	// Build search options
-	opts := memory.DefaultSearchOptions()
+	opts := agentctx.DefaultSearchOptions()
 	opts.Query = query
 	opts.Limit = limit
 
 	// Set sources based on scope
 	switch scope {
 	case "detail":
-		opts.Sources = []memory.MemorySource{memory.MemorySourceDetail}
+		opts.Sources = []agentctx.MemorySource{agentctx.MemorySourceDetail}
 	case "messages":
-		opts.Sources = []memory.MemorySource{memory.MemorySourceMessages}
+		opts.Sources = []agentctx.MemorySource{agentctx.MemorySourceMessages}
 	}
 
 	// Execute search
@@ -114,8 +113,8 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) (
 	}
 
 	// Format results
-	return []agent.ContentBlock{
-		agent.TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: formatSearchResults(query, results),
 		},
@@ -123,7 +122,7 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) (
 }
 
 // formatSearchResults formats search results for display
-func formatSearchResults(query string, results []*memory.SearchResult) string {
+func formatSearchResults(query string, results []*agentctx.SearchResult) string {
 	if len(results) == 0 {
 		return fmt.Sprintf("No results found for: %s", query)
 	}

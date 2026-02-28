@@ -1,13 +1,13 @@
 package tools
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // ReadTool reads file contents.
@@ -45,7 +45,7 @@ func (t *ReadTool) Parameters() map[string]any {
 }
 
 // Execute reads the file and returns its contents.
-func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agent.ContentBlock, error) {
+func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	path, ok := args["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid path argument")
@@ -72,8 +72,8 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agent.Co
 		content += "\n\n... (file truncated, too large)"
 	}
 
-	return []agent.ContentBlock{
-		agent.TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: content,
 		},

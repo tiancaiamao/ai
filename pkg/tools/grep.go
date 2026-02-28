@@ -1,13 +1,13 @@
 package tools
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // GrepTool searches for patterns in files using ripgrep or grep.
@@ -53,7 +53,7 @@ func (t *GrepTool) Parameters() map[string]any {
 }
 
 // Execute executes the grep search.
-func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agent.ContentBlock, error) {
+func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid pattern argument")
@@ -92,8 +92,8 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agent.Co
 	if err != nil {
 		// Grep returns exit code 1 when no matches found, which is not an error
 		if len(output) == 0 {
-			return []agent.ContentBlock{
-				agent.TextContent{
+			return []agentctx.ContentBlock{
+				agentctx.TextContent{
 					Type: "text",
 					Text: "No matches found",
 				},
@@ -107,8 +107,8 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agent.Co
 		result = "No matches found"
 	}
 
-	return []agent.ContentBlock{
-		agent.TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: result,
 		},

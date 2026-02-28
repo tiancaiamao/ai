@@ -1,6 +1,7 @@
 package winai
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"bufio"
 	"context"
 	"encoding/json"
@@ -130,13 +131,13 @@ type agentEvent struct {
 	EventAt               int64                       `json:"eventAt,omitempty"`
 	Error                 string                      `json:"error,omitempty"`
 	ErrorStack            string                      `json:"errorStack,omitempty"`
-	Message               *agent.AgentMessage         `json:"message,omitempty"`
-	Messages              []agent.AgentMessage        `json:"messages,omitempty"`
-	ToolResults           []agent.AgentMessage        `json:"toolResults,omitempty"`
+	Message               *agentctx.AgentMessage         `json:"message,omitempty"`
+	Messages              []agentctx.AgentMessage        `json:"messages,omitempty"`
+	ToolResults           []agentctx.AgentMessage        `json:"toolResults,omitempty"`
 	ToolCallID            string                      `json:"toolCallId,omitempty"`
 	ToolName              string                      `json:"toolName,omitempty"`
 	Args                  map[string]interface{}      `json:"args,omitempty"`
-	Result                *agent.AgentMessage         `json:"result,omitempty"`
+	Result                *agentctx.AgentMessage         `json:"result,omitempty"`
 	IsError               bool                        `json:"isError,omitempty"`
 	AssistantMessageEvent *assistantMessageEvent      `json:"assistantMessageEvent,omitempty"`
 	Compaction            *agent.CompactionInfo       `json:"compaction,omitempty"`
@@ -1578,7 +1579,7 @@ func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 	p.scrollToBottom()
 }
 
-func (p *AiInterpreter) writeMessageIfEmpty(msg *agent.AgentMessage) {
+func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 	p.stateMu.Lock()
 	streamed := p.currentMessageStreamed
 	showThinking := p.showThinking
@@ -1610,31 +1611,31 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agent.AgentMessage) {
 	p.writeStream(role, content, enabled)
 }
 
-func renderMessageContent(msg *agent.AgentMessage, showThinking bool, showTools bool) string {
+func renderMessageContent(msg *agentctx.AgentMessage, showThinking bool, showTools bool) string {
 	if msg == nil {
 		return ""
 	}
 	var b strings.Builder
 	for _, block := range msg.Content {
 		switch v := block.(type) {
-		case agent.TextContent:
+		case agentctx.TextContent:
 			b.WriteString(v.Text)
-		case agent.ThinkingContent:
+		case agentctx.ThinkingContent:
 			if showThinking {
 				b.WriteString(v.Thinking)
 			}
-		case agent.ToolCallContent:
+		case agentctx.ToolCallContent:
 			if showTools {
 				b.WriteString(fmt.Sprintf("[toolcall %s]", v.Name))
 			}
-		case agent.ImageContent:
+		case agentctx.ImageContent:
 			// ignore images in text output
 		}
 	}
 	return b.String()
 }
 
-func renderMessageText(msg *agent.AgentMessage) string {
+func renderMessageText(msg *agentctx.AgentMessage) string {
 	if msg == nil {
 		return ""
 	}
@@ -2357,11 +2358,11 @@ func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 
 func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 	var payload struct {
-		Messages []agent.AgentMessage `json:"messages"`
+		Messages []agentctx.AgentMessage `json:"messages"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		// get_messages may return a raw array in some versions
-		var messages []agent.AgentMessage
+		var messages []agentctx.AgentMessage
 		if err2 := json.Unmarshal(data, &messages); err2 != nil {
 			p.writeStatus(fmt.Sprintf("ai: invalid messages response: %v", err))
 			return

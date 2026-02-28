@@ -93,15 +93,15 @@ func TestBuilderWithTools(t *testing.T) {
 	}
 
 	if !contains(result, "read: Read files") {
-		t.Error("Tool 'read' missing from result")
+		t.Error("agentctx.Tool 'read' missing from result")
 	}
 
 	if !contains(result, "write: Write files") {
-		t.Error("Tool 'write' missing from result")
+		t.Error("agentctx.Tool 'write' missing from result")
 	}
 
 	if !contains(result, "Only use the tools listed above") {
-		t.Error("Tool limitation warning missing")
+		t.Error("agentctx.Tool limitation warning missing")
 	}
 }
 

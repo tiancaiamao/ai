@@ -91,7 +91,7 @@ func TestExecutorRetryMechanism(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, content)
-		assert.Equal(t, 0, tool.calls) // Tool never called because context was already canceled
+		assert.Equal(t, 0, tool.calls) // agentctx.Tool never called because context was already canceled
 	})
 
 	t.Run("exponential_backoff", func(t *testing.T) {
@@ -243,7 +243,7 @@ func TestTimeoutHandling(t *testing.T) {
 		executor := NewToolExecutor(1, 1, 10) // 1 second timeout
 		executor.SetRetryConfig(config)
 
-		// Tool that takes longer than timeout
+		// agentctx.Tool that takes longer than timeout
 		tool := &MockTool{
 			name:        "timeout-tool",
 			maxFailures: 0,

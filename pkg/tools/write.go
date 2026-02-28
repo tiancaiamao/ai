@@ -1,12 +1,12 @@
 package tools
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
 // WriteTool writes content to a file.
@@ -48,7 +48,7 @@ func (t *WriteTool) Parameters() map[string]any {
 }
 
 // Execute writes content to the file.
-func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agent.ContentBlock, error) {
+func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	path, ok1 := args["path"].(string)
 	content, ok2 := args["content"].(string)
 	if !ok1 || !ok2 {
@@ -73,8 +73,8 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agent.C
 		return nil, fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 
-	return []agent.ContentBlock{
-		agent.TextContent{
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
 			Type: "text",
 			Text: fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path),
 		},

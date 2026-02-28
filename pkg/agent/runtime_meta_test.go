@@ -1,10 +1,13 @@
 package agent
 
-import "testing"
+import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"testing"
+)
 
 func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
-	agentCtx := NewAgentContext("sys")
-	meta := ContextMeta{
+	agentCtx := agentctx.NewAgentContext("sys")
+	meta := agentctx.ContextMeta{
 		TokensUsed:        12345,
 		TokensMax:         128000,
 		TokensPercent:     25.0,
@@ -79,13 +82,13 @@ func TestBuildRuntimeSystemAppendix(t *testing.T) {
 }
 
 func TestExtractActiveTurnMessages(t *testing.T) {
-	msgs := []AgentMessage{
-		NewUserMessage("old request"),
-		NewAssistantMessage(),
-		NewUserMessage("new request"),
-		NewAssistantMessage(),
-		NewToolResultMessage("call-1", "read", []ContentBlock{
-			TextContent{Type: "text", Text: "tool output"},
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("old request"),
+		agentctx.NewAssistantMessage(),
+		agentctx.NewUserMessage("new request"),
+		agentctx.NewAssistantMessage(),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "tool output"},
 		}, false),
 	}
 
@@ -102,10 +105,10 @@ func TestExtractActiveTurnMessages(t *testing.T) {
 }
 
 func TestExtractActiveTurnMessagesNoUserFallsBackToTail(t *testing.T) {
-	msgs := []AgentMessage{
-		NewAssistantMessage(),
-		NewToolResultMessage("call-1", "bash", []ContentBlock{
-			TextContent{Type: "text", Text: "tail"},
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewAssistantMessage(),
+		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "tail"},
 		}, false),
 	}
 
@@ -119,17 +122,17 @@ func TestExtractActiveTurnMessagesNoUserFallsBackToTail(t *testing.T) {
 
 func TestExtractRecentMessagesSkipsOrphanedToolResults(t *testing.T) {
 	// Simulate a message sequence where truncation would leave orphaned toolResults at the start
-	msgs := []AgentMessage{
-		NewToolResultMessage("call-1", "read", []ContentBlock{
-			TextContent{Type: "text", Text: "orphaned tool result 1"},
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "orphaned tool result 1"},
 		}, false),
-		NewToolResultMessage("call-2", "bash", []ContentBlock{
-			TextContent{Type: "text", Text: "orphaned tool result 2"},
+		agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "orphaned tool result 2"},
 		}, false),
-		NewUserMessage("user message"),
-		NewAssistantMessage(),
-		NewToolResultMessage("call-3", "grep", []ContentBlock{
-			TextContent{Type: "text", Text: "valid tool result"},
+		agentctx.NewUserMessage("user message"),
+		agentctx.NewAssistantMessage(),
+		agentctx.NewToolResultMessage("call-3", "grep", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "valid tool result"},
 		}, false),
 	}
 

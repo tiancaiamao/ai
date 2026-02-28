@@ -1,6 +1,7 @@
 package main
 
 import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,7 +21,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/memory"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -156,8 +156,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewEditTool(cwd))
 
 	// Create memory manager and register recall_memory tool
-	var memoryMgr *memory.MemoryManager
-	memoryMgr, err = memory.NewMemoryManager(sess.GetDir())
+	var memoryMgr *agentctx.MemoryManager
+	memoryMgr, err = agentctx.NewMemoryManager(sess.GetDir())
 	if err != nil {
 		slog.Warn("Failed to create memory manager, recall_memory tool disabled", "error", err)
 	} else {
@@ -238,7 +238,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if currentSess != nil {
 			sessionDir := currentSess.GetDir()
 			if sessionDir != "" {
-				wm := agent.NewWorkingMemory(sessionDir)
+				wm := agentctx.NewWorkingMemory(sessionDir)
 				promptBuilder.SetWorkingMemory(wm)
 			}
 		}
@@ -265,7 +265,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return
 		}
 
-		wm := agent.NewWorkingMemory(sessionDir)
+		wm := agentctx.NewWorkingMemory(sessionDir)
 		if err := wm.WriteContent(summary); err != nil {
 			slog.Warn("[resume-on-branch] Failed to restore working memory", "error", err)
 		} else {
@@ -273,11 +273,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	}
 
-	createBaseContext := func() *agent.AgentContext {
+	createBaseContext := func() *agentctx.AgentContext {
 		// Rebuild system prompt from the current session so working-memory paths
 		// stay in sync after /resume, /new, /fork, and branch resume operations.
 		systemPrompt = buildSystemPrompt(sess)
-		ctx := agent.NewAgentContext(systemPrompt)
+		ctx := agentctx.NewAgentContext(systemPrompt)
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
 		}
@@ -285,7 +285,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if sess != nil {
 			sessionDir := sess.GetDir()
 			if sessionDir != "" {
-				wm := agent.NewWorkingMemory(sessionDir)
+				wm := agentctx.NewWorkingMemory(sessionDir)
 				ctx.WorkingMemory = wm
 				sess.SetWorkingMemory(wm) // Set working memory on session
 			}
@@ -315,7 +315,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
-	setAgentContext := func(ctx *agent.AgentContext) {
+	setAgentContext := func(ctx *agentctx.AgentContext) {
 		ag.SetContext(ctx)
 	}
 
