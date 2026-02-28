@@ -204,7 +204,8 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	s.header.LastCompactionID = entry.ID
 	s.header.ResumeOffset = 0 // File will be rewritten, so offset resets
 
-	if err := s.persistEntry(entry); err != nil {
+	// Rewrite the entire file to persist the updated header
+	if err := s.rewriteFile(); err != nil {
 		return nil, err
 	}
 
