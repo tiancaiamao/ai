@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -220,33 +221,34 @@ func (m *MemoryManager) parseMessagesGrep(output []byte) []*SearchResult {
 }
 
 // extractTextFromJSON attempts to extract text from a JSON line
-// This is a simple implementation - looks for "content" field
+// This handles the nested message structure used in messages.jsonl
 func extractTextFromJSON(jsonContent string) string {
-	// Look for "content":"..." pattern
-	idx := strings.Index(jsonContent, `"content":"`)
-	if idx == -1 {
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonContent), &data); err != nil {
 		return ""
 	}
 
-	// Start after "content":"
-	start := idx + len(`"content":"`)
-
-	// Find the closing quote, handling escaped quotes
-	end := start
-	for i := start; i < len(jsonContent); i++ {
-		if jsonContent[i] == '"' {
-			// Check if it's escaped
-			if i > 0 && jsonContent[i-1] == '\\' {
-				continue
-			}
-			end = i
-			break
-		}
-	}
-
-	if end <= start {
+	// Access nested message.content
+	msg, ok := data["message"].(map[string]interface{})
+	if !ok {
 		return ""
 	}
 
-	return jsonContent[start:end]
+	contentArr, ok := msg["content"].([]interface{})
+	if !ok || len(contentArr) == 0 {
+		return ""
+	}
+
+	// Get first item (text content)
+	item, ok := contentArr[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	text, ok := item["text"].(string)
+	if !ok {
+		return ""
+	}
+
+	return text
 }
