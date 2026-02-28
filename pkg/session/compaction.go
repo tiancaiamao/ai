@@ -132,6 +132,15 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 
 	s.addEntry(entry)
 
+	// Save compaction summary to working memory detail directory
+	// This ensures all compactions (auto and manual) save summaries
+	if s.workingMemory != nil && summary != "" {
+		if err := s.workingMemory.SaveCompactionSummary(summary); err != nil {
+			// Log warning but don't fail the compaction
+			// Use log/slog if available, otherwise ignore
+		}
+	}
+
 	// Update header with compaction info for fast resume
 	s.header.LastCompactionID = entry.ID
 	s.header.ResumeOffset = 0 // File will be rewritten, so offset resets

@@ -108,7 +108,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	sessionID := ""
 	sessionName := ""
 	if sessionPath != "" {
-		sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
+		// Create load options with working memory (will be set later in createBaseContext)
+		opts := session.DefaultLoadOptions()
+		sess, err = session.LoadSessionLazy(sessionPath, opts)
 		if err != nil {
 			return fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
 		}
@@ -253,12 +255,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
 		}
-		// Initialize working memory and restore messages from session
+		// Initialize working memory and set it on session for compaction summaries
 		if sess != nil {
 			sessionDir := sess.GetDir()
 			if sessionDir != "" {
 				wm := agent.NewWorkingMemory(sessionDir)
 				ctx.WorkingMemory = wm
+				sess.SetWorkingMemory(wm) // Set working memory on session
 			}
 			// Restore conversation history from session
 			ctx.Messages = sess.GetMessages()
@@ -621,7 +624,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					sessionDir = filepath.Dir(sessionPath)
 				}
 			}
-			newSess, err := session.LoadSessionLazy(sessionDir, session.DefaultLoadOptions())
+			opts := session.DefaultLoadOptions()
+			newSess, err := session.LoadSessionLazy(sessionDir, opts)
 			if err != nil {
 				return err
 			}
@@ -813,7 +817,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 				slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
 				response = &rpc.CompactResult{
-					Summary:          result.Summary,
 					FirstKeptEntryID: result.FirstKeptEntryID,
 					TokensBefore:     result.TokensBefore,
 					TokensAfter:      result.TokensAfter,

@@ -208,7 +208,6 @@ type BashResult struct {
 
 // CompactResult represents the result of a compaction operation.
 type CompactResult struct {
-	Summary          string `json:"summary,omitempty"`
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
 	TokensAfter      int    `json:"tokensAfter,omitempty"`

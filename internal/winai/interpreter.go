@@ -2687,10 +2687,6 @@ func (p *AiInterpreter) handleCompactResult(data json.RawMessage) {
 		return
 	}
 
-	if result.Summary != "" {
-		p.writeStatus(fmt.Sprintf("ai: compacted\nSummary:\n%s", result.Summary))
-		return
-	}
 	p.writeStatus("ai: compacted")
 }
 

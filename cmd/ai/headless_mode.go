@@ -70,7 +70,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 
 	if noSession {
 		// Create a new temporary session without persistence
-		sess = session.NewSession("") // Empty path = no persistence
+		sess = session.NewSession("", nil) // Empty path = no persistence
 		sessionID = sess.GetID()
 		slog.Info("Created temporary session (no persistence)", "id", sessionID)
 	} else {
