@@ -14,7 +14,7 @@
 | `loop.go` | 2,118 | 主循环逻辑、消息处理、工具协调、错误恢复 |
 | `agent.go` | 640 | Agent 结构体、核心方法 |
 | `metrics.go` | 882 | 指标收集和统计 |
-| `working_memory.go` | 610 | 工作记忆管理 |
+| `llm_context.go` | 610 | 工作记忆管理 |
 | `context.go` | 474 | 上下文结构 |
 | `tool_output.go` | 459 | 工具输出处理 |
 | `tool_tag_parser.go` | 529 | 工具标签解析 |
@@ -41,18 +41,18 @@
 ```
 pkg/agent/
 ├── context.go              # AgentContext 结构和工具管理
-└── working_memory.go       # WorkingMemory 实现
+└── llm_context.go       # LLMContext 实现
 ```
 
 **分析**:
-- `context.go` 定义了 `AgentContext`，包含 `WorkingMemory *WorkingMemory` 字段
-- `working_memory.go` 实现了 `WorkingMemory` 类型和相关逻辑
+- `context.go` 定义了 `AgentContext`，包含 `LLMContext *LLMContext` 字段
+- `llm_context.go` 实现了 `LLMContext` 类型和相关逻辑
 - 两者本质都在做同一件事：**上下文管理**
-- WorkingMemory 是 AgentContext 的一部分，但文件分离导致关注点不清晰
+- LLMContext 是 AgentContext 的一部分，但文件分离导致关注点不清晰
 
 **建议**:
-- 将 `context.go` 和 `working_memory.go` 合并到新的 `pkg/context/` 包
-- 保留清晰的概念分层：Context 是容器，WorkingMemory 是内容
+- 将 `context.go` 和 `llm_context.go` 合并到新的 `pkg/context/` 包
+- 保留清晰的概念分层：Context 是容器，LLMContext 是内容
 
 ---
 
@@ -90,7 +90,7 @@ pkg/agent/
   2. LLM 调用和重试逻辑 (`streamAssistantResponse`, `streamAssistantResponseWithRetry`)
   3. 工具调用执行 (`executeToolCalls`)
   4. 消息选择和 token 预算 (`selectMessagesForLLM`, `extractRecentMessages`)
-  5. 工作记忆集成 (`shouldInjectHistory`, `hasSuccessfulWorkingMemoryWrite`)
+  5. 工作记忆集成 (`shouldInjectHistory`, `hasSuccessfulLLMContextWrite`)
   6. 错误恢复 (`maybeRecoverMalformedToolCall`)
   7. 循环保护 (`toolLoopGuard`)
 
@@ -151,19 +151,19 @@ pkg/agent/
 
 **目标**:
 - 将上下文管理逻辑从 `pkg/agent/` 独立出来
-- 统一 `AgentContext` 和 `WorkingMemory` 的概念
+- 统一 `AgentContext` 和 `LLMContext` 的概念
 
 **迁移文件**:
 ```
 pkg/agent/context.go           → pkg/context/context.go
-pkg/agent/working_memory.go    → pkg/context/working_memory.go
+pkg/agent/llm_context.go    → pkg/context/llm_context.go
 ```
 
 **新的包结构**:
 ```
 pkg/context/
 ├── context.go              # AgentContext 和工具接口定义
-└── working_memory.go       # WorkingMemory 实现
+└── llm_context.go       # LLMContext 实现
 ```
 
 **包名**:
@@ -172,7 +172,7 @@ pkg/context/
 
 **导入变更**:
 - `agent.AgentContext` → `context.AgentContext` / `agentctx.AgentContext`
-- `agent.WorkingMemory` → `context.WorkingMemory` / `agentctx.WorkingMemory`
+- `agent.LLMContext` → `context.LLMContext` / `agentctx.LLMContext`
 - 需要更新所有引用这些类型的文件
 
 ---
@@ -217,7 +217,7 @@ pkg/agent/
 2. 复制文件：
    ```bash
    cp pkg/agent/context.go pkg/context/context.go
-   cp pkg/agent/working_memory.go pkg/context/working_memory.go
+   cp pkg/agent/llm_context.go pkg/context/llm_context.go
    ```
 3. 修改包声明：将 `package agent` 改为 `package context`
 4. 确定包名（建议使用 `agentctx` 避免与标准库冲突）
@@ -230,7 +230,7 @@ pkg/agent/
    ```
 2. 更新类型引用：
    - `AgentContext` → `context.AgentContext`
-   - `WorkingMemory` → `context.WorkingMemory`
+   - `LLMContext` → `context.LLMContext`
    - `Tool` 接口保持在 context 包中
 
 ### 第三步：验证和测试
@@ -242,7 +242,7 @@ pkg/agent/
 ### 第四步：删除旧文件
 
 1. 删除 `pkg/agent/context.go`
-2. 删除 `pkg/agent/working_memory.go`
+2. 删除 `pkg/agent/llm_context.go`
 
 ---
 
@@ -279,7 +279,7 @@ pkg/agent/
 如果你同意这个方案，我可以帮你：
 
 1. 创建 `pkg/context/` 包
-2. 迁移 `context.go` 和 `working_memory.go`
+2. 迁移 `context.go` 和 `llm_context.go`
 3. 更新所有导入和引用
 4. 运行测试验证
 

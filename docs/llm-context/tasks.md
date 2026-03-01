@@ -1,4 +1,4 @@
-# Tasks: Working Memory - Phase 2 (Level 3 自主上下文管理)
+# Tasks: LLM Context - Phase 2 (Level 3 自主上下文管理)
 
 ## Phase 2.1: 添加 `compact_history` Tool
 
@@ -16,7 +16,7 @@
 ## Phase 2.3: 移除 History 注入
 
 - [x] T035 添加 `InjectHistory` 配置选项到 `pkg/agent/loop.go`（默认 false）
-- [x] T036 修改 `streamAssistantResponse()` 逻辑 - 当 `InjectHistory=false` 时只注入 system prompt + working memory
+- [x] T036 修改 `streamAssistantResponse()` 逻辑 - 当 `InjectHistory=false` 时只注入 system prompt + llm context
 - [x] T037 确保 messages.jsonl 写入保留（用于调试和恢复）
 
 ## Phase 2.4: 更新 System Prompt
@@ -230,10 +230,10 @@ func (a *Agent) streamAssistantResponse(ctx context.Context, messages []Message)
     if a.config.InjectHistory {
         llmMessages = ConvertMessagesToLLM(messages)
     } else {
-        // 只注入 system prompt + working memory
+        // 只注入 system prompt + llm context
         llmMessages = []Message{
             a.buildSystemPrompt(),
-            a.buildWorkingMemoryMessage(),
+            a.buildLLMContextMessage(),
         }
     }
 
@@ -242,7 +242,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context, messages []Message)
 ```
 
 **验收标准**:
-- `InjectHistory=false` 时，LLM 只收到 system prompt + working memory
+- `InjectHistory=false` 时，LLM 只收到 system prompt + llm context
 - `InjectHistory=true` 时，行为不变
 
 ---
@@ -263,7 +263,7 @@ func (a *Agent) streamAssistantResponse(ctx context.Context, messages []Message)
 
 **修改**:
 ```go
-const workingMemoryPrompt = `## Working Memory ⚠️ IMPORTANT
+const llmContextPrompt = `## LLM Context ⚠️ IMPORTANT
 
 You have an external memory file that persists across conversations.
 
@@ -274,7 +274,7 @@ You have an external memory file that persists across conversations.
 
 **YOU ARE RESPONSIBLE for context management:**
 - History messages are NOT injected into your prompt
-- You MUST use working memory to remember important information
+- You MUST use llm context to remember important information
 - Check context_meta (injected each request) to monitor token usage
 - Use compact_history tool to compress when needed
 
@@ -316,12 +316,12 @@ Token Usage      Recommended Action
 
 **T039: 新 session 测试**
 - 启动新 session
-- 验证 LLM 只收到 system prompt + working memory
+- 验证 LLM 只收到 system prompt + llm context
 - 验证 LLM 能正常工作
 
 **T040: 长对话测试**
 - 进行长对话（10+ turns）
-- 观察 LLM 是否主动更新 working memory
+- 观察 LLM 是否主动更新 llm context
 - 验证 context_meta 显示正确
 
 **T041: 自主压缩测试（工具输出）**
@@ -376,8 +376,8 @@ All 16 tasks completed successfully:
 
 ## Phase 3: Bug 修复 (手动测试发现)
 
-### Bug 6: LLM 没有主动维护 Working Memory ✅
-- **问题**: LLM 在对话中不主动更新 working memory
+### Bug 6: LLM 没有主动维护 LLM Context ✅
+- **问题**: LLM 在对话中不主动更新 llm context
 - **根因**: System prompt 强调不够
 - **修复**: A+B 方案
   - A: `pkg/prompt/builder.go` - 强化标题 `⚠️ IMPORTANT` + 添加触发条件

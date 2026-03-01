@@ -20,8 +20,8 @@ type LoadOptions struct {
 	IncludeSummary bool
 	// Lazy enables lazy loading (only load recent entries + compaction summary)
 	Lazy bool
-	// WorkingMemory is the working memory instance for the session
-	WorkingMemory *agentctx.WorkingMemory
+	// LLMContext is the llm context instance for the session
+	LLMContext *agentctx.LLMContext
 }
 
 // DefaultLoadOptions returns the default load options for lazy loading.
@@ -59,7 +59,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 
 	// Non-lazy mode: use original LoadSession
 	if !opts.Lazy {
-		return LoadSession(sessionDir, opts.WorkingMemory)
+		return LoadSession(sessionDir, opts.LLMContext)
 	}
 
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
@@ -85,7 +85,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	header, err := readHeaderFromFile(f)
 	if err != nil {
 		// Fallback to full load if header parsing fails
-		return LoadSession(sessionDir, opts.WorkingMemory)
+		return LoadSession(sessionDir, opts.LLMContext)
 	}
 
 	sess := &Session{
@@ -111,7 +111,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	// Fallback: scan from end to find compaction entry
 	if err := loadFromEnd(f, sess, opts); err != nil {
 		// If lazy loading fails, fall back to full load
-		return LoadSession(sessionDir, opts.WorkingMemory)
+		return LoadSession(sessionDir, opts.LLMContext)
 	}
 
 	sess.flushed = true

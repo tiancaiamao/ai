@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	// WorkingMemoryDir is the directory name for working memory
-	WorkingMemoryDir = "working-memory"
+	// LLMContextDir is the directory name for llm context
+	LLMContextDir = "llm-context"
 	// OverviewFile is the filename for the overview (L1)
 	OverviewFile = "overview.md"
 	// DetailDir is the directory name for detailed content (L2)
@@ -16,7 +16,7 @@ const (
 
 // GetOverviewTemplate returns the default template for overview.md
 func GetOverviewTemplate() string {
-	return `# Working Memory
+	return `# LLM Context
 
 <!--
 这是你的外部记忆。每次请求时，这个文件的内容会被加载到你的 prompt 中。
@@ -37,7 +37,7 @@ func GetOverviewTemplate() string {
 - tokens_max: 最大 token 数
 - tokens_percent: 使用百分比
 - messages_in_history: 历史消息数量
-- working_memory_size: working memory 大小（字节）
+- llm_context_size: llm context 大小（字节）
 -->
 
 ## 当前任务
@@ -68,10 +68,10 @@ func GetOverviewTemplate() string {
 `
 }
 
-// EnsureWorkingMemory creates the working-memory directory structure if it doesn't exist.
+// EnsureLLMContext creates the llm-context directory structure if it doesn't exist.
 // Returns the path to the overview.md file.
-func EnsureWorkingMemory(sessionDir string) (string, error) {
-	wmDir := filepath.Join(sessionDir, WorkingMemoryDir)
+func EnsureLLMContext(sessionDir string) (string, error) {
+	wmDir := filepath.Join(sessionDir, LLMContextDir)
 	if err := os.MkdirAll(wmDir, 0755); err != nil {
 		return "", err
 	}
@@ -92,12 +92,12 @@ func EnsureWorkingMemory(sessionDir string) (string, error) {
 	return overviewPath, nil
 }
 
-// GetWorkingMemoryPath returns the path to overview.md for a session.
-func GetWorkingMemoryPath(sessionDir string) string {
-	return filepath.Join(sessionDir, WorkingMemoryDir, OverviewFile)
+// GetLLMContextPath returns the path to overview.md for a session.
+func GetLLMContextPath(sessionDir string) string {
+	return filepath.Join(sessionDir, LLMContextDir, OverviewFile)
 }
 
-// GetWorkingMemoryDetailDir returns the path to the detail directory for a session.
-func GetWorkingMemoryDetailDir(sessionDir string) string {
-	return filepath.Join(sessionDir, WorkingMemoryDir, DetailDir)
+// GetLLMContextDetailDir returns the path to the detail directory for a session.
+func GetLLMContextDetailDir(sessionDir string) string {
+	return filepath.Join(sessionDir, LLMContextDir, DetailDir)
 }

@@ -22,7 +22,7 @@ type MemoryManager struct {
 
 // NewMemoryManager creates a new memory manager
 func NewMemoryManager(sessionDir string) (*MemoryManager, error) {
-	detailDir := filepath.Join(sessionDir, "working-memory", "detail")
+	detailDir := filepath.Join(sessionDir, "llm-context", "detail")
 	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
 
 	// Ensure directories exist
@@ -48,7 +48,7 @@ func (m *MemoryManager) SetSessionDir(sessionDir string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	detailDir := filepath.Join(sessionDir, "working-memory", "detail")
+	detailDir := filepath.Join(sessionDir, "llm-context", "detail")
 	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
 
 	// Ensure directories exist

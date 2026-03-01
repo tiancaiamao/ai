@@ -1,10 +1,10 @@
-# Implementation Plan: Working Memory - Phase 2
+# Implementation Plan: LLM Context - Phase 2
 
 ## 概述
 
-**Phase 1 已完成**：Working Memory 基础设施（目录结构、注入机制、LLM 维护提醒）
+**Phase 1 已完成**：LLM Context 基础设施（目录结构、注入机制、LLM 维护提醒）
 
-**Phase 2 目标**：实现核心架构变化——History Messages 被 Working Memory 取代
+**Phase 2 目标**：实现核心架构变化——History Messages 被 LLM Context 取代
 
 ---
 
@@ -16,7 +16,7 @@
 |------|-------------------|-----------------|
 | Compaction 触发 | 代码写死 75% | **LLM 自己决定** |
 | 压缩策略 | 固定规则 | **LLM 自主判断** |
-| 上下文来源 | history + working memory | **只有** working memory + context_meta |
+| 上下文来源 | history + llm context | **只有** llm context + context_meta |
 | History 用途 | 注入 prompt + 存储 | **只存储**，不注入 |
 
 ## 压缩策略指南（写入 System Prompt）
@@ -36,7 +36,7 @@ Token 使用量    建议操作
 - 关键决策必须保留
 ```
 
-**注意**：75% 时系统会强制触发 compaction 作为兜底。如果你主动维护 working memory，这层兜底应该不会被触发。
+**注意**：75% 时系统会强制触发 compaction 作为兜底。如果你主动维护 llm context，这层兜底应该不会被触发。
 
 ---
 
@@ -46,10 +46,10 @@ Token 使用量    建议操作
 
 ```
 Phase 1（当前）:
-System Prompt → Working Memory → History Messages → Context Meta
+System Prompt → LLM Context → History Messages → Context Meta
 
 Phase 2（目标）:
-System Prompt → Working Memory
+System Prompt → LLM Context
                 ↓
            LLM 自己决定:
            - 查看 context_meta（每次自动注入）
@@ -61,14 +61,14 @@ System Prompt → Working Memory
 
 1. **History Messages 不再注入**
    - `messages.jsonl` 只用于存储和调试
-   - LLM 必须通过 working memory 获取上下文
+   - LLM 必须通过 llm context 获取上下文
 
 2. **Context Meta 变为 Tool** ❌ ~~改为保持自动注入~~
    - context_meta 仍然自动注入到消息末尾
    - LLM 每次都能看到，无需主动查询
 
 3. **LLM 职责增强**
-   - 必须主动维护 working memory
+   - 必须主动维护 llm context
    - 必须在需要时查询上下文状态
    - 自己决定何时压缩/归档
 
@@ -83,7 +83,7 @@ System Prompt → Working Memory
 
 type LoopConfig struct {
     // InjectHistory controls whether to inject history messages into prompt
-    // Phase 2: default false (LLM uses working memory only)
+    // Phase 2: default false (LLM uses llm context only)
     InjectHistory bool
 }
 ```
@@ -112,7 +112,7 @@ Usage:
   "target": "conversation" | "tools" | "all",
   "strategy": "summarize" | "archive",
   "keep_recent": 5,
-  "archive_to": "working-memory/detail/session-summary.md"
+  "archive_to": "llm-context/detail/session-summary.md"
 }
 
 Parameters:
@@ -153,7 +153,7 @@ Returns: summary of what was compacted and current token status`
     "target": "conversation",
     "strategy": "archive",
     "keep_recent": 5,
-    "archive_to": "working-memory/detail/task-progress.md"
+    "archive_to": "llm-context/detail/task-progress.md"
   }
 }
 
@@ -180,7 +180,7 @@ Returns: summary of what was compacted and current token status`
 ### 4. System Prompt 更新
 
 ```
-## Working Memory ⚠️ IMPORTANT
+## LLM Context ⚠️ IMPORTANT
 
 You have an external memory file that persists across conversations.
 
@@ -191,7 +191,7 @@ You have an external memory file that persists across conversations.
 
 **YOU ARE RESPONSIBLE for context management:**
 - History messages are NOT injected into your prompt
-- You MUST use working memory to remember important information
+- You MUST use llm context to remember important information
 - Check context_meta (injected each request) to monitor token usage
 - Compress and archive when needed
 
@@ -237,7 +237,7 @@ Token Usage      Recommended Action
 - [ ] T035 添加 `InjectHistory` 配置选项（默认 false）
 - [ ] T036 修改 `streamAssistantResponse()` 逻辑：
   - 当 `InjectHistory=false` 时，不调用 `ConvertMessagesToLLM`
-  - 只注入 system prompt + working memory
+  - 只注入 system prompt + llm context
 - [ ] T037 保留 messages.jsonl 写入（用于调试和恢复）
 
 ### Phase 2.4: 更新 System Prompt
@@ -274,7 +274,7 @@ Token Usage      Recommended Action
 如果 Phase 2 效果不佳，可以：
 
 1. **配置开关**：设置 `InjectHistory=true` 回到 Phase 1 行为
-2. **Hybrid 模式**：注入最近 N 条消息 + working memory
+2. **Hybrid 模式**：注入最近 N 条消息 + llm context
 3. **渐进式**：先保留 context_meta 注入，等 LLM 学会后再移除
 
 ---

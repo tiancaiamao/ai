@@ -18,8 +18,8 @@ type AgentContext struct {
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
 
-	// WorkingMemory is the agent's working memory for context management.
-	WorkingMemory *WorkingMemory `json:"-"`
+	// LLMContext is the agent's llm context for context management.
+	LLMContext *LLMContext `json:"-"`
 
 	// Runtime meta snapshot state for stable system-tail injection.
 	RuntimeMetaSnapshot string `json:"-"`

@@ -173,13 +173,13 @@ Be concise and focused on the task at hand.`
 	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
-	// Set working memory for system prompt explanation (tells LLM about the mechanism)
+	// Set llm context for system prompt explanation (tells LLM about the mechanism)
 	// The actual content is injected dynamically in the agent loop
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-			wm := agentctx.NewWorkingMemory(sessionDir)
-			promptBuilder.SetWorkingMemory(wm)
+			wm := agentctx.NewLLMContext(sessionDir)
+			promptBuilder.SetLLMContext(wm)
 		}
 	}
 	systemPrompt := promptBuilder.Build()
@@ -187,12 +187,12 @@ Be concise and focused on the task at hand.`
 	// Create agent context
 	agentCtx := agentctx.NewAgentContext(systemPrompt)
 
-	// Initialize working memory from session directory (for dynamic injection)
+	// Initialize llm context from session directory (for dynamic injection)
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-			wm := agentctx.NewWorkingMemory(sessionDir)
-			agentCtx.WorkingMemory = wm
+			wm := agentctx.NewLLMContext(sessionDir)
+			agentCtx.LLMContext = wm
 		}
 	}
 

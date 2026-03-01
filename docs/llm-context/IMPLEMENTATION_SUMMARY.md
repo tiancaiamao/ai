@@ -1,8 +1,8 @@
-# Working Memory - 实施总结
+# LLM Context - 实施总结
 
 ## 概述
 
-Working Memory 是 Agent 核心架构的重大升级，实现了从 Level 0.5（规则驱动的上下文压缩）到 Level 3（LLM 自主上下文管理）的跨越式演进。
+LLM Context 是 Agent 核心架构的重大升级，实现了从 Level 0.5（规则驱动的上下文压缩）到 Level 3（LLM 自主上下文管理）的跨越式演进。
 
 **核心成果**：
 - ✅ LLM 自主管理上下文，不再依赖自动规则
@@ -19,7 +19,7 @@ Working Memory 是 Agent 核心架构的重大升级，实现了从 Level 0.5（
 ```
 Level 0: 线性对话（无压缩）
 Level 1: 规则驱动压缩（原实现）
-Level 2: LLM 辅助压缩（Working Memory + 兜底）
+Level 2: LLM 辅助压缩（LLM Context + 兜底）
 Level 3: LLM 完全自主（当前实现） ✅
 Level 4: 抽象化记忆（未来方向）
 ```
@@ -28,10 +28,10 @@ Level 4: 抽象化记忆（未来方向）
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| **Working Memory 文件** | `overview.md` | LLM 维护的核心记忆 |
+| **LLM Context 文件** | `overview.md` | LLM 维护的核心记忆 |
 | **压缩工具** | `pkg/tools/compact_history.go` | LLM 主动调用的压缩接口 |
 | **上下文元数据** | `context_meta` | 实时状态监控和提醒 |
-| **Prompt Builder** | `pkg/prompt/builder.go` | Working Memory 自动注入 |
+| **Prompt Builder** | `pkg/prompt/builder.go` | LLM Context 自动注入 |
 | **Agent Loop** | `pkg/agent/loop.go` | LLM 主循环和协调 |
 
 ### 3. Session 存储结构
@@ -39,7 +39,7 @@ Level 4: 抽象化记忆（未来方向）
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/
 ├── messages.jsonl          # 对话历史（JSONL 格式）
-└── working-memory/
+└── llm-context/
     ├── overview.md          # LLM 维护的核心记忆（当前状态）
     └── detail/              # 详细归档
         ├── design-discussion.md
@@ -53,10 +53,10 @@ Level 4: 抽象化记忆（未来方向）
 
 ### Phase 1: 基础设施 (已完成)
 
-**目标**：建立 Working Memory 物理结构和注入机制
+**目标**：建立 LLM Context 物理结构和注入机制
 
 **成果**：
-- ✅ Session 目录结构扩展（添加 `working-memory/overview.md`）
+- ✅ Session 目录结构扩展（添加 `llm-context/overview.md`）
 - ✅ Prompt 自动注入（system prompt 首条消息）
 - ✅ 向后兼容（旧 session 单文件格式可识别）
 - ✅ 模板自动生成（新 session 创建空模板）
@@ -65,20 +65,20 @@ Level 4: 抽象化记忆（未来方向）
 ```go
 // pkg/session/session.go
 func NewSession(cwd string) (*Session, error) {
-    // 创建 working-memory 目录
-    sess.workingMemoryDir = filepath.Join(sess.baseDir, "working-memory")
-    os.MkdirAll(sess.workingMemoryDir, 0755)
+    // 创建 llm-context 目录
+    sess.llmContextDir = filepath.Join(sess.baseDir, "llm-context")
+    os.MkdirAll(sess.llmContextDir, 0755)
 
     // 创建 overview.md 模板
-    overviewPath := filepath.Join(sess.workingMemoryDir, "overview.md")
+    overviewPath := filepath.Join(sess.llmContextDir, "overview.md")
     if !exists(overviewPath) {
-        writeTemplate(overviewPath, workingMemoryTemplate)
+        writeTemplate(overviewPath, llmContextTemplate)
     }
 }
 
 // pkg/prompt/builder.go
 func BuildPrompt(..., sess *session.Session, ...) (string, error) {
-    // 1. 加载 working-memory/overview.md
+    // 1. 加载 llm-context/overview.md
     // 2. 注入为第一条 system 消息
     // 3. 后续添加其他内容
 }
@@ -153,7 +153,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 
 ## Bug 修复
 
-### Bug 1: compact_history 工具不更新 Working Memory
+### Bug 1: compact_history 工具不更新 LLM Context
 - **问题**: 工具压缩后没有更新 overview.md
 - **原因**: 工具实现与 LLM 职责分离设计错误
 - **解决**: 保持分离，由 LLM 自己更新
@@ -168,7 +168,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 - **修复**: 改为 `role: "system"`
 
 ### Bug 4: System Prompt 强调不足
-- **问题**: LLM 不主动维护 Working Memory
+- **问题**: LLM 不主动维护 LLM Context
 - **修复 A**: 强化标题 `⚠️ CRITICAL: You MUST actively maintain this memory`
 - **修复 B**: context_meta 后添加提醒语
 
@@ -184,7 +184,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 | 测试 | 结果 |
 |------|------|
 | 新 session 创建 overview.md | ✅ 模板正确生成 |
-| Prompt 注入 Working Memory | ✅ 首条 system 消息 |
+| Prompt 注入 LLM Context | ✅ 首条 system 消息 |
 | context_meta 自动注入 | ✅ 每次请求末尾 |
 | compact_history tool 调用 | ✅ 正常压缩 |
 | 75% 兜底机制 | ✅ 仍然有效 |
@@ -205,7 +205,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 
 ### LLM 管理策略
 
-**何时更新 Working Memory**：
+**何时更新 LLM Context**：
 - 任务进度变更时
 - 重要决策做出后
 - Bug 修复和根因分析
@@ -227,7 +227,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 ### 示例：LLM 主动维护
 
 ```markdown
-# Working Memory
+# LLM Context
 
 ## 项目上下文
 
@@ -280,7 +280,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 ### 3. 其他增强
 
 - Memory 版本控制
-- 自动从 messages.jsonl 生成 working memory
+- 自动从 messages.jsonl 生成 llm context
 - 可视化 memory 管理界面
 
 ---
@@ -295,7 +295,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 | **Agent Loop** | `pkg/agent/loop.go` |
 | **压缩逻辑** | `pkg/compact/compact.go` |
 | **Session 协议** | 项目根目录 `<session-id>/messages.jsonl` |
-| **Working Memory** | `<session-id>/working-memory/overview.md` |
+| **LLM Context** | `<session-id>/llm-context/overview.md` |
 
 ---
 

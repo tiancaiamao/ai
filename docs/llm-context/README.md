@@ -1,18 +1,18 @@
-# Working Memory - 文档集
+# LLM Context - 文档集
 
-本文件夹包含 Working Memory 功能的完整设计、实施和总结文档。
+本文件夹包含 LLM Context 功能的完整设计、实施和总结文档。
 
 ---
 
 ## 文档结构
 
 ```
-working-memory/
+llm-context/
 ├── README.md                   # 本文件 - 文档导航和快速入口
 ├── spec.md                     # 功能规格说明 - Level 3 自主上下文管理
 ├── plan.md                     # 实施计划 - Phase 1 和 Phase 2 的详细计划
 ├── tasks.md                    # 任务清单 - 已完成的所有任务和 Bug 修复
-├── design.md                   # 设计文档 - Working Memory 核心设计理念
+├── design.md                   # 设计文档 - LLM Context 核心设计理念
 └── IMPLEMENTATION_SUMMARY.md   # 实施总结 - 完整的实施历程和成果
 ```
 
@@ -29,7 +29,7 @@ working-memory/
 ### 我想查看详细的实施步骤
 👉 阅读 [plan.md](./plan.md) 和 [tasks.md](./tasks.md)
 
-### 我想知道如何使用和维护 Working Memory
+### 我想知道如何使用和维护 LLM Context
 👉 阅读 [IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md) 的 **使用指南** 部分
 
 ### 我想了解验证测试结果
@@ -39,16 +39,16 @@ working-memory/
 
 ## 核心概念速览
 
-### What is Working Memory?
+### What is LLM Context?
 
-Working Memory 是 Agent 的外部记忆系统，让 LLM 自主管理上下文，不再依赖自动规则。
+LLM Context 是 Agent 的外部记忆系统，让 LLM 自主管理上下文，不再依赖自动规则。
 
 ### 核心架构层级
 
 ```
 Level 0: 线性对话（无压缩）
 Level 1: 规则驱动压缩（原实现）
-Level 2: LLM 辅助压缩（Working Memory + 兜底）
+Level 2: LLM 辅助压缩（LLM Context + 兜底）
 Level 3: LLM 完全自主（当前实现） ✅
 Level 4: 抽象化记忆（未来方向）
 ```
@@ -69,7 +69,7 @@ Level 4: 抽象化记忆（未来方向）
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/
 ├── messages.jsonl              # 对话历史（JSONL 格式）
-└── working-memory/
+└── llm-context/
     ├── overview.md              # LLM 维护的核心记忆（当前状态）
     └── detail/                  # 详细归档
         ├── design-discussion.md
@@ -83,7 +83,7 @@ Level 4: 抽象化记忆（未来方向）
 
 ### Phase 1: 基础设施 ✅
 
-- ✅ Working Memory 目录结构
+- ✅ LLM Context 目录结构
 - ✅ Prompt 自动注入机制
 - ✅ 向后兼容性支持
 - ✅ 模板自动生成
@@ -108,9 +108,9 @@ Level 4: 抽象化记忆（未来方向）
 
 | 文件 | 职责 |
 |------|------|
-| `pkg/session/session.go` | Session 管理，Working Memory 目录创建 |
+| `pkg/session/session.go` | Session 管理，LLM Context 目录创建 |
 | `pkg/tools/compact_history.go` | 压缩工具实现 |
-| `pkg/prompt/builder.go` | Prompt 构建，Working Memory 注入 |
+| `pkg/prompt/builder.go` | Prompt 构建，LLM Context 注入 |
 | `pkg/agent/loop.go` | Agent 主循环，context_meta 注入 |
 | `pkg/compact/compact.go` | 压缩逻辑 |
 

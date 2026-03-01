@@ -169,11 +169,11 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 
 	firstKeptEntryID := refs[firstKeptIndex].EntryID
 	
-	// Save compaction summary to working memory detail directory before creating entry
+	// Save compaction summary to llm context detail directory before creating entry
 	// This ensures all compactions (auto and manual) save summaries
 	summaryFile := ""
-	if s.workingMemory != nil && summary != "" {
-		summaryFile, err = s.workingMemory.SaveCompactionSummary(summary)
+	if s.llmContext != nil && summary != "" {
+		summaryFile, err = s.llmContext.SaveCompactionSummary(summary)
 		if err != nil {
 			// Log warning but don't fail the compaction
 			// We'll store the summary inline as fallback

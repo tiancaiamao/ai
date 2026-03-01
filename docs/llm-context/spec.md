@@ -1,8 +1,8 @@
-# Working Memory: LLM 自主上下文管理
+# LLM Context: LLM 自主上下文管理
 
 ## Feature Overview
 
-将 Agent 的上下文管理权从规则驱动转变为 LLM 自主管理。LLM 通过 tool 操作 Working Memory 文件，自己决定记住什么、丢弃什么，实现从 Level 0.5 到 Level 3 的跨越。
+将 Agent 的上下文管理权从规则驱动转变为 LLM 自主管理。LLM 通过 tool 操作 LLM Context 文件，自己决定记住什么、丢弃什么，实现从 Level 0.5 到 Level 3 的跨越。
 
 ### 背景演进模型
 
@@ -43,11 +43,11 @@ Level 3: Memory Policy Learning（LLM 自主决策）
 
 | 维度 | 以前 | 现在 |
 |------|------|------|
-| 上下文来源 | chat history summary | working memory 文件 |
+| 上下文来源 | chat history summary | llm context 文件 |
 | 压缩策略 | Agent 规则触发（75% token） | LLM 自己决定 |
 | 历史管理 | 增量 compaction | LLM 自己维护 memory.md |
 | Tool 输出 | 自动截断/summary | LLM 自己决定保留什么 |
-| 状态存储 | 隐式在 Messages 中 | 显式在 working-memory/ |
+| 状态存储 | 隐式在 Messages 中 | 显式在 llm-context/ |
 
 ---
 
@@ -56,7 +56,7 @@ Level 3: Memory Policy Learning（LLM 自主决策）
 ### P1 - 核心功能（MVP）
 
 **US-1: Session 目录结构改造**
-> As System, I want session 从单文件变为目录结构，以便容纳 working memory。
+> As System, I want session 从单文件变为目录结构，以便容纳 llm context。
 
 **Acceptance Criteria:**
 - 新 session 创建时，创建目录结构：
@@ -65,17 +65,17 @@ Level 3: Memory Policy Learning（LLM 自主决策）
   └── <session-id>/
       ├── messages.jsonl
       ├── meta.json
-      └── working-memory/
+      └── llm-context/
           ├── overview.md
           └── detail/
   ```
 - Session 切换时正确识别目录结构
 
-**US-2: Working Memory 自动注入**
-> As LLM, I want 我的 working memory 自动加载到 prompt 中，以便我看到自己上次写的内容。
+**US-2: LLM Context 自动注入**
+> As LLM, I want 我的 llm context 自动加载到 prompt 中，以便我看到自己上次写的内容。
 
 **Acceptance Criteria:**
-- 每次请求时读取 `working-memory/overview.md` 注入 prompt
+- 每次请求时读取 `llm-context/overview.md` 注入 prompt
 - 注入位置：system prompt 之后，recent messages 之前
 - 文件不存在时创建并注入默认模板
 - 不破坏现有 prompt cache 机制
@@ -96,10 +96,10 @@ Level 3: Memory Policy Learning（LLM 自主决策）
     "tokens_max": 128000,
     "tokens_percent": 35,
     "messages_in_history": 42,
-    "working_memory_size": 2400
+    "llm_context_size": 2400
   }
   
-  💡 Remember to update your working-memory/overview.md to track progress and compress context if needed.
+  💡 Remember to update your llm-context/overview.md to track progress and compress context if needed.
   </context_meta>
   ```
 - 注入位置：消息末尾（不破坏 prompt cache）
@@ -142,17 +142,17 @@ Token 使用量    建议操作
 - [ ] LLM 能够自主决定压缩时机和目标
 - [ ] 75% compaction 兜底机制保留有效
 
-**US-4: LLM 自主更新 Working Memory**
-> As LLM, I want 用 write tool 更新我的 working memory，以便我控制自己看到的内容。
+**US-4: LLM 自主更新 LLM Context**
+> As LLM, I want 用 write tool 更新我的 llm context，以便我控制自己看到的内容。
 
 **Acceptance Criteria:**
-- LLM 可以用现有 `write` tool 更新 `working-memory/overview.md`
-- LLM 可以用现有 `write` tool 在 `working-memory/detail/` 创建文件
+- LLM 可以用现有 `write` tool 更新 `llm-context/overview.md`
+- LLM 可以用现有 `write` tool 在 `llm-context/detail/` 创建文件
 - 更新立即生效（下次请求可见）
-- System prompt 中说明 Working Memory 的能力和责任
+- System prompt 中说明 LLM Context 的能力和责任
 
 **US-5: 新 Session 空模板**
-> As LLM, I want 新 session 时看到空模板，以便我知道如何填写 working memory。
+> As LLM, I want 新 session 时看到空模板，以便我知道如何填写 llm context。
 
 **Acceptance Criteria:**
 - 新 session 创建时，`overview.md` 包含引导模板
@@ -164,15 +164,15 @@ Token 使用量    建议操作
 > As LLM, I want 将详细内容存入 `detail/` 目录，以便保持 overview.md 精简。
 
 **Acceptance Criteria:**
-- LLM 可以 `write working-memory/detail/xxx.md` 保存详情
-- LLM 可以 `read working-memory/detail/xxx.md` 读取详情
+- LLM 可以 `write llm-context/detail/xxx.md` 保存详情
+- LLM 可以 `read llm-context/detail/xxx.md` 读取详情
 - detail/ 内容不自动注入 prompt
 
 **US-7: 历史归档**
 > As LLM, I want 将完成的任务归档，以便清理当前工作记忆。
 
 **Acceptance Criteria:**
-- LLM 可以创建 `working-memory/archive/` 目录
+- LLM 可以创建 `llm-context/archive/` 目录
 - archive 内容不注入 prompt
 
 ### P3 - 未来扩展
@@ -212,7 +212,7 @@ pkg/compact/compact.go        # 压缩逻辑（保留，默认启用）
 └── <session-id>/             # ✨ Session 变成目录
     ├── messages.jsonl        # 消息历史（保留，不再注入 prompt）
     ├── meta.json             # 元数据
-    └── working-memory/       # ✨ 新增
+    └── llm-context/       # ✨ 新增
         ├── overview.md       # L1: 注入 prompt
         └── detail/           # L2: 按需读取
 ```
@@ -224,17 +224,17 @@ pkg/compact/compact.go        # 压缩逻辑（保留，默认启用）
 system prompt / tools / skills / AGENTS.md / history summary / recent messages
 
 现在：
-system prompt / tools / skills / AGENTS.md / working memory / (history or active-turn messages)
+system prompt / tools / skills / AGENTS.md / llm context / (history or active-turn messages)
 ```
 
 ---
 
-## Working Memory 模板
+## LLM Context 模板
 
 ### overview.md 模板
 
 ```markdown
-# Working Memory
+# LLM Context
 
 <!--
 这是你的外部记忆。每次请求时，这个文件的内容会被加载到你的 prompt 中。
@@ -245,7 +245,7 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
 - 记住什么信息
 - 丢弃什么历史
 
-使用 write tool 更新此文件：working-memory/overview.md
+使用 write tool 更新此文件：llm-context/overview.md
 下次请求时，你会看到自己写的内容。
 
 这是 YOUR memory。你控制你看到的内容。
@@ -274,7 +274,7 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
 <!--
 提示：
 - 查看 context_meta（每次自动注入）了解 token 使用情况
-- 需要保存详细内容时，写入 working-memory/detail/ 目录
+- 需要保存详细内容时，写入 llm-context/detail/ 目录
 - 文件路径相对于 session 目录
 -->
 ```
@@ -285,8 +285,8 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
 
 1. **功能完整性**
    - [ ] Session 目录结构正确创建
-   - [ ] working-memory/overview.md 自动注入到 prompt
-   - [ ] 仅在 working memory 已确认维护后才 strip history
+   - [ ] llm-context/overview.md 自动注入到 prompt
+   - [ ] 仅在 llm context 已确认维护后才 strip history
    - [ ] context_meta 自动注入到消息末尾
    - [ ] LLM 可以用 write/read 操作 memory 文件
    - [ ] 新 session 创建空模板
@@ -296,7 +296,7 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
    - [ ] 文件读写效率合理（overview.md < 5KB）
 
 3. **LLM 可理解性**
-   - [ ] System prompt 清晰说明 Working Memory 能力
+   - [ ] System prompt 清晰说明 LLM Context 能力
    - [ ] 模板引导 LLM 如何使用
    - [ ] LLM 能够自主更新 memory（需实测验证）
 
@@ -309,7 +309,7 @@ system prompt / tools / skills / AGENTS.md / working memory / (history or active
 ## Out of Scope
 
 - L0 (abstract.md) 分层（未来可扩展）
-- 自动从 messages.jsonl 生成 working memory（LLM 自己决定）
+- 自动从 messages.jsonl 生成 llm context（LLM 自己决定）
 - 多 session 间的 memory 共享
 - Memory 版本控制
 - 旧 session 自动迁移

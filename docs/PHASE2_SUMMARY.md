@@ -20,7 +20,7 @@
 ### 2. History 注入控制（修改）
 - **文件**: `pkg/agent/loop.go`
 - **新增配置**: `InjectHistory` (默认 false)
-- **效果**: Phase 2 模式下只注入 system prompt + working memory
+- **效果**: Phase 2 模式下只注入 system prompt + llm context
 
 ### 3. 自动压缩策略调整（修改）
 - **文件**: `pkg/compact/compact.go`
@@ -81,7 +81,7 @@ $ go build -o bin/ai ./cmd/ai
 |------|---------|---------|
 | Compaction 触发 | 代码写死 75% | **LLM 自己决定**（75% 兜底）|
 | 压缩策略 | 固定规则 | **LLM 自主判断** |
-| 上下文来源 | history + working memory | **只有 working memory** |
+| 上下文来源 | history + llm context | **只有 llm context** |
 
 ---
 

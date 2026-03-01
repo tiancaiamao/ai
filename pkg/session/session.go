@@ -25,7 +25,7 @@ type Session struct {
 	leafID        *string
 	flushed       bool
 	persist       bool
-	workingMemory *agentctx.WorkingMemory // WorkingMemory for saving compaction summaries
+	llmContext *agentctx.LLMContext // LLMContext for saving compaction summaries
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -35,13 +35,13 @@ type ForkMessage struct {
 }
 
 // NewSession creates a new session with the given directory path.
-func NewSession(sessionDir string, workingMemory *agentctx.WorkingMemory) *Session {
+func NewSession(sessionDir string, llmContext *agentctx.LLMContext) *Session {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
 		byID:          make(map[string]*SessionEntry),
 		persist:       sessionDir != "",
-		workingMemory: workingMemory,
+		llmContext: llmContext,
 	}
 
 	id := sessionIDFromDirPath(sessionDir)
@@ -51,13 +51,13 @@ func NewSession(sessionDir string, workingMemory *agentctx.WorkingMemory) *Sessi
 }
 
 // LoadSession loads a session from the given directory path.
-func LoadSession(sessionDir string, workingMemory *agentctx.WorkingMemory) (*Session, error) {
+func LoadSession(sessionDir string, llmContext *agentctx.LLMContext) (*Session, error) {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
 		byID:          make(map[string]*SessionEntry),
 		persist:       sessionDir != "",
-		workingMemory: workingMemory,
+		llmContext: llmContext,
 	}
 
 	if sessionDir == "" {
@@ -331,11 +331,11 @@ func (s *Session) GetLastCompactionSummary() string {
 	return ""
 }
 
-// SetWorkingMemory sets the working memory instance for the session.
-func (s *Session) SetWorkingMemory(wm *agentctx.WorkingMemory) {
+// SetLLMContext sets the llm context instance for the session.
+func (s *Session) SetLLMContext(wm *agentctx.LLMContext) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.workingMemory = wm
+	s.llmContext = wm
 }
 
 // GetCompactionCount returns the number of compaction entries along the current branch.

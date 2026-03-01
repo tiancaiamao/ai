@@ -61,9 +61,9 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 
 func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 	if _, err := wm.Load(); err != nil {
-		t.Fatalf("failed to initialize working memory: %v", err)
+		t.Fatalf("failed to initialize llm context: %v", err)
 	}
 
 	var observedMessages []struct {
@@ -94,7 +94,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.WorkingMemory = wm
+	agentCtx.LLMContext = wm
 	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
@@ -132,7 +132,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	if err := json.Unmarshal(observedMessages[0].Content, &systemContent); err != nil {
 		t.Fatalf("failed to parse system content: %v", err)
 	}
-	if strings.Contains(systemContent, "<working_memory>") || strings.Contains(systemContent, "<runtime_state>") {
+	if strings.Contains(systemContent, "<llm_context>") || strings.Contains(systemContent, "<runtime_state>") {
 		t.Fatalf("expected runtime payload outside system prompt, got system content: %q", systemContent)
 	}
 
@@ -140,8 +140,8 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	if err := json.Unmarshal(observedMessages[1].Content, &runtimeContent); err != nil {
 		t.Fatalf("failed to parse runtime content: %v", err)
 	}
-	if !strings.Contains(runtimeContent, "<working_memory>") {
-		t.Fatalf("expected runtime user content to include working_memory, got: %q", runtimeContent)
+	if !strings.Contains(runtimeContent, "<llm_context>") {
+		t.Fatalf("expected runtime user content to include llm_context, got: %q", runtimeContent)
 	}
 	if !strings.Contains(runtimeContent, "<runtime_state>") {
 		t.Fatalf("expected runtime user content to include runtime_state, got: %q", runtimeContent)

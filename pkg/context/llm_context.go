@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	WorkingMemoryDir = "working-memory"
+	LLMContextDir = "llm-context"
 	OverviewFile     = "overview.md"
 	DetailDir        = "detail"
 
@@ -26,12 +26,12 @@ type ContextMeta struct {
 	TokensMax         int     `json:"tokens_max"`
 	TokensPercent     float64 `json:"tokens_percent"`
 	MessagesInHistory int     `json:"messages_in_history"`
-	WorkingMemorySize int     `json:"working_memory_size"` // bytes
+	LLMContextSize int     `json:"llm_context_size"` // bytes
 }
 
-// WorkingMemory manages the agent's working memory (overview.md).
+// LLMContext manages the agent's llm context (overview.md).
 // It provides caching based on file modification time and update tracking.
-type WorkingMemory struct {
+type LLMContext struct {
 	mu sync.RWMutex
 
 	// Paths
@@ -62,19 +62,19 @@ type WorkingMemory struct {
 	nextReminderRound int  // Dynamic threshold for next reminder (5-30)
 }
 
-// NewWorkingMemory creates a new WorkingMemory for the given session directory.
-func NewWorkingMemory(sessionDir string) *WorkingMemory {
-	return &WorkingMemory{
+// NewLLMContext creates a new LLMContext for the given session directory.
+func NewLLMContext(sessionDir string) *LLMContext {
+	return &LLMContext{
 		sessionDir:         sessionDir,
-		overviewPath:       filepath.Join(sessionDir, WorkingMemoryDir, OverviewFile),
-		detailPath:         filepath.Join(sessionDir, WorkingMemoryDir, DetailDir),
+		overviewPath:       filepath.Join(sessionDir, LLMContextDir, OverviewFile),
+		detailPath:         filepath.Join(sessionDir, LLMContextDir, DetailDir),
 		nextReminderRound:  baseRoundsBeforeReminder,  // Default threshold
 	}
 }
 
 // GetOverviewTemplate returns the default template for overview.md with the given path.
 func GetOverviewTemplate(overviewPath, DetailDir string) string {
-	return fmt.Sprintf(`# Working Memory
+	return fmt.Sprintf(`# LLM Context
 
 <!--
 这是你的外部记忆。每次请求时，这个文件的内容会被加载到你的 prompt 中。
@@ -86,8 +86,8 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 这是 YOUR memory。你控制你看到的内容。
 
 ⚠️ 路径规则（非常重要）：
-- 以 system prompt 中 Working Memory 的 Path / Detail dir 为准
-- 不要使用相对于当前工作目录的路径（例如 working-memory/overview.md）
+- 以 system prompt 中 LLM Context 的 Path / Detail dir 为准
+- 不要使用相对于当前工作目录的路径（例如 llm-context/overview.md）
 -->
 
 ## 上下文管理指南
@@ -97,7 +97,7 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 - tokens_max: 最大 token 数  
 - tokens_percent: 使用百分比
 - messages_in_history: 历史消息数量
-- working_memory_size: working memory 大小（字节）
+- llm_context_size: llm context 大小（字节）
 
 ### 上下文压缩触发条件
 
@@ -140,11 +140,11 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 `, overviewPath, DetailDir)
 }
 
-// ensureWorkingMemory creates the working-memory directory structure if needed.
-func (wm *WorkingMemory) ensureWorkingMemory() error {
-	wmDir := filepath.Join(wm.sessionDir, WorkingMemoryDir)
+// ensureLLMContext creates the llm-context directory structure if needed.
+func (wm *LLMContext) ensureLLMContext() error {
+	wmDir := filepath.Join(wm.sessionDir, LLMContextDir)
 	if err := os.MkdirAll(wmDir, 0755); err != nil {
-		return fmt.Errorf("failed to create working-memory directory: %w", err)
+		return fmt.Errorf("failed to create llm-context directory: %w", err)
 	}
 
 	DetailDir := filepath.Join(wmDir, DetailDir)
@@ -163,8 +163,8 @@ func (wm *WorkingMemory) ensureWorkingMemory() error {
 }
 
 // Load loads the overview.md content with mtime-based caching.
-// It also checks if a reminder about updating working memory should be shown.
-func (wm *WorkingMemory) Load() (string, error) {
+// It also checks if a reminder about updating llm context should be shown.
+func (wm *LLMContext) Load() (string, error) {
 	content, err := wm.loadContent()
 	if err != nil {
 		return "", err
@@ -181,12 +181,12 @@ func (wm *WorkingMemory) Load() (string, error) {
 
 // loadContent loads the overview.md content with mtime-based caching.
 // This is an internal method that only handles file loading.
-func (wm *WorkingMemory) loadContent() (string, error) {
+func (wm *LLMContext) loadContent() (string, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
 	// Ensure directory exists
-	if err := wm.ensureWorkingMemory(); err != nil {
+	if err := wm.ensureLLMContext(); err != nil {
 		return "", err
 	}
 
@@ -216,17 +216,17 @@ func (wm *WorkingMemory) loadContent() (string, error) {
 }
 
 // GetPath returns the path to overview.md.
-func (wm *WorkingMemory) GetPath() string {
+func (wm *LLMContext) GetPath() string {
 	return wm.overviewPath
 }
 
 // GetDetailDir returns the path to the detail directory.
-func (wm *WorkingMemory) GetDetailDir() string {
+func (wm *LLMContext) GetDetailDir() string {
 	return wm.detailPath
 }
 
 // UpdateMeta updates the context metadata.
-func (wm *WorkingMemory) UpdateMeta(tokensUsed, tokensMax, messagesCount int) {
+func (wm *LLMContext) UpdateMeta(tokensUsed, tokensMax, messagesCount int) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -236,11 +236,11 @@ func (wm *WorkingMemory) UpdateMeta(tokensUsed, tokensMax, messagesCount int) {
 }
 
 // GetMeta returns the current context metadata.
-func (wm *WorkingMemory) GetMeta() ContextMeta {
+func (wm *LLMContext) GetMeta() ContextMeta {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	// Calculate working memory size
+	// Calculate llm context size
 	var wmSize int
 	if info, err := os.Stat(wm.overviewPath); err == nil {
 		wmSize = int(info.Size())
@@ -266,12 +266,12 @@ func (wm *WorkingMemory) GetMeta() ContextMeta {
 		TokensMax:         tokensMax,
 		TokensPercent:     percent,
 		MessagesInHistory: messagesCount,
-		WorkingMemorySize: wmSize,
+		LLMContextSize: wmSize,
 	}
 }
 
 // InvalidateCache clears the cached content, forcing a reload on next Load().
-func (wm *WorkingMemory) InvalidateCache() {
+func (wm *LLMContext) InvalidateCache() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -279,11 +279,11 @@ func (wm *WorkingMemory) InvalidateCache() {
 	wm.overviewModTime = time.Time{}
 }
 
-// MarkUpdated marks that working memory has been updated.
+// MarkUpdated marks that llm context has been updated.
 // This resets the roundsSinceUpdate counter and sets a silent period.
 // silentRounds: number of rounds to skip reminder (default 5 if <= 0)
 // autonomous: true if update was self-initiated (not prompted), false if after prompt
-func (wm *WorkingMemory) MarkUpdated(silentRounds int, autonomous bool) {
+func (wm *LLMContext) MarkUpdated(silentRounds int, autonomous bool) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -309,8 +309,8 @@ func (wm *WorkingMemory) MarkUpdated(silentRounds int, autonomous bool) {
 }
 
 // MarkUpdatedAfterToolCall detects if this update was autonomous or prompted.
-// This should be called when a write tool call updates working memory.
-func (wm *WorkingMemory) MarkUpdatedAfterToolCall(silentRounds int) {
+// This should be called when a write tool call updates llm context.
+func (wm *LLMContext) MarkUpdatedAfterToolCall(silentRounds int) {
 	wm.mu.Lock()
 	wasReminded := wm.wasRemindedLastRound
 	wm.mu.Unlock()
@@ -322,8 +322,8 @@ func (wm *WorkingMemory) MarkUpdatedAfterToolCall(silentRounds int) {
 
 // IncrementRound increments the round counter.
 // This should be called from the agent loop on each LLM request.
-// Call MarkUpdated() when the LLM actually updates working memory.
-func (wm *WorkingMemory) IncrementRound() {
+// Call MarkUpdated() when the LLM actually updates llm context.
+func (wm *LLMContext) IncrementRound() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -337,17 +337,17 @@ func (wm *WorkingMemory) IncrementRound() {
 }
 
 // GetRoundsSinceUpdate returns the number of rounds since the last update.
-func (wm *WorkingMemory) GetRoundsSinceUpdate() int {
+func (wm *LLMContext) GetRoundsSinceUpdate() int {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 	return wm.roundsSinceUpdate
 }
 
-// checkUpdateNeeded checks if a reminder should be shown about updating working memory.
+// checkUpdateNeeded checks if a reminder should be shown about updating llm context.
 // Returns (shouldShowReminder, reminderMessage).
 // NOTE: This method does NOT auto-increment the round counter.
 // Round tracking should be done via IncrementRound() from the agent loop.
-func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
+func (wm *LLMContext) checkUpdateNeeded() (bool, string) {
 	wm.mu.Lock()
 	rounds := wm.roundsSinceUpdate
 	threshold := wm.nextReminderRound
@@ -372,8 +372,8 @@ func (wm *WorkingMemory) checkUpdateNeeded() (bool, string) {
 	return false, ""
 }
 
-// buildReminderHTML builds an HTML comment reminder (appended to working memory content).
-func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
+// buildReminderHTML builds an HTML comment reminder (appended to llm context content).
+func (wm *LLMContext) buildReminderHTML(meta ContextMeta) string {
 	consciousness := wm.GetUpdateConsciousness()
 	consciousnessPercent := int(consciousness * 100)
 	
@@ -382,11 +382,11 @@ func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
 <!--
 ⚠️ WORKING MEMORY UPDATE NEEDED
 
-你已经连续 %d 轮没有更新 working memory 了（动态阈值：%d 轮）。
+你已经连续 %d 轮没有更新 llm context 了（动态阈值：%d 轮）。
 当前上下文状态:
 - Token 使用: %.0f%% (%d / %d)
 - 历史消息: %d 条
-- Working Memory 大小: %.2f KB
+- LLM Context 大小: %.2f KB
 
 💡 自主更新奖励机制：
 - 当前自觉度：%d%%（%d/%d 次更新是自主的）
@@ -413,7 +413,7 @@ func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
 		meta.TokensUsed,
 		meta.TokensMax,
 		meta.MessagesInHistory,
-		float64(meta.WorkingMemorySize)/1024,
+		float64(meta.LLMContextSize)/1024,
 		consciousnessPercent,
 		wm.autonomousUpdates,
 		wm.totalUpdates,
@@ -423,7 +423,7 @@ func (wm *WorkingMemory) buildReminderHTML(meta ContextMeta) string {
 
 // NeedsReminderMessage checks if a reminder message should be injected.
 // This is a separate check from checkUpdateNeeded() to allow for different thresholds.
-func (wm *WorkingMemory) NeedsReminderMessage() bool {
+func (wm *LLMContext) NeedsReminderMessage() bool {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
@@ -433,7 +433,7 @@ func (wm *WorkingMemory) NeedsReminderMessage() bool {
 
 // GetReminderUserMessage builds a user message reminder to inject into the conversation.
 // The message is clearly marked as agent-generated, not from a real user.
-func (wm *WorkingMemory) GetReminderUserMessage() string {
+func (wm *LLMContext) GetReminderUserMessage() string {
 	meta := wm.GetMeta()
 
 	wm.mu.RLock()
@@ -442,7 +442,7 @@ func (wm *WorkingMemory) GetReminderUserMessage() string {
 
 	return fmt.Sprintf(`[system message by agent, not from real user]
 
-💡 Remember to update your working memory to track progress and compress context if needed.
+💡 Remember to update your llm context to track progress and compress context if needed.
 
 <context_meta>
 tokens_used: %d
@@ -452,16 +452,16 @@ messages_in_history: %d
 rounds_since_update: %d
 </context_meta>
 
-Working memory path: %s
+Resident prompt path: %s
 Detail directory: %s
 
-To update: use the write tool to modify the working memory file.
-This reminder will stop appearing once you update your working memory.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory, rounds, wm.overviewPath, wm.detailPath)
+To update: use the write tool to modify the llm context file.
+This reminder will stop appearing once you update your llm context.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory, rounds, wm.overviewPath, wm.detailPath)
 }
 
 // SaveCompactionSummary saves a compaction summary to the detail directory.
 // This allows recall_memory to search through past compaction summaries.
-func (wm *WorkingMemory) SaveCompactionSummary(summary string) (string, error) {
+func (wm *LLMContext) SaveCompactionSummary(summary string) (string, error) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
@@ -491,20 +491,20 @@ META:
 		return "", fmt.Errorf("failed to write compaction summary: %w", err)
 	}
 
-	slog.Info("[WorkingMemory] Saved compaction summary", "path", fullpath)
+	slog.Info("[LLMContext] Saved compaction summary", "path", fullpath)
 
 	// Return relative path from session directory
-	return filepath.Join("working-memory", "detail", filename), nil
+	return filepath.Join("llm-context", "detail", filename), nil
 }
 
 // WriteContent writes the given content to the overview.md file.
-// This is used to restore working memory from compaction summaries.
-func (wm *WorkingMemory) WriteContent(content string) error {
+// This is used to restore llm context from compaction summaries.
+func (wm *LLMContext) WriteContent(content string) error {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
 	// Ensure directory exists
-	if err := wm.ensureWorkingMemory(); err != nil {
+	if err := wm.ensureLLMContext(); err != nil {
 		return err
 	}
 
@@ -519,13 +519,13 @@ func (wm *WorkingMemory) WriteContent(content string) error {
 		wm.overviewModTime = info.ModTime()
 	}
 
-	slog.Info("[WorkingMemory] Updated overview.md from compaction summary", "path", wm.overviewPath)
+	slog.Info("[LLMContext] Updated overview.md from compaction summary", "path", wm.overviewPath)
 	return nil
 }
 
 // adjustThreshold dynamically adjusts the nextReminderRound threshold based on update behavior.
 // autonomous: true for self-initiated updates (increase threshold), false for prompted updates (decrease)
-func (wm *WorkingMemory) adjustThreshold(autonomous bool) {
+func (wm *LLMContext) adjustThreshold(autonomous bool) {
 	if wm.totalUpdates < 2 {
 		// Not enough data yet, use base threshold
 		wm.nextReminderRound = baseRoundsBeforeReminder
@@ -565,7 +565,7 @@ func (wm *WorkingMemory) adjustThreshold(autonomous bool) {
 	if wm.nextReminderRound > 30 {
 		wm.nextReminderRound = 30
 
-		slog.Info("[WorkingMemory] Adjusted reminder threshold",
+		slog.Info("[LLMContext] Adjusted reminder threshold",
 			"autonomous", autonomous,
 			"consciousness", consciousness,
 			"delta", delta,
@@ -576,7 +576,7 @@ func (wm *WorkingMemory) adjustThreshold(autonomous bool) {
 }
 
 // GetUpdateConsciousness returns the ratio of autonomous updates (0.0-1.0)
-func (wm *WorkingMemory) GetUpdateConsciousness() float64 {
+func (wm *LLMContext) GetUpdateConsciousness() float64 {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
@@ -587,7 +587,7 @@ func (wm *WorkingMemory) GetUpdateConsciousness() float64 {
 }
 
 // GetNextReminderRound returns the current dynamic threshold
-func (wm *WorkingMemory) GetNextReminderRound() int {
+func (wm *LLMContext) GetNextReminderRound() int {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 	return wm.nextReminderRound
@@ -595,7 +595,7 @@ func (wm *WorkingMemory) GetNextReminderRound() int {
 
 // SetWasReminded marks that a reminder was injected in this round.
 // This helps track whether the next update is autonomous or prompted.
-func (wm *WorkingMemory) SetWasReminded() {
+func (wm *LLMContext) SetWasReminded() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	wm.wasRemindedLastRound = true
@@ -603,7 +603,7 @@ func (wm *WorkingMemory) SetWasReminded() {
 
 // ResetReminderFlag clears the "was reminded" flag after checking.
 // This should be called after checking MarkUpdated().
-func (wm *WorkingMemory) ResetReminderFlag() {
+func (wm *LLMContext) ResetReminderFlag() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	wm.wasRemindedLastRound = false

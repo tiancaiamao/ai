@@ -12,7 +12,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-		WorkingMemorySize: 3000,
+		LLMContextSize: 3000,
 	}
 
 	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
@@ -65,8 +65,8 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 
 func TestBuildRuntimeSystemAppendix(t *testing.T) {
 	appendix := buildRuntimeSystemAppendix("# wm", "<runtime_state>ok</runtime_state>")
-	if !containsString(appendix, "<working_memory>") {
-		t.Fatalf("expected working_memory section, got: %s", appendix)
+	if !containsString(appendix, "<llm_context>") {
+		t.Fatalf("expected llm_context section, got: %s", appendix)
 	}
 	if !containsString(appendix, "<runtime_state>ok</runtime_state>") {
 		t.Fatalf("expected runtime_state section, got: %s", appendix)

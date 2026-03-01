@@ -280,6 +280,32 @@ func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
 	}
 }
 
+func TestNoWorkspaceMode(t *testing.T) {
+	cwd := t.TempDir()
+
+	// Test with workspace (default)
+	builderWithWorkspace := NewBuilder("test prompt", cwd)
+	resultWith := builderWithWorkspace.Build()
+	if !contains(resultWith, "## Workspace") {
+		t.Error("expected Workspace section when noWorkspace is false")
+	}
+
+	// Test without workspace (noWorkspace mode)
+	builderNoWorkspace := NewBuilder("test prompt", cwd).SetNoWorkspace(true)
+	resultWithout := builderNoWorkspace.Build()
+	if contains(resultWithout, "## Workspace") {
+		t.Error("expected no Workspace section when noWorkspace is true")
+	}
+	if contains(resultWithout, "Your working directory is:") {
+		t.Error("expected no working directory mention when noWorkspace is true")
+	}
+
+	// Ensure base prompt is still included
+	if !contains(resultWithout, "test prompt") {
+		t.Error("expected base prompt to be included")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)

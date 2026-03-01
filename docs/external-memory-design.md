@@ -21,7 +21,7 @@ This approach has several issues:
 Transform the traditional model into an "external memory" system:
 
 ```
-[System Prompt] + [Working Memory Overview] + [Recent N turns]
+[System Prompt] + [LLM Context Overview] + [Recent N turns]
                                     ↓
                           recall_memory tool
                                     ↓
@@ -36,9 +36,9 @@ Transform the traditional model into an "external memory" system:
 3. **messages.jsonl** - Raw conversation log
 
 **Scope Clarification**:
-- Working memory manages **agent context** only
-- Project code, design docs, plans → **project directory** (not working memory)
-- Agent's summaries and notes → working memory
+- Resident prompt manages **agent context** only
+- Project code, design docs, plans → **project directory** (not llm context)
+- Agent's summaries and notes → llm context
 
 ### 1.3 Design Constraints
 
@@ -58,7 +58,7 @@ Based on our discussions:
 ┌─────────────────────────────────────────────────────────────┐
 │                     CONTEXT WINDOW                          │
 │  ┌─────────────┐  ┌─────────────────┐  ┌────────────────┐  │
-│  │ System      │  │ Working Memory  │  │ Recent Turns   │  │
+│  │ System      │  │ LLM Context  │  │ Recent Turns   │  │
 │  │ Prompt      │  │ Overview.md     │  │ (N messages)   │  │
 │  └─────────────┘  └─────────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -121,14 +121,14 @@ Based on our discussions:
 ┌─────────────────────────────────────────────────────────────┐
 │                   WORKING MEMORY SCOPE                      │
 │                                                             │
-│  ~/.ai/sessions/--<cwd>--/<session-id>/working-memory/      │
+│  ~/.ai/sessions/--<cwd>--/<session-id>/llm-context/      │
 │  ├── overview.md      ← Agent context (this session)        │
 │  └── detail/          ← Summaries, notes (this session)     │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│                   PROJECT SCOPE (NOT working memory)        │
+│                   PROJECT SCOPE (NOT llm context)        │
 │                                                             │
 │  <project-dir>/                                             │
 │  ├── docs/              ← Design docs, architecture         │
@@ -149,7 +149,7 @@ Based on our discussions:
 ~/.ai/sessions/--<cwd>--/<session-id>/
 ├── messages.jsonl              # Raw conversation log
 │
-└── working-memory/
+└── llm-context/
     ├── overview.md             # Always in context (agent state)
     └── detail/                 # External memory
         ├── 2024-01-summary.md  # Compaction summaries
@@ -167,7 +167,7 @@ Based on our discussions:
 #### overview.md
 
 ```markdown
-# Working Memory
+# LLM Context
 
 ## Current Task
 <!-- What are you working on? -->
@@ -258,7 +258,7 @@ type MemoryManager struct {
 func NewMemoryManager(sessionDir string) (*MemoryManager, error) {
     return &MemoryManager{
         sessionDir:   sessionDir,
-        detailDir:    filepath.Join(sessionDir, "working-memory", "detail"),
+        detailDir:    filepath.Join(sessionDir, "llm-context", "detail"),
         messagesPath: filepath.Join(sessionDir, "messages.jsonl"),
     }, nil
 }
@@ -446,8 +446,8 @@ func (a *Agent) buildContext() ([]Message, error) {
     // 1. System prompt
     ctx = append(ctx, Message{Role: "system", Content: a.systemPrompt})
 
-    // 2. Working memory overview (always loaded)
-    overview, _ := a.workingMemory.Load()
+    // 2. Resident prompt overview (always loaded)
+    overview, _ := a.llmContext.Load()
     ctx = append(ctx, Message{Role: "system", Content: overview})
 
     // 3. Recent N turns only (no full history)
@@ -474,7 +474,7 @@ func DefaultRegistry(memoryMgr *memory.MemoryManager) *Registry {
 ### 7.3 No Changes Needed
 
 - `session.go`: messages.jsonl is already written, grep can search it
-- `working_memory.go`: detail/ is already written, grep can search it
+- `llm_context.go`: detail/ is already written, grep can search it
 
 ---
 

@@ -108,7 +108,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	sessionID := ""
 	sessionName := ""
 	if sessionPath != "" {
-		// Create load options with working memory (will be set later in createBaseContext)
+		// Create load options with llm context (will be set later in createBaseContext)
 		opts := session.DefaultLoadOptions()
 		sess, err = session.LoadSessionLazy(sessionPath, opts)
 		if err != nil {
@@ -233,13 +233,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		promptBuilder := prompt.NewBuilder(basePrompt, cwd)
 		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
-		// Set working memory for system prompt explanation (tells LLM about the mechanism)
+		// Set llm context for system prompt explanation (tells LLM about the mechanism)
 		// The actual content is injected dynamically in the agent loop.
 		if currentSess != nil {
 			sessionDir := currentSess.GetDir()
 			if sessionDir != "" {
-				wm := agentctx.NewWorkingMemory(sessionDir)
-				promptBuilder.SetWorkingMemory(wm)
+				wm := agentctx.NewLLMContext(sessionDir)
+				promptBuilder.SetLLMContext(wm)
 			}
 		}
 		return promptBuilder.Build()
@@ -247,47 +247,47 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	systemPrompt := buildSystemPrompt(sess)
 
 	// Helper function to create a new agent context
-	// restoreWorkingMemoryFromCompaction restores the working memory overview.md
+	// restoreLLMContextFromCompaction restores the llm context overview.md
 	// from the latest compaction summary on the current session branch.
-	restoreWorkingMemoryFromCompaction := func(sess *session.Session) {
+	restoreLLMContextFromCompaction := func(sess *session.Session) {
 		// Get the latest compaction summary
 		summary := sess.GetLastCompactionSummary()
 		if summary == "" {
 			// No compaction summary found, nothing to restore
-			slog.Info("[resume-on-branch] No compaction summary found, skipping working memory restore")
+			slog.Info("[resume-on-branch] No compaction summary found, skipping llm context restore")
 			return
 		}
 
-		// Get working memory and write the summary
+		// Get llm context and write the summary
 		sessionDir := sess.GetDir()
 		if sessionDir == "" {
-			slog.Warn("[resume-on-branch] No session directory, cannot restore working memory")
+			slog.Warn("[resume-on-branch] No session directory, cannot restore llm context")
 			return
 		}
 
-		wm := agentctx.NewWorkingMemory(sessionDir)
+		wm := agentctx.NewLLMContext(sessionDir)
 		if err := wm.WriteContent(summary); err != nil {
-			slog.Warn("[resume-on-branch] Failed to restore working memory", "error", err)
+			slog.Warn("[resume-on-branch] Failed to restore llm context", "error", err)
 		} else {
-			slog.Info("[resume-on-branch] Restored working memory from compaction summary", "summary_len", len(summary))
+			slog.Info("[resume-on-branch] Restored llm context from compaction summary", "summary_len", len(summary))
 		}
 	}
 
 	createBaseContext := func() *agentctx.AgentContext {
-		// Rebuild system prompt from the current session so working-memory paths
+		// Rebuild system prompt from the current session so llm-context paths
 		// stay in sync after /resume, /new, /fork, and branch resume operations.
 		systemPrompt = buildSystemPrompt(sess)
 		ctx := agentctx.NewAgentContext(systemPrompt)
 		for _, tool := range registry.All() {
 			ctx.AddTool(tool)
 		}
-		// Initialize working memory and set it on session for compaction summaries
+		// Initialize llm context and set it on session for compaction summaries
 		if sess != nil {
 			sessionDir := sess.GetDir()
 			if sessionDir != "" {
-				wm := agentctx.NewWorkingMemory(sessionDir)
-				ctx.WorkingMemory = wm
-				sess.SetWorkingMemory(wm) // Set working memory on session
+				wm := agentctx.NewLLMContext(sessionDir)
+				ctx.LLMContext = wm
+				sess.SetLLMContext(wm) // Set llm context on session
 			}
 			// Restore conversation history from session
 			ctx.Messages = sess.GetMessages()
@@ -1352,8 +1352,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		setAgentContext(createBaseContext())
 
-		// Restore working memory from the latest compaction summary on this branch
-		restoreWorkingMemoryFromCompaction(sess)
+		// Restore llm context from the latest compaction summary on this branch
+		restoreLLMContextFromCompaction(sess)
 
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)

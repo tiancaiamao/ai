@@ -1,4 +1,4 @@
-# Working Memory - 设计和实现文档
+# LLM Context - 设计和实现文档
 
 ## 1. 设计目的
 
@@ -12,7 +12,7 @@ Agent 在长期对话中面临以下挑战：
 
 ### 1.2 解决方案
 
-**Working Memory** 是一个持久化的状态跟踪机制，用于：
+**LLM Context** 是一个持久化的状态跟踪机制，用于：
 - 存储和更新关键信息（任务状态、决策、上下文）
 - 替代对完整历史消息的依赖
 - 提供轻量级、可快速访问的状态摘要
@@ -32,7 +32,7 @@ Agent 在长期对话中面临以下挑战：
 ### 2.1 存储位置
 
 ```
-/Users/genius/.ai/sessions/--<cwd>--/<session-id>/working-memory/
+/Users/genius/.ai/sessions/--<cwd>--/<session-id>/llm-context/
 ├── overview.md          # 核心状态摘要（必须维护）
 └── detail/              # 详细文档存档目录
     ├── session-summary.md  # 压缩后的历史对话
@@ -43,12 +43,12 @@ Agent 在长期对话中面临以下挑战：
 **关键说明**：
 - `<cwd>` 使用双连字符编码：`--<工作目录路径>--`
 - 例如：`--Users-genius-project-ai--` 表示 `/Users/genius/project/ai`
-- 每个会话有独立的 working memory 目录
+- 每个会话有独立的 llm context 目录
 
 ### 2.2 overview.md 结构
 
 ```markdown
-# Working Memory
+# LLM Context
 
 ## 核心设计原则
 （设计原则和关键理念）
@@ -102,7 +102,7 @@ Agent 会根据 `runtime_state.context_meta` 动态调整：
   - `"all"` - 压缩两者
 - `strategy`: 压缩方式
   - `"summarize"` - 创建摘要
-  - `"archive"` - 移动到 detail/ 文件（默认：当 working memory 可用时）
+  - `"archive"` - 移动到 detail/ 文件（默认：当 llm context 可用时）
 - `keep_recent`: 保留最近 N 项（默认 5）
 - `archive_to`: 归档路径（可选，默认 detail/ 自动生成文件名）
 
@@ -112,7 +112,7 @@ Agent 会根据 `runtime_state.context_meta` 动态调整：
   "target": "conversation",
   "strategy": "archive",
   "keep_recent": 5,
-  "archive_to": "working-memory/detail/session-summary.md"
+  "archive_to": "llm-context/detail/session-summary.md"
 }
 ```
 
@@ -127,13 +127,13 @@ Agent 会根据 `runtime_state.context_meta` 动态调整：
 
 ### 4.1 当前已知问题
 
-#### Issue #1: compact_history 不自动更新 working memory
+#### Issue #1: compact_history 不自动更新 llm context
 
 **描述**：
 调用 `compact_history` 工具后，不会自动更新 `overview.md`，需要 LLM 手动调用 `write` 工具。
 
 **影响**：
-- LLM 可能忘记更新 working memory
+- LLM 可能忘记更新 llm context
 - 造成压缩后的历史和当前状态不同步
 - 增加手动操作负担
 
@@ -167,7 +167,7 @@ if target == "conversation" || target == "all" {
 当前 `overview.md` 是自由格式 Markdown，建议引入结构化格式：
 
 ```yaml
-# Working Memory
+# LLM Context
 
 meta:
   version: "1.0"
@@ -198,7 +198,7 @@ current_state:
 
 issues:
   - id: "issue-1"
-    title: "compact_history doesn't update working memory"
+    title: "compact_history doesn't update llm context"
     severity: "medium"
     status: "proposed"
     proposal: "Auto-update overview.md after compression"
@@ -230,7 +230,7 @@ if contextMeta.TokensUsed > policy.LightThreshold {
 
 #### Suggestion #3: 事件驱动的状态更新
 
-定义关键事件，触发 working memory 自动更新：
+定义关键事件，触发 llm context 自动更新：
 
 ```go
 type StateEvent struct {
@@ -239,7 +239,7 @@ type StateEvent struct {
 }
 
 // 事件处理器
-func (wm *WorkingMemory) OnEvent(event StateEvent) {
+func (wm *LLMContext) OnEvent(event StateEvent) {
     switch event.Type {
     case "task_started":
         wm.UpdateCurrentTask(event.Context["task"].(string))
@@ -255,7 +255,7 @@ func (wm *WorkingMemory) OnEvent(event StateEvent) {
 
 ## 5. 最佳实践
 
-### 5.1 维护 working memory 的时机
+### 5.1 维护 llm context 的时机
 
 **应该更新时**：
 - ✅ 任务状态发生变化（开始、进行中、完成）

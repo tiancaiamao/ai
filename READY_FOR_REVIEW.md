@@ -29,7 +29,7 @@ if config.InjectHistory {
     // 旧行为：注入完整历史
     llmMessages = ConvertMessagesToLLM(ctx, agentCtx.Messages)
 } else {
-    // Phase 2：只注入 system prompt + working memory
+    // Phase 2：只注入 system prompt + llm context
     llmMessages = []llm.LLMMessage{}
 }
 ```
@@ -104,7 +104,7 @@ $ go build -o bin/ai ./cmd/ai
 |------|---------|---------|
 | Compaction 触发 | 代码写死 75% | **LLM 自己决定**（75% 兜底）✅ |
 | 压缩策略 | 固定规则 | **LLM 自主判断** ✅ |
-| 上下文来源 | history + working memory | **只有 working memory** ✅ |
+| 上下文来源 | history + llm context | **只有 llm context** ✅ |
 
 ---
 

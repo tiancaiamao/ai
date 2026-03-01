@@ -9,7 +9,7 @@ import (
 
 func TestShouldInjectHistory_ForcedByConfig(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.WorkingMemory = agentctx.NewWorkingMemory(t.TempDir())
+	agentCtx.LLMContext = agentctx.NewLLMContext(t.TempDir())
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{InjectHistory: true})
 	if !inject {
@@ -20,49 +20,49 @@ func TestShouldInjectHistory_ForcedByConfig(t *testing.T) {
 	}
 }
 
-func TestShouldInjectHistory_WhenWorkingMemoryNotMaintained(t *testing.T) {
+func TestShouldInjectHistory_WhenLLMContextNotMaintained(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.WorkingMemory = wm
+	agentCtx.LLMContext = wm
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{})
 	if !inject {
-		t.Fatalf("expected history injection before working memory is maintained, reason=%q", reason)
+		t.Fatalf("expected history injection before llm context is maintained, reason=%q", reason)
 	}
-	if reason != "working_memory_not_maintained" {
+	if reason != "llm_context_not_maintained" {
 		t.Fatalf("unexpected reason: %q", reason)
 	}
 }
 
-func TestShouldInjectHistory_StripsAfterWorkingMemoryConfirmed(t *testing.T) {
+func TestShouldInjectHistory_StripsAfterLLMContextConfirmed(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 	if _, err := wm.Load(); err != nil {
-		t.Fatalf("failed to initialize working memory: %v", err)
+		t.Fatalf("failed to initialize llm context: %v", err)
 	}
 
 	overviewPath := wm.GetPath()
-	content := "# Working Memory\n\n## 当前任务\n- 完成 history gate\n"
+	content := "# LLM Context\n\n## 当前任务\n- 完成 history gate\n"
 	if err := os.WriteFile(overviewPath, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to update overview: %v", err)
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.WorkingMemory = wm
+	agentCtx.LLMContext = wm
 
 	inject, reason := shouldInjectHistory(agentCtx, &LoopConfig{})
 	if inject {
-		t.Fatalf("expected history stripping after working memory confirmation, reason=%q", reason)
+		t.Fatalf("expected history stripping after llm context confirmation, reason=%q", reason)
 	}
-	if reason != "working_memory_content_confirmed" {
+	if reason != "llm_context_content_confirmed" {
 		t.Fatalf("unexpected reason: %q", reason)
 	}
 }
 
-func TestHasSuccessfulWorkingMemoryWrite(t *testing.T) {
-	target := "/tmp/session/working-memory/overview.md"
+func TestHasSuccessfulLLMContextWrite(t *testing.T) {
+	target := "/tmp/session/llm-context/overview.md"
 	msg := agentctx.NewToolResultMessage(
 		"call-1",
 		"write",
@@ -75,22 +75,22 @@ func TestHasSuccessfulWorkingMemoryWrite(t *testing.T) {
 		false,
 	)
 
-	if !hasSuccessfulWorkingMemoryWrite([]agentctx.AgentMessage{msg}, target) {
-		t.Fatal("expected successful working memory write to be detected")
+	if !hasSuccessfulLLMContextWrite([]agentctx.AgentMessage{msg}, target) {
+		t.Fatal("expected successful llm context write to be detected")
 	}
-	if hasSuccessfulWorkingMemoryWrite([]agentctx.AgentMessage{msg}, "/tmp/another/overview.md") {
+	if hasSuccessfulLLMContextWrite([]agentctx.AgentMessage{msg}, "/tmp/another/overview.md") {
 		t.Fatal("did not expect detection for a different target path")
 	}
 }
 
-func TestSelectMessagesForLLM_UsesRecentWindowWhenWorkingMemoryUnconfirmed(t *testing.T) {
+func TestSelectMessagesForLLM_UsesRecentWindowWhenLLMContextUnconfirmed(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	longPayload := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for i := 0; i < 700; i++ {
 		agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage(fmt.Sprintf("message-%03d %s %s %s %s", i, longPayload, longPayload, longPayload, longPayload)))
 	}
 
-	selected, mode := selectMessagesForLLM(agentCtx, true, "working_memory_not_maintained", 128000)
+	selected, mode := selectMessagesForLLM(agentCtx, true, "llm_context_not_maintained", 128000)
 	if mode != "recent_history_window" {
 		t.Fatalf("expected recent_history_window mode, got %q", mode)
 	}
@@ -127,7 +127,7 @@ func TestSelectMessagesForLLM_NoInjectKeepsRecentHistoryWindow(t *testing.T) {
 		agentctx.NewUserMessage("new-user"),
 	)
 
-	selected, mode := selectMessagesForLLM(agentCtx, false, "working_memory_content_confirmed", 128000)
+	selected, mode := selectMessagesForLLM(agentCtx, false, "llm_context_content_confirmed", 128000)
 	if mode != "recent_history_window_no_inject" {
 		t.Fatalf("expected recent_history_window_no_inject mode, got %q", mode)
 	}

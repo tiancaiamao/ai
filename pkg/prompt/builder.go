@@ -15,8 +15,8 @@ type ToolInfo interface {
 	Description() string
 }
 
-// WorkingMemoryInfo provides working memory content for prompt generation.
-type WorkingMemoryInfo interface {
+// LLMContextInfo provides llm context content for prompt generation.
+type LLMContextInfo interface {
 	Load() (string, error)
 	GetPath() string
 	GetDetailDir() string
@@ -30,8 +30,11 @@ type Builder struct {
 	// Working directory
 	cwd string
 
-	// Minimal mode (excludes optional sections)
+	// Minimal mode (excludes optional sections like skills, project context)
 	minimal bool
+
+	// No workspace mode (excludes workspace section, for chat bots like claw)
+	noWorkspace bool
 
 	// Workspace notes (optional reminders)
 	workspaceNotes string
@@ -42,10 +45,10 @@ type Builder struct {
 	// Skills (for Skills section)
 	skills []skill.Skill
 
-	// Working memory (for Working Memory section)
-	workingMemory WorkingMemoryInfo
+	// Resident prompt (for LLM Context section)
+	llmContext LLMContextInfo
 
-	// Context meta (for Working Memory section, set by agent loop)
+	// Context meta (for LLM Context section, set by agent loop)
 	contextMeta string
 }
 
@@ -61,6 +64,14 @@ func NewBuilder(basePrompt, cwd string) *Builder {
 // SetMinimal enables/disables minimal mode.
 func (b *Builder) SetMinimal(minimal bool) *Builder {
 	b.minimal = minimal
+	return b
+}
+
+// SetNoWorkspace enables/disables no-workspace mode.
+// When enabled, the workspace section is excluded from the prompt.
+// Useful for chat bots (like claw) that don't have a workspace concept.
+func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
+	b.noWorkspace = noWorkspace
 	return b
 }
 
@@ -103,9 +114,9 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 	return b
 }
 
-// SetWorkingMemory sets the working memory for the prompt.
-func (b *Builder) SetWorkingMemory(wm WorkingMemoryInfo) *Builder {
-	b.workingMemory = wm
+// SetLLMContext sets the llm context for the prompt.
+func (b *Builder) SetLLMContext(wm LLMContextInfo) *Builder {
+	b.llmContext = wm
 	return b
 }
 
@@ -124,11 +135,13 @@ func (b *Builder) Build() string {
 		sections = append(sections, b.base)
 	}
 
-	// 2. Workspace (always included)
-	sections = append(sections, b.buildWorkspaceSection())
+	// 2. Workspace (skip if noWorkspace mode)
+	if !b.noWorkspace {
+		sections = append(sections, b.buildWorkspaceSection())
+	}
 
-	// 3. Working Memory (if available)
-	if wm := b.buildWorkingMemorySection(); wm != "" {
+	// 3. LLM Context (if available)
+	if wm := b.buildLLMContextSection(); wm != "" {
 		sections = append(sections, wm)
 	}
 
@@ -144,8 +157,8 @@ func (b *Builder) Build() string {
 		}
 	}
 
-	// 6. Project Context (bootstrap files)
-	if !b.minimal {
+	// 6. Project Context (bootstrap files, skip if noWorkspace mode)
+	if !b.minimal && !b.noWorkspace {
 		if context := b.buildProjectContext(); context != "" {
 			sections = append(sections, context)
 		}
@@ -166,15 +179,15 @@ Your working directory is: %s
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.cwd, notes)
 }
 
-func (b *Builder) buildWorkingMemorySection() string {
-	if b.workingMemory == nil {
+func (b *Builder) buildLLMContextSection() string {
+	if b.llmContext == nil {
 		return ""
 	}
 
-	// Build the system prompt section explaining the working memory mechanism
+	// Build the system prompt section explaining the llm context mechanism
 	// This tells the LLM WHERE the file is and HOW to update it
-	overviewPath := b.workingMemory.GetPath()
-	detailDir := b.workingMemory.GetDetailDir()
+	overviewPath := b.llmContext.GetPath()
+	detailDir := b.llmContext.GetDetailDir()
 
 	// Use context meta if available
 	contextMetaSection := ""
@@ -187,10 +200,10 @@ func (b *Builder) buildWorkingMemorySection() string {
 %s
 </context_meta>
 
-💡 Remember to update your working memory to track progress.`, b.contextMeta)
+💡 Remember to update your llm context to track progress.`, b.contextMeta)
 	}
 
-	return fmt.Sprintf(`## Working Memory
+	return fmt.Sprintf(`## LLM Context
 
 This is persistent operational state for this session.
 Treat it as the source of truth between turns.

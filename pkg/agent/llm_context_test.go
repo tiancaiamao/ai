@@ -9,9 +9,9 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-func TestWorkingMemory_Load(t *testing.T) {
+func TestLLMContext_Load(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	content, err := wm.Load()
 	if err != nil {
@@ -19,14 +19,14 @@ func TestWorkingMemory_Load(t *testing.T) {
 	}
 
 	// Should contain the template
-	if !strings.Contains(content, "# Working Memory") {
+	if !strings.Contains(content, "# LLM Context") {
 		t.Error("Expected template content")
 	}
 }
 
-func TestWorkingMemory_GetReminderUserMessage(t *testing.T) {
+func TestLLMContext_GetReminderUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	// Simulate rounds without update
 	for i := 0; i < 6; i++ {
@@ -54,9 +54,9 @@ func TestWorkingMemory_GetReminderUserMessage(t *testing.T) {
 	}
 }
 
-func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
+func TestLLMContext_NeedsReminderMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	// Initially should not need reminder
 	if wm.NeedsReminderMessage() {
@@ -84,9 +84,9 @@ func TestWorkingMemory_NeedsReminderMessage(t *testing.T) {
 	}
 }
 
-func TestWorkingMemory_MarkUpdated(t *testing.T) {
+func TestLLMContext_MarkUpdated(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	// Simulate rounds
 	for i := 0; i < 6; i++ {
@@ -105,24 +105,24 @@ func TestWorkingMemory_MarkUpdated(t *testing.T) {
 	}
 }
 
-func TestWorkingMemory_PathMethods(t *testing.T) {
+func TestLLMContext_PathMethods(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
-	expectedOverview := filepath.Join(sessionDir, "working-memory", "overview.md")
+	expectedOverview := filepath.Join(sessionDir, "llm-context", "overview.md")
 	if wm.GetPath() != expectedOverview {
 		t.Errorf("Expected path %s, got %s", expectedOverview, wm.GetPath())
 	}
 
-	expectedDetail := filepath.Join(sessionDir, "working-memory", "detail")
+	expectedDetail := filepath.Join(sessionDir, "llm-context", "detail")
 	if wm.GetDetailDir() != expectedDetail {
 		t.Errorf("Expected detail dir %s, got %s", expectedDetail, wm.GetDetailDir())
 	}
 }
 
-func TestWorkingMemory_DirectoryCreation(t *testing.T) {
+func TestLLMContext_DirectoryCreation(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	// Load should create directories
 	_, err := wm.Load()
@@ -131,25 +131,25 @@ func TestWorkingMemory_DirectoryCreation(t *testing.T) {
 	}
 
 	// Check directories exist
-	wmDir := filepath.Join(sessionDir, "working-memory")
+	wmDir := filepath.Join(sessionDir, "llm-context")
 	if _, err := os.Stat(wmDir); os.IsNotExist(err) {
-		t.Error("working-memory directory not created")
+		t.Error("llm-context directory not created")
 	}
 
-	detailDir := filepath.Join(sessionDir, "working-memory", "detail")
+	detailDir := filepath.Join(sessionDir, "llm-context", "detail")
 	if _, err := os.Stat(detailDir); os.IsNotExist(err) {
 		t.Error("detail directory not created")
 	}
 
-	overviewPath := filepath.Join(sessionDir, "working-memory", "overview.md")
+	overviewPath := filepath.Join(sessionDir, "llm-context", "overview.md")
 	if _, err := os.Stat(overviewPath); os.IsNotExist(err) {
 		t.Error("overview.md not created")
 	}
 }
 
-func TestWorkingMemory_ContextMeta(t *testing.T) {
+func TestLLMContext_ContextMeta(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewWorkingMemory(sessionDir)
+	wm := agentctx.NewLLMContext(sessionDir)
 
 	wm.UpdateMeta(50000, 128000, 25)
 

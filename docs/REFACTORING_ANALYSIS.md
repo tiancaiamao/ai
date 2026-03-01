@@ -36,7 +36,7 @@ pkg/agent/
 ├── agent.go                  # 640 行
 ├── loop.go                   # 2,118 行 ⚠️
 ├── metrics.go                # 882 行
-├── working_memory.go         # 610 行
+├── llm_context.go         # 610 行
 ├── tool_output.go            # 459 行
 ├── tool_tag_parser.go        # 529 行
 ├── ... (38 more files)

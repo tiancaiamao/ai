@@ -1,5 +1,5 @@
 // aiclaw - AI Claw Bot with picoclaw channels and ai agent core.
-// Configuration is unified in ~/.ai/config.json
+// Configuration is unified in ~/.aiclaw/config.json
 package main
 
 import (
@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"log/slog"
@@ -20,7 +21,8 @@ import (
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	aiconfig "github.com/tiancaiamao/ai/pkg/config"
+	"github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 )
 
@@ -28,10 +30,17 @@ var (
 	logLevel = flag.String("log-level", "info", "Log level: debug, info, warn, error")
 )
 
-// Config 是 aiclaw 的统一配置（扩展自 agent core 配置）
+// ModelConfig 模型配置
+type ModelConfig struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	BaseURL  string `json:"baseUrl"`
+}
+
+// Config 是 aiclaw 的统一配置
 type Config struct {
-	aiconfig.Config `json:",inline"`
-	Channels        picoclawconfig.ChannelsConfig `json:"channels,omitempty"`
+	Model    ModelConfig                   `json:"model"`
+	Channels picoclawconfig.ChannelsConfig `json:"channels,omitempty"`
 }
 
 func main() {
@@ -40,14 +49,16 @@ func main() {
 	// 设置日志
 	setupLogging(*logLevel)
 
-	// 加载统一配置 (~/.ai/config.json)
+	// 加载统一配置 (~/.aiclaw/config.json)
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("Failed to get home directory", "error", err)
 		os.Exit(1)
 	}
 
-	configPath := filepath.Join(homeDir, ".ai", "config.json")
+	clawDir := filepath.Join(homeDir, ".aiclaw")
+
+	configPath := filepath.Join(clawDir, "config.json")
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		slog.Error("Failed to load config", "error", err, "path", configPath)
@@ -79,11 +90,11 @@ func main() {
 	}
 
 	// 创建 AgentLoop
-	// 从 ~/.ai/auth.json 读取 API Key
-	apiKey, err := aiconfig.ResolveAPIKey(cfg.Model.Provider)
+	// 从 ~/.aiclaw/auth.json 读取 API Key
+	apiKey, err := resolveAPIKey(clawDir, cfg.Model.Provider)
 	if err != nil {
-		slog.Warn("Failed to resolve API key from auth.json", "error", err)
-		// 继续执行，agent core 会尝试从环境变量读取
+		slog.Warn("Failed to resolve API key", "error", err)
+		// 继续执行，可能从环境变量读取
 	}
 
 	agentConfig := &adapter.Config{
@@ -91,8 +102,9 @@ func main() {
 		Provider:     cfg.Model.Provider,
 		APIURL:       cfg.Model.BaseURL,
 		APIKey:       apiKey,
-		SystemPrompt: buildSystemPrompt(),
+		SystemPrompt: buildSystemPrompt(clawDir),
 		Tools:        []agentctx.Tool{}, // 暂时不注册工具
+		ClawDir:      clawDir,           // 传递 claw 配置目录
 	}
 	agentLoop := adapter.NewAgentLoop(agentConfig, msgBus)
 
@@ -163,18 +175,46 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// 环境变量覆盖
-	if apiKey := os.Getenv("ZAI_API_KEY"); apiKey != "" {
-		// API Key 通过环境变量传递，不存储在配置文件中
-	}
-
 	return &cfg, nil
 }
 
+// resolveAPIKey 从 auth.json 或环境变量解析 API Key
+func resolveAPIKey(clawDir, provider string) (string, error) {
+	// 先尝试环境变量
+	envVar := strings.ToUpper(provider) + "_API_KEY"
+	if key := os.Getenv(envVar); key != "" {
+		return key, nil
+	}
+
+	// 再尝试 auth.json
+	authPath := filepath.Join(clawDir, "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read auth.json: %w (set %s env var)", err, envVar)
+	}
+
+	var auth map[string]map[string]string
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return "", fmt.Errorf("failed to parse auth.json: %w", err)
+	}
+
+	if providerAuth, ok := auth[provider]; ok {
+		// 尝试不同的 key 字段名
+		for _, keyField := range []string{"apiKey", "api_key", "key", "token"} {
+			if key, ok := providerAuth[keyField]; ok && key != "" {
+				return key, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("API key not found for provider %s in auth.json", provider)
+}
+
 // buildSystemPrompt 构建 system prompt
-// 写死的通用助手身份
-func buildSystemPrompt() string {
-	return `# Claw Assistant
+// 使用 prompt.Builder，支持从 ~/.aiclaw/AGENTS.md 加载身份
+func buildSystemPrompt(clawDir string) string {
+	// 默认身份
+	defaultIdentity := `# Claw Assistant
 
 You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, etc).
 
@@ -200,6 +240,39 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 - You cannot execute code unless tools are available
 - Each chat session is independent - you don't share memory across different groups/private chats
 `
+	// 尝试从 ~/.aiclaw/AGENTS.md 加载自定义身份
+	basePrompt := defaultIdentity
+	agentsPath := filepath.Join(clawDir, "AGENTS.md")
+	if content, err := os.ReadFile(agentsPath); err == nil && len(content) > 0 {
+		basePrompt = string(content)
+		slog.Info("Loaded custom identity from AGENTS.md", "path", agentsPath)
+	}
+
+	// 加载 skills
+	skillLoader := skill.NewLoader(clawDir)
+	skillResult := skillLoader.Load(&skill.LoadOptions{
+		CWD:             "", // no workspace
+		AgentDir:        clawDir,
+		SkillPaths:      nil,
+		IncludeDefaults: true,
+	})
+	if len(skillResult.Diagnostics) > 0 {
+		for _, diag := range skillResult.Diagnostics {
+			if diag.Type == "error" {
+				slog.Error("Skill error", "path", diag.Path, "message", diag.Message)
+			}
+		}
+	}
+	if len(skillResult.Skills) > 0 {
+		slog.Info("Loaded skills", "count", len(skillResult.Skills))
+	}
+
+	// 使用 prompt.Builder 构建
+	builder := prompt.NewBuilder(basePrompt, "").
+		SetNoWorkspace(true).
+		SetSkills(skillResult.Skills)
+
+	return builder.Build()
 }
 
 // EchoTool 是一个简单的示例工具

@@ -104,9 +104,9 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Create working-memory structure
-	if _, err := EnsureWorkingMemory(sessDir); err != nil {
-		return nil, fmt.Errorf("failed to create working memory: %w", err)
+	// Create llm-context structure
+	if _, err := EnsureLLMContext(sessDir); err != nil {
+		return nil, fmt.Errorf("failed to create llm context: %w", err)
 	}
 
 	return sess, nil
@@ -173,19 +173,19 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Copy working-memory from source session
+	// Copy llm-context from source session
 	sourceDir := source.GetDir()
-	srcWM := filepath.Join(sourceDir, WorkingMemoryDir)
-	dstWM := filepath.Join(sessDir, WorkingMemoryDir)
+	srcWM := filepath.Join(sourceDir, LLMContextDir)
+	dstWM := filepath.Join(sessDir, LLMContextDir)
 	if _, err := os.Stat(srcWM); err == nil {
 		if err := copyDir(srcWM, dstWM); err != nil {
-			// Log but don't fail - working memory copy is not critical
-			fmt.Fprintf(os.Stderr, "warning: failed to copy working memory: %v\n", err)
+			// Log but don't fail - llm context copy is not critical
+			fmt.Fprintf(os.Stderr, "warning: failed to copy llm context: %v\n", err)
 		}
 	} else {
-		// Create fresh working-memory if source doesn't have one
-		if _, err := EnsureWorkingMemory(sessDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to create working memory: %v\n", err)
+		// Create fresh llm-context if source doesn't have one
+		if _, err := EnsureLLMContext(sessDir); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to create llm context: %v\n", err)
 		}
 	}
 

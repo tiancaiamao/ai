@@ -175,7 +175,7 @@ func RunLoop(
 			SystemPrompt:  agentCtx.SystemPrompt,
 			Messages:      append(agentCtx.Messages, prompts...),
 			Tools:         agentCtx.Tools,
-			WorkingMemory: agentCtx.WorkingMemory,
+			LLMContext: agentCtx.LLMContext,
 		}
 
 		stream.Push(NewAgentStartEvent())
@@ -362,20 +362,20 @@ func runInnerLoop(
 		agentCtx.Messages = append(agentCtx.Messages, *msg)
 		newMessages = append(newMessages, *msg)
 
-		// Update agentctx.WorkingMemory meta after successful LLM response
-		if agentCtx.WorkingMemory != nil && msg.Usage != nil {
+		// Update agentctx.LLMContext meta after successful LLM response
+		if agentCtx.LLMContext != nil && msg.Usage != nil {
 			// Use context window from config if available, otherwise use a default
 			tokensMax := 128000 // default context window
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			agentCtx.WorkingMemory.UpdateMeta(
+			agentCtx.LLMContext.UpdateMeta(
 				msg.Usage.TotalTokens,
 				tokensMax,
 				len(agentCtx.Messages),
 			)
 			// Invalidate cache so next Load() will re-read
-			agentCtx.WorkingMemory.InvalidateCache()
+			agentCtx.LLMContext.InvalidateCache()
 		}
 
 		// Check for error or abort
@@ -422,18 +422,18 @@ func runInnerLoop(
 				}
 			}
 
-			// Check if working memory was updated
-			if agentCtx.WorkingMemory != nil {
+			// Check if llm context was updated
+			if agentCtx.LLMContext != nil {
 				toolCalls := msg.ExtractToolCalls()
 				for _, tc := range toolCalls {
 					if strings.EqualFold(tc.Name, "write") {
-						// Check if the path matches working memory overview
+						// Check if the path matches llm context overview
 						if path, ok := tc.Arguments["path"].(string); ok {
 							// Convert to absolute path for comparison
 							absPath := filepath.Clean(path)
-							wmPath := agentCtx.WorkingMemory.GetPath()
+							wmPath := agentCtx.LLMContext.GetPath()
 							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
-								agentCtx.WorkingMemory.MarkUpdatedAfterToolCall(10)
+								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
 							}
 						}
 					}
@@ -803,18 +803,18 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Build runtime appendix (working memory + context meta) as a user message
+	// Build runtime appendix (llm context + context meta) as a user message
 	// injected right after system prompt. Keeping system prompt stable improves
 	// provider-side prompt caching opportunities.
-	if agentCtx.WorkingMemory != nil {
+	if agentCtx.LLMContext != nil {
 		// Track that we're starting a new LLM request round
-		agentCtx.WorkingMemory.IncrementRound()
+		agentCtx.LLMContext.IncrementRound()
 
 		// Invalidate cache to ensure we read the latest content
-		agentCtx.WorkingMemory.InvalidateCache()
-		content, err := agentCtx.WorkingMemory.Load()
+		agentCtx.LLMContext.InvalidateCache()
+		content, err := agentCtx.LLMContext.Load()
 		if err != nil {
-			slog.Warn("[Loop] Failed to load working memory", "error", err)
+			slog.Warn("[Loop] Failed to load llm context", "error", err)
 		} else {
 			// Refresh meta from approximate current context state.
 			tokensMax := 128000 // default context window
@@ -822,13 +822,13 @@ func streamAssistantResponse(
 				tokensMax = config.ContextWindow
 			}
 			tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
-			agentCtx.WorkingMemory.UpdateMeta(
+			agentCtx.LLMContext.UpdateMeta(
 				tokensUsedApprox,
 				tokensMax,
 				len(agentCtx.Messages),
 			)
 
-			meta := agentCtx.WorkingMemory.GetMeta()
+			meta := agentCtx.LLMContext.GetMeta()
 			runtimeMetaSnapshot, runtimeRefreshed := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
 			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
 			if runtimeAppendix != "" {
@@ -846,17 +846,17 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Inject working memory reminder if LLM hasn't updated it for too many rounds
-	if agentCtx.WorkingMemory != nil && agentCtx.WorkingMemory.NeedsReminderMessage() {
-		reminderContent := agentCtx.WorkingMemory.GetReminderUserMessage()
+	// Inject llm context reminder if LLM hasn't updated it for too many rounds
+	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() {
+		reminderContent := agentCtx.LLMContext.GetReminderUserMessage()
 		reminderMsg := llm.LLMMessage{
 			Role:    "user",
 			Content: reminderContent,
 		}
 		llmMessages = append(llmMessages, reminderMsg)
-		agentCtx.WorkingMemory.SetWasReminded()
-		slog.Info("[Loop] Injected working memory reminder message",
-			"rounds_since_update", agentCtx.WorkingMemory.GetRoundsSinceUpdate())
+		agentCtx.LLMContext.SetWasReminded()
+		slog.Info("[Loop] Injected llm context reminder message",
+			"rounds_since_update", agentCtx.LLMContext.GetRoundsSinceUpdate())
 	}
 
 	slog.Info("[Loop] Sending messages to LLM", "count", len(llmMessages))
@@ -1649,7 +1649,7 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext, injectHistory bool, r
 	}
 
 	if !injectHistory {
-		// When working memory is maintained, use all available messages
+		// When llm context is maintained, use all available messages
 		// (session lazy loading already limits to messages after last compaction)
 		if len(agentCtx.Messages) > 0 {
 			return agentCtx.Messages, "all_available_messages"
@@ -1662,7 +1662,7 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext, injectHistory bool, r
 		return agentCtx.Messages, "full_history_forced"
 	}
 
-	// When working memory is confirmed, use all available messages
+	// When llm context is confirmed, use all available messages
 	// (session lazy loading already limits to messages after last compaction)
 	if len(agentCtx.Messages) > 0 {
 		return agentCtx.Messages, "all_available_messages"
@@ -1679,9 +1679,9 @@ func shouldInjectHistory(agentCtx *agentctx.AgentContext, config *LoopConfig) (b
 
 
 
-func hasSuccessfulWorkingMemoryWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
+func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
 	targetAbs := normalizePathForContains(overviewPath)
-	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.WorkingMemoryDir, agentctx.OverviewFile)))
+	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.LLMContextDir, agentctx.OverviewFile)))
 	allowRelativeFallback := targetAbs == "" && targetRel != ""
 	if targetAbs == "" && !allowRelativeFallback {
 		return false
@@ -1709,7 +1709,7 @@ func hasSuccessfulWorkingMemoryWrite(messages []agentctx.AgentMessage, overviewP
 	return false
 }
 
-func normalizeWorkingMemoryContent(content string) string {
+func normalizeLLMContextContent(content string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.TrimSpace(content)
 	lines := strings.Split(content, "\n")
@@ -1730,10 +1730,10 @@ func normalizePathForContains(value string) string {
 	return strings.ToLower(value)
 }
 
-func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) string {
+func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
 	sections := make([]string, 0, 3)
-	if strings.TrimSpace(workingMemoryContent) != "" {
-		sections = append(sections, fmt.Sprintf("<working_memory>\n%s\n</working_memory>", workingMemoryContent))
+	if strings.TrimSpace(llmContextContent) != "" {
+		sections = append(sections, fmt.Sprintf("<llm_context>\n%s\n</llm_context>", llmContextContent))
 	}
 	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
 		sections = append(sections, runtimeMetaSnapshot)
@@ -1743,14 +1743,14 @@ func buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot string) 
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
 Follow the Turn Protocol defined in the system prompt.
-Path authority: use Working Memory Path/Detail dir from system prompt; ignore cwd-relative examples.`)
+Path authority: use LLM Context Path/Detail dir from system prompt; ignore cwd-relative examples.`)
 	return strings.Join(sections, "\n\n")
 }
 
 // buildRuntimeSystemAppendix is kept for backward-compatible tests/helpers.
 // Runtime state is now injected as a user message, not appended to system prompt.
-func buildRuntimeSystemAppendix(workingMemoryContent, runtimeMetaSnapshot string) string {
-	return buildRuntimeUserAppendix(workingMemoryContent, runtimeMetaSnapshot)
+func buildRuntimeSystemAppendix(llmContextContent, runtimeMetaSnapshot string) string {
+	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
 }
 
 func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.ContextMeta, heartbeatTurns int) (string, bool) {
@@ -1783,7 +1783,7 @@ context_meta:
   tokens_used_approx: %d
   tokens_max: %d
   messages_in_history_bucket: %s
-  working_memory_size_bucket: %s
+  llm_context_size_bucket: %s
 tool_output_pressure:
   stale_tool_outputs_bucket: %s
   large_tool_outputs_bucket: %s
@@ -1800,7 +1800,7 @@ guidance:
 		tokensUsedApprox,
 		meta.TokensMax,
 		runtimeMessageBucket(meta.MessagesInHistory),
-		runtimeSizeBucket(meta.WorkingMemorySize),
+		runtimeSizeBucket(meta.LLMContextSize),
 		runtimeCountBucket(toolPressure.StaleCount),
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),

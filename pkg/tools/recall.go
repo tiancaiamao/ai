@@ -8,7 +8,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// RecallMemoryTool searches working memory for relevant information
+// RecallMemoryTool searches llm context for relevant information
 type RecallMemoryTool struct {
 	manager *agentctx.MemoryManager
 }
@@ -38,7 +38,7 @@ HOW TO USE:
 Call this tool directly with the following parameters:
   - query (required): The search term or phrase to look for
   - scope (optional): "all" (default), "detail", or "messages"
-    - "detail": Search only compaction summaries and notes in working-memory/detail/
+    - "detail": Search only compaction summaries and notes in llm-context/detail/
     - "messages": Search raw conversation history in messages.jsonl
     - "all": Search both sources
   - limit (optional): Maximum number of results (default: 5)

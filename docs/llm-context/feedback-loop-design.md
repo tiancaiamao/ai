@@ -1,13 +1,13 @@
-# Working Memory 反馈循环设计
+# LLM Context 反馈循环设计
 
 ## 问题
 
-LLM在多轮交互中经常忘记更新working memory，导致：
+LLM在多轮交互中经常忘记更新llm context，导致：
 - 重要上下文丢失
 - 重复计算或重复工具调用
 - 无法有效压缩上下文
 
-需要一种机制让agent"提醒"自己更新working memory。
+需要一种机制让agent"提醒"自己更新llm context。
 
 ## 设计目标
 
@@ -23,16 +23,16 @@ LLM在多轮交互中经常忘记更新working memory，导致：
 | 1. 外部监控进程 | 完全解耦 | 无法实时触发，复杂度高 |
 | 2. 修改Agent Loop | 精确控制 | 侵入性强，修改核心逻辑 |
 | 3. System Prompt模板 | 无代码修改 | 不可靠，依赖LLM自我认知 |
-| 4. WorkingMemory内部跟踪 | ✅ 平衡 | ⭐ 推荐 |
+| 4. LLMContext内部跟踪 | ✅ 平衡 | ⭐ 推荐 |
 
-## 实现方案：Working Memory 更新跟踪器
+## 实现方案：LLM Context 更新跟踪器
 
 ### 核心机制
 
-在`WorkingMemory`结构中添加更新跟踪：
+在`LLMContext`结构中添加更新跟踪：
 
 ```go
-type WorkingMemory struct {
+type LLMContext struct {
     // ... 现有字段 ...
 
     // Update tracking
@@ -64,7 +64,7 @@ const (
    [OVERVIEW内容]
    
    <!-- ⚠️ WORKING MEMORY REMINDER -->
-   <!-- 你已经 6 轮没有更新 working memory 了 -->
+   <!-- 你已经 6 轮没有更新 llm context 了 -->
    <!-- 当前上下文使用了 65% tokens -->
    <!-- 建议：将已完成任务归档到 detail/，压缩关键信息 -->
    <!-- 使用 write tool 更新 %s -->
@@ -100,12 +100,12 @@ const (
 
 ## 实现细节
 
-### 1. WorkingMemory 结构扩展
+### 1. LLMContext 结构扩展
 
 ```go
-// pkg/agent/working_memory.go
+// pkg/agent/llm_context.go
 
-type WorkingMemory struct {
+type LLMContext struct {
     mu sync.RWMutex
 
     // ... 现有字段 ...
@@ -116,8 +116,8 @@ type WorkingMemory struct {
     roundsSinceUpdate int
 }
 
-// MarkUpdated 记录 working memory 已更新
-func (wm *WorkingMemory) MarkUpdated() {
+// MarkUpdated 记录 llm context 已更新
+func (wm *LLMContext) MarkUpdated() {
     wm.mu.Lock()
     defer wm.mu.Unlock()
 
@@ -126,7 +126,7 @@ func (wm *WorkingMemory) MarkUpdated() {
 }
 
 // CheckUpdateNeeded 检查是否需要提醒更新
-func (wm *WorkingMemory) CheckUpdateNeeded() (bool, string) {
+func (wm *LLMContext) CheckUpdateNeeded() (bool, string) {
     wm.mu.Lock()
     defer wm.mu.Unlock()
 
@@ -159,7 +159,7 @@ func (wm *WorkingMemory) CheckUpdateNeeded() (bool, string) {
 }
 
 // buildReminder 构建提醒消息
-func (wm *WorkingMemory) buildReminder() string {
+func (wm *LLMContext) buildReminder() string {
     meta := wm.GetMeta()
 
     reminder := fmt.Sprintf(`
@@ -167,11 +167,11 @@ func (wm *WorkingMemory) buildReminder() string {
 <!--
 ⚠️ WORKING MEMORY UPDATE NEEDED
 
-你已经连续 %d 轮没有更新 working memory 了。
+你已经连续 %d 轮没有更新 llm context 了。
 当前上下文状态:
 - Token 使用: %.0f%% (%d / %d)
 - 历史消息: %d 条
-- Working Memory 大小: %.2f KB
+- LLM Context 大小: %.2f KB
 
 建议操作:
 1. 总结已完成的任务，归档到 %s
@@ -187,7 +187,7 @@ func (wm *WorkingMemory) buildReminder() string {
         meta.TokensUsed,
         meta.TokensMax,
         meta.MessagesInHistory,
-        float64(meta.WorkingMemorySize)/1024,
+        float64(meta.LLMContextSize)/1024,
         wm.detailPath,
         wm.overviewPath)
 
@@ -199,7 +199,7 @@ func (wm *WorkingMemory) buildReminder() string {
 
 ```go
 // Load 加载内容，并在需要时插入提醒
-func (wm *WorkingMemory) Load() (string, error) {
+func (wm *LLMContext) Load() (string, error) {
     content, err := wm.loadContent()
     if err != nil {
         return "", err
@@ -215,7 +215,7 @@ func (wm *WorkingMemory) Load() (string, error) {
 }
 
 // loadContent 内部方法，只加载文件内容
-func (wm *WorkingMemory) loadContent() (string, error) {
+func (wm *LLMContext) loadContent() (string, error) {
     wm.mu.Lock()
     defer wm.mu.Unlock()
 
@@ -234,9 +234,9 @@ func (wm *WorkingMemory) loadContent() (string, error) {
 if toolCall.Name == "write" {
     args := toolCall.Arguments.(map[string]interface{})
     if path, ok := args["path"].(string); ok {
-        if path == agent.workingMemory.GetPath() {
-            // User updated working memory
-            agent.workingMemory.MarkUpdated()
+        if path == agent.llmContext.GetPath() {
+            // User updated llm context
+            agent.llmContext.MarkUpdated()
         }
     }
 }
@@ -330,7 +330,7 @@ if toolCall.Name == "write" {
 ## 实施步骤
 
 Phase 1: 基础跟踪
-- [ ] 添加字段到 WorkingMemory
+- [ ] 添加字段到 LLMContext
 - [ ] 实现 MarkUpdated()
 - [ ] 实现 CheckUpdateNeeded()
 - [ ] 实现 buildReminder()
@@ -349,7 +349,7 @@ Phase 3: 优化和配置
 
 ## 总结
 
-这个方案通过在WorkingMemory内部添加轻量级跟踪机制，实现了非侵入的反馈循环。它在不改变核心流程的情况下，让agent能够"意识到"自己需要更新working memory，并通过动态提醒促进行为改变。
+这个方案通过在LLMContext内部添加轻量级跟踪机制，实现了非侵入的反馈循环。它在不改变核心流程的情况下，让agent能够"意识到"自己需要更新llm context，并通过动态提醒促进行为改变。
 
 方案的核心优势是：
 - 简单：~150行代码
