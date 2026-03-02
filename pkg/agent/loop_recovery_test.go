@@ -1,9 +1,9 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 	"testing"
 
@@ -204,6 +204,42 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	}
 	if !sawGuardEvent {
 		t.Fatal("expected loop_guard_triggered event")
+	}
+}
+
+func TestRunInnerLoopStopsRepeatedToolCallsByDefaultGuard(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.ToolCallContent{
+				ID:        "call-repeat-default",
+				Type:      "toolCall",
+				Name:      "read",
+				Arguments: map[string]any{"path": "/tmp/a.txt"},
+			},
+		}
+		msg.StopReason = "tool_calls"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
+
+	// defaultLoopMaxConsecutiveToolCalls = 6, so guard triggers on the 7th call.
+	if callCount != 7 {
+		t.Fatalf("expected default loop guard to stop on 7th repeated call, got %d calls", callCount)
 	}
 }
 

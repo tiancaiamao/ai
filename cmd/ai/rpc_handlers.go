@@ -1,10 +1,10 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"net/http"
 	_ "net/http/pprof"
@@ -311,8 +311,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetCompactor(sessionComp)
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
-	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
-	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	setAgentContext := func(ctx *agentctx.AgentContext) {
@@ -344,18 +342,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxLines:             toolOutputConfig.MaxLines,
-		MaxBytes:             toolOutputConfig.MaxBytes,
-		MaxChars:             toolOutputConfig.MaxChars,
-		LargeOutputThreshold: toolOutputConfig.LargeOutputThreshold,
-		TruncateMode:         toolOutputConfig.TruncateMode,
+		MaxChars: toolOutputConfig.MaxChars,
 	})
 	slog.Info("Tool output truncation",
-		"maxLines", toolOutputConfig.MaxLines,
-		"maxBytes", toolOutputConfig.MaxBytes,
 		"maxChars", toolOutputConfig.MaxChars,
-		"largeOutputThreshold", toolOutputConfig.LargeOutputThreshold,
-		"truncateMode", toolOutputConfig.TruncateMode,
 	)
 
 	// Create RPC server
@@ -1094,6 +1084,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil
 	})
 
+	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
+		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
+		if cutoff < 0 {
+			return fmt.Errorf("cutoff must be >= 0")
+		}
+		compactorConfig.ToolCallCutoff = cutoff
+		ag.SetToolCallCutoff(cutoff)
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
+		return nil
+	})
+
 	validToolSummaryStrategies := map[string]bool{
 		"llm":       true,
 		"heuristic": true,
@@ -1105,13 +1108,26 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"always":   true,
 	}
 
-	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
-		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
-		if cutoff < 0 {
-			return fmt.Errorf("cutoff must be >= 0")
+	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
+		strategy = strings.ToLower(strings.TrimSpace(strategy))
+		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
+		if !validToolSummaryStrategies[strategy] {
+			return fmt.Errorf("invalid tool summary strategy")
 		}
-		compactorConfig.ToolCallCutoff = cutoff
-		ag.SetToolCallCutoff(cutoff)
+		compactorConfig.ToolSummaryStrategy = strategy
+		if err := config.SaveConfig(cfg, configPath); err != nil {
+			slog.Info("Failed to save config:", "value", err)
+		}
+		return nil
+	})
+
+	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		slog.Info("Received set_tool_summary_automation", "mode", mode)
+		if !validToolSummaryAutomations[mode] {
+			return fmt.Errorf("invalid tool summary automation mode")
+		}
+		compactorConfig.ToolSummaryAutomation = mode
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
@@ -1192,34 +1208,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	server.SetGetTraceEventsHandler(func() ([]string, error) {
 		slog.Info("Received get_trace_events")
 		return traceevent.GetEnabledEvents(), nil
-	})
-
-	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
-		strategy = strings.ToLower(strings.TrimSpace(strategy))
-		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
-		if !validToolSummaryStrategies[strategy] {
-			return fmt.Errorf("invalid tool summary strategy")
-		}
-		compactorConfig.ToolSummaryStrategy = strategy
-		ag.SetToolSummaryStrategy(strategy)
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return nil
-	})
-
-	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
-		mode = strings.ToLower(strings.TrimSpace(mode))
-		slog.Info("Received set_tool_summary_automation", "mode", mode)
-		if !validToolSummaryAutomations[mode] {
-			return fmt.Errorf("invalid tool summary automation mode")
-		}
-		compactorConfig.ToolSummaryAutomation = mode
-		ag.SetToolSummaryAutomation(mode)
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return nil
 	})
 
 	validSteeringModes := map[string]bool{

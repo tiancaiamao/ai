@@ -208,8 +208,6 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 	ag.SetCompactor(sessionComp)
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
-	ag.SetToolSummaryStrategy(compactorConfig.ToolSummaryStrategy)
-	ag.SetToolSummaryAutomation(compactorConfig.ToolSummaryAutomation)
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {
@@ -233,11 +231,7 @@ Do not include chain-of-thought or <thinking> tags in your output.`
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxLines:             toolOutputConfig.MaxLines,
-		MaxBytes:             toolOutputConfig.MaxBytes,
-		MaxChars:             toolOutputConfig.MaxChars,
-		LargeOutputThreshold: toolOutputConfig.LargeOutputThreshold,
-		TruncateMode:         toolOutputConfig.TruncateMode,
+		MaxChars: toolOutputConfig.MaxChars,
 	})
 
 	// Subscribe to all events and write them as JSON Lines

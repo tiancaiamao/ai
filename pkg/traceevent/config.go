@@ -232,6 +232,7 @@ var eventNameToBit = map[string]int{
 	"llm_retry_scheduled":             38,
 	"llm_retry_aborted":               39,
 	"llm_retry_exhausted":             40,
+	"tool_output_truncated":           41,
 }
 
 var defaultEnabledEvents = []string{
@@ -267,6 +268,7 @@ var defaultEnabledEvents = []string{
 	"llm_retry_exhausted",
 	"tool_summary",
 	"tool_summary_batch",
+	"tool_output_truncated",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -297,6 +299,7 @@ var eventSelectorGroups = map[string][]string{
 		"assistant_tool_tag_parse_failed",
 		"tool_summary",
 		"tool_summary_batch",
+		"tool_output_truncated",
 	},
 	"event": {
 		"prompt",

@@ -11,7 +11,7 @@
     "KeepRecentTokens": 20000,
     "ReserveTokens": 16384,
     "ToolCallCutoff": 10,
-    "ToolSummaryStrategy": "llm",
+    "ToolSummaryStrategy": "off",
     "ToolSummaryAutomation": "off",
     "AutoCompact": true
   },
@@ -21,7 +21,7 @@
     "queueTimeout": 60
   },
   "toolOutput": {
-    "maxChars": 204800
+    "maxChars": 10000
   },
   "log": {
     "level": "info",

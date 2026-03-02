@@ -1,10 +1,10 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -145,5 +145,141 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	}
 	if !strings.Contains(runtimeContent, "<runtime_state>") {
 		t.Fatalf("expected runtime user content to include runtime_state, got: %q", runtimeContent)
+	}
+}
+
+func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
+	sessionDir := t.TempDir()
+	wm := agentctx.NewLLMContext(sessionDir)
+	if _, err := wm.Load(); err != nil {
+		t.Fatalf("failed to initialize llm context: %v", err)
+	}
+	// Mark llm context as maintained to mirror the production path where
+	// runtime state is injected and history selection previously regressed.
+	if err := wm.WriteContent("# LLM Context\n\n## 当前任务\n- keep recent user turns\n"); err != nil {
+		t.Fatalf("failed to write llm context content: %v", err)
+	}
+
+	var observedMessages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("failed to decode request JSON: %v", err)
+		}
+		observedMessages = req.Messages
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":2,\"total_tokens\":22}}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("static system prompt")
+	agentCtx.LLMContext = wm
+
+	userTurn1 := "user-turn-1: first requirement"
+	userTurn2 := "user-turn-2: second requirement"
+	userTurn3 := "user-turn-3: final requirement"
+
+	assistantCall1 := agentctx.NewAssistantMessage()
+	assistantCall1.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:        "call-1",
+			Type:      "toolCall",
+			Name:      "read",
+			Arguments: map[string]any{"path": "a.txt"},
+		},
+	}
+	assistantCall1.StopReason = "tool_calls"
+
+	assistantCall2 := agentctx.NewAssistantMessage()
+	assistantCall2.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:        "call-2",
+			Type:      "toolCall",
+			Name:      "read",
+			Arguments: map[string]any{"path": "b.txt"},
+		},
+	}
+	assistantCall2.StopReason = "tool_calls"
+
+	largeToolOutput := strings.Repeat("X", 22000)
+
+	agentCtx.Messages = append(agentCtx.Messages,
+		agentctx.NewUserMessage(userTurn1),
+		assistantCall1,
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: largeToolOutput},
+		}, false),
+		agentctx.NewUserMessage(userTurn2),
+		assistantCall2,
+		agentctx.NewToolResultMessage("call-2", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: largeToolOutput},
+		}, false),
+		agentctx.NewUserMessage(userTurn3),
+	)
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey:        "test-key",
+		ThinkingLevel: "high",
+		ContextWindow: 200000,
+	}
+
+	stream := newTestAgentEventStream()
+	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+	if got := strings.TrimSpace(msg.ExtractText()); got != "ok" {
+		t.Fatalf("expected assistant text 'ok', got %q", got)
+	}
+
+	realUserTurns := make([]string, 0, 3)
+	for _, observed := range observedMessages {
+		if observed.Role != "user" {
+			continue
+		}
+		var content string
+		if err := json.Unmarshal(observed.Content, &content); err != nil {
+			t.Fatalf("failed to parse user content: %v", err)
+		}
+		if strings.Contains(content, "<llm_context>") {
+			continue // runtime state injection
+		}
+		if strings.Contains(content, "[system message by agent, not from real user]") {
+			continue // reminder message
+		}
+		realUserTurns = append(realUserTurns, strings.TrimSpace(content))
+	}
+
+	if len(realUserTurns) < 3 {
+		t.Fatalf("expected at least 3 real user turns in llm request, got %d (%v)", len(realUserTurns), realUserTurns)
+	}
+
+	gotTail := realUserTurns[len(realUserTurns)-3:]
+	wantTail := []string{userTurn1, userTurn2, userTurn3}
+	for i := range wantTail {
+		if gotTail[i] != wantTail[i] {
+			t.Fatalf("expected tail user turns %v, got %v", wantTail, gotTail)
+		}
 	}
 }

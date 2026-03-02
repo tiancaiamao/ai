@@ -73,20 +73,6 @@ func TestConfigExampleFile(t *testing.T) {
 		t.Errorf("MaxChars mismatch: got %d, want %d", cfg.ToolOutput.MaxChars, defaultToolOutput.MaxChars)
 	}
 
-	// Verify deprecated fields are not set
-	if cfg.ToolOutput.MaxLines != 0 {
-		t.Error("MaxLines should not be set (deprecated)")
-	}
-	if cfg.ToolOutput.MaxBytes != 0 {
-		t.Error("MaxBytes should not be set (deprecated)")
-	}
-	if cfg.ToolOutput.LargeOutputThreshold != 0 {
-		t.Error("LargeOutputThreshold should not be set (deprecated)")
-	}
-	if cfg.ToolOutput.TruncateMode != "" {
-		t.Error("TruncateMode should not be set (deprecated)")
-	}
-
 	// Verify log config
 	if cfg.Log == nil {
 		t.Fatal("Log config should not be nil")
@@ -112,7 +98,7 @@ func TestConfigDefaultsMatchCode(t *testing.T) {
 		{"Concurrency.MaxConcurrentTools", DefaultConcurrencyConfig().MaxConcurrentTools, 3},
 		{"Concurrency.ToolTimeout", DefaultConcurrencyConfig().ToolTimeout, 30},
 		{"Concurrency.QueueTimeout", DefaultConcurrencyConfig().QueueTimeout, 60},
-		{"ToolOutput.MaxChars", DefaultToolOutputConfig().MaxChars, 200 * 1024},
+		{"ToolOutput.MaxChars", DefaultToolOutputConfig().MaxChars, 10000},
 		{"Log.Level", DefaultLogConfig().Level, "info"},
 	}
 
@@ -146,13 +132,13 @@ func TestNoDeprecatedFieldsInStructs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to marshal ToolOutputConfig: %v", err)
 	}
-	
+
 	// Should only have maxChars field
 	var m map[string]interface{}
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
-	
+
 	allowedFields := map[string]bool{"maxChars": true}
 	for field := range m {
 		if !allowedFields[field] {
@@ -166,11 +152,11 @@ func TestNoDeprecatedFieldsInStructs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to marshal LogConfig: %v", err)
 	}
-	
+
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
-	
+
 	deprecatedLogFields := []string{"prefix", "traceBridge"}
 	for _, field := range deprecatedLogFields {
 		if _, exists := m[field]; exists {
@@ -181,23 +167,23 @@ func TestNoDeprecatedFieldsInStructs(t *testing.T) {
 
 // Helper function to get default compactor config
 func DefaultCompactorConfig() *struct {
-	MaxTokens           int
-	KeepRecent          int
-	KeepRecentTokens    int
-	ReserveTokens       int
-	ToolCallCutoff      int
-	AutoCompact         bool
-	MaxMessages         int
+	MaxTokens        int
+	KeepRecent       int
+	KeepRecentTokens int
+	ReserveTokens    int
+	ToolCallCutoff   int
+	AutoCompact      bool
+	MaxMessages      int
 } {
 	// Import from compact package would create cycle, so we define expected values
 	return &struct {
-		MaxTokens           int
-		KeepRecent          int
-		KeepRecentTokens    int
-		ReserveTokens       int
-		ToolCallCutoff      int
-		AutoCompact         bool
-		MaxMessages         int
+		MaxTokens        int
+		KeepRecent       int
+		KeepRecentTokens int
+		ReserveTokens    int
+		ToolCallCutoff   int
+		AutoCompact      bool
+		MaxMessages      int
 	}{
 		MaxTokens:        8000,
 		KeepRecent:       5,

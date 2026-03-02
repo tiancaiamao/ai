@@ -1,282 +1,88 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-func TestProcessOutput_Full(t *testing.T) {
-	processor := NewToolOutputProcessor(nil, 50000)
+func TestTruncateToolContentTruncatesToMaxChars(t *testing.T) {
+	longText := strings.Repeat("a", 10001)
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: longText},
+	}
 
-	// Test read tool - should use full strategy
-	longOutput := strings.Repeat("line\n", 1000)
-	result := processor.ProcessOutput("read", longOutput, false)
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10000}, "bash")
+	if len(result) != 1 {
+		t.Fatalf("expected one content block, got %d", len(result))
+	}
 
-	// Should be truncated due to max chars limit (8000 tokens * 4 = 32000 chars)
-	if len(result) > 33000 {
-		t.Errorf("Full strategy should still cap output, got %d chars", len(result))
+	text, ok := result[0].(agentctx.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result[0])
+	}
+	if len(text.Text) > 10000 {
+		t.Fatalf("truncated text exceeds limit: got %d > 10000", len(text.Text))
+	}
+	if !strings.Contains(text.Text, "tokens truncated") {
+		t.Fatalf("expected truncation marker in output")
 	}
 }
 
-func TestProcessOutput_Digest(t *testing.T) {
-	// Create processor with small limit to trigger compression
-	policies := map[string]OutputPolicy{
-		"bash": {
-			ToolName:  "bash",
-			MaxTokens: 100, // 400 chars limit
-			Strategy:  StrategyDigest,
-			KeepTail:  5,
-		},
-	}
-	processor := NewToolOutputProcessor(policies, 1000)
-
-	// Create output that exceeds the limit
-	var lines []string
-	for i := 0; i < 50; i++ {
-		lines = append(lines, "Building module "+string(rune('A'+i%26)))
-	}
-	lines = append(lines, "error: undefined variable in main.go:42")
-	for i := 0; i < 50; i++ {
-		lines = append(lines, "more output line "+string(rune('0'+i%10)))
+func TestTruncateToolContentUsesDefaultLimitWhenUnset(t *testing.T) {
+	longText := strings.Repeat("b", 12000)
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: longText},
 	}
 
-	output := strings.Join(lines, "\n")
-
-	result := processor.ProcessOutput("bash", output, true)
-
-	// Should extract error line
-	if !strings.Contains(result, "error:") {
-		t.Error("Digest should extract error lines")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{}, "read")
+	text, ok := result[0].(agentctx.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result[0])
 	}
-
-	// Should be much shorter (digest extracts key info)
-	if len(result) >= len(output) {
-		t.Errorf("Digest should compress output, got %d vs %d", len(result), len(output))
+	if len(text.Text) > 10000 {
+		t.Fatalf("default truncation limit not applied: got %d", len(text.Text))
 	}
 }
 
-func TestProcessOutput_Extract(t *testing.T) {
-	// Create processor with small limit to trigger compression
-	policies := map[string]OutputPolicy{
-		"grep": {
-			ToolName:  "grep",
-			MaxTokens: 100, // 400 chars limit
-			Strategy:  StrategyExtract,
-		},
-	}
-	processor := NewToolOutputProcessor(policies, 1000)
-
-	// Create large output to trigger extraction
-	var lines []string
-	for i := 0; i < 20; i++ {
-		lines = append(lines, "main.go:"+string(rune('0'+i%10))+": func main"+string(rune('A'+i))+"() {}")
-	}
-	for i := 0; i < 20; i++ {
-		lines = append(lines, "utils.go:"+string(rune('0'+i%10))+": func helper"+string(rune('A'+i))+"() {}")
+func TestTruncateToolContentClampsOversizedLimit(t *testing.T) {
+	longText := strings.Repeat("c", 15000)
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: longText},
 	}
 
-	output := strings.Join(lines, "\n")
-
-	result := processor.ProcessOutput("grep", output, false)
-
-	// Should preserve file information
-	if !strings.Contains(result, "main.go") {
-		t.Error("Extract should preserve file information")
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 204800}, "bash")
+	text, ok := result[0].(agentctx.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result[0])
 	}
-
-	// Should be shorter due to extraction
-	if len(result) >= len(output) {
-		t.Errorf("Extract should reduce output size, got %d vs %d", len(result), len(output))
+	if len(text.Text) > 10000 {
+		t.Fatalf("oversized tool output limit should be clamped to 10000, got %d", len(text.Text))
 	}
 }
 
-func TestProcessOutput_Truncate(t *testing.T) {
-	// Create processor with small limit to trigger truncation
-	policies := map[string]OutputPolicy{
-		"test": {
-			ToolName:  "test",
-			MaxTokens: 100, // 400 chars limit
-			Strategy:  StrategyTruncate,
-			KeepHead:  5,
-			KeepTail:  5,
-		},
-	}
-	processor := NewToolOutputProcessor(policies, 1000)
-
-	// Create large output to trigger truncation
-	var lines []string
-	for i := 0; i < 50; i++ {
-		lines = append(lines, "line "+string(rune('0'+i%10))+" with some additional content")
-	}
-	output := strings.Join(lines, "\n")
-
-	result := processor.ProcessOutput("test", output, false)
-
-	// Should contain truncation marker
-	if !strings.Contains(result, "...") && !strings.Contains(result, "truncated") {
-		t.Error("Truncate should add truncation marker")
+func TestTruncateToolContentPreservesImageBlocks(t *testing.T) {
+	blocks := []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "ok"},
+		agentctx.ImageContent{Type: "image", Data: "base64", MimeType: "image/png"},
 	}
 
-	// Should be shorter
-	if len(result) >= len(output) {
-		t.Errorf("Truncate should reduce output size, got %d vs %d", len(result), len(output))
+	result := truncateToolContent(context.Background(), blocks, ToolOutputLimits{MaxChars: 10}, "read")
+	if len(result) != 2 {
+		t.Fatalf("expected two content blocks, got %d", len(result))
+	}
+	if _, ok := result[1].(agentctx.ImageContent); !ok {
+		t.Fatalf("expected image content to be preserved, got %T", result[1])
 	}
 }
 
-func TestProcessOutput_SmallOutput(t *testing.T) {
-	processor := NewToolOutputProcessor(nil, 50000)
+func TestSetToolOutputLimitsNormalizesLimit(t *testing.T) {
+	a := &Agent{}
+	a.SetToolOutputLimits(ToolOutputLimits{MaxChars: 204800})
 
-	smallOutput := "just a small output"
-	result := processor.ProcessOutput("bash", smallOutput, false)
-
-	// Should return unchanged
-	if result != smallOutput {
-		t.Errorf("Small output should be unchanged, got: %s", result)
-	}
-}
-
-func TestProcessOutput_Empty(t *testing.T) {
-	processor := NewToolOutputProcessor(nil, 50000)
-
-	result := processor.ProcessOutput("bash", "", false)
-	if result != "" {
-		t.Errorf("Empty output should remain empty, got: %s", result)
-	}
-}
-
-func TestDefaultToolPolicies(t *testing.T) {
-	policies := DefaultToolPolicies()
-
-	// Verify all expected tools have policies
-	expectedTools := []string{"read", "write", "edit", "bash", "grep"}
-	for _, tool := range expectedTools {
-		if _, ok := policies[tool]; !ok {
-			t.Errorf("Missing policy for tool: %s", tool)
-		}
-	}
-
-	// Verify read uses full strategy
-	if policies["read"].Strategy != StrategyFull {
-		t.Error("read tool should use StrategyFull")
-	}
-
-	// Verify bash uses digest strategy
-	if policies["bash"].Strategy != StrategyDigest {
-		t.Error("bash tool should use StrategyDigest")
-	}
-
-	// Verify grep uses extract strategy
-	if policies["grep"].Strategy != StrategyExtract {
-		t.Error("grep tool should use StrategyExtract")
-	}
-}
-
-func TestContainsErrorPattern(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"error: something went wrong", true},
-		{"ERROR: critical failure", true},
-		{"Failed to connect", true},
-		{"Exception in thread main", true},
-		{"exit code 1", true},
-		{"This is fine", false},
-		{"Normal output", false},
-	}
-
-	for _, tt := range tests {
-		result := containsErrorPattern(strings.ToLower(tt.input))
-		if result != tt.expected {
-			t.Errorf("containsErrorPattern(%q) = %v, want %v", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestExtractFilePath(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"main.go:10: code here", "main.go"},
-		{"pkg/agent/loop.go:245: func run()", "pkg/agent/loop.go"},
-		{"src/utils.py:5: def help()", "src/utils.py"},
-		{"no file here", ""},
-		{"just text: no path", ""},
-	}
-
-	for _, tt := range tests {
-		result := extractFilePath(tt.input)
-		if result != tt.expected {
-			t.Errorf("extractFilePath(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestTruncateOutput_LongLine(t *testing.T) {
-	// Test the fix for long single-line output (e.g., jq JSON output)
-	// This was a bug: output with few lines but huge content was not truncated
-	policies := map[string]OutputPolicy{
-		"bash": {
-			ToolName:  "bash",
-			MaxTokens: 100, // 400 chars limit
-			Strategy:  StrategyTruncate,
-			KeepHead:  10,
-			KeepTail:  30,
-		},
-	}
-	processor := NewToolOutputProcessor(policies, 500)
-
-	// Simulate a very long single line (like jq JSON output)
-	longLine := strings.Repeat("{\"key\":\"value with lots of content\"},", 1000) // ~50KB
-
-	result := processor.ProcessOutput("bash", longLine, false)
-
-	// Should be truncated despite being only 1 line
-	if len(result) > 600 {
-		t.Errorf("Long single line should be truncated, got %d chars", len(result))
-	}
-
-	// Should contain truncation marker
-	if !strings.Contains(result, "truncated") {
-		t.Error("Truncated output should contain truncation marker")
-	}
-
-	// Original should be much larger
-	if len(longLine) <= 600 {
-		t.Errorf("Test setup error: longLine should be > 600 chars, got %d", len(longLine))
-	}
-}
-
-func TestTruncateOutput_FewLinesHugeContent(t *testing.T) {
-	// Test output with few lines but each line is very long
-	policies := map[string]OutputPolicy{
-		"test": {
-			ToolName:  "test",
-			MaxTokens: 100, // 400 chars limit
-			Strategy:  StrategyTruncate,
-			KeepHead:  10,
-			KeepTail:  30,
-		},
-	}
-	processor := NewToolOutputProcessor(policies, 500)
-
-	// 35 lines, each with lots of content (total ~35KB)
-	var lines []string
-	for i := 0; i < 35; i++ {
-		lines = append(lines, strings.Repeat("x", 1000))
-	}
-	output := strings.Join(lines, "\n")
-
-	result := processor.ProcessOutput("test", output, false)
-
-	// Should be truncated (35 lines < 40, but content is huge)
-	if len(result) > 600 {
-		t.Errorf("Few lines with huge content should be truncated, got %d chars", len(result))
-	}
-
-	// Should contain truncation marker
-	if !strings.Contains(result, "truncated") {
-		t.Error("Truncated output should contain truncation marker")
+	if a.toolOutput.MaxChars != 10000 {
+		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to 10000, got %d", a.toolOutput.MaxChars)
 	}
 }

@@ -1,13 +1,13 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -24,8 +24,8 @@ import (
 const (
 	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
 	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
-	defaultLoopMaxConsecutiveToolCalls = 0               // Disabled (was 6)
-	defaultLoopMaxToolCallsPerName     = 0               // Disabled (was 60)
+	defaultLoopMaxConsecutiveToolCalls = 6               // Stop repeated identical tool calls.
+	defaultLoopMaxToolCallsPerName     = 60              // Stop runaway single-tool loops.
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 )
@@ -39,8 +39,6 @@ type LoopConfig struct {
 	ToolOutput              ToolOutputLimits
 	Compactor               Compactor     // Optional compactor for context-length recovery
 	ToolCallCutoff          int           // Summarize oldest tool outputs when visible tool results exceed this
-	ToolSummaryStrategy     string        // llm, heuristic, off
-	ToolSummaryAutomation   string        // off, fallback, always
 	ThinkingLevel           string        // off, minimal, low, medium, high, xhigh
 	MaxLLMRetries           int           // Maximum number of retries for LLM calls
 	RetryBaseDelay          time.Duration // Base delay for exponential backoff
@@ -48,12 +46,9 @@ type LoopConfig struct {
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 	ContextWindow           int           // Context window for the model (0=use default 128000)
-	InjectHistory           bool          // Phase 2: Whether to inject history messages into prompt (default: false)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
-var summarizeToolResultFn = summarizeToolResultWithLLM
-var summarizeToolResultsBatchFn = summarizeToolResultsBatchWithLLM
 
 type llmAttemptKeyType struct{}
 
@@ -172,10 +167,10 @@ func RunLoop(
 
 		newMessages := append([]agentctx.AgentMessage{}, prompts...)
 		currentCtx := &agentctx.AgentContext{
-			SystemPrompt:  agentCtx.SystemPrompt,
-			Messages:      append(agentCtx.Messages, prompts...),
-			Tools:         agentCtx.Tools,
-			LLMContext: agentCtx.LLMContext,
+			SystemPrompt: agentCtx.SystemPrompt,
+			Messages:     append(agentCtx.Messages, prompts...),
+			Tools:        agentCtx.Tools,
+			LLMContext:   agentCtx.LLMContext,
 		}
 
 		stream.Push(NewAgentStartEvent())
@@ -206,20 +201,12 @@ func runInnerLoop(
 	const maxCompactionRecoveries = 1
 	compactionRecoveries := 0
 	loopGuard := newToolLoopGuard(config)
-	asyncSummarizer := newAsyncToolSummarizer(ctx, config)
-	if asyncSummarizer != nil {
-		defer asyncSummarizer.Close()
-	}
 	malformedToolCallRecoveries := 0
 
 	// Turn counter for MaxTurns limit
 	turnCount := 0
 
 	for {
-		if asyncSummarizer != nil {
-			asyncSummarizer.applyReady(agentCtx)
-		}
-
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
@@ -413,15 +400,6 @@ func runInnerLoop(
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
 			}
-			if shouldAutoSummarizeToolResults(agentCtx, config) {
-				if asyncSummarizer != nil {
-					asyncSummarizer.schedule(agentCtx)
-					asyncSummarizer.applyReady(agentCtx)
-				} else {
-					maybeSummarizeToolResults(ctx, agentCtx, config)
-				}
-			}
-
 			// Check if llm context was updated
 			if agentCtx.LLMContext != nil {
 				toolCalls := msg.ExtractToolCalls()
@@ -783,12 +761,9 @@ func streamAssistantResponse(
 
 	var llmMessages []llm.LLMMessage
 
-	injectHistory, historyDecisionReason := shouldInjectHistory(agentCtx, config)
-	selectedMessages, selectionMode := selectMessagesForLLM(agentCtx, injectHistory, historyDecisionReason, config.ContextWindow)
+	selectedMessages, selectionMode := selectMessagesForLLM(agentCtx)
 	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
-	slog.Info("[Loop] history injection decision",
-		"inject_history", injectHistory,
-		"reason", historyDecisionReason,
+	slog.Info("[Loop] llm message selection",
 		"selection_mode", selectionMode,
 		"messages_total", len(agentCtx.Messages),
 		"messages_sent", len(llmMessages),
@@ -1378,9 +1353,9 @@ func executeToolCalls(
 				"tool", normalized.Name,
 				"rawName", rawName,
 				"availableTools", availableToolNames)
-			content := truncateToolContent([]agentctx.ContentBlock{
+			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "agentctx.Tool not found"},
-			}, toolOutputLimits)
+			}, toolOutputLimits, normalized.Name)
 			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
@@ -1408,9 +1383,9 @@ func executeToolCalls(
 			slog.Warn("[Loop] tool not allowed by whitelist",
 				"tool", normalized.Name,
 				"toolCallID", normalized.ID)
-			content := truncateToolContent([]agentctx.ContentBlock{
+			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("agentctx.Tool %q is not allowed in this context", normalized.Name)},
-			}, toolOutputLimits)
+			}, toolOutputLimits, normalized.Name)
 			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(normalized.ID, normalized.Name, &result, true))
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
@@ -1473,9 +1448,9 @@ func executeToolCalls(
 		}
 		var result agentctx.AgentMessage
 		if outcome.err != nil {
-			content := truncateToolContent([]agentctx.ContentBlock{
+			content := truncateToolContent(ctx, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: outcome.err.Error()},
-			}, toolOutputLimits)
+			}, toolOutputLimits, plan.normalized.Name)
 			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, true)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, true))
 			plan.span.AddField("error", true)
@@ -1489,7 +1464,7 @@ func executeToolCalls(
 				traceevent.Field{Key: "error_message", Value: outcome.err.Error()},
 			)
 		} else {
-			content := truncateToolContent(outcome.content, toolOutputLimits)
+			content := truncateToolContent(ctx, outcome.content, toolOutputLimits, plan.normalized.Name)
 			result = agentctx.NewToolResultMessage(plan.normalized.ID, plan.normalized.Name, content, false)
 			stream.Push(NewToolExecutionEndEvent(plan.normalized.ID, plan.normalized.Name, &result, false))
 			plan.span.AddField("error", false)
@@ -1643,41 +1618,15 @@ func extractActiveTurnMessages(messages []agentctx.AgentMessage, tokenBudget int
 	return extractRecentMessages(active, tokenBudget)
 }
 
-func selectMessagesForLLM(agentCtx *agentctx.AgentContext, injectHistory bool, reason string, contextWindow int) ([]agentctx.AgentMessage, string) {
+func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMessage, string) {
 	if agentCtx == nil {
 		return nil, "empty_context"
 	}
-
-	if !injectHistory {
-		// When llm context is maintained, use all available messages
-		// (session lazy loading already limits to messages after last compaction)
-		if len(agentCtx.Messages) > 0 {
-			return agentCtx.Messages, "all_available_messages"
-		}
+	if len(agentCtx.Messages) == 0 {
 		return nil, "no_messages"
 	}
-
-	// Explicit compatibility toggle: keep full history behavior.
-	if reason == "inject_history_forced" {
-		return agentCtx.Messages, "full_history_forced"
-	}
-
-	// When llm context is confirmed, use all available messages
-	// (session lazy loading already limits to messages after last compaction)
-	if len(agentCtx.Messages) > 0 {
-		return agentCtx.Messages, "all_available_messages"
-	}
-	return nil, "no_messages"
+	return agentCtx.Messages, "all_available_messages_no_runtime_clip"
 }
-
-
-// shouldInjectHistory decides whether full history should be included.
-func shouldInjectHistory(agentCtx *agentctx.AgentContext, config *LoopConfig) (bool, string) {
-	return true, "always_inject"
-}
-
-
-
 
 func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
 	targetAbs := normalizePathForContains(overviewPath)

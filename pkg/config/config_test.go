@@ -47,20 +47,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ToolOutput == nil {
 		t.Error("Expected tool output config to be initialized")
 	} else {
-		if cfg.ToolOutput.MaxLines != 2000 {
-			t.Errorf("Expected default tool output MaxLines 2000, got %d", cfg.ToolOutput.MaxLines)
-		}
-		if cfg.ToolOutput.MaxBytes != 50*1024 {
-			t.Errorf("Expected default tool output MaxBytes 51200, got %d", cfg.ToolOutput.MaxBytes)
-		}
-		if cfg.ToolOutput.MaxChars != 200*1024 {
-			t.Errorf("Expected default tool output MaxChars 204800, got %d", cfg.ToolOutput.MaxChars)
-		}
-		if cfg.ToolOutput.LargeOutputThreshold != 200*1024 {
-			t.Errorf("Expected default LargeOutputThreshold 204800, got %d", cfg.ToolOutput.LargeOutputThreshold)
-		}
-		if cfg.ToolOutput.TruncateMode != "head_tail" {
-			t.Errorf("Expected default TruncateMode head_tail, got %q", cfg.ToolOutput.TruncateMode)
+		if cfg.ToolOutput.MaxChars != 10000 {
+			t.Errorf("Expected default tool output MaxChars 10000, got %d", cfg.ToolOutput.MaxChars)
 		}
 	}
 }
@@ -89,11 +77,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"autoCompact": false
 		},
 		"toolOutput": {
-			"maxLines": 500,
-			"maxBytes": 8192,
-			"maxChars": 10000,
-			"largeOutputThreshold": 15000,
-			"truncateMode": "head"
+			"maxChars": 10000
 		},
 		"log": {
 			"level": "debug"
@@ -150,25 +134,39 @@ func TestLoadConfigFromFile(t *testing.T) {
 	if cfg.ToolOutput == nil {
 		t.Error("Expected tool output config to be initialized")
 	} else {
-		if cfg.ToolOutput.MaxLines != 500 {
-			t.Errorf("Expected tool output MaxLines 500, got %d", cfg.ToolOutput.MaxLines)
-		}
-		if cfg.ToolOutput.MaxBytes != 8192 {
-			t.Errorf("Expected tool output MaxBytes 8192, got %d", cfg.ToolOutput.MaxBytes)
-		}
 		if cfg.ToolOutput.MaxChars != 10000 {
 			t.Errorf("Expected tool output MaxChars 10000, got %d", cfg.ToolOutput.MaxChars)
-		}
-		if cfg.ToolOutput.LargeOutputThreshold != 15000 {
-			t.Errorf("Expected tool output LargeOutputThreshold 15000, got %d", cfg.ToolOutput.LargeOutputThreshold)
-		}
-		if cfg.ToolOutput.TruncateMode != "head" {
-			t.Errorf("Expected tool output TruncateMode head, got %q", cfg.ToolOutput.TruncateMode)
 		}
 	}
 
 	if cfg.Log == nil || cfg.Log.Level != "debug" {
 		t.Errorf("Expected log level 'debug', got '%v'", cfg.Log)
+	}
+}
+
+func TestLoadConfigClampsOversizedToolOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+
+	testConfig := `{
+		"toolOutput": {
+			"maxChars": 204800
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(testConfig), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if cfg.ToolOutput == nil {
+		t.Fatal("Expected tool output config to be initialized")
+	}
+	if cfg.ToolOutput.MaxChars != 10000 {
+		t.Fatalf("expected oversized maxChars to be clamped to 10000, got %d", cfg.ToolOutput.MaxChars)
 	}
 }
 

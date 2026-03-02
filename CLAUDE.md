@@ -12,11 +12,11 @@ Concise project guidance for coding agents working in this repository.
 ## Most Used Commands
 
 ```bash
-# build
-go build -o bin/ai ./cmd/ai
+# install (recommended - ensures fresh binary)
+go install ./cmd/ai
 
 # run rpc mode
-./bin/ai --mode rpc
+ai --mode rpc
 
 # run all tests
 go test ./... -v
@@ -58,3 +58,56 @@ No `Makefile` is used in this repo.
 - Run focused package tests for touched code first.
 - Then run broader tests when changes affect shared paths (`pkg/agent`, `pkg/session`, `pkg/rpc`, `pkg/prompt`).
 - Existing stress/integration tests can be slow; still run them when touching loop/session behavior.
+
+## Debugging Guidance
+
+### Trace File Analysis
+
+The agent writes Perfetto-compatible trace files to `~/.ai/traces/`. These are invaluable for debugging runtime behavior:
+
+```bash
+# List recent traces
+ls -lt ~/.ai/traces/ | head -5
+
+# Check if specific event appears in traces
+grep -c 'tool_output_truncated' ~/.ai/traces/<latest>.json
+
+# Extract event details with Python
+python3 -c "
+import json
+with open('/Users/genius/.ai/traces/<file>.json') as f:
+    data = json.load(f)
+for e in data['traceEvents']:
+    if e.get('name') == 'tool_output_truncated':
+        print(json.dumps(e, indent=2))
+"
+```
+
+### Event Registration Debug
+
+If a trace event isn't appearing:
+
+1. Check if event is registered in `pkg/traceevent/config.go`:
+   - Must be in `eventNameToBit` map
+   - Should be in `defaultEnabledEvents` for default visibility
+   - Or add to a selector group (e.g., `tool`, `llm`)
+
+2. Verify `IsEventEnabled()` returns true by checking the bit flag
+
+### Interactive Testing Pattern
+
+For debugging event emission or runtime behavior:
+
+1. Make code changes (e.g., add new trace event)
+2. Rebuild: `go build -o bin/ai ./cmd/ai`
+3. Restart agent to pick up changes
+4. Trigger the behavior (e.g., run a tool with large output)
+5. Check trace file for expected events
+6. Iterate
+
+### Trace Event Categories
+
+- `tool`: Tool execution, truncation, normalization
+- `llm`: API calls, streaming, retries
+- `event`: Agent lifecycle, turns, messages
+- `log`: slog bridge output (info/warn/error)
