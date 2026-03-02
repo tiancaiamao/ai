@@ -1,44 +1,44 @@
-# AiClaw 文档
+# AiClaw Documentation
 
-AiClaw 是一个基于 AI 的聊天机器人，支持多通道（飞书等）和定时任务。
+AiClaw is an AI-powered chatbot with multi-channel support (Feishu, etc.) and scheduled tasks.
 
-## 目录
+## Table of Contents
 
-- [快速开始](#快速开始)
-- [配置](#配置)
-- [命令](#命令)
-- [Cron 定时任务](#cron-定时任务)
-- [技能系统](#技能系统)
-- [开发](#开发)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Commands](#commands)
+- [Cron Scheduled Tasks](#cron-scheduled-tasks)
+- [Skills System](#skills-system)
+- [Development](#development)
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 构建
+# Build
 cd claw && go build -o bin/aiclaw ./cmd/aiclaw
 
-# 启动 gateway（连接飞书等通道）
+# Start gateway (connect to Feishu and other channels)
 ./bin/aiclaw
 
-# 管理 cron 任务
+# Manage cron tasks
 ./bin/aiclaw cron list
-./bin/aiclaw cron add -n "每日提醒" -m "检查待办" -c "0 9 * * *"
+./bin/aiclaw cron add -n "Daily Reminder" -m "Check todos" -c "0 9 * * *"
 ```
 
-## 配置
+## Configuration
 
-配置文件位于 `~/.aiclaw/` 目录：
+Configuration files are located in `~/.aiclaw/`:
 
 ```
 ~/.aiclaw/
-├── config.json      # 主配置（模型、通道）
-├── auth.json        # API 密钥
-├── AGENTS.md        # 自定义身份提示词
-├── cron/            # 定时任务
+├── config.json      # Main config (model, channels)
+├── auth.json        # API keys
+├── AGENTS.md        # Custom identity prompt
+├── cron/            # Scheduled tasks
 │   └── jobs.json
-├── sessions/        # 会话存储
-├── skills/          # 技能目录（软链接）
-└── memory/          # tiered-memory 存储
+├── sessions/        # Session storage
+├── skills/          # Skills directory (symlink)
+└── memory/          # tiered-memory storage
 ```
 
 ### config.json
@@ -73,158 +73,160 @@ cd claw && go build -o bin/aiclaw ./cmd/aiclaw
 }
 ```
 
-## 命令
+## Commands
 
 ```bash
-# 启动 gateway（连接通道，处理消息）
+# Start gateway (connect channels, process messages)
 ./bin/aiclaw
 
-# 启动时启用 trace 调试
+# Start with trace debugging enabled
 ./bin/aiclaw -trace
 
-# 设置日志级别
+# Set log level
 ./bin/aiclaw -log-level debug
 
-# Cron 任务管理
+# Cron task management
 ./bin/aiclaw cron list
-./bin/aiclaw cron add -n "名称" -m "消息" -c "0 9 * * *"
+./bin/aiclaw cron add -n "Name" -m "Message" -c "0 9 * * *"
 ./bin/aiclaw cron remove <id>
 ./bin/aiclaw cron enable <id>
 ./bin/aiclaw cron disable <id>
 ```
 
-## Cron 定时任务
+## Cron Scheduled Tasks
 
-AiClaw 支持 cron 表达式和固定间隔两种调度方式。
+AiClaw supports both cron expressions and fixed intervals.
 
-### 添加任务
+### Adding Tasks
 
 ```bash
-# 每天 9:00 执行
-./bin/aiclaw cron add -n "早间提醒" -m "开始新的一天！" -c "0 9 * * *"
+# Execute at 9:00 every day
+./bin/aiclaw cron add -n "Morning Reminder" -m "Start a new day!" -c "0 9 * * *"
 
-# 每 60 秒执行一次
-./bin/aiclaw cron add -n "心跳" -m "ping" -e 60
+# Execute every 60 seconds
+./bin/aiclaw cron add -n "Heartbeat" -m "ping" -e 60
 
-# 每天 18:00 生成日报
-./bin/aiclaw cron add -n "日报" -m "请生成今日工作总结" -c "0 18 * * *"
+# Generate daily report at 18:00
+./bin/aiclaw cron add -n "Daily Report" -m "Generate today's summary" -c "0 18 * * *"
 ```
 
-### Cron 表达式格式
+### Cron Expression Format
 
 ```
-┌───────────── 分钟 (0 - 59)
-│ ┌───────────── 小时 (0 - 23)
-│ │ ┌───────────── 日 (1 - 31)
-│ │ │ ┌───────────── 月 (1 - 12)
-│ │ │ │ ┌───────────── 星期 (0 - 6，0=周日)
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6, 0=Sunday)
 │ │ │ │ │
 * * * * *
 ```
 
-常用示例：
-- `0 9 * * *` - 每天 9:00
-- `30 18 * * 1-5` - 周一到周五 18:30
-- `0 */2 * * *` - 每 2 小时
-- `0 0 1 * *` - 每月 1 日 0:00
+Common examples:
+- `0 9 * * *` - Every day at 9:00
+- `30 18 * * 1-5` - Mon-Fri at 18:30
+- `0 */2 * * *` - Every 2 hours
+- `0 0 1 * *` - First day of month at 0:00
 
-### 管理任务
+### Managing Tasks
 
 ```bash
-# 列出所有任务
+# List all tasks
 ./bin/aiclaw cron list
 
-# 输出示例：
+# Output example:
 # Scheduled Jobs:
 # ---------------
-#   [b28a1f52] 早间提醒
+#   [b28a1f52] Morning Reminder
 #       Schedule: 0 9 * * *
-#       Message:  开始新的一天！
+#       Message:  Start a new day!
 #       Status:   ✓ enabled
 #       Next run: 2026-03-03 09:00
 
-# 禁用任务
+# Disable task
 ./bin/aiclaw cron disable b28a1f52
 
-# 启用任务
+# Enable task
 ./bin/aiclaw cron enable b28a1f52
 
-# 删除任务
+# Delete task
 ./bin/aiclaw cron remove b28a1f52
 ```
 
-### 工作原理
+### How It Works
 
-1. 任务存储在 `~/.aiclaw/cron/jobs.json`
-2. Gateway 启动时自动加载并启动调度器
-3. 每秒检查是否有任务到期
-4. 到期时发送消息给 agent 处理
+1. Tasks are stored in `~/.aiclaw/cron/jobs.json`
+2. Gateway automatically loads and starts scheduler on startup
+3. Checks for due tasks every second
+4. Sends message to agent when task is due
+5. **Hot reload**: Changes to `jobs.json` are detected automatically - CLI modifications take effect immediately without restart
 
-## 技能系统
+## Skills System
 
-技能目录位于 `~/.aiclaw/skills/`（软链接到 `claw/skills/`）。
+Skills directory is at `~/.aiclaw/skills/` (symlinked to `claw/skills/`).
 
-### 内置技能
+### Built-in Skills
 
-- **tiered-memory** - 三层记忆系统（hot/warm/cold）
-- **agent-self-governance** - 自主治理
-- **intelligent-router** - 智能路由
-- 更多技能见 `skills/` 目录
+- **tiered-memory** - Three-tier memory system (hot/warm/cold)
+- **agent-self-governance** - Self-governance
+- **intelligent-router** - Intelligent routing
+- More skills in `skills/` directory
 
-### tiered-memory 用法
+### tiered-memory Usage
 
 ```bash
 cd ~/.aiclaw/skills/tiered-memory
 
-# 存储记忆
+# Store memory
 python3 scripts/memory_cli.py store \
-  --text "用户喜欢简洁的回复" \
+  --text "User prefers concise responses" \
   --category "preferences" \
   --importance 0.8
 
-# 检索记忆
+# Retrieve memory
 python3 scripts/memory_cli.py retrieve \
-  --query "用户偏好" \
+  --query "user preferences" \
   --llm \
   --limit 5
 
-# 查看统计
+# View stats
 python3 scripts/memory_cli.py metrics
 ```
 
-## 开发
+## Development
 
-### 项目结构
+### Project Structure
 
 ```
 claw/
-├── cmd/aiclaw/         # 主程序入口
-│   ├── main.go         # 主逻辑
-│   └── cmd_cron.go     # cron CLI
+├── cmd/aiclaw/         # Main entry point
+│   ├── main.go         # Main logic
+│   └── cmd_cron.go     # Cron CLI
 ├── pkg/
-│   ├── adapter/        # AgentLoop 适配器
-│   ├── cron/           # Cron 服务
-│   └── voice/          # 语音转录
-├── skills/             # 技能目录（27个）
-├── docs/               # 文档
+│   ├── adapter/        # AgentLoop adapter
+│   ├── cron/           # Cron service
+│   └── voice/          # Voice transcription
+├── skills/             # Skills directory (27 skills)
+├── docs/               # Documentation
 ├── go.mod
 └── README.md
 ```
 
-### 依赖
+### Dependencies
 
-- `github.com/sipeed/picoclaw` - 通道管理
-- `github.com/adhocore/gronx` - Cron 表达式解析
-- `github.com/tiancaiamao/ai` - AI Agent 核心
+- `github.com/sipeed/picoclaw` - Channel management
+- `github.com/adhocore/gronx` - Cron expression parsing
+- `github.com/fsnotify/fsnotify` - File watching for hot reload
+- `github.com/tiancaiamao/ai` - AI Agent core
 
-### 构建
+### Building
 
 ```bash
 cd claw
 go build -o bin/aiclaw ./cmd/aiclaw
 ```
 
-## 相关链接
+## Related Links
 
-- [AiClaw 主项目](../) - AI Agent 核心
-- [PicoClaw](https://github.com/sipeed/picoclaw) - 通道管理
+- [AiClaw Main Project](../) - AI Agent core
+- [PicoClaw](https://github.com/sipeed/picoclaw) - Channel management

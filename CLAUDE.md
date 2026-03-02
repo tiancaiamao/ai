@@ -9,6 +9,12 @@ Concise project guidance for coding agents working in this repository.
 - Interface: stdin/stdout JSON-RPC server
 - Model API: OpenAI-compatible (`ZAI` provider in config)
 
+## Language Rules
+
+- **Commits**: All commit messages must be in English
+- **Code**: All code and code comments must be in English
+- **Documentation**: All files under `docs/` or `**/docs/` must be in English
+
 ## Most Used Commands
 
 ```bash

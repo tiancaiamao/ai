@@ -1,190 +1,191 @@
-# Cron 定时任务
+# Cron Scheduled Tasks
 
-AiClaw 的 cron 功能允许你创建定时任务，让 agent 在指定时间自动执行操作。
+AiClaw's cron feature allows you to create scheduled tasks that automatically trigger the agent at specified times.
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 添加一个每天 9:00 执行的提醒
-aiclaw cron add -n "早间提醒" -m "开始新的一天，检查今日待办！" -c "0 9 * * *"
+# Add a daily 9:00 reminder
+aiclaw cron add -n "Morning Reminder" -m "Start a new day, check today's todos!" -c "0 9 * * *"
 
-# 查看所有任务
+# View all tasks
 aiclaw cron list
 ```
 
-## 命令参考
+## Command Reference
 
-### list - 列出任务
+### list - List Tasks
 
 ```bash
 aiclaw cron list
 ```
 
-输出示例：
+Output example:
 ```
 Scheduled Jobs:
 ---------------
-  [b28a1f52] 早间提醒
+  [b28a1f52] Morning Reminder
       Schedule: 0 9 * * *
-      Message:  开始新的一天，检查今日待办！
+      Message:  Start a new day, check today's todos!
       Status:   ✓ enabled
       Next run: 2026-03-03 09:00
 ```
 
-### add - 添加任务
+### add - Add Task
 
 ```bash
-aiclaw cron add -n <名称> -m <消息> (-e <秒> | -c <cron表达式>)
+aiclaw cron add -n <name> -m <message> (-e <seconds> | -c <cron-expression>)
 ```
 
-| 参数 | 说明 |
-|-----|------|
-| `-n, --name` | 任务名称（必填） |
-| `-m, --message` | 发送给 agent 的消息（必填） |
-| `-e, --every` | 间隔秒数 |
-| `-c, --cron` | Cron 表达式 |
+| Parameter | Description |
+|-----------|-------------|
+| `-n, --name` | Task name (required) |
+| `-m, --message` | Message to send to agent (required) |
+| `-e, --every` | Interval in seconds |
+| `-c, --cron` | Cron expression |
 
-**示例：**
+**Examples:**
 
 ```bash
-# 固定间隔：每 60 秒
-aiclaw cron add -n "心跳" -m "ping" -e 60
+# Fixed interval: every 60 seconds
+aiclaw cron add -n "Heartbeat" -m "ping" -e 60
 
-# Cron 表达式：每天 9:00
-aiclaw cron add -n "早间提醒" -m "早安！" -c "0 9 * * *"
+# Cron expression: every day at 9:00
+aiclaw cron add -n "Morning Reminder" -m "Good morning!" -c "0 9 * * *"
 
-# 每小时整点
-aiclaw cron add -n "整点报时" -m "现在是整点" -c "0 * * * *"
+# Every hour on the hour
+aiclaw cron add -n "Hourly" -m "It's a new hour" -c "0 * * * *"
 
-# 工作日 18:00
-aiclaw cron add -n "下班提醒" -m "该下班了" -c "0 18 * * 1-5"
+# Weekdays at 18:00
+aiclaw cron add -n "End of Day" -m "Time to wrap up" -c "0 18 * * 1-5"
 ```
 
-### remove - 删除任务
+### remove - Delete Task
 
 ```bash
 aiclaw cron remove <job_id>
 ```
 
-### enable/disable - 启用/禁用任务
+### enable/disable - Enable/Disable Task
 
 ```bash
 aiclaw cron enable <job_id>
 aiclaw cron disable <job_id>
 ```
 
-## Cron 表达式
+## Cron Expressions
 
-标准 5 字段格式：
+Standard 5-field format:
 
 ```
-┌───────────── 分钟 (0 - 59)
-│ ┌───────────── 小时 (0 - 23)
-│ │ ┌───────────── 日 (1 - 31)
-│ │ │ ┌───────────── 月 (1 - 12)
-│ │ │ │ ┌───────────── 星期 (0 - 6，0=周日)
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6, 0=Sunday)
 │ │ │ │ │
 * * * * *
 ```
 
-### 特殊字符
+### Special Characters
 
-| 字符 | 说明 |
-|-----|------|
-| `*` | 任意值 |
-| `,` | 列举，如 `1,3,5` |
-| `-` | 范围，如 `1-5` |
-| `/` | 步长，如 `*/15` 每 15 分钟 |
+| Character | Description |
+|-----------|-------------|
+| `*` | Any value |
+| `,` | List, e.g., `1,3,5` |
+| `-` | Range, e.g., `1-5` |
+| `/` | Step, e.g., `*/15` every 15 minutes |
 
-### 常用示例
+### Common Examples
 
-| 表达式 | 说明 |
-|-------|------|
-| `0 9 * * *` | 每天 9:00 |
-| `30 18 * * *` | 每天 18:30 |
-| `0 */2 * * *` | 每 2 小时 |
-| `*/15 * * * *` | 每 15 分钟 |
-| `0 9 * * 1-5` | 周一到周五 9:00 |
-| `0 0 1 * *` | 每月 1 日 0:00 |
-| `0 9 1 1 *` | 每年 1 月 1 日 9:00 |
+| Expression | Description |
+|------------|-------------|
+| `0 9 * * *` | Every day at 9:00 |
+| `30 18 * * *` | Every day at 18:30 |
+| `0 */2 * * *` | Every 2 hours |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 9 * * 1-5` | Mon-Fri at 9:00 |
+| `0 0 1 * *` | First day of month at 0:00 |
+| `0 9 1 1 *` | January 1st at 9:00 |
 
-## 使用场景
+## Use Cases
 
-### 1. 日常提醒
-
-```bash
-# 早间提醒
-aiclaw cron add -n "早间提醒" -m "新的一天开始了，查看今日日程" -c "0 9 * * *"
-
-# 午餐提醒
-aiclaw cron add -n "午餐" -m "该吃午饭了" -c "0 12 * * *"
-
-# 下班提醒
-aiclaw cron add -n "下班" -m "工作结束，生成今日总结" -c "0 18 * * 1-5"
-```
-
-### 2. 周期性检查
+### 1. Daily Reminders
 
 ```bash
-# 每 5 分钟检查服务状态
-aiclaw cron add -n "服务检查" -m "检查所有服务是否正常" -e 300
+# Morning reminder
+aiclaw cron add -n "Morning" -m "New day started, check your schedule" -c "0 9 * * *"
 
-# 每小时同步数据
-aiclaw cron add -n "数据同步" -m "同步最新数据" -c "0 * * * *"
+# Lunch reminder
+aiclaw cron add -n "Lunch" -m "Time for lunch" -c "0 12 * * *"
+
+# End of day reminder
+aiclaw cron add -n "End of Day" -m "Work done, generate daily summary" -c "0 18 * * 1-5"
 ```
 
-### 3. 定时报告
+### 2. Periodic Checks
 
 ```bash
-# 每周一 9:00 周报
-aiclaw cron add -n "周报" -m "生成本周工作总结" -c "0 9 * * 1"
+# Check service status every 5 minutes
+aiclaw cron add -n "Service Check" -m "Check if all services are healthy" -e 300
 
-# 每月 1 日月报
-aiclaw cron add -n "月报" -m "生成上月工作总结" -c "0 9 1 * *"
+# Sync data every hour
+aiclaw cron add -n "Data Sync" -m "Sync latest data" -c "0 * * * *"
 ```
 
-## 工作原理
+### 3. Scheduled Reports
+
+```bash
+# Weekly report on Monday at 9:00
+aiclaw cron add -n "Weekly Report" -m "Generate this week's summary" -c "0 9 * * 1"
+
+# Monthly report on the 1st
+aiclaw cron add -n "Monthly Report" -m "Generate last month's summary" -c "0 9 1 * *"
+```
+
+## How It Works
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   jobs.json     │────>│  CronService    │────>│   AgentLoop     │
-│  (任务存储)      │     │  (每秒检查)      │     │  (处理消息)      │
+│  (task storage) │     │  (check/sec)    │     │  (process msg)  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-1. **存储**: 任务保存在 `~/.aiclaw/cron/jobs.json`
-2. **调度**: Gateway 启动时启动 CronService，每秒检查是否有任务到期
-3. **执行**: 任务到期时调用 `ProcessDirect()` 发送消息给 agent
+1. **Storage**: Tasks saved in `~/.aiclaw/cron/jobs.json`
+2. **Scheduling**: CronService starts with gateway, checks for due tasks every second
+3. **Execution**: Calls `ProcessDirect()` to send message to agent when due
+4. **Hot Reload**: Uses fsnotify to watch for file changes - CLI modifications take effect immediately
 
-## 注意事项
+## Important Notes
 
-1. **Gateway 必须运行**: Cron 任务只有在 gateway 运行时才会执行
-2. **时区**: 使用系统本地时区
-3. **任务持久化**: 任务保存在 JSON 文件中，重启后自动恢复
-4. **热重载**: Gateway 会自动检测 `jobs.json` 的变化，CLI 修改后立即生效，无需重启
-5. **单实例**: 避免同时运行多个 gateway 实例，可能导致重复执行
+1. **Gateway must be running**: Cron tasks only execute when gateway is running
+2. **Timezone**: Uses system local timezone
+3. **Persistence**: Tasks saved in JSON file, automatically restored after restart
+4. **Hot Reload**: Gateway automatically detects changes to `jobs.json` - CLI modifications take effect immediately without restart
+5. **Single Instance**: Avoid running multiple gateway instances simultaneously, may cause duplicate execution
 
-## 故障排除
+## Troubleshooting
 
-### 任务没有执行
+### Task Not Executing
 
-1. 确认 gateway 正在运行
-2. 检查任务状态是否为 enabled
-3. 查看日志中的 `[cron]` 输出
+1. Confirm gateway is running
+2. Check task status is enabled
+3. Check logs for `[cron]` output
 
-### 任务执行时间不准确
+### Task Execution Time Inaccurate
 
-1. 检查系统时区设置
-2. 确认 cron 表达式正确
+1. Check system timezone settings
+2. Verify cron expression is correct
 
-### 查看执行历史
+### View Execution History
 
 ```bash
-# 任务状态包含最后执行信息
+# Task status includes last execution info
 aiclaw cron list
 ```
 
-状态字段说明：
-- `Last run`: 最后执行时间
-- `Status`: ok 或 error
-- `Error`: 错误信息（如果有）
+Status fields:
+- `Last run`: Last execution time
+- `Status`: ok or error
+- `Error`: Error message (if any)

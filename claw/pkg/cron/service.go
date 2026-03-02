@@ -101,12 +101,12 @@ func (cs *CronService) Start() error {
 		return fmt.Errorf("failed to save store: %w", err)
 	}
 
-	// 启动文件监听
+	// Start file watcher for hot reload
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[cron] failed to create file watcher: %v", err)
 	} else {
-		// 监听 jobs.json 所在目录（监听文件本身在某些系统上不可靠）
+		// Watch the directory containing jobs.json (watching file itself is unreliable on some systems)
 		dir := filepath.Dir(cs.storePath)
 		if err := watcher.Add(dir); err != nil {
 			log.Printf("[cron] failed to watch %s: %v", dir, err)
@@ -125,7 +125,7 @@ func (cs *CronService) Start() error {
 	return nil
 }
 
-// watchFileChanges 监听 jobs.json 文件变化并重新加载
+// watchFileChanges monitors jobs.json for changes and reloads
 func (cs *CronService) watchFileChanges(watcher *fsnotify.Watcher) {
 	for {
 		select {
@@ -135,7 +135,7 @@ func (cs *CronService) watchFileChanges(watcher *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-			// 只关心 jobs.json 的写入和创建事件
+			// Only care about Write and Create events for jobs.json
 			if filepath.Base(event.Name) == "jobs.json" &&
 				(event.Op&fsnotify.Write == fsnotify.Write ||
 					event.Op&fsnotify.Create == fsnotify.Create) {
@@ -151,7 +151,7 @@ func (cs *CronService) watchFileChanges(watcher *fsnotify.Watcher) {
 	}
 }
 
-// reloadStore 重新加载任务存储
+// reloadStore reloads the job store from disk
 func (cs *CronService) reloadStore() {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
