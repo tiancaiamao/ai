@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -20,14 +21,17 @@ import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/feishu" // 注册飞书通道工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/skill"
-	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 var (
 	logLevel = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	trace    = flag.Bool("trace", false, "Enable trace output to ~/.aiclaw/traces/")
 )
 
 // ModelConfig 模型配置
@@ -37,9 +41,19 @@ type ModelConfig struct {
 	BaseURL  string `json:"baseUrl"`
 }
 
+// VoiceConfig 语音配置
+type VoiceConfig struct {
+	Enabled  bool   `json:"enabled"`           // 是否启用语音支持
+	Provider string `json:"provider"`          // 语音服务提供商: "groq" 或 "zhipu" (默认 "zhipu")
+	APIKey   string `json:"apiKey,omitempty"`  // API Key (可从 auth.json 读取)
+	APIBase  string `json:"apiBase,omitempty"` // API Base URL (可选)
+	Model    string `json:"model,omitempty"`   // 模型名称 (可选)
+}
+
 // Config 是 aiclaw 的统一配置
 type Config struct {
 	Model    ModelConfig                   `json:"model"`
+	Voice    VoiceConfig                   `json:"voice,omitempty"`
 	Channels picoclawconfig.ChannelsConfig `json:"channels,omitempty"`
 }
 
@@ -57,6 +71,13 @@ func main() {
 	}
 
 	clawDir := filepath.Join(homeDir, ".aiclaw")
+
+	// 设置 trace 输出到 ~/.aiclaw/traces/（可选，调试时启用）
+	if *trace {
+		if err := setupTracing(clawDir); err != nil {
+			slog.Warn("Failed to setup tracing", "error", err)
+		}
+	}
 
 	configPath := filepath.Join(clawDir, "config.json")
 	cfg, err := loadConfig(configPath)
@@ -97,14 +118,59 @@ func main() {
 		// 继续执行，可能从环境变量读取
 	}
 
+	// 创建语音转录器（如果启用）
+	var transcriber voice.Transcriber
+	if cfg.Voice.Enabled {
+		// 确定语音服务提供商
+		provider := cfg.Voice.Provider
+		if provider == "" {
+			provider = "zhipu" // 默认使用智谱
+		}
+
+		// 获取 API Key
+		apiKey := cfg.Voice.APIKey
+		if apiKey == "" {
+			// 尝试从 auth.json 读取
+			apiKey, _ = resolveAPIKey(clawDir, provider)
+		}
+
+		if apiKey != "" {
+			switch provider {
+			case "groq":
+				transcriber = voice.NewGroqTranscriber(voice.GroqConfig{
+					APIKey:  apiKey,
+					APIBase: cfg.Voice.APIBase,
+					Model:   cfg.Voice.Model,
+				})
+				slog.Info("Voice transcription enabled", "provider", "groq", "model", cfg.Voice.Model)
+			case "zhipu":
+				transcriber = voice.NewZhipuTranscriber(voice.ZhipuConfig{
+					APIKey:  apiKey,
+					APIBase: cfg.Voice.APIBase,
+				})
+				slog.Info("Voice transcription enabled", "provider", "zhipu", "model", "glm-asr-2512")
+				if !isFFmpegAvailable() {
+					slog.Warn("ffmpeg not found; some audio formats may fail on zhipu ASR. Install ffmpeg for automatic transcoding fallback.")
+				}
+			default:
+				slog.Warn("Unknown voice provider", "provider", provider)
+			}
+		} else {
+			slog.Warn("Voice enabled but no API key found", "provider", provider)
+		}
+	}
+
 	agentConfig := &adapter.Config{
-		Model:        cfg.Model.ID,
-		Provider:     cfg.Model.Provider,
-		APIURL:       cfg.Model.BaseURL,
-		APIKey:       apiKey,
-		SystemPrompt: buildSystemPrompt(clawDir),
-		Tools:        []agentctx.Tool{}, // 暂时不注册工具
-		ClawDir:      clawDir,           // 传递 claw 配置目录
+		Model:           cfg.Model.ID,
+		Provider:        cfg.Model.Provider,
+		APIURL:          cfg.Model.BaseURL,
+		APIKey:          apiKey,
+		SystemPrompt:    buildSystemPrompt(clawDir),
+		Tools:           []agentctx.Tool{}, // 暂时不注册工具
+		ClawDir:         clawDir,           // 传递 claw 配置目录
+		Transcriber:     transcriber,
+		FeishuAppID:     cfg.Channels.Feishu.AppID,
+		FeishuAppSecret: cfg.Channels.Feishu.AppSecret,
 	}
 	agentLoop := adapter.NewAgentLoop(agentConfig, msgBus)
 
@@ -161,6 +227,27 @@ func setupLogging(level string) {
 	opts := &slog.HandlerOptions{Level: lvl}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	slog.SetDefault(logger)
+}
+
+// setupTracing 配置 trace 输出到 ~/.aiclaw/traces/
+// claw 模式：slog 日志到控制台，trace 事件到文件（分离模式）
+func setupTracing(clawDir string) error {
+	tracesDir := filepath.Join(clawDir, "traces")
+	if err := os.MkdirAll(tracesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create traces dir: %w", err)
+	}
+	handler, err := traceevent.NewFileHandler(tracesDir)
+	if err != nil {
+		return fmt.Errorf("failed to create trace handler: %w", err)
+	}
+	traceevent.SetHandler(handler)
+	slog.Info("Tracing enabled", "dir", tracesDir)
+	return nil
+}
+
+func isFFmpegAvailable() bool {
+	_, err := exec.LookPath("ffmpeg")
+	return err == nil
 }
 
 // loadConfig 加载统一配置文件

@@ -6,18 +6,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"log/slog"
 
+	"github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/pkg/agent"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/compact"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
@@ -37,6 +44,14 @@ type AgentLoop struct {
 	tools        []agentctx.Tool
 	sessionsDir  string // session 存储目录
 	compactor    *compact.Compactor
+
+	// 语音支持
+	transcriber voice.Transcriber
+
+	// 飞书配置（用于下载语音文件）
+	feishuClient    *lark.Client
+	feishuAppID     string
+	feishuAppSecret string
 }
 
 // Session 表示一个隔离的会话
@@ -111,6 +126,13 @@ type Config struct {
 	SystemPrompt string          // 系统提示词
 	Tools        []agentctx.Tool // 工具列表
 	ClawDir      string          // claw 配置目录 (~/.aiclaw)
+
+	// 语音支持
+	Transcriber voice.Transcriber // 语音转录器（可选）
+
+	// 飞书配置（用于下载语音文件）
+	FeishuAppID     string
+	FeishuAppSecret string
 }
 
 // NewAgentLoop 创建一个新的 AgentLoop
@@ -142,15 +164,26 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 		model.ContextWindow,
 	)
 
+	// 创建飞书客户端（用于下载语音文件）
+	var feishuClient *lark.Client
+	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
+		feishuClient = lark.NewClient(cfg.FeishuAppID, cfg.FeishuAppSecret)
+		slog.Info("[AgentLoop] Feishu client created for voice download")
+	}
+
 	return &AgentLoop{
-		bus:          msgBus,
-		sessions:     make(map[string]*Session),
-		model:        model,
-		apiKey:       cfg.APIKey,
-		systemPrompt: cfg.SystemPrompt,
-		tools:        cfg.Tools,
-		sessionsDir:  sessionsDir,
-		compactor:    compactor,
+		bus:             msgBus,
+		sessions:        make(map[string]*Session),
+		model:           model,
+		apiKey:          cfg.APIKey,
+		systemPrompt:    cfg.SystemPrompt,
+		tools:           cfg.Tools,
+		sessionsDir:     sessionsDir,
+		compactor:       compactor,
+		transcriber:     cfg.Transcriber,
+		feishuClient:    feishuClient,
+		feishuAppID:     cfg.FeishuAppID,
+		feishuAppSecret: cfg.FeishuAppSecret,
 	}
 }
 
@@ -270,7 +303,50 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		"channel", msg.Channel,
 		"chat_id", msg.ChatID,
 		"session_key", sessionKey,
-		"content_preview", truncate(msg.Content, 80))
+		"content_preview", truncate(msg.Content, 80),
+		"media_count", len(msg.Media))
+
+	// 处理媒体文件（语音/音频）
+	content := msg.Content
+	hasVoiceMedia := false
+
+	// 1. 处理 msg.Media 中的音频文件
+	if len(msg.Media) > 0 {
+		for _, mediaPath := range msg.Media {
+			if voice.IsAudioFile(mediaPath) {
+				hasVoiceMedia = true
+				if a.transcriber != nil && a.transcriber.IsAvailable() {
+					result, err := a.transcriber.Transcribe(ctx, mediaPath)
+					if err != nil {
+						slog.Warn("[AgentLoop] Voice transcription failed", "error", err, "file", mediaPath)
+						continue
+					}
+					slog.Info("[AgentLoop] Voice transcribed", "text_length", len(result.Text), "language", result.Language)
+					if content != "" {
+						content = "[Voice] " + result.Text + "\n" + content
+					} else {
+						content = "[Voice] " + result.Text
+					}
+				}
+			}
+		}
+	}
+
+	// 2. 处理飞书语音消息（msg.Content 是 JSON 元数据）
+	if msg.Channel == "feishu" && content != "" {
+		if transcribed, err := a.handleFeishuVoice(ctx, content, msg.MessageID, msg.ChatID, msg.Metadata); err != nil {
+			slog.Warn("[AgentLoop] Failed to handle feishu voice", "error", err)
+		} else if transcribed != "" {
+			hasVoiceMedia = true
+			content = transcribed
+		}
+	}
+
+	// 如果只有语音消息但无法转录，跳过处理
+	if content == "" && hasVoiceMedia {
+		slog.Info("[AgentLoop] Skipping voice message (no transcriber available)")
+		return "", nil
+	}
 
 	// 获取或创建会话
 	sess, err := a.getOrCreateSession(sessionKey)
@@ -279,11 +355,11 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 	}
 
 	// 保存用户消息到 session
-	userMsg := agentctx.NewUserMessage(msg.Content)
+	userMsg := agentctx.NewUserMessage(content)
 	sess.Session.AppendMessage(userMsg)
 
 	// 发送消息给 agent
-	if err := sess.Agent.Prompt(msg.Content); err != nil {
+	if err := sess.Agent.Prompt(content); err != nil {
 		return "", fmt.Errorf("agent prompt failed: %w", err)
 	}
 
@@ -473,4 +549,350 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen-3] + "..."
 	}
 	return s[:maxLen]
+}
+
+// FeishuVoicePayload 飞书语音消息的 JSON 结构
+type FeishuVoicePayload struct {
+	FileKey  string `json:"file_key"`
+	Duration int    `json:"duration"`
+}
+
+// handleFeishuVoice 处理飞书语音消息
+// 返回转录后的文本，如果不是语音消息则返回空字符串
+func (a *AgentLoop) handleFeishuVoice(
+	ctx context.Context,
+	content string,
+	inboundMessageID string,
+	chatID string,
+	metadata map[string]string,
+) (string, error) {
+	// 检查是否是飞书语音消息格式
+	var voicePayload FeishuVoicePayload
+	if err := json.Unmarshal([]byte(content), &voicePayload); err != nil {
+		return "", nil // 不是 JSON，不是语音消息
+	}
+
+	// 检查是否是语音消息
+	if voicePayload.FileKey == "" {
+		return "", nil // 没有 file_key，不是语音消息
+	}
+
+	slog.Info("[AgentLoop] Detected feishu voice message", "file_key", voicePayload.FileKey, "duration", voicePayload.Duration)
+
+	// 检查是否有转录器
+	if a.transcriber == nil || !a.transcriber.IsAvailable() {
+		slog.Warn("[AgentLoop] No transcriber available for feishu voice")
+		return "", nil
+	}
+
+	// 获取 message_id（飞书语音下载需要）
+	// In picoclaw v0.2.0+, message ID is carried on bus.InboundMessage.MessageID.
+	messageID := strings.TrimSpace(inboundMessageID)
+	if metadata != nil {
+		if messageID == "" {
+			messageID = strings.TrimSpace(metadata["message_id"])
+		}
+		if messageID == "" {
+			messageID = strings.TrimSpace(metadata["open_message_id"])
+		}
+	}
+	if messageID == "" {
+		slog.Warn("[AgentLoop] No message id found for feishu voice",
+			"inbound_message_id", inboundMessageID,
+			"chat_id", chatID,
+			"metadata", metadata)
+
+		// Fallback: query recent chat messages and match by file_key.
+		// This handles cases where upstream metadata omits message_id.
+		if chatID != "" {
+			foundID, err := a.findFeishuAudioMessageID(ctx, chatID, voicePayload.FileKey)
+			if err != nil {
+				slog.Warn("[AgentLoop] Failed to resolve feishu message id by file_key",
+					"error", err,
+					"chat_id", chatID,
+					"file_key", voicePayload.FileKey)
+			} else if foundID != "" {
+				messageID = foundID
+				slog.Info("[AgentLoop] Resolved feishu message id by file_key",
+					"chat_id", chatID,
+					"file_key", voicePayload.FileKey,
+					"message_id", messageID)
+			}
+		}
+	}
+
+	// 下载飞书音频文件
+	audioPath, err := a.downloadFeishuAudio(ctx, voicePayload.FileKey, messageID)
+	if err != nil {
+		// 如果下载失败，返回提示信息而不是错误
+		slog.Warn("[AgentLoop] Failed to download feishu audio", "error", err, "message_id", messageID)
+		return "[Voice message - download failed. Note: Feishu voice requires message_id in metadata.]", nil
+	}
+	defer os.Remove(audioPath) // 清理临时文件
+
+	slog.Info("[AgentLoop] Downloaded feishu audio", "path", audioPath)
+
+	// 转录
+	result, err := a.transcriber.Transcribe(ctx, audioPath)
+	if err != nil {
+		// Zhipu may reject OGG/Opus with code 1214. Try local ffmpeg conversion fallback.
+		if isUnsupportedAudioFormatError(err) {
+			convertedPath, convErr := transcodeAudioToMP3(ctx, audioPath)
+			if convErr == nil {
+				defer os.Remove(convertedPath)
+				slog.Info("[AgentLoop] Retrying feishu voice transcription with converted audio",
+					"path", convertedPath)
+				result, err = a.transcriber.Transcribe(ctx, convertedPath)
+			} else {
+				slog.Warn("[AgentLoop] Failed to convert feishu audio for transcription", "error", convErr)
+			}
+		}
+		if err != nil {
+			// Degrade gracefully: do not pass raw JSON payload to the LLM.
+			return "[Voice message - transcription failed: unsupported audio format for current ASR provider]", nil
+		}
+	}
+
+	slog.Info("[AgentLoop] Feishu voice transcribed", "text_length", len(result.Text), "language", result.Language)
+	return "[Voice] " + result.Text, nil
+}
+
+// downloadFeishuAudio 下载飞书音频文件
+func (a *AgentLoop) downloadFeishuAudio(ctx context.Context, fileKey string, messageID string) (string, error) {
+	if a.feishuAppID == "" || a.feishuAppSecret == "" {
+		return "", fmt.Errorf("feishu app_id or app_secret not configured")
+	}
+	if messageID == "" {
+		return "", fmt.Errorf("missing message_id for feishu audio download")
+	}
+
+	// 创建临时文件
+	tmpDir := os.TempDir()
+	tmpFile := filepath.Join(tmpDir, "feishu_voice_"+fileKey+".ogg")
+
+	// 使用 HTTP API 下载飞书文件
+	// 1. 先获取 tenant_access_token
+	token, err := a.getFeishuAccessToken(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get feishu access token: %w", err)
+	}
+
+	// 2. 下载消息资源文件（语音属于消息资源）
+	// https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-resources/get
+	downloadURL := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/messages/%s/resources/%s?type=file", messageID, fileKey)
+	var req *http.Request
+
+	req, err = http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create download request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	slog.Info("[AgentLoop] Downloading feishu audio", "url", downloadURL, "has_message_id", messageID != "")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to download feishu file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("feishu API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	// 3. 写入临时文件
+	out, err := os.Create(tmpFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		os.Remove(tmpFile)
+		return "", fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	return tmpFile, nil
+}
+
+type feishuMessageListResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Items []struct {
+			MessageID   string `json:"message_id"`
+			MessageType string `json:"message_type"`
+			Content     string `json:"content"`
+		} `json:"items"`
+	} `json:"data"`
+}
+
+// findFeishuAudioMessageID tries to resolve open_message_id by matching file_key
+// from recent chat messages.
+func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKey string) (string, error) {
+	if chatID == "" || fileKey == "" {
+		return "", nil
+	}
+
+	token, err := a.getFeishuAccessToken(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get feishu access token: %w", err)
+	}
+
+	q := url.Values{}
+	q.Set("container_id_type", "chat")
+	q.Set("container_id", chatID)
+	q.Set("sort_type", "ByCreateTimeDesc")
+	q.Set("page_size", "20")
+
+	listURL := "https://open.feishu.cn/open-apis/im/v1/messages?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create list messages request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to list feishu messages: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read list messages response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("list messages API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var listResp feishuMessageListResponse
+	if err := json.Unmarshal(body, &listResp); err != nil {
+		return "", fmt.Errorf("failed to parse list messages response: %w", err)
+	}
+	if listResp.Code != 0 {
+		return "", fmt.Errorf("list messages API error: code=%d msg=%s", listResp.Code, listResp.Msg)
+	}
+
+	for _, item := range listResp.Data.Items {
+		if item.MessageID == "" {
+			continue
+		}
+		if item.MessageType != "audio" {
+			continue
+		}
+		if strings.Contains(item.Content, fileKey) {
+			return item.MessageID, nil
+		}
+	}
+
+	return "", nil
+}
+
+func isUnsupportedAudioFormatError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "\"code\":\"1214\"") ||
+		strings.Contains(msg, "不支持当前文件格式") ||
+		strings.Contains(msg, "unsupported") && strings.Contains(msg, "format")
+}
+
+func transcodeAudioToMP3(ctx context.Context, inputPath string) (string, error) {
+	if strings.TrimSpace(inputPath) == "" {
+		return "", fmt.Errorf("input path is empty")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return "", fmt.Errorf("ffmpeg not found in PATH")
+	}
+
+	outPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + "_transcoded.mp3"
+	cmd := exec.CommandContext(
+		ctx,
+		"ffmpeg",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-i", inputPath,
+		"-vn",
+		"-ac", "1",
+		"-ar", "16000",
+		outPath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("ffmpeg transcode failed: %w, output: %s", err, string(output))
+	}
+	return outPath, nil
+}
+
+// feishuTokenResponse 飞书 token 响应
+type feishuTokenResponse struct {
+	Code              int    `json:"code"`
+	Msg               string `json:"msg"`
+	TenantAccessToken string `json:"tenant_access_token"`
+	Expire            int    `json:"expire"`
+}
+
+// feishuTokenCache 缓存飞书 token
+type feishuTokenCache struct {
+	token      string
+	expireTime time.Time
+	mu         sync.Mutex
+}
+
+var globalFeishuTokenCache feishuTokenCache
+
+// getFeishuAccessToken 获取飞书 tenant_access_token
+func (a *AgentLoop) getFeishuAccessToken(ctx context.Context) (string, error) {
+	globalFeishuTokenCache.mu.Lock()
+	defer globalFeishuTokenCache.mu.Unlock()
+
+	// 检查缓存是否有效
+	if globalFeishuTokenCache.token != "" && time.Now().Before(globalFeishuTokenCache.expireTime) {
+		return globalFeishuTokenCache.token, nil
+	}
+
+	// 获取新 token
+	url := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+	payload := map[string]string{
+		"app_id":     a.feishuAppID,
+		"app_secret": a.feishuAppSecret,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var tokenResp feishuTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", err
+	}
+
+	if tokenResp.Code != 0 {
+		return "", fmt.Errorf("feishu auth error: code=%d msg=%s", tokenResp.Code, tokenResp.Msg)
+	}
+
+	// 缓存 token（提前 5 分钟过期）
+	globalFeishuTokenCache.token = tokenResp.TenantAccessToken
+	globalFeishuTokenCache.expireTime = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
+
+	return tokenResp.TenantAccessToken, nil
 }
