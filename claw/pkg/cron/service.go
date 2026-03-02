@@ -1,4 +1,3 @@
-// Package cron provides scheduled task management for aiclaw.
 package cron
 
 import (
@@ -13,25 +12,25 @@ import (
 	"time"
 
 	"github.com/adhocore/gronx"
-	"github.com/fsnotify/fsnotify"
 )
 
-// CronSchedule defines when a job should run
 type CronSchedule struct {
-	Kind    string `json:"kind"`            // "every" or "cron"
-	EveryMS *int64 `json:"everyMs,omitempty"` // For "every" kind: interval in milliseconds
-	Expr    string `json:"expr,omitempty"`    // For "cron" kind: cron expression
+	Kind    string `json:"kind"`
+	AtMS    *int64 `json:"atMs,omitempty"`
+	EveryMS *int64 `json:"everyMs,omitempty"`
+	Expr    string `json:"expr,omitempty"`
+	TZ      string `json:"tz,omitempty"`
 }
 
-// CronPayload defines what to do when the job runs
 type CronPayload struct {
-	Message string `json:"message"`          // Message to send to agent
-	Deliver bool   `json:"deliver"`          // Whether to deliver response to channel
-	Channel string `json:"channel,omitempty"` // Channel to deliver to
-	To      string `json:"to,omitempty"`      // Recipient for delivery
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+	Command string `json:"command,omitempty"`
+	Deliver bool   `json:"deliver"`
+	Channel string `json:"channel,omitempty"`
+	To      string `json:"to,omitempty"`
 }
 
-// CronJobState tracks execution state
 type CronJobState struct {
 	NextRunAtMS *int64 `json:"nextRunAtMs,omitempty"`
 	LastRunAtMS *int64 `json:"lastRunAtMs,omitempty"`
@@ -39,40 +38,35 @@ type CronJobState struct {
 	LastError   string `json:"lastError,omitempty"`
 }
 
-// CronJob represents a scheduled job
 type CronJob struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Enabled     bool         `json:"enabled"`
-	Schedule    CronSchedule `json:"schedule"`
-	Payload     CronPayload  `json:"payload"`
-	State       CronJobState `json:"state"`
-	CreatedAtMS int64        `json:"createdAtMs"`
-	UpdatedAtMS int64        `json:"updatedAtMs"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	Enabled        bool         `json:"enabled"`
+	Schedule       CronSchedule `json:"schedule"`
+	Payload        CronPayload  `json:"payload"`
+	State          CronJobState `json:"state"`
+	CreatedAtMS    int64        `json:"createdAtMs"`
+	UpdatedAtMS    int64        `json:"updatedAtMs"`
+	DeleteAfterRun bool         `json:"deleteAfterRun"`
 }
 
-// CronStore is the on-disk format
 type CronStore struct {
 	Version int       `json:"version"`
 	Jobs    []CronJob `json:"jobs"`
 }
 
-// JobHandler is called when a job is due
 type JobHandler func(job *CronJob) (string, error)
 
-// CronService manages scheduled jobs
 type CronService struct {
-	storePath   string
-	store       *CronStore
-	onJob       JobHandler
-	mu          sync.RWMutex
-	running     bool
-	stopChan    chan struct{}
-	gronx       *gronx.Gronx
-	fileWatcher *fsnotify.Watcher
+	storePath string
+	store     *CronStore
+	onJob     JobHandler
+	mu        sync.RWMutex
+	running   bool
+	stopChan  chan struct{}
+	gronx     *gronx.Gronx
 }
 
-// NewCronService creates a new cron service
 func NewCronService(storePath string, onJob JobHandler) *CronService {
 	cs := &CronService{
 		storePath: storePath,
@@ -83,7 +77,6 @@ func NewCronService(storePath string, onJob JobHandler) *CronService {
 	return cs
 }
 
-// Start begins the cron scheduler
 func (cs *CronService) Start() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -101,23 +94,6 @@ func (cs *CronService) Start() error {
 		return fmt.Errorf("failed to save store: %w", err)
 	}
 
-	// Start file watcher for hot reload
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("[cron] failed to create file watcher: %v", err)
-	} else {
-		// Watch the directory containing jobs.json (watching file itself is unreliable on some systems)
-		dir := filepath.Dir(cs.storePath)
-		if err := watcher.Add(dir); err != nil {
-			log.Printf("[cron] failed to watch %s: %v", dir, err)
-			watcher.Close()
-		} else {
-			cs.fileWatcher = watcher
-			go cs.watchFileChanges(watcher)
-			log.Printf("[cron] watching %s for changes", dir)
-		}
-	}
-
 	cs.stopChan = make(chan struct{})
 	cs.running = true
 	go cs.runLoop(cs.stopChan)
@@ -125,51 +101,6 @@ func (cs *CronService) Start() error {
 	return nil
 }
 
-// watchFileChanges monitors jobs.json for changes and reloads
-func (cs *CronService) watchFileChanges(watcher *fsnotify.Watcher) {
-	for {
-		select {
-		case <-cs.stopChan:
-			return
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			// Only care about Write and Create events for jobs.json
-			if filepath.Base(event.Name) == "jobs.json" &&
-				(event.Op&fsnotify.Write == fsnotify.Write ||
-					event.Op&fsnotify.Create == fsnotify.Create) {
-				log.Printf("[cron] detected jobs.json change, reloading...")
-				cs.reloadStore()
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Printf("[cron] watcher error: %v", err)
-		}
-	}
-}
-
-// reloadStore reloads the job store from disk
-func (cs *CronService) reloadStore() {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	if err := cs.loadStore(); err != nil {
-		log.Printf("[cron] failed to reload store: %v", err)
-		return
-	}
-
-	cs.recomputeNextRuns()
-	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store after reload: %v", err)
-	}
-
-	log.Printf("[cron] reloaded %d jobs", len(cs.store.Jobs))
-}
-
-// Stop halts the cron scheduler
 func (cs *CronService) Stop() {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -182,10 +113,6 @@ func (cs *CronService) Stop() {
 	if cs.stopChan != nil {
 		close(cs.stopChan)
 		cs.stopChan = nil
-	}
-	if cs.fileWatcher != nil {
-		cs.fileWatcher.Close()
-		cs.fileWatcher = nil
 	}
 }
 
@@ -214,7 +141,6 @@ func (cs *CronService) checkJobs() {
 	now := time.Now().UnixMilli()
 	var dueJobIDs []string
 
-	// Collect jobs that are due
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
 		if job.Enabled && job.State.NextRunAtMS != nil && *job.State.NextRunAtMS <= now {
@@ -222,7 +148,6 @@ func (cs *CronService) checkJobs() {
 		}
 	}
 
-	// Reset next run for due jobs before unlocking
 	dueMap := make(map[string]bool, len(dueJobIDs))
 	for _, jobID := range dueJobIDs {
 		dueMap[jobID] = true
@@ -233,13 +158,14 @@ func (cs *CronService) checkJobs() {
 		}
 	}
 
-	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+	if len(dueJobIDs) > 0 {
+		if err := cs.saveStoreUnsafe(); err != nil {
+			log.Printf("[cron] failed to save store: %v", err)
+		}
 	}
 
 	cs.mu.Unlock()
 
-	// Execute jobs outside lock
 	for _, jobID := range dueJobIDs {
 		cs.executeJobByID(jobID)
 	}
@@ -269,7 +195,6 @@ func (cs *CronService) executeJobByID(jobID string) {
 		_, err = cs.onJob(callbackJob)
 	}
 
-	// Update state
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -296,9 +221,17 @@ func (cs *CronService) executeJobByID(jobID string) {
 		job.State.LastError = ""
 	}
 
-	// Compute next run time
-	nextRun := cs.computeNextRun(&job.Schedule, time.Now().UnixMilli())
-	job.State.NextRunAtMS = nextRun
+	if job.Schedule.Kind == "at" {
+		if job.DeleteAfterRun {
+			cs.removeJobUnsafe(job.ID)
+		} else {
+			job.Enabled = false
+			job.State.NextRunAtMS = nil
+		}
+	} else {
+		nextRun := cs.computeNextRun(&job.Schedule, time.Now().UnixMilli())
+		job.State.NextRunAtMS = nextRun
+	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
 		log.Printf("[cron] failed to save store: %v", err)
@@ -374,7 +307,6 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return os.WriteFile(cs.storePath, data, 0o600)
 }
 
-// AddJob creates a new scheduled job
 func (cs *CronService) AddJob(
 	name string,
 	schedule CronSchedule,
@@ -387,12 +319,15 @@ func (cs *CronService) AddJob(
 
 	now := time.Now().UnixMilli()
 
+	deleteAfterRun := (schedule.Kind == "at")
+
 	job := CronJob{
 		ID:       generateID(),
 		Name:     name,
 		Enabled:  true,
 		Schedule: schedule,
 		Payload: CronPayload{
+			Kind:    "agent_turn",
 			Message: message,
 			Deliver: deliver,
 			Channel: channel,
@@ -401,8 +336,9 @@ func (cs *CronService) AddJob(
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),
 		},
-		CreatedAtMS: now,
-		UpdatedAtMS: now,
+		CreatedAtMS:    now,
+		UpdatedAtMS:    now,
+		DeleteAfterRun: deleteAfterRun,
 	}
 
 	cs.store.Jobs = append(cs.store.Jobs, job)
@@ -413,11 +349,14 @@ func (cs *CronService) AddJob(
 	return &job, nil
 }
 
-// RemoveJob deletes a job
 func (cs *CronService) RemoveJob(jobID string) bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	return cs.removeJobUnsafe(jobID)
+}
+
+func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	before := len(cs.store.Jobs)
 	var jobs []CronJob
 	for _, job := range cs.store.Jobs {
@@ -437,7 +376,6 @@ func (cs *CronService) RemoveJob(jobID string) bool {
 	return removed
 }
 
-// EnableJob toggles a job's enabled state
 func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -464,7 +402,6 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 	return nil
 }
 
-// ListJobs returns all jobs
 func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
@@ -483,28 +420,26 @@ func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 	return enabled
 }
 
-// GetJob returns a single job by ID
 func (cs *CronService) GetJob(jobID string) *CronJob {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
 	for _, job := range cs.store.Jobs {
 		if job.ID == jobID {
-			return &job
+			jobCopy := job
+			return &jobCopy
 		}
 	}
 
 	return nil
 }
 
-// SetOnJob sets the job handler
 func (cs *CronService) SetOnJob(handler JobHandler) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.onJob = handler
 }
 
-// Status returns service status
 func (cs *CronService) Status() map[string]any {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()

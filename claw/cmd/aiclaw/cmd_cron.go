@@ -3,12 +3,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
-	"path/filepath"
 	"time"
-
-	"github.com/tiancaiamao/ai/claw/pkg/cron"
 )
 
 func cronCmd(clawDir string) {
@@ -18,31 +18,30 @@ func cronCmd(clawDir string) {
 	}
 
 	subcommand := os.Args[2]
-	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
 
 	switch subcommand {
 	case "list":
-		cronListCmd(cronStorePath)
+		cronListCmd()
 	case "add":
-		cronAddCmd(cronStorePath)
+		cronAddCmd()
 	case "remove":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: aiclaw cron remove <job_id>")
 			return
 		}
-		cronRemoveCmd(cronStorePath, os.Args[3])
+		cronRemoveCmd(os.Args[3])
 	case "enable":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: aiclaw cron enable <job_id>")
 			return
 		}
-		cronEnableCmd(cronStorePath, os.Args[3], true)
+		cronEnableCmd(os.Args[3], true)
 	case "disable":
 		if len(os.Args) < 4 {
 			fmt.Println("Usage: aiclaw cron disable <job_id>")
 			return
 		}
-		cronEnableCmd(cronStorePath, os.Args[3], false)
+		cronEnableCmd(os.Args[3], false)
 	default:
 		fmt.Printf("Unknown cron command: %s\n", subcommand)
 		cronHelp()
@@ -70,9 +69,67 @@ func cronHelp() {
 	fmt.Println("  aiclaw cron remove abc123")
 }
 
-func cronListCmd(storePath string) {
-	cs := cron.NewCronService(storePath, nil)
-	jobs := cs.ListJobs(true)
+type rpcRequest struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params"`
+	ID      int                    `json:"id"`
+}
+
+type rpcResponse struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Result  interface{} `json:"result"`
+	Error   *rpcError   `json:"error"`
+	ID      int         `json:"id"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func callGatewayRPC(method string, params map[string]interface{}) (interface{}, error) {
+	req := rpcRequest{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+		ID:      1,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := http.Post("http://127.0.0.1:28789/rpc", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to gateway: %w (is aiclaw running?)", err)
+	}
+	defer resp.Body.Close()
+
+	var result rpcResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if result.Error != nil {
+		return nil, fmt.Errorf("RPC error: %s", result.Error.Message)
+	}
+
+	return result.Result, nil
+}
+
+func cronListCmd() {
+	result, err := callGatewayRPC("cron.list", map[string]interface{}{
+		"include_disabled": true,
+	})
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	data := result.(map[string]interface{})
+	jobs := data["jobs"].([]interface{})
 
 	if len(jobs) == 0 {
 		fmt.Println("No scheduled jobs.")
@@ -81,40 +138,63 @@ func cronListCmd(storePath string) {
 
 	fmt.Println("\nScheduled Jobs:")
 	fmt.Println("---------------")
-	for _, job := range jobs {
+	for _, j := range jobs {
+		job := j.(map[string]interface{})
+		id := job["id"].(string)
+		name := job["name"].(string)
+		enabled := job["enabled"].(bool)
+
+		// Get schedule info
 		var schedule string
-		if job.Schedule.Kind == "every" && job.Schedule.EveryMS != nil {
-			schedule = fmt.Sprintf("every %ds", *job.Schedule.EveryMS/1000)
-		} else if job.Schedule.Kind == "cron" {
-			schedule = job.Schedule.Expr
-		} else {
-			schedule = "unknown"
+		if sched, ok := job["schedule"].(map[string]interface{}); ok {
+			if kind, ok := sched["kind"].(string); ok {
+				if kind == "every" {
+					if everyMS, ok := sched["every_ms"].(float64); ok {
+						schedule = fmt.Sprintf("every %ds", int(everyMS/1000))
+					}
+				} else if kind == "cron" {
+					if expr, ok := sched["expr"].(string); ok {
+						schedule = expr
+					}
+				}
+			}
 		}
 
+		// Get message
+		message := ""
+		if payload, ok := job["payload"].(map[string]interface{}); ok {
+			if msg, ok := payload["message"].(string); ok {
+				message = msg
+			}
+		}
+
+		// Get next run
 		nextRun := "pending"
-		if job.State.NextRunAtMS != nil {
-			nextTime := time.UnixMilli(*job.State.NextRunAtMS)
-			nextRun = nextTime.Format("2006-01-02 15:04")
+		if state, ok := job["state"].(map[string]interface{}); ok {
+			if nextRunMS, ok := state["next_run_at_ms"].(float64); ok {
+				nextTime := time.UnixMilli(int64(nextRunMS))
+				nextRun = nextTime.Format("2006-01-02 15:04")
+			}
 		}
 
 		status := "✓ enabled"
-		if !job.Enabled {
+		if !enabled {
 			status = "✗ disabled"
 		}
 
-		fmt.Printf("  [%s] %s\n", job.ID, job.Name)
+		fmt.Printf("  [%s] %s\n", id, name)
 		fmt.Printf("      Schedule: %s\n", schedule)
-		fmt.Printf("      Message:  %s\n", job.Payload.Message)
+		fmt.Printf("      Message:  %s\n", message)
 		fmt.Printf("      Status:   %s\n", status)
 		fmt.Printf("      Next run: %s\n", nextRun)
 		fmt.Println()
 	}
 }
 
-func cronAddCmd(storePath string) {
+func cronAddCmd() {
 	name := ""
 	message := ""
-	var everySec *int64
+	var everySec *float64
 	cronExpr := ""
 
 	args := os.Args[3:]
@@ -132,8 +212,8 @@ func cronAddCmd(storePath string) {
 			}
 		case "-e", "--every":
 			if i+1 < len(args) {
-				var sec int64
-				fmt.Sscanf(args[i+1], "%d", &sec)
+				var sec float64
+				fmt.Sscanf(args[i+1], "%f", &sec)
 				everySec = &sec
 				i++
 			}
@@ -160,58 +240,71 @@ func cronAddCmd(storePath string) {
 		return
 	}
 
-	var schedule cron.CronSchedule
-	if everySec != nil {
-		everyMS := *everySec * 1000
-		schedule = cron.CronSchedule{
-			Kind:    "every",
-			EveryMS: &everyMS,
-		}
-	} else {
-		schedule = cron.CronSchedule{
-			Kind: "cron",
-			Expr: cronExpr,
-		}
+	params := map[string]interface{}{
+		"name":    name,
+		"message": message,
 	}
 
-	cs := cron.NewCronService(storePath, nil)
-	job, err := cs.AddJob(name, schedule, message, false, "", "")
+	if everySec != nil {
+		params["every"] = *everySec
+	} else {
+		params["cron"] = cronExpr
+	}
+
+	result, err := callGatewayRPC("cron.add", params)
 	if err != nil {
 		fmt.Printf("Error adding job: %v\n", err)
 		return
 	}
 
+	job := result.(map[string]interface{})
 	var scheduleDesc string
 	if everySec != nil {
-		scheduleDesc = fmt.Sprintf("every %ds", *everySec)
+		scheduleDesc = fmt.Sprintf("every %ds", int(*everySec))
 	} else {
 		scheduleDesc = cronExpr
 	}
 
-	fmt.Printf("✓ Added job '%s' (%s)\n", job.Name, job.ID)
+	fmt.Printf("✓ Added job '%s' (%s)\n", job["name"], job["id"])
 	fmt.Printf("  Schedule: %s\n", scheduleDesc)
 	fmt.Printf("  Message: %s\n", message)
 }
 
-func cronRemoveCmd(storePath, jobID string) {
-	cs := cron.NewCronService(storePath, nil)
-	if cs.RemoveJob(jobID) {
+func cronRemoveCmd(jobID string) {
+	result, err := callGatewayRPC("cron.remove", map[string]interface{}{
+		"id": jobID,
+	})
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	data := result.(map[string]interface{})
+	if removed, ok := data["removed"].(bool); ok && removed {
 		fmt.Printf("✓ Removed job %s\n", jobID)
 	} else {
 		fmt.Printf("✗ Job %s not found\n", jobID)
 	}
 }
 
-func cronEnableCmd(storePath, jobID string, enable bool) {
-	cs := cron.NewCronService(storePath, nil)
-	job := cs.EnableJob(jobID, enable)
-	if job != nil {
-		status := "enabled"
-		if !enable {
-			status = "disabled"
-		}
-		fmt.Printf("✓ Job '%s' %s\n", job.Name, status)
-	} else {
-		fmt.Printf("✗ Job %s not found\n", jobID)
+func cronEnableCmd(jobID string, enable bool) {
+	method := "cron.enable"
+	if !enable {
+		method = "cron.disable"
 	}
+
+	result, err := callGatewayRPC(method, map[string]interface{}{
+		"id": jobID,
+	})
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	job := result.(map[string]interface{})
+	status := "enabled"
+	if !enable {
+		status = "disabled"
+	}
+	fmt.Printf("✓ Job '%s' %s\n", job["name"], status)
 }

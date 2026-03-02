@@ -23,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
+	"github.com/tiancaiamao/ai/claw/pkg/gateway"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
@@ -221,6 +222,16 @@ func main() {
 	}
 	defer cronService.Stop()
 
+	// 启动 gateway RPC server
+	gwServer := gateway.NewServer(gateway.DefaultConfig())
+	registerCronMethods(gwServer.Handler(), cronService)
+	if err := gwServer.Start(ctx); err != nil {
+		slog.Error("Failed to start gateway server", "error", err)
+	} else {
+		slog.Info("Gateway RPC server started", "port", 28789)
+	}
+	defer gwServer.Stop()
+
 	slog.Info("Starting aiclaw",
 		"model", cfg.Model.ID,
 		"provider", cfg.Model.Provider)
@@ -386,6 +397,113 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 		SetSkills(skillResult.Skills)
 
 	return builder.Build()
+}
+
+// registerCronMethods registers cron RPC methods
+func registerCronMethods(h *gateway.Handler, cronService *cron.CronService) {
+	// cron.list - list all jobs
+	h.Register("cron.list", func(params map[string]interface{}) (interface{}, error) {
+		includeDisabled := false
+		if v, ok := params["include_disabled"].(bool); ok {
+			includeDisabled = v
+		}
+		jobs := cronService.ListJobs(includeDisabled)
+		return map[string]interface{}{
+			"jobs":  jobs,
+			"count": len(jobs),
+		}, nil
+	})
+
+	// cron.add - add a new job
+	h.Register("cron.add", func(params map[string]interface{}) (interface{}, error) {
+		name, ok := params["name"].(string)
+		if !ok {
+			return nil, fmt.Errorf("name is required")
+		}
+		message, ok := params["message"].(string)
+		if !ok {
+			return nil, fmt.Errorf("message is required")
+		}
+
+		var schedule cron.CronSchedule
+		if every, ok := params["every"].(float64); ok {
+			everyMS := int64(every * 1000)
+			schedule = cron.CronSchedule{
+				Kind:    "every",
+				EveryMS: &everyMS,
+			}
+		} else if expr, ok := params["cron"].(string); ok {
+			schedule = cron.CronSchedule{
+				Kind: "cron",
+				Expr: expr,
+			}
+		} else {
+			return nil, fmt.Errorf("either every or cron is required")
+		}
+
+		job, err := cronService.AddJob(name, schedule, message, false, "", "")
+		if err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"id":       job.ID,
+			"name":     job.Name,
+			"schedule": job.Schedule,
+			"enabled":  job.Enabled,
+		}, nil
+	})
+
+	// cron.remove - remove a job
+	h.Register("cron.remove", func(params map[string]interface{}) (interface{}, error) {
+		id, ok := params["id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("id is required")
+		}
+		removed := cronService.RemoveJob(id)
+		return map[string]interface{}{
+			"removed": removed,
+			"id":      id,
+		}, nil
+	})
+
+	// cron.enable - enable a job
+	h.Register("cron.enable", func(params map[string]interface{}) (interface{}, error) {
+		id, ok := params["id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("id is required")
+		}
+		job := cronService.EnableJob(id, true)
+		if job == nil {
+			return nil, fmt.Errorf("job not found: %s", id)
+		}
+		return map[string]interface{}{
+			"id":      job.ID,
+			"name":    job.Name,
+			"enabled": job.Enabled,
+		}, nil
+	})
+
+	// cron.disable - disable a job
+	h.Register("cron.disable", func(params map[string]interface{}) (interface{}, error) {
+		id, ok := params["id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("id is required")
+		}
+		job := cronService.EnableJob(id, false)
+		if job == nil {
+			return nil, fmt.Errorf("job not found: %s", id)
+		}
+		return map[string]interface{}{
+			"id":      job.ID,
+			"name":    job.Name,
+			"enabled": job.Enabled,
+		}, nil
+	})
+
+	// cron.status - get cron service status
+	h.Register("cron.status", func(params map[string]interface{}) (interface{}, error) {
+		return cronService.Status(), nil
+	})
 }
 
 // EchoTool 是一个简单的示例工具

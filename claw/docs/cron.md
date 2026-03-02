@@ -146,24 +146,29 @@ aiclaw cron add -n "Monthly Report" -m "Generate last month's summary" -c "0 9 1
 ## How It Works
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   jobs.json     │────>│  CronService    │────>│   AgentLoop     │
-│  (task storage) │     │  (check/sec)    │     │  (process msg)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌─────────────────────────────────┐     ┌─────────────────┐
+│   CLI           │────>│   Gateway (RPC on port 28789)   │────>│   jobs.json     │
+│   aiclaw cron   │     │   - In-memory state (truth)     │     │   (persistence) │
+└─────────────────┘     │   - CronService (check/sec)     │     └─────────────────┘
+                        │   - AgentLoop (process msg)     │
+                        └─────────────────────────────────┘
 ```
 
-1. **Storage**: Tasks saved in `~/.aiclaw/cron/jobs.json`
-2. **Scheduling**: CronService starts with gateway, checks for due tasks every second
-3. **Execution**: Calls `ProcessDirect()` to send message to agent when due
-4. **Hot Reload**: Uses fsnotify to watch for file changes - CLI modifications take effect immediately
+1. **CLI via RPC**: CLI commands call gateway via HTTP RPC (port 28789)
+2. **In-memory state**: Gateway holds the source of truth in memory
+3. **Persistence**: Changes saved to `~/.aiclaw/cron/jobs.json`
+4. **Scheduling**: CronService checks for due tasks every second
+5. **Execution**: Calls `ProcessDirect()` to send message to agent when due
+6. **Immediate effect**: CLI changes take effect immediately (no restart needed)
 
 ## Important Notes
 
-1. **Gateway must be running**: Cron tasks only execute when gateway is running
-2. **Timezone**: Uses system local timezone
-3. **Persistence**: Tasks saved in JSON file, automatically restored after restart
-4. **Hot Reload**: Gateway automatically detects changes to `jobs.json` - CLI modifications take effect immediately without restart
-5. **Single Instance**: Avoid running multiple gateway instances simultaneously, may cause duplicate execution
+1. **Gateway must be running**: Cron tasks only execute when aiclaw is running
+2. **CLI requires running gateway**: CLI commands need gateway to be running on port 28789
+3. **Timezone**: Uses system local timezone
+4. **Persistence**: Tasks saved in JSON file, automatically restored after restart
+5. **Changes take effect immediately**: CLI modifications take effect immediately via RPC
+6. **Single instance**: Avoid running multiple aiclaw instances simultaneously, may cause duplicate execution
 
 ## Troubleshooting
 
