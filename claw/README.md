@@ -1,6 +1,33 @@
-# aiclaw
+# AiClaw 🦞
 
 将 ai 项目的 agent 内核嵌入 picoclaw，实现"换心脏"。
+
+## 文档
+
+- [完整文档](docs/README.md) - 配置、命令、技能系统
+- [Cron 定时任务](docs/cron.md) - 定时任务使用指南
+
+## 快速开始
+
+```bash
+# 构建
+cd claw && go build -o bin/aiclaw ./cmd/aiclaw
+
+# 启动 gateway
+./bin/aiclaw
+
+# 管理 cron 任务
+./bin/aiclaw cron list
+./bin/aiclaw cron add -n "每日提醒" -m "检查待办" -c "0 9 * * *"
+```
+
+## 功能
+
+- **多通道支持**: 飞书、Telegram、Discord 等
+- **语音转录**: 支持智谱 ASR 和 Groq Whisper
+- **定时任务**: Cron 表达式和固定间隔调度
+- **技能系统**: 27+ 内置技能（tiered-memory 等）
+- **会话隔离**: 按 Channel:ChatID 隔离
 
 ## 架构
 

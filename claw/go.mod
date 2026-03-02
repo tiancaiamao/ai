@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/adhocore/gronx v1.19.6 // indirect
 	github.com/caarlos0/env/v11 v11.3.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

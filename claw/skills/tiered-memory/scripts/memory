@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Tiered Memory CLI Wrapper
+# Detects EvoClaw vs OpenClaw environment and routes appropriately
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Detect environment
+if command -v evoclaw &> /dev/null; then
+    # Running in EvoClaw environment - use built-in memory system
+    exec evoclaw memory "$@"
+else
+    # Running in OpenClaw environment - use Python CLI
+    PYTHON_CLI="$SCRIPT_DIR/memory_cli.py"
+    
+    if [[ ! -f "$PYTHON_CLI" ]]; then
+        echo "Error: memory_cli.py not found at $PYTHON_CLI" >&2
+        exit 1
+    fi
+    
+    # Load Turso credentials if available
+    CRED_FILE="$(cd "$SCRIPT_DIR/../../.." && pwd)/memory/turso-credentials.json"
+    
+    if [[ -f "$CRED_FILE" ]]; then
+        export TURSO_DB_URL=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['database_url'])")
+        export TURSO_AUTH_TOKEN=$(python3 -c "import json; print(json.load(open('$CRED_FILE'))['auth_token'])")
+    fi
+    
+    exec python3 "$PYTHON_CLI" "$@"
+fi

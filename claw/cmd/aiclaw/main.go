@@ -22,6 +22,7 @@ import (
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	"github.com/tiancaiamao/ai/claw/pkg/cron"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
@@ -59,6 +60,18 @@ type Config struct {
 
 func main() {
 	flag.Parse()
+
+	// Handle cron subcommand (doesn't require full setup)
+	if len(os.Args) >= 2 && os.Args[1] == "cron" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error getting home directory: %v\n", err)
+			os.Exit(1)
+		}
+		clawDir := filepath.Join(homeDir, ".aiclaw")
+		cronCmd(clawDir)
+		return
+	}
 
 	// 设置日志
 	setupLogging(*logLevel)
@@ -194,6 +207,19 @@ func main() {
 		slog.Error("Failed to start channels", "error", err)
 		os.Exit(1)
 	}
+
+	// 启动 cron 服务
+	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
+	cronService := cron.NewCronService(cronStorePath, func(job *cron.CronJob) (string, error) {
+		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
+		return agentLoop.ProcessDirect(ctx, job.Payload.Message, "cron:"+job.ID)
+	})
+	if err := cronService.Start(); err != nil {
+		slog.Error("Failed to start cron service", "error", err)
+	} else {
+		slog.Info("Cron service started", "jobs", len(cronService.ListJobs(false)))
+	}
+	defer cronService.Stop()
 
 	slog.Info("Starting aiclaw",
 		"model", cfg.Model.ID,

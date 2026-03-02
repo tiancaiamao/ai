@@ -1,0 +1,44 @@
+{
+  "_comment": "Tiered Memory Configuration for AiClaw",
+  "agent_id": "aiclaw",
+  "memory_dir": "~/.aiclaw/memory",
+  "hot": {
+    "max_bytes": 5120,
+    "max_lessons": 20,
+    "max_events": 10,
+    "max_tasks": 10
+  },
+  "warm": {
+    "max_kb": 50,
+    "retention_days": 30,
+    "eviction_threshold": 0.3
+  },
+  "cold": {
+    "backend": "none",
+    "retention_years": 10
+  },
+  "scoring": {
+    "half_life_days": 30,
+    "reinforcement_boost": 0.1
+  },
+  "tree": {
+    "max_nodes": 50,
+    "max_depth": 4,
+    "max_size_bytes": 4096
+  },
+  "distillation": {
+    "aggression": 0.7,
+    "max_distilled_bytes": 100,
+    "mode": "rule"
+  },
+  "consolidation": {
+    "warm_eviction": "hourly",
+    "tree_prune": "daily",
+    "tree_rebuild": "monthly"
+  },
+  "llm": {
+    "endpoint": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "model": "glm-4.7-flash",
+    "api_key_env": "ZAI_API_KEY"
+  }
+}

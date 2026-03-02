@@ -323,9 +323,9 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 					}
 					slog.Info("[AgentLoop] Voice transcribed", "text_length", len(result.Text), "language", result.Language)
 					if content != "" {
-						content = "[Voice] " + result.Text + "\n" + content
+						content = "[voice transcription: " + result.Text + "]" + "\n" + content
 					} else {
-						content = "[Voice] " + result.Text
+						content = "[voice transcription: " + result.Text + "]"
 					}
 				}
 			}
@@ -654,7 +654,7 @@ func (a *AgentLoop) handleFeishuVoice(
 	}
 
 	slog.Info("[AgentLoop] Feishu voice transcribed", "text_length", len(result.Text), "language", result.Language)
-	return "[Voice] " + result.Text, nil
+	return "[voice transcription: " + result.Text + "]", nil
 }
 
 // downloadFeishuAudio 下载飞书音频文件
@@ -895,4 +895,16 @@ func (a *AgentLoop) getFeishuAccessToken(ctx context.Context) (string, error) {
 	globalFeishuTokenCache.expireTime = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
 
 	return tokenResp.TenantAccessToken, nil
+}
+
+// ProcessDirect 处理直接调用的消息（如 cron 触发）
+func (a *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey string) (string, error) {
+	msg := bus.InboundMessage{
+		Channel:    "cron",
+		ChatID:     "cron",
+		SessionKey: sessionKey,
+		Content:    content,
+		SenderID:   "cron",
+	}
+	return a.processMessage(ctx, msg)
 }
