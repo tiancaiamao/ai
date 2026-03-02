@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/adhocore/gronx"
+	"github.com/fsnotify/fsnotify"
 )
 
 // CronSchedule defines when a job should run
@@ -61,13 +62,14 @@ type JobHandler func(job *CronJob) (string, error)
 
 // CronService manages scheduled jobs
 type CronService struct {
-	storePath string
-	store     *CronStore
-	onJob     JobHandler
-	mu        sync.RWMutex
-	running   bool
-	stopChan  chan struct{}
-	gronx     *gronx.Gronx
+	storePath   string
+	store       *CronStore
+	onJob       JobHandler
+	mu          sync.RWMutex
+	running     bool
+	stopChan    chan struct{}
+	gronx       *gronx.Gronx
+	fileWatcher *fsnotify.Watcher
 }
 
 // NewCronService creates a new cron service
@@ -99,11 +101,72 @@ func (cs *CronService) Start() error {
 		return fmt.Errorf("failed to save store: %w", err)
 	}
 
+	// 启动文件监听
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[cron] failed to create file watcher: %v", err)
+	} else {
+		// 监听 jobs.json 所在目录（监听文件本身在某些系统上不可靠）
+		dir := filepath.Dir(cs.storePath)
+		if err := watcher.Add(dir); err != nil {
+			log.Printf("[cron] failed to watch %s: %v", dir, err)
+			watcher.Close()
+		} else {
+			cs.fileWatcher = watcher
+			go cs.watchFileChanges(watcher)
+			log.Printf("[cron] watching %s for changes", dir)
+		}
+	}
+
 	cs.stopChan = make(chan struct{})
 	cs.running = true
 	go cs.runLoop(cs.stopChan)
 
 	return nil
+}
+
+// watchFileChanges 监听 jobs.json 文件变化并重新加载
+func (cs *CronService) watchFileChanges(watcher *fsnotify.Watcher) {
+	for {
+		select {
+		case <-cs.stopChan:
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			// 只关心 jobs.json 的写入和创建事件
+			if filepath.Base(event.Name) == "jobs.json" &&
+				(event.Op&fsnotify.Write == fsnotify.Write ||
+					event.Op&fsnotify.Create == fsnotify.Create) {
+				log.Printf("[cron] detected jobs.json change, reloading...")
+				cs.reloadStore()
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[cron] watcher error: %v", err)
+		}
+	}
+}
+
+// reloadStore 重新加载任务存储
+func (cs *CronService) reloadStore() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	if err := cs.loadStore(); err != nil {
+		log.Printf("[cron] failed to reload store: %v", err)
+		return
+	}
+
+	cs.recomputeNextRuns()
+	if err := cs.saveStoreUnsafe(); err != nil {
+		log.Printf("[cron] failed to save store after reload: %v", err)
+	}
+
+	log.Printf("[cron] reloaded %d jobs", len(cs.store.Jobs))
 }
 
 // Stop halts the cron scheduler
@@ -119,6 +182,10 @@ func (cs *CronService) Stop() {
 	if cs.stopChan != nil {
 		close(cs.stopChan)
 		cs.stopChan = nil
+	}
+	if cs.fileWatcher != nil {
+		cs.fileWatcher.Close()
+		cs.fileWatcher = nil
 	}
 }
 
