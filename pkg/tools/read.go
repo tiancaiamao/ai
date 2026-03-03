@@ -51,6 +51,12 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid path argument")
 	}
 
+	// Expand ~ to home directory
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+
 	// Resolve path
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(t.cwd, path)

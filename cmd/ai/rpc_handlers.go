@@ -1516,10 +1516,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}()
 
 	// Emit start event
+	allTools := registry.All()
+	toolNames := make([]string, len(allTools))
+	for i, t := range allTools {
+		toolNames[i] = t.Name()
+	}
 	server.EmitEvent(map[string]any{
 		"type":  "server_start",
 		"model": model.ID,
-		"tools": []string{"read", "bash", "write", "grep", "edit"},
+		"tools": toolNames,
 	})
 
 	// Start debug server if enabled

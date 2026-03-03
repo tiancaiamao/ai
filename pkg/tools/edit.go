@@ -109,6 +109,11 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 // resolvePath resolves a path relative to the current working directory.
 func (t *EditTool) resolvePath(path string) string {
+	// Expand ~ to home directory
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
 	if filepath.IsAbs(path) {
 		return path
 	}

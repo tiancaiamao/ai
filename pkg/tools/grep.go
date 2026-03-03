@@ -4,10 +4,10 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-
 )
 
 // GrepTool searches for patterns in files using ripgrep or grep.
@@ -61,6 +61,11 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	searchPath := t.cwd
 	if path, ok := args["path"].(string); ok && path != "" {
+		// Expand ~ to home directory
+		if strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = filepath.Join(home, path[2:])
+		}
 		if !filepath.IsAbs(path) {
 			searchPath = filepath.Join(t.cwd, path)
 		} else {

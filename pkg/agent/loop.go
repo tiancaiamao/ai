@@ -761,13 +761,8 @@ func streamAssistantResponse(
 
 	var llmMessages []llm.LLMMessage
 
-	selectedMessages, selectionMode := selectMessagesForLLM(agentCtx)
+	selectedMessages, _ := selectMessagesForLLM(agentCtx)
 	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
-	slog.Info("[Loop] llm message selection",
-		"selection_mode", selectionMode,
-		"messages_total", len(agentCtx.Messages),
-		"messages_sent", len(llmMessages),
-	)
 
 	systemPrompt := agentCtx.SystemPrompt
 	if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
@@ -804,7 +799,7 @@ func streamAssistantResponse(
 			)
 
 			meta := agentCtx.LLMContext.GetMeta()
-			runtimeMetaSnapshot, runtimeRefreshed := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
+			runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
 			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
 			if runtimeAppendix != "" {
 				runtimeMsg := llm.LLMMessage{
@@ -814,10 +809,6 @@ func streamAssistantResponse(
 				llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
 			}
 
-			slog.Info("[Loop] Injecting runtime state as leading user message",
-				"wm_length", len(content),
-				"runtime_meta_refreshed", runtimeRefreshed,
-				"messages_sent", len(llmMessages))
 		}
 	}
 
@@ -830,11 +821,7 @@ func streamAssistantResponse(
 		}
 		llmMessages = append(llmMessages, reminderMsg)
 		agentCtx.LLMContext.SetWasReminded()
-		slog.Info("[Loop] Injected llm context reminder message",
-			"rounds_since_update", agentCtx.LLMContext.GetRoundsSinceUpdate())
 	}
-
-	slog.Info("[Loop] Sending messages to LLM", "count", len(llmMessages))
 
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
@@ -1069,10 +1056,6 @@ func streamAssistantResponse(
 						traceevent.Field{Key: "issues", Value: issues},
 						traceevent.Field{Key: "issue_count", Value: len(issues)},
 					)
-					slog.Info("[Loop] assistant response contains tags but no tool calls injected",
-						"text_preview", truncateLine(text, 200),
-						"stop_reason", e.StopReason,
-						"issues", issues)
 				}
 			}
 
@@ -1109,103 +1092,6 @@ func streamAssistantResponse(
 	}
 
 	return partialMessage, nil
-}
-
-type llmRequestSnapshot struct {
-	Attempt           int
-	RequestHash       string
-	MessagesHash      string
-	ToolsHash         string
-	SystemPromptHash  string
-	MessageCount      int
-	UserMessages      int
-	AssistantMessages int
-	ToolMessages      int
-	SystemChars       int
-	LastRole          string
-	LastMessageHash   string
-	LastUserHash      string
-}
-
-func emitLLMRequestSnapshot(ctx context.Context, model llm.Model, llmCtx llm.LLMContext) {
-	snapshot := buildLLMRequestSnapshot(ctx, model, llmCtx)
-	traceevent.Log(ctx, traceevent.CategoryLLM, "llm_request_snapshot",
-		traceevent.Field{Key: "attempt", Value: snapshot.Attempt},
-		traceevent.Field{Key: "request_hash", Value: snapshot.RequestHash},
-		traceevent.Field{Key: "messages_hash", Value: snapshot.MessagesHash},
-		traceevent.Field{Key: "tools_hash", Value: snapshot.ToolsHash},
-		traceevent.Field{Key: "system_prompt_hash", Value: snapshot.SystemPromptHash},
-		traceevent.Field{Key: "message_count", Value: snapshot.MessageCount},
-		traceevent.Field{Key: "user_messages", Value: snapshot.UserMessages},
-		traceevent.Field{Key: "assistant_messages", Value: snapshot.AssistantMessages},
-		traceevent.Field{Key: "tool_messages", Value: snapshot.ToolMessages},
-		traceevent.Field{Key: "system_chars", Value: snapshot.SystemChars},
-		traceevent.Field{Key: "last_role", Value: snapshot.LastRole},
-		traceevent.Field{Key: "last_message_hash", Value: snapshot.LastMessageHash},
-		traceevent.Field{Key: "last_user_hash", Value: snapshot.LastUserHash},
-	)
-	slog.Info("[Loop] LLM request snapshot",
-		"attempt", snapshot.Attempt,
-		"requestHash", snapshot.RequestHash,
-		"messagesHash", snapshot.MessagesHash,
-		"toolsHash", snapshot.ToolsHash,
-		"messageCount", snapshot.MessageCount,
-		"lastRole", snapshot.LastRole)
-}
-
-func buildLLMRequestSnapshot(ctx context.Context, model llm.Model, llmCtx llm.LLMContext) llmRequestSnapshot {
-	snapshot := llmRequestSnapshot{
-		Attempt:          llmAttemptFromContext(ctx),
-		MessagesHash:     hashAny(llmCtx.Messages),
-		ToolsHash:        hashAny(llmCtx.Tools),
-		SystemPromptHash: hashAny(llmCtx.SystemPrompt),
-		MessageCount:     len(llmCtx.Messages),
-		SystemChars:      len(llmCtx.SystemPrompt),
-	}
-
-	for _, msg := range llmCtx.Messages {
-		switch msg.Role {
-		case "user":
-			snapshot.UserMessages++
-		case "assistant":
-			snapshot.AssistantMessages++
-		case "tool":
-			snapshot.ToolMessages++
-		}
-	}
-
-	if n := len(llmCtx.Messages); n > 0 {
-		last := llmCtx.Messages[n-1]
-		snapshot.LastRole = last.Role
-		snapshot.LastMessageHash = hashAny(last)
-	}
-	for i := len(llmCtx.Messages) - 1; i >= 0; i-- {
-		if llmCtx.Messages[i].Role == "user" {
-			snapshot.LastUserHash = hashAny(llmCtx.Messages[i])
-			break
-		}
-	}
-
-	reqMessages := llmCtx.Messages
-	if strings.TrimSpace(llmCtx.SystemPrompt) != "" {
-		systemMsg := llm.LLMMessage{
-			Role:    "system",
-			Content: llmCtx.SystemPrompt,
-		}
-		reqMessages = append([]llm.LLMMessage{systemMsg}, reqMessages...)
-	}
-
-	reqBody := map[string]any{
-		"model":    model.ID,
-		"messages": reqMessages,
-		"stream":   true,
-	}
-	if len(llmCtx.Tools) > 0 {
-		reqBody["tools"] = llmCtx.Tools
-		reqBody["tool_choice"] = "auto"
-	}
-	snapshot.RequestHash = hashAny(reqBody)
-	return snapshot
 }
 
 func llmAttemptFromContext(ctx context.Context) int {

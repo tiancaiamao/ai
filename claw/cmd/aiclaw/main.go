@@ -7,15 +7,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"log/slog"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -28,6 +30,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/tools"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -162,18 +165,49 @@ func main() {
 		}
 	}
 
+	// Load skills
+	skillLoader := skill.NewLoader(clawDir)
+	skillResult := skillLoader.Load(&skill.LoadOptions{
+		CWD:             "", // no workspace
+		AgentDir:        clawDir,
+		SkillPaths:      nil,
+		IncludeDefaults: true,
+	})
+	if len(skillResult.Diagnostics) > 0 {
+		for _, diag := range skillResult.Diagnostics {
+			if diag.Type == "error" {
+				slog.Error("Skill error", "path", diag.Path, "message", diag.Message)
+			}
+		}
+	}
+	if len(skillResult.Skills) > 0 {
+		slog.Info("Loaded skills", "count", len(skillResult.Skills))
+	}
+
+	// Create tool registry and register tools
+	// For claw (chat bot), we use clawDir as working directory since it's not tied to a specific project
+	toolRegistry := tools.NewRegistry()
+	toolRegistry.Register(tools.NewReadTool(clawDir))
+	toolRegistry.Register(tools.NewBashTool(clawDir))
+	toolRegistry.Register(tools.NewWriteTool(clawDir))
+	toolRegistry.Register(tools.NewGrepTool(clawDir))
+	toolRegistry.Register(tools.NewEditTool(clawDir))
+
 	agentConfig := &adapter.Config{
 		Model:           cfg.Model.ID,
 		Provider:        cfg.Model.Provider,
 		APIURL:          cfg.Model.BaseURL,
 		APIKey:          apiKey,
-		SystemPrompt:    buildSystemPrompt(clawDir),
-		Tools:           []agentctx.Tool{}, // 暂时不注册工具
-		ClawDir:         clawDir,           // 传递 claw 配置目录
+		SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills),
+		Tools:           toolRegistry.All(),
+		ClawDir:         clawDir, // 传递 claw 配置目录
 		Transcriber:     transcriber,
 		FeishuAppID:     cfg.Channels.Feishu.AppID,
 		FeishuAppSecret: cfg.Channels.Feishu.AppSecret,
+		Skills:          skillResult.Skills,
 	}
+
+	slog.Info("Registered tools", "count", len(agentConfig.Tools))
 
 	// 创建 CronService（需要在 AgentLoop 之前创建）
 	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
@@ -254,8 +288,120 @@ func setupLogging(level string) {
 	}
 
 	opts := &slog.HandlerOptions{Level: lvl}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+	logger := slog.New(newSimpleHandler(os.Stdout, opts))
 	slog.SetDefault(logger)
+}
+
+// simpleHandler is a custom slog handler with cleaner output format
+type simpleHandler struct {
+	writer io.Writer
+	level  slog.Leveler
+	attrs  []slog.Attr
+}
+
+func newSimpleHandler(w io.Writer, opts *slog.HandlerOptions) *simpleHandler {
+	if opts == nil {
+		opts = &slog.HandlerOptions{}
+	}
+	return &simpleHandler{
+		writer: w,
+		level:  opts.Level,
+	}
+}
+
+// Enabled implements slog.Handler
+func (h *simpleHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= h.level.Level()
+}
+
+// Handle implements slog.Handler
+func (h *simpleHandler) Handle(ctx context.Context, r slog.Record) error {
+	// Build a simple format: TIME LEVEL FILE:LINE MSG key1=value1 key2=value2
+	var sb strings.Builder
+
+	// Time and level
+	sb.WriteString(r.Time.Format("15:04:05.000"))
+	sb.WriteString(" ")
+
+	// Shorten level names
+	levelStr := strings.ToUpper(r.Level.String())
+	if len(levelStr) > 4 {
+		levelStr = levelStr[:4]
+	}
+	sb.WriteString(levelStr)
+	sb.WriteString(" ")
+
+	// Source (file:line)
+	if r.PC != 0 {
+		frames := runtime.CallersFrames([]uintptr{r.PC})
+		frame, _ := frames.Next()
+		if frame.File != "" {
+			file := frame.File
+			if idx := strings.LastIndex(file, "/"); idx >= 0 {
+				file = file[idx+1:]
+			}
+			sb.WriteString(file)
+			sb.WriteString(":")
+			sb.WriteString(strconv.Itoa(frame.Line))
+			sb.WriteString(" ")
+		}
+	}
+
+	// Message
+	sb.WriteString(r.Message)
+
+	// Add handler attrs
+	for _, a := range h.attrs {
+		sb.WriteString(" ")
+		sb.WriteString(a.Key)
+		sb.WriteString("=")
+		sb.WriteString(a.Value.String())
+	}
+
+	// Attrs from record
+	r.Attrs(func(a slog.Attr) bool {
+		sb.WriteString(" ")
+		sb.WriteString(a.Key)
+		sb.WriteString("=")
+		// Handle different value types
+		switch v := a.Value.Any().(type) {
+		case string:
+			sb.WriteString(v)
+		case int64, int, uint64, uint:
+			sb.WriteString(fmt.Sprintf("%d", v))
+		case float64:
+			sb.WriteString(fmt.Sprintf("%f", v))
+		case bool:
+			sb.WriteString(strconv.FormatBool(v))
+		case time.Duration:
+			sb.WriteString(v.String())
+		default:
+			sb.WriteString(a.Value.String())
+		}
+		return true
+	})
+
+	sb.WriteString("\n")
+	_, err := h.writer.Write([]byte(sb.String()))
+	return err
+}
+
+// WithAttrs implements slog.Handler
+func (h *simpleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newAttrs := make([]slog.Attr, len(h.attrs)+len(attrs))
+	copy(newAttrs, h.attrs)
+	copy(newAttrs[len(h.attrs):], attrs)
+	return &simpleHandler{
+		writer: h.writer,
+		level:  h.level,
+		attrs:  newAttrs,
+	}
+}
+
+// WithGroup implements slog.Handler
+func (h *simpleHandler) WithGroup(name string) slog.Handler {
+	// For simplicity, just return self without group support
+	return h
 }
 
 // setupTracing 配置 trace 输出到 ~/.aiclaw/traces/
@@ -328,7 +474,7 @@ func resolveAPIKey(clawDir, provider string) (string, error) {
 
 // buildSystemPrompt 构建 system prompt
 // 使用 prompt.Builder，支持从 ~/.aiclaw/AGENTS.md 加载身份
-func buildSystemPrompt(clawDir string) string {
+func buildSystemPrompt(clawDir string, skills []skill.Skill) string {
 	// 默认身份
 	defaultIdentity := `# Claw Assistant
 
@@ -364,29 +510,10 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 		slog.Info("Loaded custom identity from AGENTS.md", "path", agentsPath)
 	}
 
-	// 加载 skills
-	skillLoader := skill.NewLoader(clawDir)
-	skillResult := skillLoader.Load(&skill.LoadOptions{
-		CWD:             "", // no workspace
-		AgentDir:        clawDir,
-		SkillPaths:      nil,
-		IncludeDefaults: true,
-	})
-	if len(skillResult.Diagnostics) > 0 {
-		for _, diag := range skillResult.Diagnostics {
-			if diag.Type == "error" {
-				slog.Error("Skill error", "path", diag.Path, "message", diag.Message)
-			}
-		}
-	}
-	if len(skillResult.Skills) > 0 {
-		slog.Info("Loaded skills", "count", len(skillResult.Skills))
-	}
-
 	// 使用 prompt.Builder 构建
 	builder := prompt.NewBuilder(basePrompt, "").
 		SetNoWorkspace(true).
-		SetSkills(skillResult.Skills)
+		SetSkills(skills)
 
 	return builder.Build()
 }

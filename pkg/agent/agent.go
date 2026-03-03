@@ -130,7 +130,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 		context:        agentCtx,
 		eventChan:      make(chan AgentEvent, 100),
 		followUpQueue:  make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:       NewExecutorPool(map[string]int{"maxConcurrentTools": 3, "toolTimeout": 30, "queueTimeout": 60}),
+		executor:       NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "toolTimeout": 30, "queueTimeout": 60}),
 		metrics:        metrics,
 		toolOutput:     DefaultToolOutputLimits(),
 		toolCallCutoff: 10,

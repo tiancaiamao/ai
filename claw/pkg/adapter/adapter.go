@@ -5,6 +5,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +31,8 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/session"
+	"github.com/tiancaiamao/ai/pkg/skill"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // CommandHandler is the function signature for handling control commands.
@@ -103,8 +107,20 @@ type AgentLoop struct {
 	// Cron service
 	cronService *cron.CronService
 
+	// Skills
+	skills []skill.Skill
+
+	// Thinking level (off, minimal, low, medium, high, xhigh)
+	thinkingLevel   string
+	thinkingLevelMu sync.RWMutex
+
 	// Command registry
 	commands *CommandRegistry
+
+	// Statistics
+	messageCount  atomic.Int64
+	totalTokens   atomic.Int64
+	startTime     time.Time
 }
 
 // Session represents an isolated conversation session
@@ -189,6 +205,9 @@ type Config struct {
 
 	// Cron 服务（可选）
 	CronService *cron.CronService
+
+	// Skills (可选)
+	Skills []skill.Skill
 }
 
 // NewAgentLoop 创建一个新的 AgentLoop
@@ -244,7 +263,10 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 		feishuAppID:     cfg.FeishuAppID,
 		feishuAppSecret: cfg.FeishuAppSecret,
 		cronService:     cfg.CronService,
+		skills:          cfg.Skills,
+		thinkingLevel:   "off", // Default to off
 		commands:        commands,
+		startTime:       time.Now(),
 	}
 
 	// 注册基础命令
@@ -256,6 +278,7 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 // ModelSpec 模型规格定义
 type ModelSpec struct {
 	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
 	Provider      string `json:"provider"`
 	BaseURL       string `json:"baseUrl"`
 	API           string `json:"api"`
@@ -435,13 +458,23 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 	sess.Session.AppendMessage(userMsg)
 
 	// 发送消息给 agent
+	// 如果 agent 正在处理，使用 FollowUp 而不是等待超时
 	if err := sess.Agent.Prompt(content); err != nil {
+		if errors.Is(err, agent.ErrAgentBusy) {
+			// Agent busy, use FollowUp instead
+			slog.Info("[AgentLoop] Agent busy, using follow-up", "session_key", sessionKey)
+			if followErr := sess.Agent.FollowUp(content); followErr != nil {
+				return "", fmt.Errorf("agent busy and follow-up queue full: %w", followErr)
+			}
+			return fmt.Sprintf("(Agent is processing, your message has been queued: %s)", truncate(content, 50)), nil
+		}
 		return "", fmt.Errorf("agent prompt failed: %w", err)
 	}
 
 	// 收集响应
 	var response strings.Builder
 	var assistantMsg *agentctx.AgentMessage
+	var agentErrors []string
 
 	for event := range sess.Agent.Events() {
 		switch event.Type {
@@ -455,10 +488,27 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		case agent.EventError:
 			if event.Error != "" {
 				slog.Error("[AgentLoop] Agent error", "error", event.Error)
+				agentErrors = append(agentErrors, event.Error)
 			}
 		}
 		if event.Type == agent.EventAgentEnd {
 			break
+		}
+	}
+
+	// 如果有错误且没有正常响应，返回错误信息
+	result := response.String()
+	if result == "" && len(agentErrors) > 0 {
+		// 返回最后一个错误（通常是最相关的）
+		lastError := agentErrors[len(agentErrors)-1]
+		return fmt.Sprintf("Error: %s", lastError), nil
+	}
+	// 如果有响应但也有错误，在响应后附加错误信息
+	if result != "" && len(agentErrors) > 0 {
+		// 将错误附加到响应后面
+		result += fmt.Sprintf("\n\n[Errors occurred: %d]", len(agentErrors))
+		for _, e := range agentErrors {
+			result += fmt.Sprintf("\n- %s", truncate(e, 100))
 		}
 	}
 
@@ -467,8 +517,7 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		sess.Session.AppendMessage(*assistantMsg)
 	}
 
-	result := response.String()
-	slog.Info("[AgentLoop] Response", "session_key", sessionKey, "length", len(result))
+	slog.Info("[AgentLoop] Response", "session_key", sessionKey, "length", len(result), "errors", len(agentErrors))
 	return result, nil
 }
 
@@ -563,6 +612,12 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 		ag.AddTool(tool)
 	}
 
+	// 设置思考级别
+	a.thinkingLevelMu.RLock()
+	thinkingLevel := a.thinkingLevel
+	a.thinkingLevelMu.RUnlock()
+	ag.SetThinkingLevel(thinkingLevel)
+
 	return &Session{
 		Key:       sessionKey,
 		Agent:     ag,
@@ -624,9 +679,15 @@ func (a *AgentLoop) RegisterCommand(name string, handler CommandHandler) {
 
 // registerBuiltinCommands registers the built-in control commands.
 func (a *AgentLoop) registerBuiltinCommands() {
-	// Register aliases for commands that have multiple names
 	a.commands.Register("help", func(args string, sess *Session) (string, error) {
 		return a.cmdHelp(), nil
+	})
+	// /commands or /skills - list available skills (aliases)
+	a.commands.Register("commands", func(args string, sess *Session) (string, error) {
+		return a.cmdCommands(), nil
+	})
+	a.commands.Register("skills", func(args string, sess *Session) (string, error) {
+		return a.cmdCommands(), nil
 	})
 	a.commands.Register("session", func(args string, sess *Session) (string, error) {
 		return a.cmdSession(sess), nil
@@ -637,23 +698,22 @@ func (a *AgentLoop) registerBuiltinCommands() {
 	a.commands.Register("messages", func(args string, sess *Session) (string, error) {
 		return a.cmdHistory(sess), nil
 	})
-	a.commands.Register("sessions", func(args string, sess *Session) (string, error) {
-		return a.cmdSessions(), nil
-	})
 	a.commands.Register("clear", func(args string, sess *Session) (string, error) {
 		return a.cmdClear(sess), nil
 	})
-	a.commands.Register("compact", func(args string, sess *Session) (string, error) {
-		return "", a.cmdCompact(sess)
-	})
 	a.commands.Register("model", func(args string, sess *Session) (string, error) {
-		return a.cmdModel(), nil
+		return a.cmdModel(args, sess)
 	})
-	a.commands.Register("tools", func(args string, sess *Session) (string, error) {
-		return a.cmdTools(), nil
+	a.commands.Register("traceevent", func(args string, sess *Session) (string, error) {
+		return a.cmdTraceevent(args), nil
 	})
-	a.commands.Register("stats", func(args string, sess *Session) (string, error) {
-		return a.cmdStats(sess), nil
+	// show commands - show settings and usage
+	a.commands.Register("show", func(args string, sess *Session) (string, error) {
+		return a.cmdShow(args, sess), nil
+	})
+	// thinking command - toggle thinking mode
+	a.commands.Register("thinking", func(args string, sess *Session) (string, error) {
+		return a.cmdThinking(args, sess), nil
 	})
 }
 
@@ -1049,16 +1109,55 @@ func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKe
 
 // cmdHelp 显示帮助信息
 func (a *AgentLoop) cmdHelp() string {
+	// Define command descriptions
+	descriptions := map[string]string{
+		"help":        "Show this help message",
+		"commands":    "List available skills (alias: /skills)",
+		"skills":      "List available skills (alias: /commands)",
+		"session":     "Show current session info",
+		"history":     "Show message history (alias: /messages)",
+		"messages":    "Show message history (alias: /history)",
+		"clear":       "Clear current session messages",
+		"model":       "List or switch AI models",
+		"traceevent":  "Manage trace events for debugging",
+		"cron":        "Manage cron jobs",
+		"show":        "Show settings or usage (usage: /show [settings|usage])",
+		"thinking":    "Toggle or set thinking level (usage: /thinking [off|minimal|low|medium|high|xhigh])",
+	}
+
 	commands := a.commands.List()
-	// Sort commands alphabetically
 	sort.Strings(commands)
 
 	var b strings.Builder
 	b.WriteString("Control Commands:\n\n")
 	for _, cmd := range commands {
-		b.WriteString(fmt.Sprintf("  /%s\n", cmd))
+		desc := descriptions[cmd]
+		if desc != "" {
+			b.WriteString(fmt.Sprintf("  /%-15s %s\n", cmd, desc))
+		} else {
+			b.WriteString(fmt.Sprintf("  /%s\n", cmd))
+		}
 	}
 	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.")
+	return strings.TrimSpace(b.String())
+}
+
+// cmdCommands lists available skills
+func (a *AgentLoop) cmdCommands() string {
+	if len(a.skills) == 0 {
+		return "No skills available"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Available Skills (%d):\n\n", len(a.skills)))
+
+	for i, s := range a.skills {
+		b.WriteString(fmt.Sprintf("[%d] /%s\n", i, s.Name))
+		if s.Description != "" {
+			b.WriteString(fmt.Sprintf("    %s\n", s.Description))
+		}
+	}
+
 	return strings.TrimSpace(b.String())
 }
 
@@ -1131,26 +1230,6 @@ func (a *AgentLoop) cmdHistory(sess *Session) string {
 	return strings.TrimSpace(b.String())
 }
 
-// cmdSessions 列出所有活跃会话
-func (a *AgentLoop) cmdSessions() string {
-	sessions := a.ListSessions()
-	if len(sessions) == 0 {
-		return "No active sessions"
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Active Sessions (%d):\n\n", len(sessions)))
-	for i, key := range sessions {
-		if sess, ok := a.GetSession(key); ok {
-			msgCount := len(sess.Session.GetMessages())
-			b.WriteString(fmt.Sprintf("[%d] %s (%d messages)\n", i, key, msgCount))
-		} else {
-			b.WriteString(fmt.Sprintf("[%d] %s\n", i, key))
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
-
 // cmdClear 清空当前会话消息
 func (a *AgentLoop) cmdClear(sess *Session) string {
 	if sess == nil {
@@ -1173,78 +1252,570 @@ func (a *AgentLoop) cmdClear(sess *Session) string {
 		for _, tool := range a.tools {
 			sess.Agent.AddTool(tool)
 		}
+
+		// 设置思考级别
+		a.thinkingLevelMu.RLock()
+		thinkingLevel := a.thinkingLevel
+		a.thinkingLevelMu.RUnlock()
+		sess.Agent.SetThinkingLevel(thinkingLevel)
 	}
 
 	return fmt.Sprintf("Cleared %d messages from session", msgCount)
 }
 
-// cmdCompact 压缩会话
-func (a *AgentLoop) cmdCompact(sess *Session) error {
-	if sess == nil {
-		return fmt.Errorf("no active session")
+// cmdModel lists available models or switches to a specific model
+// Usage:
+//   /model          - list all available models
+//   /model <id>     - switch to the specified model
+func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
+	args = strings.TrimSpace(args)
+
+	// If no args, list available models
+	if args == "" {
+		return a.listModels(), nil
 	}
 
-	// 触发 agent 进行压缩
-	// 这需要 agent 暴露压缩方法，暂时返回提示
-	return fmt.Errorf("compact command: use normal prompt to trigger compaction when needed")
+	// Otherwise, try to switch to the specified model
+	return "", a.switchModel(args, sess)
 }
 
-// cmdModel 显示当前模型信息
-func (a *AgentLoop) cmdModel() string {
-	return fmt.Sprintf(`Model Info:
-  ID: %s
-  Provider: %s
-  BaseURL: %s
-  Context Window: %d`,
-		a.model.ID,
-		a.model.Provider,
-		a.model.BaseURL,
-		a.model.ContextWindow,
-	)
-}
+// listModels lists all available models from ~/.aiclaw/models.json
+func (a *AgentLoop) listModels() string {
+	// Try to load models from ~/.aiclaw/models.json
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nCannot load models list: failed to get home directory",
+			a.model.ID, a.model.Provider)
+	}
 
-// cmdTools 列出可用工具
-func (a *AgentLoop) cmdTools() string {
-	if len(a.tools) == 0 {
-		return "No tools configured"
+	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
+	specs, err := a.loadModelSpecs(modelsPath)
+	if err != nil {
+		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nCannot load models list: %v\n\nExpected file: %s",
+			a.model.ID, a.model.Provider, err, modelsPath)
+	}
+
+	if len(specs) == 0 {
+		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nNo models found in %s",
+			a.model.ID, a.model.Provider, modelsPath)
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Available Tools (%d):\n\n", len(a.tools)))
-	for i, tool := range a.tools {
-		b.WriteString(fmt.Sprintf("[%d] %s\n", i, tool.Name))
-		if desc := tool.Description(); desc != "" {
-			b.WriteString(fmt.Sprintf("    %s\n", desc))
+	b.WriteString(fmt.Sprintf("Available Models (%d):\n\n", len(specs)))
+
+	// Display with numeric indices for easy selection
+	for i, spec := range specs {
+		isCurrent := spec.ID == a.model.ID
+		prefix := "  "
+		if isCurrent {
+			prefix = "* "
+		}
+		displayName := spec.ID
+		if spec.Name != "" && spec.Name != spec.ID {
+			displayName = fmt.Sprintf("%s (%s)", spec.Name, spec.ID)
+		}
+		b.WriteString(fmt.Sprintf("%s[%d] %s\n", prefix, i, displayName))
+		if isCurrent {
+			b.WriteString("       <- current\n")
 		}
 	}
+
+	b.WriteString("\nUsage: /model <number> to switch (e.g., /model 0)")
+
 	return strings.TrimSpace(b.String())
 }
 
-// cmdStats 显示会话统计
-func (a *AgentLoop) cmdStats(sess *Session) string {
-	if sess == nil {
-		return "No active session"
+// switchModel switches to the specified model
+func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
+	// Load available models
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	messages := sess.Session.GetMessages()
-	summary := sess.Session.GetLastCompactionSummary()
+	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
+	specs, err := a.loadModelSpecs(modelsPath)
+	if err != nil {
+		return fmt.Errorf("failed to load models: %w (path: %s)", err, modelsPath)
+	}
 
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Session Statistics:\n"))
-	b.WriteString(fmt.Sprintf("  Total Messages: %d\n", len(messages)))
-	if summary != "" {
-		b.WriteString(fmt.Sprintf("  Last Compaction: %s\n", truncate(summary, 100)))
+	// Try to parse as numeric index first
+	var targetSpec *ModelSpec
+	if idx, err := strconv.Atoi(modelID); err == nil && idx >= 0 && idx < len(specs) {
+		// Numeric index selection
+		targetSpec = &specs[idx]
 	} else {
-		b.WriteString("  Last Compaction: never\n")
+		// Find by ID or name (partial match supported)
+		for i := range specs {
+			spec := &specs[i]
+			if spec.ID == modelID || strings.HasPrefix(spec.ID, modelID) {
+				targetSpec = spec
+				break
+			}
+			// Also match by name if provided
+			if spec.Name != "" && (spec.Name == modelID || strings.HasPrefix(spec.Name, modelID)) {
+				targetSpec = spec
+				break
+			}
+		}
 	}
 
-	// 统计 token 估算
-	totalChars := 0
-	for _, m := range messages {
-		totalChars += len(m.ExtractText())
+	if targetSpec == nil {
+		return fmt.Errorf("model not found: %s\nUse /model to list available models", modelID)
 	}
-	estimatedTokens := totalChars / 4 // 粗略估算
-	b.WriteString(fmt.Sprintf("  Estimated Tokens: ~%d", estimatedTokens))
 
-	return strings.TrimSpace(b.String())
+	// Resolve API key for the provider
+	apiKey, err := a.resolveAPIKey(targetSpec.Provider)
+	if err != nil {
+		return fmt.Errorf("failed to resolve API key for %s: %w", targetSpec.Provider, err)
+	}
+
+	// Create new model
+	newModel := llm.Model{
+		ID:            targetSpec.ID,
+		Provider:      targetSpec.Provider,
+		BaseURL:       targetSpec.BaseURL,
+		API:           targetSpec.API,
+		ContextWindow: targetSpec.ContextWindow,
+	}
+
+	// Update the agent loop's model
+	a.model = newModel
+	a.apiKey = apiKey
+
+	// Create new compactor with the new model
+	compactorCfg := compact.DefaultConfig()
+	newCompactor := compact.NewCompactor(
+		compactorCfg,
+		newModel,
+		apiKey,
+		a.systemPrompt,
+		newModel.ContextWindow,
+	)
+	a.compactor = newCompactor
+
+	// Update all existing sessions with the new model
+	a.sessionsMu.Lock()
+	for _, s := range a.sessions {
+		s.Agent.SetModel(newModel)
+		s.Agent.SetAPIKey(apiKey)
+		s.Agent.SetCompactor(&clawCompactor{sess: s.Session, compactor: newCompactor})
+		s.Agent.SetContextWindow(newModel.ContextWindow)
+		s.Compactor.Update(s.Session, newCompactor)
+	}
+	a.sessionsMu.Unlock()
+
+	// Update config file
+	if err := a.saveModelConfig(newModel); err != nil {
+		slog.Warn("[AgentLoop] Failed to save model config", "error", err)
+	}
+
+	slog.Info("[AgentLoop] Model switched",
+		"id", newModel.ID,
+		"provider", newModel.Provider,
+		"baseUrl", newModel.BaseURL,
+		"contextWindow", newModel.ContextWindow)
+
+	return nil
+}
+
+// loadModelSpecs loads model specs from a models.json file
+func (a *AgentLoop) loadModelSpecs(path string) ([]ModelSpec, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg struct {
+		Providers map[string]struct {
+			BaseURL string `json:"baseUrl,omitempty"`
+			API     string `json:"api,omitempty"`
+			Models  []struct {
+				ID            string   `json:"id"`
+				Name          string   `json:"name,omitempty"`
+				BaseURL       string   `json:"baseUrl,omitempty"`
+				API           string   `json:"api,omitempty"`
+				ContextWindow int      `json:"contextWindow,omitempty"`
+				MaxTokens     int      `json:"maxTokens,omitempty"`
+			} `json:"models,omitempty"`
+		} `json:"providers"`
+	}
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	var specs []ModelSpec
+	for provider, pcfg := range cfg.Providers {
+		baseURL := pcfg.BaseURL
+		api := pcfg.API
+		for _, m := range pcfg.Models {
+			if m.ID == "" {
+				continue
+			}
+			specs = append(specs, ModelSpec{
+				ID:            m.ID,
+				Name:          m.Name,
+				Provider:      provider,
+				BaseURL:       firstNonEmpty(m.BaseURL, baseURL),
+				API:           firstNonEmpty(m.API, api),
+				ContextWindow: m.ContextWindow,
+			})
+		}
+	}
+
+	return specs, nil
+}
+
+// resolveAPIKey resolves API key from environment or auth.json
+func (a *AgentLoop) resolveAPIKey(provider string) (string, error) {
+	// Try environment variable first
+	envVar := strings.ToUpper(provider) + "_API_KEY"
+	if key := os.Getenv(envVar); key != "" {
+		return key, nil
+	}
+
+	// Try auth.json
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read auth.json (set %s env var): %w", envVar, err)
+	}
+
+	var auth map[string]map[string]string
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return "", fmt.Errorf("failed to parse auth.json: %w", err)
+	}
+
+	if providerAuth, ok := auth[provider]; ok {
+		for _, keyField := range []string{"apiKey", "api_key", "key", "token"} {
+			if key, ok := providerAuth[keyField]; ok && key != "" {
+				return key, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("API key not found for provider %s in auth.json (set %s env var)", provider, envVar)
+}
+
+// saveModelConfig saves the current model config to ~/.aiclaw/config.json
+func (a *AgentLoop) saveModelConfig(model llm.Model) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	configPath := filepath.Join(homeDir, ".aiclaw", "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	// Parse existing config to preserve other fields
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return err
+	}
+
+	// Update model section
+	if cfg == nil {
+		cfg = make(map[string]any)
+	}
+	modelCfg := map[string]any{
+		"id":       model.ID,
+		"provider": model.Provider,
+		"baseUrl":  model.BaseURL,
+	}
+	cfg["model"] = modelCfg
+
+	// Preserve voice and channels if they exist
+	if _, ok := cfg["voice"]; !ok && data != nil {
+		var voiceCfg map[string]any
+		var originalCfg map[string]any
+		if err := json.Unmarshal(data, &originalCfg); err == nil {
+			if v, ok := originalCfg["voice"]; ok {
+				cfg["voice"] = v
+			}
+		}
+		_ = voiceCfg
+	}
+
+	newData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, newData, 0644)
+}
+
+// cmdTraceevent manages trace event settings
+// Usage:
+//   /traceevent              - list enabled events
+//   /traceevent default      - reset to default set
+//   /traceevent all          - enable all events
+//   /traceevent off          - disable all events
+//   /traceevent <events>     - set specific events (e.g., llm, tool, event)
+//   /traceevent enable <events>   - enable additional events
+//   /traceevent disable <events>  - disable specific events
+func (a *AgentLoop) cmdTraceevent(args string) string {
+	args = strings.TrimSpace(args)
+
+	if args == "" {
+		// List enabled events
+		events := traceevent.GetEnabledEvents()
+		if len(events) == 0 {
+			return "Trace events: disabled (use /traceevent all to enable)"
+		}
+		return fmt.Sprintf("Trace events (%d): %s", len(events), strings.Join(events, ", "))
+	}
+
+	fields := strings.Fields(args)
+	op := fields[0]
+
+	switch op {
+	case "default":
+		events := traceevent.ResetToDefaultEvents()
+		return fmt.Sprintf("Reset to default events (%d): %s", len(events), strings.Join(events, ", "))
+
+	case "all":
+		traceevent.DisableAllEvents()
+		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
+		for _, eventName := range expanded {
+			traceevent.EnableEvent(eventName)
+		}
+		events := traceevent.GetEnabledEvents()
+		return fmt.Sprintf("Enabled all events (%d)", len(events))
+
+	case "off", "none":
+		traceevent.DisableAllEvents()
+		return "All trace events disabled"
+
+	case "enable":
+		if len(fields) < 2 {
+			return "Usage: /traceevent enable <events>\nExample: /traceevent enable llm tool"
+		}
+		selectors := fields[1:]
+		expanded, unknown := traceevent.ExpandEventSelectors(selectors)
+		if len(unknown) > 0 {
+			return fmt.Sprintf("Unknown trace events: %s\nAvailable selectors: all, llm, tool, event, log", strings.Join(unknown, ", "))
+		}
+		for _, eventName := range expanded {
+			traceevent.EnableEvent(eventName)
+		}
+		events := traceevent.GetEnabledEvents()
+		return fmt.Sprintf("Enabled events (%d): %s", len(events), strings.Join(events, ", "))
+
+	case "disable":
+		if len(fields) < 2 {
+			return "Usage: /traceevent disable <events>\nExample: /traceevent disable tool"
+		}
+		selectors := fields[1:]
+		expanded, unknown := traceevent.ExpandEventSelectors(selectors)
+		if len(unknown) > 0 {
+			return fmt.Sprintf("Unknown trace events: %s", strings.Join(unknown, ", "))
+		}
+		for _, eventName := range expanded {
+			traceevent.DisableEvent(eventName)
+		}
+		events := traceevent.GetEnabledEvents()
+		if len(events) == 0 {
+			return "Disabled all events"
+		}
+		return fmt.Sprintf("Remaining events (%d): %s", len(events), strings.Join(events, ", "))
+
+	default:
+		// Treat as list of events to set (replace current set)
+		traceevent.DisableAllEvents()
+		expanded, unknown := traceevent.ExpandEventSelectors(fields)
+		if len(unknown) > 0 {
+			return fmt.Sprintf("Unknown trace events: %s\nAvailable selectors: all, llm, tool, event, log", strings.Join(unknown, ", "))
+		}
+		for _, eventName := range expanded {
+			traceevent.EnableEvent(eventName)
+		}
+		events := traceevent.GetEnabledEvents()
+		return fmt.Sprintf("Set events (%d): %s", len(events), strings.Join(events, ", "))
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if v := strings.TrimSpace(value); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// cmdShow displays settings or usage statistics
+// Usage:
+//   /show              - show settings (default)
+//   /show settings     - show current settings
+//   /show usage        - show usage statistics
+func (a *AgentLoop) cmdShow(args string, sess *Session) string {
+	args = strings.TrimSpace(args)
+
+	if args == "" || args == "settings" {
+		return a.cmdShowSettings(sess)
+	}
+
+	if args == "usage" {
+		return a.cmdShowUsage()
+	}
+
+	return fmt.Sprintf("Unknown show command: %s\nUsage: /show [settings|usage]", args)
+}
+
+// cmdShowSettings shows current configuration settings
+func (a *AgentLoop) cmdShowSettings(sess *Session) string {
+	var sb strings.Builder
+
+	sb.WriteString("Current Settings:\n")
+
+	// Model info
+	sb.WriteString(fmt.Sprintf("  Model: %s (provider: %s)\n", a.model.ID, a.model.Provider))
+	if a.model.BaseURL != "" {
+		sb.WriteString(fmt.Sprintf("  Base URL: %s\n", a.model.BaseURL))
+	}
+
+	// Thinking level
+	a.thinkingLevelMu.RLock()
+	thinkingLevel := a.thinkingLevel
+	a.thinkingLevelMu.RUnlock()
+	sb.WriteString(fmt.Sprintf("  Thinking Level: %s\n", thinkingLevel))
+
+	// Session info
+	if sess != nil {
+		sb.WriteString(fmt.Sprintf("  Session: %s\n", sess.Key))
+		if sess.Session != nil {
+			msgCount := len(sess.Session.GetMessages())
+			sb.WriteString(fmt.Sprintf("  Session Messages: %d\n", msgCount))
+		}
+	}
+
+	// Skills
+	if len(a.skills) > 0 {
+		sb.WriteString(fmt.Sprintf("  Skills: %d loaded\n", len(a.skills)))
+	}
+
+	// Voice
+	if a.transcriber != nil {
+		sb.WriteString("  Voice: enabled\n")
+	} else {
+		sb.WriteString("  Voice: disabled\n")
+	}
+
+	// Cron
+	if a.cronService != nil {
+		sb.WriteString("  Cron: enabled\n")
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+// cmdShowUsage shows usage statistics
+func (a *AgentLoop) cmdShowUsage() string {
+	var sb strings.Builder
+
+	sb.WriteString("Usage Statistics:\n")
+
+	// Message count
+	msgCount := a.messageCount.Load()
+	sb.WriteString(fmt.Sprintf("  Messages Processed: %d\n", msgCount))
+
+	// Token count
+	tokens := a.totalTokens.Load()
+	if tokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Total Tokens: %d\n", tokens))
+	}
+
+	// Uptime
+	uptime := time.Since(a.startTime)
+	sb.WriteString(fmt.Sprintf("  Uptime: %s\n", formatDuration(uptime)))
+
+	// Active sessions
+	a.sessionsMu.RLock()
+	sessionCount := len(a.sessions)
+	a.sessionsMu.RUnlock()
+	sb.WriteString(fmt.Sprintf("  Active Sessions: %d\n", sessionCount))
+
+	return strings.TrimSpace(sb.String())
+}
+
+// formatDuration formats a duration in a human-readable way
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return d.Round(time.Second).String()
+	}
+	if d < time.Hour {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
+// cmdThinking toggles or sets the thinking level
+// Usage:
+//   /thinking              - toggle to next level
+//   /thinking <level>      - set specific level (off, minimal, low, medium, high, xhigh)
+func (a *AgentLoop) cmdThinking(args string, sess *Session) string {
+	levels := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
+	levelMap := make(map[string]string)
+	for _, level := range levels {
+		levelMap[level] = level
+	}
+
+	args = strings.TrimSpace(args)
+
+	var newLevel string
+
+	if args == "" {
+		// Toggle to next level
+		a.thinkingLevelMu.RLock()
+		currentLevel := a.thinkingLevel
+		a.thinkingLevelMu.RUnlock()
+
+		// Find current level index
+		currentIndex := 0
+		for i, level := range levels {
+			if level == currentLevel {
+				currentIndex = i
+				break
+			}
+		}
+
+		// Move to next level (wrap around)
+		nextIndex := (currentIndex + 1) % len(levels)
+		newLevel = levels[nextIndex]
+	} else {
+		// Set specific level
+		if _, ok := levelMap[args]; !ok {
+			return fmt.Sprintf("Invalid thinking level: %s\nValid levels: %s", args, strings.Join(levels, ", "))
+		}
+		newLevel = args
+	}
+
+	// Update thinking level
+	a.thinkingLevelMu.Lock()
+	a.thinkingLevel = newLevel
+	a.thinkingLevelMu.Unlock()
+
+	// Update all existing sessions with new thinking level
+	a.sessionsMu.RLock()
+	for _, sess := range a.sessions {
+		if sess.Agent != nil {
+			sess.Agent.SetThinkingLevel(newLevel)
+		}
+	}
+	a.sessionsMu.RUnlock()
+
+	return fmt.Sprintf("Thinking level: %s", newLevel)
 }

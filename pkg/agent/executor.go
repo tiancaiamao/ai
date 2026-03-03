@@ -4,6 +4,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,14 +141,18 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool agentctx.Too
 
 			// Check if error is retryable
 			if !e.isRetryable(result.err) {
-				slog.Error("[Executor] agentctx.Tool failed with non-retryable error", "tool", tool.Name(), "error", result.err)
+				slog.Error("[Executor] Tool failed with non-retryable error",
+					"tool", tool.Name(),
+					"args", formatArgs(args),
+					"error", result.err)
 				return nil, result.err
 			}
 
 			// Error is retryable, will retry
 			lastErr = result.err
-			slog.Warn("[Executor] agentctx.Tool failed, will retry",
+			slog.Warn("[Executor] Tool failed, will retry",
 				"tool", tool.Name(),
+				"args", formatArgs(args),
 				"attempt", attempt+1,
 				"maxAttempts", e.retryConfig.MaxRetries+1,
 				"error", result.err)
@@ -155,8 +160,9 @@ func (e *ToolExecutor) executeWithRetries(ctx context.Context, tool agentctx.Too
 		case <-timeoutCtx.Done():
 			// Timeout is always retryable
 			lastErr = fmt.Errorf("tool execution timeout after %v", e.toolTimeout)
-			slog.Warn("[Executor] agentctx.Tool timed out, will retry",
+			slog.Warn("[Executor] Tool timed out, will retry",
 				"tool", tool.Name(),
+				"args", formatArgs(args),
 				"attempt", attempt+1,
 				"maxAttempts", e.retryConfig.MaxRetries+1)
 		}
@@ -238,7 +244,7 @@ func containsIgnoreCase(s, substr string) bool {
 
 // DefaultExecutor creates an executor with default settings.
 func DefaultExecutor() *ToolExecutor {
-	return NewToolExecutor(3, 30, 60)
+	return NewToolExecutor(10, 30, 60)
 }
 
 // ExecutorPool manages a pool of executors for different tool types.
@@ -275,6 +281,26 @@ func (p *ExecutorPool) GetExecutor(toolName string) *ToolExecutor {
 	}
 
 	return executor
+}
+
+// formatArgs formats tool arguments for logging.
+// For bash tools, this extracts the command field for clarity.
+func formatArgs(args map[string]interface{}) string {
+	if args == nil {
+		return "{}"
+	}
+
+	// Special handling for bash tool - show the command
+	if cmd, ok := args["command"].(string); ok {
+		return cmd
+	}
+
+	// For other tools, show as key=value pairs
+	var parts []string
+	for k, v := range args {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	return fmt.Sprintf("{%s}", strings.Join(parts, " "))
 }
 
 // SetExecutor sets a custom executor for a specific tool.
