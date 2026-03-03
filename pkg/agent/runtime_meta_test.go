@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-		LLMContextSize: 3000,
+		LLMContextSize:    3000,
 	}
 
 	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
@@ -148,6 +149,38 @@ func TestExtractRecentMessagesSkipsOrphanedToolResults(t *testing.T) {
 	// Should start with user or assistant
 	if active[0].Role != "user" && active[0].Role != "assistant" {
 		t.Fatalf("expected first message to be user or assistant, got %q", active[0].Role)
+	}
+}
+
+func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) {
+	msgs := []agentctx.AgentMessage{agentctx.NewUserMessage("old")}
+	msgs = append(msgs, agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "stale-1"},
+	}, false))
+	msgs = append(msgs, agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "stale-2"},
+	}, false))
+	for i := 3; i <= 12; i++ {
+		msgs = append(msgs, agentctx.NewToolResultMessage(
+			fmt.Sprintf("call-%d", i),
+			"grep",
+			[]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("recent-%d", i)},
+			},
+			false,
+		))
+	}
+	msgs = append(msgs, agentctx.NewUserMessage("latest"))
+
+	summary := buildToolOutputsSummary(msgs)
+	if !containsString(summary, "2 stale outputs") {
+		t.Fatalf("expected 2 stale outputs in summary, got: %s", summary)
+	}
+	if !containsString(summary, "1 bash, 1 read") {
+		t.Fatalf("expected grouped tool counts, got: %s", summary)
+	}
+	if !containsString(summary, "consider TRUNCATE") {
+		t.Fatalf("expected truncate guidance, got: %s", summary)
 	}
 }
 

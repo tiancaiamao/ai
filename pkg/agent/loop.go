@@ -8,30 +8,26 @@ import (
 	"errors"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"log/slog"
-
-	"github.com/tiancaiamao/ai/pkg/hint"
-	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/prompt"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
-	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
-	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
-	defaultLoopMaxConsecutiveToolCalls = 6               // Stop repeated identical tool calls.
-	defaultLoopMaxToolCallsPerName     = 60              // Stop runaway single-tool loops.
+	defaultLLMMaxRetries               = 1
+	defaultRetryBaseDelay              = 1 * time.Second
+	defaultLoopMaxConsecutiveToolCalls = 6
+	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 )
 
-// LoopConfig contains configuration for the agent loop.
 type LoopConfig struct {
 	Model                   llm.Model
 	APIKey                  string
@@ -226,9 +222,24 @@ func runInnerLoop(
 		}
 		turnCount++
 
+		compactPerformedViaHint := false
+		if agentCtx.LLMContext != nil {
+			hintProcessor := NewTruncateCompactHint(config.Compactor)
+			hintResult, err := hintProcessor.Process(ctx, agentCtx)
+			if err != nil {
+				slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
+			} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
+				slog.Info("[Loop] Processed truncate-compact hint",
+					"truncated_count", hintResult.TruncatedCount,
+					"compact_performed", hintResult.CompactPerformed,
+				)
+			}
+			compactPerformedViaHint = hintResult.CompactPerformed
+		}
+
 		// Compact before each LLM request so long-running tool loops do not keep
 		// carrying stale outputs into the next turn.
-		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
+		if !compactPerformedViaHint && config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
 			before := len(agentCtx.Messages)
 			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
@@ -420,148 +431,6 @@ func runInnerLoop(
 			}
 		}
 
-		// Process hint file (truncate-compact-hint.md)
-		if agentCtx.LLMContext != nil && config.Compactor != nil {
-			sessionDir := agentCtx.LLMContext.GetSessionDir()
-			hintData, err := hint.LoadHintFile(sessionDir)
-			if err != nil {
-				slog.Warn("[Loop] Failed to load hint file", "error", err)
-			} else {
-				// Calculate current context usage
-				tokensMax := 128000
-				if config.ContextWindow > 0 {
-					tokensMax = config.ContextWindow
-				}
-				meta := agentCtx.LLMContext.GetMeta()
-				usage := float64(meta.TokensUsed) / float64(tokensMax)
-
-				// Check if we should trigger compact
-				shouldTrigger, confidence, reason := hint.ShouldTriggerCompact(hintData, usage)
-				if shouldTrigger {
-					// Apply confidence: only trigger if random check passes
-					// confidence 1.0 = always trigger, 0.5 = 50% chance
-					shouldActuallyTrigger := confidence >= 1.0 || randFloat64() < confidence
-
-					if shouldActuallyTrigger {
-						slog.Info("[Loop] Triggering compaction based on hint",
-							"confidence", confidence,
-							"reason", reason,
-							"usage", usage)
-
-						before := len(agentCtx.Messages)
-						compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-							traceevent.Field{Key: "source", Value: "hint"},
-							traceevent.Field{Key: "auto", Value: true},
-							traceevent.Field{Key: "before_messages", Value: before},
-							traceevent.Field{Key: "trigger", Value: reason},
-						)
-						stream.Push(NewCompactionStartEvent(CompactionInfo{
-							Auto:    true,
-							Before:  before,
-							Trigger: reason,
-						}))
-
-						compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
-						if compactErr != nil {
-							compactErr = WithErrorStack(compactErr)
-							slog.Error("[Loop] Hint-based compaction failed", "error", compactErr)
-							compactionSpan.AddField("error", true)
-							compactionSpan.AddField("error_message", compactErr.Error())
-							if stack := ErrorStack(compactErr); stack != "" {
-								compactionSpan.AddField("error_stack", stack)
-							}
-							compactionSpan.End()
-							stream.Push(NewCompactionEndEvent(CompactionInfo{
-								Auto:    true,
-								Before:  before,
-								Error:   compactErr.Error(),
-								Trigger: reason,
-							}))
-						} else {
-							if compacted != nil {
-								agentCtx.Messages = compacted.Messages
-								agentCtx.LastCompactionSummary = compacted.Summary
-							}
-							compactionSpan.AddField("after_messages", len(agentCtx.Messages))
-							compactionSpan.End()
-							stream.Push(NewCompactionEndEvent(CompactionInfo{
-								Auto:    true,
-								Before:  before,
-								After:   len(agentCtx.Messages),
-								Trigger: reason,
-							}))
-						}
-					}
-				}
-
-				// Process TRUNCATE hint (archive stale tool outputs)
-				if hintData.Truncate != nil {
-					truncateHint := hintData.Truncate
-					truncatedCount := 0
-
-					slog.Info("[Loop] Processing truncate hint",
-						"tool_name", truncateHint.ToolName,
-						"tool_ids_count", len(truncateHint.ToolIDs),
-						"reason", truncateHint.Reason)
-
-					for i, msg := range agentCtx.Messages {
-						// Only process tool results
-						if msg.Role != "toolResult" {
-							continue
-						}
-
-						// Skip already archived messages
-						if !msg.IsAgentVisible() {
-							continue
-						}
-
-						// Check if this message should be truncated
-						shouldTruncate := false
-
-						if truncateHint.ToolName != "" {
-							// Match by tool name
-							if strings.EqualFold(msg.ToolName, truncateHint.ToolName) {
-								shouldTruncate = true
-							}
-						}
-
-						if !shouldTruncate && len(truncateHint.ToolIDs) > 0 {
-							// Match by tool call ID
-							for _, id := range truncateHint.ToolIDs {
-								if strings.EqualFold(msg.ToolCallID, id) {
-									shouldTruncate = true
-									break
-								}
-							}
-						}
-
-						// Apply truncation (archive) - make invisible to agent, visible to user
-						if shouldTruncate {
-							agentCtx.Messages[i] = msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-							truncatedCount++
-							slog.Debug("[Loop] Archived tool output",
-								"index", i,
-								"tool_name", msg.ToolName,
-								"tool_call_id", msg.ToolCallID)
-						}
-					}
-
-					if truncatedCount > 0 {
-						slog.Info("[Loop] Truncate hint applied",
-							"archived_count", truncatedCount,
-							"reason", truncateHint.Reason)
-					}
-				}
-
-				// Clear hint file after processing
-				if hintData.Compact != nil || hintData.Truncate != nil {
-					if err := hint.ClearHintFile(sessionDir); err != nil {
-						slog.Warn("[Loop] Failed to clear hint file", "error", err)
-					}
-				}
-			}
-		}
-
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
 		// If no more tool calls, end the conversation
@@ -647,7 +516,6 @@ func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) 
 	for _, block := range msg.Content {
 		switch block.(type) {
 		case agentctx.ToolCallContent:
-			continue
 		default:
 			filtered = append(filtered, block)
 		}
@@ -942,6 +810,7 @@ func streamAssistantResponse(
 			)
 
 			meta := agentCtx.LLMContext.GetMeta()
+
 			runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
 			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
 			if runtimeAppendix != "" {
@@ -1752,6 +1621,7 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
+	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
 	snapshot := fmt.Sprintf(`<runtime_state>
@@ -1764,6 +1634,7 @@ context_meta:
   llm_context_size_bucket: %s
 tool_output_pressure:
   stale_tool_outputs_bucket: %s
+  tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s
 decision:
@@ -1772,6 +1643,7 @@ guidance:
   - Use this for context management decisions only.
   - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
   - When action_hint is not normal, compaction is usually recommended.
+  - If tool_outputs_summary is not "none", consider TRUNCATE in truncate-compact-hint.md.
 </runtime_state>`,
 		band,
 		actionHint,
@@ -1780,6 +1652,7 @@ guidance:
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.LLMContextSize),
 		runtimeCountBucket(toolPressure.StaleCount),
+		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
 		yesNo(fastPathAllowed),
@@ -1804,35 +1677,21 @@ func collectRuntimeToolPressure(messages []agentctx.AgentMessage) runtimeToolPre
 		return pressure
 	}
 
-	activeStart := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		if strings.EqualFold(msg.Role, "user") {
-			activeStart = i
-			break
-		}
-	}
-	if activeStart == len(messages) {
-		activeStart = 0
-	}
+	staleCount, _ := collectStaleToolOutputStats(messages, recentToolResultsNoMetadata)
+	pressure.StaleCount = staleCount
 
 	const largeOutputThresholdChars = 2000
-	for i, msg := range messages {
+	for _, msg := range messages {
 		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
 			continue
 		}
+
 		size := len(msg.ExtractText())
 		if size > pressure.LargestChars {
 			pressure.LargestChars = size
 		}
 		if size >= largeOutputThresholdChars {
 			pressure.LargeCount++
-		}
-		if i < activeStart {
-			pressure.StaleCount++
 		}
 	}
 

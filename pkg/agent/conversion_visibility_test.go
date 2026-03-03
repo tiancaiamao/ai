@@ -1,10 +1,14 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
+	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"strings"
 	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
 func TestConvertMessagesToLLMFiltersAgentInvisible(t *testing.T) {
@@ -164,5 +168,71 @@ func TestConvertMessagesToLLMKeepsAssistantToolCallsWhenSetDiffers(t *testing.T)
 	})
 	if len(llmMessages) != 3 {
 		t.Fatalf("expected both assistant tool-call sets to be kept, got %d", len(llmMessages))
+	}
+}
+
+func TestConvertMessagesToLLMInjectsStaleToolMetadataBeyondRecent10(t *testing.T) {
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("old turn"),
+	}
+	for i := 1; i <= 11; i++ {
+		msgs = append(msgs, agentctx.NewToolResultMessage(
+			fmt.Sprintf("call-%d", i),
+			"read",
+			[]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("payload-%d", i)},
+			},
+			false,
+		))
+	}
+	msgs = append(msgs, agentctx.NewUserMessage("latest turn"))
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
+
+	var firstTool, latestTool llm.LLMMessage
+	for _, m := range llmMessages {
+		if m.Role != "tool" {
+			continue
+		}
+		if m.ToolCallID == "call-1" {
+			firstTool = m
+		}
+		if m.ToolCallID == "call-11" {
+			latestTool = m
+		}
+	}
+
+	if !strings.Contains(firstTool.Content, `stale="true"`) {
+		t.Fatalf("expected call-1 to include stale metadata tag, got %q", firstTool.Content)
+	}
+	if strings.Contains(latestTool.Content, `stale="true"`) {
+		t.Fatalf("expected recent tool output to remain untagged, got %q", latestTool.Content)
+	}
+}
+
+func TestConvertMessagesToLLMDoesNotInjectMetadataForRecent10ToolOutputs(t *testing.T) {
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("old turn"),
+	}
+	for i := 1; i <= 10; i++ {
+		msgs = append(msgs, agentctx.NewToolResultMessage(
+			fmt.Sprintf("call-%d", i),
+			"bash",
+			[]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("out-%d", i)},
+			},
+			false,
+		))
+	}
+	msgs = append(msgs, agentctx.NewUserMessage("latest turn"))
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
+	for _, m := range llmMessages {
+		if m.Role != "tool" {
+			continue
+		}
+		if strings.Contains(m.Content, `stale="true"`) {
+			t.Fatalf("expected no stale metadata within recent 10 tool outputs, got %q", m.Content)
+		}
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/hint"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
@@ -213,35 +212,29 @@ func (b *Builder) buildLLMContextSection() string {
 💡 Remember to update your llm context to track progress.`, b.contextMeta)
 	}
 
-	// Add hint messages based on token usage
-	hintMessage := ""
-	if b.tokensPercent > 0 {
-		truncateHint := hint.GetTruncateHintMessage(b.tokensPercent)
-		compactHint := hint.GetCompactHintMessage(b.tokensPercent)
-		if truncateHint != "" {
-			hintMessage += "\n\n" + truncateHint
-		}
-		if compactHint != "" {
-			hintMessage += "\n\n" + compactHint
-		}
-	}
-
 	return fmt.Sprintf(`## LLM Context
 
 This is persistent operational state for this session.
 Treat it as the source of truth between turns.
 
 **Path**: %s
-**Detail dir**: %s
+**Detail dir**: %s%s
 
 **Turn Protocol (run every turn):**
 1. Read runtime_state and classify this turn as: no_action | memory_update_only.
 2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
 3. If task state changed, update overview.md in this same turn.
 4. If overview points to detail files needed for current task, read them explicitly.
-5. Check tool_output_pressure - if high (many stale outputs), consider writing to llm-context/truncate-compact-hint.md:
-   - Use TRUNCATE section with tool_name or tool_ids to archive specific tool outputs
-   - Example: ## TRUNCATE\n- tool_name: "grep"\n- reason: "search results processed"
+5. Check tool_output_pressure.tool_outputs_summary:
+   - If it is not "none", consider writing llm-context/truncate-compact-hint.md.
+   - Use ## TRUNCATE with tool_call_id values (comma-separated or one per line).
+   - Use ## COMPACT when you want one compaction pass.
+   - Example:
+     ## TRUNCATE
+     call_abc123, call_def456
+
+     ## COMPACT
+     target: all
 6. Then answer the user.
 
 **External Memory:**
@@ -261,7 +254,12 @@ When to use llm_context_recall:
 - runtime_state is telemetry/advice, not user intent.
 - You must perform the turn classification every turn (even when the result is no_action).
 - Never assume memory was updated unless tool result confirms success.
-- Keep overview concise; store large logs/details under detail/.%s%s`, overviewPath, detailDir, contextMetaSection, hintMessage)
+- Keep overview concise; store large logs/details under detail/.
+
+**Agent Metadata Tags:**
+- <agent:tool id="call_xxx" name="read" chars="91" stale="true" /> means stale historical output.
+- <agent:tool id="call_xxx" name="read" chars="91" truncated="true" /> means output already truncated.
+- For TRUNCATE, use ids from these tags.`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {
