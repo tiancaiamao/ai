@@ -8,25 +8,25 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// RecallMemoryTool searches llm context for relevant information
-type RecallMemoryTool struct {
+// LLMContextRecallTool searches llm context for relevant information
+type LLMContextRecallTool struct {
 	manager *agentctx.MemoryManager
 }
 
-// NewRecallMemoryTool creates a new recall_memory tool
-func NewRecallMemoryTool(manager *agentctx.MemoryManager) *RecallMemoryTool {
-	return &RecallMemoryTool{
+// NewLLMContextRecallTool creates a new llm_context_recall tool
+func NewLLMContextRecallTool(manager *agentctx.MemoryManager) *LLMContextRecallTool {
+	return &LLMContextRecallTool{
 		manager: manager,
 	}
 }
 
 // Name returns the tool name
-func (t *RecallMemoryTool) Name() string {
-	return "recall_memory"
+func (t *LLMContextRecallTool) Name() string {
+	return "llm_context_recall"
 }
 
 // Description returns the tool description
-func (t *RecallMemoryTool) Description() string {
+func (t *LLMContextRecallTool) Description() string {
 	return `Search external memory for relevant information from past conversations, notes, and summaries.
 
 Use this tool when you need to:
@@ -36,7 +36,7 @@ Use this tool when you need to:
 
 HOW TO USE:
 Call this tool directly with the following parameters:
-  - query (required): The search term or phrase to look for
+  - query (required): The search term or phrase to look up
   - scope (optional): "all" (default), "detail", or "messages"
     - "detail": Search only compaction summaries and notes in llm-context/detail/
     - "messages": Search raw conversation history in messages.jsonl
@@ -52,7 +52,7 @@ Returns: Top matching memory entries with citations for source lookup.`
 }
 
 // Parameters returns the tool parameter schema
-func (t *RecallMemoryTool) Parameters() map[string]interface{} {
+func (t *LLMContextRecallTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -77,7 +77,7 @@ func (t *RecallMemoryTool) Parameters() map[string]interface{} {
 }
 
 // Execute runs the tool
-func (t *RecallMemoryTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
+func (t *LLMContextRecallTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	query, ok := params["query"].(string)
 	if !ok || query == "" {
 		return nil, fmt.Errorf("query parameter is required")

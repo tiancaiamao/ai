@@ -155,13 +155,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(tools.NewGrepTool(cwd))
 	registry.Register(tools.NewEditTool(cwd))
 
-	// Create memory manager and register recall_memory tool
+	// Create memory manager and register llm_context_recall tool
 	var memoryMgr *agentctx.MemoryManager
 	memoryMgr, err = agentctx.NewMemoryManager(sess.GetDir())
 	if err != nil {
-		slog.Warn("Failed to create memory manager, recall_memory tool disabled", "error", err)
+		slog.Warn("Failed to create memory manager, llm_context_recall tool disabled", "error", err)
 	} else {
-		registry.Register(tools.NewRecallMemoryTool(memoryMgr))
+		registry.Register(tools.NewLLMContextRecallTool(memoryMgr))
 	}
 
 	// Create compactor for automatic context compression
