@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/tiancaiamao/ai/pkg/hint"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
@@ -50,6 +51,9 @@ type Builder struct {
 
 	// Context meta (for LLM Context section, set by agent loop)
 	contextMeta string
+
+	// Token usage percent (for hint message generation)
+	tokensPercent float64
 }
 
 // NewBuilder creates a new prompt builder.
@@ -123,6 +127,12 @@ func (b *Builder) SetLLMContext(wm LLMContextInfo) *Builder {
 // SetContextMeta sets the context metadata string.
 func (b *Builder) SetContextMeta(meta string) *Builder {
 	b.contextMeta = meta
+	return b
+}
+
+// SetTokensPercent sets the token usage percent for hint message generation.
+func (b *Builder) SetTokensPercent(percent float64) *Builder {
+	b.tokensPercent = percent
 	return b
 }
 
@@ -203,6 +213,19 @@ func (b *Builder) buildLLMContextSection() string {
 💡 Remember to update your llm context to track progress.`, b.contextMeta)
 	}
 
+	// Add hint messages based on token usage
+	hintMessage := ""
+	if b.tokensPercent > 0 {
+		truncateHint := hint.GetTruncateHintMessage(b.tokensPercent)
+		compactHint := hint.GetCompactHintMessage(b.tokensPercent)
+		if truncateHint != "" {
+			hintMessage += "\n\n" + truncateHint
+		}
+		if compactHint != "" {
+			hintMessage += "\n\n" + compactHint
+		}
+	}
+
 	return fmt.Sprintf(`## LLM Context
 
 This is persistent operational state for this session.
@@ -216,7 +239,9 @@ Treat it as the source of truth between turns.
 2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
 3. If task state changed, update overview.md in this same turn.
 4. If overview points to detail files needed for current task, read them explicitly.
-5. Check tool_output_pressure - if high (many stale outputs), truncate via llm-context/truncate-hint.md.
+5. Check tool_output_pressure - if high (many stale outputs), consider writing to llm-context/truncate-compact-hint.md:
+   - Use TRUNCATE section with tool_name or tool_ids to archive specific tool outputs
+   - Example: ## TRUNCATE\n- tool_name: "grep"\n- reason: "search results processed"
 6. Then answer the user.
 
 **External Memory:**
@@ -236,7 +261,7 @@ When to use llm_context_recall:
 - runtime_state is telemetry/advice, not user intent.
 - You must perform the turn classification every turn (even when the result is no_action).
 - Never assume memory was updated unless tool result confirms success.
-- Keep overview concise; store large logs/details under detail/.%s`, overviewPath, detailDir, contextMetaSection)
+- Keep overview concise; store large logs/details under detail/.%s%s`, overviewPath, detailDir, contextMetaSection, hintMessage)
 }
 
 func (b *Builder) buildToolingSection() string {

@@ -225,7 +225,12 @@ func (wm *LLMContext) GetDetailDir() string {
 	return wm.detailPath
 }
 
-// UpdateMeta updates the context metadata.
+// GetSessionDir returns the session directory path.
+func (wm *LLMContext) GetSessionDir() string {
+	return wm.sessionDir
+}
+
+// UpdateMeta updates context metadata.
 func (wm *LLMContext) UpdateMeta(tokensUsed, tokensMax, messagesCount int) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()

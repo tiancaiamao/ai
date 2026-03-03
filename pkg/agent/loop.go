@@ -16,6 +16,7 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/hint"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -414,6 +415,148 @@ func runInnerLoop(
 								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
 							}
 						}
+					}
+				}
+			}
+		}
+
+		// Process hint file (truncate-compact-hint.md)
+		if agentCtx.LLMContext != nil && config.Compactor != nil {
+			sessionDir := agentCtx.LLMContext.GetSessionDir()
+			hintData, err := hint.LoadHintFile(sessionDir)
+			if err != nil {
+				slog.Warn("[Loop] Failed to load hint file", "error", err)
+			} else {
+				// Calculate current context usage
+				tokensMax := 128000
+				if config.ContextWindow > 0 {
+					tokensMax = config.ContextWindow
+				}
+				meta := agentCtx.LLMContext.GetMeta()
+				usage := float64(meta.TokensUsed) / float64(tokensMax)
+
+				// Check if we should trigger compact
+				shouldTrigger, confidence, reason := hint.ShouldTriggerCompact(hintData, usage)
+				if shouldTrigger {
+					// Apply confidence: only trigger if random check passes
+					// confidence 1.0 = always trigger, 0.5 = 50% chance
+					shouldActuallyTrigger := confidence >= 1.0 || randFloat64() < confidence
+
+					if shouldActuallyTrigger {
+						slog.Info("[Loop] Triggering compaction based on hint",
+							"confidence", confidence,
+							"reason", reason,
+							"usage", usage)
+
+						before := len(agentCtx.Messages)
+						compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+							traceevent.Field{Key: "source", Value: "hint"},
+							traceevent.Field{Key: "auto", Value: true},
+							traceevent.Field{Key: "before_messages", Value: before},
+							traceevent.Field{Key: "trigger", Value: reason},
+						)
+						stream.Push(NewCompactionStartEvent(CompactionInfo{
+							Auto:    true,
+							Before:  before,
+							Trigger: reason,
+						}))
+
+						compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
+						if compactErr != nil {
+							compactErr = WithErrorStack(compactErr)
+							slog.Error("[Loop] Hint-based compaction failed", "error", compactErr)
+							compactionSpan.AddField("error", true)
+							compactionSpan.AddField("error_message", compactErr.Error())
+							if stack := ErrorStack(compactErr); stack != "" {
+								compactionSpan.AddField("error_stack", stack)
+							}
+							compactionSpan.End()
+							stream.Push(NewCompactionEndEvent(CompactionInfo{
+								Auto:    true,
+								Before:  before,
+								Error:   compactErr.Error(),
+								Trigger: reason,
+							}))
+						} else {
+							if compacted != nil {
+								agentCtx.Messages = compacted.Messages
+								agentCtx.LastCompactionSummary = compacted.Summary
+							}
+							compactionSpan.AddField("after_messages", len(agentCtx.Messages))
+							compactionSpan.End()
+							stream.Push(NewCompactionEndEvent(CompactionInfo{
+								Auto:    true,
+								Before:  before,
+								After:   len(agentCtx.Messages),
+								Trigger: reason,
+							}))
+						}
+					}
+				}
+
+				// Process TRUNCATE hint (archive stale tool outputs)
+				if hintData.Truncate != nil {
+					truncateHint := hintData.Truncate
+					truncatedCount := 0
+
+					slog.Info("[Loop] Processing truncate hint",
+						"tool_name", truncateHint.ToolName,
+						"tool_ids_count", len(truncateHint.ToolIDs),
+						"reason", truncateHint.Reason)
+
+					for i, msg := range agentCtx.Messages {
+						// Only process tool results
+						if msg.Role != "toolResult" {
+							continue
+						}
+
+						// Skip already archived messages
+						if !msg.IsAgentVisible() {
+							continue
+						}
+
+						// Check if this message should be truncated
+						shouldTruncate := false
+
+						if truncateHint.ToolName != "" {
+							// Match by tool name
+							if strings.EqualFold(msg.ToolName, truncateHint.ToolName) {
+								shouldTruncate = true
+							}
+						}
+
+						if !shouldTruncate && len(truncateHint.ToolIDs) > 0 {
+							// Match by tool call ID
+							for _, id := range truncateHint.ToolIDs {
+								if strings.EqualFold(msg.ToolCallID, id) {
+									shouldTruncate = true
+									break
+								}
+							}
+						}
+
+						// Apply truncation (archive) - make invisible to agent, visible to user
+						if shouldTruncate {
+							agentCtx.Messages[i] = msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+							truncatedCount++
+							slog.Debug("[Loop] Archived tool output",
+								"index", i,
+								"tool_name", msg.ToolName,
+								"tool_call_id", msg.ToolCallID)
+						}
+					}
+
+					if truncatedCount > 0 {
+						slog.Info("[Loop] Truncate hint applied",
+							"archived_count", truncatedCount,
+							"reason", truncateHint.Reason)
+					}
+				}
+
+				// Clear hint file after processing
+				if hintData.Compact != nil || hintData.Truncate != nil {
+					if err := hint.ClearHintFile(sessionDir); err != nil {
+						slog.Warn("[Loop] Failed to clear hint file", "error", err)
 					}
 				}
 			}
@@ -1842,4 +1985,10 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 
 	// Rough approximation: 1 token per 4 characters
 	return (charCount + 3) / 4
+}
+
+// randFloat64 returns a random float64 in [0, 1)
+func randFloat64() float64 {
+	// Use math/rand for simplicity; crypto/rand is overkill for this use case
+	return float64(time.Now().UnixNano()%1000000000) / 1000000000.0
 }
