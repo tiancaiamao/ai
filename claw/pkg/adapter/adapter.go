@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/tiancaiamao/ai/claw/pkg/cron"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
@@ -28,6 +30,51 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
+
+// CommandHandler is the function signature for handling control commands.
+// args: the remaining arguments after the command name
+// sess: the current session (may be nil for commands that don't need session)
+// Returns the response text and an optional error.
+type CommandHandler func(args string, sess *Session) (string, error)
+
+// CommandRegistry stores registered control commands.
+type CommandRegistry struct {
+	commands map[string]CommandHandler
+	mu       sync.RWMutex
+}
+
+// NewCommandRegistry creates a new command registry.
+func NewCommandRegistry() *CommandRegistry {
+	return &CommandRegistry{
+		commands: make(map[string]CommandHandler),
+	}
+}
+
+// Register registers a command handler.
+func (r *CommandRegistry) Register(name string, handler CommandHandler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands[name] = handler
+}
+
+// Get retrieves a command handler by name.
+func (r *CommandRegistry) Get(name string) (CommandHandler, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	handler, ok := r.commands[name]
+	return handler, ok
+}
+
+// List returns all registered command names.
+func (r *CommandRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.commands))
+	for name := range r.commands {
+		names = append(names, name)
+	}
+	return names
+}
 
 // AgentLoop implements the message processing loop using ai agent core.
 // It is compatible with picoclaw's MessageBus interface.
@@ -42,19 +89,25 @@ type AgentLoop struct {
 	apiKey       string
 	systemPrompt string
 	tools        []agentctx.Tool
-	sessionsDir  string // session 存储目录
+	sessionsDir  string // session storage directory
 	compactor    *compact.Compactor
 
-	// 语音支持
+	// Voice transcription support
 	transcriber voice.Transcriber
 
-	// 飞书配置（用于下载语音文件）
+	// Feishu configuration for voice file download
 	feishuClient    *lark.Client
 	feishuAppID     string
 	feishuAppSecret string
+
+	// Cron service
+	cronService *cron.CronService
+
+	// Command registry
+	commands *CommandRegistry
 }
 
-// Session 表示一个隔离的会话
+// Session represents an isolated conversation session
 type Session struct {
 	Key       string
 	Agent     *agent.Agent
@@ -133,6 +186,9 @@ type Config struct {
 	// 飞书配置（用于下载语音文件）
 	FeishuAppID     string
 	FeishuAppSecret string
+
+	// Cron 服务（可选）
+	CronService *cron.CronService
 }
 
 // NewAgentLoop 创建一个新的 AgentLoop
@@ -171,7 +227,10 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 		slog.Info("[AgentLoop] Feishu client created for voice download")
 	}
 
-	return &AgentLoop{
+	// 创建命令注册表
+	commands := NewCommandRegistry()
+
+	loop := &AgentLoop{
 		bus:             msgBus,
 		sessions:        make(map[string]*Session),
 		model:           model,
@@ -184,7 +243,14 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 		feishuClient:    feishuClient,
 		feishuAppID:     cfg.FeishuAppID,
 		feishuAppSecret: cfg.FeishuAppSecret,
+		cronService:     cfg.CronService,
+		commands:        commands,
 	}
+
+	// 注册基础命令
+	loop.registerBuiltinCommands()
+
+	return loop
 }
 
 // ModelSpec 模型规格定义
@@ -352,6 +418,16 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 	sess, err := a.getOrCreateSession(sessionKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to get/create session: %w", err)
+	}
+
+	// 检查是否是控制指令（/ 前缀）
+	if strings.HasPrefix(content, "/") {
+		cmd := strings.TrimSpace(strings.TrimPrefix(content, "/"))
+		response, err := a.handleControlCommand(ctx, cmd, sessionKey, sess)
+		if err != nil {
+			return fmt.Sprintf("Command error: %v", err), nil
+		}
+		return response, nil
 	}
 
 	// 保存用户消息到 session
@@ -537,6 +613,48 @@ func (a *AgentLoop) Close() {
 		sess.Agent.Shutdown()
 	}
 	a.sessions = make(map[string]*Session)
+}
+
+// RegisterCommand registers a custom control command.
+// name: the command name (without the "/" prefix)
+// handler: the function to handle the command
+func (a *AgentLoop) RegisterCommand(name string, handler CommandHandler) {
+	a.commands.Register(name, handler)
+}
+
+// registerBuiltinCommands registers the built-in control commands.
+func (a *AgentLoop) registerBuiltinCommands() {
+	// Register aliases for commands that have multiple names
+	a.commands.Register("help", func(args string, sess *Session) (string, error) {
+		return a.cmdHelp(), nil
+	})
+	a.commands.Register("session", func(args string, sess *Session) (string, error) {
+		return a.cmdSession(sess), nil
+	})
+	a.commands.Register("history", func(args string, sess *Session) (string, error) {
+		return a.cmdHistory(sess), nil
+	})
+	a.commands.Register("messages", func(args string, sess *Session) (string, error) {
+		return a.cmdHistory(sess), nil
+	})
+	a.commands.Register("sessions", func(args string, sess *Session) (string, error) {
+		return a.cmdSessions(), nil
+	})
+	a.commands.Register("clear", func(args string, sess *Session) (string, error) {
+		return a.cmdClear(sess), nil
+	})
+	a.commands.Register("compact", func(args string, sess *Session) (string, error) {
+		return "", a.cmdCompact(sess)
+	})
+	a.commands.Register("model", func(args string, sess *Session) (string, error) {
+		return a.cmdModel(), nil
+	})
+	a.commands.Register("tools", func(args string, sess *Session) (string, error) {
+		return a.cmdTools(), nil
+	})
+	a.commands.Register("stats", func(args string, sess *Session) (string, error) {
+		return a.cmdStats(sess), nil
+	})
 }
 
 // Helper
@@ -907,4 +1025,226 @@ func (a *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey strin
 		SenderID:   "cron",
 	}
 	return a.processMessage(ctx, msg)
+}
+
+// handleControlCommand 处理控制指令
+func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKey string, sess *Session) (string, error) {
+	fields := strings.Fields(cmdLine)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+
+	cmd := fields[0]
+	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmd))
+
+	// 从命令注册表中查找处理器
+	handler, ok := a.commands.Get(cmd)
+	if ok {
+		return handler(args, sess)
+	}
+
+	// 命令未找到
+	return fmt.Sprintf("Unknown command: %s\nUse /help for available commands", cmd), nil
+}
+
+// cmdHelp 显示帮助信息
+func (a *AgentLoop) cmdHelp() string {
+	commands := a.commands.List()
+	// Sort commands alphabetically
+	sort.Strings(commands)
+
+	var b strings.Builder
+	b.WriteString("Control Commands:\n\n")
+	for _, cmd := range commands {
+		b.WriteString(fmt.Sprintf("  /%s\n", cmd))
+	}
+	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.")
+	return strings.TrimSpace(b.String())
+}
+
+// cmdSession 显示当前会话信息
+func (a *AgentLoop) cmdSession(sess *Session) string {
+	if sess == nil {
+		return "No active session"
+	}
+
+	messages := sess.Session.GetMessages()
+	var userMsgs, asstMsgs, toolMsgs int
+	for _, m := range messages {
+		switch m.Role {
+		case "user":
+			userMsgs++
+		case "assistant":
+			asstMsgs++
+		case "tool":
+			toolMsgs++
+		}
+	}
+
+	return fmt.Sprintf(`Session Info:
+  Key: %s
+  Messages: %d total (user: %d, assistant: %d, tool: %d)
+  Model: %s
+  Provider: %s`,
+		sess.Key,
+		len(messages),
+		userMsgs,
+		asstMsgs,
+		toolMsgs,
+		a.model.ID,
+		a.model.Provider,
+	)
+}
+
+// cmdHistory 显示消息历史
+func (a *AgentLoop) cmdHistory(sess *Session) string {
+	if sess == nil {
+		return "No active session"
+	}
+
+	messages := sess.Session.GetMessages()
+	if len(messages) == 0 {
+		return "No messages in session"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Message History (%d messages):\n\n", len(messages)))
+
+	// 显示最近 20 条消息
+	start := 0
+	if len(messages) > 20 {
+		start = len(messages) - 20
+		b.WriteString(fmt.Sprintf("(Showing last %d messages)\n\n", 20))
+	}
+
+	for i := start; i < len(messages); i++ {
+		m := messages[i]
+		role := m.Role
+		text := m.ExtractText()
+		if text == "" {
+			text = fmt.Sprintf("[%d content blocks]", len(m.Content))
+		}
+		preview := truncate(text, 100)
+		b.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, role, preview))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// cmdSessions 列出所有活跃会话
+func (a *AgentLoop) cmdSessions() string {
+	sessions := a.ListSessions()
+	if len(sessions) == 0 {
+		return "No active sessions"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Active Sessions (%d):\n\n", len(sessions)))
+	for i, key := range sessions {
+		if sess, ok := a.GetSession(key); ok {
+			msgCount := len(sess.Session.GetMessages())
+			b.WriteString(fmt.Sprintf("[%d] %s (%d messages)\n", i, key, msgCount))
+		} else {
+			b.WriteString(fmt.Sprintf("[%d] %s\n", i, key))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// cmdClear 清空当前会话消息
+func (a *AgentLoop) cmdClear(sess *Session) string {
+	if sess == nil {
+		return "No active session"
+	}
+
+	// 获取当前消息数量
+	messages := sess.Session.GetMessages()
+	msgCount := len(messages)
+
+	// 创建新的 session 来清空消息
+	sess.Session = session.NewSession(sess.Session.GetDir(), nil)
+
+	// 同时重置 agent context
+	if sess.Agent != nil {
+		agentCtx := agentctx.NewAgentContext(a.systemPrompt)
+		sess.Agent = agent.NewAgentWithContext(a.model, a.apiKey, agentCtx)
+		sess.Agent.SetCompactor(sess.Compactor)
+		sess.Agent.SetContextWindow(a.model.ContextWindow)
+		for _, tool := range a.tools {
+			sess.Agent.AddTool(tool)
+		}
+	}
+
+	return fmt.Sprintf("Cleared %d messages from session", msgCount)
+}
+
+// cmdCompact 压缩会话
+func (a *AgentLoop) cmdCompact(sess *Session) error {
+	if sess == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	// 触发 agent 进行压缩
+	// 这需要 agent 暴露压缩方法，暂时返回提示
+	return fmt.Errorf("compact command: use normal prompt to trigger compaction when needed")
+}
+
+// cmdModel 显示当前模型信息
+func (a *AgentLoop) cmdModel() string {
+	return fmt.Sprintf(`Model Info:
+  ID: %s
+  Provider: %s
+  BaseURL: %s
+  Context Window: %d`,
+		a.model.ID,
+		a.model.Provider,
+		a.model.BaseURL,
+		a.model.ContextWindow,
+	)
+}
+
+// cmdTools 列出可用工具
+func (a *AgentLoop) cmdTools() string {
+	if len(a.tools) == 0 {
+		return "No tools configured"
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Available Tools (%d):\n\n", len(a.tools)))
+	for i, tool := range a.tools {
+		b.WriteString(fmt.Sprintf("[%d] %s\n", i, tool.Name))
+		if desc := tool.Description(); desc != "" {
+			b.WriteString(fmt.Sprintf("    %s\n", desc))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// cmdStats 显示会话统计
+func (a *AgentLoop) cmdStats(sess *Session) string {
+	if sess == nil {
+		return "No active session"
+	}
+
+	messages := sess.Session.GetMessages()
+	summary := sess.Session.GetLastCompactionSummary()
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Session Statistics:\n"))
+	b.WriteString(fmt.Sprintf("  Total Messages: %d\n", len(messages)))
+	if summary != "" {
+		b.WriteString(fmt.Sprintf("  Last Compaction: %s\n", truncate(summary, 100)))
+	} else {
+		b.WriteString("  Last Compaction: never\n")
+	}
+
+	// 统计 token 估算
+	totalChars := 0
+	for _, m := range messages {
+		totalChars += len(m.ExtractText())
+	}
+	estimatedTokens := totalChars / 4 // 粗略估算
+	b.WriteString(fmt.Sprintf("  Estimated Tokens: ~%d", estimatedTokens))
+
+	return strings.TrimSpace(b.String())
 }

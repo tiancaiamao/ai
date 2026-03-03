@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"log/slog"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
-	"github.com/tiancaiamao/ai/claw/pkg/gateway"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
@@ -62,19 +62,7 @@ type Config struct {
 func main() {
 	flag.Parse()
 
-	// Handle cron subcommand (doesn't require full setup)
-	if len(os.Args) >= 2 && os.Args[1] == "cron" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Printf("Error getting home directory: %v\n", err)
-			os.Exit(1)
-		}
-		clawDir := filepath.Join(homeDir, ".aiclaw")
-		cronCmd(clawDir)
-		return
-	}
-
-	// 设置日志
+	// Setup logging
 	setupLogging(*logLevel)
 
 	// 加载统一配置 (~/.aiclaw/config.json)
@@ -186,6 +174,16 @@ func main() {
 		FeishuAppID:     cfg.Channels.Feishu.AppID,
 		FeishuAppSecret: cfg.Channels.Feishu.AppSecret,
 	}
+
+	// 创建 CronService（需要在 AgentLoop 之前创建）
+	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
+	cronService := cron.NewCronService(cronStorePath, func(job *cron.CronJob) (string, error) {
+		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
+		// ProcessDirect 将在 AgentLoop 创建后调用
+		return "", nil
+	})
+	agentConfig.CronService = cronService
+
 	agentLoop := adapter.NewAgentLoop(agentConfig, msgBus)
 
 	// 设置上下文
@@ -209,28 +207,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 启动 cron 服务
-	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
-	cronService := cron.NewCronService(cronStorePath, func(job *cron.CronJob) (string, error) {
+	// 注册 cron 命令
+	registerCronCommands(agentLoop, cronService)
+
+	// 更新 CronService 的 job handler
+	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
 		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
 		return agentLoop.ProcessDirect(ctx, job.Payload.Message, "cron:"+job.ID)
 	})
+
+	// 启动 cron 服务
 	if err := cronService.Start(); err != nil {
 		slog.Error("Failed to start cron service", "error", err)
 	} else {
 		slog.Info("Cron service started", "jobs", len(cronService.ListJobs(false)))
 	}
 	defer cronService.Stop()
-
-	// 启动 gateway RPC server
-	gwServer := gateway.NewServer(gateway.DefaultConfig())
-	registerCronMethods(gwServer.Handler(), cronService)
-	if err := gwServer.Start(ctx); err != nil {
-		slog.Error("Failed to start gateway server", "error", err)
-	} else {
-		slog.Info("Gateway RPC server started", "port", 28789)
-	}
-	defer gwServer.Stop()
 
 	slog.Info("Starting aiclaw",
 		"model", cfg.Model.ID,
@@ -399,111 +391,205 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 	return builder.Build()
 }
 
-// registerCronMethods registers cron RPC methods
-func registerCronMethods(h *gateway.Handler, cronService *cron.CronService) {
-	// cron.list - list all jobs
-	h.Register("cron.list", func(params map[string]interface{}) (interface{}, error) {
-		includeDisabled := false
-		if v, ok := params["include_disabled"].(bool); ok {
-			includeDisabled = v
+// registerCronCommands registers cron control commands.
+func registerCronCommands(agentLoop *adapter.AgentLoop, cronService *cron.CronService) {
+	// /cron - shows cron usage
+	agentLoop.RegisterCommand("cron", func(args string, sess *adapter.Session) (string, error) {
+		if cronService == nil {
+			return "Cron service is not configured", nil
 		}
-		jobs := cronService.ListJobs(includeDisabled)
-		return map[string]interface{}{
-			"jobs":  jobs,
-			"count": len(jobs),
-		}, nil
-	})
-
-	// cron.add - add a new job
-	h.Register("cron.add", func(params map[string]interface{}) (interface{}, error) {
-		name, ok := params["name"].(string)
-		if !ok {
-			return nil, fmt.Errorf("name is required")
-		}
-		message, ok := params["message"].(string)
-		if !ok {
-			return nil, fmt.Errorf("message is required")
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			return `Usage:
+  /cron list          List all cron jobs
+  /cron add <expr> <message>  Add a cron job
+  /cron remove <id>   Remove a cron job
+  /cron enable <id>   Enable a cron job
+  /cron disable <id>  Disable a cron job
+  /cron status        Show cron service status`, nil
 		}
 
-		var schedule cron.CronSchedule
-		if every, ok := params["every"].(float64); ok {
-			everyMS := int64(every * 1000)
-			schedule = cron.CronSchedule{
-				Kind:    "every",
-				EveryMS: &everyMS,
+		cmd := fields[0]
+		switch cmd {
+		case "list":
+			return cmdCronList(cronService), nil
+		case "add":
+			if len(fields) < 3 {
+				return "Usage: /cron add <expr> <message>\nExample: /cron add '0 9 * * *' Good morning", nil
 			}
-		} else if expr, ok := params["cron"].(string); ok {
-			schedule = cron.CronSchedule{
-				Kind: "cron",
-				Expr: expr,
+			expr := fields[1]
+			message := strings.Join(fields[2:], " ")
+			return cmdCronAdd(cronService, expr, message), nil
+		case "remove", "rm", "del":
+			if len(fields) < 2 {
+				return "Usage: /cron remove <id>", nil
 			}
-		} else {
-			return nil, fmt.Errorf("either every or cron is required")
+			return cmdCronRemove(cronService, fields[1]), nil
+		case "enable":
+			if len(fields) < 2 {
+				return "Usage: /cron enable <id>", nil
+			}
+			return cmdCronEnable(cronService, fields[1], true), nil
+		case "disable":
+			if len(fields) < 2 {
+				return "Usage: /cron disable <id>", nil
+			}
+			return cmdCronEnable(cronService, fields[1], false), nil
+		case "status":
+			return cmdCronStatus(cronService), nil
+		default:
+			return fmt.Sprintf("Unknown cron command: %s\nUse /cron to see usage", cmd), nil
 		}
-
-		job, err := cronService.AddJob(name, schedule, message, false, "", "")
-		if err != nil {
-			return nil, err
-		}
-		return map[string]interface{}{
-			"id":       job.ID,
-			"name":     job.Name,
-			"schedule": job.Schedule,
-			"enabled":  job.Enabled,
-		}, nil
 	})
+}
 
-	// cron.remove - remove a job
-	h.Register("cron.remove", func(params map[string]interface{}) (interface{}, error) {
-		id, ok := params["id"].(string)
-		if !ok {
-			return nil, fmt.Errorf("id is required")
-		}
-		removed := cronService.RemoveJob(id)
-		return map[string]interface{}{
-			"removed": removed,
-			"id":      id,
-		}, nil
-	})
+// cmdCronList 列出所有 cron 任务
+func cmdCronList(cronService *cron.CronService) string {
+	jobs := cronService.ListJobs(true)
+	if len(jobs) == 0 {
+		return "No cron jobs"
+	}
 
-	// cron.enable - enable a job
-	h.Register("cron.enable", func(params map[string]interface{}) (interface{}, error) {
-		id, ok := params["id"].(string)
-		if !ok {
-			return nil, fmt.Errorf("id is required")
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Cron Jobs (%d):\n\n", len(jobs)))
+	for i, job := range jobs {
+		status := "enabled"
+		if !job.Enabled {
+			status = "disabled"
 		}
-		job := cronService.EnableJob(id, true)
-		if job == nil {
-			return nil, fmt.Errorf("job not found: %s", id)
+		b.WriteString(fmt.Sprintf("[%d] %s\n", i, job.ID[:8]))
+		b.WriteString(fmt.Sprintf("    Name: %s\n", job.Name))
+		b.WriteString(fmt.Sprintf("    Status: %s\n", status))
+		b.WriteString(fmt.Sprintf("    Schedule: %s\n", formatSchedule(&job.Schedule)))
+		b.WriteString(fmt.Sprintf("    Message: %s\n", truncate(job.Payload.Message, 60)))
+		if job.State.LastRunAtMS != nil {
+			lastRun := time.UnixMilli(*job.State.LastRunAtMS).Format("2006-01-02 15:04:05")
+			b.WriteString(fmt.Sprintf("    Last Run: %s\n", lastRun))
+			b.WriteString(fmt.Sprintf("    Last Status: %s\n", job.State.LastStatus))
 		}
-		return map[string]interface{}{
-			"id":      job.ID,
-			"name":    job.Name,
-			"enabled": job.Enabled,
-		}, nil
-	})
+		if job.State.NextRunAtMS != nil {
+			nextRun := time.UnixMilli(*job.State.NextRunAtMS).Format("2006-01-02 15:04:05")
+			b.WriteString(fmt.Sprintf("    Next Run: %s\n", nextRun))
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
 
-	// cron.disable - disable a job
-	h.Register("cron.disable", func(params map[string]interface{}) (interface{}, error) {
-		id, ok := params["id"].(string)
-		if !ok {
-			return nil, fmt.Errorf("id is required")
-		}
-		job := cronService.EnableJob(id, false)
-		if job == nil {
-			return nil, fmt.Errorf("job not found: %s", id)
-		}
-		return map[string]interface{}{
-			"id":      job.ID,
-			"name":    job.Name,
-			"enabled": job.Enabled,
-		}, nil
-	})
+// cmdCronAdd 添加 cron 任务
+func cmdCronAdd(cronService *cron.CronService, expr, message string) string {
+	schedule := cron.CronSchedule{
+		Kind: "cron",
+		Expr: expr,
+	}
 
-	// cron.status - get cron service status
-	h.Register("cron.status", func(params map[string]interface{}) (interface{}, error) {
-		return cronService.Status(), nil
-	})
+	job, err := cronService.AddJob(
+		fmt.Sprintf("job_%d", time.Now().Unix()),
+		schedule,
+		message,
+		false, // deliver
+		"",    // channel
+		"",    // to
+	)
+	if err != nil {
+		return fmt.Sprintf("Failed to add cron job: %v", err)
+	}
+
+	return fmt.Sprintf("Cron job added:\n  ID: %s\n  Schedule: %s\n  Message: %s",
+		job.ID[:8], expr, truncate(message, 60))
+}
+
+// cmdCronRemove 删除 cron 任务
+func cmdCronRemove(cronService *cron.CronService, id string) string {
+	// Try to find job by partial ID
+	matched := false
+	for _, job := range cronService.ListJobs(true) {
+		if strings.HasPrefix(job.ID, id) || job.ID == id {
+			id = job.ID
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		return fmt.Sprintf("Job not found: %s", id)
+	}
+
+	if cronService.RemoveJob(id) {
+		return fmt.Sprintf("Cron job removed: %s", id[:8])
+	}
+	return fmt.Sprintf("Failed to remove job: %s", id[:8])
+}
+
+// cmdCronEnable 启用/禁用 cron 任务
+func cmdCronEnable(cronService *cron.CronService, id string, enable bool) string {
+	// Try to find job by partial ID
+	matched := false
+	for _, job := range cronService.ListJobs(true) {
+		if strings.HasPrefix(job.ID, id) || job.ID == id {
+			id = job.ID
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		return fmt.Sprintf("Job not found: %s", id)
+	}
+
+	job := cronService.EnableJob(id, enable)
+	if job == nil {
+		return fmt.Sprintf("Failed to %s job: %s", map[bool]string{true: "enable", false: "disable"}[enable], id[:8])
+	}
+
+	action := "disabled"
+	if enable {
+		action = "enabled"
+	}
+	return fmt.Sprintf("Cron job %s: %s", action, job.ID[:8])
+}
+
+// cmdCronStatus 显示 cron 服务状态
+func cmdCronStatus(cronService *cron.CronService) string {
+	status := cronService.Status()
+	running := "stopped"
+	if status["running"].(bool) {
+		running = "running"
+	}
+	return fmt.Sprintf("Cron Service:\n  Status: %s\n  Total Jobs: %d\n  Enabled Jobs: %d",
+		running, status["jobs"], status["enabled"])
+}
+
+// formatSchedule 格式化调度信息
+func formatSchedule(s *cron.CronSchedule) string {
+	switch s.Kind {
+	case "cron":
+		return s.Expr
+	case "every":
+		if s.EveryMS != nil {
+			return fmt.Sprintf("every %d ms", *s.EveryMS)
+		}
+		return "every <unknown>"
+	case "at":
+		if s.AtMS != nil {
+			t := time.UnixMilli(*s.AtMS)
+			return fmt.Sprintf("at %s", t.Format("2006-01-02 15:04:05"))
+		}
+		return "at <unknown>"
+	default:
+		return s.Kind
+	}
+}
+
+// truncate truncates a string to maxLen characters.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen > 3 {
+		return s[:maxLen-3] + "..."
+	}
+	return s[:maxLen]
 }
 
 // EchoTool 是一个简单的示例工具

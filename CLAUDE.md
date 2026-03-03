@@ -11,9 +11,28 @@ Concise project guidance for coding agents working in this repository.
 
 ## Language Rules
 
-- **Commits**: All commit messages must be in English
-- **Code**: All code and code comments must be in English
-- **Documentation**: All files under `docs/` or `**/docs/` must be in English
+IMPORTANT: Different rules apply to different contexts!
+
+### Code (MUST be English)
+- All **code** must be in English (variable names, function names, types, etc.)
+- All **code comments** must be in English
+- All **commit messages** must be in English
+- All **documentation files** under `docs/` or `**/docs/` must be in English
+
+### Communication (Chinese OK)
+- **Chat/conversation** with the user: Use Chinese (中文)
+- **Explanations** to the user: Use Chinese
+- **Code reviews**: Use Chinese
+
+### Summary
+| Context | Language |
+|---------|----------|
+| Writing code | English only |
+| Code comments | English only |
+| Commit messages | English only |
+| Documentation files | English only |
+| Chatting with user | Chinese (中文) |
+| Explaining things | Chinese (中文) |
 
 ## Most Used Commands
 

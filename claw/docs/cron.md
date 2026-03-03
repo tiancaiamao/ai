@@ -4,73 +4,83 @@ AiClaw's cron feature allows you to create scheduled tasks that automatically tr
 
 ## Quick Start
 
-```bash
+```
 # Add a daily 9:00 reminder
-aiclaw cron add -n "Morning Reminder" -m "Start a new day, check today's todos!" -c "0 9 * * *"
+/cron add "0 9 * * *" "Good morning! Check today's todos."
 
 # View all tasks
-aiclaw cron list
+/cron list
 ```
 
 ## Command Reference
 
 ### list - List Tasks
 
-```bash
-aiclaw cron list
+```
+/cron list
 ```
 
 Output example:
 ```
-Scheduled Jobs:
----------------
-  [b28a1f52] Morning Reminder
-      Schedule: 0 9 * * *
-      Message:  Start a new day, check today's todos!
-      Status:   ✓ enabled
-      Next run: 2026-03-03 09:00
+Cron Jobs (2):
+
+[0] b28a1f52
+    Name: Morning Reminder
+    Status: enabled
+    Schedule: 0 9 * * *
+    Message: Good morning! Check today's todos.
+    Next Run: 2026-03-04 09:00:00
 ```
 
 ### add - Add Task
 
-```bash
-aiclaw cron add -n <name> -m <message> (-e <seconds> | -c <cron-expression>)
+```
+/cron add <cron-expression> <message>
 ```
 
 | Parameter | Description |
 |-----------|-------------|
-| `-n, --name` | Task name (required) |
-| `-m, --message` | Message to send to agent (required) |
-| `-e, --every` | Interval in seconds |
-| `-c, --cron` | Cron expression |
+| `cron-expression` | Cron expression (e.g., "0 9 * * *") |
+| `message` | Message to send to agent |
 
 **Examples:**
 
-```bash
-# Fixed interval: every 60 seconds
-aiclaw cron add -n "Heartbeat" -m "ping" -e 60
-
-# Cron expression: every day at 9:00
-aiclaw cron add -n "Morning Reminder" -m "Good morning!" -c "0 9 * * *"
+```
+# Every day at 9:00
+/cron add "0 9 * * *" "Good morning!"
 
 # Every hour on the hour
-aiclaw cron add -n "Hourly" -m "It's a new hour" -c "0 * * * *"
+/cron add "0 * * * *" "Hourly check-in"
 
 # Weekdays at 18:00
-aiclaw cron add -n "End of Day" -m "Time to wrap up" -c "0 18 * * 1-5"
+/cron add "0 18 * * 1-5" "Time to wrap up"
+
+# Every 15 minutes
+/cron add "*/15 * * * *" "Quarter hour check"
 ```
 
 ### remove - Delete Task
 
-```bash
-aiclaw cron remove <job_id>
+```
+/cron remove <job_id>
+```
+
+Use the first 8 characters of the job ID:
+```
+/cron remove b28a1f52
 ```
 
 ### enable/disable - Enable/Disable Task
 
-```bash
-aiclaw cron enable <job_id>
-aiclaw cron disable <job_id>
+```
+/cron enable <job_id>
+/cron disable <job_id>
+```
+
+### status - Show Service Status
+
+```
+/cron status
 ```
 
 ## Cron Expressions
@@ -112,70 +122,58 @@ Standard 5-field format:
 
 ### 1. Daily Reminders
 
-```bash
-# Morning reminder
-aiclaw cron add -n "Morning" -m "New day started, check your schedule" -c "0 9 * * *"
-
-# Lunch reminder
-aiclaw cron add -n "Lunch" -m "Time for lunch" -c "0 12 * * *"
-
-# End of day reminder
-aiclaw cron add -n "End of Day" -m "Work done, generate daily summary" -c "0 18 * * 1-5"
+```
+/cron add "0 9 * * *" "New day started, check your schedule"
+/cron add "0 12 * * *" "Time for lunch"
+/cron add "0 18 * * 1-5" "Work done, generate daily summary"
 ```
 
 ### 2. Periodic Checks
 
-```bash
-# Check service status every 5 minutes
-aiclaw cron add -n "Service Check" -m "Check if all services are healthy" -e 300
-
-# Sync data every hour
-aiclaw cron add -n "Data Sync" -m "Sync latest data" -c "0 * * * *"
+```
+/cron add "*/5 * * * *" "Check if all services are healthy"
+/cron add "0 * * * *" "Sync latest data"
 ```
 
 ### 3. Scheduled Reports
 
-```bash
-# Weekly report on Monday at 9:00
-aiclaw cron add -n "Weekly Report" -m "Generate this week's summary" -c "0 9 * * 1"
-
-# Monthly report on the 1st
-aiclaw cron add -n "Monthly Report" -m "Generate last month's summary" -c "0 9 1 * *"
+```
+/cron add "0 9 * * 1" "Generate this week's summary"
+/cron add "0 9 1 * *" "Generate last month's summary"
 ```
 
 ## How It Works
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────┐     ┌─────────────────┐
-│   CLI           │────>│   Gateway (RPC on port 28789)   │────>│   jobs.json     │
-│   aiclaw cron   │     │   - In-memory state (truth)     │     │   (persistence) │
-└─────────────────┘     │   - CronService (check/sec)     │     └─────────────────┘
-                        │   - AgentLoop (process msg)     │
+│   Chat          │────>│   AgentLoop (command registry)  │────>│   jobs.json     │
+│   /cron add     │     │   - In-memory state (truth)     │     │   (persistence) │
+│   /cron list    │     │   - CronService (check/sec)     │     │                 │
+└─────────────────┘     │   - ProcessDirect (exec)        │     └─────────────────┘
                         └─────────────────────────────────┘
 ```
 
-1. **CLI via RPC**: CLI commands call gateway via HTTP RPC (port 28789)
-2. **In-memory state**: Gateway holds the source of truth in memory
-3. **Persistence**: Changes saved to `~/.aiclaw/cron/jobs.json`
-4. **Scheduling**: CronService checks for due tasks every second
-5. **Execution**: Calls `ProcessDirect()` to send message to agent when due
-6. **Immediate effect**: CLI changes take effect immediately (no restart needed)
+1. **Chat commands**: Send `/cron` commands in any chat
+2. **Command registry**: Commands registered in AgentLoop
+3. **In-memory state**: CronService holds the source of truth
+4. **Persistence**: Changes saved to `~/.aiclaw/cron/jobs.json`
+5. **Scheduling**: CronService checks for due tasks every second
+6. **Execution**: Calls `ProcessDirect()` to send message to agent
 
 ## Important Notes
 
-1. **Gateway must be running**: Cron tasks only execute when aiclaw is running
-2. **CLI requires running gateway**: CLI commands need gateway to be running on port 28789
+1. **Aiclaw must be running**: Cron tasks only execute when aiclaw is running
+2. **No restart needed**: Changes take effect immediately
 3. **Timezone**: Uses system local timezone
-4. **Persistence**: Tasks saved in JSON file, automatically restored after restart
-5. **Changes take effect immediately**: CLI modifications take effect immediately via RPC
-6. **Single instance**: Avoid running multiple aiclaw instances simultaneously, may cause duplicate execution
+4. **Persistence**: Tasks saved in JSON file, restored after restart
+5. **Single instance**: Avoid running multiple aiclaw instances simultaneously
 
 ## Troubleshooting
 
 ### Task Not Executing
 
-1. Confirm gateway is running
-2. Check task status is enabled
+1. Confirm aiclaw is running
+2. Check task status: `/cron list`
 3. Check logs for `[cron]` output
 
 ### Task Execution Time Inaccurate
@@ -185,12 +183,11 @@ aiclaw cron add -n "Monthly Report" -m "Generate last month's summary" -c "0 9 1
 
 ### View Execution History
 
-```bash
-# Task status includes last execution info
-aiclaw cron list
+```
+/cron list
 ```
 
 Status fields:
-- `Last run`: Last execution time
-- `Status`: ok or error
-- `Error`: Error message (if any)
+- `Last Run`: Last execution time
+- `Last Status`: ok or error
+- `Next Run`: Next scheduled execution time
