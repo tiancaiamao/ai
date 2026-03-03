@@ -466,7 +466,7 @@ func (a *Agent) buildContext() ([]Message, error) {
 func DefaultRegistry(memoryMgr *memory.MemoryManager) *Registry {
     r := NewRegistry()
     // ... existing tools
-    r.Register(NewRecallMemoryTool(memoryMgr))
+    r.Register(NewLLMContextRecallTool(memoryMgr))
     return r
 }
 ```

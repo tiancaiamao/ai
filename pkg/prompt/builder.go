@@ -216,13 +216,14 @@ Treat it as the source of truth between turns.
 2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
 3. If task state changed, update overview.md in this same turn.
 4. If overview points to detail files needed for current task, read them explicitly.
-5. Then answer the user.
+5. Check tool_output_pressure - if high (many stale outputs), truncate via llm-context/truncate-hint.md.
+6. Then answer the user.
 
 **External Memory:**
 - **overview.md**: Auto-injected each turn. Keep it concise.
-- **detail/**: Past compaction summaries and notes. Use recall_memory tool to search.
+- **detail/**: Past compaction summaries and notes. Use llm_context_recall tool to search.
 
-When to use recall_memory:
+When to use llm_context_recall:
 - Need to recall specific decisions, discussions, or earlier info
 
 **When overview.md update is REQUIRED:**

@@ -636,16 +636,14 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 			return true, nil
 		}
 		return true, nil
-	case "commands":
+	case "skills":
 		return true, p.sendCommand("get_commands", nil, "")
+	case "set":
+		return true, p.handleSet(args, fromControl)
 	case "show":
 		return true, p.handleShow(args, fromControl)
 	case "thinking":
-		return true, p.handleToggle("thinking", args, fromControl)
-	case "tools":
-		return true, p.handleTools(args, fromControl)
-	case "prefix":
-		return true, p.handleToggle("prefix", args, fromControl)
+		return true, p.handleThinking(args, fromControl)
 	case "model-select":
 		return p.handleModelSelect()
 	case "new":
@@ -671,16 +669,8 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, nil
 	case "compact":
 		return true, p.sendCommand("compact", nil, "")
-	case "copy":
-		return true, p.sendCommand("get_last_assistant_text", nil, "")
-	case "auto-compaction":
-		return true, p.handleAutoCompaction(args, fromControl)
-	case "thinking-level":
-		return true, p.handleThinkingLevel(args, fromControl)
 	case "trace-events":
 		return true, p.handleTraceEvents(args, fromControl)
-	case "cycle-thinking-level":
-		return true, p.sendCommand("cycle_thinking_level", nil, "")
 	case "fork":
 		return true, p.handleFork(args)
 	case "resume-on-branch":
@@ -697,35 +687,12 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 			return true, nil
 		}
 		return true, nil
-	case "steer":
-		if strings.TrimSpace(args) == "" {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /steer <message>")
-			return true, nil
-		}
-		return true, p.sendMessageCommand("steer", strings.TrimSpace(args))
 	case "follow-up", "followup":
 		if strings.TrimSpace(args) == "" {
 			p.writeStatusMaybeDefer(fromControl, "ai: usage: /follow-up <message>")
 			return true, nil
 		}
 		return true, p.sendMessageCommand("follow_up", strings.TrimSpace(args))
-	case "busy-mode":
-		mode := strings.TrimSpace(args)
-		if mode == "" {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /busy-mode <steer|follow-up|reject>")
-			return true, nil
-		}
-		switch mode {
-		case "steer", "follow-up", "reject":
-			p.stateMu.Lock()
-			p.busyMode = mode
-			p.stateMu.Unlock()
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: busy-mode %s", mode))
-			return true, nil
-		default:
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /busy-mode <steer|follow-up|reject>")
-			return true, nil
-		}
 	default:
 		return false, nil
 	}
@@ -866,6 +833,82 @@ func (p *AiInterpreter) nextID() string {
 	return fmt.Sprintf("%d", seq)
 }
 
+func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
+	parts := strings.Fields(args)
+	if len(parts) == 0 {
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /set <key> [value]")
+		return nil
+	}
+
+	key := parts[0]
+	value := strings.TrimSpace(strings.TrimPrefix(args, key))
+
+	// Parse the value if provided
+	var valueArgs []string
+	if value != "" {
+		valueArgs = strings.Fields(value)
+	}
+
+	switch key {
+	case "tools":
+		if len(valueArgs) == 0 {
+			value = "toggle"
+		} else {
+			value = strings.ToLower(valueArgs[0])
+		}
+		return p.handleTools(value, fromControl)
+
+	case "prefix":
+		if len(valueArgs) == 0 {
+			value = "toggle"
+		} else {
+			value = strings.ToLower(valueArgs[0])
+		}
+		return p.handleToggle("prefix", value, fromControl)
+
+	case "thinking":
+		// /set thinking [on|off|toggle] - Toggle thinking display
+		if len(valueArgs) == 0 {
+			// Show current status
+			p.stateMu.Lock()
+			showThinking := p.showThinking
+			p.stateMu.Unlock()
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: thinking display: %s", onOff(showThinking)))
+			return nil
+		}
+		return p.handleThinkingDisplay(value, fromControl)
+
+	case "auto-compaction":
+		if len(valueArgs) == 0 {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /set auto-compaction <on|off>")
+			return nil
+		}
+		return p.handleAutoCompaction(value, fromControl)
+
+	case "busy-mode":
+		if len(valueArgs) == 0 {
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /set busy-mode <steer|follow-up|reject>")
+			return nil
+		}
+		switch value {
+		case "steer", "follow-up", "reject":
+			p.stateMu.Lock()
+			p.busyMode = value
+			p.stateMu.Unlock()
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: busy-mode %s", value))
+			return nil
+		default:
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /set busy-mode <steer|follow-up|reject>")
+			return nil
+		}
+
+	default:
+		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: unknown setting: %s", key))
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]")
+		return nil
+	}
+}
+
 func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	parts := strings.Fields(args)
 	if len(parts) == 0 {
@@ -997,13 +1040,50 @@ func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) erro
 	return p.sendCommand("set_auto_compaction", map[string]any{"enabled": enabled}, "")
 }
 
-func (p *AiInterpreter) handleThinkingLevel(args string, fromControl bool) error {
-	level := strings.TrimSpace(args)
-	if level == "" {
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /thinking-level <off|minimal|low|medium|high|xhigh>")
+func (p *AiInterpreter) handleThinking(args string, fromControl bool) error {
+	arg := strings.TrimSpace(args)
+
+	// No args: show current level and usage
+	if arg == "" {
+		p.stateMu.Lock()
+		thinkingLevel := p.currentThinkingLevel
+		p.stateMu.Unlock()
+
+		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`ai: thinking level: %s
+Usage:
+  /thinking <level>                  - Set thinking level (off|minimal|low|medium|high|xhigh)
+  /set thinking [on|off|toggle]      - Show/hide thinking content`,
+			orUnknown(thinkingLevel)))
 		return nil
 	}
-	return p.sendCommand("set_thinking_level", map[string]any{"level": level}, "")
+
+	// Set thinking level
+	return p.sendCommand("set_thinking_level", map[string]any{"level": arg}, "")
+}
+
+func (p *AiInterpreter) handleThinkingDisplay(value string, fromControl bool) error {
+	switch value {
+	case "on":
+		p.stateMu.Lock()
+		p.showThinking = true
+		p.stateMu.Unlock()
+	case "off":
+		p.stateMu.Lock()
+		p.showThinking = false
+		p.stateMu.Unlock()
+	case "toggle":
+		p.stateMu.Lock()
+		p.showThinking = !p.showThinking
+		p.stateMu.Unlock()
+	default:
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /set thinking [on|off|toggle]")
+		return nil
+	}
+	p.stateMu.Lock()
+	status := onOff(p.showThinking)
+	p.stateMu.Unlock()
+	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: thinking display %s", status))
+	return nil
 }
 
 func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
@@ -1319,8 +1399,6 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 	case "set_auto_compaction":
 		p.writeStatus("ai: auto-compaction updated")
 	case "set_thinking_level":
-		p.handleThinkingLevelResponse(resp.Data)
-	case "cycle_thinking_level":
 		p.handleThinkingLevelResponse(resp.Data)
 	case "get_last_assistant_text":
 		p.handleLastAssistantText(resp.Data)
@@ -1867,25 +1945,17 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /messages
   /tree
   /resume-on-branch <index|entry-id>
-  /commands
-  /show settings
-  /show pipeline
-  /show usage
-  /thinking [on|off|toggle]
-  /tools [off|on|verbose|toggle]
-  /prefix [on|off|toggle]
+  /skills
+  /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]
+  /show settings|pipeline|usage
+  /thinking [level]                    - Show/set thinking level (off|minimal|low|medium|high|xhigh)
   /model-select
   /new [name]
   /resume [id|path|index]
   /compact
-  /copy
-  /auto-compaction <on|off>
-  /thinking-level <off|minimal|low|medium|high|xhigh>
   /trace-events <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
-  /steer <message>
   /follow-up <message>
-  /busy-mode <steer|follow-up|reject>
   /abort
   /quit`)
 }
@@ -1928,7 +1998,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
   model: %s
-  thinking: %s
+  show-thinking: %s
   tools: %s
   prefix: %s
   thinking-level: %s
