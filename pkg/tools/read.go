@@ -7,17 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 )
 
-// ReadTool reads file contents.
+// ReadTool reads file contents with dynamic workspace support.
 type ReadTool struct {
-	cwd string
+	workspace *Workspace
 }
 
-// NewReadTool creates a new Read tool.
-func NewReadTool(cwd string) *ReadTool {
-	return &ReadTool{cwd: cwd}
+// NewReadTool creates a new Read tool with dynamic workspace support.
+func NewReadTool(ws *Workspace) *ReadTool {
+	return &ReadTool{workspace: ws}
 }
 
 // Name returns the tool name.
@@ -57,9 +56,9 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		path = filepath.Join(home, path[2:])
 	}
 
-	// Resolve path
+	// Resolve path using current workspace
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.cwd, path)
+		path = t.workspace.ResolvePath(path)
 	}
 
 	// Read file

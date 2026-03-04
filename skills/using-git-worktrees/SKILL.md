@@ -95,8 +95,15 @@ esac
 
 # Create worktree with new branch
 git worktree add "$path" -b "$BRANCH_NAME"
-cd "$path"
-```
+
+# IMPORTANT: After creating the worktree, use the change_workspace tool
+# This switches the agent's workspace to the new worktree directory.
+# All subsequent file operations (read, write, grep, edit, bash) will be relative to the new workspace.
+#
+# Example tool call:
+# <change_workspace path="$path"/>
+#
+# DO NOT use 'cd' in bash - it only affects the bash subprocess, not the agent's workspace.
 
 ### 3. Run Project Setup
 
@@ -183,7 +190,8 @@ You: I'm using the using-git-worktrees skill to set up an isolated workspace.
 [Check .worktrees/ - exists]
 [Verify ignored - git check-ignore confirms .worktrees/ is ignored]
 [Create worktree: git worktree add .worktrees/auth -b feature/auth]
-[Run npm install]
+[Use change_workspace tool: change_workspace path=".worktrees/auth"]
+[Run npm install in the new workspace]
 [Run npm test - 47 passing]
 
 Worktree ready at /Users/jesse/myproject/.worktrees/auth
@@ -236,13 +244,15 @@ Combine git worktrees with subagents for persistent, observable task execution i
 ```bash
 # 1. Create worktree for the task
 git worktree add .worktrees/review-auth -b review/auth
-cd .worktrees/review-auth
 
-# 2. Run subagent in the worktree
+# 2. Use change_workspace tool to switch agent's workspace
+# (Note: for subagent mode, each subagent has its own workspace)
+
+# 3. Run subagent in the worktree
 ai --mode headless --no-session --subagent --tools read,grep \
   "Review auth changes for security issues"
 
-# 3. Results remain in worktree for inspection
+# 4. Results remain in worktree for inspection
 # Original worktree remains untouched
 ```
 
@@ -252,8 +262,9 @@ ai --mode headless --no-session --subagent --tools read,grep \
 # Create a persistent review worktree
 git worktree add .worktrees/review-feature-x -b review/feature-x
 
-# Run reviewer subagent
-cd .worktrees/review-feature-x
+# Use change_workspace tool, then run reviewer subagent
+# (Note: the change_workspace would be done by the agent using the tool)
+
 ai --mode headless --subagent --tools read,grep --max-turns 10 \
   "Review changes against main: security, correctness, style"
 
@@ -270,14 +281,12 @@ ai --mode headless --subagent --tools read,grep --max-turns 10 \
 git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
 
-# Run builders in parallel
-cd .worktrees/feature-auth
-ai --mode headless --subagent --tools read,write,edit,bash \
-  "Implement authentication" &
+# Run builders in parallel (each uses change_workspace tool internally)
+ai --mode headless --subagent --tools read,write,edit,bash,change_workspace \
+  "Implement authentication in .worktrees/feature-auth" &
 
-cd ../.worktrees/feature-api
-ai --mode headless --subagent --tools read,write,edit,bash \
-  "Implement API endpoints" &
+ai --mode headless --subagent --tools read,write,edit,bash,change_workspace \
+  "Implement API endpoints in .worktrees/feature-api" &
 
 wait
 

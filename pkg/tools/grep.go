@@ -10,14 +10,14 @@ import (
 	"strings"
 )
 
-// GrepTool searches for patterns in files using ripgrep or grep.
+// GrepTool searches for patterns in files using ripgrep or grep with dynamic workspace support.
 type GrepTool struct {
-	cwd string
+	workspace *Workspace
 }
 
-// NewGrepTool creates a new Grep tool.
-func NewGrepTool(cwd string) *GrepTool {
-	return &GrepTool{cwd: cwd}
+// NewGrepTool creates a new Grep tool with dynamic workspace support.
+func NewGrepTool(ws *Workspace) *GrepTool {
+	return &GrepTool{workspace: ws}
 }
 
 // Name returns the tool name.
@@ -59,7 +59,8 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid pattern argument")
 	}
 
-	searchPath := t.cwd
+	cwd := t.workspace.GetCWD()
+	searchPath := cwd
 	if path, ok := args["path"].(string); ok && path != "" {
 		// Expand ~ to home directory
 		if strings.HasPrefix(path, "~/") {
@@ -67,7 +68,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			path = filepath.Join(home, path[2:])
 		}
 		if !filepath.IsAbs(path) {
-			searchPath = filepath.Join(t.cwd, path)
+			searchPath = filepath.Join(cwd, path)
 		} else {
 			searchPath = path
 		}
@@ -91,7 +92,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		cmd = exec.CommandContext(ctx, "grep", cmdArgs...)
 	}
 
-	cmd.Dir = t.cwd
+	cmd.Dir = cwd
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

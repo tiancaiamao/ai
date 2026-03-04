@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 // ToolInfo describes a tool for prompt generation.
@@ -27,8 +28,9 @@ type Builder struct {
 	// Base system prompt (identity, core behavior)
 	base string
 
-	// Working directory
-	cwd string
+	// Working directory (can be static or dynamic via workspace)
+	cwd      string
+	workspace *tools.Workspace
 
 	// Minimal mode (excludes optional sections like skills, project context)
 	minimal bool
@@ -62,6 +64,27 @@ func NewBuilder(basePrompt, cwd string) *Builder {
 		cwd:     cwd,
 		minimal: false,
 	}
+}
+
+// NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
+// The workspace will be queried for the current directory each time the prompt is built.
+func NewBuilderWithWorkspace(basePrompt string, ws *tools.Workspace) *Builder {
+	return &Builder{
+		base:      basePrompt,
+		cwd:       "", // Not used when workspace is set
+		workspace: ws,
+		minimal:   false,
+	}
+}
+
+// GetCWD returns the current working directory.
+// If a workspace is set, it returns the dynamic cwd from the workspace.
+// Otherwise, it returns the static cwd.
+func (b *Builder) GetCWD() string {
+	if b.workspace != nil {
+		return b.workspace.GetCWD()
+	}
+	return b.cwd
 }
 
 // SetMinimal enables/disables minimal mode.
@@ -185,7 +208,7 @@ func (b *Builder) buildWorkspaceSection() string {
 	}
 	return fmt.Sprintf(`## Workspace
 Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.cwd, notes)
+Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.GetCWD(), notes)
 }
 
 func (b *Builder) buildLLMContextSection() string {
@@ -324,14 +347,16 @@ func (b *Builder) buildProjectContext() string {
 }
 
 func (b *Builder) loadBootstrapFile(filename string) string {
+	cwd := b.GetCWD()
+
 	// Try project-local first: .ai/<filename>
-	projectPath := fmt.Sprintf("%s/.ai/%s", b.cwd, filename)
+	projectPath := fmt.Sprintf("%s/.ai/%s", cwd, filename)
 	if content, err := os.ReadFile(projectPath); err == nil {
 		return string(content)
 	}
 
 	// Try workspace root: <cwd>/<filename>
-	rootPath := fmt.Sprintf("%s/%s", b.cwd, filename)
+	rootPath := fmt.Sprintf("%s/%s", cwd, filename)
 	if content, err := os.ReadFile(rootPath); err == nil {
 		return string(content)
 	}

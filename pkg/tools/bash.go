@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
 )
 
 // BashResult represents the result of a bash command execution.
@@ -17,17 +16,17 @@ type BashResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// BashTool executes bash commands.
+// BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
-	cwd         string
+	workspace   *Workspace
 	timeout     time.Duration
 	execTimeout time.Duration
 }
 
-// NewBashTool creates a new Bash tool.
-func NewBashTool(cwd string) *BashTool {
+// NewBashTool creates a new Bash tool with dynamic workspace support.
+func NewBashTool(ws *Workspace) *BashTool {
 	return &BashTool{
-		cwd:         cwd,
+		workspace:   ws,
 		timeout:     60 * time.Second, // Increased from 30s
 		execTimeout: 30 * time.Second, // Increased from 5s to allow longer commands
 	}
@@ -57,20 +56,23 @@ func (t *BashTool) Parameters() map[string]any {
 	}
 }
 
-// Execute executes the bash command.
+// Execute executes the bash command with dynamic workspace support.
 func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	command, ok := args["command"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid command argument")
 	}
 
+	// Get current working directory from workspace
+	cwd := t.workspace.GetCWD()
+
 	// Create context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, t.execTimeout)
 	defer cancel()
 
-	// Execute command using /bin/sh -c
+	// Execute command using /bin/sh -c with current workspace directory
 	cmd := exec.CommandContext(execCtx, "/bin/sh", "-c", command)
-	cmd.Dir = t.cwd
+	cmd.Dir = cwd
 
 	output, err := cmd.CombinedOutput()
 

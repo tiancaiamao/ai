@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -696,14 +697,36 @@ func bytesTrimSpace(data []byte) []byte {
 }
 
 // GetDefaultSessionsDir returns the default sessions directory for a working directory.
+// The session directory is based on the git repository root to allow sessions to be
+// shared across git worktrees. If not in a git repository, it falls back to cwd.
 func GetDefaultSessionsDir(cwd string) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	safePath := sanitizeSessionPath(cwd)
+	sessionRoot := getSessionRoot(cwd)
+	safePath := sanitizeSessionPath(sessionRoot)
 	return filepath.Join(homeDir, ".ai", "sessions", safePath), nil
+}
+
+// getSessionRoot returns the git repository root for session storage.
+// If not in a git repository, it returns the original cwd.
+// This ensures that sessions are shared across git worktrees.
+func getSessionRoot(cwd string) string {
+	// Try git rev-parse --show-toplevel
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = cwd
+	output, err := cmd.Output()
+	if err == nil {
+		gitRoot := strings.TrimSpace(string(output))
+		if gitRoot != "" {
+			return gitRoot
+		}
+	}
+
+	// Not in a git repo, use cwd as fallback
+	return cwd
 }
 
 // GetDefaultSessionPath returns the default session file path for a working directory.

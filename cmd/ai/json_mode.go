@@ -140,12 +140,19 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	}
 
 	// Create tool registry and register tools
+	// Create a shared workspace object for all tools to track directory changes
+	ws, err := tools.NewWorkspace(cwd)
+	if err != nil {
+		return fmt.Errorf("failed to create workspace: %w", err)
+	}
+
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewReadTool(cwd))
-	registry.Register(tools.NewBashTool(cwd))
-	registry.Register(tools.NewWriteTool(cwd))
-	registry.Register(tools.NewGrepTool(cwd))
-	registry.Register(tools.NewEditTool(cwd))
+	registry.Register(tools.NewReadTool(ws))
+	registry.Register(tools.NewBashTool(ws))
+	registry.Register(tools.NewWriteTool(ws))
+	registry.Register(tools.NewGrepTool(ws))
+	registry.Register(tools.NewEditTool(ws))
+	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	// Create compactor for automatic context compression
 	compactorConfig := cfg.Compactor
@@ -181,7 +188,8 @@ When you need to inspect files or run commands, call the tools. Do not write too
 Do not include chain-of-thought or <thinking> tags in your output.`
 
 	// Build the full system prompt
-	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+	// Use workspace to get dynamic cwd for each prompt build
+	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 	systemPrompt := promptBuilder.Build()
 

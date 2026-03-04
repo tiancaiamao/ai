@@ -148,12 +148,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create tool registry and register tools
+	// Create a shared workspace object for all tools to track directory changes
+	ws, err := tools.NewWorkspace(cwd)
+	if err != nil {
+		return fmt.Errorf("failed to create workspace: %w", err)
+	}
+
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewReadTool(cwd))
-	registry.Register(tools.NewBashTool(cwd))
-	registry.Register(tools.NewWriteTool(cwd))
-	registry.Register(tools.NewGrepTool(cwd))
-	registry.Register(tools.NewEditTool(cwd))
+	registry.Register(tools.NewReadTool(ws))
+	registry.Register(tools.NewBashTool(ws))
+	registry.Register(tools.NewWriteTool(ws))
+	registry.Register(tools.NewGrepTool(ws))
+	registry.Register(tools.NewEditTool(ws))
+	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	// Create memory manager and register llm_context_recall tool
 	var memoryMgr *agentctx.MemoryManager
@@ -231,7 +238,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
-		promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+		// Use workspace to get dynamic cwd for each prompt build
+		promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
 		// Set llm context for system prompt explanation (tells LLM about the mechanism)

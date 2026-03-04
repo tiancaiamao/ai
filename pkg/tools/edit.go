@@ -7,17 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 )
 
-// EditTool edits a file by replacing old text with new text.
+// EditTool edits a file by replacing old text with new text with dynamic workspace support.
 type EditTool struct {
-	cwd string
+	workspace *Workspace
 }
 
-// NewEditTool creates a new Edit tool.
-func NewEditTool(cwd string) *EditTool {
-	return &EditTool{cwd: cwd}
+// NewEditTool creates a new Edit tool with dynamic workspace support.
+func NewEditTool(ws *Workspace) *EditTool {
+	return &EditTool{workspace: ws}
 }
 
 // Name returns the tool name.
@@ -70,7 +69,7 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("newText must be a string")
 	}
 
-	// Resolve path
+	// Resolve path using current workspace
 	fullPath := t.resolvePath(path)
 
 	// Read file
@@ -117,7 +116,7 @@ func (t *EditTool) resolvePath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
-	return filepath.Join(t.cwd, path)
+	return t.workspace.ResolvePath(path)
 }
 
 // matchResult represents a fuzzy match result.

@@ -113,12 +113,19 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	}
 
 	// Create tool registry and register tools
+	// Create a shared workspace object for all tools to track directory changes
+	ws, err := tools.NewWorkspace(cwd)
+	if err != nil {
+		return writeHeadlessError(output, fmt.Sprintf("failed to create workspace: %v", err))
+	}
+
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewReadTool(cwd))
-	registry.Register(tools.NewBashTool(cwd))
-	registry.Register(tools.NewWriteTool(cwd))
-	registry.Register(tools.NewGrepTool(cwd))
-	registry.Register(tools.NewEditTool(cwd))
+	registry.Register(tools.NewReadTool(ws))
+	registry.Register(tools.NewBashTool(ws))
+	registry.Register(tools.NewWriteTool(ws))
+	registry.Register(tools.NewGrepTool(ws))
+	registry.Register(tools.NewEditTool(ws))
+	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	// Resolve context window and create compactor for automatic context compression
 	activeSpec, err := resolveActiveModelSpec(cfg)
@@ -170,7 +177,8 @@ Be concise and focused on the task at hand.`
 	}
 
 	// Build the full system prompt
-	promptBuilder := prompt.NewBuilder(basePrompt, cwd)
+	// Use workspace to get dynamic cwd for each prompt build
+	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
 	// Set llm context for system prompt explanation (tells LLM about the mechanism)

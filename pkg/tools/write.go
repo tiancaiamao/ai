@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// WriteTool writes content to a file.
+// WriteTool writes content to a file with dynamic workspace support.
 type WriteTool struct {
-	cwd string
+	workspace *Workspace
 }
 
-// NewWriteTool creates a new Write tool.
-func NewWriteTool(cwd string) *WriteTool {
-	return &WriteTool{cwd: cwd}
+// NewWriteTool creates a new Write tool with dynamic workspace support.
+func NewWriteTool(ws *Workspace) *WriteTool {
+	return &WriteTool{workspace: ws}
 }
 
 // Name returns the tool name.
@@ -61,9 +61,9 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agentct
 		path = filepath.Join(home, path[2:])
 	}
 
-	// Resolve path
+	// Resolve path using current workspace
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(t.cwd, path)
+		path = t.workspace.ResolvePath(path)
 	}
 
 	// Create parent directory if needed
