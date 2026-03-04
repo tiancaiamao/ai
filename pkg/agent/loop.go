@@ -223,33 +223,16 @@ func runInnerLoop(
 			return
 		}
 
-		// Check if LLMContext is available for hint processing (every turn)
-		llmContextAvailable := agentCtx.LLMContext != nil
-		if !llmContextAvailable {
-			traceevent.Log(ctx, traceevent.CategoryEvent, "hint_processing_disabled",
-				traceevent.Field{Key: "reason", Value: "llm_context_is_nil"},
-			)
+		// Initialize ContextMgmtState if needed
+		if agentCtx.ContextMgmtState == nil {
+			agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 		}
 
-		compactPerformedViaHint := false
-		if llmContextAvailable {
-			hintProcessor := agentctx.NewTruncateCompactHint(config.Compactor)
-			hintResult, err := hintProcessor.Process(ctx, agentCtx)
-				if err != nil {
-					slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
-				} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
-					slog.Info("[Loop] Processed truncate-compact hint",
-						"truncated_count", hintResult.TruncatedCount,
-						"compact_performed", hintResult.CompactPerformed,
-					)
-				}
-				compactPerformedViaHint = hintResult.CompactPerformed
-		}
-turnCount++
+	turnCount++
 
-		// Compact before each LLM request so long-running tool loops do not keep
-		// carrying stale outputs into the next turn.
-		if !compactPerformedViaHint && config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
+		// Fallback auto-compact as safety net (only if LLM didn't handle it via llm_context_decision)
+		// This is a last resort when context grows too large without LLM intervention.
+		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
 			before := len(agentCtx.Messages)
 			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
@@ -1454,6 +1437,45 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	stageHint := runtimeContextManagementHint(meta.TokensPercent)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
+
+	// Determine action_required based on tool pressure and context usage
+	actionRequired := "none"
+	urgency := "none"
+	if meta.TokensPercent >= 65 || toolPressure.StaleCount > 20 || toolPressure.LargeCount > 5 {
+		actionRequired = "compact"
+		urgency = "critical"
+	} else if meta.TokensPercent >= 50 || toolPressure.StaleCount > 10 || toolPressure.LargeCount > 3 {
+		actionRequired = "truncate"
+		urgency = "high"
+	} else if meta.TokensPercent >= 30 || toolPressure.StaleCount > 5 {
+		actionRequired = "truncate"
+		urgency = "medium"
+	} else if toolOutputsSummary != "none" {
+		actionRequired = "truncate"
+		urgency = "low"
+	}
+
+	// Get or initialize ContextMgmtState
+	if agentCtx.ContextMgmtState == nil {
+		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
+	}
+	state := agentCtx.ContextMgmtState
+
+	// Build context management stats section
+	var cmStats string
+	if state.ProactiveDecisions > 0 || state.ReminderNeeded > 0 {
+		cmStats = fmt.Sprintf(`  your_score: %s
+  proactive_decisions: %d
+  reminders_needed: %d
+  current_frequency: every %d turns`,
+			state.GetScore(),
+			state.ProactiveDecisions,
+			state.ReminderNeeded,
+			state.ReminderFrequency)
+	} else {
+		cmStats = "  your_score: no_data_yet"
+	}
+
 	snapshot := fmt.Sprintf(`<runtime_state>
 context_meta:
   tokens_band: %s
@@ -1467,6 +1489,11 @@ tool_output_pressure:
   tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s
+context_management:
+  action_required: %s
+  urgency: %s
+  skip_until_turn: %d
+%s
 compact_decision_signals:
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
@@ -1475,11 +1502,10 @@ compact_decision_signals:
 decision:
   fast_path_allowed: %s
 guidance:
-  - Use this for context management decisions only.
-  - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
-  - When action_hint is not normal, compaction is usually recommended.
-  - If tool_outputs_summary is not "none", consider TRUNCATE in truncate-compact-hint.md.
-  - For COMPACT hints, include confidence (e.g. confidence: 80%% or confidence_range: 70%%-90%%).
+  - If action_required is not "none", you MUST call llm_context_decision tool BEFORE answering the user.
+  - Use decision="skip" with appropriate skip_turns (1-30) to defer when not urgent.
+  - Higher skip_turns values (15-30) indicate you承诺 to be proactive; this increases trust and reduces reminder frequency.
+  - Lower skip_turns values (1-5) are for uncertain situations; reminders will come more frequently.
   - Stage hint: %s
 </runtime_state>`,
 		band,
@@ -1492,6 +1518,10 @@ guidance:
 		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
+		actionRequired,
+		urgency,
+		state.SkipUntilTurn,
+		cmStats,
 		meta.TokensPercent,
 		yesNo(fastPathAllowed),
 		stageHint,

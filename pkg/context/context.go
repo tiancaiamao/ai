@@ -25,6 +25,157 @@ type AgentContext struct {
 	RuntimeMetaSnapshot string `json:"-"`
 	RuntimeMetaBand     string `json:"-"`
 	RuntimeMetaTurns    int    `json:"-"`
+
+	// ContextMgmtState tracks LLM's context management behavior for adaptive reminders.
+	ContextMgmtState *ContextMgmtState `json:"-"`
+}
+
+// ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
+type ContextMgmtState struct {
+	// Frequency adjustment (turns between reminders)
+	ReminderFrequency int    // Current: 5-30, Default: 10
+	SkipUntilTurn     int    // Skip reminders until this turn (set by LLM via skip_turns)
+
+	// Statistics for adaptive adjustment
+	ProactiveDecisions int // LLM made decisions without being reminded
+	ReminderNeeded     int // LLM needed reminders to make decisions
+
+	// Last action state
+	LastDecisionTurn  int    // Turn number of last decision
+	LastActionTaken   string // "truncate", "compact", "both", "skip"
+	LastReminderTurn  int    // Turn number of last reminder shown
+	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
+}
+
+// DefaultContextMgmtState creates a new ContextMgmtState with defaults.
+func DefaultContextMgmtState() *ContextMgmtState {
+	return &ContextMgmtState{
+		ReminderFrequency:   10,  // Default: remind every 10 turns
+		SkipUntilTurn:       0,
+		ProactiveDecisions:  0,
+		ReminderNeeded:      0,
+		LastDecisionTurn:    0,
+		LastActionTaken:     "none",
+		LastReminderTurn:    0,
+		LastReminderUrgency: "none",
+	}
+}
+
+// AdjustFrequency adjusts the reminder frequency based on LLM's behavior.
+// More proactive decisions = lower frequency (fewer reminders).
+// More reminders needed = higher frequency (more reminders).
+func (s *ContextMgmtState) AdjustFrequency() {
+	if s == nil {
+		return
+	}
+
+	// Calculate ratio: positive means proactive, negative means needs reminders
+	ratio := s.ProactiveDecisions - s.ReminderNeeded
+
+	switch {
+	case ratio >= 5: // Very proactive
+		s.ReminderFrequency = min(30, s.ReminderFrequency+2)
+	case ratio >= 2: // Somewhat proactive
+		s.ReminderFrequency = min(30, s.ReminderFrequency+1)
+	case ratio <= -5: // Needs many reminders
+		s.ReminderFrequency = max(5, s.ReminderFrequency-2)
+	case ratio <= -2: // Needs some reminders
+		s.ReminderFrequency = max(5, s.ReminderFrequency-1)
+	}
+	// If ratio is between -1 and 1, keep current frequency
+}
+
+// RecordDecision records a context management decision made by LLM.
+func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded bool) {
+	if s == nil {
+		return
+	}
+
+	s.LastDecisionTurn = turn
+	s.LastActionTaken = action
+
+	if wasReminded {
+		s.ReminderNeeded++
+	} else {
+		s.ProactiveDecisions++
+	}
+
+	s.AdjustFrequency()
+}
+
+// SetSkipUntil sets the skip period and counts it as proactive if LLM承诺s to check back.
+func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, wasReminded bool) {
+	if s == nil {
+		return
+	}
+
+	s.SkipUntilTurn = turn + skipTurns
+
+	// Setting a skip is considered proactive behavior
+	if !wasReminded {
+		s.ProactiveDecisions++
+		s.AdjustFrequency()
+	}
+}
+
+// ShouldShowReminder determines if a reminder should be shown this turn.
+func (s *ContextMgmtState) ShouldShowReminder(turn int, actionRequired string, urgency string) bool {
+	if s == nil {
+		return false
+	}
+
+	// Always show for critical urgency
+	if urgency == "critical" {
+		return true
+	}
+
+	// Don't show if no action is required
+	if actionRequired == "none" {
+		return false
+	}
+
+	// Don't show if we're in a skip period
+	if turn <= s.SkipUntilTurn {
+		return false
+	}
+
+	// Check if enough turns have passed since last reminder
+	turnsSinceReminder := turn - s.LastReminderTurn
+	return turnsSinceReminder >= s.ReminderFrequency
+}
+
+// RecordReminder records that a reminder was shown.
+func (s *ContextMgmtState) RecordReminder(turn int, urgency string) {
+	if s == nil {
+		return
+	}
+
+	s.LastReminderTurn = turn
+	s.LastReminderUrgency = urgency
+}
+
+// GetScore returns a human-readable score of LLM's proactiveness.
+func (s *ContextMgmtState) GetScore() string {
+	if s == nil {
+		return "unknown"
+	}
+
+	ratio := s.ProactiveDecisions - s.ReminderNeeded
+	total := s.ProactiveDecisions + s.ReminderNeeded
+	if total == 0 {
+		return "no_data"
+	}
+
+	switch {
+	case ratio >= 5:
+		return "excellent"
+	case ratio >= 2:
+		return "good"
+	case ratio >= -1:
+		return "fair"
+	default:
+		return "needs_improvement"
+	}
 }
 
 // Tool represents a tool that can be called by the agent.
