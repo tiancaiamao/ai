@@ -23,6 +23,11 @@ func StreamLLM(
 	llmCtx LLMContext,
 	apiKey string,
 ) *EventStream[LLMEvent, LLMMessage] {
+	// Route to Anthropic API if requested
+	if model.API == "anthropic-messages" {
+		return StreamAnthropic(ctx, model, llmCtx, apiKey)
+	}
+
 	stream := NewEventStream[LLMEvent, LLMMessage](
 		func(e LLMEvent) bool {
 			return e.GetEventType() == "done" || e.GetEventType() == "error"

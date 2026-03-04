@@ -8,7 +8,7 @@ import (
 // AgentEvent represents an event emitted during agent execution.
 type AgentEvent struct {
 	Type string `json:"type"` // Event type discriminator
-	// EventAt is when the event was created (UnixNano).
+	// EventAt is when event was created (UnixNano).
 	EventAt int64 `json:"eventAt,omitempty"`
 
 	// error
@@ -40,6 +40,9 @@ type AgentEvent struct {
 
 	// tool-call recovery events
 	ToolCallRecovery *ToolCallRecoveryInfo `json:"toolCallRecovery,omitempty"`
+
+	// LLM retry events
+	LLMRetry *LLMRetryInfo `json:"llmRetry,omitempty"`
 }
 
 // AssistantMessageEvent provides a stable, json-tagged shape for streaming updates.
@@ -69,6 +72,7 @@ const (
 	EventLoopGuardTriggered = "loop_guard_triggered"
 	EventToolCallRecovery   = "tool_call_recovery"
 	EventError              = "error"
+	EventLLMRetry          = "llm_retry"
 )
 
 // CompactionInfo describes a compaction event.
@@ -215,11 +219,30 @@ type ToolCallRecoveryInfo struct {
 	Attempt int    `json:"attempt,omitempty"`
 }
 
+// LLMRetryInfo describes a retry event for LLM calls.
+type LLMRetryInfo struct {
+	Attempt    int           `json:"attempt"`
+	MaxRetries int           `json:"maxRetries"`
+	Delay      time.Duration `json:"delay"`
+	ErrorType  string        `json:"errorType"`
+	Error      string        `json:"error,omitempty"`
+}
+
 // NewToolCallRecoveryEvent creates a tool_call_recovery event.
 func NewToolCallRecoveryEvent(info ToolCallRecoveryInfo) AgentEvent {
 	return AgentEvent{
 		Type:             EventToolCallRecovery,
 		EventAt:          time.Now().UnixNano(),
 		ToolCallRecovery: &info,
+	}
+}
+
+// NewLLMRetryEvent creates an llm_retry event.
+func NewLLMRetryEvent(info LLMRetryInfo) AgentEvent {
+	return AgentEvent{
+		Type:       EventLLMRetry,
+		EventAt:    time.Now().UnixNano(),
+		Error:      info.Error,
+		LLMRetry:   &info,
 	}
 }
