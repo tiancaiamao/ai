@@ -8,7 +8,7 @@ import (
 // AgentEvent represents an event emitted during agent execution.
 type AgentEvent struct {
 	Type string `json:"type"` // Event type discriminator
-	// EventAt is when the event was created (UnixNano).
+	// EventAt is when event was created (UnixNano).
 	EventAt int64 `json:"eventAt,omitempty"`
 
 	// error
@@ -40,6 +40,9 @@ type AgentEvent struct {
 
 	// tool-call recovery events
 	ToolCallRecovery *ToolCallRecoveryInfo `json:"toolCallRecovery,omitempty"`
+
+	// LLM retry events
+	LLMRetry *LLMRetryInfo `json:"llmRetry,omitempty"`
 }
 
 // AssistantMessageEvent provides a stable, json-tagged shape for streaming updates.
@@ -240,5 +243,6 @@ func NewLLMRetryEvent(info LLMRetryInfo) AgentEvent {
 		Type:       EventLLMRetry,
 		EventAt:    time.Now().UnixNano(),
 		Error:      info.Error,
+		LLMRetry:   &info,
 	}
 }
