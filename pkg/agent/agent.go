@@ -52,19 +52,12 @@ func shouldLogAgentEvent(eventType string) bool {
 // ErrAgentBusy is returned when the agent is already processing a request.
 var ErrAgentBusy = errors.New("agent is busy")
 
-// Compactor interface for context compression.
-type Compactor interface {
-	ShouldCompact(messages []agentctx.AgentMessage) bool
-	Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error)
-}
+// Compactor interface is defined in pkg/context package.
+// Agent uses agentctx.Compactor for context compression.
+type Compactor = agentctx.Compactor
 
-// CompactionResult contains the result of a compaction operation.
-type CompactionResult struct {
-	Summary      string                  // The generated summary
-	Messages     []agentctx.AgentMessage // The compressed message list
-	TokensBefore int                     // Token count before compaction
-	TokensAfter  int                     // Token count after compaction
-}
+// CompactionResult is an alias to agentctx.CompactionResult.
+type CompactionResult = agentctx.CompactionResult
 
 // Agent represents an AI agent.
 type Agent struct {
