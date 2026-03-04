@@ -432,7 +432,7 @@ turnCount++
 							// Convert to absolute path for comparison
 							absPath := filepath.Clean(path)
 							wmPath := agentCtx.LLMContext.GetPath()
-							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
+							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile || filepath.Base(absPath) == agentctx.TruncateCompactHintFile {
 								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
 							}
 						}

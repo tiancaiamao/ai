@@ -13,6 +13,7 @@ const (
 	LLMContextDir = "llm-context"
 	OverviewFile     = "overview.md"
 	DetailDir        = "detail"
+	TruncateCompactHintFile = "truncate-compact-hint.md"
 
 	// Update tracking thresholds
 	baseRoundsBeforeReminder = 10 // Default base threshold for reminders
