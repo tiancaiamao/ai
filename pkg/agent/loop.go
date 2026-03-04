@@ -434,6 +434,10 @@ turnCount++
 							wmPath := agentCtx.LLMContext.GetPath()
 							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile || filepath.Base(absPath) == agentctx.TruncateCompactHintFile {
 								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
+								// Reset write tool loop guard counter since this is productive work
+								if loopGuard != nil {
+									loopGuard.ResetToolCount("write")
+								}
 							}
 						}
 					}
@@ -515,6 +519,16 @@ func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, str
 		}
 	}
 	return false, ""
+}
+
+// ResetToolCount resets the call counter for a specific tool.
+// This is used when a tool call is productive (e.g., writing llm context)
+// and should not contribute to loop detection.
+func (g *toolLoopGuard) ResetToolCount(toolName string) {
+	if g == nil {
+		return
+	}
+	g.toolCallTotals[toolName] = 0
 }
 
 func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) {
