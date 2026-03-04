@@ -184,6 +184,66 @@ func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) 
 	}
 }
 
+func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("修复 truncate compact 协议"),
+		func() agentctx.AgentMessage {
+			m := agentctx.NewAssistantMessage()
+			m.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "阶段完成：truncate 已完成"},
+			}
+			return m
+		}(),
+		agentctx.NewUserMessage("顺便看看前端动画设计"),
+	}
+	meta := agentctx.ContextMeta{
+		TokensUsed:        64000,
+		TokensMax:         128000,
+		TokensPercent:     50.0,
+		MessagesInHistory: len(agentCtx.Messages),
+		LLMContextSize:    1200,
+	}
+
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	if !refreshed {
+		t.Fatal("expected refreshed snapshot")
+	}
+	if !containsString(snapshot, "compact_decision_signals:") {
+		t.Fatalf("expected compact_decision_signals section, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "topic_shift_since_last_user: llm_judge") {
+		t.Fatalf("expected llm_judge topic shift signal, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "phase_completed_recently: llm_judge") {
+		t.Fatalf("expected llm_judge phase completion signal, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "llm_judge_hint: Compare the latest user intent") {
+		t.Fatalf("expected llm_judge_hint, got: %s", snapshot)
+	}
+}
+
+func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
+	cases := []struct {
+		percent float64
+		expect  string
+	}{
+		{percent: 12, expect: "only TRUNCATE"},
+		{percent: 32, expect: "TRUNCATE in batches"},
+		{percent: 52, expect: "prepare one COMPACT pass"},
+		{percent: 68, expect: "run COMPACT soon"},
+		{percent: 79, expect: "fallback auto-compaction is getting close"},
+		{percent: 90, expect: "forced fallback compaction may trigger"},
+	}
+
+	for _, tc := range cases {
+		got := runtimeContextManagementHint(tc.percent)
+		if !containsString(got, tc.expect) {
+			t.Fatalf("percent %.1f expected hint containing %q, got %q", tc.percent, tc.expect, got)
+		}
+	}
+}
+
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || containsSubstring(s, substr))
 }

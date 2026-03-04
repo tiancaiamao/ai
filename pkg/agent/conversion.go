@@ -21,6 +21,24 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 	messages = dedupeMessagesForLLM(messages)
 	lastUserIndex := findLastVisibleUserIndex(messages)
 	protectedToolResults := protectedRecentToolResultIndexes(messages, recentToolResultsNoMetadata)
+
+	// Pre-calculate age rank for each tool result message
+	toolResultAgeRanks := make(map[int]int)
+	toolResultCount := 0
+	for i, msg := range messages {
+		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
+			continue
+		}
+		if lastUserIndex < 0 || i >= lastUserIndex {
+			continue
+		}
+		if _, protected := protectedToolResults[i]; protected {
+			continue
+		}
+		toolResultCount++
+		toolResultAgeRanks[i] = toolResultCount
+	}
+
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
 
 	for i, msg := range messages {
@@ -87,11 +105,13 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 				if toolName == "" {
 					toolName = "unknown"
 				}
+				ageRank := toolResultAgeRanks[i]
 				staleTag := fmt.Sprintf(
-					`<agent:tool id="%s" name="%s" chars="%d" stale="true" />`,
+					`<agent:tool id="%s" name="%s" chars="%d" stale="%d" />`,
 					msg.ToolCallID,
 					toolName,
 					charCount,
+					ageRank,
 				)
 				if content == "" {
 					content = staleTag

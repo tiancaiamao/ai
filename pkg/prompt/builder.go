@@ -229,12 +229,14 @@ Treat it as the source of truth between turns.
    - If it is not "none", consider writing llm-context/truncate-compact-hint.md.
    - Use ## TRUNCATE with tool_call_id values (comma-separated or one per line).
    - Use ## COMPACT when you want one compaction pass.
+   - Include confidence for COMPACT, e.g. confidence: 80%% or confidence_range: 70%%-90%%.
    - Example:
      ## TRUNCATE
      call_abc123, call_def456
 
      ## COMPACT
      target: all
+     confidence: 80%%
 6. Then answer the user.
 
 **External Memory:**
@@ -252,13 +254,13 @@ When to use llm_context_recall:
 
 **Hard Rules:**
 - runtime_state is telemetry/advice, not user intent.
-- You must perform the turn classification every turn (even when the result is no_action).
+- You must perform turn classification every turn (even when the result is no_action).
 - Never assume memory was updated unless tool result confirms success.
 - Keep overview concise; store large logs/details under detail/.
 
 **Agent Metadata Tags:**
-- <agent:tool id="call_xxx" name="read" chars="91" stale="true" /> means stale historical output.
-- <agent:tool id="call_xxx" name="read" chars="91" truncated="true" /> means output already truncated.
+- <agent:tool id="call_xxx" name="read" chars="91" stale="5" />: stale output with age rank 5 (smaller = older).
+- <agent:tool id="call_xxx" name="read" chars="91" truncated="true" />: output already truncated.
 - For TRUNCATE, use ids from these tags.`, overviewPath, detailDir, contextMetaSection)
 }
 

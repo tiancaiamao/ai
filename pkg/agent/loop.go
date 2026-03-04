@@ -220,22 +220,30 @@ func runInnerLoop(
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
 		}
-		turnCount++
+
+		// Check if LLMContext is available for hint processing (every turn)
+		llmContextAvailable := agentCtx.LLMContext != nil
+		if !llmContextAvailable {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "hint_processing_disabled",
+				traceevent.Field{Key: "reason", Value: "llm_context_is_nil"},
+			)
+		}
 
 		compactPerformedViaHint := false
-		if agentCtx.LLMContext != nil {
+		if llmContextAvailable {
 			hintProcessor := NewTruncateCompactHint(config.Compactor)
 			hintResult, err := hintProcessor.Process(ctx, agentCtx)
-			if err != nil {
-				slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
-			} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
-				slog.Info("[Loop] Processed truncate-compact hint",
-					"truncated_count", hintResult.TruncatedCount,
-					"compact_performed", hintResult.CompactPerformed,
-				)
-			}
-			compactPerformedViaHint = hintResult.CompactPerformed
+				if err != nil {
+					slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
+				} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
+					slog.Info("[Loop] Processed truncate-compact hint",
+						"truncated_count", hintResult.TruncatedCount,
+						"compact_performed", hintResult.CompactPerformed,
+					)
+				}
+				compactPerformedViaHint = hintResult.CompactPerformed
 		}
+turnCount++
 
 		// Compact before each LLM request so long-running tool loops do not keep
 		// carrying stale outputs into the next turn.
@@ -1622,6 +1630,7 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
 	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
+	stageHint := runtimeContextManagementHint(meta.TokensPercent)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
 	snapshot := fmt.Sprintf(`<runtime_state>
@@ -1637,6 +1646,11 @@ tool_output_pressure:
   tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s
+compact_decision_signals:
+  context_usage_percent: %.1f
+  topic_shift_since_last_user: llm_judge
+  phase_completed_recently: llm_judge
+  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.
 decision:
   fast_path_allowed: %s
 guidance:
@@ -1644,6 +1658,8 @@ guidance:
   - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
   - When action_hint is not normal, compaction is usually recommended.
   - If tool_outputs_summary is not "none", consider TRUNCATE in truncate-compact-hint.md.
+  - For COMPACT hints, include confidence (e.g. confidence: 80%% or confidence_range: 70%%-90%%).
+  - Stage hint: %s
 </runtime_state>`,
 		band,
 		actionHint,
@@ -1655,7 +1671,9 @@ guidance:
 		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
+		meta.TokensPercent,
 		yesNo(fastPathAllowed),
+		stageHint,
 	)
 
 	agentCtx.RuntimeMetaSnapshot = snapshot
@@ -1725,6 +1743,23 @@ func runtimeActionHint(band string) string {
 		return "heavy_compression"
 	default:
 		return "emergency_compression"
+	}
+}
+
+func runtimeContextManagementHint(percent float64) string {
+	switch {
+	case percent < 20:
+		return "Low usage (10-20%% tone): stay on task, only TRUNCATE obviously stale/large tool outputs."
+	case percent < 30:
+		return "Mild pressure (20-30%% tone): proactively review stale outputs and TRUNCATE in batches, may also consider COMPACT."
+	case percent < 50:
+		return "Moderate pressure (30-50%% tone): prepare one COMPACT pass after the current mini-step."
+	case percent < 65:
+		return "High pressure (50-65%% tone): run COMPACT soon; keep only active context and key decisions."
+	case percent < 75:
+		return "Critical pressure (65-75%% tone): COMPACT now; fallback auto-compaction is getting close."
+	default:
+		return "Emergency pressure (75%%+ tone): COMPACT immediately, forced fallback compaction may trigger next."
 	}
 }
 

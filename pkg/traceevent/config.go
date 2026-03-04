@@ -231,8 +231,17 @@ var eventNameToBit = map[string]int{
 	"tool_summary_batch":              37,
 	"llm_retry_scheduled":             38,
 	"llm_retry_aborted":               39,
-	"llm_retry_exhausted":             40,
-	"tool_output_truncated":           41,
+	"llm_retry_exhausted":                40,
+	"tool_output_truncated":              41,
+	"truncate_compact_hint_read":         42,
+	"truncate_compact_hint_processed":      43,
+	"tool_output_truncated_via_hint":     44,
+	"compact_skipped_via_hint_confidence": 45,
+	"compact_performed_via_hint":         46,
+	"hint_processing_disabled":              47,
+	"truncate_compact_hint_start":         48,
+	"truncate_compact_hint_skip":          49,
+	"truncate_compact_hint_read_attempt":   50,
 }
 
 var defaultEnabledEvents = []string{
@@ -269,6 +278,11 @@ var defaultEnabledEvents = []string{
 	"tool_summary",
 	"tool_summary_batch",
 	"tool_output_truncated",
+	"truncate_compact_hint_read",
+	"truncate_compact_hint_processed",
+	"tool_output_truncated_via_hint",
+	"compact_skipped_via_hint_confidence",
+	"compact_performed_via_hint",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -300,6 +314,7 @@ var eventSelectorGroups = map[string][]string{
 		"tool_summary",
 		"tool_summary_batch",
 		"tool_output_truncated",
+		"truncate_compact_hint_read",
 	},
 	"event": {
 		"prompt",
