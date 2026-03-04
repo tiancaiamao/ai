@@ -1,4 +1,4 @@
-package agent
+package context
 
 import (
 	"bufio"
@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -32,7 +32,7 @@ func NewTruncateCompactHint(compactor Compactor) *TruncateCompactHint {
 }
 
 // Process reads and applies truncate-compact-hint.md once.
-func (t *TruncateCompactHint) Process(ctx context.Context, agentCtx *agentctx.AgentContext) (HintProcessResult, error) {
+func (t *TruncateCompactHint) Process(ctx context.Context, agentCtx *AgentContext) (HintProcessResult, error) {
 	traceevent.Log(ctx, traceevent.CategoryTool, "truncate_compact_hint_start",
 		traceevent.Field{Key: "agent_ctx_nil", Value: agentCtx == nil},
 		traceevent.Field{Key: "llm_context_nil", Value: agentCtx == nil || agentCtx.LLMContext == nil},
@@ -159,7 +159,6 @@ func (t *TruncateCompactHint) parseSections(content string) (*HintSections, erro
 					ConfidenceMax: -1,
 				}
 			}
-
 			switch key {
 			case "TARGET":
 				sections.Compact.Target = value
@@ -172,14 +171,12 @@ func (t *TruncateCompactHint) parseSections(content string) (*HintSections, erro
 			case "ARCHIVE_TO":
 				sections.Compact.ArchiveTo = value
 			case "CONFIDENCE":
-				if p, ok := parseCompactConfidence(value); ok {
-					sections.Compact.ConfidenceMin = p
-					sections.Compact.ConfidenceMax = p
-				}
-			case "CONFIDENCE_RANGE":
 				if min, max, ok := parseCompactConfidenceRange(value); ok {
 					sections.Compact.ConfidenceMin = min
 					sections.Compact.ConfidenceMax = max
+				} else if p, ok := parseCompactConfidence(value); ok {
+					sections.Compact.ConfidenceMin = p
+					sections.Compact.ConfidenceMax = p
 				}
 			case "CONFIDENCE_MIN":
 				if p, ok := parseCompactConfidence(value); ok {
@@ -198,7 +195,7 @@ func (t *TruncateCompactHint) parseSections(content string) (*HintSections, erro
 
 func (t *TruncateCompactHint) processTruncateSection(
 	ctx context.Context,
-	agentCtx *agentctx.AgentContext,
+	agentCtx *AgentContext,
 	idsToTruncate []string,
 ) (int, error) {
 	if len(idsToTruncate) == 0 {
@@ -214,20 +211,20 @@ func (t *TruncateCompactHint) processTruncateSection(
 		if !shouldTruncate(msg.ToolCallID, idsToTruncate) {
 			continue
 		}
-		if isTruncatedAgentToolTag(msg.ExtractText()) {
+		if IsTruncatedAgentToolTag(msg.ExtractText()) {
 			continue
 		}
 
 		originalSize := len(msg.ExtractText())
-		if n, ok := parseCharsFromAgentToolTag(msg.ExtractText()); ok {
+		if n, ok := ParseCharsFromAgentToolTag(msg.ExtractText()); ok {
 			originalSize = n
 		}
 
-		agentCtx.Messages[i] = agentctx.NewToolResultMessage(
+		agentCtx.Messages[i] = NewToolResultMessage(
 			msg.ToolCallID,
 			msg.ToolName,
-			[]agentctx.ContentBlock{
-				agentctx.TextContent{
+			[]ContentBlock{
+				TextContent{
 					Type: "text",
 					Text: fmt.Sprintf(
 						`<agent:tool id="%s" name="%s" chars="%d" truncated="true" />`,
@@ -253,7 +250,7 @@ func (t *TruncateCompactHint) processTruncateSection(
 
 func (t *TruncateCompactHint) processCompactSection(
 	ctx context.Context,
-	agentCtx *agentctx.AgentContext,
+	agentCtx *AgentContext,
 	spec *CompactHintSpec,
 ) (bool, error) {
 	if spec == nil {
@@ -264,7 +261,7 @@ func (t *TruncateCompactHint) processCompactSection(
 	}
 
 	confidence := compactConfidenceProbability(spec)
-	roll := randFloat64()
+	roll := rand.Float64()
 	if roll > confidence {
 		traceevent.Log(ctx, traceevent.CategoryTool, "compact_skipped_via_hint_confidence",
 			traceevent.Field{Key: "confidence", Value: confidence},
