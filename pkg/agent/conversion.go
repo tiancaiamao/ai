@@ -271,7 +271,9 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) agentctx.AgentMessage {
 		for _, tc := range llmMsg.ToolCalls {
 			// Parse arguments JSON string
 			var args map[string]any
-			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				args = make(map[string]any)
+			}
 
 			agentMsg.Content = append(agentMsg.Content, agentctx.ToolCallContent{
 				ID:        tc.ID,

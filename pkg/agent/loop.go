@@ -892,7 +892,9 @@ func streamAssistantResponse(
 					call.name = e.ToolCall.Function.Name
 				}
 				if e.ToolCall.Function.Arguments != "" {
-					call.arguments += e.ToolCall.Function.Arguments
+					// For Anthropic API, we send the complete accumulated arguments, not just the delta
+					// So we should replace instead of concatenate
+					call.arguments = e.ToolCall.Function.Arguments
 				}
 
 				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)

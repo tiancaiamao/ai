@@ -215,7 +215,8 @@ func (pm *PartialMessage) ToLLMMessage() LLMMessage {
 
 	if len(pm.ToolCalls) > 0 {
 		toolCalls := make([]ToolCall, 0, len(pm.ToolCalls))
-		for i := 0; i < len(pm.ToolCalls); i++ {
+		// Iterate over map keys in order
+		for i := 0; i < len(pm.ToolCalls)*2; i++ {
 			if tc, ok := pm.ToolCalls[i]; ok {
 				toolCalls = append(toolCalls, *tc)
 			}
