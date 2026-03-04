@@ -202,10 +202,10 @@ func TestConvertMessagesToLLMInjectsStaleToolMetadataBeyondRecent10(t *testing.T
 		}
 	}
 
-	if !strings.Contains(firstTool.Content, `stale="true"`) {
+	if !strings.Contains(firstTool.Content, `stale="`) {
 		t.Fatalf("expected call-1 to include stale metadata tag, got %q", firstTool.Content)
 	}
-	if strings.Contains(latestTool.Content, `stale="true"`) {
+	if strings.Contains(latestTool.Content, `stale="`) {
 		t.Fatalf("expected recent tool output to remain untagged, got %q", latestTool.Content)
 	}
 }

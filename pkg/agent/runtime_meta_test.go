@@ -229,10 +229,10 @@ func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
 		expect  string
 	}{
 		{percent: 12, expect: "only TRUNCATE"},
-		{percent: 32, expect: "TRUNCATE in batches"},
-		{percent: 52, expect: "prepare one COMPACT pass"},
-		{percent: 68, expect: "run COMPACT soon"},
-		{percent: 79, expect: "fallback auto-compaction is getting close"},
+		{percent: 25, expect: "TRUNCATE in batches"},
+		{percent: 32, expect: "prepare one COMPACT pass"},
+		{percent: 60, expect: "run COMPACT soon"},
+		{percent: 70, expect: "fallback auto-compaction is getting close"},
 		{percent: 90, expect: "forced fallback compaction may trigger"},
 	}
 

@@ -136,9 +136,6 @@ func (t *TruncateCompactHint) parseSections(content string) (*HintSections, erro
 			currentSection = strings.ToUpper(sectionName)
 			continue
 		}
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
 
 		switch currentSection {
 		case "TRUNCATE":

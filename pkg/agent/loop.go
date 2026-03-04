@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
+
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
@@ -1883,6 +1885,5 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 
 // randFloat64 returns a random float64 in [0, 1)
 func randFloat64() float64 {
-	// Use math/rand for simplicity; crypto/rand is overkill for this use case
-	return float64(time.Now().UnixNano()%1000000000) / 1000000000.0
+	return rand.Float64()
 }
