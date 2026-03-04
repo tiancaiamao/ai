@@ -23,7 +23,9 @@ import (
 
 const (
 	defaultLLMMaxRetries               = 1
+	defaultRateLimitMaxRetries         = 8               // More retries for rate limit errors
 	defaultRetryBaseDelay              = 1 * time.Second
+	defaultRateLimitBaseDelay          = 3 * time.Second // Longer base delay for rate limit
 	defaultLoopMaxConsecutiveToolCalls = 6
 	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
@@ -458,7 +460,7 @@ turnCount++
 
 	stream.Push(NewAgentEndEvent(agentCtx.Messages))
 }
-// streamAssistantResponseWithRetry streams the assistant's response with retry logic.
+// streamAssistantResponseWithRetry streams assistant's response with retry logic.
 func streamAssistantResponseWithRetry(
 	ctx context.Context,
 	agentCtx *agentctx.AgentContext,
@@ -468,6 +470,10 @@ func streamAssistantResponseWithRetry(
 	span := traceevent.StartSpan(ctx, "streamAssistantResponseWithRetry", traceevent.CategoryEvent)
 	defer span.End()
 
+	var lastErr error
+	var isRateLimitError bool
+
+	// Determine retry limits based on error type
 	maxRetries := config.MaxLLMRetries
 	if maxRetries < 0 {
 		maxRetries = defaultLLMMaxRetries
@@ -477,11 +483,27 @@ func streamAssistantResponseWithRetry(
 		baseDelay = defaultRetryBaseDelay
 	}
 
-	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			delay := baseDelay * time.Duration(1<<(attempt-1))
-			if llm.IsRateLimit(lastErr) {
+			// Use longer delays and more retries for rate limit errors
+			if isRateLimitError {
+				// Re-evaluate retry limits for rate limit
+				rlMaxRetries := defaultRateLimitMaxRetries
+				if config.MaxLLMRetries > defaultRateLimitMaxRetries {
+					rlMaxRetries = config.MaxLLMRetries
+				}
+
+				// If we still have rate limit retries available, extend the loop
+				if attempt > maxRetries && attempt <= rlMaxRetries {
+					maxRetries = rlMaxRetries
+				}
+
+				baseDelay = defaultRateLimitBaseDelay
+				delay := baseDelay * time.Duration(1<<(attempt-1))
+				if delay > 30*time.Second {
+					delay = 30 * time.Second // Cap at 30 seconds
+				}
+
 				// Respect provider backoff hint when available.
 				retryAfter := llm.RetryAfter(lastErr)
 				if retryAfter > delay {
@@ -491,46 +513,68 @@ func streamAssistantResponseWithRetry(
 					delay = 2 * time.Second
 				}
 				delay = jitterDelay(delay)
-			}
-			meta := classifyLLMError(lastErr)
-			retryFields := []traceevent.Field{
-				{Key: "attempt", Value: attempt},
-				{Key: "max_retries", Value: maxRetries},
-				{Key: "delay_ms", Value: delay.Milliseconds()},
-				{Key: "error_type", Value: meta.ErrorType},
-				{Key: "error_message", Value: lastErr.Error()},
-			}
-			if meta.StatusCode > 0 {
-				retryFields = append(retryFields, traceevent.Field{Key: "error_status_code", Value: meta.StatusCode})
-			}
-			if meta.RetryAfter > 0 {
-				retryFields = append(retryFields, traceevent.Field{Key: "retry_after_ms", Value: meta.RetryAfter.Milliseconds()})
-			}
-			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_scheduled", retryFields...)
 
-			slog.Info("[Loop] Retrying LLM call",
-				"attempt", attempt,
-				"maxRetries", maxRetries,
-				"delay", delay,
-				"rateLimit", llm.IsRateLimit(lastErr))
+				// Emit retry event to frontend
+				stream.Push(NewLLMRetryEvent(LLMRetryInfo{
+					Attempt:    attempt,
+					MaxRetries: maxRetries,
+					Delay:      delay,
+					ErrorType:  "rate_limit",
+					Error:      lastErr.Error(),
+				}))
 
-			select {
-			case <-time.After(delay):
-				// Continue with retry
-			case <-ctx.Done():
-				traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
-					traceevent.Field{Key: "attempt", Value: attempt},
-					traceevent.Field{Key: "max_retries", Value: maxRetries},
-					traceevent.Field{Key: "reason", Value: "context_done"},
-				)
-				if lastErr != nil {
-					return nil, lastErr
+				slog.Info("[Loop] Retrying LLM call (rate limit)",
+					"attempt", attempt,
+					"maxRetries", maxRetries,
+					"delay", delay)
+
+				select {
+				case <-time.After(delay):
+					// Continue with retry
+				case <-ctx.Done():
+					traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+						traceevent.Field{Key: "attempt", Value: attempt},
+						traceevent.Field{Key: "max_retries", Value: maxRetries},
+						traceevent.Field{Key: "reason", Value: "context_done"},
+					)
+					if lastErr != nil {
+						return nil, lastErr
+					}
+					cause := context.Cause(ctx)
+					if cause == nil {
+						cause = ctx.Err()
+					}
+					return nil, WithErrorStack(cause)
 				}
-				cause := context.Cause(ctx)
-				if cause == nil {
-					cause = ctx.Err()
+			} else {
+				// Standard retry for non-rate-limit errors
+				delay := baseDelay * time.Duration(1<<(attempt-1))
+				delay = jitterDelay(delay)
+
+				slog.Info("[Loop] Retrying LLM call",
+					"attempt", attempt,
+					"maxRetries", maxRetries,
+					"delay", delay,
+					"errorType", classifyLLMError(lastErr).ErrorType)
+
+				select {
+				case <-time.After(delay):
+					// Continue with retry
+				case <-ctx.Done():
+					traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+						traceevent.Field{Key: "attempt", Value: attempt},
+						traceevent.Field{Key: "max_retries", Value: maxRetries},
+						traceevent.Field{Key: "reason", Value: "context_done"},
+					)
+					if lastErr != nil {
+						return nil, lastErr
+					}
+					cause := context.Cause(ctx)
+					if cause == nil {
+						cause = ctx.Err()
+					}
+					return nil, WithErrorStack(cause)
 				}
-				return nil, WithErrorStack(cause)
 			}
 		}
 
@@ -540,12 +584,19 @@ func streamAssistantResponseWithRetry(
 			return msg, nil
 		}
 
+		// Check error type
+		isRateLimitError = llm.IsRateLimit(err)
+
 		if llm.IsContextLengthExceeded(err) {
 			return nil, WithErrorStack(err)
 		}
 
 		lastErr = WithErrorStack(err)
-		slog.Error("[Loop] LLM call failed", "attempt", attempt, "maxRetries", maxRetries, "error", err)
+		slog.Error("[Loop] LLM call failed",
+			"attempt", attempt,
+			"maxRetries", maxRetries,
+			"isRateLimit", isRateLimitError,
+			"error", err)
 
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
@@ -566,6 +617,19 @@ func streamAssistantResponseWithRetry(
 				traceevent.Field{Key: "error_message", Value: lastErr.Error()},
 			)
 			return nil, lastErr
+		}
+
+		// For rate limit errors, allow more retries beyond initial maxRetries
+		if isRateLimitError && attempt >= maxRetries {
+			rlMaxRetries := defaultRateLimitMaxRetries
+			if config.MaxLLMRetries > defaultRateLimitMaxRetries {
+				rlMaxRetries = config.MaxLLMRetries
+			}
+			if attempt < rlMaxRetries {
+				// Continue to retry rate limit errors
+				maxRetries = rlMaxRetries
+				continue
+			}
 		}
 	}
 
