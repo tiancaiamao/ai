@@ -40,6 +40,9 @@ type ContextMgmtState struct {
 	ProactiveDecisions int // LLM made decisions without being reminded
 	ReminderNeeded     int // LLM needed reminders to make decisions
 
+	// Turn tracking
+	CurrentTurn int // Current turn number (updated every loop iteration)
+
 	// Last action state
 	LastDecisionTurn  int    // Turn number of last decision
 	LastActionTaken   string // "truncate", "compact", "both", "skip"
@@ -54,6 +57,7 @@ func DefaultContextMgmtState() *ContextMgmtState {
 		SkipUntilTurn:       0,
 		ProactiveDecisions:  0,
 		ReminderNeeded:      0,
+		CurrentTurn:         0,
 		LastDecisionTurn:    0,
 		LastActionTaken:     "none",
 		LastReminderTurn:    0,

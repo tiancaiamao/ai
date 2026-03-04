@@ -228,6 +228,9 @@ func runInnerLoop(
 			agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 		}
 
+		// Update current turn counter
+		agentCtx.ContextMgmtState.CurrentTurn = turnCount + 1
+
 	turnCount++
 
 		// Fallback auto-compact as safety net (only if LLM didn't handle it via llm_context_decision)

@@ -133,8 +133,8 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 	}
 
-	// Get turn count from context (we'll use a simple counter)
-	turn := agentCtx.ContextMgmtState.LastDecisionTurn + 1
+	// Get current turn from context (updated every loop iteration)
+	turn := agentCtx.ContextMgmtState.CurrentTurn
 	wasReminded := (turn - agentCtx.ContextMgmtState.LastReminderTurn) < agentCtx.ContextMgmtState.ReminderFrequency
 
 	var result strings.Builder
@@ -157,12 +157,6 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
 		result.WriteString(fmt.Sprintf("Deferred for %d turns.\n", skipTurns))
 		result.WriteString(fmt.Sprintf("Next reminder at turn %d.\n", turn+skipTurns))
-
-		// Update stats
-		if !wasReminded {
-			agentCtx.ContextMgmtState.ProactiveDecisions++
-		}
-		agentCtx.ContextMgmtState.AdjustFrequency()
 
 		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
 			traceevent.Field{Key: "skip_turns", Value: skipTurns},
