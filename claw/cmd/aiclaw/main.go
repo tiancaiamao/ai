@@ -185,13 +185,14 @@ func main() {
 	}
 
 	// Create tool registry and register tools
-	// For claw (chat bot), we use clawDir as working directory since it's not tied to a specific project
+	// For claw (chat bot), we create a workspace with clawDir as working directory since it's not tied to a specific project
+	workspace := tools.MustNewWorkspace(clawDir)
 	toolRegistry := tools.NewRegistry()
-	toolRegistry.Register(tools.NewReadTool(clawDir))
-	toolRegistry.Register(tools.NewBashTool(clawDir))
-	toolRegistry.Register(tools.NewWriteTool(clawDir))
-	toolRegistry.Register(tools.NewGrepTool(clawDir))
-	toolRegistry.Register(tools.NewEditTool(clawDir))
+	toolRegistry.Register(tools.NewReadTool(workspace))
+	toolRegistry.Register(tools.NewBashTool(workspace))
+	toolRegistry.Register(tools.NewWriteTool(workspace))
+	toolRegistry.Register(tools.NewGrepTool(workspace))
+	toolRegistry.Register(tools.NewEditTool(workspace))
 
 	agentConfig := &adapter.Config{
 		Model:           cfg.Model.ID,
