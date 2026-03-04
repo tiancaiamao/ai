@@ -8,6 +8,7 @@ AiClaw is an AI-powered chatbot with multi-channel support (Feishu, etc.) and sc
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Cron Scheduled Tasks](#cron-scheduled-tasks)
+- [Workflow Skills](#workflow-skills)
 - [Skills System](#skills-system)
 - [Development](#development)
 
@@ -164,6 +165,18 @@ Common examples:
 ## Skills System
 
 Skills directory is at `~/.aiclaw/skills/` (symlinked to `claw/skills/`).
+
+## Workflow Skills
+
+AiClaw includes a workflow-oriented skill set for issue/worktree/PR automation:
+
+- `wf-intake` - task -> issue -> worktree + status initialization
+- `wf-tick` - cron-safe reconciliation tick and state transition engine
+- `wf-worker` - subagent execution and heartbeat supervision
+- `wf-pr-review` - PR/review reconciliation and fix-loop triggering
+- `wf-closeout` - issue close + worktree cleanup + registry archive
+
+See [workflow-skills.md](./workflow-skills.md) for usage and state model.
 
 ### Built-in Skills
 
