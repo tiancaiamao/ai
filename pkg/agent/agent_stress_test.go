@@ -264,7 +264,7 @@ func TestStressRetryUnderLoad(t *testing.T) {
 					t.Errorf("Flaky tool failed: %v", err)
 				} else {
 					atomic.AddInt32(&successCount, 1)
-					atomic.AddInt32(&retryCount, int32(tool.calls-1))
+					atomic.AddInt32(&retryCount, int32(tool.GetCalls()-1))
 				}
 			}(tool)
 		}

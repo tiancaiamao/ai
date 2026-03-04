@@ -38,7 +38,7 @@ func TestExecutorRetryMechanism(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, content)
-		assert.Equal(t, 3, tool.calls)                  // Should have been called 3 times (initial + 2 retries)
+		assert.Equal(t, 3, tool.GetCalls())                  // Should have been called 3 times (initial + 2 retries)
 		assert.True(t, elapsed >= 100*time.Millisecond) // At least 100ms backoff
 	})
 
@@ -64,7 +64,7 @@ func TestExecutorRetryMechanism(t *testing.T) {
 		content, err := executor.Execute(ctx, tool, map[string]any{"input": "test"})
 		require.Error(t, err)
 		assert.Nil(t, content)
-		assert.Equal(t, 1, tool.calls) // Should have been called only once (no retry)
+		assert.Equal(t, 1, tool.GetCalls()) // Should have been called only once (no retry)
 	})
 
 	t.Run("stop_retry_on_context_cancel", func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestExecutorRetryMechanism(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, content)
-		assert.Equal(t, 0, tool.calls) // agentctx.Tool never called because context was already canceled
+		assert.Equal(t, 0, tool.GetCalls()) // agentctx.Tool never called because context was already canceled
 	})
 
 	t.Run("exponential_backoff", func(t *testing.T) {
@@ -259,7 +259,7 @@ func TestTimeoutHandling(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "timeout")
-		assert.Equal(t, 3, tool.calls) // Should have tried 3 times (initial + 2 retries)
+		assert.Equal(t, 3, tool.GetCalls()) // Should have tried 3 times (initial + 2 retries)
 
 		// Should have tried multiple times (3 attempts with ~1s timeout each)
 		// Total time varies based on context cancellation behavior

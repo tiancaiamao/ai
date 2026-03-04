@@ -4,6 +4,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -14,7 +15,7 @@ type MockTool struct {
 	failCount   int
 	maxFailures int
 	failMessage string
-	calls       int
+	calls       int32 // Use int32 for atomic operations
 	execDelayMs int
 }
 
@@ -39,9 +40,9 @@ func (m *MockTool) Parameters() map[string]any {
 }
 
 func (m *MockTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
-	m.calls++
+	calls := int(atomic.AddInt32(&m.calls, 1))
 
-	if m.calls <= m.maxFailures {
+	if calls <= m.maxFailures {
 		return nil, errors.New(m.failMessage)
 	}
 
@@ -59,7 +60,12 @@ func (m *MockTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 // Reset resets the mock tool state
 func (m *MockTool) Reset() {
-	m.calls = 0
+	atomic.StoreInt32(&m.calls, 0)
+}
+
+// GetCalls returns the number of calls (thread-safe)
+func (m *MockTool) GetCalls() int {
+	return int(atomic.LoadInt32(&m.calls))
 }
 
 func TestToolExecutorRetryOnFailure(t *testing.T) {
@@ -128,8 +134,8 @@ func TestToolExecutorRetryOnFailure(t *testing.T) {
 			if !tt.expectError && err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if tt.tool.calls != tt.expectedCalls {
-				t.Errorf("expected %d calls, got %d", tt.expectedCalls, tt.tool.calls)
+			if tt.tool.GetCalls() != tt.expectedCalls {
+				t.Errorf("expected %d calls, got %d", tt.expectedCalls, tt.tool.GetCalls())
 			}
 			if !tt.expectError && result == nil {
 				t.Errorf("expected result but got nil")
@@ -176,11 +182,11 @@ func TestToolExecutorRetryWithExponentialBackoff(t *testing.T) {
 	}
 
 	// Verify retries happened
-	if tool.calls != 3 {
-		t.Errorf("expected 3 calls (2 failures + 1 success), got %d", tool.calls)
+	if tool.GetCalls() != 3 {
+		t.Errorf("expected 3 calls (2 failures + 1 success), got %d", tool.GetCalls())
 	}
 
-	t.Logf("Execution took %v with %d retries", elapsed, tool.calls-1)
+	t.Logf("Execution took %v with %d retries", elapsed, tool.GetCalls()-1)
 }
 
 func TestToolExecutorNoRetryOnContextCancel(t *testing.T) {
@@ -222,7 +228,7 @@ func TestToolExecutorNoRetryOnContextCancel(t *testing.T) {
 		t.Errorf("expected quick cancel (< %v), got %v", maxExpected, elapsed)
 	}
 
-	t.Logf("Context canceled in %v after %d calls", elapsed, tool.calls)
+	t.Logf("Context canceled in %v after %d calls", elapsed, tool.GetCalls())
 }
 
 func TestExecutorPoolRetryPerTool(t *testing.T) {
@@ -265,8 +271,8 @@ func TestExecutorPoolRetryPerTool(t *testing.T) {
 	if resultA == nil {
 		t.Errorf("tool A result is nil")
 	}
-	if toolA.calls != 2 {
-		t.Errorf("expected tool A to be called 2 times, got %d", toolA.calls)
+	if toolA.GetCalls() != 2 {
+		t.Errorf("expected tool A to be called 2 times, got %d", toolA.GetCalls())
 	}
 
 	// agentctx.Tool B should succeed immediately
@@ -277,9 +283,9 @@ func TestExecutorPoolRetryPerTool(t *testing.T) {
 	if resultB == nil {
 		t.Errorf("tool B result is nil")
 	}
-	if toolB.calls != 1 {
-		t.Errorf("expected tool B to be called 1 time, got %d", toolB.calls)
+	if toolB.GetCalls() != 1 {
+		t.Errorf("expected tool B to be called 1 time, got %d", toolB.GetCalls())
 	}
 
-	t.Logf("agentctx.Tool A: %d calls, agentctx.Tool B: %d calls", toolA.calls, toolB.calls)
+	t.Logf("agentctx.Tool A: %d calls, agentctx.Tool B: %d calls", toolA.GetCalls(), toolB.GetCalls())
 }
