@@ -1464,6 +1464,18 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	}
 	state := agentCtx.ContextMgmtState
 
+	// Check if we should show reminder based on adaptive frequency
+	// If we're in a skip period or haven't reached the frequency threshold, suppress the reminder
+	showReminder := state.ShouldShowReminder(agentCtx.RuntimeMetaTurns, actionRequired, urgency)
+	if !showReminder && actionRequired != "none" {
+		// Suppress the reminder - don't show action_required in runtime_state
+		actionRequired = "none"
+		urgency = "none"
+	} else if showReminder && actionRequired != "none" {
+		// We're showing a reminder, record it
+		state.RecordReminder(agentCtx.RuntimeMetaTurns, urgency)
+	}
+
 	// Build context management stats section
 	var cmStats string
 	if state.ProactiveDecisions > 0 || state.ReminderNeeded > 0 {
@@ -1507,7 +1519,7 @@ decision:
 guidance:
   - If action_required is not "none", you MUST call llm_context_decision tool BEFORE answering the user.
   - Use decision="skip" with appropriate skip_turns (1-30) to defer when not urgent.
-  - Higher skip_turns values (15-30) indicate you承诺 to be proactive; this increases trust and reduces reminder frequency.
+  - Higher skip_turns values (15-30) indicate you promise to be proactive; this increases trust and reduces reminder frequency.
   - Lower skip_turns values (1-5) are for uncertain situations; reminders will come more frequently.
   - Stage hint: %s
 </runtime_state>`,

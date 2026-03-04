@@ -820,3 +820,33 @@ func extractText(msg agentctx.AgentMessage) string {
 	}
 	return b.String()
 }
+
+// ToContextCompactor adapts this Compactor to implement context.Compactor interface.
+// This allows the compact.Compactor to be used where context.Compactor is expected.
+func (c *Compactor) ToContextCompactor() agentctx.Compactor {
+	return &contextCompactorAdapter{c: c}
+}
+
+// contextCompactorAdapter adapts compact.Compactor to context.Compactor interface.
+type contextCompactorAdapter struct {
+	c *Compactor
+}
+
+// ShouldCompact checks if context compression is needed.
+func (a *contextCompactorAdapter) ShouldCompact(messages []agentctx.AgentMessage) bool {
+	return a.c.ShouldCompact(messages)
+}
+
+// Compact performs context compression and returns a context.CompactionResult.
+func (a *contextCompactorAdapter) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agentctx.CompactionResult, error) {
+	result, err := a.c.Compact(messages, previousSummary)
+	if err != nil {
+		return nil, err
+	}
+	return &agentctx.CompactionResult{
+		Summary:      result.Summary,
+		Messages:     result.Messages,
+		TokensBefore: result.TokensBefore,
+		TokensAfter:  result.TokensAfter,
+	}, nil
+}

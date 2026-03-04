@@ -243,22 +243,15 @@ Treat it as the source of truth between turns.
 **Path**: %s
 **Detail dir**: %s%s
 
-**Turn Protocol (Separated Priorities):**
-
-**PHASE 1: Memory Update (low priority, flexible)**
-1. Read runtime_state.
-2. If task state changed, update overview.md (can be done alongside your main task).
-
-**PHASE 2: Context Management (HIGH PRIORITY)**
-3. If context_management.action_required is NOT "none":
-   - You MUST call llm_context_decision tool BEFORE answering the user.
-   - This is MANDATORY and takes priority over everything else.
-   - Do NOT proceed to phase 3 until this is complete.
+**Turn Protocol:**
+1. Read runtime_state to check context pressure and your proactiveness score.
+2. If context_management.action_required is not "none", call llm_context_decision tool.
    - Available decisions: "truncate", "compact", "both", "skip"
    - Use decision="skip" with appropriate skip_turns (1-30) when context pressure is low.
-
-**PHASE 3: Answer User**
-4. After completing phase 1 and 2 (if required), answer the user.
+   - Higher skip_turns (15-30) indicate you promise to be proactive; this increases trust.
+   - Lower skip_turns (1-5) are for uncertain situations; reminders will come more frequently.
+3. If task state changed, update overview.md.
+4. Then answer the user.
 
 **External Memory:**
 - **overview.md**: Auto-injected each turn. Keep it concise.

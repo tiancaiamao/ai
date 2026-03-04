@@ -43,7 +43,7 @@ DECISION OPTIONS:
 - "truncate": Remove specific tool outputs (provide truncate_ids)
 - "compact": Run compaction to summarize history (provide compact_confidence)
 - "both": Do both truncate and compact
-- "skip": Defer for skip_turns (1-30, higher = you承诺 to be proactive)
+- "skip": Defer for skip_turns (1-30, higher = you promise to be proactive)
 
 PARAMETERS:
 - decision (required): "truncate", "compact", "both", or "skip"
@@ -90,7 +90,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 				"minimum":     1,
 				"maximum":     30,
 				"default":     10,
-				"description": "If decision='skip', how many turns to skip before reminding again (higher = you承诺 to be proactive)",
+				"description": "If decision='skip', how many turns to skip before reminding again (higher = you promise to be proactive)",
 			},
 			"truncate_ids": map[string]any{
 				"type":        "array",
@@ -135,7 +135,8 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 
 	// Get current turn from context (updated every loop iteration)
 	turn := agentCtx.ContextMgmtState.CurrentTurn
-	wasReminded := (turn - agentCtx.ContextMgmtState.LastReminderTurn) < agentCtx.ContextMgmtState.ReminderFrequency
+	// wasReminded indicates whether a reminder was shown THIS turn
+	wasReminded := agentCtx.ContextMgmtState.LastReminderTurn == turn
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
@@ -157,6 +158,9 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
 		result.WriteString(fmt.Sprintf("Deferred for %d turns.\n", skipTurns))
 		result.WriteString(fmt.Sprintf("Next reminder at turn %d.\n", turn+skipTurns))
+
+		// Record the skip decision so LastDecisionTurn is updated
+		agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
 
 		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
 			traceevent.Field{Key: "skip_turns", Value: skipTurns},
@@ -205,7 +209,12 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 	case "compact":
 		if t.compactor == nil {
 			result.WriteString("Compactor not available, skipped compaction.\n")
-			agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
+			// Record decision with correct action type
+			action := "compact"
+			if decision == "both" {
+				action = "both"
+			}
+			agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
 			break
 		}
 
@@ -237,8 +246,12 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			result.WriteString("Compaction returned no changes.\n")
 		}
 
-		// Record decision
-		agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
+		// Record decision with correct action type
+		action := "compact"
+		if decision == "both" {
+			action = "both"
+		}
+		agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
 
 	default:
 		return nil, fmt.Errorf("invalid decision: %s", decision)

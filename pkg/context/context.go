@@ -107,7 +107,7 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 	s.AdjustFrequency()
 }
 
-// SetSkipUntil sets the skip period and counts it as proactive if LLM承诺s to check back.
+// SetSkipUntil sets the skip period and counts it as proactive if LLM promises to check back later.
 func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, wasReminded bool) {
 	if s == nil {
 		return
