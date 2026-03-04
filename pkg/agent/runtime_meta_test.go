@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-		LLMContextSize: 3000,
+		LLMContextSize:    3000,
 	}
 
 	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
@@ -148,6 +149,98 @@ func TestExtractRecentMessagesSkipsOrphanedToolResults(t *testing.T) {
 	// Should start with user or assistant
 	if active[0].Role != "user" && active[0].Role != "assistant" {
 		t.Fatalf("expected first message to be user or assistant, got %q", active[0].Role)
+	}
+}
+
+func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) {
+	msgs := []agentctx.AgentMessage{agentctx.NewUserMessage("old")}
+	msgs = append(msgs, agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "stale-1"},
+	}, false))
+	msgs = append(msgs, agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "stale-2"},
+	}, false))
+	for i := 3; i <= 12; i++ {
+		msgs = append(msgs, agentctx.NewToolResultMessage(
+			fmt.Sprintf("call-%d", i),
+			"grep",
+			[]agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("recent-%d", i)},
+			},
+			false,
+		))
+	}
+	msgs = append(msgs, agentctx.NewUserMessage("latest"))
+
+	summary := buildToolOutputsSummary(msgs)
+	if !containsString(summary, "2 stale outputs") {
+		t.Fatalf("expected 2 stale outputs in summary, got: %s", summary)
+	}
+	if !containsString(summary, "1 bash, 1 read") {
+		t.Fatalf("expected grouped tool counts, got: %s", summary)
+	}
+	if !containsString(summary, "consider TRUNCATE") {
+		t.Fatalf("expected truncate guidance, got: %s", summary)
+	}
+}
+
+func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("修复 truncate compact 协议"),
+		func() agentctx.AgentMessage {
+			m := agentctx.NewAssistantMessage()
+			m.Content = []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "阶段完成：truncate 已完成"},
+			}
+			return m
+		}(),
+		agentctx.NewUserMessage("顺便看看前端动画设计"),
+	}
+	meta := agentctx.ContextMeta{
+		TokensUsed:        64000,
+		TokensMax:         128000,
+		TokensPercent:     50.0,
+		MessagesInHistory: len(agentCtx.Messages),
+		LLMContextSize:    1200,
+	}
+
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	if !refreshed {
+		t.Fatal("expected refreshed snapshot")
+	}
+	if !containsString(snapshot, "compact_decision_signals:") {
+		t.Fatalf("expected compact_decision_signals section, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "topic_shift_since_last_user: llm_judge") {
+		t.Fatalf("expected llm_judge topic shift signal, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "phase_completed_recently: llm_judge") {
+		t.Fatalf("expected llm_judge phase completion signal, got: %s", snapshot)
+	}
+	if !containsString(snapshot, "llm_judge_hint: Compare the latest user intent") {
+		t.Fatalf("expected llm_judge_hint, got: %s", snapshot)
+	}
+}
+
+func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
+	cases := []struct {
+		percent float64
+		expect  string
+	}{
+		{percent: 12, expect: "only TRUNCATE"},
+		{percent: 25, expect: "TRUNCATE in batches"},
+		{percent: 32, expect: "prepare one COMPACT pass"},
+		{percent: 60, expect: "run COMPACT soon"},
+		{percent: 70, expect: "fallback auto-compaction is getting close"},
+		{percent: 90, expect: "forced fallback compaction may trigger"},
+	}
+
+	for _, tc := range cases {
+		got := runtimeContextManagementHint(tc.percent)
+		if !containsString(got, tc.expect) {
+			t.Fatalf("percent %.1f expected hint containing %q, got %q", tc.percent, tc.expect, got)
+		}
 	}
 }
 

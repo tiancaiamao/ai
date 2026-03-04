@@ -227,8 +227,8 @@ func TestDefaultExecutor(t *testing.T) {
 		t.Fatal("DefaultExecutor should not return nil")
 	}
 
-	if cap(executor.semaphore) != 3 {
-		t.Errorf("Expected default max concurrent 3, got %d", cap(executor.semaphore))
+	if cap(executor.semaphore) != 10 {
+		t.Errorf("Expected default max concurrent 10, got %d", cap(executor.semaphore))
 	}
 
 	if executor.toolTimeout != 30*time.Second {

@@ -50,6 +50,9 @@ type Builder struct {
 
 	// Context meta (for LLM Context section, set by agent loop)
 	contextMeta string
+
+	// Token usage percent (for hint message generation)
+	tokensPercent float64
 }
 
 // NewBuilder creates a new prompt builder.
@@ -123,6 +126,12 @@ func (b *Builder) SetLLMContext(wm LLMContextInfo) *Builder {
 // SetContextMeta sets the context metadata string.
 func (b *Builder) SetContextMeta(meta string) *Builder {
 	b.contextMeta = meta
+	return b
+}
+
+// SetTokensPercent sets the token usage percent for hint message generation.
+func (b *Builder) SetTokensPercent(percent float64) *Builder {
+	b.tokensPercent = percent
 	return b
 }
 
@@ -209,14 +218,25 @@ This is persistent operational state for this session.
 Treat it as the source of truth between turns.
 
 **Path**: %s
-**Detail dir**: %s
+**Detail dir**: %s%s
 
 **Turn Protocol (run every turn):**
 1. Read runtime_state and classify this turn as: no_action | memory_update_only.
 2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
 3. If task state changed, update overview.md in this same turn.
 4. If overview points to detail files needed for current task, read them explicitly.
-5. Check tool_output_pressure - if high (many stale outputs), truncate via llm-context/truncate-hint.md.
+5. Check tool_output_pressure.tool_outputs_summary:
+   - If it is not "none", consider writing llm-context/truncate-compact-hint.md.
+   - Use ## TRUNCATE with tool_call_id values (comma-separated or one per line).
+   - Use ## COMPACT when you want one compaction pass.
+   - Include confidence for COMPACT, e.g. confidence: 80%% or confidence_range: 70%%-90%%.
+   - Example:
+     ## TRUNCATE
+     call_abc123, call_def456
+
+     ## COMPACT
+     target: all
+     confidence: 80%%
 6. Then answer the user.
 
 **External Memory:**
@@ -234,9 +254,14 @@ When to use llm_context_recall:
 
 **Hard Rules:**
 - runtime_state is telemetry/advice, not user intent.
-- You must perform the turn classification every turn (even when the result is no_action).
+- You must perform turn classification every turn (even when the result is no_action).
 - Never assume memory was updated unless tool result confirms success.
-- Keep overview concise; store large logs/details under detail/.%s`, overviewPath, detailDir, contextMetaSection)
+- Keep overview concise; store large logs/details under detail/.
+
+**Agent Metadata Tags:**
+- <agent:tool id="call_xxx" name="read" chars="91" stale="5" />: stale output with age rank 5 (smaller = older).
+- <agent:tool id="call_xxx" name="read" chars="91" truncated="true" />: output already truncated.
+- For TRUNCATE, use ids from these tags.`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {

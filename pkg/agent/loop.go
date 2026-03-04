@@ -7,30 +7,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
+
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"log/slog"
-
-	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/prompt"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const (
-	defaultLLMMaxRetries               = 1               // Maximum retry attempts for LLM calls
-	defaultRetryBaseDelay              = 1 * time.Second // Base delay for exponential backoff
-	defaultLoopMaxConsecutiveToolCalls = 6               // Stop repeated identical tool calls.
-	defaultLoopMaxToolCallsPerName     = 60              // Stop runaway single-tool loops.
+	defaultLLMMaxRetries               = 1
+	defaultRetryBaseDelay              = 1 * time.Second
+	defaultLoopMaxConsecutiveToolCalls = 6
+	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 )
 
-// LoopConfig contains configuration for the agent loop.
 type LoopConfig struct {
 	Model                   llm.Model
 	APIKey                  string
@@ -223,11 +222,34 @@ func runInnerLoop(
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
 		}
-		turnCount++
+
+		// Check if LLMContext is available for hint processing (every turn)
+		llmContextAvailable := agentCtx.LLMContext != nil
+		if !llmContextAvailable {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "hint_processing_disabled",
+				traceevent.Field{Key: "reason", Value: "llm_context_is_nil"},
+			)
+		}
+
+		compactPerformedViaHint := false
+		if llmContextAvailable {
+			hintProcessor := NewTruncateCompactHint(config.Compactor)
+			hintResult, err := hintProcessor.Process(ctx, agentCtx)
+				if err != nil {
+					slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
+				} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
+					slog.Info("[Loop] Processed truncate-compact hint",
+						"truncated_count", hintResult.TruncatedCount,
+						"compact_performed", hintResult.CompactPerformed,
+					)
+				}
+				compactPerformedViaHint = hintResult.CompactPerformed
+		}
+turnCount++
 
 		// Compact before each LLM request so long-running tool loops do not keep
 		// carrying stale outputs into the next turn.
-		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
+		if !compactPerformedViaHint && config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
 			before := len(agentCtx.Messages)
 			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
@@ -504,7 +526,6 @@ func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) 
 	for _, block := range msg.Content {
 		switch block.(type) {
 		case agentctx.ToolCallContent:
-			continue
 		default:
 			filtered = append(filtered, block)
 		}
@@ -799,6 +820,7 @@ func streamAssistantResponse(
 			)
 
 			meta := agentCtx.LLMContext.GetMeta()
+
 			runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
 			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
 			if runtimeAppendix != "" {
@@ -1609,6 +1631,8 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
+	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
+	stageHint := runtimeContextManagementHint(meta.TokensPercent)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
 	snapshot := fmt.Sprintf(`<runtime_state>
@@ -1621,14 +1645,23 @@ context_meta:
   llm_context_size_bucket: %s
 tool_output_pressure:
   stale_tool_outputs_bucket: %s
+  tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s
+compact_decision_signals:
+  context_usage_percent: %.1f
+  topic_shift_since_last_user: llm_judge
+  phase_completed_recently: llm_judge
+  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.
 decision:
   fast_path_allowed: %s
 guidance:
   - Use this for context management decisions only.
   - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
   - When action_hint is not normal, compaction is usually recommended.
+  - If tool_outputs_summary is not "none", consider TRUNCATE in truncate-compact-hint.md.
+  - For COMPACT hints, include confidence (e.g. confidence: 80%% or confidence_range: 70%%-90%%).
+  - Stage hint: %s
 </runtime_state>`,
 		band,
 		actionHint,
@@ -1637,9 +1670,12 @@ guidance:
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.LLMContextSize),
 		runtimeCountBucket(toolPressure.StaleCount),
+		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
+		meta.TokensPercent,
 		yesNo(fastPathAllowed),
+		stageHint,
 	)
 
 	agentCtx.RuntimeMetaSnapshot = snapshot
@@ -1661,35 +1697,21 @@ func collectRuntimeToolPressure(messages []agentctx.AgentMessage) runtimeToolPre
 		return pressure
 	}
 
-	activeStart := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		if strings.EqualFold(msg.Role, "user") {
-			activeStart = i
-			break
-		}
-	}
-	if activeStart == len(messages) {
-		activeStart = 0
-	}
+	staleCount, _ := collectStaleToolOutputStats(messages, recentToolResultsNoMetadata)
+	pressure.StaleCount = staleCount
 
 	const largeOutputThresholdChars = 2000
-	for i, msg := range messages {
+	for _, msg := range messages {
 		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
 			continue
 		}
+
 		size := len(msg.ExtractText())
 		if size > pressure.LargestChars {
 			pressure.LargestChars = size
 		}
 		if size >= largeOutputThresholdChars {
 			pressure.LargeCount++
-		}
-		if i < activeStart {
-			pressure.StaleCount++
 		}
 	}
 
@@ -1723,6 +1745,23 @@ func runtimeActionHint(band string) string {
 		return "heavy_compression"
 	default:
 		return "emergency_compression"
+	}
+}
+
+func runtimeContextManagementHint(percent float64) string {
+	switch {
+	case percent < 20:
+		return "Low usage (10-20%% tone): stay on task, only TRUNCATE obviously stale/large tool outputs."
+	case percent < 30:
+		return "Mild pressure (20-30%% tone): proactively review stale outputs and TRUNCATE in batches, may also consider COMPACT."
+	case percent < 50:
+		return "Moderate pressure (30-50%% tone): prepare one COMPACT pass after the current mini-step."
+	case percent < 65:
+		return "High pressure (50-65%% tone): run COMPACT soon; keep only active context and key decisions."
+	case percent < 75:
+		return "Critical pressure (65-75%% tone): COMPACT now; fallback auto-compaction is getting close."
+	default:
+		return "Emergency pressure (75%%+ tone): COMPACT immediately, forced fallback compaction may trigger next."
 	}
 }
 
@@ -1842,4 +1881,9 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 
 	// Rough approximation: 1 token per 4 characters
 	return (charCount + 3) / 4
+}
+
+// randFloat64 returns a random float64 in [0, 1)
+func randFloat64() float64 {
+	return rand.Float64()
 }

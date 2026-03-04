@@ -1,12 +1,12 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -19,9 +19,29 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 	defer span.End()
 
 	messages = dedupeMessagesForLLM(messages)
+	lastUserIndex := findLastVisibleUserIndex(messages)
+	protectedToolResults := protectedRecentToolResultIndexes(messages, recentToolResultsNoMetadata)
+
+	// Pre-calculate age rank for each tool result message
+	toolResultAgeRanks := make(map[int]int)
+	toolResultCount := 0
+	for i, msg := range messages {
+		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
+			continue
+		}
+		if lastUserIndex < 0 || i >= lastUserIndex {
+			continue
+		}
+		if _, protected := protectedToolResults[i]; protected {
+			continue
+		}
+		toolResultCount++
+		toolResultAgeRanks[i] = toolResultCount
+	}
+
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
 
-	for _, msg := range messages {
+	for i, msg := range messages {
 		if !msg.IsAgentVisible() {
 			continue
 		}
@@ -75,14 +95,55 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 		// agentctx.Tool result message
 		if msg.Role == "toolResult" {
 			llmMsg.ToolCallID = msg.ToolCallID
-			// Extract text content
-			llmMsg.Content = msg.ExtractText()
+			content := msg.ExtractText()
+			if shouldInjectStaleToolMetadata(msg, i, lastUserIndex, protectedToolResults) {
+				charCount := len(content)
+				if n, ok := parseCharsFromAgentToolTag(content); ok {
+					charCount = n
+				}
+				toolName := strings.TrimSpace(msg.ToolName)
+				if toolName == "" {
+					toolName = "unknown"
+				}
+				ageRank := toolResultAgeRanks[i]
+				staleTag := fmt.Sprintf(
+					`<agent:tool id="%s" name="%s" chars="%d" stale="%d" />`,
+					msg.ToolCallID,
+					toolName,
+					charCount,
+					ageRank,
+				)
+				if content == "" {
+					content = staleTag
+				} else {
+					content = staleTag + "\n" + content
+				}
+			}
+			llmMsg.Content = content
 		}
 
 		llmMessages = append(llmMessages, llmMsg)
 	}
 
 	return llmMessages
+}
+
+func shouldInjectStaleToolMetadata(
+	msg agentctx.AgentMessage,
+	messageIndex int,
+	lastUserIndex int,
+	protectedToolResults map[int]struct{},
+) bool {
+	if msg.Role != "toolResult" {
+		return false
+	}
+	if lastUserIndex < 0 || messageIndex >= lastUserIndex {
+		return false
+	}
+	if _, protected := protectedToolResults[messageIndex]; protected {
+		return false
+	}
+	return !hasAgentToolMetadataTag(msg.ExtractText())
 }
 
 func dedupeMessagesForLLM(messages []agentctx.AgentMessage) []agentctx.AgentMessage {

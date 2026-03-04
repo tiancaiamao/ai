@@ -226,7 +226,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	basePrompt := `You are a helpful AI coding assistant.
 - If you cannot answer the request, return an empty JSON with error field.
-- Do not hallucinate or add unnecessary commentary.`
+- Do not hallucinate or add unnecessary commentary.
+- Respect facts and be critical in your thinking. Don't simply agree with everything the user says.`
 
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
