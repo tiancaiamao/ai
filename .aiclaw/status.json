@@ -1,0 +1,12 @@
+{
+  "issue": 8,
+  "title": "[WF] 实现 xxx",
+  "branch": "feature/issue-8-implement-xxx",
+  "state": "in_progress",
+  "progress": {
+    "tests_passed": true,
+    "context_package_tests": "passed",
+    "build_status": "not_verified"
+  },
+  "started_at": "2025-01-01T00:00:00Z"
+}
