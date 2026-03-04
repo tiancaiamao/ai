@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/sminez/ad/win v0.0.0
+	github.com/sminez/ad/win v0.0.0-20260211034838-14a2a7a40d33
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -15,4 +15,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/sminez/ad/win => /Users/genius/project/ad/win
+replace github.com/sminez/ad/win => github.com/tiancaiamao/ad/win v0.0.0-20260211034838-14a2a7a40d33
