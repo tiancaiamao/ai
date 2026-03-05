@@ -56,7 +56,7 @@ EXAMPLES:
 # Truncate old outputs
 decision: "truncate"
 reasoning: "70 stale outputs from earlier task, no longer needed"
-truncate_ids: ["call_abc123", "call_def456"]
+truncate_ids: "call_abc123, call_def456"
 
 # Compact with confidence
 decision: "compact"
@@ -93,9 +93,8 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 				"description": "If decision='skip', how many turns to skip before reminding again (higher = you promise to be proactive)",
 			},
 			"truncate_ids": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Tool call IDs to truncate (if decision='truncate' or 'both')",
+				"type":        "string",
+				"description": "Comma-separated tool call IDs to truncate (e.g., 'call_abc123, call_def456')",
 			},
 			"compact_confidence": map[string]any{
 				"type":        "integer",
@@ -175,14 +174,26 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 
 	case "truncate", "both":
 		truncatedCount := 0
-		if ids, ok := params["truncate_ids"].([]any); ok && len(ids) > 0 {
-			idsToTruncate := make([]string, 0, len(ids))
+		// Support both string (comma-separated) and array formats for backwards compatibility
+		var idsToTruncate []string
+		if ids, ok := params["truncate_ids"].(string); ok && ids != "" {
+			// Parse comma-separated string
+			for _, id := range strings.Split(ids, ",") {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					idsToTruncate = append(idsToTruncate, id)
+				}
+			}
+		} else if ids, ok := params["truncate_ids"].([]any); ok && len(ids) > 0 {
+			// Fallback to array format
 			for _, id := range ids {
 				if idStr, ok := id.(string); ok {
 					idsToTruncate = append(idsToTruncate, idStr)
 				}
 			}
+		}
 
+		if len(idsToTruncate) > 0 {
 			truncatedCount = t.processTruncate(ctx, agentCtx, idsToTruncate)
 			result.WriteString(fmt.Sprintf("Truncated %d tool output(s).\n", truncatedCount))
 
