@@ -58,6 +58,7 @@ type LLMContext struct {
 	// Decision tracking - for separate reminder when LLM updates overview but doesn't call llm_context_decision
 	updatedOverviewThisRound bool // LLM updated overview but didn't call tool
 	roundsSinceDecisionNeeded int // Rounds since decision was needed but not made
+	staleToolOutputs int // Number of stale tool outputs (updated from runtime)
 
 	// Update statistics for adaptive reminder frequency
 	totalUpdates      int  // Total number of updates
@@ -103,18 +104,29 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 - messages_in_history: 历史消息数量
 - llm_context_size: llm context 大小（字节）
 
-### 上下文压缩触发条件
+### llm_context_decision 工具使用
 
-当 tokens_percent >= 70%% 时，你应该主动压缩上下文：
+当需要管理 context 时，使用 llm_context_decision tool：
 
-1. **总结历史对话**：将已完成的任务、已解决的问题归档到 detail 目录
-2. **精简 overview.md**：只保留当前任务、关键决策、待解决问题
-3. **使用 write tool** 更新此文件，系统会在下次请求时使用压缩后的内容
+**决策选项：**
+- TRUNCATE: 删除旧的 tool outputs（推荐批量删除 50-100 条）
+- COMPACT: 总结对话历史
+- SKIP: 推迟决策
 
-压缩示例：
-- 将详细的调试过程移到 detail/debug-xxx.md
-- 将已完成的任务从"当前任务"移到"已完成"
-- 删除不再需要的临时信息
+**如何批量 TRUNCATE：**
+1. 从消息历史中查找 tool call ID（格式：<agent:tool id="call_function_xxx" ...>）
+2. 收集多个 ID（一次删除 50-100 条，不要只删 1-2 条）
+3. 传入 truncate_ids 数组
+
+**示例：**
+{"decision": "truncate", "reasoning": "清理 80 条旧的 tool outputs", "truncate_ids": ["call_xxx1", "call_xxx2", ...80+ IDs...]}
+
+### 决策建议
+
+- stale outputs > 20 → TRUNCATE（优先批量删除）
+- tokens > 65% → COMPACT
+- tokens 50-65% → COMPACT 或 TRUNCATE
+- 其他情况 → 根据需要决定
 
 ## 当前任务
 <!-- 用户让你做什么？当前进度？ -->
@@ -663,13 +675,28 @@ func (wm *LLMContext) IncrementDecisionNeededCounter() {
 	wm.roundsSinceDecisionNeeded++
 }
 
+// SetStaleToolCount sets the number of stale tool outputs (called from runtime).
+func (wm *LLMContext) SetStaleToolCount(count int) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.staleToolOutputs = count
+}
+
+// GetStaleToolCount returns the number of stale tool outputs.
+func (wm *LLMContext) GetStaleToolCount() int {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+	return wm.staleToolOutputs
+}
+
 // GetDecisionReminderMessage returns a user message reminder for llm_context_decision.
 func (wm *LLMContext) GetDecisionReminderMessage() string {
 	meta := wm.GetMeta()
+	staleCount := wm.GetStaleToolCount()
 
 	return fmt.Sprintf(`[system message by agent, not from real user]
 
-💡 Remember to use llm_context_decision tool to keep your context well maintained.
+💡 Context management required: tokens at %d%%, %d stale tool outputs.
 
 <context_meta>
 tokens_used: %d
@@ -678,7 +705,45 @@ tokens_percent: %.0f%%
 messages_in_history: %d
 </context_meta>
 
-Action required: Please call llm_context_decision tool to manage context.
-Even you decide to skip, you need to call it with the 'skip' and 'reason'.
-This reminder will stop appearing once you call the tool.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory)
+Current state suggests: %s (RECOMMEND ACTION NOW!)
+
+HOW TO TRUNCATE (IMPORTANT):
+1. Find tool call IDs from message history - look for patterns like: <agent:tool id="call_function_xxx" ...
+2. Get many IDs (批量清理！一次清理 50-100 条，不要只清理 1-2 条)
+3. Pass them as truncate_ids array
+
+EXAMPLE (copy and modify):
+{"decision": "truncate", "reasoning": "Cleaning up %d stale tool outputs to free space", "truncate_ids": ["call_xxx1", "call_xxx2", "call_xxx3", ...50-100 IDs...]}
+
+If you don't know IDs, use decision="skip" instead.`,
+		int(meta.TokensPercent), staleCount,
+		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
+		getSuggestedAction(meta.TokensPercent, staleCount),
+		staleCount)
+}
+
+// getSuggestedAction returns suggested action based on token usage and stale outputs.
+func getSuggestedAction(tokensPercent float64, staleCount int) string {
+	// High priority: many stale outputs → TRUNCATE
+	if staleCount > 20 {
+		return "TRUNCATE (many stale outputs, free space now)"
+	}
+	if staleCount > 10 {
+		return "TRUNCATE (several stale outputs, recommend action)"
+	}
+	
+	// High token usage → COMPACT
+	if tokensPercent >= 65 {
+		return "COMPACT (high token usage)"
+	}
+	if tokensPercent >= 50 {
+		return "COMPACT or TRUNCATE (moderate token usage)"
+	}
+	
+	// Low usage + stale outputs → TRUNCATE
+	if staleCount > 5 {
+		return "TRUNCATE (many stale outputs even at low usage)"
+	}
+	
+	return "TRUNCATE or SKIP (low usage, optional)"
 }

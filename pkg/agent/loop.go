@@ -734,6 +734,10 @@ func streamAssistantResponse(
 	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
 	// This is separate from overview update reminder - it triggers when decision is needed but not made
 	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsDecisionReminder() {
+		// Get stale count for reminder
+		staleCount, _ := collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
+		agentCtx.LLMContext.SetStaleToolCount(staleCount)
+		
 		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage()
 		decisionReminderMsg := llm.LLMMessage{
 			Role:    "user",
@@ -1560,7 +1564,8 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 
 	// Check if we should show reminder based on adaptive frequency
 	// If we're in a skip period or haven't reached the frequency threshold, suppress the reminder
-	showReminder := state.ShouldShowReminder(agentCtx.RuntimeMetaTurns, actionRequired, urgency)
+	// Use CurrentTurn instead of RuntimeMetaTurns to ensure consistency with llm_context_decision tool
+	showReminder := state.ShouldShowReminder(agentCtx.ContextMgmtState.CurrentTurn, actionRequired, urgency)
 	if !showReminder && actionRequired != "none" {
 		// Suppress the reminder - don't show action_required in runtime_state
 		actionRequired = "none"
