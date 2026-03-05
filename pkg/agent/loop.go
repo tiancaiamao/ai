@@ -737,11 +737,14 @@ func streamAssistantResponse(
 	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
 	// This is separate from overview update reminder - it triggers when decision is needed but not made
 	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsDecisionReminder() {
-		// Get stale count for reminder
+		// Get stale count and available tool IDs for reminder
 		staleCount, _ := collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
 		agentCtx.LLMContext.SetStaleToolCount(staleCount)
 
-		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage()
+		// Get available (non-truncated) tool IDs to include in reminder example
+		_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
+
+		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage(availableToolIDs)
 		decisionReminderMsg := llm.LLMMessage{
 			Role:    "user",
 			Content: decisionReminderContent,

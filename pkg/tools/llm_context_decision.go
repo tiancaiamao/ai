@@ -354,3 +354,65 @@ func (t *LLMContextDecisionTool) shouldTruncate(toolCallID string, idsToTruncate
 	}
 	return false
 }
+
+// filterAlreadyTruncated filters out already truncated tool call IDs from the provided IDs.
+// This prevents LLM from trying to truncate the same tool output multiple times.
+func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
+	if rawIDs == nil {
+		return nil
+	}
+
+	// Parse IDs from the input
+	var idsToFilter []string
+
+	// Handle string (comma-separated)
+	if idsStr, ok := rawIDs.(string); ok && idsStr != "" {
+		parts := strings.Split(idsStr, ",")
+		for _, part := range parts {
+			id := strings.TrimSpace(part)
+			if id != "" {
+				idsToFilter = append(idsToFilter, id)
+			}
+		}
+	}
+
+	// Handle array
+	if idsArray, ok := rawIDs.([]any); ok && len(idsArray) > 0 {
+		for _, id := range idsArray {
+			if idStr, ok := id.(string); ok && idStr != "" {
+				idsToFilter = append(idsToFilter, idStr)
+			}
+		}
+	}
+
+	if len(idsToFilter) == 0 {
+		return nil
+	}
+
+	// Filter out IDs that are already truncated
+	var filteredIDs []string
+	for _, id := range idsToFilter {
+		// Check if this tool output exists and is already truncated
+		alreadyTruncated := false
+		for _, msg := range agentCtx.Messages {
+			if msg.Role != "toolResult" {
+				continue
+			}
+			if strings.EqualFold(msg.ToolCallID, id) {
+				// Found the tool output, check if it's already truncated
+				if agentctx.IsTruncatedAgentToolTag(msg.ExtractText()) {
+					alreadyTruncated = true
+					slog.Debug("[LLMContextDecision] Skipping already truncated ID",
+						"tool_call_id", id)
+				}
+				break
+			}
+		}
+
+		if !alreadyTruncated {
+			filteredIDs = append(filteredIDs, id)
+		}
+	}
+
+	return filteredIDs
+}
