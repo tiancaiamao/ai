@@ -230,6 +230,9 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 
 	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
 
+	// Ensure tool_call and tool_result pairing is preserved
+	recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
+
 	// Create new context with summary + recent messages
 	newMessages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
@@ -819,4 +822,85 @@ func extractText(msg agentctx.AgentMessage) string {
 		return msg.ExtractText()
 	}
 	return b.String()
+}
+
+// ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
+// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
+// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
+// This prevents "tool call and result not match" errors after compaction.
+func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	if len(recentMessages) == 0 {
+		return recentMessages
+	}
+
+	// Collect all tool_call IDs from oldMessages
+	oldToolCallIDs := make(map[string]bool)
+	for _, msg := range oldMessages {
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ExtractToolCalls() {
+				oldToolCallIDs[tc.ID] = true
+			}
+		}
+	}
+
+	// If no tool_calls in oldMessages, nothing to fix
+	if len(oldToolCallIDs) == 0 {
+		return recentMessages
+	}
+
+	// Find tool_results in recentMessages whose tool_call is in oldMessages
+	// These need to be hidden (archived) because their tool_calls will be summarized
+	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
+	archivedCount := 0
+
+	for _, msg := range recentMessages {
+		if msg.Role == "toolResult" && msg.ToolCallID != "" {
+			if oldToolCallIDs[msg.ToolCallID] {
+				// This tool_result's call is in oldMessages - hide it to prevent mismatch
+				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				keptMessages = append(keptMessages, archivedMsg)
+				archivedCount++
+				continue
+			}
+		}
+		keptMessages = append(keptMessages, msg)
+	}
+
+	if archivedCount > 0 {
+		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
+			"archived", archivedCount,
+			"kept", len(keptMessages))
+	}
+
+	return keptMessages
+}
+
+// ToContextCompactor adapts this Compactor to implement context.Compactor interface.
+// This allows the compact.Compactor to be used where context.Compactor is expected.
+func (c *Compactor) ToContextCompactor() agentctx.Compactor {
+	return &contextCompactorAdapter{c: c}
+}
+
+// contextCompactorAdapter adapts compact.Compactor to context.Compactor interface.
+type contextCompactorAdapter struct {
+	c *Compactor
+}
+
+// ShouldCompact checks if context compression is needed.
+func (a *contextCompactorAdapter) ShouldCompact(messages []agentctx.AgentMessage) bool {
+	return a.c.ShouldCompact(messages)
+}
+
+// Compact performs context compression and returns a context.CompactionResult.
+func (a *contextCompactorAdapter) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agentctx.CompactionResult, error) {
+	result, err := a.c.Compact(messages, previousSummary)
+	if err != nil {
+		return nil, err
+	}
+	return &agentctx.CompactionResult{
+		Summary:      result.Summary,
+		Messages:     result.Messages,
+		TokensBefore: result.TokensBefore,
+		TokensAfter:  result.TokensAfter,
+	}, nil
 }
