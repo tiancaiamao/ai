@@ -31,15 +31,33 @@ func TestLLMContextDecisionFiltersAlreadyTruncated(t *testing.T) {
 		}, false),
 	}
 
+	// Debug: check message content
+	for i, msg := range messages {
+		t.Logf("Message %d: Role=%s, ToolCallID=%s, Content=%s", i, msg.Role, msg.ToolCallID, msg.ExtractText())
+	}
+
+	// Test IsTruncatedAgentToolTag function
+	for _, msg := range messages {
+		if msg.Role != "toolResult" {
+			t.Errorf("Expected role toolResult, got %s", msg.Role)
+		}
+		text := msg.ExtractText()
+		isTruncated := agentctx.IsTruncatedAgentToolTag(text)
+		t.Logf("ToolCallID=%s, IsTruncated=%v, Text=%s", msg.ToolCallID, isTruncated, text)
+	}
+
 	tool := NewLLMContextDecisionTool(nil)
 
-	// Try to truncate all four tool outputs
-	ctx := context.Background()
+	// Create agent context
 	agentCtx := &agentctx.AgentContext{
 		Messages:          messages,
 		ContextMgmtState:  agentctx.DefaultContextMgmtState(),
 		LLMContext:        nil,
 	}
+
+	// Wrap with agent context - this is what AgentLoop does when executing tools
+	ctx := context.Background()
+	ctx = agentctx.WithToolExecutionAgentContext(ctx, agentCtx)
 
 	params := map[string]any{
 		"decision":     "truncate",
@@ -64,23 +82,24 @@ func TestLLMContextDecisionFiltersAlreadyTruncated(t *testing.T) {
 	}
 	t.Logf("Result: %s", resultText)
 
-	// Only call_1 and call_3 should be truncated (they weren't truncated yet)
-	// call_2 and call_4 should be skipped (already truncated)
+	// Verify: call_1 and call_3 should be truncated, call_2 and call_4 should remain truncated
 	for _, msg := range agentCtx.Messages {
 		if msg.Role != "toolResult" {
 			continue
 		}
 
 		content := msg.ExtractText()
+		isTruncated := agentctx.IsTruncatedAgentToolTag(content)
+
 		switch msg.ToolCallID {
 		case "call_1", "call_3":
 			// Should be truncated now
-			if !agentctx.IsTruncatedAgentToolTag(content) {
+			if !isTruncated {
 				t.Errorf("Message %s should be truncated but is not: %s", msg.ToolCallID, content)
 			}
 		case "call_2", "call_4":
-			// Were already truncated, should still be truncated
-			if !agentctx.IsTruncatedAgentToolTag(content) {
+			// Were already truncated, should remain truncated
+			if !isTruncated {
 				t.Errorf("Message %s should still be truncated but is not: %s", msg.ToolCallID, content)
 			}
 		}
