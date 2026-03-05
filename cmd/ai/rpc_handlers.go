@@ -87,6 +87,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
+	// Set workspace (startup path) in config
+	cfg.Workspace = cwd
+
 	sessionPath, err = normalizeSessionPath(sessionPath)
 	if err != nil {
 		return fmt.Errorf("failed to normalize session path: %w", err)
@@ -621,8 +624,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, err
 		}
 
+		// Get workspace and current directory info
+		startupPath := cfg.Workspace // This is the initial working directory (git root or cwd at startup)
+		currentWorkdir := ws.GetCWD() // This is the current working directory
+
 		result := make([]any, len(sessions))
 		for i, sess := range sessions {
+			// Add workspace info to each session
+			sess.Workspace = startupPath
+			sess.CurrentWorkdir = currentWorkdir
 			result[i] = sess
 		}
 		return result, nil
@@ -769,7 +779,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			SessionName:           currentSessionName,
 			AIPid:                 os.Getpid(),
 			AILogPath:             traceOutputPath,
-			AIWorkingDir:          cwd,
+			AIWorkingDir:          ws.GetCWD(),
+			AIStartupPath:         ws.GetGitRoot(),
 			AutoCompactionEnabled: autoCompact,
 			MessageCount:          len(ag.GetMessages()),
 			PendingMessageCount:   ag.GetPendingFollowUps(),
@@ -1057,6 +1068,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			Tokens:            tokens,
 			TokenRate:         tokenRate,
 			Cost:              cost,
+			Workspace:         ws.GetGitRoot(),
+			CurrentWorkdir:    ws.GetCWD(),
 		}, nil
 	})
 

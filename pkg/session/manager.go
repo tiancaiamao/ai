@@ -19,6 +19,10 @@ type SessionMeta struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	MessageCount int       `json:"messageCount"`
+	// Workspace is the git repository root path (the path bound at startup)
+	Workspace string `json:"workspace,omitempty"`
+	// CurrentWorkdir is the current working directory path
+	CurrentWorkdir string `json:"currentWorkdir,omitempty"`
 }
 
 // SessionManager manages multiple sessions.
