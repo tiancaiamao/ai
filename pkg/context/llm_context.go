@@ -11,12 +11,12 @@ import (
 
 const (
 	LLMContextDir = "llm-context"
-	OverviewFile     = "overview.md"
-	DetailDir        = "detail"
+	OverviewFile  = "overview.md"
+	DetailDir     = "detail"
 
 	// Update tracking thresholds
 	baseRoundsBeforeReminder = 10 // Default base threshold for reminders
-	MaxRoundsWithoutUpdate = 10 // Maximum rounds without update before reminder (legacy)
+	MaxRoundsWithoutUpdate   = 10 // Maximum rounds without update before reminder (legacy)
 	minRoundsBeforeCheck     = 3  // Minimum rounds before checking for update
 )
 
@@ -26,7 +26,7 @@ type ContextMeta struct {
 	TokensMax         int     `json:"tokens_max"`
 	TokensPercent     float64 `json:"tokens_percent"`
 	MessagesInHistory int     `json:"messages_in_history"`
-	LLMContextSize int     `json:"llm_context_size"` // bytes
+	LLMContextSize    int     `json:"llm_context_size"` // bytes
 }
 
 // LLMContext manages the agent's llm context (overview.md).
@@ -52,28 +52,30 @@ type LLMContext struct {
 	lastUpdateTime        time.Time
 	lastCheckTime         time.Time
 	roundsSinceUpdate     int
-	silentRoundsRemaining int // Rounds to skip reminder after update
+	silentRoundsRemaining int  // Rounds to skip reminder after update
 	wasRemindedLastRound  bool // Was reminder injected in the last round?
 
-	// Decision tracking - for separate reminder when LLM updates overview but doesn't call llm_context_decision
-	updatedOverviewThisRound bool // LLM updated overview but didn't call tool
-	roundsSinceDecisionNeeded int // Rounds since decision was needed but not made
-	staleToolOutputs int // Number of stale tool outputs (updated from runtime)
+	// Decision tracking - for separate reminder when LLM updates overview but doesn't call llm_context_decision.
+	updatedOverviewThisTurn   bool // LLM updated overview in the current turn
+	decisionNeededThisTurn    bool // runtime_state.action_required != none for the current turn
+	pendingDecisionReminder   bool // Waiting for llm_context_decision after overview update
+	roundsSinceDecisionNeeded int  // Rounds since decision became pending
+	staleToolOutputs          int  // Number of stale tool outputs (updated from runtime)
 
 	// Update statistics for adaptive reminder frequency
-	totalUpdates      int  // Total number of updates
-	autonomousUpdates int  // Updates without prompt (LLM self-initiated)
-	promptedUpdates   int  // Updates after prompt
-	nextReminderRound int  // Dynamic threshold for next reminder (5-30)
+	totalUpdates      int // Total number of updates
+	autonomousUpdates int // Updates without prompt (LLM self-initiated)
+	promptedUpdates   int // Updates after prompt
+	nextReminderRound int // Dynamic threshold for next reminder (5-30)
 }
 
 // NewLLMContext creates a new LLMContext for the given session directory.
 func NewLLMContext(sessionDir string) *LLMContext {
 	return &LLMContext{
-		sessionDir:         sessionDir,
-		overviewPath:       filepath.Join(sessionDir, LLMContextDir, OverviewFile),
-		detailPath:         filepath.Join(sessionDir, LLMContextDir, DetailDir),
-		nextReminderRound:  baseRoundsBeforeReminder,  // Default threshold
+		sessionDir:        sessionDir,
+		overviewPath:      filepath.Join(sessionDir, LLMContextDir, OverviewFile),
+		detailPath:        filepath.Join(sessionDir, LLMContextDir, DetailDir),
+		nextReminderRound: baseRoundsBeforeReminder, // Default threshold
 	}
 }
 
@@ -287,7 +289,7 @@ func (wm *LLMContext) GetMeta() ContextMeta {
 		TokensMax:         tokensMax,
 		TokensPercent:     percent,
 		MessagesInHistory: messagesCount,
-		LLMContextSize: wmSize,
+		LLMContextSize:    wmSize,
 	}
 }
 
@@ -313,7 +315,7 @@ func (wm *LLMContext) MarkUpdated(silentRounds int, autonomous bool) {
 
 	// Set silent period
 	if silentRounds <= 0 {
-		silentRounds = 5  // Default silent period
+		silentRounds = 5 // Default silent period
 	}
 	wm.silentRoundsRemaining = silentRounds
 
@@ -397,7 +399,7 @@ func (wm *LLMContext) checkUpdateNeeded() (bool, string) {
 func (wm *LLMContext) buildReminderHTML(meta ContextMeta) string {
 	consciousness := wm.GetUpdateConsciousness()
 	consciousnessPercent := int(consciousness * 100)
-	
+
 	return fmt.Sprintf(`
 
 <!--
@@ -563,20 +565,20 @@ func (wm *LLMContext) adjustThreshold(autonomous bool) {
 	if autonomous {
 		// Autonomous update: increase threshold
 		if consciousness > 0.7 {
-			delta = 3  // Highly conscious: big reward
+			delta = 3 // Highly conscious: big reward
 		} else if consciousness > 0.4 {
-			delta = 2  // Moderately conscious
+			delta = 2 // Moderately conscious
 		} else {
-			delta = 1  // Low consciousness: small reward
+			delta = 1 // Low consciousness: small reward
 		}
 	} else {
 		// Prompted update: decrease threshold
 		if consciousness > 0.6 {
-			delta = -1  // Still fairly conscious: small penalty
+			delta = -1 // Still fairly conscious: small penalty
 		} else if consciousness > 0.3 {
-			delta = -2  // Moderate penalty
+			delta = -2 // Moderate penalty
 		} else {
-			delta = -3  // Low consciousness: big penalty
+			delta = -3 // Low consciousness: big penalty
 		}
 	}
 
@@ -637,7 +639,14 @@ func (wm *LLMContext) ResetReminderFlag() {
 func (wm *LLMContext) SetUpdatedOverview() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
-	wm.updatedOverviewThisRound = true
+	wm.updatedOverviewThisTurn = true
+}
+
+// SetDecisionNeededThisTurn marks whether context management is required in this turn.
+func (wm *LLMContext) SetDecisionNeededThisTurn(needed bool) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.decisionNeededThisTurn = needed
 }
 
 // MarkDecisionMade marks that LLM called llm_context_decision tool.
@@ -645,7 +654,9 @@ func (wm *LLMContext) SetUpdatedOverview() {
 func (wm *LLMContext) MarkDecisionMade() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
-	wm.updatedOverviewThisRound = false
+	wm.updatedOverviewThisTurn = false
+	wm.decisionNeededThisTurn = false
+	wm.pendingDecisionReminder = false
 	wm.roundsSinceDecisionNeeded = 0
 }
 
@@ -657,22 +668,40 @@ func (wm *LLMContext) MarkDecisionMade() {
 func (wm *LLMContext) NeedsDecisionReminder() bool {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
-
-	// Only remind if LLM updated overview but didn't call decision tool
-	if wm.updatedOverviewThisRound {
-		// LLM just updated overview - give it time to respond
-		return false
-	}
-
-	// Decision reminder threshold (smaller than overview update threshold)
-	return wm.roundsSinceDecisionNeeded >= 2 // Remind after 2 rounds
+	return wm.pendingDecisionReminder && wm.roundsSinceDecisionNeeded >= 2
 }
 
-// IncrementDecisionNeededCounter increments the counter when decision is needed but not made.
-func (wm *LLMContext) IncrementDecisionNeededCounter() {
+// AdvanceDecisionState advances per-turn decision reminder state at turn boundary.
+func (wm *LLMContext) AdvanceDecisionState(decisionMadeThisTurn bool) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
-	wm.roundsSinceDecisionNeeded++
+
+	if decisionMadeThisTurn {
+		wm.updatedOverviewThisTurn = false
+		wm.decisionNeededThisTurn = false
+		wm.pendingDecisionReminder = false
+		wm.roundsSinceDecisionNeeded = 0
+		return
+	}
+
+	if !wm.decisionNeededThisTurn {
+		wm.pendingDecisionReminder = false
+		wm.roundsSinceDecisionNeeded = 0
+		wm.updatedOverviewThisTurn = false
+		wm.decisionNeededThisTurn = false
+		return
+	}
+
+	if wm.updatedOverviewThisTurn {
+		// The turn that updates overview is the baseline turn; start counting from next turn.
+		wm.pendingDecisionReminder = true
+		wm.roundsSinceDecisionNeeded = 0
+	} else if wm.pendingDecisionReminder {
+		wm.roundsSinceDecisionNeeded++
+	}
+
+	wm.updatedOverviewThisTurn = false
+	wm.decisionNeededThisTurn = false
 }
 
 // SetStaleToolCount sets the number of stale tool outputs (called from runtime).
@@ -731,7 +760,7 @@ func getSuggestedAction(tokensPercent float64, staleCount int) string {
 	if staleCount > 10 {
 		return "TRUNCATE (several stale outputs, recommend action)"
 	}
-	
+
 	// High token usage → COMPACT
 	if tokensPercent >= 65 {
 		return "COMPACT (high token usage)"
@@ -739,11 +768,11 @@ func getSuggestedAction(tokensPercent float64, staleCount int) string {
 	if tokensPercent >= 50 {
 		return "COMPACT or TRUNCATE (moderate token usage)"
 	}
-	
+
 	// Low usage + stale outputs → TRUNCATE
 	if staleCount > 5 {
 		return "TRUNCATE (many stale outputs even at low usage)"
 	}
-	
+
 	return "TRUNCATE or SKIP (low usage, optional)"
 }

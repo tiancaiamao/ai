@@ -169,9 +169,20 @@ func TestSetSkipUntil(t *testing.T) {
 	if state.SkipUntilTurn != 25 { // 10 + 15
 		t.Fatalf("expected SkipUntilTurn 25, got %d", state.SkipUntilTurn)
 	}
-	// Setting skip should count as proactive
+	// SetSkipUntil should not mutate decision statistics.
+	if state.ProactiveDecisions != 0 {
+		t.Fatalf("expected ProactiveDecisions 0 after setting skip, got %d", state.ProactiveDecisions)
+	}
+}
+
+func TestSkipDecisionCountedOnce(t *testing.T) {
+	state := DefaultContextMgmtState()
+
+	state.SetSkipUntil(10, 5, false)
+	state.RecordDecision(10, "skip", false)
+
 	if state.ProactiveDecisions != 1 {
-		t.Fatalf("expected ProactiveDecisions 1 after setting skip, got %d", state.ProactiveDecisions)
+		t.Fatalf("expected skip to increase proactive decisions once, got %d", state.ProactiveDecisions)
 	}
 }
 
@@ -306,40 +317,40 @@ func TestShouldShowReminder(t *testing.T) {
 
 func TestGetScore(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		proactive int
 		reminded  int
-		expected string
+		expected  string
 	}{
 		{
-			name:     "no data",
+			name:      "no data",
 			proactive: 0,
 			reminded:  0,
-			expected: "no_data",
+			expected:  "no_data",
 		},
 		{
-			name:     "excellent",
+			name:      "excellent",
 			proactive: 10,
 			reminded:  2,
-			expected: "excellent",
+			expected:  "excellent",
 		},
 		{
-			name:     "good",
+			name:      "good",
 			proactive: 5,
 			reminded:  2,
-			expected: "good",
+			expected:  "good",
 		},
 		{
-			name:     "fair",
+			name:      "fair",
 			proactive: 3,
 			reminded:  3,
-			expected: "fair",
+			expected:  "fair",
 		},
 		{
-			name:     "needs improvement",
+			name:      "needs improvement",
 			proactive: 2,
 			reminded:  8,
-			expected: "needs_improvement",
+			expected:  "needs_improvement",
 		},
 	}
 

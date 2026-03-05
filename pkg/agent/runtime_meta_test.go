@@ -223,6 +223,28 @@ func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 	}
 }
 
+func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
+	agentCtx.ContextMgmtState.CurrentTurn = 7
+
+	meta := agentctx.ContextMeta{
+		TokensUsed:        90000,
+		TokensMax:         128000,
+		TokensPercent:     70.0,
+		MessagesInHistory: 10,
+		LLMContextSize:    1000,
+	}
+
+	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	if !refreshed {
+		t.Fatal("expected refreshed snapshot")
+	}
+	if agentCtx.ContextMgmtState.LastReminderTurn != 7 {
+		t.Fatalf("expected LastReminderTurn to use CurrentTurn=7, got %d", agentCtx.ContextMgmtState.LastReminderTurn)
+	}
+}
+
 func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
 	cases := []struct {
 		percent float64

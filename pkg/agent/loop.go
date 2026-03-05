@@ -23,7 +23,7 @@ import (
 
 const (
 	defaultLLMMaxRetries               = 1
-	defaultRateLimitMaxRetries         = 8               // More retries for rate limit errors
+	defaultRateLimitMaxRetries         = 8 // More retries for rate limit errors
 	defaultRetryBaseDelay              = 1 * time.Second
 	defaultRateLimitBaseDelay          = 3 * time.Second // Longer base delay for rate limit
 	defaultLoopMaxConsecutiveToolCalls = 6
@@ -233,7 +233,7 @@ func runInnerLoop(
 		// Update current turn counter
 		agentCtx.ContextMgmtState.CurrentTurn = turnCount + 1
 
-	turnCount++
+		turnCount++
 
 		// Fallback auto-compact as safety net (only if LLM didn't handle it via llm_context_decision)
 		// This is a last resort when context grows too large without LLM intervention.
@@ -444,10 +444,12 @@ func runInnerLoop(
 		// If reminder was shown but LLM didn't call llm_context_decision, apply penalty
 		if agentCtx.ContextMgmtState != nil {
 			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
-			// Increment decision counter every turn when decision is needed but not made
-			if agentCtx.LLMContext != nil {
-				agentCtx.LLMContext.IncrementDecisionNeededCounter()
-			}
+		}
+		if agentCtx.LLMContext != nil {
+			decisionMadeThisTurn := agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.DecisionMadeThisTurn
+			agentCtx.LLMContext.AdvanceDecisionState(decisionMadeThisTurn)
+		}
+		if agentCtx.ContextMgmtState != nil {
 			// Reset per-turn tracking for next turn
 			agentCtx.ContextMgmtState.ResetTurnTracking()
 		}
@@ -463,6 +465,7 @@ func runInnerLoop(
 
 	stream.Push(NewAgentEndEvent(agentCtx.Messages))
 }
+
 // streamAssistantResponseWithRetry streams assistant's response with retry logic.
 func streamAssistantResponseWithRetry(
 	ctx context.Context,
@@ -737,7 +740,7 @@ func streamAssistantResponse(
 		// Get stale count for reminder
 		staleCount, _ := collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
 		agentCtx.LLMContext.SetStaleToolCount(staleCount)
-		
+
 		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage()
 		decisionReminderMsg := llm.LLMMessage{
 			Role:    "user",
@@ -1529,6 +1532,9 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 		agentCtx.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
+		if agentCtx.LLMContext != nil {
+			agentCtx.LLMContext.SetDecisionNeededThisTurn(runtimeSnapshotNeedsDecision(agentCtx.RuntimeMetaSnapshot))
+		}
 		return agentCtx.RuntimeMetaSnapshot, false
 	}
 
@@ -1572,9 +1578,12 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 		urgency = "none"
 	} else if showReminder && actionRequired != "none" {
 		// We're showing a reminder, record it
-		state.RecordReminder(agentCtx.RuntimeMetaTurns, urgency)
+		state.RecordReminder(state.CurrentTurn, urgency)
 		// Mark that reminder was shown this turn (for compliance tracking)
 		state.MarkReminderShown()
+	}
+	if agentCtx.LLMContext != nil {
+		agentCtx.LLMContext.SetDecisionNeededThisTurn(actionRequired != "none")
 	}
 
 	// Build context management stats section
@@ -1648,6 +1657,16 @@ guidance:
 	agentCtx.RuntimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+func runtimeSnapshotNeedsDecision(snapshot string) bool {
+	if snapshot == "" {
+		return false
+	}
+	if strings.Contains(snapshot, "action_required: none") {
+		return false
+	}
+	return strings.Contains(snapshot, "action_required:")
 }
 
 type runtimeToolPressure struct {

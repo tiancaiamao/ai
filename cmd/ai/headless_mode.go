@@ -1,8 +1,8 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"os"
 	"path/filepath"
@@ -85,6 +85,18 @@ func splitLines(text string) []string {
 // joinLines joins lines with newlines.
 func joinLines(lines []string) string {
 	return strings.Join(lines, "\n")
+}
+
+func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compactor *compact.Compactor) {
+	registry.Register(tools.NewReadTool(ws))
+	registry.Register(tools.NewBashTool(ws))
+	registry.Register(tools.NewWriteTool(ws))
+	registry.Register(tools.NewGrepTool(ws))
+	registry.Register(tools.NewEditTool(ws))
+	registry.Register(tools.NewChangeWorkspaceTool(ws))
+	if compactor != nil {
+		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+	}
 }
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
@@ -191,12 +203,6 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	}
 
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewReadTool(ws))
-	registry.Register(tools.NewBashTool(ws))
-	registry.Register(tools.NewWriteTool(ws))
-	registry.Register(tools.NewGrepTool(ws))
-	registry.Register(tools.NewEditTool(ws))
-	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	// Resolve context window and create compactor for automatic context compression
 	activeSpec, err := resolveActiveModelSpec(cfg)
@@ -218,6 +224,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		"You are a helpful coding assistant.",
 		currentContextWindow,
 	)
+	registerHeadlessTools(registry, ws, compactor)
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
@@ -339,7 +346,7 @@ Be concise and focused on the task at hand.`
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxChars:             toolOutputConfig.MaxChars,
+		MaxChars: toolOutputConfig.MaxChars,
 	})
 
 	// Track current turn state

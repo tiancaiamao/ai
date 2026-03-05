@@ -34,8 +34,8 @@ type AgentContext struct {
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
 type ContextMgmtState struct {
 	// Frequency adjustment (turns between reminders)
-	ReminderFrequency int    // Current: 5-30, Default: 10
-	SkipUntilTurn     int    // Skip reminders until this turn (set by LLM via skip_turns)
+	ReminderFrequency int // Current: 5-30, Default: 10
+	SkipUntilTurn     int // Skip reminders until this turn (set by LLM via skip_turns)
 
 	// Statistics for adaptive adjustment
 	ProactiveDecisions int // LLM made decisions without being reminded
@@ -45,20 +45,20 @@ type ContextMgmtState struct {
 	CurrentTurn int // Current turn number (updated every loop iteration)
 
 	// Last action state
-	LastDecisionTurn  int    // Turn number of last decision
-	LastActionTaken   string // "truncate", "compact", "both", "skip"
-	LastReminderTurn  int    // Turn number of last reminder shown
+	LastDecisionTurn    int    // Turn number of last decision
+	LastActionTaken     string // "truncate", "compact", "both", "skip"
+	LastReminderTurn    int    // Turn number of last reminder shown
 	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
 
 	// Compliance tracking
 	ReminderShownThisTurn bool // Was reminder shown in current turn?
-	DecisionMadeThisTurn bool // Did LLM call llm_context_decision this turn?
+	DecisionMadeThisTurn  bool // Did LLM call llm_context_decision this turn?
 }
 
 // DefaultContextMgmtState creates a new ContextMgmtState with defaults.
 func DefaultContextMgmtState() *ContextMgmtState {
 	return &ContextMgmtState{
-		ReminderFrequency:    10, // Default: remind every 10 turns
+		ReminderFrequency:   10, // Default: remind every 10 turns
 		SkipUntilTurn:       0,
 		ProactiveDecisions:  0,
 		ReminderNeeded:      0,
@@ -155,19 +155,14 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 	s.AdjustFrequency()
 }
 
-// SetSkipUntil sets the skip period and counts it as proactive if LLM promises to check back later.
-func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, wasReminded bool) {
+// SetSkipUntil sets the skip period.
+// Decision statistics are recorded by RecordDecision only, to avoid double counting.
+func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, _ bool) {
 	if s == nil {
 		return
 	}
 
 	s.SkipUntilTurn = turn + skipTurns
-
-	// Setting a skip is considered proactive behavior
-	if !wasReminded {
-		s.ProactiveDecisions++
-		s.AdjustFrequency()
-	}
 }
 
 // ShouldShowReminder determines if a reminder should be shown this turn.
