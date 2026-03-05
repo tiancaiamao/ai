@@ -2,11 +2,11 @@ package main
 
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -20,8 +20,75 @@ import (
 	"log/slog"
 )
 
-// runHeadless executes prompts in headless mode, outputting only the final result.
-// No intermediate events are streamed - just a single JSON output at the end.
+// Helper functions for headless output formatting
+
+// formatArgsBrief formats tool arguments briefly.
+func formatArgsBrief(args map[string]interface{}) string {
+	if len(args) == 0 {
+		return ""
+	}
+	// Show first few args
+	parts := []string{}
+	for k, v := range args {
+		if len(parts) >= 2 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	result := fmt.Sprint(parts)
+	if len(args) > len(parts) {
+		result += "..."
+	}
+	return result
+}
+
+// truncateLines truncates text to max lines and adds "..." if truncated.
+func truncateLines(text string, maxLines int) string {
+	lines := splitLines(text)
+	if len(lines) <= maxLines {
+		return text
+	}
+	result := joinLines(lines[:maxLines])
+	if !strings.HasSuffix(result, "\n") {
+		result += "\n"
+	}
+	result += "..."
+	return result
+}
+
+// truncateString truncates string to max length and adds "..." if truncated.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// splitLines splits text into lines.
+func splitLines(text string) []string {
+	lines := []string{}
+	current := ""
+	for _, ch := range text {
+		if ch == '\n' {
+			lines = append(lines, current)
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+// joinLines joins lines with newlines.
+func joinLines(lines []string) string {
+	return strings.Join(lines, "\n")
+}
+
+// runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
+// Each turn shows: thinking, tool calls (simplified), and assistant output.
 func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, prompts []string, output io.Writer) error {
 	startTime := time.Now()
 	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent)
@@ -111,6 +178,10 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		}
 		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 	}
+
+	// Output session info to stdout for observability
+	fmt.Fprintf(output, "Session: %s\n", sessionID)
+	fmt.Fprintf(output, "Mode: headless (no_session=%v)\n\n", noSession)
 
 	// Create tool registry and register tools
 	// Create a shared workspace object for all tools to track directory changes
@@ -271,7 +342,15 @@ Be concise and focused on the task at hand.`
 		MaxChars:             toolOutputConfig.MaxChars,
 	})
 
-	// Subscribe to events silently (write to session, not stdout)
+	// Track current turn state
+	turnCounter := 0
+
+	type toolCallInfo struct {
+		name string
+		args string
+	}
+
+	// Subscribe to events and output turn-by-turn
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
 	go func() {
@@ -279,7 +358,7 @@ Be concise and focused on the task at hand.`
 		for {
 			select {
 			case event := <-ag.Events():
-				// Write to session but don't output to stdout
+				// Write to session
 				if event.Type == "message_end" && event.Message != nil {
 					sessionWriter.Append(sess, *event.Message)
 				}
@@ -291,6 +370,63 @@ Be concise and focused on the task at hand.`
 						slog.Info("Failed to replace session messages on agent_end:", "value", err)
 					}
 				}
+
+				// Output turn information
+				if event.Type == "message_end" && event.Message != nil {
+					msg := event.Message
+					if msg.Role == "assistant" {
+						turnCounter++
+
+						// Extract thinking, tool calls, and output from message
+						thinking := ""
+						toolCalls := []toolCallInfo{}
+						textOutput := ""
+
+						for _, block := range msg.Content {
+							switch b := block.(type) {
+							case agentctx.ThinkingContent:
+								if b.Thinking != "" {
+									thinking = b.Thinking
+								}
+							case agentctx.ToolCallContent:
+								// Capture tool call info
+								argsStr := ""
+								if len(b.Arguments) > 0 {
+									argsStr = formatArgsBrief(b.Arguments)
+								}
+								toolCalls = append(toolCalls, toolCallInfo{
+									name: b.Name,
+									args: argsStr,
+								})
+							case agentctx.TextContent:
+								if b.Text != "" {
+									textOutput = b.Text
+								}
+							}
+						}
+
+						// Output turn summary
+						fmt.Fprintf(output, "\n=== Turn %d ===\n", turnCounter)
+						if thinking != "" {
+							fmt.Fprintf(output, "Thinking: %s\n\n", truncateLines(thinking, 3))
+						}
+						if len(toolCalls) > 0 {
+							fmt.Fprintln(output, "Tool calls:")
+							for _, tc := range toolCalls {
+								if tc.args != "" {
+									fmt.Fprintf(output, "  • %s: %s\n", tc.name, truncateString(tc.args, 60))
+								} else {
+									fmt.Fprintf(output, "  • %s\n", tc.name)
+								}
+							}
+							fmt.Fprintln(output)
+						}
+						if textOutput != "" {
+							fmt.Fprintf(output, "Output: %s\n", truncateLines(textOutput, 5))
+						}
+					}
+				}
+
 				if event.Type == "agent_end" && !noSession {
 					if err := sessionMgr.SaveCurrent(); err != nil {
 						slog.Info("Failed to update session metadata:", "value", err)
@@ -350,48 +486,24 @@ Be concise and focused on the task at hand.`
 
 	// Get all messages from the session
 	messages := sess.GetMessages()
-
-	// Extract final result
-	finalText := agent.GetFinalAssistantText(messages)
 	usage := agent.GetTotalUsage(messages)
 
-	// Build result
-	result := agent.HeadlessResult{
-		Text:     finalText,
-		Usage:    usage,
-		ExitCode: 0,
+	// Output final summary
+	fmt.Fprintf(output, "\n=== Summary ===\n")
+	fmt.Fprintf(output, "Total turns: %d\n", turnCounter)
+	if usage.TotalTokens > 0 {
+		fmt.Fprintf(output, "Tokens: %d input, %d output, %d total\n",
+			usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
 	}
-
-	// Output single JSON line
-	data, err := json.Marshal(result)
-	if err != nil {
-		return writeHeadlessError(output, fmt.Sprintf("failed to marshal result: %v", err))
-	}
-
-	// Write result
-	if _, err := output.Write(append(data, '\n')); err != nil {
-		return err
-	}
-
 	elapsed := time.Since(startTime)
-	slog.Info("Headless mode completed", "duration", elapsed, "output_length", len(finalText))
+	fmt.Fprintf(output, "Duration: %s\n", elapsed.Round(time.Millisecond))
 
+	slog.Info("Headless mode completed", "duration", elapsed, "turns", turnCounter)
 	return nil
 }
 
-// writeHeadlessError writes an error result as JSON.
+// writeHeadlessError writes an error message.
 func writeHeadlessError(w io.Writer, errMsg string) error {
-	result := agent.HeadlessResult{
-		Text:     "",
-		Usage:    agent.UsageStats{},
-		Error:    errMsg,
-		ExitCode: 1,
-	}
-	data, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
+	fmt.Fprintf(w, "Error: %s\n", errMsg)
+	return nil
 }

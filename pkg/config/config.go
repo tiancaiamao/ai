@@ -68,7 +68,7 @@ const (
 // DefaultConcurrencyConfig returns default concurrency configuration.
 func DefaultConcurrencyConfig() *ConcurrencyConfig {
 	return &ConcurrencyConfig{
-		MaxConcurrentTools: 3,
+		MaxConcurrentTools: 5,
 		ToolTimeout:        30,
 		QueueTimeout:       60,
 	}
