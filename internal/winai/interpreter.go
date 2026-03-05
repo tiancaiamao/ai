@@ -1,12 +1,12 @@
 package winai
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"os"
 	"os/exec"
@@ -90,7 +90,6 @@ type AiInterpreter struct {
 	workingDir            string
 }
 
-
 type stateRequestInfo struct {
 	started time.Time
 	show    bool
@@ -98,11 +97,9 @@ type stateRequestInfo struct {
 	quiet   bool
 }
 
-
 type rpcEnvelope struct {
 	Type string `json:"type"`
 }
-
 
 type rpcResponse struct {
 	ID      string          `json:"id"`
@@ -113,14 +110,12 @@ type rpcResponse struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-
 type assistantMessageEvent struct {
 	Type         string `json:"type"`
 	ContentIndex int    `json:"contentIndex"`
 	Delta        string `json:"delta"`
 	Content      string `json:"content"`
 }
-
 
 type SessionMeta struct {
 	ID           string    `json:"id"`
@@ -131,19 +126,18 @@ type SessionMeta struct {
 	MessageCount int       `json:"messageCount"`
 }
 
-
 type agentEvent struct {
 	Type                  string                      `json:"type"`
 	EventAt               int64                       `json:"eventAt,omitempty"`
 	Error                 string                      `json:"error,omitempty"`
 	ErrorStack            string                      `json:"errorStack,omitempty"`
-	Message               *agentctx.AgentMessage         `json:"message,omitempty"`
-	Messages              []agentctx.AgentMessage        `json:"messages,omitempty"`
-	ToolResults           []agentctx.AgentMessage        `json:"toolResults,omitempty"`
+	Message               *agentctx.AgentMessage      `json:"message,omitempty"`
+	Messages              []agentctx.AgentMessage     `json:"messages,omitempty"`
+	ToolResults           []agentctx.AgentMessage     `json:"toolResults,omitempty"`
 	ToolCallID            string                      `json:"toolCallId,omitempty"`
 	ToolName              string                      `json:"toolName,omitempty"`
 	Args                  map[string]interface{}      `json:"args,omitempty"`
-	Result                *agentctx.AgentMessage         `json:"result,omitempty"`
+	Result                *agentctx.AgentMessage      `json:"result,omitempty"`
 	IsError               bool                        `json:"isError,omitempty"`
 	AssistantMessageEvent *assistantMessageEvent      `json:"assistantMessageEvent,omitempty"`
 	Compaction            *agent.CompactionInfo       `json:"compaction,omitempty"`
@@ -151,13 +145,11 @@ type agentEvent struct {
 	ToolCallRecovery      *agent.ToolCallRecoveryInfo `json:"toolCallRecovery,omitempty"`
 }
 
-
 type serverStartEvent struct {
 	Type  string   `json:"type"`
 	Model string   `json:"model"`
 	Tools []string `json:"tools"`
 }
-
 
 type pipelineMetrics struct {
 	EventCount    int64
@@ -178,7 +170,6 @@ type pipelineMetrics struct {
 	StderrLastAt time.Time
 }
 
-
 // NewAiInterpreter creates a new ai interpreter.
 func NewAiInterpreter(cmdPath string, cmdArgs []string) *AiInterpreter {
 	interp := newBaseInterpreter()
@@ -186,7 +177,6 @@ func NewAiInterpreter(cmdPath string, cmdArgs []string) *AiInterpreter {
 	interp.cmdArgs = cmdArgs
 	return interp
 }
-
 
 // NewAiInterpreterWithIO creates an interpreter backed by in-process IO pipes.
 func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.ReadCloser) *AiInterpreter {
@@ -197,7 +187,6 @@ func NewAiInterpreterWithIO(stdin io.WriteCloser, stdout io.ReadCloser, stderr i
 	interp.stderr = stderr
 	return interp
 }
-
 
 func newBaseInterpreter() *AiInterpreter {
 	return &AiInterpreter{
@@ -213,14 +202,12 @@ func newBaseInterpreter() *AiInterpreter {
 
 }
 
-
 // SetAdClient sets the ad client for minibuffer interactions.
 func (p *AiInterpreter) SetAdClient(client *ad.Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.adClient = client
 }
-
 
 // Start starts the ai subprocess and begins streaming output.
 func (p *AiInterpreter) Start(ctx context.Context) error {
@@ -230,7 +217,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 	if p.started {
 		return fmt.Errorf("ai already started")
 	}
-
 
 	p.startCtx = ctx
 
@@ -256,7 +242,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 
 		return nil
 	}
-
 
 	args := append([]string{}, p.cmdArgs...)
 	if !hasFlag(args, "-http") && !hasFlag(args, "--http") {
@@ -285,7 +270,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		return fmt.Errorf("create stderr pipe: %w", err)
 	}
 
-
 	p.cmd = cmd
 	p.stdin = stdin
 	p.stdout = stdout
@@ -298,13 +282,11 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		return fmt.Errorf("start ai: %w", err)
 	}
 
-
 	if wd, err := os.Getwd(); err == nil {
 		p.stateMu.Lock()
 		p.workingDir = wd
 		p.stateMu.Unlock()
 	}
-
 
 	go p.readStdout(childCtx)
 	go p.readStderr(childCtx)
@@ -312,7 +294,6 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 
 	return nil
 }
-
 
 func hasFlag(args []string, name string) bool {
 	for _, arg := range args {
@@ -324,7 +305,6 @@ func hasFlag(args []string, name string) bool {
 
 	return false
 }
-
 
 // Stop terminates the ai subprocess.
 func (p *AiInterpreter) Stop() error {
@@ -347,7 +327,6 @@ func (p *AiInterpreter) Stop() error {
 		cancel()
 	}
 
-
 	if stdin != nil {
 		_ = stdin.Close()
 	}
@@ -360,7 +339,6 @@ func (p *AiInterpreter) Stop() error {
 		_ = stderr.Close()
 	}
 
-
 	if !inProc && cmd != nil && cmd.Process != nil {
 		if err := cmd.Process.Kill(); err != nil {
 			return fmt.Errorf("kill ai: %w", err)
@@ -368,11 +346,9 @@ func (p *AiInterpreter) Stop() error {
 
 	}
 
-
 	p.resetAiState()
 	return nil
 }
-
 
 func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
 	_ = cmd.Wait()
@@ -381,11 +357,9 @@ func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 
-
 	if !p.resetProcessForCmd(cmd, "process exited") {
 		return
 	}
-
 
 	msg := "ai: process exited"
 	if exitCode >= 0 {
@@ -394,7 +368,6 @@ func (p *AiInterpreter) waitForExit(cmd *exec.Cmd) {
 
 	p.writeStatus(msg)
 }
-
 
 func (p *AiInterpreter) resetProcess(reason string) {
 	p.mu.Lock()
@@ -406,7 +379,6 @@ func (p *AiInterpreter) resetProcess(reason string) {
 
 	_ = p.resetProcessForCmd(cmd, reason)
 }
-
 
 func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
 	p.mu.Lock()
@@ -443,11 +415,9 @@ func (p *AiInterpreter) resetProcessForCmd(cmd *exec.Cmd, reason string) bool {
 		_ = stderr.Close()
 	}
 
-
 	p.resetAiState()
 	return true
 }
-
 
 func (p *AiInterpreter) resetAiState() {
 	p.stateMu.Lock()
@@ -460,7 +430,6 @@ func (p *AiInterpreter) resetAiState() {
 	p.setStreaming(false)
 }
 
-
 func (p *AiInterpreter) restartAI(reason string) error {
 	p.mu.Lock()
 	inProc := p.inProc
@@ -469,11 +438,9 @@ func (p *AiInterpreter) restartAI(reason string) error {
 		return fmt.Errorf("ai in-process session cannot be restarted")
 	}
 
-
 	if reason != "" {
 		p.writeStatus(fmt.Sprintf("ai: %s; restarting...", reason))
 	}
-
 
 	p.mu.Lock()
 	ctx := p.startCtx
@@ -481,7 +448,6 @@ func (p *AiInterpreter) restartAI(reason string) error {
 	if ctx == nil || ctx.Err() != nil {
 		return fmt.Errorf("ai not running")
 	}
-
 
 	if err := p.Start(ctx); err != nil {
 		if strings.Contains(err.Error(), "ai already started") {
@@ -494,7 +460,6 @@ func (p *AiInterpreter) restartAI(reason string) error {
 	return nil
 }
 
-
 // Process sends input to ai or handles control commands.
 func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 	raw := input
@@ -502,7 +467,6 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 	if trimmed == "" {
 		return nil
 	}
-
 
 	handled, err := p.handleInput(trimmed, false)
 	if err != nil {
@@ -513,7 +477,6 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 	if handled {
 		return nil
 	}
-
 
 	p.stateMu.Lock()
 	streaming := p.isStreaming
@@ -541,7 +504,6 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 
 	}
 
-
 	if err := p.sendPrompt(raw); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: %v", err))
 	}
@@ -549,12 +511,10 @@ func (p *AiInterpreter) Process(ctx context.Context, input string) error {
 	return nil
 }
 
-
 // SendInput sends input directly to the ai process (async interpreter).
 func (p *AiInterpreter) SendInput(input string) error {
 	return p.sendPrompt(input)
 }
-
 
 // HandleControl intercepts control commands from send-to-win.
 func (p *AiInterpreter) HandleControl(input string) (bool, error) {
@@ -566,18 +526,15 @@ func (p *AiInterpreter) HandleControl(input string) (bool, error) {
 	return p.handleInput(trimmed, true)
 }
 
-
 // SetOutputWriter sets the output writer for streaming output.
 func (p *AiInterpreter) SetOutputWriter(writer repl.OutputWriter) {
 	p.BaseInterpreter.SetOutputWriter(writer)
 }
 
-
 func (p *AiInterpreter) handleInput(input string, fromControl bool) (bool, error) {
 	if strings.HasPrefix(input, "::rpc") {
 		return true, p.handleRawRPC(input)
 	}
-
 
 	if strings.HasPrefix(input, "/") {
 		cmdLine := strings.TrimSpace(strings.TrimPrefix(input, "/"))
@@ -600,17 +557,14 @@ func (p *AiInterpreter) handleInput(input string, fromControl bool) (bool, error
 		return handled, err
 	}
 
-
 	return false, nil
 }
-
 
 func (p *AiInterpreter) handleModelSelect() (bool, error) {
 	// Send request to get available models
 	if err := p.sendCommand("get_available_models", nil, ""); err != nil {
 		return false, err
 	}
-
 
 	// Wait for the models to arrive
 	timeout := time.After(5 * time.Second)
@@ -640,7 +594,6 @@ func (p *AiInterpreter) handleModelSelect() (bool, error) {
 					options[i] = fmt.Sprintf("%s - %s", ref, name)
 				}
 
-
 				// Use ad's minibuffer for interactive selection
 				if p.adClient != nil {
 					selection, err := p.adClient.MinibufferSelect("Select model:", options)
@@ -666,7 +619,6 @@ func (p *AiInterpreter) handleModelSelect() (bool, error) {
 					return true, nil
 				}
 
-
 				// Fall back to showing the list
 				p.showModelList(models, true)
 				return true, nil
@@ -678,18 +630,15 @@ func (p *AiInterpreter) handleModelSelect() (bool, error) {
 
 }
 
-
 func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, error) {
 	if cmdLine == "" {
 		return false, nil
 	}
 
-
 	fields := strings.Fields(cmdLine)
 	if len(fields) == 0 {
 		return false, nil
 	}
-
 
 	cmd := fields[0]
 	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmd))
@@ -799,7 +748,6 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 
 }
 
-
 var errModelListRequired = errors.New("model list required")
 var errSessionListRequired = errors.New("session list required")
 var errForkListRequired = errors.New("fork list required")
@@ -818,17 +766,14 @@ func (p *AiInterpreter) handleRawRPC(input string) error {
 	return p.sendRaw(payload)
 }
 
-
 func (p *AiInterpreter) sendPrompt(message string) error {
 	return p.sendCommand("prompt", nil, message)
 }
-
 
 func (p *AiInterpreter) sendCommand(cmdType string, data any, message string) error {
 	_, err := p.sendCommandWithID(cmdType, data, message)
 	return err
 }
-
 
 func (p *AiInterpreter) sendCommandWithID(cmdType string, data any, message string) (string, error) {
 	payload := map[string]any{
@@ -848,7 +793,6 @@ func (p *AiInterpreter) sendCommandWithID(cmdType string, data any, message stri
 	return id, p.sendJSON(payload)
 }
 
-
 func (p *AiInterpreter) sendMessageCommand(cmdType, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -857,7 +801,6 @@ func (p *AiInterpreter) sendMessageCommand(cmdType, message string) error {
 
 	return p.sendCommand(cmdType, map[string]any{"message": message}, "")
 }
-
 
 func (p *AiInterpreter) sendStateRequest(show bool, kind string, quiet bool) error {
 	id, err := p.sendCommandWithID("get_state", nil, "")
@@ -877,7 +820,6 @@ func (p *AiInterpreter) sendStateRequest(show bool, kind string, quiet bool) err
 	return nil
 }
 
-
 func (p *AiInterpreter) sendRaw(jsonLine string) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		p.mu.Lock()
@@ -894,7 +836,6 @@ func (p *AiInterpreter) sendRaw(jsonLine string) error {
 
 			return fmt.Errorf("ai stdin not available")
 		}
-
 
 		if _, err := stdin.Write([]byte(jsonLine)); err != nil {
 			p.mu.Unlock()
@@ -934,7 +875,6 @@ func (p *AiInterpreter) sendRaw(jsonLine string) error {
 	return fmt.Errorf("ai stdin not available")
 }
 
-
 func (p *AiInterpreter) sendJSON(payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -943,7 +883,6 @@ func (p *AiInterpreter) sendJSON(payload any) error {
 
 	return p.sendRaw(string(data))
 }
-
 
 func isClosedPipe(err error) bool {
 	if err == nil {
@@ -960,12 +899,10 @@ func isClosedPipe(err error) bool {
 		strings.Contains(msg, "closed pipe")
 }
 
-
 func (p *AiInterpreter) nextID() string {
 	seq := atomic.AddInt64(&p.rpcSequence, 1)
 	return fmt.Sprintf("%d", seq)
 }
-
 
 func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 	parts := strings.Fields(args)
@@ -973,7 +910,6 @@ func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 		p.writeStatusMaybeDefer(fromControl, "ai: usage: /set <key> [value]")
 		return nil
 	}
-
 
 	key := parts[0]
 	value := strings.TrimSpace(strings.TrimPrefix(args, key))
@@ -983,7 +919,6 @@ func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 	if value != "" {
 		valueArgs = strings.Fields(value)
 	}
-
 
 	switch key {
 	case "tools":
@@ -1043,7 +978,6 @@ func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 			return nil
 		}
 
-
 	default:
 		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: unknown setting: %s", key))
 		p.writeStatusMaybeDefer(fromControl, "ai: usage: /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]")
@@ -1051,7 +985,6 @@ func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 	}
 
 }
-
 
 func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	parts := strings.Fields(args)
@@ -1073,7 +1006,6 @@ func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 
 	return nil
 }
-
 
 func (p *AiInterpreter) handleToggle(kind, args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
@@ -1109,12 +1041,10 @@ func (p *AiInterpreter) handleToggle(kind, args string, fromControl bool) error 
 		ok = true
 	}
 
-
 	if !ok {
 		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /%s [on|off|toggle]", kind))
 		return nil
 	}
-
 
 	p.stateMu.Lock()
 	switch kind {
@@ -1130,13 +1060,11 @@ func (p *AiInterpreter) handleToggle(kind, args string, fromControl bool) error 
 	return nil
 }
 
-
 func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
 	if mode == "" {
 		mode = "toggle"
 	}
-
 
 	p.stateMu.Lock()
 	showTools := p.showTools
@@ -1167,7 +1095,6 @@ func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 		return nil
 	}
 
-
 	p.stateMu.Lock()
 	p.showTools = showTools
 	p.showToolsVerbose = showVerbose
@@ -1176,7 +1103,6 @@ func (p *AiInterpreter) handleTools(args string, fromControl bool) error {
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: tools %s", toolsMode(showTools, showVerbose)))
 	return nil
 }
-
 
 func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) error {
 	mode := strings.TrimSpace(args)
@@ -1199,7 +1125,6 @@ func (p *AiInterpreter) handleAutoCompaction(args string, fromControl bool) erro
 	return p.sendCommand("set_auto_compaction", map[string]any{"enabled": enabled}, "")
 }
 
-
 func (p *AiInterpreter) handleThinking(args string, fromControl bool) error {
 	arg := strings.TrimSpace(args)
 
@@ -1217,11 +1142,9 @@ Usage:
 		return nil
 	}
 
-
 	// Set thinking level
 	return p.sendCommand("set_thinking_level", map[string]any{"level": arg}, "")
 }
-
 
 func (p *AiInterpreter) handleThinkingDisplay(value string, fromControl bool) error {
 	switch value {
@@ -1249,14 +1172,12 @@ func (p *AiInterpreter) handleThinkingDisplay(value string, fromControl bool) er
 	return nil
 }
 
-
 func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	args = strings.TrimSpace(args)
 	if args == "" {
 		p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
 		return nil
 	}
-
 
 	parts := strings.Fields(args)
 	cmd := strings.ToLower(parts[0])
@@ -1293,7 +1214,6 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 
 }
 
-
 func parseTraceEventSelectors(raw string) []string {
 	tokens := strings.FieldsFunc(raw, func(r rune) bool {
 		switch r {
@@ -1324,7 +1244,6 @@ func parseTraceEventSelectors(raw string) []string {
 	return out
 }
 
-
 func (p *AiInterpreter) handleFork(args string) error {
 	arg := strings.TrimSpace(args)
 	if arg == "" {
@@ -1345,7 +1264,6 @@ func (p *AiInterpreter) handleFork(args string) error {
 
 	return p.sendCommand("fork", map[string]any{"entryId": entryID}, "")
 }
-
 
 func (p *AiInterpreter) resolveForkInput(input string) (string, error) {
 	if input == "" {
@@ -1368,7 +1286,6 @@ func (p *AiInterpreter) resolveForkInput(input string) (string, error) {
 
 	return input, nil
 }
-
 
 func (p *AiInterpreter) resolveTreeInput(input string) (string, error) {
 	if input == "" {
@@ -1396,7 +1313,6 @@ func (p *AiInterpreter) resolveTreeInput(input string) (string, error) {
 	return input, nil
 }
 
-
 func (p *AiInterpreter) resumeOnBranchFromInput(input string) error {
 	entryID, err := p.resolveTreeInput(input)
 	if err != nil {
@@ -1405,7 +1321,6 @@ func (p *AiInterpreter) resumeOnBranchFromInput(input string) error {
 
 	return p.sendCommand("resume_on_branch", map[string]any{"entryId": entryID}, "")
 }
-
 
 func (p *AiInterpreter) setModelFromInput(input string) error {
 	model, err := p.resolveModelInput(strings.TrimSpace(input))
@@ -1416,12 +1331,10 @@ func (p *AiInterpreter) setModelFromInput(input string) error {
 	return p.sendCommand("set_model", map[string]any{"provider": model.Provider, "modelId": model.ID}, "")
 }
 
-
 func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) {
 	if input == "" {
 		return nil, fmt.Errorf("missing model id")
 	}
-
 
 	p.stateMu.Lock()
 	models := append([]rpc.ModelInfo(nil), p.availableModels...)
@@ -1440,7 +1353,6 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 		return &models[idx], nil
 	}
 
-
 	if strings.Contains(input, "/") {
 		parts := strings.SplitN(input, "/", 2)
 		if parts[0] == "" || parts[1] == "" {
@@ -1450,7 +1362,6 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 		return &rpc.ModelInfo{Provider: parts[0], ID: parts[1]}, nil
 	}
 
-
 	if len(models) == 0 {
 		if currentProvider != "" {
 			return &rpc.ModelInfo{Provider: currentProvider, ID: input}, nil
@@ -1459,14 +1370,12 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 		return nil, errModelListRequired
 	}
 
-
 	for _, m := range models {
 		if m.ID == input || m.Name == input {
 			return &m, nil
 		}
 
 	}
-
 
 	if currentProvider != "" {
 		return &rpc.ModelInfo{Provider: currentProvider, ID: input}, nil
@@ -1475,12 +1384,10 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 	return nil, fmt.Errorf("unknown model: %s", input)
 }
 
-
 func (p *AiInterpreter) switchSessionFromInput(input string) error {
 	if input == "" {
 		return fmt.Errorf("missing session id")
 	}
-
 
 	p.stateMu.Lock()
 	sessions := append([]SessionMeta(nil), p.availableSessions...)
@@ -1498,13 +1405,11 @@ func (p *AiInterpreter) switchSessionFromInput(input string) error {
 		return p.sendCommand("switch_session", map[string]any{"id": sessions[idx].ID}, "")
 	}
 
-
 	return p.sendCommand("switch_session", map[string]any{"id": input}, "")
 }
 
-
 func (p *AiInterpreter) readStdout(ctx context.Context) {
-//	slog.Debug("[AI-STDOUT] reader started")
+	//	slog.Debug("[AI-STDOUT] reader started")
 	scanner := bufio.NewScanner(p.stdout)
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 64*1024*1024)
@@ -1526,13 +1431,11 @@ func (p *AiInterpreter) readStdout(ctx context.Context) {
 
 	}
 
-
 	if err := scanner.Err(); err != nil {
 		slog.Error("[AI-STDOUT] scanner error", "error", err)
 	}
 
 }
-
 
 func (p *AiInterpreter) readStderr(ctx context.Context) {
 	scanner := bufio.NewScanner(p.stderr)
@@ -1552,13 +1455,11 @@ func (p *AiInterpreter) readStderr(ctx context.Context) {
 
 	}
 
-
 	if err := scanner.Err(); err != nil {
 		_ = err // stderr scanner error captured for debugging
 	}
 
 }
-
 
 func (p *AiInterpreter) handleStdoutLine(line []byte) {
 	var env rpcEnvelope
@@ -1567,7 +1468,6 @@ func (p *AiInterpreter) handleStdoutLine(line []byte) {
 		p.writeStatus(fmt.Sprintf("ai: %s", string(line)))
 		return
 	}
-
 
 	if env.Type == "response" {
 		var resp rpcResponse
@@ -1580,10 +1480,8 @@ func (p *AiInterpreter) handleStdoutLine(line []byte) {
 		return
 	}
 
-
 	p.handleEvent(line)
 }
-
 
 func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 	if !resp.Success {
@@ -1603,7 +1501,6 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 		p.writeStatus(fmt.Sprintf("ai: %s failed: %s", resp.Command, resp.Error))
 		return
 	}
-
 
 	switch resp.Command {
 	case "get_available_models":
@@ -1651,7 +1548,6 @@ func (p *AiInterpreter) handleResponse(resp rpcResponse) {
 	}
 
 }
-
 
 func (p *AiInterpreter) handleEvent(line []byte) {
 	var evt agentEvent
@@ -1716,11 +1612,10 @@ func (p *AiInterpreter) handleEvent(line []byte) {
 	case "tool_call_delta":
 		// ignore
 	default:
-//		slog.Debug("[AI-EVENT]", "line", string(line))
+		//		slog.Debug("[AI-EVENT]", "line", string(line))
 	}
 
 }
-
 
 func (p *AiInterpreter) handleMessageStart(evt agentEvent) {
 	p.stateMu.Lock()
@@ -1729,7 +1624,6 @@ func (p *AiInterpreter) handleMessageStart(evt agentEvent) {
 	p.stateMu.Unlock()
 	p.noteAiActivity()
 }
-
 
 func (p *AiInterpreter) handleMessageUpdate(evt agentEvent) {
 	if evt.AssistantMessageEvent == nil {
@@ -1757,7 +1651,6 @@ func (p *AiInterpreter) handleMessageUpdate(evt agentEvent) {
 	p.noteAiActivity()
 }
 
-
 func (p *AiInterpreter) handleMessageEnd(evt agentEvent) {
 	if evt.Message != nil {
 		p.writeMessageIfEmpty(evt.Message)
@@ -1766,7 +1659,6 @@ func (p *AiInterpreter) handleMessageEnd(evt agentEvent) {
 	p.endStream(true)
 	p.noteAiActivity()
 }
-
 
 func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.CompactionInfo) {
 	label := "compaction"
@@ -1797,7 +1689,6 @@ func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.Compaction
 	p.writeStatus(fmt.Sprintf("ai: %s done", label))
 }
 
-
 func (p *AiInterpreter) handleLoopGuardEvent(info *agent.LoopGuardInfo) {
 	reason := "possible infinite tool loop detected"
 	if info != nil && strings.TrimSpace(info.Reason) != "" {
@@ -1806,7 +1697,6 @@ func (p *AiInterpreter) handleLoopGuardEvent(info *agent.LoopGuardInfo) {
 
 	p.writeStatus(fmt.Sprintf("ai: loop guard triggered: %s", reason))
 }
-
 
 func (p *AiInterpreter) handleToolCallRecoveryEvent(info *agent.ToolCallRecoveryInfo) {
 	reason := "malformed tool-call markup"
@@ -1827,11 +1717,9 @@ func (p *AiInterpreter) handleToolCallRecoveryEvent(info *agent.ToolCallRecovery
 	p.writeStatus(fmt.Sprintf("ai: recovered malformed tool call: %s", truncate(reason, 220)))
 }
 
-
 func (p *AiInterpreter) handleAgentErrorEvent(raw string) {
 	p.writeStatus(formatAgentErrorStatus(raw))
 }
-
 
 func (p *AiInterpreter) handleToolStart(evt agentEvent) {
 	p.stateMu.Lock()
@@ -1864,7 +1752,6 @@ func (p *AiInterpreter) handleToolStart(evt agentEvent) {
 		return
 	}
 
-
 	summary := summarizeToolArgs(evt.ToolName, evt.Args)
 	if summary != "" {
 		p.writePrefixedLine("tool", fmt.Sprintf("%s start (%s)", label, summary))
@@ -1873,7 +1760,6 @@ func (p *AiInterpreter) handleToolStart(evt agentEvent) {
 	}
 
 }
-
 
 func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 	p.stateMu.Lock()
@@ -1910,7 +1796,6 @@ func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 		return
 	}
 
-
 	if evt.IsError {
 		msg := "error"
 		if evt.Result != nil {
@@ -1929,7 +1814,6 @@ func (p *AiInterpreter) handleToolEnd(evt agentEvent) {
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 	p.stateMu.Lock()
 	streamed := p.currentMessageStreamed
@@ -1941,7 +1825,6 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 	if streamed {
 		return
 	}
-
 
 	content := renderMessageContent(msg, showThinking, showTools)
 	if content == "" {
@@ -1965,7 +1848,6 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 
 	p.writeStream(role, content, enabled)
 }
-
 
 func renderMessageContent(msg *agentctx.AgentMessage, showThinking bool, showTools bool) string {
 	if msg == nil {
@@ -1996,7 +1878,6 @@ func renderMessageContent(msg *agentctx.AgentMessage, showThinking bool, showToo
 	return b.String()
 }
 
-
 func renderMessageText(msg *agentctx.AgentMessage) string {
 	if msg == nil {
 		return ""
@@ -2010,12 +1891,10 @@ func renderMessageText(msg *agentctx.AgentMessage) string {
 	return renderMessageContent(msg, true, true)
 }
 
-
 func (p *AiInterpreter) writeStream(role, text string, enabled bool) {
 	if !enabled || text == "" {
 		return
 	}
-
 
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
@@ -2046,10 +1925,8 @@ func (p *AiInterpreter) writeStream(role, text string, enabled bool) {
 		p.stateMu.Unlock()
 	}
 
-
 	p.writeRaw(text)
 }
-
 
 func (p *AiInterpreter) endStream(scroll bool) {
 	p.writeMu.Lock()
@@ -2071,7 +1948,6 @@ func (p *AiInterpreter) endStream(scroll bool) {
 
 }
 
-
 func (p *AiInterpreter) writePrefixedLine(role, text string) {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
@@ -2088,13 +1964,12 @@ func (p *AiInterpreter) writePrefixedLine(role, text string) {
 	p.writeRaw(text + "\n")
 }
 
-
 func (p *AiInterpreter) writeStatus(text string) {
 	p.stateMu.Lock()
 	deferStatus := p.deferStatus
 	streaming := p.isStreaming
 	if deferStatus && streaming {
-//		slog.Debug("[AI-STATUS] deferred", "bytes", len(text))
+		//		slog.Debug("[AI-STATUS] deferred", "bytes", len(text))
 		p.pendingStatus = append(p.pendingStatus, text)
 		p.stateMu.Unlock()
 		return
@@ -2114,7 +1989,6 @@ func (p *AiInterpreter) writeStatus(text string) {
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) writeStatusMaybeDefer(fromControl bool, text string) {
 	if !fromControl {
 		p.writeStatus(text)
@@ -2123,7 +1997,6 @@ func (p *AiInterpreter) writeStatusMaybeDefer(fromControl bool, text string) {
 
 	p.writeStatus(text)
 }
-
 
 func (p *AiInterpreter) setStreaming(streaming bool) {
 	var pending []string
@@ -2145,7 +2018,6 @@ func (p *AiInterpreter) setStreaming(streaming bool) {
 	}
 
 }
-
 
 func (p *AiInterpreter) writeRaw(text string) {
 	writer := p.GetOutputWriter()
@@ -2198,7 +2070,6 @@ func (p *AiInterpreter) writeRaw(text string) {
 
 }
 
-
 func (p *AiInterpreter) scrollToBottom() {
 	writer := p.GetOutputWriter()
 	if writer == nil {
@@ -2207,7 +2078,6 @@ func (p *AiInterpreter) scrollToBottom() {
 
 	_ = writer.ScrollToBottom()
 }
-
 
 func (p *AiInterpreter) recordEventMetrics(evt agentEvent) {
 	recvAt := time.Now()
@@ -2232,7 +2102,6 @@ func (p *AiInterpreter) recordEventMetrics(evt agentEvent) {
 	p.pipelineMu.Unlock()
 }
 
-
 func (p *AiInterpreter) recordWriteMetrics(d time.Duration) {
 	now := time.Now()
 	p.pipelineMu.Lock()
@@ -2247,7 +2116,6 @@ func (p *AiInterpreter) recordWriteMetrics(d time.Duration) {
 	p.pipelineMu.Unlock()
 }
 
-
 func (p *AiInterpreter) noteStdout() {
 	now := time.Now()
 	p.pipelineMu.Lock()
@@ -2255,14 +2123,12 @@ func (p *AiInterpreter) noteStdout() {
 	p.pipelineMu.Unlock()
 }
 
-
 func (p *AiInterpreter) noteStderr() {
 	now := time.Now()
 	p.pipelineMu.Lock()
 	p.pipeline.StderrLastAt = now
 	p.pipelineMu.Unlock()
 }
-
 
 func (p *AiInterpreter) showHelp(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, `Commands:
@@ -2286,7 +2152,6 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /quit`)
 }
 
-
 func (p *AiInterpreter) showSettings(fromControl bool) {
 	p.stateMu.Lock()
 	showThinking := p.showThinking
@@ -2306,7 +2171,6 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		model = fmt.Sprintf("%s/%s", modelProvider, modelID)
 	}
 
-
 	compactionContext := "unknown"
 	compactionReserve := "unknown"
 	compactionLimit := "unknown"
@@ -2323,7 +2187,6 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
 		compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
 	}
-
 
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
   model: %s
@@ -2356,7 +2219,6 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 		compactionKeepRecentTokens,
 	))
 }
-
 
 func (p *AiInterpreter) showPipeline(fromControl bool) {
 	p.pipelineMu.Lock()
@@ -2393,7 +2255,6 @@ func (p *AiInterpreter) showPipeline(fromControl bool) {
 		writeIdle = time.Since(pm.WriteLastAt)
 	}
 
-
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Pipeline Metrics:
   events: count=%d lastType=%s lastLag=%s avgLag=%s maxLag=%s
   events: lastEventAt=%s lastRecvAt=%s idle=%s
@@ -2420,7 +2281,6 @@ func (p *AiInterpreter) showPipeline(fromControl bool) {
 	))
 }
 
-
 func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 	var payload struct {
 		Models []rpc.ModelInfo `json:"models"`
@@ -2430,7 +2290,6 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 		p.writeStatus(fmt.Sprintf("ai: invalid models response: %v", err))
 		return
 	}
-
 
 	p.stateMu.Lock()
 	p.availableModels = payload.Models
@@ -2448,13 +2307,11 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 	p.stateMu.Unlock()
 }
 
-
 func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
 	if len(models) == 0 {
 		p.writeStatus("ai: no models available")
 		return
 	}
-
 
 	maxID := 0
 	for _, m := range models {
@@ -2464,7 +2321,6 @@ func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
 		}
 
 	}
-
 
 	p.writeRaw(sectionLine + "\n")
 	p.writeRaw("Available Models\n")
@@ -2491,7 +2347,6 @@ func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
 		p.writeRaw(line)
 	}
 
-
 	p.writeRaw("\n" + sectionLine + "\n")
 	if showUsage {
 		p.writeRaw(`
@@ -2505,14 +2360,12 @@ Usage:
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) handleSetModel(data json.RawMessage) {
 	var model rpc.ModelInfo
 	if err := json.Unmarshal(data, &model); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid set_model response: %v", err))
 		return
 	}
-
 
 	p.stateMu.Lock()
 	p.currentModelID = model.ID
@@ -2526,7 +2379,6 @@ func (p *AiInterpreter) handleSetModel(data json.RawMessage) {
 
 	p.writeStatus(fmt.Sprintf("ai: model set to %s", label))
 }
-
 
 func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 	info, ok := p.takeStateRequestInfo(resp.ID)
@@ -2548,10 +2400,8 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 		return
 	}
 
-
 	p.showState(state)
 }
-
 
 func (p *AiInterpreter) decodeState(data json.RawMessage) (*rpc.SessionState, error) {
 	var state rpc.SessionState
@@ -2561,7 +2411,6 @@ func (p *AiInterpreter) decodeState(data json.RawMessage) (*rpc.SessionState, er
 
 	return &state, nil
 }
-
 
 func (p *AiInterpreter) applyState(state *rpc.SessionState) {
 	if state == nil {
@@ -2584,7 +2433,6 @@ func (p *AiInterpreter) applyState(state *rpc.SessionState) {
 	p.stateMu.Unlock()
 }
 
-
 func (p *AiInterpreter) showState(state *rpc.SessionState) {
 	if state == nil {
 		return
@@ -2598,7 +2446,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
 		}
 
 	}
-
 
 	compactionContext := "unknown"
 	compactionLimit := "unknown"
@@ -2631,7 +2478,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
 	if strings.TrimSpace(state.AIWorkingDir) != "" {
 		aiWorkingDir = state.AIWorkingDir
 	}
-
 
 	p.writeStatus(fmt.Sprintf(`Session:
   id: %s
@@ -2675,7 +2521,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
 	))
 }
 
-
 func (p *AiInterpreter) takeStateRequestInfo(id string) (stateRequestInfo, bool) {
 	if strings.TrimSpace(id) == "" {
 		return stateRequestInfo{}, false
@@ -2691,14 +2536,12 @@ func (p *AiInterpreter) takeStateRequestInfo(id string) (stateRequestInfo, bool)
 	return info, ok
 }
 
-
 func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *rpc.SessionState) {
 	latency := time.Since(info.started)
 
 	if info.quiet {
 		return
 	}
-
 
 	label := "pong"
 	streaming := "unknown"
@@ -2714,14 +2557,12 @@ func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *rpc.Sessio
 		label, latency.Round(time.Millisecond), streaming, compacting, pending))
 }
 
-
 func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 	var stats rpc.SessionStats
 	if err := json.Unmarshal(data, &stats); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid usage response: %v", err))
 		return
 	}
-
 
 	rateLine := "  token-rate: unavailable"
 	recentLine := "  token-rate-recent: unavailable"
@@ -2745,7 +2586,6 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 			stats.TokenRate.LastTotalPerSec,
 		)
 	}
-
 
 	p.writeStatus(fmt.Sprintf(`Usage:
   session: %s
@@ -2776,7 +2616,6 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 	))
 }
 
-
 func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 	var payload struct {
 		Commands []rpc.SlashCommand `json:"commands"`
@@ -2787,13 +2626,11 @@ func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 		return
 	}
 
-
 	commands := payload.Commands
 	if len(commands) == 0 {
 		p.writeStatus("ai: no commands available")
 		return
 	}
-
 
 	sort.Slice(commands, func(i, j int) bool {
 		if commands[i].Source == commands[j].Source {
@@ -2818,7 +2655,6 @@ func (p *AiInterpreter) handleCommands(data json.RawMessage) {
 	p.writeStatus(strings.TrimRight(b.String(), "\n"))
 }
 
-
 func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 	var payload struct {
 		Messages []agentctx.AgentMessage `json:"messages"`
@@ -2835,12 +2671,10 @@ func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 		payload.Messages = messages
 	}
 
-
 	if len(payload.Messages) == 0 {
 		p.writeStatus("ai: no messages")
 		return
 	}
-
 
 	const maxMessages = 10
 	total := len(payload.Messages)
@@ -2850,7 +2684,6 @@ func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 		baseIndex = total - maxMessages
 		display = payload.Messages[baseIndex:]
 	}
-
 
 	var b strings.Builder
 	if total > maxMessages {
@@ -2872,7 +2705,6 @@ func (p *AiInterpreter) handleMessages(data json.RawMessage) {
 	p.writeStatus(strings.TrimRight(b.String(), "\n"))
 }
 
-
 func (p *AiInterpreter) handleNewSession(data json.RawMessage) {
 	var payload struct {
 		SessionID string `json:"sessionId"`
@@ -2892,7 +2724,6 @@ func (p *AiInterpreter) handleNewSession(data json.RawMessage) {
 	p.writeStatus(fmt.Sprintf("ai: new session %s", payload.SessionID))
 }
 
-
 func (p *AiInterpreter) handleListSessions(data json.RawMessage) {
 	var payload struct {
 		Sessions []SessionMeta `json:"sessions"`
@@ -2908,7 +2739,6 @@ func (p *AiInterpreter) handleListSessions(data json.RawMessage) {
 
 		payload.Sessions = sessions
 	}
-
 
 	p.stateMu.Lock()
 	p.availableSessions = payload.Sessions
@@ -2926,17 +2756,14 @@ func (p *AiInterpreter) handleListSessions(data json.RawMessage) {
 		return
 	}
 
-
 	if !pendingList {
 		return
 	}
-
 
 	if len(payload.Sessions) == 0 {
 		p.writeStatus("ai: no sessions found")
 		return
 	}
-
 
 	p.writeRaw(sectionLine + "\n")
 	p.writeRaw("Available Sessions\n")
@@ -2962,7 +2789,6 @@ func (p *AiInterpreter) handleListSessions(data json.RawMessage) {
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) handleThinkingLevelResponse(data json.RawMessage) {
 	var payload struct {
 		Level string `json:"level"`
@@ -2979,7 +2805,6 @@ func (p *AiInterpreter) handleThinkingLevelResponse(data json.RawMessage) {
 		payload.Level = level
 	}
 
-
 	p.stateMu.Lock()
 	p.currentThinkingLevel = payload.Level
 	p.stateMu.Unlock()
@@ -2992,7 +2817,6 @@ func (p *AiInterpreter) handleThinkingLevelResponse(data json.RawMessage) {
 	p.writeStatus(fmt.Sprintf("ai: thinking level set to %s", payload.Level))
 }
 
-
 func (p *AiInterpreter) handleTraceEventsResponse(data json.RawMessage) {
 	var payload struct {
 		Events []string `json:"events"`
@@ -3003,7 +2827,6 @@ func (p *AiInterpreter) handleTraceEventsResponse(data json.RawMessage) {
 		return
 	}
 
-
 	if len(payload.Events) == 0 {
 		p.writeStatus("ai: trace events set to: <none>")
 		return
@@ -3011,7 +2834,6 @@ func (p *AiInterpreter) handleTraceEventsResponse(data json.RawMessage) {
 
 	p.writeStatus(fmt.Sprintf("ai: trace events set to: %s", strings.Join(payload.Events, ", ")))
 }
-
 
 func (p *AiInterpreter) handleTraceEventsList(data json.RawMessage) {
 	var payload struct {
@@ -3023,16 +2845,13 @@ func (p *AiInterpreter) handleTraceEventsList(data json.RawMessage) {
 		return
 	}
 
-
 	if len(payload.Events) == 0 {
 		p.writeStatus("ai: no trace events enabled")
 		return
 	}
 
-
 	p.writeStatus(fmt.Sprintf("ai: enabled trace events: %s", strings.Join(payload.Events, ", ")))
 }
-
 
 func (p *AiInterpreter) handleLastAssistantText(data json.RawMessage) {
 	var payload struct {
@@ -3057,7 +2876,6 @@ func (p *AiInterpreter) handleLastAssistantText(data json.RawMessage) {
 	p.writeStatus("ai: copied last assistant message")
 }
 
-
 func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 	var payload struct {
 		Messages []rpc.ForkMessage `json:"messages"`
@@ -3067,7 +2885,6 @@ func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 		p.writeStatus(fmt.Sprintf("ai: invalid fork messages response: %v", err))
 		return
 	}
-
 
 	p.stateMu.Lock()
 	p.availableForkMessages = payload.Messages
@@ -3090,17 +2907,14 @@ func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 		return
 	}
 
-
 	if !pendingList {
 		return
 	}
-
 
 	if len(payload.Messages) == 0 {
 		p.writeStatus("ai: no fork messages available")
 		return
 	}
-
 
 	p.writeRaw(sectionLine + "\n")
 	p.writeRaw("Available Messages for Forking\n")
@@ -3117,7 +2931,6 @@ func (p *AiInterpreter) handleForkMessages(data json.RawMessage) {
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 	var payload struct {
 		Entries []rpc.TreeEntry `json:"entries"`
@@ -3132,7 +2945,6 @@ func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 
 		payload.Entries = entries
 	}
-
 
 	p.stateMu.Lock()
 	p.availableTreeEntries = payload.Entries
@@ -3155,17 +2967,14 @@ func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 		return
 	}
 
-
 	if !pendingList {
 		return
 	}
-
 
 	if len(payload.Entries) == 0 {
 		p.writeStatus("ai: no tree entries available")
 		return
 	}
-
 
 	p.writeRaw(sectionLine + "\n")
 	p.writeRaw("Session Tree\n")
@@ -3187,7 +2996,6 @@ func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 	p.scrollToBottom()
 }
 
-
 func (p *AiInterpreter) handleForkResult(data json.RawMessage) {
 	var result rpc.ForkResult
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -3208,7 +3016,6 @@ func (p *AiInterpreter) handleForkResult(data json.RawMessage) {
 	p.writeStatus("ai: forked")
 }
 
-
 func (p *AiInterpreter) handleCompactResult(data json.RawMessage) {
 	var result rpc.CompactResult
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -3216,17 +3023,14 @@ func (p *AiInterpreter) handleCompactResult(data json.RawMessage) {
 		return
 	}
 
-
 	p.writeStatus("ai: compacted")
 }
-
 
 func (p *AiInterpreter) noteAiActivity() {
 	p.stateMu.Lock()
 	p.lastAiActivity = time.Now()
 	p.stateMu.Unlock()
 }
-
 
 func onOff(value bool) string {
 	if value {
@@ -3235,7 +3039,6 @@ func onOff(value bool) string {
 
 	return "off"
 }
-
 
 func toolsMode(showTools, showVerbose bool) string {
 	if !showTools {
@@ -3249,7 +3052,6 @@ func toolsMode(showTools, showVerbose bool) string {
 	return "on"
 }
 
-
 func orUnknown(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "unknown"
@@ -3257,7 +3059,6 @@ func orUnknown(value string) string {
 
 	return value
 }
-
 
 func formatDuration(d time.Duration) string {
 	if d <= 0 {
@@ -3267,7 +3068,6 @@ func formatDuration(d time.Duration) string {
 	return d.String()
 }
 
-
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return "unknown"
@@ -3275,7 +3075,6 @@ func formatTime(t time.Time) string {
 
 	return t.Format(time.RFC3339Nano)
 }
-
 
 func formatIntOrUnknown(value int) string {
 	if value <= 0 {
@@ -3285,7 +3084,6 @@ func formatIntOrUnknown(value int) string {
 	return strconv.Itoa(value)
 }
 
-
 func formatLimit(value int) string {
 	if value <= 0 {
 		return "disabled"
@@ -3293,7 +3091,6 @@ func formatLimit(value int) string {
 
 	return strconv.Itoa(value)
 }
-
 
 func formatTokenLimit(state *rpc.CompactionState) string {
 	if state == nil || state.TokenLimit <= 0 {
@@ -3307,7 +3104,6 @@ func formatTokenLimit(state *rpc.CompactionState) string {
 
 	return fmt.Sprintf("%d (%s)", state.TokenLimit, source)
 }
-
 
 func formatTokenLimitSource(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -3323,7 +3119,6 @@ func formatTokenLimitSource(value string) string {
 
 }
 
-
 func truncate(text string, limit int) string {
 	if len(text) <= limit {
 		return text
@@ -3332,13 +3127,11 @@ func truncate(text string, limit int) string {
 	return text[:limit-3] + "..."
 }
 
-
 func formatAgentErrorStatus(raw string) string {
 	reason := strings.TrimSpace(raw)
 	if reason == "" {
 		return "ai: request failed: unknown error"
 	}
-
 
 	normalized := strings.Join(strings.Fields(reason), " ")
 	display := truncate(normalized, 260)
@@ -3365,7 +3158,6 @@ func formatAgentErrorStatus(raw string) string {
 
 }
 
-
 func containsAny(value string, needles ...string) bool {
 	for _, needle := range needles {
 		if strings.Contains(value, needle) {
@@ -3376,7 +3168,6 @@ func containsAny(value string, needles ...string) bool {
 
 	return false
 }
-
 
 func formatTreeLabel(entry rpc.TreeEntry) string {
 	label := entry.Type
@@ -3391,7 +3182,6 @@ func formatTreeLabel(entry rpc.TreeEntry) string {
 
 	return fmt.Sprintf("%s: %s", label, truncate(text, 120))
 }
-
 
 func summarizeToolArgs(toolName string, args map[string]interface{}) string {
 	if len(args) == 0 {
@@ -3422,7 +3212,6 @@ func summarizeToolArgs(toolName string, args map[string]interface{}) string {
 
 	}
 
-
 	keys := make([]string, 0, len(args))
 	for k := range args {
 		keys = append(keys, k)
@@ -3431,7 +3220,6 @@ func summarizeToolArgs(toolName string, args map[string]interface{}) string {
 	sort.Strings(keys)
 	return fmt.Sprintf("args=%s", strings.Join(keys, ","))
 }
-
 
 func copyToClipboard(text string) error {
 	cmd := exec.Command("pbcopy")
@@ -3457,7 +3245,6 @@ func copyToClipboard(text string) error {
 	return cmd.Wait()
 }
 
-
 // func (p *AiInterpreter) resolveWorkingDir(path string) string {
 // 	if path == "" {
 // 		return ""
@@ -3477,7 +3264,6 @@ func copyToClipboard(text string) error {
 
 // 	return abs
 // }
-
 
 var _ repl.Interpreter = (*AiInterpreter)(nil)
 var _ repl.AsyncInterpreter = (*AiInterpreter)(nil)
