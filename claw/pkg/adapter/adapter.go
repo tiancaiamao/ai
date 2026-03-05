@@ -192,6 +192,7 @@ type Config struct {
 	Provider     string          // 提供商，如 "anthropic"
 	APIKey       string          // API 密钥
 	APIURL       string          // API URL (可选)
+	API          string          // API 类型，如 "anthropic-messages"
 	SystemPrompt string          // 系统提示词
 	Tools        []agentctx.Tool // 工具列表
 	ClawDir      string          // claw 配置目录 (~/.aiclaw)
@@ -291,6 +292,7 @@ func resolveModel(cfg *Config) llm.Model {
 		ID:       cfg.Model,
 		Provider: cfg.Provider,
 		BaseURL:  cfg.APIURL,
+		API:      cfg.API,
 	}
 
 	// 如果已经有完整配置，直接返回

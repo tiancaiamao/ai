@@ -44,6 +44,7 @@ type ModelConfig struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
 	BaseURL  string `json:"baseUrl"`
+	API      string `json:"api,omitempty"`
 }
 
 // VoiceConfig 语音配置
@@ -198,6 +199,7 @@ func main() {
 		Model:           cfg.Model.ID,
 		Provider:        cfg.Model.Provider,
 		APIURL:          cfg.Model.BaseURL,
+		API:             cfg.Model.API,
 		APIKey:          apiKey,
 		SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills),
 		Tools:           toolRegistry.All(),
