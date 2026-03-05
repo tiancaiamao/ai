@@ -78,7 +78,7 @@ ai --mode headless --no-session --subagent --max-turns 20 \
 If async supervision is needed, run in background and persist pid:
 
 ```bash
-cd "<worktree>" && nohup ai --mode headless --no-session --subagent --max-turns 20 "..." > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
+cd "<worktree>" && nohup ai --mode headless --no-session --subagent "..." > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
 ```
 
 4. Heartbeat behavior.
