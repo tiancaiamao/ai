@@ -1,6 +1,6 @@
 ---
 name: wf-tick
-description: "Cron-friendly scheduler tick: scan workflow registry, reconcile status with GitHub and process state transitions by delegating to wf-worker, wf-pr-review, and wf-closeout actions."
+description: "Cron-friendly scheduler tick: scan workflow registry, reconcile status with GitHub, and process state transitions by delegating to wf-worker, wf-push, wf-pr-code-review, and wf-closeout."
 allowed-tools: [bash, read, write, edit, grep]
 ---
 
@@ -20,7 +20,8 @@ Optional runtime parameters (use defaults if missing):
 - `stale_minutes` (default `10`)
 - `max_retries` (default `2`)
 - `target_workflow_id` (optional; reconcile only one item)
-- `no_worker` (default `false`; when `true`, do not invoke `wf-worker` or start/restart subagents)
+- `no_worker` (default `false`; when `true`, do not invoke `wf-worker` or start subagents)
+- `auto_review` (default `true`; when `false`, skip automated code review)
 
 ## Required Files
 
@@ -31,14 +32,11 @@ Optional runtime parameters (use defaults if missing):
 
 Only one tick may run at a time.
 
-- Acquire lock with atomic directory create:
-
 ```bash
 mkdir ~/.aiclaw/workflows/.tick.lock
+# If lock exists, exit quickly with WF_TICK_SKIPPED_LOCKED
+# Always release lock at the end: rm -rf ~/.aiclaw/workflows/.tick.lock
 ```
-
-- If lock exists, exit quickly with `WF_TICK_SKIPPED_LOCKED`.
-- Always release lock at the end.
 
 ## Reconciliation Order
 
@@ -59,39 +57,71 @@ For each registry item:
   - Target: `running`.
 - No-worker mode (`no_worker=true`):
   - Do not invoke `wf-worker`.
-  - Only update status to:
+  - Update status:
     - `state=running`
     - `step=queued_no_worker`
     - refresh `heartbeat_at` and `updated_at`
 
 ### `running`
 
-- Normal mode (`no_worker=false`):
+**Normal mode (`no_worker=false`):**
+
+- Check heartbeat:
   - If `heartbeat_at` older than `stale_minutes`:
-    - increment retry
+    - increment `retry_count`
     - restart worker if `retry_count <= max_retries`
-    - else `failed`
-  - If PR exists and open: `pr_open`
-  - If PR merged: `done`
-- No-worker mode (`no_worker=true`):
-  - Do not restart worker and do not increment retry due to missing heartbeat.
-  - Keep state as-is unless PR truth requires transition (`pr_open` / `done`).
+    - else `state=failed`
+
+- Check for implementation completion:
+  - If `.aiclaw/result.json` exists and `ok=true`:
+    - If result indicates `phase=done` or implementation is complete:
+      - **Call wf-push to push branch and create PR**
+      - Set `state=pr_open`, `step=awaiting_review`
+    - If result indicates `partial=true`:
+      - Resume from `next_phase` (invoke wf-worker again)
+
+- Check PR status:
+  - If PR exists and open: `state=pr_open`, `step=awaiting_review`
+  - If PR merged: `state=done`
+
+**No-worker mode (`no_worker=true`):**
+
+- Do not restart worker and do not increment retry due to missing heartbeat.
+- Do not invoke wf-push.
+- Keep state as-is unless PR truth requires transition (`pr_open` / `done`).
 
 ### `pr_open`
 
-- Action: invoke `wf-pr-review` reconcile behavior.
-- If merged: `done`
-- If changes requested: `reviewing`
+- If `auto_review=true` and `step=awaiting_review`:
+  - **Call wf-pr-code-review for automated review**
+  - Review result determines next state:
+    - If `decision=approved`: `state=approved`, `step=awaiting_merge`
+    - If `decision=changes_requested`: `state=reviewing`, `step=review_fix`
+    - If `decision=commented`: keep `state=pr_open`, `step=awaiting_review`
+- If `auto_review=false`:
+  - Keep `state=pr_open`, `step=awaiting_human_review`
+  - Wait for human review decision
+
+- Reconcile with GitHub PR state:
+  - If merged: `state=done`
+  - If review requested changes: `state=reviewing`
 
 ### `reviewing`
 
-- Action: invoke `wf-pr-review` fix cycle.
-- If fixes pushed and no blocking feedback: `pr_open`
-- If retries exceeded: `failed`
+- Action: invoke `wf-worker` for fix pass (task: address review comments).
+- If fixes pushed and no blocking feedback: `state=pr_open`
+- If retries exceeded: `state=failed`
+
+### `approved`
+
+- If PR is not yet merged:
+  - **Auto-merge**: `gh pr merge <pr> --repo <repo> --squash --auto`
+  - Wait for merge confirmation on next tick
+- If merged: `state=done`
 
 ### `done`
 
-- Action: invoke `wf-closeout`.
+- Action: invoke `wf-closeout` (cleanup worktree, close issue).
 - Remove from active registry when closeout succeeds.
 
 ### `failed`
@@ -102,12 +132,55 @@ For each registry item:
 
 - Keep terminal until manual unblocking.
 
+## Key Workflow Pattern
+
+**Fully automated task flow:**
+
+```
+todo
+  → wf-tick detects todo
+  → invoke wf-worker (subagent)
+  → state=running
+
+running
+  → wf-worker completes implementation (ok=true)
+  → wf-tick detects completion
+  → invoke wf-push (push branch, create PR)
+  → state=pr_open
+
+pr_open
+  → wf-tick invokes wf-pr-code-review (AI review!)  🆕
+  ↓
+  ├─ approved → state=approved → auto-merge → done
+  ├─ changes_requested → state=reviewing
+  └─ commented → keep pr_open, re-review
+
+reviewing
+  → invoke wf-worker fix pass
+  → fixes pushed
+  → state=pr_open → re-review
+```
+
+**Manual review flow (auto_review=false):**
+
+```
+pr_open
+  → state=pr_open, step=awaiting_human_review
+  → wait for human to post review
+  → wf-tick reconciles with GitHub
+  ↓
+  ├─ approved → auto-merge → done
+  └─ changes_requested → state=reviewing → wf-worker fix
+```
+
 ## Idempotency Rules
 
 - Multiple ticks must produce the same result if no external state changed.
 - Never append duplicate registry entries.
 - Never create multiple PRs for the same branch.
-- Always reconcile with GitHub before changing `pr_open/reviewing/done`.
+- Always reconcile with GitHub before changing `pr_open/reviewing/done/approved`.
+- `wf-push` should check if PR already exists (idempotent).
+- `wf-pr-code-review` should check if review already posted (idempotent).
 
 ## Cron Prompt Template
 
@@ -122,10 +195,13 @@ Expected summary format:
 ```text
 WF_TICK_RESULT
 mode: normal|no_worker
+auto_review: true|false
 scanned: <n>
 updated: <n>
 running: <n>
+pr_open: <n>
 reviewing: <n>
+approved: <n>
 done: <n>
 failed: <n>
 blocked: <n>
@@ -137,3 +213,7 @@ blocked: <n>
 - Never close issues from `wf-tick` directly; use closeout behavior.
 - Never keep stale lock on normal exit; release lock in all branches.
 - In `no_worker=true` mode, never invoke `wf-worker` and never start subagents.
+- Always verify `wf-push` only runs when implementation is complete (ok=true).
+- Never invoke `wf-push` on partial results (partial=true).
+- In `auto_review=false` mode, allow human review workflow.
+- Auto-merge only when PR is approved and has no blocking reviews.
