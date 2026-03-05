@@ -357,6 +357,14 @@ Be concise and focused on the task at hand.`
 		args string
 	}
 
+	// Output session info at the start
+	fmt.Fprintf(output, "=== Session Info ===\n")
+	fmt.Fprintf(output, "Session ID: %s\n", sessionID)
+	if !noSession {
+		fmt.Fprintf(output, "Session file: %s\n", sess.GetPath())
+	}
+	fmt.Fprintln(output)
+
 	// Subscribe to events and output turn-by-turn
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
