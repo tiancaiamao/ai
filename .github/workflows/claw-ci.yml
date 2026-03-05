@@ -1,0 +1,55 @@
+name: claw CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'claw/**'
+      - '.github/workflows/claw-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'claw/**'
+      - '.github/workflows/claw-ci.yml'
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Download dependencies
+        working-directory: claw
+        run: go mod download
+
+      - name: Verify dependencies
+        working-directory: claw
+        run: go mod verify
+
+      - name: Build
+        working-directory: claw
+        run: go build -o bin/aiclaw ./cmd/aiclaw
+
+      - name: Run vet
+        working-directory: claw
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: claw
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-coverage
+          path: claw/coverage.out
+          retention-days: 7
