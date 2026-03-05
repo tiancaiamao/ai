@@ -35,26 +35,58 @@ func ResolveAPIKey(provider string) (string, error) {
 	}
 
 	envVar := strings.ToUpper(providerKey) + "_API_KEY"
-	if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
-		return value, nil
+	envValue := strings.TrimSpace(os.Getenv(envVar))
+
+	authValue, authPath, authErr := resolveAPIKeyFromAuth(providerKey)
+	preferEnv := strings.EqualFold(strings.TrimSpace(os.Getenv("AI_API_KEY_SOURCE")), "env")
+
+	// Default to auth-first to avoid stale shell env overriding managed auth.json.
+	if preferEnv {
+		if envValue != "" {
+			return envValue, nil
+		}
+		if authValue != "" {
+			return authValue, nil
+		}
+	} else {
+		if authValue != "" {
+			return authValue, nil
+		}
+		if envValue != "" {
+			return envValue, nil
+		}
 	}
 
+	if authErr != nil {
+		return "", authErr
+	}
+	if authPath == "" {
+		var err error
+		authPath, err = GetDefaultAuthPath()
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("set %s or add %s", envVar, authPath)
+}
+
+func resolveAPIKeyFromAuth(providerKey string) (string, string, error) {
 	authPath, err := GetDefaultAuthPath()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	data, err := os.ReadFile(authPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("set %s or add %s", envVar, authPath)
+			return "", authPath, nil
 		}
-		return "", fmt.Errorf("failed to read auth file: %w", err)
+		return "", authPath, fmt.Errorf("failed to read auth file: %w", err)
 	}
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return "", fmt.Errorf("failed to parse auth file: %w", err)
+		return "", authPath, fmt.Errorf("failed to parse auth file: %w", err)
 	}
 
 	entryRaw, ok := raw[providerKey]
@@ -68,30 +100,30 @@ func ResolveAPIKey(provider string) (string, error) {
 		}
 	}
 	if !ok {
-		return "", fmt.Errorf("no credentials for %q in %s", providerKey, authPath)
+		return "", authPath, nil
 	}
 
 	var key string
 	if err := json.Unmarshal(entryRaw, &key); err == nil {
 		key = strings.TrimSpace(key)
 		if key != "" {
-			return key, nil
+			return key, authPath, nil
 		}
 	}
 
 	var entry AuthEntry
 	if err := json.Unmarshal(entryRaw, &entry); err != nil {
-		return "", fmt.Errorf("invalid auth entry for %q in %s", providerKey, authPath)
+		return "", authPath, fmt.Errorf("invalid auth entry for %q in %s", providerKey, authPath)
 	}
 	if entry.APIKey != "" {
-		return entry.APIKey, nil
+		return strings.TrimSpace(entry.APIKey), authPath, nil
 	}
 	if entry.Key != "" {
-		return entry.Key, nil
+		return strings.TrimSpace(entry.Key), authPath, nil
 	}
 	if entry.Token != "" {
-		return entry.Token, nil
+		return strings.TrimSpace(entry.Token), authPath, nil
 	}
 
-	return "", fmt.Errorf("empty credentials for %q in %s", providerKey, authPath)
+	return "", authPath, fmt.Errorf("empty credentials for %q in %s", providerKey, authPath)
 }
