@@ -2455,10 +2455,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
 	aiPID := "unknown"
 	aiLogPath := "unknown"
 	aiWorkingDir := "unknown"
-	workspace := "unknown"
-	if strings.TrimSpace(state.AIStartupPath) != "" {
-		workspace = state.AIStartupPath
-	}
 	if state.Compaction != nil {
 		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
 		compactionLimit = formatTokenLimit(state.Compaction)
@@ -2485,7 +2481,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
   file: %s
   ai-pid: %s
   ai-log: %s
-  workspace: %s
   ai-cwd: %s
   model: %s
   context-window: %s
@@ -2504,7 +2499,6 @@ func (p *AiInterpreter) showState(state *rpc.SessionState) {
 		orUnknown(state.SessionFile),
 		aiPID,
 		orUnknown(aiLogPath),
-		orUnknown(workspace),
 		orUnknown(aiWorkingDir),
 		model,
 		compactionContext,
