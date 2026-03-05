@@ -16,7 +16,7 @@
     "AutoCompact": true
   },
   "concurrency": {
-    "maxConcurrentTools": 3,
+    "maxConcurrentTools": 5,
     "toolTimeout": 30,
     "queueTimeout": 60
   },
