@@ -1,6 +1,6 @@
 ---
 name: wf-tick
-description: "Cron-friendly scheduler tick: scan workflow registry, reconcile status with GitHub, and process state transitions by delegating to wf-worker, wf-push, wf-pr-code-review, and wf-closeout."
+description: "Cron-friendly scheduler tick: scan workflow registry, reconcile status with GitHub, and process state transitions by delegating to wf-worker, wf-push, wf-pr-review, and wf-closeout."
 allowed-tools: [bash, read, write, edit, grep]
 ---
 
@@ -93,11 +93,11 @@ For each registry item:
 ### `pr_open`
 
 - If `auto_review=true` and `step=awaiting_review`:
-  - **Call wf-pr-code-review for automated review**
+  - **Call wf-pr-review** (wait for CI, add LGTM, flag for human merge)
   - Review result determines next state:
-    - If `decision=approved`: `state=approved`, `step=awaiting_merge`
-    - If `decision=changes_requested`: `state=reviewing`, `step=review_fix`
-    - If `decision=commented`: keep `state=pr_open`, `step=awaiting_review`
+    - If CI passing + LGTM added: keep `state=pr_open`, `step=ready_to_merge`
+    - If CI not passing: keep `state=pr_open`, `step=waiting_ci`
+    - If review comment requested changes: `state=reviewing`, `step=review_fix`
 - If `auto_review=false`:
   - Keep `state=pr_open`, `step=awaiting_human_review`
   - Wait for human review decision
@@ -112,12 +112,12 @@ For each registry item:
 - If fixes pushed and no blocking feedback: `state=pr_open`
 - If retries exceeded: `state=failed`
 
-### `approved`
+### `ready_to_merge`
 
-- If PR is not yet merged:
-  - **Auto-merge**: `gh pr merge <pr> --repo <repo> --squash --auto`
-  - Wait for merge confirmation on next tick
-- If merged: `state=done`
+- Keep `state=pr_open`, `step=ready_to_merge`
+- Wait for human to merge the PR
+- Reconcile with GitHub PR state:
+  - If merged: `state=done`
 
 ### `done`
 
@@ -149,11 +149,11 @@ running
   → state=pr_open
 
 pr_open
-  → wf-tick invokes wf-pr-code-review (AI review!)  🆕
+  → wf-tick invokes wf-pr-review (wait CI + LGTM + human merge)
   ↓
-  ├─ approved → state=approved → auto-merge → done
-  ├─ changes_requested → state=reviewing
-  └─ commented → keep pr_open, re-review
+  ├─ CI passing + LGTM added → state=pr_open, step=ready_to_merge
+  ├─ CI not passing → state=pr_open, step=waiting_ci
+  └─ human review changes requested → state=reviewing
 
 reviewing
   → invoke wf-worker fix pass
@@ -169,7 +169,7 @@ pr_open
   → wait for human to post review
   → wf-tick reconciles with GitHub
   ↓
-  ├─ approved → auto-merge → done
+  ├─ approved + LGTM → state=pr_open, step=ready_to_merge (wait for human merge)
   └─ changes_requested → state=reviewing → wf-worker fix
 ```
 
@@ -180,7 +180,7 @@ pr_open
 - Never create multiple PRs for the same branch.
 - Always reconcile with GitHub before changing `pr_open/reviewing/done/approved`.
 - `wf-push` should check if PR already exists (idempotent).
-- `wf-pr-code-review` should check if review already posted (idempotent).
+- `wf-pr-review` should check if review already posted (idempotent).
 
 ## Cron Prompt Template
 
@@ -201,7 +201,7 @@ updated: <n>
 running: <n>
 pr_open: <n>
 reviewing: <n>
-approved: <n>
+ready_to_merge: <n>
 done: <n>
 failed: <n>
 blocked: <n>
@@ -216,4 +216,4 @@ blocked: <n>
 - Always verify `wf-push` only runs when implementation is complete (ok=true).
 - Never invoke `wf-push` on partial results (partial=true).
 - In `auto_review=false` mode, allow human review workflow.
-- Auto-merge only when PR is approved and has no blocking reviews.
+- Never auto-merge - always wait for human to merge PRs.
