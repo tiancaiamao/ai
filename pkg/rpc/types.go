@@ -84,7 +84,7 @@ type SessionState struct {
 	AIPid                 int              `json:"aiPid,omitempty"`
 	AILogPath             string           `json:"aiLogPath,omitempty"`
 	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"` // Current working directory
-	AIStartupPath         string           `json:"aiStartupPath,omitempty"` // Git repository root (where session started
+	AIStartupPath         string           `json:"aiStartupPath,omitempty"` // Git repository root (where session started)
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	MessageCount          int              `json:"messageCount"`
 	PendingMessageCount   int              `json:"pendingMessageCount"`

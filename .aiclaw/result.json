@@ -1,6 +1,0 @@
-{
-  "ok": true,
-  "summary": "已实现 /session 命令显示区分启动路径和工作路径。修改了 rpc/types.go 添加 AIWorkingDir 和 AIStartupPath 字段，修改 rpc_handlers.go 在 get_state 时返回这两个路径。代码已编译通过。",
-  "next_state": "push_or_open_pr",
-  "last_error": ""
-}
