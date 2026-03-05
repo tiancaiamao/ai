@@ -20,6 +20,7 @@ Optional runtime parameters (use defaults if missing):
 - `stale_minutes` (default `10`)
 - `max_retries` (default `2`)
 - `target_workflow_id` (optional; reconcile only one item)
+- `no_worker` (default `false`; when `true`, do not invoke `wf-worker` or start/restart subagents)
 
 ## Required Files
 
@@ -53,17 +54,28 @@ For each registry item:
 
 ### `todo`
 
-- Action: invoke `wf-worker` start behavior.
-- Target: `running`.
+- Normal mode (`no_worker=false`):
+  - Action: invoke `wf-worker` start behavior.
+  - Target: `running`.
+- No-worker mode (`no_worker=true`):
+  - Do not invoke `wf-worker`.
+  - Only update status to:
+    - `state=running`
+    - `step=queued_no_worker`
+    - refresh `heartbeat_at` and `updated_at`
 
 ### `running`
 
-- If `heartbeat_at` older than `stale_minutes`:
-  - increment retry
-  - restart worker if `retry_count <= max_retries`
-  - else `failed`
-- If PR exists and open: `pr_open`
-- If PR merged: `done`
+- Normal mode (`no_worker=false`):
+  - If `heartbeat_at` older than `stale_minutes`:
+    - increment retry
+    - restart worker if `retry_count <= max_retries`
+    - else `failed`
+  - If PR exists and open: `pr_open`
+  - If PR merged: `done`
+- No-worker mode (`no_worker=true`):
+  - Do not restart worker and do not increment retry due to missing heartbeat.
+  - Keep state as-is unless PR truth requires transition (`pr_open` / `done`).
 
 ### `pr_open`
 
@@ -109,6 +121,7 @@ Expected summary format:
 
 ```text
 WF_TICK_RESULT
+mode: normal|no_worker
 scanned: <n>
 updated: <n>
 running: <n>
@@ -123,3 +136,4 @@ blocked: <n>
 - Never run destructive cleanup outside `done`.
 - Never close issues from `wf-tick` directly; use closeout behavior.
 - Never keep stale lock on normal exit; release lock in all branches.
+- In `no_worker=true` mode, never invoke `wf-worker` and never start subagents.
