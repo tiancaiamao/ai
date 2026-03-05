@@ -171,7 +171,9 @@ func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, wasReminded bool) {
 }
 
 // ShouldShowReminder determines if a reminder should be shown this turn.
-func (s *ContextMgmtState) ShouldShowReminder(turn int, actionRequired string, urgency string) bool {
+// tokensPercent is the current context usage percentage (0-100). If < 10, reminders are suppressed
+// unless urgency is critical.
+func (s *ContextMgmtState) ShouldShowReminder(turn int, actionRequired string, urgency string, tokensPercent int) bool {
 	if s == nil {
 		return false
 	}
@@ -187,7 +189,15 @@ func (s *ContextMgmtState) ShouldShowReminder(turn int, actionRequired string, u
 	}
 
 	// Don't show if we're in a skip period
-	if turn <= s.SkipUntilTurn {
+	// Use < (not <=) because the skip was set in a previous turn, and we want to suppress
+	// reminders in the turns AFTER the skip was set, not including the current turn
+	if turn < s.SkipUntilTurn {
+		return false
+	}
+
+	// Don't show reminders if context usage is below 10% (unless critical)
+	// This reduces noise when there's plenty of context space available
+	if tokensPercent < 10 {
 		return false
 	}
 

@@ -1565,7 +1565,7 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	// Check if we should show reminder based on adaptive frequency
 	// If we're in a skip period or haven't reached the frequency threshold, suppress the reminder
 	// Use CurrentTurn instead of RuntimeMetaTurns to ensure consistency with llm_context_decision tool
-	showReminder := state.ShouldShowReminder(agentCtx.ContextMgmtState.CurrentTurn, actionRequired, urgency)
+	showReminder := state.ShouldShowReminder(agentCtx.ContextMgmtState.CurrentTurn, actionRequired, urgency, int(meta.TokensPercent))
 	if !showReminder && actionRequired != "none" {
 		// Suppress the reminder - don't show action_required in runtime_state
 		actionRequired = "none"

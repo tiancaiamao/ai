@@ -184,6 +184,7 @@ func TestShouldShowReminder(t *testing.T) {
 		skipUntil      int
 		lastReminder   int
 		frequency      int
+		tokensPercent  int
 		expected       bool
 	}{
 		{
@@ -194,6 +195,7 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      0,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       false,
 		},
 		{
@@ -204,6 +206,7 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      0,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       true,
 		},
 		{
@@ -214,6 +217,7 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      20,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       false,
 		},
 		{
@@ -224,6 +228,7 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      20,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       true,
 		},
 		{
@@ -234,6 +239,7 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      0,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       false, // Only 7 turns since last reminder
 		},
 		{
@@ -244,7 +250,41 @@ func TestShouldShowReminder(t *testing.T) {
 			skipUntil:      0,
 			lastReminder:   5,
 			frequency:      10,
+			tokensPercent:  50,
 			expected:       true, // 11 turns since last reminder
+		},
+		{
+			name:           "below 10% tokens threshold - suppress reminder",
+			turn:           15,
+			actionRequired: "truncate",
+			urgency:        "low",
+			skipUntil:      0,
+			lastReminder:   5,
+			frequency:      1,
+			tokensPercent:  5,
+			expected:       false, // Below 10% threshold
+		},
+		{
+			name:           "at 10% tokens threshold - show reminder",
+			turn:           15,
+			actionRequired: "truncate",
+			urgency:        "low",
+			skipUntil:      0,
+			lastReminder:   5,
+			frequency:      1,
+			tokensPercent:  10,
+			expected:       true, // At 10% threshold
+		},
+		{
+			name:           "critical overrides 10% threshold",
+			turn:           15,
+			actionRequired: "truncate",
+			urgency:        "critical",
+			skipUntil:      0,
+			lastReminder:   5,
+			frequency:      1,
+			tokensPercent:  5,
+			expected:       true, // Critical urgency overrides threshold
 		},
 	}
 
@@ -256,7 +296,7 @@ func TestShouldShowReminder(t *testing.T) {
 				ReminderFrequency: tt.frequency,
 			}
 
-			result := state.ShouldShowReminder(tt.turn, tt.actionRequired, tt.urgency)
+			result := state.ShouldShowReminder(tt.turn, tt.actionRequired, tt.urgency, tt.tokensPercent)
 			if result != tt.expected {
 				t.Fatalf("expected %v, got %v", tt.expected, result)
 			}

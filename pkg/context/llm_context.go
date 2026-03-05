@@ -124,8 +124,8 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 ### 决策建议
 
 - stale outputs > 20 → TRUNCATE（优先批量删除）
-- tokens > 65% → COMPACT
-- tokens 50-65% → COMPACT 或 TRUNCATE
+- tokens > 65%% → COMPACT
+- tokens 50-65%% → COMPACT 或 TRUNCATE
 - 其他情况 → 根据需要决定
 
 ## 当前任务
