@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -719,9 +720,29 @@ func (wm *LLMContext) GetStaleToolCount() int {
 }
 
 // GetDecisionReminderMessage returns a user message reminder for llm_context_decision.
-func (wm *LLMContext) GetDecisionReminderMessage() string {
+func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string) string {
 	meta := wm.GetMeta()
 	staleCount := wm.GetStaleToolCount()
+
+	// Build truncate_ids example from available (non-truncated) tool IDs
+	var truncateIDsExample string
+	if len(availableToolIDs) > 0 {
+		// Show first few IDs as example, limit to 5 to avoid overwhelming
+		limit := 5
+		if len(availableToolIDs) < limit {
+			limit = len(availableToolIDs)
+		}
+		exampleIDs := make([]string, limit)
+		for i := 0; i < limit; i++ {
+			exampleIDs[i] = fmt.Sprintf(`"%s"`, availableToolIDs[i])
+		}
+		if len(availableToolIDs) > limit {
+			truncateIDsExample = fmt.Sprintf(`["%s", ...%d more IDs available in tool outputs]`,
+				strings.Join(exampleIDs, `", "`), len(availableToolIDs)-limit)
+		} else {
+			truncateIDsExample = fmt.Sprintf(`[%s]`, strings.Join(exampleIDs, ", "))
+		}
+	}
 
 	return fmt.Sprintf(`[system message by agent, not from real user]
 
@@ -742,13 +763,13 @@ HOW TO TRUNCATE (IMPORTANT):
 3. Pass them as truncate_ids array
 
 EXAMPLE (copy and modify):
-{"decision": "truncate", "reasoning": "Cleaning up %d stale tool outputs to free space", "truncate_ids": ["call_xxx1", "call_xxx2", "call_xxx3", ...50-100 IDs...]}
+{"decision": "truncate", "reasoning": "Cleaning up %d stale tool outputs to free space", "truncate_ids": %s}
 
 If you don't know IDs, use decision="skip" instead.`,
 		int(meta.TokensPercent), staleCount,
 		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
 		getSuggestedAction(meta.TokensPercent, staleCount),
-		staleCount)
+		staleCount, truncateIDsExample)
 }
 
 // getSuggestedAction returns suggested action based on token usage and stale outputs.
