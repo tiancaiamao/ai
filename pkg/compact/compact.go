@@ -826,7 +826,7 @@ func extractText(msg agentctx.AgentMessage) string {
 
 // ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
 // If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// move the tool_result to oldMessages (it will be summarized).
+// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
 // This prevents "tool call and result not match" errors after compaction.
 func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	if len(recentMessages) == 0 {
@@ -849,39 +849,27 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 	}
 
 	// Find tool_results in recentMessages whose tool_call is in oldMessages
-	// These need to be moved to oldMessages
+	// These need to be hidden (archived) because their tool_calls will be summarized
 	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	movedToOld := make([]agentctx.AgentMessage, 0)
+	archivedCount := 0
 
 	for _, msg := range recentMessages {
 		if msg.Role == "toolResult" && msg.ToolCallID != "" {
 			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages, move it there
-				movedToOld = append(movedToOld, msg)
+				// This tool_result's call is in oldMessages - hide it to prevent mismatch
+				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				keptMessages = append(keptMessages, archivedMsg)
+				archivedCount++
 				continue
 			}
 		}
 		keptMessages = append(keptMessages, msg)
 	}
 
-	if len(movedToOld) > 0 {
+	if archivedCount > 0 {
 		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"moved_to_old", len(movedToOld),
-			"kept_in_recent", len(keptMessages))
-		// Note: We can't actually modify oldMessages here, but we log the issue
-		// The tool_result will be hidden from the LLM but still present
-		// This prevents the "not match" error while keeping the summary context
-
-		// Alternative: mark these as archived instead of removing
-		// This way they're not visible to LLM but API can still match them
-		for i := range keptMessages {
-			msg := &keptMessages[i]
-			if msg.Role == "toolResult" && msg.ToolCallID != "" {
-				if oldToolCallIDs[msg.ToolCallID] {
-					*msg = msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				}
-			}
-		}
+			"archived", archivedCount,
+			"kept", len(keptMessages))
 	}
 
 	return keptMessages
