@@ -1,10 +1,10 @@
 ---
-name: wf-intake
+name: wf-issue
 description: "Create a new work item from a user task: open issue, create worktree, initialize status files, and register the workflow item for cron scheduling."
 allowed-tools: [bash, read, write, edit, grep]
 ---
 
-# wf-intake
+# wf-issue
 
 Create one workflow item that can be advanced by `wf-tick`.
 
@@ -15,7 +15,7 @@ Create one workflow item that can be advanced by `wf-tick`.
 - `task` (required)
 - `acceptance_criteria` (required)
 
-If any required input is missing, stop and return `WF_INTAKE_FAILED`.
+If any required input is missing, stop and return `WF_ISSUE_FAILED`.
 
 ## Use When
 
@@ -52,7 +52,7 @@ Per-worktree status schema:
   "branch": "feature/issue-123-short-slug",
   "worktree": "/abs/path/to/repo/.worktrees/issue-123",
   "state": "todo",
-  "step": "intake",
+  "step": "issue",
   "heartbeat_at": "2026-03-04T10:00:00Z",
   "started_at": "",
   "updated_at": "2026-03-04T10:00:00Z",
@@ -157,7 +157,7 @@ cd "<repo_path>" && git worktree add "<worktree>" "<branch>"
 
 6. Mandatory verification (do not skip).
 
-All checks below must pass. If any check fails, return `WF_INTAKE_FAILED`.
+All checks below must pass. If any check fails, return `WF_ISSUE_FAILED`.
 
 ```bash
 cd "<repo_path>" && git worktree list --porcelain
@@ -191,7 +191,7 @@ Before returning success, verify:
 Success format (only after all verification checks pass):
 
 ```text
-WF_CREATED
+WF_ISSUE_CREATED
 workflow_id: ...
 issue: #...
 issue_url: ...
@@ -203,7 +203,7 @@ state: todo
 Failure format (any step failed, including worktree create/verify):
 
 ```text
-WF_INTAKE_FAILED
+WF_ISSUE_FAILED
 workflow_id: <or empty>
 issue: #<or empty>
 repo_path: ...
@@ -216,7 +216,7 @@ next_action: ...
 
 - Always use absolute paths in JSON.
 - Never create duplicate registry entries for the same issue.
-- Never set `running` in intake; only `wf-worker` may do that.
-- Never return `WF_CREATED` if worktree creation or verification failed.
+- Never set `running` in issue stage; only `wf-worker` may do that.
+- Never return `WF_ISSUE_CREATED` if worktree creation or verification failed.
 - If issue exists but worktree fails, write a `blocked` status record with `last_error`.
-- If issue exists but worktree fails, the response must still be `WF_INTAKE_FAILED`.
+- If issue exists but worktree fails, the response must still be `WF_ISSUE_FAILED`.
