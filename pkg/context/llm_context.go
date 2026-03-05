@@ -55,6 +55,10 @@ type LLMContext struct {
 	silentRoundsRemaining int // Rounds to skip reminder after update
 	wasRemindedLastRound  bool // Was reminder injected in the last round?
 
+	// Decision tracking - for separate reminder when LLM updates overview but doesn't call llm_context_decision
+	updatedOverviewThisRound bool // LLM updated overview but didn't call tool
+	roundsSinceDecisionNeeded int // Rounds since decision was needed but not made
+
 	// Update statistics for adaptive reminder frequency
 	totalUpdates      int  // Total number of updates
 	autonomousUpdates int  // Updates without prompt (LLM self-initiated)
@@ -428,6 +432,7 @@ func (wm *LLMContext) buildReminderHTML(meta ContextMeta) string {
 
 // NeedsReminderMessage checks if a reminder message should be injected.
 // This is a separate check from checkUpdateNeeded() to allow for different thresholds.
+// Reminder is shown when LLM hasn't updated overview.md for too many rounds.
 func (wm *LLMContext) NeedsReminderMessage() bool {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
@@ -438,6 +443,7 @@ func (wm *LLMContext) NeedsReminderMessage() bool {
 
 // GetReminderUserMessage builds a user message reminder to inject into the conversation.
 // The message is clearly marked as agent-generated, not from a real user.
+// This reminder is for updating overview.md - the llm_context_decision is handled separately.
 func (wm *LLMContext) GetReminderUserMessage() string {
 	meta := wm.GetMeta()
 
@@ -447,7 +453,7 @@ func (wm *LLMContext) GetReminderUserMessage() string {
 
 	return fmt.Sprintf(`[system message by agent, not from real user]
 
-💡 Remember to update your llm context to track progress and compress context if needed.
+💡 Remember to update your llm context to track progress.
 
 <context_meta>
 tokens_used: %d
@@ -612,4 +618,67 @@ func (wm *LLMContext) ResetReminderFlag() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	wm.wasRemindedLastRound = false
+}
+
+// SetUpdatedOverview marks that LLM updated overview.md this round.
+// This should be called when LLM writes to overview.md.
+func (wm *LLMContext) SetUpdatedOverview() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.updatedOverviewThisRound = true
+}
+
+// MarkDecisionMade marks that LLM called llm_context_decision tool.
+// This resets the decision reminder counter.
+func (wm *LLMContext) MarkDecisionMade() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.updatedOverviewThisRound = false
+	wm.roundsSinceDecisionNeeded = 0
+}
+
+// NeedsDecisionReminder checks if a decision reminder should be shown.
+// This is separate from overview update reminder - it triggers when:
+// - LLM has updated overview.md
+// - But hasn't called llm_context_decision tool
+// - And decision is still needed (action_required != "none")
+func (wm *LLMContext) NeedsDecisionReminder() bool {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+
+	// Only remind if LLM updated overview but didn't call decision tool
+	if wm.updatedOverviewThisRound {
+		// LLM just updated overview - give it time to respond
+		return false
+	}
+
+	// Decision reminder threshold (smaller than overview update threshold)
+	return wm.roundsSinceDecisionNeeded >= 2 // Remind after 2 rounds
+}
+
+// IncrementDecisionNeededCounter increments the counter when decision is needed but not made.
+func (wm *LLMContext) IncrementDecisionNeededCounter() {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.roundsSinceDecisionNeeded++
+}
+
+// GetDecisionReminderMessage returns a user message reminder for llm_context_decision.
+func (wm *LLMContext) GetDecisionReminderMessage() string {
+	meta := wm.GetMeta()
+
+	return fmt.Sprintf(`[system message by agent, not from real user]
+
+💡 Remember to use llm_context_decision tool to keep your context well maintained.
+
+<context_meta>
+tokens_used: %d
+tokens_max: %d
+tokens_percent: %.0f%%
+messages_in_history: %d
+</context_meta>
+
+Action required: Please call llm_context_decision tool to manage context.
+Even you decide to skip, you need to call it with the 'skip' and 'reason'.
+This reminder will stop appearing once you call the tool.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory)
 }

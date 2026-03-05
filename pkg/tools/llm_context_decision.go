@@ -116,6 +116,11 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		return nil, fmt.Errorf("agent context not available")
 	}
 
+	// Mark that LLM made a decision this turn (compliance tracking)
+	if agentCtx.ContextMgmtState != nil {
+		agentCtx.ContextMgmtState.MarkDecisionMade()
+	}
+
 	// Parse decision
 	decision, ok := params["decision"].(string)
 	if !ok || decision == "" {

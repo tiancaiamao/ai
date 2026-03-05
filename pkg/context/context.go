@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -48,12 +49,16 @@ type ContextMgmtState struct {
 	LastActionTaken   string // "truncate", "compact", "both", "skip"
 	LastReminderTurn  int    // Turn number of last reminder shown
 	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
+
+	// Compliance tracking
+	ReminderShownThisTurn bool // Was reminder shown in current turn?
+	DecisionMadeThisTurn bool // Did LLM call llm_context_decision this turn?
 }
 
 // DefaultContextMgmtState creates a new ContextMgmtState with defaults.
 func DefaultContextMgmtState() *ContextMgmtState {
 	return &ContextMgmtState{
-		ReminderFrequency:   10,  // Default: remind every 10 turns
+		ReminderFrequency:    10, // Default: remind every 10 turns
 		SkipUntilTurn:       0,
 		ProactiveDecisions:  0,
 		ReminderNeeded:      0,
@@ -62,6 +67,49 @@ func DefaultContextMgmtState() *ContextMgmtState {
 		LastActionTaken:     "none",
 		LastReminderTurn:    0,
 		LastReminderUrgency: "none",
+	}
+}
+
+// MarkReminderShown marks that a reminder was shown this turn.
+func (s *ContextMgmtState) MarkReminderShown() {
+	if s == nil {
+		return
+	}
+	s.ReminderShownThisTurn = true
+}
+
+// MarkDecisionMade marks that LLM called llm_context_decision this turn.
+func (s *ContextMgmtState) MarkDecisionMade() {
+	if s == nil {
+		return
+	}
+	s.DecisionMadeThisTurn = true
+}
+
+// ResetTurnTracking resets per-turn tracking flags at the start of each turn.
+func (s *ContextMgmtState) ResetTurnTracking() {
+	if s == nil {
+		return
+	}
+	s.ReminderShownThisTurn = false
+	s.DecisionMadeThisTurn = false
+}
+
+// CheckAndApplyCompliance checks if LLM complied with the protocol when reminder was shown.
+// If reminder was shown but LLM didn't call llm_context_decision, apply penalty.
+func (s *ContextMgmtState) CheckAndApplyCompliance() {
+	if s == nil {
+		return
+	}
+	// If reminder was shown but LLM didn't make a decision, apply penalty
+	if s.ReminderShownThisTurn && !s.DecisionMadeThisTurn {
+		s.ReminderNeeded++
+		s.AdjustFrequency()
+		slog.Info("[ContextMgmt] LLM ignored reminder, applying penalty",
+			"reminder_shown", s.ReminderShownThisTurn,
+			"decision_made", s.DecisionMadeThisTurn,
+			"reminder_needed", s.ReminderNeeded,
+		)
 	}
 }
 

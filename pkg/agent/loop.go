@@ -422,6 +422,7 @@ func runInnerLoop(
 							wmPath := agentCtx.LLMContext.GetPath()
 							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
 								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
+								agentCtx.LLMContext.SetUpdatedOverview()
 								// Reset write tool loop guard counter since this is productive work
 								if loopGuard != nil {
 									loopGuard.ResetToolCount("write")
@@ -429,11 +430,27 @@ func runInnerLoop(
 							}
 						}
 					}
+					// Track if LLM called llm_context_decision tool
+					if strings.EqualFold(tc.Name, "llm_context_decision") {
+						agentCtx.LLMContext.MarkDecisionMade()
+					}
 				}
 			}
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
+
+		// Check if LLM complied with context management protocol
+		// If reminder was shown but LLM didn't call llm_context_decision, apply penalty
+		if agentCtx.ContextMgmtState != nil {
+			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
+			// Increment decision counter every turn when decision is needed but not made
+			if agentCtx.LLMContext != nil {
+				agentCtx.LLMContext.IncrementDecisionNeededCounter()
+			}
+			// Reset per-turn tracking for next turn
+			agentCtx.ContextMgmtState.ResetTurnTracking()
+		}
 
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
@@ -712,6 +729,17 @@ func streamAssistantResponse(
 		}
 		llmMessages = append(llmMessages, reminderMsg)
 		agentCtx.LLMContext.SetWasReminded()
+	}
+
+	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
+	// This is separate from overview update reminder - it triggers when decision is needed but not made
+	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsDecisionReminder() {
+		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage()
+		decisionReminderMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: decisionReminderContent,
+		}
+		llmMessages = append(llmMessages, decisionReminderMsg)
 	}
 
 	// Convert tools to LLM format
@@ -1540,6 +1568,8 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	} else if showReminder && actionRequired != "none" {
 		// We're showing a reminder, record it
 		state.RecordReminder(agentCtx.RuntimeMetaTurns, urgency)
+		// Mark that reminder was shown this turn (for compliance tracking)
+		state.MarkReminderShown()
 	}
 
 	// Build context management stats section
