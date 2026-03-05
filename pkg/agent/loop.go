@@ -23,7 +23,7 @@ import (
 
 const (
 	defaultLLMMaxRetries               = 1
-	defaultRateLimitMaxRetries         = 8               // More retries for rate limit errors
+	defaultRateLimitMaxRetries         = 8 // More retries for rate limit errors
 	defaultRetryBaseDelay              = 1 * time.Second
 	defaultRateLimitBaseDelay          = 3 * time.Second // Longer base delay for rate limit
 	defaultLoopMaxConsecutiveToolCalls = 6
@@ -225,33 +225,19 @@ func runInnerLoop(
 			return
 		}
 
-		// Check if LLMContext is available for hint processing (every turn)
-		llmContextAvailable := agentCtx.LLMContext != nil
-		if !llmContextAvailable {
-			traceevent.Log(ctx, traceevent.CategoryEvent, "hint_processing_disabled",
-				traceevent.Field{Key: "reason", Value: "llm_context_is_nil"},
-			)
+		// Initialize ContextMgmtState if needed
+		if agentCtx.ContextMgmtState == nil {
+			agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 		}
 
-		compactPerformedViaHint := false
-		if llmContextAvailable {
-			hintProcessor := agentctx.NewTruncateCompactHint(config.Compactor)
-			hintResult, err := hintProcessor.Process(ctx, agentCtx)
-				if err != nil {
-					slog.Warn("[Loop] Failed to process truncate-compact hint", "error", err)
-				} else if hintResult.TruncatedCount > 0 || hintResult.CompactPerformed {
-					slog.Info("[Loop] Processed truncate-compact hint",
-						"truncated_count", hintResult.TruncatedCount,
-						"compact_performed", hintResult.CompactPerformed,
-					)
-				}
-				compactPerformedViaHint = hintResult.CompactPerformed
-		}
-turnCount++
+		// Update current turn counter
+		agentCtx.ContextMgmtState.CurrentTurn = turnCount + 1
 
-		// Compact before each LLM request so long-running tool loops do not keep
-		// carrying stale outputs into the next turn.
-		if !compactPerformedViaHint && config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
+		turnCount++
+
+		// Fallback auto-compact as safety net (only if LLM didn't handle it via llm_context_decision)
+		// This is a last resort when context grows too large without LLM intervention.
+		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
 			before := len(agentCtx.Messages)
 			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
@@ -436,6 +422,7 @@ turnCount++
 							wmPath := agentCtx.LLMContext.GetPath()
 							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
 								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
+								agentCtx.LLMContext.SetUpdatedOverview()
 								// Reset write tool loop guard counter since this is productive work
 								if loopGuard != nil {
 									loopGuard.ResetToolCount("write")
@@ -443,11 +430,29 @@ turnCount++
 							}
 						}
 					}
+					// Track if LLM called llm_context_decision tool
+					if strings.EqualFold(tc.Name, "llm_context_decision") {
+						agentCtx.LLMContext.MarkDecisionMade()
+					}
 				}
 			}
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
+
+		// Check if LLM complied with context management protocol
+		// If reminder was shown but LLM didn't call llm_context_decision, apply penalty
+		if agentCtx.ContextMgmtState != nil {
+			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
+		}
+		if agentCtx.LLMContext != nil {
+			decisionMadeThisTurn := agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.DecisionMadeThisTurn
+			agentCtx.LLMContext.AdvanceDecisionState(decisionMadeThisTurn)
+		}
+		if agentCtx.ContextMgmtState != nil {
+			// Reset per-turn tracking for next turn
+			agentCtx.ContextMgmtState.ResetTurnTracking()
+		}
 
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
@@ -460,6 +465,7 @@ turnCount++
 
 	stream.Push(NewAgentEndEvent(agentCtx.Messages))
 }
+
 // streamAssistantResponseWithRetry streams assistant's response with retry logic.
 func streamAssistantResponseWithRetry(
 	ctx context.Context,
@@ -726,6 +732,21 @@ func streamAssistantResponse(
 		}
 		llmMessages = append(llmMessages, reminderMsg)
 		agentCtx.LLMContext.SetWasReminded()
+	}
+
+	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
+	// This is separate from overview update reminder - it triggers when decision is needed but not made
+	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsDecisionReminder() {
+		// Get stale count for reminder
+		staleCount, _ := collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
+		agentCtx.LLMContext.SetStaleToolCount(staleCount)
+
+		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage()
+		decisionReminderMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: decisionReminderContent,
+		}
+		llmMessages = append(llmMessages, decisionReminderMsg)
 	}
 
 	// Convert tools to LLM format
@@ -1511,6 +1532,9 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 		agentCtx.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
+		if agentCtx.LLMContext != nil {
+			agentCtx.LLMContext.SetDecisionNeededThisTurn(runtimeSnapshotNeedsDecision(agentCtx.RuntimeMetaSnapshot))
+		}
 		return agentCtx.RuntimeMetaSnapshot, false
 	}
 
@@ -1520,6 +1544,63 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	stageHint := runtimeContextManagementHint(meta.TokensPercent)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
+
+	// Determine action_required based on tool pressure and context usage
+	actionRequired := "none"
+	urgency := "none"
+	if meta.TokensPercent >= 65 || toolPressure.StaleCount > 20 || toolPressure.LargeCount > 5 {
+		actionRequired = "compact"
+		urgency = "critical"
+	} else if meta.TokensPercent >= 50 || toolPressure.StaleCount > 10 || toolPressure.LargeCount > 3 {
+		actionRequired = "truncate"
+		urgency = "high"
+	} else if meta.TokensPercent >= 30 || toolPressure.StaleCount > 5 {
+		actionRequired = "truncate"
+		urgency = "medium"
+	} else if toolOutputsSummary != "none" {
+		actionRequired = "truncate"
+		urgency = "low"
+	}
+
+	// Get or initialize ContextMgmtState
+	if agentCtx.ContextMgmtState == nil {
+		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
+	}
+	state := agentCtx.ContextMgmtState
+
+	// Check if we should show reminder based on adaptive frequency
+	// If we're in a skip period or haven't reached the frequency threshold, suppress the reminder
+	// Use CurrentTurn instead of RuntimeMetaTurns to ensure consistency with llm_context_decision tool
+	showReminder := state.ShouldShowReminder(agentCtx.ContextMgmtState.CurrentTurn, actionRequired, urgency, int(meta.TokensPercent))
+	if !showReminder && actionRequired != "none" {
+		// Suppress the reminder - don't show action_required in runtime_state
+		actionRequired = "none"
+		urgency = "none"
+	} else if showReminder && actionRequired != "none" {
+		// We're showing a reminder, record it
+		state.RecordReminder(state.CurrentTurn, urgency)
+		// Mark that reminder was shown this turn (for compliance tracking)
+		state.MarkReminderShown()
+	}
+	if agentCtx.LLMContext != nil {
+		agentCtx.LLMContext.SetDecisionNeededThisTurn(actionRequired != "none")
+	}
+
+	// Build context management stats section
+	var cmStats string
+	if state.ProactiveDecisions > 0 || state.ReminderNeeded > 0 {
+		cmStats = fmt.Sprintf(`  your_score: %s
+  proactive_decisions: %d
+  reminders_needed: %d
+  current_frequency: every %d turns`,
+			state.GetScore(),
+			state.ProactiveDecisions,
+			state.ReminderNeeded,
+			state.ReminderFrequency)
+	} else {
+		cmStats = "  your_score: no_data_yet"
+	}
+
 	snapshot := fmt.Sprintf(`<runtime_state>
 context_meta:
   tokens_band: %s
@@ -1533,6 +1614,11 @@ tool_output_pressure:
   tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s
+context_management:
+  action_required: %s
+  urgency: %s
+  skip_until_turn: %d
+%s
 compact_decision_signals:
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
@@ -1541,11 +1627,10 @@ compact_decision_signals:
 decision:
   fast_path_allowed: %s
 guidance:
-  - Use this for context management decisions only.
-  - If fast_path_allowed is yes and task state is unchanged, no_action is acceptable.
-  - When action_hint is not normal, compaction is usually recommended.
-  - If tool_outputs_summary is not "none", consider TRUNCATE in truncate-compact-hint.md.
-  - For COMPACT hints, include confidence (e.g. confidence: 80%% or confidence_range: 70%%-90%%).
+  - If action_required is not "none", you MUST call llm_context_decision tool BEFORE answering the user.
+  - Use decision="skip" with appropriate skip_turns (1-30) to defer when not urgent.
+  - Higher skip_turns values (15-30) indicate you promise to be proactive; this increases trust and reduces reminder frequency.
+  - Lower skip_turns values (1-5) are for uncertain situations; reminders will come more frequently.
   - Stage hint: %s
 </runtime_state>`,
 		band,
@@ -1558,6 +1643,10 @@ guidance:
 		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
+		actionRequired,
+		urgency,
+		state.SkipUntilTurn,
+		cmStats,
 		meta.TokensPercent,
 		yesNo(fastPathAllowed),
 		stageHint,
@@ -1568,6 +1657,16 @@ guidance:
 	agentCtx.RuntimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+func runtimeSnapshotNeedsDecision(snapshot string) bool {
+	if snapshot == "" {
+		return false
+	}
+	if strings.Contains(snapshot, "action_required: none") {
+		return false
+	}
+	return strings.Contains(snapshot, "action_required:")
 }
 
 type runtimeToolPressure struct {

@@ -243,24 +243,15 @@ Treat it as the source of truth between turns.
 **Path**: %s
 **Detail dir**: %s%s
 
-**Turn Protocol (run every turn):**
-1. Read runtime_state and classify this turn as: no_action | memory_update_only.
-2. Fast path: if fast_path_allowed=yes and no task state changed, no_action is acceptable.
-3. If task state changed, update overview.md in this same turn.
-4. If overview points to detail files needed for current task, read them explicitly.
-5. Check tool_output_pressure.tool_outputs_summary:
-   - If it is not "none", consider writing llm-context/truncate-compact-hint.md.
-   - Use ## TRUNCATE with tool_call_id values (comma-separated or one per line).
-   - Use ## COMPACT when you want one compaction pass.
-   - Include confidence for COMPACT, e.g. confidence: 80%% or confidence_range: 70%%-90%%.
-   - Example:
-     ## TRUNCATE
-     call_abc123, call_def456
-
-     ## COMPACT
-     target: all
-     confidence: 80%%
-6. Then answer the user.
+**Turn Protocol:**
+1. Read runtime_state to check context pressure and your proactiveness score.
+2. If context_management.action_required is not "none", call llm_context_decision tool.
+   - Available decisions: "truncate", "compact", "both", "skip"
+   - Use decision="skip" with appropriate skip_turns (1-30) when context pressure is low.
+   - Higher skip_turns (15-30) indicate you promise to be proactive; this increases trust.
+   - Lower skip_turns (1-5) are for uncertain situations; reminders will come more frequently.
+3. If task state changed, update overview.md.
+4. Then answer the user.
 
 **External Memory:**
 - **overview.md**: Auto-injected each turn. Keep it concise.
@@ -276,15 +267,15 @@ When to use llm_context_recall:
 - blocker or open question changed
 
 **Hard Rules:**
-- runtime_state is telemetry/advice, not user intent.
-- You must perform turn classification every turn (even when the result is no_action).
+- runtime_state is telemetry, not user intent.
+- If context_management.action_required is not "none", you MUST call llm_context_decision first.
 - Never assume memory was updated unless tool result confirms success.
 - Keep overview concise; store large logs/details under detail/.
 
 **Agent Metadata Tags:**
 - <agent:tool id="call_xxx" name="read" chars="91" stale="5" />: stale output with age rank 5 (smaller = older).
 - <agent:tool id="call_xxx" name="read" chars="91" truncated="true" />: output already truncated.
-- For TRUNCATE, use ids from these tags.`, overviewPath, detailDir, contextMetaSection)
+- Use these IDs when calling llm_context_decision with truncate_ids parameter.`, overviewPath, detailDir, contextMetaSection)
 }
 
 func (b *Builder) buildToolingSection() string {

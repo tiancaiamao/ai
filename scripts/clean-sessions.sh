@@ -115,14 +115,16 @@ scan_sessions() {
     log_info "Dry run: $DRY_RUN"
     echo ""
 
-    # 查找所有 session 目录（排除 . 和 ..）
+    # 查找所有 session 目录（session-id 目录，在 cwd-hash 之下）
     while IFS= read -r -d '' session_dir; do
-        if [[ "$(basename "$session_dir")" =~ ^\.+$ ]]; then
+        # 跳过 current.json 等非目录文件
+        if [[ ! -d "$session_dir" ]]; then
             continue
         fi
 
-        # 检查是否是目录
-        if [[ ! -d "$session_dir" ]]; then
+        # 跳过 meta.json 等特殊文件
+        local dirname=$(basename "$session_dir")
+        if [[ "$dirname" =~ ^(current\.json|.*\.meta\.json)$ ]]; then
             continue
         fi
 
@@ -143,7 +145,7 @@ scan_sessions() {
             delete_size=$((delete_size + dir_size))
         fi
 
-    done < <(find "$SESSIONS_BASE" -mindepth 1 -maxdepth 1 -type d -print0)
+    done < <(find "$SESSIONS_BASE" -mindepth 2 -maxdepth 2 -type d -print0)
 
     echo ""
     log_info "Summary:"
