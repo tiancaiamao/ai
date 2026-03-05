@@ -766,7 +766,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			SessionName:           currentSessionName,
 			AIPid:                 os.Getpid(),
 			AILogPath:             traceOutputPath,
-			AIWorkingDir:          cwd,
+			AIWorkingDir:          ws.GetCWD(),
+			AIStartupPath:         ws.GetGitRoot(),
 			AutoCompactionEnabled: autoCompact,
 			MessageCount:          len(ag.GetMessages()),
 			PendingMessageCount:   ag.GetPendingFollowUps(),
@@ -1054,6 +1055,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			Tokens:            tokens,
 			TokenRate:         tokenRate,
 			Cost:              cost,
+			Workspace:         cwd,
 		}, nil
 	})
 

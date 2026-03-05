@@ -1,0 +1,24 @@
+{
+  "workflow_id": "wf-20260126-016",
+  "repo": "tiancaiamao/ai",
+  "repo_path": "/Users/genius/project/ai",
+  "issue_number": 16,
+  "issue_url": "https://github.com/tiancaiamao/ai/issues/16",
+  "branch": "feature/issue-16-session-path-display",
+  "worktree": "/Users/genius/project/ai/.worktrees/issue-16",
+  "state": "running",
+  "step": "worker",
+  "heartbeat_at": "2026-03-05T19:00:00Z",
+  "started_at": "2026-03-05T19:00:00Z",
+  "updated_at": "2026-03-05T19:00:00Z",
+  "pr_number": 0,
+  "pr_url": "",
+  "retry_count": 0,
+  "max_retries": 2,
+  "last_error": "",
+  "subagent": {
+    "pid": 0,
+    "run_id": "",
+    "last_exit_code": 0
+  }
+}

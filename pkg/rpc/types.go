@@ -83,7 +83,8 @@ type SessionState struct {
 	SessionName           string           `json:"sessionName,omitempty"`
 	AIPid                 int              `json:"aiPid,omitempty"`
 	AILogPath             string           `json:"aiLogPath,omitempty"`
-	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"`
+	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"` // Current working directory
+	AIStartupPath         string           `json:"aiStartupPath,omitempty"` // Git repository root (where session started
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	MessageCount          int              `json:"messageCount"`
 	PendingMessageCount   int              `json:"pendingMessageCount"`
@@ -148,6 +149,10 @@ type SessionStats struct {
 	Tokens            SessionTokenStats `json:"tokens"`
 	TokenRate         *TokenRateStats   `json:"tokenRate,omitempty"`
 	Cost              float64           `json:"cost"`
+	// Workspace is the git repo root path (the path bound at startup)
+	Workspace string `json:"workspace,omitempty"`
+	// CurrentWorkdir is the current working directory path
+	CurrentWorkdir string `json:"currentWorkdir,omitempty"`
 }
 
 // TokenRateStats summarizes token throughput derived from runtime metrics.
