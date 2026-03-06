@@ -347,6 +347,9 @@ func (s *Server) Run() error {
 // This method blocks until an error occurs or the reader is closed.
 func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
 	scanner := bufio.NewScanner(reader)
+	// Set larger buffer: 4MB initial, 16MB max to handle large JSON commands (>64KB)
+	buf := make([]byte, 0, 4*1024*1024) // 4MB
+	scanner.Buffer(buf, 16*1024*1024)   // 16MB max
 	s.setOutput(writer)
 
 	for scanner.Scan() {
