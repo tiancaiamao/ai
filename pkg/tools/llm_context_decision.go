@@ -194,6 +194,10 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		}
 
 		if len(idsToTruncate) > 0 {
+			// Filter out already truncated IDs to avoid redundant operations
+			// Pass the original raw IDs (string or []any) to filterAlreadyTruncated
+			idsToTruncate = t.filterAlreadyTruncated(ctx, agentCtx, params["truncate_ids"])
+
 			truncatedCount = t.processTruncate(ctx, agentCtx, idsToTruncate)
 			result.WriteString(fmt.Sprintf("Truncated %d tool output(s).\n", truncatedCount))
 
