@@ -103,6 +103,10 @@ func TestBuilderWithTools(t *testing.T) {
 	if !contains(result, "Only use the tools listed above") {
 		t.Error("agentctx.Tool limitation warning missing")
 	}
+
+	if !contains(result, "### Tool Usage") {
+		t.Error("tool usage guidance missing")
+	}
 }
 
 func TestBuilderWithSkills(t *testing.T) {
@@ -153,6 +157,29 @@ func TestBuilderMinimalMode(t *testing.T) {
 
 	if !contains(result, "## Workspace") {
 		t.Error("Workspace section missing in minimal mode")
+	}
+}
+
+func TestBuilderSkillsRendering(t *testing.T) {
+	base := "You are an AI assistant."
+	cwd := "/workspace"
+	skills := []skill.Skill{
+		{Name: "wf-issue", Description: "issue workflow", FilePath: "/tmp/wf-issue/SKILL.md"},
+		{Name: "subagent", Description: "subagent workflow", FilePath: "/tmp/subagent/SKILL.md"},
+	}
+
+	b := NewBuilder(base, cwd)
+	b.SetSkills(skills)
+	result := b.Build()
+
+	if !contains(result, "## Skills") {
+		t.Error("skills header missing")
+	}
+	if !contains(result, "- **wf-issue**: issue workflow (/tmp/wf-issue/SKILL.md)") {
+		t.Error("full skill entry missing")
+	}
+	if !contains(result, "- **subagent**: subagent workflow (/tmp/subagent/SKILL.md)") {
+		t.Error("full skill entry missing")
 	}
 }
 

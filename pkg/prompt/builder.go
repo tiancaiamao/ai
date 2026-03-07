@@ -29,7 +29,7 @@ type Builder struct {
 	base string
 
 	// Working directory (can be static or dynamic via workspace)
-	cwd      string
+	cwd       string
 	workspace *tools.Workspace
 
 	// Minimal mode (excludes optional sections like skills, project context)
@@ -247,9 +247,8 @@ Treat it as the source of truth between turns.
 1. Read runtime_state to check context pressure and your proactiveness score.
 2. If context_management.action_required is not "none", call llm_context_decision tool.
    - Available decisions: "truncate", "compact", "both", "skip"
-   - Use decision="skip" with appropriate skip_turns (1-30) when context pressure is low.
-   - Higher skip_turns (15-30) indicate you promise to be proactive; this increases trust.
-   - Lower skip_turns (1-5) are for uncertain situations; reminders will come more frequently.
+   - Use decision="skip" with skip_turns (1-30) only when pressure is low and risk is understood.
+   - Use smaller skip_turns when uncertainty is high.
 3. If task state changed, update overview.md.
 4. Then answer the user.
 
@@ -297,6 +296,13 @@ func (b *Builder) buildToolingSection() string {
 	lines = append(lines, "")
 	lines = append(lines, "**IMPORTANT**: Only use the tools listed above.")
 	lines = append(lines, "Do NOT assume you have access to any other tools.")
+
+	// Tool usage guidance
+	lines = append(lines, "")
+	lines = append(lines, "### Tool Usage")
+	lines = append(lines, "- Analyze tool errors before retrying.")
+	lines = append(lines, "- If stuck, report blockers with actionable context.")
+	lines = append(lines, "- If a tool appears missing, check available Skills.")
 
 	// Skills hint
 	if !b.minimal && len(b.skills) > 0 {
