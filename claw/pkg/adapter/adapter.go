@@ -1278,7 +1278,11 @@ func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
 	}
 
 	// Otherwise, try to switch to the specified model
-	return "", a.switchModel(args, sess)
+	err := a.switchModel(args, sess)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Model switched to: %s (provider: %s)", a.model.ID, a.model.Provider), nil
 }
 
 // listModels lists all available models from ~/.aiclaw/models.json
