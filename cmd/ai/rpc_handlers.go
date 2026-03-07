@@ -183,7 +183,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compactorConfig,
 		model,
 		apiKey,
-		"You are a helpful coding assistant.",
+		prompt.CompactorBasePrompt(),
 		currentContextWindow,
 	)
 
@@ -232,15 +232,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Skill", "name", s.Name, "description", s.Description)
 	}
 
-	// Create agent with skills using structured prompt builder
-
-	// - Always output JSON objects as specified by the task schema.
-	// - Never output free text or markdown explanations.
-
-	basePrompt := `You are a helpful AI coding assistant.
-- If you cannot answer the request, return an empty JSON with error field.
-- Do not hallucinate or add unnecessary commentary.
-- Respect facts and be critical in your thinking. Don't simply agree with everything the user says.`
+	// Create agent with skills using structured prompt builder.
+	basePrompt := prompt.RPCBasePrompt()
 
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
@@ -625,7 +618,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		// Get workspace and current directory info
-		startupPath := cfg.Workspace // This is the initial working directory (git root or cwd at startup)
+		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
 		currentWorkdir := ws.GetCWD() // This is the current working directory
 
 		result := make([]any, len(sessions))

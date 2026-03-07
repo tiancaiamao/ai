@@ -221,7 +221,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		compactorConfig,
 		model,
 		apiKey,
-		"You are a helpful coding assistant.",
+		prompt.CompactorBasePrompt(),
 		currentContextWindow,
 	)
 	registerHeadlessTools(registry, ws, compactor)
@@ -241,18 +241,8 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		IncludeDefaults: true,
 	})
 
-	// Create agent with skills using structured prompt builder
-	basePrompt := `You are a helpful coding assistant.
-When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
-Do not include chain-of-thought or <thinking> tags in your output.`
-
-	// Use focused subagent prompt if running as subagent
-	if isSubagent {
-		basePrompt = `You are a focused subagent executing a specific task.
-Complete the task efficiently and report your findings.
-Do not include chain-of-thought or <thinking> tags in your output.
-Be concise and focused on the task at hand.`
-	}
+	// Create agent with skills using structured prompt builder.
+	basePrompt := prompt.HeadlessBasePrompt(isSubagent)
 
 	// Build the full system prompt
 	// Use workspace to get dynamic cwd for each prompt build

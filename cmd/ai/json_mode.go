@@ -1,9 +1,9 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"os"
 	"path/filepath"
@@ -163,7 +163,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		compactorConfig,
 		model,
 		apiKey,
-		"You are a helpful coding assistant.",
+		prompt.CompactorBasePrompt(),
 		currentContextWindow,
 	)
 
@@ -182,10 +182,8 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		IncludeDefaults: true,
 	})
 
-	// Create agent with skills using structured prompt builder
-	basePrompt := `You are a helpful coding assistant.
-When you need to inspect files or run commands, call the tools. Do not write tool markup like <read_file> in plain text.
-Do not include chain-of-thought or <thinking> tags in your output.`
+	// Create agent with skills using structured prompt builder.
+	basePrompt := prompt.JSONModeBasePrompt()
 
 	// Build the full system prompt
 	// Use workspace to get dynamic cwd for each prompt build
