@@ -830,10 +830,11 @@ func boolPtr(v bool) *bool {
 }
 
 func newToolSummaryContextMessage(text string) agentctx.AgentMessage {
-	msg := agentctx.NewAssistantMessage()
-	msg.Content = []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: text},
-	}
+	// Use user message instead of assistant to avoid violating API constraints.
+	// When compact is called during tool execution (e.g., llm_context_decision),
+	// adding an assistant message would create consecutive assistant messages
+	// (tool_use followed by this message), which violates OpenAI API requirements.
+	msg := agentctx.NewUserMessage(text)
 	return msg.WithVisibility(true, false).WithKind("tool_summary")
 }
 
