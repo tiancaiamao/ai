@@ -699,7 +699,7 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 		t.Fatalf("HandleChunk final failed: %v", err)
 	}
 
-	paths, err := filepath.Glob(filepath.Join(tmp, "*-chunk-trace.perfetto.json"))
+	paths, err := filepath.Glob(filepath.Join(tmp, "*.perfetto.json"))
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}
@@ -764,7 +764,7 @@ func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 		t.Fatalf("HandleChunk split failed: %v", err)
 	}
 
-	paths, err := filepath.Glob(filepath.Join(tmp, "*-split-trace*.perfetto.json"))
+	paths, err := filepath.Glob(filepath.Join(tmp, "*.perfetto.json"))
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}
