@@ -25,8 +25,7 @@ Meta-skill for orchestrating subagent execution for workflow tasks. Delegates to
 
 ## Optional Inputs
 
-- `async` (default: `true`; async execution with log observation)
-- `max_turns` (default: `30` for individual phases)
+(None - always uses async execution with no turn limit)
 
 ## State Rules
 
@@ -60,7 +59,15 @@ Status schema:
   "heartbeat_at": "2026-03-05T19:17:00Z",
   "updated_at": "2026-03-05T19:17:00Z",
   "retry_count": 0,
-  "last_error": ""
+  "last_error": "",
+  "metrics": {
+    "input_tokens": 15000,
+    "output_tokens": 5000,
+    "total_tokens": 20000,
+    "seconds_running": 300,
+    "turn_count": 25,
+    "tool_calls": 45
+  }
 }
 ```
 
@@ -140,6 +147,48 @@ prompt="Address the following review comments: ..."
 
 ## Procedure
 
+### 0. Load Configuration
+
+Load global config for hooks and retry settings:
+
+```bash
+CONFIG_PATH="${HOME}/.aiclaw/workflows/config.json"
+
+# Read hook commands
+HOOK_BEFORE_RUN=$(jq -r '.hooks.before_run // ""' "$CONFIG_PATH")
+HOOK_AFTER_RUN=$(jq -r '.hooks.after_run // ""' "$CONFIG_PATH")
+
+# Read retry settings
+MAX_RETRIES=$(jq -r '.retry.max_retries // 3' "$CONFIG_PATH")
+RETRY_BASE_DELAY=$(jq -r '.retry.base_delay_ms // 10000' "$CONFIG_PATH")
+RETRY_BACKOFF=$(jq -r '.retry.backoff_multiplier // 2' "$CONFIG_PATH")
+RETRY_MAX_DELAY=$(jq -r '.retry.max_delay_ms // 120000' "$CONFIG_PATH")
+```
+
+### 0.5. Hook: before_run
+
+Execute before_run hook if defined:
+
+```bash
+run_hook() {
+  local hook_name="$1"
+  local workspace="$2"
+  local timeout_ms="${3:-60000}"
+  
+  if [ -z "$hook_name" ]; then
+    return 0
+  fi
+  
+  cd "$workspace"
+  timeout "$timeout_ms" sh -lc "$hook_name" 2>/dev/null || true
+}
+
+# Execute before_run hook
+if [ -n "$HOOK_BEFORE_RUN" ]; then
+  run_hook "$HOOK_BEFORE_RUN" "<worktree>" 60000
+fi
+```
+
 ### 1. Read current status
 
 ```bash
@@ -174,14 +223,14 @@ Update `.aiclaw/status.json`:
 **Async mode** (recommended):
 ```bash
 cd "<worktree>" && \
-nohup ai --mode headless --no-session --subagent --max-turns <max_turns> "<phase_prompt>" \
+nohup ai --mode headless --no-session --subagent "<phase_prompt>" \
   > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
 ```
 
 **Sync mode** (for simple/quick tasks):
 ```bash
 cd "<worktree>" && \
-ai --mode headless --no-session --subagent --max-turns <max_turns> "<phase_prompt>"
+ai --mode headless --no-session --subagent "<phase_prompt>" \
 ```
 
 ### 4. Generate task-specific prompts
@@ -278,7 +327,7 @@ Rate limit handling:
 Start the subagent in background:
 ```bash
 cd "<worktree>" && \
-nohup ai --mode headless --no-session --subagent --max-turns 30 "<phase_prompt>" \
+nohup ai --mode headless --no-session --subagent "<phase_prompt>" \
   > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
 ```
 
@@ -309,6 +358,36 @@ fi
 
 When `.aiclaw/result.json` exists and `ok=true`:
 
+- **Collect token metrics:**
+  ```bash
+  # Read metrics from result.json (if available)
+  INPUT_TOKENS=$(jq -r '.metrics.input_tokens // 0' "<worktree>/.aiclaw/result.json")
+  OUTPUT_TOKENS=$(jq -r '.metrics.output_tokens // 0' "<worktree>/.aiclaw/result.json")
+  TOTAL_TOKENS=$(jq -r '.metrics.total_tokens // 0' "<worktree>/.aiclaw/result.json")
+  TURN_COUNT=$(jq -r '.metrics.turn_count // 0' "<worktree>/.aiclaw/result.json")
+  TOOL_CALLS=$(jq -r '.metrics.tool_calls // 0' "<worktree>/.aiclaw/result.json")
+  
+  # Calculate seconds running
+  STARTED_AT=$(jq -r '.started_at // empty' "<worktree>/.aiclaw/status.json")
+  if [ -n "$STARTED_AT" ]; then
+    START_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || echo 0)
+    NOW_EPOCH=$(date -u +%s)
+    SECONDS_RUNNING=$((NOW_EPOCH - START_EPOCH))
+  else
+    SECONDS_RUNNING=0
+  fi
+  ```
+- Update status with metrics:
+  ```bash
+  jq --argjson input "$INPUT_TOKENS" \
+     --argjson output "$OUTPUT_TOKENS" \
+     --argjson total "$TOTAL_TOKENS" \
+     --argjson turns "$TURN_COUNT" \
+     --argjson calls "$TOOL_CALLS" \
+     --argjson secs "$SECONDS_RUNNING" \
+     '.metrics = {"input_tokens": $input, "output_tokens": $output, "total_tokens": $total, "turn_count": $turns, "tool_calls": $calls, "seconds_running": $secs}' \
+     "<worktree>/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "<worktree>/.aiclaw/status.json"
+  ```
 - If `partial=false` (fully complete):
   - Copy `next_state` into status.
   - For `implement` task: wf-tick will invoke wf-push
@@ -320,12 +399,34 @@ When `.aiclaw/result.json` exists and `ok=true`:
 When `.aiclaw/result.json` exists and `ok=false`:
 
 - Increment `retry_count`.
-- If `retry_count > 3`:
+- If `retry_count >= MAX_RETRIES`:
   - Set `state="failed"`.
   - Copy `last_error` to status.
 - Otherwise:
+  - Calculate exponential backoff delay:
+    ```bash
+    # Exponential backoff: base * (multiplier ^ retry_count)
+    retry_count=$(jq -r '.retry_count // 0' "<worktree>/.aiclaw/status.json")
+    backoff_delay=$((RETRY_BASE_DELAY * (RETRY_BACKOFF ** retry_count) / 1000)))
+    if [ $backoff_delay -gt $((RETRY_MAX_DELAY / 1000)) ]; then
+      backoff_delay=$((RETRY_MAX_DELAY / 1000))
+    fi
+    echo "Retrying in ${backoff_delay}s (attempt $((retry_count + 1))/${MAX_RETRIES})"
+    sleep $backoff_delay
+    ```
   - Keep `state="running"`.
   - Retry from current or next phase.
+
+### 6.5. Hook: after_run
+
+Execute after_run hook after completion:
+
+```bash
+# Execute after_run hook (even on failure)
+if [ -n "$HOOK_AFTER_RUN" ]; then
+  run_hook "$HOOK_AFTER_RUN" "<worktree>" 60000
+fi
+```
 
 ## Integration with wf-tick
 
@@ -353,12 +454,12 @@ task_type=implement
 task_prompt="Add /session command to show startup and working directory"
 
 # Phase 1: analysis (30 turns)
-nohup ai --mode headless --no-session --subagent --max-turns 30 \
+nohup ai --mode headless --no-session --subagent \
   "Phase 1: analysis prompt..." \
   > .aiclaw/worker.log 2>&1 &
 
 # After phase 1 complete, phase 2: implement
-nohup ai --mode headless --no-session --subagent --max-turns 30 \
+nohup ai --mode headless --no-session --subagent \
   "Phase 2: implement prompt..." \
   > .aiclaw/worker.log 2>&1 &
 
@@ -374,7 +475,7 @@ task_type=fix_review
 task_prompt="Address review comments from PR #17"
 
 # Single-phase execution (40 turns for more complexity)
-nohup ai --mode headless --no-session --subagent --max-turns 40 \
+nohup ai --mode headless --no-session --subagent \
   "You are fixing review comments for PR #17.
 
 Review comments:
@@ -398,7 +499,7 @@ Output result.json when done." \
 cat .aiclaw/result.json
 
 # Resume with adjusted prompt
-nohup ai --mode headless --no-session --subagent --max-turns 20 \
+nohup ai --mode headless --no-session --subagent \
   "Resume: branch already pushed, create PR for issue #16" \
   > .aiclaw/worker.log 2>&1 &
 ```

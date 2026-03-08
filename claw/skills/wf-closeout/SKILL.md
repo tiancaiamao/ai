@@ -24,6 +24,28 @@ Finalize one completed workflow item safely.
 
 ## Procedure
 
+### 0. Load Configuration
+
+Load global config for hooks:
+
+```bash
+CONFIG_PATH="${HOME}/.aiclaw/workflows/config.json"
+HOOK_BEFORE_REMOVE=$(jq -r '.hooks.before_remove // ""' "$CONFIG_PATH")
+
+run_hook() {
+  local hook_name="$1"
+  local workspace="$2"
+  local timeout_ms="${3:-60000}"
+  
+  if [ -z "$hook_name" ]; then
+    return 0
+  fi
+  
+  # Worktree may not exist, run from parent directory
+  timeout "$timeout_ms" sh -lc "$hook_name" 2>/dev/null || true
+}
+```
+
 1. Verify merge state from GitHub.
 
 - If PR is not merged, do not close out.
@@ -37,6 +59,17 @@ gh issue close <issue> --repo <owner/repo> --comment "Closed automatically after
 ```
 
 3. Cleanup git resources.
+
+Execute before_remove hook before cleanup:
+
+```bash
+# Execute before_remove hook before worktree removal
+if [ -n "$HOOK_BEFORE_REMOVE" ]; then
+  run_hook "$HOOK_BEFORE_REMOVE" "<worktree>" 60000
+fi
+```
+
+Then cleanup:
 
 ```bash
 cd "<repo_path>"

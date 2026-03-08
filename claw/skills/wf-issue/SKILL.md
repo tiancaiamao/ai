@@ -92,6 +92,28 @@ Registry schema:
 
 ## Procedure
 
+### 0. Load Configuration
+
+Load global config for hooks:
+
+```bash
+CONFIG_PATH="${HOME}/.aiclaw/workflows/config.json"
+HOOK_AFTER_CREATE=$(jq -r '.hooks.after_create // ""' "$CONFIG_PATH")
+
+run_hook() {
+  local hook_name="$1"
+  local workspace="$2"
+  local timeout_ms="${3:-60000}"
+  
+  if [ -z "$hook_name" ]; then
+    return 0
+  fi
+  
+  cd "$workspace"
+  timeout "$timeout_ms" sh -lc "$hook_name" 2>/dev/null || true
+}
+```
+
 1. Validate and enter repository.
 
 - `repo_path` is mandatory. Do not infer it from current workspace.
@@ -171,6 +193,17 @@ Also create runtime directory:
 
 ```bash
 mkdir -p "<worktree>/.aiclaw"
+```
+
+7.5. Hook: after_create
+
+Execute after_create hook after status file initialization:
+
+```bash
+# Execute after_create hook (only for newly created worktrees)
+if [ -n "$HOOK_AFTER_CREATE" ]; then
+  run_hook "$HOOK_AFTER_CREATE" "<worktree>" 60000
+fi
 ```
 
 8. Upsert entry into `~/.aiclaw/workflows/registry.json`.

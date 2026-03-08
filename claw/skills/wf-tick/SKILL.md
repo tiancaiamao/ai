@@ -26,6 +26,7 @@ Optional runtime parameters (use defaults if missing):
 ## Required Files
 
 - `~/.aiclaw/workflows/registry.json`
+- `~/.aiclaw/workflows/running.json` (for concurrency control)
 - `<worktree>/.aiclaw/status.json` for each item
 
 ## Locking
@@ -38,23 +39,175 @@ mkdir ~/.aiclaw/workflows/.tick.lock
 # Always release lock at the end: rm -rf ~/.aiclaw/workflows/.tick.lock
 ```
 
+## Concurrency Control
+
+Check running slots before invoking wf-worker:
+
+```bash
+CONFIG_PATH="${HOME}/.aiclaw/workflows/config.json"
+RUNNING_PATH="${HOME}/.aiclaw/workflows/running.json"
+
+# Read config values
+MAX_CONCURRENT=$(jq -r '.concurrency.max_concurrent // 3' "$CONFIG_PATH")
+STALE_MINUTES=$(jq -r '.health.stale_minutes // 10' "$CONFIG_PATH")
+
+# Read current running count
+RUNNING_COUNT=$(jq '.running_items | length' "$RUNNING_PATH")
+
+if [ "$RUNNING_COUNT" -ge "$MAX_CONCURRENT" ]; then
+  echo "Max concurrent ($RUNNING_COUNT/$MAX_CONCURRENT) reached, skipping new tasks"
+  # Skip invoking wf-worker for todo items
+fi
+
+# Function to acquire slot
+acquire_slot() {
+  local workflow_id="$1"
+  local worktree="$2"
+  
+  RUNNING_COUNT=$(jq '.running_items | length' "$RUNNING_PATH")
+  if [ "$RUNNING_COUNT" -ge "$MAX_CONCURRENT" ]; then
+    return 1
+  fi
+  
+  # Add to running_items
+  jq --arg id "$workflow_id" --arg wt "$worktree" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.running_items += [{"workflow_id": $id, "worktree": $wt, "started_at": $now}]' \
+    "$RUNNING_PATH" > /tmp/running.json && mv /tmp/running.json "$RUNNING_PATH"
+  return 0
+}
+
+# Function to release slot
+release_slot() {
+  local workflow_id="$1"
+  jq --arg id "$workflow_id" \
+    '(.running_items |= map(select(.workflow_id != $id)))' \
+    "$RUNNING_PATH" > /tmp/running.json && mv /tmp/running.json "$RUNNING_PATH"
+}
+
+# Health check functions
+check_process_alive() {
+  local pid_file="$1"
+  
+  if [ ! -f "$pid_file" ]; then
+    return 1
+  fi
+  
+  local pid=$(cat "$pid_file")
+  if ps -p "$pid" > /dev/null 2>&1; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+check_stale() {
+  local status_file="$1"
+  local stale_minutes="$2"
+  
+  local heartbeat=$(jq -r '.heartbeat_at // empty' "$status_file")
+  
+  if [ -z "$heartbeat" ] || [ "$heartbeat" = "null" ]; then
+    return 2  # No heartbeat = stale
+  fi
+  
+  local heartbeat_epoch=$(date -d "$heartbeat" +%s 2>/dev/null || echo 0)
+  local now_epoch=$(date -u +%s)
+  local diff_minutes=$(( (now_epoch - heartbeat_epoch) / 60 ))
+  
+  if [ $diff_minutes -gt $stale_minutes ]; then
+    return 1  # Stale
+  fi
+  
+  return 0  # Healthy
+}
+
+# Process health check and recovery
+check_worker_health() {
+  local workflow_id="$1"
+  local worktree="$2"
+  local pid_file="$worktree/.aiclaw/worker.pid"
+  local status_file="$worktree/.aiclaw/status.json"
+  
+  # 1. Check if process is alive
+  if ! check_process_alive "$pid_file"; then
+    echo "Worker for $workflow_id: process not running"
+    
+    # 2. Check if result exists
+    if [ -f "$worktree/.aiclaw/result.json" ]; then
+      echo "Worker for $workflow_id: result exists, will process"
+      return 0  # Let completion handling deal with it
+    else
+      echo "Worker for $workflow_id: crashed without result"
+      return 2  # Needs retry
+    fi
+  fi
+  
+  # 3. Check if stale (no heartbeat)
+  if ! check_stale "$status_file" "$STALE_MINUTES"; then
+    echo "Worker for $workflow_id: stale (no heartbeat for $STALE_MINUTES min)"
+    return 3  # Stale but alive
+  fi
+  
+  echo "Worker for $workflow_id: healthy"
+  return 0  # Healthy
+}
+```
+
 ## Reconciliation Order
 
 For each registry item:
 
-1. Load status file. If missing, mark `blocked` with error.
-2. Reconcile issue/PR truth from GitHub.
-3. Apply state transition rules.
-4. Write status file.
-5. Mirror summary state back to registry item.
+1. **Validate worktree exists:**
+   ```bash
+   if [ ! -d "$worktree" ]; then
+     echo "Worktree $worktree not found, removing from registry"
+     # Remove from registry and skip
+     continue
+   fi
+   ```
+
+2. Load status file. If missing, mark `blocked` with error.
+   ```bash
+   if [ ! -f "$worktree/.aiclaw/status.json" ]; then
+     echo "Status file missing for $workflow_id, marking blocked"
+     # Mark as blocked, write status, continue
+     continue
+   fi
+   ```
+
+3. Validate status.json is valid JSON:
+   ```bash
+   if ! jq empty "$worktree/.aiclaw/status.json" 2>/dev/null; then
+     echo "Corrupted status.json for $workflow_id, marking blocked"
+     # Mark as blocked with error, continue
+     continue
+   fi
+   ```
+
+4. Reconcile issue/PR truth from GitHub.
+5. Apply state transition rules.
+6. Write status file.
+7. Mirror summary state back to registry item.
 
 ## Transition Rules
 
 ### `todo`
 
 - Normal mode (`no_worker=false`):
+  - **Check concurrency first:**
+    ```bash
+    RUNNING_COUNT=$(jq '.running_items | length' "$RUNNING_PATH")
+    if [ "$RUNNING_COUNT" -ge "$MAX_CONCURRENT" ]; then
+      echo "Max concurrent ($RUNNING_COUNT/$MAX_CONCURRENT) reached, skipping"
+      # Skip invoking wf-worker
+    else
+      # Acquire slot before invoking worker
+      acquire_slot "$workflow_id" "$worktree"
+      # Then invoke wf-worker
+    fi
+    ```
   - Action: invoke `wf-worker` start behavior.
-  - Target: `running`.
+  - Target: `state=running`.
 - No-worker mode (`no_worker=true`):
   - Do not invoke `wf-worker`.
   - Update status:
@@ -66,6 +219,52 @@ For each registry item:
 
 **Normal mode (`no_worker=false`):**
 
+- **First, check worker health:**
+  ```bash
+  HEALTH_STATUS=$(check_worker_health "$workflow_id" "$worktree")
+  case $HEALTH_STATUS in
+    0)  # Healthy - process running normally
+       echo "Worker $workflow_id: healthy"
+       ;;
+    1)  # Process dead but has result - will be handled below
+       echo "Worker $workflow_id: process dead, result exists"
+       ;;
+    2)  # Process crashed without result - needs retry
+       echo "Worker $workflow_id: crashed without result"
+       retry_count=$(jq -r '.retry_count // 0' "$worktree/.aiclaw/status.json")
+       if [ "$retry_count" -lt "$max_retries" ]; then
+         # Increment retry_count and restart worker
+         jq --argjson count $((retry_count + 1)) \
+            '.retry_count = $count | .last_error = "worker crashed, restarting"' \
+            "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+            mv /tmp/status.json "$worktree/.aiclaw/status.json"
+         # Invoke wf-worker to restart
+       else
+         # Exhausted retries, mark as failed
+         jq '.state = "failed" | .last_error = "exhausted retries after crash"' \
+            "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+            mv /tmp/status.json "$worktree/.aiclaw/status.json"
+       fi
+       ;;
+    3)  # Stale - process alive but no heartbeat
+       echo "Worker $workflow_id: stale, no heartbeat"
+       retry_count=$(jq -r '.retry_count // 0' "$worktree/.aiclaw/status.json")
+       if [ "$retry_count" -lt "$max_retries" ]; then
+         # Increment and restart
+         jq --argjson count $((retry_count + 1)) \
+            '.retry_count = $count | .last_error = "heartbeat stale, restarting"' \
+            "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+            mv /tmp/status.json "$worktree/.aiclaw/status.json"
+       else
+         # Exhausted retries, mark as failed
+         jq '.state = "failed" | .last_error = "exhausted retries due to stale"' \
+            "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+            mv /tmp/status.json "$worktree/.aiclaw/status.json"
+       fi
+       ;;
+  esac
+  ```
+
 - Check heartbeat:
   - If `heartbeat_at` older than `stale_minutes`:
     - increment `retry_count`
@@ -74,6 +273,10 @@ For each registry item:
 
 - Check for implementation completion:
   - If `.aiclaw/result.json` exists and `ok=true`:
+    - **Release concurrency slot:**
+      ```bash
+      release_slot "$workflow_id"
+      ```
     - If result indicates `phase=done` or implementation is complete:
       - **Call wf-push to push branch and create PR**
       - Set `state=pr_open`, `step=awaiting_review`
@@ -121,12 +324,38 @@ For each registry item:
 
 ### `done`
 
-- Action: invoke `wf-closeout` (cleanup worktree, close issue).
+- **Invoke wf-closeout for cleanup:**
+  ```bash
+  # Call wf-closeout to cleanup worktree and close issue
+  wf-closeout workflow_id="$workflow_id" worktree="$worktree" issue_number="$issue_number"
+  
+  # After closeout succeeds, remove from active registry
+  if [ $? -eq 0 ]; then
+    # Remove item from registry
+    jq --arg id "$workflow_id" \
+      '(.items |= map(select(.workflow_id != $id)))' \
+      ~/.aiclaw/workflows/registry.json > /tmp/registry.json && \
+      mv /tmp/registry.json ~/.aiclaw/workflows/registry.json
+  fi
+  ```
 - Remove from active registry when closeout succeeds.
 
 ### `failed`
 
 - Keep terminal unless explicit retry command is present.
+- **Enable manual retry:**
+  ```bash
+  # Check if explicit retry flag is present in input or env
+  if [ "$FORCE_RETRY" = "true" ] || [ -n "$RETRY_WORKFLOW_ID" ]; then
+    if [ "$RETRY_WORKFLOW_ID" = "$workflow_id" ]; then
+      echo "Manual retry requested for $workflow_id"
+      # Reset retry_count and set state back to todo
+      jq '.state = "todo" | .retry_count = 0 | .last_error = ""' \
+         "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+         mv /tmp/status.json "$worktree/.aiclaw/status.json"
+    fi
+  fi
+  ```
 
 ### `blocked`
 
