@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // TraceHandler handles trace events.
@@ -27,6 +26,7 @@ type ChunkTraceHandler interface {
 type FileHandler struct {
 	outputDir        string
 	processID        int
+	sessionID        string
 	maxFileSizeBytes int64
 	mu               sync.Mutex
 	streams          map[string]*traceStream
@@ -67,6 +67,13 @@ func (h *FileHandler) SetMaxFileSizeBytes(maxBytes int64) {
 	h.mu.Unlock()
 }
 
+// SetSessionID sets the session ID for trace file naming.
+func (h *FileHandler) SetSessionID(sessionID string) {
+	h.mu.Lock()
+	h.sessionID = sessionID
+	h.mu.Unlock()
+}
+
 // Handle writes trace events to a file.
 func (h *FileHandler) Handle(ctx context.Context, traceID []byte, events []TraceEvent) error {
 	return h.HandleChunk(ctx, traceID, events, true)
@@ -85,7 +92,7 @@ func (h *FileHandler) HandleChunk(_ context.Context, traceID []byte, events []Tr
 		}
 
 		var err error
-		baseName := h.traceBaseName(traceIDStr, time.Now())
+		baseName := h.traceBaseName(traceIDStr)
 		stream, err = h.createTraceStream(baseName, processIDForTrace(traceID), 0)
 		if err != nil {
 			return err
@@ -233,9 +240,12 @@ func (h *FileHandler) traceFilePath(baseName string, part int) string {
 	return filepath.Join(h.outputDir, filename)
 }
 
-func (h *FileHandler) traceBaseName(traceID string, createdAt time.Time) string {
-	ts := createdAt.UTC().Format("20060102T150405.000Z")
-	return fmt.Sprintf("pid%d-%s-%s", h.processID, ts, traceID)
+func (h *FileHandler) traceBaseName(traceID string) string {
+	sessionID := h.sessionID
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	return fmt.Sprintf("pid%d-sess%s", h.processID, sessionID)
 }
 
 func sanitizeFilenameComponent(s string) string {

@@ -217,18 +217,24 @@ func buildSkillCommands(skills []skill.Skill) []rpc.SlashCommand {
 	return commands
 }
 
-func initTraceFileHandler() (string, error) {
+func initTraceFileHandler(sessionID string) (*traceevent.FileHandler, string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	tracesDir := filepath.Join(homeDir, ".ai", "traces")
 	handler, err := traceevent.NewFileHandler(tracesDir)
 	if err != nil {
-		return tracesDir, err
+		return nil, tracesDir, err
 	}
 	traceevent.SetHandler(handler)
-	return tracesDir, nil
+
+	// Set the session ID for meaningful trace file names
+	if sessionID != "" {
+		handler.SetSessionID(sessionID)
+	}
+
+	return handler, tracesDir, nil
 }
 
 // runDetachedTraceSpan executes a non-prompt operation as an independent trace segment.

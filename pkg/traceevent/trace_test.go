@@ -671,7 +671,7 @@ func TestTraceBufAutoFlushByInterval(t *testing.T) {
 
 func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 	tmp := t.TempDir()
-	h, err := NewFileHandler(tmp)
+	h, err := NewFileHandler(tmp, "test-session")
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 
 func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 	tmp := t.TempDir()
-	h, err := NewFileHandler(tmp)
+	h, err := NewFileHandler(tmp, "test-session")
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
