@@ -56,7 +56,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`Agent Benchmark Runner
+	fmt.Print(`Agent Benchmark Runner
 
 Usage:
   runner run              Run all benchmark tasks

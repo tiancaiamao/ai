@@ -193,7 +193,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
 	// Load skills
-	traceOutputPath, err = initTraceFileHandler()
+	_, traceOutputPath, err = initTraceFileHandler(sessionID)
 	if err != nil {
 		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
 	} else {

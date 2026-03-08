@@ -675,6 +675,7 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
+	h.SetSessionID("test-session")
 
 	traceID := []byte("chunk-trace")
 	ev1 := TraceEvent{
@@ -698,7 +699,7 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 		t.Fatalf("HandleChunk final failed: %v", err)
 	}
 
-	paths, err := filepath.Glob(filepath.Join(tmp, "*-chunk-trace.perfetto.json"))
+	paths, err := filepath.Glob(filepath.Join(tmp, "*.perfetto.json"))
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}
@@ -730,6 +731,7 @@ func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
+	h.SetSessionID("test-session")
 	h.SetMaxFileSizeBytes(700)
 
 	traceID := []byte("split-trace")
@@ -762,7 +764,7 @@ func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 		t.Fatalf("HandleChunk split failed: %v", err)
 	}
 
-	paths, err := filepath.Glob(filepath.Join(tmp, "*-split-trace*.perfetto.json"))
+	paths, err := filepath.Glob(filepath.Join(tmp, "*.perfetto.json"))
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}

@@ -46,14 +46,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	}
 	slog.SetDefault(log)
 
-	traceOutputPath, err := initTraceFileHandler()
-	if err != nil {
-		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
-	} else {
-		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
-	}
-
-	// Convert config to llm.Model
+	// Get current working directory
 	model := cfg.GetLLMModel()
 	var _ llm.Model = model
 
@@ -119,6 +112,14 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
+	}
+
+	// Initialize trace handler with sessionID
+	_, traceOutputPath, err := initTraceFileHandler(sessionID)
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
+	} else {
+		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
 	}
 
 	// Output session header (JSON Lines format)
