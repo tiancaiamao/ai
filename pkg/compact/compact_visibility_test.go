@@ -64,6 +64,46 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 	}
 }
 
+// TestCompactToolSummaryMessageRole verifies that the tool_summary message
+// added by compactToolResultsInRecent has role "user", not "assistant".
+// This is critical for API compatibility: when compact is called during
+// tool execution (e.g., llm_context_decision), adding an assistant message
+// would create consecutive assistant messages (tool_use followed by this message),
+// which violates OpenAI API requirements.
+func TestCompactToolSummaryMessageRole(t *testing.T) {
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "first output"},
+		}, false),
+		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "second output"},
+		}, false),
+	}
+
+	compacted := compactToolResultsInRecent(messages, 1)
+
+	// Find the tool_summary message
+	var summaryMsg *agentctx.AgentMessage
+	for i := range compacted {
+		if compacted[i].Metadata != nil && compacted[i].Metadata.Kind == "tool_summary" {
+			summaryMsg = &compacted[i]
+			break
+		}
+	}
+
+	if summaryMsg == nil {
+		t.Fatal("expected tool_summary message to be present")
+	}
+
+	// CRITICAL: The summary message must be "user" role, not "assistant".
+	// This prevents consecutive assistant messages when compact is called
+	// during tool execution (e.g., llm_context_decision tool).
+	if summaryMsg.Role != "user" {
+		t.Fatalf("expected tool_summary message to have role 'user' to avoid consecutive assistant messages, got role '%s'", summaryMsg.Role)
+	}
+}
+
 func TestProjectMessagesForSummaryTrimsToolOutputs(t *testing.T) {
 	longText := strings.Repeat("a", 5000)
 	messages := []agentctx.AgentMessage{
