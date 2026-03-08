@@ -16,6 +16,7 @@ NC='\033[0m' # No Color
 # Parse arguments
 VERBOSE=""
 COVERAGE=""
+SHORT="-short"
 PACKAGES=""
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +27,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -c|--coverage)
       COVERAGE="-cover"
+      shift
+      ;;
+    -s|--short)
+      SHORT="-short"
       shift
       ;;
     -p|--package)
@@ -48,10 +53,11 @@ echo "Running tests with:"
 echo "  Packages: $PACKAGES"
 echo "  Verbose: ${VERBOSE:-no}"
 echo "  Coverage: ${COVERAGE:-no}"
+echo "  Short: ${SHORT:-no}"
 echo ""
 
 # Run tests
-if go test $COVERAGE $VERBOSE $PACKAGES; then
+if go test $SHORT $COVERAGE $VERBOSE $PACKAGES; then
   echo ""
   echo -e "${GREEN}✅ All tests passed!${NC}"
   echo ""
@@ -60,7 +66,7 @@ if go test $COVERAGE $VERBOSE $PACKAGES; then
   if [ -n "$COVERAGE" ]; then
     echo "Coverage Report:"
     echo "================"
-    go test $COVERAGE $PACKAGES | grep -E "coverage:|ok"
+    go test $SHORT $COVERAGE $PACKAGES | grep -E "coverage:|ok"
   fi
 
   exit 0
