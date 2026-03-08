@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-03-08T11:53:35+08:00",
+  "agent_name": "local-agent",
+  "git_commit": "8c62fbb",
+  "total_tasks": 7,
+  "passed_tasks": 1,
+  "failed_tasks": 6,
+  "duration": 1131109916,
+  "results": [
+    {
+      "task_id": "001_fix_off_by_one",
+      "name": "Task: Fix Off-by-One Error",
+      "passed": false,
+      "duration": 59257458,
+      "error": "Verification failed",
+      "output": "FAIL: SumRange(5) expected 15, got 10\n"
+    },
+    {
+      "task_id": "002_add_error_handling",
+      "name": "Task: Add Error Handling",
+      "passed": false,
+      "duration": 150036708,
+      "error": "Verification failed",
+      "output": "PASS: Code compiles\nFAIL: Divide should return (float64, error)\n"
+    },
+    {
+      "task_id": "003_refactor_duplicated_code",
+      "name": "Task: Refactor Duplicated Code",
+      "passed": true,
+      "duration": 215534875,
+      "output": "PASS: Code compiles\nPASS: Output matches expected\nPASS: Code appears refactored (      57 lines)\nWARN: No obvious helper function found\nAll tests passed!\n"
+    },
+    {
+      "task_id": "010_basic_interpreter",
+      "name": "Task: Implement BASIC Interpreter",
+      "passed": false,
+      "duration": 201400791,
+      "error": "Verification failed",
+      "output": "PASS: Code compiles\nFAIL: example1.bas expected 'hello', got 'TODO: Interpret examples/example1.bas'\n"
+    },
+    {
+      "task_id": "011_unittest_http_parser",
+      "name": "Task: Write Unit Tests for HTTP File Parser",
+      "passed": false,
+      "duration": 132989459,
+      "error": "Verification failed",
+      "output": "?   \thttpfileparser/httpfile\t[no test files]\nPASS: Code compiles\nFAIL: No test files found (*_test.go)\n"
+    },
+    {
+      "task_id": "012_mos6502_assembler",
+      "name": "Task: Implement MOS6502 Assembler",
+      "passed": false,
+      "duration": 177894291,
+      "error": "Verification failed",
+      "output": "PASS: Code compiles\nPASS: simple_load.asm assembles\nFAIL: Output is not valid JSON\nTODO: Assemble examples/simple_load.asm\n"
+    },
+    {
+      "task_id": "013_fix_concurrent_bug",
+      "name": "Task: Fix Concurrent Bug",
+      "passed": false,
+      "duration": 193238500,
+      "error": "Verification failed",
+      "output": "PASS: Code compiles\nPASS: 0/5 runs succeeded\nFAIL: Race condition still present (5 failures)\n"
+    }
+  ],
+  "pass_rate": 14.285714285714285
+}

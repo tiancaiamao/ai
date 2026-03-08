@@ -1,0 +1,55 @@
+{
+  "agent": "my-agent",
+  "model": null,
+  "timestamp": "2026-03-08T13:03:02.123724",
+  "tasks": {
+    "001_fix_off_by_one": {
+      "agent_success": true,
+      "verify_passed": true,
+      "duration": 26.472425937652588,
+      "output": "PASS: SumRange(5) = 15\nPASS: Loop condition fixed to i <= n\nAll tests passed!\n"
+    },
+    "002_add_error_handling": {
+      "agent_success": true,
+      "verify_passed": true,
+      "duration": 30.77399182319641,
+      "output": "PASS: Code compiles\nPASS: Divide returns error\nPASS: GetUserAge returns error\nPASS: Program runs without panic\nAll tests passed!\n"
+    },
+    "003_refactor_duplicated_code": {
+      "agent_success": true,
+      "verify_passed": true,
+      "duration": 124.32223320007324,
+      "output": "PASS: Code compiles\nPASS: Output matches expected\nWARN: Code still seems long (      73 lines), consider more refactoring\nPASS: Helper function detected\nAll tests passed!\n"
+    },
+    "010_basic_interpreter": {
+      "agent_success": true,
+      "verify_passed": false,
+      "duration": 1124.7326049804688,
+      "output": "PASS: Code compiles\nFAIL: example1.bas expected 'hello', got 'TODO: Interpret examples/example1.bas'\n"
+    },
+    "011_unittest_http_parser": {
+      "agent_success": true,
+      "verify_passed": true,
+      "duration": 223.50804495811462,
+      "output": "PASS: Code compiles\nPASS: Test files exist\nPASS: Tests pass (36 test assertions)\nPASS: Uses testdata directory convention\n\nAll tests passed!\n"
+    },
+    "012_mos6502_assembler": {
+      "agent_success": false,
+      "verify_passed": false,
+      "duration": 300.0060679912567,
+      "output": "PASS: Code compiles\nFAIL: simple_load.asm failed to assemble\n/Users/genius/project/ai/benchmark/tasks/012_mos6502_assembler/verify.sh: line 15: ./assembler: is a directory\n"
+    },
+    "013_fix_concurrent_bug": {
+      "agent_success": true,
+      "verify_passed": true,
+      "duration": 2607.972005844116,
+      "output": "PASS: Code compiles\nPASS: 5/5 runs succeeded\nPASS: No race condition detected\nPASS: Uses proper synchronization (Mutex or atomic)\n\nAll tests passed!\n"
+    }
+  },
+  "summary": {
+    "total": 7,
+    "passed": 5,
+    "failed": 2,
+    "pass_rate": 71.42857142857143
+  }
+}

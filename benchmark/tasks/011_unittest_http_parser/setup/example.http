@@ -1,0 +1,19 @@
+# Example HTTP file
+// @Name Get Users
+// @Tags api, users
+
+GET https://api.example.com/users?limit=10&offset=0
+Content-Type: application/json
+Accept: application/json
+
+###
+
+// @Name Create User
+POST https://api.example.com/users
+Content-Type: application/json
+Authorization: Basic admin secret
+
+{
+  "name": "John Doe",
+  "email": "john@example.com"
+}

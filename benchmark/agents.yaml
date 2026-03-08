@@ -1,0 +1,61 @@
+# Agent configurations for A/B testing
+# Each agent has a command template that will be executed
+
+agents:
+  # Your custom agent
+  my-agent:
+    name: "My Agent"
+    command: 'ai --mode headless --no-session --max-turns 50 "{prompt}"'
+    type: "custom"
+
+  # Claude Code CLI
+  claude-code:
+    name: "Claude Code"
+    command: 'claude --print "{prompt}"'
+    type: "external"
+    # Note: Requires claude CLI to be installed
+
+  # Codex CLI (OpenAI)
+  codex:
+    name: "Codex CLI"
+    command: 'codex "{prompt}"'
+    type: "external"
+    # Note: Requires codex CLI to be installed
+
+  # Gemini CLI
+  gemini:
+    name: "Gemini CLI"
+    command: 'gemini "{prompt}"'
+    type: "external"
+    # Note: Requires gemini CLI to be installed
+
+# Model configurations (for agents that support model selection)
+models:
+  glm5:
+    name: "GLM-5"
+    provider: "zai"
+
+  minimax:
+    name: "MiniMax 2.5"
+    provider: "minimax"
+
+  deepseek:
+    name: "DeepSeek V3"
+    provider: "deepseek"
+
+  gpt4:
+    name: "GPT-4"
+    provider: "openai"
+
+  claude:
+    name: "Claude Sonnet"
+    provider: "anthropic"
+
+# Test configurations
+config:
+  # Maximum time per task (seconds)
+  timeout: 300
+  # Maximum turns per task
+  max_turns: 50
+  # Number of retries for failed tasks
+  retries: 1
