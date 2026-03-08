@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -77,6 +78,13 @@ func main() {
 	}
 
 	clawDir := filepath.Join(homeDir, ".aiclaw")
+
+	lockFile, err := acquireInstanceLock(clawDir)
+	if err != nil {
+		slog.Error("Failed to acquire instance lock", "error", err)
+		os.Exit(1)
+	}
+	defer releaseInstanceLock(lockFile)
 
 	// 设置 trace 输出到 ~/.aiclaw/traces/（可选，调试时启用）
 	if *trace {
@@ -421,6 +429,42 @@ func setupTracing(clawDir string) error {
 	traceevent.SetHandler(handler)
 	slog.Info("Tracing enabled", "dir", tracesDir)
 	return nil
+}
+
+func acquireInstanceLock(clawDir string) (*os.File, error) {
+	if err := os.MkdirAll(clawDir, 0755); err != nil {
+		return nil, fmt.Errorf("create claw dir: %w", err)
+	}
+
+	lockPath := filepath.Join(clawDir, "aiclaw.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file %s: %w", lockPath, err)
+	}
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another aiclaw instance is already running (lock: %s)", lockPath)
+		}
+		return nil, fmt.Errorf("acquire lock %s: %w", lockPath, err)
+	}
+
+	_ = lockFile.Truncate(0)
+	if _, err := lockFile.Seek(0, 0); err == nil {
+		_, _ = fmt.Fprintf(lockFile, "%d\n", os.Getpid())
+	}
+
+	return lockFile, nil
+}
+
+func releaseInstanceLock(lockFile *os.File) {
+	if lockFile == nil {
+		return
+	}
+
+	_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	_ = lockFile.Close()
 }
 
 func isFFmpegAvailable() bool {

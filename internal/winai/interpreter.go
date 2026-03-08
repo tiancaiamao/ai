@@ -24,6 +24,7 @@ import (
 	"github.com/sminez/ad/win/pkg/ad"
 	"github.com/sminez/ad/win/pkg/repl"
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/modelselect"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
@@ -77,6 +78,7 @@ type AiInterpreter struct {
 	pipeline              pipelineMetrics
 	pendingSessionList    bool
 	pendingSessionSwitch  string
+	pendingModelInput     string
 	pendingForkList       bool
 	pendingForkSelect     string
 	pendingTreeList       bool
@@ -561,6 +563,10 @@ func (p *AiInterpreter) handleInput(input string, fromControl bool) (bool, error
 }
 
 func (p *AiInterpreter) handleModelSelect() (bool, error) {
+	p.stateMu.Lock()
+	p.availableModels = nil
+	p.stateMu.Unlock()
+
 	// Send request to get available models
 	if err := p.sendCommand("get_available_models", nil, ""); err != nil {
 		return false, err
@@ -630,6 +636,27 @@ func (p *AiInterpreter) handleModelSelect() (bool, error) {
 
 }
 
+func (p *AiInterpreter) handleModel(args string, fromControl bool) (bool, error) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return p.handleModelSelect()
+	}
+
+	if err := p.setModelFromInput(args); err != nil {
+		if errors.Is(err, errModelListRequired) {
+			p.stateMu.Lock()
+			p.pendingModelInput = args
+			p.stateMu.Unlock()
+			return true, p.sendCommand("get_available_models", nil, "")
+		}
+
+		p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
+		return true, nil
+	}
+
+	return true, nil
+}
+
 func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, error) {
 	if cmdLine == "" {
 		return false, nil
@@ -684,8 +711,10 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.handleShow(args, fromControl)
 	case "thinking":
 		return true, p.handleThinking(args, fromControl)
+	case "model":
+		return p.handleModel(args, fromControl)
 	case "model-select":
-		return p.handleModelSelect()
+		return p.handleModel(args, fromControl)
 	case "new":
 		data := map[string]any{}
 
@@ -1359,7 +1388,7 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 			return nil, fmt.Errorf("invalid model: %s", input)
 		}
 
-		return &rpc.ModelInfo{Provider: parts[0], ID: parts[1]}, nil
+		return &rpc.ModelInfo{Provider: strings.TrimSpace(parts[0]), ID: strings.TrimSpace(parts[1])}, nil
 	}
 
 	if len(models) == 0 {
@@ -1370,11 +1399,18 @@ func (p *AiInterpreter) resolveModelInput(input string) (*rpc.ModelInfo, error) 
 		return nil, errModelListRequired
 	}
 
-	for _, m := range models {
-		if m.ID == input || m.Name == input {
-			return &m, nil
+	match, err := modelselect.SelectByQuery(models, input, func(model rpc.ModelInfo) modelselect.Keys {
+		return modelselect.Keys{
+			Provider: model.Provider,
+			ID:       model.ID,
+			Name:     model.Name,
 		}
-
+	})
+	if err == nil {
+		return &match, nil
+	}
+	if !errors.Is(err, modelselect.ErrNotFound) {
+		return nil, err
 	}
 
 	if currentProvider != "" {
@@ -2141,7 +2177,8 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]
   /show settings|pipeline|usage
   /thinking [level]                    - Show/set thinking level (off|minimal|low|medium|high|xhigh)
-  /model-select
+  /model [number|id|provider/id]
+  /model-select                        - Alias of /model
   /new [name]
   /resume [id|path|index]
   /compact
@@ -2291,10 +2328,20 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 		return
 	}
 
+	models := append([]rpc.ModelInfo(nil), payload.Models...)
+	modelselect.SortByModelKey(models, func(model rpc.ModelInfo) modelselect.Keys {
+		return modelselect.Keys{
+			Provider: model.Provider,
+			ID:       model.ID,
+			Name:     model.Name,
+		}
+	})
+
+	var pendingInput string
 	p.stateMu.Lock()
-	p.availableModels = payload.Models
+	p.availableModels = models
 	if p.currentModelProvider == "" && p.currentModelID != "" {
-		for _, model := range payload.Models {
+		for _, model := range models {
 			if model.ID == p.currentModelID {
 				p.currentModelProvider = model.Provider
 				break
@@ -2303,8 +2350,16 @@ func (p *AiInterpreter) handleAvailableModels(data json.RawMessage) {
 		}
 
 	}
+	pendingInput = strings.TrimSpace(p.pendingModelInput)
+	p.pendingModelInput = ""
 
 	p.stateMu.Unlock()
+
+	if pendingInput != "" {
+		if err := p.setModelFromInput(pendingInput); err != nil {
+			p.writeStatus(fmt.Sprintf("ai: %v", err))
+		}
+	}
 }
 
 func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
@@ -2353,7 +2408,8 @@ func (p *AiInterpreter) showModelList(models []rpc.ModelInfo, showUsage bool) {
 Usage:
   - Visual select a model line above
   - Press: <space> p m to set selected model
-  - Or type: /model <number|provider/model-id>
+  - Or type: /model <number|id|provider/model-id>
+  - /model-select is an alias of /model
 `)
 	}
 

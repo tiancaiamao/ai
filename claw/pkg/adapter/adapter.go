@@ -28,8 +28,10 @@ import (
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
+	aiconfig "github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/modelselect"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -118,9 +120,9 @@ type AgentLoop struct {
 	commands *CommandRegistry
 
 	// Statistics
-	messageCount  atomic.Int64
-	totalTokens   atomic.Int64
-	startTime     time.Time
+	messageCount atomic.Int64
+	totalTokens  atomic.Int64
+	startTime    time.Time
 }
 
 // Session represents an isolated conversation session
@@ -276,15 +278,8 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 	return loop
 }
 
-// ModelSpec 模型规格定义
-type ModelSpec struct {
-	ID            string `json:"id"`
-	Name          string `json:"name,omitempty"`
-	Provider      string `json:"provider"`
-	BaseURL       string `json:"baseUrl"`
-	API           string `json:"api"`
-	ContextWindow int    `json:"contextWindow"`
-}
+// ModelSpec aliases shared model specification to avoid duplicate schema definitions.
+type ModelSpec = aiconfig.ModelSpec
 
 // resolveModel 从 claw 配置目录加载模型配置
 func resolveModel(cfg *Config) llm.Model {
@@ -306,15 +301,9 @@ func resolveModel(cfg *Config) llm.Model {
 	}
 
 	modelsPath := filepath.Join(cfg.ClawDir, "models.json")
-	data, err := os.ReadFile(modelsPath)
+	specs, err := aiconfig.LoadModelSpecs(modelsPath)
 	if err != nil {
-		slog.Warn("[AgentLoop] Failed to read models.json", "error", err, "path", modelsPath)
-		return model
-	}
-
-	var specs []ModelSpec
-	if err := json.Unmarshal(data, &specs); err != nil {
-		slog.Warn("[AgentLoop] Failed to parse models.json", "error", err, "path", modelsPath)
+		slog.Warn("[AgentLoop] Failed to load models.json", "error", err, "path", modelsPath)
 		return model
 	}
 
@@ -1113,18 +1102,18 @@ func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKe
 func (a *AgentLoop) cmdHelp() string {
 	// Define command descriptions
 	descriptions := map[string]string{
-		"help":        "Show this help message",
-		"commands":    "List available skills (alias: /skills)",
-		"skills":      "List available skills (alias: /commands)",
-		"session":     "Show current session info",
-		"history":     "Show message history (alias: /messages)",
-		"messages":    "Show message history (alias: /history)",
-		"clear":       "Clear current session messages",
-		"model":       "List or switch AI models",
-		"traceevent":  "Manage trace events for debugging",
-		"cron":        "Manage cron jobs",
-		"show":        "Show settings or usage (usage: /show [settings|usage])",
-		"thinking":    "Toggle or set thinking level (usage: /thinking [off|minimal|low|medium|high|xhigh])",
+		"help":       "Show this help message",
+		"commands":   "List available skills (alias: /skills)",
+		"skills":     "List available skills (alias: /commands)",
+		"session":    "Show current session info",
+		"history":    "Show message history (alias: /messages)",
+		"messages":   "Show message history (alias: /history)",
+		"clear":      "Clear current session messages",
+		"model":      "List or switch AI models",
+		"traceevent": "Manage trace events for debugging",
+		"cron":       "Manage cron jobs",
+		"show":       "Show settings or usage (usage: /show [settings|usage])",
+		"thinking":   "Toggle or set thinking level (usage: /thinking [off|minimal|low|medium|high|xhigh])",
 	}
 
 	commands := a.commands.List()
@@ -1267,8 +1256,9 @@ func (a *AgentLoop) cmdClear(sess *Session) string {
 
 // cmdModel lists available models or switches to a specific model
 // Usage:
-//   /model          - list all available models
-//   /model <id>     - switch to the specified model
+//
+//	/model          - list all available models
+//	/model <id>     - switch to the specified model
 func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
 	args = strings.TrimSpace(args)
 
@@ -1295,7 +1285,7 @@ func (a *AgentLoop) listModels() string {
 	}
 
 	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
-	specs, err := a.loadModelSpecs(modelsPath)
+	specs, err := aiconfig.LoadModelSpecs(modelsPath)
 	if err != nil {
 		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nCannot load models list: %v\n\nExpected file: %s",
 			a.model.ID, a.model.Provider, err, modelsPath)
@@ -1333,6 +1323,8 @@ func (a *AgentLoop) listModels() string {
 
 // switchModel switches to the specified model
 func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
+	modelID = strings.TrimSpace(modelID)
+
 	// Load available models
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1340,34 +1332,29 @@ func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
 	}
 
 	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
-	specs, err := a.loadModelSpecs(modelsPath)
+	specs, err := aiconfig.LoadModelSpecs(modelsPath)
 	if err != nil {
 		return fmt.Errorf("failed to load models: %w (path: %s)", err, modelsPath)
 	}
 
 	// Try to parse as numeric index first
-	var targetSpec *ModelSpec
-	if idx, err := strconv.Atoi(modelID); err == nil && idx >= 0 && idx < len(specs) {
-		// Numeric index selection
-		targetSpec = &specs[idx]
-	} else {
-		// Find by ID or name (partial match supported)
-		for i := range specs {
-			spec := &specs[i]
-			if spec.ID == modelID || strings.HasPrefix(spec.ID, modelID) {
-				targetSpec = spec
-				break
-			}
-			// Also match by name if provided
-			if spec.Name != "" && (spec.Name == modelID || strings.HasPrefix(spec.Name, modelID)) {
-				targetSpec = spec
-				break
-			}
+	var targetSpec ModelSpec
+	if idx, parseErr := strconv.Atoi(modelID); parseErr == nil {
+		if idx < 0 || idx >= len(specs) {
+			return fmt.Errorf("model index out of range: %d\nUse /model to list available models", idx)
 		}
-	}
-
-	if targetSpec == nil {
-		return fmt.Errorf("model not found: %s\nUse /model to list available models", modelID)
+		targetSpec = specs[idx]
+	} else {
+		targetSpec, err = modelselect.SelectByQuery(specs, modelID, func(spec ModelSpec) modelselect.Keys {
+			return modelselect.Keys{
+				Provider: spec.Provider,
+				ID:       spec.ID,
+				Name:     spec.Name,
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("%w\nUse /model to list available models", err)
+		}
 	}
 
 	// Resolve API key for the provider
@@ -1423,54 +1410,6 @@ func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
 		"contextWindow", newModel.ContextWindow)
 
 	return nil
-}
-
-// loadModelSpecs loads model specs from a models.json file
-func (a *AgentLoop) loadModelSpecs(path string) ([]ModelSpec, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var cfg struct {
-		Providers map[string]struct {
-			BaseURL string `json:"baseUrl,omitempty"`
-			API     string `json:"api,omitempty"`
-			Models  []struct {
-				ID            string   `json:"id"`
-				Name          string   `json:"name,omitempty"`
-				BaseURL       string   `json:"baseUrl,omitempty"`
-				API           string   `json:"api,omitempty"`
-				ContextWindow int      `json:"contextWindow,omitempty"`
-				MaxTokens     int      `json:"maxTokens,omitempty"`
-			} `json:"models,omitempty"`
-		} `json:"providers"`
-	}
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	var specs []ModelSpec
-	for provider, pcfg := range cfg.Providers {
-		baseURL := pcfg.BaseURL
-		api := pcfg.API
-		for _, m := range pcfg.Models {
-			if m.ID == "" {
-				continue
-			}
-			specs = append(specs, ModelSpec{
-				ID:            m.ID,
-				Name:          m.Name,
-				Provider:      provider,
-				BaseURL:       firstNonEmpty(m.BaseURL, baseURL),
-				API:           firstNonEmpty(m.API, api),
-				ContextWindow: m.ContextWindow,
-			})
-		}
-	}
-
-	return specs, nil
 }
 
 // resolveAPIKey resolves API key from environment or auth.json
@@ -1561,13 +1500,14 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 
 // cmdTraceevent manages trace event settings
 // Usage:
-//   /traceevent              - list enabled events
-//   /traceevent default      - reset to default set
-//   /traceevent all          - enable all events
-//   /traceevent off          - disable all events
-//   /traceevent <events>     - set specific events (e.g., llm, tool, event)
-//   /traceevent enable <events>   - enable additional events
-//   /traceevent disable <events>  - disable specific events
+//
+//	/traceevent              - list enabled events
+//	/traceevent default      - reset to default set
+//	/traceevent all          - enable all events
+//	/traceevent off          - disable all events
+//	/traceevent <events>     - set specific events (e.g., llm, tool, event)
+//	/traceevent enable <events>   - enable additional events
+//	/traceevent disable <events>  - disable specific events
 func (a *AgentLoop) cmdTraceevent(args string) string {
 	args = strings.TrimSpace(args)
 
@@ -1649,20 +1589,12 @@ func (a *AgentLoop) cmdTraceevent(args string) string {
 	}
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if v := strings.TrimSpace(value); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // cmdShow displays settings or usage statistics
 // Usage:
-//   /show              - show settings (default)
-//   /show settings     - show current settings
-//   /show usage        - show usage statistics
+//
+//	/show              - show settings (default)
+//	/show settings     - show current settings
+//	/show usage        - show usage statistics
 func (a *AgentLoop) cmdShow(args string, sess *Session) string {
 	args = strings.TrimSpace(args)
 
@@ -1770,8 +1702,9 @@ func formatDuration(d time.Duration) string {
 
 // cmdThinking toggles or sets the thinking level
 // Usage:
-//   /thinking              - toggle to next level
-//   /thinking <level>      - set specific level (off, minimal, low, medium, high, xhigh)
+//
+//	/thinking              - toggle to next level
+//	/thinking <level>      - set specific level (off, minimal, low, medium, high, xhigh)
 func (a *AgentLoop) cmdThinking(args string, sess *Session) string {
 	levels := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 	levelMap := make(map[string]string)

@@ -85,3 +85,54 @@ func TestLoadModelSpecsOverrides(t *testing.T) {
 		t.Errorf("api = %q, want %q", spec.API, "anthropic-messages")
 	}
 }
+
+func TestLoadModelSpecsDeterministicSort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "zai": {
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "api": "openai-completions",
+      "models": [
+        { "id": "glm-5", "name": "GLM 5" },
+        { "id": "glm-4.7", "name": "GLM 4.7" }
+      ]
+    },
+    "anthropic": {
+      "baseUrl": "https://api.anthropic.com/v1",
+      "api": "anthropic-messages",
+      "models": [
+        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4" }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs error: %v", err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("expected 3 specs, got %d", len(specs))
+	}
+
+	got := []string{
+		specs[0].Provider + "/" + specs[0].ID,
+		specs[1].Provider + "/" + specs[1].ID,
+		specs[2].Provider + "/" + specs[2].ID,
+	}
+	want := []string{
+		"anthropic/claude-sonnet-4-20250514",
+		"zai/glm-4.7",
+		"zai/glm-5",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

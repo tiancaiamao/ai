@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/modelselect"
 )
 
 // ModelSpec represents a resolved model entry from models.json.
@@ -75,15 +76,8 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 		return nil, nil
 	}
 
-	providers := make([]string, 0, len(cfg.Providers))
-	for provider := range cfg.Providers {
-		providers = append(providers, provider)
-	}
-	sort.Strings(providers)
-
 	specs := make([]ModelSpec, 0)
-	for _, provider := range providers {
-		pcfg := cfg.Providers[provider]
+	for provider, pcfg := range cfg.Providers {
 		provider = strings.TrimSpace(provider)
 		baseURL := strings.TrimSpace(pcfg.BaseURL)
 		api := strings.TrimSpace(pcfg.API)
@@ -108,6 +102,14 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 			})
 		}
 	}
+
+	modelselect.SortByModelKey(specs, func(spec ModelSpec) modelselect.Keys {
+		return modelselect.Keys{
+			Provider: spec.Provider,
+			ID:       spec.ID,
+			Name:     spec.Name,
+		}
+	})
 
 	return specs, nil
 }
