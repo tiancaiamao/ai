@@ -422,7 +422,7 @@ func setupTracing(clawDir string) error {
 	if err := os.MkdirAll(tracesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create traces dir: %w", err)
 	}
-	handler, err := traceevent.NewFileHandler(tracesDir, "")
+	handler, err := traceevent.NewFileHandler(tracesDir)
 	if err != nil {
 		return fmt.Errorf("failed to create trace handler: %w", err)
 	}
