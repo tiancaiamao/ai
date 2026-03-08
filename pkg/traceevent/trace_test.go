@@ -671,10 +671,11 @@ func TestTraceBufAutoFlushByInterval(t *testing.T) {
 
 func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 	tmp := t.TempDir()
-	h, err := NewFileHandler(tmp, "test-session")
+	h, err := NewFileHandler(tmp)
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
+	h.SetSessionID("test-session")
 
 	traceID := []byte("chunk-trace")
 	ev1 := TraceEvent{
@@ -726,10 +727,11 @@ func TestFileHandlerHandleChunkProducesValidPerfettoJSON(t *testing.T) {
 
 func TestFileHandlerSplitsLargeTraceIntoParts(t *testing.T) {
 	tmp := t.TempDir()
-	h, err := NewFileHandler(tmp, "test-session")
+	h, err := NewFileHandler(tmp)
 	if err != nil {
 		t.Fatalf("NewFileHandler failed: %v", err)
 	}
+	h.SetSessionID("test-session")
 	h.SetMaxFileSizeBytes(700)
 
 	traceID := []byte("split-trace")
