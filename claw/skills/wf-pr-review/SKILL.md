@@ -53,7 +53,31 @@ gh pr checks <pr_number> --repo <repo> --json name,conclusion,status --jq '.'
 **If CI is passing:**
 - Proceed to review step
 
-### 3. Check if already reviewed
+### 3. AI Self-Review (Required)
+
+**CRITICAL: You must review the code changes yourself before adding LGTM.**
+
+```bash
+# Get PR diff for review
+gh pr view <pr_number> --repo <repo> --json files --jq '.files[].path' | head -20
+```
+
+Then use `read` tool to review key files:
+- Check logic correctness
+- Look for potential bugs
+- Verify error handling
+- Check testing coverage
+
+**If you find issues:**
+- Add a comment describing the issues clearly
+- Do NOT add LGTM
+- Update status to `reviewing`, step to `review_fix_needed`
+- Return, waiting for next tick to handle fixes
+
+**If code looks good:**
+- Proceed to step 4 (add LGTM)
+
+### 4. Check if already reviewed
 
 Check if an LGTM review already exists from the AI bot:
 
@@ -64,6 +88,8 @@ gh api repos/<repo>/pulls/<pr_number>/reviews --jq '.[] | select(.user.login == 
 If `APPROVED` review already exists, skip adding another one.
 
 ### 4. Add LGTM review and comment
+
+**Only add LGTM if you have reviewed the code and found no issues!**
 
 ```bash
 # Approve the PR
