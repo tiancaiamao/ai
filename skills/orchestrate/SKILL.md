@@ -11,29 +11,36 @@ Automatically analyze user tasks, determine if decomposition is needed, spawn ap
 ## ⚠️ CRITICAL RULES (READ FIRST)
 
 ```
-1. NEVER use --max-turns unless explicitly asked by user
-   → Let subagents run to completion naturally
+1. NEVER use --no-session by default
+   → Sessions are needed for debugging subagent behavior
 
-2. ALWAYS use --system-prompt @{persona-path} with appropriate persona
+2. ALWAYS use --subagent-timeout to prevent runaway subagents
+   → Recommended: 5-10 minutes for most tasks
+
+3. ALWAYS use --system-prompt @{persona-path} with appropriate persona
    → Personas are in: skills/orchestrate/references/
 
-3. ALWAYS use absolute paths for persona files
+4. ALWAYS use absolute paths for persona files
    → /Users/genius/.ai/skills/orchestrate/references/{persona}.md
 ```
 
 ## Correct Command Template
 
 ```bash
-# CORRECT ✓
-ai --mode headless --no-session --subagent \
+# CORRECT ✓ - Session enabled for debugging, timeout for safety
+ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Your task description here"
 
-# WRONG ✗ - missing persona
+# WRONG ✗ - No session = no debugging
 ai --mode headless --no-session --subagent "task"
 
-# WRONG ✗ - unnecessary --max-turns
-ai --mode headless --no-session --subagent --max-turns 20 "task"
+# WRONG ✗ - No timeout = runaway risk
+ai --mode headless --subagent "complex task"
+
+# WRONG ✗ - missing persona
+ai --mode headless --subagent --subagent-timeout 10m "task"
 ```
 
 ## When to Use
@@ -111,26 +118,28 @@ Phase 2 (implementer): Fix identified issues
 For independent tasks, run subagents in parallel:
 
 ```bash
-# Launch 3 parallel explorers
-(ai --mode headless --no-session --subagent \
+# Launch 2 parallel explorers with delay
+(ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze project A" > /tmp/a.txt) &
 
-(ai --mode headless --no-session --subagent \
+sleep 5  # ⚠️ Prevent request burst
+
+(ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze project B" > /tmp/b.txt) &
-
-(ai --mode headless --no-session --subagent \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze project C" > /tmp/c.txt) &
 
 wait
 
 # Aggregate results
-cat /tmp/a.txt /tmp/b.txt /tmp/c.txt
+cat /tmp/a.txt /tmp/b.txt
 ```
 
-**Max parallelism**: 3-4 subagents (resource limits)
+**Max parallelism**: 2 subagents (API rate limit protection)
+- ⚠️ **CRITICAL**: Avoid launching multiple subagents simultaneously
+- Add delay between launches to prevent request burst (e.g., `sleep 5`)
 
 ## Result Aggregation
 
@@ -165,12 +174,16 @@ After subagents complete, synthesize results:
 # Decomposition: 2 parallel explorers + aggregate
 
 # Launch parallel analysis
-(ai --mode headless --no-session --subagent \
+(ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling." \
   > /tmp/mc.txt) &
 
-(ai --mode headless --no-session --subagent \
+sleep 5
+
+(ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback." \
   > /tmp/omo.txt) &
@@ -189,19 +202,22 @@ echo "## Comparison\n<Key differences and similarities>"
 # User: "Add OAuth2 login to the app"
 
 # Phase 1: Research
-ai --mode headless --no-session --subagent \
+ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/researcher.md \
   "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations." \
   > /tmp/research.txt
 
 # Phase 2: Implement (pass research findings)
-ai --mode headless --no-session --subagent \
+ai --mode headless --subagent \
+  --subagent-timeout 15m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/implementer.md \
   "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)" \
   > /tmp/implement.txt
 
 # Phase 3: Review
-ai --mode headless --no-session --subagent \
+ai --mode headless --subagent \
+  --subagent-timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/reviewer.md \
   "Review OAuth2 implementation for security issues" \
   > /tmp/review.txt
@@ -212,13 +228,15 @@ ai --mode headless --no-session --subagent \
 ## Best Practices
 
 - ✅ **Always** use persona with `--system-prompt`
-- ✅ **Never** use `--max-turns` (let subagents complete naturally)
+- ✅ **Always** add `--subagent-timeout` (5-15m typical)
+- ✅ **Never** use `--no-session` (lose debugging info)
 - ✅ Use absolute paths for persona files
-- ✅ Run independent tasks in parallel
+- ✅ Run independent tasks in parallel with 5s delay
 - ✅ Pass context between sequential phases
 - ✅ Aggregate results into coherent summary
 - ❌ Don't decompose trivial tasks
-- ❌ Don't spawn >4 parallel subagents
+- ❌ Don't spawn >2 parallel subagents
+- ❌ Don't launch multiple subagents without delay (rate limit risk)
 - ❌ Don't forget to aggregate results
 
 ## Configuration
@@ -226,14 +244,17 @@ ai --mode headless --no-session --subagent \
 | Setting | Value |
 |---------|-------|
 | Persona directory | `/Users/genius/.ai/skills/orchestrate/references/` |
-| Max parallel subagents | 3-4 |
-| Default timeout | None (natural completion) |
+| Max parallel subagents | 2 (rate limit protection) |
+| Launch delay | 5s between subagents |
+| Default timeout | 10m per subagent |
+| Session | Enabled (for debugging) |
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| Subagent times out | Remove `--max-turns`, let it complete naturally |
+| Can't find session for debugging | Check `--no-session` not used. Sessions: `~/.ai/sessions/--<cwd>--/subagents/<id>/messages.jsonl` |
+| Subagent hangs/timeout | Add `--subagent-timeout 10m` to prevent runaway |
 | Poor quality output | Ensure persona is loaded via `--system-prompt` |
 | Inconsistent results | Check persona matches task type |
-| Resource exhaustion | Reduce parallel subagents to 2-3 |
+| Resource exhaustion | Reduce parallel subagents to 2, ensure 5s delay |
