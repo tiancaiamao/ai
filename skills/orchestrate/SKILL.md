@@ -37,11 +37,11 @@ User Input → Analyze Complexity → Simple? → Execute directly
 The orchestration prompt should include:
 1. The user's original task
 2. Request to analyze and decompose if needed
-3. Instructions to use agent personas from `~/.ai/skills/orchestrate/agents/`
+3. Instructions to use agent personas from `skills/orchestrate/references/`
 
 ## Agent Personas
 
-Agent personas are defined as Markdown files in `~/.ai/skills/orchestrate/agents/`:
+Agent personas are defined as Markdown files in `skills/orchestrate/references/`:
 
 | Persona File | Role | Use When |
 |--------------|------|----------|
@@ -54,7 +54,7 @@ Agent personas are defined as Markdown files in `~/.ai/skills/orchestrate/agents
 
 ```bash
 # Use --system-prompt @path to load persona file
-ai --mode headless --no-session --subagent --system-prompt @~/.ai/skills/orchestrate/agents/implementer.md "Task description"
+ai --mode headless --no-session --subagent --system-prompt @skills/orchestrate/references/implementer.md "Task description"
 ```
 
 ## Task Analysis
@@ -119,7 +119,7 @@ Build subagent command:
 ```bash
 # Template
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/<persona>.md \
+  --system-prompt @skills/orchestrate/references/<persona>.md \
   --max-turns <N> \
   "<subtask description>"
 ```
@@ -166,20 +166,17 @@ After subagents complete:
 
 # Step 1: Research
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/researcher.md \
-  --max-turns 10 \
+  --system-prompt @skills/orchestrate/references/researcher.md \
   "Research OAuth2 implementation options for Go web apps" > /tmp/research.txt
 
 # Step 2: Implement
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/implementer.md \
-  --max-turns 20 \
+  --system-prompt @skills/orchestrate/references/implementer.md \
   "Implement OAuth2 login using the research findings. Files: auth.go, oauth.go" > /tmp/implement.txt
 
 # Step 3: Review
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/reviewer.md \
-  --max-turns 10 \
+  --system-prompt @skills/orchestrate/references/reviewer.md \
   "Review the OAuth2 implementation for security issues" > /tmp/review.txt
 
 # Aggregate results
@@ -195,14 +192,12 @@ echo "=== Review ===" && cat /tmp/review.txt
 
 # Step 1: Explore to find the issue
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/explorer.md \
-  --max-turns 8 \
+  --system-prompt @skills/orchestrate/references/explorer.md \
   "Find potential memory leak sources in cache package. Look for unclosed resources, growing maps, missing cleanup." > /tmp/explore.txt
 
 # Step 2: Fix based on findings
 ai --mode headless --no-session --subagent \
-  --system-prompt @~/.ai/skills/orchestrate/agents/implementer.md \
-  --max-turns 15 \
+  --system-prompt @skills/orchestrate/references/implementer.md \
   "Fix the memory leak in cache package. Issues found: $(cat /tmp/explore.txt)" > /tmp/fix.txt
 ```
 
@@ -210,7 +205,6 @@ ai --mode headless --no-session --subagent \
 
 - ✅ Analyze task complexity first before decomposing
 - ✅ Choose persona based on subtask type
-- ✅ Set appropriate --max-turns per subtask complexity
 - ✅ Aggregate results into coherent summary
 - ✅ Let user see final result, not internal subagent outputs
 - ❌ Don't decompose trivial one-step tasks
@@ -242,8 +236,7 @@ When working:
 ## Configuration
 
 Default locations:
-- Persona directory: `~/.ai/skills/orchestrate/agents/`
-- Default max turns: 10 (research), 15 (implement), 8 (review)
+- Persona directory: `skills/orchestrate/references/`
 - Max parallel subagents: 3
 
-These can be overridden in the orchestration prompt as needed.
+Note: `--max-turns` is optional. Omit it to let subagents run until completion. Only use it when you need to limit resource usage.

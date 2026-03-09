@@ -1,4 +1,4 @@
-package agent
+package prompt
 
 // DefaultSubagentPrompt is the default system prompt used when --subagent flag is set
 // and no custom --system-prompt is provided.

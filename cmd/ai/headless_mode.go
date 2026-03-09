@@ -265,7 +265,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		systemPrompt = customSystemPrompt
 		slog.Info("Using custom system prompt", "length", len(customSystemPrompt))
 	} else if isSubagent {
-		systemPrompt = agent.DefaultSubagentPrompt
+		systemPrompt = prompt.DefaultSubagentPrompt
 		slog.Info("Using default subagent prompt")
 	} else {
 		systemPrompt = promptBuilder.Build()
