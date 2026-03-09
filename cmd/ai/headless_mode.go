@@ -101,9 +101,9 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, customSystemPrompt string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
-	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent)
+	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent, "has_custom_prompt", customSystemPrompt != "")
 
 	if len(prompts) == 0 {
 		return writeHeadlessError(output, "at least one prompt argument is required for --mode headless")
@@ -258,7 +258,30 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 			promptBuilder.SetLLMContext(wm)
 		}
 	}
-	systemPrompt := promptBuilder.Build()
+	
+	// Use custom system prompt if provided, otherwise use default
+	var systemPrompt string
+	if customSystemPrompt != "" {
+		systemPrompt = customSystemPrompt
+		slog.Info("Using custom system prompt", "length", len(customSystemPrompt))
+	} else if isSubagent {
+		// Default subagent prompt
+		systemPrompt = `You are a focused subagent assistant.
+
+Your role is to complete the specific task assigned to you by the orchestrating agent.
+
+Guidelines:
+- Complete the task efficiently and accurately
+- If you need clarification, ask the orchestrator
+- Focus on the task at hand - don't expand scope unnecessarily
+- Report results clearly and concisely
+- If you encounter blocking issues, report them immediately with details
+
+Remember: You are a subagent. The main agent will coordinate multiple subagents if needed.`
+		slog.Info("Using default subagent prompt")
+	} else {
+		systemPrompt = promptBuilder.Build()
+	}
 
 	// Create agent context
 	agentCtx := agentctx.NewAgentContext(systemPrompt)
