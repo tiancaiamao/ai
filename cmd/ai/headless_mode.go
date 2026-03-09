@@ -101,9 +101,9 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, customSystemPrompt string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, subagentTimeout time.Duration, customSystemPrompt string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
-	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent, "has_custom_prompt", customSystemPrompt != "")
+	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent, "subagent_timeout", subagentTimeout, "has_custom_prompt", customSystemPrompt != "")
 
 	if len(prompts) == 0 {
 		return writeHeadlessError(output, "at least one prompt argument is required for --mode headless")
@@ -147,22 +147,37 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	var sess *session.Session
 	var sessionID string
 	var sessionMgr *session.SessionManager
+	var subagentSessionDir string // For subagent session tracking
+	var sessionsDir string        // For tools
 
 	if noSession {
 		// Create a new temporary session without persistence
 		sess = session.NewSession("", nil) // Empty path = no persistence
 		sessionID = sess.GetID()
 		slog.Info("Created temporary session (no persistence)", "id", sessionID)
+		sessionsDir = ""
 	} else {
 		// Normal session handling with persistence
-		sessionsDir, err := session.GetDefaultSessionsDir(cwd)
+		var err error
+		sessionsDir, err = session.GetDefaultSessionsDir(cwd)
 		if err != nil {
 			return writeHeadlessError(output, fmt.Sprintf("failed to get sessions path: %v", err))
 		}
 		if sessionPath != "" {
 			sessionsDir = filepath.Dir(sessionPath)
 		}
-		sessionMgr = session.NewSessionManager(sessionsDir)
+
+		// For subagents, create session in a dedicated subdirectory
+		if isSubagent {
+			subagentSessionDir = filepath.Join(sessionsDir, "subagents")
+			if err := os.MkdirAll(subagentSessionDir, 0755); err != nil {
+				return writeHeadlessError(output, fmt.Sprintf("failed to create subagent sessions dir: %v", err))
+			}
+			sessionMgr = session.NewSessionManager(subagentSessionDir)
+			slog.Info("Using subagent session directory", "dir", subagentSessionDir)
+		} else {
+			sessionMgr = session.NewSessionManager(sessionsDir)
+		}
 
 		if sessionPath != "" {
 			sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
@@ -363,6 +378,9 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	fmt.Fprintf(output, "Session ID: %s\n", sessionID)
 	if !noSession {
 		fmt.Fprintf(output, "Session file: %s\n", sess.GetPath())
+		if isSubagent && subagentSessionDir != "" {
+			fmt.Fprintf(output, "Subagent dir: %s\n", subagentSessionDir)
+		}
 	}
 	fmt.Fprintln(output)
 
@@ -488,10 +506,34 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		}
 	}
 
-	// Wait for agent to complete
-	ag.Wait()
+	// Wait for agent to complete with optional timeout
+	var waitErr error
+	if subagentTimeout > 0 {
+		// Wait with timeout
+		done := make(chan struct{})
+		go func() {
+			ag.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			// Completed normally
+		case <-time.After(subagentTimeout):
+			slog.Error("Subagent timeout exceeded", "timeout", subagentTimeout)
+			ag.Shutdown()
+			waitErr = fmt.Errorf("subagent timeout after %s", subagentTimeout)
+			fmt.Fprintf(output, "\n=== Timeout ===\nSubagent exceeded %s timeout and was terminated.\n", subagentTimeout)
+		}
+	} else {
+		// Wait without timeout
+		ag.Wait()
+	}
 	close(shutdownEmitter)
 	<-eventEmitterDone
+
+	if waitErr != nil {
+		return writeHeadlessError(output, waitErr.Error())
+	}
 
 	sessionWriter.Close()
 	if !noSession {
