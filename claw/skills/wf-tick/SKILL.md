@@ -306,8 +306,28 @@ For each registry item:
   - Wait for human review decision
 
 - Reconcile with GitHub PR state:
+  ```bash
+  # Check PR status using gh CLI
+  PR_STATE=$(gh pr view "$pr_number" --repo "$repo" --json state -q '.state')
+  
+  # Also check if merged (state might be MERGED even if not showing as merged)
+  IS_MERGED=$(gh pr view "$pr_number" --repo "$repo" --json merged -q '.merged')
+  
+  if [ "$PR_STATE" = "MERGED" ] || [ "$IS_MERGED" = "true" ]; then
+    echo "PR #$pr_number has been merged"
+    # Update status to done
+    jq ".state = \"done\" | .step = \"merged\"" "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+      mv /tmp/status.json "$worktree/.aiclaw/status.json"
+    # Will trigger closeout on next tick
+  elif [ "$PR_STATE" = "CLOSED" ]; then
+    echo "PR #$pr_number was closed without merging"
+    jq ".state = \"failed\" | .last_error = \"PR closed without merging\"" "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+      mv /tmp/status.json "$worktree/.aiclaw/status.json"
+  fi
+  ```
   - If merged: `state=done`
   - If review requested changes: `state=reviewing`
+- If no Worker ran (no_worker=true), still do the reconciliation above.
 
 ### `reviewing`
 
@@ -320,6 +340,17 @@ For each registry item:
 - Keep `state=pr_open`, `step=ready_to_merge`
 - Wait for human to merge the PR
 - Reconcile with GitHub PR state:
+  ```bash
+  # Check PR status using gh CLI
+  PR_STATE=$(gh pr view "$pr_number" --repo "$repo" --json state -q '.state')
+  IS_MERGED=$(gh pr view "$pr_number" --repo "$repo" --json merged -q '.merged')
+  
+  if [ "$PR_STATE" = "MERGED" ] || [ "$IS_MERGED" = "true" ]; then
+    echo "PR #$pr_number has been merged"
+    jq ".state = \"done\" | .step = \"merged\"" "$worktree/.aiclaw/status.json" > /tmp/status.json && \
+      mv /tmp/status.json "$worktree/.aiclaw/status.json"
+  fi
+  ```
   - If merged: `state=done`
 
 ### `done`
