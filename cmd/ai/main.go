@@ -23,6 +23,37 @@ func parseToolsFlag(toolsFlag string) []string {
 	return result
 }
 
+// parseSystemPrompt parses the --system-prompt flag.
+// If the value starts with '@', it reads the file content.
+// Otherwise, it returns the value as-is.
+func parseSystemPrompt(systemPromptFlag string) string {
+	if systemPromptFlag == "" {
+		return ""
+	}
+	// If starts with '@', read file
+	if strings.HasPrefix(systemPromptFlag, "@") {
+		filePath := strings.TrimPrefix(systemPromptFlag, "@")
+		filePath = strings.TrimSpace(filePath)
+		if filePath == "" {
+			slog.Warn("empty file path after '@' in --system-prompt flag")
+			return ""
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			slog.Error("failed to read system-prompt file", "path", filePath, "error", err)
+			return ""
+		}
+		// Limit file size to 64KB
+		if len(content) > 64*1024 {
+			slog.Warn("system-prompt file too large, truncating to 64KB", "size", len(content))
+			content = content[:64*1024]
+		}
+		return string(content)
+	}
+	// Otherwise, use the value as-is
+	return systemPromptFlag
+}
+
 func main() {
 	mode := flag.String("mode", "", "Run mode (rpc|win|json|headless). Default: win")
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json/headless mode)")
@@ -30,9 +61,14 @@ func main() {
 	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, headless mode only)")
 	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
 	subagentFlag := flag.Bool("subagent", false, "Run as subagent with focused system prompt (headless mode only)")
+	subagentTimeoutFlag := flag.Duration("subagent-timeout", 0, "Total timeout for subagent execution (0 = unlimited, headless mode only)")
+	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
+
+	// Parse system-prompt flag: if starts with '@', read file content
+	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
 	case "rpc":
@@ -49,7 +85,7 @@ func main() {
 	case "headless":
 		prompts := flag.Args()
 		tools := parseToolsFlag(*toolsFlag)
-		if err := runHeadless(*sessionPathFlag, *noSessionFlag, *maxTurnsFlag, tools, *subagentFlag, prompts, os.Stdout); err != nil {
+		if err := runHeadless(*sessionPathFlag, *noSessionFlag, *maxTurnsFlag, tools, *subagentFlag, *subagentTimeoutFlag, systemPrompt, prompts, os.Stdout); err != nil {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}
