@@ -296,11 +296,11 @@ For each registry item:
 ### `pr_open`
 
 - If `auto_review=true` and `step=awaiting_review`:
-  - **Call wf-pr-review** (wait for CI, add LGTM, flag for human merge)
+  - **Call wf-pr-review** (wait for CI, self-review code, add LGTM or comment issues)
   - Review result determines next state:
-    - If CI passing + LGTM added: keep `state=pr_open`, `step=ready_to_merge`
-    - If CI not passing: keep `state=pr_open`, `step=waiting_ci`
-    - If review comment requested changes: `state=reviewing`, `step=review_fix`
+    - If CI passing + AI added LGTM: `state=pr_open`, `step=ready_to_merge`
+    - If CI not passing: `state=pr_open`, `step=waiting_ci`
+    - If AI found issues and commented: `state=reviewing`, `step=review_fix_needed`
 - If `auto_review=false`:
   - Keep `state=pr_open`, `step=awaiting_human_review`
   - Wait for human review decision
