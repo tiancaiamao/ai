@@ -54,7 +54,7 @@ Agent personas are defined as Markdown files in `skills/orchestrate/references/`
 
 ```bash
 # Use --system-prompt @path to load persona file
-ai --mode headless --no-session --subagent --system-prompt @skills/orchestrate/references/implementer.md "Task description"
+ai --mode headless --no-session --subagent --system-prompt @{skills-path}/orchestrate/references/implementer.md "Task description"
 ```
 
 ## Task Analysis
