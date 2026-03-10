@@ -290,43 +290,45 @@ func resolveModel(cfg *Config) llm.Model {
 		API:      cfg.API,
 	}
 
-	// 如果已经有完整配置，直接返回
-	if model.Provider != "" && model.BaseURL != "" {
-		return model
-	}
-
-	// 尝试从 ~/.aiclaw/models.json 加载模型配置
-	if cfg.ClawDir == "" {
-		return model
-	}
-
-	modelsPath := filepath.Join(cfg.ClawDir, "models.json")
-	specs, err := aiconfig.LoadModelSpecs(modelsPath)
-	if err != nil {
-		slog.Warn("[AgentLoop] Failed to load models.json", "error", err, "path", modelsPath)
-		return model
-	}
-
-	// 查找匹配的模型
-	for _, spec := range specs {
-		if spec.ID == cfg.Model {
-			if model.Provider == "" {
-				model.Provider = spec.Provider
+	// 尝试从 ~/.aiclaw/models.json 加载完整模型配置（包括 API 类型）
+	if cfg.ClawDir != "" {
+		modelsPath := filepath.Join(cfg.ClawDir, "models.json")
+		specs, err := aiconfig.LoadModelSpecs(modelsPath)
+		if err == nil {
+			// 查找匹配的模型
+			for _, spec := range specs {
+				if spec.ID == cfg.Model {
+					// 使用 models.json 中的配置补充缺失字段
+					if model.Provider == "" {
+						model.Provider = spec.Provider
+					}
+					if model.BaseURL == "" {
+						model.BaseURL = spec.BaseURL
+					}
+					// 始终使用 models.json 中的 API 类型（如果存在）
+					if spec.API != "" {
+						model.API = spec.API
+					}
+					model.ContextWindow = spec.ContextWindow
+					slog.Info("[AgentLoop] Loaded model config from models.json",
+						"id", spec.ID,
+						"provider", spec.Provider,
+						"baseUrl", spec.BaseURL,
+						"api", model.API)
+					return model
+				}
 			}
-			if model.BaseURL == "" {
-				model.BaseURL = spec.BaseURL
-			}
-			model.API = spec.API
-			model.ContextWindow = spec.ContextWindow
-			slog.Info("[AgentLoop] Found model in config",
-				"id", spec.ID,
-				"provider", spec.Provider,
-				"baseUrl", spec.BaseURL)
-			return model
+		} else {
+			slog.Warn("[AgentLoop] Failed to load models.json", "error", err, "path", modelsPath)
 		}
 	}
 
-	slog.Warn("[AgentLoop] Model not found in config, using defaults", "id", cfg.Model)
+	// 如果没有找到 models.json 或模型不在其中，使用现有配置
+	slog.Info("[AgentLoop] Using config from config.json",
+		"id", model.ID,
+		"provider", model.Provider,
+		"baseUrl", model.BaseURL,
+		"api", model.API)
 	return model
 }
 
