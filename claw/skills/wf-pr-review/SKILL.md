@@ -1,140 +1,240 @@
 ---
 name: wf-pr-review
-description: "Wait for CI to pass, add LGTM review, and flag for human merge (no auto-merge)."
+description: "Automated PR review: wait for CI, review code changes, add LGTM or comment issues. Called by wf-tick when auto_review=true."
 allowed-tools: [bash, read, write, edit, grep]
 ---
 
 # wf-pr-review
 
-Wait for CI to pass on a PR, then add LGTM review and comment that the PR is ready for human merge.
+Automated code review for pull requests. Reviews code quality, waits for CI, and adds LGTM or comments issues.
 
 ## Use When
 
-- A workflow item is in `pr_open` and needs automated review.
-- User requests: "Review PR #17" or "Review https://github.com/owner/repo/pull/17"
-- Integrated into `wf-tick` for automated review cycle.
+- A workflow item is in `pr_open` state with `step=awaiting_review`.
+- `auto_review=true` in workflow config.
+- Called by wf-tick during reconciliation.
 
 ## Required Inputs
 
-At least one of:
-
-- `pr_url` (e.g., "https://github.com/tiancaiamao/ai/pull/17")
-- `pr_number` + `repo` (e.g., 17 + "tiancaiamao/ai")
-- Just run in worktree and auto-detect from git
+- `worktree` (absolute path)
+- `pr_number` (or can be detected from git)
+- `repo` (e.g., "owner/repo")
 
 ## Procedure
 
-### 1. Resolve PR details
+### 1. Fetch PR details
 
-If only `pr_url` provided:
-```bash
-# Extract owner/repo and pr_number
-# e.g., https://github.com/tiancaiamao/ai/pull/17 → repo=tiancaiamao/ai, pr=17
-```
-
-If in worktree:
 ```bash
 cd "<worktree>"
-repo=$(gh repo view --json owner,name -q '.owner.login + "/" + .name')
-pr=$(gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number')
+
+# Get PR info
+PR_INFO=$(gh pr view <pr_number> --repo <repo> --json \
+  title,body,headRefName,baseRefName,additions,deletions,changedFiles,files,commits)
+
+# Get changed files
+CHANGED_FILES=$(gh pr diff <pr_number> --repo <repo>)
 ```
 
-### 2. Check CI status
+### 2. Wait for CI (optional, configurable)
 
 ```bash
-# Get CI checks status
-gh pr checks <pr_number> --repo <repo> --json name,conclusion,status --jq '.'
+# Check CI status
+CI_STATUS=$(gh pr checks <pr_number> --repo <repo> --json status --jq '.status')
+
+if [ "$CI_STATUS" = "pending" ]; then
+  echo "CI still running, waiting..."
+  # Option 1: Wait with timeout
+  # Option 2: Return and retry next tick
+  # Default: Skip CI wait, proceed with review
+fi
 ```
 
-**If CI is not passing:**
-- Still running or pending: return early, will retry on next tick
-- Failed: add comment noting CI failure, return early
+### 3. Review code changes
 
-**If CI is passing:**
-- Proceed to review step
+Review task prompt:
 
-### 3. AI Self-Review (Required)
+```
+You are reviewing PR #<pr_number>: <title>
 
-**CRITICAL: You must review the code changes yourself before adding LGTM.**
+Changed files:
+<list of changed files with additions/deletions>
 
-```bash
-# Get PR diff for review
-gh pr view <pr_number> --repo <repo> --json files --jq '.files[].path' | head -20
+Diff:
+<diff content>
+
+Review checklist:
+1. Code quality: Is the code clean, readable, and follows project conventions?
+2. Logic correctness: Does the implementation match the requirements?
+3. Error handling: Are edge cases and errors handled properly?
+4. Tests: Are there adequate tests for the changes?
+5. Documentation: Is the code properly documented?
+6. Security: Are there any security concerns?
+7. Performance: Are there any performance issues?
+
+Your task:
+1. Read each changed file
+2. Analyze the implementation
+3. Check for issues or improvements
+4. If no issues found: Respond with "LGTM" and a brief summary
+5. If issues found: List each issue with file:line and suggested fix
+
+Response format (LGTM):
+LGTM
+Summary: <brief summary of changes>
+Confidence: <high/medium/low>
+
+Response format (Issues found):
+ISSUES_FOUND
+1. <file>:<line> - <issue description>
+   Suggested fix: <fix>
+2. ...
 ```
 
-Then use `read` tool to review key files:
-- Check logic correctness
-- Look for potential bugs
-- Verify error handling
-- Check testing coverage
+### 4. Post review result
 
-**If you find issues:**
-- Add a comment describing the issues clearly
-- Do NOT add LGTM
-- Update status to `reviewing`, step to `review_fix_needed`
-- Return, waiting for next tick to handle fixes
-
-**If code looks good:**
-- Proceed to step 4 (add LGTM)
-
-### 4. Check if already reviewed
-
-Check if an LGTM review already exists from the AI bot:
-
+**If LGTM**:
 ```bash
-gh api repos/<repo>/pulls/<pr_number>/reviews --jq '.[] | select(.user.login == "ai-claw[bot]" or .user.login == "ai-claw") | .state'
+# Add LGTM review
+gh pr review <pr_number> --repo <repo> --approve --body "🤖 Automated Review: LGTM
+
+Summary: <summary>
+Confidence: <confidence>
+
+Ready for human review."
 ```
 
-If `APPROVED` review already exists, skip adding another one.
-
-### 4. Add LGTM review and comment
-
-**Only add LGTM if you have reviewed the code and found no issues!**
-
+**If issues found**:
 ```bash
-# Approve the PR
-gh pr review <pr_number> --repo <repo> --approve --body "LGTM 🎉
+# Add review comments
+gh pr review <pr_number> --repo <repo> --request-changes --body "🤖 Automated Review: Issues found
 
-CI passed. Ready for human merge."
+<list of issues>
 
-# Also add a comment for visibility
-gh pr comment <pr_number> --repo <repo> --body "CI passed, LGTM added. Ready for human merge."
+Please address these issues before merging."
 ```
 
-### 5. Update status (if integrated with workflow)
+### 5. Update workflow status
 
-If called from `wf-tick` for a workflow item:
-- Update `.aiclaw/status.json` with review result
-- Set `state=pr_open`, `step=ready_to_merge`
+Update `.aiclaw/status.json`:
 
-## Example Usage
-
-### Simple usage (auto-detect)
-```bash
-# User asks: "Review the current PR"
-# Agent detects PR from git/gh and performs review
+**If LGTM**:
+```json
+{
+  "state": "pr_open",
+  "step": "ready_to_merge",
+  "review_result": "approved",
+  "review_summary": "<summary>",
+  "review_confidence": "<confidence>",
+  "updated_at": "<now>"
+}
 ```
 
-### With PR URL
-```bash
-# User asks: "Review https://github.com/tiancaiamao/ai/pull/17"
-# Agent extracts info and reviews
+**If issues found**:
+```json
+{
+  "state": "reviewing",
+  "step": "review_fix_needed",
+  "review_result": "changes_requested",
+  "review_issues": ["<issue1>", "<issue2>"],
+  "updated_at": "<now>"
+}
 ```
 
-### With PR number and repo
+## Integration with wf-tick
+
+```
+pr_open (step=awaiting_review)
+  → wf-tick checks auto_review=true
+  → calls wf-pr-review
+  ↓
+  ├─ LGTM → state=pr_open, step=ready_to_merge (wait for human merge)
+  └─ Issues → state=reviewing (wf-address-comment handles fixes)
+```
+
+## Configuration
+
+Review behavior can be configured in `~/.aiclaw/workflows/config.json`:
+
+```json
+{
+  "review": {
+    "wait_for_ci": false,
+    "ci_timeout_minutes": 10,
+    "confidence_threshold": "medium",
+    "skip_patterns": ["*.md", "*.txt"],
+    "max_diff_size": 10000
+  }
+}
+```
+
+## Idempotency
+
+- Check if review already posted before posting again
+- Use consistent review body format for detection
+- Don't duplicate reviews on re-run
+
 ```bash
-# User asks: "Review PR #17 in tiancaiamao/ai"
-# Agent reviews the specified PR
+# Check for existing automated review
+EXISTING_REVIEW=$(gh pr view <pr> --repo <repo> --json reviews --jq \
+  '.reviews[] | select(.body | contains("🤖 Automated Review"))')
+
+if [ -n "$EXISTING_REVIEW" ]; then
+  echo "Automated review already exists, skipping"
+  exit 0
+fi
+```
+
+## Examples
+
+### Example 1: Simple LGTM
+
+```bash
+$ wf-pr-review worktree=/path/to/worktree pr_number=48 repo=tiancaiamao/ai
+
+Fetching PR #48 details...
+Changed files: 3 (+150, -20)
+
+Reviewing code changes...
+- Makefile: ✓ Clean, follows conventions
+- .github/workflows/test.yml: ✓ Correct CI configuration
+- README.md: ✓ Documentation updated
+
+Result: LGTM
+Summary: Adds Makefile with build/test targets and updates CI to use make commands
+Confidence: high
+
+Posting review...
+✓ Posted LGTM review to PR #48
+✓ Updated status to ready_to_merge
+```
+
+### Example 2: Issues Found
+
+```bash
+$ wf-pr-review worktree=/path/to/worktree pr_number=49 repo=tiancaiamao/ai
+
+Fetching PR #49 details...
+Changed files: 2 (+80, -5)
+
+Reviewing code changes...
+- config.go: ⚠ Missing error handling on line 42
+- main.go: ⚠ Hardcoded value should be configurable
+
+Result: ISSUES_FOUND
+1. config.go:42 - Error return value not checked
+   Suggested fix: Add if err != nil { return err }
+2. main.go:78 - Hardcoded timeout value
+   Suggested fix: Make configurable via flag or config
+
+Posting review...
+✓ Posted changes_requested review to PR #49
+✓ Updated status to reviewing
 ```
 
 ## Guardrails
 
-- Always check if review already exists (idempotent)
+- Never auto-merge PRs
+- Always wait for human final approval
+- Don't review files matching skip_patterns
+- Fail gracefully on large diffs (skip with warning)
 - Don't post duplicate reviews
-- Never auto-merge - only add review and comment
-- Only add review when CI is passing
-- Be specific in comments about CI status
-
-## Output
-
-Review is posted directly to GitHub as an approval with LGTM comment. The PR remains open for human merge decision.

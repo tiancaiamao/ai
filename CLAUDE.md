@@ -124,7 +124,7 @@ If a trace event isn't appearing:
 For debugging event emission or runtime behavior:
 
 1. Make code changes (e.g., add new trace event)
-2. Rebuild: `go build -o bin/ai ./cmd/ai`
+2. Rebuild: `go install ./cmd/ai`
 3. Restart agent to pick up changes
 4. Trigger the behavior (e.g., run a tool with large output)
 5. Check trace file for expected events

@@ -189,6 +189,157 @@ For each registry item:
 6. Write status file.
 7. Mirror summary state back to registry item.
 
+## Subagent Invocation Commands
+
+**重要**: wf-tick 通过调用其他技能来推进任务。以下是具体的调用命令。
+
+### Invoke wf-worker (启动实现/修复)
+
+```bash
+# 1. 读取任务信息
+ISSUE_NUMBER=$(jq -r '.issue_number // 0' "$worktree/.aiclaw/status.json")
+ISSUE_URL=$(jq -r '.issue_url // ""' "$worktree/.aiclaw/status.json")
+BRANCH=$(jq -r '.branch // ""' "$worktree/.aiclaw/status.json")
+
+# 2. 获取 issue 内容作为任务描述
+if [ -n "$ISSUE_URL" ]; then
+  ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json title,body --jq '.title + "\n\n" + .body')
+else
+  ISSUE_BODY="Implement the task"
+fi
+
+# 3. 确定 task_type
+# - implement: 首次实现
+# - fix_review: 修复 review 问题
+TASK_TYPE="implement"  # 或 "fix_review"
+
+# 4. 后台启动 subagent (参考 /skill:subagent 最佳实践)
+nohup ai --mode headless --subagent \
+  --subagent-timeout 30m \
+  --system-prompt "You are a focused implementer. Complete the task efficiently.
+Work in directory: $worktree
+Branch: $BRANCH
+
+When done:
+1. Run tests to verify
+2. Commit changes
+3. Write result to $worktree/.aiclaw/result.json with format:
+{\"ok\": true, \"summary\": \"...\", \"next_state\": \"pr_open\"}" \
+  "Task: $ISSUE_BODY
+
+Working directory: $worktree
+Branch: $BRANCH
+
+Complete the implementation and write result.json when done." \
+  > "$worktree/.aiclaw/worker.log" 2>&1 &
+
+WORKER_PID=$!
+echo $WORKER_PID > "$worktree/.aiclaw/worker.pid"
+
+# 5. 更新状态
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+jq --arg pid "$WORKER_PID" \
+   --arg now "$NOW" \
+   --arg task_type "$TASK_TYPE" \
+   '.state = "running" | .step = "implement" | .task_type = $task_type | .started_at = $now | .heartbeat_at = $now | .subagent.pid = ($pid | tonumber)' \
+   "$worktree/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "$worktree/.aiclaw/status.json"
+
+# 6. 占用 slot
+acquire_slot "$workflow_id" "$worktree"
+
+echo "Started worker for $workflow_id with PID $WORKER_PID"
+```
+
+### Invoke wf-push (推送 PR)
+
+```bash
+# 前置条件: result.json 存在且 ok=true
+if [ -f "$worktree/.aiclaw/result.json" ] && [ "$(jq -r '.ok' "$worktree/.aiclaw/result.json")" = "true" ]; then
+  
+  BRANCH=$(jq -r '.branch // ""' "$worktree/.aiclaw/status.json")
+  ISSUE_NUMBER=$(jq -r '.issue_number // 0' "$worktree/.aiclaw/status.json")
+  REPO=$(jq -r '.repo // ""' "$worktree/.aiclaw/status.json")
+  
+  # 检查 PR 是否已存在
+  EXISTING_PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --json number --jq '.[0].number // empty')
+  
+  if [ -n "$EXISTING_PR" ]; then
+    echo "PR #$EXISTING_PR already exists for branch $BRANCH"
+    PR_NUMBER=$EXISTING_PR
+  else
+    # 推送分支
+    cd "$worktree"
+    git push -u origin "$BRANCH"
+    
+    # 创建 PR
+    PR_URL=$(gh pr create --repo "$REPO" --head "$BRANCH" --base main \
+      --title "[$(basename $BRANCH)] Implementation" \
+      --body "Closes #$ISSUE_NUMBER")
+    PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+    
+    echo "Created PR #$PR_NUMBER"
+  fi
+  
+  # 更新状态
+  jq --arg pr "$PR_NUMBER" --arg url "https://github.com/$REPO/pull/$PR_NUMBER" \
+    '.state = "pr_open" | .step = "created" | .pr_number = ($pr | tonumber) | .pr_url = $url' \
+    "$worktree/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "$worktree/.aiclaw/status.json"
+fi
+```
+
+### Invoke wf-pr-review (自动 Review)
+
+```bash
+# 参考 /skill:subagent 的最佳实践
+PR_NUMBER=$(jq -r '.pr_number // 0' "$worktree/.aiclaw/status.json")
+REPO=$(jq -r '.repo // ""' "$worktree/.aiclaw/status.json")
+
+if [ "$auto_review" = "true" ] && [ "$PR_NUMBER" -gt 0 ]; then
+  # 获取 PR diff
+  gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/pr_$PR_NUMBER.diff
+  
+  # 后台启动 review subagent
+  (ai --mode headless --subagent \
+    --subagent-timeout 15m \
+    --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
+    "Review PR #$PR_NUMBER: $(cat /tmp/pr_$PR_NUMBER.diff)" \
+    > "$worktree/.aiclaw/review_result.txt" 2>&1) &
+  
+  REVIEW_PID=$!
+  echo "Started review for PR #$PR_NUMBER with PID $REVIEW_PID"
+  
+  # 等待完成后处理结果...
+fi
+```
+
+### Invoke wf-closeout (清理)
+
+```bash
+# 仅在 state=done 时调用
+ISSUE_NUMBER=$(jq -r '.issue_number // 0' "$worktree/.aiclaw/status.json")
+REPO=$(jq -r '.repo // ""' "$worktree/.aiclaw/status.json")
+
+# 1. 关闭 issue (如果还没关闭)
+ISSUE_STATE=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json state --jq '.state')
+if [ "$ISSUE_STATE" != "CLOSED" ]; then
+  gh issue close "$ISSUE_NUMBER" --repo "$REPO" --comment "Completed via workflow"
+fi
+
+# 2. 移除 worktree (可选，保留历史)
+# cd "$repo_path" && git worktree remove "$worktree" --force
+
+# 3. 从 registry 移除
+jq --arg id "$workflow_id" \
+  '(.items |= map(select(.workflow_id != $id)))' \
+  ~/.aiclaw/workflows/registry.json > /tmp/registry.json && \
+  mv /tmp/registry.json ~/.aiclaw/workflows/registry.json
+
+# 4. 释放 slot
+release_slot "$workflow_id"
+
+echo "Closeout complete for $workflow_id"
+```
+
 ## Transition Rules
 
 ### `todo`
@@ -327,6 +478,61 @@ For each registry item:
   ```
   - If merged: `state=done`
   - If review requested changes: `state=reviewing`
+
+- **Check for unaddressed review comments** (COMMENTED type counts as changes requested):
+  ```bash
+  # Get last addressed commit and timestamp from status.json
+  LAST_ADDRESSED_COMMIT=$(jq -r '.last_addressed_commit // ""' "$worktree/.aiclaw/status.json")
+  LAST_PUSH_TIME=$(jq -r '.last_push_time // ""' "$worktree/.aiclaw/status.json")
+  
+  # Fetch review comments (line-level comments)
+  COMMENTS=$(gh api "repos/$repo/pulls/$pr_number/comments" --jq '.[]')
+  
+  # Filter to only new comments since last push
+  NEW_COMMENTS=$(echo "$COMMENTS" | jq --arg last_time "$LAST_PUSH_TIME" \
+    'select(.created_at > $last_time)')
+  
+  if [ -n "$NEW_COMMENTS" ]; then
+    echo "Found new review comments since last push"
+    jq ".state = \"reviewing\" | .step = \"review_fix_needed\" | .last_error = \"\"" \
+      "$worktree/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "$worktree/.aiclaw/status.json"
+  fi
+  
+  # Also check review-level comments
+  REVIEWS=$(gh pr view "$pr_number" --repo "$repo" --json reviews --jq '.reviews[]')
+  
+  for review in $REVIEWS; do
+    REVIEW_STATE=$(echo "$review" | jq -r '.state')
+    REVIEW_SUBMITTED=$(echo "$review" | jq -r '.submitted_at // ""')
+    AUTHOR=$(echo "$review" | jq -r '.author.login')
+    
+    # Skip if submitted before last push
+    if [ -n "$LAST_PUSH_TIME" ] && [ "$REVIEW_SUBMITTED" \< "$LAST_PUSH_TIME" ]; then
+      continue
+    fi
+    
+    # CHANGES_REQUESTED from anyone means needs attention
+    if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ]; then
+      echo "Found CHANGES_REQUESTED from $AUTHOR"
+      jq ".state = \"reviewing\" | .step = \"review_fix_needed\" | .last_error = \"\"" \
+        "$worktree/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "$worktree/.aiclaw/status.json"
+      break
+    fi
+    
+    # COMMENTED type also triggers reviewing (for single-account workflow)
+    if [ "$REVIEW_STATE" = "COMMENTED" ]; then
+      REVIEW_BODY=$(echo "$review" | jq -r '.body // ""')
+      if [ -n "$REVIEW_BODY" ] && ! echo "$REVIEW_BODY" | grep -qiE "^(lgtm|approved|looks good|👍|✓)"; then
+        echo "Found COMMENTED review with actionable feedback from $AUTHOR"
+        jq ".state = \"reviewing\" | .step = \"review_fix_needed\" | .last_error = \"\"" \
+          "$worktree/.aiclaw/status.json" > /tmp/status.json && mv /tmp/status.json "$worktree/.aiclaw/status.json"
+        break
+      fi
+    fi
+  done
+  ```
+  - If merged: `state=done`
+  - If review comments found: `state=reviewing`
 - If no Worker ran (no_worker=true), still do the reconciliation above.
 
 ### `reviewing`

@@ -127,6 +127,20 @@ Schema:
   - `updated_at` and `heartbeat_at` to now (UTC ISO-8601)
   - `last_error = ""`
   - `subagent.pid = 0` (manual finalize path)
+  - `last_push_time = now` (for multi-round review loop)
+  - `last_addressed_commit = $(git rev-parse HEAD)` (track which commit addressed comments)
+
+```bash
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CURRENT_COMMIT=$(git rev-parse HEAD)
+
+jq --arg now "$NOW" --arg commit "$CURRENT_COMMIT" \
+   '.state = "pr_open" | .step = "awaiting_review" | 
+    .updated_at = $now | .heartbeat_at = $now |
+    .last_push_time = $now | .last_addressed_commit = $commit |
+    .last_error = "" | .subagent.pid = 0' \
+   .aiclaw/status.json > /tmp/status.json && mv /tmp/status.json .aiclaw/status.json
+```
 
 7. Upsert global registry (`update_registry=true`).
 

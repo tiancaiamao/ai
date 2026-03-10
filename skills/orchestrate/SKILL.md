@@ -24,39 +24,19 @@ Automatically analyze user tasks, determine if decomposition is needed, spawn ap
    → /Users/genius/.ai/skills/orchestrate/references/{persona}.md
 ```
 
-## Correct Command Template
+## Subagent 调用
 
-```bash
-# CORRECT ✓ - Session enabled for debugging, timeout for safety
-ai --mode headless --subagent \
-  --subagent-timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Your task description here"
+**重要**: 所有 subagent 调用请参考 `/skill:subagent` 技能的最佳实践。
 
-# WRONG ✗ - No session = no debugging
-ai --mode headless --no-session --subagent "task"
+核心要点：
+- **必须**使用 persona：`--system-prompt @{persona-path}`
+- **必须**设置 timeout：`--subagent-timeout 10m`
+- **必须**后台运行并收集结果（bash 工具有 30s 超时限制）
+- **不要**使用 `--no-session`
 
-# WRONG ✗ - No timeout = runaway risk
-ai --mode headless --subagent "complex task"
+Persona 路径: `/Users/genius/.ai/skills/orchestrate/references/{persona}.md`
 
-# WRONG ✗ - missing persona
-ai --mode headless --subagent --subagent-timeout 10m "task"
-```
-
-## When to Use
-
-- **Complex multi-step tasks** that would benefit from decomposition
-- **Tasks requiring different skills** (research + implementation + review)
-- **Large implementation projects** that need organized execution
-- **Parallel analysis** of multiple independent targets
-
-## How It Works
-
-```
-User Input → Analyze Complexity → Simple? → Execute directly
-                            ↓
-                     Complex? → Decompose → Select Personas → Spawn Subagents → Aggregate Results
-```
+详细调试、监控、结果收集方法见 subagent 技能的 **Debugging & Monitoring** 章节。
 
 ## Persona Selection (MANDATORY)
 
@@ -115,31 +95,13 @@ Phase 2 (implementer): Fix identified issues
 
 ## Parallel Execution
 
-For independent tasks, run subagents in parallel:
+For independent tasks, run subagents in parallel (参考 `/skill:subagent`):
 
-```bash
-# Launch 2 parallel explorers with delay
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze project A" > /tmp/a.txt) &
-
-sleep 5  # ⚠️ Prevent request burst
-
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze project B" > /tmp/b.txt) &
-
-wait
-
-# Aggregate results
-cat /tmp/a.txt /tmp/b.txt
-```
-
-**Max parallelism**: 2 subagents (API rate limit protection)
-- ⚠️ **CRITICAL**: Avoid launching multiple subagents simultaneously
-- Add delay between launches to prevent request burst (e.g., `sleep 5`)
+关键点：
+- 最大并行数: 2 subagents（API rate limit 保护）
+- 启动间隔: 5s delay（防止请求突发）
+- 后台运行: `(...) &` + `> /tmp/out.txt`
+- 收集结果: `wait` + `cat /tmp/*.txt`
 
 ## Result Aggregation
 

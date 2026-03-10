@@ -230,6 +230,108 @@ cat ~/.ai/sessions/--<project>--/subagents/abc123/messages.jsonl | jq .
 kill <PID>
 ```
 
+## Debugging & Monitoring Subagents
+
+### Problem: Bash Timeout vs Subagent Timeout
+
+When calling subagent via bash tool, the bash tool has its own timeout (typically 30s). Even if subagent has `--subagent-timeout 10m`, bash will timeout first.
+
+**Solution: Run subagent in background and collect results**
+
+```bash
+# 1. Start subagent in background, output to file
+(ai --mode headless --subagent \
+  --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
+  --subagent-timeout 10m \
+  "Review this code: $(cat /tmp/diff.txt)" > /tmp/subagent_output.txt 2>&1) &
+
+SUBAGENT_PID=$!
+echo "Subagent started with PID: $SUBAGENT_PID"
+```
+
+### Monitor Subagent Status
+
+```bash
+# 1. Check if process is still alive
+ps -p $SUBAGENT_PID -o pid,ppid,%cpu,%mem,etime,stat,command
+
+# 2. Watch output file in real-time
+tail -f /tmp/subagent_output.txt
+
+# 3. Monitor session file (find latest)
+SESSION_FILE=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+if [ -n "$SESSION_FILE" ]; then
+  tail -f "$SESSION_FILE" | jq -r 'select(.role=="assistant") | .content[]? | select(.type=="text") | .text'
+fi
+```
+
+### Check Subagent Progress
+
+```bash
+# Count turns completed (from session file)
+SESSION_FILE=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+echo "Turns: $(grep -c '"role":"assistant"' "$SESSION_FILE" 2>/dev/null || echo 0)"
+
+# Check if subagent is making progress (file size changing)
+watch -n 2 "ls -lh /tmp/subagent_output.txt"
+
+# View last N lines of output
+tail -20 /tmp/subagent_output.txt
+```
+
+### Collect Results
+
+```bash
+# Wait for completion and get exit code
+wait $SUBAGENT_PID
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+  echo "Subagent completed successfully"
+  cat /tmp/subagent_output.txt
+else
+  echo "Subagent failed with exit code: $EXIT_CODE"
+  # Check session for error details
+  cat "$SESSION_FILE" | jq -r 'select(.role=="assistant") | .content[]? | select(.type=="text") | .text' | tail -50
+fi
+```
+
+### Kill Stuck Subagent
+
+```bash
+# Check if still running
+if ps -p $SUBAGENT_PID > /dev/null 2>&1; then
+  echo "Subagent still running, killing..."
+  kill $SUBAGENT_PID
+  # Force kill if needed
+  sleep 2
+  kill -9 $SUBAGENT_PID 2>/dev/null
+fi
+```
+
+### Full Debugging Script
+
+```bash
+#!/bin/bash
+# debug_subagent.sh - Monitor and debug a running subagent
+
+echo "=== Running Subagents ==="
+ps aux | grep "ai.*--subagent" | grep -v grep
+
+echo -e "\n=== Latest Session Files ==="
+ls -lt ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -5
+
+echo -e "\n=== Latest Session Activity ==="
+LATEST=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+if [ -n "$LATEST" ]; then
+  echo "File: $LATEST"
+  echo "Size: $(ls -lh "$LATEST" | awk '{print $5}')"
+  echo "Messages: $(wc -l < "$LATEST")"
+  echo -e "\nLast assistant message:"
+  tac "$LATEST" | grep -m1 '"role":"assistant"' | jq -r '.content[]? | select(.type=="text") | .text' | head -20
+fi
+```
+
 ## Common Pitfalls
 
 | Problem | Cause | Solution |
@@ -238,6 +340,8 @@ kill <PID>
 | Subagent hangs | No timeout set | Add `--subagent-timeout 10m` |
 | Process stuck | Unexpected error | Use `ps` + `kill` to terminate |
 | Can't find session | Wrong directory | Check `Subagent dir:` in output |
+| Bash timeout | Bash tool has 30s limit | Run in background with `&` and collect to file |
+| Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
 
 ## Best Practices
 
