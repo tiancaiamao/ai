@@ -1212,7 +1212,11 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	cmd := strings.ToLower(parts[0])
 
 	switch cmd {
-	case "all", "on":
+	case "on":
+		// "on" enables the default working set (not all events, to avoid high-frequency noise)
+		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"on"}}, "")
+	case "all":
+		// "all" enables ALL known events, including high-frequency ones
 		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"all"}}, "")
 	case "default":
 		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"default"}}, "")

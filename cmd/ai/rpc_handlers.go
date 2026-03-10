@@ -1185,11 +1185,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		op := normalized[0]
 		switch op {
-		case "default":
+		case "on":
+			// "on" enables the default working set (not all events, to avoid high-frequency noise)
 			return traceevent.ResetToDefaultEvents(), nil
-		case "all", "on":
+		case "all":
+			// "all" enables ALL known events, including high-frequency ones
 			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
 			return applyExpanded(expanded, true), nil
+		case "default":
+			return traceevent.ResetToDefaultEvents(), nil
 		case "off", "none":
 			traceevent.DisableAllEvents()
 			return []string{}, nil
