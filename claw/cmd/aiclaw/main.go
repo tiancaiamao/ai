@@ -493,6 +493,13 @@ func loadConfig(path string) (*Config, error) {
 }
 
 // validate ensures required configuration fields are present
+// 
+// Why load from config instead of hardcoding defaults?
+// 1. User flexibility: Different users may prefer different models (e.g., glm-4-flash, gpt-4, claude)
+// 2. Environment-specific: Development vs production may use different providers
+// 3. Cost control: Users can choose cheaper/faster models based on their needs
+// 4. No surprises: Explicit config prevents unexpected behavior from silent defaults
+// 5. Multi-tenant: Different deployments can use different models without code changes
 func (c *Config) validate() error {
 	// Model ID is required - should be configured in ~/.aiclaw/config.json
 	if c.Model.ID == "" {
