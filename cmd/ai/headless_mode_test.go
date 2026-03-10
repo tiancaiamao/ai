@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
+	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/tools"
 )
@@ -23,7 +24,7 @@ func TestRegisterHeadlessToolsIncludesContextDecisionTool(t *testing.T) {
 		128000,
 	)
 
-	registerHeadlessTools(registry, ws, compactor)
+	registerHeadlessTools(registry, ws, compactor, &config.Config{})
 
 	found := false
 	for _, tool := range registry.All() {

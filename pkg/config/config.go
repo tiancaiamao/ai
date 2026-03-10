@@ -29,6 +29,9 @@ type Config struct {
 	// Tool output configuration
 	ToolOutput *ToolOutputConfig `json:"toolOutput,omitempty"`
 
+	// Edit tool configuration
+	Edit *EditConfig `json:"edit,omitempty"`
+
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 
@@ -60,7 +63,13 @@ type ConcurrencyConfig struct {
 
 // ToolOutputConfig contains tool output truncation settings.
 type ToolOutputConfig struct {
-	MaxChars int `json:"maxChars,omitempty"` // Maximum characters to keep (0 = default)
+	MaxChars  int  `json:"maxChars,omitempty"`  // Maximum characters to keep (0 = default)
+	HashLines bool `json:"hashLines,omitempty"` // Enable hashline mode for read tool
+}
+
+// EditConfig contains edit tool settings.
+type EditConfig struct {
+	Mode string `json:"mode,omitempty"` // Edit mode: "replace" (default) or "hashline"
 }
 
 const (
@@ -80,7 +89,15 @@ func DefaultConcurrencyConfig() *ConcurrencyConfig {
 // DefaultToolOutputConfig returns default tool output truncation configuration.
 func DefaultToolOutputConfig() *ToolOutputConfig {
 	return &ToolOutputConfig{
-		MaxChars: defaultToolOutputMaxChars,
+		MaxChars:  defaultToolOutputMaxChars,
+		HashLines: false,
+	}
+}
+
+// DefaultEditConfig returns default edit tool configuration.
+func DefaultEditConfig() *EditConfig {
+	return &EditConfig{
+		Mode: "replace", // Default to replace mode
 	}
 }
 
