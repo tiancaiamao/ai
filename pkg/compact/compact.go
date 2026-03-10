@@ -1,7 +1,6 @@
 package compact
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +9,9 @@ import (
 
 	"log/slog"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -252,98 +253,11 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 	}, nil
 }
 
-const summarizationSystemPrompt = `You are a context summarization assistant for a coding agent.
-
-<critical>
-MANDATORY SECTIONS — Every summary MUST contain these sections:
-- Current Task (MOST IMPORTANT)
-- Files Involved (exact paths)
-- Key Code Elements (names, purposes)
-- Errors Encountered (exact messages, status)
-- Decisions Made (what + why)
-- What's Complete (finished items)
-- Next Steps (immediate actions)
-- User Requirements (explicit constraints)
-
-MUST PRESERVE:
-- EXACT file paths, error messages, function names
-- Decisions with reasons (crucial for continuity)
-- Completed items (never drop "What's Complete")
-- User's explicit requirements
-
-DISCARD:
-- Pleasantries, redundant explanations, abandoned approaches
-</critical>
-
-Output ONLY the structured summary. Do NOT continue the conversation. This matters.`
-
-const summarizationPrompt = `Summarize this coding conversation for context preservation.
-
-## Current Task (MOST IMPORTANT)
-[What is being actively worked on RIGHT NOW? Be specific about the exact goal.]
-
-## Files Involved
-- path/to/file: [status/changes]
-- path/to/another: [status/changes]
-
-## Key Code Elements
-- Functions: [names and purposes]
-- Variables: [names and types]
-- Classes/Types: [names and purposes]
-
-## Errors Encountered
-- Error: [EXACT message] — Status: [resolved/unresolved]
-
-## Decisions Made
-- Decision: [what] — Reason: [why]
-
-## What's Complete
-[Finished items - DO NOT omit this section]
-1. [completed task]
-2. [completed task]
-
-## Next Steps
-1. [immediate action]
-2. [following action]
-
-## User Requirements
-[Explicit constraints from user]
-
-<critical>
-- Preserve EXACT paths, errors, names (use quotes)
-- Keep "What's Complete" even if empty
-- Keep under 800 tokens
-- Omit pleasantries
-</critical>`
-
-const updateSummarizationPrompt = `Update the existing summary with NEW conversation messages.
-
-<previous-summary>
-%s
-</previous-summary>
-
-<new-messages>
-%s
-</new-messages>
-
-<critical>
-MANDATORY — ALWAYS preserve these sections from previous summary:
-- "Decisions Made" — NEVER drop, ADD new decisions
-- "What's Complete" — NEVER drop, ADD new completions
-- "Files Involved" — ADD new files, UPDATE statuses
-- "Errors Encountered" — UPDATE statuses, ADD new errors
-
-UPDATE RULES:
-1. ADD new discoveries, errors, decisions to existing sections
-2. MOVE completed "Next Steps" to "What's Complete"
-3. UPDATE "Current Task" if focus changed
-4. MARK errors as "resolved" if fixed
-5. PRESERVE exact paths, errors, names — do NOT paraphrase
-
-Keep ALL sections. If empty, write "None yet."
-</critical>
-
-Output the updated summary using the same format. This matters.`
+var (
+	summarizationSystemPrompt = prompt.CompactSystemPrompt()
+	summarizationPrompt       = prompt.CompactSummarizePrompt()
+	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
+)
 
 // GenerateSummary generates a structured summary of messages using the LLM.
 func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
