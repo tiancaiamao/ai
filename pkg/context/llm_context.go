@@ -91,51 +91,15 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 	return fmt.Sprintf(`# LLM Context
 
 <!--
-这是你的外部记忆。每次请求时，这个文件的内容会被加载到你的 prompt 中。
-你自己决定记住什么、丢弃什么。
+这是你的外部记忆。
+使用 llm_context_update tool 更新此文件：%s
 
-使用 write tool 更新此文件：%s
-下次请求时，你会看到自己写的内容。
+这个文件的内容会：
+1. 在你调用 llm_context_update 工具后，通过 tool output 留在上下文窗口中
+2. 在 compact 后被注入到 prompt 中恢复记忆
 
 这是 YOUR memory。你控制你看到的内容。
-
-⚠️ 路径规则（非常重要）：
-- 以 system prompt 中 LLM Context 的 Path / Detail dir 为准
-- 不要使用相对于当前工作目录的路径（例如 llm-context/overview.md）
 -->
-
-## 上下文管理指南
-
-每次请求会附带 <context_meta> 元信息：
-- tokens_used: 已使用的 token 数
-- tokens_max: 最大 token 数  
-- tokens_percent: 使用百分比
-- messages_in_history: 历史消息数量
-- llm_context_size: llm context 大小（字节）
-
-### llm_context_decision 工具使用
-
-当需要管理 context 时，使用 llm_context_decision tool：
-
-**决策选项：**
-- TRUNCATE: 删除旧的 tool outputs（推荐批量删除 50-100 条）
-- COMPACT: 总结对话历史
-- SKIP: 推迟决策
-
-**如何批量 TRUNCATE：**
-1. 从消息历史中查找 tool call ID（格式：<agent:tool id="call_function_xxx" ...>）
-2. 收集多个 ID（一次删除 50-100 条，不要只删 1-2 条）
-3. 传入 truncate_ids 数组
-
-**示例：**
-{"decision": "truncate", "reasoning": "清理 80 条旧的 tool outputs", "truncate_ids": ["call_xxx1", "call_xxx2", ...80+ IDs...]}
-
-### 决策建议
-
-- stale outputs > 20 → TRUNCATE（优先批量删除）
-- tokens > 65%% → COMPACT
-- tokens 50-65%% → COMPACT 或 TRUNCATE
-- 其他情况 → 根据需要决定
 
 ## 当前任务
 <!-- 用户让你做什么？当前进度？ -->
@@ -153,14 +117,10 @@ func GetOverviewTemplate(overviewPath, DetailDir string) string {
 <!-- 待处理的问题或阻塞项 -->
 
 
-## 最近操作
-<!-- 最近几步做了什么（可选，用于快速回顾） -->
-
-
 <!--
 提示：
 - 需要保存详细内容时，写入 %s 目录
-- 路径优先使用 system prompt 给出的绝对路径
+- 使用 llm_context_update tool 更新此文件
 -->
 `, overviewPath, DetailDir)
 }
@@ -412,7 +372,7 @@ func (wm *LLMContext) buildReminderHTML(meta ContextMeta) string {
 <!--
 ⚠️ WORKING MEMORY UPDATE NEEDED
 
-你已经连续 %d 轮没有更新 llm context 了（动态阈值：%d 轮）。
+你已经连续 %d 轮没有调用 llm_context_update 了（动态阈值：%d 轮）。
 当前上下文状态:
 - Token 使用: %.0f%% (%d / %d)
 - 历史消息: %d 条
