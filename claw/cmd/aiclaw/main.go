@@ -484,7 +484,30 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Apply default model configuration if not specified
+	cfg.applyDefaults()
+
 	return &cfg, nil
+}
+
+// applyDefaults applies default values to missing model configuration
+func (c *Config) applyDefaults() {
+	// Use glm-4-flash as default model (fast and capable)
+	if c.Model.ID == "" {
+		c.Model.ID = "glm-4-flash"
+	}
+	// Default provider is zai (Z.AI)
+	if c.Model.Provider == "" {
+		c.Model.Provider = "zai"
+	}
+	// Default base URL for Z.AI API
+	if c.Model.BaseURL == "" {
+		c.Model.BaseURL = "https://api.z.ai/api/coding/paas/v4"
+	}
+	// Default API type
+	if c.Model.API == "" {
+		c.Model.API = "openai-completions"
+	}
 }
 
 // resolveAPIKey 从 auth.json 或环境变量解析 API Key
