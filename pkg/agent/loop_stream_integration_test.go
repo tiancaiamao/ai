@@ -118,8 +118,8 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		t.Fatalf("expected assistant text 'ok', got %q", got)
 	}
 
-	if len(observedMessages) < 3 {
-		t.Fatalf("expected at least 3 messages (system + runtime user + user), got %d", len(observedMessages))
+	if len(observedMessages) < 2 {
+		t.Fatalf("expected at least 2 messages (system + runtime user), got %d", len(observedMessages))
 	}
 	if observedMessages[0].Role != "system" {
 		t.Fatalf("expected first message to be system, got %q", observedMessages[0].Role)
@@ -140,11 +140,101 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	if err := json.Unmarshal(observedMessages[1].Content, &runtimeContent); err != nil {
 		t.Fatalf("failed to parse runtime content: %v", err)
 	}
-	if !strings.Contains(runtimeContent, "<llm_context>") {
-		t.Fatalf("expected runtime user content to include llm_context, got: %q", runtimeContent)
+	// After the refactor, llm_context is NOT injected in normal requests
+	// It's only injected after compact for recovery
+	if strings.Contains(runtimeContent, "<llm_context>") {
+		t.Fatalf("expected runtime user content to NOT include llm_context in normal request, got: %q", runtimeContent)
 	}
+	// runtime_state should still be injected
 	if !strings.Contains(runtimeContent, "<runtime_state>") {
 		t.Fatalf("expected runtime user content to include runtime_state, got: %q", runtimeContent)
+	}
+}
+
+func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
+	sessionDir := t.TempDir()
+	wm := agentctx.NewLLMContext(sessionDir)
+	if _, err := wm.Load(); err != nil {
+		t.Fatalf("failed to initialize llm context: %v", err)
+	}
+
+	var observedMessages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("failed to decode request JSON: %v", err)
+		}
+		observedMessages = req.Messages
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":2,\"total_tokens\":14}}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("static system prompt")
+	agentCtx.LLMContext = wm
+	// Simulate post-compact recovery state
+	agentCtx.PostCompactRecovery = true
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("continue"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey:        "test-key",
+		ThinkingLevel: "high",
+		ContextWindow: 128000,
+	}
+
+	stream := newTestAgentEventStream()
+	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+	if got := strings.TrimSpace(msg.ExtractText()); got != "ok" {
+		t.Fatalf("expected assistant text 'ok', got %q", got)
+	}
+
+	// After compact, llm_context SHOULD be injected
+	var foundLLMContext bool
+	for _, observed := range observedMessages {
+		if observed.Role != "user" {
+			continue
+		}
+		var content string
+		if err := json.Unmarshal(observed.Content, &content); err != nil {
+			continue
+		}
+		if strings.Contains(content, "<llm_context>") {
+			foundLLMContext = true
+			break
+		}
+	}
+
+	if !foundLLMContext {
+		t.Fatalf("expected llm_context to be injected after compact (PostCompactRecovery=true)")
+	}
+
+	// Verify flag was reset
+	if agentCtx.PostCompactRecovery {
+		t.Fatalf("expected PostCompactRecovery to be reset to false after injection")
 	}
 }
 
