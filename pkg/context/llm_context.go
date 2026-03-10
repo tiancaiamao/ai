@@ -447,7 +447,7 @@ rounds_since_update: %d
 Resident prompt path: %s
 Detail directory: %s
 
-To update: use the write tool to modify the llm context file.
+To update: use the llm_context_update tool to modify the llm context.
 This reminder will stop appearing once you update your llm context.`, meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory, rounds, wm.overviewPath, wm.detailPath)
 }
 
@@ -710,7 +710,7 @@ func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string) stri
 		}
 	}
 
-	return fmt.Sprintf(`[system message by agent, not from real user]
+	return fmt.Sprintf(`<agent:remind comment="system message by agent, not from real user">
 
 💡 Context management required: tokens at %d%%, %d stale tool outputs.
 
