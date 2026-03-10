@@ -1187,7 +1187,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		switch op {
 		case "default":
 			return traceevent.ResetToDefaultEvents(), nil
-		case "all":
+		case "all", "on":
 			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
 			return applyExpanded(expanded, true), nil
 		case "off", "none":

@@ -1212,7 +1212,7 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	cmd := strings.ToLower(parts[0])
 
 	switch cmd {
-	case "all":
+	case "all", "on":
 		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"all"}}, "")
 	case "default":
 		return p.sendCommand("set_trace_events", map[string]any{"events": []string{"default"}}, "")

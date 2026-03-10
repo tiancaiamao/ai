@@ -1504,6 +1504,7 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 //	/traceevent              - list enabled events
 //	/traceevent default      - reset to default set
 //	/traceevent all          - enable all events
+//	/traceevent on           - enable all events (alias for 'all')
 //	/traceevent off          - disable all events
 //	/traceevent <events>     - set specific events (e.g., llm, tool, event)
 //	/traceevent enable <events>   - enable additional events
@@ -1528,7 +1529,7 @@ func (a *AgentLoop) cmdTraceevent(args string) string {
 		events := traceevent.ResetToDefaultEvents()
 		return fmt.Sprintf("Reset to default events (%d): %s", len(events), strings.Join(events, ", "))
 
-	case "all":
+	case "all", "on":
 		traceevent.DisableAllEvents()
 		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
 		for _, eventName := range expanded {
