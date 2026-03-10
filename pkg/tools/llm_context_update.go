@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // LLMContextUpdateTool allows LLM to update its persistent context.
@@ -62,9 +63,20 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 	// Dual-write: persist to overview.md file via LLMContext
 	if agentCtx.LLMContext != nil {
 		if err := agentCtx.LLMContext.WriteContent(content); err != nil {
+			traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update_failed",
+				traceevent.Field{Key: "error", Value: err.Error()},
+				traceevent.Field{Key: "content_len", Value: len(content)},
+			)
 			return nil, fmt.Errorf("failed to write context: %w", err)
 		}
+		// Mark that LLM updated context this turn (for reminder tracking)
+		agentCtx.LLMContext.SetUpdatedOverview()
 	}
+
+	// Log successful update
+	traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update",
+		traceevent.Field{Key: "content_len", Value: len(content)},
+	)
 
 	// Return simple confirmation (tool output stays in context window)
 	return []agentctx.ContentBlock{

@@ -435,7 +435,7 @@ func (wm *LLMContext) buildReminderHTML(meta ContextMeta) string {
 3. 删除过时信息，保留最近决策
 4. 将详细讨论移到 detail/ 目录
 
-使用 write tool 更新: %s
+使用 llm_context_update tool 更新: %s
 -->`,
 		wm.roundsSinceUpdate,
 		wm.nextReminderRound,
