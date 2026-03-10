@@ -40,8 +40,10 @@ When `context_management.action_required` is not "none":
 - Higher score = better self-management
 
 **Agent Metadata Tags** (for truncate):
-- `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, age rank 5
-- `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated
+- `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, CAN be truncated
+- `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated, DO NOT include in truncate_ids
+
+**IMPORTANT:** Only pass IDs with `stale="N"` attribute to truncate_ids. Never pass IDs with `truncated="true"`.
 
 ### Hard Rules
 

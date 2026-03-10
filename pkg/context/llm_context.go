@@ -724,9 +724,10 @@ messages_in_history: %d
 Current state suggests: %s (RECOMMEND ACTION NOW!)
 
 HOW TO TRUNCATE (IMPORTANT):
-1. Find tool call IDs from message history - look for patterns like: <agent:tool id="call_xxx" ...
-2. Get many IDs (批量清理！一次清理 50-100 条，不要只清理 1-2 条)
-3. Pass them as comma-separated string to truncate_ids parameter
+1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" ...
+2. Skip IDs with truncated="true" - already truncated
+3. Get many IDs (批量清理！一次清理 50-100 条)
+4. Pass as comma-separated string to truncate_ids
 
 EXAMPLE (copy and modify):
 decision: "truncate"
