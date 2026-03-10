@@ -1,3 +1,4 @@
 bin/*
 .worktrees/
 .aiclaw/
+coverage.out
