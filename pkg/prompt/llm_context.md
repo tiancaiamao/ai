@@ -31,6 +31,14 @@ When `context_management.action_required` is not "none":
 | `compact` | Topic shift, phase completed, usage moderate |
 | `skip` | Low pressure (<25%), set `skip_turns` 1-30 |
 
+**skip_turns meaning:**
+- Higher values (15-30): You promise to be proactive, fewer reminders
+- Lower values (1-5): Uncertain situation, more frequent reminders
+
+**Proactive score:**
+- Tracked across session: proactive decisions vs reminded decisions
+- Higher score = better self-management
+
 **Agent Metadata Tags** (for truncate):
 - `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, age rank 5
 - `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated

@@ -42,15 +42,14 @@ When runtime_state shows context_management.action_required is not "none", you M
 DECISION OPTIONS:
 - "truncate": Remove specific tool outputs (provide truncate_ids)
 - "compact": Run compaction to summarize history (provide compact_confidence)
-- "both": Do both truncate and compact
 - "skip": Defer for skip_turns (1-30, higher = you promise to be proactive)
 
 PARAMETERS:
-- decision (required): "truncate", "compact", "both", or "skip"
+- decision (required): "truncate", "compact", or "skip"
 - reasoning (required): Explain WHY you made this decision
 - skip_turns (optional, for decision="skip"): How many turns to skip (1-30, default=10)
-- truncate_ids (optional, for decision="truncate"/"both"): Tool call IDs to truncate
-- compact_confidence (optional, for decision="compact"/"both"): Confidence 0-100
+- truncate_ids (optional, for decision="truncate"): Tool call IDs to truncate
+- compact_confidence (optional, for decision="compact"): Confidence 0-100
 
 EXAMPLES:
 # Truncate old outputs
@@ -78,7 +77,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"decision": map[string]any{
 				"type":        "string",
-				"enum":        []string{"truncate", "compact", "both", "skip"},
+				"enum":        []string{"truncate", "compact", "skip"},
 				"description": "What action to take",
 			},
 			"reasoning": map[string]any{
@@ -100,7 +99,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 				"type":        "integer",
 				"minimum":     0,
 				"maximum":     100,
-				"description": "Confidence for COMPACT (0-100), if decision='compact' or 'both'",
+				"description": "Confidence for COMPACT (0-100), if decision='compact'",
 			},
 		},
 		"required": []string{"decision", "reasoning"},
@@ -172,7 +171,7 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			traceevent.Field{Key: "was_reminded", Value: wasReminded},
 		)
 
-	case "truncate", "both":
+	case "truncate":
 		truncatedCount := 0
 		// Support both string (comma-separated) and array formats for backwards compatibility
 		var idsToTruncate []string
@@ -210,31 +209,17 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			result.WriteString("No truncate_ids provided, skipped truncation.\n")
 		}
 
-		if decision == "both" {
-			// Fall through to compact
-		} else {
-			// Record decision
-			agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
-			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
-				traceevent.Field{Key: "truncated_count", Value: truncatedCount},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
-			)
-		}
-
-		if decision != "both" {
-			break
-		}
-		fallthrough
+		// Record decision
+		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
+		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
+			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
+			traceevent.Field{Key: "was_reminded", Value: wasReminded},
+		)
 
 	case "compact":
 		if t.compactor == nil {
 			result.WriteString("Compactor not available, skipped compaction.\n")
-			// Record decision with correct action type
-			action := "compact"
-			if decision == "both" {
-				action = "both"
-			}
-			agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
+			agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
 			break
 		}
 
@@ -266,12 +251,7 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			result.WriteString("Compaction returned no changes.\n")
 		}
 
-		// Record decision with correct action type
-		action := "compact"
-		if decision == "both" {
-			action = "both"
-		}
-		agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
+		agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
 
 	default:
 		return nil, fmt.Errorf("invalid decision: %s", decision)

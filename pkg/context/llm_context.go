@@ -700,13 +700,13 @@ func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string) stri
 		}
 		exampleIDs := make([]string, limit)
 		for i := 0; i < limit; i++ {
-			exampleIDs[i] = fmt.Sprintf(`"%s"`, availableToolIDs[i])
+			exampleIDs[i] = availableToolIDs[i]
 		}
 		if len(availableToolIDs) > limit {
-			truncateIDsExample = fmt.Sprintf(`["%s", ...%d more IDs available in tool outputs]`,
-				strings.Join(exampleIDs, `", "`), len(availableToolIDs)-limit)
+			truncateIDsExample = fmt.Sprintf(`"%s, ...%d more"`,
+				strings.Join(exampleIDs, ", "), len(availableToolIDs)-limit)
 		} else {
-			truncateIDsExample = fmt.Sprintf(`[%s]`, strings.Join(exampleIDs, ", "))
+			truncateIDsExample = fmt.Sprintf(`"%s"`, strings.Join(exampleIDs, ", "))
 		}
 	}
 
@@ -724,12 +724,14 @@ messages_in_history: %d
 Current state suggests: %s (RECOMMEND ACTION NOW!)
 
 HOW TO TRUNCATE (IMPORTANT):
-1. Find tool call IDs from message history - look for patterns like: <agent:tool id="call_function_xxx" ...
+1. Find tool call IDs from message history - look for patterns like: <agent:tool id="call_xxx" ...
 2. Get many IDs (批量清理！一次清理 50-100 条，不要只清理 1-2 条)
-3. Pass them as truncate_ids array
+3. Pass them as comma-separated string to truncate_ids parameter
 
 EXAMPLE (copy and modify):
-{"decision": "truncate", "reasoning": "Cleaning up %d stale tool outputs to free space", "truncate_ids": %s}
+decision: "truncate"
+reasoning: "Cleaning up %d stale tool outputs"
+truncate_ids: %s
 
 If you don't know IDs, use decision="skip" instead.`,
 		int(meta.TokensPercent), staleCount,

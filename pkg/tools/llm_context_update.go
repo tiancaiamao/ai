@@ -69,8 +69,10 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 			)
 			return nil, fmt.Errorf("failed to write context: %w", err)
 		}
-		// Mark that LLM updated context this turn (for reminder tracking)
+		// Mark that LLM updated context this turn (for decision reminder tracking)
 		agentCtx.LLMContext.SetUpdatedOverview()
+		// Mark updated to reset roundsSinceUpdate counter (stops reminder loop)
+		agentCtx.LLMContext.MarkUpdatedAfterToolCall(5)
 	}
 
 	// Log successful update
