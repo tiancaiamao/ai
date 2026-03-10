@@ -273,6 +273,8 @@ func runInnerLoop(
 					agentCtx.LastCompactionSummary = compacted.Summary
 					// Note: SaveCompactionSummary is now handled inside Session.Compact()
 				}
+				// Set flag to inject overview.md for recovery on next request
+				agentCtx.PostCompactRecovery = true
 				after := len(agentCtx.Messages)
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
@@ -324,6 +326,8 @@ func runInnerLoop(
 						agentCtx.LastCompactionSummary = compacted.Summary
 						// Note: SaveCompactionSummary is now handled inside Session.Compact()
 					}
+					// Set flag to inject overview.md for recovery on next request
+					agentCtx.PostCompactRecovery = true
 					compactionSpan.AddField("after_messages", len(compacted.Messages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
@@ -414,22 +418,6 @@ func runInnerLoop(
 			if agentCtx.LLMContext != nil {
 				toolCalls := msg.ExtractToolCalls()
 				for _, tc := range toolCalls {
-					if strings.EqualFold(tc.Name, "write") {
-						// Check if the path matches llm context overview
-						if path, ok := tc.Arguments["path"].(string); ok {
-							// Convert to absolute path for comparison
-							absPath := filepath.Clean(path)
-							wmPath := agentCtx.LLMContext.GetPath()
-							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
-								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
-								agentCtx.LLMContext.SetUpdatedOverview()
-								// Reset write tool loop guard counter since this is productive work
-								if loopGuard != nil {
-									loopGuard.ResetToolCount("write")
-								}
-							}
-						}
-					}
 					// Track if LLM called llm_context_decision tool
 					if strings.EqualFold(tc.Name, "llm_context_decision") {
 						agentCtx.LLMContext.MarkDecisionMade()
@@ -684,43 +672,57 @@ func streamAssistantResponse(
 	}
 
 	// Build runtime appendix (llm context + context meta) as a user message
-	// injected right after system prompt. Keeping system prompt stable improves
-	// provider-side prompt caching opportunities.
+	// injected BEFORE the last user message for better LLM attention.
+	// Placing runtime_state close to the decision point improves context management.
+	//
+	// NOTE: overview.md content is NOT injected by default. It's only injected:
+	// 1. After compact (PostCompactRecovery = true) for recovery
+	// 2. The LLM should use llm_context_update tool to record state, which stays in tool output
 	if agentCtx.LLMContext != nil {
 		// Track that we're starting a new LLM request round
 		agentCtx.LLMContext.IncrementRound()
 
-		// Invalidate cache to ensure we read the latest content
-		agentCtx.LLMContext.InvalidateCache()
-		content, err := agentCtx.LLMContext.Load()
-		if err != nil {
-			slog.Warn("[Loop] Failed to load llm context", "error", err)
-		} else {
-			// Refresh meta from approximate current context state.
-			tokensMax := 128000 // default context window
-			if config.ContextWindow > 0 {
-				tokensMax = config.ContextWindow
+		// Determine if we should inject overview.md content
+		// Only inject after compact for recovery
+		var content string
+		if agentCtx.PostCompactRecovery {
+			// Invalidate cache to ensure we read the latest content
+			agentCtx.LLMContext.InvalidateCache()
+			loadedContent, err := agentCtx.LLMContext.Load()
+			if err != nil {
+				slog.Warn("[Loop] Failed to load llm context for recovery", "error", err)
+			} else {
+				content = loadedContent
 			}
-			tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
-			agentCtx.LLMContext.UpdateMeta(
-				tokensUsedApprox,
-				tokensMax,
-				len(agentCtx.Messages),
-			)
-
-			meta := agentCtx.LLMContext.GetMeta()
-
-			runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
-			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
-			if runtimeAppendix != "" {
-				runtimeMsg := llm.LLMMessage{
-					Role:    "user",
-					Content: runtimeAppendix,
-				}
-				llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
-			}
-
+			// Reset the flag after injection
+			agentCtx.PostCompactRecovery = false
 		}
+
+		// Refresh meta from approximate current context state.
+		tokensMax := 128000 // default context window
+		if config.ContextWindow > 0 {
+			tokensMax = config.ContextWindow
+		}
+		tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
+		agentCtx.LLMContext.UpdateMeta(
+			tokensUsedApprox,
+			tokensMax,
+			len(agentCtx.Messages),
+		)
+
+		meta := agentCtx.LLMContext.GetMeta()
+
+		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
+		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
+		if runtimeAppendix != "" {
+			runtimeMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: runtimeAppendix,
+			}
+			// Insert runtime_state before the last user message for better attention
+			llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
+		}
+
 	}
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
@@ -1494,6 +1496,36 @@ func normalizePathForContains(value string) string {
 	value = filepath.Clean(value)
 	value = strings.ReplaceAll(value, "\\", "/")
 	return strings.ToLower(value)
+}
+
+// insertBeforeLastUserMessage inserts a message before the last user message in the slice.
+// If there are no user messages, it appends to the end.
+// This is used to place runtime_state close to the decision point for better LLM attention.
+func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the last user message index
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, append to end
+	if lastUserIdx == -1 {
+		return append(messages, msg)
+	}
+
+	// Insert before the last user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:lastUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[lastUserIdx:]...)
+	return result
 }
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {

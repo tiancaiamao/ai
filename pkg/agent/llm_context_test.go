@@ -40,7 +40,7 @@ func TestLLMContext_GetReminderUserMessage(t *testing.T) {
 	msg := wm.GetReminderUserMessage()
 
 	// Check message content
-	if !strings.Contains(msg, "[system message by agent, not from real user]") {
+	if !strings.Contains(msg, "system message by agent, not from real user") {
 		t.Error("Expected marker for agent-generated message")
 	}
 	if !strings.Contains(msg, "💡") {

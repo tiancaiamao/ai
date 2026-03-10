@@ -9,7 +9,7 @@ build:
 
 # Run tests with coverage
 test:
-	go test -short ./... -race -coverprofile=coverage.out -covermode=atomic
+	go test -short ./... -race -coverprofile=coverage.out -covermode=atomic -timeout 30s
 
 # Run vet
 vet:

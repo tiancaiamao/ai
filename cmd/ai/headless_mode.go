@@ -95,6 +95,7 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 	registry.Register(tools.NewEditTool(ws))
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 	if compactor != nil {
+		registry.Register(tools.NewLLMContextUpdateTool())
 		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
 	}
 }
