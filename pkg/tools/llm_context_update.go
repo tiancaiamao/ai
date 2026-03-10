@@ -27,7 +27,7 @@ func (t *LLMContextUpdateTool) Description() string {
 
 Provide markdown content with your current context (task, decisions, known info, pending items).
 
-The tool output stays in context window. It also persists to ` + "`overview.md`" + ` for recovery after compact.
+The tool output stays in context window and persists for recovery after compact.
 
 Do not repeat the full contents after calling — the tool already displays it.`
 }

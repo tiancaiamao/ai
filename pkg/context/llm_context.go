@@ -432,7 +432,7 @@ func (wm *LLMContext) GetReminderUserMessage() string {
 	rounds := wm.roundsSinceUpdate
 	wm.mu.RUnlock()
 
-	return fmt.Sprintf(`[system message by agent, not from real user]
+	return fmt.Sprintf(`<agent:remind comment="system message by agent, not from real user">
 
 💡 Remember to update your llm context to track progress.
 
