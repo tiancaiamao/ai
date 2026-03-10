@@ -2,3 +2,4 @@ bin/*
 .worktrees/
 .aiclaw/
 coverage.out
+ai
