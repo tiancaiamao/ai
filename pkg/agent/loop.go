@@ -418,22 +418,6 @@ func runInnerLoop(
 			if agentCtx.LLMContext != nil {
 				toolCalls := msg.ExtractToolCalls()
 				for _, tc := range toolCalls {
-					if strings.EqualFold(tc.Name, "write") {
-						// Check if the path matches llm context overview
-						if path, ok := tc.Arguments["path"].(string); ok {
-							// Convert to absolute path for comparison
-							absPath := filepath.Clean(path)
-							wmPath := agentCtx.LLMContext.GetPath()
-							if absPath == wmPath || filepath.Base(absPath) == agentctx.OverviewFile {
-								agentCtx.LLMContext.MarkUpdatedAfterToolCall(10)
-								agentCtx.LLMContext.SetUpdatedOverview()
-								// Reset write tool loop guard counter since this is productive work
-								if loopGuard != nil {
-									loopGuard.ResetToolCount("write")
-								}
-							}
-						}
-					}
 					// Track if LLM called llm_context_decision tool
 					if strings.EqualFold(tc.Name, "llm_context_decision") {
 						agentCtx.LLMContext.MarkDecisionMade()
