@@ -222,20 +222,19 @@ func (b *Builder) buildLLMContextSection() string {
 	// detailDir := b.llmContext.GetDetailDir()
 
 	// Use context meta if available
-	contextMetaSection := ""
 	if b.contextMeta != "" {
-		contextMetaSection = fmt.Sprintf(`
+		return llmContextPrompt + `
 
 ---
 
 <context_meta>
-%s
+` + b.contextMeta + `
 </context_meta>
 
-💡 Remember to update your llm context to track progress.`, b.contextMeta)
+💡 Remember to update your llm context to track progress.`
 	}
 
-	return fmt.Sprintf(llmContextPrompt, contextMetaSection)
+	return llmContextPrompt
 }
 
 func (b *Builder) buildToolingSection() string {
