@@ -69,17 +69,23 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 
 func compactionSummaryMessage(entry *SessionEntry) agentctx.AgentMessage {
 	var text string
-	if entry.SummaryFile != nil {
-		// New format: show file reference
-		text = "The conversation history before this point was compacted into a summary file.\n\n<summary_ref>\n" + *entry.SummaryFile + "\n</summary_ref>"
-	} else if entry.Summary != "" {
-		// Old format: show inline summary
+	if entry.Summary != "" {
+		// Inline summary (old format or when file read fails)
 		text = CompactionSummaryPrefix + entry.Summary + CompactionSummarySuffix
 	} else {
 		// No content
 		return agentctx.AgentMessage{}
 	}
 	return summaryMessage(text, entry.Timestamp)
+}
+
+// compactionSummaryMessageWithContent creates a summary message with the given content.
+// This is used when the summary content is read from a file reference.
+func compactionSummaryMessageWithContent(summary, timestamp string) agentctx.AgentMessage {
+	if summary == "" {
+		return agentctx.AgentMessage{}
+	}
+	return summaryMessage(CompactionSummaryPrefix+summary+CompactionSummarySuffix, timestamp)
 }
 
 func branchSummaryMessage(summary, timestamp string) agentctx.AgentMessage {

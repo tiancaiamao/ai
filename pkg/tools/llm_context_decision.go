@@ -238,6 +238,9 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			agentCtx.LastCompactionSummary = compacted.Summary
 			after := len(compacted.Messages)
 
+			// Set flag to inject overview.md for recovery on next request
+			agentCtx.PostCompactRecovery = true
+
 			result.WriteString(fmt.Sprintf("Compacted messages: %d → %d (%d removed).\n", before, after, before-after))
 			result.WriteString(fmt.Sprintf("Confidence: %d%%\n", confidence))
 
