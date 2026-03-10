@@ -7,27 +7,25 @@ import (
 	"testing"
 )
 
-func TestConfigApplyDefaults(t *testing.T) {
+func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name           string
 		configJSON     string
+		expectError    bool
 		expectedID     string
 		expectedProvider string
 		expectedBaseURL string
 		expectedAPI    string
 	}{
 		{
-			name: "empty model section",
+			name: "empty model section - should error",
 			configJSON: `{
 				"model": {}
 			}`,
-			expectedID:     "glm-4-flash",
-			expectedProvider: "zai",
-			expectedBaseURL: "https://api.z.ai/api/coding/paas/v4",
-			expectedAPI:    "openai-completions",
+			expectError: true,
 		},
 		{
-			name: "no model section",
+			name: "no model section - should error",
 			configJSON: `{
 				"channels": {
 					"feishu": {
@@ -35,38 +33,29 @@ func TestConfigApplyDefaults(t *testing.T) {
 					}
 				}
 			}`,
-			expectedID:     "glm-4-flash",
-			expectedProvider: "zai",
-			expectedBaseURL: "https://api.z.ai/api/coding/paas/v4",
-			expectedAPI:    "openai-completions",
+			expectError: true,
 		},
 		{
-			name: "partial model section - only ID",
+			name: "partial model section - only ID - should error",
 			configJSON: `{
 				"model": {
 					"id": "custom-model"
 				}
 			}`,
-			expectedID:     "custom-model",
-			expectedProvider: "zai",
-			expectedBaseURL: "https://api.z.ai/api/coding/paas/v4",
-			expectedAPI:    "openai-completions",
+			expectError: true,
 		},
 		{
-			name: "partial model section - ID and provider",
+			name: "partial model section - ID and provider - should error",
 			configJSON: `{
 				"model": {
 					"id": "test-model",
 					"provider": "test-provider"
 				}
 			}`,
-			expectedID:     "test-model",
-			expectedProvider: "test-provider",
-			expectedBaseURL: "https://api.z.ai/api/coding/paas/v4",
-			expectedAPI:    "openai-completions",
+			expectError: true,
 		},
 		{
-			name: "full model section - no defaults applied",
+			name: "full model section - no error",
 			configJSON: `{
 				"model": {
 					"id": "my-model",
@@ -75,10 +64,26 @@ func TestConfigApplyDefaults(t *testing.T) {
 					"api": "my-api"
 				}
 			}`,
+			expectError: false,
 			expectedID:     "my-model",
 			expectedProvider: "my-provider",
 			expectedBaseURL: "https://my.api.com",
 			expectedAPI:    "my-api",
+		},
+		{
+			name: "full model section without api - should default api",
+			configJSON: `{
+				"model": {
+					"id": "my-model",
+					"provider": "my-provider",
+					"baseUrl": "https://my.api.com"
+				}
+			}`,
+			expectError: false,
+			expectedID:     "my-model",
+			expectedProvider: "my-provider",
+			expectedBaseURL: "https://my.api.com",
+			expectedAPI:    "openai-completions",
 		},
 	}
 
@@ -89,30 +94,39 @@ func TestConfigApplyDefaults(t *testing.T) {
 				t.Fatalf("Failed to parse config: %v", err)
 			}
 
-			cfg.applyDefaults()
+			err := cfg.validate()
 
-			if cfg.Model.ID != tt.expectedID {
-				t.Errorf("Expected Model.ID = %q, got %q", tt.expectedID, cfg.Model.ID)
-			}
-			if cfg.Model.Provider != tt.expectedProvider {
-				t.Errorf("Expected Model.Provider = %q, got %q", tt.expectedProvider, cfg.Model.Provider)
-			}
-			if cfg.Model.BaseURL != tt.expectedBaseURL {
-				t.Errorf("Expected Model.BaseURL = %q, got %q", tt.expectedBaseURL, cfg.Model.BaseURL)
-			}
-			if cfg.Model.API != tt.expectedAPI {
-				t.Errorf("Expected Model.API = %q, got %q", tt.expectedAPI, cfg.Model.API)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
+				if cfg.Model.ID != tt.expectedID {
+					t.Errorf("Expected Model.ID = %q, got %q", tt.expectedID, cfg.Model.ID)
+				}
+				if cfg.Model.Provider != tt.expectedProvider {
+					t.Errorf("Expected Model.Provider = %q, got %q", tt.expectedProvider, cfg.Model.Provider)
+				}
+				if cfg.Model.BaseURL != tt.expectedBaseURL {
+					t.Errorf("Expected Model.BaseURL = %q, got %q", tt.expectedBaseURL, cfg.Model.BaseURL)
+				}
+				if cfg.Model.API != tt.expectedAPI {
+					t.Errorf("Expected Model.API = %q, got %q", tt.expectedAPI, cfg.Model.API)
+				}
 			}
 		})
 	}
 }
 
-func TestLoadConfigWithDefaults(t *testing.T) {
+func TestLoadConfigWithValidation(t *testing.T) {
 	// Create a temporary config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
 
-	// Test 1: Config without model section
+	// Test 1: Config without model section - should error
 	configWithoutModel := `{
 		"channels": {
 			"feishu": {
@@ -126,21 +140,11 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 	}
 
 	cfg, err := loadConfig(configPath)
-	if err != nil {
-		t.Fatalf("loadConfig failed: %v", err)
+	if err == nil {
+		t.Errorf("Expected error for config without model section, got nil")
 	}
 
-	if cfg.Model.ID != "glm-4-flash" {
-		t.Errorf("Expected default Model.ID = 'glm-4-flash', got %q", cfg.Model.ID)
-	}
-	if cfg.Model.Provider != "zai" {
-		t.Errorf("Expected default Model.Provider = 'zai', got %q", cfg.Model.Provider)
-	}
-	if cfg.Model.BaseURL != "https://api.z.ai/api/coding/paas/v4" {
-		t.Errorf("Expected default Model.BaseURL, got %q", cfg.Model.BaseURL)
-	}
-
-	// Test 2: Config with partial model section
+	// Test 2: Config with partial model section - should error
 	configWithPartialModel := `{
 		"model": {
 			"id": "custom-model"
@@ -152,18 +156,11 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 	}
 
 	cfg, err = loadConfig(configPath)
-	if err != nil {
-		t.Fatalf("loadConfig failed: %v", err)
+	if err == nil {
+		t.Errorf("Expected error for partial model section, got nil")
 	}
 
-	if cfg.Model.ID != "custom-model" {
-		t.Errorf("Expected Model.ID = 'custom-model', got %q", cfg.Model.ID)
-	}
-	if cfg.Model.Provider != "zai" {
-		t.Errorf("Expected default Model.Provider = 'zai', got %q", cfg.Model.Provider)
-	}
-
-	// Test 3: Config with full model section - defaults should not override
+	// Test 3: Config with full model section - should succeed
 	configWithFullModel := `{
 		"model": {
 			"id": "my-model",
@@ -189,5 +186,32 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 	}
 	if cfg.Model.BaseURL != "https://my.api.com" {
 		t.Errorf("Expected Model.BaseURL = 'https://my.api.com', got %q", cfg.Model.BaseURL)
+	}
+	// API should default to openai-completions
+	if cfg.Model.API != "openai-completions" {
+		t.Errorf("Expected Model.API = 'openai-completions', got %q", cfg.Model.API)
+	}
+
+	// Test 4: Config with explicit API - should preserve it
+	configWithAPI := `{
+		"model": {
+			"id": "my-model",
+			"provider": "my-provider",
+			"baseUrl": "https://my.api.com",
+			"api": "custom-api"
+		}
+	}`
+
+	if err := os.WriteFile(configPath, []byte(configWithAPI), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err = loadConfig(configPath)
+	if err != nil {
+		t.Fatalf("loadConfig failed: %v", err)
+	}
+
+	if cfg.Model.API != "custom-api" {
+		t.Errorf("Expected Model.API = 'custom-api', got %q", cfg.Model.API)
 	}
 }

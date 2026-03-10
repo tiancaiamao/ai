@@ -484,30 +484,33 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Apply default model configuration if not specified
-	cfg.applyDefaults()
+	// Validate required model configuration is present from config.json
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
 }
 
-// applyDefaults applies default values to missing model configuration
-func (c *Config) applyDefaults() {
-	// Use glm-4-flash as default model (fast and capable)
+// validate ensures required configuration fields are present
+func (c *Config) validate() error {
+	// Model ID is required - should be configured in ~/.aiclaw/config.json
 	if c.Model.ID == "" {
-		c.Model.ID = "glm-4-flash"
+		return fmt.Errorf("model.id is required in config.json")
 	}
-	// Default provider is zai (Z.AI)
+	// Provider is required - should be configured in ~/.aiclaw/config.json
 	if c.Model.Provider == "" {
-		c.Model.Provider = "zai"
+		return fmt.Errorf("model.provider is required in config.json")
 	}
-	// Default base URL for Z.AI API
+	// BaseURL is required - should be configured in ~/.aiclaw/config.json
 	if c.Model.BaseURL == "" {
-		c.Model.BaseURL = "https://api.z.ai/api/coding/paas/v4"
+		return fmt.Errorf("model.baseUrl is required in config.json")
 	}
-	// Default API type
+	// API type is optional, default to openai-completions if not specified
 	if c.Model.API == "" {
 		c.Model.API = "openai-completions"
 	}
+	return nil
 }
 
 // resolveAPIKey 从 auth.json 或环境变量解析 API Key
