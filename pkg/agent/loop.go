@@ -672,8 +672,8 @@ func streamAssistantResponse(
 	}
 
 	// Build runtime appendix (llm context + context meta) as a user message
-	// injected right after system prompt. Keeping system prompt stable improves
-	// provider-side prompt caching opportunities.
+	// injected BEFORE the last user message for better LLM attention.
+	// Placing runtime_state close to the decision point improves context management.
 	//
 	// NOTE: overview.md content is NOT injected by default. It's only injected:
 	// 1. After compact (PostCompactRecovery = true) for recovery
@@ -719,7 +719,8 @@ func streamAssistantResponse(
 				Role:    "user",
 				Content: runtimeAppendix,
 			}
-			llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
+			// Insert runtime_state before the last user message for better attention
+			llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
 		}
 
 	}
@@ -1495,6 +1496,36 @@ func normalizePathForContains(value string) string {
 	value = filepath.Clean(value)
 	value = strings.ReplaceAll(value, "\\", "/")
 	return strings.ToLower(value)
+}
+
+// insertBeforeLastUserMessage inserts a message before the last user message in the slice.
+// If there are no user messages, it appends to the end.
+// This is used to place runtime_state close to the decision point for better LLM attention.
+func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the last user message index
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, append to end
+	if lastUserIdx == -1 {
+		return append(messages, msg)
+	}
+
+	// Insert before the last user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:lastUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[lastUserIdx:]...)
+	return result
 }
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {

@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/llm"
 	"testing"
 )
 
@@ -277,4 +278,150 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestInsertBeforeLastUserMessage(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []llm.LLMMessage
+		insert   llm.LLMMessage
+		wantLen  int
+		check    func([]llm.LLMMessage) bool
+	}{
+		{
+			name:     "empty messages",
+			messages: nil,
+			insert:   llm.LLMMessage{Role: "user", Content: "runtime"},
+			wantLen:  1,
+			check: func(msgs []llm.LLMMessage) bool {
+				return len(msgs) == 1 && msgs[0].Content == "runtime"
+			},
+		},
+		{
+			name: "no user message - append to end",
+			messages: []llm.LLMMessage{
+				{Role: "assistant", Content: "hi"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
+			wantLen: 2,
+			check: func(msgs []llm.LLMMessage) bool {
+				return msgs[1].Content == "runtime"
+			},
+		},
+		{
+			name: "single user message - insert before",
+			messages: []llm.LLMMessage{
+				{Role: "user", Content: "hello"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
+			wantLen: 2,
+			check: func(msgs []llm.LLMMessage) bool {
+				return msgs[0].Content == "runtime" && msgs[1].Content == "hello"
+			},
+		},
+		{
+			name: "multiple messages - insert before last user",
+			messages: []llm.LLMMessage{
+				{Role: "user", Content: "first"},
+				{Role: "assistant", Content: "response"},
+				{Role: "user", Content: "last"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
+			wantLen: 4,
+			check: func(msgs []llm.LLMMessage) bool {
+				// runtime should be at index 2, before "last" at index 3
+				return msgs[2].Content == "runtime" && msgs[3].Content == "last"
+			},
+		},
+		{
+			name: "tool results after user - insert before user",
+			messages: []llm.LLMMessage{
+				{Role: "user", Content: "request"},
+				{Role: "assistant", Content: ""},
+				{Role: "toolResult", Content: "output"},
+				{Role: "user", Content: "follow-up"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "runtime"},
+			wantLen: 5,
+			check: func(msgs []llm.LLMMessage) bool {
+				// runtime should be before "follow-up"
+				return msgs[3].Content == "runtime" && msgs[4].Content == "follow-up"
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := insertBeforeLastUserMessage(tc.messages, tc.insert)
+			if len(result) != tc.wantLen {
+				t.Fatalf("expected %d messages, got %d", tc.wantLen, len(result))
+			}
+			if !tc.check(result) {
+				t.Fatalf("check failed for messages: %+v", result)
+			}
+		})
+	}
+}
+
+func TestCollectStaleToolOutputStatsProtectsLLMContextUpdate(t *testing.T) {
+	// Create messages with multiple llm_context_update calls
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("first request"),
+		agentctx.NewToolResultMessage("call-1", "llm_context_update", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "old update"},
+		}, false),
+		agentctx.NewToolResultMessage("call-2", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "file content"},
+		}, false),
+		agentctx.NewUserMessage("second request"),
+		agentctx.NewToolResultMessage("call-3", "llm_context_update", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "latest update"},
+		}, false),
+		agentctx.NewToolResultMessage("call-4", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "command output"},
+		}, false),
+	}
+
+	// Use keepRecent=0 to test the llm_context_update protection specifically
+	staleCount, byTool := collectStaleToolOutputStats(msgs, 0)
+
+	// Should have 2 stale: 1 old llm_context_update + 1 read (bash is after last user, latest llm_context_update is protected)
+	if staleCount != 2 {
+		t.Fatalf("expected 2 stale outputs, got %d", staleCount)
+	}
+
+	// Check that llm_context_update count is 1 (not 2)
+	if byTool["llm_context_update"] != 1 {
+		t.Fatalf("expected 1 stale llm_context_update, got %d", byTool["llm_context_update"])
+	}
+
+	// Check that read is counted
+	if byTool["read"] != 1 {
+		t.Fatalf("expected 1 stale read, got %d", byTool["read"])
+	}
+}
+
+func TestFindLatestToolCallID(t *testing.T) {
+	msgs := []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "first"},
+		}, false),
+		agentctx.NewToolResultMessage("call-2", "llm_context_update", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "old"},
+		}, false),
+		agentctx.NewToolResultMessage("call-3", "llm_context_update", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "latest"},
+		}, false),
+	}
+
+	id := findLatestToolCallID(msgs, "llm_context_update")
+	if id != "call-3" {
+		t.Fatalf("expected call-3, got %s", id)
+	}
+
+	// Test not found
+	id = findLatestToolCallID(msgs, "nonexistent")
+	if id != "" {
+		t.Fatalf("expected empty string for nonexistent tool, got %s", id)
+	}
 }

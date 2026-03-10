@@ -353,7 +353,10 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 			t.Fatalf("failed to parse user content: %v", err)
 		}
 		if strings.Contains(content, "<llm_context>") {
-			continue // runtime state injection
+			continue // runtime state injection (llm context part)
+		}
+		if strings.Contains(content, "<runtime_state>") {
+			continue // runtime state injection (meta part)
 		}
 		if strings.Contains(content, "[system message by agent, not from real user]") {
 			continue // reminder message
