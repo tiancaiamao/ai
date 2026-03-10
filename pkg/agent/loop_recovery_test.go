@@ -454,7 +454,8 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 		_ *LoopConfig,
 		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 	) (*agentctx.AgentMessage, error) {
-		return nil, errors.New("API error (429): Rate limit reached for requests")
+		// Use 500 error to avoid rate limit retry logic (which has exponential backoff)
+		return nil, &llm.APIError{StatusCode: 500, Message: "internal server error"}
 	}
 
 	stream := newTestAgentEventStream()
@@ -470,7 +471,7 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 		if item.Done {
 			break
 		}
-		if item.Value.Type == EventError && strings.Contains(item.Value.Error, "Rate limit reached") {
+		if item.Value.Type == EventError && strings.Contains(item.Value.Error, "internal server error") {
 			sawErrorEvent = true
 			if strings.TrimSpace(item.Value.ErrorStack) != "" {
 				sawErrorStack = true
