@@ -214,8 +214,8 @@ fi
 TASK_TYPE="implement"  # 或 "fix_review"
 
 # 4. 后台启动 subagent (参考 /skill:subagent 最佳实践)
-nohup ai --mode headless --subagent \
-  --subagent-timeout 30m \
+nohup ai --mode headless \
+  --timeout 30m \
   --system-prompt "You are a focused implementer. Complete the task efficiently.
 Work in directory: $worktree
 Branch: $BRANCH
@@ -299,8 +299,8 @@ if [ "$auto_review" = "true" ] && [ "$PR_NUMBER" -gt 0 ]; then
   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/pr_$PR_NUMBER.diff
   
   # 后台启动 review subagent
-  (ai --mode headless --subagent \
-    --subagent-timeout 15m \
+  (ai --mode headless \
+    --timeout 15m \
     --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
     "Review PR #$PR_NUMBER: $(cat /tmp/pr_$PR_NUMBER.diff)" \
     > "$worktree/.aiclaw/review_result.txt" 2>&1) &

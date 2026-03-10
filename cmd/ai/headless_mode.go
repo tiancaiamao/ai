@@ -102,9 +102,9 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools []string, isSubagent bool, subagentTimeout time.Duration, customSystemPrompt string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
-	slog.Info("Starting headless mode", "prompts", len(prompts), "no_session", noSession, "max_turns", maxTurns, "tools", allowedTools, "is_subagent", isSubagent, "subagent_timeout", subagentTimeout, "has_custom_prompt", customSystemPrompt != "")
+	slog.Info("Starting headless mode", "prompts", len(prompts), "max_turns", maxTurns, "tools", allowedTools, "timeout", timeout, "has_custom_prompt", customSystemPrompt != "")
 
 	if len(prompts) == 0 {
 		return writeHeadlessError(output, "at least one prompt argument is required for --mode headless")
@@ -148,68 +148,48 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	var sess *session.Session
 	var sessionID string
 	var sessionMgr *session.SessionManager
-	var subagentSessionDir string // For subagent session tracking
-	var sessionsDir string        // For tools
+	var sessionsDir string // For tools
 
-	if noSession {
-		// Create a new temporary session without persistence
-		sess = session.NewSession("", nil) // Empty path = no persistence
-		sessionID = sess.GetID()
-		slog.Info("Created temporary session (no persistence)", "id", sessionID)
-		sessionsDir = ""
-	} else {
-		// Normal session handling with persistence
-		var err error
-		sessionsDir, err = session.GetDefaultSessionsDir(cwd)
-		if err != nil {
-			return writeHeadlessError(output, fmt.Sprintf("failed to get sessions path: %v", err))
-		}
-		if sessionPath != "" {
-			sessionsDir = filepath.Dir(sessionPath)
-		}
-
-		// For subagents, create session in a dedicated subdirectory
-		if isSubagent {
-			subagentSessionDir = filepath.Join(sessionsDir, "subagents")
-			if err := os.MkdirAll(subagentSessionDir, 0755); err != nil {
-				return writeHeadlessError(output, fmt.Sprintf("failed to create subagent sessions dir: %v", err))
-			}
-			sessionMgr = session.NewSessionManager(subagentSessionDir)
-			slog.Info("Using subagent session directory", "dir", subagentSessionDir)
-		} else {
-			sessionMgr = session.NewSessionManager(sessionsDir)
-		}
-
-		if sessionPath != "" {
-			sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
-			if err != nil {
-				return writeHeadlessError(output, fmt.Sprintf("failed to load session from %s: %v", sessionPath, err))
-			}
-			sessionID = sess.GetID()
-			_ = sessionMgr.SetCurrent(sessionID)
-			if err := sessionMgr.SaveCurrent(); err != nil {
-				slog.Info("Failed to update session metadata:", "value", err)
-			}
-		} else {
-			name := time.Now().Format("20060102-150405")
-			sess, err = sessionMgr.CreateSession(name, name)
-			if err != nil {
-				return writeHeadlessError(output, fmt.Sprintf("failed to create new session: %v", err))
-			}
-			sessionID = sess.GetID()
-			if err := sessionMgr.SetCurrent(sessionID); err != nil {
-				slog.Info("Failed to set current session:", "value", err)
-			}
-			if err := sessionMgr.SaveCurrent(); err != nil {
-				slog.Info("Failed to update session metadata:", "value", err)
-			}
-		}
-		slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
+	// Session handling with persistence
+	sessionsDir, err = session.GetDefaultSessionsDir(cwd)
+	if err != nil {
+		return writeHeadlessError(output, fmt.Sprintf("failed to get sessions path: %v", err))
 	}
+	if sessionPath != "" {
+		sessionsDir = filepath.Dir(sessionPath)
+	}
+
+	sessionMgr = session.NewSessionManager(sessionsDir)
+
+	if sessionPath != "" {
+		sess, err = session.LoadSessionLazy(sessionPath, session.DefaultLoadOptions())
+		if err != nil {
+			return writeHeadlessError(output, fmt.Sprintf("failed to load session from %s: %v", sessionPath, err))
+		}
+		sessionID = sess.GetID()
+		_ = sessionMgr.SetCurrent(sessionID)
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	} else {
+		name := time.Now().Format("20060102-150405")
+		sess, err = sessionMgr.CreateSession(name, name)
+		if err != nil {
+			return writeHeadlessError(output, fmt.Sprintf("failed to create new session: %v", err))
+		}
+		sessionID = sess.GetID()
+		if err := sessionMgr.SetCurrent(sessionID); err != nil {
+			slog.Info("Failed to set current session:", "value", err)
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	}
+	slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 
 	// Output session info to stdout for observability
 	fmt.Fprintf(output, "Session: %s\n", sessionID)
-	fmt.Fprintf(output, "Mode: headless (no_session=%v)\n\n", noSession)
+	fmt.Fprintf(output, "Mode: headless\n\n")
 
 	// Create tool registry and register tools
 	// Create a shared workspace object for all tools to track directory changes
@@ -258,7 +238,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	})
 
 	// Create agent with skills using structured prompt builder.
-	basePrompt := prompt.HeadlessBasePrompt(isSubagent)
+	basePrompt := prompt.HeadlessBasePrompt(false)
 
 	// Build the full system prompt
 	// Use workspace to get dynamic cwd for each prompt build
@@ -280,9 +260,6 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	if customSystemPrompt != "" {
 		systemPrompt = customSystemPrompt
 		slog.Info("Using custom system prompt", "length", len(customSystemPrompt))
-	} else if isSubagent {
-		systemPrompt = prompt.DefaultSubagentPrompt
-		slog.Info("Using default subagent prompt")
 	} else {
 		systemPrompt = promptBuilder.Build()
 	}
@@ -377,12 +354,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	// Output session info at the start
 	fmt.Fprintf(output, "=== Session Info ===\n")
 	fmt.Fprintf(output, "Session ID: %s\n", sessionID)
-	if !noSession {
-		fmt.Fprintf(output, "Session file: %s\n", sess.GetPath())
-		if isSubagent && subagentSessionDir != "" {
-			fmt.Fprintf(output, "Subagent dir: %s\n", subagentSessionDir)
-		}
-	}
+	fmt.Fprintf(output, "Session file: %s\n", sess.GetPath())
 	fmt.Fprintln(output)
 
 	// Subscribe to events and output turn-by-turn
@@ -462,7 +434,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 					}
 				}
 
-				if event.Type == "agent_end" && !noSession {
+				if event.Type == "agent_end" {
 					if err := sessionMgr.SaveCurrent(); err != nil {
 						slog.Info("Failed to update session metadata:", "value", err)
 					}
@@ -483,7 +455,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 								slog.Info("Failed to replace session messages on agent_end:", "value", err)
 							}
 						}
-						if event.Type == "agent_end" && !noSession {
+						if event.Type == "agent_end" {
 							if err := sessionMgr.SaveCurrent(); err != nil {
 								slog.Info("Failed to update session metadata:", "value", err)
 							}
@@ -509,7 +481,7 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 
 	// Wait for agent to complete with optional timeout
 	var waitErr error
-	if subagentTimeout > 0 {
+	if timeout > 0 {
 		// Wait with timeout
 		done := make(chan struct{})
 		go func() {
@@ -519,11 +491,11 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 		select {
 		case <-done:
 			// Completed normally
-		case <-time.After(subagentTimeout):
-			slog.Error("Subagent timeout exceeded", "timeout", subagentTimeout)
+		case <-time.After(timeout):
+			slog.Error("Timeout exceeded", "timeout", timeout)
 			ag.Shutdown()
-			waitErr = fmt.Errorf("subagent timeout after %s", subagentTimeout)
-			fmt.Fprintf(output, "\n=== Timeout ===\nSubagent exceeded %s timeout and was terminated.\n", subagentTimeout)
+			waitErr = fmt.Errorf("timeout after %s", timeout)
+			fmt.Fprintf(output, "\n=== Timeout ===\nExecution exceeded %s timeout and was terminated.\n", timeout)
 		}
 	} else {
 		// Wait without timeout
@@ -537,10 +509,8 @@ func runHeadless(sessionPath string, noSession bool, maxTurns int, allowedTools 
 	}
 
 	sessionWriter.Close()
-	if !noSession {
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
+	if err := sessionMgr.SaveCurrent(); err != nil {
+		slog.Info("Failed to update session metadata:", "value", err)
 	}
 
 	// Get all messages from the session

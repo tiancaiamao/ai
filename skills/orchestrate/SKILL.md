@@ -11,10 +11,10 @@ Automatically analyze user tasks, determine if decomposition is needed, spawn ap
 ## ⚠️ CRITICAL RULES (READ FIRST)
 
 ```
-1. NEVER use --no-session by default
-   → Sessions are needed for debugging subagent behavior
+1. Sessions are ALWAYS saved (for debugging)
+   → Check ~/.ai/sessions/--<cwd>--/<id>/messages.jsonl
 
-2. ALWAYS use --subagent-timeout to prevent runaway subagents
+2. ALWAYS use --timeout to prevent runaway subagents
    → Recommended: 5-10 minutes for most tasks
 
 3. ALWAYS use --system-prompt @{persona-path} with appropriate persona
@@ -30,9 +30,9 @@ Automatically analyze user tasks, determine if decomposition is needed, spawn ap
 
 核心要点：
 - **必须**使用 persona：`--system-prompt @{persona-path}`
-- **必须**设置 timeout：`--subagent-timeout 10m`
+- **必须**设置 timeout：`--timeout 10m`
 - **必须**后台运行并收集结果（bash 工具有 30s 超时限制）
-- **不要**使用 `--no-session`
+- Sessions 自动保存用于调试
 
 Persona 路径: `/Users/genius/.ai/skills/orchestrate/references/{persona}.md`
 
@@ -136,16 +136,16 @@ After subagents complete, synthesize results:
 # Decomposition: 2 parallel explorers + aggregate
 
 # Launch parallel analysis
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
+(ai --mode headless \
+  --timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling." \
   > /tmp/mc.txt) &
 
 sleep 5
 
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
+(ai --mode headless \
+  --timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback." \
   > /tmp/omo.txt) &
@@ -164,22 +164,22 @@ echo "## Comparison\n<Key differences and similarities>"
 # User: "Add OAuth2 login to the app"
 
 # Phase 1: Research
-ai --mode headless --subagent \
-  --subagent-timeout 10m \
+ai --mode headless \
+  --timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/researcher.md \
   "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations." \
   > /tmp/research.txt
 
 # Phase 2: Implement (pass research findings)
-ai --mode headless --subagent \
-  --subagent-timeout 15m \
+ai --mode headless \
+  --timeout 15m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/implementer.md \
   "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)" \
   > /tmp/implement.txt
 
 # Phase 3: Review
-ai --mode headless --subagent \
-  --subagent-timeout 10m \
+ai --mode headless \
+  --timeout 10m \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/reviewer.md \
   "Review OAuth2 implementation for security issues" \
   > /tmp/review.txt
@@ -190,8 +190,8 @@ ai --mode headless --subagent \
 ## Best Practices
 
 - ✅ **Always** use persona with `--system-prompt`
-- ✅ **Always** add `--subagent-timeout` (5-15m typical)
-- ✅ **Never** use `--no-session` (lose debugging info)
+- ✅ **Always** add `--timeout` (5-15m typical)
+- ✅ Sessions are always saved for debugging
 - ✅ Use absolute paths for persona files
 - ✅ Run independent tasks in parallel with 5s delay
 - ✅ Pass context between sequential phases
@@ -215,8 +215,8 @@ ai --mode headless --subagent \
 
 | Problem | Solution |
 |---------|----------|
-| Can't find session for debugging | Check `--no-session` not used. Sessions: `~/.ai/sessions/--<cwd>--/subagents/<id>/messages.jsonl` |
-| Subagent hangs/timeout | Add `--subagent-timeout 10m` to prevent runaway |
+| Can't find session for debugging | Sessions are in `~/.ai/sessions/--<cwd>--/<id>/messages.jsonl` |
+| Subagent hangs/timeout | Add `--timeout 10m` to prevent runaway |
 | Poor quality output | Ensure persona is loaded via `--system-prompt` |
 | Inconsistent results | Check persona matches task type |
 | Resource exhaustion | Reduce parallel subagents to 2, ensure 5s delay |

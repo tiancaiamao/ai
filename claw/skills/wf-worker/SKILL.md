@@ -223,14 +223,14 @@ Update `.aiclaw/status.json`:
 **Async mode** (recommended):
 ```bash
 cd "<worktree>" && \
-nohup ai --mode headless --no-session --subagent "<phase_prompt>" \
+nohup ai --mode headless  "<phase_prompt>" \
   > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
 ```
 
 **Sync mode** (for simple/quick tasks):
 ```bash
 cd "<worktree>" && \
-ai --mode headless --no-session --subagent "<phase_prompt>" \
+ai --mode headless  "<phase_prompt>" \
 ```
 
 ### 4. Generate task-specific prompts
@@ -327,7 +327,7 @@ Rate limit handling:
 Start the subagent in background:
 ```bash
 cd "<worktree>" && \
-nohup ai --mode headless --no-session --subagent "<phase_prompt>" \
+nohup ai --mode headless  "<phase_prompt>" \
   > .aiclaw/worker.log 2>&1 & echo $! > .aiclaw/worker.pid
 ```
 
@@ -454,12 +454,12 @@ task_type=implement
 task_prompt="Add /session command to show startup and working directory"
 
 # Phase 1: analysis (30 turns)
-nohup ai --mode headless --no-session --subagent \
+nohup ai --mode headless  \
   "Phase 1: analysis prompt..." \
   > .aiclaw/worker.log 2>&1 &
 
 # After phase 1 complete, phase 2: implement
-nohup ai --mode headless --no-session --subagent \
+nohup ai --mode headless  \
   "Phase 2: implement prompt..." \
   > .aiclaw/worker.log 2>&1 &
 
@@ -475,7 +475,7 @@ task_type=fix_review
 task_prompt="Address review comments from PR #17"
 
 # Single-phase execution (40 turns for more complexity)
-nohup ai --mode headless --no-session --subagent \
+nohup ai --mode headless  \
   "You are fixing review comments for PR #17.
 
 Review comments:
@@ -499,7 +499,7 @@ Output result.json when done." \
 cat .aiclaw/result.json
 
 # Resume with adjusted prompt
-nohup ai --mode headless --no-session --subagent \
+nohup ai --mode headless  \
   "Resume: branch already pushed, create PR for issue #16" \
   > .aiclaw/worker.log 2>&1 &
 ```

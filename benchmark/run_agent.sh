@@ -59,7 +59,7 @@ Please start by reading the task files and understanding what needs to be done."
     echo "Starting agent..."
     cd "$setup_dir"
 
-    ai --mode headless --no-session --max-turns 50 "$prompt" 2>&1 || {
+    ai --mode headless --max-turns 50 "$prompt" 2>&1 || {
         echo "Agent finished with error for $task_id"
     }
 

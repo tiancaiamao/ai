@@ -249,7 +249,7 @@ git worktree add .worktrees/review-auth -b review/auth
 # (Note: for subagent mode, each subagent has its own workspace)
 
 # 3. Run subagent in the worktree
-ai --mode headless --no-session --subagent --tools read,grep \
+ai --mode headless  --tools read,grep \
   "Review auth changes for security issues"
 
 # 4. Results remain in worktree for inspection
@@ -265,7 +265,7 @@ git worktree add .worktrees/review-feature-x -b review/feature-x
 # Use change_workspace tool, then run reviewer subagent
 # (Note: the change_workspace would be done by the agent using the tool)
 
-ai --mode headless --subagent --tools read,grep --max-turns 10 \
+ai --mode headless --tools read,grep --max-turns 10 \
   "Review changes against main: security, correctness, style"
 
 # Worktree stays available for:
@@ -282,10 +282,10 @@ git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
 
 # Run builders in parallel (each uses change_workspace tool internally)
-ai --mode headless --subagent --tools read,write,edit,bash,change_workspace \
+ai --mode headless --tools read,write,edit,bash,change_workspace \
   "Implement authentication in .worktrees/feature-auth" &
 
-ai --mode headless --subagent --tools read,write,edit,bash,change_workspace \
+ai --mode headless --tools read,write,edit,bash,change_workspace \
   "Implement API endpoints in .worktrees/feature-api" &
 
 wait

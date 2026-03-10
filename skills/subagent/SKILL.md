@@ -11,14 +11,14 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
 ## ⚠️ CRITICAL RULES
 
 ```
-1. NEVER use --no-session by default
+1. Sessions are ALWAYS saved (no --no-session option)
    → Sessions are needed for debugging subagent behavior
 
-2. ALWAYS use --subagent flag for focused prompt
-   → Gives subagent appropriate role and behavior
-
-3. Use --subagent-timeout to prevent runaway subagents
+2. ALWAYS use --timeout to prevent runaway subagents
    → Recommended: 5-10 minutes for most tasks
+
+3. Use --system-prompt @file for focused persona
+   → Load appropriate role from skill references
 
 4. NEVER use --max-turns unless explicitly needed
    → Let subagents complete naturally
@@ -27,17 +27,17 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
 ## Correct Command Template
 
 ```bash
-# CORRECT ✓ - Session enabled for debugging
-ai --mode headless --subagent \
+# CORRECT ✓ - Session enabled, timeout set, persona loaded
+ai --mode headless \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --subagent-timeout 10m \
+  --timeout 10m \
   "Your task description here"
 
-# WRONG ✗ - No session = no debugging
-ai --mode headless --no-session --subagent "task"
-
 # WRONG ✗ - No timeout = runaway risk
-ai --mode headless --subagent "complex task"
+ai --mode headless "complex task"
+
+# WRONG ✗ - No persona = unfocused output
+ai --mode headless --timeout 10m "analyze this"
 ```
 
 ## Subagent Management with Bash
@@ -47,18 +47,18 @@ Since there's no dedicated subagent tool, use bash commands:
 ### Find Running Subagents
 
 ```bash
-# Find all ai subagent processes
-ps aux | grep "ai.*--subagent"
+# Find all ai headless processes
+ps aux | grep "ai.*--mode headless"
 
-# More precise: find by session directory
-ps aux | grep "ai.*--subagent" | grep -v grep
+# More precise: find by timeout flag
+ps aux | grep "ai.*--mode headless" | grep -v grep
 ```
 
 ### Kill a Runaway Subagent
 
 ```bash
 # Find the PID first
-ps aux | grep "ai.*--subagent"
+ps aux | grep "ai.*--mode headless"
 
 # Kill by PID
 kill <PID>
@@ -69,20 +69,17 @@ kill -9 <PID>
 
 ### Track Subagent Sessions
 
-Subagent sessions are saved to:
+Sessions are saved to:
 ```
-~/.ai/sessions/--<cwd>--/subagents/<session-id>/messages.jsonl
+~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
 ```
 
 ```bash
-# List all subagent sessions
-ls -la ~/.ai/sessions/--$(echo $PWD | sed 's/\//--/g')--/subagents/
+# List all sessions
+ls -la ~/.ai/sessions/
 
-# Or simply
-ls -la ~/.ai/sessions/*/subagents/ 2>/dev/null
-
-# View a subagent's session
-cat ~/.ai/sessions/--project--/subagents/abc123/messages.jsonl | jq .
+# View a session
+cat ~/.ai/sessions/--project--/abc123/messages.jsonl | jq .
 ```
 
 ## When to Use
@@ -97,18 +94,16 @@ cat ~/.ai/sessions/--project--/subagents/abc123/messages.jsonl | jq .
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--mode headless` | Run in headless mode (required) | - |
-| `--subagent` | Use focused subagent system prompt | false |
-| `--subagent-timeout D` | Total execution timeout (e.g., `10m`, `300s`) | 0 (unlimited) |
-| `--system-prompt @FILE` | Load persona from file | default subagent prompt |
+| `--timeout D` | Total execution timeout (e.g., `10m`, `300s`) | 0 (unlimited) |
+| `--system-prompt @FILE` | Load persona from file | default headless prompt |
 | `--tools T1,T2` | Comma-separated tool whitelist | all tools |
-| `--no-session` | **Don't use** (needed for debugging) | false |
 | `--max-turns N` | Maximum turns (avoid, use timeout) | 0 (unlimited) |
 
 ## Session Persistence
 
-**Subagent sessions are saved to:**
+**Sessions are always saved to:**
 ```
-~/.ai/sessions/--<cwd>--/subagents/<session-id>/messages.jsonl
+~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
 ```
 
 This allows you to:
@@ -121,8 +116,7 @@ This allows you to:
 ```
 === Session Info ===
 Session ID: abc123
-Session file: ~/.ai/sessions/--project--/subagents/abc123/messages.jsonl
-Subagent dir: ~/.ai/sessions/--project--/subagents
+Session file: ~/.ai/sessions/--project--/abc123/messages.jsonl
 
 === Turn 1 ===
 Thinking: ...
@@ -141,26 +135,29 @@ Duration: 45.2s
 ### Example 1: Code Analysis with Timeout
 
 ```bash
-ai --mode headless --subagent \
+ai --mode headless \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --subagent-timeout 5m \
+  --timeout 5m \
   "Analyze the authentication flow in src/auth/"
 ```
 
 ### Example 2: Parallel Analysis
 
 ```bash
-# Run 3 parallel subagents with sessions
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
+# Run 3 parallel subagents
+(ai --mode headless \
+  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  --timeout 10m \
   "Analyze project A architecture" > /tmp/a.txt) &
 
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
+(ai --mode headless \
+  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  --timeout 10m \
   "Analyze project B architecture" > /tmp/b.txt) &
 
-(ai --mode headless --subagent \
-  --subagent-timeout 10m \
+(ai --mode headless \
+  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  --timeout 10m \
   "Analyze project C architecture" > /tmp/c.txt) &
 
 wait
@@ -171,9 +168,9 @@ cat /tmp/a.txt /tmp/b.txt /tmp/c.txt
 
 ```bash
 # Read-only explorer (safe for analysis)
-ai --mode headless --subagent \
+ai --mode headless \
   --tools read,grep \
-  --subagent-timeout 5m \
+  --timeout 5m \
   "Find all API endpoints in src/api/"
 ```
 
@@ -181,9 +178,9 @@ ai --mode headless --subagent \
 
 ```bash
 # Check running subagents
-$ ps aux | grep "ai.*--subagent"
-genius   54321  0.5  1.2  ... ai --mode headless --subagent ...
-genius   54322  0.3  1.1  ... ai --mode headless --subagent ...
+$ ps aux | grep "ai.*--mode headless"
+genius   54321  0.5  1.2  ... ai --mode headless ...
+genius   54322  0.3  1.1  ... ai --mode headless ...
 
 # Kill a stuck one
 $ kill 54321
@@ -218,13 +215,13 @@ If a subagent fails or behaves unexpectedly:
 
 ```bash
 # 1. Check if it's still running
-ps aux | grep "ai.*--subagent"
+ps aux | grep "ai.*--mode headless"
 
 # 2. Find the session from output
 # Session ID: abc123
 
 # 3. View the session
-cat ~/.ai/sessions/--<project>--/subagents/abc123/messages.jsonl | jq .
+cat ~/.ai/sessions/--<project>--/abc123/messages.jsonl | jq .
 
 # 4. If stuck, kill it
 kill <PID>
@@ -234,15 +231,15 @@ kill <PID>
 
 ### Problem: Bash Timeout vs Subagent Timeout
 
-When calling subagent via bash tool, the bash tool has its own timeout (typically 30s). Even if subagent has `--subagent-timeout 10m`, bash will timeout first.
+When calling subagent via bash tool, the bash tool has its own timeout (typically 30s). Even if subagent has `--timeout 10m`, bash will timeout first.
 
 **Solution: Run subagent in background and collect results**
 
 ```bash
 # 1. Start subagent in background, output to file
-(ai --mode headless --subagent \
+(ai --mode headless \
   --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
-  --subagent-timeout 10m \
+  --timeout 10m \
   "Review this code: $(cat /tmp/diff.txt)" > /tmp/subagent_output.txt 2>&1) &
 
 SUBAGENT_PID=$!
@@ -259,7 +256,7 @@ ps -p $SUBAGENT_PID -o pid,ppid,%cpu,%mem,etime,stat,command
 tail -f /tmp/subagent_output.txt
 
 # 3. Monitor session file (find latest)
-SESSION_FILE=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+SESSION_FILE=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
 if [ -n "$SESSION_FILE" ]; then
   tail -f "$SESSION_FILE" | jq -r 'select(.role=="assistant") | .content[]? | select(.type=="text") | .text'
 fi
@@ -269,7 +266,7 @@ fi
 
 ```bash
 # Count turns completed (from session file)
-SESSION_FILE=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+SESSION_FILE=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
 echo "Turns: $(grep -c '"role":"assistant"' "$SESSION_FILE" 2>/dev/null || echo 0)"
 
 # Check if subagent is making progress (file size changing)
@@ -316,13 +313,13 @@ fi
 # debug_subagent.sh - Monitor and debug a running subagent
 
 echo "=== Running Subagents ==="
-ps aux | grep "ai.*--subagent" | grep -v grep
+ps aux | grep "ai.*--mode headless" | grep -v grep
 
 echo -e "\n=== Latest Session Files ==="
-ls -lt ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -5
+ls -lt ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -5
 
 echo -e "\n=== Latest Session Activity ==="
-LATEST=$(ls -t ~/.ai/sessions/*/subagents/*/messages.jsonl 2>/dev/null | head -1)
+LATEST=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
 if [ -n "$LATEST" ]; then
   echo "File: $LATEST"
   echo "Size: $(ls -lh "$LATEST" | awk '{print $5}')"
@@ -336,22 +333,19 @@ fi
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| No session file | Used `--no-session` | Remove `--no-session` flag |
-| Subagent hangs | No timeout set | Add `--subagent-timeout 10m` |
+| Subagent hangs | No timeout set | Add `--timeout 10m` |
 | Process stuck | Unexpected error | Use `ps` + `kill` to terminate |
-| Can't find session | Wrong directory | Check `Subagent dir:` in output |
+| Can't find session | Wrong directory | Check `Session file:` in output |
 | Bash timeout | Bash tool has 30s limit | Run in background with `&` and collect to file |
 | Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
 
 ## Best Practices
 
-- ✅ Always use `--subagent` for focused output
-- ✅ Set `--subagent-timeout` to prevent runaway
+- ✅ Always set `--timeout` to prevent runaway
 - ✅ Use persona files via `--system-prompt @file`
 - ✅ Run independent tasks in parallel with `&` and `wait`
 - ✅ Keep sessions for debugging
 - ✅ Use `ps aux | grep` to track running subagents
 - ✅ Use `kill` to terminate stuck subagents
-- ❌ Don't use `--no-session` (lose debugging info)
 - ❌ Don't use `--max-turns` (use timeout instead)
 - ❌ Don't nest subagents
