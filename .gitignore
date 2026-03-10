@@ -2,4 +2,5 @@ bin/*
 .worktrees/
 .aiclaw/
 coverage.out
-result.json
+ai
+

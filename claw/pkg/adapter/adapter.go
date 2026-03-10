@@ -1503,7 +1503,8 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 //
 //	/traceevent              - list enabled events
 //	/traceevent default      - reset to default set
-//	/traceevent all          - enable all events
+//	/traceevent on           - enable default working set of events
+//	/traceevent all          - enable ALL events (including high-frequency)
 //	/traceevent off          - disable all events
 //	/traceevent <events>     - set specific events (e.g., llm, tool, event)
 //	/traceevent enable <events>   - enable additional events
@@ -1511,11 +1512,14 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 func (a *AgentLoop) cmdTraceevent(args string) string {
 	args = strings.TrimSpace(args)
 
+	// Ensure trace handler is initialized when traceevent commands are used
+	ensureTraceHandler()
+
 	if args == "" {
 		// List enabled events
 		events := traceevent.GetEnabledEvents()
 		if len(events) == 0 {
-			return "Trace events: disabled (use /traceevent all to enable)"
+			return "Trace events: disabled (use /traceevent on to enable default events, or /traceevent all for all events)"
 		}
 		return fmt.Sprintf("Trace events (%d): %s", len(events), strings.Join(events, ", "))
 	}
@@ -1528,7 +1532,13 @@ func (a *AgentLoop) cmdTraceevent(args string) string {
 		events := traceevent.ResetToDefaultEvents()
 		return fmt.Sprintf("Reset to default events (%d): %s", len(events), strings.Join(events, ", "))
 
+	case "on":
+		// "on" enables the default working set (not all events, to avoid high-frequency noise)
+		events := traceevent.ResetToDefaultEvents()
+		return fmt.Sprintf("Enabled default events (%d)", len(events))
+
 	case "all":
+		// "all" enables ALL known events, including high-frequency ones
 		traceevent.DisableAllEvents()
 		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
 		for _, eventName := range expanded {
@@ -1698,6 +1708,31 @@ func formatDuration(d time.Duration) string {
 	hours := int(d.Hours())
 	minutes := int(d.Minutes()) % 60
 	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
+// ensureTraceHandler ensures that a trace handler is initialized if not already set.
+// This allows trace events to be captured even when -trace flag was not used at startup.
+func ensureTraceHandler() {
+	if traceevent.GetHandler() != nil {
+		return
+	}
+
+	// Initialize trace handler on demand
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Warn("Failed to get home directory for trace handler", "error", err)
+		return
+	}
+
+	tracesDir := filepath.Join(homeDir, ".aiclaw", "traces")
+	handler, err := traceevent.NewFileHandler(tracesDir)
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "dir", tracesDir, "error", err)
+		return
+	}
+
+	traceevent.SetHandler(handler)
+	slog.Info("Trace handler initialized on demand", "dir", tracesDir)
 }
 
 // cmdThinking toggles or sets the thinking level
