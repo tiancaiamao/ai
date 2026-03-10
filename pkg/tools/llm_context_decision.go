@@ -42,15 +42,14 @@ When runtime_state shows context_management.action_required is not "none", you M
 DECISION OPTIONS:
 - "truncate": Remove specific tool outputs (provide truncate_ids)
 - "compact": Run compaction to summarize history (provide compact_confidence)
-- "both": Do both truncate and compact
 - "skip": Defer for skip_turns (1-30, higher = you promise to be proactive)
 
 PARAMETERS:
-- decision (required): "truncate", "compact", "both", or "skip"
+- decision (required): "truncate", "compact", or "skip"
 - reasoning (required): Explain WHY you made this decision
 - skip_turns (optional, for decision="skip"): How many turns to skip (1-30, default=10)
-- truncate_ids (optional, for decision="truncate"/"both"): Tool call IDs to truncate
-- compact_confidence (optional, for decision="compact"/"both"): Confidence 0-100
+- truncate_ids (optional, for decision="truncate"): Tool call IDs to truncate
+- compact_confidence (optional, for decision="compact"): Confidence 0-100
 
 EXAMPLES:
 # Truncate old outputs
@@ -78,7 +77,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"decision": map[string]any{
 				"type":        "string",
-				"enum":        []string{"truncate", "compact", "both", "skip"},
+				"enum":        []string{"truncate", "compact", "skip"},
 				"description": "What action to take",
 			},
 			"reasoning": map[string]any{
@@ -100,7 +99,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 				"type":        "integer",
 				"minimum":     0,
 				"maximum":     100,
-				"description": "Confidence for COMPACT (0-100), if decision='compact' or 'both'",
+				"description": "Confidence for COMPACT (0-100), if decision='compact'",
 			},
 		},
 		"required": []string{"decision", "reasoning"},
@@ -172,7 +171,7 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			traceevent.Field{Key: "was_reminded", Value: wasReminded},
 		)
 
-	case "truncate", "both":
+	case "truncate":
 		truncatedCount := 0
 		// Support both string (comma-separated) and array formats for backwards compatibility
 		var idsToTruncate []string
@@ -210,31 +209,17 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			result.WriteString("No truncate_ids provided, skipped truncation.\n")
 		}
 
-		if decision == "both" {
-			// Fall through to compact
-		} else {
-			// Record decision
-			agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
-			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
-				traceevent.Field{Key: "truncated_count", Value: truncatedCount},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
-			)
-		}
-
-		if decision != "both" {
-			break
-		}
-		fallthrough
+		// Record decision
+		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
+		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
+			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
+			traceevent.Field{Key: "was_reminded", Value: wasReminded},
+		)
 
 	case "compact":
 		if t.compactor == nil {
 			result.WriteString("Compactor not available, skipped compaction.\n")
-			// Record decision with correct action type
-			action := "compact"
-			if decision == "both" {
-				action = "both"
-			}
-			agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
+			agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
 			break
 		}
 
@@ -253,6 +238,9 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			agentCtx.LastCompactionSummary = compacted.Summary
 			after := len(compacted.Messages)
 
+			// Set flag to inject overview.md for recovery on next request
+			agentCtx.PostCompactRecovery = true
+
 			result.WriteString(fmt.Sprintf("Compacted messages: %d → %d (%d removed).\n", before, after, before-after))
 			result.WriteString(fmt.Sprintf("Confidence: %d%%\n", confidence))
 
@@ -266,12 +254,7 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			result.WriteString("Compaction returned no changes.\n")
 		}
 
-		// Record decision with correct action type
-		action := "compact"
-		if decision == "both" {
-			action = "both"
-		}
-		agentCtx.ContextMgmtState.RecordDecision(turn, action, wasReminded)
+		agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
 
 	default:
 		return nil, fmt.Errorf("invalid decision: %s", decision)
@@ -361,6 +344,7 @@ func (t *LLMContextDecisionTool) shouldTruncate(toolCallID string, idsToTruncate
 
 // filterAlreadyTruncated filters out already truncated tool call IDs from the provided IDs.
 // This prevents LLM from trying to truncate the same tool output multiple times.
+// Also protects the latest llm_context_update from being truncated.
 func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
 	if rawIDs == nil {
 		return nil
@@ -393,9 +377,23 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 		return nil
 	}
 
-	// Filter out IDs that are already truncated
+	// Find the latest llm_context_update tool call ID to protect
+	protectedID := findLatestToolCall(agentCtx.Messages, "llm_context_update")
+	if protectedID != "" {
+		slog.Debug("[LLMContextDecision] Protecting latest llm_context_update from truncate",
+			"tool_call_id", protectedID)
+	}
+
+	// Filter out IDs that are already truncated or protected
 	var filteredIDs []string
 	for _, id := range idsToFilter {
+		// Check if this is the protected llm_context_update
+		if protectedID != "" && strings.EqualFold(id, protectedID) {
+			slog.Debug("[LLMContextDecision] Skipping protected llm_context_update ID",
+				"tool_call_id", id)
+			continue
+		}
+
 		// Check if this tool output exists and is already truncated
 		alreadyTruncated := false
 		for _, msg := range agentCtx.Messages {
@@ -419,4 +417,20 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 	}
 
 	return filteredIDs
+}
+
+// findLatestToolCall finds the most recent tool call ID for a given tool name.
+// Returns empty string if not found.
+func findLatestToolCall(messages []agentctx.AgentMessage, toolName string) string {
+	// Iterate in reverse to find the most recent
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "toolResult" {
+			continue
+		}
+		if msg.ToolName == toolName {
+			return msg.ToolCallID
+		}
+	}
+	return ""
 }

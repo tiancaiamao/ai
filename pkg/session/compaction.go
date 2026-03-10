@@ -245,7 +245,9 @@ func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
 				Cuttable: true,
 			})
 		case EntryTypeCompaction:
-			msg := compactionSummaryMessage(&entry)
+			// Get summary content from inline or file reference
+			summary := GetSummaryFromEntry(sessionDir, &entry)
+			msg := compactionSummaryMessageWithContent(summary, entry.Timestamp)
 			if msg.Role == "" {
 				continue
 			}

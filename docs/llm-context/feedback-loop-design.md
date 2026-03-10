@@ -67,7 +67,7 @@ const (
    <!-- 你已经 6 轮没有更新 llm context 了 -->
    <!-- 当前上下文使用了 65% tokens -->
    <!-- 建议：将已完成任务归档到 detail/，压缩关键信息 -->
-   <!-- 使用 write tool 更新 %s -->
+   <!-- 使用 llm_context_update tool 更新 %s -->
 ```
 
 ### 触发条件
@@ -95,7 +95,7 @@ const (
 3. 删除过时信息
 4. 保留最近决策和关键问题
 
-使用 write tool 更新: {overview_path}
+使用 llm_context_update tool 更新: {overview_path}
 ```
 
 ## 实现细节
@@ -179,7 +179,7 @@ func (wm *LLMContext) buildReminder() string {
 3. 删除过时信息，保留最近决策
 4. 将详细讨论移到 detail/ 目录
 
-使用 write tool 更新: %s
+使用 llm_context_update tool 更新: %s
 下次请求时，你会看到更新后的内容。
 -->`,
         wm.roundsSinceUpdate,

@@ -66,6 +66,7 @@ type Agent struct {
 	apiKey        string
 	systemPrompt  string
 	context       *agentctx.AgentContext
+	ctxMu         sync.RWMutex // Protects context.Messages access
 	eventChan     chan AgentEvent
 	currentStream *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	streamMu      sync.RWMutex
@@ -315,7 +316,9 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
 			// (e.g. auto-compaction editing older messages).
+			a.ctxMu.Lock()
 			a.context.Messages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
+			a.ctxMu.Unlock()
 		}
 
 		// Send to event channel
@@ -492,6 +495,8 @@ func (a *Agent) GetModel() llm.Model {
 
 // GetMessages returns all messages in the context.
 func (a *Agent) GetMessages() []agentctx.AgentMessage {
+	a.ctxMu.RLock()
+	defer a.ctxMu.RUnlock()
 	return a.context.Messages
 }
 

@@ -218,24 +218,23 @@ func (b *Builder) buildLLMContextSection() string {
 
 	// Build the system prompt section explaining the llm context mechanism
 	// This tells the LLM WHERE the file is and HOW to update it
-	overviewPath := b.llmContext.GetPath()
-	detailDir := b.llmContext.GetDetailDir()
+	// overviewPath := b.llmContext.GetPath()
+	// detailDir := b.llmContext.GetDetailDir()
 
 	// Use context meta if available
-	contextMetaSection := ""
 	if b.contextMeta != "" {
-		contextMetaSection = fmt.Sprintf(`
+		return llmContextPrompt + `
 
 ---
 
 <context_meta>
-%s
+` + b.contextMeta + `
 </context_meta>
 
-💡 Remember to update your llm context to track progress.`, b.contextMeta)
+💡 Remember to update your llm context to track progress.`
 	}
 
-	return fmt.Sprintf(llmContextPrompt, overviewPath, detailDir, contextMetaSection)
+	return llmContextPrompt
 }
 
 func (b *Builder) buildToolingSection() string {

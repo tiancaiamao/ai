@@ -77,7 +77,8 @@ Agent 在长期对话中面临以下挑战：
 
 **系统自动处理**：
 - 每次轮次开始前检查并处理 `truncate-compact-hint.md`
-- `overview.md` 的内容在每次请求时自动注入到系统提示中
+- `overview.md` 的内容在 compact 后自动注入到系统提示中（恢复记忆）
+- 正常请求时不注入，依赖 `llm_context_update` 工具的 output 留在上下文中
 - detail/ 目录的内容不会自动注入（需主动读取）
 
 ---

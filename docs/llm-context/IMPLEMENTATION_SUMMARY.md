@@ -31,7 +31,7 @@ Level 4: 抽象化记忆（未来方向）
 | **LLM Context 文件** | `overview.md` | LLM 维护的核心记忆 |
 | **压缩工具** | `pkg/tools/compact_history.go` | LLM 主动调用的压缩接口 |
 | **上下文元数据** | `context_meta` | 实时状态监控和提醒 |
-| **Prompt Builder** | `pkg/prompt/builder.go` | LLM Context 自动注入 |
+| **Prompt Builder** | `pkg/prompt/builder.go` | LLM Context compact 后注入 |
 | **Agent Loop** | `pkg/agent/loop.go` | LLM 主循环和协调 |
 
 ### 3. Session 存储结构
@@ -57,7 +57,7 @@ Level 4: 抽象化记忆（未来方向）
 
 **成果**：
 - ✅ Session 目录结构扩展（添加 `llm-context/overview.md`）
-- ✅ Prompt 自动注入（system prompt 首条消息）
+- ✅ Prompt 注入（compact 后恢复）
 - ✅ 向后兼容（旧 session 单文件格式可识别）
 - ✅ 模板自动生成（新 session 创建空模板）
 
@@ -184,7 +184,7 @@ func (a *Agent) buildLLMMessages(ctx context.Context, sess *session.Session) ([]
 | 测试 | 结果 |
 |------|------|
 | 新 session 创建 overview.md | ✅ 模板正确生成 |
-| Prompt 注入 LLM Context | ✅ 首条 system 消息 |
+| Prompt 注入 LLM Context | ✅ compact 后注入恢复 |
 | context_meta 自动注入 | ✅ 每次请求末尾 |
 | compact_history tool 调用 | ✅ 正常压缩 |
 | 75% 兜底机制 | ✅ 仍然有效 |
