@@ -361,6 +361,7 @@ func (t *LLMContextDecisionTool) shouldTruncate(toolCallID string, idsToTruncate
 
 // filterAlreadyTruncated filters out already truncated tool call IDs from the provided IDs.
 // This prevents LLM from trying to truncate the same tool output multiple times.
+// Also protects the latest llm_context_update from being truncated.
 func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
 	if rawIDs == nil {
 		return nil
@@ -393,9 +394,23 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 		return nil
 	}
 
-	// Filter out IDs that are already truncated
+	// Find the latest llm_context_update tool call ID to protect
+	protectedID := findLatestToolCall(agentCtx.Messages, "llm_context_update")
+	if protectedID != "" {
+		slog.Debug("[LLMContextDecision] Protecting latest llm_context_update from truncate",
+			"tool_call_id", protectedID)
+	}
+
+	// Filter out IDs that are already truncated or protected
 	var filteredIDs []string
 	for _, id := range idsToFilter {
+		// Check if this is the protected llm_context_update
+		if protectedID != "" && strings.EqualFold(id, protectedID) {
+			slog.Debug("[LLMContextDecision] Skipping protected llm_context_update ID",
+				"tool_call_id", id)
+			continue
+		}
+
 		// Check if this tool output exists and is already truncated
 		alreadyTruncated := false
 		for _, msg := range agentCtx.Messages {
@@ -419,4 +434,20 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 	}
 
 	return filteredIDs
+}
+
+// findLatestToolCall finds the most recent tool call ID for a given tool name.
+// Returns empty string if not found.
+func findLatestToolCall(messages []agentctx.AgentMessage, toolName string) string {
+	// Iterate in reverse to find the most recent
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "toolResult" {
+			continue
+		}
+		if msg.ToolName == toolName {
+			return msg.ToolCallID
+		}
+	}
+	return ""
 }

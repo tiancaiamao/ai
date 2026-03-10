@@ -30,6 +30,12 @@ type ContextMeta struct {
 	LLMContextSize    int     `json:"llm_context_size"` // bytes
 }
 
+// LLMContextWriter defines the interface for writing LLM context.
+// This allows tools to update the context without depending on the full LLMContext type.
+type LLMContextWriter interface {
+	WriteContent(content string) error
+}
+
 // LLMContext manages the agent's llm context (overview.md).
 // It provides caching based on file modification time and update tracking.
 type LLMContext struct {

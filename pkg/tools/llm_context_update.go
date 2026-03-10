@@ -1,0 +1,76 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+)
+
+// LLMContextUpdateTool allows LLM to update its persistent context.
+type LLMContextUpdateTool struct{}
+
+// NewLLMContextUpdateTool creates a new llm_context_update tool.
+func NewLLMContextUpdateTool() *LLMContextUpdateTool {
+	return &LLMContextUpdateTool{}
+}
+
+// Name returns the tool name.
+func (t *LLMContextUpdateTool) Name() string {
+	return "llm_context_update"
+}
+
+// Description returns the tool description.
+func (t *LLMContextUpdateTool) Description() string {
+	return `A tool to record your current operational state. Call it when task state changes.
+
+Provide markdown content with your current context (task, decisions, known info, pending items).
+
+The tool output stays in context window. It also persists to ` + "`overview.md`" + ` for recovery after compact.
+
+Do not repeat the full contents after calling — the tool already displays it.`
+}
+
+// Parameters returns the tool parameter schema.
+func (t *LLMContextUpdateTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Markdown content to record (task, decisions, known info, pending)",
+			},
+		},
+		"required": []string{"content"},
+	}
+}
+
+// Execute runs the tool.
+func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
+	// Parse content
+	content, ok := params["content"].(string)
+	if !ok || content == "" {
+		return nil, fmt.Errorf("content parameter is required")
+	}
+
+	// Get agent context from context
+	agentCtx := agentctx.ToolExecutionAgentContext(ctx)
+	if agentCtx == nil {
+		return nil, fmt.Errorf("agent context not available")
+	}
+
+	// Dual-write: persist to overview.md file via LLMContext
+	if agentCtx.LLMContext != nil {
+		if err := agentCtx.LLMContext.WriteContent(content); err != nil {
+			return nil, fmt.Errorf("failed to write context: %w", err)
+		}
+	}
+
+	// Return simple confirmation (tool output stays in context window)
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{
+			Type: "text",
+			Text: "Context updated.",
+		},
+	}, nil
+}

@@ -187,7 +187,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentContextWindow,
 	)
 
-	// Register llm_context_decision tool (needs compactor adapted to context.Compactor)
+	// Register llm_context tools (needs compactor adapted to context.Compactor)
+	registry.Register(tools.NewLLMContextUpdateTool())
 	registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))

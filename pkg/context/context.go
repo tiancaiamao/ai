@@ -29,6 +29,10 @@ type AgentContext struct {
 
 	// ContextMgmtState tracks LLM's context management behavior for adaptive reminders.
 	ContextMgmtState *ContextMgmtState `json:"-"`
+
+	// PostCompactRecovery indicates that overview.md should be injected for recovery after compact.
+	// Set after compact completes, reset after injection.
+	PostCompactRecovery bool `json:"-"`
 }
 
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.

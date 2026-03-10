@@ -273,6 +273,8 @@ func runInnerLoop(
 					agentCtx.LastCompactionSummary = compacted.Summary
 					// Note: SaveCompactionSummary is now handled inside Session.Compact()
 				}
+				// Set flag to inject overview.md for recovery on next request
+				agentCtx.PostCompactRecovery = true
 				after := len(agentCtx.Messages)
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
@@ -324,6 +326,8 @@ func runInnerLoop(
 						agentCtx.LastCompactionSummary = compacted.Summary
 						// Note: SaveCompactionSummary is now handled inside Session.Compact()
 					}
+					// Set flag to inject overview.md for recovery on next request
+					agentCtx.PostCompactRecovery = true
 					compactionSpan.AddField("after_messages", len(compacted.Messages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
@@ -686,41 +690,54 @@ func streamAssistantResponse(
 	// Build runtime appendix (llm context + context meta) as a user message
 	// injected right after system prompt. Keeping system prompt stable improves
 	// provider-side prompt caching opportunities.
+	//
+	// NOTE: overview.md content is NOT injected by default. It's only injected:
+	// 1. After compact (PostCompactRecovery = true) for recovery
+	// 2. The LLM should use llm_context_update tool to record state, which stays in tool output
 	if agentCtx.LLMContext != nil {
 		// Track that we're starting a new LLM request round
 		agentCtx.LLMContext.IncrementRound()
 
-		// Invalidate cache to ensure we read the latest content
-		agentCtx.LLMContext.InvalidateCache()
-		content, err := agentCtx.LLMContext.Load()
-		if err != nil {
-			slog.Warn("[Loop] Failed to load llm context", "error", err)
-		} else {
-			// Refresh meta from approximate current context state.
-			tokensMax := 128000 // default context window
-			if config.ContextWindow > 0 {
-				tokensMax = config.ContextWindow
+		// Determine if we should inject overview.md content
+		// Only inject after compact for recovery
+		var content string
+		if agentCtx.PostCompactRecovery {
+			// Invalidate cache to ensure we read the latest content
+			agentCtx.LLMContext.InvalidateCache()
+			loadedContent, err := agentCtx.LLMContext.Load()
+			if err != nil {
+				slog.Warn("[Loop] Failed to load llm context for recovery", "error", err)
+			} else {
+				content = loadedContent
 			}
-			tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
-			agentCtx.LLMContext.UpdateMeta(
-				tokensUsedApprox,
-				tokensMax,
-				len(agentCtx.Messages),
-			)
-
-			meta := agentCtx.LLMContext.GetMeta()
-
-			runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
-			runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
-			if runtimeAppendix != "" {
-				runtimeMsg := llm.LLMMessage{
-					Role:    "user",
-					Content: runtimeAppendix,
-				}
-				llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
-			}
-
+			// Reset the flag after injection
+			agentCtx.PostCompactRecovery = false
 		}
+
+		// Refresh meta from approximate current context state.
+		tokensMax := 128000 // default context window
+		if config.ContextWindow > 0 {
+			tokensMax = config.ContextWindow
+		}
+		tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
+		agentCtx.LLMContext.UpdateMeta(
+			tokensUsedApprox,
+			tokensMax,
+			len(agentCtx.Messages),
+		)
+
+		meta := agentCtx.LLMContext.GetMeta()
+
+		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
+		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
+		if runtimeAppendix != "" {
+			runtimeMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: runtimeAppendix,
+			}
+			llmMessages = append([]llm.LLMMessage{runtimeMsg}, llmMessages...)
+		}
+
 	}
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
