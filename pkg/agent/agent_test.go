@@ -221,14 +221,13 @@ func TestAgentWithTools(t *testing.T) {
 }
 
 func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
-	origRunLoop := runLoopFn
-	defer func() { runLoopFn = origRunLoop }()
-
 	finalMessages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("compacted history state"),
 	}
 
-	runLoopFn = func(_ context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+	defer ag.Shutdown()
+	ag.runLoopFn = func(_ context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
 		stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
 			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
 			func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
@@ -241,8 +240,6 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 		return stream
 	}
 
-	ag := NewAgent(llm.Model{}, "test-key", "test")
-	defer ag.Shutdown()
 	ag.SetContext(&agentctx.AgentContext{
 		SystemPrompt: "test",
 		Messages: []agentctx.AgentMessage{

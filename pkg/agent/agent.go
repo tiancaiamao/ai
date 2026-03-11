@@ -84,14 +84,13 @@ type Agent struct {
 	retryBaseDelay time.Duration
 	maxTurns       int // Maximum conversation turns (0 = unlimited)
 	contextWindow  int // Context window for the model (0 = use default 128000)
+	runLoopFn       func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	traceBuf       *traceevent.TraceBuf
 	traceStop      chan struct{}
 	traceDone      chan struct{}
 	shutdownOnce   sync.Once
 	traceSeq       atomic.Uint64
 }
-
-var runLoopFn = RunLoop
 
 // NewAgent creates a new agent.
 func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
@@ -131,6 +130,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 		thinkingLevel:  "high",
 		maxLLMRetries:  defaultLLMMaxRetries,
 		retryBaseDelay: defaultRetryBaseDelay,
+		runLoopFn:      RunLoop,
 		traceBuf:       traceBuf,
 		traceStop:      make(chan struct{}),
 		traceDone:      make(chan struct{}),
@@ -215,7 +215,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
-	stream := runLoopFn(ctx, prompts, a.context, config)
+	stream := a.runLoopFn(ctx, prompts, a.context, config)
 	a.setCurrentStream(stream)
 	defer a.setCurrentStream(nil)
 
