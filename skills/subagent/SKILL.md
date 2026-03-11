@@ -111,6 +111,54 @@ This allows you to:
 - Review tool calls and reasoning
 - Understand why a subagent failed
 
+## Monitoring via status.json
+
+**Each headless session creates a status.json file:**
+```
+~/.ai/sessions/--<cwd>--/<session-id>/status.json
+```
+
+**Status file structure:**
+```json
+{
+  "session_id": "abc123",
+  "pid": 54321,
+  "status": "running",
+  "current_turn": 3,
+  "last_tool": "read",
+  "last_activity": "2024-03-11T09:00:00Z",
+  "started_at": "2024-03-11T08:55:00Z",
+  "error": ""
+}
+```
+
+**Status values:**
+- `running` - Subagent is actively processing
+- `completed` - Finished successfully
+- `timeout` - Exceeded timeout limit
+- `error` - Failed with an error
+
+**Monitor subagent progress:**
+```bash
+# Start subagent in background
+(ai --mode headless --timeout 10m "task" > /tmp/out.txt 2>&1) &
+PID=$!
+
+# Get session ID from output
+SESSION_ID=$(grep "Session ID:" /tmp/out.txt | head -1 | awk '{print $3}')
+
+# Monitor status
+watch -n 2 "cat ~/.ai/sessions/*/$SESSION_ID/status.json 2>/dev/null | jq ."
+
+# Or check specific fields
+cat ~/.ai/sessions/*/$SESSION_ID/status.json | jq '.current_turn, .last_tool, .status'
+```
+
+**For aiclaw integration:**
+- Read status.json periodically to display progress
+- Check `status` field to know when complete
+- Use `current_turn` and `last_tool` for progress indicators
+
 ## Output Format
 
 ```
