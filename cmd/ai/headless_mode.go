@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -19,6 +21,44 @@ import (
 
 	"log/slog"
 )
+
+// HeadlessStatus represents the status of a headless agent run.
+// Written to status.json for external monitoring (e.g., aiclaw).
+type HeadlessStatus struct {
+	SessionID    string    `json:"session_id"`
+	PID          int       `json:"pid"`
+	Status       string    `json:"status"` // "running", "completed", "timeout", "error"
+	CurrentTurn  int       `json:"current_turn"`
+	LastTool     string    `json:"last_tool,omitempty"`
+	LastActivity time.Time `json:"last_activity"`
+	StartedAt    time.Time `json:"started_at"`
+	Error        string    `json:"error,omitempty"`
+	mu           sync.Mutex
+}
+
+// Write writes the status to a JSON file.
+func (s *HeadlessStatus) Write(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// Update safely updates the status and writes to file.
+func (s *HeadlessStatus) Update(path string, fn func(*HeadlessStatus)) error {
+	s.mu.Lock()
+	fn(s)
+	s.LastActivity = time.Now()
+	data, err := json.MarshalIndent(s, "", "  ")
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
 
 // Helper functions for headless output formatting
 
@@ -198,9 +238,28 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 	slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 
-	// Output session info to stdout for observability
-	fmt.Fprintf(output, "Session: %s\n", sessionID)
-	fmt.Fprintf(output, "Mode: headless\n\n")
+	// Initialize status file for observability
+	status := &HeadlessStatus{
+		SessionID:    sessionID,
+		PID:          os.Getpid(),
+		Status:       "running",
+		StartedAt:    time.Now(),
+		LastActivity: time.Now(),
+	}
+	sessionFile := filepath.Join(sessionsDir, sessionID, "messages.jsonl")
+	statusFile := filepath.Join(sessionsDir, sessionID, "status.json")
+	if err := status.Write(statusFile); err != nil {
+		slog.Warn("Failed to write status file", "error", err)
+	}
+
+	// Output session info for observability
+	fmt.Fprintf(output, "=== Session Info ===\n")
+	fmt.Fprintf(output, "Session ID: %s\n", sessionID)
+	fmt.Fprintf(output, "PID: %d\n", os.Getpid())
+	fmt.Fprintf(output, "Session file: %s\n", sessionFile)
+	fmt.Fprintf(output, "Status file: %s\n", statusFile)
+	fmt.Fprintln(output)
+
 
 	// Create tool registry and register tools
 	// Create a shared workspace object for all tools to track directory changes
@@ -362,10 +421,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		args string
 	}
 
-	// Output session info at the start
-	fmt.Fprintf(output, "=== Session Info ===\n")
-	fmt.Fprintf(output, "Session ID: %s\n", sessionID)
-	fmt.Fprintf(output, "Session file: %s\n", sess.GetPath())
 	fmt.Fprintln(output)
 
 	// Subscribe to events and output turn-by-turn
@@ -421,6 +476,18 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 									textOutput = b.Text
 								}
 							}
+						}
+
+						// Update status file
+						if len(toolCalls) > 0 {
+							status.Update(statusFile, func(s *HeadlessStatus) {
+								s.CurrentTurn = turnCounter
+								s.LastTool = toolCalls[0].name
+							})
+						} else {
+							status.Update(statusFile, func(s *HeadlessStatus) {
+								s.CurrentTurn = turnCounter
+							})
 						}
 
 						// Output turn summary
@@ -516,8 +583,17 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	<-eventEmitterDone
 
 	if waitErr != nil {
+		status.Update(statusFile, func(s *HeadlessStatus) {
+			s.Status = "error"
+			s.Error = waitErr.Error()
+		})
 		return writeHeadlessError(output, waitErr.Error())
 	}
+
+	// Mark status as completed
+	status.Update(statusFile, func(s *HeadlessStatus) {
+		s.Status = "completed"
+	})
 
 	sessionWriter.Close()
 	if err := sessionMgr.SaveCurrent(); err != nil {
