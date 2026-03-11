@@ -75,6 +75,11 @@ func intToBase36(n uint32, length int) string {
 // FormatHashLines formats file content with hashline prefixes for display.
 // Each line becomes LINENUM:HASH|CONTENT where LINENUM is 1-indexed.
 func FormatHashLines(content string, startLine int) string {
+	// Handle empty content - return empty output instead of spurious hashline
+	if content == "" {
+		return ""
+	}
+	
 	if startLine == 0 {
 		startLine = 1
 	}
@@ -362,8 +367,32 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 			trackFirstChanged(&firstChangedLine, insertLine+1)
 
 		case "replace":
-			// Handle replace mode separately
-			continue
+			// Handle replace mode - operates on full content, not line-based
+			if len(pe.dstLines) >= 2 {
+				oldText := pe.dstLines[0]
+				newText := pe.dstLines[1]
+				fileContent := strings.Join(fileLines, "\n")
+				
+				// Check if this is a no-op
+				if !strings.Contains(fileContent, oldText) {
+					noopEdits = append(noopEdits, NoopEdit{
+						EditIndex:     pe.idx,
+						Location:      "replace",
+						CurrentContent: oldText,
+					})
+					continue
+				}
+				
+				// Apply the replacement
+				if edit, ok := findEditByIndex(edits, pe.idx); ok && edit.All {
+					fileContent = strings.ReplaceAll(fileContent, oldText, newText)
+				} else {
+					fileContent = strings.Replace(fileContent, oldText, newText, 1)
+				}
+				
+				fileLines = strings.Split(fileContent, "\n")
+				trackFirstChanged(&firstChangedLine, 1)
+			}
 		}
 	}
 
@@ -547,4 +576,12 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// findEditByIndex finds an edit by its original index in the edits slice
+func findEditByIndex(edits []HashlineEdit, idx int) (HashlineEdit, bool) {
+	if idx >= 0 && idx < len(edits) {
+		return edits[idx], true
+	}
+	return HashlineEdit{}, false
 }

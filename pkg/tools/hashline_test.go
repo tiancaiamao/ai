@@ -67,6 +67,14 @@ func TestFormatHashLines(t *testing.T) {
 	}
 }
 
+func TestFormatHashLinesEmpty(t *testing.T) {
+	// Empty content should return empty string, not a spurious hashline
+	result := FormatHashLines("", 1)
+	if result != "" {
+		t.Errorf("FormatHashLines(\"\", 1) = %q, want empty string", result)
+	}
+}
+
 func TestParseLineRef(t *testing.T) {
 	tests := []struct {
 		ref      string
@@ -188,6 +196,48 @@ func TestApplyHashlineEdits(t *testing.T) {
 		}
 
 		expected := "line1\nreplaced\nline4"
+		if result.Content != expected {
+			t.Errorf("ApplyHashlineEdits = %q, want %q", result.Content, expected)
+		}
+	})
+
+	t.Run("replace_substring", func(t *testing.T) {
+		content := "line1\nline2\nline3"
+
+		edits := []HashlineEdit{{
+			Type:    HashlineEditReplace,
+			OldText: "line2",
+			NewText: "modified",
+			All:     false,
+		}}
+
+		result, err := ApplyHashlineEdits(edits, content)
+		if err != nil {
+			t.Fatalf("ApplyHashlineEdits error: %v", err)
+		}
+
+		expected := "line1\nmodified\nline3"
+		if result.Content != expected {
+			t.Errorf("ApplyHashlineEdits = %q, want %q", result.Content, expected)
+		}
+	})
+
+	t.Run("replace_substring_all", func(t *testing.T) {
+		content := "foo bar foo baz foo"
+
+		edits := []HashlineEdit{{
+			Type:    HashlineEditReplace,
+			OldText: "foo",
+			NewText: "qux",
+			All:     true,
+		}}
+
+		result, err := ApplyHashlineEdits(edits, content)
+		if err != nil {
+			t.Fatalf("ApplyHashlineEdits error: %v", err)
+		}
+
+		expected := "qux bar qux baz qux"
 		if result.Content != expected {
 			t.Errorf("ApplyHashlineEdits = %q, want %q", result.Content, expected)
 		}
