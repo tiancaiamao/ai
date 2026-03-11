@@ -415,12 +415,17 @@ func runInnerLoop(
 				newMessages = append(newMessages, result)
 			}
 			// Check if llm context was updated
-			if agentCtx.LLMContext != nil {
+			if agentCtx.LLMContext != nil || loopGuard != nil {
 				toolCalls := msg.ExtractToolCalls()
 				for _, tc := range toolCalls {
 					// Track if LLM called llm_context_decision tool
 					if strings.EqualFold(tc.Name, "llm_context_decision") {
 						agentCtx.LLMContext.MarkDecisionMade()
+					}
+					// Reset loop guard counter for llm_context_update tool
+					// This tool is used for task state management and should not trigger loop guard
+					if strings.EqualFold(tc.Name, "llm_context_update") {
+						loopGuard.ResetToolCount("llm_context_update")
 					}
 				}
 			}
