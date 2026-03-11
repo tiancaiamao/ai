@@ -9,14 +9,28 @@ import (
 	"strings"
 )
 
+// EditMode defines the edit mode
+type EditMode int
+
+const (
+	EditModeReplace EditMode = iota // Default: oldText/newText replacement
+	EditModeHashline               // Hashline mode: line-addressed edits using content hashes
+)
+
 // EditTool edits a file by replacing old text with new text with dynamic workspace support.
 type EditTool struct {
 	workspace *Workspace
+	editMode  EditMode
 }
 
 // NewEditTool creates a new Edit tool with dynamic workspace support.
 func NewEditTool(ws *Workspace) *EditTool {
 	return &EditTool{workspace: ws}
+}
+
+// SetEditMode sets the edit mode.
+func (t *EditTool) SetEditMode(mode EditMode) {
+	t.editMode = mode
 }
 
 // Name returns the tool name.
@@ -53,7 +67,12 @@ func (t *EditTool) Parameters() map[string]any {
 
 // Execute executes the Edit tool.
 func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
-	// Extract parameters
+	// Check for hashline mode edits
+	if edits, ok := args["edits"].([]interface{}); ok && len(edits) > 0 {
+		return t.executeHashlineEdits(ctx, args)
+	}
+
+	// Extract parameters for replace mode
 	path, ok := args["path"].(string)
 	if !ok {
 		return nil, fmt.Errorf("path must be a string")
@@ -104,6 +123,151 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Type: "text",
 		Text: result,
 	}}, nil
+}
+
+// executeHashlineEdits handles hashline mode edits
+func (t *EditTool) executeHashlineEdits(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
+	path, ok := args["path"].(string)
+	if !ok {
+		return nil, fmt.Errorf("path must be a string")
+	}
+
+	editsRaw, ok := args["edits"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("edits must be an array")
+	}
+
+	// Convert edits to HashlineEdit slice
+	edits := make([]HashlineEdit, 0, len(editsRaw))
+	for i, e := range editsRaw {
+		editMap, ok := e.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("edit %d must be an object", i)
+		}
+
+		edit, err := parseHashlineEditFromMap(editMap)
+		if err != nil {
+			return nil, fmt.Errorf("edit %d: %w", i, err)
+		}
+		edits = append(edits, *edit)
+	}
+
+	// Resolve path
+	fullPath := t.resolvePath(path)
+
+	// Read file
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fileContent := string(content)
+
+	// Apply hashline edits
+	result, err := ApplyHashlineEdits(edits, fileContent)
+	if err != nil {
+		if mismatchErr, ok := err.(*HashlineMismatchError); ok {
+			// Format helpful error with remaps
+			errMsg := mismatchErr.Error()
+			if len(mismatchErr.Remaps) > 0 {
+				errMsg += "\n\nCorrected line references:"
+				for line, hash := range mismatchErr.Remaps {
+					errMsg += fmt.Sprintf("\n  %d:%s", line, hash)
+				}
+			}
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+		return nil, err
+	}
+
+	// Write back
+	if err := os.WriteFile(fullPath, []byte(result.Content), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Build result message
+	msg := fmt.Sprintf("Edited %s (%d operations)", path, len(edits))
+	if len(result.Warnings) > 0 {
+		msg += "\n\nWarnings:"
+		for _, w := range result.Warnings {
+			msg += "\n- " + w
+		}
+	}
+	if len(result.NoopEdits) > 0 {
+		msg += fmt.Sprintf("\n\n%d edits produced no changes (content identical)", len(result.NoopEdits))
+	}
+
+	return []agentctx.ContentBlock{agentctx.TextContent{
+		Type: "text",
+		Text: msg,
+	}}, nil
+}
+
+// parseHashlineEditFromMap parses a hashline edit from a map
+func parseHashlineEditFromMap(m map[string]interface{}) (*HashlineEdit, error) {
+	edit := &HashlineEdit{}
+
+	if setLine, ok := m["set_line"].(map[string]interface{}); ok {
+		edit.Type = HashlineEditSetLine
+		if anchor, ok := setLine["anchor"].(string); ok {
+			edit.Anchor = anchor
+		} else {
+			return nil, fmt.Errorf("set_line requires anchor")
+		}
+		if newText, ok := setLine["new_text"].(string); ok {
+			edit.NewText = newText
+		}
+		return edit, nil
+	}
+
+	if replaceLines, ok := m["replace_lines"].(map[string]interface{}); ok {
+		edit.Type = HashlineEditReplaceLines
+		if startAnchor, ok := replaceLines["start_anchor"].(string); ok {
+			edit.StartAnchor = startAnchor
+		} else {
+			return nil, fmt.Errorf("replace_lines requires start_anchor")
+		}
+		if endAnchor, ok := replaceLines["end_anchor"].(string); ok {
+			edit.EndAnchor = endAnchor
+		}
+		if newText, ok := replaceLines["new_text"].(string); ok {
+			edit.NewText = newText
+		}
+		return edit, nil
+	}
+
+	if insertAfter, ok := m["insert_after"].(map[string]interface{}); ok {
+		edit.Type = HashlineEditInsertAfter
+		if anchor, ok := insertAfter["anchor"].(string); ok {
+			edit.Anchor = anchor
+		} else {
+			return nil, fmt.Errorf("insert_after requires anchor")
+		}
+		if text, ok := insertAfter["text"].(string); ok {
+			edit.Text = text
+		}
+		return edit, nil
+	}
+
+	if replace, ok := m["replace"].(map[string]interface{}); ok {
+		edit.Type = HashlineEditReplace
+		if oldText, ok := replace["old_text"].(string); ok {
+			edit.OldText = oldText
+		} else {
+			return nil, fmt.Errorf("replace requires old_text")
+		}
+		if newText, ok := replace["new_text"].(string); ok {
+			edit.NewText = newText
+		} else {
+			return nil, fmt.Errorf("replace requires new_text")
+		}
+		if all, ok := replace["all"].(bool); ok {
+			edit.All = all
+		}
+		return edit, nil
+	}
+
+	return nil, fmt.Errorf("unknown edit type")
 }
 
 // resolvePath resolves a path relative to the current working directory.

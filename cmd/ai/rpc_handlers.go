@@ -158,11 +158,22 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewReadTool(ws))
+	readTool := tools.NewReadTool(ws)
+	editTool := tools.NewEditTool(ws)
+
+	// Apply hashline configuration if enabled
+	if cfg.ToolOutput != nil && cfg.ToolOutput.HashLines {
+		readTool.SetHashLines(true)
+	}
+	if cfg.Edit != nil && cfg.Edit.Mode == "hashline" {
+		editTool.SetEditMode(tools.EditModeHashline)
+	}
+
+	registry.Register(readTool)
 	registry.Register(tools.NewBashTool(ws))
 	registry.Register(tools.NewWriteTool(ws))
 	registry.Register(tools.NewGrepTool(ws))
-	registry.Register(tools.NewEditTool(ws))
+	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	// Create memory manager and register llm_context_recall tool

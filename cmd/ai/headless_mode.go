@@ -87,12 +87,23 @@ func joinLines(lines []string) string {
 	return strings.Join(lines, "\n")
 }
 
-func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compactor *compact.Compactor) {
-	registry.Register(tools.NewReadTool(ws))
+func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compactor *compact.Compactor, cfg *config.Config) {
+	readTool := tools.NewReadTool(ws)
+	editTool := tools.NewEditTool(ws)
+
+	// Apply hashline configuration if enabled
+	if cfg.ToolOutput != nil && cfg.ToolOutput.HashLines {
+		readTool.SetHashLines(true)
+	}
+	if cfg.Edit != nil && cfg.Edit.Mode == "hashline" {
+		editTool.SetEditMode(tools.EditModeHashline)
+	}
+
+	registry.Register(readTool)
 	registry.Register(tools.NewBashTool(ws))
 	registry.Register(tools.NewWriteTool(ws))
 	registry.Register(tools.NewGrepTool(ws))
-	registry.Register(tools.NewEditTool(ws))
+	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 	if compactor != nil {
 		registry.Register(tools.NewLLMContextUpdateTool())
@@ -220,7 +231,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		prompt.CompactorBasePrompt(),
 		currentContextWindow,
 	)
-	registerHeadlessTools(registry, ws, compactor)
+	registerHeadlessTools(registry, ws, compactor, cfg)
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
