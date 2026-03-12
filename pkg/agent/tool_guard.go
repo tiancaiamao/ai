@@ -12,13 +12,13 @@ import (
 )
 
 // toolLoopGuard detects and prevents infinite tool call loops.
+// It only counts consecutive calls with the same signature (name + arguments hash).
+// When the tool or arguments change, the counter resets to 1.
 type toolLoopGuard struct {
 	maxConsecutive int
-	maxPerToolName int
 
 	lastSignature  string
 	consecutiveRun int
-	toolCallTotals map[string]int
 }
 
 func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
@@ -26,14 +26,11 @@ func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
 		return nil
 	}
 	maxConsecutive := resolveLoopGuardLimit(config.MaxConsecutiveToolCalls, defaultLoopMaxConsecutiveToolCalls)
-	maxPerToolName := resolveLoopGuardLimit(config.MaxToolCallsPerName, defaultLoopMaxToolCallsPerName)
-	if maxConsecutive == 0 && maxPerToolName == 0 {
+	if maxConsecutive == 0 {
 		return nil
 	}
 	return &toolLoopGuard{
 		maxConsecutive: maxConsecutive,
-		maxPerToolName: maxPerToolName,
-		toolCallTotals: make(map[string]int),
 	}
 }
 
@@ -48,6 +45,8 @@ func resolveLoopGuardLimit(value, defaultValue int) int {
 }
 
 // Observe checks tool calls for loop patterns.
+// It only counts consecutive calls with the same signature (name + arguments hash).
+// When the signature changes, the counter resets.
 func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, string) {
 	for _, tc := range toolCalls {
 		name := strings.ToLower(strings.TrimSpace(tc.Name))
@@ -66,23 +65,8 @@ func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, str
 		if g.maxConsecutive > 0 && g.consecutiveRun > g.maxConsecutive {
 			return true, fmt.Sprintf("detected %d consecutive identical tool calls (%s)", g.consecutiveRun, name)
 		}
-
-		g.toolCallTotals[name]++
-		if g.maxPerToolName > 0 && g.toolCallTotals[name] > g.maxPerToolName {
-			return true, fmt.Sprintf("tool %q called %d times in one run", name, g.toolCallTotals[name])
-		}
 	}
 	return false, ""
-}
-
-// ResetToolCount resets the call counter for a specific tool.
-// This is used when a tool call is productive (e.g., writing llm context)
-// and should not contribute to loop detection.
-func (g *toolLoopGuard) ResetToolCount(toolName string) {
-	if g == nil {
-		return
-	}
-	g.toolCallTotals[toolName] = 0
 }
 
 func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) {

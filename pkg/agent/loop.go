@@ -422,11 +422,6 @@ func runInnerLoop(
 					if strings.EqualFold(tc.Name, "llm_context_decision") {
 						agentCtx.LLMContext.MarkDecisionMade()
 					}
-					// Reset loop guard counter for llm_context_update tool
-					// This tool is used for task state management and should not trigger loop guard
-					if strings.EqualFold(tc.Name, "llm_context_update") {
-						loopGuard.ResetToolCount("llm_context_update")
-					}
 				}
 			}
 		}
