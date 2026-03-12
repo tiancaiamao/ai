@@ -234,7 +234,8 @@ func initTraceFileHandler(sessionID string) (*traceevent.FileHandler, string, er
 		handler.SetSessionID(sessionID)
 	}
 
-	return handler, tracesDir, nil
+	traceFilePath := handler.TraceFilePath("")
+	return handler, traceFilePath, nil
 }
 
 // runDetachedTraceSpan executes a non-prompt operation as an independent trace segment.

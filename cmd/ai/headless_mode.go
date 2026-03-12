@@ -238,6 +238,14 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 	slog.Info("Loaded session", "id", sessionID, "count", len(sess.GetMessages()))
 
+	// Initialize trace handler with sessionID
+	_, traceFile, err := initTraceFileHandler(sessionID)
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "file", traceFile, "error", err)
+	} else {
+		slog.Info("Trace handler initialized", "file", traceFile)
+	}
+
 	// Initialize status file for observability
 	status := &HeadlessStatus{
 		SessionID:    sessionID,
@@ -258,6 +266,9 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	fmt.Fprintf(output, "PID: %d\n", os.Getpid())
 	fmt.Fprintf(output, "Session file: %s\n", sessionFile)
 	fmt.Fprintf(output, "Status file: %s\n", statusFile)
+	if traceFile != "" {
+		fmt.Fprintf(output, "Trace file: %s\n", traceFile)
+	}
 	fmt.Fprintln(output)
 
 

@@ -283,3 +283,19 @@ func GetHandler() TraceHandler {
 func ClearHandler() {
 	globalHandler.Store(nil)
 }
+
+// TraceFilePath returns the expected trace file path for the given trace ID.
+// If traceID is empty, returns the path for the default trace.
+// This method is safe to call before any events are written.
+func (h *FileHandler) TraceFilePath(traceID string) string {
+	h.mu.Lock()
+	sessionID := h.sessionID
+	processID := h.processID
+	h.mu.Unlock()
+
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	baseName := fmt.Sprintf("pid%d-sess%s", processID, sessionID)
+	return h.traceFilePath(baseName, 0)
+}
