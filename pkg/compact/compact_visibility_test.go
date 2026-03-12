@@ -25,11 +25,26 @@ func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
 }
 
 func TestCompactToolResultsInRecent(t *testing.T) {
+	// Create messages with tool_calls (assistant) and tool_results
 	messages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
+		func() agentctx.AgentMessage {
+			m := agentctx.NewAssistantMessage()
+			m.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{ID: "call-1", Name: "read", Arguments: map[string]any{"path": "file1.txt"}},
+			}
+			return m
+		}(),
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "first output"},
 		}, false),
+		func() agentctx.AgentMessage {
+			m := agentctx.NewAssistantMessage()
+			m.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{ID: "call-2", Name: "grep", Arguments: map[string]any{"pattern": "foo"}},
+			}
+			return m
+		}(),
 		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "second output"},
 		}, false),
@@ -47,7 +62,18 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 		t.Fatalf("expected 1 visible tool result after compaction, got %d", visibleToolResults)
 	}
 
-	oldest := compacted[1]
+	// The oldest tool_result (first one) should be archived
+	oldestResultIndex := -1
+	for i, msg := range compacted {
+		if msg.Role == "toolResult" {
+			oldestResultIndex = i
+			break
+		}
+	}
+	if oldestResultIndex < 0 {
+		t.Fatal("expected to find tool_result messages")
+	}
+	oldest := compacted[oldestResultIndex]
 	if oldest.IsAgentVisible() {
 		t.Fatal("expected oldest tool result to be archived")
 	}
@@ -55,52 +81,27 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 		t.Fatalf("expected archived kind, got %+v", oldest.Metadata)
 	}
 
-	last := compacted[len(compacted)-1]
-	if last.Metadata == nil || last.Metadata.Kind != "tool_summary" {
-		t.Fatalf("expected tool summary message, got %+v", last.Metadata)
-	}
-	if !last.IsAgentVisible() || last.IsUserVisible() {
-		t.Fatal("expected summary to be agent-visible and user-hidden")
-	}
-}
-
-// TestCompactToolSummaryMessageRole verifies that the tool_summary message
-// added by compactToolResultsInRecent has role "user", not "assistant".
-// This is critical for API compatibility: when compact is called during
-// tool execution (e.g., llm_context_decision), adding an assistant message
-// would create consecutive assistant messages (tool_use followed by this message),
-// which violates OpenAI API requirements.
-func TestCompactToolSummaryMessageRole(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("start"),
-		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "first output"},
-		}, false),
-		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "second output"},
-		}, false),
-	}
-
-	compacted := compactToolResultsInRecent(messages, 1)
-
-	// Find the tool_summary message
-	var summaryMsg *agentctx.AgentMessage
-	for i := range compacted {
-		if compacted[i].Metadata != nil && compacted[i].Metadata.Kind == "tool_summary" {
-			summaryMsg = &compacted[i]
-			break
+	// Verify no tool_summary message was added
+	for _, msg := range compacted {
+		if msg.Metadata != nil && msg.Metadata.Kind == "tool_summary" {
+			t.Fatal("expected no tool_summary message to be added")
 		}
 	}
 
-	if summaryMsg == nil {
-		t.Fatal("expected tool_summary message to be present")
+	// Verify tool_call messages are still present (not hidden)
+	// This ensures protocol compliance - we don't hide tool_calls anymore
+	toolCallCount := 0
+	for _, msg := range compacted {
+		if msg.Role == "assistant" {
+			for _, block := range msg.Content {
+				if _, ok := block.(agentctx.ToolCallContent); ok {
+					toolCallCount++
+				}
+			}
+		}
 	}
-
-	// CRITICAL: The summary message must be "user" role, not "assistant".
-	// This prevents consecutive assistant messages when compact is called
-	// during tool execution (e.g., llm_context_decision tool).
-	if summaryMsg.Role != "user" {
-		t.Fatalf("expected tool_summary message to have role 'user' to avoid consecutive assistant messages, got role '%s'", summaryMsg.Role)
+	if toolCallCount != 2 {
+		t.Fatalf("expected 2 tool_calls to still be present (not hidden), got %d", toolCallCount)
 	}
 }
 

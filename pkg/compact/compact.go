@@ -648,129 +648,23 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 	)
 
 	compacted := append([]agentctx.AgentMessage{}, messages...)
-	lines := make([]string, 0, excess)
 
-	// Collect tool_call IDs that will be archived (to hide corresponding tool_calls)
-	archivedToolCallIDs := make(map[string]bool)
-
+	// Hide excess tool_results from agent (but keep visible to user)
+	// Unlike before, we don't hide tool_calls or add a summary message,
+	// which avoids protocol violations.
 	for i := 0; i < excess; i++ {
 		idx := visibleToolIndexes[i]
 		original := compacted[idx]
-		// Mark tool_result as hidden from agent but keep visible to user
 		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
-		lines = append(lines, compactionToolDigestLine(original))
-
-		// Track the tool_call ID that needs to be hidden
-		if original.ToolCallID != "" {
-			archivedToolCallIDs[original.ToolCallID] = true
-		}
 	}
 
-	// Now hide the corresponding tool_calls in assistant messages
-	// These are the tool_call content blocks that match the archived tool_result IDs
-	compacted = hideArchivedToolCalls(compacted, archivedToolCallIDs)
-
-	digest := "[ARCHIVED_TOOL_CONTEXT: " + strings.Join(lines, " ") + "]"
-	compacted = append(compacted, newToolSummaryContextMessage(digest))
-	summarySpan.AddField("summary_chars", len([]rune(digest)))
 	summarySpan.End()
 	return compacted
-}
-
-// hideArchivedToolCalls hides tool_call content blocks in assistant messages
-// that correspond to archived (hidden) tool_result messages.
-// This prevents "tool call and result not match" errors from the API.
-func hideArchivedToolCalls(messages []agentctx.AgentMessage, archivedToolCallIDs map[string]bool) []agentctx.AgentMessage {
-	if len(archivedToolCallIDs) == 0 {
-		return messages
-	}
-
-	result := make([]agentctx.AgentMessage, 0, len(messages))
-	for _, msg := range messages {
-		// Only process assistant messages with tool_calls
-		if msg.Role != "assistant" || len(msg.Content) == 0 {
-			result = append(result, msg)
-			continue
-		}
-
-		// Check if any tool_call needs to be hidden
-		hasArchivedCall := false
-		for _, block := range msg.Content {
-			if tc, ok := block.(agentctx.ToolCallContent); ok {
-				if archivedToolCallIDs[tc.ID] {
-					hasArchivedCall = true
-					break
-				}
-			}
-		}
-
-		if !hasArchivedCall {
-			result = append(result, msg)
-			continue
-		}
-
-		// Filter out archived tool_calls, keep other content
-		newContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-		for _, block := range msg.Content {
-			if tc, ok := block.(agentctx.ToolCallContent); ok {
-				if archivedToolCallIDs[tc.ID] {
-					// Skip this archived tool_call
-					continue
-				}
-			}
-			newContent = append(newContent, block)
-		}
-
-		// If all tool_calls were archived, hide the entire message from agent
-		if len(newContent) == 0 {
-			msg.Content = newContent
-			msg.Metadata = &agentctx.MessageMetadata{
-				AgentVisible: boolPtr(false),
-				UserVisible:  boolPtr(msg.IsUserVisible()),
-				Kind:         "tool_call_archived",
-			}
-		} else {
-			msg.Content = newContent
-		}
-		result = append(result, msg)
-	}
-
-	return result
 }
 
 func boolPtr(v bool) *bool {
 	b := v
 	return &b
-}
-
-func newToolSummaryContextMessage(text string) agentctx.AgentMessage {
-	// Use user message instead of assistant to avoid violating API constraints.
-	// When compact is called during tool execution (e.g., llm_context_decision),
-	// adding an assistant message would create consecutive assistant messages
-	// (tool_use followed by this message), which violates OpenAI API requirements.
-	msg := agentctx.NewUserMessage(text)
-	return msg.WithVisibility(true, false).WithKind("tool_summary")
-}
-
-func compactionToolDigestLine(msg agentctx.AgentMessage) string {
-	status := "ok"
-	if msg.IsError {
-		status = "error"
-	}
-
-	name := strings.TrimSpace(msg.ToolName)
-	if name == "" {
-		name = "unknown"
-	}
-
-	text := strings.TrimSpace(extractText(msg))
-	if text == "" {
-		text = "(empty output)"
-	}
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = trimRunes(text, 200)
-
-	return fmt.Sprintf("- %s (%s): %s", name, status, text)
 }
 
 func trimRunes(input string, limit int) string {
