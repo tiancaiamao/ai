@@ -22,22 +22,35 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
 
 4. NEVER use --max-turns unless explicitly needed
    → Let subagents complete naturally
+
+5. ALWAYS use subagent_wait.sh to wait for completion
+   → NEVER use sleep, wait, or polling loops
+   → subagent_wait.sh enables user interrupt support
 ```
 
 ## Correct Command Template
 
 ```bash
-# CORRECT ✓ - Session enabled, timeout set, persona loaded
-ai --mode headless \
+# STEP 1: Start subagent in background with output redirect
+(ai --mode headless \
   --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
   --timeout 10m \
-  "Your task description here"
+  "Your task description here" > /tmp/subagent-output.txt 2>&1) &
 
-# WRONG ✗ - No timeout = runaway risk
-ai --mode headless "complex task"
+# STEP 2: Capture session ID from output (appears in first few lines)
+SESSION_ID=$(grep -m1 "Session ID:" /tmp/subagent-output.txt | awk '{print $3}')
 
-# WRONG ✗ - No persona = unfocused output
-ai --mode headless --timeout 10m "analyze this"
+# STEP 3: Wait using subagent_wait.sh (REQUIRED - enables interrupt)
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION_ID" 600
+
+# STEP 4: Collect results
+cat /tmp/subagent-output.txt
+
+# WRONG ✗ - Using sleep (blocking, no interrupt support)
+sleep 30 && cat /tmp/subagent-output.txt
+
+# WRONG ✗ - Using polling loop (wasteful, no interrupt support)
+while [ ! -f /tmp/done ]; do sleep 1; done
 ```
 
 ## Subagent Management with Bash
@@ -138,26 +151,39 @@ This allows you to:
 - `timeout` - Exceeded timeout limit
 - `error` - Failed with an error
 
-**Monitor subagent progress:**
+### Using subagent_wait.sh (Recommended)
+
+**The easiest way to monitor subagents:**
+
 ```bash
 # Start subagent in background
-(ai --mode headless --timeout 10m "task" > /tmp/out.txt 2>&1) &
-PID=$!
+SESSION=$(ai --mode headless --detach --timeout 10m "complex analysis task")
 
-# Get session ID from output
-SESSION_ID=$(grep "Session ID:" /tmp/out.txt | head -1 | awk '{print $3}')
-
-# Monitor status
-watch -n 2 "cat ~/.ai/sessions/*/$SESSION_ID/status.json 2>/dev/null | jq ."
-
-# Or check specific fields
-cat ~/.ai/sessions/*/$SESSION_ID/status.json | jq '.current_turn, .last_tool, .status'
+# Wait for completion (with interrupt support)
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
 ```
 
-**For aiclaw integration:**
-- Read status.json periodically to display progress
-- Check `status` field to know when complete
-- Use `current_turn` and `last_tool` for progress indicators
+**Features:**
+- ✅ Monitors multiple sessions: `~/.ai/skills/subagent/bin/subagent_wait.sh "abc123,def456" 600`
+- ✅ **Interruptible by user input** - main agent stays responsive
+- ✅ Timeout control (default 600s = 10 minutes)
+- ✅ Progress updates every 5 seconds
+- ✅ Exit codes: 0=completed/interrupted, 1=timeout, 2=error
+
+**How interrupt works:**
+- When user sends input (prompt/steer), the agent loop creates an interrupt file
+- subagent_wait.sh detects the file and exits immediately
+- Main agent loop continues, can respond to user
+- No blocking, no blind waiting!
+
+**Manual status check:**
+```bash
+# Check specific session
+cat ~/.ai/sessions/*/$SESSION/status.json | jq .
+
+# Check all running sessions
+find ~/.ai/sessions -name status.json -exec sh -c 'echo "=== {} ===" && cat {} | jq -r "select(.status==\"running\") | "\(.session_id): turn \(.current_turn), last tool: \(.last_tool)""' \;
+```
 
 ## Output Format
 
@@ -386,6 +412,7 @@ fi
 | Can't find session | Wrong directory | Check `Session file:` in output |
 | Bash timeout | Bash tool has 30s limit | Run in background with `&` and collect to file |
 | Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
+| **User input blocked** | **Using sleep/wait instead of subagent_wait.sh** | **Always use subagent_wait.sh** |
 
 ## Best Practices
 
