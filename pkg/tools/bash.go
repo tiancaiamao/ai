@@ -65,6 +65,19 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
+	
+	// Check if this is a subagent_wait command
+	im := getGlobalInterruptManager()
+	interruptFile := ""
+	if im != nil && strings.Contains(command, "subagent_wait") {
+		// Generate interrupt file path
+		interruptFile = GenerateInterruptFilePath()
+		im.SetInterruptFile(interruptFile)
+		defer im.ClearInterruptFile()
+		
+		// Append interrupt file to command
+		command = command + " " + interruptFile
+	}
 
 	// Create context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, t.execTimeout)

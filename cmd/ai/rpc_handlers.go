@@ -29,7 +29,53 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+// cmdInterruptManager implements tools.InterruptManager and triggers file creation.
+type cmdInterruptManager struct {
+	mu          sync.Mutex
+	currentFile string
+}
+
+// SetInterruptFile sets the current interrupt file path.
+func (m *cmdInterruptManager) SetInterruptFile(path string) {
+	m.mu.Lock()
+	m.currentFile = path
+	m.mu.Unlock()
+}
+
+// ClearInterruptFile clears the current interrupt file path.
+func (m *cmdInterruptManager) ClearInterruptFile() {
+	m.mu.Lock()
+	m.currentFile = ""
+	m.mu.Unlock()
+}
+
+// GetInterruptFile returns the current interrupt file path.
+func (m *cmdInterruptManager) GetInterruptFile() string {
+	m.mu.Lock()
+	path := m.currentFile
+	m.mu.Unlock()
+	return path
+}
+
+// TriggerInterrupt creates the interrupt file if one is set.
+func (m *cmdInterruptManager) TriggerInterrupt() {
+	path := m.GetInterruptFile()
+	
+	if path != "" {
+		// Create the file to signal subagent_wait
+		if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+			slog.Warn("Failed to create interrupt file", "error", err, "path", path)
+		} else {
+			slog.Debug("Triggered interrupt", "path", path)
+		}
+	}
+}
+
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
+	// Create and register interrupt manager
+	interruptMgr := &cmdInterruptManager{}
+	tools.SetGlobalInterruptManager(interruptMgr)
+	
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -513,6 +559,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.SetSteerHandler(func(message string) error {
 		slog.Info("Received steer:", "value", message)
+		
+		// Trigger interrupt for subagent_wait
+		interruptMgr.TriggerInterrupt()
+		
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
