@@ -746,6 +746,11 @@ func streamAssistantResponse(
 		}
 		llmMessages = append(llmMessages, reminderMsg)
 		agentCtx.LLMContext.SetWasReminded()
+
+		// Trace event for context update reminder
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",
+			traceevent.Field{Key: "reminder_type", Value: "llm_context_update"},
+		)
 	}
 
 	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
@@ -764,6 +769,12 @@ func streamAssistantResponse(
 			Content: decisionReminderContent,
 		}
 		llmMessages = append(llmMessages, decisionReminderMsg)
+
+		// Trace event for context decision reminder
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
+			traceevent.Field{Key: "reminder_type", Value: "llm_context_decision"},
+			traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
+		)
 	}
 
 	// Convert tools to LLM format
@@ -1648,6 +1659,44 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 		cmStats = "  your_score: no_data_yet"
 	}
 
+	// Build update metrics section
+	var updateMetrics string
+	if agentCtx.LLMContext != nil {
+		updateStats := agentCtx.LLMContext.GetUpdateStats()
+		if updateStats.Total > 0 {
+			updateMetrics = fmt.Sprintf(`
+context_metrics:
+  update:
+    total: %d
+    autonomous: %d
+    prompted: %d
+    consciousness: %d%%
+    score: %s
+  decision:
+    proactive: %d
+    reminded: %d
+    score: %s`,
+				updateStats.Total,
+				updateStats.Autonomous,
+				updateStats.Prompted,
+				updateStats.ConsciousPct,
+				updateStats.Score,
+				state.ProactiveDecisions,
+				state.ReminderNeeded,
+				state.GetScore())
+		} else {
+			updateMetrics = `
+context_metrics:
+  update:
+    total: 0
+    score: no_data
+  decision:
+    proactive: 0
+    reminded: 0
+    score: no_data_yet`
+		}
+	}
+
 	snapshot := fmt.Sprintf(`<runtime_state>
 context_meta:
   tokens_band: %s
@@ -1665,7 +1714,7 @@ context_management:
   action_required: %s
   urgency: %s
   skip_until_turn: %d
-%s
+%s%s
 compact_decision_signals:
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
@@ -1694,6 +1743,7 @@ guidance:
 		urgency,
 		state.SkipUntilTurn,
 		cmStats,
+		updateMetrics,
 		meta.TokensPercent,
 		yesNo(fastPathAllowed),
 		stageHint,

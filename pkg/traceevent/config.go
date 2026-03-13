@@ -242,6 +242,8 @@ var eventNameToBit = map[string]int{
 	"truncate_compact_hint_start":         48,
 	"truncate_compact_hint_skip":          49,
 	"truncate_compact_hint_read_attempt":   50,
+	"context_update_reminder":              51,
+	"context_decision_reminder":            52,
 }
 
 var defaultEnabledEvents = []string{
@@ -283,6 +285,8 @@ var defaultEnabledEvents = []string{
 	"tool_output_truncated_via_hint",
 	"compact_skipped_via_hint_confidence",
 	"compact_performed_via_hint",
+	"context_update_reminder",
+	"context_decision_reminder",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -327,6 +331,8 @@ var eventSelectorGroups = map[string][]string{
 		"message_end",
 		"message_update",
 		"compaction",
+		"context_update_reminder",
+		"context_decision_reminder",
 	},
 	"log": {
 		"log:info",

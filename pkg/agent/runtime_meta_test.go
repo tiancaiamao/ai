@@ -425,3 +425,36 @@ func TestFindLatestToolCallID(t *testing.T) {
 		t.Fatalf("expected empty string for nonexistent tool, got %s", id)
 	}
 }
+
+func TestUpdateRuntimeMetaSnapshotIncludesContextMetrics(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.LLMContext = agentctx.NewLLMContext(t.TempDir())
+
+	meta := agentctx.ContextMeta{
+		TokensUsed:        12345,
+		TokensMax:         128000,
+		TokensPercent:     15.0,
+		MessagesInHistory: 10,
+		LLMContextSize:    500,
+	}
+
+	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+
+	// Should contain context_metrics section
+	if !containsString(snapshot, "context_metrics:") {
+		t.Fatalf("expected context_metrics section in snapshot:\n%s", snapshot)
+	}
+
+	// Should have update subsection with no_data initially
+	if !containsString(snapshot, "update:") {
+		t.Fatalf("expected update subsection:\n%s", snapshot)
+	}
+	if !containsString(snapshot, "total: 0") {
+		t.Fatalf("expected total: 0 for no data yet:\n%s", snapshot)
+	}
+
+	// Should have decision subsection
+	if !containsString(snapshot, "decision:") {
+		t.Fatalf("expected decision subsection:\n%s", snapshot)
+	}
+}

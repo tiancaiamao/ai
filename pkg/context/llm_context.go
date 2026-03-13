@@ -578,6 +578,44 @@ func (wm *LLMContext) GetUpdateConsciousness() float64 {
 	return float64(wm.autonomousUpdates) / float64(wm.totalUpdates)
 }
 
+// UpdateStats contains statistics about llm_context_update tool calls.
+type UpdateStats struct {
+	Total       int
+	Autonomous  int
+	Prompted    int
+	Score       string // "excellent", "good", "needs_improvement", "no_data"
+	ConsciousPct int   // percentage 0-100
+}
+
+// GetUpdateStats returns statistics about llm_context_update tool calls.
+func (wm *LLMContext) GetUpdateStats() UpdateStats {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+
+	stats := UpdateStats{
+		Total:      wm.totalUpdates,
+		Autonomous: wm.autonomousUpdates,
+		Prompted:   wm.promptedUpdates,
+	}
+
+	if wm.totalUpdates > 0 {
+		stats.ConsciousPct = int(float64(wm.autonomousUpdates) * 100 / float64(wm.totalUpdates))
+		// Score based on autonomous percentage
+		switch {
+		case stats.ConsciousPct >= 80:
+			stats.Score = "excellent"
+		case stats.ConsciousPct >= 60:
+			stats.Score = "good"
+		default:
+			stats.Score = "needs_improvement"
+		}
+	} else {
+		stats.Score = "no_data"
+	}
+
+	return stats
+}
+
 // GetNextReminderRound returns the current dynamic threshold
 func (wm *LLMContext) GetNextReminderRound() int {
 	wm.mu.RLock()
