@@ -7,22 +7,22 @@ import (
 )
 
 // InterruptManager handles interrupt files for subagent_wait.
-// It's a global singleton that can be set from cmd/ai.
+// It supports multiple concurrent interrupt files.
 type InterruptManager interface {
-	// SetInterruptFile sets the current interrupt file path.
-	// Returns the path that was set (useful for appending to command).
-	SetInterruptFile(path string)
-	
-	// ClearInterruptFile clears the current interrupt file path.
-	ClearInterruptFile()
-	
-	// GetInterruptFile returns the current interrupt file path.
-	GetInterruptFile() string
+	// RegisterInterruptFile registers an interrupt file path and returns a unique ID.
+	// The ID should be used to unregister the file when the command completes.
+	RegisterInterruptFile(path string) string
+
+	// UnregisterInterruptFile removes an interrupt file by ID.
+	UnregisterInterruptFile(id string)
+
+	// GetAllInterruptFiles returns all registered interrupt file paths.
+	GetAllInterruptFiles() []string
 }
 
 // globalInterruptManager is the global interrupt manager instance.
 var (
-	interruptManagerMu   sync.Mutex
+	interruptManagerMu     sync.Mutex
 	globalInterruptManager InterruptManager
 )
 
@@ -42,37 +42,46 @@ func getGlobalInterruptManager() InterruptManager {
 	return im
 }
 
-// DefaultInterruptManager is a simple in-memory implementation.
+// DefaultInterruptManager supports multiple concurrent interrupt files.
 type DefaultInterruptManager struct {
-	mu             sync.Mutex
-	currentFile    string
+	mu       sync.Mutex
+	files    map[string]string // id -> path
+	nextID   int
 }
 
 // NewDefaultInterruptManager creates a new default interrupt manager.
 func NewDefaultInterruptManager() *DefaultInterruptManager {
-	return &DefaultInterruptManager{}
+	return &DefaultInterruptManager{
+		files: make(map[string]string),
+	}
 }
 
-// SetInterruptFile sets the current interrupt file path.
-func (m *DefaultInterruptManager) SetInterruptFile(path string) {
+// RegisterInterruptFile registers an interrupt file path and returns a unique ID.
+func (m *DefaultInterruptManager) RegisterInterruptFile(path string) string {
 	m.mu.Lock()
-	m.currentFile = path
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("interrupt-%d-%d", time.Now().UnixNano(), m.nextID)
+	m.files[id] = path
+	return id
 }
 
-// ClearInterruptFile clears the current interrupt file path.
-func (m *DefaultInterruptManager) ClearInterruptFile() {
+// UnregisterInterruptFile removes an interrupt file by ID.
+func (m *DefaultInterruptManager) UnregisterInterruptFile(id string) {
 	m.mu.Lock()
-	m.currentFile = ""
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	delete(m.files, id)
 }
 
-// GetInterruptFile returns the current interrupt file path.
-func (m *DefaultInterruptManager) GetInterruptFile() string {
+// GetAllInterruptFiles returns all registered interrupt file paths.
+func (m *DefaultInterruptManager) GetAllInterruptFiles() []string {
 	m.mu.Lock()
-	path := m.currentFile
-	m.mu.Unlock()
-	return path
+	defer m.mu.Unlock()
+	paths := make([]string, 0, len(m.files))
+	for _, path := range m.files {
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 // GenerateInterruptFilePath generates a unique interrupt file path.

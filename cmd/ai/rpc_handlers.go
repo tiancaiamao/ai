@@ -31,49 +31,60 @@ import (
 
 // cmdInterruptManager implements tools.InterruptManager and triggers file creation.
 type cmdInterruptManager struct {
-	mu          sync.Mutex
-	currentFile string
+	mu       sync.Mutex
+	files    map[string]string // id -> path
+	nextID   int
 }
 
-// SetInterruptFile sets the current interrupt file path.
-func (m *cmdInterruptManager) SetInterruptFile(path string) {
+// RegisterInterruptFile registers an interrupt file path and returns a unique ID.
+func (m *cmdInterruptManager) RegisterInterruptFile(path string) string {
 	m.mu.Lock()
-	m.currentFile = path
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("interrupt-%d-%d", time.Now().UnixNano(), m.nextID)
+	m.files[id] = path
+	return id
 }
 
-// ClearInterruptFile clears the current interrupt file path.
-func (m *cmdInterruptManager) ClearInterruptFile() {
+// UnregisterInterruptFile removes an interrupt file by ID.
+func (m *cmdInterruptManager) UnregisterInterruptFile(id string) {
 	m.mu.Lock()
-	m.currentFile = ""
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	delete(m.files, id)
 }
 
-// GetInterruptFile returns the current interrupt file path.
-func (m *cmdInterruptManager) GetInterruptFile() string {
+// GetAllInterruptFiles returns all registered interrupt file paths.
+func (m *cmdInterruptManager) GetAllInterruptFiles() []string {
 	m.mu.Lock()
-	path := m.currentFile
-	m.mu.Unlock()
-	return path
+	defer m.mu.Unlock()
+	paths := make([]string, 0, len(m.files))
+	for _, path := range m.files {
+		paths = append(paths, path)
+	}
+	return paths
 }
 
-// TriggerInterrupt creates the interrupt file if one is set.
+// TriggerInterrupt creates all registered interrupt files.
 func (m *cmdInterruptManager) TriggerInterrupt() {
-	path := m.GetInterruptFile()
+	paths := m.GetAllInterruptFiles()
 	
-	if path != "" {
-		// Create the file to signal subagent_wait
-		if err := os.WriteFile(path, []byte{}, 0644); err != nil {
-			slog.Warn("Failed to create interrupt file", "error", err, "path", path)
-		} else {
-			slog.Debug("Triggered interrupt", "path", path)
+	for _, path := range paths {
+		if path != "" {
+			// Create the file to signal subagent_wait
+			if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+				slog.Warn("Failed to create interrupt file", "error", err, "path", path)
+			} else {
+				slog.Debug("Triggered interrupt", "path", path)
+			}
 		}
 	}
 }
 
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
 	// Create and register interrupt manager
-	interruptMgr := &cmdInterruptManager{}
+	interruptMgr := &cmdInterruptManager{
+		files: make(map[string]string),
+	}
 	tools.SetGlobalInterruptManager(interruptMgr)
 	
 	// Load configuration

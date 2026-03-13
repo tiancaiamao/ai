@@ -16,6 +16,29 @@ type BashResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// isSubagentWaitCommand checks if the command is a subagent_wait call.
+// Uses precise matching to avoid false positives from echo, grep, etc.
+func isSubagentWaitCommand(command string) bool {
+	// Common patterns for calling subagent_wait:
+	// - ~/.ai/skills/subagent/bin/subagent_wait.sh <session>
+	// - /path/to/subagent_wait.sh <session>
+	// - subagent_wait.sh <session> (if in PATH)
+	command = strings.TrimSpace(command)
+	
+	// Check for direct script invocation
+	if strings.Contains(command, "subagent_wait.sh") {
+		return true
+	}
+	
+	// Check if command starts with subagent_wait (in PATH case)
+	fields := strings.Fields(command)
+	if len(fields) > 0 && fields[0] == "subagent_wait" {
+		return true
+	}
+	
+	return false
+}
+
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
 	workspace   *Workspace
@@ -66,14 +89,15 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
 	
-	// Check if this is a subagent_wait command
+	// Check if this is a subagent_wait command (precise match)
 	im := getGlobalInterruptManager()
 	interruptFile := ""
-	if im != nil && strings.Contains(command, "subagent_wait") {
+	interruptID := ""
+	if im != nil && isSubagentWaitCommand(command) {
 		// Generate interrupt file path
 		interruptFile = GenerateInterruptFilePath()
-		im.SetInterruptFile(interruptFile)
-		defer im.ClearInterruptFile()
+		interruptID = im.RegisterInterruptFile(interruptFile)
+		defer im.UnregisterInterruptFile(interruptID)
 		
 		// Append interrupt file to command
 		command = command + " " + interruptFile
