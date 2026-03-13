@@ -141,6 +141,11 @@ func TestExtractFirstCommandToken(t *testing.T) {
 		{"# comment", ""},
 		{"| pipe", ""},
 		{"$(cmd)", ""},
+		
+		// Unclosed quotes - should return empty to avoid infinite loop
+		{"VAR=\"unclosed cmd", ""},
+		{"FOO='bar cmd", ""},
+		{"A=\"b cmd", ""},
 	}
 	
 	for _, tt := range tests {

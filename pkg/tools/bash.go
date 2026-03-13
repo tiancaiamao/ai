@@ -81,11 +81,17 @@ func extractFirstCommandToken(command string) string {
 		if rest[0] == '"' || rest[0] == '\'' {
 			quote := rest[0]
 			// Find matching end quote
+			found := false
 			for i := 1; i < len(rest); i++ {
 				if rest[i] == quote {
 					command = strings.TrimSpace(rest[i+1:])
+					found = true
 					break
 				}
+			}
+			// If no closing quote found, malformed input - stop parsing
+			if !found {
+				return ""
 			}
 		} else {
 			// Unquoted value - skip until space
