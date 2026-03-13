@@ -90,6 +90,73 @@ func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) 
 	msg.StopReason = "aborted"
 }
 
+// isSuccessfulStopReason returns true if the stopReason indicates a successful completion.
+// Successful stopReason values are: "stop", "tool_calls", "toolUse", "length".
+// Any other value indicates an error or abnormal termination that should be reported to the user.
+func isSuccessfulStopReason(stopReason string) bool {
+	switch stopReason {
+	case "stop", "tool_calls", "toolUse", "length", "":
+		// "stop" - normal completion
+		// "tool_calls"/"toolUse" - LLM wants to use tools
+		// "length" - hit max token limit (still completed normally)
+		// "" - empty stopReason (treat as success for compatibility)
+		return true
+	default:
+		return false
+	}
+}
+
+// sanitizeMessageForNonSuccessStopReason modifies the message to notify the user
+// about any non-success stopReason. This ensures the user is informed instead of
+// experiencing a silent failure for network errors, rate limits, timeouts, etc.
+//
+// Returns true if the message was sanitized (stopReason was non-success), false otherwise.
+func sanitizeMessageForNonSuccessStopReason(msg *agentctx.AgentMessage) bool {
+	if msg == nil {
+		return false
+	}
+
+	stopReason := msg.StopReason
+	if isSuccessfulStopReason(stopReason) {
+		return false
+	}
+
+	// Filter out tool calls since the request failed before they could be executed
+	filtered := make([]agentctx.ContentBlock, 0, len(msg.Content)+1)
+	for _, block := range msg.Content {
+		switch block.(type) {
+		case agentctx.ToolCallContent:
+			// Remove tool calls since they failed due to the error
+		default:
+			filtered = append(filtered, block)
+		}
+	}
+
+	// Generate user-facing error message based on stopReason
+	var errorMsg string
+	switch stopReason {
+	case "network_error":
+		errorMsg = "[Network error] The request failed due to a network issue. Please check your connection and try again."
+	case "rate_limit_error", "rate_limit":
+		errorMsg = "[Rate limit] The request was rate-limited. Please wait a moment and try again."
+	case "timeout":
+		errorMsg = "[Timeout] The request timed out. Please try again."
+	case "error":
+		errorMsg = "[Error] The request failed. Please try again."
+	default:
+		// Handle any other unexpected stopReason
+		errorMsg = fmt.Sprintf("[Request failed] The request ended unexpectedly: %s. Please try again.", stopReason)
+	}
+
+	filtered = append(filtered, agentctx.TextContent{
+		Type: "text",
+		Text: "\n\n" + errorMsg,
+	})
+	msg.Content = filtered
+	// Keep the original stopReason for proper categorization
+	return true
+}
+
 func maybeRecoverMalformedToolCall(
 	ctx context.Context,
 	agentCtx *agentctx.AgentContext,

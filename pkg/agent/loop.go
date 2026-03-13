@@ -379,11 +379,23 @@ func runInnerLoop(
 			agentCtx.LLMContext.InvalidateCache()
 		}
 
-		// Check for error or abort
+		// Check for error or abort (special cases that end the loop immediately)
 		if msg.StopReason == "error" || msg.StopReason == "aborted" {
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
+		}
+
+		// Check for non-success stopReason and notify user
+		// This handles network_error, rate_limit_error, timeout, and any other
+		// error conditions that should be reported to the user instead of silent failure.
+		if sanitized := sanitizeMessageForNonSuccessStopReason(msg); sanitized {
+			slog.Warn("[Loop] LLM request ended with non-success stopReason", "stopReason", msg.StopReason)
+			traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
+				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
+			// Update the message in both arrays to include the error notification
+			agentCtx.Messages[len(agentCtx.Messages)-1] = *msg
+			newMessages[len(newMessages)-1] = *msg
 		}
 
 		// Check for tool calls
