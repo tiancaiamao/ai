@@ -17,26 +17,145 @@ type BashResult struct {
 }
 
 // isSubagentWaitCommand checks if the command is a subagent_wait call.
-// Uses precise matching to avoid false positives from echo, grep, etc.
+// Uses robust parsing to avoid false positives from echo, grep, comments, etc.
 func isSubagentWaitCommand(command string) bool {
-	// Common patterns for calling subagent_wait:
-	// - ~/.ai/skills/subagent/bin/subagent_wait.sh <session>
-	// - /path/to/subagent_wait.sh <session>
-	// - subagent_wait.sh <session> (if in PATH)
 	command = strings.TrimSpace(command)
-	
-	// Check for direct script invocation
-	if strings.Contains(command, "subagent_wait.sh") {
-		return true
+	if command == "" {
+		return false
 	}
-	
-	// Check if command starts with subagent_wait (in PATH case)
-	fields := strings.Fields(command)
-	if len(fields) > 0 && fields[0] == "subagent_wait" {
-		return true
+
+	// Parse the first token (the command itself) using shell-like rules
+	// Handle: ~/.ai/skills/subagent/bin/subagent_wait.sh, ./subagent_wait.sh, etc.
+	firstToken := extractFirstCommandToken(command)
+	if firstToken == "" {
+		return false
 	}
-	
-	return false
+
+	// Check if the command name (without path) is subagent_wait.sh or subagent_wait
+	// Handle paths like:
+	//   ~/.ai/skills/subagent/bin/subagent_wait.sh -> subagent_wait.sh
+	//   ./subagent_wait.sh -> subagent_wait.sh
+	//   /usr/local/bin/subagent_wait -> subagent_wait
+	baseName := firstToken
+	if idx := strings.LastIndex(baseName, "/"); idx >= 0 {
+		baseName = baseName[idx+1:]
+	}
+
+	// Exact match on the basename
+	return baseName == "subagent_wait.sh" || baseName == "subagent_wait"
+}
+
+// extractFirstCommandToken extracts the first token from a shell command.
+// This handles quoted strings, environment variables, and common shell constructs.
+func extractFirstCommandToken(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+
+	// Skip environment variable assignments (VAR=value cmd)
+	for {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			return ""
+		}
+		
+		// Check if command starts with VAR=value pattern
+		eqIdx := strings.IndexByte(command, '=')
+		if eqIdx <= 0 {
+			break
+		}
+		
+		varName := command[:eqIdx]
+		if !isValidEnvVarName(varName) {
+			break
+		}
+		
+		// Skip past the = and the value
+		rest := command[eqIdx+1:]
+		if len(rest) == 0 {
+			break
+		}
+		
+		// Handle quoted values
+		if rest[0] == '"' || rest[0] == '\'' {
+			quote := rest[0]
+			// Find matching end quote
+			for i := 1; i < len(rest); i++ {
+				if rest[i] == quote {
+					command = strings.TrimSpace(rest[i+1:])
+					break
+				}
+			}
+		} else {
+			// Unquoted value - skip until space
+			spaceIdx := strings.IndexByte(rest, ' ')
+			if spaceIdx < 0 {
+				// No space after value, nothing left
+				return ""
+			}
+			command = strings.TrimSpace(rest[spaceIdx+1:])
+		}
+	}
+
+	if command == "" {
+		return ""
+	}
+
+	// Now extract the actual command token
+	var result strings.Builder
+	inQuote := false
+	quoteChar := byte(0)
+
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+
+		switch {
+		case !inQuote && (ch == '"' || ch == '\''):
+			// Start of quoted section - the command itself might be quoted
+			inQuote = true
+			quoteChar = ch
+		case inQuote && ch == quoteChar:
+			// End of quoted section
+			inQuote = false
+			quoteChar = 0
+		case !inQuote && (ch == ' ' || ch == '\t' || ch == '|' || ch == '&' || ch == ';' || ch == '<' || ch == '>' || ch == '#'):
+			// End of token
+			if result.Len() > 0 {
+				return result.String()
+			}
+			// If we hit a pipe or semicolon before any command, there's no valid token
+			if ch == '|' || ch == ';' || ch == '#' {
+				return ""
+			}
+		case !inQuote && ch == '$' && i+1 < len(command) && command[i+1] == '(':
+			// Command substitution at start - not a simple command
+			return ""
+		default:
+			result.WriteByte(ch)
+		}
+	}
+
+	return result.String()
+}
+
+// isValidEnvVarName checks if s is a valid environment variable name.
+func isValidEnvVarName(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// First char must be letter or underscore
+	if !((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z') || s[0] == '_') {
+		return false
+	}
+	// Rest can be alphanumeric or underscore
+	for i := 1; i < len(s); i++ {
+		ch := s[i]
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // BashTool executes bash commands with dynamic workspace support.

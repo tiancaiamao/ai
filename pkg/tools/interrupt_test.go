@@ -67,20 +67,39 @@ func TestIsSubagentWaitCommand(t *testing.T) {
 		command  string
 		expected bool
 	}{
-		// Should match
+		// Should match - direct invocations
 		{"~/.ai/skills/subagent/bin/subagent_wait.sh abc123", true},
 		{"/home/user/.ai/skills/subagent/bin/subagent_wait.sh abc123", true},
 		{"subagent_wait abc123", true},
-		{"  subagent_wait.sh abc123  ", true},
+		{"subagent_wait.sh abc123", true},
+		{"./subagent_wait.sh abc123", true},
+		{"/usr/local/bin/subagent_wait abc123", true},
 		
-		// Should NOT match (false positives from original code)
+		// Should match - with env vars
+		{"PATH=/usr/bin subagent_wait.sh abc123", true},
+		{"DEBUG=1 ~/.ai/skills/subagent/bin/subagent_wait.sh abc123", true},
+		
+		// Should NOT match - false positives (the main issue we're fixing)
 		{"echo \"subagent_wait\"", false},
 		{"echo subagent_wait", false},
+		{"echo subagent_wait.sh", false},
 		{"grep subagent_wait file.txt", false},
 		{"cat file | grep subagent_wait", false},
 		{"# subagent_wait command", false},
+		{"# using subagent_wait.sh to monitor", false},
 		{"ls -la", false},
 		{"bash script.sh # contains subagent_wait", false},
+		{"cat ~/.ai/skills/subagent/bin/subagent_wait.sh", false},  // cat, not executing
+		{"less subagent_wait.sh", false},
+		{"vim subagent_wait.sh", false},
+		{"chmod +x subagent_wait.sh", false},
+		
+		// Edge cases
+		{"", false},
+		{"   ", false},
+		{"| subagent_wait", false},  // After pipe, not first command
+		{"echo hi | subagent_wait", false},  // After pipe
+		{"subagent_wait.sh", true},  // No args, still valid
 	}
 	
 	for _, tt := range tests {
@@ -88,6 +107,47 @@ func TestIsSubagentWaitCommand(t *testing.T) {
 			result := isSubagentWaitCommand(tt.command)
 			if result != tt.expected {
 				t.Errorf("isSubagentWaitCommand(%q) = %v, want %v", tt.command, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExtractFirstCommandToken(t *testing.T) {
+	tests := []struct {
+		command  string
+		expected string
+	}{
+		// Simple commands
+		{"ls -la", "ls"},
+		{"cat file.txt", "cat"},
+		
+		// With paths
+		{"~/bin/script.sh", "~/bin/script.sh"},
+		{"/usr/bin/cat file", "/usr/bin/cat"},
+		{"./script.sh arg", "./script.sh"},
+		
+		// With env vars
+		{"PATH=/usr/bin ls", "ls"},
+		{"DEBUG=1 VERBOSE=1 cmd", "cmd"},
+		{"VAR=\"value with space\" cmd", "cmd"},
+		
+		// Quoted commands
+		{"\"my script.sh\" arg", "my script.sh"},
+		{"'~/my script.sh' arg", "~/my script.sh"},
+		
+		// Edge cases
+		{"", ""},
+		{"   ", ""},
+		{"# comment", ""},
+		{"| pipe", ""},
+		{"$(cmd)", ""},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			result := extractFirstCommandToken(tt.command)
+			if result != tt.expected {
+				t.Errorf("extractFirstCommandToken(%q) = %q, want %q", tt.command, result, tt.expected)
 			}
 		})
 	}
