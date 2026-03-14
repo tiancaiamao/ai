@@ -134,6 +134,14 @@ func (m *mockCompactor) Compact(messages []agentctx.AgentMessage, previousSummar
 	}, nil
 }
 
+func (m *mockCompactor) CalculateDynamicThreshold() int {
+	return 100000 // Default threshold for tests
+}
+
+func (m *mockCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+	return len(messages) * 100 // Simple estimation for tests
+}
+
 // TestAgentEvents tests the event channel.
 func TestAgentEvents(t *testing.T) {
 	agent := NewAgent(llm.Model{}, "test-key", "test")

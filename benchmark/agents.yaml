@@ -5,7 +5,7 @@ agents:
   # Your custom agent
   my-agent:
     name: "My Agent"
-    command: 'ai --mode headless --no-session --max-turns 50 "{prompt}"'
+    command: 'ai --mode headless --max-turns 50 "{prompt}"'
     type: "custom"
 
   # Claude Code CLI

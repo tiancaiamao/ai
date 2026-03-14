@@ -759,20 +759,20 @@ tokens_percent: %.0f%%
 messages_in_history: %d
 </context_meta>
 
-Current state suggests: %s (RECOMMEND ACTION NOW!)
+Suggested: %s
 
 HOW TO TRUNCATE (IMPORTANT):
-1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" ...
-2. Skip IDs with truncated="true" - already truncated
-3. Get many IDs (批量清理！一次清理 50-100 条)
-4. Pass as comma-separated string to truncate_ids
+1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" />
+2. **SKIP IDs with truncated="true"** - these are already truncated!
+3. Batch clean: get 50-100 IDs at once
+4. Pass as comma-separated string: truncate_ids: "call_abc, call_def, ..."
 
 EXAMPLE (copy and modify):
 decision: "truncate"
 reasoning: "Cleaning up %d stale tool outputs"
 truncate_ids: %s
 
-If you don't know IDs, use decision="skip" instead.`,
+⚠️ WARNING: Including already-truncated IDs will result in "0 truncated".`,
 		int(meta.TokensPercent), staleCount,
 		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
 		getSuggestedAction(meta.TokensPercent, staleCount),
@@ -783,24 +783,12 @@ If you don't know IDs, use decision="skip" instead.`,
 func getSuggestedAction(tokensPercent float64, staleCount int) string {
 	// High priority: many stale outputs → TRUNCATE
 	if staleCount > 20 {
-		return "TRUNCATE (many stale outputs, free space now)"
+		return "TRUNCATE (many stale outputs)"
 	}
 	if staleCount > 10 {
-		return "TRUNCATE (several stale outputs, recommend action)"
+		return "TRUNCATE (several stale outputs)"
 	}
 
-	// High token usage → COMPACT
-	if tokensPercent >= 65 {
-		return "COMPACT (high token usage)"
-	}
-	if tokensPercent >= 50 {
-		return "COMPACT or TRUNCATE (moderate token usage)"
-	}
-
-	// Low usage + stale outputs → TRUNCATE
-	if staleCount > 5 {
-		return "TRUNCATE (many stale outputs even at low usage)"
-	}
-
-	return "TRUNCATE or SKIP (low usage, optional)"
+	// Low stale count, just show token percentage
+	return fmt.Sprintf("Token usage: %.0f%%", tokensPercent)
 }

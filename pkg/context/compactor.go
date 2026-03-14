@@ -4,6 +4,10 @@ package context
 type Compactor interface {
 	ShouldCompact(messages []AgentMessage) bool
 	Compact(messages []AgentMessage, previousSummary string) (*CompactionResult, error)
+	// CalculateDynamicThreshold returns the token threshold for compaction
+	CalculateDynamicThreshold() int
+	// EstimateContextTokens estimates the token count of messages
+	EstimateContextTokens(messages []AgentMessage) int
 }
 
 // CompactionResult contains the result of a compaction operation.
