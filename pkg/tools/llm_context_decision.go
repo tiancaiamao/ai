@@ -223,6 +223,33 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 			break
 		}
 
+		// Check if compaction should be performed based on token usage
+		if !t.compactor.ShouldCompact(agentCtx.Messages) {
+			threshold := t.compactor.CalculateDynamicThreshold()
+			current := t.compactor.EstimateContextTokens(agentCtx.Messages)
+			var percent float64
+			if threshold > 0 {
+				percent = float64(current) / float64(threshold) * 100
+			}
+
+			result.WriteString("**Compact Rejected**\n\n")
+			result.WriteString(fmt.Sprintf("Reason: Token usage too low (%.1f%% of threshold)\n", percent))
+			result.WriteString(fmt.Sprintf("Current: %d tokens, Threshold: %d tokens\n\n", current, threshold))
+			result.WriteString("**Recommendation:** Use TRUNCATE instead to clean up stale tool outputs.\n")
+			result.WriteString("COMPACT is only effective when token usage is high (≥50% of threshold).\n")
+			result.WriteString("It's an expensive operation that requires LLM calls to generate summaries.\n")
+
+			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_compact_rejected",
+				traceevent.Field{Key: "current_tokens", Value: current},
+				traceevent.Field{Key: "threshold_tokens", Value: threshold},
+				traceevent.Field{Key: "percent", Value: percent},
+				traceevent.Field{Key: "was_reminded", Value: wasReminded},
+			)
+
+			agentCtx.ContextMgmtState.RecordDecision(turn, "compact_rejected", wasReminded)
+			break
+		}
+
 		confidence := 80 // default
 		if c, ok := params["compact_confidence"].(float64); ok {
 			confidence = int(c)

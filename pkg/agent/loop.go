@@ -1780,17 +1780,19 @@ func runtimeActionHint(band string) string {
 }
 
 func runtimeContextManagementHint(percent float64) string {
+	// COMPACT is expensive (requires LLM call), only recommend when truly needed
+	// ShouldCompact rejects when token usage < 75% of available threshold
 	switch {
 	case percent < 20:
-		return "Low usage (10-20%% tone): stay on task, only TRUNCATE obviously stale/large tool outputs."
+		return "Low usage (10-20%% tone): stay on task, only TRUNCATE obviously stale/large tool outputs. COMPACT is NOT recommended at this level."
 	case percent < 30:
-		return "Mild pressure (20-30%% tone): proactively review stale outputs and TRUNCATE in batches, may also consider COMPACT."
+		return "Mild pressure (20-30%% tone): proactively TRUNCATE stale outputs in batches (50-100 at once). COMPACT is optional and may be rejected."
 	case percent < 50:
-		return "Moderate pressure (30-50%% tone): prepare one COMPACT pass after the current mini-step."
+		return "Moderate pressure (30-50%% tone): TRUNCATE stale outputs, consider COMPACT only after completing current task phase."
 	case percent < 65:
-		return "High pressure (50-65%% tone): run COMPACT soon; keep only active context and key decisions."
+		return "High pressure (50-65%% tone): prepare for COMPACT, keep only active context and key decisions."
 	case percent < 75:
-		return "Critical pressure (65-75%% tone): COMPACT now; fallback auto-compaction is getting close."
+		return "Critical pressure (65-75%% tone): COMPACT now, fallback auto-compaction is getting close."
 	default:
 		return "Emergency pressure (75%%+ tone): COMPACT immediately, forced fallback compaction may trigger next."
 	}

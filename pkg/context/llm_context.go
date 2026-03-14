@@ -710,6 +710,12 @@ func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string) stri
 		}
 	}
 
+	// Add compact threshold warning if token usage is low
+	var compactWarning string
+	if meta.TokensPercent < 50 {
+		compactWarning = fmt.Sprintf("\n\n⚠️ COMPACT WARNING: Token usage is %.0f%% (< 50%%). COMPACT will be REJECTED.\nUse TRUNCATE instead to clean up stale outputs.", meta.TokensPercent)
+	}
+
 	return fmt.Sprintf(`<agent:remind comment="system message by agent, not from real user">
 
 💡 Context management required: tokens at %d%%, %d stale tool outputs.
@@ -721,24 +727,29 @@ tokens_percent: %.0f%%
 messages_in_history: %d
 </context_meta>
 
-Current state suggests: %s (RECOMMEND ACTION NOW!)
+Recommended action: %s%s
 
 HOW TO TRUNCATE (IMPORTANT):
-1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" ...
-2. Skip IDs with truncated="true" - already truncated
-3. Get many IDs (批量清理！一次清理 50-100 条)
-4. Pass as comma-separated string to truncate_ids
+1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" />
+2. **SKIP IDs with truncated="true"** - these are already truncated!
+3. Batch clean: get 50-100 IDs at once
+4. Pass as comma-separated string: truncate_ids: "call_abc, call_def, ..."
 
 EXAMPLE (copy and modify):
 decision: "truncate"
 reasoning: "Cleaning up %d stale tool outputs"
 truncate_ids: %s
 
-If you don't know IDs, use decision="skip" instead.`,
+⚠️ WARNING: Including already-truncated IDs will result in "0 truncated".%s
+
+For COMPACT: Only use when token usage ≥50%%. Current: %d%%`,
 		int(meta.TokensPercent), staleCount,
 		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
 		getSuggestedAction(meta.TokensPercent, staleCount),
-		staleCount, truncateIDsExample)
+		compactWarning,
+		staleCount, truncateIDsExample,
+		compactWarning,
+		int(meta.TokensPercent))
 }
 
 // getSuggestedAction returns suggested action based on token usage and stale outputs.
@@ -751,18 +762,19 @@ func getSuggestedAction(tokensPercent float64, staleCount int) string {
 		return "TRUNCATE (several stale outputs, recommend action)"
 	}
 
-	// High token usage → COMPACT
+	// Token usage based recommendations
+	// COMPACT is expensive (requires LLM call), only recommend when truly needed
 	if tokensPercent >= 65 {
-		return "COMPACT (high token usage)"
+		return "COMPACT (high token usage, compact now)"
 	}
 	if tokensPercent >= 50 {
-		return "COMPACT or TRUNCATE (moderate token usage)"
+		return "COMPACT or TRUNCATE (moderate-high token usage)"
 	}
 
-	// Low usage + stale outputs → TRUNCATE
+	// Below 50%: TRUNCATE only, COMPACT will be rejected
 	if staleCount > 5 {
-		return "TRUNCATE (many stale outputs even at low usage)"
+		return "TRUNCATE (stale outputs at low usage, compact not needed)"
 	}
 
-	return "TRUNCATE or SKIP (low usage, optional)"
+	return "TRUNCATE or SKIP (low usage, compact will be rejected)"
 }
