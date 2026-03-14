@@ -188,6 +188,28 @@ func (c *clawCompactor) Compact(messages []agentctx.AgentMessage, previousSummar
 	}, nil
 }
 
+func (c *clawCompactor) CalculateDynamicThreshold() int {
+	c.mu.Lock()
+	comp := c.compactor
+	c.mu.Unlock()
+
+	if comp == nil {
+		return 0
+	}
+	return comp.CalculateDynamicThreshold()
+}
+
+func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+	c.mu.Lock()
+	comp := c.compactor
+	c.mu.Unlock()
+
+	if comp == nil {
+		return 0
+	}
+	return comp.EstimateContextTokens(messages)
+}
+
 // Config 是 AgentLoop 的配置
 type Config struct {
 	Model        string          // 模型 ID，如 "claude-3-5-sonnet-20241022"
