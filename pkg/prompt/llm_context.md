@@ -63,27 +63,11 @@ reasoning: "No significant state change, just answering a question"
 
 When `context_management.action_required` is not "none":
 
-| Decision | When to Use | Token Threshold |
-|----------|-------------|-----------------|
-| `truncate` | Stale/large tool outputs exist | Any level |
-| `compact` | Topic shift, phase completed, usage HIGH | **≥50%** (will be rejected below this!) |
-| `skip` | Low pressure (<25%), set `skip_turns` 1-30 | Any level |
-
-**⚠️ COMPACT Threshold:**
-- COMPACT is **expensive** (requires LLM call to generate summary)
-- COMPACT is **rejected** when token usage < 50% of threshold
-- If rejected, use **TRUNCATE** instead
-
-**Decision Guidelines by Token Usage:**
-
-| Token % | Recommended Action |
-|---------|-------------------|
-| < 20% | TRUNCATE stale outputs only, COMPACT NOT recommended |
-| 20-40% | TRUNCATE in batches (50-100), COMPACT may be rejected |
-| 40-50% | TRUNCATE stale outputs, consider COMPACT only after task phase |
-| 50-65% | Prepare for COMPACT, keep only active context |
-| 65-75% | COMPACT now, fallback auto-compaction approaching |
-| > 75% | COMPACT immediately, forced fallback may trigger |
+| Decision | When to Use |
+|----------|-------------|
+| `truncate` | Stale/large tool outputs exist |
+| `compact` | Topic shift, phase completed, context management needed |
+| `skip` | Low pressure (<25%), set `skip_turns` 1-30 |
 
 **skip_turns meaning:**
 - Higher values (15-30): You promise to be proactive, fewer reminders
@@ -114,4 +98,3 @@ Signs of topic shift:
 - `runtime_state` is telemetry, not user intent
 - If `action_required` is not "none", MUST call `llm_context_decision` first
 - Never assume memory was updated unless tool result confirms success
-- **COMPACT will be rejected if token usage < 50%** - use TRUNCATE instead

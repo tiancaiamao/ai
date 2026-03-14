@@ -710,12 +710,6 @@ func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string) stri
 		}
 	}
 
-	// Add compact threshold warning if token usage is low
-	var compactWarning string
-	if meta.TokensPercent < 50 {
-		compactWarning = fmt.Sprintf("\n\n⚠️ COMPACT WARNING: Token usage is %.0f%% (< 50%%). COMPACT will be REJECTED.\nUse TRUNCATE instead to clean up stale outputs.", meta.TokensPercent)
-	}
-
 	return fmt.Sprintf(`<agent:remind comment="system message by agent, not from real user">
 
 💡 Context management required: tokens at %d%%, %d stale tool outputs.
@@ -727,7 +721,7 @@ tokens_percent: %.0f%%
 messages_in_history: %d
 </context_meta>
 
-Recommended action: %s%s
+Suggested: %s
 
 HOW TO TRUNCATE (IMPORTANT):
 1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" />
@@ -740,41 +734,23 @@ decision: "truncate"
 reasoning: "Cleaning up %d stale tool outputs"
 truncate_ids: %s
 
-⚠️ WARNING: Including already-truncated IDs will result in "0 truncated".%s
-
-For COMPACT: Only use when token usage ≥50%%. Current: %d%%`,
+⚠️ WARNING: Including already-truncated IDs will result in "0 truncated".`,
 		int(meta.TokensPercent), staleCount,
 		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
 		getSuggestedAction(meta.TokensPercent, staleCount),
-		compactWarning,
-		staleCount, truncateIDsExample,
-		compactWarning,
-		int(meta.TokensPercent))
+		staleCount, truncateIDsExample)
 }
 
 // getSuggestedAction returns suggested action based on token usage and stale outputs.
 func getSuggestedAction(tokensPercent float64, staleCount int) string {
 	// High priority: many stale outputs → TRUNCATE
 	if staleCount > 20 {
-		return "TRUNCATE (many stale outputs, free space now)"
+		return "TRUNCATE (many stale outputs)"
 	}
 	if staleCount > 10 {
-		return "TRUNCATE (several stale outputs, recommend action)"
+		return "TRUNCATE (several stale outputs)"
 	}
 
-	// Token usage based recommendations
-	// COMPACT is expensive (requires LLM call), only recommend when truly needed
-	if tokensPercent >= 65 {
-		return "COMPACT (high token usage, compact now)"
-	}
-	if tokensPercent >= 50 {
-		return "COMPACT or TRUNCATE (moderate-high token usage)"
-	}
-
-	// Below 50%: TRUNCATE only, COMPACT will be rejected
-	if staleCount > 5 {
-		return "TRUNCATE (stale outputs at low usage, compact not needed)"
-	}
-
-	return "TRUNCATE or SKIP (low usage, compact will be rejected)"
+	// Low stale count, just show token percentage
+	return fmt.Sprintf("Token usage: %.0f%%", tokensPercent)
 }
