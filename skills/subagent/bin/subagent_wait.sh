@@ -33,14 +33,22 @@ wait_pid_file="/tmp/ai-wait-$$.pid"
 echo $$ > "$wait_pid_file"
 trap "rm -f $wait_pid_file" EXIT
 
+# Function to find status file for a session ID
+# Sessions are stored in directories like: ~/.ai/sessions/--<cwd>--/<session-id>/
+find_status_file() {
+    local session_id="$1"
+    # Search across all session directories to find the matching session ID
+    find "$HOME/.ai/sessions" -path "*/$session_id/status.json" -type f 2>/dev/null | head -1
+}
+
 # Function to check if all sessions are completed
 check_sessions() {
     all_completed=true
     
     for s in "${SESSION_ARRAY[@]}"; do
-        status_file="$HOME/.ai/sessions/$s/status.json"
+        status_file=$(find_status_file "$s")
         
-        if [ ! -f "$status_file" ]; then
+        if [ -z "$status_file" ] || [ ! -f "$status_file" ]; then
             echo "Warning: status file not found for session $s" >&2
             continue
         fi
@@ -65,9 +73,9 @@ check_sessions() {
 # Function to print status of all sessions
 print_status() {
     for s in "${SESSION_ARRAY[@]}"; do
-        status_file="$HOME/.ai/sessions/$s/status.json"
+        status_file=$(find_status_file "$s")
         
-        if [ -f "$status_file" ]; then
+        if [ -n "$status_file" ] && [ -f "$status_file" ]; then
             status=$(jq -r .status "$status_file" 2>/dev/null || echo "unknown")
             turn=$(jq -r .current_turn "$status_file" 2>/dev/null || echo "?")
             progress=$(jq -r .progress "$status_file" 2>/dev/null || echo "")

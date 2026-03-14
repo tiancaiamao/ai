@@ -97,11 +97,83 @@ Phase 2 (implementer): Fix identified issues
 
 For independent tasks, run subagents in parallel (参考 `/skill:subagent`):
 
+**⚠️ 重要：必须使用 subagent_wait.sh 等待子代理完成，而不是 sleep 或 wait**
+
 关键点：
 - 最大并行数: 2 subagents（API rate limit 保护）
 - 启动间隔: 5s delay（防止请求突发）
 - 后台运行: `(...) &` + `> /tmp/out.txt`
-- 收集结果: `wait` + `cat /tmp/*.txt`
+- **必须使用 subagent_wait.sh 等待**: `~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION_ID" 300`
+- 收集结果: `cat /tmp/out.txt`
+
+### 正确工作流程（使用 start_subagent.sh）
+
+**推荐方式**：使用 `start_subagent.sh` 辅助脚本自动捕获 Session ID
+
+```bash
+# STEP 1: 启动 subagent 并自动捕获 Session ID
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/out.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  "Your task description")
+
+echo "Started subagent with session: $SESSION"
+
+# STEP 2: 使用 subagent_wait.sh 等待（支持用户中断）
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+
+# STEP 3: 收集结果
+cat /tmp/out.txt
+```
+
+### 手动方式（不推荐）
+
+如果需要手动控制，必须提取 Session ID：
+
+```bash
+# 启动 subagent
+(ai --mode headless \
+  --timeout 10m \
+  --system-prompt @/path/to/persona.md \
+  "Your task" > /tmp/out.txt 2>&1) &
+
+# 等待 Session ID 出现（最多 4 秒）
+SESSION=""
+for i in $(seq 1 20); do
+    sleep 0.2
+    SESSION=$(grep -m1 "Session ID:" /tmp/out.txt 2>/dev/null | awk '{print $3}')
+    if [ -n "$SESSION" ]; then
+        break
+    fi
+done
+
+if [ -z "$SESSION" ]; then
+    echo "Error: Failed to capture session ID"
+    exit 1
+fi
+
+# 使用 Session ID 等待（不是 PID！）
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+
+# 收集结果
+cat /tmp/out.txt
+```
+
+### ❌ 错误方式
+
+```bash
+# 错误：使用 PID 而不是 Session ID
+(ai --mode headless ... > /tmp/out.txt 2>&1) &
+PID=$!
+~/.ai/skills/subagent/bin/subagent_wait.sh "$PID" 300  # ❌ PID 不是 Session ID！
+
+# 错误：使用 sleep 会阻塞，无法响应用户中断
+sleep 60 &
+
+# 错误：直接使用 wait 无法监控进度
+wait
+```
 
 ## Result Aggregation
 
@@ -135,22 +207,25 @@ After subagents complete, synthesize results:
 
 # Decomposition: 2 parallel explorers + aggregate
 
-# Launch parallel analysis
-(ai --mode headless \
-  --timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling." \
-  > /tmp/mc.txt) &
+# Launch parallel analysis using start_subagent.sh
+SESSION1=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/mc.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling.")
 
 sleep 5
 
-(ai --mode headless \
-  --timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback." \
-  > /tmp/omo.txt) &
+SESSION2=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/omo.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback.")
 
-wait
+echo "Sessions: $SESSION1, $SESSION2"
+
+# Wait for both sessions
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION1,$SESSION2" 600
 
 # Aggregate and compare
 echo "## mission-control\n$(cat /tmp/mc.txt)"
@@ -158,33 +233,45 @@ echo "## oh-my-openagent\n$(cat /tmp/omo.txt)"
 echo "## Comparison\n<Key differences and similarities>"
 ```
 
-### Example 2: Feature Implementation Pipeline
+### Example 2: Feature Implementation Pipeline (Sequential)
 
 ```bash
 # User: "Add OAuth2 login to the app"
 
 # Phase 1: Research
-ai --mode headless \
-  --timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/researcher.md \
-  "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations." \
-  > /tmp/research.txt
+SESSION1=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/research.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/researcher.md \
+  "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations.")
+
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION1" 600
 
 # Phase 2: Implement (pass research findings)
-ai --mode headless \
-  --timeout 15m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/implementer.md \
-  "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)" \
-  > /tmp/implement.txt
+SESSION2=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/implement.txt \
+  15m \
+  /Users/genius/.ai/skills/orchestrate/references/implementer.md \
+  "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)")
+
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION2" 900
 
 # Phase 3: Review
-ai --mode headless \
-  --timeout 10m \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/reviewer.md \
-  "Review OAuth2 implementation for security issues" \
-  > /tmp/review.txt
+SESSION3=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/review.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/reviewer.md \
+  "Review OAuth2 implementation for security issues")
+
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION3" 600
 
 # Return aggregated result
+echo "## Research"
+cat /tmp/research.txt
+echo "## Implementation"
+cat /tmp/implement.txt
+echo "## Review"
+cat /tmp/review.txt
 ```
 
 ## Best Practices

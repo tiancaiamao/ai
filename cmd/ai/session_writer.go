@@ -47,6 +47,28 @@ func (sc *sessionCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool
 	return sess.CanCompact(comp)
 }
 
+// CalculateDynamicThreshold returns the token threshold for compaction.
+func (sc *sessionCompactor) CalculateDynamicThreshold() int {
+	sc.mu.Lock()
+	comp := sc.compactor
+	sc.mu.Unlock()
+	if comp == nil {
+		return 0
+	}
+	return comp.CalculateDynamicThreshold()
+}
+
+// EstimateContextTokens estimates the token count of messages.
+func (sc *sessionCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+	sc.mu.Lock()
+	comp := sc.compactor
+	sc.mu.Unlock()
+	if comp == nil {
+		return 0
+	}
+	return comp.EstimateContextTokens(messages)
+}
+
 func (sc *sessionCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
 	sc.mu.Lock()
 	sess := sc.session

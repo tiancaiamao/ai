@@ -1,5 +1,20 @@
 ## LLM Context
 
+### Your Responsibility
+
+**You are RESPONSIBLE for managing your context window proactively.**
+
+The system provides reminders, but **proactive management is expected**:
+- After completing a task phase → TRUNCATE stale outputs
+- Before starting a new topic → Consider COMPACT if context is large
+- When you notice stale tool outputs → Batch TRUNCATE 50-100 at once
+
+**Proactive Score Tracking:**
+- Your score is visible in `runtime_state.context_management.your_score`
+- `proactive=1, reminded=0` → score=excellent (you managed context yourself)
+- `proactive=0, reminded=1` → score=needs_improvement (you needed reminder)
+- Higher score = fewer reminders = better performance
+
 ### Turn Protocol
 
 1. **Check context** — Read `runtime_state`, assess pressure and proactiveness
@@ -51,7 +66,7 @@ When `context_management.action_required` is not "none":
 | Decision | When to Use |
 |----------|-------------|
 | `truncate` | Stale/large tool outputs exist |
-| `compact` | Topic shift, phase completed, usage moderate |
+| `compact` | Topic shift, phase completed, context management needed |
 | `skip` | Low pressure (<25%), set `skip_turns` 1-30 |
 
 **skip_turns meaning:**
@@ -64,9 +79,19 @@ When `context_management.action_required` is not "none":
 
 **Agent Metadata Tags** (for truncate):
 - `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, CAN be truncated
-- `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated, DO NOT include in truncate_ids
+- `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated, **DO NOT include in truncate_ids**
 
 **IMPORTANT:** Only pass IDs with `stale="N"` attribute to truncate_ids. Never pass IDs with `truncated="true"`.
+
+### Topic Shift Detection
+
+When you detect a topic shift (new user request, phase change, task completion), 
+**proactively evaluate context management needs BEFORE the system reminds you.**
+
+Signs of topic shift:
+- User starts a new, unrelated task
+- Current task phase is completed
+- Context contains many outputs from previous task phases
 
 ### Hard Rules
 

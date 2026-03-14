@@ -78,7 +78,7 @@ func (c *Compactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 
 	// Phase 2 manual mode: only token-pressure fallback triggers auto compaction.
 	// Message-count based compaction is intentionally disabled.
-	threshold := c.calculateDynamicThreshold()
+	threshold := c.CalculateDynamicThreshold()
 	if threshold > 0 {
 		tokens := c.EstimateContextTokens(messages)
 		return tokens >= threshold
@@ -89,7 +89,9 @@ func (c *Compactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 // calculateDynamicThreshold calculates the compaction threshold based on context window.
 // For models with large context windows (e.g., 128k), this allows much more context
 // before triggering compaction, rather than using a fixed 8000 token limit.
-func (c *Compactor) calculateDynamicThreshold() int {
+// CalculateDynamicThreshold returns the dynamic compaction threshold based on context window.
+// Exported for use by llm_context_decision tool to provide feedback when compact is rejected.
+func (c *Compactor) CalculateDynamicThreshold() int {
 	// If context window is known, calculate dynamic threshold
 	if c.contextWindow > 0 {
 		// Reserve tokens for:
@@ -135,7 +137,7 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 		budget := c.config.KeepRecentTokens
 
 		// Don't let keep-recent exceed 30% of available context
-		if threshold := c.calculateDynamicThreshold(); threshold > 0 {
+		if threshold := c.CalculateDynamicThreshold(); threshold > 0 {
 			maxKeep := int(float64(threshold) * 0.3)
 			if budget > maxKeep && maxKeep > 0 {
 				budget = maxKeep
@@ -146,7 +148,7 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 	}
 
 	// Calculate based on threshold
-	threshold := c.calculateDynamicThreshold()
+	threshold := c.CalculateDynamicThreshold()
 	if threshold > 0 {
 		// Keep 25% of threshold as recent context
 		return int(float64(threshold) * 0.25)
@@ -200,7 +202,7 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 		slog.Info("[Compact] Compressing messages",
 			"count", len(messages),
 			"keepTokens", keepRecentTokens,
-			"threshold", c.calculateDynamicThreshold(),
+			"threshold", c.CalculateDynamicThreshold(),
 			"contextWindow", c.contextWindow,
 			"hasPreviousSummary", previousSummary != "")
 	} else {
@@ -215,7 +217,7 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 		slog.Info("[Compact] Compressing messages",
 			"count", len(messages),
 			"keepRecent", keepCount,
-			"threshold", c.calculateDynamicThreshold(),
+			"threshold", c.CalculateDynamicThreshold(),
 			"hasPreviousSummary", previousSummary != "")
 		splitIndex := len(messages) - keepCount
 		oldMessages = messages[:splitIndex]
@@ -790,4 +792,14 @@ func (a *contextCompactorAdapter) Compact(messages []agentctx.AgentMessage, prev
 		TokensBefore: result.TokensBefore,
 		TokensAfter:  result.TokensAfter,
 	}, nil
+}
+
+// CalculateDynamicThreshold returns the token threshold for compaction.
+func (a *contextCompactorAdapter) CalculateDynamicThreshold() int {
+	return a.c.CalculateDynamicThreshold()
+}
+
+// EstimateContextTokens estimates the token count of messages.
+func (a *contextCompactorAdapter) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+	return a.c.EstimateContextTokens(messages)
 }

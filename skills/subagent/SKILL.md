@@ -30,6 +30,27 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
 
 ## Correct Command Template
 
+**推荐方式：使用 start_subagent.sh 辅助脚本**
+
+```bash
+# STEP 1: 启动 subagent 并自动捕获 Session ID
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/subagent-output.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  "Your task description here")
+
+echo "Started subagent: $SESSION"
+
+# STEP 2: 等待完成（支持用户中断）
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+
+# STEP 3: 收集结果
+cat /tmp/subagent-output.txt
+```
+
+**手动方式（不推荐）**
+
 ```bash
 # STEP 1: Start subagent in background with output redirect
 (ai --mode headless \
@@ -38,13 +59,31 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
   "Your task description here" > /tmp/subagent-output.txt 2>&1) &
 
 # STEP 2: Capture session ID from output (appears in first few lines)
-SESSION_ID=$(grep -m1 "Session ID:" /tmp/subagent-output.txt | awk '{print $3}')
+# ⚠️ 必须等待 Session ID 写入文件
+SESSION=""
+for i in $(seq 1 20); do
+    sleep 0.2
+    SESSION=$(grep -m1 "Session ID:" /tmp/subagent-output.txt 2>/dev/null | awk '{print $3}')
+    if [ -n "$SESSION" ]; then
+        break
+    fi
+done
+
+if [ -z "$SESSION" ]; then
+    echo "Error: Failed to capture session ID"
+    exit 1
+fi
 
 # STEP 3: Wait using subagent_wait.sh (REQUIRED - enables interrupt)
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION_ID" 600
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
 
 # STEP 4: Collect results
 cat /tmp/subagent-output.txt
+
+# WRONG ✗ - Using PID instead of Session ID
+(ai --mode headless ...) &
+PID=$!
+~/.ai/skills/subagent/bin/subagent_wait.sh "$PID" 300  # ❌ Wrong!
 
 # WRONG ✗ - Using sleep (blocking, no interrupt support)
 sleep 30 && cat /tmp/subagent-output.txt
@@ -151,15 +190,82 @@ This allows you to:
 - `timeout` - Exceeded timeout limit
 - `error` - Failed with an error
 
+## Using start_subagent.sh Helper Script
+
+**Location:** `~/.ai/skills/subagent/bin/start_subagent.sh`
+
+This script simplifies subagent management by automatically:
+1. Starting the subagent in background
+2. Waiting for Session ID to appear in output
+3. Returning the Session ID for use with `subagent_wait.sh`
+
+**Usage:**
+```bash
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  <output_file> \
+  <timeout> \
+  <system_prompt_file|-> \
+  "<task_description>")
+```
+
+**Parameters:**
+- `output_file` - File to capture subagent output (required)
+- `timeout` - Timeout duration (e.g., `10m`, `300s`) (required)
+- `system_prompt_file` - Path to persona file, or `-` for default (required)
+- `task_description` - The task to execute (required)
+
+**Example:**
+```bash
+# With persona
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/review.txt \
+  10m \
+  /Users/genius/.ai/skills/orchestrate/references/reviewer.md \
+  "Review the authentication code")
+
+# Without persona (use default)
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/analysis.txt \
+  5m \
+  - \
+  "Analyze the log file")
+```
+
+**Output:**
+- On success: Prints Session ID to stdout
+- On error: Prints error message to stderr and exits with code 1
+
 ### Using subagent_wait.sh (Recommended)
 
 **The easiest way to monitor subagents:**
 
+### Method 1: Using start_subagent.sh (Recommended)
+
 ```bash
-# Start subagent in background
-SESSION=$(ai --mode headless --detach --timeout 10m "complex analysis task")
+# Start subagent with automatic session ID capture
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+  /tmp/output.txt \
+  10m \
+  /path/to/persona.md \
+  "complex analysis task")
 
 # Wait for completion (with interrupt support)
+~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+
+# Collect results
+cat /tmp/output.txt
+```
+
+### Method 2: Manual Session ID Extraction
+
+```bash
+# Start subagent in background
+(ai --mode headless --timeout 10m "task" > /tmp/out.txt 2>&1) &
+
+# Extract session ID (wait for it to appear)
+SESSION=$(timeout 4 bash -c 'while ! grep -q "Session ID:" /tmp/out.txt 2>/dev/null; do sleep 0.2; done; grep "Session ID:" /tmp/out.txt | awk "{print \$3}"')
+
+# Wait with subagent_wait.sh
 ~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
 ```
 
