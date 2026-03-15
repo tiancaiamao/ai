@@ -64,7 +64,6 @@ type LLMContext struct {
 
 	// Decision tracking - for separate reminder when LLM updates overview but doesn't call llm_context_decision.
 	updatedOverviewThisTurn   bool // LLM updated overview in the current turn
-	decisionNeededThisTurn    bool // runtime_state.action_required != none for the current turn
 	pendingDecisionReminder   bool // Waiting for llm_context_decision after overview update
 	roundsSinceDecisionNeeded int  // Rounds since decision became pending
 	staleToolOutputs          int  // Number of stale tool outputs (updated from runtime)
@@ -647,53 +646,76 @@ func (wm *LLMContext) SetUpdatedOverview() {
 	wm.updatedOverviewThisTurn = true
 }
 
-// SetDecisionNeededThisTurn marks whether context management is required in this turn.
-func (wm *LLMContext) SetDecisionNeededThisTurn(needed bool) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	wm.decisionNeededThisTurn = needed
-}
-
 // MarkDecisionMade marks that LLM called llm_context_decision tool.
 // This resets the decision reminder counter.
 func (wm *LLMContext) MarkDecisionMade() {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	wm.updatedOverviewThisTurn = false
-	wm.decisionNeededThisTurn = false
 	wm.pendingDecisionReminder = false
 	wm.roundsSinceDecisionNeeded = 0
 }
 
 // NeedsDecisionReminder checks if a decision reminder should be shown.
 // This is separate from overview update reminder - it triggers when:
-// - LLM has updated overview.md
-// - But hasn't called llm_context_decision tool
-// - And decision is still needed (action_required != "none")
+// - Context pressure is high (tokens or stale outputs)
+// - LLM hasn't called llm_context_decision tool recently
+//
+// The trigger is based on actual context pressure, not SetDecisionNeededThisTurn.
 func (wm *LLMContext) NeedsDecisionReminder() bool {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
+
+	// Check if there's actual pressure requiring a decision
+	tokensPercent := 0.0
+	if wm.tokensMax > 0 {
+		tokensPercent = float64(wm.tokensUsed) / float64(wm.tokensMax) * 100
+	}
+
+	// Decision is needed when:
+	// - Token usage >= 30% AND stale outputs exist
+	// - OR token usage >= 50%
+	// - OR many stale outputs (>= 10)
+	hasPressure := (tokensPercent >= 30 && wm.staleToolOutputs > 0) ||
+		tokensPercent >= 50 ||
+		wm.staleToolOutputs >= 10
+
+	if !hasPressure {
+		return false
+	}
+
+	// Only remind after a delay (roundsSinceDecisionNeeded >= 2)
+	// This gives LLM time to act on the runtime_state information
 	return wm.pendingDecisionReminder && wm.roundsSinceDecisionNeeded >= 2
 }
 
 // AdvanceDecisionState advances per-turn decision reminder state at turn boundary.
+// It now calculates pressure internally based on tokens and stale outputs.
 func (wm *LLMContext) AdvanceDecisionState(decisionMadeThisTurn bool) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
+	// Calculate current pressure
+	tokensPercent := 0.0
+	if wm.tokensMax > 0 {
+		tokensPercent = float64(wm.tokensUsed) / float64(wm.tokensMax) * 100
+	}
+
+	hasPressure := (tokensPercent >= 30 && wm.staleToolOutputs > 0) ||
+		tokensPercent >= 50 ||
+		wm.staleToolOutputs >= 10
+
 	if decisionMadeThisTurn {
 		wm.updatedOverviewThisTurn = false
-		wm.decisionNeededThisTurn = false
 		wm.pendingDecisionReminder = false
 		wm.roundsSinceDecisionNeeded = 0
 		return
 	}
 
-	if !wm.decisionNeededThisTurn {
+	if !hasPressure {
 		wm.pendingDecisionReminder = false
 		wm.roundsSinceDecisionNeeded = 0
 		wm.updatedOverviewThisTurn = false
-		wm.decisionNeededThisTurn = false
 		return
 	}
 
@@ -706,7 +728,6 @@ func (wm *LLMContext) AdvanceDecisionState(decisionMadeThisTurn bool) {
 	}
 
 	wm.updatedOverviewThisTurn = false
-	wm.decisionNeededThisTurn = false
 }
 
 // SetStaleToolCount sets the number of stale tool outputs (called from runtime).

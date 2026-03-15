@@ -27,6 +27,7 @@ type FileHandler struct {
 	outputDir        string
 	processID        int
 	sessionID        string
+	promptCount      int // Counter for each prompt/trace
 	maxFileSizeBytes int64
 	mu               sync.Mutex
 	streams          map[string]*traceStream
@@ -72,6 +73,16 @@ func (h *FileHandler) SetSessionID(sessionID string) {
 	h.mu.Lock()
 	h.sessionID = sessionID
 	h.mu.Unlock()
+}
+
+// IncrementPromptCount increments the prompt counter and returns the new value.
+// This should be called at the start of each new prompt to get a unique trace file.
+func (h *FileHandler) IncrementPromptCount() int {
+	h.mu.Lock()
+	h.promptCount++
+	count := h.promptCount
+	h.mu.Unlock()
+	return count
 }
 
 // Handle writes trace events to a file.
@@ -245,7 +256,9 @@ func (h *FileHandler) traceBaseName(traceID string) string {
 	if sessionID == "" {
 		sessionID = "unknown"
 	}
-	return fmt.Sprintf("pid%d-sess%s", h.processID, sessionID)
+	// Format: pid{PID}-sess{SESSION}.{N}
+	// N is the prompt count for unique trace files per prompt
+	return fmt.Sprintf("pid%d-sess%s.%d", h.processID, sessionID, h.promptCount)
 }
 
 func sanitizeFilenameComponent(s string) string {
@@ -291,11 +304,12 @@ func (h *FileHandler) TraceFilePath(traceID string) string {
 	h.mu.Lock()
 	sessionID := h.sessionID
 	processID := h.processID
+	promptCount := h.promptCount
 	h.mu.Unlock()
 
 	if sessionID == "" {
 		sessionID = "unknown"
 	}
-	baseName := fmt.Sprintf("pid%d-sess%s", processID, sessionID)
+	baseName := fmt.Sprintf("pid%d-sess%s.%d", processID, sessionID, promptCount)
 	return h.traceFilePath(baseName, 0)
 }

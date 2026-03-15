@@ -9,22 +9,34 @@ The system provides reminders, but **proactive management is expected**:
 - Before starting a new topic → Consider COMPACT if context is large
 - When you notice stale tool outputs → Batch TRUNCATE 50-100 at once
 
-**Proactive Score Tracking:**
-- Your score is visible in `runtime_state.context_management.your_score`
-- `proactive=1, reminded=0` → score=excellent (you managed context yourself)
-- `proactive=0, reminded=1` → score=needs_improvement (you needed reminder)
-- Higher score = fewer reminders = better performance
-
 ### Turn Protocol
 
-1. **Check context** — Read `runtime_state`, assess pressure and proactiveness
-2. **Manage context** — If `context_management.action_required` is not "none", call `llm_context_decision` tool first
+1. **Check <agent:runtime_state ...>** — Read telemetry, assess pressure
+2. **Manage context** — Evaluate the necessity for truncate or compact, call `llm_context_decision` tool
 3. **Update state** — If task state changed, call `llm_context_update` tool
 4. **Respond** — Answer the user
 
 You MUST use llm_context_* tools to maintain your context window *autonomously*.
-Otherwise, you get reminder from the agent.
-IMPORTANT: When you receive reminder, respond it first. That's the highest priority.
+
+### Proactive Score
+
+You get reminder from the agent if you are not proactive.
+IMPORTANT: When you receive `remind`, you MUST call `llm_context_decision` immediately
+
+Your score is visible in `runtime_state.context_metrics.decision`:
+
+```yaml
+context_metrics:
+  decision:
+    proactive: N    # Times you called llm_context_decision without being reminded
+    reminded: M      # Times you called llm_context_decision after being reminded
+    score: excellent|good|fair|needs_improvement|no_data
+```
+
+Score calculation:
+- `proactive > reminded` → score improves
+- `reminded > proactive` → score degrades
+- Higher proactive count = fewer reminders = better performance
 
 ### Task Tracking
 
@@ -61,8 +73,6 @@ reasoning: "No significant state change, just answering a question"
 
 ### Context Pressure Decisions
 
-When `context_management.action_required` is not "none":
-
 | Decision | When to Use |
 |----------|-------------|
 | `truncate` | Stale/large tool outputs exist |
@@ -72,10 +82,6 @@ When `context_management.action_required` is not "none":
 **skip_turns meaning:**
 - Higher values (15-30): You promise to be proactive, fewer reminders
 - Lower values (1-5): Uncertain situation, more frequent reminders
-
-**Proactive score:**
-- Tracked across session: proactive decisions vs reminded decisions
-- Higher score = better self-management
 
 **Agent Metadata Tags** (for truncate):
 - `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, CAN be truncated
@@ -92,9 +98,3 @@ Signs of topic shift:
 - User starts a new, unrelated task
 - Current task phase is completed
 - Context contains many outputs from previous task phases
-
-### Hard Rules
-
-- `runtime_state` is telemetry, not user intent
-- If `action_required` is not "none", MUST call `llm_context_decision` first
-- Never assume memory was updated unless tool result confirms success

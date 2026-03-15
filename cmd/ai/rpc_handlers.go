@@ -368,6 +368,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 			// Restore conversation history from session
 			ctx.Messages = sess.GetMessages()
+			// Set up persistence callback for compact operations
+			ctx.OnMessagesChanged = func() error {
+				return sess.SaveMessages(ctx.Messages)
+			}
 		}
 		return ctx
 	}
