@@ -11,21 +11,27 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated p
 ## ⚠️ CRITICAL RULES
 
 ```
-1. Sessions are ALWAYS saved (no --no-session option)
+🔴 RULE 1: NEVER use sleep, wait, or polling loops
+   → sleep 30 即使 subagent 3s 完成也要白等 30s
+   → subagent_wait.sh 会及时结束（3s 完成就 3s 结束）
+   → subagent_wait.sh 支持用户中断（Ctrl+C）
+
+🔴 RULE 2: ALWAYS use subagent_wait.sh to wait for completion
+   → 正确：subagent_wait.sh "$SESSION" 600
+   → 错误：sleep 30 && cat output.txt
+   → 错误：while [ ! -f done ]; do sleep 1; done
+
+🔴 RULE 3: Sessions are ALWAYS saved (no --no-session option)
    → Sessions are needed for debugging subagent behavior
 
-2. ALWAYS use --timeout to prevent runaway subagents
+🔴 RULE 4: ALWAYS use --timeout to prevent runaway subagents
    → Recommended: 5-10 minutes for most tasks
 
-3. Use --system-prompt @file for focused persona
+🔴 RULE 5: Use --system-prompt @file for focused persona
    → Load appropriate role from skill references
 
-4. NEVER use --max-turns unless explicitly needed
+🔴 RULE 6: NEVER use --max-turns unless explicitly needed
    → Let subagents complete naturally
-
-5. ALWAYS use subagent_wait.sh to wait for completion
-   → NEVER use sleep, wait, or polling loops
-   → subagent_wait.sh enables user interrupt support
 ```
 
 ## Correct Command Template

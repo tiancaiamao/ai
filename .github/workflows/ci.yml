@@ -18,7 +18,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
           cache: true
 
       - name: Download dependencies
@@ -38,4 +38,41 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+          retention-days: 7
+
+  claw-build:
+    name: Build and Test (claw)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        working-directory: claw
+        run: make deps
+
+      - name: Build
+        working-directory: claw
+        run: make build
+
+      - name: Run vet
+        working-directory: claw
+        run: make vet
+
+      - name: Run tests
+        working-directory: claw
+        run: make test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-coverage
+          path: claw/coverage.out
           retention-days: 7
