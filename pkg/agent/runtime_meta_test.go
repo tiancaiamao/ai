@@ -180,9 +180,8 @@ func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) 
 	if !containsString(summary, "1 bash, 1 read") {
 		t.Fatalf("expected grouped tool counts, got: %s", summary)
 	}
-	if !containsString(summary, "consider TRUNCATE") {
-		t.Fatalf("expected truncate guidance, got: %s", summary)
-	}
+	// Note: guidance is no longer included in buildToolOutputsSummary
+	// LLM decides based on runtime_state telemetry
 }
 
 func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
@@ -241,9 +240,8 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}
-	if agentCtx.ContextMgmtState.LastReminderTurn != 7 {
-		t.Fatalf("expected LastReminderTurn to use CurrentTurn=7, got %d", agentCtx.ContextMgmtState.LastReminderTurn)
-	}
+	// Note: LastReminderTurn is now set when reminder is actually shown (in streamAssistantResponse)
+	// not in updateRuntimeMetaSnapshot which is telemetry-only
 }
 
 func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {

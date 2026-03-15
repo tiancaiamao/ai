@@ -69,9 +69,19 @@ func (h *FileHandler) SetMaxFileSizeBytes(maxBytes int64) {
 }
 
 // SetSessionID sets the session ID for trace file naming.
+// It closes all existing streams to ensure new traces use the new session ID.
 func (h *FileHandler) SetSessionID(sessionID string) {
 	h.mu.Lock()
 	h.sessionID = sessionID
+	// Close all existing streams so new traces use the new session ID
+	for id, stream := range h.streams {
+		if stream != nil && stream.file != nil {
+			// Write closing bracket before closing
+			_, _ = stream.file.WriteString(traceJSONSuffix)
+			_ = stream.file.Close()
+		}
+		delete(h.streams, id)
+	}
 	h.mu.Unlock()
 }
 
