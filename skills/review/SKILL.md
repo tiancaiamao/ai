@@ -29,8 +29,9 @@ tools: [bash]
 
 1. **解析用户输入** - 识别 review 模式（PR/commit/uncommitted）
 2. **获取代码变更** - 通过 gh pr diff 或 git 命令获取变更
-3. **调用 subagent** - 使用 review system prompt 执行审查
-4. **收集反馈** - 解析 JSON 输出，格式化展示
+3. **准备输出文件** - 确定结果文件路径（如 `/tmp/review-42.json`）
+4. **调用 subagent** - 使用 review system prompt 执行审查
+5. **读取结果** - 从文件读取 JSON 输出，格式化展示
 
 ## Review System Prompt
 
@@ -97,15 +98,50 @@ tools: [bash]
 
 **重要**: 调用 subagent 时请参考 `/skill:subagent` 技能的最佳实践。
 
-关键点：
-- 使用 reviewer.md 作为 system prompt
-- 设置 timeout 10-15 分钟（复杂 review 可能需要更长时间）
-- **必须后台运行并收集结果**（bash 工具有 30s 超时限制）
-- 监控 session 文件获取进度
+### 指定工具集
 
-Reviewer persona 路径: `/Users/genius/.ai/skills/review/reviewer.md`
+必须指定 `--tools` 参数，确保 subagent 有写文件权限：
 
-详细调试方法见 subagent 技能的 **Debugging & Monitoring** 章节。
+```bash
+ai --mode headless \
+  --system-prompt @/path/to/reviewer.md \
+  --tools read,write,grep,edit,glob \
+  --timeout 15m \
+  "Review the PR... Write your result to /tmp/review-42.json"
+```
+
+### 输出文件约定
+
+在 prompt 里明确告诉 subagent 输出文件路径：
+
+```
+Review the following PR diff ... Write your result to /tmp/review-42.json
+```
+
+**关键点**:
+- 文件名由主 agent 决定（如 `review-{PR号}.json`）
+- Subagent 使用 `write` 工具把 JSON 结果写入文件
+- 主 agent 事后读取该文件获取结果
+- 不要依赖 subagent 的 stdout（会混有日志）
+
+### 示例
+
+```bash
+# 1. 获取 PR diff
+gh pr diff 42 > /tmp/pr42.diff
+
+# 2. 调用 subagent，指定输出文件
+ai --mode headless \
+  --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
+  --tools read,write,grep,edit \
+  --timeout 15m \
+  "Review this PR diff. Write your result to /tmp/review-42.json
+
+$(cat /tmp/pr42.diff)" &
+
+# 3. 等待完成后读取结果
+cat /tmp/review-42.json
+```
 
 ## 关键规则
 

@@ -536,3 +536,31 @@ fi
 - ✅ Use `kill` to terminate stuck subagents
 - ❌ Don't use `--max-turns` (use timeout instead)
 - ❌ Don't nest subagents
+
+## Output File Convention
+
+**When the main agent needs structured output from subagent:**
+
+1. **Main agent specifies output file** in the prompt:
+   ```
+   "Review this code. Write your result to /tmp/review-result.json"
+   ```
+
+2. **Subagent uses `write` tool** to save the result
+
+3. **Main agent reads the file** to get the result
+
+**Why this approach:**
+- Avoids mixing headless logs with actual output
+- File path is controlled by main agent (knows what it wants)
+- Subagent needs `write` tool (use `--tools read,write,...`)
+
+**Example:**
+```bash
+# Main agent: call subagent with --tools and output file
+ai --mode headless \
+  --system-prompt @/path/to/persona.md \
+  --tools read,write,grep \
+  --timeout 10m \
+  "Your task. Write result to /tmp/output.json"
+```
