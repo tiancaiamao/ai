@@ -163,7 +163,7 @@ func buildToolOutputsSummary(messages []agentctx.AgentMessage) string {
 		parts = append(parts, "...")
 	}
 
-	return fmt.Sprintf("%d stale outputs (%s), consider TRUNCATE", staleCount, strings.Join(parts, ", "))
+	return fmt.Sprintf("%d stale outputs (%s)", staleCount, strings.Join(parts, ", "))
 }
 
 // buildToolOutputsSummaryWithIDs returns summary and list of tool call IDs that can be truncated.
@@ -241,6 +241,6 @@ func buildToolOutputsSummaryWithIDs(messages []agentctx.AgentMessage) (string, [
 		allIDs = append(allIDs, ids...)
 	}
 
-	summary := fmt.Sprintf("%d stale outputs (%s), consider TRUNCATE", staleCount, strings.Join(parts, ", "))
+	summary := fmt.Sprintf("%d stale outputs (%s)", staleCount, strings.Join(parts, ", "))
 	return summary, allIDs
 }

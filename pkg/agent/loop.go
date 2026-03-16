@@ -271,7 +271,12 @@ func runInnerLoop(
 				if compacted != nil {
 					agentCtx.Messages = compacted.Messages
 					agentCtx.LastCompactionSummary = compacted.Summary
-					// Note: SaveCompactionSummary is now handled inside Session.Compact()
+					// Persist changes to session storage
+					if agentCtx.OnMessagesChanged != nil {
+						if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
+							slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
+						}
+					}
 				}
 				// Set flag to inject overview.md for recovery on next request
 				agentCtx.PostCompactRecovery = true
@@ -324,7 +329,12 @@ func runInnerLoop(
 					if compacted != nil {
 						agentCtx.Messages = compacted.Messages
 						agentCtx.LastCompactionSummary = compacted.Summary
-						// Note: SaveCompactionSummary is now handled inside Session.Compact()
+						// Persist changes to session storage
+						if agentCtx.OnMessagesChanged != nil {
+							if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
+								slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
+							}
+						}
 					}
 					// Set flag to inject overview.md for recovery on next request
 					agentCtx.PostCompactRecovery = true
@@ -746,6 +756,11 @@ func streamAssistantResponse(
 		}
 		llmMessages = append(llmMessages, reminderMsg)
 		agentCtx.LLMContext.SetWasReminded()
+
+		// Trace event for context update reminder
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",
+			traceevent.Field{Key: "reminder_type", Value: "llm_context_update"},
+		)
 	}
 
 	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
@@ -764,6 +779,17 @@ func streamAssistantResponse(
 			Content: decisionReminderContent,
 		}
 		llmMessages = append(llmMessages, decisionReminderMsg)
+
+		// Record that a reminder was shown this turn (for proactive/reminded tracking)
+		if agentCtx.ContextMgmtState != nil {
+			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, "high")
+		}
+
+		// Trace event for context decision reminder
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
+			traceevent.Field{Key: "reminder_type", Value: "llm_context_decision"},
+			traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
+		)
 	}
 
 	// Convert tools to LLM format
@@ -1579,35 +1605,14 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 		agentCtx.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
-		if agentCtx.LLMContext != nil {
-			agentCtx.LLMContext.SetDecisionNeededThisTurn(runtimeSnapshotNeedsDecision(agentCtx.RuntimeMetaSnapshot))
-		}
 		return agentCtx.RuntimeMetaSnapshot, false
 	}
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
 	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
-	stageHint := runtimeContextManagementHint(meta.TokensPercent)
 	actionHint := runtimeActionHint(band)
 	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
-
-	// Determine action_required based on tool pressure and context usage
-	actionRequired := "none"
-	urgency := "none"
-	if meta.TokensPercent >= 65 || toolPressure.StaleCount > 20 || toolPressure.LargeCount > 5 {
-		actionRequired = "compact"
-		urgency = "critical"
-	} else if meta.TokensPercent >= 50 || toolPressure.StaleCount > 10 || toolPressure.LargeCount > 3 {
-		actionRequired = "truncate"
-		urgency = "high"
-	} else if meta.TokensPercent >= 30 || toolPressure.StaleCount > 5 {
-		actionRequired = "truncate"
-		urgency = "medium"
-	} else if toolOutputsSummary != "none" {
-		actionRequired = "truncate"
-		urgency = "low"
-	}
 
 	// Get or initialize ContextMgmtState
 	if agentCtx.ContextMgmtState == nil {
@@ -1615,40 +1620,47 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	}
 	state := agentCtx.ContextMgmtState
 
-	// Check if we should show reminder based on adaptive frequency
-	// If we're in a skip period or haven't reached the frequency threshold, suppress the reminder
-	// Use CurrentTurn instead of RuntimeMetaTurns to ensure consistency with llm_context_decision tool
-	showReminder := state.ShouldShowReminder(agentCtx.ContextMgmtState.CurrentTurn, actionRequired, urgency, int(meta.TokensPercent))
-	if !showReminder && actionRequired != "none" {
-		// Suppress the reminder - don't show action_required in runtime_state
-		actionRequired = "none"
-		urgency = "none"
-	} else if showReminder && actionRequired != "none" {
-		// We're showing a reminder, record it
-		state.RecordReminder(state.CurrentTurn, urgency)
-		// Mark that reminder was shown this turn (for compliance tracking)
-		state.MarkReminderShown()
-	}
+	// Build update metrics section
+	var updateMetrics string
 	if agentCtx.LLMContext != nil {
-		agentCtx.LLMContext.SetDecisionNeededThisTurn(actionRequired != "none")
+		updateStats := agentCtx.LLMContext.GetUpdateStats()
+		if updateStats.Total > 0 {
+			updateMetrics = fmt.Sprintf(`
+context_metrics:
+  update:
+    total: %d
+    autonomous: %d
+    prompted: %d
+    consciousness: %d%%
+    score: %s
+  decision:
+    proactive: %d
+    reminded: %d
+    score: %s`,
+				updateStats.Total,
+				updateStats.Autonomous,
+				updateStats.Prompted,
+				updateStats.ConsciousPct,
+				updateStats.Score,
+				state.ProactiveDecisions,
+				state.ReminderNeeded,
+				state.GetScore())
+		} else {
+			updateMetrics = `
+context_metrics:
+  update:
+    total: 0
+    score: no_data
+  decision:
+    proactive: 0
+    reminded: 0
+    score: no_data_yet`
+		}
 	}
 
-	// Build context management stats section
-	var cmStats string
-	if state.ProactiveDecisions > 0 || state.ReminderNeeded > 0 {
-		cmStats = fmt.Sprintf(`  your_score: %s
-  proactive_decisions: %d
-  reminders_needed: %d
-  current_frequency: every %d turns`,
-			state.GetScore(),
-			state.ProactiveDecisions,
-			state.ReminderNeeded,
-			state.ReminderFrequency)
-	} else {
-		cmStats = "  your_score: no_data_yet"
-	}
-
-	snapshot := fmt.Sprintf(`<runtime_state>
+	// runtime_state is purely informational - no directives or commands
+	// Reminders are handled separately via NeedsReminderMessage/NeedsDecisionReminder
+	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
 context_meta:
   tokens_band: %s
   action_hint: %s
@@ -1660,26 +1672,14 @@ tool_output_pressure:
   stale_tool_outputs_bucket: %s
   tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
-  largest_tool_output_bucket: %s
-context_management:
-  action_required: %s
-  urgency: %s
-  skip_until_turn: %d
-%s
+  largest_tool_output_bucket: %s%s
 compact_decision_signals:
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
   phase_completed_recently: llm_judge
   llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.
 decision:
-  fast_path_allowed: %s
-guidance:
-  - If action_required is not "none", you MUST call llm_context_decision tool BEFORE answering the user.
-  - Use decision="skip" with appropriate skip_turns (1-30) to defer when not urgent.
-  - Higher skip_turns values (15-30) indicate you promise to be proactive; this increases trust and reduces reminder frequency.
-  - Lower skip_turns values (1-5) are for uncertain situations; reminders will come more frequently.
-  - Stage hint: %s
-</runtime_state>`,
+  fast_path_allowed: %s`,
 		band,
 		actionHint,
 		tokensUsedApprox,
@@ -1690,13 +1690,9 @@ guidance:
 		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
-		actionRequired,
-		urgency,
-		state.SkipUntilTurn,
-		cmStats,
+		updateMetrics,
 		meta.TokensPercent,
 		yesNo(fastPathAllowed),
-		stageHint,
 	)
 
 	agentCtx.RuntimeMetaSnapshot = snapshot
@@ -1704,16 +1700,6 @@ guidance:
 	agentCtx.RuntimeMetaTurns = 0
 
 	return snapshot, true
-}
-
-func runtimeSnapshotNeedsDecision(snapshot string) bool {
-	if snapshot == "" {
-		return false
-	}
-	if strings.Contains(snapshot, "action_required: none") {
-		return false
-	}
-	return strings.Contains(snapshot, "action_required:")
 }
 
 type runtimeToolPressure struct {

@@ -180,9 +180,8 @@ func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) 
 	if !containsString(summary, "1 bash, 1 read") {
 		t.Fatalf("expected grouped tool counts, got: %s", summary)
 	}
-	if !containsString(summary, "consider TRUNCATE") {
-		t.Fatalf("expected truncate guidance, got: %s", summary)
-	}
+	// Note: guidance is no longer included in buildToolOutputsSummary
+	// LLM decides based on runtime_state telemetry
 }
 
 func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
@@ -241,9 +240,8 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}
-	if agentCtx.ContextMgmtState.LastReminderTurn != 7 {
-		t.Fatalf("expected LastReminderTurn to use CurrentTurn=7, got %d", agentCtx.ContextMgmtState.LastReminderTurn)
-	}
+	// Note: LastReminderTurn is now set when reminder is actually shown (in streamAssistantResponse)
+	// not in updateRuntimeMetaSnapshot which is telemetry-only
 }
 
 func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
@@ -423,5 +421,38 @@ func TestFindLatestToolCallID(t *testing.T) {
 	id = findLatestToolCallID(msgs, "nonexistent")
 	if id != "" {
 		t.Fatalf("expected empty string for nonexistent tool, got %s", id)
+	}
+}
+
+func TestUpdateRuntimeMetaSnapshotIncludesContextMetrics(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.LLMContext = agentctx.NewLLMContext(t.TempDir())
+
+	meta := agentctx.ContextMeta{
+		TokensUsed:        12345,
+		TokensMax:         128000,
+		TokensPercent:     15.0,
+		MessagesInHistory: 10,
+		LLMContextSize:    500,
+	}
+
+	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+
+	// Should contain context_metrics section
+	if !containsString(snapshot, "context_metrics:") {
+		t.Fatalf("expected context_metrics section in snapshot:\n%s", snapshot)
+	}
+
+	// Should have update subsection with no_data initially
+	if !containsString(snapshot, "update:") {
+		t.Fatalf("expected update subsection:\n%s", snapshot)
+	}
+	if !containsString(snapshot, "total: 0") {
+		t.Fatalf("expected total: 0 for no data yet:\n%s", snapshot)
+	}
+
+	// Should have decision subsection
+	if !containsString(snapshot, "decision:") {
+		t.Fatalf("expected decision subsection:\n%s", snapshot)
 	}
 }

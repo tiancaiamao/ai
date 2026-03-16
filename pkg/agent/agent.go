@@ -345,6 +345,14 @@ func (a *Agent) rotateTraceForPrompt(ctx context.Context) {
 	if err := a.traceBuf.DiscardOrFlush(ctx); err != nil {
 		slog.Error("[Agent] Failed to rotate trace file", "error", err)
 	}
+
+	// Increment prompt count for unique trace file naming
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			fh.IncrementPromptCount()
+		}
+	}
+
 	seq := int(a.traceSeq.Add(1))
 	a.traceBuf.SetTraceID(traceevent.GenerateTraceID("session", seq))
 }

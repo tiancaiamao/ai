@@ -146,7 +146,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		t.Fatalf("expected runtime user content to NOT include llm_context in normal request, got: %q", runtimeContent)
 	}
 	// runtime_state should still be injected
-	if !strings.Contains(runtimeContent, "<runtime_state>") {
+	if !strings.Contains(runtimeContent, "<agent:runtime_state") {
 		t.Fatalf("expected runtime user content to include runtime_state, got: %q", runtimeContent)
 	}
 }
@@ -355,7 +355,7 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 		if strings.Contains(content, "<llm_context>") {
 			continue // runtime state injection (llm context part)
 		}
-		if strings.Contains(content, "<runtime_state>") {
+		if strings.Contains(content, "<agent:runtime_state") {
 			continue // runtime state injection (meta part)
 		}
 		if strings.Contains(content, "[system message by agent, not from real user]") {

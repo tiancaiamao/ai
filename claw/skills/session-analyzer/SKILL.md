@@ -36,7 +36,9 @@ license: MIT
 **⚠️ 重要：路径必须正确**
 
 - **Sessions**: `~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl`
-- **Traces**: `~/.ai/traces/pid<pid>-sess<session-id>.perfetto.json`
+- **Traces**: `~/.ai/traces/pid<pid>-sess<session-id>.<N>.perfetto.json`
+  - N 是每次 prompt 递增的序号（1, 2, 3...）
+  - 大文件可能还有 `-part-X` 后缀
 
 **不是** `~/.aiclaw/` 目录！
 
