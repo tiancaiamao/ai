@@ -310,7 +310,7 @@ func (t *LLMContextDecisionTool) processTruncate(ctx context.Context, agentCtx *
 			originalSize = n
 		}
 
-		// Replace with truncated tag
+		// Replace with truncated tag (no id to prevent reuse)
 		agentCtx.Messages[i] = agentctx.NewToolResultMessage(
 			msg.ToolCallID,
 			msg.ToolName,
@@ -318,8 +318,7 @@ func (t *LLMContextDecisionTool) processTruncate(ctx context.Context, agentCtx *
 				agentctx.TextContent{
 					Type: "text",
 					Text: fmt.Sprintf(
-						`<agent:tool id="%s" name="%s" chars="%d" truncated="true" />`,
-						msg.ToolCallID,
+						`<agent:tool name="%s" chars="%d" truncated="true" />`,
 						msg.ToolName,
 						originalSize,
 					),

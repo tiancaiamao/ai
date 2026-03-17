@@ -17,7 +17,7 @@ func TestLLMContextDecisionFiltersAlreadyTruncated(t *testing.T) {
 
 		// Already truncated tool output
 		agentctx.NewToolResultMessage("call_2", "read", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: `<agent:tool id="call_2" name="read" chars="1000" truncated="true" />`},
+			agentctx.TextContent{Type: "text", Text: `<agent:tool name="read" chars="1000" truncated="true" />`},
 		}, false),
 
 		// Another regular tool output
@@ -27,7 +27,7 @@ func TestLLMContextDecisionFiltersAlreadyTruncated(t *testing.T) {
 
 		// Another already truncated tool output
 		agentctx.NewToolResultMessage("call_4", "bash", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: `<agent:tool id="call_4" name="bash" chars="2000" truncated="true" />`},
+			agentctx.TextContent{Type: "text", Text: `<agent:tool name="bash" chars="2000" truncated="true" />`},
 		}, false),
 	}
 
