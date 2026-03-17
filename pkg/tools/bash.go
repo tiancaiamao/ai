@@ -406,115 +406,103 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	select {
-	case <-timeoutChan:
-		// Timeout expired - return partial output and let LLM decide
-		state, _ := t.registry.GetCommand(cmdID)
-		state.mu.Lock()
-		partialOutput := state.Output.String()
-		elapsed := time.Since(state.StartTime)
-		pgid := state.PGID
-		state.mu.Unlock()
+	for {
+		select {
+		case <-timeoutChan:
+			// Timeout expired - return partial output and let LLM decide
+			state, _ := t.registry.GetCommand(cmdID)
+			state.mu.Lock()
+			partialOutput := state.Output.String()
+			elapsed := time.Since(state.StartTime)
+			pgid := state.PGID
+			state.mu.Unlock()
 
-		slog.Warn("[Bash] Command timed out",
-			"cmdID", cmdID,
-			"command", command,
-			"timeout", execTimeout.Seconds(),
-			"elapsed", elapsed.Seconds(),
-			"outputSize", len(partialOutput),
-			"pgid", pgid)
+			slog.Warn("[Bash] Command timed out",
+				"cmdID", cmdID,
+				"command", command,
+				"timeout", execTimeout.Seconds(),
+				"elapsed", elapsed.Seconds(),
+				"outputSize", len(partialOutput),
+				"pgid", pgid)
 
-		resultText := fmt.Sprintf(
-			"Command timed out after %v (configured timeout was %v).\n"+
-				"Command is still running in background (PID: %d, PGID: %d).\n\n"+
-				"Partial output (%d bytes):\n%s\n\n"+
-				"Options:\n"+
-				"  • command_status id=%s  - Check current status\n"+
-				"  • Wait and check later  - Command may complete\n"+
-				"  • Retry with timeout=%d - Use longer timeout\n"+
-				"  • timeout=0             - Wait indefinitely\n",
-			elapsed, execTimeout, state.PID, pgid,
-			len(partialOutput), partialOutput, cmdID,
-			int(execTimeout.Seconds())*2,
-		)
+			resultText := fmt.Sprintf(
+				"Command timed out after %v (configured timeout was %v).\n"+
+					"Command is still running in background (PID: %d, PGID: %d).\n\n"+
+					"Partial output (%d bytes):\n%s\n\n"+
+					"Options:\n"+
+					"  • command_status id=%s  - Check current status\n"+
+					"  • Wait and check later  - Command may complete\n"+
+					"  • Retry with timeout=%d - Use longer timeout\n"+
+					"  • timeout=0             - Wait indefinitely\n",
+				elapsed, execTimeout, state.PID, pgid,
+				len(partialOutput), partialOutput, cmdID,
+				int(execTimeout.Seconds())*2,
+			)
 
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: resultText,
-			},
-		}, nil
+			return []agentctx.ContentBlock{
+				agentctx.TextContent{
+					Type: "text",
+					Text: resultText,
+				},
+			}, nil
 
-	case <-ctx.Done():
-		// Context canceled
-		state, _ := t.registry.GetCommand(cmdID)
-		state.mu.Lock()
-		output := state.Output.String()
-		elapsed := time.Since(state.StartTime)
-		state.mu.Unlock()
+		case <-ctx.Done():
+			// Context canceled
+			state, _ := t.registry.GetCommand(cmdID)
+			state.mu.Lock()
+			output := state.Output.String()
+			elapsed := time.Since(state.StartTime)
+			state.mu.Unlock()
 
-		slog.Info("[Bash] Command context canceled",
-			"cmdID", cmdID,
-			"command", command,
-			"elapsed", elapsed.Seconds(),
-			"outputSize", len(output))
+			slog.Info("[Bash] Command context canceled",
+				"cmdID", cmdID,
+				"command", command,
+				"elapsed", elapsed.Seconds(),
+				"outputSize", len(output))
 
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: fmt.Sprintf("Command execution canceled.\n\nOutput:\n%s", output),
-			},
-		}, nil
-	}
+			return []agentctx.ContentBlock{
+				agentctx.TextContent{
+					Type: "text",
+					Text: fmt.Sprintf("Command execution canceled.\n\nOutput:\n%s", output),
+				},
+			}, nil
 
-	// Check if command completed
-	state, ok := t.registry.GetCommand(cmdID)
-	if ok && state.Done {
-		state.mu.Lock()
-		output := state.Output.String()
-		exitCode := state.ExitCode
-		errorMsg := state.Error
-		elapsed := time.Since(state.StartTime)
-		state.mu.Unlock()
+		case <-ticker.C:
+			// Check if command completed
+			state, ok := t.registry.GetCommand(cmdID)
+			if ok && state.Done {
+				state.mu.Lock()
+				output := state.Output.String()
+				exitCode := state.ExitCode
+				errorMsg := state.Error
+				elapsed := time.Since(state.StartTime)
+				state.mu.Unlock()
 
-		slog.Info("[Bash] Command completed",
-			"cmdID", cmdID,
-			"command", command,
-			"exitCode", exitCode,
-			"elapsed", elapsed.Seconds(),
-			"outputSize", len(output))
+				slog.Info("[Bash] Command completed",
+					"cmdID", cmdID,
+					"command", command,
+					"exitCode", exitCode,
+					"elapsed", elapsed.Seconds(),
+					"outputSize", len(output))
 
-		var result strings.Builder
-		result.WriteString(output)
-		if errorMsg != "" {
-			if result.Len() > 0 {
-				result.WriteString("\n")
+				var result strings.Builder
+				result.WriteString(output)
+				if errorMsg != "" {
+					if result.Len() > 0 {
+						result.WriteString("\n")
+					}
+					result.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", errorMsg, exitCode))
+				}
+
+				return []agentctx.ContentBlock{
+					agentctx.TextContent{
+						Type: "text",
+						Text: result.String(),
+					},
+				}, nil
 			}
-			result.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", errorMsg, exitCode))
 		}
-
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: result.String(),
-			},
-		}, nil
 	}
-
-	// Should not reach here
-	var output strings.Builder
-	if state, ok := t.registry.GetCommand(cmdID); ok {
-		state.mu.Lock()
-		output.WriteString(state.Output.String())
-		state.mu.Unlock()
-	}
-
-	return []agentctx.ContentBlock{
-		agentctx.TextContent{
-			Type: "text",
-			Text: output.String(),
-		},
-	}, nil
 }
 
 // SetTimeout sets the timeout for command execution.
