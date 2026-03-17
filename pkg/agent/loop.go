@@ -436,16 +436,6 @@ func runInnerLoop(
 				agentCtx.Messages = append(agentCtx.Messages, result)
 				newMessages = append(newMessages, result)
 			}
-			// Check if llm context was updated
-			if agentCtx.LLMContext != nil || loopGuard != nil {
-				toolCalls := msg.ExtractToolCalls()
-				for _, tc := range toolCalls {
-					// Track if LLM called llm_context_decision tool
-					if strings.EqualFold(tc.Name, "llm_context_decision") {
-						agentCtx.LLMContext.MarkDecisionMade()
-					}
-				}
-			}
 		}
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
@@ -454,10 +444,6 @@ func runInnerLoop(
 		// If reminder was shown but LLM didn't call llm_context_decision, apply penalty
 		if agentCtx.ContextMgmtState != nil {
 			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
-		}
-		if agentCtx.LLMContext != nil {
-			decisionMadeThisTurn := agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.DecisionMadeThisTurn
-			agentCtx.LLMContext.AdvanceDecisionState(decisionMadeThisTurn)
 		}
 		if agentCtx.ContextMgmtState != nil {
 			// Reset per-turn tracking for next turn
@@ -747,6 +733,14 @@ func streamAssistantResponse(
 
 	}
 
+	staleCount := 0
+	if len(agentCtx.Messages) > 0 {
+		staleCount, _ = collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
+	}
+	if agentCtx.LLMContext != nil {
+		agentCtx.LLMContext.SetStaleToolCount(staleCount)
+	}
+
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
 	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() {
 		reminderContent := agentCtx.LLMContext.GetReminderUserMessage()
@@ -763,33 +757,35 @@ func streamAssistantResponse(
 		)
 	}
 
-	// Inject decision reminder if LLM updated overview but didn't call llm_context_decision tool
-	// This is separate from overview update reminder - it triggers when decision is needed but not made
-	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsDecisionReminder() {
-		// Get stale count and available tool IDs for reminder
-		staleCount, _ := collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
-		agentCtx.LLMContext.SetStaleToolCount(staleCount)
-
-		// Get available (non-truncated) tool IDs to include in reminder example
-		_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
-
-		decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage(availableToolIDs)
-		decisionReminderMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: decisionReminderContent,
-		}
-		llmMessages = append(llmMessages, decisionReminderMsg)
-
-		// Record that a reminder was shown this turn (for proactive/reminded tracking)
-		if agentCtx.ContextMgmtState != nil {
-			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, "high")
-		}
-
-		// Trace event for context decision reminder
-		traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
-			traceevent.Field{Key: "reminder_type", Value: "llm_context_decision"},
-			traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
+	// Inject decision reminder based on independent decision-pressure state.
+	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil {
+		meta := agentCtx.LLMContext.GetMeta()
+		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
+			agentCtx.ContextMgmtState.CurrentTurn,
+			meta.TokensPercent,
+			staleCount,
 		)
+		if showDecisionReminder {
+			// Get available (non-truncated) tool IDs to include in reminder example
+			_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
+
+			decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage(availableToolIDs, agentCtx.ContextMgmtState, urgency)
+			decisionReminderMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: decisionReminderContent,
+			}
+			llmMessages = append(llmMessages, decisionReminderMsg)
+
+			// Record that a reminder was shown this turn (for proactive/reminded tracking)
+			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, urgency)
+
+			// Trace event for context decision reminder
+			traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
+				traceevent.Field{Key: "reminder_type", Value: "llm_context_decision"},
+				traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
+				traceevent.Field{Key: "urgency", Value: urgency},
+			)
+		}
 	}
 
 	// Convert tools to LLM format
