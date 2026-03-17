@@ -1,22 +1,42 @@
 package tools
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// BashResult represents the result of a bash command execution.
-type BashResult struct {
-	ExitCode int    `json:"exitCode"`
-	Output   string `json:"output"`
-	Error    string `json:"error,omitempty"`
+// CommandState tracks the state of a running command.
+type CommandState struct {
+	Command    string
+	PID        int
+	PGID       int // Process group ID for cleanup
+	StartTime  time.Time
+	Output     strings.Builder
+	Done       bool
+	ExitCode   int
+	Error      string
+	mu         sync.Mutex
+	cancel     context.CancelFunc
 }
 
-// isSubagentWaitCommand checks if the command is a subagent_wait call.
+// CommandRegistry manages running commands.
+type CommandRegistry struct {
+	commands sync.Map // map[string]*CommandState
+}
+
+var globalCommandRegistry = &CommandRegistry{}
+
+// isSubagentWaitCommand checks if command is a subagent_wait call.
 // Uses robust parsing to avoid false positives from echo, grep, comments, etc.
 func isSubagentWaitCommand(command string) bool {
 	command = strings.TrimSpace(command)
@@ -59,24 +79,24 @@ func extractFirstCommandToken(command string) string {
 		if command == "" {
 			return ""
 		}
-		
+
 		// Check if command starts with VAR=value pattern
 		eqIdx := strings.IndexByte(command, '=')
 		if eqIdx <= 0 {
 			break
 		}
-		
+
 		varName := command[:eqIdx]
 		if !isValidEnvVarName(varName) {
 			break
 		}
-		
+
 		// Skip past the = and the value
 		rest := command[eqIdx+1:]
 		if len(rest) == 0 {
 			break
 		}
-		
+
 		// Handle quoted values
 		if rest[0] == '"' || rest[0] == '\'' {
 			quote := rest[0]
@@ -164,19 +184,123 @@ func isValidEnvVarName(s string) bool {
 	return true
 }
 
-// BashTool executes bash commands with dynamic workspace support.
+// RegisterCommand registers a command and returns its ID.
+func (r *CommandRegistry) RegisterCommand(command string) string {
+	id := fmt.Sprintf("cmd-%d", time.Now().UnixNano())
+	state := &CommandState{
+		Command:   command,
+		StartTime: time.Now(),
+	}
+	r.commands.Store(id, state)
+	return id
+}
+
+// GetCommand retrieves a command by ID.
+func (r *CommandRegistry) GetCommand(id string) (*CommandState, bool) {
+	if v, ok := r.commands.Load(id); ok {
+		return v.(*CommandState), true
+	}
+	return nil, false
+}
+
+// Execute runs a command in background and streams output.
+func (r *CommandRegistry) Execute(ctx context.Context, cmdID string, command string, cwd string) {
+	state, ok := r.GetCommand(cmdID)
+	if !ok {
+		return
+	}
+
+	// Create command with process group for cleanup
+	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd.Dir = cwd
+
+	// Set process group to enable cleanup of entire process tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	// Setup pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		state.mu.Lock()
+		state.Error = fmt.Sprintf("failed to create stdout pipe: %v", err)
+		state.Done = true
+		state.mu.Unlock()
+		return
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		state.mu.Lock()
+		state.Error = fmt.Sprintf("failed to create stderr pipe: %v", err)
+		state.Done = true
+		state.mu.Unlock()
+		return
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		state.mu.Lock()
+		state.Error = fmt.Sprintf("failed to start command: %v", err)
+		state.Done = true
+		state.mu.Unlock()
+		return
+	}
+
+	state.mu.Lock()
+	state.PID = cmd.Process.Pid
+	state.PGID = cmd.Process.Pid // Process group ID equals process ID when Setpgid is true
+	state.mu.Unlock()
+
+	// Stream output in background
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		scanner := bufio.NewScanner(io.MultiReader(stdout, stderr))
+		for scanner.Scan() {
+			line := scanner.Text()
+			state.mu.Lock()
+			state.Output.WriteString(line + "\n")
+			state.mu.Unlock()
+		}
+	}()
+
+	// Wait for command to finish
+	err = cmd.Wait()
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	<-outputDone // Wait for output streaming to complete
+
+	state.Done = true
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			state.ExitCode = exitErr.ExitCode()
+		} else {
+			state.ExitCode = -1
+			state.Error = err.Error()
+		}
+	} else {
+		state.ExitCode = 0
+	}
+}
+
+// BashTool executes bash commands with dynamic workspace support and async execution.
 type BashTool struct {
 	workspace   *Workspace
 	timeout     time.Duration
 	execTimeout time.Duration
+	registry    *CommandRegistry
 }
 
 // NewBashTool creates a new Bash tool with dynamic workspace support.
 func NewBashTool(ws *Workspace) *BashTool {
 	return &BashTool{
 		workspace:   ws,
-		timeout:     60 * time.Second, // Increased from 30s
-		execTimeout: 30 * time.Second, // Increased from 5s to allow longer commands
+		timeout:     120 * time.Second, // Default 120s for overall timeout
+		execTimeout: 120 * time.Second, // Default 120s for individual commands (LLM can override)
+		registry:    globalCommandRegistry,
 	}
 }
 
@@ -187,10 +311,26 @@ func (t *BashTool) Name() string {
 
 // Description returns the tool description.
 func (t *BashTool) Description() string {
-	return "Execute a bash command in the current working directory."
+	return `Execute bash commands in the current working directory.
+
+Timeout behavior:
+  • Default: 120 seconds
+  • Override: Set timeout parameter (in seconds)
+  • No limit: Set timeout=0 to wait indefinitely
+  • On timeout: Command continues running in background, partial output returned
+
+When a command times out:
+  • Command continues running in background (use command_status to check)
+  • Partial output is returned
+  • Retry with longer timeout or use timeout=0 for long-running commands
+
+Examples:
+  • Normal: {"command": "make build"}
+  • Custom timeout: {"command": "make build", "timeout": 300}
+  • No timeout: {"command": "make build", "timeout": 0}`
 }
 
-// Parameters returns the JSON Schema for the tool parameters.
+// Parameters returns the JSON Schema for tool parameters.
 func (t *BashTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -199,12 +339,17 @@ func (t *BashTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Bash command to execute",
 			},
+			"timeout": map[string]any{
+				"type":        "integer",
+				"description": "Timeout in seconds (default: 120, 0 for no timeout). If command times out, it continues running in background.",
+				"minimum":     0,
+			},
 		},
 		"required": []string{"command"},
 	}
 }
 
-// Execute executes the bash command with dynamic workspace support.
+// Execute executes the bash command with async execution support.
 func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
 	command, ok := args["command"].(string)
 	if !ok {
@@ -213,7 +358,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
-	
+
 	// Check if this is a subagent_wait command (precise match)
 	im := getGlobalInterruptManager()
 	interruptFile := ""
@@ -223,57 +368,151 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		interruptFile = GenerateInterruptFilePath()
 		interruptID = im.RegisterInterruptFile(interruptFile)
 		defer im.UnregisterInterruptFile(interruptID)
-		
+
 		// Append interrupt file to command
 		command = command + " " + interruptFile
 	}
 
-	// Create context with timeout
-	execCtx, cancel := context.WithTimeout(ctx, t.execTimeout)
-	defer cancel()
-
-	// Execute command using /bin/sh -c with current workspace directory
-	cmd := exec.CommandContext(execCtx, "/bin/sh", "-c", command)
-	cmd.Dir = cwd
-
-	output, err := cmd.CombinedOutput()
-
-	result := BashResult{
-		Output: string(output),
-	}
-
-	// Check for timeout
-	if execCtx.Err() == context.DeadlineExceeded {
-		result.Error = "command timed out"
-		result.ExitCode = -1
-	} else if err != nil {
-		// Command failed
-		result.Error = err.Error()
-		if exitError, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitError.ExitCode()
+	// Handle timeout parameter (default: 120 seconds)
+	execTimeout := t.execTimeout
+	if timeoutArg, ok := args["timeout"].(float64); ok {
+		if timeoutArg > 0 {
+			execTimeout = time.Duration(timeoutArg) * time.Second
+			slog.Info("[Bash] Custom timeout set", "timeout", execTimeout.Seconds(), "command", command)
 		} else {
-			result.ExitCode = -1
+			// timeout=0 means no timeout - wait for command to complete
+			execTimeout = 0
+			slog.Info("[Bash] No timeout (will wait indefinitely)", "command", command)
 		}
-	} else {
-		result.ExitCode = 0
 	}
 
-	// Format output
-	var outputBuilder strings.Builder
-	if result.Output != "" {
-		outputBuilder.WriteString(result.Output)
+	// Register command
+	cmdID := t.registry.RegisterCommand(command)
+	slog.Info("[Bash] Command registered", "cmdID", cmdID, "command", command, "timeout", execTimeout.Seconds())
+
+	// Start command in background
+	go t.registry.Execute(ctx, cmdID, command, cwd)
+
+	// Wait for timeout or command completion
+	timeoutChan := make(chan struct{})
+	if execTimeout > 0 {
+		go func() {
+			time.Sleep(execTimeout)
+			close(timeoutChan)
+		}()
 	}
-	if result.Error != "" {
-		if outputBuilder.Len() > 0 {
-			outputBuilder.WriteString("\n")
+
+	// Poll command state
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	select {
+	case <-timeoutChan:
+		// Timeout expired - return partial output and let LLM decide
+		state, _ := t.registry.GetCommand(cmdID)
+		state.mu.Lock()
+		partialOutput := state.Output.String()
+		elapsed := time.Since(state.StartTime)
+		pgid := state.PGID
+		state.mu.Unlock()
+
+		slog.Warn("[Bash] Command timed out",
+			"cmdID", cmdID,
+			"command", command,
+			"timeout", execTimeout.Seconds(),
+			"elapsed", elapsed.Seconds(),
+			"outputSize", len(partialOutput),
+			"pgid", pgid)
+
+		resultText := fmt.Sprintf(
+			"Command timed out after %v (configured timeout was %v).\n"+
+				"Command is still running in background (PID: %d, PGID: %d).\n\n"+
+				"Partial output (%d bytes):\n%s\n\n"+
+				"Options:\n"+
+				"  • command_status id=%s  - Check current status\n"+
+				"  • Wait and check later  - Command may complete\n"+
+				"  • Retry with timeout=%d - Use longer timeout\n"+
+				"  • timeout=0             - Wait indefinitely\n",
+			elapsed, execTimeout, state.PID, pgid,
+			len(partialOutput), partialOutput, cmdID,
+			int(execTimeout.Seconds())*2,
+		)
+
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: resultText,
+			},
+		}, nil
+
+	case <-ctx.Done():
+		// Context canceled
+		state, _ := t.registry.GetCommand(cmdID)
+		state.mu.Lock()
+		output := state.Output.String()
+		elapsed := time.Since(state.StartTime)
+		state.mu.Unlock()
+
+		slog.Info("[Bash] Command context canceled",
+			"cmdID", cmdID,
+			"command", command,
+			"elapsed", elapsed.Seconds(),
+			"outputSize", len(output))
+
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Command execution canceled.\n\nOutput:\n%s", output),
+			},
+		}, nil
+	}
+
+	// Check if command completed
+	state, ok := t.registry.GetCommand(cmdID)
+	if ok && state.Done {
+		state.mu.Lock()
+		output := state.Output.String()
+		exitCode := state.ExitCode
+		errorMsg := state.Error
+		elapsed := time.Since(state.StartTime)
+		state.mu.Unlock()
+
+		slog.Info("[Bash] Command completed",
+			"cmdID", cmdID,
+			"command", command,
+			"exitCode", exitCode,
+			"elapsed", elapsed.Seconds(),
+			"outputSize", len(output))
+
+		var result strings.Builder
+		result.WriteString(output)
+		if errorMsg != "" {
+			if result.Len() > 0 {
+				result.WriteString("\n")
+			}
+			result.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", errorMsg, exitCode))
 		}
-		outputBuilder.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", result.Error, result.ExitCode))
+
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: result.String(),
+			},
+		}, nil
+	}
+
+	// Should not reach here
+	var output strings.Builder
+	if state, ok := t.registry.GetCommand(cmdID); ok {
+		state.mu.Lock()
+		output.WriteString(state.Output.String())
+		state.mu.Unlock()
 	}
 
 	return []agentctx.ContentBlock{
 		agentctx.TextContent{
 			Type: "text",
-			Text: outputBuilder.String(),
+			Text: output.String(),
 		},
 	}, nil
 }

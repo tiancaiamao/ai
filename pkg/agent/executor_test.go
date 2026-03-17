@@ -3,7 +3,7 @@ package agent
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
-	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +11,7 @@ import (
 
 // TestToolExecutorBasic tests basic tool execution.
 func TestToolExecutorBasic(t *testing.T) {
-	executor := NewToolExecutor(2, 5, 10)
+	executor := NewToolExecutor(2, 10) // maxConcurrent=2, queueTimeout=10s
 	tool := &mockTool{name: "test_tool"}
 
 	ctx := context.Background()
@@ -29,7 +29,7 @@ func TestToolExecutorBasic(t *testing.T) {
 
 // TestToolExecutorConcurrency tests concurrent tool execution limit.
 func TestToolExecutorConcurrency(t *testing.T) {
-	executor := NewToolExecutor(2, 10, 5) // Max 2 concurrent
+	executor := NewToolExecutor(2, 5) // Max 2 concurrent, 5s queue timeout
 	ctx := context.Background()
 
 	var mu sync.Mutex
@@ -77,49 +77,14 @@ func TestToolExecutorConcurrency(t *testing.T) {
 	t.Logf("Max concurrent executions: %d", maxRunning)
 }
 
-// TestToolExecutorTimeout tests tool execution timeout.
-func TestToolExecutorTimeout(t *testing.T) {
-	executor := NewToolExecutor(1, 1, 5) // 1 second timeout
-	// Disable retries for this test
-	executor.SetRetryConfig(&RetryConfig{
-		MaxRetries:    0, // No retries
-		InitialDelay:  100 * time.Millisecond,
-		MaxDelay:      100 * time.Millisecond,
-		RetryableErrs: []string{},
-	})
-	ctx := context.Background()
-
-	// Create a tool that takes longer than timeout
-	slowTool := &slowTool{delay: 2 * time.Second}
-
-	_, err := executor.Execute(ctx, slowTool, map[string]interface{}{})
-	if err == nil {
-		t.Error("Expected timeout error, got nil")
-	}
-
-	// Check for timeout error
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) && err.Error() != "tool execution timeout after 1s" {
-		t.Logf("Got error: %v", err)
-	}
-}
-
 // TestToolExecutorQueueTimeout tests queue timeout.
 func TestToolExecutorQueueTimeout(t *testing.T) {
-	executor := NewToolExecutor(1, 5, 1) // Max 1 concurrent, 1s queue timeout
-	// Disable retries for this test
-	executor.SetRetryConfig(&RetryConfig{
-		MaxRetries:    0, // No retries
-		InitialDelay:  100 * time.Millisecond,
-		MaxDelay:      100 * time.Millisecond,
-		RetryableErrs: []string{},
-	})
-
-	// Use a context that will be canceled to test queue timeout
-	ctx, cancel := context.WithCancel(context.Background())
+	executor := NewToolExecutor(1, 1) // Max 1 concurrent, 1s queue timeout
 
 	// Start a slow tool that will occupy the slot
-	slowTool := &slowTool{delay: 10 * time.Second}
+	slowTool := &slowTool{delay: 5 * time.Second}
 
+	ctx := context.Background()
 	resultCh := make(chan error, 1)
 	go func() {
 		_, err := executor.Execute(ctx, slowTool, map[string]interface{}{})
@@ -129,28 +94,19 @@ func TestToolExecutorQueueTimeout(t *testing.T) {
 	// Wait for the slow tool to acquire the semaphore
 	time.Sleep(200 * time.Millisecond)
 
-	// Cancel the context - this should stop the slow tool and free the semaphore
-	cancel()
-	<-resultCh // Wait for slow tool to finish
-
-	// Now the semaphore should be free, try executing a fast tool
+	// Try to execute another tool - should timeout waiting for slot
 	fastTool := &mockTool{name: "fast"}
 	_, err := executor.Execute(context.Background(), fastTool, map[string]interface{}{})
-	if err != nil {
-		t.Errorf("Fast tool should succeed, got error: %v", err)
+	if err == nil {
+		t.Error("Expected queue timeout error, got nil")
 	}
+
+	t.Logf("Got expected error: %v", err)
 }
 
 // TestToolExecutorContextCancellation tests context cancellation.
 func TestToolExecutorContextCancellation(t *testing.T) {
-	executor := NewToolExecutor(1, 5, 10)
-	// Disable retries for this test
-	executor.SetRetryConfig(&RetryConfig{
-		MaxRetries:    0,
-		InitialDelay:  100 * time.Millisecond,
-		MaxDelay:      100 * time.Millisecond,
-		RetryableErrs: []string{},
-	})
+	executor := NewToolExecutor(1, 5)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slowTool := &slowTool{delay: 5 * time.Second}
@@ -176,7 +132,6 @@ func TestToolExecutorContextCancellation(t *testing.T) {
 func TestExecutorPool(t *testing.T) {
 	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 2,
-		"toolTimeout":        10,
 		"queueTimeout":       5,
 	})
 
@@ -185,7 +140,7 @@ func TestExecutorPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Both should use default executor
+	// Both should use the executor
 	_, err := pool.Execute(ctx, tool1, map[string]interface{}{})
 	if err != nil {
 		t.Errorf("Execute tool1 failed: %v", err)
@@ -194,28 +149,6 @@ func TestExecutorPool(t *testing.T) {
 	_, err = pool.Execute(ctx, tool2, map[string]interface{}{})
 	if err != nil {
 		t.Errorf("Execute tool2 failed: %v", err)
-	}
-}
-
-// TestExecutorPoolCustomExecutor tests custom executors per tool.
-func TestExecutorPoolCustomExecutor(t *testing.T) {
-	pool := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 1,
-		"toolTimeout":        5,
-		"queueTimeout":       2,
-	})
-
-	// Create custom executor for specific tool
-	customExecutor := NewToolExecutor(5, 10, 10) // Higher concurrency
-	pool.SetExecutor("fast_tool", customExecutor)
-
-	tool := &mockTool{name: "fast_tool"}
-	ctx := context.Background()
-
-	// Should use custom executor
-	_, err := pool.Execute(ctx, tool, map[string]interface{}{})
-	if err != nil {
-		t.Errorf("Execute with custom executor failed: %v", err)
 	}
 }
 
@@ -231,8 +164,8 @@ func TestDefaultExecutor(t *testing.T) {
 		t.Errorf("Expected default max concurrent 10, got %d", cap(executor.semaphore))
 	}
 
-	if executor.toolTimeout != 30*time.Second {
-		t.Errorf("Expected default timeout 30s, got %v", executor.toolTimeout)
+	if executor.queueTimeout != 60*time.Second {
+		t.Errorf("Expected default queue timeout 60s, got %v", executor.queueTimeout)
 	}
 }
 
@@ -273,4 +206,62 @@ func (m *slowTool) Execute(ctx context.Context, args map[string]interface{}) ([]
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// MockTool is a mock tool for testing with configurable behavior.
+type MockTool struct {
+	name        string
+	maxFailures int
+	failMessage string
+	execDelayMs int
+	callCount   int
+	mu          sync.Mutex
+}
+
+func (m *MockTool) Name() string {
+	return m.name
+}
+
+func (m *MockTool) Description() string {
+	return "Mock tool for testing"
+}
+
+func (m *MockTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"input": map[string]interface{}{
+			"type":        "string",
+			"description": "Input parameter",
+		},
+	}
+}
+
+func (m *MockTool) Execute(ctx context.Context, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
+	m.mu.Lock()
+	m.callCount++
+	callNum := m.callCount
+	shouldFail := m.maxFailures > 0 && callNum <= m.maxFailures
+	m.mu.Unlock()
+
+	// Simulate execution delay
+	if m.execDelayMs > 0 {
+		select {
+		case <-time.After(time.Duration(m.execDelayMs) * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	if shouldFail {
+		return nil, fmt.Errorf("%s", m.failMessage)
+	}
+
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: m.failMessage},
+	}, nil
+}
+
+func (m *MockTool) GetCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callCount
 }
