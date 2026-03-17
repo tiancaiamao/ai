@@ -470,36 +470,41 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		case <-ticker.C:
 			// Check if command completed
 			state, ok := t.registry.GetCommand(cmdID)
-			if ok && state.Done {
+			if ok {
 				state.mu.Lock()
-				output := state.Output.String()
-				exitCode := state.ExitCode
-				errorMsg := state.Error
-				elapsed := time.Since(state.StartTime)
-				state.mu.Unlock()
+				done := state.Done
+				if done {
+					output := state.Output.String()
+					exitCode := state.ExitCode
+					errorMsg := state.Error
+					elapsed := time.Since(state.StartTime)
+					state.mu.Unlock()
 
-				slog.Info("[Bash] Command completed",
-					"cmdID", cmdID,
-					"command", command,
-					"exitCode", exitCode,
-					"elapsed", elapsed.Seconds(),
-					"outputSize", len(output))
+					slog.Info("[Bash] Command completed",
+						"cmdID", cmdID,
+						"command", command,
+						"exitCode", exitCode,
+						"elapsed", elapsed.Seconds(),
+						"outputSize", len(output))
 
-				var result strings.Builder
-				result.WriteString(output)
-				if errorMsg != "" {
-					if result.Len() > 0 {
-						result.WriteString("\n")
+					var result strings.Builder
+					result.WriteString(output)
+					if errorMsg != "" {
+						if result.Len() > 0 {
+							result.WriteString("\n")
+						}
+						result.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", errorMsg, exitCode))
 					}
-					result.WriteString(fmt.Sprintf("Command exited with error: %s (exit code %d)", errorMsg, exitCode))
-				}
 
-				return []agentctx.ContentBlock{
-					agentctx.TextContent{
-						Type: "text",
-						Text: result.String(),
-					},
-				}, nil
+					return []agentctx.ContentBlock{
+						agentctx.TextContent{
+							Type: "text",
+							Text: result.String(),
+						},
+					}, nil
+				} else {
+					state.mu.Unlock()
+				}
 			}
 		}
 	}
