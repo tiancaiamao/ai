@@ -27,9 +27,9 @@ func (t *LLMContextDecisionTool) Name() string {
 	return "llm_context_decision"
 }
 
-// Description returns the tool description.
+// Description returns tool description.
 func (t *LLMContextDecisionTool) Description() string {
-	return `Declare your context management decision. Call this tool when you need to manage context, or when runtime_state indicates action_required.
+	return `Declare your context management decision. Call this tool when you need to manage context.
 
 IMPORTANT: This tool is for CONTEXT MANAGEMENT only. Use it to:
 - TRUNCATE: Remove old/large tool outputs to free up space
@@ -37,7 +37,7 @@ IMPORTANT: This tool is for CONTEXT MANAGEMENT only. Use it to:
 - SKIP: Defer context management for a specified number of turns
 
 USAGE:
-When runtime_state shows context_management.action_required is not "none", you MUST call this tool BEFORE answering the user.
+When runtime_state shows high context pressure (tokens_percent >= 30% with stale outputs, or >= 50% overall), you SHOULD call this tool proactively.
 
 DECISION OPTIONS:
 - "truncate": Remove specific tool outputs (provide truncate_ids)
@@ -114,11 +114,6 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 		return nil, fmt.Errorf("agent context not available")
 	}
 
-	// Mark that LLM made a decision this turn (compliance tracking)
-	if agentCtx.ContextMgmtState != nil {
-		agentCtx.ContextMgmtState.MarkDecisionMade()
-	}
-
 	// Parse decision
 	decision, ok := params["decision"].(string)
 	if !ok || decision == "" {
@@ -135,6 +130,9 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 	if agentCtx.ContextMgmtState == nil {
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 	}
+
+	// Mark that LLM made a decision this turn (compliance tracking)
+	agentCtx.ContextMgmtState.MarkDecisionMade()
 
 	// Get current turn from context (updated every loop iteration)
 	turn := agentCtx.ContextMgmtState.CurrentTurn

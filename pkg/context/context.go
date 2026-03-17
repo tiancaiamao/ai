@@ -58,23 +58,36 @@ type ContextMgmtState struct {
 	LastReminderTurn    int    // Turn number of last reminder shown
 	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
 
+	// Decision reminder state (independent from llm_context_update reminder)
+	DecisionPressureTurns int // Consecutive turns under decision pressure
+	LastPressureTurn      int // Last turn when pressure was observed
+
 	// Compliance tracking
 	ReminderShownThisTurn bool // Was reminder shown in current turn?
 	DecisionMadeThisTurn  bool // Did LLM call llm_context_decision this turn?
 }
 
+const (
+	decisionPressureTokensWithStale = 30.0
+	decisionPressureTokensOnly      = 50.0
+	decisionPressureStaleOnly       = 10
+	decisionReminderWarmupTurns     = 2
+)
+
 // DefaultContextMgmtState creates a new ContextMgmtState with defaults.
 func DefaultContextMgmtState() *ContextMgmtState {
 	return &ContextMgmtState{
-		ReminderFrequency:   10, // Default: remind every 10 turns
-		SkipUntilTurn:       0,
-		ProactiveDecisions:  0,
-		ReminderNeeded:      0,
-		CurrentTurn:         0,
-		LastDecisionTurn:    0,
-		LastActionTaken:     "none",
-		LastReminderTurn:    0,
-		LastReminderUrgency: "none",
+		ReminderFrequency:     10, // Default: remind every 10 turns
+		SkipUntilTurn:         0,
+		ProactiveDecisions:    0,
+		ReminderNeeded:        0,
+		CurrentTurn:           0,
+		LastDecisionTurn:      0,
+		LastActionTaken:       "none",
+		LastReminderTurn:      0,
+		LastReminderUrgency:   "none",
+		DecisionPressureTurns: 0,
+		LastPressureTurn:      0,
 	}
 }
 
@@ -159,6 +172,8 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 	} else {
 		s.ProactiveDecisions++
 	}
+	s.DecisionPressureTurns = 0
+	s.LastPressureTurn = 0
 
 	s.AdjustFrequency()
 }
@@ -217,6 +232,65 @@ func (s *ContextMgmtState) RecordReminder(turn int, urgency string) {
 
 	s.LastReminderTurn = turn
 	s.LastReminderUrgency = urgency
+	s.MarkReminderShown()
+}
+
+// DecisionPressureRequired reports whether llm_context_decision should be considered.
+func DecisionPressureRequired(tokensPercent float64, staleToolOutputs int) bool {
+	return (tokensPercent >= decisionPressureTokensWithStale && staleToolOutputs > 0) ||
+		tokensPercent >= decisionPressureTokensOnly ||
+		staleToolOutputs >= decisionPressureStaleOnly
+}
+
+// DecisionReminderUrgency classifies pressure severity for reminder telemetry.
+func DecisionReminderUrgency(tokensPercent float64, staleToolOutputs int) string {
+	switch {
+	case tokensPercent >= 75 || staleToolOutputs >= 40:
+		return "critical"
+	case tokensPercent >= 60 || staleToolOutputs >= 25:
+		return "high"
+	case tokensPercent >= 45 || staleToolOutputs >= 15:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+// ShouldShowDecisionReminder evaluates decision pressure and decides whether to remind this turn.
+// This logic is independent from llm_context_update reminder state.
+func (s *ContextMgmtState) ShouldShowDecisionReminder(turn int, tokensPercent float64, staleToolOutputs int) (bool, string) {
+	if s == nil {
+		return false, "none"
+	}
+
+	pressure := DecisionPressureRequired(tokensPercent, staleToolOutputs)
+	urgency := DecisionReminderUrgency(tokensPercent, staleToolOutputs)
+	if !pressure {
+		s.DecisionPressureTurns = 0
+		s.LastPressureTurn = 0
+		return false, "none"
+	}
+
+	// Count pressured turns only once per turn.
+	if s.LastPressureTurn != turn {
+		s.DecisionPressureTurns++
+		s.LastPressureTurn = turn
+	}
+
+	if turn < s.SkipUntilTurn {
+		return false, urgency
+	}
+	if s.DecisionPressureTurns < decisionReminderWarmupTurns {
+		return false, urgency
+	}
+
+	// First reminder for a pressure wave should be immediate after warmup.
+	if s.LastReminderTurn == 0 {
+		return true, urgency
+	}
+
+	turnsSinceReminder := turn - s.LastReminderTurn
+	return turnsSinceReminder >= s.ReminderFrequency, urgency
 }
 
 // GetScore returns a human-readable score of LLM's proactiveness.
