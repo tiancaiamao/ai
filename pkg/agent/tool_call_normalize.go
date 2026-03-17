@@ -168,7 +168,12 @@ func coerceToolArguments(toolName string, args map[string]any) (map[string]any, 
 		if command == "" {
 			return nil, fmt.Errorf("missing command")
 		}
-		return map[string]any{"command": command}, nil
+		result := map[string]any{"command": command}
+		// Preserve timeout parameter if present
+		if timeout, ok := args["timeout"]; ok {
+			result["timeout"] = timeout
+		}
+		return result, nil
 	case "grep":
 		pattern := getStringArg(args, "pattern", "query")
 		if pattern == "" {

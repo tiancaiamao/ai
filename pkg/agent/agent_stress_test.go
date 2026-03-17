@@ -20,7 +20,6 @@ func TestStressConcurrentRequests(t *testing.T) {
 	// Create executor pool
 	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 10,
-		"toolTimeout":        5,
 		"queueTimeout":       30,
 	})
 
@@ -115,7 +114,6 @@ func TestStressLongRunningCommands(t *testing.T) {
 
 	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 3,
-		"toolTimeout":        10,
 		"queueTimeout":       60,
 	})
 
@@ -194,16 +192,7 @@ func TestStressRetryUnderLoad(t *testing.T) {
 
 	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 5,
-		"toolTimeout":        3,
 		"queueTimeout":       10,
-	})
-
-	// Configure retry for some tools
-	pool.SetRetryConfig("flaky-tool", &RetryConfig{
-		MaxRetries:    3,
-		InitialDelay:  200 * time.Millisecond,
-		MaxDelay:      1 * time.Second,
-		RetryableErrs: []string{"flaky", "temporary", "timeout"},
 	})
 
 	ctx := context.Background()
@@ -305,7 +294,6 @@ func TestStressQueueFull(t *testing.T) {
 
 	pool := NewExecutorPool(map[string]int{
 		"maxConcurrentTools": 2,
-		"toolTimeout":        5,
 		"queueTimeout":       1, // Short queue timeout (1 second)
 	})
 
