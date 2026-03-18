@@ -133,6 +133,71 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 	}
 }
 
+// TestEnsureToolCallPairing_OrphanToolCall tests the fix: tool_call in recentMessages
+// but its tool_result is in oldMessages (will be summarized)
+func TestEnsureToolCallPairing_OrphanToolCall(t *testing.T) {
+	// Scenario: tool_result in oldMessages (will be summarized), tool_call in recentMessages
+	// This is the reverse of the original bug - the tool_call should be hidden
+	
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-orphan",
+			ToolName:   "bash",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "command output"},
+			},
+		},
+	}
+
+	recentMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-orphan",
+					Type: "toolCall",
+					Name: "bash",
+					Arguments: map[string]any{"command": "ls"},
+				},
+			},
+		},
+		agentctx.NewUserMessage("next user message"),
+	}
+
+	result := ensureToolCallPairing(oldMessages, recentMessages)
+
+	// After fix: tool_call should be hidden because its tool_result is in oldMessages (will be summarized)
+	// This prevents "tool call result does not match" error
+	
+	// Check that tool_call is hidden
+	assistantMsgFound := false
+	for _, msg := range result {
+		if msg.Role == "assistant" {
+			assistantMsgFound = true
+			if msg.IsAgentVisible() {
+				t.Error("BUG: tool_call should be hidden when its tool_result is in oldMessages (will be summarized)")
+			}
+		}
+	}
+	
+	if !assistantMsgFound {
+		t.Error("assistant message should still be present in messages (just hidden)")
+	}
+	
+	// User message should still be visible
+	userMsgVisible := false
+	for _, msg := range result {
+		if msg.Role == "user" && msg.IsAgentVisible() {
+			userMsgVisible = true
+		}
+	}
+	
+	if !userMsgVisible {
+		t.Error("user message should stay visible")
+	}
+}
+
 // TestFullCompactPreservesPairing tests the full compaction flow preserves tool_call/tool_result pairing
 func TestFullCompactPreservesPairing(t *testing.T) {
 	config := &Config{

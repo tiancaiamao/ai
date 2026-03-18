@@ -715,50 +715,81 @@ func extractText(msg agentctx.AgentMessage) string {
 }
 
 // ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
-// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
+// Two cases must be handled:
+// 1. tool_result in recentMessages but tool_call in oldMessages -> hide tool_result
+// 2. tool_call in recentMessages but tool_result in oldMessages -> hide tool_call
+//
 // This prevents "tool call and result not match" errors after compaction.
 func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	if len(recentMessages) == 0 {
 		return recentMessages
 	}
 
-	// Collect all tool_call IDs from oldMessages
+	// Collect all tool_call IDs from oldMessages (for case 1)
 	oldToolCallIDs := make(map[string]bool)
+	// Collect all tool_result IDs from oldMessages (for case 2)
+	oldToolResultIDs := make(map[string]bool)
+
 	for _, msg := range oldMessages {
 		if msg.Role == "assistant" {
 			for _, tc := range msg.ExtractToolCalls() {
 				oldToolCallIDs[tc.ID] = true
 			}
 		}
+		if msg.Role == "toolResult" && msg.ToolCallID != "" {
+			oldToolResultIDs[msg.ToolCallID] = true
+		}
 	}
 
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
+	// If no tool-related messages in oldMessages, nothing to fix
+	if len(oldToolCallIDs) == 0 && len(oldToolResultIDs) == 0 {
 		return recentMessages
 	}
 
-	// Find tool_results in recentMessages whose tool_call is in oldMessages
-	// These need to be hidden (archived) because their tool_calls will be summarized
 	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedCount := 0
+	archivedToolResultCount := 0
+	archivedToolCallCount := 0
 
 	for _, msg := range recentMessages {
+		// Case 1: tool_result in recentMessages but its tool_call is in oldMessages
 		if msg.Role == "toolResult" && msg.ToolCallID != "" {
 			if oldToolCallIDs[msg.ToolCallID] {
 				// This tool_result's call is in oldMessages - hide it to prevent mismatch
 				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
 				keptMessages = append(keptMessages, archivedMsg)
-				archivedCount++
+				archivedToolResultCount++
 				continue
 			}
 		}
+
+		// Case 2: tool_call in recentMessages but its tool_result is in oldMessages
+		if msg.Role == "assistant" && len(msg.ExtractToolCalls()) > 0 {
+			// Check if any tool_call has its result in oldMessages
+			hasOrphanToolCall := false
+			for _, tc := range msg.ExtractToolCalls() {
+				if oldToolResultIDs[tc.ID] {
+					hasOrphanToolCall = true
+					break
+				}
+			}
+
+			if hasOrphanToolCall {
+				// Hide the entire assistant message if it contains orphan tool_calls
+				// This is safer than selectively hiding tool_calls within a message
+				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_call_archived")
+				keptMessages = append(keptMessages, archivedMsg)
+				archivedToolCallCount++
+				continue
+			}
+		}
+
 		keptMessages = append(keptMessages, msg)
 	}
 
-	if archivedCount > 0 {
+	if archivedToolResultCount > 0 || archivedToolCallCount > 0 {
 		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived", archivedCount,
+			"archived_tool_results", archivedToolResultCount,
+			"archived_tool_calls", archivedToolCallCount,
 			"kept", len(keptMessages))
 	}
 
