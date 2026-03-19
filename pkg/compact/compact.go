@@ -717,6 +717,8 @@ func extractText(msg agentctx.AgentMessage) string {
 // ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
 // If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
 // the tool_result must be hidden (archived) so the API doesn't see a mismatch.
+// Similarly, if an assistant message contains tool_calls that are in oldMessages,
+// those tool_calls must be removed from the assistant message.
 // This prevents "tool call and result not match" errors after compaction.
 func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	if len(recentMessages) == 0 {
@@ -741,7 +743,8 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 	// Find tool_results in recentMessages whose tool_call is in oldMessages
 	// These need to be hidden (archived) because their tool_calls will be summarized
 	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedCount := 0
+	archivedToolResultCount := 0
+	filteredToolCallCount := 0
 
 	for _, msg := range recentMessages {
 		if msg.Role == "toolResult" && msg.ToolCallID != "" {
@@ -749,16 +752,44 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 				// This tool_result's call is in oldMessages - hide it to prevent mismatch
 				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
 				keptMessages = append(keptMessages, archivedMsg)
-				archivedCount++
+				archivedToolResultCount++
 				continue
 			}
 		}
+
+		if msg.Role == "assistant" {
+			// Check if this assistant message contains tool_calls that are in oldMessages
+			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
+			hasOldToolCalls := false
+
+			for _, block := range msg.Content {
+				if tc, ok := block.(agentctx.ToolCallContent); ok {
+					if oldToolCallIDs[tc.ID] {
+						// This tool_call is in oldMessages - skip it
+						hasOldToolCalls = true
+						filteredToolCallCount++
+						continue
+					}
+				}
+				filteredContent = append(filteredContent, block)
+			}
+
+			if hasOldToolCalls {
+				// Create a new message with filtered content
+				filteredMsg := msg
+				filteredMsg.Content = filteredContent
+				keptMessages = append(keptMessages, filteredMsg)
+				continue
+			}
+		}
+
 		keptMessages = append(keptMessages, msg)
 	}
 
-	if archivedCount > 0 {
+	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
 		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived", archivedCount,
+			"archived_tool_results", archivedToolResultCount,
+			"filtered_tool_calls", filteredToolCallCount,
 			"kept", len(keptMessages))
 	}
 
