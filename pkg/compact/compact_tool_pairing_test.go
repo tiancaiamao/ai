@@ -133,6 +133,94 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 	}
 }
 
+// TestEnsureToolCallPairing_AssistantWithOldToolCalls tests that tool_calls in assistant messages
+// that are in oldMessages are filtered out to prevent mismatch
+func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
+	// Scenario: assistant message in recentMessages contains a tool_call whose ID is in oldMessages
+	// The tool_call should be filtered out from the assistant message
+
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-old-1",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/old.txt"},
+				},
+			},
+		},
+	}
+
+	recentMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "Here's what I found:"},
+				agentctx.ToolCallContent{
+					ID:   "call-old-1",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/old.txt"},
+				},
+			},
+		},
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-old-1",
+			ToolName:   "read",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "old content"},
+			},
+		},
+	}
+
+	result := ensureToolCallPairing(oldMessages, recentMessages)
+
+	// After fix: the tool_call should be filtered out from the assistant message
+	// and the tool_result should be hidden
+	if len(result) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(result))
+	}
+
+	// Check assistant message - should have text but not the tool_call
+	foundAssistant := false
+	for _, msg := range result {
+		if msg.Role == "assistant" {
+			foundAssistant = true
+			toolCalls := msg.ExtractToolCalls()
+			if len(toolCalls) != 0 {
+				t.Errorf("BUG: assistant message should have tool_calls filtered out, but found %d", len(toolCalls))
+			}
+			// Check that text content is preserved
+			hasText := false
+			for _, block := range msg.Content {
+				if tc, ok := block.(agentctx.TextContent); ok && tc.Text != "" {
+					hasText = true
+					break
+				}
+			}
+			if !hasText {
+				t.Error("BUG: assistant message should preserve text content")
+			}
+		}
+	}
+
+	if !foundAssistant {
+		t.Error("assistant message should be present in result")
+	}
+
+	// Check tool_result - should be hidden
+	for _, msg := range result {
+		if msg.Role == "toolResult" && msg.ToolCallID == "call-old-1" {
+			if msg.IsAgentVisible() {
+				t.Error("BUG: tool_result should be hidden when its tool_call is in oldMessages")
+			}
+		}
+	}
+}
+
 // TestFullCompactPreservesPairing tests the full compaction flow preserves tool_call/tool_result pairing
 func TestFullCompactPreservesPairing(t *testing.T) {
 	config := &Config{
