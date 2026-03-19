@@ -16,6 +16,12 @@ make bench-task TASK=tbench/chess-best-move
 
 # 导入 Terminal Bench 2.0 任务
 make bench-import
+
+# A/B: 单 agent + 指定模型
+make ab-test AGENT=my-agent MODEL=minimax
+
+# A/B: 多 agent 对比
+make ab-compare AGENTS="my-agent codex claude-code" MODEL=minimax
 ```
 
 ## 特性
@@ -61,6 +67,26 @@ make bench-list MANIFEST=tasks/agent_v1_manifest.json
 # 仅运行冻结清单中的任务
 make bench-run MANIFEST=tasks/agent_v1_manifest.json
 ```
+
+## A/B 对比（agent 与 model）
+
+```bash
+# 查看可用 agent / model / task
+make ab-list
+
+# 对比多个 agent（同一模型）
+make ab-compare AGENTS="my-agent codex" MODEL=minimax
+
+# 跑所有已配置 agent
+make ab-benchmark MODEL=minimax
+
+# 查看历史 A/B 结果
+make ab-report
+```
+
+说明：
+- `ab_test.py` 只会运行带 `verify.sh` 的可验证任务。
+- 若任务依赖 legacy `/app` 路径，benchmark runner 已提供兼容映射（无需 sudo）。
 
 ## 参考
 

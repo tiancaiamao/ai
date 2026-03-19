@@ -55,9 +55,13 @@ class ABTestFramework:
     def _get_tasks(self) -> list[str]:
         """Get list of available tasks"""
         tasks = []
-        for task_dir in sorted(self.tasks_dir.iterdir()):
-            if task_dir.is_dir() and (task_dir / "task.md").exists():
-                tasks.append(task_dir.name)
+        for task_file in sorted(self.tasks_dir.rglob("task.md")):
+            task_dir = task_file.parent
+            if ".pytest_cache" in task_dir.parts:
+                continue
+            if not (task_dir / "verify.sh").exists():
+                continue
+            tasks.append(task_dir.relative_to(self.tasks_dir).as_posix())
         return tasks
 
     def _get_task_prompt(self, task_id: str) -> str:
@@ -99,11 +103,33 @@ Please start by reading the task files and understanding what needs to be done."
         # Replace placeholders
         command = command.replace("{prompt}", prompt.replace('"', '\\"'))
 
+        env = os.environ.copy()
+        model_placeholder_in_command = "{model}" in command
+
         # Add model if specified
         if model:
-            # For my-agent, model is configured via config file
-            # This is agent-specific
-            pass
+            command = command.replace("{model}", model)
+            env["MODEL"] = model
+            env["AB_MODEL"] = model
+
+            model_env_var = agent_config.get("model_env_var")
+            if model_env_var:
+                env[model_env_var] = model
+            elif not model_placeholder_in_command:
+                print(
+                    f"{Colors.YELLOW}Warning:{Colors.END} agent '{agent_name}' command has no {{model}} placeholder "
+                    "and no model_env_var; model may be ignored."
+                )
+        else:
+            command = command.replace("{model}", "")
+
+        extra_env = agent_config.get("env", {})
+        if isinstance(extra_env, dict):
+            for key, value in extra_env.items():
+                text_value = str(value)
+                if model:
+                    text_value = text_value.replace("{model}", model)
+                env[str(key)] = text_value
 
         start_time = time.time()
 
@@ -113,6 +139,7 @@ Please start by reading the task files and understanding what needs to be done."
                 shell=True,
                 capture_output=True,
                 text=True,
+                env=env,
                 timeout=self.config.get("config", {}).get("timeout", 300)
             )
 
@@ -249,7 +276,7 @@ Please start by reading the task files and understanding what needs to be done."
 
         return results
 
-    def compare_agents(self, agent_names: list[str], task_ids: list[str] = None):
+    def compare_agents(self, agent_names: list[str], task_ids: list[str] = None, model: str = None):
         """Compare multiple agents"""
         all_results = {}
 
@@ -258,7 +285,7 @@ Please start by reading the task files and understanding what needs to be done."
             print(f"Testing Agent: {agent_name}")
             print(f"{'='*60}")
 
-            results = self.run_single_agent(agent_name, task_ids=task_ids)
+            results = self.run_single_agent(agent_name, model=model, task_ids=task_ids)
             all_results[agent_name] = results
 
         # Print comparison table
@@ -374,14 +401,14 @@ def main():
     elif args.report:
         framework.generate_report()
     elif args.compare:
-        framework.compare_agents(args.compare, args.task)
+        framework.compare_agents(args.compare, args.task, args.model)
     elif args.agent:
         framework.run_single_agent(args.agent, args.model, args.task)
     elif args.benchmark:
         # Run all configured agents
         agents = list(framework.config.get("agents", {}).keys())
         if agents:
-            framework.compare_agents(agents)
+            framework.compare_agents(agents, model=args.model)
         else:
             print("No agents configured in agents.yaml")
     else:

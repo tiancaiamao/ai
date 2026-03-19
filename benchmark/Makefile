@@ -1,4 +1,4 @@
-.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean help
+.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean ab-list ab-test ab-compare ab-benchmark ab-report help
 
 MANIFEST_FLAG := $(if $(strip $(MANIFEST)),--manifest $(MANIFEST),)
 MAX_STEPS_MODE_FLAG := $(if $(strip $(MAX_STEPS_MODE)),--max-steps-mode $(MAX_STEPS_MODE),)
@@ -22,9 +22,17 @@ help:
 	@echo "  make bench-compare       对比上次结果"
 	@echo "  make bench-baseline      保存当前为基准"
 	@echo "  make bench-clean         清理结果文件"
+	@echo "  make ab-list             列出可用 agent/model/task"
+	@echo "  make ab-test AGENT=xxx   运行 A/B 单 agent 测试"
+	@echo "  make ab-compare AGENTS=\"a b\"  对比多个 agent"
+	@echo "  make ab-benchmark        运行 agents.yaml 里所有 agent"
+	@echo "  make ab-report           输出历史 A/B 报告"
 	@echo ""
 	@echo "Options:"
 	@echo "  AGENT=ai                 指定 agent 二进制 (默认: /Users/genius/go/bin/ai)"
+	@echo "  AGENTS=\"a b\"            A/B 对比的 agent 列表"
+	@echo "  MODEL=minimax            A/B 运行模型名（会透传到 ab_test.py）"
+	@echo "  TASK=task_id             A/B 或 bench 运行单任务"
 	@echo "  TIMEOUT=0                单任务超时 (默认: 0=不限制)"
 	@echo "  MAX_STEPS_MODE=soft      max_steps 判分模式: soft|hard (可选，不传则使用 runner/manifest 默认)"
 	@echo "  MANIFEST=tasks/xxx.json  按 manifest 精确筛选任务"
@@ -37,6 +45,7 @@ help:
 	@echo "  make bench-resume RESUME=xxx.json   # 从指定进度文件继续"
 	@echo "  make bench-run TASK=001_fix_off_by_one"
 	@echo "  make bench-list MANIFEST=tasks/agent_v1_manifest.json"
+	@echo "  make ab-test AGENT=my-agent MODEL=minimax TASK=agent_001_forced_exploration"
 	@echo ""
 	@echo "============================================================"
 
@@ -103,6 +112,48 @@ bench-clean:
 	rm -f results/*.json
 	rm -rf results/.pytest_cache
 	@echo "Done."
+
+# A/B list
+ab-list:
+	python3 ab_test.py --list
+
+# A/B single agent
+ab-test:
+	@if [ -z "$(AGENT)" ]; then \
+		echo "Error: AGENT is required"; \
+		echo "Usage: make ab-test AGENT=my-agent [MODEL=minimax] [TASK=task_id]"; \
+		exit 1; \
+	fi
+	@cmd="python3 ab_test.py --agent $(AGENT)"; \
+	if [ -n "$(MODEL)" ]; then cmd="$$cmd --model $(MODEL)"; fi; \
+	if [ -n "$(TASK)" ]; then cmd="$$cmd --task $(TASK)"; fi; \
+	echo "$$cmd"; \
+	eval "$$cmd"
+
+# A/B compare multiple agents
+ab-compare:
+	@if [ -z "$(AGENTS)" ]; then \
+		echo "Error: AGENTS is required"; \
+		echo "Usage: make ab-compare AGENTS=\"my-agent codex\" [MODEL=minimax] [TASK=task_id]"; \
+		exit 1; \
+	fi
+	@cmd="python3 ab_test.py --compare $(AGENTS)"; \
+	if [ -n "$(MODEL)" ]; then cmd="$$cmd --model $(MODEL)"; fi; \
+	if [ -n "$(TASK)" ]; then cmd="$$cmd --task $(TASK)"; fi; \
+	echo "$$cmd"; \
+	eval "$$cmd"
+
+# A/B benchmark all configured agents
+ab-benchmark:
+	@cmd="python3 ab_test.py --benchmark"; \
+	if [ -n "$(MODEL)" ]; then cmd="$$cmd --model $(MODEL)"; fi; \
+	if [ -n "$(TASK)" ]; then cmd="$$cmd --task $(TASK)"; fi; \
+	echo "$$cmd"; \
+	eval "$$cmd"
+
+# A/B report
+ab-report:
+	python3 ab_test.py --report
 
 # Run tests with coverage
 test:
