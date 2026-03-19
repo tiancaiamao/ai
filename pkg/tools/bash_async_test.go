@@ -156,3 +156,25 @@ func TestCommandStatusTool(t *testing.T) {
 	assert.Contains(t, statusResult.Text, "PGID:")
 	assert.Contains(t, statusResult.Text, "Elapsed time:")
 }
+
+func TestBashToolHandlesLargeStderrOutput(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	// This writes >64KB to stderr quickly; bash tool must still complete.
+	args := map[string]any{
+		"command": `i=0; while [ $i -lt 20000 ]; do echo "err-$i" 1>&2; i=$((i+1)); done; echo done`,
+		"timeout": float64(5),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	blocks, err := tool.Execute(ctx, args)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, blocks)
+
+	result := blocks[0].(agentctx.TextContent)
+	assert.Contains(t, result.Text, "done")
+	assert.NotContains(t, result.Text, "timed out")
+}
