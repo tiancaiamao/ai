@@ -252,27 +252,37 @@ func (r *CommandRegistry) Execute(ctx context.Context, cmdID string, command str
 	state.PGID = cmd.Process.Pid // Process group ID equals process ID when Setpgid is true
 	state.mu.Unlock()
 
-	// Stream output in background
-	outputDone := make(chan struct{})
-	go func() {
-		defer close(outputDone)
-		scanner := bufio.NewScanner(io.MultiReader(stdout, stderr))
+	// Stream stdout/stderr concurrently to avoid pipe backpressure deadlocks.
+	var outputWG sync.WaitGroup
+	streamPipe := func(reader io.Reader) {
+		defer outputWG.Done()
+		scanner := bufio.NewScanner(reader)
+		// Increase scanner token limit to avoid dropping large lines.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			state.mu.Lock()
 			state.Output.WriteString(line + "\n")
 			state.mu.Unlock()
 		}
-	}()
+		if scanErr := scanner.Err(); scanErr != nil {
+			state.mu.Lock()
+			state.Output.WriteString(fmt.Sprintf("stream read error: %v\n", scanErr))
+			state.mu.Unlock()
+		}
+	}
+
+	outputWG.Add(2)
+	go streamPipe(stdout)
+	go streamPipe(stderr)
 
 	// Wait for command to finish
 	err = cmd.Wait()
 
+	// Wait for output streaming to complete before marking done.
+	outputWG.Wait()
+
 	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	<-outputDone // Wait for output streaming to complete
-
 	state.Done = true
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -284,6 +294,7 @@ func (r *CommandRegistry) Execute(ctx context.Context, cmdID string, command str
 	} else {
 		state.ExitCode = 0
 	}
+	state.mu.Unlock()
 }
 
 // BashTool executes bash commands with dynamic workspace support and async execution.
