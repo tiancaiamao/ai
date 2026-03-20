@@ -2823,18 +2823,22 @@ func (p *AiInterpreter) handleListSessions(data json.RawMessage) {
 	p.writeRaw("Available Sessions\n")
 	p.writeRaw(sectionLine + "\n\n")
 
+	// Sort sessions: newest first at index 0
 	sort.Slice(payload.Sessions, func(i, j int) bool {
 		return payload.Sessions[i].UpdatedAt.After(payload.Sessions[j].UpdatedAt)
 	})
 
-	for i, sess := range payload.Sessions {
+	// Display in reverse order (oldest first, newest at bottom)
+	// so index 0 (newest) appears at the bottom of the list
+	for idx := len(payload.Sessions) - 1; idx >= 0; idx-- {
+		sess := payload.Sessions[idx]
 		name := sess.Name
 		if name == "" {
 			name = sess.ID
 		}
 
 		updated := sess.UpdatedAt.Format("2006-01-02 15:04")
-		p.writeRaw(fmt.Sprintf("%d: %s (id: %s)\n", i, name, sess.ID))
+		p.writeRaw(fmt.Sprintf("%d: %s (id: %s)\n", idx, name, sess.ID))
 		p.writeRaw(fmt.Sprintf("    updated: %s  messages: %d\n", updated, sess.MessageCount))
 	}
 

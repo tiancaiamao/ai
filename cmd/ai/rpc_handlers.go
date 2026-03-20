@@ -851,6 +851,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		modelInfo := currentModelInfo
 		stateMu.Unlock()
 
+		// Get current trace file path from FileHandler
+		aiLogPath := traceOutputPath
+		if handler := traceevent.GetHandler(); handler != nil {
+			if fh, ok := handler.(*traceevent.FileHandler); ok {
+				aiLogPath = fh.TraceFilePath("")
+			}
+		}
+
 		return &rpc.SessionState{
 			Model:                 &modelInfo,
 			ThinkingLevel:         thinkingLevel,
@@ -862,7 +870,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			SessionID:             currentSessionID,
 			SessionName:           currentSessionName,
 			AIPid:                 os.Getpid(),
-			AILogPath:             traceOutputPath,
+			AILogPath:             aiLogPath,
 			AIWorkingDir:          ws.GetCWD(),
 			AIStartupPath:         ws.GetGitRoot(),
 			AutoCompactionEnabled: autoCompact,
