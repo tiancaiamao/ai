@@ -506,6 +506,74 @@ func (b *Benchmark) verifyTask(task Task) (bool, string, error) {
 	return err == nil, output, err
 }
 
+// verifyInitialTaskFailure resets the task and verifies initial state fails.
+// Returns passed=true when verification unexpectedly passes before agent edits.
+func (b *Benchmark) verifyInitialTaskFailure(task Task) (bool, string, error) {
+	if task.NeedsAppShim {
+		shimmedTask, cleanup, err := prepareShimmedTask(task)
+		if err != nil {
+			return false, "", fmt.Errorf("prepare /app shim failed: %w", err)
+		}
+		defer cleanup()
+		task = shimmedTask
+	}
+
+	if err := b.resetTask(task); err != nil {
+		return false, "", fmt.Errorf("reset failed: %w", err)
+	}
+
+	if task.NeedsAppShim {
+		if err := rewriteLegacyAppPaths(task.Dir, filepath.Join(task.Dir, "setup")); err != nil {
+			return false, "", fmt.Errorf("rewrite /app paths failed: %w", err)
+		}
+	}
+
+	passed, output, err := b.verifyTask(task)
+	if passed {
+		return true, output, nil
+	}
+	if err != nil {
+		// Expected path: initial state should fail verification.
+		return false, output, nil
+	}
+	return false, output, nil
+}
+
+// AssertInitialFailures checks that all selected tasks fail in initial state.
+func (b *Benchmark) AssertInitialFailures(tasks []Task) error {
+	unexpectedPasses := make([]string, 0)
+
+	fmt.Printf("Precheck: asserting initial state fails for %d task(s)...\n", len(tasks))
+	for _, task := range tasks {
+		passed, output, err := b.verifyInitialTaskFailure(task)
+		if err != nil {
+			return fmt.Errorf("[%s] initial-state precheck error: %w", task.ID, err)
+		}
+		if passed {
+			preview := strings.TrimSpace(output)
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			if preview == "" {
+				unexpectedPasses = append(unexpectedPasses, task.ID)
+			} else {
+				unexpectedPasses = append(unexpectedPasses, fmt.Sprintf("%s (%s)", task.ID, preview))
+			}
+			fmt.Printf("[%s] ✗ unexpected PASS\n", task.ID)
+			continue
+		}
+		fmt.Printf("[%s] ✓ expected FAIL\n", task.ID)
+	}
+
+	if len(unexpectedPasses) > 0 {
+		return fmt.Errorf("initial-state verify unexpectedly passed for %d task(s):\n  - %s",
+			len(unexpectedPasses), strings.Join(unexpectedPasses, "\n  - "))
+	}
+
+	fmt.Println("Precheck passed: all selected tasks fail before agent modifications.")
+	return nil
+}
+
 var (
 	logFilePattern   = regexp.MustCompile(`logs/[A-Za-z0-9_.-]+`)
 	searchCmdPattern = regexp.MustCompile(`\b(grep|rg)\b`)
@@ -1417,18 +1485,20 @@ func isFlagExplicitlySet(name string) bool {
 func main() {
 	// Parse flags
 	var (
-		tasksDir     = flag.String("tasks", "tasks", "Tasks directory")
-		resultsDir   = flag.String("results", "results", "Results directory")
-		agentBinary  = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path")
-		maxTurns     = flag.Int("max-turns", 50, "Maximum agent turns")
-		timeout      = flag.Duration("timeout", 10*time.Minute, "Per-task timeout")
-		manifestPath = flag.String("manifest", "", "Task manifest path (JSON)")
-		taskID       = flag.String("task", "", "Run specific task only")
-		compare      = flag.String("compare", "", "Compare with previous result file")
-		resume       = flag.String("resume", "", "Resume from progress file (default: results/progress.json)")
-		clean        = flag.Bool("clean", false, "Start fresh (ignore existing progress)")
-		list         = flag.Bool("list", false, "List available tasks")
-		maxStepsMode = flag.String("max-steps-mode", "soft", "How to treat max_steps constraint: soft|hard")
+		tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
+		resultsDir        = flag.String("results", "results", "Results directory")
+		agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path")
+		maxTurns          = flag.Int("max-turns", 50, "Maximum agent turns")
+		timeout           = flag.Duration("timeout", 10*time.Minute, "Per-task timeout")
+		manifestPath      = flag.String("manifest", "", "Task manifest path (JSON)")
+		taskID            = flag.String("task", "", "Run specific task only")
+		compare           = flag.String("compare", "", "Compare with previous result file")
+		resume            = flag.String("resume", "", "Resume from progress file (default: results/progress.json)")
+		clean             = flag.Bool("clean", false, "Start fresh (ignore existing progress)")
+		list              = flag.Bool("list", false, "List available tasks")
+		maxStepsMode      = flag.String("max-steps-mode", "soft", "How to treat max_steps constraint: soft|hard")
+		assertInitialFail = flag.Bool("assert-initial-fail", false, "Assert that selected tasks fail in initial state before running agent")
+		precheckOnly      = flag.Bool("precheck-only", false, "Run only initial-state failure precheck, then exit")
 	)
 	flag.Parse()
 	maxStepsFlagSet := isFlagExplicitlySet("max-steps-mode")
@@ -1529,6 +1599,16 @@ func main() {
 			}
 		}
 		return
+	}
+
+	if *assertInitialFail || *precheckOnly {
+		if err := bench.AssertInitialFailures(tasks); err != nil {
+			fmt.Fprintf(os.Stderr, "Initial-state precheck failed: %v\n", err)
+			os.Exit(2)
+		}
+		if *precheckOnly {
+			return
+		}
 	}
 
 	// Determine progress file

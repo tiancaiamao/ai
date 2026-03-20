@@ -1,7 +1,11 @@
-.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean reset reset-task reset-hard ab-list ab-test ab-compare ab-benchmark ab-report help
+.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean bench-precheck reset reset-task reset-hard ab-list ab-test ab-compare ab-benchmark ab-report help
 
 MANIFEST_FLAG := $(if $(strip $(MANIFEST)),--manifest $(MANIFEST),)
 MAX_STEPS_MODE_FLAG := $(if $(strip $(MAX_STEPS_MODE)),--max-steps-mode $(MAX_STEPS_MODE),)
+ASSERT_INIT_FAIL_FLAG := $(if $(filter 1 true yes,$(ASSERT_INIT_FAIL)),--assert-initial-fail,)
+DEFAULT_PRECHECK_MANIFEST ?= tasks/agent_v1_manifest.json
+PRECHECK_MANIFEST := $(or $(strip $(MANIFEST)),$(DEFAULT_PRECHECK_MANIFEST))
+PRECHECK_MANIFEST_FLAG := $(if $(strip $(PRECHECK_MANIFEST)),--manifest $(PRECHECK_MANIFEST),)
 
 # Default target
 all: build
@@ -18,6 +22,7 @@ help:
 	@echo "  make bench-run           运行所有任务 (从头开始)"
 	@echo "  make bench-resume        从上次中断处继续"
 	@echo "  make bench-run TASK=xxx  运行单个任务"
+	@echo "  make bench-precheck      仅做初始态预检（默认用 agent_v1_manifest）"
 	@echo "  make bench-list          列出所有任务"
 	@echo "  make bench-compare       对比上次结果"
 	@echo "  make bench-baseline      保存当前为基准"
@@ -41,11 +46,14 @@ help:
 	@echo "  MANIFEST=tasks/xxx.json  按 manifest 精确筛选任务"
 	@echo "  RESUME=results/xxx.json  指定进度文件 (默认: results/progress.json)"
 	@echo "  VERBOSE=1                详细输出"
+	@echo "  ASSERT_INIT_FAIL=1       bench-run 前强制初始态全 FAIL 校验"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make bench-run                      # 从头运行所有任务"
 	@echo "  make bench-resume                   # 从上次中断处继续"
 	@echo "  make bench-resume RESUME=xxx.json   # 从指定进度文件继续"
+	@echo "  make bench-precheck                    # 默认 manifest 预检"
+	@echo "  make bench-precheck MANIFEST=tasks/xxx.json"
 	@echo "  make bench-run TASK=001_fix_off_by_one"
 	@echo "  make bench-list MANIFEST=tasks/agent_v1_manifest.json"
 	@echo "  make ab-test AGENT=my-agent MODEL=minimax TASK=agent_001_forced_exploration"
@@ -68,10 +76,15 @@ bench: bench-run
 bench-run: bench-build
 	@if [ -n "$(TASK)" ]; then \
 		echo "Running task: $(TASK)"; \
-		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG); \
+		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
 	else \
-		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --clean; \
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
 	fi
+
+# Verify all selected tasks fail before agent modifications
+bench-precheck: bench-build
+	@echo "Precheck manifest: $(PRECHECK_MANIFEST)"
+	../../bin/benchmark --precheck-only $(PRECHECK_MANIFEST_FLAG)
 
 # Resume from previous progress
 bench-resume: bench-build
