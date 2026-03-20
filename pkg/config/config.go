@@ -376,3 +376,10 @@ func WithThinkingLevel(level string) LoopConfigOption {
 		cfg.ThinkingLevel = level
 	}
 }
+
+// WithToolCallCutoff sets the tool call cutoff.
+func WithToolCallCutoff(cutoff int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolCallCutoff = cutoff
+	}
+}

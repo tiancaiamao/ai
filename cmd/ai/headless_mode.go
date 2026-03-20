@@ -180,6 +180,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		return writeHeadlessError(output, fmt.Sprintf("failed to resolve API key: %v", err))
 	}
+	slog.Info("API key resolved", "provider", model.Provider, "key_length", len(apiKey))
 
 	// Get current working directory
 	cwd, err := os.Getwd()
@@ -387,8 +388,36 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		}
 	}
 
-	// Create agent
-	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
+	// Create session compactor first (needed for LoopConfig)
+	sessionWriter := newSessionWriter(256)
+	defer sessionWriter.Close()
+	sessionComp := &sessionCompactor{
+		session:   sess,
+		compactor: compactor,
+		writer:    sessionWriter,
+	}
+
+	// Build LoopConfig from application config
+	loopCfg := cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(currentContextWindow),
+		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+	)
+
+	// Set model and apiKey (not handled by ToLoopConfig)
+	loopCfg.Model = model
+	loopCfg.APIKey = apiKey
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
+		loopCfg.TaskTrackingEnabled = *cfg.TaskTracking.Enabled
+	}
+	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
+		loopCfg.ContextManagementEnabled = *cfg.ContextManagement.Enabled
+	}
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 
 	// Set max turns if specified
@@ -397,24 +426,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
 
-	sessionWriter := newSessionWriter(256)
-	defer sessionWriter.Close()
-	sessionComp := &sessionCompactor{
-		session:   sess,
-		compactor: compactor,
-		writer:    sessionWriter,
-	}
-	ag.SetCompactor(sessionComp)
-	ag.SetContextWindow(currentContextWindow)
-	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
-
-	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-		ag.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
-	}
-	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-		ag.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
-	}
+	// LoopConfig already includes TaskTracking and ContextManagement settings
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {
