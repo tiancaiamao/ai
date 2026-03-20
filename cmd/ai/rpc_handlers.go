@@ -517,9 +517,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.SetSteerHandler(func(message string) error {
 		slog.Info("Received steer:", "value", message)
-		
+
 		// Handle steer command
-	if strings.TrimSpace(message) == "" {
+		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
 
