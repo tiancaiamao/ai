@@ -1,4 +1,4 @@
-.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean ab-list ab-test ab-compare ab-benchmark ab-report help
+.PHONY: build test clean vet coverage bench bench-build bench-run bench-resume bench-list bench-task bench-import bench-compare bench-baseline bench-clean reset reset-task reset-hard ab-list ab-test ab-compare ab-benchmark ab-report help
 
 MANIFEST_FLAG := $(if $(strip $(MANIFEST)),--manifest $(MANIFEST),)
 MAX_STEPS_MODE_FLAG := $(if $(strip $(MAX_STEPS_MODE)),--max-steps-mode $(MAX_STEPS_MODE),)
@@ -22,6 +22,9 @@ help:
 	@echo "  make bench-compare       对比上次结果"
 	@echo "  make bench-baseline      保存当前为基准"
 	@echo "  make bench-clean         清理结果文件"
+	@echo "  make reset               重置 tasks 工作区（保留 benchmark/results/*.json）"
+	@echo "  make reset-task TASK=xx  重置单个任务的 setup"
+	@echo "  make reset-hard          强重置（额外清理 progress/run/临时缓存）"
 	@echo "  make ab-list             列出可用 agent/model/task"
 	@echo "  make ab-test AGENT=xxx   运行 A/B 单 agent 测试"
 	@echo "  make ab-compare AGENTS=\"a b\"  对比多个 agent"
@@ -112,6 +115,31 @@ bench-clean:
 	rm -f results/*.json
 	rm -rf results/.pytest_cache
 	@echo "Done."
+
+# Reset tasks to clean initial state (keep benchmark/results/*.json)
+reset:
+	@if [ -n "$(TASK)" ]; then \
+		./reset.sh "$(TASK)"; \
+	else \
+		./reset.sh; \
+	fi
+
+# Reset specific task
+reset-task:
+ifndef TASK
+	@echo "Error: TASK is required"
+	@echo "Usage: make reset-task TASK=<task_id>"
+	@exit 1
+endif
+	@./reset.sh "$(TASK)"
+
+# Hard reset tasks and runtime junk (keep historical results/*.json)
+reset-hard:
+	@./reset.sh --hard
+	@rm -f results/progress.json
+	@rm -rf results/.pytest_cache
+	@rm -f run reset
+	@echo "Done. Kept historical result files (results/*.json except progress.json)."
 
 # A/B list
 ab-list:
