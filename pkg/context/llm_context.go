@@ -198,11 +198,6 @@ func (wm *LLMContext) SetMeta(tokensUsed, tokensMax, messagesCount int) {
 	wm.messagesCount = messagesCount
 }
 
-// UpdateMeta is an alias for SetMeta for backward compatibility.
-func (wm *LLMContext) UpdateMeta(tokensUsed, tokensMax, messagesCount int) {
-	wm.SetMeta(tokensUsed, tokensMax, messagesCount)
-}
-
 // GetMeta returns the current metadata.
 func (wm *LLMContext) GetMeta() ContextMeta {
 	wm.mu.RLock()
@@ -247,24 +242,6 @@ func (wm *LLMContext) InvalidateCache() {
 	defer wm.mu.Unlock()
 	wm.overviewContent = ""
 	wm.overviewModTime = time.Time{}
-}
-
-// IncrementRound is a no-op placeholder for backward compatibility.
-// Round tracking is now handled by TaskTrackingState.
-func (wm *LLMContext) IncrementRound() {
-	// No-op - round tracking moved to TaskTrackingState
-}
-
-// GetDecisionReminderMessage returns a decision reminder message.
-// This delegates to TaskTrackingState for the message generation.
-func (wm *LLMContext) GetDecisionReminderMessage(availableToolIDs []string, state *ContextMgmtState, urgency string) string {
-	return ""
-}
-
-// GetUpdateStats returns empty stats for backward compatibility.
-// Real stats are now in TaskTrackingState.
-func (wm *LLMContext) GetUpdateStats() UpdateStats {
-	return UpdateStats{Score: "no_data"}
 }
 
 // SaveCompactionSummary saves a compaction summary to the detail directory.

@@ -122,7 +122,7 @@ func TestLLMContext_ContextMeta(t *testing.T) {
 	sessionDir := t.TempDir()
 	wm := agentctx.NewLLMContext(sessionDir)
 
-	wm.UpdateMeta(50000, 128000, 25)
+	wm.SetMeta(50000, 128000, 25)
 
 	meta := wm.GetMeta()
 

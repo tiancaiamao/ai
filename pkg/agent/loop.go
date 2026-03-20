@@ -382,7 +382,7 @@ func runInnerLoop(
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			agentCtx.LLMContext.UpdateMeta(
+			agentCtx.LLMContext.SetMeta(
 				msg.Usage.TotalTokens,
 				tokensMax,
 				len(agentCtx.Messages),
@@ -689,9 +689,6 @@ func streamAssistantResponse(
 	// 1. After compact (PostCompactRecovery = true) for recovery
 	// 2. The LLM should use llm_context_update tool to record state, which stays in tool output
 	if agentCtx.LLMContext != nil {
-		// Track that we're starting a new LLM request round
-		agentCtx.LLMContext.IncrementRound()
-
 		// Determine if we should inject overview.md content
 		// Only inject after compact for recovery
 		var content string
@@ -714,7 +711,7 @@ func streamAssistantResponse(
 			tokensMax = config.ContextWindow
 		}
 		tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
-		agentCtx.LLMContext.UpdateMeta(
+		agentCtx.LLMContext.SetMeta(
 			tokensUsedApprox,
 			tokensMax,
 			len(agentCtx.Messages),
@@ -773,7 +770,8 @@ func streamAssistantResponse(
 			// Get available (non-truncated) tool IDs to include in reminder example
 			_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
 
-			decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage(availableToolIDs, agentCtx.ContextMgmtState, urgency)
+			meta := agentCtx.LLMContext.GetMeta()
+			decisionReminderContent := agentCtx.TaskTrackingState.GetDecisionReminderMessage(availableToolIDs, agentCtx.ContextMgmtState, urgency, meta, staleCount)
 			decisionReminderMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: decisionReminderContent,
@@ -1622,8 +1620,8 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 
 	// Build update metrics section
 	var updateMetrics string
-	if agentCtx.LLMContext != nil {
-		updateStats := agentCtx.LLMContext.GetUpdateStats()
+	if agentCtx.TaskTrackingState != nil {
+		updateStats := agentCtx.TaskTrackingState.GetUpdateStats()
 		if updateStats.Total > 0 {
 			updateMetrics = fmt.Sprintf(`
 context_metrics:
