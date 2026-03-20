@@ -745,14 +745,14 @@ func streamAssistantResponse(
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
 	// Only if task tracking is enabled
-	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() && config.TaskTrackingEnabled {
-		reminderContent := agentCtx.LLMContext.GetReminderUserMessage()
+	if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled {
+		reminderContent := agentCtx.TaskTrackingState.GetReminderUserMessage()
 		reminderMsg := llm.LLMMessage{
 			Role:    "user",
 			Content: reminderContent,
 		}
 		llmMessages = append(llmMessages, reminderMsg)
-		agentCtx.LLMContext.SetWasReminded()
+		agentCtx.TaskTrackingState.SetWasReminded()
 
 		// Trace event for context update reminder
 		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",

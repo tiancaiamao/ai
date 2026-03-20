@@ -362,6 +362,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		if sessionDir != "" {
 			wm := agentctx.NewLLMContext(sessionDir)
 			agentCtx.LLMContext = wm
+			agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
 		}
 	}
 

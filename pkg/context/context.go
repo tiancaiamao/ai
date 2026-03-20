@@ -19,8 +19,11 @@ type AgentContext struct {
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
 
-	// LLMContext is the agent's llm context for context management.
+	// LLMContext is the agent's llm context file manager.
 	LLMContext *LLMContext `json:"-"`
+
+	// TaskTrackingState tracks llm_context_update behavior for reminders.
+	TaskTrackingState *TaskTrackingState `json:"-"`
 
 	// Runtime meta snapshot state for stable system-tail injection.
 	RuntimeMetaSnapshot string `json:"-"`

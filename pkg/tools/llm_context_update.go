@@ -88,8 +88,8 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 		}
 
 		// Mark that LLM is still active (resets roundsSinceUpdate counter)
-		if agentCtx.LLMContext != nil {
-			agentCtx.LLMContext.MarkUpdatedAfterToolCall(5)
+		if agentCtx.TaskTrackingState != nil {
+			agentCtx.TaskTrackingState.MarkSkipped(reasoning)
 		}
 
 		traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update_skip",
@@ -119,8 +119,11 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 			)
 			return nil, fmt.Errorf("failed to write context: %w", err)
 		}
-		// Mark updated to reset roundsSinceUpdate counter (stops reminder loop)
-		agentCtx.LLMContext.MarkUpdatedAfterToolCall(5)
+	}
+
+	// Mark updated to reset roundsSinceUpdate counter (stops reminder loop)
+	if agentCtx.TaskTrackingState != nil {
+		agentCtx.TaskTrackingState.MarkUpdated()
 	}
 
 	// Log successful update

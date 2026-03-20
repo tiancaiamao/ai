@@ -373,6 +373,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if sessionDir != "" {
 				wm := agentctx.NewLLMContext(sessionDir)
 				ctx.LLMContext = wm
+				ctx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
 				sess.SetLLMContext(wm) // Set llm context on session
 			}
 			// Restore conversation history from session
