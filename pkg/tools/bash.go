@@ -187,6 +187,20 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Check result
 	if cmdCtx.Err() == context.DeadlineExceeded {
+		// Kill entire process group to ensure all child processes are terminated
+		if cmd.Process != nil {
+			pgid, err := syscall.Getpgid(cmd.Process.Pid)
+			if err == nil {
+				// Kill the process group (negative PID)
+				syscall.Kill(-pgid, syscall.SIGKILL)
+				slog.Debug("[Bash] Killed process group", "pgid", pgid)
+			} else {
+				// Fallback: kill just the process
+				syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
+				slog.Debug("[Bash] Killed single process (no process group)", "pid", cmd.Process.Pid)
+			}
+		}
+
 		slog.Warn("[Bash] Command timed out and was killed",
 			"command", command,
 			"timeout", execTimeout.Seconds(),

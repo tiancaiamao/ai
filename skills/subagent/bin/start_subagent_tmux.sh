@@ -26,22 +26,26 @@ if [ -z "$OUTPUT_FILE" ] || [ -z "$TIMEOUT" ] || [ -z "$TASK" ]; then
     exit 1
 fi
 
-# Generate unique session name
-SESSION_NAME="subagent-$(date +%s)"
-
-# Build command
-CMD="ai --mode headless --timeout $TIMEOUT"
-if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
-    CMD="$CMD --system-prompt @$SYSTEM_PROMPT"
-fi
-CMD="$CMD \"$TASK\""
+# Generate unique session name (use random to avoid collisions on macOS where %N is not supported)
+SESSION_NAME="subagent-$(date +%s)-$RANDOM$$"
 
 # Clear output file
 > "$OUTPUT_FILE"
 
+# Build command arguments array for safe quoting
+declare -a CMD_ARGS
+CMD_ARGS=(ai --mode headless --timeout "$TIMEOUT")
+if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
+    CMD_ARGS+=(--system-prompt "@$SYSTEM_PROMPT")
+fi
+CMD_ARGS+=("$TASK")
+
 # Start in tmux session with output tee
-# Using bash -c to ensure proper quoting and tee to save output
-tmux new -s "$SESSION_NAME" -d "bash -c '$CMD 2>&1 | tee \"$OUTPUT_FILE\"'"
+# Use bash -c with proper quoting to handle special characters in TASK
+# On failure, keep session alive for debugging
+tmux new -s "$SESSION_NAME" -d
+tmux send-keys -t "$SESSION_NAME" -l "$(printf '%q ' "${CMD_ARGS[@]}")"
+tmux send-keys -t "$SESSION_NAME" C-m
 
 # Wait for session to start and output to appear
 sleep 2
@@ -54,8 +58,8 @@ for i in $(seq 1 30); do
     SESSION_ID=$(echo "$OUTPUT" | grep -m1 "Session ID:" | awk '{print $3}' || true)
 
     if [ -n "$SESSION_ID" ]; then
-        # Verify session ID format (should be alphanumeric)
-        if echo "$SESSION_ID" | grep -qE '^[a-zA-Z0-9]+$'; then
+        # Verify session ID format (allow UUID with hyphens)
+        if echo "$SESSION_ID" | grep -qE '^[a-zA-Z0-9-]+$'; then
             break
         fi
     fi
