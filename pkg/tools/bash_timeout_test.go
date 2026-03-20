@@ -67,5 +67,5 @@ func TestBashToolTimeoutDetection(t *testing.T) {
 	// Check that the result contains timeout information
 	result := blocks[0].(agentctx.TextContent)
 	assert.Contains(t, result.Text, "timed out")
-	assert.Contains(t, result.Text, "Retry") // Capital R in "Retry with a longer timeout"
+	assert.Contains(t, result.Text, "tmux") // Points to tmux skill for long-running tasks
 }

@@ -6,138 +6,107 @@ tools: [bash]
 
 # Subagent Skill
 
-Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated process** using headless mode with a **focused system prompt**.
+Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated tmux session** using headless mode with a **focused system prompt**.
 
 ## ⚠️ CRITICAL RULES
 
 ```
 🔴 RULE 1: NEVER use sleep, wait, or polling loops
-   → sleep 30 即使 subagent 3s 完成也要白等 30s
-   → subagent_wait.sh 会及时结束（3s 完成就 3s 结束）
-   → subagent_wait.sh 支持用户中断（Ctrl+C）
+   → Use tmux_wait.sh - it detects completion immediately
+   → sleep 30 wastes 27s if subagent finishes in 3s
 
-🔴 RULE 2: ALWAYS use subagent_wait.sh to wait for completion
-   → 正确：subagent_wait.sh "$SESSION" 600
-   → 错误：sleep 30 && cat output.txt
-   → 错误：while [ ! -f done ]; do sleep 1; done
+🔴 RULE 2: ALWAYS use tmux_wait.sh to wait for completion
+   → Correct: tmux_wait.sh "$SESSION" 600
+   → Wrong: sleep 30 && cat output.txt
+   → Wrong: while [ ! -f done ]; do sleep 1; done
 
-🔴 RULE 3: Sessions are ALWAYS saved (no --no-session option)
-   → Sessions are needed for debugging subagent behavior
-
-🔴 RULE 4: ALWAYS use --timeout to prevent runaway subagents
+🔴 RULE 3: ALWAYS use --timeout to prevent runaway subagents
    → Recommended: 5-10 minutes for most tasks
 
-🔴 RULE 5: Use --system-prompt @file for focused persona
+🔴 RULE 4: Use --system-prompt @file for focused persona
    → Load appropriate role from skill references
 
-🔴 RULE 6: NEVER use --max-turns unless explicitly needed
+🔴 RULE 5: NEVER use --max-turns unless explicitly needed
    → Let subagents complete naturally
 ```
 
 ## Correct Command Template
 
-**推荐方式：使用 start_subagent.sh 辅助脚本**
-
 ```bash
-# STEP 1: 启动 subagent 并自动捕获 Session ID
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+# STEP 1: Start subagent in tmux (auto-captures session ID)
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/subagent-output.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Your task description here")
 
-echo "Started subagent: $SESSION"
+# Extract session name (format: "session-name:session-id")
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
 
-# STEP 2: 等待完成（支持用户中断）
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+echo "Started subagent: $SESSION_NAME"
 
-# STEP 3: 收集结果
+# STEP 2: Wait for completion
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
+
+# STEP 3: Collect results
 cat /tmp/subagent-output.txt
 ```
 
-**手动方式（不推荐）**
+## Interrupting Subagents
+
+**With tmux, you have better control than interrupt files:**
 
 ```bash
-# STEP 1: Start subagent in background with output redirect
-(ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --timeout 10m \
-  "Your task description here" > /tmp/subagent-output.txt 2>&1) &
+# Method 1: Send Ctrl+C (graceful interrupt)
+tmux send-keys -t subagent-1234567890 C-c
 
-# STEP 2: Capture session ID from output (appears in first few lines)
-# ⚠️ 必须等待 Session ID 写入文件
-SESSION=""
-for i in $(seq 1 20); do
-    sleep 0.2
-    SESSION=$(grep -m1 "Session ID:" /tmp/subagent-output.txt 2>/dev/null | awk '{print $3}')
-    if [ -n "$SESSION" ]; then
-        break
-    fi
-done
+# Method 2: Kill session (force interrupt)
+tmux kill-session -t subagent-1234567890
 
-if [ -z "$SESSION" ]; then
-    echo "Error: Failed to capture session ID"
-    exit 1
-fi
-
-# STEP 3: Wait using subagent_wait.sh (REQUIRED - enables interrupt)
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
-
-# STEP 4: Collect results
-cat /tmp/subagent-output.txt
-
-# WRONG ✗ - Using PID instead of Session ID
-(ai --mode headless ...) &
-PID=$!
-~/.ai/skills/subagent/bin/subagent_wait.sh "$PID" 300  # ❌ Wrong!
-
-# WRONG ✗ - Using sleep (blocking, no interrupt support)
-sleep 30 && cat /tmp/subagent-output.txt
-
-# WRONG ✗ - Using polling loop (wasteful, no interrupt support)
-while [ ! -f /tmp/done ]; do sleep 1; done
+# Method 3: Check what's running first
+tmux attach -t subagent-1234567890
+# Then: Ctrl+C to interrupt
 ```
 
-## Subagent Management with Bash
+**Why this is better than interrupt files:**
+- ✅ Immediate effect (no polling delay)
+- ✅ Standard Unix signals
+- ✅ Can attach and inspect before killing
+- ✅ No race conditions
 
-Since there's no dedicated subagent tool, use bash commands:
+## Subagent Management
 
-### Find Running Subagents
+### List Running Subagents
 
 ```bash
-# Find all ai headless processes
-ps aux | grep "ai.*--mode headless"
+# List all subagent tmux sessions
+tmux ls | grep subagent
 
-# More precise: find by timeout flag
-ps aux | grep "ai.*--mode headless" | grep -v grep
+# Check if specific session exists
+tmux ls | grep "subagent-123"
+```
+
+### View Subagent Output in Real-time
+
+```bash
+# Attach to session (Ctrl-b d to detach)
+tmux attach -t subagent-1234567890
+
+# Capture current output
+tmux capture-pane -t subagent-1234567890 -p
+
+# Capture last N lines
+tmux capture-pane -t subagent-1234567890 -p -S -50
 ```
 
 ### Kill a Runaway Subagent
 
 ```bash
-# Find the PID first
-ps aux | grep "ai.*--mode headless"
+# Find the session
+tmux ls | grep subagent
 
-# Kill by PID
-kill <PID>
-
-# Force kill if stuck
-kill -9 <PID>
-```
-
-### Track Subagent Sessions
-
-Sessions are saved to:
-```
-~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
-```
-
-```bash
-# List all sessions
-ls -la ~/.ai/sessions/
-
-# View a session
-cat ~/.ai/sessions/--project--/abc123/messages.jsonl | jq .
+# Kill it
+tmux kill-session -t subagent-1234567890
 ```
 
 ## When to Use
@@ -157,410 +126,234 @@ cat ~/.ai/sessions/--project--/abc123/messages.jsonl | jq .
 | `--tools T1,T2` | Comma-separated tool whitelist | all tools |
 | `--max-turns N` | Maximum turns (avoid, use timeout) | 0 (unlimited) |
 
+## Understanding Sessions
+
+**Two types of sessions are involved:**
+
+### 1. Tmux Session (Container)
+- **Name**: `subagent-TIMESTAMP-RANDOM$$` (e.g., `subagent-1773995291-216285`)
+- **Purpose**: Process isolation + observability
+- **Operations**: `tmux attach/kill/ls`
+- **Lifecycle**: Exists while process runs
+- **Recovery**: `tmux ls | grep subagent`
+
+### 2. AI Headless Session (Internal State)
+- **ID**: UUID format (e.g., `cb76798b-445f-469f-9d02-1bf1464cd0a9`)
+- **Purpose**: Conversation tracking + message storage
+- **Storage**: `~/.ai/sessions/--<cwd>--/<session-id>/`
+- **Lifecycle**: Persistent (survives restart)
+- **Recovery**: `ls ~/.ai/sessions/--<cwd>--/`
+
+### Hierarchy
+```
+tmux session (container)
+  └─> ai --mode headless (process)
+        └─> ai session (UUID)
+              ├─> messages.jsonl
+              └─> status.json
+```
+
+## Session Recovery After Restart
+
+**Scenario**: Main agent restarts, needs to recover subagent information
+
+### Find Tmux Sessions
+```bash
+# List all subagent tmux sessions
+tmux ls | grep subagent
+
+# Check if specific session still running
+tmux ls | grep "subagent-1234567890"
+
+# Attach to inspect
+tmux attach -t subagent-1234567890
+```
+
+### Find AI Sessions
+```bash
+# List all ai sessions for current directory
+ls -lt ~/.ai/sessions/--$(pwd | sed 's|/|-|g')--/
+
+# Find most recent session
+ls -td ~/.ai/sessions/--*--/*/ | head -1
+
+# Read session messages
+cat ~/.ai/sessions/--...--/<uuid>/messages.jsonl | jq .
+
+# Check session status
+cat ~/.ai/sessions/--...--/<uuid>/status.json | jq .
+```
+
+### Link Tmux and AI Sessions
+```bash
+# If you have tmux session name, find ai session:
+tmux capture-pane -t subagent-1234567890 -p -S - | grep "Session ID:"
+
+# If you have ai session ID, check if tmux session exists:
+# (need to search through tmux sessions)
+tmux ls | grep subagent | while read line; do
+  sess=$(echo $line | cut -d: -f1)
+  if tmux capture-pane -t $sess -p -S - | grep -q "<ai-session-id>"; then
+    echo "Found: $sess"
+  fi
+done
+```
+
+### Resume Work After Restart
+```bash
+# 1. Check running subagents
+tmux ls | grep subagent
+
+# 2. Check recent ai sessions
+ls -ltd ~/.ai/sessions/--*--/*/ | head -5
+
+# 3. View session output
+tmux attach -t subagent-xxxxx  # or
+cat ~/.ai/sessions/--...--/<uuid>/messages.jsonl | jq -r '.content'
+
+# 4. Check if subagent completed
+# Look for done marker or check status.json
+cat ~/.ai/sessions/--...--/<uuid>/status.json | jq .status
+```
+
 ## Session Persistence
 
-**Sessions are always saved to:**
+Sessions are saved to:
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
 ```
 
-This allows you to:
-- Debug subagent behavior after execution
-- Review tool calls and reasoning
-- Understand why a subagent failed
-
-## Monitoring via status.json
-
-**Each headless session creates a status.json file:**
-```
-~/.ai/sessions/--<cwd>--/<session-id>/status.json
-```
-
-**Status file structure:**
-```json
-{
-  "session_id": "abc123",
-  "pid": 54321,
-  "status": "running",
-  "current_turn": 3,
-  "last_tool": "read",
-  "last_activity": "2024-03-11T09:00:00Z",
-  "started_at": "2024-03-11T08:55:00Z",
-  "error": ""
-}
-```
-
-**Status values:**
-- `running` - Subagent is actively processing
-- `completed` - Finished successfully
-- `timeout` - Exceeded timeout limit
-- `error` - Failed with an error
-
-## Using start_subagent.sh Helper Script
-
-**Location:** `~/.ai/skills/subagent/bin/start_subagent.sh`
-
-This script simplifies subagent management by automatically:
-1. Starting the subagent in background
-2. Waiting for Session ID to appear in output
-3. Returning the Session ID for use with `subagent_wait.sh`
-
-**Usage:**
-```bash
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
-  <output_file> \
-  <timeout> \
-  <system_prompt_file|-> \
-  "<task_description>")
-```
-
-**Parameters:**
-- `output_file` - File to capture subagent output (required)
-- `timeout` - Timeout duration (e.g., `10m`, `300s`) (required)
-- `system_prompt_file` - Path to persona file, or `-` for default (required)
-- `task_description` - The task to execute (required)
-
-**Example:**
-```bash
-# With persona
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
-  /tmp/review.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/reviewer.md \
-  "Review the authentication code")
-
-# Without persona (use default)
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
-  /tmp/analysis.txt \
-  5m \
-  - \
-  "Analyze the log file")
-```
-
-**Output:**
-- On success: Prints Session ID to stdout
-- On error: Prints error message to stderr and exits with code 1
-
-### Using subagent_wait.sh (Recommended)
-
-**The easiest way to monitor subagents:**
-
-### Method 1: Using start_subagent.sh (Recommended)
-
-```bash
-# Start subagent with automatic session ID capture
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
-  /tmp/output.txt \
-  10m \
-  /path/to/persona.md \
-  "complex analysis task")
-
-# Wait for completion (with interrupt support)
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
-
-# Collect results
-cat /tmp/output.txt
-```
-
-### Method 2: Manual Session ID Extraction
-
-```bash
-# Start subagent in background
-(ai --mode headless --timeout 10m "task" > /tmp/out.txt 2>&1) &
-
-# Extract session ID (wait for it to appear)
-SESSION=$(timeout 4 bash -c 'while ! grep -q "Session ID:" /tmp/out.txt 2>/dev/null; do sleep 0.2; done; grep "Session ID:" /tmp/out.txt | awk "{print \$3}"')
-
-# Wait with subagent_wait.sh
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
-```
-
-**Features:**
-- ✅ Monitors multiple sessions: `~/.ai/skills/subagent/bin/subagent_wait.sh "abc123,def456" 600`
-- ✅ **Interruptible by user input** - main agent stays responsive
-- ✅ Timeout control (default 600s = 10 minutes)
-- ✅ Progress updates every 5 seconds
-- ✅ Exit codes: 0=completed/interrupted, 1=timeout, 2=error
-
-**How interrupt works:**
-- When user sends input (prompt/steer), the agent loop creates an interrupt file
-- subagent_wait.sh detects the file and exits immediately
-- Main agent loop continues, can respond to user
-- No blocking, no blind waiting!
-
-**Manual status check:**
-```bash
-# Check specific session
-cat ~/.ai/sessions/*/$SESSION/status.json | jq .
-
-# Check all running sessions
-find ~/.ai/sessions -name status.json -exec sh -c 'echo "=== {} ===" && cat {} | jq -r "select(.status==\"running\") | "\(.session_id): turn \(.current_turn), last tool: \(.last_tool)""' \;
-```
-
-## Output Format
-
-```
-=== Session Info ===
-Session ID: abc123
-Session file: ~/.ai/sessions/--project--/abc123/messages.jsonl
-
-=== Turn 1 ===
-Thinking: ...
-Tool calls:
-  • read: path=config.yaml
-  • grep: pattern=timeout
-
-=== Summary ===
-Total turns: 5
-Tokens: 1500 input, 800 output, 2300 total
-Duration: 45.2s
-```
-
-## Examples
-
-### Example 1: Code Analysis with Timeout
-
-```bash
-ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --timeout 5m \
-  "Analyze the authentication flow in src/auth/"
-```
-
-### Example 2: Parallel Analysis
-
-```bash
-# Run 3 parallel subagents
-(ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --timeout 10m \
-  "Analyze project A architecture" > /tmp/a.txt) &
-
-(ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --timeout 10m \
-  "Analyze project B architecture" > /tmp/b.txt) &
-
-(ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  --timeout 10m \
-  "Analyze project C architecture" > /tmp/c.txt) &
-
-wait
-cat /tmp/a.txt /tmp/b.txt /tmp/c.txt
-```
-
-### Example 3: With Tool Restrictions
-
-```bash
-# Read-only explorer (safe for analysis)
-ai --mode headless \
-  --tools read,grep \
-  --timeout 5m \
-  "Find all API endpoints in src/api/"
-```
-
-### Example 4: Check and Kill Stuck Subagent
-
-```bash
-# Check running subagents
-$ ps aux | grep "ai.*--mode headless"
-genius   54321  0.5  1.2  ... ai --mode headless ...
-genius   54322  0.3  1.1  ... ai --mode headless ...
-
-# Kill a stuck one
-$ kill 54321
-
-# Verify it's gone
-$ ps aux | grep 54321
-```
-
-## Persona Profiles
-
-Use with `--system-prompt @/Users/genius/.ai/skills/orchestrate/references/<persona>.md`:
-
-| Persona | File | Purpose |
-|---------|------|---------|
-| Explorer | `explorer.md` | Code analysis, architecture review |
-| Researcher | `researcher.md` | Investigation, comparison |
-| Implementer | `implementer.md` | Feature implementation |
-| Reviewer | `reviewer.md` | Code review, validation |
+Useful for debugging subagent behavior after execution.
 
 ## Timeout Guidelines
 
-| Task Complexity | Recommended Timeout |
-|----------------|---------------------|
-| Simple lookup | 2-5 minutes |
-| Code analysis | 5-10 minutes |
-| Feature implementation | 10-20 minutes |
+| Task Type | Recommended Timeout |
+|-----------|-------------------|
+| Quick search/analysis | 5 minutes |
+| Code review | 10 minutes |
+| Multi-file refactoring | 15 minutes |
 | Complex investigation | 15-30 minutes |
-
-## Debugging Subagents
-
-If a subagent fails or behaves unexpectedly:
-
-```bash
-# 1. Check if it's still running
-ps aux | grep "ai.*--mode headless"
-
-# 2. Find the session from output
-# Session ID: abc123
-
-# 3. View the session
-cat ~/.ai/sessions/--<project>--/abc123/messages.jsonl | jq .
-
-# 4. If stuck, kill it
-kill <PID>
-```
-
-## Debugging & Monitoring Subagents
-
-### Problem: Bash Timeout vs Subagent Timeout
-
-When calling subagent via bash tool, the bash tool has its own timeout (typically 30s). Even if subagent has `--timeout 10m`, bash will timeout first.
-
-**Solution: Run subagent in background and collect results**
-
-```bash
-# 1. Start subagent in background, output to file
-(ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
-  --timeout 10m \
-  "Review this code: $(cat /tmp/diff.txt)" > /tmp/subagent_output.txt 2>&1) &
-
-SUBAGENT_PID=$!
-echo "Subagent started with PID: $SUBAGENT_PID"
-```
-
-### Monitor Subagent Status
-
-```bash
-# 1. Check if process is still alive
-ps -p $SUBAGENT_PID -o pid,ppid,%cpu,%mem,etime,stat,command
-
-# 2. Watch output file in real-time
-tail -f /tmp/subagent_output.txt
-
-# 3. Monitor session file (find latest)
-SESSION_FILE=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
-if [ -n "$SESSION_FILE" ]; then
-  tail -f "$SESSION_FILE" | jq -r 'select(.role=="assistant") | .content[]? | select(.type=="text") | .text'
-fi
-```
-
-### Check Subagent Progress
-
-```bash
-# Count turns completed (from session file)
-SESSION_FILE=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
-echo "Turns: $(grep -c '"role":"assistant"' "$SESSION_FILE" 2>/dev/null || echo 0)"
-
-# Check if subagent is making progress (file size changing)
-watch -n 2 "ls -lh /tmp/subagent_output.txt"
-
-# View last N lines of output
-tail -20 /tmp/subagent_output.txt
-```
-
-### Collect Results
-
-```bash
-# Wait for completion and get exit code
-wait $SUBAGENT_PID
-EXIT_CODE=$?
-
-if [ $EXIT_CODE -eq 0 ]; then
-  echo "Subagent completed successfully"
-  cat /tmp/subagent_output.txt
-else
-  echo "Subagent failed with exit code: $EXIT_CODE"
-  # Check session for error details
-  cat "$SESSION_FILE" | jq -r 'select(.role=="assistant") | .content[]? | select(.type=="text") | .text' | tail -50
-fi
-```
-
-### Kill Stuck Subagent
-
-```bash
-# Check if still running
-if ps -p $SUBAGENT_PID > /dev/null 2>&1; then
-  echo "Subagent still running, killing..."
-  kill $SUBAGENT_PID
-  # Force kill if needed
-  sleep 2
-  kill -9 $SUBAGENT_PID 2>/dev/null
-fi
-```
-
-### Full Debugging Script
-
-```bash
-#!/bin/bash
-# debug_subagent.sh - Monitor and debug a running subagent
-
-echo "=== Running Subagents ==="
-ps aux | grep "ai.*--mode headless" | grep -v grep
-
-echo -e "\n=== Latest Session Files ==="
-ls -lt ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -5
-
-echo -e "\n=== Latest Session Activity ==="
-LATEST=$(ls -t ~/.ai/sessions/*/*/messages.jsonl 2>/dev/null | head -1)
-if [ -n "$LATEST" ]; then
-  echo "File: $LATEST"
-  echo "Size: $(ls -lh "$LATEST" | awk '{print $5}')"
-  echo "Messages: $(wc -l < "$LATEST")"
-  echo -e "\nLast assistant message:"
-  tac "$LATEST" | grep -m1 '"role":"assistant"' | jq -r '.content[]? | select(.type=="text") | .text' | head -20
-fi
-```
 
 ## Common Pitfalls
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | Subagent hangs | No timeout set | Add `--timeout 10m` |
-| Process stuck | Unexpected error | Use `ps` + `kill` to terminate |
-| Can't find session | Wrong directory | Check `Session file:` in output |
-| Bash timeout | Bash tool has 30s limit | Run in background with `&` and collect to file |
+| Process stuck | Unexpected error | `tmux kill-session -t <name>` |
+| Can't find session | Wrong name | `tmux ls \| grep subagent` |
 | Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
-| **User input blocked** | **Using sleep/wait instead of subagent_wait.sh** | **Always use subagent_wait.sh** |
+| **Wasted time waiting** | **Using sleep instead of tmux_wait.sh** | **Always use tmux_wait.sh** |
+| **Session ID capture fails** | **Long task description** | **Write to file, pass file path** |
+| **Resource leaks** | **Failed start, no cleanup** | **start_subagent_tmux.sh auto-cleans** |
+
+## Resource Management
+
+**Automatic Cleanup**: `start_subagent_tmux.sh` automatically cleans up tmux sessions on failure:
+
+```bash
+# If Session ID capture fails, the script:
+# 1. Outputs error message with full scrollback
+# 2. Kills the tmux session it created
+# 3. Exits with code 1
+
+# This prevents resource leaks when startup fails
+```
+
+**Manual Cleanup** (if needed):
+
+```bash
+# List all subagent sessions
+tmux ls | grep subagent
+
+# Kill specific session
+tmux kill-session -t subagent-1234567890
+
+# Kill all subagent sessions (nuclear option)
+tmux ls | grep subagent | cut -d: -f1 | xargs -I {} tmux kill-session -t {}
+```
+
+**Checking for Leaks**:
+
+```bash
+# Check for orphan tmux sessions
+tmux ls | grep subagent
+
+# Check for orphan processes
+ps aux | grep "ai --mode headless" | grep -v grep
+
+# Check for stale output files
+ls -lt /tmp/*-output.txt | head -10
+```
 
 ## Best Practices
 
 - ✅ Always set `--timeout` to prevent runaway
 - ✅ Use persona files via `--system-prompt @file`
-- ✅ Run independent tasks in parallel with `&` and `wait`
+- ✅ Run independent tasks in parallel with separate sessions
 - ✅ Keep sessions for debugging
-- ✅ Use `ps aux | grep` to track running subagents
-- ✅ Use `kill` to terminate stuck subagents
+- ✅ Use `tmux kill-session` to terminate stuck subagents
+- ✅ Use `tmux capture-pane` to check progress
+- ✅ **For long tasks (>200 chars), write to file and pass file path**
 - ❌ Don't use `--max-turns` (use timeout instead)
 - ❌ Don't nest subagents
+- ❌ **Don't pass long text directly in command line**
+
+## Handling Long Task Descriptions
+
+**Problem**: Passing long task descriptions (>200 characters) directly can cause:
+- Command line too long errors
+- Shell quoting issues (single/double quotes in text)
+- tmux send-keys failures
+- start_subagent_tmux.sh unable to capture Session ID
+
+**Solution**: Write task to file, pass file path
+
+```bash
+# ❌ BAD: Long task description directly
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/output.txt 10m @reviewer.md \
+  "Review PR #62. This is a very long description with multiple paragraphs, special characters like it's, \"quotes\", $variables, etc...")  # FAILS!
+
+# ✅ GOOD: Write to file first
+cat > /tmp/task.txt << 'EOF'
+Review PR #62 (tmux-unified-task-management).
+
+Key Changes:
+- Removed interrupt file mechanism
+- Fixed 4 critical bugs found by dogfooding
+
+Focus on: correctness, performance, security
+Write result to /tmp/review-62.json
+EOF
+
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/output.txt 10m @reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+tmux_wait.sh "$SESSION_NAME" 600
+```
+
+**Benefits**:
+- ✅ No command line length limits
+- ✅ No shell quoting issues
+- ✅ Reliable Session ID capture
+- ✅ Easier to debug (can view /tmp/task.txt)
 
 ## Output File Convention
 
-**When the main agent needs structured output from subagent:**
+When the main agent needs structured output from subagent:
 
-1. **Main agent specifies output file** in the prompt:
-   ```
-   "Review this code. Write your result to /tmp/review-result.json"
-   ```
-
-2. **Subagent uses `write` tool** to save the result
-
-3. **Main agent reads the file** to get the result
-
-**Why this approach:**
-- Avoids mixing headless logs with actual output
-- File path is controlled by main agent (knows what it wants)
-- Subagent needs `write` tool (use `--tools read,write,...`)
-
-**Example:**
 ```bash
-# Main agent: call subagent with --tools and output file
-ai --mode headless \
-  --system-prompt @/path/to/persona.md \
-  --tools read,write,grep \
-  --timeout 10m \
-  "Your task. Write result to /tmp/output.json"
+# Main agent specifies output file in the prompt
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/review-output.txt \
+  10m \
+  @reviewer.md \
+  "Review this code. Write result to /tmp/review-result.json")
+
+tmux_wait.sh "$(echo $SESSION | cut -d: -f1)" 600
+
+# Read the structured result
+cat /tmp/review-result.json
 ```

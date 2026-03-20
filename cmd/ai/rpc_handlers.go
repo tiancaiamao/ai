@@ -29,64 +29,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// cmdInterruptManager implements tools.InterruptManager and triggers file creation.
-type cmdInterruptManager struct {
-	mu       sync.Mutex
-	files    map[string]string // id -> path
-	nextID   int
-}
-
-// RegisterInterruptFile registers an interrupt file path and returns a unique ID.
-func (m *cmdInterruptManager) RegisterInterruptFile(path string) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.nextID++
-	id := fmt.Sprintf("interrupt-%d-%d", time.Now().UnixNano(), m.nextID)
-	m.files[id] = path
-	return id
-}
-
-// UnregisterInterruptFile removes an interrupt file by ID.
-func (m *cmdInterruptManager) UnregisterInterruptFile(id string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.files, id)
-}
-
-// GetAllInterruptFiles returns all registered interrupt file paths.
-func (m *cmdInterruptManager) GetAllInterruptFiles() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	paths := make([]string, 0, len(m.files))
-	for _, path := range m.files {
-		paths = append(paths, path)
-	}
-	return paths
-}
-
-// TriggerInterrupt creates all registered interrupt files.
-func (m *cmdInterruptManager) TriggerInterrupt() {
-	paths := m.GetAllInterruptFiles()
-	
-	for _, path := range paths {
-		if path != "" {
-			// Create the file to signal subagent_wait
-			if err := os.WriteFile(path, []byte{}, 0644); err != nil {
-				slog.Warn("Failed to create interrupt file", "error", err, "path", path)
-			} else {
-				slog.Debug("Triggered interrupt", "path", path)
-			}
-		}
-	}
-}
-
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
-	// Create and register interrupt manager
-	interruptMgr := &cmdInterruptManager{
-		files: make(map[string]string),
-	}
-	tools.SetGlobalInterruptManager(interruptMgr)
-	
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -593,10 +536,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.SetSteerHandler(func(message string) error {
 		slog.Info("Received steer:", "value", message)
-		
-		// Trigger interrupt for subagent_wait
-		interruptMgr.TriggerInterrupt()
-		
+
+		// Handle steer command
 		if strings.TrimSpace(message) == "" {
 			return fmt.Errorf("empty steer message")
 		}
@@ -870,6 +811,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		modelInfo := currentModelInfo
 		stateMu.Unlock()
 
+		// Get current trace file path from FileHandler
+		aiLogPath := traceOutputPath
+		if handler := traceevent.GetHandler(); handler != nil {
+			if fh, ok := handler.(*traceevent.FileHandler); ok {
+				aiLogPath = fh.TraceFilePath("")
+			}
+		}
+
 		return &rpc.SessionState{
 			Model:                 &modelInfo,
 			ThinkingLevel:         thinkingLevel,
@@ -881,7 +830,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			SessionID:             currentSessionID,
 			SessionName:           currentSessionName,
 			AIPid:                 os.Getpid(),
-			AILogPath:             traceOutputPath,
+			AILogPath:             aiLogPath,
 			AIWorkingDir:          ws.GetCWD(),
 			AIStartupPath:         ws.GetGitRoot(),
 			AutoCompactionEnabled: autoCompact,

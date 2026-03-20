@@ -88,8 +88,8 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 		}
 	}
 
-	// Verify tool_call messages are still present (not hidden)
-	// This ensures protocol compliance - we don't hide tool_calls anymore
+	// Verify tool_call messages are filtered for archived tool_results
+	// so assistant/tool protocol stays valid.
 	toolCallCount := 0
 	for _, msg := range compacted {
 		if msg.Role == "assistant" {
@@ -100,8 +100,8 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 			}
 		}
 	}
-	if toolCallCount != 2 {
-		t.Fatalf("expected 2 tool_calls to still be present (not hidden), got %d", toolCallCount)
+	if toolCallCount != 1 {
+		t.Fatalf("expected 1 remaining tool_call after filtering archived pair, got %d", toolCallCount)
 	}
 }
 

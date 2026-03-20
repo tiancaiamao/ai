@@ -73,8 +73,14 @@ func TestAgentMessageMetadataRoundTrip(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+	}
+
 	msgs := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("do work"),
+		assistant,
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "old output"},
 		}, false),
@@ -84,17 +90,20 @@ func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
 	}
 
 	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
-	if len(llmMessages) != 2 {
-		t.Fatalf("expected 2 messages after dedupe, got %d", len(llmMessages))
+	if len(llmMessages) != 3 {
+		t.Fatalf("expected 3 messages after dedupe, got %d", len(llmMessages))
 	}
-	if llmMessages[1].Role != "tool" {
-		t.Fatalf("expected second message role=tool, got %q", llmMessages[1].Role)
+	if llmMessages[1].Role != "assistant" {
+		t.Fatalf("expected second message role=assistant, got %q", llmMessages[1].Role)
 	}
-	if llmMessages[1].ToolCallID != "call-1" {
-		t.Fatalf("expected toolCallID call-1, got %q", llmMessages[1].ToolCallID)
+	if len(llmMessages[1].ToolCalls) != 1 || llmMessages[1].ToolCalls[0].ID != "call-1" {
+		t.Fatalf("expected assistant to keep tool call call-1, got %+v", llmMessages[1].ToolCalls)
 	}
-	if llmMessages[1].Content != "new output" {
-		t.Fatalf("expected newest tool output to be kept, got %q", llmMessages[1].Content)
+	if llmMessages[2].Role != "tool" || llmMessages[2].ToolCallID != "call-1" {
+		t.Fatalf("expected third message tool result for call-1, got role=%q id=%q", llmMessages[2].Role, llmMessages[2].ToolCallID)
+	}
+	if llmMessages[2].Content != "new output" {
+		t.Fatalf("expected newest tool output to be kept, got %q", llmMessages[2].Content)
 	}
 }
 
@@ -140,12 +149,25 @@ func TestConvertMessagesToLLMDedupesAssistantToolCallsByFullSet(t *testing.T) {
 		agentctx.NewUserMessage("start"),
 		a1,
 		a2,
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "read output"},
+		}, false),
+		agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "bash output"},
+		}, false),
 	})
-	if len(llmMessages) != 2 {
-		t.Fatalf("expected duplicate assistant tool-call set to dedupe, got %d", len(llmMessages))
+
+	assistantWithTools := 0
+	for _, msg := range llmMessages {
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 2 {
+			assistantWithTools++
+		}
 	}
-	if len(llmMessages[1].ToolCalls) != 2 {
-		t.Fatalf("expected 2 tool calls after dedupe, got %d", len(llmMessages[1].ToolCalls))
+	if assistantWithTools != 1 {
+		t.Fatalf("expected exactly one assistant with duplicated tool-call set after dedupe, got %d", assistantWithTools)
+	}
+	if llmMessages[len(llmMessages)-1].Role != "tool" {
+		t.Fatalf("expected tool results to remain in protocol sequence, got last role=%q", llmMessages[len(llmMessages)-1].Role)
 	}
 }
 
@@ -157,17 +179,36 @@ func TestConvertMessagesToLLMKeepsAssistantToolCallsWhenSetDiffers(t *testing.T)
 	}
 	a2 := agentctx.NewAssistantMessage()
 	a2.Content = []agentctx.ContentBlock{
-		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
-		agentctx.ToolCallContent{ID: "call-3", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
+		agentctx.ToolCallContent{ID: "call-4", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+		agentctx.ToolCallContent{ID: "call-5", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
 	}
 
 	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		a1,
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "read output 1"},
+		}, false),
+		agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "bash output 1"},
+		}, false),
 		a2,
+		agentctx.NewToolResultMessage("call-4", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "read output 2"},
+		}, false),
+		agentctx.NewToolResultMessage("call-5", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "bash output 2"},
+		}, false),
 	})
-	if len(llmMessages) != 3 {
-		t.Fatalf("expected both assistant tool-call sets to be kept, got %d", len(llmMessages))
+
+	assistantWithTools := 0
+	for _, msg := range llmMessages {
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 2 {
+			assistantWithTools++
+		}
+	}
+	if assistantWithTools != 2 {
+		t.Fatalf("expected both distinct assistant tool-call sets to be kept, got %d", assistantWithTools)
 	}
 }
 
@@ -176,6 +217,16 @@ func TestConvertMessagesToLLMInjectsStaleToolMetadataBeyondRecent10(t *testing.T
 		agentctx.NewUserMessage("old turn"),
 	}
 	for i := 1; i <= 11; i++ {
+		assistant := agentctx.NewAssistantMessage()
+		assistant.Content = []agentctx.ContentBlock{
+			agentctx.ToolCallContent{
+				ID:        fmt.Sprintf("call-%d", i),
+				Type:      "toolCall",
+				Name:      "read",
+				Arguments: map[string]any{"path": fmt.Sprintf("f-%d.txt", i)},
+			},
+		}
+		msgs = append(msgs, assistant)
 		msgs = append(msgs, agentctx.NewToolResultMessage(
 			fmt.Sprintf("call-%d", i),
 			"read",
@@ -234,5 +285,154 @@ func TestConvertMessagesToLLMDoesNotInjectMetadataForRecent10ToolOutputs(t *test
 		if strings.Contains(m.Content, `stale="true"`) {
 			t.Fatalf("expected no stale metadata within recent 10 tool outputs, got %q", m.Content)
 		}
+	}
+}
+
+func TestConvertMessagesToLLMStripsDanglingAssistantToolCalls(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "planning"},
+		agentctx.ToolCallContent{
+			ID:        "call-hidden",
+			Type:      "toolCall",
+			Name:      "bash",
+			Arguments: map[string]any{"command": "echo hidden"},
+		},
+	}
+
+	hiddenTool := agentctx.NewToolResultMessage(
+		"call-hidden",
+		"bash",
+		[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "hidden output"}},
+		false,
+	).WithVisibility(false, true)
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		assistant,
+		hiddenTool,
+		agentctx.NewUserMessage("next"),
+	})
+
+	assertNoOrphanedToolProtocol(t, llmMessages)
+	for _, msg := range llmMessages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		if strings.TrimSpace(msg.Content) == "planning" && len(msg.ToolCalls) != 0 {
+			t.Fatalf("expected dangling tool calls to be removed, got %d", len(msg.ToolCalls))
+		}
+	}
+}
+
+func TestConvertMessagesToLLMDropsOrphanedToolResult(t *testing.T) {
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		agentctx.NewToolResultMessage(
+			"call-orphan",
+			"read",
+			[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "orphan"}},
+			false,
+		),
+		agentctx.NewUserMessage("next"),
+	})
+
+	assertNoOrphanedToolProtocol(t, llmMessages)
+	for _, msg := range llmMessages {
+		if msg.Role == "tool" {
+			t.Fatalf("expected orphan tool messages to be dropped, got %+v", msg)
+		}
+	}
+}
+
+func TestConvertMessagesToLLMRetainsResolvedToolCallsWhenPartiallyMatched(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:        "call-keep",
+			Type:      "toolCall",
+			Name:      "read",
+			Arguments: map[string]any{"path": "a.txt"},
+		},
+		agentctx.ToolCallContent{
+			ID:        "call-drop",
+			Type:      "toolCall",
+			Name:      "bash",
+			Arguments: map[string]any{"command": "echo drop"},
+		},
+	}
+
+	visibleTool := agentctx.NewToolResultMessage(
+		"call-keep",
+		"read",
+		[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "kept"}},
+		false,
+	)
+	hiddenTool := agentctx.NewToolResultMessage(
+		"call-drop",
+		"bash",
+		[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "dropped"}},
+		false,
+	).WithVisibility(false, true)
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("start"),
+		assistant,
+		visibleTool,
+		hiddenTool,
+		agentctx.NewUserMessage("next"),
+	})
+
+	assertNoOrphanedToolProtocol(t, llmMessages)
+
+	var keptAssistant *llm.LLMMessage
+	toolCount := 0
+	for i := range llmMessages {
+		if llmMessages[i].Role == "assistant" && len(llmMessages[i].ToolCalls) > 0 {
+			keptAssistant = &llmMessages[i]
+		}
+		if llmMessages[i].Role == "tool" {
+			toolCount++
+		}
+	}
+	if keptAssistant == nil {
+		t.Fatal("expected assistant with resolved tool call to be kept")
+	}
+	if len(keptAssistant.ToolCalls) != 1 || keptAssistant.ToolCalls[0].ID != "call-keep" {
+		t.Fatalf("expected only resolved tool call to remain, got %+v", keptAssistant.ToolCalls)
+	}
+	if toolCount != 1 {
+		t.Fatalf("expected exactly one tool result to remain, got %d", toolCount)
+	}
+}
+
+func assertNoOrphanedToolProtocol(t *testing.T, messages []llm.LLMMessage) {
+	t.Helper()
+	pending := map[string]struct{}{}
+	for i, msg := range messages {
+		switch msg.Role {
+		case "assistant":
+			if len(pending) > 0 {
+				t.Fatalf("assistant at %d appeared before pending tools resolved: %+v", i, pending)
+			}
+			for _, tc := range msg.ToolCalls {
+				pending[tc.ID] = struct{}{}
+			}
+		case "tool":
+			if len(pending) == 0 {
+				t.Fatalf("orphaned tool message at %d: %+v", i, msg)
+			}
+			if _, ok := pending[msg.ToolCallID]; !ok {
+				t.Fatalf("tool message at %d has unknown toolCallID=%q pending=%+v", i, msg.ToolCallID, pending)
+			}
+			delete(pending, msg.ToolCallID)
+		default:
+			if len(pending) > 0 {
+				t.Fatalf("non-tool role=%q at %d before pending tools resolved: %+v", msg.Role, i, pending)
+			}
+		}
+	}
+	if len(pending) > 0 {
+		t.Fatalf("unresolved pending tool calls at end: %+v", pending)
 	}
 }

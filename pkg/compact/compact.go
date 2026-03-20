@@ -169,10 +169,10 @@ func estimateStringTokens(s string) int {
 
 // CompactionResult contains the result of a compaction operation.
 type CompactionResult struct {
-	Summary      string               // The generated summary
+	Summary      string                  // The generated summary
 	Messages     []agentctx.AgentMessage // The compressed message list
-	TokensBefore int                  // Token count before compaction
-	TokensAfter  int                  // Token count after compaction
+	TokensBefore int                     // Token count before compaction
+	TokensAfter  int                     // Token count after compaction
 }
 
 // Compact compresses the context by summarizing old messages.
@@ -650,16 +650,44 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 	)
 
 	compacted := append([]agentctx.AgentMessage{}, messages...)
+	archivedToolCallIDs := make(map[string]struct{}, excess)
 
-	// Hide excess tool_results from agent (but keep visible to user)
-	// Unlike before, we don't hide tool_calls or add a summary message,
-	// which avoids protocol violations.
+	// Hide excess tool_results from agent (but keep visible to user).
+	// We also remove corresponding tool_calls from assistant messages below,
+	// otherwise strict APIs reject unmatched assistant/tool sequences.
 	for i := 0; i < excess; i++ {
 		idx := visibleToolIndexes[i]
 		original := compacted[idx]
 		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
+		if strings.TrimSpace(original.ToolCallID) != "" {
+			archivedToolCallIDs[strings.TrimSpace(original.ToolCallID)] = struct{}{}
+		}
 	}
 
+	filteredToolCalls := 0
+	for i := range compacted {
+		if compacted[i].Role != "assistant" || len(archivedToolCallIDs) == 0 {
+			continue
+		}
+		filtered := make([]agentctx.ContentBlock, 0, len(compacted[i].Content))
+		removed := false
+		for _, block := range compacted[i].Content {
+			toolCall, ok := block.(agentctx.ToolCallContent)
+			if ok {
+				if _, drop := archivedToolCallIDs[strings.TrimSpace(toolCall.ID)]; drop {
+					removed = true
+					filteredToolCalls++
+					continue
+				}
+			}
+			filtered = append(filtered, block)
+		}
+		if removed {
+			compacted[i].Content = filtered
+		}
+	}
+
+	summarySpan.AddField("filtered_tool_calls", filteredToolCalls)
 	summarySpan.End()
 	return compacted
 }
@@ -795,6 +823,7 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 
 	return keptMessages
 }
+
 // ToContextCompactor adapts this Compactor to implement context.Compactor interface.
 // This allows the compact.Compactor to be used where context.Compactor is expected.
 func (c *Compactor) ToContextCompactor() agentctx.Compactor {

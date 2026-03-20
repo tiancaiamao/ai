@@ -287,6 +287,38 @@ tmux send-keys -t ad-dev:0.1 "# shell for go test, git, etc." Enter
 tmux attach -t ad-dev
 ```
 
+## Checking Background Task Status
+
+When you've started a long-running task in tmux, use these commands to check status:
+
+| Task | Command |
+|------|---------|
+| List all sessions | `tmux ls` |
+| Check if session exists | `tmux ls \| grep <name>` |
+| View current output | `tmux capture-pane -t <name> -p` |
+| View last N lines | `tmux capture-pane -t <name> -p -S -50` |
+| Attach to session | `tmux attach -t <name>` |
+| Send interrupt (Ctrl+C) | `tmux send-keys -t <name> C-c` |
+| Kill session | `tmux kill-session -t <name>` |
+| Wait for completion | `tmux_wait.sh <name> [timeout]` |
+
+**Example workflow:**
+```bash
+# 1. Start long build
+tmux new -s build -d "go build ./... 2>&1 | tee /tmp/build.log"
+
+# 2. Do other work...
+
+# 3. Check progress
+tmux capture-pane -t build -p -S -20
+
+# 4. Or attach to see full output
+tmux attach -t build
+
+# 5. Wait for completion in script
+~/.ai/skills/tmux/bin/tmux_wait.sh build 600
+```
+
 ## When to Use
 
 | Scenario | tmux Pattern |
