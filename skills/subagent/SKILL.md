@@ -126,6 +126,96 @@ tmux kill-session -t subagent-1234567890
 | `--tools T1,T2` | Comma-separated tool whitelist | all tools |
 | `--max-turns N` | Maximum turns (avoid, use timeout) | 0 (unlimited) |
 
+## Understanding Sessions
+
+**Two types of sessions are involved:**
+
+### 1. Tmux Session (Container)
+- **Name**: `subagent-TIMESTAMP-RANDOM$$` (e.g., `subagent-1773995291-216285`)
+- **Purpose**: Process isolation + observability
+- **Operations**: `tmux attach/kill/ls`
+- **Lifecycle**: Exists while process runs
+- **Recovery**: `tmux ls | grep subagent`
+
+### 2. AI Headless Session (Internal State)
+- **ID**: UUID format (e.g., `cb76798b-445f-469f-9d02-1bf1464cd0a9`)
+- **Purpose**: Conversation tracking + message storage
+- **Storage**: `~/.ai/sessions/--<cwd>--/<session-id>/`
+- **Lifecycle**: Persistent (survives restart)
+- **Recovery**: `ls ~/.ai/sessions/--<cwd>--/`
+
+### Hierarchy
+```
+tmux session (container)
+  └─> ai --mode headless (process)
+        └─> ai session (UUID)
+              ├─> messages.jsonl
+              └─> status.json
+```
+
+## Session Recovery After Restart
+
+**Scenario**: Main agent restarts, needs to recover subagent information
+
+### Find Tmux Sessions
+```bash
+# List all subagent tmux sessions
+tmux ls | grep subagent
+
+# Check if specific session still running
+tmux ls | grep "subagent-1234567890"
+
+# Attach to inspect
+tmux attach -t subagent-1234567890
+```
+
+### Find AI Sessions
+```bash
+# List all ai sessions for current directory
+ls -lt ~/.ai/sessions/--$(pwd | sed 's|/|-|g')--/
+
+# Find most recent session
+ls -td ~/.ai/sessions/--*--/*/ | head -1
+
+# Read session messages
+cat ~/.ai/sessions/--...--/<uuid>/messages.jsonl | jq .
+
+# Check session status
+cat ~/.ai/sessions/--...--/<uuid>/status.json | jq .
+```
+
+### Link Tmux and AI Sessions
+```bash
+# If you have tmux session name, find ai session:
+tmux capture-pane -t subagent-1234567890 -p -S - | grep "Session ID:"
+
+# If you have ai session ID, check if tmux session exists:
+# (need to search through tmux sessions)
+tmux ls | grep subagent | while read line; do
+  sess=$(echo $line | cut -d: -f1)
+  if tmux capture-pane -t $sess -p -S - | grep -q "<ai-session-id>"; then
+    echo "Found: $sess"
+  fi
+done
+```
+
+### Resume Work After Restart
+```bash
+# 1. Check running subagents
+tmux ls | grep subagent
+
+# 2. Check recent ai sessions
+ls -ltd ~/.ai/sessions/--*--/*/ | head -5
+
+# 3. View session output
+tmux attach -t subagent-xxxxx  # or
+cat ~/.ai/sessions/--...--/<uuid>/messages.jsonl | jq -r '.content'
+
+# 4. Check if subagent completed
+# Look for done marker or check status.json
+cat ~/.ai/sessions/--...--/<uuid>/status.json | jq .status
+```
+
 ## Session Persistence
 
 Sessions are saved to:
