@@ -264,12 +264,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		// Set task tracking and context management based on config
-		if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-			promptBuilder.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
-		}
-		if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-			promptBuilder.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
-		}
+		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
 
 		return promptBuilder.Build()
 	}

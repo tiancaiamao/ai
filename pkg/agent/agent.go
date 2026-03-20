@@ -59,93 +59,6 @@ type Compactor = agentctx.Compactor
 // CompactionResult is an alias to agentctx.CompactionResult.
 type CompactionResult = agentctx.CompactionResult
 
-// AgentOption is a functional option for configuring LoopConfig.
-type AgentOption func(*LoopConfig)
-
-// WithCompactor sets the compactor for automatic context compression.
-func WithCompactor(c Compactor) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.Compactor = c
-	}
-}
-
-// WithToolOutputLimits sets the tool output limits.
-func WithToolOutputLimits(limits ToolOutputLimits) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.ToolOutput = limits
-	}
-}
-
-// WithToolCallCutoff sets the tool call cutoff threshold.
-func WithToolCallCutoff(cutoff int) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.ToolCallCutoff = cutoff
-	}
-}
-
-// WithThinkingLevel sets the thinking level (off, minimal, low, medium, high, xhigh).
-func WithThinkingLevel(level string) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.ThinkingLevel = prompt.NormalizeThinkingLevel(level)
-	}
-}
-
-// WithMaxLLMRetries sets the maximum number of LLM retries.
-func WithMaxLLMRetries(retries int) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.MaxLLMRetries = retries
-	}
-}
-
-// WithRetryBaseDelay sets the base delay for retry exponential backoff.
-func WithRetryBaseDelay(delay time.Duration) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.RetryBaseDelay = delay
-	}
-}
-
-// WithMaxTurns sets the maximum number of conversation turns (0 = unlimited).
-func WithMaxTurns(maxTurns int) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.MaxTurns = maxTurns
-	}
-}
-
-// WithContextWindow sets the context window for the model (0 = default 128000).
-func WithContextWindow(window int) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.ContextWindow = window
-	}
-}
-
-// WithTaskTracking sets whether task tracking reminders are enabled.
-func WithTaskTracking(enabled bool) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.TaskTrackingEnabled = enabled
-	}
-}
-
-// WithContextManagement sets whether context management reminders are enabled.
-func WithContextManagement(enabled bool) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.ContextManagementEnabled = enabled
-	}
-}
-
-// WithExecutor sets the executor pool for tool execution.
-func WithExecutor(executor *ExecutorPool) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.Executor = executor
-	}
-}
-
-// WithMetrics sets the metrics collector.
-func WithMetrics(metrics *Metrics) AgentOption {
-	return func(cfg *LoopConfig) {
-		cfg.Metrics = metrics
-	}
-}
-
 // Agent represents an AI agent.
 type Agent struct {
 	mu            chan struct{}
@@ -173,8 +86,8 @@ type Agent struct {
 }
 
 // NewAgent creates a new agent with default configuration.
-func NewAgent(model llm.Model, apiKey, systemPrompt string, opts ...AgentOption) *Agent {
-	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt), opts...)
+func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
+	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt))
 }
 
 // NewAgentFromConfig creates a new agent from a LoopConfig.
@@ -184,13 +97,8 @@ func NewAgentFromConfig(model llm.Model, apiKey, systemPrompt string, cfg *LoopC
 }
 
 // NewAgentWithContext creates a new agent with a custom context.
-func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext, opts ...AgentOption) *Agent {
-	// Start with default config, then apply options
-	cfg := DefaultLoopConfig()
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	return NewAgentFromConfigWithContext(model, apiKey, agentCtx, cfg)
+func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext) *Agent {
+	return NewAgentFromConfigWithContext(model, apiKey, agentCtx, DefaultLoopConfig())
 }
 
 // NewAgentFromConfigWithContext creates a new agent with a custom context from LoopConfig.

@@ -203,12 +203,8 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-		promptBuilder.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
-	}
-	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-		promptBuilder.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
-	}
+	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
 
 	systemPrompt := promptBuilder.Build()
 

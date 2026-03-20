@@ -338,12 +338,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-		promptBuilder.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
-	}
-	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-		promptBuilder.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
-	}
+	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
 
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
@@ -409,12 +405,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	loopCfg.APIKey = apiKey
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-		loopCfg.TaskTrackingEnabled = *cfg.TaskTracking.Enabled
-	}
-	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-		loopCfg.ContextManagementEnabled = *cfg.ContextManagement.Enabled
-	}
+	loopCfg.TaskTrackingEnabled = cfg.TaskTracking
+	loopCfg.ContextManagementEnabled = cfg.ContextManagement
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)

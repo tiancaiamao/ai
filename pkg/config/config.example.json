@@ -23,12 +23,8 @@
   "toolOutput": {
     "maxChars": 10000
   },
-  "taskTracking": {
-    "enabled": true
-  },
-  "contextManagement": {
-    "enabled": true
-  },
+  "taskTracking": true,
+  "contextManagement": true,
   "log": {
     "level": "info",
     "file": "~/.ai/ai-{pid}.log",

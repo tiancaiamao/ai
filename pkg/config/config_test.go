@@ -432,71 +432,46 @@ func TestCompactorDefaults(t *testing.T) {
 }
 
 // TestTaskTrackingContextManagementDefaults tests that task tracking and context management
-// are enabled by default and work correctly with empty object config.
+// are enabled by default and work correctly with simple boolean config.
 func TestTaskTrackingContextManagementDefaults(t *testing.T) {
-	// Test 1: nil config should use defaults
-	defaultTT := normalizeTaskTrackingConfig(nil)
-	if defaultTT.Enabled == nil || *defaultTT.Enabled != true {
-		t.Errorf("Expected nil taskTracking to default to enabled=true, got %v", defaultTT)
+	// Test 1: default config should have both enabled
+	cfg := DefaultConfig()
+	if !cfg.TaskTracking {
+		t.Error("Expected TaskTracking to default to true")
 	}
-	defaultCM := normalizeContextManagementConfig(nil)
-	if defaultCM.Enabled == nil || *defaultCM.Enabled != true {
-		t.Errorf("Expected nil contextManagement to default to enabled=true, got %v", defaultCM)
+	if !cfg.ContextManagement {
+		t.Error("Expected ContextManagement to default to true")
 	}
 
-	// Test 2: empty object {} should enable both features (not false!)
+	// Test 2: explicit false should work
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "empty_objects.json")
-	emptyObjectsConfig := `{
-		"taskTracking": {},
-		"contextManagement": {}
-	}`
-	err := os.WriteFile(configPath, []byte(emptyObjectsConfig), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Empty object {} should result in enabled=true (default), not false (zero value)
-	if cfg.TaskTracking == nil || cfg.TaskTracking.Enabled == nil || *cfg.TaskTracking.Enabled != true {
-		t.Errorf("Expected taskTracking.enabled to be true with empty object, got %v", cfg.TaskTracking)
-	}
-	if cfg.ContextManagement == nil || cfg.ContextManagement.Enabled == nil || *cfg.ContextManagement.Enabled != true {
-		t.Errorf("Expected contextManagement.enabled to be true with empty object, got %v", cfg.ContextManagement)
-	}
-
-	// Test 3: explicit false should work
-	configPath2 := filepath.Join(tmpDir, "explicit_false.json")
+	configPath := filepath.Join(tmpDir, "explicit_false.json")
 	explicitFalseConfig := `{
-		"taskTracking": { "enabled": false },
-		"contextManagement": { "enabled": false }
+		"taskTracking": false,
+		"contextManagement": false
 	}`
-	err = os.WriteFile(configPath2, []byte(explicitFalseConfig), 0644)
+	err := os.WriteFile(configPath, []byte(explicitFalseConfig), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	cfg2, err := LoadConfig(configPath2)
+	cfg2, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg2.TaskTracking == nil || cfg2.TaskTracking.Enabled == nil || *cfg2.TaskTracking.Enabled != false {
-		t.Errorf("Expected taskTracking.enabled to be false when explicitly set, got %v", cfg2.TaskTracking)
+	if cfg2.TaskTracking != false {
+		t.Errorf("Expected taskTracking to be false, got %v", cfg2.TaskTracking)
 	}
-	if cfg2.ContextManagement == nil || cfg2.ContextManagement.Enabled == nil || *cfg2.ContextManagement.Enabled != false {
-		t.Errorf("Expected contextManagement.enabled to be false when explicitly set, got %v", cfg2.ContextManagement)
+	if cfg2.ContextManagement != false {
+		t.Errorf("Expected contextManagement to be false, got %v", cfg2.ContextManagement)
 	}
 
-	// Test 4: explicit true should work
+	// Test 3: explicit true should work
 	configPath3 := filepath.Join(tmpDir, "explicit_true.json")
 	explicitTrueConfig := `{
-		"taskTracking": { "enabled": true },
-		"contextManagement": { "enabled": true }
+		"taskTracking": true,
+		"contextManagement": true
 	}`
 	err = os.WriteFile(configPath3, []byte(explicitTrueConfig), 0644)
 	if err != nil {
@@ -508,10 +483,10 @@ func TestTaskTrackingContextManagementDefaults(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg3.TaskTracking == nil || cfg3.TaskTracking.Enabled == nil || *cfg3.TaskTracking.Enabled != true {
-		t.Errorf("Expected taskTracking.enabled to be true when explicitly set, got %v", cfg3.TaskTracking)
+	if cfg3.TaskTracking != true {
+		t.Errorf("Expected taskTracking to be true, got %v", cfg3.TaskTracking)
 	}
-	if cfg3.ContextManagement == nil || cfg3.ContextManagement.Enabled == nil || *cfg3.ContextManagement.Enabled != true {
-		t.Errorf("Expected contextManagement.enabled to be true when explicitly set, got %v", cfg3.ContextManagement)
+	if cfg3.ContextManagement != true {
+		t.Errorf("Expected contextManagement to be true, got %v", cfg3.ContextManagement)
 	}
 }

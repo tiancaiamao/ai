@@ -36,11 +36,11 @@ type Config struct {
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 
-	// Task tracking configuration (llm_context_update)
-	TaskTracking *TaskTrackingConfig `json:"taskTracking,omitempty"`
+	// Task tracking (llm_context_update)
+	TaskTracking bool `json:"taskTracking"`
 
-	// Context management configuration (llm_context_decision)
-	ContextManagement *ContextManagementConfig `json:"contextManagement,omitempty"`
+	// Context management (llm_context_decision)
+	ContextManagement bool `json:"contextManagement"`
 
 	// Workspace is the working directory path (the git repo path bound at startup)
 	Workspace string `json:"workspace,omitempty"`
@@ -79,16 +79,6 @@ type EditConfig struct {
 	Mode string `json:"mode,omitempty"` // Edit mode: "replace" (default) or "hashline"
 }
 
-// TaskTrackingConfig contains task tracking (llm_context_update) settings.
-type TaskTrackingConfig struct {
-	Enabled *bool `json:"enabled,omitempty"` // Enable task tracking prompt and reminders. nil = default (true)
-}
-
-// ContextManagementConfig contains context management (llm_context_decision) settings.
-type ContextManagementConfig struct {
-	Enabled *bool `json:"enabled,omitempty"` // Enable context management prompt and reminders. nil = default (true)
-}
-
 const (
 	defaultToolOutputMaxChars = 10_000
 	maxToolOutputMaxChars     = defaultToolOutputMaxChars
@@ -118,20 +108,6 @@ func DefaultEditConfig() *EditConfig {
 	}
 }
 
-// DefaultTaskTrackingConfig returns default task tracking configuration.
-func DefaultTaskTrackingConfig() *TaskTrackingConfig {
-	return &TaskTrackingConfig{
-		Enabled: ptrBool(true),
-	}
-}
-
-// DefaultContextManagementConfig returns default context management configuration.
-func DefaultContextManagementConfig() *ContextManagementConfig {
-	return &ContextManagementConfig{
-		Enabled: ptrBool(true),
-	}
-}
-
 func normalizeToolOutputConfig(cfg *ToolOutputConfig) *ToolOutputConfig {
 	if cfg == nil {
 		return DefaultToolOutputConfig()
@@ -143,30 +119,6 @@ func normalizeToolOutputConfig(cfg *ToolOutputConfig) *ToolOutputConfig {
 		cfg.MaxChars = maxToolOutputMaxChars
 	}
 	return cfg
-}
-
-func normalizeTaskTrackingConfig(cfg *TaskTrackingConfig) *TaskTrackingConfig {
-	if cfg == nil {
-		return DefaultTaskTrackingConfig()
-	}
-	if cfg.Enabled == nil {
-		cfg.Enabled = ptrBool(true)
-	}
-	return cfg
-}
-
-func normalizeContextManagementConfig(cfg *ContextManagementConfig) *ContextManagementConfig {
-	if cfg == nil {
-		return DefaultContextManagementConfig()
-	}
-	if cfg.Enabled == nil {
-		cfg.Enabled = ptrBool(true)
-	}
-	return cfg
-}
-
-func ptrBool(v bool) *bool {
-	return &v
 }
 
 // DefaultLogConfig returns default logging configuration.
@@ -219,11 +171,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	// Start with default config
 	cfg := DefaultConfig()
 
-	// Override model from environment
-	cfg.Model.ID = getEnv("ZAI_MODEL", cfg.Model.ID)
-	cfg.Model.BaseURL = getEnv("ZAI_BASE_URL", cfg.Model.BaseURL)
-
-	// Load from file if exists (file values override defaults)
+	// Load from file if exists
 	if _, err := os.Stat(configPath); err == nil {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
@@ -234,10 +182,11 @@ func LoadConfig(configPath string) (*Config, error) {
 		}
 	}
 
-	// Environment variables override config file (already set above for model)
+	// Environment variables override config file
+	cfg.Model.ID = getEnv("ZAI_MODEL", cfg.Model.ID)
+	cfg.Model.BaseURL = getEnv("ZAI_BASE_URL", cfg.Model.BaseURL)
+
 	cfg.ToolOutput = normalizeToolOutputConfig(cfg.ToolOutput)
-	cfg.TaskTracking = normalizeTaskTrackingConfig(cfg.TaskTracking)
-	cfg.ContextManagement = normalizeContextManagementConfig(cfg.ContextManagement)
 
 	return cfg, nil
 }
@@ -302,10 +251,12 @@ func DefaultConfig() *Config {
 			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
 			API:      "openai-completions",
 		},
-		Compactor:   compact.DefaultConfig(),
-		Concurrency: DefaultConcurrencyConfig(),
-		ToolOutput:  DefaultToolOutputConfig(),
-		Log:         DefaultLogConfig(),
+		Compactor:         compact.DefaultConfig(),
+		Concurrency:      DefaultConcurrencyConfig(),
+		ToolOutput:       DefaultToolOutputConfig(),
+		Log:              DefaultLogConfig(),
+		TaskTracking:     true, // Default enabled
+		ContextManagement: true, // Default enabled
 	}
 }
 
@@ -337,12 +288,12 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 		}
 	}
 
-	if c.TaskTracking != nil && c.TaskTracking.Enabled != nil {
-		loopCfg.TaskTrackingEnabled = *c.TaskTracking.Enabled
+	if c.TaskTracking {
+		loopCfg.TaskTrackingEnabled = true
 	}
 
-	if c.ContextManagement != nil && c.ContextManagement.Enabled != nil {
-		loopCfg.ContextManagementEnabled = *c.ContextManagement.Enabled
+	if c.ContextManagement {
+		loopCfg.ContextManagementEnabled = true
 	}
 
 	// Apply options last (they can override config values)

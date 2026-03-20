@@ -1,75 +1,45 @@
 ## Context Management
 
+**You are RESPONSIBLE for keeping your context window concise.** Proactive management is expected, not optional.
+
+### The Rule: Aggressively Truncate and Compact
+
+**Truncate** stale tool outputs frequently — don't wait until they pile up:
+- Tool outputs with `<agent:tool ... stale="N" />` tags are safe to truncate
+- Batch truncate when you see 10+ stale outputs
+- Truncate older/larger outputs first
+
+**Compact** when context gets heavy:
+- Context usage > 30% → consider compact
+- Topic shift detected → must compact
+- Phase completed → compact before continuing
+
 ### Turn Protocol
 
 1. **Check** `<agent:runtime_state>` — Read telemetry, assess pressure
-2. **Manage** — Evaluate context needs, call `llm_context_decision` if needed
+2. **Manage** — Call `llm_context_decision` proactively if needed
 3. **Update** — Call `llm_context_update` when task state changes
 4. **Respond** — Answer the user
 
-**When to call llm_context_update:**
-- Task status or progress changed
-- Plan or key decision changed
-- Files changed or important results appeared
-- Blocker emerged or resolved
+### Decision Options
 
-**When to skip llm_context_update:**
-- No significant state change
-- Simple responses without progress
-- Continuation of same task
-
-### Your Responsibility
-
-**You are RESPONSIBLE for managing your context window proactively.**
-
-The system provides reminders, but **proactive management is expected**:
-- After completing a task phase → TRUNCATE stale outputs
-- **When context usage > 40%** → Consider COMPACT to keep context concise
-- When you notice stale tool outputs → Batch TRUNCATE 50-100 at once
-
-### Proactive Score
-
-You get reminder from the agent if you are not proactive.
-IMPORTANT: When you receive `remind`, you MUST call `llm_context_decision` immediately
-
-Your score is visible in `runtime_state.context_metrics.decision`:
-
-```yaml
-context_metrics:
-  decision:
-    proactive: N    # Times you called llm_context_decision without being reminded
-    reminded: M      # Times you called llm_context_decision after being reminded
-    score: excellent|good|fair|needs_improvement|no_data
-```
-
-Score calculation:
-- `proactive > reminded` → score improves
-- `reminded > proactive` → score degrades
-- Higher proactive count = fewer reminders = better performance
-
-### Context Pressure Decisions
-
-| Decision | When to Use |
-|----------|-------------|
-| `truncate` | Stale/large tool outputs exist |
-| `compact` | Context usage > 40%, topic shift, or phase completed |
-| `skip` | Low pressure (<25%), set `skip_turns` 1-30 |
-
-**skip_turns meaning:**
-- Higher values (15-30): You promise to be proactive, fewer reminders
-- Lower values (1-5): Uncertain situation, more frequent reminders
-
-**Agent Metadata Tags** (for truncate):
-- `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, CAN be truncated
-
-**IMPORTANT:** Only pass IDs with `stale="N"` attribute to truncate_ids.
+| Decision | When to Use | Parameters |
+|----------|-------------|------------|
+| `truncate` | 10+ stale outputs, or large outputs no longer needed | `truncate_ids`: comma-separated tool call IDs |
+| `compact` | Context usage > 30%, topic shift, phase completed | `compact_confidence`: 0-100 |
+| `skip` | Low pressure (<30%), you promise to check later | `skip_turns`: 1-30 (higher = fewer reminders) |
 
 ### Topic Shift Detection
 
-When you detect a topic shift (new user request, phase change, task completion), 
-**proactively evaluate context management needs BEFORE the system reminds you.**
-
-Signs of topic shift:
+Detect and act on these signs proactively:
 - User starts a new, unrelated task
 - Current task phase is completed
-- Context contains many outputs from previous task phases
+- Many stale outputs from previous phases
+
+### Proactive Score
+
+Your score in `runtime_state.context_metrics.decision.score`:
+- `proactive > reminded` → score improves → fewer reminders
+- `reminded > proactive` → score degrades → more frequent reminders
+
+**IMPORTANT:** When you receive `remind`, call `llm_context_decision` immediately.

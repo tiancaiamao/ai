@@ -1,32 +1,42 @@
 ## Task Tracking
 
-Use llm_context_update tool for task tracking.
+Track multi-step tasks using `llm_context_update` to maintain awareness of progress and direction.
 
-**When to update:**
-- Task status or progress changed
-- Plan or key decision changed
-- Files changed or important results appeared
+### When to Update
+
+Call `llm_context_update` when meaningful progress or changes occur:
+- Task status or milestone reached
+- Plan or key decision made
+- Significant files changed or results produced
 - Blocker emerged or resolved
 
-**When to skip update:**
-- No significant state change
-- Simple responses without progress
-- Continuation of same task
+**Do not update** for simple questions, no-progress continuations, or routine responses.
 
-**⚠️ IMPORTANT: Skip Behavior**
+### How to Update
 
-If you decide NOT to update context, you MUST still call `llm_context_update` with `skip=true`:
+Provide structured markdown with clear sections:
+
+```markdown
+## Current Task
+- Implementing feature X
+- Status: 60% complete
+- Done: Core logic, unit tests
+- Next: Integration tests
+- Blockers: None
+```
+
+### Skip Pattern
+
+When no update needed but you're actively working, call `llm_context_update` with `skip=true`:
 
 ```
 skip: true
-reasoning: "No significant state change, just answering a question"
+reasoning: "Answering a question, no task progress"
 ```
 
-**Why this matters:**
-- **Without skip:** Reminder mechanism thinks you're inactive → more frequent reminders (penalty)
-- **With skip:** System knows you're still active → resets reminder counter (no penalty)
+This prevents reminder spam by signaling you're alive.
 
-**The pattern:**
-1. Task changed → `llm_context_update` with `content`
-2. No change but active → `llm_context_update` with `skip=true` + `reasoning`
-3. Neither → You get frequent reminders (bad)
+### Why This Matters
+
+- **With skip:** Resets reminder counter → fewer interruptions
+- **Without skip:** System thinks you're idle → frequent reminders (penalty)
