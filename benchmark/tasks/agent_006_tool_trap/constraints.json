@@ -1,0 +1,20 @@
+{
+  "max_steps": 8,
+  "must_use_tools": [],
+  "forbidden_patterns": [
+    "read_entire_file",
+    "sequential_read_all"
+  ],
+  "success_criteria": {
+    "test_passed": true,
+    "capabilities_used": {
+      "search": ">=1"
+    },
+    "file_reads": "<=3"
+  },
+  "description": "Must use grep to locate performance issue, not read entire file",
+  "must_use_capabilities": [
+    "search",
+    "edit"
+  ]
+}

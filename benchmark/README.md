@@ -1,250 +1,95 @@
-# Agent Benchmark
+# AI Agent Benchmark
 
-A lightweight benchmark framework for testing and comparing AI coding agents.
+评估 AI agent 能力的 benchmark 框架，支持 regression 检测。
 
-## Features
-
-- **No Docker required** - Runs locally
-- **A/B testing** - Compare different agents and models
-- **Regression detection** - Catch when changes break things
-- **Easy to extend** - Add new tasks in minutes
-
-## Quick Start
+## 快速开始
 
 ```bash
-# List all tasks
-make list
+# 列出所有测试任务
+make bench-list
 
-# Run verification only (no agent)
-make run
+# 运行所有测试
+make bench
 
-# Run with your agent
-make agent-task TASK=001_fix_off_by_one
+# 运行单个任务
+make bench-task TASK=tbench/chess-best-move
 
-# Save baseline
-make baseline
+# 导入 Terminal Bench 2.0 任务
+make bench-import
 
-# Compare with baseline
-make compare
+# A/B: 单 agent + 指定模型
+make ab-test AGENT=my-agent MODEL=minimax
+
+# A/B: 多 agent 对比
+make ab-compare AGENTS="my-agent codex claude-code" MODEL=minimax
 ```
 
-## A/B Testing
+## 特性
 
-### Compare Different Agents
+- ✅ **无 Docker** - 直接在本地运行
+- ✅ **白盒测试** - 可 debug 失败的 case
+- ✅ **Regression 检测** - 对比历史结果
+- ✅ **多测试集** - 8 个自定义 + 55 个 Terminal Bench 2.0 任务
+- ✅ **`/app` 兼容层** - 自动将 legacy `/app` 路径映射到每个 task 的 `setup`，无需 sudo 创建 `/app`
 
-```bash
-# List available agents
-make ab-list
-
-# Run single agent
-make ab-test AGENT=my-agent
-
-# Compare multiple agents
-python3 ab_test.py --compare my-agent claude-code
-
-# Run all configured agents
-python3 ab_test.py --benchmark
-```
-
-### Compare Different Models
-
-```bash
-# Test with specific model
-python3 ab_test.py --agent my-agent --model glm5
-python3 ab_test.py --agent my-agent --model deepseek
-```
-
-### View Reports
-
-```bash
-# Generate report from all results
-make ab-report
-
-# Or
-python3 ab_test.py --report
-```
-
-## Available Agents
-
-| Agent | Description |
-|-------|-------------|
-| my-agent | Your custom agent (uses `ai` CLI) |
-| claude-code | Claude Code CLI |
-| codex | OpenAI Codex CLI |
-| gemini | Gemini CLI |
-
-## Available Models
-
-| Model | Description |
-|-------|-------------|
-| glm5 | GLM-5 |
-| minimax | MiniMax 2.5 |
-| deepseek | DeepSeek V3 |
-| gpt4 | GPT-4 |
-| claude | Claude Sonnet |
-
-## Tasks
-
-| Task | Difficulty | Description |
-|------|------------|-------------|
-| 001_fix_off_by_one | Easy | Fix off-by-one error in loop |
-| 002_add_error_handling | Easy | Add error handling to functions |
-| 003_refactor_duplicated_code | Medium | Refactor duplicate code |
-| 010_basic_interpreter | Hard | Implement BASIC interpreter |
-| 011_unittest_http_parser | Medium | Write unit tests |
-| 012_mos6502_assembler | Hard | Implement MOS6502 assembler |
-| 013_fix_concurrent_bug | Easy | Fix race condition |
-
-## Directory Structure
+## 目录结构
 
 ```
 benchmark/
-├── run.sh              # Main runner script
-├── runner/
-│   └── runner.go       # Go implementation
-├── tasks/
-│   ├── 001_fix_off_by_one/
-│   │   ├── setup/      # Initial code
-│   │   ├── task.md     # Task description
-│   │   └── verify.sh   # Verification script
-│   └── ...
-└── results/
-    ├── baseline.json   # Baseline results
-    └── current.json    # Latest results
+├── tasks/               # 测试任务
+│   ├── 001_fix_off_by_one/  # 自定义任务
+│   ├── ...
+│   └── tbench/              # Terminal Bench 2.0 任务
+│       ├── chess-best-move/
+│       └── ...
+└── results/             # 测试结果
+
+cmd/benchmark/           # Go benchmark runner
+cmd/import-tbench/       # Terminal Bench 导入工具
 ```
 
-## Adding New Tasks
+## 添加新测试
 
-1. Create a new directory under `tasks/`:
-   ```bash
-   mkdir -p tasks/004_your_task/setup
-   ```
+1. 在 `benchmark/tasks/` 创建任务目录
+2. 添加 `task.md` 和 `verify.sh`
+3. 运行 `make bench-list` 查看新任务
 
-2. Create `task.md` with the task description:
-   ```markdown
-   # Task: Your Task Name
+更完整的 case 设计与冻结流程见：
 
-   ## Description
-   What the agent needs to do...
+- `docs/agent_case_authoring.md` (English)
 
-   ## Requirements
-   - Requirement 1
-   - Requirement 2
-   ```
-
-3. Create `setup/` with initial code files
-
-4. Create `verify.sh` to check the result:
-   ```bash
-   #!/bin/bash
-   cd "$(dirname "$0")/setup"
-
-   # Your verification logic
-   if [ condition ]; then
-       echo "PASS: Description"
-   else
-       echo "FAIL: Description"
-       exit 1
-   fi
-   ```
-
-## Running with Your Agent
+## Manifest 运行（冻结测试集）
 
 ```bash
-# Set your agent command
-export AGENT_CMD="ai --mode rpc"
+# 仅列出冻结清单中的任务
+make bench-list MANIFEST=tasks/agent_v1_manifest.json
 
-# Run benchmark with agent
-./run.sh agent
+# 仅运行冻结清单中的任务
+make bench-run MANIFEST=tasks/agent_v1_manifest.json
 ```
 
-## Output Format
-
-Results are saved as JSON:
-
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "agent_name": "my-agent",
-  "git_commit": "abc123",
-  "total_tasks": 3,
-  "passed_tasks": 2,
-  "failed_tasks": 1,
-  "pass_rate": 66.67,
-  "results": [...]
-}
-```
-
-## Example Workflow
-
-### A/B Testing
+## A/B 对比（agent 与 model）
 
 ```bash
-# 1. Run and save baseline
-./run.sh run
-./run.sh baseline
+# 查看可用 agent / model / task
+make ab-list
 
-# 2. Make changes to your agent code
-git checkout -b feature/new-capability
-# ... make changes ...
+# 对比多个 agent（同一模型）
+make ab-compare AGENTS="my-agent codex" MODEL=minimax
 
-# 3. Run again
-./run.sh run
+# 跑所有已配置 agent
+make ab-benchmark MODEL=minimax
 
-# 4. Compare
-./run.sh compare
+# 查看历史 A/B 结果
+make ab-report
 ```
 
-### CI Integration
+说明：
+- `ab_test.py` 只会运行带 `verify.sh` 的可验证任务。
+- 若任务依赖 legacy `/app` 路径，benchmark runner 已提供兼容映射（无需 sudo）。
 
-```yaml
-# .github/workflows/benchmark.yml
-name: Benchmark
+## 参考
 
-on: [push, pull_request]
-
-jobs:
-  benchmark:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run benchmark
-        run: |
-          cd benchmark
-          ./run.sh run
-
-      - name: Compare with baseline
-        run: |
-          cd benchmark
-          ./run.sh compare
-```
-
-## Task Types
-
-### Bug Fix Tasks
-- Fix off-by-one errors
-- Handle edge cases
-- Fix null pointer dereferences
-
-### Feature Tasks
-- Add new functions
-- Implement interfaces
-- Add validation
-
-### Refactoring Tasks
-- Reduce code duplication
-- Improve naming
-- Extract functions
-
-### Performance Tasks
-- Optimize algorithms
-- Reduce allocations
-- Improve concurrency
-
-## Tips
-
-1. **Keep tasks small** - Each task should take < 5 minutes
-2. **Clear verification** - verify.sh should be deterministic
-3. **Isolated setup** - Each task's setup/ should be independent
-4. **Meaningful descriptions** - task.md should be clear and specific
+- [Terminal Bench 2.0](https://github.com/harbor-framework/terminal-bench-2)
+- [Letta Evals](https://github.com/letta-ai/letta-evals)
+- [8 Benchmarks Shaping AI Agents](https://tessl.io/blog/8-benchmarks-shaping-the-next-generation-of-ai-agents)
