@@ -59,6 +59,93 @@ type Compactor = agentctx.Compactor
 // CompactionResult is an alias to agentctx.CompactionResult.
 type CompactionResult = agentctx.CompactionResult
 
+// AgentOption is a functional option for configuring an Agent.
+type AgentOption func(*Agent)
+
+// WithCompactor sets the compactor for automatic context compression.
+func WithCompactor(c Compactor) AgentOption {
+	return func(a *Agent) {
+		a.compactor = c
+	}
+}
+
+// WithToolOutputLimits sets the tool output limits.
+func WithToolOutputLimits(limits ToolOutputLimits) AgentOption {
+	return func(a *Agent) {
+		a.toolOutput = limits
+	}
+}
+
+// WithToolCallCutoff sets the tool call cutoff threshold.
+func WithToolCallCutoff(cutoff int) AgentOption {
+	return func(a *Agent) {
+		a.toolCallCutoff = cutoff
+	}
+}
+
+// WithThinkingLevel sets the thinking level (off, minimal, low, medium, high, xhigh).
+func WithThinkingLevel(level string) AgentOption {
+	return func(a *Agent) {
+		a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
+	}
+}
+
+// WithMaxLLMRetries sets the maximum number of LLM retries.
+func WithMaxLLMRetries(retries int) AgentOption {
+	return func(a *Agent) {
+		a.maxLLMRetries = retries
+	}
+}
+
+// WithRetryBaseDelay sets the base delay for retry exponential backoff.
+func WithRetryBaseDelay(delay time.Duration) AgentOption {
+	return func(a *Agent) {
+		a.retryBaseDelay = delay
+	}
+}
+
+// WithMaxTurns sets the maximum number of conversation turns (0 = unlimited).
+func WithMaxTurns(maxTurns int) AgentOption {
+	return func(a *Agent) {
+		a.maxTurns = maxTurns
+	}
+}
+
+// WithContextWindow sets the context window for the model (0 = default 128000).
+func WithContextWindow(window int) AgentOption {
+	return func(a *Agent) {
+		a.contextWindow = window
+	}
+}
+
+// WithTaskTracking sets whether task tracking reminders are enabled.
+func WithTaskTracking(enabled bool) AgentOption {
+	return func(a *Agent) {
+		a.taskTrackingEnabled = enabled
+	}
+}
+
+// WithContextManagement sets whether context management reminders are enabled.
+func WithContextManagement(enabled bool) AgentOption {
+	return func(a *Agent) {
+		a.contextManagementEnabled = enabled
+	}
+}
+
+// WithExecutor sets the executor pool for tool execution.
+func WithExecutor(executor *ExecutorPool) AgentOption {
+	return func(a *Agent) {
+		a.executor = executor
+	}
+}
+
+// WithMetrics sets the metrics collector.
+func WithMetrics(metrics *Metrics) AgentOption {
+	return func(a *Agent) {
+		a.metrics = metrics
+	}
+}
+
 // Agent represents an AI agent.
 type Agent struct {
 	mu            chan struct{}
@@ -96,12 +183,12 @@ type Agent struct {
 }
 
 // NewAgent creates a new agent.
-func NewAgent(model llm.Model, apiKey, systemPrompt string) *Agent {
-	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt))
+func NewAgent(model llm.Model, apiKey, systemPrompt string, opts ...AgentOption) *Agent {
+	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt), opts...)
 }
 
 // NewAgentWithContext creates a new agent with a custom context.
-func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext) *Agent {
+func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext, opts ...AgentOption) *Agent {
 	traceBuf := traceevent.NewTraceBuf()
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
@@ -119,26 +206,31 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 	traceevent.SetActiveTraceBuf(traceBuf)
 
 	a := &Agent{
-		mu:                      make(chan struct{}, 1),
-		model:                   model,
-		apiKey:                  apiKey,
-		systemPrompt:            agentCtx.SystemPrompt,
-		context:                 agentCtx,
-		eventChan:               make(chan AgentEvent, 100),
-		followUpQueue:           make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:                NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
-		metrics:                 metrics,
-		toolOutput:              DefaultToolOutputLimits(),
-		toolCallCutoff:          10,
-		thinkingLevel:           "high",
-		maxLLMRetries:           defaultLLMMaxRetries,
-		retryBaseDelay:          defaultRetryBaseDelay,
-		taskTrackingEnabled:     true, // Default: enabled
+		mu:                       make(chan struct{}, 1),
+		model:                    model,
+		apiKey:                   apiKey,
+		systemPrompt:             agentCtx.SystemPrompt,
+		context:                  agentCtx,
+		eventChan:                make(chan AgentEvent, 100),
+		followUpQueue:            make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
+		executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+		metrics:                  metrics,
+		toolOutput:               DefaultToolOutputLimits(),
+		toolCallCutoff:           10,
+		thinkingLevel:            "high",
+		maxLLMRetries:            defaultLLMMaxRetries,
+		retryBaseDelay:           defaultRetryBaseDelay,
+		taskTrackingEnabled:      true, // Default: enabled
 		contextManagementEnabled: true, // Default: enabled
-		runLoopFn:               RunLoop,
-		traceBuf:                traceBuf,
-		traceStop:               make(chan struct{}),
-		traceDone:               make(chan struct{}),
+		runLoopFn:                RunLoop,
+		traceBuf:                 traceBuf,
+		traceStop:                make(chan struct{}),
+		traceDone:                make(chan struct{}),
+	}
+
+	// Apply all options
+	for _, opt := range opts {
+		opt(a)
 	}
 
 	go a.runTraceFlusher()

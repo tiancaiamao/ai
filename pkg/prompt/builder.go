@@ -246,9 +246,7 @@ func (b *Builder) buildTaskTrackingSection() string {
 
 <context_meta>
 ` + b.contextMeta + `
-</context_meta>
-
-💡 Remember to update your llm context to track progress.`
+</context_meta>`
 	}
 	return taskTrackingPrompt
 }
