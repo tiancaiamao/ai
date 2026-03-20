@@ -321,11 +321,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		// Set task tracking and context management based on config
-		if cfg.TaskTracking != nil {
-			promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+		if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
+			promptBuilder.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
 		}
-		if cfg.ContextManagement != nil {
-			promptBuilder.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+		if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
+			promptBuilder.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
 		}
 
 		return promptBuilder.Build()
@@ -403,11 +403,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil {
-		ag.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
+		ag.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
 	}
-	if cfg.ContextManagement != nil {
-		ag.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
+		ag.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
 	}
 
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)

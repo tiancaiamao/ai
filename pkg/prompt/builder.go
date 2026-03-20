@@ -66,9 +66,11 @@ type Builder struct {
 // NewBuilder creates a new prompt builder.
 func NewBuilder(basePrompt, cwd string) *Builder {
 	return &Builder{
-		base:    basePrompt,
-		cwd:     cwd,
-		minimal: false,
+		base:                     basePrompt,
+		cwd:                      cwd,
+		minimal:                  false,
+		taskTrackingEnabled:      true, // Default: enabled
+		contextManagementEnabled: true, // Default: enabled
 	}
 }
 
@@ -76,10 +78,12 @@ func NewBuilder(basePrompt, cwd string) *Builder {
 // The workspace will be queried for the current directory each time the prompt is built.
 func NewBuilderWithWorkspace(basePrompt string, ws *tools.Workspace) *Builder {
 	return &Builder{
-		base:      basePrompt,
-		cwd:       "", // Not used when workspace is set
-		workspace: ws,
-		minimal:   false,
+		base:                     basePrompt,
+		cwd:                      "", // Not used when workspace is set
+		workspace:                ws,
+		minimal:                  false,
+		taskTrackingEnabled:      true, // Default: enabled
+		contextManagementEnabled: true, // Default: enabled
 	}
 }
 

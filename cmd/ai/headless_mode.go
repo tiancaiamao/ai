@@ -337,11 +337,11 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil {
-		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
+		promptBuilder.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
 	}
-	if cfg.ContextManagement != nil {
-		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
+		promptBuilder.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
 	}
 
 	// Use custom system prompt if provided, otherwise use default
@@ -408,11 +408,11 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 
 	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil {
-		ag.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
+		ag.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
 	}
-	if cfg.ContextManagement != nil {
-		ag.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
+		ag.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
 	}
 
 	// Load previous messages into agent context

@@ -80,12 +80,12 @@ type EditConfig struct {
 
 // TaskTrackingConfig contains task tracking (llm_context_update) settings.
 type TaskTrackingConfig struct {
-	Enabled bool `json:"enabled"` // Enable task tracking prompt and reminders
+	Enabled *bool `json:"enabled,omitempty"` // Enable task tracking prompt and reminders. nil = default (true)
 }
 
 // ContextManagementConfig contains context management (llm_context_decision) settings.
 type ContextManagementConfig struct {
-	Enabled bool `json:"enabled"` // Enable context management prompt and reminders
+	Enabled *bool `json:"enabled,omitempty"` // Enable context management prompt and reminders. nil = default (true)
 }
 
 const (
@@ -120,14 +120,14 @@ func DefaultEditConfig() *EditConfig {
 // DefaultTaskTrackingConfig returns default task tracking configuration.
 func DefaultTaskTrackingConfig() *TaskTrackingConfig {
 	return &TaskTrackingConfig{
-		Enabled: true, // Enabled by default
+		Enabled: ptrBool(true),
 	}
 }
 
 // DefaultContextManagementConfig returns default context management configuration.
 func DefaultContextManagementConfig() *ContextManagementConfig {
 	return &ContextManagementConfig{
-		Enabled: true, // Enabled by default
+		Enabled: ptrBool(true),
 	}
 }
 
@@ -148,6 +148,9 @@ func normalizeTaskTrackingConfig(cfg *TaskTrackingConfig) *TaskTrackingConfig {
 	if cfg == nil {
 		return DefaultTaskTrackingConfig()
 	}
+	if cfg.Enabled == nil {
+		cfg.Enabled = ptrBool(true)
+	}
 	return cfg
 }
 
@@ -155,7 +158,14 @@ func normalizeContextManagementConfig(cfg *ContextManagementConfig) *ContextMana
 	if cfg == nil {
 		return DefaultContextManagementConfig()
 	}
+	if cfg.Enabled == nil {
+		cfg.Enabled = ptrBool(true)
+	}
 	return cfg
+}
+
+func ptrBool(v bool) *bool {
+	return &v
 }
 
 // DefaultLogConfig returns default logging configuration.
