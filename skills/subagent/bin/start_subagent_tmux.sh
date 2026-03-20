@@ -82,7 +82,8 @@ if [ -z "$SESSION_ID" ]; then
     echo "Output so far:" >&2
     cat "$OUTPUT_FILE" >&2
     echo -e "\nTmux capture:" >&2
-    tmux capture-pane -t "$SESSION_NAME" -p >&2 || true
+    tmux capture-pane -t "$SESSION_NAME" -p -S - >&2 || true
+    # Clean up the session we created
     tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
     exit 1
 fi
