@@ -59,90 +59,90 @@ type Compactor = agentctx.Compactor
 // CompactionResult is an alias to agentctx.CompactionResult.
 type CompactionResult = agentctx.CompactionResult
 
-// AgentOption is a functional option for configuring an Agent.
-type AgentOption func(*Agent)
+// AgentOption is a functional option for configuring LoopConfig.
+type AgentOption func(*LoopConfig)
 
 // WithCompactor sets the compactor for automatic context compression.
 func WithCompactor(c Compactor) AgentOption {
-	return func(a *Agent) {
-		a.compactor = c
+	return func(cfg *LoopConfig) {
+		cfg.Compactor = c
 	}
 }
 
 // WithToolOutputLimits sets the tool output limits.
 func WithToolOutputLimits(limits ToolOutputLimits) AgentOption {
-	return func(a *Agent) {
-		a.toolOutput = limits
+	return func(cfg *LoopConfig) {
+		cfg.ToolOutput = limits
 	}
 }
 
 // WithToolCallCutoff sets the tool call cutoff threshold.
 func WithToolCallCutoff(cutoff int) AgentOption {
-	return func(a *Agent) {
-		a.toolCallCutoff = cutoff
+	return func(cfg *LoopConfig) {
+		cfg.ToolCallCutoff = cutoff
 	}
 }
 
 // WithThinkingLevel sets the thinking level (off, minimal, low, medium, high, xhigh).
 func WithThinkingLevel(level string) AgentOption {
-	return func(a *Agent) {
-		a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
+	return func(cfg *LoopConfig) {
+		cfg.ThinkingLevel = prompt.NormalizeThinkingLevel(level)
 	}
 }
 
 // WithMaxLLMRetries sets the maximum number of LLM retries.
 func WithMaxLLMRetries(retries int) AgentOption {
-	return func(a *Agent) {
-		a.maxLLMRetries = retries
+	return func(cfg *LoopConfig) {
+		cfg.MaxLLMRetries = retries
 	}
 }
 
 // WithRetryBaseDelay sets the base delay for retry exponential backoff.
 func WithRetryBaseDelay(delay time.Duration) AgentOption {
-	return func(a *Agent) {
-		a.retryBaseDelay = delay
+	return func(cfg *LoopConfig) {
+		cfg.RetryBaseDelay = delay
 	}
 }
 
 // WithMaxTurns sets the maximum number of conversation turns (0 = unlimited).
 func WithMaxTurns(maxTurns int) AgentOption {
-	return func(a *Agent) {
-		a.maxTurns = maxTurns
+	return func(cfg *LoopConfig) {
+		cfg.MaxTurns = maxTurns
 	}
 }
 
 // WithContextWindow sets the context window for the model (0 = default 128000).
 func WithContextWindow(window int) AgentOption {
-	return func(a *Agent) {
-		a.contextWindow = window
+	return func(cfg *LoopConfig) {
+		cfg.ContextWindow = window
 	}
 }
 
 // WithTaskTracking sets whether task tracking reminders are enabled.
 func WithTaskTracking(enabled bool) AgentOption {
-	return func(a *Agent) {
-		a.taskTrackingEnabled = enabled
+	return func(cfg *LoopConfig) {
+		cfg.TaskTrackingEnabled = enabled
 	}
 }
 
 // WithContextManagement sets whether context management reminders are enabled.
 func WithContextManagement(enabled bool) AgentOption {
-	return func(a *Agent) {
-		a.contextManagementEnabled = enabled
+	return func(cfg *LoopConfig) {
+		cfg.ContextManagementEnabled = enabled
 	}
 }
 
 // WithExecutor sets the executor pool for tool execution.
 func WithExecutor(executor *ExecutorPool) AgentOption {
-	return func(a *Agent) {
-		a.executor = executor
+	return func(cfg *LoopConfig) {
+		cfg.Executor = executor
 	}
 }
 
 // WithMetrics sets the metrics collector.
 func WithMetrics(metrics *Metrics) AgentOption {
-	return func(a *Agent) {
-		a.metrics = metrics
+	return func(cfg *LoopConfig) {
+		cfg.Metrics = metrics
 	}
 }
 
@@ -160,26 +160,16 @@ type Agent struct {
 	// 	ctx             context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
-	compactor      Compactor     // Optional compactor for automatic context compression
 	followUpQueue  chan string   // Queue for follow-up messages
-	executor       *ExecutorPool // agentctx.Tool executor with concurrency control
-	metrics        *Metrics      // Performance and usage metrics
-	toolOutput     ToolOutputLimits
-	toolCallCutoff int
-	thinkingLevel  string
-	maxLLMRetries  int
-	retryBaseDelay time.Duration
-	maxTurns       int // Maximum conversation turns (0 = unlimited)
-	contextWindow  int // Context window for the model (0 = use default 128000)
-	// Task tracking and context management flags
-	taskTrackingEnabled     bool // Enable task tracking reminders (llm_context_update)
-	contextManagementEnabled bool // Enable context management reminders (llm_context_decision)
-	runLoopFn       func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
+	runLoopFn      func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	traceBuf       *traceevent.TraceBuf
 	traceStop      chan struct{}
 	traceDone      chan struct{}
 	shutdownOnce   sync.Once
 	traceSeq       atomic.Uint64
+
+	// LoopConfig embedded for unified configuration management
+	LoopConfig
 }
 
 // NewAgent creates a new agent.
@@ -205,32 +195,37 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 	})
 	traceevent.SetActiveTraceBuf(traceBuf)
 
-	a := &Agent{
-		mu:                       make(chan struct{}, 1),
-		model:                    model,
-		apiKey:                   apiKey,
-		systemPrompt:             agentCtx.SystemPrompt,
-		context:                  agentCtx,
-		eventChan:                make(chan AgentEvent, 100),
-		followUpQueue:            make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
-		metrics:                  metrics,
-		toolOutput:               DefaultToolOutputLimits(),
-		toolCallCutoff:           10,
-		thinkingLevel:            "high",
-		maxLLMRetries:            defaultLLMMaxRetries,
-		retryBaseDelay:           defaultRetryBaseDelay,
-		taskTrackingEnabled:      true, // Default: enabled
-		contextManagementEnabled: true, // Default: enabled
-		runLoopFn:                RunLoop,
-		traceBuf:                 traceBuf,
-		traceStop:                make(chan struct{}),
-		traceDone:                make(chan struct{}),
+	// Start with default LoopConfig
+	cfg := LoopConfig{
+		ToolCallCutoff:           10,
+		ThinkingLevel:            "high",
+		MaxLLMRetries:           defaultLLMMaxRetries,
+		RetryBaseDelay:          defaultRetryBaseDelay,
+		TaskTrackingEnabled:     true,
+		ContextManagementEnabled: true,
+		Metrics:                  metrics,
+		Executor:                NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+		ToolOutput:              DefaultToolOutputLimits(),
 	}
 
-	// Apply all options
+	// Apply all options to override defaults
 	for _, opt := range opts {
-		opt(a)
+		opt(&cfg)
+	}
+
+	a := &Agent{
+		mu:           make(chan struct{}, 1),
+		model:        model,
+		apiKey:       apiKey,
+		systemPrompt: agentCtx.SystemPrompt,
+		context:      agentCtx,
+		eventChan:    make(chan AgentEvent, 100),
+		followUpQueue: make(chan string, 100),
+		runLoopFn:    RunLoop,
+		traceBuf:     traceBuf,
+		traceStop:    make(chan struct{}),
+		traceDone:    make(chan struct{}),
+		LoopConfig:   cfg, // Embedded LoopConfig with applied options
 	}
 
 	go a.runTraceFlusher()
@@ -296,25 +291,8 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 	prompts := []agentctx.AgentMessage{agentctx.NewUserMessage(message)}
 
-	config := &LoopConfig{
-		Model:                   a.model,
-		APIKey:                  a.apiKey,
-		Executor:                a.executor,
-		Metrics:                 a.metrics,
-		ToolOutput:              a.toolOutput,
-		Compactor:               a.compactor,
-		ToolCallCutoff:          a.toolCallCutoff,
-		ThinkingLevel:           a.thinkingLevel,
-		MaxLLMRetries:           a.maxLLMRetries,
-		RetryBaseDelay:          a.retryBaseDelay,
-		MaxTurns:                a.maxTurns,
-		ContextWindow:           a.contextWindow,
-		TaskTrackingEnabled:     a.taskTrackingEnabled,
-		ContextManagementEnabled: a.contextManagementEnabled,
-	}
-
 	slog.Info("[Agent] Starting RunLoop")
-	stream := a.runLoopFn(ctx, prompts, a.context, config)
+	stream := a.runLoopFn(ctx, prompts, a.context, &a.LoopConfig)
 	a.setCurrentStream(stream)
 	defer a.setCurrentStream(nil)
 
@@ -627,22 +605,22 @@ func (a *Agent) GetContext() *agentctx.AgentContext {
 
 // SetCompactor sets the compactor for automatic context compression.
 func (a *Agent) SetCompactor(compactor Compactor) {
-	a.compactor = compactor
+	a.LoopConfig.Compactor = compactor
 }
 
 // SetExecutor sets the tool executor pool for concurrency control.
 func (a *Agent) SetExecutor(executor *ExecutorPool) {
-	a.executor = executor
+	a.LoopConfig.Executor = executor
 }
 
 // GetExecutor returns the current tool executor.
 func (a *Agent) GetExecutor() *ExecutorPool {
-	return a.executor
+	return a.LoopConfig.Executor
 }
 
 // SetToolOutputLimits sets truncation limits for tool output.
 func (a *Agent) SetToolOutputLimits(limits ToolOutputLimits) {
-	a.toolOutput = normalizeToolOutputLimits(limits)
+	a.LoopConfig.ToolOutput = normalizeToolOutputLimits(limits)
 }
 
 // SetToolCallCutoff sets threshold for automatic tool output summarization.
@@ -650,32 +628,31 @@ func (a *Agent) SetToolCallCutoff(cutoff int) {
 	if cutoff < 0 {
 		cutoff = 0
 	}
-	a.toolCallCutoff = cutoff
+	a.LoopConfig.ToolCallCutoff = cutoff
 }
 
 // SetThinkingLevel controls reasoning depth instructions sent to the model.
-// Accepted values: off, minimal, low, medium, high, xhigh.
 func (a *Agent) SetThinkingLevel(level string) {
-	a.thinkingLevel = prompt.NormalizeThinkingLevel(level)
+	a.LoopConfig.ThinkingLevel = prompt.NormalizeThinkingLevel(level)
 }
 
 // SetAutoRetry enables/disables LLM automatic retry behavior.
 func (a *Agent) SetAutoRetry(enabled bool) {
 	if enabled {
-		if a.maxLLMRetries <= 0 {
-			a.maxLLMRetries = defaultLLMMaxRetries
+		if a.LoopConfig.MaxLLMRetries <= 0 {
+			a.LoopConfig.MaxLLMRetries = defaultLLMMaxRetries
 		}
-		if a.retryBaseDelay <= 0 {
-			a.retryBaseDelay = defaultRetryBaseDelay
+		if a.LoopConfig.RetryBaseDelay <= 0 {
+			a.LoopConfig.RetryBaseDelay = defaultRetryBaseDelay
 		}
 		return
 	}
-	a.maxLLMRetries = 0
+	a.LoopConfig.MaxLLMRetries = 0
 }
 
 // AutoRetryEnabled reports whether LLM auto retry is currently enabled.
 func (a *Agent) AutoRetryEnabled() bool {
-	return a.maxLLMRetries > 0
+	return a.LoopConfig.MaxLLMRetries > 0
 }
 
 // SetLLMRetryConfig configures LLM retry count and base delay.
@@ -686,36 +663,34 @@ func (a *Agent) SetLLMRetryConfig(maxRetries int, baseDelay time.Duration) {
 	if baseDelay <= 0 {
 		baseDelay = defaultRetryBaseDelay
 	}
-	a.maxLLMRetries = maxRetries
-	a.retryBaseDelay = baseDelay
+	a.LoopConfig.MaxLLMRetries = maxRetries
+	a.LoopConfig.RetryBaseDelay = baseDelay
 }
 
 // SetMaxTurns sets the maximum number of conversation turns.
-// Set to 0 for unlimited turns (default).
 func (a *Agent) SetMaxTurns(maxTurns int) {
 	if maxTurns < 0 {
 		maxTurns = 0
 	}
-	a.maxTurns = maxTurns
+	a.LoopConfig.MaxTurns = maxTurns
 }
 
 // SetContextWindow sets the context window for the model.
-// Set to 0 to use the default (128000).
 func (a *Agent) SetContextWindow(contextWindow int) {
 	if contextWindow < 0 {
 		contextWindow = 0
 	}
-	a.contextWindow = contextWindow
+	a.LoopConfig.ContextWindow = contextWindow
 }
 
 // SetTaskTrackingEnabled sets whether task tracking reminders are enabled.
 func (a *Agent) SetTaskTrackingEnabled(enabled bool) {
-	a.taskTrackingEnabled = enabled
+	a.LoopConfig.TaskTrackingEnabled = enabled
 }
 
 // SetContextManagementEnabled sets whether context management reminders are enabled.
 func (a *Agent) SetContextManagementEnabled(enabled bool) {
-	a.contextManagementEnabled = enabled
+	a.LoopConfig.ContextManagementEnabled = enabled
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.
@@ -741,12 +716,12 @@ func (a *Agent) Compact(compactor Compactor) error {
 
 // tryAutoCompact attempts automatic compression if thresholds exceeded.
 func (a *Agent) tryAutoCompact(ctx context.Context) {
-	if a.compactor == nil {
+	if a.LoopConfig.Compactor == nil {
 		return
 	}
 
 	messages := a.context.Messages
-	if a.compactor.ShouldCompact(messages) {
+	if a.LoopConfig.Compactor.ShouldCompact(messages) {
 		before := len(messages)
 		slog.Info("[Agent] Auto-compacting", "beforeCount", before)
 		compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
@@ -760,7 +735,7 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 			Before:  before,
 			Trigger: "threshold",
 		}))
-		if err := a.Compact(a.compactor); err != nil {
+		if err := a.Compact(a.LoopConfig.Compactor); err != nil {
 			err = WithErrorStack(err)
 			slog.Error("[Agent] Auto-compact failed", "error", err)
 			compactSpan.AddField("error", true)
@@ -834,5 +809,5 @@ func (a *Agent) clearFollowUps() {
 
 // GetMetrics returns the agent's metrics collector.
 func (a *Agent) GetMetrics() *Metrics {
-	return a.metrics
+	return a.LoopConfig.Metrics
 }
