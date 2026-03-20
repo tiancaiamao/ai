@@ -335,7 +335,15 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 			promptBuilder.SetLLMContext(wm)
 		}
 	}
-	
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil {
+		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	}
+	if cfg.ContextManagement != nil {
+		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	}
+
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
 	if customSystemPrompt != "" {
@@ -398,6 +406,14 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	ag.SetCompactor(sessionComp)
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil {
+		ag.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	}
+	if cfg.ContextManagement != nil {
+		ag.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	}
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

@@ -201,6 +201,15 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	// Use workspace to get dynamic cwd for each prompt build
 	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil {
+		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	}
+	if cfg.ContextManagement != nil {
+		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	}
+
 	systemPrompt := promptBuilder.Build()
 
 	// Helper function to create a new agent context
@@ -226,6 +235,14 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	ag.SetCompactor(sessionComp)
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil {
+		ag.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	}
+	if cfg.ContextManagement != nil {
+		ag.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	}
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

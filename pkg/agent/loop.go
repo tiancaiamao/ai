@@ -47,6 +47,8 @@ type LoopConfig struct {
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 	ContextWindow           int           // Context window for the model (0=use default 128000)
+	TaskTrackingEnabled     bool          // Enable task tracking reminders (llm_context_update)
+	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -742,7 +744,8 @@ func streamAssistantResponse(
 	}
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
-	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() {
+	// Only if task tracking is enabled
+	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() && config.TaskTrackingEnabled {
 		reminderContent := agentCtx.LLMContext.GetReminderUserMessage()
 		reminderMsg := llm.LLMMessage{
 			Role:    "user",
@@ -758,7 +761,8 @@ func streamAssistantResponse(
 	}
 
 	// Inject decision reminder based on independent decision-pressure state.
-	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil {
+	// Only if context management is enabled
+	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled {
 		meta := agentCtx.LLMContext.GetMeta()
 		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
 			agentCtx.ContextMgmtState.CurrentTurn,

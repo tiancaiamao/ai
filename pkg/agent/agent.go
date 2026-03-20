@@ -84,6 +84,9 @@ type Agent struct {
 	retryBaseDelay time.Duration
 	maxTurns       int // Maximum conversation turns (0 = unlimited)
 	contextWindow  int // Context window for the model (0 = use default 128000)
+	// Task tracking and context management flags
+	taskTrackingEnabled     bool // Enable task tracking reminders (llm_context_update)
+	contextManagementEnabled bool // Enable context management reminders (llm_context_decision)
 	runLoopFn       func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	traceBuf       *traceevent.TraceBuf
 	traceStop      chan struct{}
@@ -116,24 +119,26 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 	traceevent.SetActiveTraceBuf(traceBuf)
 
 	a := &Agent{
-		mu:             make(chan struct{}, 1),
-		model:          model,
-		apiKey:         apiKey,
-		systemPrompt:   agentCtx.SystemPrompt,
-		context:        agentCtx,
-		eventChan:      make(chan AgentEvent, 100),
-		followUpQueue:  make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
-		executor:       NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
-		metrics:        metrics,
-		toolOutput:     DefaultToolOutputLimits(),
-		toolCallCutoff: 10,
-		thinkingLevel:  "high",
-		maxLLMRetries:  defaultLLMMaxRetries,
-		retryBaseDelay: defaultRetryBaseDelay,
-		runLoopFn:      RunLoop,
-		traceBuf:       traceBuf,
-		traceStop:      make(chan struct{}),
-		traceDone:      make(chan struct{}),
+		mu:                      make(chan struct{}, 1),
+		model:                   model,
+		apiKey:                  apiKey,
+		systemPrompt:            agentCtx.SystemPrompt,
+		context:                 agentCtx,
+		eventChan:               make(chan AgentEvent, 100),
+		followUpQueue:           make(chan string, 100), // Buffer up to 100 follow-up messages (increased from 10)
+		executor:                NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+		metrics:                 metrics,
+		toolOutput:              DefaultToolOutputLimits(),
+		toolCallCutoff:          10,
+		thinkingLevel:           "high",
+		maxLLMRetries:           defaultLLMMaxRetries,
+		retryBaseDelay:          defaultRetryBaseDelay,
+		taskTrackingEnabled:     true, // Default: enabled
+		contextManagementEnabled: true, // Default: enabled
+		runLoopFn:               RunLoop,
+		traceBuf:                traceBuf,
+		traceStop:               make(chan struct{}),
+		traceDone:               make(chan struct{}),
 	}
 
 	go a.runTraceFlusher()
@@ -200,18 +205,20 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 	prompts := []agentctx.AgentMessage{agentctx.NewUserMessage(message)}
 
 	config := &LoopConfig{
-		Model:          a.model,
-		APIKey:         a.apiKey,
-		Executor:       a.executor,
-		Metrics:        a.metrics,
-		ToolOutput:     a.toolOutput,
-		Compactor:      a.compactor,
-		ToolCallCutoff: a.toolCallCutoff,
-		ThinkingLevel:  a.thinkingLevel,
-		MaxLLMRetries:  a.maxLLMRetries,
-		RetryBaseDelay: a.retryBaseDelay,
-		MaxTurns:       a.maxTurns,
-		ContextWindow:  a.contextWindow,
+		Model:                   a.model,
+		APIKey:                  a.apiKey,
+		Executor:                a.executor,
+		Metrics:                 a.metrics,
+		ToolOutput:              a.toolOutput,
+		Compactor:               a.compactor,
+		ToolCallCutoff:          a.toolCallCutoff,
+		ThinkingLevel:           a.thinkingLevel,
+		MaxLLMRetries:           a.maxLLMRetries,
+		RetryBaseDelay:          a.retryBaseDelay,
+		MaxTurns:                a.maxTurns,
+		ContextWindow:           a.contextWindow,
+		TaskTrackingEnabled:     a.taskTrackingEnabled,
+		ContextManagementEnabled: a.contextManagementEnabled,
 	}
 
 	slog.Info("[Agent] Starting RunLoop")
@@ -607,6 +614,16 @@ func (a *Agent) SetContextWindow(contextWindow int) {
 		contextWindow = 0
 	}
 	a.contextWindow = contextWindow
+}
+
+// SetTaskTrackingEnabled sets whether task tracking reminders are enabled.
+func (a *Agent) SetTaskTrackingEnabled(enabled bool) {
+	a.taskTrackingEnabled = enabled
+}
+
+// SetContextManagementEnabled sets whether context management reminders are enabled.
+func (a *Agent) SetContextManagementEnabled(enabled bool) {
+	a.contextManagementEnabled = enabled
 }
 
 // GetPendingFollowUps returns the number of queued follow-up messages.

@@ -593,7 +593,9 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 	// 使用 prompt.Builder 构建
 	builder := prompt.NewBuilder(basePrompt, "").
 		SetNoWorkspace(true).
-		SetSkills(skills)
+		SetSkills(skills).
+		SetTaskTrackingEnabled(true).
+		SetContextManagementEnabled(true)
 
 	return builder.Build()
 }

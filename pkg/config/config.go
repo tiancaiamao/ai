@@ -35,6 +35,12 @@ type Config struct {
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 
+	// Task tracking configuration (llm_context_update)
+	TaskTracking *TaskTrackingConfig `json:"taskTracking,omitempty"`
+
+	// Context management configuration (llm_context_decision)
+	ContextManagement *ContextManagementConfig `json:"contextManagement,omitempty"`
+
 	// Workspace is the working directory path (the git repo path bound at startup)
 	Workspace string `json:"workspace,omitempty"`
 }
@@ -72,6 +78,16 @@ type EditConfig struct {
 	Mode string `json:"mode,omitempty"` // Edit mode: "replace" (default) or "hashline"
 }
 
+// TaskTrackingConfig contains task tracking (llm_context_update) settings.
+type TaskTrackingConfig struct {
+	Enabled bool `json:"enabled"` // Enable task tracking prompt and reminders
+}
+
+// ContextManagementConfig contains context management (llm_context_decision) settings.
+type ContextManagementConfig struct {
+	Enabled bool `json:"enabled"` // Enable context management prompt and reminders
+}
+
 const (
 	defaultToolOutputMaxChars = 10_000
 	maxToolOutputMaxChars     = defaultToolOutputMaxChars
@@ -101,6 +117,20 @@ func DefaultEditConfig() *EditConfig {
 	}
 }
 
+// DefaultTaskTrackingConfig returns default task tracking configuration.
+func DefaultTaskTrackingConfig() *TaskTrackingConfig {
+	return &TaskTrackingConfig{
+		Enabled: true, // Enabled by default
+	}
+}
+
+// DefaultContextManagementConfig returns default context management configuration.
+func DefaultContextManagementConfig() *ContextManagementConfig {
+	return &ContextManagementConfig{
+		Enabled: true, // Enabled by default
+	}
+}
+
 func normalizeToolOutputConfig(cfg *ToolOutputConfig) *ToolOutputConfig {
 	if cfg == nil {
 		return DefaultToolOutputConfig()
@@ -110,6 +140,20 @@ func normalizeToolOutputConfig(cfg *ToolOutputConfig) *ToolOutputConfig {
 	}
 	if cfg.MaxChars > maxToolOutputMaxChars {
 		cfg.MaxChars = maxToolOutputMaxChars
+	}
+	return cfg
+}
+
+func normalizeTaskTrackingConfig(cfg *TaskTrackingConfig) *TaskTrackingConfig {
+	if cfg == nil {
+		return DefaultTaskTrackingConfig()
+	}
+	return cfg
+}
+
+func normalizeContextManagementConfig(cfg *ContextManagementConfig) *ContextManagementConfig {
+	if cfg == nil {
+		return DefaultContextManagementConfig()
 	}
 	return cfg
 }
@@ -196,6 +240,8 @@ func LoadConfig(configPath string) (*Config, error) {
 		cfg.Model.BaseURL = val
 	}
 	cfg.ToolOutput = normalizeToolOutputConfig(cfg.ToolOutput)
+	cfg.TaskTracking = normalizeTaskTrackingConfig(cfg.TaskTracking)
+	cfg.ContextManagement = normalizeContextManagementConfig(cfg.ContextManagement)
 
 	return cfg, nil
 }

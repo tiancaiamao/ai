@@ -319,6 +319,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				promptBuilder.SetLLMContext(wm)
 			}
 		}
+
+		// Set task tracking and context management based on config
+		if cfg.TaskTracking != nil {
+			promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+		}
+		if cfg.ContextManagement != nil {
+			promptBuilder.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+		}
+
 		return promptBuilder.Build()
 	}
 	systemPrompt := buildSystemPrompt(sess)
@@ -392,6 +401,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag.SetCompactor(sessionComp)
 	ag.SetContextWindow(currentContextWindow)
 	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
+
+	// Set task tracking and context management based on config
+	if cfg.TaskTracking != nil {
+		ag.SetTaskTrackingEnabled(cfg.TaskTracking.Enabled)
+	}
+	if cfg.ContextManagement != nil {
+		ag.SetContextManagementEnabled(cfg.ContextManagement.Enabled)
+	}
+
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
 	setAgentContext := func(ctx *agentctx.AgentContext) {
