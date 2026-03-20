@@ -42,7 +42,8 @@ CMD_ARGS+=("$TASK")
 
 # Build full command with output redirection and done marker
 # When command completes, create ${OUTPUT_FILE}.done to signal completion
-FULL_CMD="$(printf '%q ' "${CMD_ARGS[@]}") 2>&1 | tee \"$OUTPUT_FILE\"; touch \"${OUTPUT_FILE}.done\""
+# Use trap to ensure done marker is created even on signal/exit
+FULL_CMD="trap 'touch \"${OUTPUT_FILE}.done\"' EXIT; $(printf '%q ' "${CMD_ARGS[@]}") 2>&1 | tee \"$OUTPUT_FILE\""
 
 # Start in tmux session
 tmux new -s "$SESSION_NAME" -d

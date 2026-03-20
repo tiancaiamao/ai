@@ -67,12 +67,23 @@ echo ""
 # Main polling loop
 for i in $(seq 1 $ITERATIONS); do
     if [ -n "$OUTPUT_FILE" ]; then
-        # New mode: check for done marker file
+        # New mode: prefer done marker, fallback to session check
         if [ -f "$DONE_MARKER" ]; then
             echo ""
             echo "✓ Session '${SESSION_NAME}' completed (done marker found)"
             # Clean up marker
             rm -f "$DONE_MARKER"
+            exit 0
+        fi
+
+        # Fallback: if session no longer exists, consider it complete
+        # This handles SIGKILL scenario where trap cannot create done marker
+        if ! get_session_info | grep -q .; then
+            echo ""
+            echo "✓ Session '${SESSION_NAME}' completed (session ended)"
+            echo "  Note: Done marker not found (process may have been killed)"
+            # Create marker ourselves to prevent confusion
+            touch "$DONE_MARKER"
             exit 0
         fi
     else
