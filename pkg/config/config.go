@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/logger"
@@ -216,39 +217,24 @@ func expandLogPath(path string) string {
 // Environment variables take precedence over config file values.
 func LoadConfig(configPath string) (*Config, error) {
 	// Start with default config
-	cfg := &Config{
-		Model: ModelConfig{
-			ID:       getEnv("ZAI_MODEL", "glm-4.5-air"),
-			Provider: "zai",
-			BaseURL:  getEnv("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
-			API:      "openai-completions",
-		},
-		Compactor:   compact.DefaultConfig(),
-		Concurrency: DefaultConcurrencyConfig(),
-		ToolOutput:  DefaultToolOutputConfig(),
-		Log:         DefaultLogConfig(),
-	}
+	cfg := DefaultConfig()
 
-	// Load from file if exists
+	// Override model from environment
+	cfg.Model.ID = getEnv("ZAI_MODEL", cfg.Model.ID)
+	cfg.Model.BaseURL = getEnv("ZAI_BASE_URL", cfg.Model.BaseURL)
+
+	// Load from file if exists (file values override defaults)
 	if _, err := os.Stat(configPath); err == nil {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-
-		// Merge with defaults (file values override defaults)
 		if err := json.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file: %w", err)
 		}
 	}
 
-	// Environment variables override config file
-	if val := os.Getenv("ZAI_MODEL"); val != "" {
-		cfg.Model.ID = val
-	}
-	if val := os.Getenv("ZAI_BASE_URL"); val != "" {
-		cfg.Model.BaseURL = val
-	}
+	// Environment variables override config file (already set above for model)
 	cfg.ToolOutput = normalizeToolOutputConfig(cfg.ToolOutput)
 	cfg.TaskTracking = normalizeTaskTrackingConfig(cfg.TaskTracking)
 	cfg.ContextManagement = normalizeContextManagementConfig(cfg.ContextManagement)
@@ -304,4 +290,61 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// DefaultConfig returns a default Config with sensible values.
+// This is the base configuration that can be overridden by LoadConfig.
+func DefaultConfig() *Config {
+	return &Config{
+		Model: ModelConfig{
+			ID:       "glm-4.5-air",
+			Provider: "zai",
+			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
+			API:      "openai-completions",
+		},
+		Compactor:   compact.DefaultConfig(),
+		Concurrency: DefaultConcurrencyConfig(),
+		ToolOutput:  DefaultToolOutputConfig(),
+		Log:         DefaultLogConfig(),
+	}
+}
+
+// ToLoopConfig converts Config to agent.LoopConfig.
+// Compactor and Metrics are not included because they depend on session-specific resources.
+// Pass them explicitly to override the defaults.
+func (c *Config) ToLoopConfig(compactor agent.Compactor, metrics *agent.Metrics) *agent.LoopConfig {
+	loopCfg := agent.DefaultLoopConfig()
+
+	// Override with config values if present
+	if c.Concurrency != nil {
+		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
+			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
+			"queueTimeout":       c.Concurrency.QueueTimeout,
+		})
+	}
+
+	if c.ToolOutput != nil {
+		loopCfg.ToolOutput = agent.ToolOutputLimits{
+			MaxChars: c.ToolOutput.MaxChars,
+		}
+		// Note: HashLines is not mapped because agent.ToolOutputLimits doesn't have it
+	}
+
+	if c.TaskTracking != nil && c.TaskTracking.Enabled != nil {
+		loopCfg.TaskTrackingEnabled = *c.TaskTracking.Enabled
+	}
+
+	if c.ContextManagement != nil && c.ContextManagement.Enabled != nil {
+		loopCfg.ContextManagementEnabled = *c.ContextManagement.Enabled
+	}
+
+	// Override dependencies if provided
+	if compactor != nil {
+		loopCfg.Compactor = compactor
+	}
+	if metrics != nil {
+		loopCfg.Metrics = metrics
+	}
+
+	return loopCfg
 }

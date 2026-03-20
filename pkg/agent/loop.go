@@ -51,6 +51,20 @@ type LoopConfig struct {
 	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
 }
 
+// DefaultLoopConfig returns a default LoopConfig with sensible values.
+func DefaultLoopConfig() *LoopConfig {
+	return &LoopConfig{
+		ToolCallCutoff:            10,
+		ThinkingLevel:             "high",
+		MaxLLMRetries:             defaultLLMMaxRetries,
+		RetryBaseDelay:            defaultRetryBaseDelay,
+		TaskTrackingEnabled:       true,
+		ContextManagementEnabled:  true,
+		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+		ToolOutput:                DefaultToolOutputLimits(),
+	}
+}
+
 var streamAssistantResponseFn = streamAssistantResponse
 
 type llmAttemptKeyType struct{}

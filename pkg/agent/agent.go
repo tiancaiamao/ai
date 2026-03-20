@@ -172,13 +172,29 @@ type Agent struct {
 	LoopConfig
 }
 
-// NewAgent creates a new agent.
+// NewAgent creates a new agent with default configuration.
 func NewAgent(model llm.Model, apiKey, systemPrompt string, opts ...AgentOption) *Agent {
 	return NewAgentWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt), opts...)
 }
 
+// NewAgentFromConfig creates a new agent from a LoopConfig.
+// This is the preferred constructor for production use.
+func NewAgentFromConfig(model llm.Model, apiKey, systemPrompt string, cfg *LoopConfig) *Agent {
+	return NewAgentFromConfigWithContext(model, apiKey, agentctx.NewAgentContext(systemPrompt), cfg)
+}
+
 // NewAgentWithContext creates a new agent with a custom context.
 func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext, opts ...AgentOption) *Agent {
+	// Start with default config, then apply options
+	cfg := DefaultLoopConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return NewAgentFromConfigWithContext(model, apiKey, agentCtx, cfg)
+}
+
+// NewAgentFromConfigWithContext creates a new agent with a custom context from LoopConfig.
+func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *agentctx.AgentContext, cfg *LoopConfig) *Agent {
 	traceBuf := traceevent.NewTraceBuf()
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
@@ -195,22 +211,19 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 	})
 	traceevent.SetActiveTraceBuf(traceBuf)
 
-	// Start with default LoopConfig
-	cfg := LoopConfig{
-		ToolCallCutoff:           10,
-		ThinkingLevel:            "high",
-		MaxLLMRetries:           defaultLLMMaxRetries,
-		RetryBaseDelay:          defaultRetryBaseDelay,
-		TaskTrackingEnabled:     true,
-		ContextManagementEnabled: true,
-		Metrics:                  metrics,
-		Executor:                NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
-		ToolOutput:              DefaultToolOutputLimits(),
+	// Ensure Metrics is set in config
+	if cfg.Metrics == nil {
+		cfg.Metrics = metrics
 	}
 
-	// Apply all options to override defaults
-	for _, opt := range opts {
-		opt(&cfg)
+	// Ensure Executor is set in config
+	if cfg.Executor == nil {
+		cfg.Executor = NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60})
+	}
+
+	// Ensure ToolOutput is set in config
+	if cfg.ToolOutput.MaxChars == 0 {
+		cfg.ToolOutput = DefaultToolOutputLimits()
 	}
 
 	a := &Agent{
@@ -225,7 +238,7 @@ func NewAgentWithContext(model llm.Model, apiKey string, agentCtx *agentctx.Agen
 		traceBuf:     traceBuf,
 		traceStop:    make(chan struct{}),
 		traceDone:    make(chan struct{}),
-		LoopConfig:   cfg, // Embedded LoopConfig with applied options
+		LoopConfig:   *cfg, // Embedded LoopConfig with applied options
 	}
 
 	go a.runTraceFlusher()
