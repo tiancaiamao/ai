@@ -6,7 +6,7 @@
 
 The system provides reminders, but **proactive management is expected**:
 - After completing a task phase → TRUNCATE stale outputs
-- Before starting a new topic → Consider COMPACT if context is large
+- **When context usage > 40%** → Consider COMPACT to keep context concise
 - When you notice stale tool outputs → Batch TRUNCATE 50-100 at once
 
 ### Proactive Score
@@ -34,7 +34,7 @@ Score calculation:
 | Decision | When to Use |
 |----------|-------------|
 | `truncate` | Stale/large tool outputs exist |
-| `compact` | Topic shift, phase completed, context management needed |
+| `compact` | Context usage > 40%, topic shift, or phase completed |
 | `skip` | Low pressure (<25%), set `skip_turns` 1-30 |
 
 **skip_turns meaning:**
@@ -43,9 +43,8 @@ Score calculation:
 
 **Agent Metadata Tags** (for truncate):
 - `<agent:tool id="call_xxx" name="read" chars="91" stale="5" />` — stale output, CAN be truncated
-- `<agent:tool id="call_xxx" chars="91" truncated="true" />` — already truncated, **DO NOT include in truncate_ids**
 
-**IMPORTANT:** Only pass IDs with `stale="N"` attribute to truncate_ids. Never pass IDs with `truncated="true"`.
+**IMPORTANT:** Only pass IDs with `stale="N"` attribute to truncate_ids.
 
 ### Topic Shift Detection
 
