@@ -383,3 +383,17 @@ func WithToolCallCutoff(cutoff int) LoopConfigOption {
 		cfg.ToolCallCutoff = cutoff
 	}
 }
+
+// WithExecutor sets the executor for the loop config.
+func WithExecutor(executor *agent.ExecutorPool) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Executor = executor
+	}
+}
+
+// WithToolOutputLimits sets the tool output limits for the loop config.
+func WithToolOutputLimits(limits agent.ToolOutputLimits) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolOutput = limits
+	}
+}

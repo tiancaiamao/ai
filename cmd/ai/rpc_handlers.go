@@ -331,10 +331,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	agentCtx := createBaseContext()
 
-	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
-	defer ag.Shutdown()
-
-	// Enable automatic compression
+	// Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
@@ -342,54 +339,54 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compactor: compactor,
 		writer:    sessionWriter,
 	}
-	ag.SetCompactor(sessionComp)
-	ag.SetContextWindow(currentContextWindow)
-	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 
-	// Set task tracking and context management based on config
-	if cfg.TaskTracking != nil && cfg.TaskTracking.Enabled != nil {
-		ag.SetTaskTrackingEnabled(*cfg.TaskTracking.Enabled)
-	}
-	if cfg.ContextManagement != nil && cfg.ContextManagement.Enabled != nil {
-		ag.SetContextManagementEnabled(*cfg.ContextManagement.Enabled)
-	}
-
-	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
-
-	setAgentContext := func(ctx *agentctx.AgentContext) {
-		ag.SetContext(ctx)
-	}
-
-	// Set up executor with concurrency control
 	concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-
 	executor := agent.NewExecutorPool(map[string]int{
 		"maxConcurrentTools": concurrencyConfig.MaxConcurrentTools,
 		"toolTimeout":        concurrencyConfig.ToolTimeout,
 		"queueTimeout":       concurrencyConfig.QueueTimeout,
 	})
-	ag.SetExecutor(executor)
+
+	toolOutputConfig := cfg.ToolOutput
+	if toolOutputConfig == nil {
+		toolOutputConfig = config.DefaultToolOutputConfig()
+	}
+
+	// Build LoopConfig with all settings
+	loopCfg := cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(currentContextWindow),
+		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+		config.WithExecutor(executor),
+		config.WithToolOutputLimits(agent.ToolOutputLimits{
+			MaxChars: toolOutputConfig.MaxChars,
+		}),
+	)
+
+	// Set model and apiKey
+	loopCfg.Model = model
+	loopCfg.APIKey = apiKey
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+	defer ag.Shutdown()
+
+	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
+	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
+
+	setAgentContext := func(ctx *agentctx.AgentContext) {
+		ag.SetContext(ctx)
+	}
 
 	bashRunner := newBashRunner()
 	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
 	if bashTimeout <= 0 {
 		bashTimeout = 30 * time.Second
 	}
-
-	toolOutputConfig := cfg.ToolOutput
-	if toolOutputConfig == nil {
-		toolOutputConfig = config.DefaultToolOutputConfig()
-	}
-	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxChars: toolOutputConfig.MaxChars,
-	})
-	slog.Info("Tool output truncation",
-		"maxChars", toolOutputConfig.MaxChars,
-	)
 
 	// Create RPC server
 	server := rpc.NewServer()

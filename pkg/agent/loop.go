@@ -827,7 +827,6 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-	slog.Info("[Loop] LLM call starting", "apiKey_length", len(config.APIKey), "model", config.Model.ID)
 	llmStream := llm.StreamLLM(llmCtx, config.Model, llmCtxParams, config.APIKey)
 
 	type toolCallState struct {
