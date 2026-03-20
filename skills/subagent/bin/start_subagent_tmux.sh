@@ -40,11 +40,12 @@ if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
 fi
 CMD_ARGS+=("$TASK")
 
-# Start in tmux session with output tee
-# Use bash -c with proper quoting to handle special characters in TASK
-# On failure, keep session alive for debugging
+# Build full command with output redirection
+FULL_CMD="$(printf '%q ' "${CMD_ARGS[@]}") 2>&1 | tee '$OUTPUT_FILE'"
+
+# Start in tmux session
 tmux new -s "$SESSION_NAME" -d
-tmux send-keys -t "$SESSION_NAME" -l "$(printf '%q ' "${CMD_ARGS[@]}")"
+tmux send-keys -t "$SESSION_NAME" -l "$FULL_CMD"
 tmux send-keys -t "$SESSION_NAME" C-m
 
 # Wait for session to start and output to appear
