@@ -72,7 +72,7 @@ type ContextMgmtState struct {
 
 const (
 	decisionPressureTokensWithStale = 30.0
-	decisionPressureTokensOnly      = 50.0
+	decisionPressureTokensOnly      = 40.0 // More aggressive: trigger at 40% instead of 50%
 	decisionPressureStaleOnly       = 10
 	decisionReminderWarmupTurns     = 2
 )
