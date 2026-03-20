@@ -55,7 +55,8 @@ sleep 2
 SESSION_ID=""
 for i in $(seq 1 30); do
     sleep 0.3
-    OUTPUT=$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null || true)
+    # Capture entire scrollback buffer, not just visible portion
+    OUTPUT=$(tmux capture-pane -t "$SESSION_NAME" -p -S - 2>/dev/null || true)
     SESSION_ID=$(echo "$OUTPUT" | grep -m1 "Session ID:" | awk '{print $3}' || true)
 
     if [ -n "$SESSION_ID" ]; then
