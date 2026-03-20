@@ -153,6 +153,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Stream stdout/stderr concurrently to avoid pipe backpressure deadlocks
 	var output strings.Builder
+	var outputMu sync.Mutex // Protect output from concurrent writes
 	var outputWG sync.WaitGroup
 	streamPipe := func(reader io.Reader) {
 		defer outputWG.Done()
@@ -161,10 +162,14 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
+			outputMu.Lock()
 			output.WriteString(line + "\n")
+			outputMu.Unlock()
 		}
 		if scanErr := scanner.Err(); scanErr != nil {
+			outputMu.Lock()
 			output.WriteString(fmt.Sprintf("stream read error: %v\n", scanErr))
+			outputMu.Unlock()
 		}
 	}
 
