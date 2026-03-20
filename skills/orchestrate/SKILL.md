@@ -97,31 +97,34 @@ Phase 2 (implementer): Fix identified issues
 
 For independent tasks, run subagents in parallel (参考 `/skill:subagent`):
 
-**⚠️ 重要：必须使用 subagent_wait.sh 等待子代理完成，而不是 sleep 或 wait**
+**⚠️ 重要：必须使用 tmux_wait.sh 等待子代理完成，而不是 sleep 或 wait**
 
 关键点：
 - 最大并行数: 2 subagents（API rate limit 保护）
 - 启动间隔: 5s delay（防止请求突发）
-- 后台运行: `(...) &` + `> /tmp/out.txt`
-- **必须使用 subagent_wait.sh 等待**: `~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION_ID" 300`
+- 使用 tmux: `start_subagent_tmux.sh` + `tmux_wait.sh`
+- **必须使用 tmux_wait.sh 等待**: `~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 300`
 - 收集结果: `cat /tmp/out.txt`
 
-### 正确工作流程（使用 start_subagent.sh）
+### 正确工作流程（使用 start_subagent_tmux.sh）
 
-**推荐方式**：使用 `start_subagent.sh` 辅助脚本自动捕获 Session ID
+**推荐方式**：使用 `start_subagent_tmux.sh` 辅助脚本自动捕获 Session ID
 
 ```bash
 # STEP 1: 启动 subagent 并自动捕获 Session ID
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/out.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Your task description")
 
-echo "Started subagent with session: $SESSION"
+# Extract session name (format: "session-name:session-id")
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
 
-# STEP 2: 使用 subagent_wait.sh 等待（支持用户中断）
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+echo "Started subagent: $SESSION_NAME"
+
+# STEP 2: 使用 tmux_wait.sh 等待
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
 
 # STEP 3: 收集结果
 cat /tmp/out.txt
@@ -129,32 +132,18 @@ cat /tmp/out.txt
 
 ### 手动方式（不推荐）
 
-如果需要手动控制，必须提取 Session ID：
+如果需要手动控制：
 
 ```bash
-# 启动 subagent
-(ai --mode headless \
+# 启动 subagent in tmux
+SESSION_NAME="subagent-$(date +%s)"
+tmux new -s "$SESSION_NAME" -d "ai --mode headless \
   --timeout 10m \
   --system-prompt @/path/to/persona.md \
-  "Your task" > /tmp/out.txt 2>&1) &
+  'Your task' 2>&1 | tee /tmp/out.txt"
 
-# 等待 Session ID 出现（最多 4 秒）
-SESSION=""
-for i in $(seq 1 20); do
-    sleep 0.2
-    SESSION=$(grep -m1 "Session ID:" /tmp/out.txt 2>/dev/null | awk '{print $3}')
-    if [ -n "$SESSION" ]; then
-        break
-    fi
-done
-
-if [ -z "$SESSION" ]; then
-    echo "Error: Failed to capture session ID"
-    exit 1
-fi
-
-# 使用 Session ID 等待（不是 PID！）
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+# 使用 tmux_wait.sh 等待
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
 
 # 收集结果
 cat /tmp/out.txt
@@ -163,16 +152,23 @@ cat /tmp/out.txt
 ### ❌ 错误方式
 
 ```bash
-# 错误：使用 PID 而不是 Session ID
-(ai --mode headless ... > /tmp/out.txt 2>&1) &
-PID=$!
-~/.ai/skills/subagent/bin/subagent_wait.sh "$PID" 300  # ❌ PID 不是 Session ID！
-
-# 错误：使用 sleep 会阻塞，无法响应用户中断
-sleep 60 &
+# 错误：使用 sleep 会阻塞
+sleep 60
 
 # 错误：直接使用 wait 无法监控进度
 wait
+```
+
+### 中断 subagent
+
+使用 tmux 的标准方式中断：
+
+```bash
+# 方法1: 发送 Ctrl+C
+tmux send-keys -t subagent-xxx C-c
+
+# 方法2: 直接 kill session
+tmux kill-session -t subagent-xxx
 ```
 
 ## Result Aggregation
@@ -207,25 +203,30 @@ After subagents complete, synthesize results:
 
 # Decomposition: 2 parallel explorers + aggregate
 
-# Launch parallel analysis using start_subagent.sh
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+# Launch parallel analysis using start_subagent_tmux.sh
+SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/mc.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling.")
 
+SESSION1_NAME=$(echo "$SESSION1" | cut -d: -f1)
+
 sleep 5
 
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/omo.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/explorer.md \
   "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback.")
 
-echo "Sessions: $SESSION1, $SESSION2"
+SESSION2_NAME=$(echo "$SESSION2" | cut -d: -f1)
 
-# Wait for both sessions
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION1,$SESSION2" 600
+echo "Sessions: $SESSION1_NAME, $SESSION2_NAME"
+
+# Wait for both sessions (sequentially)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION1_NAME" 600
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION2_NAME" 600
 
 # Aggregate and compare
 echo "## mission-control\n$(cat /tmp/mc.txt)"
@@ -239,31 +240,34 @@ echo "## Comparison\n<Key differences and similarities>"
 # User: "Add OAuth2 login to the app"
 
 # Phase 1: Research
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/research.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/researcher.md \
   "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations.")
 
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION1" 600
+SESSION1_NAME=$(echo "$SESSION1" | cut -d: -f1)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION1_NAME" 600
 
 # Phase 2: Implement (pass research findings)
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/implement.txt \
   15m \
   /Users/genius/.ai/skills/orchestrate/references/implementer.md \
   "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)")
 
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION2" 900
+SESSION2_NAME=$(echo "$SESSION2" | cut -d: -f1)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION2_NAME" 900
 
 # Phase 3: Review
-SESSION3=$(~/.ai/skills/subagent/bin/start_subagent.sh \
+SESSION3=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/review.txt \
   10m \
   /Users/genius/.ai/skills/orchestrate/references/reviewer.md \
   "Review OAuth2 implementation for security issues")
 
-~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION3" 600
+SESSION3_NAME=$(echo "$SESSION3" | cut -d: -f1)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION3_NAME" 600
 
 # Return aggregated result
 echo "## Research"

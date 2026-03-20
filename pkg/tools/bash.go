@@ -55,7 +55,8 @@ When a command times out:
 
 Examples:
   • Normal: {"command": "ls -la"}
-  • Custom timeout: {"command": "sleep 30", "timeout": 60}
+  • Custom timeout: {"command": "go build ./...", "timeout": 300}
+  • No timeout: {"command": "go test -race ./...", "timeout": 0}
   • Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)`
 }
 
@@ -87,20 +88,6 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
-
-	// Handle interrupt file for subagent_wait
-	im := getGlobalInterruptManager()
-	interruptFile := ""
-	interruptID := ""
-	if im != nil && isSubagentWaitCommand(command) {
-		// Generate interrupt file path
-		interruptFile = GenerateInterruptFilePath()
-		interruptID = im.RegisterInterruptFile(interruptFile)
-		defer im.UnregisterInterruptFile(interruptID)
-
-		// Append interrupt file to command
-		command = command + " " + interruptFile
-	}
 
 	// Handle timeout parameter (default: 120 seconds)
 	execTimeout := t.execTimeout
@@ -264,138 +251,4 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 // SetTimeout sets the timeout for command execution.
 func (t *BashTool) SetTimeout(timeout time.Duration) {
 	t.execTimeout = timeout
-}
-
-// isSubagentWaitCommand checks if command is a subagent_wait call.
-// Uses robust parsing to avoid false positives from echo, grep, comments, etc.
-func isSubagentWaitCommand(command string) bool {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return false
-	}
-
-	// Parse the first token (the command itself) using shell-like rules
-	firstToken := extractFirstCommandToken(command)
-	if firstToken == "" {
-		return false
-	}
-
-	// Check if the command name (without path) is subagent_wait.sh or subagent_wait
-	baseName := firstToken
-	if idx := strings.LastIndex(baseName, "/"); idx >= 0 {
-		baseName = baseName[idx+1:]
-	}
-
-	// Exact match on the basename
-	return baseName == "subagent_wait.sh" || baseName == "subagent_wait"
-}
-
-// extractFirstCommandToken extracts the first token from a shell command.
-func extractFirstCommandToken(command string) string {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return ""
-	}
-
-	// Skip environment variable assignments (VAR=value cmd)
-	for {
-		command = strings.TrimSpace(command)
-		if command == "" {
-			return ""
-		}
-
-		// Check if command starts with VAR=value pattern
-		eqIdx := strings.IndexByte(command, '=')
-		if eqIdx <= 0 {
-			break
-		}
-
-		varName := command[:eqIdx]
-		if !isValidEnvVarName(varName) {
-			break
-		}
-
-		// Skip past the = and the value
-		rest := command[eqIdx+1:]
-		if len(rest) == 0 {
-			break
-		}
-
-		// Handle quoted values
-		if rest[0] == '"' || rest[0] == '\'' {
-			quote := rest[0]
-			found := false
-			for i := 1; i < len(rest); i++ {
-				if rest[i] == quote {
-					command = strings.TrimSpace(rest[i+1:])
-					found = true
-					break
-				}
-			}
-			if !found {
-				return ""
-			}
-		} else {
-			// Unquoted value - skip until space
-			spaceIdx := strings.IndexByte(rest, ' ')
-			if spaceIdx < 0 {
-				return ""
-			}
-			command = strings.TrimSpace(rest[spaceIdx+1:])
-		}
-	}
-
-	if command == "" {
-		return ""
-	}
-
-	// Extract the actual command token
-	var result strings.Builder
-	inQuote := false
-	quoteChar := byte(0)
-
-	for i := 0; i < len(command); i++ {
-		ch := command[i]
-
-		switch {
-		case !inQuote && (ch == '"' || ch == '\''):
-			inQuote = true
-			quoteChar = ch
-		case inQuote && ch == quoteChar:
-			inQuote = false
-			quoteChar = 0
-		case !inQuote && (ch == ' ' || ch == '\t' || ch == '|' || ch == '&' || ch == ';' || ch == '<' || ch == '>' || ch == '#'):
-			if result.Len() > 0 {
-				return result.String()
-			}
-			if ch == '|' || ch == ';' || ch == '#' {
-				return ""
-			}
-		case !inQuote && ch == '$' && i+1 < len(command) && command[i+1] == '(':
-			return ""
-		default:
-			result.WriteByte(ch)
-		}
-	}
-
-	return result.String()
-}
-
-// isValidEnvVarName checks if s is a valid environment variable name.
-func isValidEnvVarName(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	// First char must be letter or underscore
-	if !((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z') || s[0] == '_') {
-		return false
-	}
-	// Rest can be alphanumeric or underscore
-	for i := 1; i < len(s); i++ {
-		ch := s[i]
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
-			return false
-		}
-	}
-	return true
 }

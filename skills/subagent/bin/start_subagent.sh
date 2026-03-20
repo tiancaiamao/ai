@@ -10,7 +10,7 @@
 #
 # Example:
 #   SESSION=$(start_subagent.sh /tmp/out.txt 10m @explorer.md "Analyze the codebase")
-#   ~/.ai/skills/subagent/bin/subagent_wait.sh "$SESSION" 600
+#   ~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
 #   cat /tmp/out.txt
 
 set -e
