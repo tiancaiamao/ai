@@ -757,6 +757,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionName = resolveSessionName(sessionMgr, newSessionID)
 			stateMu.Unlock()
 
+			// Update trace handler session ID
+			if handler := traceevent.GetHandler(); handler != nil {
+				if fh, ok := handler.(*traceevent.FileHandler); ok {
+					fh.SetSessionID(newSessionID)
+				}
+			}
+
 			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 			return nil
 		}
@@ -791,6 +798,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionID = newSessionID
 		sessionName = resolveSessionName(sessionMgr, newSessionID)
 		stateMu.Unlock()
+
+		// Update trace handler session ID
+		if handler := traceevent.GetHandler(); handler != nil {
+			if fh, ok := handler.(*traceevent.FileHandler); ok {
+				fh.SetSessionID(newSessionID)
+			}
+		}
 
 		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 		return nil
