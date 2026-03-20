@@ -125,7 +125,90 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 		llmMessages = append(llmMessages, llmMsg)
 	}
 
-	return llmMessages
+	return sanitizeToolCallProtocol(llmMessages)
+}
+
+// sanitizeToolCallProtocol ensures generated messages follow strict assistant/tool pairing rules:
+// - a tool message must follow a pending assistant tool call
+// - unresolved tool calls are stripped before appending non-tool messages
+func sanitizeToolCallProtocol(messages []llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	sanitized := make([]llm.LLMMessage, 0, len(messages))
+	pendingToolCalls := map[string]struct{}{}
+
+	clearPending := func() {
+		if len(pendingToolCalls) == 0 {
+			return
+		}
+		sanitized = stripPendingToolCallsFromLastAssistant(sanitized, pendingToolCalls)
+		pendingToolCalls = map[string]struct{}{}
+	}
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case "assistant":
+			clearPending()
+			sanitized = append(sanitized, msg)
+			for _, toolCall := range msg.ToolCalls {
+				if strings.TrimSpace(toolCall.ID) == "" {
+					continue
+				}
+				pendingToolCalls[toolCall.ID] = struct{}{}
+			}
+		case "tool":
+			toolCallID := strings.TrimSpace(msg.ToolCallID)
+			if toolCallID == "" || len(pendingToolCalls) == 0 {
+				continue
+			}
+			if _, ok := pendingToolCalls[toolCallID]; !ok {
+				continue
+			}
+			sanitized = append(sanitized, msg)
+			delete(pendingToolCalls, toolCallID)
+		default:
+			clearPending()
+			sanitized = append(sanitized, msg)
+		}
+	}
+
+	clearPending()
+	return sanitized
+}
+
+func stripPendingToolCallsFromLastAssistant(messages []llm.LLMMessage, pending map[string]struct{}) []llm.LLMMessage {
+	if len(messages) == 0 || len(pending) == 0 {
+		return messages
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "assistant" {
+			continue
+		}
+		if len(messages[i].ToolCalls) == 0 {
+			return messages
+		}
+
+		filteredToolCalls := make([]llm.ToolCall, 0, len(messages[i].ToolCalls))
+		for _, toolCall := range messages[i].ToolCalls {
+			if _, drop := pending[toolCall.ID]; drop {
+				continue
+			}
+			filteredToolCalls = append(filteredToolCalls, toolCall)
+		}
+		messages[i].ToolCalls = filteredToolCalls
+
+		if len(messages[i].ToolCalls) == 0 &&
+			strings.TrimSpace(messages[i].Content) == "" &&
+			len(messages[i].ContentParts) == 0 {
+			return append(messages[:i], messages[i+1:]...)
+		}
+		return messages
+	}
+
+	return messages
 }
 
 func shouldInjectStaleToolMetadata(
