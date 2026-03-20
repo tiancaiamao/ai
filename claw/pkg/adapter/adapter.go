@@ -91,12 +91,13 @@ type AgentLoop struct {
 	running    atomic.Bool
 
 	// 配置
-	model        llm.Model
-	apiKey       string
+	appConfig  *aiconfig.Config // Application config for LoopConfig
+	model      llm.Model
+	apiKey     string
 	systemPrompt string
-	tools        []agentctx.Tool
-	sessionsDir  string // session storage directory
-	compactor    *compact.Compactor
+	tools      []agentctx.Tool
+	sessionsDir string // session storage directory
+	compactor   *compact.Compactor
 
 	// Voice transcription support
 	transcriber voice.Transcriber
@@ -211,7 +212,7 @@ func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) 
 }
 
 // Config 是 AgentLoop 的配置
-type Config struct {
+type AppConfig struct {
 	Model        string          // 模型 ID，如 "claude-3-5-sonnet-20241022"
 	Provider     string          // 提供商，如 "anthropic"
 	APIKey       string          // API 密钥
@@ -236,7 +237,7 @@ type Config struct {
 }
 
 // NewAgentLoop 创建一个新的 AgentLoop
-func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
+func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
 	model := resolveModel(cfg)
 
 	slog.Info("[AgentLoop] Model resolved",
@@ -304,7 +305,7 @@ func NewAgentLoop(cfg *Config, msgBus *bus.MessageBus) *AgentLoop {
 type ModelSpec = aiconfig.ModelSpec
 
 // resolveModel 从 claw 配置目录加载模型配置
-func resolveModel(cfg *Config) llm.Model {
+func resolveModel(cfg *AppConfig) llm.Model {
 	model := llm.Model{
 		ID:       cfg.Model,
 		Provider: cfg.Provider,
@@ -611,27 +612,22 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 	// 恢复最后的 compaction summary
 	agentCtx.LastCompactionSummary = sess.GetLastCompactionSummary()
 
-	// 创建 agent
-	ag := agent.NewAgentWithContext(a.model, a.apiKey, agentCtx)
-
 	// 创建并设置 compactor
 	clawComp := &clawCompactor{
 		sess:      sess,
 		compactor: a.compactor,
 	}
-	ag.SetCompactor(clawComp)
-	ag.SetContextWindow(a.model.ContextWindow)
+
+	// 从 AgentLoop 的配置构建 LoopConfig
+	loopCfg := a.loopConfig(clawComp)
+
+	// 创建 agent
+	ag := agent.NewAgentFromConfigWithContext(a.model, a.apiKey, agentCtx, loopCfg)
 
 	// 注册工具
 	for _, tool := range a.tools {
 		ag.AddTool(tool)
 	}
-
-	// 设置思考级别
-	a.thinkingLevelMu.RLock()
-	thinkingLevel := a.thinkingLevel
-	a.thinkingLevelMu.RUnlock()
-	ag.SetThinkingLevel(thinkingLevel)
 
 	return &Session{
 		Key:       sessionKey,
@@ -639,6 +635,29 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 		Session:   sess,
 		Compactor: clawComp,
 	}, nil
+}
+
+// loopConfig builds LoopConfig from AgentLoop's configuration.
+func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
+	// Start with config defaults (if available)
+	var cfg *agent.LoopConfig
+	if a.appConfig != nil {
+		cfg = a.appConfig.ToLoopConfig(
+			aiconfig.WithCompactor(compactor),
+			aiconfig.WithContextWindow(a.model.ContextWindow),
+		)
+	} else {
+		cfg = agent.DefaultLoopConfig()
+		cfg.Compactor = compactor
+		cfg.ContextWindow = a.model.ContextWindow
+	}
+
+	// Override with runtime thinking level
+	a.thinkingLevelMu.RLock()
+	cfg.ThinkingLevel = a.thinkingLevel
+	a.thinkingLevelMu.RUnlock()
+
+	return cfg
 }
 
 // GetSession 获取会话

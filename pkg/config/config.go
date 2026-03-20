@@ -310,12 +310,20 @@ func DefaultConfig() *Config {
 }
 
 // ToLoopConfig converts Config to agent.LoopConfig.
-// Compactor and Metrics are not included because they depend on session-specific resources.
-// Pass them explicitly to override the defaults.
-func (c *Config) ToLoopConfig(compactor agent.Compactor, metrics *agent.Metrics) *agent.LoopConfig {
+// This establishes the relationship between application config and agent config.
+//
+// Usage:
+//
+//	cfg := config.LoadConfig(path)
+//	loopCfg := cfg.ToLoopConfig(
+//	    config.WithCompactor(myCompactor),
+//	    config.WithContextWindow(204800),
+//	)
+//	agent := agent.NewAgentFromConfig(model, apiKey, prompt, loopCfg)
+func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 	loopCfg := agent.DefaultLoopConfig()
 
-	// Override with config values if present
+	// Override with config file values if present
 	if c.Concurrency != nil {
 		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
 			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
@@ -327,7 +335,6 @@ func (c *Config) ToLoopConfig(compactor agent.Compactor, metrics *agent.Metrics)
 		loopCfg.ToolOutput = agent.ToolOutputLimits{
 			MaxChars: c.ToolOutput.MaxChars,
 		}
-		// Note: HashLines is not mapped because agent.ToolOutputLimits doesn't have it
 	}
 
 	if c.TaskTracking != nil && c.TaskTracking.Enabled != nil {
@@ -338,13 +345,34 @@ func (c *Config) ToLoopConfig(compactor agent.Compactor, metrics *agent.Metrics)
 		loopCfg.ContextManagementEnabled = *c.ContextManagement.Enabled
 	}
 
-	// Override dependencies if provided
-	if compactor != nil {
-		loopCfg.Compactor = compactor
-	}
-	if metrics != nil {
-		loopCfg.Metrics = metrics
+	// Apply options last (they can override config values)
+	for _, opt := range opts {
+		opt(loopCfg)
 	}
 
 	return loopCfg
+}
+
+// LoopConfigOption is a functional option for configuring LoopConfig.
+type LoopConfigOption func(*agent.LoopConfig)
+
+// WithCompactor sets the compactor for context compression.
+func WithCompactor(compactor agent.Compactor) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Compactor = compactor
+	}
+}
+
+// WithContextWindow sets the model context window size.
+func WithContextWindow(window int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ContextWindow = window
+	}
+}
+
+// WithThinkingLevel sets the thinking level.
+func WithThinkingLevel(level string) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ThinkingLevel = level
+	}
 }
