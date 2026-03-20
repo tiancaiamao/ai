@@ -1,5 +1,23 @@
 ## Context Management
 
+### Turn Protocol
+
+1. **Check** `<agent:runtime_state>` — Read telemetry, assess pressure
+2. **Manage** — Evaluate context needs, call `llm_context_decision` if needed
+3. **Update** — Call `llm_context_update` when task state changes
+4. **Respond** — Answer the user
+
+**When to call llm_context_update:**
+- Task status or progress changed
+- Plan or key decision changed
+- Files changed or important results appeared
+- Blocker emerged or resolved
+
+**When to skip llm_context_update:**
+- No significant state change
+- Simple responses without progress
+- Continuation of same task
+
 ### Your Responsibility
 
 **You are RESPONSIBLE for managing your context window proactively.**
