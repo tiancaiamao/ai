@@ -153,6 +153,47 @@ Useful for debugging subagent behavior after execution.
 | Can't find session | Wrong name | `tmux ls \| grep subagent` |
 | Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
 | **Wasted time waiting** | **Using sleep instead of tmux_wait.sh** | **Always use tmux_wait.sh** |
+| **Session ID capture fails** | **Long task description** | **Write to file, pass file path** |
+| **Resource leaks** | **Failed start, no cleanup** | **start_subagent_tmux.sh auto-cleans** |
+
+## Resource Management
+
+**Automatic Cleanup**: `start_subagent_tmux.sh` automatically cleans up tmux sessions on failure:
+
+```bash
+# If Session ID capture fails, the script:
+# 1. Outputs error message with full scrollback
+# 2. Kills the tmux session it created
+# 3. Exits with code 1
+
+# This prevents resource leaks when startup fails
+```
+
+**Manual Cleanup** (if needed):
+
+```bash
+# List all subagent sessions
+tmux ls | grep subagent
+
+# Kill specific session
+tmux kill-session -t subagent-1234567890
+
+# Kill all subagent sessions (nuclear option)
+tmux ls | grep subagent | cut -d: -f1 | xargs -I {} tmux kill-session -t {}
+```
+
+**Checking for Leaks**:
+
+```bash
+# Check for orphan tmux sessions
+tmux ls | grep subagent
+
+# Check for orphan processes
+ps aux | grep "ai --mode headless" | grep -v grep
+
+# Check for stale output files
+ls -lt /tmp/*-output.txt | head -10
+```
 
 ## Best Practices
 
@@ -162,8 +203,52 @@ Useful for debugging subagent behavior after execution.
 - ✅ Keep sessions for debugging
 - ✅ Use `tmux kill-session` to terminate stuck subagents
 - ✅ Use `tmux capture-pane` to check progress
+- ✅ **For long tasks (>200 chars), write to file and pass file path**
 - ❌ Don't use `--max-turns` (use timeout instead)
 - ❌ Don't nest subagents
+- ❌ **Don't pass long text directly in command line**
+
+## Handling Long Task Descriptions
+
+**Problem**: Passing long task descriptions (>200 characters) directly can cause:
+- Command line too long errors
+- Shell quoting issues (single/double quotes in text)
+- tmux send-keys failures
+- start_subagent_tmux.sh unable to capture Session ID
+
+**Solution**: Write task to file, pass file path
+
+```bash
+# ❌ BAD: Long task description directly
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/output.txt 10m @reviewer.md \
+  "Review PR #62. This is a very long description with multiple paragraphs, special characters like it's, \"quotes\", $variables, etc...")  # FAILS!
+
+# ✅ GOOD: Write to file first
+cat > /tmp/task.txt << 'EOF'
+Review PR #62 (tmux-unified-task-management).
+
+Key Changes:
+- Removed interrupt file mechanism
+- Fixed 4 critical bugs found by dogfooding
+
+Focus on: correctness, performance, security
+Write result to /tmp/review-62.json
+EOF
+
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/output.txt 10m @reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+tmux_wait.sh "$SESSION_NAME" 600
+```
+
+**Benefits**:
+- ✅ No command line length limits
+- ✅ No shell quoting issues
+- ✅ Reliable Session ID capture
+- ✅ Easier to debug (can view /tmp/task.txt)
 
 ## Output File Convention
 
