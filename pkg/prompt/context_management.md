@@ -2,71 +2,45 @@
 
 **You are RESPONSIBLE for keeping your context window concise.** Proactive management is expected, not optional.
 
-### The Rule: Aggressively Truncate and Compact
-
-**Truncate** stale tool outputs in batches:
-- Tool outputs with `<agent:tool ... stale="N" />` tags show staleness level (higher N = more stale)
-- Evaluate staleness and decide whether to truncate (higher N = more likely obsolete)
-- **Batch truncate** when you see 5+ stale outputs (truncate operation itself adds context)
-- Truncate older/larger outputs first
-- Always truncate before compacting
-
-**IMPORTANT - Truncate IDs Rules**:
-1. **Use ONLY IDs from current context** - from the most recent `runtime_state` or reminder message
-2. **List each ID only ONCE** - avoid duplicates in the same truncate call
-3. **IDs expire quickly** - never use IDs from old reminders (they may already be truncated)
-4. **If unsure**, check current `runtime_state.tool_output_pressure.stale_tool_outputs` for valid IDs
-
-**Compact** aggressively when context builds up:
-- Context usage ≥ 30% → compact frequently
-- Context usage < 20% → no need to compact
-- Topic shift detected → must compact immediately
-- Phase completed → compact before continuing
-
-### Decision Priority
-
-1. **Always truncate stale outputs first** (even 1-2 is enough)
-2. **Reassess** after truncation
-3. **Then compact** if context still ≥ 30%
-
 ### Turn Protocol
 
-1. **Check** `<agent:runtime_state>` — Read telemetry YAML inside XML tag, assess pressure
+1. **Check** `<agent:runtime_state>` — Read telemetry YAML, assess pressure
 2. **Manage** — Call `llm_context_decision` proactively if needed
 3. **Update** — Call `llm_context_update` when task state changes
 4. **Respond** — Answer the user
 
 ### Decision Options
 
-| Decision | When to Use | Parameters |
-|----------|-------------|------------|
-| `truncate` | 5+ stale outputs (batch for efficiency), or large outputs no longer needed | `truncate_ids`: comma-separated tool call IDs |
-| `compact` | Context ≥ 30%, or topic shift, or phase completed | `compact_confidence`: 0-100 |
-| `skip` | Context < 20%, you promise to check later | `skip_turns`: 1-30 (higher = fewer reminders) |
+| Decision | When | Parameters |
+|----------|------|------------|
+| `truncate` | 5+ stale outputs, batch for efficiency | `truncate_ids`: IDs from `<agent:tool id="...">` tags in context |
+| `compact` | Context ≥30%, topic shift, phase completed | `compact_confidence`: 0-100 |
+| `skip` | Context <20%, promise to check later | `skip_turns`: 1-30 |
 
-### Compact Confidence Guide
+### Truncate Rules
 
-Use high confidence when context is clearly obsolete. Use lower confidence when context may still be useful.
+- Tool outputs with `stale="N"` show staleness (lower N = older, more obsolete)
+- Get IDs from: (1) `<agent:tool id="..." stale="N" />` tags in context, or (2) reminder message examples
+- **Batch truncate** 5+ outputs at once (operation itself adds context)
+- **List each ID only ONCE** — no duplicates
+- **IDs expire quickly** — never use IDs from old messages, always check current context
 
-| Confidence | When to Use |
-|------------|-------------|
-| 80-100 | Topic shift, phase completed, or context > 40% |
-| 60-79 | Context 30-40% with many stale outputs |
-| 40-59 | Context 30-40%, ongoing related work |
-| 20-39 | Context just crossed 30%, early in task |
-| 0-19 | Low confidence, prefer skip if context < 20% |
+**Anti-patterns:**
+- ❌ Don't copy IDs from previous reminders (likely already expired, results in "0 truncated")
+- ❌ Don't truncate fewer than 5 outputs (inefficient, operation cost > benefit)
+- ❌ Don't reuse the same ID list twice (always refresh from current context)
 
-### Topic Shift Detection
+### Compact Confidence
 
-Detect and act on these signs proactively:
-- User starts a new, unrelated task
-- Current task phase is completed
-- Many stale outputs from previous phases
+| Confidence | When |
+|------------|------|
+| 80-100 | Topic shift, phase completed, context >40% |
+| 40-79 | Context 30-40%, ongoing work |
+| 0-39 | Low confidence, prefer skip if context <20% |
 
 ### Proactive Score
 
-Your score in `runtime_state.context_metrics.decision.score`:
 - `proactive > reminded` → score improves → fewer reminders
 - `reminded > proactive` → score degrades → more frequent reminders
 
-**IMPORTANT:** When you receive `remind`, call `llm_context_decision` immediately.
+**When you receive `remind`, call `llm_context_decision` immediately.**

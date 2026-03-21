@@ -32,7 +32,8 @@ Summarize this coding conversation for context preservation.
 
 <critical>
 - Preserve EXACT paths, errors, names (use quotes)
-- Keep even if empty
- "What's Complete"- Keep under 800 tokens
+- Keep ALL sections even if empty — write "None" if truly empty
+- Keep "What's Complete" — never drop this section
+- Keep under 800 tokens total
 - Omit pleasantries
 </critical>

@@ -1,27 +1,19 @@
 ## Task Tracking
 
-Track multi-step tasks using `llm_context_update` to maintain awareness of progress and direction.
+Track multi-step tasks using `llm_context_update`.
 
-### When to Update
+**Update** (with markdown content) when:
+- Task status changes, decisions made, files changed
+- Progress milestone reached, blocker emerged/resolved
 
-Call `llm_context_update` with markdown content when meaningful progress or changes occur:
-- Task status or milestone reached
-- Plan or key decision made
-- Significant files changed or results produced
-- Blocker emerged or resolved
+**Skip** (with `skip=true, reasoning="..."`) when:
+- Simple questions, no progress, routine responses
 
-### When to Skip
+**Important:** Always call `llm_context_update` — with content or `skip=true`. This prevents reminder spam.
 
-Call `llm_context_update` with `skip=true` when:
-- Answering simple questions
-- No task progress to report
-- Routine responses without state changes
+### Update Example
 
-**Important:** Always call `llm_context_update` — either with content or with `skip=true`. This signals you're active and prevents reminder spam.
-
-### How to Update
-
-Provide structured markdown with clear sections:
+**Good:** Specific, actionable status
 
 ```markdown
 ## Current Task
@@ -29,19 +21,15 @@ Provide structured markdown with clear sections:
 - Status: 60% complete
 - Done: Core logic, unit tests
 - Next: Integration tests
-- Blockers: None
 ```
 
-### Skip Pattern
+**Bad:** Too vague, no actionable info
 
-When no update needed but you're actively working:
-
-```
-skip: true
-reasoning: "Answering a question, no task progress"
+```markdown
+Working on it...
 ```
 
-### Why This Matters
-
-- **With skip:** Resets reminder counter → fewer interruptions
-- **Without calling llm_context_update:** System thinks you're idle → frequent reminders (penalty)
+**When to skip (skip=true):**
+- Simple questions without task progress
+- Routine responses without state changes
+- Quick clarifications or confirmations

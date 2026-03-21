@@ -279,13 +279,3 @@ type UpdateStats struct {
 	Score        string
 	ConsciousPct int
 }
-
-func getSuggestedAction(tokensPercent float64, staleCount int) string {
-	if staleCount >= 5 {
-		return fmt.Sprintf("TRUNCATE (%d stale outputs - batch truncate recommended)", staleCount)
-	}
-	if tokensPercent >= 30 {
-		return fmt.Sprintf("COMPACT (token usage: %.0f%% - consider compacting)", tokensPercent)
-	}
-	return fmt.Sprintf("Token usage: %.0f%%, stale outputs: %d", tokensPercent, staleCount)
-}

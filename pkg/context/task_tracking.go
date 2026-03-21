@@ -1,9 +1,7 @@
 package context
 
 import (
-	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 )
@@ -225,75 +223,4 @@ func (t *TaskTrackingState) GetSessionDir() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.sessionDir
-}
-
-// GetDecisionReminderMessage returns a user message reminder for llm_context_decision.
-// This is kept here for backward compatibility but uses ContextMgmtState.
-func (t *TaskTrackingState) GetDecisionReminderMessage(availableToolIDs []string, state *ContextMgmtState, urgency string, meta ContextMeta, staleCount int) string {
-	proactive := 0
-	reminded := 0
-	frequency := 10
-	score := "no_data"
-	if state != nil {
-		proactive = state.ProactiveDecisions
-		reminded = state.ReminderNeeded
-		frequency = state.ReminderFrequency
-		score = state.GetScore()
-	}
-
-	// Build truncate_ids example from available (non-truncated) tool IDs
-	var truncateIDsExample string
-	if len(availableToolIDs) > 0 {
-		limit := 5
-		if len(availableToolIDs) < limit {
-			limit = len(availableToolIDs)
-		}
-		exampleIDs := make([]string, limit)
-		for i := 0; i < limit; i++ {
-			exampleIDs[i] = availableToolIDs[i]
-		}
-		if len(availableToolIDs) > limit {
-			truncateIDsExample = fmt.Sprintf(`"%s, ...%d more"`,
-				strings.Join(exampleIDs, ", "), len(availableToolIDs)-limit)
-		} else {
-			truncateIDsExample = fmt.Sprintf(`"%s"`, strings.Join(exampleIDs, ", "))
-		}
-	}
-
-	return fmt.Sprintf(`<agent:remind comment="system message by agent, not from real user">
-
-💡 Context management required (%s): tokens at %d%%, %d stale tool outputs.
-
-<context_meta>
-tokens_used: %d
-tokens_max: %d
-tokens_percent: %.0f%%
-messages_in_history: %d
-</context_meta>
-
-<decision_autonomy>
-proactive_decisions: %d
-reminder_needed: %d
-reminder_frequency_turns: %d
-autonomy_score: %s
-</decision_autonomy>
-
-Suggested: %s
-
-HOW TO TRUNCATE (IMPORTANT):
-1. Find IDs with stale="N" attribute: <agent:tool id="call_xxx" stale="5" />
-2. Batch clean: get 50-100 IDs at once
-3. Pass as comma-separated string: truncate_ids: "call_abc, call_def, ..."
-
-EXAMPLE (copy and modify):
-decision: "truncate"
-reasoning: "Cleaning up %d stale tool outputs"
-truncate_ids: %s
-
-⚠️ WARNING: Including already-truncated IDs will result in "0 truncated".`,
-		urgency, int(meta.TokensPercent), staleCount,
-		meta.TokensUsed, meta.TokensMax, meta.TokensPercent, meta.MessagesInHistory,
-		proactive, reminded, frequency, score,
-		getSuggestedAction(meta.TokensPercent, staleCount),
-		staleCount, truncateIDsExample)
 }
