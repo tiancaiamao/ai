@@ -646,7 +646,9 @@ func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
 			aiconfig.WithCompactor(compactor),
 			aiconfig.WithContextWindow(a.model.ContextWindow),
 		)
-	} else {
+	}
+	// Fallback if appConfig is nil or ToLoopConfig returned nil
+	if cfg == nil {
 		cfg = agent.DefaultLoopConfig()
 		cfg.Compactor = compactor
 		cfg.ContextWindow = a.model.ContextWindow

@@ -24,7 +24,7 @@ func TestRegisterHeadlessToolsIncludesContextDecisionTool(t *testing.T) {
 		128000,
 	)
 
-	registerHeadlessTools(registry, ws, compactor, &config.Config{})
+	registerHeadlessTools(registry, ws, compactor, config.DefaultConfig())
 
 	found := false
 	for _, tool := range registry.All() {

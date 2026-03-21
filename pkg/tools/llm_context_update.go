@@ -47,16 +47,14 @@ reasoning: "No state change, just answering user question"`
 }
 
 // Parameters returns the tool parameter schema.
-// Uses JSON Schema if-then-else to express conditional required fields:
-// - skip=false (default): content is required
-// - skip=true: reasoning is required
+// Conditional required: content required when skip=false, reasoning required when skip=true
 func (t *LLMContextUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"content": map[string]any{
 				"type":        "string",
-				"description": "Markdown content to record. Required when skip=false.",
+				"description": "Markdown content to record. Required when skip=false. Ignored when skip=true.",
 			},
 			"skip": map[string]any{
 				"type":        "boolean",
@@ -65,20 +63,8 @@ func (t *LLMContextUpdateTool) Parameters() map[string]any {
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
-				"description": "Required when skip=true. Explain why you're skipping the update.",
+				"description": "Required when skip=true. Explain why you're skipping the update. Ignored when skip=false.",
 			},
-		},
-		// Conditional required fields based on skip value
-		"if": map[string]any{
-			"properties": map[string]any{
-				"skip": map[string]any{"const": false},
-			},
-		},
-		"then": map[string]any{
-			"required": []string{"content"},
-		},
-		"else": map[string]any{
-			"required": []string{"reasoning"},
 		},
 	}
 }
