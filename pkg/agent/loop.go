@@ -35,6 +35,12 @@ const (
 type LoopConfig struct {
 	Model                   llm.Model
 	APIKey                  string
+	// GetModel returns the current model. If nil, falls back to Model field.
+	// This allows dynamic model switching without restarting the loop.
+	GetModel                 func() llm.Model
+	// GetAPIKey returns the current API key. If nil, falls back to APIKey field.
+	// This allows dynamic API key switching without restarting the loop.
+	GetAPIKey                func() string
 	Executor                *ExecutorPool // agentctx.Tool executor with concurrency control
 	Metrics                 *Metrics      // Metrics collector
 	ToolOutput              ToolOutputLimits
@@ -49,6 +55,22 @@ type LoopConfig struct {
 	ContextWindow           int           // Context window for the model (0=use default 128000)
 	TaskTrackingEnabled     bool          // Enable task tracking reminders (llm_context_update)
 	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
+}
+
+// getEffectiveModel returns the current model, using GetModel callback if available.
+func getEffectiveModel(config *LoopConfig) llm.Model {
+	if config.GetModel != nil {
+		return config.GetModel()
+	}
+	return config.Model
+}
+
+// getEffectiveAPIKey returns the current API key, using GetAPIKey callback if available.
+func getEffectiveAPIKey(config *LoopConfig) string {
+	if config.GetAPIKey != nil {
+		return config.GetAPIKey()
+	}
+	return config.APIKey
 }
 
 // DefaultLoopConfig returns a default LoopConfig with sensible values.
@@ -818,10 +840,11 @@ func streamAssistantResponse(
 
 	// Stream LLM response
 	llmStart := time.Now()
+	model := getEffectiveModel(config)
 	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
-		traceevent.Field{Key: "model", Value: config.Model.ID},
-		traceevent.Field{Key: "provider", Value: config.Model.Provider},
-		traceevent.Field{Key: "api", Value: config.Model.API},
+		traceevent.Field{Key: "model", Value: model.ID},
+		traceevent.Field{Key: "provider", Value: model.Provider},
+		traceevent.Field{Key: "api", Value: model.API},
 		traceevent.Field{Key: "attempt", Value: llmAttemptFromContext(ctx)},
 		traceevent.Field{Key: "timeout_ms", Value: llmTimeout.Milliseconds()},
 	)
@@ -829,7 +852,7 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-	llmStream := llm.StreamLLM(llmCtx, config.Model, llmCtxParams, config.APIKey)
+	llmStream := llm.StreamLLM(llmCtx, model, llmCtxParams, getEffectiveAPIKey(config))
 
 	type toolCallState struct {
 		id        string
@@ -1004,6 +1027,7 @@ func streamAssistantResponse(
 				}))
 			}
 			var finalMessage agentctx.AgentMessage
+			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				// Prefer the incrementally built message so thinking/tool-tag content
 				// emitted via deltas is not lost when done payload omits it.
@@ -1014,9 +1038,9 @@ func streamAssistantResponse(
 				finalMessage = agentctx.NewAssistantMessage()
 			}
 
-			finalMessage.API = config.Model.API
-			finalMessage.Provider = config.Model.Provider
-			finalMessage.Model = config.Model.ID
+			finalMessage.API = model.API
+			finalMessage.Provider = model.Provider
+			finalMessage.Model = model.ID
 			finalMessage.Timestamp = time.Now().UnixMilli()
 			finalMessage.StopReason = e.StopReason
 			finalMessage.Usage = &agentctx.Usage{
