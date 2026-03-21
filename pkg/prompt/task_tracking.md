@@ -1,25 +1,21 @@
-## Planning
+## Task Tracking
 
-Break down complex tasks into clear, sequential steps. Maintain awareness of current progress and remaining work.
+Track multi-step tasks using `llm_context_update` to maintain awareness of progress and direction.
 
-**Before implementing:**
-- Define the scope and boundaries of the task
-- Identify dependencies and potential blockers
-- Plan the implementation order
+### When to Update
 
-**During execution:**
-- Track progress against the plan
-- Update status when significant milestones are reached
-- Note decisions and their rationale
+Call `llm_context_update` when meaningful progress or changes occur:
+- Task status or milestone reached
+- Plan or key decision made
+- Significant files changed or results produced
+- Blocker emerged or resolved
 
-**When blocked:**
-- Clearly articulate the blocker
-- Suggest possible workarounds or alternatives
-- Report blockers to the user with actionable context
+**Do not update** for simple questions, no-progress continuations, or routine responses.
 
-**Use `llm_context_update` sparingly** — only when meaningful progress or decisions occur. Frequent updates waste context space.
+### How to Update
 
-**Example update:**
+Provide structured markdown with clear sections:
+
 ```markdown
 ## Current Task
 - Implementing feature X
@@ -28,3 +24,19 @@ Break down complex tasks into clear, sequential steps. Maintain awareness of cur
 - Next: Integration tests
 - Blockers: None
 ```
+
+### Skip Pattern
+
+When no update needed but you're actively working, call `llm_context_update` with `skip=true`:
+
+```
+skip: true
+reasoning: "Answering a question, no task progress"
+```
+
+This prevents reminder spam by signaling you're alive.
+
+### Why This Matters
+
+- **With skip:** Resets reminder counter → fewer interruptions
+- **Without skip:** System thinks you're idle → frequent reminders (penalty)
