@@ -4,3 +4,9 @@ bin/*
 coverage.out
 ai
 
+-e 
+# Benchmark
+__pycache__/
+*.pyc
+benchmark/results/
+benchmark/tasks/*/tests/output/
