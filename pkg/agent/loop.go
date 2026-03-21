@@ -794,6 +794,7 @@ func streamAssistantResponse(
 
 			// Record that a reminder was shown this turn (for proactive/reminded tracking)
 			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, urgency)
+			agentCtx.ContextMgmtState.MarkReminderShown()
 
 			// Trace event for context decision reminder
 			traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
