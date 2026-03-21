@@ -7,5 +7,4 @@ ai
 # Benchmark temp
 __pycache__/
 *.pyc
-benchmark/results/*.json
-!benchmark/results/result_20260321_025137.json
+benchmark/results/progress.json
