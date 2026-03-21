@@ -6,8 +6,7 @@
 
 1. **Check** `<agent:runtime_state>` — Read telemetry YAML, assess pressure
 2. **Manage** — Call `llm_context_decision` proactively if needed
-3. **Update** — Call `llm_context_update` when task state changes
-4. **Respond** — Answer the user
+3. **Respond** — Answer the user
 
 ### Decision Options
 

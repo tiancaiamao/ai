@@ -288,13 +288,9 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 		}
 	}
 
-	if c.TaskTracking {
-		loopCfg.TaskTrackingEnabled = true
-	}
-
-	if c.ContextManagement {
-		loopCfg.ContextManagementEnabled = true
-	}
+	// Explicitly set these flags based on config (not just conditional set to true)
+	loopCfg.TaskTrackingEnabled = c.TaskTracking
+	loopCfg.ContextManagementEnabled = c.ContextManagement
 
 	// Apply options last (they can override config values)
 	for _, opt := range opts {

@@ -146,8 +146,14 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 	if compactor != nil {
-		registry.Register(tools.NewLLMContextUpdateTool())
-		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+		// Only register llm_context_update when taskTracking is enabled
+		if cfg.TaskTracking {
+			registry.Register(tools.NewLLMContextUpdateTool())
+		}
+		// Only register llm_context_decision when contextManagement is enabled
+		if cfg.ContextManagement {
+			registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+		}
 	}
 }
 
