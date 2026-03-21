@@ -11,6 +11,12 @@
 - Truncate older/larger outputs first
 - Always truncate before compacting
 
+**IMPORTANT - Truncate IDs Rules**:
+1. **Use ONLY IDs from current context** - from the most recent `runtime_state` or reminder message
+2. **List each ID only ONCE** - avoid duplicates in the same truncate call
+3. **IDs expire quickly** - never use IDs from old reminders (they may already be truncated)
+4. **If unsure**, check current `runtime_state.tool_output_pressure.stale_tool_outputs` for valid IDs
+
 **Compact** aggressively when context builds up:
 - Context usage ≥ 30% → compact frequently
 - Context usage < 20% → no need to compact
