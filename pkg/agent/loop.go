@@ -781,11 +781,12 @@ func streamAssistantResponse(
 			staleCount,
 		)
 		if showDecisionReminder {
-			// Get available (non-truncated) tool IDs to include in reminder example
-			_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
+			// Minimal reminder - just nudge LLM to check runtime_state and stale outputs
+			// LLM should autonomously decide what to truncate based on stale="N" attributes
+			decisionReminderContent := `<agent:remind comment="system message by agent, not from real user">
 
-			meta := agentCtx.LLMContext.GetMeta()
-			decisionReminderContent := agentCtx.TaskTrackingState.GetDecisionReminderMessage(availableToolIDs, agentCtx.ContextMgmtState, urgency, meta, staleCount)
+💡 Context management may be needed. Check runtime_state and stale tool outputs.
+</agent:remind>`
 			decisionReminderMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: decisionReminderContent,
