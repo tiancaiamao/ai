@@ -82,7 +82,7 @@ func TestSetToolOutputLimitsNormalizesLimit(t *testing.T) {
 	a := &Agent{}
 	a.SetToolOutputLimits(ToolOutputLimits{MaxChars: 204800})
 
-	if a.toolOutput.MaxChars != 10000 {
-		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to 10000, got %d", a.toolOutput.MaxChars)
+	if a.LoopConfig.ToolOutput.MaxChars != 10000 {
+		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to 10000, got %d", a.LoopConfig.ToolOutput.MaxChars)
 	}
 }

@@ -146,8 +146,14 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 	if compactor != nil {
-		registry.Register(tools.NewLLMContextUpdateTool())
-		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+		// Only register llm_context_update when taskTracking is enabled
+		if cfg.TaskTracking {
+			registry.Register(tools.NewLLMContextUpdateTool())
+		}
+		// Only register llm_context_decision when contextManagement is enabled
+		if cfg.ContextManagement {
+			registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+		}
 	}
 }
 
@@ -180,6 +186,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		return writeHeadlessError(output, fmt.Sprintf("failed to resolve API key: %v", err))
 	}
+	slog.Info("API key resolved", "provider", model.Provider, "key_length", len(apiKey))
 
 	// Get current working directory
 	cwd, err := os.Getwd()
@@ -335,7 +342,11 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 			promptBuilder.SetLLMContext(wm)
 		}
 	}
-	
+
+	// Set task tracking and context management based on config
+	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
 	if customSystemPrompt != "" {
@@ -354,6 +365,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		if sessionDir != "" {
 			wm := agentctx.NewLLMContext(sessionDir)
 			agentCtx.LLMContext = wm
+			agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
 		}
 	}
 
@@ -378,8 +390,32 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		}
 	}
 
-	// Create agent
-	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
+	// Create session compactor first (needed for LoopConfig)
+	sessionWriter := newSessionWriter(256)
+	defer sessionWriter.Close()
+	sessionComp := &sessionCompactor{
+		session:   sess,
+		compactor: compactor,
+		writer:    sessionWriter,
+	}
+
+	// Build LoopConfig from application config
+	loopCfg := cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(currentContextWindow),
+		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+	)
+
+	// Set model and apiKey (not handled by ToLoopConfig)
+	loopCfg.Model = model
+	loopCfg.APIKey = apiKey
+
+	// Set task tracking and context management based on config
+	loopCfg.TaskTrackingEnabled = cfg.TaskTracking
+	loopCfg.ContextManagementEnabled = cfg.ContextManagement
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 
 	// Set max turns if specified
@@ -388,16 +424,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
 
-	sessionWriter := newSessionWriter(256)
-	defer sessionWriter.Close()
-	sessionComp := &sessionCompactor{
-		session:   sess,
-		compactor: compactor,
-		writer:    sessionWriter,
-	}
-	ag.SetCompactor(sessionComp)
-	ag.SetContextWindow(currentContextWindow)
-	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
+	// LoopConfig already includes TaskTracking and ContextManagement settings
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

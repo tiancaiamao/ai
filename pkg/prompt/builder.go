@@ -55,14 +55,22 @@ type Builder struct {
 
 	// Token usage percent (for hint message generation)
 	tokensPercent float64
+
+	// Task tracking enabled (controls task_tracking.md inclusion)
+	taskTrackingEnabled bool
+
+	// Context management enabled (controls context_management.md inclusion)
+	contextManagementEnabled bool
 }
 
 // NewBuilder creates a new prompt builder.
 func NewBuilder(basePrompt, cwd string) *Builder {
 	return &Builder{
-		base:    basePrompt,
-		cwd:     cwd,
-		minimal: false,
+		base:                     basePrompt,
+		cwd:                      cwd,
+		minimal:                  false,
+		taskTrackingEnabled:      true, // Default: enabled
+		contextManagementEnabled: true, // Default: enabled
 	}
 }
 
@@ -70,10 +78,12 @@ func NewBuilder(basePrompt, cwd string) *Builder {
 // The workspace will be queried for the current directory each time the prompt is built.
 func NewBuilderWithWorkspace(basePrompt string, ws *tools.Workspace) *Builder {
 	return &Builder{
-		base:      basePrompt,
-		cwd:       "", // Not used when workspace is set
-		workspace: ws,
-		minimal:   false,
+		base:                     basePrompt,
+		cwd:                      "", // Not used when workspace is set
+		workspace:                ws,
+		minimal:                  false,
+		taskTrackingEnabled:      true, // Default: enabled
+		contextManagementEnabled: true, // Default: enabled
 	}
 }
 
@@ -158,6 +168,18 @@ func (b *Builder) SetTokensPercent(percent float64) *Builder {
 	return b
 }
 
+// SetTaskTrackingEnabled sets whether task tracking prompt is included.
+func (b *Builder) SetTaskTrackingEnabled(enabled bool) *Builder {
+	b.taskTrackingEnabled = enabled
+	return b
+}
+
+// SetContextManagementEnabled sets whether context management prompt is included.
+func (b *Builder) SetContextManagementEnabled(enabled bool) *Builder {
+	b.contextManagementEnabled = enabled
+	return b
+}
+
 // Build generates the final system prompt.
 func (b *Builder) Build() string {
 	sections := []string{}
@@ -172,9 +194,14 @@ func (b *Builder) Build() string {
 		sections = append(sections, b.buildWorkspaceSection())
 	}
 
-	// 3. LLM Context (if available)
-	if wm := b.buildLLMContextSection(); wm != "" {
-		sections = append(sections, wm)
+	// 3. LLM Context sections (task tracking and context management)
+	if b.llmContext != nil {
+		if b.taskTrackingEnabled {
+			sections = append(sections, b.buildTaskTrackingSection())
+		}
+		if b.contextManagementEnabled {
+			sections = append(sections, b.buildContextManagementSection())
+		}
 	}
 
 	// 4. Tooling (always included)
@@ -211,30 +238,21 @@ Your working directory is: %s
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.GetCWD(), notes)
 }
 
-func (b *Builder) buildLLMContextSection() string {
-	if b.llmContext == nil {
-		return ""
-	}
-
-	// Build the system prompt section explaining the llm context mechanism
-	// This tells the LLM WHERE the file is and HOW to update it
-	// overviewPath := b.llmContext.GetPath()
-	// detailDir := b.llmContext.GetDetailDir()
-
-	// Use context meta if available
+func (b *Builder) buildTaskTrackingSection() string {
 	if b.contextMeta != "" {
-		return llmContextPrompt + `
+		return taskTrackingPrompt + `
 
 ---
 
 <context_meta>
 ` + b.contextMeta + `
-</context_meta>
-
-💡 Remember to update your llm context to track progress.`
+</context_meta>`
 	}
+	return taskTrackingPrompt
+}
 
-	return llmContextPrompt
+func (b *Builder) buildContextManagementSection() string {
+	return contextManagementPrompt
 }
 
 func (b *Builder) buildToolingSection() string {

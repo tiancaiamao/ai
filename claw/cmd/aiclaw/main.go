@@ -203,7 +203,7 @@ func main() {
 	toolRegistry.Register(tools.NewGrepTool(workspace))
 	toolRegistry.Register(tools.NewEditTool(workspace))
 
-	agentConfig := &adapter.Config{
+	agentConfig := &adapter.AppConfig{
 		Model:           cfg.Model.ID,
 		Provider:        cfg.Model.Provider,
 		APIURL:          cfg.Model.BaseURL,

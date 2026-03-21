@@ -69,3 +69,45 @@ func TestBashToolTimeoutDetection(t *testing.T) {
 	assert.Contains(t, result.Text, "timed out")
 	assert.Contains(t, result.Text, "tmux") // Points to tmux skill for long-running tasks
 }
+
+func TestBashToolLargeSingleLineOutput(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	// Create a file with a very large single line (larger than Scanner's default 64KB limit)
+	// This tests that bufio.Reader.ReadString handles large lines without hanging
+	cmd := `dd if=/dev/zero bs=1M count=10 2>/dev/null | head -c 10485760 | tr '\0' 'x' > /tmp/large_single_line.txt && wc -c /tmp/large_single_line.txt`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// First create the file
+	_, err := tool.Execute(ctx, map[string]any{"command": cmd, "timeout": float64(5)})
+	assert.NoError(t, err)
+
+	// Now cat the large single-line file - should complete quickly without timeout
+	args := map[string]any{
+		"command": "cat /tmp/large_single_line.txt | head -1",
+		"timeout": float64(5),
+	}
+
+	start := time.Now()
+	blocks, err := tool.Execute(ctx, args)
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, blocks)
+
+	result := blocks[0].(agentctx.TextContent)
+	// Should NOT contain timeout message
+	assert.NotContains(t, result.Text, "timed out")
+	assert.NotContains(t, result.Text, "was terminated")
+	// Should contain the large output
+	assert.Greater(t, len(result.Text), 1000000)
+
+	// Should complete in reasonable time (< 2 seconds for 10MB)
+	assert.Less(t, elapsed.Milliseconds(), int64(2000), "Large file processing should be fast")
+
+	// Cleanup
+	tool.Execute(ctx, map[string]any{"command": "rm -f /tmp/large_single_line.txt", "timeout": float64(1)})
+}

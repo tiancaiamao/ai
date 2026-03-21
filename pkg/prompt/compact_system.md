@@ -19,6 +19,12 @@ MUST PRESERVE:
 
 DISCARD:
 - Pleasantries, redundant explanations, abandoned approaches
+
+ANTI-PATTERNS:
+- ❌ Don't paraphrase error messages (keep EXACT text)
+- ❌ Don't drop "What's Complete" section (critical for continuity)
+- ❌ Don't merge "Decisions Made" with other sections
+- ❌ Don't omit file paths or function names
 </critical>
 
 Output ONLY the structured summary. Do NOT continue the conversation. This matters.

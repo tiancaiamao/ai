@@ -19,8 +19,11 @@ type AgentContext struct {
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
 
-	// LLMContext is the agent's llm context for context management.
+	// LLMContext is the agent's llm context file manager.
 	LLMContext *LLMContext `json:"-"`
+
+	// TaskTrackingState tracks llm_context_update behavior for reminders.
+	TaskTrackingState *TaskTrackingState `json:"-"`
 
 	// Runtime meta snapshot state for stable system-tail injection.
 	RuntimeMetaSnapshot string `json:"-"`
@@ -69,7 +72,7 @@ type ContextMgmtState struct {
 
 const (
 	decisionPressureTokensWithStale = 30.0
-	decisionPressureTokensOnly      = 50.0
+	decisionPressureTokensOnly      = 40.0 // More aggressive: trigger at 40% instead of 50%
 	decisionPressureStaleOnly       = 10
 	decisionReminderWarmupTurns     = 2
 )
@@ -100,11 +103,32 @@ func (s *ContextMgmtState) MarkReminderShown() {
 }
 
 // MarkDecisionMade marks that LLM called llm_context_decision this turn.
+// It also resets pressure counters and adjusts reminder frequency for proactive behavior.
 func (s *ContextMgmtState) MarkDecisionMade() {
 	if s == nil {
 		return
 	}
 	s.DecisionMadeThisTurn = true
+
+	// Reset pressure counters when LLM makes a decision
+	s.DecisionPressureTurns = 0
+	s.LastDecisionTurn = s.CurrentTurn
+
+	// If this was a proactive decision (no reminder shown), reward it
+	if !s.ReminderShownThisTurn {
+		s.ProactiveDecisions++
+		// Increase reminder interval for proactive behavior
+		if s.ProactiveDecisions > s.ReminderNeeded && s.ReminderFrequency < 30 {
+			s.ReminderFrequency++
+			slog.Debug("[ContextMgmt] Increasing reminder interval (proactive decision)",
+				"frequency", s.ReminderFrequency,
+				"proactive", s.ProactiveDecisions,
+				"reminded", s.ReminderNeeded)
+		}
+	}
+
+	// Update LastReminderTurn to simulate "self-reminder" and prevent immediate re-reminder
+	s.LastReminderTurn = s.CurrentTurn
 }
 
 // ResetTurnTracking resets per-turn tracking flags at the start of each turn.

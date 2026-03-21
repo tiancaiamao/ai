@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/logger"
@@ -34,6 +35,12 @@ type Config struct {
 
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
+
+	// Task tracking (llm_context_update)
+	TaskTracking bool `json:"taskTracking"`
+
+	// Context management (llm_context_decision)
+	ContextManagement bool `json:"contextManagement"`
 
 	// Workspace is the working directory path (the git repo path bound at startup)
 	Workspace string `json:"workspace,omitempty"`
@@ -162,18 +169,7 @@ func expandLogPath(path string) string {
 // Environment variables take precedence over config file values.
 func LoadConfig(configPath string) (*Config, error) {
 	// Start with default config
-	cfg := &Config{
-		Model: ModelConfig{
-			ID:       getEnv("ZAI_MODEL", "glm-4.5-air"),
-			Provider: "zai",
-			BaseURL:  getEnv("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
-			API:      "openai-completions",
-		},
-		Compactor:   compact.DefaultConfig(),
-		Concurrency: DefaultConcurrencyConfig(),
-		ToolOutput:  DefaultToolOutputConfig(),
-		Log:         DefaultLogConfig(),
-	}
+	cfg := DefaultConfig()
 
 	// Load from file if exists
 	if _, err := os.Stat(configPath); err == nil {
@@ -181,20 +177,15 @@ func LoadConfig(configPath string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-
-		// Merge with defaults (file values override defaults)
 		if err := json.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file: %w", err)
 		}
 	}
 
 	// Environment variables override config file
-	if val := os.Getenv("ZAI_MODEL"); val != "" {
-		cfg.Model.ID = val
-	}
-	if val := os.Getenv("ZAI_BASE_URL"); val != "" {
-		cfg.Model.BaseURL = val
-	}
+	cfg.Model.ID = getEnv("ZAI_MODEL", cfg.Model.ID)
+	cfg.Model.BaseURL = getEnv("ZAI_BASE_URL", cfg.Model.BaseURL)
+
 	cfg.ToolOutput = normalizeToolOutputConfig(cfg.ToolOutput)
 
 	return cfg, nil
@@ -248,4 +239,108 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// DefaultConfig returns a default Config with sensible values.
+// This is the base configuration that can be overridden by LoadConfig.
+func DefaultConfig() *Config {
+	return &Config{
+		Model: ModelConfig{
+			ID:       "glm-4.5-air",
+			Provider: "zai",
+			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
+			API:      "openai-completions",
+		},
+		Compactor:         compact.DefaultConfig(),
+		Concurrency:      DefaultConcurrencyConfig(),
+		ToolOutput:       DefaultToolOutputConfig(),
+		Log:              DefaultLogConfig(),
+		TaskTracking:     true, // Default enabled
+		ContextManagement: true, // Default enabled
+	}
+}
+
+// ToLoopConfig converts Config to agent.LoopConfig.
+// This establishes the relationship between application config and agent config.
+//
+// Usage:
+//
+//	cfg := config.LoadConfig(path)
+//	loopCfg := cfg.ToLoopConfig(
+//	    config.WithCompactor(myCompactor),
+//	    config.WithContextWindow(204800),
+//	)
+//	agent := agent.NewAgentFromConfig(model, apiKey, prompt, loopCfg)
+func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
+	loopCfg := agent.DefaultLoopConfig()
+
+	// Override with config file values if present
+	if c.Concurrency != nil {
+		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
+			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
+			"queueTimeout":       c.Concurrency.QueueTimeout,
+		})
+	}
+
+	if c.ToolOutput != nil {
+		loopCfg.ToolOutput = agent.ToolOutputLimits{
+			MaxChars: c.ToolOutput.MaxChars,
+		}
+	}
+
+	// Explicitly set these flags based on config (not just conditional set to true)
+	loopCfg.TaskTrackingEnabled = c.TaskTracking
+	loopCfg.ContextManagementEnabled = c.ContextManagement
+
+	// Apply options last (they can override config values)
+	for _, opt := range opts {
+		opt(loopCfg)
+	}
+
+	return loopCfg
+}
+
+// LoopConfigOption is a functional option for configuring LoopConfig.
+type LoopConfigOption func(*agent.LoopConfig)
+
+// WithCompactor sets the compactor for context compression.
+func WithCompactor(compactor agent.Compactor) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Compactor = compactor
+	}
+}
+
+// WithContextWindow sets the model context window size.
+func WithContextWindow(window int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ContextWindow = window
+	}
+}
+
+// WithThinkingLevel sets the thinking level.
+func WithThinkingLevel(level string) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ThinkingLevel = level
+	}
+}
+
+// WithToolCallCutoff sets the tool call cutoff.
+func WithToolCallCutoff(cutoff int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolCallCutoff = cutoff
+	}
+}
+
+// WithExecutor sets the executor for the loop config.
+func WithExecutor(executor *agent.ExecutorPool) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Executor = executor
+	}
+}
+
+// WithToolOutputLimits sets the tool output limits for the loop config.
+func WithToolOutputLimits(limits agent.ToolOutputLimits) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolOutput = limits
+	}
 }

@@ -201,6 +201,11 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	// Use workspace to get dynamic cwd for each prompt build
 	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+
+	// Set task tracking and context management based on config
+	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+
 	systemPrompt := promptBuilder.Build()
 
 	// Helper function to create a new agent context
@@ -213,9 +218,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	}
 	agentCtx := createBaseContext()
 
-	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
-	defer ag.Shutdown()
-
+	// Build LoopConfig from application config
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
@@ -223,16 +226,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		compactor: compactor,
 		writer:    sessionWriter,
 	}
-	ag.SetCompactor(sessionComp)
-	ag.SetContextWindow(currentContextWindow)
-	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
 
-	// Load previous messages into agent context
-	for _, msg := range sess.GetMessages() {
-		ag.GetContext().AddMessage(msg)
-	}
-
-	// Set up executor and tool output limits
 	concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
@@ -242,15 +236,35 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		"toolTimeout":        concurrencyConfig.ToolTimeout,
 		"queueTimeout":       concurrencyConfig.QueueTimeout,
 	})
-	ag.SetExecutor(executor)
 
 	toolOutputConfig := cfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
-	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxChars: toolOutputConfig.MaxChars,
-	})
+
+	// Build LoopConfig with all settings
+	loopCfg := cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(currentContextWindow),
+		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+		config.WithExecutor(executor),
+		config.WithToolOutputLimits(agent.ToolOutputLimits{
+			MaxChars: toolOutputConfig.MaxChars,
+		}),
+	)
+
+	// Set model and apiKey (not handled by ToLoopConfig)
+	loopCfg.Model = model
+	loopCfg.APIKey = apiKey
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+	defer ag.Shutdown()
+
+	// Load previous messages into agent context
+	for _, msg := range sess.GetMessages() {
+		ag.GetContext().AddMessage(msg)
+	}
 
 	// Subscribe to all events and write them as JSON Lines
 	eventEmitterDone := make(chan struct{})

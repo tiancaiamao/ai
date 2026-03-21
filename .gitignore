@@ -4,3 +4,7 @@ bin/*
 coverage.out
 ai
 
+# Benchmark temp
+__pycache__/
+*.pyc
+benchmark/results/progress.json

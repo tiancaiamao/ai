@@ -198,9 +198,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentContextWindow,
 	)
 
-	// Register llm_context tools (needs compactor adapted to context.Compactor)
-	registry.Register(tools.NewLLMContextUpdateTool())
-	registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+	// Register llm_context tools
+	// Only register llm_context_update when taskTracking is enabled
+	if cfg.TaskTracking {
+		registry.Register(tools.NewLLMContextUpdateTool())
+	}
+	// Only register llm_context_decision when contextManagement is enabled
+	if cfg.ContextManagement {
+		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+	}
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -262,6 +268,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				promptBuilder.SetLLMContext(wm)
 			}
 		}
+
+		// Set task tracking and context management based on config
+		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
+		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+
 		return promptBuilder.Build()
 	}
 	systemPrompt := buildSystemPrompt(sess)
@@ -307,6 +318,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if sessionDir != "" {
 				wm := agentctx.NewLLMContext(sessionDir)
 				ctx.LLMContext = wm
+				ctx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
 				sess.SetLLMContext(wm) // Set llm context on session
 			}
 			// Restore conversation history from session
@@ -321,10 +333,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	agentCtx := createBaseContext()
 
-	ag := agent.NewAgentWithContext(model, apiKey, agentCtx)
-	defer ag.Shutdown()
-
-	// Enable automatic compression
+	// Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
@@ -332,45 +341,54 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		compactor: compactor,
 		writer:    sessionWriter,
 	}
-	ag.SetCompactor(sessionComp)
-	ag.SetContextWindow(currentContextWindow)
-	ag.SetToolCallCutoff(compactorConfig.ToolCallCutoff)
-	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 
-	setAgentContext := func(ctx *agentctx.AgentContext) {
-		ag.SetContext(ctx)
-	}
-
-	// Set up executor with concurrency control
 	concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-
 	executor := agent.NewExecutorPool(map[string]int{
 		"maxConcurrentTools": concurrencyConfig.MaxConcurrentTools,
 		"toolTimeout":        concurrencyConfig.ToolTimeout,
 		"queueTimeout":       concurrencyConfig.QueueTimeout,
 	})
-	ag.SetExecutor(executor)
+
+	toolOutputConfig := cfg.ToolOutput
+	if toolOutputConfig == nil {
+		toolOutputConfig = config.DefaultToolOutputConfig()
+	}
+
+	// Build LoopConfig with all settings
+	loopCfg := cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(currentContextWindow),
+		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+		config.WithExecutor(executor),
+		config.WithToolOutputLimits(agent.ToolOutputLimits{
+			MaxChars: toolOutputConfig.MaxChars,
+		}),
+	)
+
+	// Set model and apiKey
+	loopCfg.Model = model
+	loopCfg.APIKey = apiKey
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+	defer ag.Shutdown()
+
+	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
+	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
+
+	setAgentContext := func(ctx *agentctx.AgentContext) {
+		ag.SetContext(ctx)
+	}
 
 	bashRunner := newBashRunner()
 	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
 	if bashTimeout <= 0 {
 		bashTimeout = 30 * time.Second
 	}
-
-	toolOutputConfig := cfg.ToolOutput
-	if toolOutputConfig == nil {
-		toolOutputConfig = config.DefaultToolOutputConfig()
-	}
-	ag.SetToolOutputLimits(agent.ToolOutputLimits{
-		MaxChars: toolOutputConfig.MaxChars,
-	})
-	slog.Info("Tool output truncation",
-		"maxChars", toolOutputConfig.MaxChars,
-	)
 
 	// Create RPC server
 	server := rpc.NewServer()

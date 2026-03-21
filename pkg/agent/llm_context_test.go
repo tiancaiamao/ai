@@ -24,20 +24,12 @@ func TestLLMContext_Load(t *testing.T) {
 	}
 }
 
-func TestLLMContext_GetReminderUserMessage(t *testing.T) {
+func TestTaskTrackingState_GetReminderUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
-
-	// Simulate rounds without update
-	for i := 0; i < 6; i++ {
-		wm.IncrementRound()
-	}
-
-	// Update meta
-	wm.UpdateMeta(45000, 128000, 10)
+	tt := agentctx.NewTaskTrackingState(sessionDir)
 
 	// Get reminder message
-	msg := wm.GetReminderUserMessage()
+	msg := tt.GetReminderUserMessage()
 
 	// Check message content
 	if !strings.Contains(msg, "system message by agent, not from real user") {
@@ -46,62 +38,46 @@ func TestLLMContext_GetReminderUserMessage(t *testing.T) {
 	if !strings.Contains(msg, "💡") {
 		t.Error("Expected reminder emoji")
 	}
-	if !strings.Contains(msg, "<context_meta>") {
-		t.Error("Expected context_meta section")
+}
+
+func TestTaskTrackingState_NeedsReminderMessage(t *testing.T) {
+	sessionDir := t.TempDir()
+	tt := agentctx.NewTaskTrackingState(sessionDir)
+
+	// Should not need reminder initially (rounds = 0)
+	if tt.NeedsReminderMessage() {
+		t.Fatal("Should not need reminder initially")
 	}
-	if !strings.Contains(msg, "rounds_since_update: 6") {
-		t.Error("Expected rounds count in message")
+
+	// Increment to threshold (default 10)
+	for i := 0; i < 9; i++ {
+		tt.NeedsReminderMessage()
+	}
+
+	// Should need reminder now
+	if !tt.NeedsReminderMessage() {
+		t.Fatal("Should need reminder at threshold")
 	}
 }
 
-func TestLLMContext_NeedsReminderMessage(t *testing.T) {
+func TestTaskTrackingState_MarkUpdated(t *testing.T) {
 	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
-
-	// Initially should not need reminder
-	if wm.NeedsReminderMessage() {
-		t.Error("Should not need reminder initially")
-	}
-
-	// Increment rounds but not enough
-	for i := 0; i < agentctx.MaxRoundsWithoutUpdate-1; i++ {
-		wm.IncrementRound()
-	}
-	if wm.NeedsReminderMessage() {
-		t.Fatalf("Should not need reminder before %d rounds", agentctx.MaxRoundsWithoutUpdate)
-	}
-
-	// Increment to threshold
-	wm.IncrementRound()
-	if !wm.NeedsReminderMessage() {
-		t.Fatalf("Should need reminder at %d rounds", agentctx.MaxRoundsWithoutUpdate)
-	}
-
-	// Mark updated should reset
-	wm.MarkUpdated(0, false)
-	if wm.NeedsReminderMessage() {
-		t.Error("Should not need reminder after update")
-	}
-}
-
-func TestLLMContext_MarkUpdated(t *testing.T) {
-	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
+	tt := agentctx.NewTaskTrackingState(sessionDir)
 
 	// Simulate rounds
-	for i := 0; i < 6; i++ {
-		wm.IncrementRound()
+	for i := 0; i < 5; i++ {
+		tt.NeedsReminderMessage()
 	}
 
-	if wm.GetRoundsSinceUpdate() != 6 {
-		t.Fatalf("Expected 6 rounds, got %d", wm.GetRoundsSinceUpdate())
+	if tt.GetRoundsSinceUpdate() != 5 {
+		t.Fatalf("Expected 5 rounds, got %d", tt.GetRoundsSinceUpdate())
 	}
 
 	// Mark updated
-	wm.MarkUpdated(0, false)
+	tt.MarkUpdated()
 
-	if wm.GetRoundsSinceUpdate() != 0 {
-		t.Fatalf("Expected 0 rounds after update, got %d", wm.GetRoundsSinceUpdate())
+	if tt.GetRoundsSinceUpdate() != 0 {
+		t.Fatalf("Expected 0 rounds after update, got %d", tt.GetRoundsSinceUpdate())
 	}
 }
 
@@ -113,14 +89,9 @@ func TestLLMContext_PathMethods(t *testing.T) {
 	if wm.GetPath() != expectedOverview {
 		t.Errorf("Expected path %s, got %s", expectedOverview, wm.GetPath())
 	}
-
-	expectedDetail := filepath.Join(sessionDir, "llm-context", "detail")
-	if wm.GetDetailDir() != expectedDetail {
-		t.Errorf("Expected detail dir %s, got %s", expectedDetail, wm.GetDetailDir())
-	}
 }
 
-func TestLLMContext_DirectoryCreation(t *testing.T) {
+func TestLLMContext_Directories(t *testing.T) {
 	sessionDir := t.TempDir()
 	wm := agentctx.NewLLMContext(sessionDir)
 
@@ -151,7 +122,7 @@ func TestLLMContext_ContextMeta(t *testing.T) {
 	sessionDir := t.TempDir()
 	wm := agentctx.NewLLMContext(sessionDir)
 
-	wm.UpdateMeta(50000, 128000, 25)
+	wm.SetMeta(50000, 128000, 25)
 
 	meta := wm.GetMeta()
 

@@ -23,6 +23,12 @@ UPDATE RULES:
 5. PRESERVE exact paths, errors, names — do NOT paraphrase
 
 Keep ALL sections. If empty, write "None yet."
+
+ANTI-PATTERNS:
+- ❌ Don't start fresh — always UPDATE existing summary
+- ❌ Don't remove items from "What's Complete" (they're completed for a reason)
+- ❌ Don't paraphrase — keep exact paths, errors, names
+- ❌ Don't create new section names — use existing structure
 </critical>
 
 Output the updated summary using the same format. This matters.

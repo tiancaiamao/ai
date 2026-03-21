@@ -47,6 +47,22 @@ type LoopConfig struct {
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 	ContextWindow           int           // Context window for the model (0=use default 128000)
+	TaskTrackingEnabled     bool          // Enable task tracking reminders (llm_context_update)
+	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
+}
+
+// DefaultLoopConfig returns a default LoopConfig with sensible values.
+func DefaultLoopConfig() *LoopConfig {
+	return &LoopConfig{
+		ToolCallCutoff:            10,
+		ThinkingLevel:             "high",
+		MaxLLMRetries:             defaultLLMMaxRetries,
+		RetryBaseDelay:            defaultRetryBaseDelay,
+		TaskTrackingEnabled:       true,
+		ContextManagementEnabled:  true,
+		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+		ToolOutput:                DefaultToolOutputLimits(),
+	}
 }
 
 var streamAssistantResponseFn = streamAssistantResponse
@@ -380,7 +396,7 @@ func runInnerLoop(
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			agentCtx.LLMContext.UpdateMeta(
+			agentCtx.LLMContext.SetMeta(
 				msg.Usage.TotalTokens,
 				tokensMax,
 				len(agentCtx.Messages),
@@ -687,9 +703,6 @@ func streamAssistantResponse(
 	// 1. After compact (PostCompactRecovery = true) for recovery
 	// 2. The LLM should use llm_context_update tool to record state, which stays in tool output
 	if agentCtx.LLMContext != nil {
-		// Track that we're starting a new LLM request round
-		agentCtx.LLMContext.IncrementRound()
-
 		// Determine if we should inject overview.md content
 		// Only inject after compact for recovery
 		var content string
@@ -712,7 +725,7 @@ func streamAssistantResponse(
 			tokensMax = config.ContextWindow
 		}
 		tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
-		agentCtx.LLMContext.UpdateMeta(
+		agentCtx.LLMContext.SetMeta(
 			tokensUsedApprox,
 			tokensMax,
 			len(agentCtx.Messages),
@@ -742,14 +755,15 @@ func streamAssistantResponse(
 	}
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
-	if agentCtx.LLMContext != nil && agentCtx.LLMContext.NeedsReminderMessage() {
-		reminderContent := agentCtx.LLMContext.GetReminderUserMessage()
+	// Only if task tracking is enabled
+	if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled {
+		reminderContent := agentCtx.TaskTrackingState.GetReminderUserMessage()
 		reminderMsg := llm.LLMMessage{
 			Role:    "user",
 			Content: reminderContent,
 		}
 		llmMessages = append(llmMessages, reminderMsg)
-		agentCtx.LLMContext.SetWasReminded()
+		agentCtx.TaskTrackingState.SetWasReminded()
 
 		// Trace event for context update reminder
 		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",
@@ -758,7 +772,8 @@ func streamAssistantResponse(
 	}
 
 	// Inject decision reminder based on independent decision-pressure state.
-	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil {
+	// Only if context management is enabled
+	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled {
 		meta := agentCtx.LLMContext.GetMeta()
 		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
 			agentCtx.ContextMgmtState.CurrentTurn,
@@ -766,10 +781,12 @@ func streamAssistantResponse(
 			staleCount,
 		)
 		if showDecisionReminder {
-			// Get available (non-truncated) tool IDs to include in reminder example
-			_, availableToolIDs := buildToolOutputsSummaryWithIDs(agentCtx.Messages)
+			// Minimal reminder - just nudge LLM to check runtime_state and stale outputs
+			// LLM should autonomously decide what to truncate based on stale="N" attributes
+			decisionReminderContent := `<agent:remind comment="system message by agent, not from real user">
 
-			decisionReminderContent := agentCtx.LLMContext.GetDecisionReminderMessage(availableToolIDs, agentCtx.ContextMgmtState, urgency)
+💡 Context management may be needed. Check runtime_state and stale tool outputs.
+</agent:remind>`
 			decisionReminderMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: decisionReminderContent,
@@ -778,6 +795,7 @@ func streamAssistantResponse(
 
 			// Record that a reminder was shown this turn (for proactive/reminded tracking)
 			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, urgency)
+			agentCtx.ContextMgmtState.MarkReminderShown()
 
 			// Trace event for context decision reminder
 			traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
@@ -1618,8 +1636,8 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 
 	// Build update metrics section
 	var updateMetrics string
-	if agentCtx.LLMContext != nil {
-		updateStats := agentCtx.LLMContext.GetUpdateStats()
+	if agentCtx.TaskTrackingState != nil {
+		updateStats := agentCtx.TaskTrackingState.GetUpdateStats()
 		if updateStats.Total > 0 {
 			updateMetrics = fmt.Sprintf(`
 context_metrics:

@@ -24,8 +24,11 @@ var subagentBasePrompt string
 //go:embed "headless_base.md"
 var headlessBasePrompt string
 
-//go:embed "llm_context.md"
-var llmContextPrompt string
+//go:embed "task_tracking.md"
+var taskTrackingPrompt string
+
+//go:embed "context_management.md"
+var contextManagementPrompt string
 
 //go:embed "compact_system.md"
 var compactSystemPrompt string

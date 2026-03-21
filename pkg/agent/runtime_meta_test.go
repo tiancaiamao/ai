@@ -427,6 +427,7 @@ func TestFindLatestToolCallID(t *testing.T) {
 func TestUpdateRuntimeMetaSnapshotIncludesContextMetrics(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.LLMContext = agentctx.NewLLMContext(t.TempDir())
+	agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(t.TempDir())
 
 	meta := agentctx.ContextMeta{
 		TokensUsed:        12345,

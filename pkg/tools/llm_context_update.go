@@ -47,25 +47,25 @@ reasoning: "No state change, just answering user question"`
 }
 
 // Parameters returns the tool parameter schema.
+// Conditional required: content required when skip=false, reasoning required when skip=true
 func (t *LLMContextUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"content": map[string]any{
 				"type":        "string",
-				"description": "Markdown content to record (task, decisions, known info, pending)",
+				"description": "Markdown content to record. Required when skip=false. Ignored when skip=true.",
 			},
 			"skip": map[string]any{
 				"type":        "boolean",
 				"default":     false,
-				"description": "Set to true when you want to skip update but still report activity (prevents reminder penalty)",
+				"description": "Set to true when you don't need to update content but want to report activity (prevents reminder penalty).",
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
-				"description": "Required when skip=true. Explain why you're skipping the update.",
+				"description": "Required when skip=true. Explain why you're skipping the update. Ignored when skip=false.",
 			},
 		},
-		"required": []string{}, // content is optional when skip=true
 	}
 }
 
@@ -88,8 +88,8 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 		}
 
 		// Mark that LLM is still active (resets roundsSinceUpdate counter)
-		if agentCtx.LLMContext != nil {
-			agentCtx.LLMContext.MarkUpdatedAfterToolCall(5)
+		if agentCtx.TaskTrackingState != nil {
+			agentCtx.TaskTrackingState.MarkSkipped(reasoning)
 		}
 
 		traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update_skip",
@@ -119,8 +119,11 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 			)
 			return nil, fmt.Errorf("failed to write context: %w", err)
 		}
-		// Mark updated to reset roundsSinceUpdate counter (stops reminder loop)
-		agentCtx.LLMContext.MarkUpdatedAfterToolCall(5)
+	}
+
+	// Mark updated to reset roundsSinceUpdate counter (stops reminder loop)
+	if agentCtx.TaskTrackingState != nil {
+		agentCtx.TaskTrackingState.MarkUpdated()
 	}
 
 	// Log successful update
