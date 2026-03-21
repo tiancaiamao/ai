@@ -157,19 +157,23 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	var outputWG sync.WaitGroup
 	streamPipe := func(reader io.Reader) {
 		defer outputWG.Done()
-		scanner := bufio.NewScanner(reader)
-		// Increase scanner token limit to avoid dropping large lines
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			outputMu.Lock()
-			output.WriteString(line + "\n")
-			outputMu.Unlock()
-		}
-		if scanErr := scanner.Err(); scanErr != nil {
-			outputMu.Lock()
-			output.WriteString(fmt.Sprintf("stream read error: %v\n", scanErr))
-			outputMu.Unlock()
+		bufReader := bufio.NewReader(reader)
+		for {
+			line, err := bufReader.ReadString('\n')
+			if len(line) > 0 {
+				outputMu.Lock()
+				output.WriteString(line)
+				outputMu.Unlock()
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				outputMu.Lock()
+				output.WriteString(fmt.Sprintf("stream read error: %v\n", err))
+				outputMu.Unlock()
+				break
+			}
 		}
 	}
 
