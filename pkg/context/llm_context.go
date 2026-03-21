@@ -281,11 +281,11 @@ type UpdateStats struct {
 }
 
 func getSuggestedAction(tokensPercent float64, staleCount int) string {
-	if staleCount > 20 {
-		return "TRUNCATE (many stale outputs)"
+	if staleCount >= 5 {
+		return fmt.Sprintf("TRUNCATE (%d stale outputs - batch truncate recommended)", staleCount)
 	}
-	if staleCount > 10 {
-		return "TRUNCATE (several stale outputs)"
+	if tokensPercent >= 30 {
+		return fmt.Sprintf("COMPACT (token usage: %.0f%% - consider compacting)", tokensPercent)
 	}
-	return fmt.Sprintf("Token usage: %.0f%%", tokensPercent)
+	return fmt.Sprintf("Token usage: %.0f%%, stale outputs: %d", tokensPercent, staleCount)
 }
