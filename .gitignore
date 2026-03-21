@@ -4,9 +4,8 @@ bin/*
 coverage.out
 ai
 
--e 
-# Benchmark
+# Benchmark temp
 __pycache__/
 *.pyc
-benchmark/results/
-benchmark/tasks/*/tests/output/
+benchmark/results/*.json
+!benchmark/results/result_20260321_025137.json
