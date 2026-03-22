@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-03-22T18:50:01+08:00",
+  "agent": "ai-agent",
+  "max_steps_mode": "soft",
+  "total_tasks": 1,
+  "passed": 0,
+  "failed": 1,
+  "pass_rate": 0,
+  "functional_failed": 1,
+  "agentic_failed": 1,
+  "results": [
+    {
+      "task_id": "020_hashline_ambiguous_edit",
+      "passed": false,
+      "functional_passed": false,
+      "agentic_passed": false,
+      "output": "",
+      "error": "agent failed: fork/exec /Users/genius/project/ai/.worktrees/bin/ai: no such file or directory",
+      "duration_seconds": 0.003665833,
+      "timestamp": "2026-03-22T18:50:01.522503+08:00"
+    }
+  ]
+}
