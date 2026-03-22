@@ -8,6 +8,16 @@ TIMEOUT="${TIMEOUT:-10m}"
 PERSONA="${PERSONA:-$HOME/.ai/skills/review/reviewer.md}"
 OUTPUT="/tmp/review-output.txt"
 
+# Expand ~ and resolve absolute path for persona
+resolve_path() {
+    local p="$1"
+    if [[ "$p" == "~"* ]]; then
+        p="$HOME${p:1}"
+    fi
+    echo "$p"
+}
+PERSONA=$(resolve_path "$PERSONA")
+
 usage() {
     cat << EOF
 Usage: review.sh [options] <target>
@@ -70,10 +80,11 @@ TASK_FILE="/tmp/review-task-$$.txt"
 echo "$TASK" > "$TASK_FILE"
 
 # Run reviewer
+# Note: start_subagent_tmux.sh expects just the path, adds @ internally
 SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
     "$OUTPUT" \
     "$TIMEOUT" \
-    "@$PERSONA" \
+    "$PERSONA" \
     "@$TASK_FILE")
 
 SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
