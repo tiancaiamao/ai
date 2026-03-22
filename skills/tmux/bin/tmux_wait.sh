@@ -44,6 +44,7 @@ SESSION_END_MARKER="=== DONE ==="
 
 is_session_done() {
     # Check for explicit done marker in pane output
+    # Only check this if start_subagent_tmux.sh wrote it
     tmux capture-pane -t "$SESSION_NAME" -p -S -20 2>/dev/null | grep -q "$SESSION_END_MARKER"
 }
 
