@@ -122,8 +122,12 @@ echo "${SESSION_NAME}:${SESSION_ID}"
 if [ "$WAIT_FOR_COMPLETE" = true ]; then
     echo ""
     echo "Waiting for completion..."
-    # Convert timeout to seconds for tmux_wait.sh
-    TIMEOUT_SECS=$(echo "$TIMEOUT" | sed 's/[^0-9]//g')
+    # Convert timeout to seconds (2m -> 120, 2h -> 7200, 2 -> 2)
+    case "$TIMEOUT" in
+        *m) TIMEOUT_SECS=$((${TIMEOUT%m} * 60)) ;;
+        *h) TIMEOUT_SECS=$((${TIMEOUT%h} * 3600)) ;;
+        *) TIMEOUT_SECS=$((TIMEOUT)) ;;
+    esac
     TMUX_WAIT="$HOME/.ai/skills/tmux/bin/tmux_wait.sh"
     "$TMUX_WAIT" "$SESSION_NAME" "$OUTPUT_FILE" "$TIMEOUT_SECS" 1
 fi
