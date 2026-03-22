@@ -97,7 +97,7 @@ for i in "${!TASKS[@]}"; do
     # Mark as in_progress before starting
     if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
         task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
-        ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" in_progress
+        ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$task_id" in_progress
     fi
     
     # Replace {previous} with actual previous output
@@ -139,14 +139,14 @@ for i in "${!TASKS[@]}"; do
     TIMEOUT_SECS=$(timeout_to_seconds "$TIMEOUT")
     
     # Wait for completion
-    if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$TIMEOUT_SECS"; then
+    if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$output_file" "$TIMEOUT_SECS"; then
         echo "✓ Step $step_num completed"
         
         # Auto-update tasks.md if provided
         if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
             # Extract task identifier from task description (first line, first 50 chars)
             task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
-            ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done
+            ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done
         fi
         
         # Capture output as previous for next step

@@ -94,16 +94,27 @@ for task in "${TASKS[@]}"; do
     # Write session and output file paths
     echo "$session_file" >> "$SESSIONS_FILE"
     echo "$output_file" >> "$OUTPUTS_FILE"
-    
-    # Run subagent in background
+
+    # Run subagent in background with -w flag to auto-wait
     (
-        session=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+        # Convert timeout to seconds for tmux_wait.sh
+        case "$TIMEOUT" in
+            *m) timeout_secs=$((${TIMEOUT%m} * 60)) ;;
+            *h) timeout_secs=$((${TIMEOUT%h} * 3600)) ;;
+            *) timeout_secs=$((TIMEOUT)) ;;
+        esac
+
+        # Use -w flag to automatically wait for completion
+        if ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+            -w \
             "$output_file" \
             "$TIMEOUT" \
             "$PERSONA_ARG" \
-            "$task_arg" 2>&1)
-        session_name=$(echo "$session" | head -1 | cut -d: -f1)
-        echo "$session_name" > "$session_file"
+            "$task_arg" 2>&1; then
+            echo "SUCCESS" > "$session_file"
+        else
+            echo "FAILED" > "$session_file"
+        fi
     ) &
     
     echo "Started: task-${INDEX} (running)"
@@ -128,27 +139,26 @@ FAILED=0
 i=0
 while read session_file; do
     output_file=$(sed -n "$((i + 1))p" "$OUTPUTS_FILE")
-    
+
     if [ -f "$session_file" ]; then
-        session_name=$(cat "$session_file")
-        
-        # Wait for completion
-        if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$output_file" 60 2>/dev/null; then
+        result=$(cat "$session_file")
+
+        if [ "$result" = "SUCCESS" ]; then
             echo "✓ task-${i}: SUCCESS"
             SUCCESS=$((SUCCESS + 1))
-            
+
             # Auto-update tasks.md
             if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
                 task_id=$(echo "${TASKS[$i]}" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
-                ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done 2>/dev/null || true
+                ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done 2>/dev/null || true
             fi
         else
             echo "✗ task-${i}: FAILED or TIMEOUT"
             FAILED=$((FAILED + 1))
-            
+
             if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
                 task_id=$(echo "${TASKS[$i]}" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
-                ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" failed 2>/dev/null || true
+                ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$task_id" failed 2>/dev/null || true
             fi
         fi
     else

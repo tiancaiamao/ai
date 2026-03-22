@@ -59,7 +59,6 @@ SESSION_NAME="subagent-$(date +%s)-$RANDOM$$"
 > "$OUTPUT_FILE"
 
 # Build command arguments array for safe quoting
-declare -a CMD_ARGS
 CMD_ARGS=(ai --mode headless --timeout "$TIMEOUT")
 if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
     # Add @ prefix if not already present

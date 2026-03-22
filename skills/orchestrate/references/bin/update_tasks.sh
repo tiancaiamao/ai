@@ -44,8 +44,19 @@ case "$STATUS" in
 esac
 
 # Find the line number of the task pattern
-# Look for lines starting with - [ ] or - [X] etc. containing the pattern
-LINE_NUM=$(grep -n -i "$PATTERN" "$TASKS_FILE" | head -1 | cut -d: -f1)
+# Strategy: First try to match task ID (e.g., T001), then fall back to fuzzy matching
+LINE_NUM=""
+
+# Try exact task ID match first (e.g., "T001", "T002")
+if echo "$PATTERN" | grep -qE '^[A-Z]+[0-9]+$'; then
+    # Pattern looks like a task ID, try to match it as a prefix in task lines
+    LINE_NUM=$(grep -n "^\- \[.\] .*${PATTERN}" "$TASKS_FILE" | head -1 | cut -d: -f1)
+fi
+
+# Fallback to case-sensitive substring match if no exact ID match
+if [ -z "$LINE_NUM" ]; then
+    LINE_NUM=$(grep -n "$PATTERN" "$TASKS_FILE" | head -1 | cut -d: -f1)
+fi
 
 if [ -z "$LINE_NUM" ]; then
     echo "Warning: Pattern not found: $PATTERN"

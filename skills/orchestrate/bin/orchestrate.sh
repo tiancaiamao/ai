@@ -83,17 +83,9 @@ get_next_pending() {
 update_task() {
     local pattern="$1"
     local status="$2"
-    
-    case "$status" in
-        in_progress) marker="[-]" ;;
-        done) marker="[X]" ;;
-        failed) marker="[!]" ;;
-        *) marker="[ ]" ;;
-    esac
-    
-    # macOS sed requires -i ''
-    sed -i '' "s/^\- \[.\] \(.*${pattern}.*\)$/- $marker \1/" "$TASKS_FILE" 2>/dev/null || \
-    sed -i "s/^\- \[.\] \(.*${pattern}.*\)$/- $marker \1/" "$TASKS_FILE" 2>/dev/null
+
+    # Use update_tasks.sh for consistent task updates
+    ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$pattern" "$status" 2>/dev/null || true
 }
 
 # Show status
