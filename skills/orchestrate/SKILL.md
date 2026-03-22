@@ -1,313 +1,208 @@
 ---
 name: orchestrate
-description: Automatically analyze tasks, decompose complex ones, and coordinate subagents to complete them. Users only see final results.
-tools: [bash]
+description: Multi-agent orchestration methodology. Use chain/parallel/loop patterns to coordinate multiple subagents for complex tasks. Current: loop mode for tasks.md execution.
+allowed-tools: [bash, read, write, edit, grep]
 ---
 
-# Orchestrate Skill
+# Orchestrate - Multi-Agent Orchestration
 
-Automatically analyze user tasks, determine if decomposition is needed, spawn appropriate subagents with suitable personas, and aggregate results back to the user.
+**Orchestrate** is a methodology for coordinating multiple specialized agents to complete complex tasks. Like how `speckit` provides a spec-driven development workflow, `orchestrate` provides patterns for multi-agent collaboration.
 
-## ⚠️ CRITICAL RULES (READ FIRST)
+## What Problem Does It Solve?
+
+When working on complex tasks, you often need:
+- **Exploration** → Research existing code/docs
+- **Planning** → Design the approach
+- **Implementation** → Write the code
+- **Verification** → Check if it works
+
+Doing all of this in a single agent context leads to:
+- Context bloat (accumulated garbage)
+- No isolation between phases
+- Hard to recover from failures
+
+**Orchestrate solves this** by using isolated subagents for each phase.
+
+## Core Principles
+
+1. **Isolated Context** - Each subagent has a fresh context window
+2. **Clear Roles** - Each subagent has a focused persona
+3. **Composable Patterns** - Chain, parallel, loop modes can be combined
+4. **Main Agent Supervision** - The main agent coordinates, subagents execute
+
+## Supported Patterns (Phase 1)
+
+### Loop Mode (Current Default)
+
+Execute tasks with a worker → checker loop:
 
 ```
-1. Sessions are ALWAYS saved (for debugging)
-   → Check ~/.ai/sessions/--<cwd>--/<id>/messages.jsonl
-
-2. ALWAYS use --timeout to prevent runaway subagents
-   → Recommended: 5-10 minutes for most tasks
-
-3. ALWAYS use --system-prompt @{persona-path} with appropriate persona
-   → Personas are in: skills/orchestrate/references/
-
-4. ALWAYS use absolute paths for persona files
-   → /Users/genius/.ai/skills/orchestrate/references/{persona}.md
+for each task:
+    while not approved:
+        worker subagent executes
+        task-checker subagent verifies
+        if approved: move to next task
+        if needs fixes: loop back to worker
 ```
 
-## Subagent 调用
+**Use case**: Executing `tasks.md` from speckit
 
-**重要**: 所有 subagent 调用请参考 `/skill:subagent` 技能的最佳实践。
-
-核心要点：
-- **必须**使用 persona：`--system-prompt @{persona-path}`
-- **必须**设置 timeout：`--timeout 10m`
-- **必须**后台运行并收集结果（bash 工具有 30s 超时限制）
-- Sessions 自动保存用于调试
-
-Persona 路径: `/Users/genius/.ai/skills/orchestrate/references/{persona}.md`
-
-详细调试、监控、结果收集方法见 subagent 技能的 **Debugging & Monitoring** 章节。
-
-## Persona Selection (MANDATORY)
-
-**Always load a persona.** Choose based on task type:
-
-| Persona | File | Use When | Keywords |
-|---------|------|----------|----------|
-| **Explorer** | `explorer.md` | Understanding code, finding patterns | analyze, explore, understand, find |
-| **Researcher** | `researcher.md` | Gathering info, investigating | research, investigate, compare |
-| **Implementer** | `implementer.md` | Building features, writing code | implement, build, create, fix |
-| **Reviewer** | `reviewer.md` | Validating, checking quality | review, check, validate, audit |
-
-## Task Decomposition
-
-### Complexity Analysis
-
-**Simple task** (execute directly, no decomposition):
-- Single file modification
-- Quick lookup or question
-- Straightforward implementation
-
-**Complex task** (decompose into subagents):
-- Multiple files/directories
-- Multi-step process (research → implement → review)
-- Parallel analysis of independent targets
-- Requires different expertise phases
-
-### Decomposition Patterns
-
-**Pattern A: Sequential Phases**
-```
-Task: "Add user authentication"
-
-Phase 1 (researcher): Research auth best practices
-Phase 2 (implementer): Implement based on research
-Phase 3 (reviewer): Review for security issues
-```
-
-**Pattern B: Parallel Analysis**
-```
-Task: "Compare three projects' architecture"
-
-Subagent 1 (explorer): Analyze project A
-Subagent 2 (explorer): Analyze project B
-Subagent 3 (explorer): Analyze project C
-→ Aggregate and compare
-```
-
-**Pattern C: Explore + Fix**
-```
-Task: "Fix the memory leak"
-
-Phase 1 (explorer): Find leak sources
-Phase 2 (implementer): Fix identified issues
-```
-
-## Parallel Execution
-
-For independent tasks, run subagents in parallel (参考 `/skill:subagent`):
-
-**⚠️ 重要：必须使用 tmux_wait.sh 等待子代理完成，而不是 sleep 或 wait**
-
-关键点：
-- 最大并行数: 2 subagents（API rate limit 保护）
-- 启动间隔: 5s delay（防止请求突发）
-- 使用 tmux: `start_subagent_tmux.sh` + `tmux_wait.sh`
-- **必须使用 tmux_wait.sh 等待**: `~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 300`
-- 收集结果: `cat /tmp/out.txt`
-
-### 正确工作流程（使用 start_subagent_tmux.sh）
-
-**推荐方式**：使用 `start_subagent_tmux.sh` 辅助脚本自动捕获 Session ID
-
+**Usage**:
 ```bash
-# STEP 1: 启动 subagent 并自动捕获 Session ID
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/out.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Your task description")
-
-# Extract session name (format: "session-name:session-id")
-SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
-
-echo "Started subagent: $SESSION_NAME"
-
-# STEP 2: 使用 tmux_wait.sh 等待
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
-
-# STEP 3: 收集结果
-cat /tmp/out.txt
+~/.ai/skills/orchestrate/bin/orchestrate.sh
 ```
 
-### 手动方式（不推荐）
+**How it works**:
+1. Reads `tasks.md`
+2. For each pending task:
+   - Spawns a worker subagent to implement
+   - Spawns a task-checker subagent to verify
+   - Loops up to 3 times if fixes are needed
+   - Marks task as done/failed
 
-如果需要手动控制：
+## Planned Patterns (Phase 2)
 
+### Chain Mode
+
+Sequential execution with output passing:
+
+```
+task → scout → {context} → planner → {plan} → worker → {code}
+```
+
+**Use case**: Explore → Research → Implement pipeline
+
+### Parallel Mode
+
+Concurrent execution with result merging:
+
+```
+      ┌→ worker 1 ─┐
+task →├→ worker 2 ─┼→ merge results
+      └→ worker 3 ─┘
+```
+
+**Use case**: Researching multiple options in parallel
+
+### Debate Mode
+
+Multiple perspectives synthesis:
+
+```
+task → researcher A (观点 A)
+     → researcher B (观点 B)
+     → synthesizer (综合)
+```
+
+**Use case**: Evaluating different approaches
+
+## Internal Personas
+
+Orchestrate uses internal personas (not exposed as skills):
+
+| Persona | Role | Location |
+|---------|------|----------|
+| **worker** | Executes implementation tasks | `orchestrate/references/worker.md` |
+| **task-checker** | Verifies task completion | `orchestrate/references/task-checker.md` |
+
+These are **internal** - use them via orchestrate, don't call directly.
+
+## vs Other Skills
+
+| Skill | Focus | Subagents? |
+|-------|-------|------------|
+| **speckit** | Spec-driven workflow | No (main agent does all work) |
+| **orchestrate** | Multi-agent coordination | Yes (core feature) |
+| **explore** | Codebase exploration | Yes (uses subagent) |
+| **review** | Code review | Yes (uses subagent) |
+
+## Typical Workflow
+
+```
+1. /skill:explore      → explorer/*.md (optional, for context)
+2. /skill:brainstorming → decisions.md (optional, for decisions)
+3. /skill:speckit      → spec.md, plan.md, tasks.md
+4. orchestrate.sh      → executes all tasks with worker→checker loop
+```
+
+## Commands
+
+### Run orchestration
 ```bash
-# 启动 subagent in tmux
-SESSION_NAME="subagent-$(date +%s)"
-tmux new -s "$SESSION_NAME" -d "ai --mode headless \
-  --timeout 10m \
-  --system-prompt @/path/to/persona.md \
-  'Your task' 2>&1 | tee /tmp/out.txt"
-
-# 使用 tmux_wait.sh 等待
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
-
-# 收集结果
-cat /tmp/out.txt
+~/.ai/skills/orchestrate/bin/orchestrate.sh
 ```
 
-### ❌ 错误方式
-
+### Check status
 ```bash
-# 错误：使用 sleep 会阻塞
-sleep 60
-
-# 错误：直接使用 wait 无法监控进度
-wait
+~/.ai/skills/orchestrate/bin/orchestrate.sh status
 ```
 
-### 中断 subagent
-
-使用 tmux 的标准方式中断：
-
+### Execute next task only
 ```bash
-# 方法1: 发送 Ctrl+C
-tmux send-keys -t subagent-xxx C-c
-
-# 方法2: 直接 kill session
-tmux kill-session -t subagent-xxx
+~/.ai/skills/orchestrate/bin/orchestrate.sh next
 ```
 
-## Result Aggregation
-
-After subagents complete, synthesize results:
-
-```markdown
-## Summary
-<Brief overall summary>
-
-## Detailed Results
-
-### Phase 1: Research
-<researcher output>
-
-### Phase 2: Implementation
-<implementer output>
-
-### Phase 3: Review
-<reviewer output>
-
-## Next Steps
-<If any follow-up needed>
-```
-
-## Complete Examples
-
-### Example 1: Parallel Project Analysis
-
+### Initialize workflow
 ```bash
-# User: "Compare mission-control and oh-my-openagent's agent orchestration"
-
-# Decomposition: 2 parallel explorers + aggregate
-
-# Launch parallel analysis using start_subagent_tmux.sh
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/mc.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze mission-control's agent orchestration. Find: scheduler, dispatcher, task queue, concurrency handling.")
-
-SESSION1_NAME=$(echo "$SESSION1" | cut -d: -f1)
-
-sleep 5
-
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/omo.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
-  "Analyze oh-my-openagent's agent orchestration. Find: delegate-task, background-task, sync-task, model fallback.")
-
-SESSION2_NAME=$(echo "$SESSION2" | cut -d: -f1)
-
-echo "Sessions: $SESSION1_NAME, $SESSION2_NAME"
-
-# Wait for both sessions (sequentially)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION1_NAME" 600
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION2_NAME" 600
-
-# Aggregate and compare
-echo "## mission-control\n$(cat /tmp/mc.txt)"
-echo "## oh-my-openagent\n$(cat /tmp/omo.txt)"
-echo "## Comparison\n<Key differences and similarities>"
+~/.ai/skills/orchestrate/bin/orchestrate.sh init
 ```
 
-### Example 2: Feature Implementation Pipeline (Sequential)
+## Roadmap
 
-```bash
-# User: "Add OAuth2 login to the app"
+| Phase | Features | Status |
+|-------|----------|--------|
+| **1** | Loop mode for tasks.md | ✅ Current |
+| **2** | Chain/parallel modes | 🚧 Planned |
+| **3** | Integration with speckit phases | 📋 Future |
 
-# Phase 1: Research
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/research.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/researcher.md \
-  "Research OAuth2 implementation for Go web apps. Find: libraries, flows, security considerations.")
+## Key Benefits
 
-SESSION1_NAME=$(echo "$SESSION1" | cut -d: -f1)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION1_NAME" 600
+- ✅ **Clean main agent context** - All execution in subagents
+- ✅ **Crash recovery** - Each subagent session is isolated
+- ✅ **Parallel processing** - Can run multiple subagents at once (Phase 2)
+- ✅ **Specialized roles** - Each subagent has focused expertise
+- ✅ **Composable** - Patterns can be combined
 
-# Phase 2: Implement (pass research findings)
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/implement.txt \
-  15m \
-  /Users/genius/.ai/skills/orchestrate/references/implementer.md \
-  "Implement OAuth2 login. Research findings: $(cat /tmp/research.txt)")
+## Example Output
 
-SESSION2_NAME=$(echo "$SESSION2" | cut -d: -f1)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION2_NAME" 900
-
-# Phase 3: Review
-SESSION3=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/review.txt \
-  10m \
-  /Users/genius/.ai/skills/orchestrate/references/reviewer.md \
-  "Review OAuth2 implementation for security issues")
-
-SESSION3_NAME=$(echo "$SESSION3" | cut -d: -f1)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION3_NAME" 600
-
-# Return aggregated result
-echo "## Research"
-cat /tmp/research.txt
-echo "## Implementation"
-cat /tmp/implement.txt
-echo "## Review"
-cat /tmp/review.txt
 ```
+=== Orchestration ===
+Tasks file: tasks.md
 
-## Best Practices
+--- Iteration 1 ---
 
-- ✅ **Always** use persona with `--system-prompt`
-- ✅ **Always** add `--timeout` (5-15m typical)
-- ✅ Sessions are always saved for debugging
-- ✅ Use absolute paths for persona files
-- ✅ Run independent tasks in parallel with 5s delay
-- ✅ Pass context between sequential phases
-- ✅ Aggregate results into coherent summary
-- ❌ Don't decompose trivial tasks
-- ❌ Don't spawn >2 parallel subagents
-- ❌ Don't launch multiple subagents without delay (rate limit risk)
-- ❌ Don't forget to aggregate results
+=== Task: Implement user signup (ID: T01) ===
 
-## Configuration
+--- Cycle 1/3 ---
+→ Worker executing...
+✓ Task completed: T01
+→ Task-checker verifying...
+⚠ Changes requested, cycle 1/3
 
-| Setting | Value |
-|---------|-------|
-| Persona directory | `/Users/genius/.ai/skills/orchestrate/references/` |
-| Max parallel subagents | 2 (rate limit protection) |
-| Launch delay | 5s between subagents |
-| Default timeout | 10m per subagent |
-| Session | Enabled (for debugging) |
+--- Cycle 2/3 ---
+Feedback from previous cycle:
+1. Add password validation (min 8 chars)
+2. Show error messages when form submits
+
+→ Worker executing...
+✓ Task completed: T01
+→ Task-checker verifying...
+✓ Task approved: T01
+
+=== Task: Add database models (ID: T02) ===
+...
+```
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Can't find session for debugging | Sessions are in `~/.ai/sessions/--<cwd>--/<id>/messages.jsonl` |
-| Subagent hangs/timeout | Add `--timeout 10m` to prevent runaway |
-| Poor quality output | Ensure persona is loaded via `--system-prompt` |
-| Inconsistent results | Check persona matches task type |
-| Resource exhaustion | Reduce parallel subagents to 2, ensure 5s delay |
+### Task stuck in loop
+- Check `/tmp/orchestrate-check-*.txt` for feedback
+- Max cycles is 3 - after that it stops for manual intervention
+
+### Subagent fails to start
+- Ensure `ai` binary is in PATH
+- Check tmux is installed: `tmux -V`
+
+### Task-checker not parsing
+- Ensure task-checker.md outputs `TASK_CHECK_RESULT` JSON
+- Check `/tmp/orchestrate-check-*.txt` for raw output

@@ -1,122 +1,104 @@
 #!/bin/bash
-# tmux_wait.sh - Wait for tmux session to complete
+# tmux_wait.sh - Wait for tmux session to complete via .done marker
 #
 # Usage:
-#   tmux_wait.sh <session-name> [timeout] [check-interval]
-#   OR (recommended for subagents):
 #   tmux_wait.sh <session-name> <output-file> [timeout] [check-interval]
 #
-# If output-file is provided, waits for ${output-file}.done marker instead of
-# polling tmux session. This is more reliable and detects completion immediately.
+# Arguments:
+#   session-name    - Name of tmux session to wait for
+#   output-file     - Path to output file (waits for ${output-file}.done)
+#   timeout         - Max seconds to wait (default: 600)
+#   check-interval  - Seconds between checks (default: 1)
 #
 # Exit codes:
-#   0 - Session completed (ended)
+#   0 - Session completed successfully
 #   1 - Timeout
-#   2 - Error (invalid arguments, tmux not available, etc.)
+#   2 - Invalid arguments
+#   3 - Session ended unexpectedly (no done marker)
 
 set -e
 
 SESSION_NAME="$1"
-shift
+OUTPUT_FILE="$2"
+TIMEOUT="${3:-600}"
+CHECK_INTERVAL="${4:-1}"
 
-# Detect if second argument is a file path or timeout number
-if [ $# -gt 0 ] && [[ ! "$1" =~ ^[0-9]+$ ]]; then
-    # Second arg is not a number, treat as output file
-    OUTPUT_FILE="$1"
-    shift
-    TIMEOUT="${1:-600}"
-    CHECK_INTERVAL="${2:-1}"
-else
-    # Legacy mode: no output file
-    OUTPUT_FILE=""
-    TIMEOUT="${1:-3600}"
-    CHECK_INTERVAL="${2:-5}"
-fi
-
-if [ -z "$SESSION_NAME" ]; then
-    echo "Usage: tmux_wait.sh <session-name> [output-file] [timeout] [check-interval]" >&2
-    echo "Example: tmux_wait.sh build /tmp/out.txt 600 1" >&2
+# Validate arguments
+if [ -z "$SESSION_NAME" ] || [ -z "$OUTPUT_FILE" ]; then
+    echo "Usage: tmux_wait.sh <session-name> <output-file> [timeout] [check-interval]" >&2
+    echo "" >&2
+    echo "Example: tmux_wait.sh my-session /tmp/output.txt 600 1" >&2
+    echo "" >&2
+    echo "This script waits for \${output-file}.done marker to appear." >&2
+    echo "Use start_subagent_tmux.sh -w for automatic waiting." >&2
     exit 2
 fi
 
-# Validate tmux is available
 if ! command -v tmux &> /dev/null; then
-    echo "Error: tmux is not installed or not in PATH" >&2
+    echo "Error: tmux is not installed" >&2
     exit 2
 fi
 
-# Function to get session info
-get_session_info() {
-    tmux ls 2>/dev/null | grep "^${SESSION_NAME}:" || echo ""
+DONE_MARKER="${OUTPUT_FILE}.done"
+SESSION_END_MARKER="=== DONE ==="
+
+is_session_done() {
+    # Check for explicit done marker in pane output
+    # Only check this if start_subagent_tmux.sh wrote it
+    tmux capture-pane -t "$SESSION_NAME" -p -S -20 2>/dev/null | grep -q "$SESSION_END_MARKER"
 }
 
-# Calculate iterations
-ITERATIONS=$((TIMEOUT / CHECK_INTERVAL))
+session_exists() {
+    tmux ls 2>/dev/null | grep -q "^${SESSION_NAME}:"
+}
 
 echo "Waiting for tmux session: $SESSION_NAME"
-if [ -n "$OUTPUT_FILE" ]; then
-    DONE_MARKER="${OUTPUT_FILE}.done"
-    echo "Output file: $OUTPUT_FILE"
-    echo "Waiting for: $DONE_MARKER"
-else
-    echo "Polling tmux session (legacy mode)"
-fi
+echo "Output file: $OUTPUT_FILE"
+echo "Waiting for: $DONE_MARKER"
 echo "Timeout: ${TIMEOUT}s, checking every ${CHECK_INTERVAL}s"
 echo ""
 
-# Main polling loop
-for i in $(seq 1 $ITERATIONS); do
-    if [ -n "$OUTPUT_FILE" ]; then
-        # New mode: prefer done marker, fallback to session check
-        if [ -f "$DONE_MARKER" ]; then
-            echo ""
-            echo "✓ Session '${SESSION_NAME}' completed (done marker found)"
-            # Clean up marker
-            rm -f "$DONE_MARKER"
-            exit 0
-        fi
+for i in $(seq 1 $((TIMEOUT / CHECK_INTERVAL))); do
+    if [ -f "$DONE_MARKER" ]; then
+        echo ""
+        echo "✓ Session '$SESSION_NAME' completed (done marker)"
+        rm -f "$DONE_MARKER"
+        exit 0
+    fi
 
-        # Fallback: if session no longer exists, consider it complete
-        # This handles SIGKILL scenario where trap cannot create done marker
-        if ! get_session_info | grep -q .; then
+    if is_session_done; then
+        echo ""
+        echo "✓ Session '$SESSION_NAME' completed (output shows completion)"
+        touch "$DONE_MARKER"
+        exit 0
+    fi
+
+    if ! session_exists; then
+        # Session 不存在，检查是否是正常结束
+        if [ -f "${OUTPUT_FILE}.done" ]; then
             echo ""
-            echo "✓ Session '${SESSION_NAME}' completed (session ended)"
-            echo "  Note: Done marker not found (process may have been killed)"
-            # Create marker ourselves to prevent confusion
-            touch "$DONE_MARKER"
+            echo "✓ Session '$SESSION_NAME' completed (done marker)"
+            rm -f "${OUTPUT_FILE}.done"
             exit 0
-        fi
-    else
-        # Legacy mode: check if session still exists
-        if ! get_session_info | grep -q .; then
+        else
+            # Session 异常退出（没有 done marker）
             echo ""
-            echo "✓ Session '${SESSION_NAME}' completed (no longer exists)"
-            exit 0
+            echo "✗ Session '$SESSION_NAME' ended unexpectedly (no done marker)"
+            echo ""
+            echo "Last output:"
+            tail -20 "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
+            exit 3
         fi
     fi
 
-    # Print progress every few iterations
-    if [ $CHECK_INTERVAL -ge 10 ]; then
-        echo -n "."
-    elif [ $((i % (10 / CHECK_INTERVAL))) -eq 0 ]; then
-        echo -n "."
-    fi
-
+    echo -n "."
     sleep "$CHECK_INTERVAL"
 done
 
 echo ""
 echo "✗ Timeout after ${TIMEOUT}s"
-if [ -n "$OUTPUT_FILE" ]; then
-    echo "Done marker not found: $DONE_MARKER"
-else
-    echo "Session still running: $(get_session_info)"
-fi
+echo "Done marker not found: $DONE_MARKER"
 echo ""
 echo "Last output:"
-if [ -n "$OUTPUT_FILE" ] && [ -f "$OUTPUT_FILE" ]; then
-    tail -20 "$OUTPUT_FILE"
-else
-    tmux capture-pane -t "$SESSION_NAME" -p -S -20 2>/dev/null || echo "(no output)"
-fi
+tail -20 "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
 exit 1

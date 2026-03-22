@@ -29,9 +29,10 @@ tools: [bash]
 
 1. **解析用户输入** - 识别 review 模式（PR/commit/uncommitted）
 2. **获取代码变更** - 通过 gh pr diff 或 git 命令获取变更
-3. **准备输出文件** - 确定结果文件路径（如 `/tmp/review-42.json`）
-4. **调用 subagent** - 使用 review system prompt 执行审查
-5. **读取结果** - 从文件读取 JSON 输出，格式化展示
+3. **准备任务文件** - 将大内容（如 diff）写入文件，准备任务描述
+4. **启动 subagent** - 使用 `start_subagent_tmux.sh` + review system prompt
+5. **等待完成** - 使用 `tmux_wait.sh` 等待 subagent 执行完毕
+6. **读取结果** - 从文件读取 JSON 输出，格式化展示
 
 ## Review System Prompt
 
@@ -76,10 +77,24 @@ tools: [bash]
 /skill:review 帮我 review 这个 pr https://github.com/tiancaiamao/ai/pull/42
 
 # 执行流程
-1. gh pr diff 42 > /tmp/pr.diff
-2. 调用 subagent with review prompt
-3. 收集 JSON 结果
-4. 格式化输出
+PR_NUM=42
+gh pr diff $PR_NUM > /tmp/pr${PR_NUM}.diff
+
+cat > /tmp/task.txt << 'EOF'
+Read the diff from /tmp/pr42.diff and review it.
+Write your result to /tmp/review-42.json in JSON format.
+EOF
+
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/subagent-output.txt \
+  15m \
+  @/Users/genius/.ai/skills/review/reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+/Users/genius/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 900
+
+cat /tmp/review-42.json
 ```
 
 ### Example 2: Review 本地变更
@@ -89,67 +104,148 @@ tools: [bash]
 /skill:review review 当前未提交的代码
 
 # 执行流程
-1. git diff > /tmp/changes.diff
-2. 调用 subagent with review prompt
-3. 收集 JSON 结果
+git diff > /tmp/changes.diff
+
+cat > /tmp/task.txt << 'EOF'
+Read the diff from /tmp/changes.diff and review it.
+Write your result to /tmp/review-uncommitted.json in JSON format.
+EOF
+
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/subagent-output.txt \
+  15m \
+  @/Users/genius/.ai/skills/review/reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+/Users/genius/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 900
+
+cat /tmp/review-uncommitted.json
+```
+
+### Example 3: Review 特定 Commit
+
+```bash
+COMMIT="abc1234"
+git show $COMMIT > /tmp/commit-${COMMIT}.diff
+
+cat > /tmp/task.txt << EOF
+Read the commit diff from /tmp/commit-${COMMIT}.diff and review it.
+Write your result to /tmp/review-${COMMIT}.json in JSON format.
+EOF
+
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/subagent-output.txt \
+  15m \
+  @/Users/genius/.ai/skills/review/reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+/Users/genius/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 900
+
+cat /tmp/review-${COMMIT}.json
 ```
 
 ## Subagent 调用
 
-**重要**: 调用 subagent 时请参考 `/skill:subagent` 技能的最佳实践。
+**重要**: 本技能完全依赖 `/skill:subagent` 技能。请遵循 subagent 技能的最佳实践。
 
-### 指定工具集
+### 核心规则（来自 subagent 技能）
 
-必须指定 `--tools` 参数，确保 subagent 有写文件权限：
+1. **必须使用 `start_subagent_tmux.sh` 脚本** - 不要直接调用 `ai --mode headless`
+2. **大内容必须通过文件传递** - 对于超过 200 字符的内容，写入文件并传递文件路径
+3. **必须使用 `tmux_wait.sh` 等待完成** - 不要依赖 `&` 后台运行
+4. **指定 system prompt 和工具集**
+
+### 标准调用模式
 
 ```bash
-ai --mode headless \
-  --system-prompt @/path/to/reviewer.md \
-  --tools read,write,grep,edit,glob \
-  --timeout 15m \
-  "Review the PR... Write your result to /tmp/review-42.json"
+# 1. 获取 PR diff（大内容）
+gh pr diff 42 > /tmp/pr42.diff
+
+# 2. 准备任务描述（小内容，嵌入命令行）
+cat > /tmp/task.txt << 'EOF'
+Read the diff from /tmp/pr42.diff and review it.
+Write your result to /tmp/review-42.json in JSON format.
+EOF
+
+# 3. 启动 subagent
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/subagent-output.txt \
+  15m \
+  @/Users/genius/.ai/skills/review/reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+# 4. 等待 subagent 完成
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+/Users/genius/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 900
+
+# 5. 读取结果
+cat /tmp/review-42.json
 ```
 
 ### 输出文件约定
 
-在 prompt 里明确告诉 subagent 输出文件路径：
+- **文件名由主 agent 决定**（如 `review-{PR号}.json`、`review-{commit}.json`）
+- **在任务描述中明确告知 subagent 输出路径**
+- **Subagent 使用 `write` 工具写入结果**
+- **主 agent 事后读取该文件**
 
-```
-Review the following PR diff ... Write your result to /tmp/review-42.json
-```
+### 为什么使用文件传递大内容？
 
-**关键点**:
-- 文件名由主 agent 决定（如 `review-{PR号}.json`）
-- Subagent 使用 `write` 工具把 JSON 结果写入文件
-- 主 agent 事后读取该文件获取结果
-- 不要依赖 subagent 的 stdout（会混有日志）
+subagent 技能明确说明：
+> For long task descriptions (>200 characters), write to file first, pass file path. Don't embed large content directly in the command.
 
-### 示例
+原因：
+- 命令行参数有长度限制
+- Shell `$()` 替换可能导致 `file already closed` 错误
+- 文件传递更可靠，支持任意大小
 
+### 小内容 vs 大内容
+
+**小内容（<200 字符）** - 可以直接嵌入：
 ```bash
-# 1. 获取 PR diff
-gh pr diff 42 > /tmp/pr42.diff
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/output.txt \
+  10m \
+  @reviewer.md \
+  "Review the single file at /tmp/one-file.go")
+```
 
-# 2. 调用 subagent，指定输出文件
-ai --mode headless \
-  --system-prompt @/Users/genius/.ai/skills/review/reviewer.md \
-  --tools read,write,grep,edit \
-  --timeout 15m \
-  "Review this PR diff. Write your result to /tmp/review-42.json
+**大内容（>200 字符或 diff）** - 必须通过文件：
+```bash
+cat > /tmp/task.txt << 'EOF'
+Read the diff from /tmp/explore-skill.diff (6507 lines, 204KB)
+Review thoroughly. Output to /tmp/review-explore-skill.json
+EOF
+```
 
-$(cat /tmp/pr42.diff)" &
+### 环境变量引用
 
-# 3. 等待完成后读取结果
-cat /tmp/review-42.json
+如需引用环境变量，使用 `--env` 参数（subagent 技能支持）：
+```bash
+SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/output.txt \
+  10m \
+  --env GITHUB_TOKEN \
+  @reviewer.md \
+  "Read task from /tmp/task.txt")
 ```
 
 ## 关键规则
 
-- 使用 subagent 隔离执行
-- 必须等待 subagent 完成
-- 解析 JSON 格式输出
-- 如果无 findings，输出 "No issues found"
-- overall_correctness 只能是 "patch is correct" 或 "patch is incorrect"
+- **完全依赖 subagent 技能** - 使用 `start_subagent_tmux.sh` 脚本，不要直接调用 `ai`
+- **必须等待完成** - 使用 `tmux_wait.sh` 确保执行完毕再读取结果
+- **大内容通过文件传递** - Diff 等大内容写入文件，通过文件路径传递给 subagent
+- **解析 JSON 格式输出** - 从指定文件读取 JSON 结果
+- **如果没有 findings** - 输出 "No issues found"
+- **overall_correctness** - 只能是 "patch is correct" 或 "patch is incorrect"
+
+## 参考文档
+
+详细的使用规则和最佳实践请参见：
+- `/skill:subagent` - Subagent 技能文档
+- `/skill:tmux` - Tmux 技能文档（含 tmux_wait.sh 说明）
 
 ## 常见问题
 
