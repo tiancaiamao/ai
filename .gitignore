@@ -8,12 +8,3 @@ ai
 __pycache__/
 *.pyc
 benchmark/results/progress.json
-
-# Test generated files
-lisp-interpreter/
-test-orchestrate/
-spec.md
-plan.md
-tasks.md
-*.bak
-*.bak[0-9]*

@@ -146,7 +146,7 @@ do_next() {
     fi
     
     # Execute via worker
-    local worker_persona="${PERSONA_DIR}/worker/worker.md"
+    local worker_persona="${PERSONA_DIR}/orchestrate/references/worker.md"
     local output="/tmp/orchestrate-task-${task_id:-unknown}.txt"
     
     echo "Executing with worker..."
@@ -166,7 +166,7 @@ do_next() {
             
             # Run review
             echo "Running review..."
-            local reviewer_persona="${PERSONA_DIR}/review/reviewer.md"
+            local reviewer_persona="${PERSONA_DIR}/orchestrate/references/reviewer.md"
             local review_output="/tmp/orchestrate-review-${task_id:-unknown}.txt"
             
             ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
