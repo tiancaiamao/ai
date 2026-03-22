@@ -149,6 +149,18 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 		LoopConfig:   *cfg, // Embedded LoopConfig with applied options
 	}
 
+	// Set GetModel callback to enable dynamic model switching during loop execution.
+	// This allows the loop to get the current model value after SetModel() is called.
+	a.LoopConfig.GetModel = func() llm.Model {
+		return a.model
+	}
+
+	// Set GetAPIKey callback to enable dynamic API key switching during loop execution.
+	// This allows the loop to get the current API key value after SetAPIKey() is called.
+	a.LoopConfig.GetAPIKey = func() string {
+		return a.apiKey
+	}
+
 	go a.runTraceFlusher()
 	return a
 }
@@ -487,6 +499,7 @@ func (a *Agent) GetState() map[string]any {
 // SetModel updates the active model configuration.
 func (a *Agent) SetModel(model llm.Model) {
 	a.model = model
+	a.LoopConfig.Model = model // Keep LoopConfig in sync for loop that reads from config
 }
 
 // SetAPIKey updates the API key for the active model.
