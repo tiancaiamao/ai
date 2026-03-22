@@ -23,12 +23,25 @@ Create `tasks.md` - an actionable checklist based on `plan.md`.
 ## Task Format
 
 ```markdown
-- [ ] T### [P] Task description
+- [ ] T001: Task title (concise, actionable)
+
+  **Description**: What needs to be done.
+
+  **Acceptance Criteria**:
+  - [ ] Criterion 1 (measurable, verifiable)
+  - [ ] Criterion 2
+  - [ ] Criterion 3
+
+  **Dependencies**: T001 (if any)
+  **Estimated**: 30m (optional)
 ```
 
 - `T###`: Task ID (T001, T002, T003, etc.)
-- `[P]`: Optional, marks parallelizable tasks
-- Description should be specific and actionable
+- Title: Concise, actionable description
+- Acceptance Criteria: Measurable, verifiable, testable
+- Dependencies: Other task IDs this task depends on
+
+**See**: [docs/tasks-format.md](../../../../docs/tasks-format.md) for detailed specification.
 
 ## tasks.md Template
 

@@ -10,7 +10,55 @@ Execute tasks from `tasks.md` checklist systematically. This is the execution ph
 - Implementation plan (`plan.md`) for technical guidance
 - Feature specification (`spec.md`) for requirements context
 
-## Workflow
+## Execution Options
+
+You have two ways to execute tasks:
+
+### Option 1: Manual Execution (Default)
+
+Execute tasks one by one with your supervision. This gives you full control and visibility.
+
+**When to use**:
+- Complex tasks requiring careful oversight
+- Learning the codebase
+- Debugging tricky issues
+
+**See**: [Manual Execution](#manual-execution) below
+
+### Option 2: Orchestrate Loop (Recommended)
+
+Use the orchestrate loop mode for automated execution with worker → task-checker verification.
+
+**When to use**:
+- Well-defined tasks with clear acceptance criteria
+- Want to save time
+- Tasks are straightforward
+
+**Usage**:
+```bash
+~/.ai/skills/orchestrate/bin/orchestrate.sh
+```
+
+**How it works**:
+1. Reads `tasks.md`
+2. For each task:
+   - Spawns a worker subagent to implement
+   - Spawns a task-checker subagent to verify
+   - Loops up to 3 times if fixes are needed
+   - Marks task as done/failed
+3. Main agent context stays clean throughout
+
+**Benefits**:
+- ✅ Automated execution
+- ✅ Worker subagent has isolated context
+- ✅ Task-checker verifies completion
+- ✅ Main agent supervises, doesn't execute
+
+---
+
+## Manual Execution
+
+Use this for manual, supervised execution of tasks.
 
 ### Step 1: Checklist Validation
 

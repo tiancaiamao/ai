@@ -1,10 +1,10 @@
 #!/bin/bash
-# orchestrate.sh - Orchestrate EDD workflow automatically
-# Usage: orchestrate.sh [options] <task-description>
-#   -p, --persona DIR    Directory containing personas (default: ~/.ai/skills)
-#   -f, --tasks FILE     Tasks.md file (default: tasks.md)
-#   -n, --dry-run        Show what would be done without executing
-#   -h, --help           Show this help
+# orchestrate.sh - Multi-agent orchestration loop mode
+# Usage: orchestrate.sh [options]
+#   -p, --persona-dir DIR    Directory containing personas (default: ~/.ai/skills)
+#   -f, --tasks FILE         Tasks.md file (default: tasks.md)
+#   -n, --dry-run            Show what would be done without executing
+#   -h, --help               Show this help
 
 set -e
 
@@ -32,22 +32,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--help)
             cat << 'EOF'
-orchestrate.sh - Orchestrate EDD workflow automatically
+orchestrate.sh - Multi-agent orchestration loop mode
 
 Usage:
-  orchestrate.sh "Build a REST API"
-  orchestrate.sh -f tasks.md -n "Continue work"
+  orchestrate.sh
+  orchestrate.sh -f tasks.md
   orchestrate.sh status
   orchestrate.sh next
 
 Commands:
-  (default)    Run full orchestration loop
+  (default)    Run full orchestration loop on tasks.md
   status       Show current progress
   next         Execute next pending task
   init         Initialize workflow
 
 Options:
-  -p, --persona-dir DIR   Where to find worker.md, reviewer.md
+  -p, --persona-dir DIR   Where to find worker.md, task-checker.md
   -f, --tasks FILE        Path to tasks.md (default: tasks.md)
   -n, --dry-run           Show plan without executing
 EOF
@@ -66,17 +66,17 @@ done
 
 # Helper: count pending tasks
 count_pending() {
-    grep -c "^\- \[ \]" "$TASKS_FILE" 2>/dev/null || echo "0"
+    grep -c "^- \[ \]" "$TASKS_FILE" 2>/dev/null || echo "0"
 }
 
 # Helper: get next pending task ID
 get_next_task_id() {
-    grep "^\- \[ \]" "$TASKS_FILE" | head -1 | grep -oE '[A-Z]+[0-9]+' | head -1
+    grep "^- \[ \]" "$TASKS_FILE" | head -1 | grep -oE '[A-Z]+[0-9]+' | head -1
 }
 
 # Helper: get next pending task description
 get_next_pending() {
-    grep "^\- \[ \]" "$TASKS_FILE" | head -1 | sed 's/^\- \[.\] //' | sed 's/^[A-Z0-9]* //' | head -1
+    grep "^- \[ \]" "$TASKS_FILE" | head -1 | sed 's/^- \[.\] //' | sed 's/^[A-Z0-9]* //' | head -1
 }
 
 # Helper: update task status
@@ -88,22 +88,42 @@ update_task() {
     ~/.ai/skills/orchestrate/references/bin/update_tasks.sh "$TASKS_FILE" "$pattern" "$status" 2>/dev/null || true
 }
 
+# Helper: extract check status from task-checker output
+extract_check_status() {
+    local file="$1"
+    grep -oP 'TASK_CHECK_RESULT:\s*\K\{[^}]+\}' "$file" 2>/dev/null | \
+        jq -r '.status // ""' 2>/dev/null || echo ""
+}
+
+# Helper: extract feedback from task-checker output
+extract_feedback() {
+    local file="$1"
+    local json=$(grep -oP 'TASK_CHECK_RESULT:\s*\K\{[^}]+\}' "$file" 2>/dev/null)
+    if [ -n "$json" ]; then
+        echo "$json" | jq -r '"\(.next_steps // "")"' 2>/dev/null || \
+        echo "$json" | jq -r '"Issues:\n\(.blocking_issues | map("- " + .) | join("\n"))"' 2>/dev/null || \
+        cat "$file"
+    else
+        cat "$file"
+    fi
+}
+
 # Show status
 do_status() {
-    echo "=== EDD Workflow Status ==="
+    echo "=== Orchestration Status ==="
     echo ""
     
     if [ -f "$TASKS_FILE" ]; then
         local total=$(grep -c "^\- \[" "$TASKS_FILE" 2>/dev/null || echo "0")
-        local done=$(grep -c "^\- \[X\]" "$TASKS_FILE" 2>/dev/null || echo "0")
-        local failed=$(grep -c "^\- \[!\]" "$TASKS_FILE" 2>/dev/null || echo "0")
-        local in_progress=$(grep -c "^\- \[-\]" "$TASKS_FILE" 2>/dev/null || echo "0")
-        local pending=$(grep -c "^\- \[ \]" "$TASKS_FILE" 2>/dev/null || echo "0")
+        local done=$(grep -c "^- \[X\]" "$TASKS_FILE" 2>/dev/null || echo "0")
+        local failed=$(grep -c "^- \[!\]" "$TASKS_FILE" 2>/dev/null || echo "0")
+        local in_progress=$(grep -c "^- \[-\]" "$TASKS_FILE" 2>/dev/null || echo "0")
+        local pending=$(grep -c "^- \[ \]" "$TASKS_FILE" 2>/dev/null || echo "0")
         
         echo "Tasks: $done/$total done, $pending pending, $in_progress in progress, $failed failed"
         echo ""
         echo "Pending tasks:"
-        grep "^\- \[ \]" "$TASKS_FILE" | head -5
+        grep "^- \[ \]" "$TASKS_FILE" | head -5
     else
         echo "No tasks.md found"
     fi
@@ -119,61 +139,105 @@ do_status() {
 do_next() {
     local task=$(get_next_pending)
     local task_id=$(get_next_task_id)
-    
+    local max_cycles=3
+    local cycle=0
+
     if [ -z "$task" ]; then
         echo "✓ All tasks completed!"
         return 0
     fi
-    
-    echo "Next task: $task (ID: ${task_id:-unknown})"
-    
+
+    echo "=== Task: $task (ID: ${task_id:-unknown}) ==="
+
     if [ "$DRY_RUN" = true ]; then
         echo "[DRY RUN] Would execute: $task"
         return 0
     fi
-    
+
     # Mark as in_progress
     if [ -n "$task_id" ]; then
         update_task "$task_id" in_progress
     fi
-    
-    # Execute via worker
+
     local worker_persona="${PERSONA_DIR}/orchestrate/references/worker.md"
+    local checker_persona="${PERSONA_DIR}/orchestrate/references/task-checker.md"
     local output="/tmp/orchestrate-task-${task_id:-unknown}.txt"
-    
-    echo "Executing with worker..."
-    ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-        -w "$output" \
-        10m \
-        "@${worker_persona}" \
-        "$task"
-    
-# Check result - wait for output file to exist with content
-    sleep 2
-    if [ -f "$output" ] && [ -s "$output" ]; then
-        # Check for successful completion markers
-        if grep -q "completed successfully\|Headless mode completed\|✓" "$output" 2>/dev/null; then
-            echo "✓ Task completed: $task_id"
-            update_task "$task_id" done
-            
-            # Run review
-            echo "Running review..."
-            local reviewer_persona="${PERSONA_DIR}/orchestrate/references/reviewer.md"
-            local review_output="/tmp/orchestrate-review-${task_id:-unknown}.txt"
-            
-            ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-                -w "$review_output" \
-                5m \
-                "@${reviewer_persona}" \
-                "Review implementation of $task"
-            
-            return 0
+    local check_output="/tmp/orchestrate-check-${task_id:-unknown}.txt"
+
+    # Worker → Task-checker loop
+    while [ $cycle -lt $max_cycles ]; do
+        cycle=$((cycle + 1))
+        echo ""
+        echo "--- Cycle $cycle/$max_cycles ---"
+
+        # Build worker prompt
+        local worker_prompt="$task"
+        if [ $cycle -gt 1 ]; then
+            # Get feedback from previous check
+            local feedback=$(extract_feedback "$check_output")
+            worker_prompt="Fix the following issues for task $task_id:\n\n$feedback"
+            echo "Feedback from previous cycle:"
+            echo "$feedback" | head -5
+            echo ""
         fi
-    fi
-    
-    echo "✗ Task failed: $task_id"
-    update_task "$task_id" failed
-    return 1
+
+        # Execute worker
+        echo "→ Worker executing..."
+        ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+            -w "$output" \
+            10m \
+            "@${worker_persona}" \
+            "$worker_prompt"
+
+        # Check if worker succeeded
+        sleep 2
+        if [ ! -f "$output" ] || [ ! -s "$output" ]; then
+            echo "✗ Worker produced no output"
+            update_task "$task_id" failed
+            return 1
+        fi
+
+        if ! grep -q "completed successfully\|Headless mode completed\|✓" "$output" 2>/dev/null; then
+            echo "✗ Worker execution failed"
+            update_task "$task_id" failed
+            return 1
+        fi
+
+        # Run task-checker
+        echo "→ Task-checker verifying..."
+        ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+            -w "$check_output" \
+            5m \
+            "@${checker_persona}" \
+            "Check task completion: $task_id"
+
+        # Parse check result
+        local status=$(extract_check_status "$check_output")
+
+        case "$status" in
+            APPROVED)
+                echo "✓ Task approved: $task_id"
+                update_task "$task_id" done
+                return 0
+                ;;
+            CHANGES_REQUESTED)
+                echo "⚠ Changes requested, cycle $cycle/$max_cycles"
+                if [ $cycle -ge $max_cycles ]; then
+                    echo "✗ Max cycles reached, manual intervention needed"
+                    echo "Latest feedback:"
+                    extract_feedback "$check_output" | head -10
+                    update_task "$task_id" failed
+                    return 1
+                fi
+                # Continue loop, feedback will be passed to worker
+                ;;
+            FAILED|"")
+                echo "✗ Task failed: $task_id"
+                update_task "$task_id" failed
+                return 1
+                ;;
+        esac
+    done
 }
 
 # Run full orchestration loop
