@@ -1,0 +1,183 @@
+#!/bin/bash
+# chain.sh - Execute tasks sequentially, passing output to next task
+# Usage: chain.sh [options] <task1> [task2] [task3]...
+#   -o, --output-dir DIR   Output directory (default: /tmp)
+#   -p, --persona FILE     Persona file for subagent
+#   -t, --timeout DURATION Timeout for each task (default: 10m)
+#   -k, --keep-going       Continue on error (default: stop on error)
+
+# {previous} in task text will be replaced with previous output
+
+set -e
+
+OUTPUT_DIR="/tmp"
+PERSONA=""
+TIMEOUT="10m"
+KEEP_GOING=false
+TASKS_FILE=""  # Optional tasks.md to update
+TASKS=()
+
+# Convert timeout to seconds (e.g., "10m" -> "600")
+timeout_to_seconds() {
+    local t="$1"
+    if [[ "$t" =~ ^([0-9]+)([smh])?$ ]]; then
+        local num="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[2]:-s}"
+        case "$unit" in
+            m) echo $((num * 60)) ;;
+            h) echo $((num * 3600)) ;;
+            s) echo "$num" ;;
+        esac
+    else
+        echo "600"  # default
+    fi
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o|--output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        -p|--persona)
+            PERSONA="$2"
+            shift 2
+            ;;
+        -t|--timeout)
+            TIMEOUT="$2"
+            shift 2
+            ;;
+        -k|--keep-going)
+            KEEP_GOING=true
+            shift
+            ;;
+        -f|--tasks-file)
+            TASKS_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: chain.sh [options] <task1> [task2]..."
+            echo "  -o, --output-dir DIR   Output directory (default: /tmp)"
+            echo "  -p, --persona FILE     Persona file for subagent"
+            echo "  -t, --timeout DURATION Timeout (default: 10m)"
+            echo "  -k, --keep-going       Continue on error (default: stop)"
+            echo "  -f, --tasks-file FILE  Tasks.md to auto-update progress"
+            echo ""
+            echo "Use {previous} in task text to reference previous output."
+            exit 0
+            ;;
+        *)
+            TASKS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ ${#TASKS[@]} -eq 0 ]; then
+    echo "Error: No tasks provided"
+    exit 1
+fi
+
+echo "Starting chain of ${#TASKS[@]} tasks"
+
+# Build persona argument
+PERSONA_ARG=""
+if [ -n "$PERSONA" ]; then
+    PERSONA_ARG="@$PERSONA"
+fi
+
+PREVIOUS_OUTPUT=""
+CHAIN_OUTPUT_FILE="${OUTPUT_DIR}/chain-output.txt"
+
+for i in "${!TASKS[@]}"; do
+    task="${TASKS[$i]}"
+    step_num=$((i + 1))
+    
+    # Mark as in_progress before starting
+    if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+        task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+        ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" in_progress
+    fi
+    
+    # Replace {previous} with actual previous output
+    if [[ "$task" == *"{previous}"* ]]; then
+        # Escape special characters in previous output for sed
+        escaped_prev=$(echo "$PREVIOUS_OUTPUT" | sed 's/[[\.*^$/&]/\\&/g')
+        task=$(echo "$task" | sed "s/{previous}/$escaped_prev/g")
+    fi
+    
+    echo ""
+    echo "=== Step $step_num/${#TASKS[@]} ==="
+    
+    # Write task to file if long
+    task_file=""
+    if [ ${#task} -gt 200 ]; then
+        task_file="${OUTPUT_DIR}/chain-task-${i}.txt"
+        echo "$task" > "$task_file"
+        task="@$task_file"
+    fi
+    
+    output_file="${OUTPUT_DIR}/chain-step-${i}.txt"
+    
+    # Build persona argument (use "-" if empty)
+    if [ -z "$PERSONA_ARG" ]; then
+        PERSONA_ARG="-"
+    fi
+    
+    # Start subagent
+    session=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+        "$output_file" \
+        "$TIMEOUT" \
+        "$PERSONA_ARG" \
+        "$task" 2>&1)
+    
+    session_name=$(echo "$session" | cut -d: -f1)
+    echo "Running: session=$session_name"
+    
+    # Convert timeout to seconds for tmux_wait.sh
+    TIMEOUT_SECS=$(timeout_to_seconds "$TIMEOUT")
+    
+    # Wait for completion
+    if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$TIMEOUT_SECS"; then
+        echo "✓ Step $step_num completed"
+        
+        # Auto-update tasks.md if provided
+        if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+            # Extract task identifier from task description (first line, first 50 chars)
+            task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+            ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done
+        fi
+        
+        # Capture output as previous for next step
+        if [ -f "$output_file" ]; then
+            PREVIOUS_OUTPUT=$(cat "$output_file")
+            # Also save to combined output
+            echo "" >> "$CHAIN_OUTPUT_FILE"
+            echo "=== Step $step_num Output ===" >> "$CHAIN_OUTPUT_FILE"
+            cat "$output_file" >> "$CHAIN_OUTPUT_FILE"
+        fi
+    else
+        echo "✗ Step $step_num FAILED or TIMEOUT"
+        
+        if [ -f "$output_file" ]; then
+            echo "--- Partial output ---"
+            tail -20 "$output_file"
+        fi
+        
+        if [ "$KEEP_GOING" = true ]; then
+            echo "Continuing due to --keep-going..."
+            PREVIOUS_OUTPUT="[ERROR in step $step_num]"
+        else
+            echo "Chain stopped at step $step_num"
+            exit 1
+        fi
+    fi
+done
+
+echo ""
+echo "=== Chain Complete ==="
+echo "Full output: $CHAIN_OUTPUT_FILE"
+echo "$PREVIOUS_OUTPUT"
+
+exit 0

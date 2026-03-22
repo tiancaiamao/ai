@@ -1,7 +1,7 @@
 ---
 name: subagent
 description: Spawn isolated subagent processes for delegated tasks. Use for parallel execution, focused tasks, or breaking down complex problems.
-tools: [bash]
+allowed-tools: [bash]
 ---
 
 # Subagent Skill
@@ -28,12 +28,20 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated t
 
 🔴 RULE 5: NEVER use --max-turns unless explicitly needed
    → Let subagents complete naturally
+
+🔴 RULE 6: Set bash timeout to match subagent timeout
+   → tmux_wait.sh respects the timeout you pass (e.g., 600s)
+   → But bash tool has its own default (120s)
+   → For tasks >2min: pass "timeout" parameter to the script call
+   → Example: start_subagent_tmux.sh -w /tmp/out.txt 10m ... → timeout=660
+   → The extra margin handles startup overhead
 ```
 
 ## Correct Command Template
 
 ```bash
 # STEP 1: Start subagent in tmux (auto-captures session ID)
+# NOTE: For tasks >2min, pass "timeout" parameter to avoid bash timeout
 SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/subagent-output.txt \
   10m \
@@ -46,11 +54,36 @@ SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
 echo "Started subagent: $SESSION_NAME"
 
 # STEP 2: Wait for completion
+# NOTE: For 10m tasks, use timeout=660 to handle bash default limit
 ~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
 
 # STEP 3: Collect results
 cat /tmp/subagent-output.txt
 ```
+
+## One-Liner with -w Flag
+
+Use `-w` flag to start and wait in one command:
+
+```bash
+# ⚠️ IMPORTANT: Bash tool has 120s default timeout!
+# For tasks expected to run >2min, you MUST set bash timeout parameter
+
+# Short task (<2min): default bash timeout is fine
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/out.txt 5m @persona.md "Quick task"
+
+# Long task (>2min): set bash timeout to match subagent timeout + margin
+# The "timeout" parameter in your tool call must exceed tmux_wait.sh timeout
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/out.txt 10m @persona.md "Long task"
+# ↑ tmux_wait.sh will wait 600s (10min)
+# ↑ Bash tool default is 120s - MUST set "timeout": 660 in your tool call
+```
+
+**Why this matters:**
+- `start_subagent_tmux.sh -w` calls `tmux_wait.sh` internally
+- `tmux_wait.sh` respects the timeout you pass (e.g., 600s for 10m)
+- But bash tool has its own default timeout (120s)
+- If bash kills the process before tmux_wait.sh finishes, you lose the result
 
 ## Interrupting Subagents
 
