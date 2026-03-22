@@ -2,7 +2,10 @@
 # start_subagent_tmux.sh - Start subagent in tmux session
 #
 # Usage:
-#   start_subagent_tmux.sh <output_file> <timeout> <system_prompt_file> <task_description>
+#   start_subagent_tmux.sh [-w] <output_file> <timeout> <system_prompt_file|-> <task_description>
+#
+# Options:
+#   -w: Wait for subagent to complete (uses tmux_wait.sh internally)
 #
 # Output:
 #   Prints "SESSION_NAME:SESSION_ID" to stdout
@@ -12,9 +15,32 @@
 #   RESULT=$(start_subagent_tmux.sh /tmp/out.txt 10m @explorer.md "Analyze code")
 #   SESSION_NAME=$(echo $RESULT | cut -d: -f1)
 #   SESSION_ID=$(echo $RESULT | cut -d: -f2)
-#   ~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
+#
+# Example with -w (wait for completion):
+#   start_subagent_tmux.sh -w /tmp/out.txt 10m @explorer.md "Analyze code"
 
 set -e
+
+WAIT_FOR_COMPLETE=false
+
+# Parse -w flag
+while [[ "$1" == -* ]]; do
+    case "$1" in
+        -w|--wait)
+            WAIT_FOR_COMPLETE=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-w] <output_file> <timeout> <system_prompt_file|-> <task_description>"
+            echo "  -w, --wait: Wait for subagent to complete"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 OUTPUT_FILE="$1"
 TIMEOUT="$2"
@@ -91,3 +117,13 @@ fi
 
 # Output session name and session ID (colon-separated)
 echo "${SESSION_NAME}:${SESSION_ID}"
+
+# If -w flag was passed, wait for completion
+if [ "$WAIT_FOR_COMPLETE" = true ]; then
+    echo ""
+    echo "Waiting for completion..."
+    # Convert timeout to seconds for tmux_wait.sh
+    TIMEOUT_SECS=$(echo "$TIMEOUT" | sed 's/[^0-9]//g')
+    TMUX_WAIT="$HOME/.ai/skills/tmux/bin/tmux_wait.sh"
+    "$TMUX_WAIT" "$SESSION_NAME" "$OUTPUT_FILE" "$TIMEOUT_SECS" 1
+fi
