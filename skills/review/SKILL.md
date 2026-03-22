@@ -8,6 +8,45 @@ allowed-tools: [bash, read, grep]
 
 Verify code quality and correctness after Worker implementation.
 
+## Review Modes
+
+### Mode 1: Direct Review (Main Agent)
+
+When user calls `/skill:review`, execute **directly in current agent**:
+
+```bash
+# User: /skill:review PR #123
+# Action: Review directly without subagent
+
+1. Read the code changes
+2. Run tests: go test ./... -v
+3. Check quality: golangci-lint run
+4. Output review results
+```
+
+**When to use**:
+- User explicitly asks for review
+- Manual code review needed
+- Quick verification
+
+### Mode 2: Subagent Review (Orchestration)
+
+When orchestrate.sh calls review, use **subagent**:
+
+```bash
+# In orchestrate.sh
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+    /tmp/review-output.txt \
+    5m \
+    @reviewer.md \
+    "Review implementation of $task"
+```
+
+**When to use**:
+- Automated workflow
+- Parallel task execution
+- Background review
+
 ## Review Criteria
 
 | Category | Checks |
