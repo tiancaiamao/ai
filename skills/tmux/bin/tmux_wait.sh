@@ -50,6 +50,20 @@ get_session_info() {
     tmux ls 2>/dev/null | grep "^${SESSION_NAME}:" || echo ""
 }
 
+# Function to check if session is truly idle (no active processes)
+is_session_idle() {
+    # Check if session contains "completed" in output (our success indicator)
+    # Look at more lines to find the completion message
+    local pane_content=$(tmux capture-pane -t "$SESSION_NAME" -p -S -10 2>/dev/null)
+    if echo "$pane_content" | grep -q "Headless mode completed"; then
+        return 0
+    fi
+    if echo "$pane_content" | grep -q "completed"; then
+        return 0
+    fi
+    return 1
+}
+
 # Calculate iterations
 ITERATIONS=$((TIMEOUT / CHECK_INTERVAL))
 
@@ -71,18 +85,22 @@ for i in $(seq 1 $ITERATIONS); do
         if [ -f "$DONE_MARKER" ]; then
             echo ""
             echo "✓ Session '${SESSION_NAME}' completed (done marker found)"
-            # Clean up marker
             rm -f "$DONE_MARKER"
             exit 0
         fi
 
+        # Check if session contains "completed" text (indicates task finished)
+        if is_session_idle; then
+            echo ""
+            echo "✓ Session '${SESSION_NAME}' completed (output shows completion)"
+            touch "$DONE_MARKER"
+            exit 0
+        fi
+
         # Fallback: if session no longer exists, consider it complete
-        # This handles SIGKILL scenario where trap cannot create done marker
         if ! get_session_info | grep -q .; then
             echo ""
             echo "✓ Session '${SESSION_NAME}' completed (session ended)"
-            echo "  Note: Done marker not found (process may have been killed)"
-            # Create marker ourselves to prevent confusion
             touch "$DONE_MARKER"
             exit 0
         fi
@@ -93,15 +111,16 @@ for i in $(seq 1 $ITERATIONS); do
             echo "✓ Session '${SESSION_NAME}' completed (no longer exists)"
             exit 0
         fi
+        # Also check for completion marker in legacy mode
+        if is_session_idle; then
+            echo ""
+            echo "✓ Session '${SESSION_NAME}' completed (output shows completion)"
+            exit 0
+        fi
     fi
 
-    # Print progress every few iterations
-    if [ $CHECK_INTERVAL -ge 10 ]; then
-        echo -n "."
-    elif [ $((i % (10 / CHECK_INTERVAL))) -eq 0 ]; then
-        echo -n "."
-    fi
-
+    # Print progress
+    echo -n "."
     sleep "$CHECK_INTERVAL"
 done
 
