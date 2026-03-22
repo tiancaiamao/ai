@@ -7,7 +7,7 @@ type ProcessorA struct{}
 
 func (p *ProcessorA) ProcessItem(items []int) int {
 	sum := 0
-	for i := 0; i < len(items); i++ { // BUG: off-by-one, but leave this one unchanged
+	for i := 0; i < len(items); i++ { // BUG: off-by-one, fix this one
 		sum += items[i]
 	}
 	return sum
@@ -18,7 +18,7 @@ type ProcessorB struct{}
 
 func (p *ProcessorB) ProcessItem(items []int) int {
 	sum := 0
-	for i := 0; i < len(items); i++ { // BUG: off-by-one - FIX THIS ONE ONLY
+	for i := 0; i < len(items); i++ { // BUG: off-by-one, fix this one
 		sum += items[i]
 	}
 	return sum
@@ -29,7 +29,7 @@ type ProcessorC struct{}
 
 func (p *ProcessorC) ProcessItem(items []int) int {
 	sum := 0
-	for i := 0; i < len(items); i++ { // BUG: off-by-one, but leave this one unchanged
+	for i := 0; i < len(items); i++ { // BUG: off-by-one, fix this one
 		sum += items[i]
 	}
 	return sum
@@ -50,8 +50,10 @@ func main() {
 	c := &ProcessorC{}
 	resultC := c.ProcessItem(items)
 
-	// Verification: Only ProcessorB should be fixed
-	// After fix: resultA=10, resultB=15, resultC=10
+	// Verification: After fix
+	// ProcessorA: skip last item → resultA=10
+	// ProcessorB: process all items → resultB=15
+	// ProcessorC: skip last item → resultC=10
 	expectedA := 10
 	expectedB := 15
 	expectedC := 10
