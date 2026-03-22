@@ -62,7 +62,12 @@ SESSION_NAME="subagent-$(date +%s)-$RANDOM$$"
 declare -a CMD_ARGS
 CMD_ARGS=(ai --mode headless --timeout "$TIMEOUT")
 if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
-    CMD_ARGS+=(--system-prompt "@$SYSTEM_PROMPT")
+    # Add @ prefix if not already present
+    if [ "${SYSTEM_PROMPT:0:1}" = "@" ]; then
+        CMD_ARGS+=(--system-prompt "$SYSTEM_PROMPT")
+    else
+        CMD_ARGS+=(--system-prompt "@$SYSTEM_PROMPT")
+    fi
 fi
 CMD_ARGS+=("$TASK")
 
