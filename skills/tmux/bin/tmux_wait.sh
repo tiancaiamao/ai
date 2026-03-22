@@ -11,9 +11,10 @@
 #   check-interval  - Seconds between checks (default: 1)
 #
 # Exit codes:
-#   0 - Session completed
+#   0 - Session completed successfully
 #   1 - Timeout
 #   2 - Invalid arguments
+#   3 - Session ended unexpectedly (no done marker)
 
 set -e
 
@@ -39,9 +40,11 @@ if ! command -v tmux &> /dev/null; then
 fi
 
 DONE_MARKER="${OUTPUT_FILE}.done"
+SESSION_END_MARKER="=== DONE ==="
 
 is_session_done() {
-    tmux capture-pane -t "$SESSION_NAME" -p -S -20 2>/dev/null | grep -q "Headless mode completed\|Prompt completed\|completed"
+    # Check for explicit done marker in pane output
+    tmux capture-pane -t "$SESSION_NAME" -p -S -20 2>/dev/null | grep -q "$SESSION_END_MARKER"
 }
 
 session_exists() {
@@ -70,9 +73,21 @@ for i in $(seq 1 $((TIMEOUT / CHECK_INTERVAL))); do
     fi
 
     if ! session_exists; then
-        echo ""
-        echo "✓ Session '$SESSION_NAME' ended"
-        exit 0
+        # Session 不存在，检查是否是正常结束
+        if [ -f "${OUTPUT_FILE}.done" ]; then
+            echo ""
+            echo "✓ Session '$SESSION_NAME' completed (done marker)"
+            rm -f "${OUTPUT_FILE}.done"
+            exit 0
+        else
+            # Session 异常退出（没有 done marker）
+            echo ""
+            echo "✗ Session '$SESSION_NAME' ended unexpectedly (no done marker)"
+            echo ""
+            echo "Last output:"
+            tail -20 "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
+            exit 3
+        fi
     fi
 
     echo -n "."

@@ -146,13 +146,26 @@ explorer/
 - **必须**设置 timeout：`--timeout 10m`
 - **必须**使用 tmux_wait.sh 等待：`tmux_wait.sh "$SESSION_NAME" 600`
 - **长任务描述**写入文件，避免命令行过长
+- **必须**设置 bash timeout 参数（对于 >2min 的任务）
+
+**⚠️ Bash Timeout 设置**：
+```bash
+# 短任务 (<2min): 默认 bash timeout 足够
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/explore-out.txt 5m \
+  @/path/to/explorer.md "Explore ..."
+
+# 长任务 (>2min): 必须设置 bash timeout 参数
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/explore-out.txt 10m \
+  @/path/to/explorer.md "Explore ..."
+#                                              ↑ 在你的 tool call 中设置 "timeout": 660
+```
 
 ```bash
 # 单目标探索
 SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/explore-output.txt \
   10m \
-  /Users/genius/.ai/skills/explore/explorer.md \
+  @/Users/genius/.ai/skills/explore/explorer.md \
   "Explore ~/project/pi-mono's subagent implementation. Write findings to explorer/subagent.md")
 
 SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
@@ -164,12 +177,12 @@ cat /tmp/explore-output.txt
 # 多目标并行探索
 SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/explore1.txt 10m \
-  /Users/genius/.ai/skills/explore/explorer.md \
+  @/Users/genius/.ai/skills/explore/explorer.md \
   "Explore repo1. Write to explorer/repo1.md")
 
 SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/explore2.txt 10m \
-  /Users/genius/.ai/skills/explore/explorer.md \
+  @/Users/genius/.ai/skills/explore/explorer.md \
   "Explore repo2. Write to explorer/repo2.md")
 
 # 等待两个 subagent 完成

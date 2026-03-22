@@ -66,15 +66,32 @@ if [ -n "$SYSTEM_PROMPT" ] && [ "$SYSTEM_PROMPT" != "-" ]; then
 fi
 CMD_ARGS+=("$TASK")
 
-# Build full command with output redirection and done marker
-# When command completes, create ${OUTPUT_FILE}.done to signal completion
-# Use trap to ensure done marker is created even on signal/exit
-FULL_CMD="trap 'touch \"${OUTPUT_FILE}.done\"' EXIT; $(printf '%q ' "${CMD_ARGS[@]}") 2>&1 | tee \"$OUTPUT_FILE\""
+# Use a script file for the command to handle exit codes properly
+# CMD_SCRIPT takes: <output_file> <cmd> [args...]
+CMD_SCRIPT=$(mktemp "/tmp/subagent-cmd-XXXXXX.sh")
+cat > "$CMD_SCRIPT" << 'CMDSCRIPT'
+set -o pipefail
+_output_file="$1"
+shift
+"$@" 2>&1 | tee "$_output_file"
+_exit_code=$?
+if [ $_exit_code -eq 0 ]; then
+    # Create done marker ONLY on successful completion
+    touch "${_output_file}.done"
+    # Output explicit done marker to pane for tmux_wait.sh detection
+    echo "=== DONE ===" >&2
+fi
+exit $_exit_code
+CMDSCRIPT
+chmod +x "$CMD_SCRIPT"
 
-# Start in tmux session
-tmux new -s "$SESSION_NAME" -d
-tmux send-keys -t "$SESSION_NAME" -l "$FULL_CMD"
-tmux send-keys -t "$SESSION_NAME" C-m
+# Build the full command line with proper quoting for tmux
+FULL_CMD="$CMD_SCRIPT $OUTPUT_FILE $(printf '%q ' "${CMD_ARGS[@]}")"
+
+# Start in tmux session with the command
+tmux new-session -d -s "$SESSION_NAME"
+# Send command with Enter
+tmux send-keys -t "$SESSION_NAME" "$FULL_CMD" C-m
 
 # Wait for session to start and output to appear
 sleep 2
@@ -130,4 +147,18 @@ if [ "$WAIT_FOR_COMPLETE" = true ]; then
     esac
     TMUX_WAIT="$HOME/.ai/skills/tmux/bin/tmux_wait.sh"
     "$TMUX_WAIT" "$SESSION_NAME" "$OUTPUT_FILE" "$TIMEOUT_SECS" 1
+    EXIT_CODE=$?
+    
+    # Clean up temp script
+    rm -f "$CMD_SCRIPT"
+    
+    case $EXIT_CODE in
+        0) echo "Subagent completed successfully" ;;
+        1) echo "Error: Subagent timed out"; exit 1 ;;
+        3) echo "Error: Subagent exited unexpectedly"; exit 1 ;;
+        *) echo "Error: tmux_wait.sh exited with code $EXIT_CODE"; exit 1 ;;
+    esac
 fi
+
+# Clean up temp script if not waiting
+rm -f "$CMD_SCRIPT"
