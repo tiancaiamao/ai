@@ -17,6 +17,16 @@ const (
 	EditModeHashline               // Hashline mode: line-addressed edits using content hashes
 )
 
+// PoorMatchError indicates a fuzzy match was found but with poor quality
+type PoorMatchError struct {
+	Match   *matchResult
+	Message string
+}
+
+func (e *PoorMatchError) Error() string {
+	return e.Message
+}
+
 // EditTool edits a file by replacing old text with new text with dynamic workspace support.
 type EditTool struct {
 	workspace *Workspace
@@ -99,10 +109,17 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	fileContent := string(content)
 
-	// Find best match using fuzzy matching
+	// Find best match using layered fuzzy matching
 	match, err := findBestMatch(fileContent, oldText)
 	if err != nil {
-		return nil, err
+		// Check if it's a PoorMatchError (edit still proceeds)
+		if poorErr, ok := err.(*PoorMatchError); ok {
+			match = poorErr.Match
+			// Edit proceeds with the poor match
+		} else {
+			// Genuine error (no match found)
+			return nil, err
+		}
 	}
 
 	// Generate diff
@@ -118,6 +135,11 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Return success with diff
 	result := fmt.Sprintf("Edited %s\n\nDiff:\n%s", path, diff)
+
+	// Check if there was a warning and append it
+	if poorErr, ok := err.(*PoorMatchError); ok {
+		result += fmt.Sprintf("\n\nWarning: %s", poorErr.Message)
+	}
 
 	return []agentctx.ContentBlock{agentctx.TextContent{
 		Type: "text",
@@ -142,41 +164,25 @@ func (t *EditTool) executeHashlineEdits(ctx context.Context, args map[string]any
 	for i, e := range editsRaw {
 		editMap, ok := e.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("edit %d must be an object", i)
+			return nil, fmt.Errorf("edit %d must be a map", i)
 		}
-
 		edit, err := parseHashlineEditFromMap(editMap)
 		if err != nil {
-			return nil, fmt.Errorf("edit %d: %w", i, err)
+			return nil, fmt.Errorf("failed to parse edit %d: %w", i, err)
 		}
 		edits = append(edits, *edit)
 	}
 
-	// Resolve path
+	// Read file content
 	fullPath := t.resolvePath(path)
-
-	// Read file
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	fileContent := string(content)
-
 	// Apply hashline edits
-	result, err := ApplyHashlineEdits(edits, fileContent)
+	result, err := ApplyHashlineEdits(edits, string(content))
 	if err != nil {
-		if mismatchErr, ok := err.(*HashlineMismatchError); ok {
-			// Format helpful error with remaps
-			errMsg := mismatchErr.Error()
-			if len(mismatchErr.Remaps) > 0 {
-				errMsg += "\n\nCorrected line references:"
-				for line, hash := range mismatchErr.Remaps {
-					errMsg += fmt.Sprintf("\n  %d:%s", line, hash)
-				}
-			}
-			return nil, fmt.Errorf("%s", errMsg)
-		}
 		return nil, err
 	}
 
@@ -185,255 +191,73 @@ func (t *EditTool) executeHashlineEdits(ctx context.Context, args map[string]any
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	// Build result message
-	msg := fmt.Sprintf("Edited %s (%d operations)", path, len(edits))
+	summary := fmt.Sprintf("Applied %d edits, first changed line: %d", len(edits), result.FirstChangedLine)
 	if len(result.Warnings) > 0 {
-		msg += "\n\nWarnings:"
+		summary += "\nWarnings:\n"
 		for _, w := range result.Warnings {
-			msg += "\n- " + w
+			summary += "  - " + w + "\n"
 		}
-	}
-	if len(result.NoopEdits) > 0 {
-		msg += fmt.Sprintf("\n\n%d edits produced no changes (content identical)", len(result.NoopEdits))
 	}
 
 	return []agentctx.ContentBlock{agentctx.TextContent{
 		Type: "text",
-		Text: msg,
+		Text: summary,
 	}}, nil
 }
 
 // parseHashlineEditFromMap parses a hashline edit from a map
 func parseHashlineEditFromMap(m map[string]interface{}) (*HashlineEdit, error) {
-	edit := &HashlineEdit{}
+	edit := HashlineEdit{}
 
-	if setLine, ok := m["set_line"].(map[string]interface{}); ok {
-		edit.Type = HashlineEditSetLine
-		if anchor, ok := setLine["anchor"].(string); ok {
-			edit.Anchor = anchor
-		} else {
-			return nil, fmt.Errorf("set_line requires anchor")
+	// Parse type
+	if t, ok := m["type"].(string); ok {
+		switch t {
+		case "set_line":
+			edit.Type = HashlineEditSetLine
+		case "replace_lines":
+			edit.Type = HashlineEditReplaceLines
+		case "insert_after":
+			edit.Type = HashlineEditInsertAfter
+		default:
+			return nil, fmt.Errorf("unknown edit type: %s", t)
 		}
-		if newText, ok := setLine["new_text"].(string); ok {
-			edit.NewText = newText
-		}
-		return edit, nil
 	}
 
-	if replaceLines, ok := m["replace_lines"].(map[string]interface{}); ok {
-		edit.Type = HashlineEditReplaceLines
-		if startAnchor, ok := replaceLines["start_anchor"].(string); ok {
-			edit.StartAnchor = startAnchor
-		} else {
-			return nil, fmt.Errorf("replace_lines requires start_anchor")
-		}
-		if endAnchor, ok := replaceLines["end_anchor"].(string); ok {
-			edit.EndAnchor = endAnchor
-		}
-		if newText, ok := replaceLines["new_text"].(string); ok {
-			edit.NewText = newText
-		}
-		return edit, nil
+	// Parse anchors
+	if anchor, ok := m["anchor"].(string); ok {
+		edit.Anchor = anchor
+	}
+	if startAnchor, ok := m["start_anchor"].(string); ok {
+		edit.StartAnchor = startAnchor
+	}
+	if endAnchor, ok := m["end_anchor"].(string); ok {
+		edit.EndAnchor = endAnchor
 	}
 
-	if insertAfter, ok := m["insert_after"].(map[string]interface{}); ok {
-		edit.Type = HashlineEditInsertAfter
-		if anchor, ok := insertAfter["anchor"].(string); ok {
-			edit.Anchor = anchor
-		} else {
-			return nil, fmt.Errorf("insert_after requires anchor")
-		}
-		if text, ok := insertAfter["text"].(string); ok {
-			edit.Text = text
-		}
-		return edit, nil
+	// Parse text content
+	if newText, ok := m["new_text"].(string); ok {
+		edit.NewText = newText
+	}
+	if text, ok := m["text"].(string); ok {
+		edit.Text = text
 	}
 
-	if replace, ok := m["replace"].(map[string]interface{}); ok {
-		edit.Type = HashlineEditReplace
-		if oldText, ok := replace["old_text"].(string); ok {
-			edit.OldText = oldText
-		} else {
-			return nil, fmt.Errorf("replace requires old_text")
-		}
-		if newText, ok := replace["new_text"].(string); ok {
-			edit.NewText = newText
-		} else {
-			return nil, fmt.Errorf("replace requires new_text")
-		}
-		if all, ok := replace["all"].(bool); ok {
-			edit.All = all
-		}
-		return edit, nil
-	}
-
-	return nil, fmt.Errorf("unknown edit type")
+	return &edit, nil
 }
 
-// resolvePath resolves a path relative to the current working directory.
 func (t *EditTool) resolvePath(path string) string {
-	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[2:])
-	}
+	// If absolute path, use as-is
 	if filepath.IsAbs(path) {
 		return path
 	}
-	return t.workspace.ResolvePath(path)
-}
 
-// matchResult represents a fuzzy match result.
-type matchResult struct {
-	start int
-	end   int
-	score int // lower is better
-}
-
-// findBestMatch finds the best matching position for oldText in content.
-func findBestMatch(content, oldText string) (*matchResult, error) {
-	// First try exact match
-	idx := strings.Index(content, oldText)
-	if idx >= 0 {
-		return &matchResult{
-			start: idx,
-			end:   idx + len(oldText),
-			score: 0,
-		}, nil
+	// If relative to workspace, join with workspace
+	if t.workspace != nil {
+		return filepath.Join(t.workspace.GetGitRoot(), path)
 	}
 
-	// No exact match, try fuzzy matching
-	// Split content and oldText into lines
-	contentLines := strings.Split(content, "\n")
-	oldLines := strings.Split(oldText, "\n")
-
-	if len(oldLines) == 0 {
-		return nil, fmt.Errorf("oldText is empty")
-	}
-
-	// Find the best matching window
-	bestMatch := &matchResult{score: 999999}
-
-	// Slide through content to find the best match
-	for i := 0; i <= len(contentLines)-len(oldLines); i++ {
-		window := contentLines[i : i+len(oldLines)]
-		score := computeMatchScore(window, oldLines)
-
-		if score < bestMatch.score {
-			// Calculate character positions
-			startPos := 0
-			for j := 0; j < i; j++ {
-				startPos += len(contentLines[j]) + 1 // +1 for newline
-			}
-
-			endPos := startPos + len(strings.Join(window, "\n"))
-
-			bestMatch = &matchResult{
-				start: startPos,
-				end:   endPos,
-				score: score,
-			}
-		}
-	}
-
-	if bestMatch.score == 999999 {
-		return nil, fmt.Errorf("could not find matching text (tried fuzzy matching)")
-	}
-
-	// If score is high (poor match), warn but continue
-	if bestMatch.score > 10 {
-		// Try to show what we found
-		matchedContent := content[bestMatch.start:bestMatch.end]
-		return bestMatch, fmt.Errorf("fuzzy match is poor (score %d), found: %q", bestMatch.score, truncateString(matchedContent, 50))
-	}
-
-	return bestMatch, nil
-}
-
-// computeMatchScore computes the edit distance between two slices of lines.
-func computeMatchScore(a, b []string) int {
-	// Simple implementation: count character differences
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
-	}
-
-	score := 0
-	for i := 0; i < maxLen; i++ {
-		if i >= len(a) {
-			score += len(b[i])
-		} else if i >= len(b) {
-			score += len(a[i])
-		} else {
-			score += editDistance(a[i], b[i])
-		}
-	}
-
-	return score
-}
-
-// editDistance computes the Levenshtein distance between two strings.
-func editDistance(a, b string) int {
-	lenA := len(a)
-	lenB := len(b)
-
-	// Optimization: if one string is empty
-	if lenA == 0 {
-		return lenB
-	}
-	if lenB == 0 {
-		return lenA
-	}
-
-	// Use a smaller matrix for optimization
-	if lenA < lenB {
-		a, b = b, a
-		lenA, lenB = lenB, lenA
-	}
-
-	// Previous row of distances
-	previous := make([]int, lenB+1)
-	for i := 0; i <= lenB; i++ {
-		previous[i] = i
-	}
-
-	// Current row
-	current := make([]int, lenB+1)
-
-	for i := 1; i <= lenA; i++ {
-		current[0] = i
-		for j := 1; j <= lenB; j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-
-			current[j] = min(
-				previous[j]+1,      // deletion
-				current[j-1]+1,     // insertion
-				previous[j-1]+cost, // substitution
-			)
-		}
-
-		// Swap rows
-		previous, current = current, previous
-	}
-
-	return previous[lenB]
-}
-
-// min returns the minimum of three integers.
-func min(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
-	}
-	if b < c {
-		return b
-	}
-	return c
+	// Otherwise use as relative to current dir
+	return path
 }
 
 // generateDiff generates a unified diff for the edit.
