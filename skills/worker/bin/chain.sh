@@ -14,6 +14,7 @@ OUTPUT_DIR="/tmp"
 PERSONA=""
 TIMEOUT="10m"
 KEEP_GOING=false
+TASKS_FILE=""  # Optional tasks.md to update
 TASKS=()
 
 # Convert timeout to seconds (e.g., "10m" -> "600")
@@ -51,12 +52,17 @@ while [[ $# -gt 0 ]]; do
             KEEP_GOING=true
             shift
             ;;
+        -f|--tasks-file)
+            TASKS_FILE="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: chain.sh [options] <task1> [task2]..."
             echo "  -o, --output-dir DIR   Output directory (default: /tmp)"
             echo "  -p, --persona FILE     Persona file for subagent"
             echo "  -t, --timeout DURATION Timeout (default: 10m)"
             echo "  -k, --keep-going       Continue on error (default: stop)"
+            echo "  -f, --tasks-file FILE  Tasks.md to auto-update progress"
             echo ""
             echo "Use {previous} in task text to reference previous output."
             exit 0
@@ -87,6 +93,12 @@ CHAIN_OUTPUT_FILE="${OUTPUT_DIR}/chain-output.txt"
 for i in "${!TASKS[@]}"; do
     task="${TASKS[$i]}"
     step_num=$((i + 1))
+    
+    # Mark as in_progress before starting
+    if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+        task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+        ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" in_progress
+    fi
     
     # Replace {previous} with actual previous output
     if [[ "$task" == *"{previous}"* ]]; then
@@ -129,6 +141,13 @@ for i in "${!TASKS[@]}"; do
     # Wait for completion
     if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$TIMEOUT_SECS"; then
         echo "✓ Step $step_num completed"
+        
+        # Auto-update tasks.md if provided
+        if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+            # Extract task identifier from task description (first line, first 50 chars)
+            task_id=$(echo "$task" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+            ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done
+        fi
         
         # Capture output as previous for next step
         if [ -f "$output_file" ]; then

@@ -16,7 +16,35 @@ Execute implementation tasks from `tasks.md` using isolated subagent processes.
    - parallel.sh: Independent tasks in parallel
    - chain.sh: Sequential tasks with data flow
 4. Execute with verification (compile/test)
-5. Update tasks.md status
+5. Auto-update tasks.md status ← NEW!
+```
+
+## Auto-Update tasks.md
+
+Worker scripts now **automatically update** task status in tasks.md:
+
+| Status | Checkbox | When |
+|--------|----------|------|
+| pending | `[ ]` | Before execution |
+| in_progress | `[-]` | Task started |
+| done | `[X]` | Task succeeded |
+| failed | `[!]` | Task failed/timeout |
+
+Pass `-f <tasks.md>` to enable auto-update:
+
+```bash
+# Parallel mode with auto-update
+~/.ai/skills/worker/bin/parallel.sh \
+    -f tasks.md \
+    -n 2 \
+    "Task 1: Implement feature X" \
+    "Task 2: Write tests for feature X"
+
+# Chain mode with auto-update
+~/.ai/skills/worker/bin/chain.sh \
+    -f tasks.md \
+    "Task 1: Generate code skeleton" \
+    "Task 2: Review and refine - {previous}"
 ```
 
 ## Execution Modes
@@ -58,19 +86,11 @@ Execute implementation tasks from `tasks.md` using isolated subagent processes.
 - Assignee: worker
 ```
 
-## Update tasks.md
-
-After task completion, update status:
+## Manual Update (if not using -f)
 
 ```bash
-# Mark as doing
-sed -i 's/Status: todo/Status: doing/' tasks.md
-
-# Mark as done
-sed -i 's/Status: doing/Status: done/' tasks.md
-
-# Or use a tag
-sed -i 's/Assignee: worker/Assignee: worker-done/' tasks.md
+# Or use update_tasks.sh directly
+~/.ai/skills/worker/bin/update_tasks.sh tasks.md "Task name" done
 ```
 
 ## Verification

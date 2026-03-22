@@ -12,6 +12,7 @@ MAX_PARALLEL=2
 OUTPUT_DIR="/tmp"
 PERSONA=""
 TIMEOUT="10m"
+TASKS_FILE=""  # Optional tasks.md to update
 TASKS=()
 
 # Parse arguments
@@ -33,12 +34,17 @@ while [[ $# -gt 0 ]]; do
             TIMEOUT="$2"
             shift 2
             ;;
+        -f|--tasks-file)
+            TASKS_FILE="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: parallel.sh [options] <task1> [task2]..."
             echo "  -n, --max-parallel N   Max parallel tasks (default: 2)"
             echo "  -o, --output-dir DIR   Output directory (default: /tmp)"
             echo "  -p, --persona FILE     Persona file for subagent"
             echo "  -t, --timeout DURATION Timeout (default: 10m)"
+            echo "  -f, --tasks-file FILE  Tasks.md to auto-update progress"
             exit 0
             ;;
         *)
@@ -147,9 +153,21 @@ for i in $(seq 0 $((INDEX - 1))); do
         if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" 1 2>/dev/null; then
             echo "✓ task-${i}: SUCCESS"
             SUCCESS=$((SUCCESS + 1))
+            
+            # Auto-update tasks.md if provided
+            if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+                task_id=$(echo "${TASKS[$i]}" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+                ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" done
+            fi
         else
             echo "✗ task-${i}: FAILED or TIMEOUT"
             FAILED=$((FAILED + 1))
+            
+            # Mark as failed in tasks.md
+            if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+                task_id=$(echo "${TASKS[$i]}" | head -1 | cut -c1-50 | sed 's/[[\.*^$/&]/\\&/g')
+                ~/.ai/skills/worker/bin/update_tasks.sh "$TASKS_FILE" "$task_id" failed
+            fi
         fi
     else
         echo "✗ task-${i}: NO SESSION FILE"
