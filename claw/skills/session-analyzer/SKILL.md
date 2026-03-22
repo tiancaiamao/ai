@@ -30,6 +30,7 @@ license: MIT
 3. **流程设计**：任务分解是否合理，执行顺序是否最优
 4. **错误处理**：失败时的重试、fallback 策略
 5. **反模式**：重复失败、无效循环、过度调用
+6. **Subagent 协作**：delegation 是否合理，任务描述是否清晰
 
 ## 数据源
 
@@ -44,7 +45,37 @@ license: MIT
 
 ## 工作流程
 
-### 步骤 1：选择多个 session（批处理）
+### 步骤 0：快速会话概览（配合 session-reader）
+
+在深度分析前，先用 session-reader 快速了解会话：
+
+```bash
+# 获取会话概览
+uv run ${CLAUDE_SKILL_ROOT}/scripts/read_session.py <path> --mode overview
+
+# 查看工具调用
+uv run ${CLAUDE_SKILL_ROOT}/scripts/read_session.py <path> --mode tools
+```
+
+参考：`references/session-reader.md`
+
+---
+
+### 步骤 1：选择分析模式
+
+根据分析目标选择模式：
+
+| 模式 | 目标 | 适用场景 |
+|------|------|----------|
+| `--mode full` | 全面分析 | 周期性深度 review |
+| `--mode tools` | 仅工具选择 | 快速发现工具使用问题 |
+| `--mode flow` | 仅流程设计 | 优化执行效率 |
+| `--mode prompt` | 仅 prompt 设计 | 调试理解问题 |
+| `--mode subagents` | 仅 subagent | 优化 delegation 策略 |
+
+---
+
+### 步骤 2：选择多个 session（批处理）
 
 ```bash
 # 找到最近 5-10 个未分析的 session（按修改时间）
@@ -60,61 +91,94 @@ CHECKPOINT=$(cat ~/.aiclaw/analysis/checkpoint.json 2>/dev/null || echo '{}')
 - 从 checkpoint 继续，避免重复分析
 - 分析完所有 session 后，生成汇总报告
 
-### 步骤 2：逐个分析 session
+---
 
-对每个 session：
+### 步骤 3：按模式逐个分析 session
+
+#### 模式 A: 工具选择分析 (`--mode tools`)
 
 ```bash
-# 读取对话内容
+# 读取工具调用
+uv run ${CLAUDE_SKILL_ROOT}/scripts/read_session.py <path> --mode tools
+```
+
+**关注点**：
+- Agent 选择了什么工具？
+- 是否选错了？（如应该用 read 却用了 bash cat）
+- 为什么选错？工具描述不够清楚？
+- 是否有更好的工具组合？
+
+#### 模式 B: 流程设计分析 (`--mode flow`)
+
+```bash
+# 读取对话，关注执行顺序
 tail -100 "$SESSION_DIR/messages.jsonl"
 ```
 
 **关注点**：
-- User 的意图是什么？
-- Agent 的理解是否正确？
-- 选择了什么工具？
-- 执行结果如何？
-- 是否有失败/重试？
-
-**⚠️ Rate Limit 避免策略**：
-- 每个 session 分析完后，等待 10-30 秒
-- 如果遇到 rate limit (429)，等待 60 秒后重试
-- 不要并发分析多个 session
-
-### 步骤 3：Code Review 分析（逐个）
-
-**像 review 代码一样思考**：
-
-#### 检查 Prompt 设计
-```
-问题：agent 是否正确理解了用户意图？
-- 如果误解：prompt 是否不够清晰？
-- 如果理解正确但执行错误：工具描述是否有歧义？
-```
-
-#### 检查工具选择
-```
-问题：agent 选择了什么工具？
-- 是否选错了？（比如应该用 read 却用了 bash cat）
-- 为什么选错？工具描述不够清楚？
-- 是否有更好的工具组合？
-```
-
-#### 检查流程设计
-```
-问题：任务分解是否合理？
+- 任务分解是否合理？
 - 是否有冗余步骤？
 - 执行顺序是否最优？
 - 是否可以并行执行？
+
+#### 模式 C: Prompt 设计分析 (`--mode prompt`)
+
+**关注点**：
+- Agent 是否正确理解了用户意图？
+- 如果误解：系统提示词/工具描述是否不够清晰？
+- 如果理解正确但执行错误：工具描述是否有歧义？
+
+#### 模式 D: Subagent 分析 (`--mode subagents`)
+
+**⚠️ 子代理会话位置**（ai 项目使用 tmux 机制）：
+
+```bash
+# 1. 从主 session 中找到 subagent 调用
+# 查找 toolCall 结果中的 tmux session 名称
+grep "subagent-" ~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
+
+# 2. 通过 tmux session 找到对应的 AI session
+tmux capture-pane -t subagent-<timestamp>-<random> -p -S - | grep "Session ID:"
+
+# 3. 读取 subagent 的 messages.jsonl
+cat ~/.ai/sessions/--<cwd>--/<subagent-session-id>/messages.jsonl
 ```
 
-#### 检查错误处理
+**关注点**：
+- **任务描述清晰度**：父代理给子代理的指令是否明确？
+- **子代理理解**：子代理是否理解了任务？
+- **执行偏差**：子代理是否过度拆解/过度执行？
+- **结果完整性**：子代理返回的结果是否完整？
+- **协作效率**：父子代理间的交互是否合理？
+
+**典型问题**：
+- 父代理任务描述不清晰 → 子代理执行偏差
+- 子代理过度执行（做了额外工作）
+- 结果返回格式不统一
+- Subagent 超时未完成
+- 并发 subagent 没有正确协调
+
+---
+
+#### 模式 E: Traces 性能分析（可选）
+
+当需要深入理解性能/并发问题时：
+
+```bash
+# 检查工具调用时序
+grep "toolCall" ~/.ai/traces/pid<pid>-sess<session-id>.*.perfetto.json
+
+# 检查并发执行
+# 寻找同一时间段内并发的 toolCall
 ```
-问题：失败时如何处理？
-- 重试策略是否合理？
-- 是否有 fallback？
-- 错误信息是否清晰？
-```
+
+**关注点**：
+- 工具是否真正并行执行？（还是串行）
+- 是否有工具调用延迟异常？
+- 是否有空转/等待时间？
+- Subagent 启动/等待时间是否合理？
+
+---
 
 ### 步骤 4：生成单个 session 报告
 
@@ -123,6 +187,8 @@ tail -100 "$SESSION_DIR/messages.jsonl"
 ```bash
 REPORT=~/.aiclaw/analysis/session-<session-id>.md
 ```
+
+---
 
 ### 步骤 5：生成汇总报告
 
@@ -140,6 +206,7 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
 ## 分析范围
 - 时间段：<起止时间>
 - Session 数量：<N 个>
+- 分析模式：<tools/flow/prompt/subagents>
 - 发现问题总数：<M 个>
 
 ---
@@ -175,6 +242,17 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
 
 ---
 
+## 按目标分类统计
+
+| 用户目标 | Session 数 | 成功率 | 典型问题 |
+|---------|-----------|--------|----------|
+| 读取文件 | 5 | 80% | 1 个用 bash cat |
+| 修改代码 | 3 | 100% | 无 |
+| 调试问题 | 2 | 50% | 1 个重复失败 |
+| Subagent 任务 | 4 | 75% | 1 个任务描述不清 |
+
+---
+
 ## 统计数据
 
 ### 问题分布
@@ -186,9 +264,10 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
 
 ### 问题类型统计
 - 工具选择错误: X 次
-- 并发设计问题: Y 次
-- 错误处理不当: Z 次
-- ...
+- Subagent 协作问题: Y 次
+- 并发设计问题: Z 次
+- 错误处理不当: W 次
+- Prompt 不清晰: V 次
 
 ---
 
@@ -213,6 +292,8 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
 - [ ] 跟踪长期改进项进度
 ```
 
+---
+
 ### 步骤 6：更新 checkpoint
 
 ```json
@@ -220,11 +301,13 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
   "lastSessionId": "<最后一个分析的 session-id>",
   "lastAnalyzedAt": "<ISO 时间>",
   "totalSessions": <累计分析数量>,
-  "lastSummaryAt": "<上次汇总时间>"
+  "lastSummaryAt": "<上次汇总时间>",
+  "analysisMode": "<使用的分析模式>",
+  "pendingSessions": ["sess-124", "sess-125"]
 }
 ```
 
-**报告格式**（参考 code review comment）：
+## 单个 Session 报告格式（Code Review Style）
 
 ```markdown
 # Session Analysis - Code Review Style
@@ -232,6 +315,7 @@ SUMMARY_REPORT=~/.aiclaw/analysis/summary-$(date +%Y-%m-%d).md
 **Session**: <session-id>
 **时间**: <timestamp>
 **工作目录**: <cwd>
+**分析模式**: <tools/flow/prompt/subagents>
 
 ## 摘要
 - 用户意图：<一句话描述>
@@ -273,9 +357,44 @@ Agent: 调用 bash 工具，执行 `cat pkg/agent/loop.go`
 
 ---
 
+### Issue 2: Subagent 任务描述不清（Subagent 模式特有）
+
+**位置**：messages.jsonl:45（subagent 调用）
+
+**问题描述**：
+父代理启动 subagent 时，任务描述过于宽泛，导致子代理执行了不必要的工作
+
+**具体证据**：
+```
+父代理: "Review the code in pkg/agent/ directory"
+Subagent 执行: 分析了 pkg/agent/ 下的所有 15 个文件，但用户只关心 loop.go
+```
+
+**根因分析**：
+- 父代理没有明确子代理的范围
+- 缺少输出格式要求
+- 没有设置合理的 timeout
+
+**改进建议**：
+```bash
+# 在启动 subagent 前明确任务
+cat > /tmp/task.txt << 'EOF'
+Review pkg/agent/loop.go only.
+
+Focus on:
+- Concurrency safety
+- Error handling
+- Performance bottlenecks
+
+Output format: /tmp/review-result.json (JSON)
+EOF
+```
+
+---
+
 ## 🟡 Medium Issues
 
-### Issue 2: <具体问题>
+### Issue 3: <具体问题>
 
 **位置**：messages.jsonl:45-50
 
@@ -328,7 +447,8 @@ agent 依次执行了 3 个独立的文件读取
 
 ### 优先修复
 1. [Critical] tools.md 中明确 read vs bash 使用场景
-2. [Medium] 系统提示词添加失败处理策略
+2. [Critical] Subagent 任务描述模板化
+3. [Medium] 系统提示词添加失败处理策略
 
 ### 可选优化
 1. [Suggestion] 利用工具并发能力
@@ -336,6 +456,7 @@ agent 依次执行了 3 个独立的文件读取
 ### 下次关注点
 - 检查修复后的效果
 - 关注是否有新的反模式
+- 监控 subagent 协作效率
 ```
 
 ## 分析重点
@@ -345,7 +466,8 @@ agent 依次执行了 3 个独立的文件读取
 1. **设计问题**：prompt 不清晰、工具描述有歧义
 2. **选择错误**：选错工具、执行顺序不合理
 3. **反模式**：重复失败、无效循环、过度调用
-4. **改进机会**：可以优化的流程、可以复用的模式
+4. **Subagent 协作**：任务描述不清、过度执行、结果不完整
+5. **改进机会**：可以优化的流程、可以复用的模式
 
 ### ❌ 不应该关注的
 
@@ -365,25 +487,9 @@ agent 依次执行了 3 个独立的文件读取
 - **Code Review 范式**：像 senior engineer review PR 一样思考
 - **目标明确**：持续优化 ai 项目的代码质量
 - **汇总报告**：分析完一批 session 后，必须生成汇总报告（跨 session 共性问题）
+- **与 session-reader 配合**：先快速概览，再深度分析
 
-## 示例：好的分析 vs 差的分析
+## 参考文档
 
-### ✅ 好的分析
-
-```
-问题：agent 选择了 bash cat 而不是 read 工具
-
-根因：tools.md 中 read 工具描述不够清晰
-
-改进：在 tools.md 添加对比说明
-```
-
-### ❌ 差的分析
-
-```
-统计：工具调用 328 次，重试率 23%
-
-建议：优化调用策略
-```
-
-**差异**：好的分析有根因、有证据、有具体改进建议。
+- **Session Reader**: `references/session-reader.md` - 会话读取和概览
+- **Subagent**: `/skills/subagent` - 子代理机制和最佳实践
