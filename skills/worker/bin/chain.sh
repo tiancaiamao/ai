@@ -16,6 +16,22 @@ TIMEOUT="10m"
 KEEP_GOING=false
 TASKS=()
 
+# Convert timeout to seconds (e.g., "10m" -> "600")
+timeout_to_seconds() {
+    local t="$1"
+    if [[ "$t" =~ ^([0-9]+)([smh])?$ ]]; then
+        local num="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[2]:-s}"
+        case "$unit" in
+            m) echo $((num * 60)) ;;
+            h) echo $((num * 3600)) ;;
+            s) echo "$num" ;;
+        esac
+    else
+        echo "600"  # default
+    fi
+}
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -92,8 +108,13 @@ for i in "${!TASKS[@]}"; do
     
     output_file="${OUTPUT_DIR}/chain-step-${i}.txt"
     
+    # Build persona argument (use "-" if empty)
+    if [ -z "$PERSONA_ARG" ]; then
+        PERSONA_ARG="-"
+    fi
+    
     # Start subagent
-    local session=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+    session=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
         "$output_file" \
         "$TIMEOUT" \
         "$PERSONA_ARG" \
@@ -102,8 +123,11 @@ for i in "${!TASKS[@]}"; do
     session_name=$(echo "$session" | cut -d: -f1)
     echo "Running: session=$session_name"
     
+    # Convert timeout to seconds for tmux_wait.sh
+    TIMEOUT_SECS=$(timeout_to_seconds "$TIMEOUT")
+    
     # Wait for completion
-    if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$TIMEOUT"; then
+    if ~/.ai/skills/tmux/bin/tmux_wait.sh "$session_name" "$TIMEOUT_SECS"; then
         echo "✓ Step $step_num completed"
         
         # Capture output as previous for next step
