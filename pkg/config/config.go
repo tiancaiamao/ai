@@ -97,14 +97,14 @@ func DefaultConcurrencyConfig() *ConcurrencyConfig {
 func DefaultToolOutputConfig() *ToolOutputConfig {
 	return &ToolOutputConfig{
 		MaxChars:  defaultToolOutputMaxChars,
-		HashLines: false,
+		HashLines: true, // Enable hashline by default for better token efficiency
 	}
 }
 
 // DefaultEditConfig returns default edit tool configuration.
 func DefaultEditConfig() *EditConfig {
 	return &EditConfig{
-		Mode: "replace", // Default to replace mode
+		Mode: "hashline", // Default to hashline mode for better token efficiency
 	}
 }
 
