@@ -41,7 +41,7 @@ Create `tasks.md` - an actionable checklist based on `plan.md`.
 - Acceptance Criteria: Measurable, verifiable, testable
 - Dependencies: Other task IDs this task depends on
 
-**See**: [docs/tasks-format.md](../../../../docs/tasks-format.md) for detailed specification.
+**See**: [tasks-format.md](./tasks-format.md) for detailed specification.
 
 ## tasks.md Template
 
