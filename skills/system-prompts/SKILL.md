@@ -146,7 +146,7 @@ tool {"param": "value", "option": true}
 ---
 name: agent-name
 description: One-line for spawning UI (imperative: "Fast read-only codebase scout")
-tools: read, grep, find, bash
+allowed-tools: read, grep, find, bash
 model: pi/slow, gpt-5.2, codex
 output:
   properties:
@@ -511,7 +511,7 @@ grep {"pattern": "struct \\{[\\s\\S]*?field", "multiline": true}
 ---
 name: explore
 description: Fast read-only codebase scout returning compressed context for handoff
-tools: read, grep, find, bash
+allowed-tools: read, grep, find, bash
 model: pi/smol, haiku-4.5, haiku-4-5, gemini-flash-latest, gemini-3-flash, zai-glm-4.7, glm-4.7-flash, glm-4.5-flash, gpt-5.1-codex-mini, haiku, flash, mini
 output:
   properties:

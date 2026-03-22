@@ -1,6 +1,7 @@
+---
 name: orchestrate
 description: Coordinate the full EDD workflow - explore → speckit → worker → review. Manage workflow state and progress tracking.
-tools: [bash, read, write, edit, grep]
+allowed-tools: [bash, read, write, edit, grep]
 ---
 
 # Orchestrate Skill

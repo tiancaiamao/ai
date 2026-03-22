@@ -1,7 +1,7 @@
 ---
 name: subagent
 description: Spawn isolated subagent processes for delegated tasks. Use for parallel execution, focused tasks, or breaking down complex problems.
-tools: [bash]
+allowed-tools: [bash]
 ---
 
 # Subagent Skill

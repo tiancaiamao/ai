@@ -1,6 +1,7 @@
+---
 name: review
 description: Review code quality, run tests, and verify Worker output. Use for PR review, code verification, and quality gates.
-tools: [bash, read, grep]
+allowed-tools: [bash, read, grep]
 ---
 
 # Review Skill

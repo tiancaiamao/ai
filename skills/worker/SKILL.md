@@ -1,6 +1,7 @@
+---
 name: worker
 description: Execute implementation tasks from tasks.md with isolation and verification. Use parallel.sh or chain.sh for task execution.
-tools: [bash, read, write, edit]
+allowed-tools: [bash, read, write, edit]
 ---
 
 # Worker Skill

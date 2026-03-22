@@ -1,3 +1,9 @@
+---
+name: explore
+description: Explore codebases, repositories, or topics and collect key information for later phases. Use for code exploration, architecture analysis, and information gathering before implementation.
+allowed-tools: [bash, read, grep, write]
+---
+
 # Explore Skill
 
 Explore codebases, repositories, or topics and collect key information for later phases. Similar to the `review` skill, this can run as an autonomous subagent.
