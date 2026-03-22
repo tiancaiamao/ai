@@ -8,10 +8,10 @@
 
 - [x] T001: Create explore skill directory
 - [x] T002: Create SKILL.md with usage docs
-- [x] T003: Create explorer persona
+- [x] T004 Implement Parser in parser.go ✓
 - [x] T004: Document subagent execution pattern
-- [x] T005: Add output file conventions
-
+- [X] T006 Add built-in functions ✓
+- [X] T007 Add special forms ✓ ✓
 **Files:**
 - `skills/explore/SKILL.md`
 - `skills/explore/explorer.md`
@@ -52,20 +52,20 @@
 
 - [x] T030: Create review skill directory
 - [x] T031: Create SKILL.md with review process
-- [x] T032: Create reviewer persona
-- [x] T033: Add P0/P1/P2/P3 issue classification
-- [x] T034: Add review loop mechanism
+## Status Summary
 
-**Files:**
-- `skills/review/SKILL.md`
-- `skills/review/reviewer.md`
-
----
-
-## Phase 5: Integration & Testing ✅
-
-### Subagent Bug Fixes
-
+```
+Types:      2/2  ✓
+Lexer:      1/1  ✓
+Parser:     1/1  ✓
+Evaluator:  1/1  ✓
+Builtins:   1/1  ✓
+Forms:      1/1  ✓
+REPL:       0/1
+Tests:      1/1  ✓
+─────────────────
+Total:      8/9  (89%)
+```
 - [x] T040: Fix @ prefix path handling in start_subagent_tmux.sh
   - Problem: `@path` was getting double-prefixed to `@@path`
   - Fix: Check if already has `@` prefix before adding
@@ -104,7 +104,7 @@
   
 - [ ] T051: Create usage examples for each skill
   
-- [ ] T052: Document workflow integration
+- [X] T005 Implement Evaluator core in evaluator.go ✓
 
 ---
 
@@ -125,11 +125,11 @@
 | `f418a81` | fix(subagent): handle @ prefix in system prompt path |
 | `ea4651d` | refactor: simplify explore skill, use /tmp for artifacts |
 
----
+## Entry Point
 
-## Status Summary
+- [X] T008 Create main.go with REPL ✓
 
-```
+## Testing
 Phase 1: Explore Skill      ████████████ 100% ✅
 Phase 2: Worker Skill       ████████████ 100% ✅
 Phase 3: Orchestrate Skill  ████████████ 100% ✅
