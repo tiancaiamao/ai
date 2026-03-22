@@ -4,9 +4,6 @@ import "fmt"
 
 // InitEvaluator registers all built-in functions and special forms.
 func InitEvaluator() {
-	// Boolean literals
-	GlobalEnv().Set("#t", Boolean{Value: true})
-	GlobalEnv().Set("#f", Boolean{Value: false})
 	// Arithmetic built-ins
 	RegisterBuiltin("+", builtinPlus)
 	RegisterBuiltin("-", builtinMinus)
@@ -164,9 +161,9 @@ func (b Boolean) Eval(env *Environment) (Expr, error) {
 
 func (b Boolean) String() string {
 	if b.Value {
-		return "#t"
+		return "true"
 	}
-	return "#f"
+	return "false"
 }
 
 // ============== List Built-ins ==============

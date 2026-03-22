@@ -1,0 +1,327 @@
+package lisp
+
+import "testing"
+
+func TestIntegerString(t *testing.T) {
+	tests := []struct {
+		input int64
+		want  string
+	}{
+		{0, "0"},
+		{42, "42"},
+		{-123, "-123"},
+		{999999999999, "999999999999"},
+	}
+
+	for _, tt := range tests {
+		i := Integer{Value: tt.input}
+		if got := i.String(); got != tt.want {
+			t.Errorf("Integer.String() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestIntegerEval(t *testing.T) {
+	env := NewEnvironment()
+	i := Integer{Value: 42}
+
+	result, err := i.Eval(env)
+	if err != nil {
+		t.Fatalf("Integer.Eval() error = %v", err)
+	}
+
+	resultInt, ok := result.(Integer)
+	if !ok {
+		t.Fatalf("Integer.Eval() result type = %T, want Integer", result)
+	}
+
+	if resultInt.Value != 42 {
+		t.Errorf("Integer.Eval() result.Value = %d, want 42", resultInt.Value)
+	}
+}
+
+func TestSymbolString(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"foo", "foo"},
+		{"+", "+"},
+		{"my-function", "my-function"},
+	}
+
+	for _, tt := range tests {
+		s := Symbol{Name: tt.name}
+		if got := s.String(); got != tt.want {
+			t.Errorf("Symbol.String() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestSymbolEval(t *testing.T) {
+	env := NewEnvironment()
+	env.Set("x", Integer{Value: 42})
+
+	s := Symbol{Name: "x"}
+	result, err := s.Eval(env)
+	if err != nil {
+		t.Fatalf("Symbol.Eval() error = %v", err)
+	}
+
+	resultInt, ok := result.(Integer)
+	if !ok {
+		t.Fatalf("Symbol.Eval() result type = %T, want Integer", result)
+	}
+
+	if resultInt.Value != 42 {
+		t.Errorf("Symbol.Eval() result.Value = %d, want 42", resultInt.Value)
+	}
+}
+
+func TestSymbolEvalUndefined(t *testing.T) {
+	env := NewEnvironment()
+	s := Symbol{Name: "undefined"}
+
+	_, err := s.Eval(env)
+	if err == nil {
+		t.Error("Symbol.Eval() expected error for undefined symbol, got nil")
+	}
+
+	expectedErr := "undefined: undefined"
+	if err.Error() != expectedErr {
+		t.Errorf("Symbol.Eval() error = %q, want %q", err.Error(), expectedErr)
+	}
+}
+
+func TestListString(t *testing.T) {
+	tests := []struct {
+		name string
+		list List
+		want string
+	}{
+		{
+			name: "empty list",
+			list: List{Items: []Expr{}},
+			want: "()",
+		},
+		{
+			name: "single element",
+			list: List{Items: []Expr{Integer{Value: 1}}},
+			want: "(1)",
+		},
+		{
+			name: "multiple elements",
+			list: List{Items: []Expr{
+				Symbol{Name: "+"},
+				Integer{Value: 1},
+				Integer{Value: 2},
+			}},
+			want: "(+ 1 2)",
+		},
+		{
+			name: "nested list",
+			list: List{Items: []Expr{
+				Symbol{Name: "list"},
+				Integer{Value: 1},
+				List{Items: []Expr{Integer{Value: 2}, Integer{Value: 3}}},
+			}},
+			want: "(list 1 (2 3))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.list.String(); got != tt.want {
+				t.Errorf("List.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListEvalEmpty(t *testing.T) {
+	env := NewEnvironment()
+	l := List{Items: []Expr{}}
+
+	result, err := l.Eval(env)
+	if err != nil {
+		t.Fatalf("List.Eval() error = %v", err)
+	}
+
+	resultList, ok := result.(List)
+	if !ok {
+		t.Fatalf("List.Eval() result type = %T, want List", result)
+	}
+
+	if len(resultList.Items) != 0 {
+		t.Errorf("List.Eval() result.Items length = %d, want 0", len(resultList.Items))
+	}
+}
+
+func TestListEvalFunctionCall(t *testing.T) {
+	InitEvaluator()
+	env := GlobalEnv()
+
+	l := List{Items: []Expr{
+		Symbol{Name: "+"},
+		Integer{Value: 1},
+		Integer{Value: 2},
+		Integer{Value: 3},
+	}}
+
+	result, err := l.Eval(env)
+	if err != nil {
+		t.Fatalf("List.Eval() error = %v", err)
+	}
+
+	resultInt, ok := result.(Integer)
+	if !ok {
+		t.Fatalf("List.Eval() result type = %T, want Integer", result)
+	}
+
+	if resultInt.Value != 6 {
+		t.Errorf("List.Eval() result.Value = %d, want 6", resultInt.Value)
+	}
+}
+
+func TestListEvalUndefinedFunction(t *testing.T) {
+	InitEvaluator()
+	env := GlobalEnv()
+
+	l := List{Items: []Expr{
+		Symbol{Name: "undefined-func"},
+		Integer{Value: 1},
+	}}
+
+	_, err := l.Eval(env)
+	if err == nil {
+		t.Error("List.Eval() expected error for undefined function, got nil")
+	}
+}
+
+func TestFunctionString(t *testing.T) {
+	f := Function{
+		Params: []Symbol{{Name: "x"}, {Name: "y"}},
+		Body:   []Expr{Symbol{Name: "+"}},
+	}
+
+	want := "#<function>"
+	if got := f.String(); got != want {
+		t.Errorf("Function.String() = %q, want %q", got, want)
+	}
+}
+
+func TestFunctionEval(t *testing.T) {
+	env := NewEnvironment()
+	f := Function{
+		Params: []Symbol{{Name: "x"}},
+		Body:   []Expr{Symbol{Name: "x"}},
+		Env:    env,
+	}
+
+	result, err := f.Eval(env)
+	if err != nil {
+		t.Fatalf("Function.Eval() error = %v", err)
+	}
+
+	resultFunc, ok := result.(Function)
+	if !ok {
+		t.Fatalf("Function.Eval() result type = %T, want Function", result)
+	}
+	if len(resultFunc.Params) != len(f.Params) {
+		t.Errorf("Function.Eval() did not return same function (param count mismatch)")
+	}
+		t.Error("Function.Eval() did not return itself")
+	}
+}
+
+func TestBuiltinFuncString(t *testing.T) {
+	b := &BuiltinFunc{Name: "test-func"}
+
+	want := "#<builtin:test-func>"
+	if got := b.String(); got != want {
+		t.Errorf("BuiltinFunc.String() = %q, want %q", got, want)
+	}
+}
+
+func TestBuiltinFuncEval(t *testing.T) {
+	env := NewEnvironment()
+	b := &BuiltinFunc{
+		Name: "test",
+		Fn: func(env *Environment, args []Expr) (Expr, error) {
+			return Integer{Value: 42}, nil
+		},
+	}
+
+	result, err := b.Eval(env)
+	if err != nil {
+		t.Fatalf("BuiltinFunc.Eval() error = %v", err)
+	}
+
+	resultBuiltin, ok := result.(*BuiltinFunc)
+	if !ok {
+		t.Fatalf("BuiltinFunc.Eval() result type = %T, want *BuiltinFunc", result)
+	}
+	if resultBuiltin.Name != b.Name {
+		t.Errorf("BuiltinFunc.Eval() did not return same function (name mismatch)")
+	}
+		t.Error("BuiltinFunc.Eval() did not return itself")
+	}
+}
+
+func TestStringTypeString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", `"hello"`},
+		{"", `""`},
+		{"hello\nworld", `"hello\nworld"`},
+	}
+
+	for _, tt := range tests {
+		s := String{Value: tt.input}
+		if got := s.String(); got != tt.want {
+			t.Errorf("String.String() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+func TestStringTypeEval(t *testing.T) {
+	env := NewEnvironment()
+	s := String{Value: "hello"}
+
+	result, err := s.Eval(env)
+	if err != nil {
+		t.Fatalf("String.Eval() error = %v", err)
+	}
+
+	resultString, ok := result.(String)
+	if !ok {
+		t.Fatalf("String.Eval() result type = %T, want String", result)
+	}
+
+	if resultString.Value != "hello" {
+		t.Errorf("String.Eval() result.Value = %q, want %q", resultString.Value, "hello")
+	}
+}
+
+func TestNilString(t *testing.T) {
+	n := &Nil{}
+	if got := n.String(); got != "nil" {
+		t.Errorf("Nil.String() = %q, want %q", got, "nil")
+	}
+}
+
+func TestNilEval(t *testing.T) {
+	env := NewEnvironment()
+	n := &Nil{}
+
+	result, err := n.Eval(env)
+	if err != nil {
+		t.Fatalf("Nil.Eval() error = %v", err)
+	}
+
+	if result != n {
+		t.Error("Nil.Eval() did not return itself")
+	}
+}

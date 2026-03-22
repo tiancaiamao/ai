@@ -164,9 +164,9 @@ func (b Boolean) Eval(env *Environment) (Expr, error) {
 
 func (b Boolean) String() string {
 	if b.Value {
-		return "#t"
+		return "true"
 	}
-	return "#f"
+	return "false"
 }
 
 // ============== List Built-ins ==============

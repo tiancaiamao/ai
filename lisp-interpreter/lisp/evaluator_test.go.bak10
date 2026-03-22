@@ -1,0 +1,775 @@
+package lisp
+
+import (
+	"testing"
+)
+
+func setupTestEnv() *Environment {
+	InitEvaluator()
+	return GlobalEnv()
+}
+
+// Helper function to parse and evaluate a string
+func evalString(input string, env *Environment) (Expr, error) {
+	lexer := NewLexer(input)
+	tokens, err := lexer.Lex()
+	if err != nil {
+		return nil, err
+	}
+
+	parser := NewParser(tokens)
+	exprs, err := parser.Parse()
+	if err != nil {
+		return nil, err
+	}
+
+	var result Expr
+	for _, expr := range exprs {
+		result, err = expr.Eval(env)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func TestBuiltinPlus(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"(+)", 0},
+		{"(+ 1)", 1},
+		{"(+ 1 2)", 3},
+		{"(+ 1 2 3 4 5)", 15},
+		{"(+ -1 1)", 0},
+		{"(+ -5 -10)", -15},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			num, ok := result.(Integer)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Integer", tt.input, result)
+			}
+
+			if num.Value != tt.expected {
+				t.Errorf("evalString(%q) = %d, want %d", tt.input, num.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinPlusTypeError(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString(`(+ 1 "hello")`, env)
+	if err == nil {
+		t.Error("evalString(+ 1 \"hello\") expected error, got nil")
+	}
+}
+
+func TestBuiltinMinus(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"(- 5)", 5},
+		{"(- 10 3)", 7},
+		{"(- 10 3 2)", 5},
+		{"(- 0)", 0},
+		{"(- 10 -5)", 15},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			num, ok := result.(Integer)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Integer", tt.input, result)
+			}
+
+			if num.Value != tt.expected {
+				t.Errorf("evalString(%q) = %d, want %d", tt.input, num.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinMinusNoArgs(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(-)", env)
+	if err == nil {
+		t.Error("evalString(-) expected error, got nil")
+	}
+}
+
+func TestBuiltinMultiply(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"(*)", 1},
+		{"(* 5)", 5},
+		{"(* 2 3)", 6},
+		{"(* 2 3 4)", 24},
+		{"(* -2 3)", -6},
+		{"(* -2 -3)", 6},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			num, ok := result.(Integer)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Integer", tt.input, result)
+			}
+
+			if num.Value != tt.expected {
+				t.Errorf("evalString(%q) = %d, want %d", tt.input, num.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinDivide(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"(/ 10 2)", 5},
+		{"(/ 12 3 2)", 2},
+		{"(/ -10 2)", -5},
+		{"(/ 10 -2)", -5},
+		{"(/ -10 -2)", 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			num, ok := result.(Integer)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Integer", tt.input, result)
+			}
+
+			if num.Value != tt.expected {
+				t.Errorf("evalString(%q) = %d, want %d", tt.input, num.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinDivideByZero(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(/ 10 0)", env)
+	if err == nil {
+		t.Error("evalString(/ 10 0) expected error, got nil")
+	}
+}
+
+func TestBuiltinDivideNoArgs(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(/)", env)
+	if err == nil {
+		t.Error("evalString(/) expected error, got nil")
+	}
+}
+
+func TestBuiltinDivideOneArg(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(/ 10)", env)
+	if err == nil {
+		t.Error("evalString(/ 10) expected error, got nil")
+	}
+}
+
+func TestBuiltinComparisons(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"(> 5 3)", true},
+		{"(> 3 5)", false},
+		{"(> 5 5)", false},
+		{"(< 3 5)", true},
+		{"(< 5 3)", false},
+		{"(< 5 5)", false},
+		{"(>= 5 3)", true},
+		{"(>= 5 5)", true},
+		{"(>= 3 5)", false},
+		{"(<= 3 5)", true},
+		{"(<= 5 5)", true},
+		{"(<= 5 3)", false},
+		{"(= 5 5)", true},
+		{"(= 3 5)", false},
+		{"(> 5 3 2 1)", true},
+		{"(= 5 5 5)", true},
+		{"(= 5 5 6)", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			b, ok := result.(Boolean)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Boolean", tt.input, result)
+			}
+
+			if b.Value != tt.expected {
+				t.Errorf("evalString(%q) = %v, want %v", tt.input, b.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinList(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(list 1 2 3)", env)
+	if err != nil {
+		t.Fatalf("evalString(list 1 2 3) error = %v", err)
+	}
+
+	list, ok := result.(List)
+	if !ok {
+		t.Fatalf("evalString(list 1 2 3) result type = %T, want List", result)
+	}
+
+	if len(list.Items) != 3 {
+		t.Errorf("evalString(list 1 2 3) list.Items length = %d, want 3", len(list.Items))
+	}
+}
+
+func TestBuiltinEmpty(t *testing.T) {
+	env := setupTestEnv()
+
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"(empty? (list))", true},
+		{"(empty? (list 1))", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result, err := evalString(tt.input, env)
+			if err != nil {
+				t.Fatalf("evalString(%q) error = %v", tt.input, err)
+			}
+
+			b, ok := result.(Boolean)
+			if !ok {
+				t.Fatalf("evalString(%q) result type = %T, want Boolean", tt.input, result)
+			}
+
+			if b.Value != tt.expected {
+				t.Errorf("evalString(%q) = %v, want %v", tt.input, b.Value, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuiltinCar(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(car (list 1 2 3))", env)
+	if err != nil {
+		t.Fatalf("evalString(car (list 1 2 3)) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok {
+		t.Fatalf("evalString(car (list 1 2 3)) result type = %T, want Integer", result)
+	}
+
+	if num.Value != 1 {
+		t.Errorf("evalString(car (list 1 2 3)) = %d, want 1", num.Value)
+	}
+}
+
+func TestBuiltinCdr(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(cdr (list 1 2 3))", env)
+	if err != nil {
+		t.Fatalf("evalString(cdr (list 1 2 3)) error = %v", err)
+	}
+
+	list, ok := result.(List)
+	if !ok {
+		t.Fatalf("evalString(cdr (list 1 2 3)) result type = %T, want List", result)
+	}
+
+	if len(list.Items) != 2 {
+		t.Errorf("evalString(cdr (list 1 2 3)) list.Items length = %d, want 2", len(list.Items))
+	}
+
+	num, ok := list.Items[0].(Integer)
+	if !ok || num.Value != 2 {
+		t.Errorf("evalString(cdr (list 1 2 3)) first element = %v, want 2", list.Items[0])
+	}
+}
+
+func TestBuiltinCons(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(cons 1 (list 2 3))", env)
+	if err != nil {
+		t.Fatalf("evalString(cons 1 (list 2 3)) error = %v", err)
+	}
+
+	list, ok := result.(List)
+	if !ok {
+		t.Fatalf("evalString(cons 1 (list 2 3)) result type = %T, want List", result)
+	}
+
+	if len(list.Items) != 3 {
+		t.Errorf("evalString(cons 1 (list 2 3)) list.Items length = %d, want 3", len(list.Items))
+	}
+
+	num, ok := list.Items[0].(Integer)
+	if !ok || num.Value != 1 {
+		t.Errorf("evalString(cons 1 (list 2 3)) first element = %v, want 1", list.Items[0])
+	}
+}
+
+func TestSpecialDef(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(def x 42)", env)
+	if err != nil {
+		t.Fatalf("evalString(def x 42) error = %v", err)
+	}
+
+	result, err := evalString("x", env)
+	if err != nil {
+		t.Fatalf("evalString(x) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 42 {
+		t.Errorf("evalString(x) = %v, want 42", result)
+	}
+}
+
+func TestSpecialDefn(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(defn square (x) (* x x))", env)
+	if err != nil {
+		t.Fatalf("evalString(defn square (x) (* x x)) error = %v", err)
+	}
+
+	result, err := evalString("(square 5)", env)
+	if err != nil {
+		t.Fatalf("evalString(square 5) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 25 {
+		t.Errorf("evalString(square 5) = %v, want 25", result)
+	}
+}
+
+func TestSpecialIfTrue(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(if true 1 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(if true 1 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 1 {
+		t.Errorf("evalString(if true 1 2) = %v, want 1", result)
+	}
+}
+
+func TestSpecialIfFalse(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(if #f 1 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(if #f 1 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 2 {
+		t.Errorf("evalString(if #f 1 2) = %v, want 2", result)
+	}
+}
+
+func TestSpecialIfWithoutElse(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(if #f 1)", env)
+	if err != nil {
+		t.Fatalf("evalString(if #f 1) error = %v", err)
+	}
+
+	if _, ok := result.(*Nil); !ok {
+		t.Errorf("evalString(if #f 1) = %v, want nil", result)
+	}
+}
+
+func TestSpecialIfTruthyInteger(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(if 5 1 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(if 5 1 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 1 {
+		t.Errorf("evalString(if 5 1 2) = %v, want 1", result)
+	}
+}
+
+func TestSpecialIfFalsyInteger(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(if 0 1 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(if 0 1 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 2 {
+		t.Errorf("evalString(if 0 1 2) = %v, want 2", result)
+	}
+}
+
+func TestSpecialLet(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(let (x 10 y 20) (+ x y))", env)
+	if err != nil {
+		t.Fatalf("evalString(let (x 10 y 20) (+ x y)) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 30 {
+		t.Errorf("evalString(let (x 10 y 20) (+ x y)) = %v, want 30", result)
+	}
+}
+
+func TestSpecialLetScoped(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(def x 5)", env)
+	if err != nil {
+		t.Fatalf("evalString(def x 5) error = %v", err)
+	}
+
+	_, err = evalString("(let [x 10] x)", env)
+	if err != nil {
+		t.Fatalf("evalString(let [x 10] x) error = %v", err)
+	}
+
+	// Check that x is still 5 outside the let
+	result, err := evalString("x", env)
+	if err != nil {
+		t.Fatalf("evalString(x) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 5 {
+		t.Errorf("evalString(x) = %v, want 5 (let should not affect outer scope)", result)
+	}
+}
+
+func TestSpecialLambda(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("((lambda (x) (* x 2)) 5)", env)
+	if err != nil {
+		t.Fatalf("evalString((lambda (x) (* x 2)) 5) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 10 {
+		t.Errorf("evalString((lambda (x) (* x 2)) 5) = %v, want 10", result)
+	}
+}
+
+func TestSpecialFnAlias(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("((fn (x) (+ x 1)) 9)", env)
+	if err != nil {
+		t.Fatalf("evalString((fn (x) (+ x 1)) 9) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 10 {
+		t.Errorf("evalString((fn (x) (+ x 1)) 9) = %v, want 10", result)
+	}
+}
+
+func TestSpecialLambdaClosure(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(def x 10)", env)
+	if err != nil {
+		t.Fatalf("evalString(def x 10) error = %v", err)
+	}
+
+	result, err := evalString("((lambda [y] (+ x y)) 5)", env)
+	if err != nil {
+		t.Fatalf("evalString((lambda [y] (+ x y)) 5) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 15 {
+		t.Errorf("evalString((lambda [y] (+ x y)) 5) = %v, want 15", result)
+	}
+}
+
+func TestSpecialQuote(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(quote (+ 1 2))", env)
+	if err != nil {
+		t.Fatalf("evalString(quote (+ 1 2)) error = %v", err)
+	}
+
+	list, ok := result.(List)
+	if !ok {
+		t.Fatalf("evalString(quote (+ 1 2)) result type = %T, want List", result)
+	}
+
+	if len(list.Items) != 3 {
+		t.Errorf("evalString(quote (+ 1 2)) list.Items length = %d, want 3", len(list.Items))
+	}
+
+	sym, ok := list.Items[0].(Symbol)
+	if !ok || sym.Name != "+" {
+		t.Errorf("evalString(quote (+ 1 2)) first item = %v, want +", list.Items[0])
+	}
+}
+
+func TestSpecialQuoteShortSyntax(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("'(+ 1 2)", env)
+	if err != nil {
+		t.Fatalf("evalString('(+ 1 2)) error = %v", err)
+	}
+
+	list, ok := result.(List)
+	if !ok {
+		t.Fatalf("evalString('(+ 1 2)) result type = %T, want List", result)
+	}
+
+	// Quote syntax 'x is transformed to (quote x)
+	// So we should get a list with "quote" as first element and the quoted list as second
+	sym, ok := list.Items[0].(Symbol)
+	if !ok || sym.Name != "quote" {
+		t.Errorf("evalString('(+ 1 2)) first item = %v, want quote", list.Items[0])
+	}
+
+	quotedList, ok := list.Items[1].(List)
+	if !ok || len(quotedList.Items) != 3 {
+		t.Errorf("evalString('(+ 1 2)) second item = %v, want list with 3 items", list.Items[1])
+	}
+}
+
+func TestSpecialCond(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(cond (= 1 1) 1 (= 2 2) 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(cond (= 1 1) 1 (= 2 2) 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 1 {
+		t.Errorf("evalString(cond (= 1 1) 1 (= 2 2) 2) = %v, want 1", result)
+	}
+}
+
+func TestSpecialCondSecondClause(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(cond (= 1 2) 1 (= 2 2) 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(cond (= 1 2) 1 (= 2 2) 2) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 2 {
+		t.Errorf("evalString(cond (= 1 2) 1 (= 2 2) 2) = %v, want 2", result)
+	}
+}
+
+func TestSpecialCondNoMatch(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(cond (= 1 2) 1 (= 2 3) 2)", env)
+	if err != nil {
+		t.Fatalf("evalString(cond (= 1 2) 1 (= 2 3) 2) error = %v", err)
+	}
+
+	if _, ok := result.(*Nil); !ok {
+		t.Errorf("evalString(cond (= 1 2) 1 (= 2 3) 2) = %v, want nil", result)
+	}
+}
+
+func TestBooleanType(t *testing.T) {
+	env := setupTestEnv()
+
+	trueExpr, err := evalString("true", env)
+	if err != nil {
+		t.Fatalf("evalString(true) error = %v", err)
+	}
+	trueBool, ok := trueExpr.(Boolean)
+	if !ok || trueBool.Value != true {
+		t.Errorf("evalString(true) = %v, want true", trueExpr)
+	}
+
+	falseExpr, err := evalString("#f", env)
+	if err != nil {
+		t.Fatalf("evalString(#f) error = %v", err)
+	}
+	falseBool, ok := falseExpr.(Boolean)
+	if !ok || falseBool.Value != false {
+		t.Errorf("evalString(#f) = %v, want #f", falseExpr)
+	}
+}
+
+func TestBooleanString(t *testing.T) {
+	tests := []struct {
+		input    Boolean
+		expected string
+	}{
+		{Boolean{Value: true}, "true"},
+		{Boolean{Value: false}, "#f"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.input.String(); got != tt.expected {
+			t.Errorf("Boolean.String() = %q, want %q", got, tt.expected)
+		}
+	}
+}
+
+func TestBooleanEval(t *testing.T) {
+	env := NewEnvironment()
+
+	trueVal := Boolean{Value: true}
+	result, err := trueVal.Eval(env)
+	if err != nil {
+		t.Fatalf("Boolean.Eval() error = %v", err)
+	}
+
+	resultBool, ok := result.(Boolean)
+	if !ok || resultBool.Value != true {
+		t.Errorf("Boolean.Eval() = %v, want true", result)
+	}
+}
+
+func TestComplexExpression(t *testing.T) {
+	env := setupTestEnv()
+
+	// Factorial using defn
+	_, err := evalString("(defn factorial (n) (if (= n 0) 1 (* n (factorial (- n 1)))))", env)
+	if err != nil {
+		t.Fatalf("evalString(defn factorial ...) error = %v", err)
+	}
+
+	result, err := evalString("(factorial 5)", env)
+	if err != nil {
+		t.Fatalf("evalString(factorial 5) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 120 {
+		t.Errorf("evalString(factorial 5) = %v, want 120", result)
+	}
+}
+
+func TestHigherOrderFunction(t *testing.T) {
+	env := setupTestEnv()
+
+	// Apply a lambda to a list
+	result, err := evalString("(car (list 1 2 3))", env)
+	if err != nil {
+		t.Fatalf("evalString(car (list 1 2 3)) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 1 {
+		t.Errorf("evalString(car (list 1 2 3)) = %v, want 1", result)
+	}
+}
+
+func TestNestedLets(t *testing.T) {
+	env := setupTestEnv()
+
+	result, err := evalString("(let [x 1] (let [x (+ x 1)] x))", env)
+	if err != nil {
+		t.Fatalf("evalString(nested lets) error = %v", err)
+	}
+
+	num, ok := result.(Integer)
+	if !ok || num.Value != 2 {
+		t.Errorf("evalString(nested lets) = %v, want 2", result)
+	}
+}
+
+func TestArgumentMismatch(t *testing.T) {
+	env := setupTestEnv()
+
+	_, err := evalString("(defn two-args (x y) (+ x y))", env)
+	if err != nil {
+		t.Fatalf("evalString(defn two-args (x y) (+ x y)) error = %v", err)
+	}
+
+	// Call with wrong number of arguments
+	_, err = evalString("(two-args 1)", env)
+	if err == nil {
+		t.Error("evalString(two-args 1) expected error, got nil")
+	}
+
+	_, err = evalString("(two-args 1 2 3)", env)
+	if err == nil {
+		t.Error("evalString(two-args 1 2 3) expected error, got nil")
+	}
+}
