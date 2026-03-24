@@ -46,7 +46,7 @@ func TestLLMContextDecisionFiltersAlreadyTruncated(t *testing.T) {
 		t.Logf("ToolCallID=%s, IsTruncated=%v, Text=%s", msg.ToolCallID, isTruncated, text)
 	}
 
-	tool := NewLLMContextDecisionTool(nil)
+	tool := NewContextManagementTool(nil)
 
 	// Create agent context
 	agentCtx := &agentctx.AgentContext{

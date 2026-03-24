@@ -66,10 +66,10 @@ func GetOverviewTemplate(overviewPath, detailPath string) string {
 
 <!--
 这是你的外部记忆。
-使用 llm_context_update tool 更新此文件：%s
+使用 task_tracking tool 更新此文件：%s
 
 这个文件的内容会：
-1. 在你调用 llm_context_update 工具后，通过 tool output 留在上下文窗口中
+1. 在你调用 task_tracking 工具后，通过 tool output 留在上下文窗口中
 2. 在 compact 后被注入到 prompt 中恢复记忆
 
 这是 YOUR memory。你控制你看到的内容。
@@ -94,7 +94,7 @@ func GetOverviewTemplate(overviewPath, detailPath string) string {
 <!--
 提示：
 - 需要保存详细内容时，写入 %s 目录
-- 使用 llm_context_update tool 更新此文件
+- 使用 task_tracking tool 更新此文件
 -->
 `, overviewPath, detailPath)
 }
@@ -271,7 +271,7 @@ func (wm *LLMContext) SaveCompactionSummary(summary string) (string, error) {
 	return summaryPath, nil
 }
 
-// UpdateStats contains statistics about llm_context_update tool calls.
+// UpdateStats contains statistics about task_tracking tool calls.
 type UpdateStats struct {
 	Total        int
 	Autonomous   int

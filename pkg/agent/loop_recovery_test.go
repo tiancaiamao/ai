@@ -790,14 +790,14 @@ func TestRunInnerLoopEmitsToolCallRecoveryEvent(t *testing.T) {
 	}
 }
 
-// TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard verifies that llm_context_update
+// TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard verifies that task_tracking
 // tool calls do not contribute to loop guard detection.
 func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()
 
 	callCount := 0
-	// Simulate LLM calling llm_context_update repeatedly, which should NOT trigger loop guard
+	// Simulate LLM calling task_tracking repeatedly, which should NOT trigger loop guard
 	streamAssistantResponseFn = func(
 		_ context.Context,
 		_ *agentctx.AgentContext,
@@ -807,14 +807,14 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 		callCount++
 		msg := agentctx.NewAssistantMessage()
 
-		// Call llm_context_update repeatedly - this should never trigger loop guard
+		// Call task_tracking repeatedly - this should never trigger loop guard
 		// because we reset the counter after each execution
 		if callCount <= 10 {
 			msg.Content = []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
 					ID:        "call-llm-context-" + fmt.Sprint(callCount),
 					Type:      "toolCall",
-					Name:      "llm_context_update",
+					Name:      "task_tracking",
 					Arguments: map[string]any{"content": fmt.Sprintf("task %d", callCount)},
 				},
 			}
@@ -834,17 +834,17 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
 
 	// Set a very low limit - without the fix, this would stop at 61 calls (default)
-	// With the fix, llm_context_update should be exempt and not trigger loop guard
+	// With the fix, task_tracking should be exempt and not trigger loop guard
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
 		MaxConsecutiveToolCalls: 10,
 		MaxToolCallsPerName:     3, // Would stop any tool after 3 calls
 	}, stream)
 
-	// Should have more than 10 calls because llm_context_update resets its counter each time
+	// Should have more than 10 calls because task_tracking resets its counter each time
 	// Without the fix, loop would stop at 61 calls (default) or earlier if MaxToolCallsPerName=3
 	if callCount <= 10 {
-		t.Fatalf("expected more than 10 LLM calls (llm_context_update should be exempt), got %d", callCount)
+		t.Fatalf("expected more than 10 LLM calls (task_tracking should be exempt), got %d", callCount)
 	}
 
 	var guardTriggeredForLLMContextUpdate bool
@@ -854,14 +854,14 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 		}
 		if item.Value.Type == EventLoopGuardTriggered && item.Value.LoopGuard != nil {
 			reason := item.Value.LoopGuard.Reason
-			// Check if loop guard was triggered for llm_context_update
-			if strings.Contains(reason, "llm_context_update") {
+			// Check if loop guard was triggered for task_tracking
+			if strings.Contains(reason, "task_tracking") {
 				guardTriggeredForLLMContextUpdate = true
 			}
 		}
 	}
 
 	if guardTriggeredForLLMContextUpdate {
-		t.Fatal("llm_context_update should NOT trigger loop guard")
+		t.Fatal("task_tracking should NOT trigger loop guard")
 	}
 }

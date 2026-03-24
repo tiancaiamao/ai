@@ -2,7 +2,7 @@
 
 ## Description
 You are given a real trace from `main` branch runtime and a `main` commit hash.
-After `llm_context_decision` performs `compact`, the next LLM call fails with:
+After `context_management` performs `compact`, the next LLM call fails with:
 
 `invalid params, tool call result does not follow tool call`
 

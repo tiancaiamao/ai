@@ -90,7 +90,7 @@ func (c *Compactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 // For models with large context windows (e.g., 128k), this allows much more context
 // before triggering compaction, rather than using a fixed 8000 token limit.
 // CalculateDynamicThreshold returns the dynamic compaction threshold based on context window.
-// Exported for use by llm_context_decision tool to provide feedback when compact is rejected.
+// Exported for use by context_management tool to provide feedback when compact is rejected.
 func (c *Compactor) CalculateDynamicThreshold() int {
 	// If context window is known, calculate dynamic threshold
 	if c.contextWindow > 0 {

@@ -55,8 +55,8 @@ type LoopConfig struct {
 	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
 	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
 	ContextWindow           int           // Context window for the model (0=use default 128000)
-	TaskTrackingEnabled     bool          // Enable task tracking reminders (llm_context_update)
-	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
+	TaskTrackingEnabled     bool          // Enable task tracking reminders (task_tracking)
+	ContextManagementEnabled bool         // Enable context management reminders (context_management)
 	LLMTotalTimeout         time.Duration // Total timeout for LLM request (default 10min)
 	LLMFirstResponseTimeout  time.Duration // Timeout between streaming chunks (default 2min)
 }
@@ -279,7 +279,7 @@ func runInnerLoop(
 
 		turnCount++
 
-		// Fallback auto-compact as safety net (only if LLM didn't handle it via llm_context_decision)
+		// Fallback auto-compact as safety net (only if LLM didn't handle it via context_management)
 		// This is a last resort when context grows too large without LLM intervention.
 		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
 			before := len(agentCtx.Messages)
@@ -485,7 +485,7 @@ func runInnerLoop(
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
 		// Check if LLM complied with context management protocol
-		// If reminder was shown but LLM didn't call llm_context_decision, apply penalty
+		// If reminder was shown but LLM didn't call context_management, apply penalty
 		if agentCtx.ContextMgmtState != nil {
 			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
 		}
@@ -732,12 +732,13 @@ func streamAssistantResponse(
 	//
 	// NOTE: overview.md content is NOT injected by default. It's only injected:
 	// 1. After compact (PostCompactRecovery = true) for recovery
-	// 2. The LLM should use llm_context_update tool to record state, which stays in tool output
+	// 2. The LLM should use task_tracking tool to record state, which stays in tool output
 	if agentCtx.LLMContext != nil {
 		// Determine if we should inject overview.md content
 		// Only inject after compact for recovery
 		var content string
-		if agentCtx.PostCompactRecovery {
+		postCompactRecovery := agentCtx.PostCompactRecovery
+		if postCompactRecovery {
 			// Invalidate cache to ensure we read the latest content
 			agentCtx.LLMContext.InvalidateCache()
 			loadedContent, err := agentCtx.LLMContext.Load()
@@ -766,7 +767,9 @@ func streamAssistantResponse(
 
 		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
 		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
-		if runtimeAppendix != "" {
+		
+		// Only insert runtime_state if not the first message OR after compact recovery
+		if runtimeAppendix != "" && (postCompactRecovery || (agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.CurrentTurn > 1)) {
 			runtimeMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: runtimeAppendix,
@@ -798,7 +801,7 @@ func streamAssistantResponse(
 
 		// Trace event for context update reminder
 		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",
-			traceevent.Field{Key: "reminder_type", Value: "llm_context_update"},
+			traceevent.Field{Key: "reminder_type", Value: "task_tracking"},
 		)
 	}
 
@@ -830,7 +833,7 @@ func streamAssistantResponse(
 
 			// Trace event for context decision reminder
 			traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
-				traceevent.Field{Key: "reminder_type", Value: "llm_context_decision"},
+				traceevent.Field{Key: "reminder_type", Value: "context_management"},
 				traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
 				traceevent.Field{Key: "urgency", Value: urgency},
 			)
