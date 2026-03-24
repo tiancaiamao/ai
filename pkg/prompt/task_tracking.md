@@ -1,6 +1,6 @@
 ## Task Tracking
 
-Track multi-step tasks using `llm_context_update`.
+Track multi-step tasks using `task_tracking`.
 
 **Update** (with markdown content) when:
 - Task status changes, decisions made, files changed
@@ -9,7 +9,7 @@ Track multi-step tasks using `llm_context_update`.
 **Skip** (with `skip=true, reasoning="..."`) when:
 - Simple questions, no progress, routine responses
 
-**Important:** Always call `llm_context_update` — with content or `skip=true`. This prevents reminder spam.
+**Important:** Always call `task_tracking` — with content or `skip=true`. This prevents reminder spam.
 
 ### Update Example
 

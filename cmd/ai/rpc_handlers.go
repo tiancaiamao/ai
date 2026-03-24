@@ -200,13 +200,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	)
 
 	// Register llm_context tools
-	// Only register llm_context_update when taskTracking is enabled
+	// Only register task_tracking when taskTracking is enabled
 	if cfg.TaskTracking {
-		registry.Register(tools.NewLLMContextUpdateTool())
+		registry.Register(tools.NewTaskTrackingTool())
 	}
-	// Only register llm_context_decision when contextManagement is enabled
+	// Only register context_management when contextManagement is enabled
 	if cfg.ContextManagement {
-		registry.Register(tools.NewLLMContextDecisionTool(compactor.ToContextCompactor()))
+		registry.Register(tools.NewContextManagementTool(compactor.ToContextCompactor()))
 	}
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))

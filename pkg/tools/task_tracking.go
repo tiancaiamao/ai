@@ -8,21 +8,21 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// LLMContextUpdateTool allows LLM to update its persistent context.
-type LLMContextUpdateTool struct{}
+// TaskTrackingTool allows LLM to track its current task state.
+type TaskTrackingTool struct{}
 
-// NewLLMContextUpdateTool creates a new llm_context_update tool.
-func NewLLMContextUpdateTool() *LLMContextUpdateTool {
-	return &LLMContextUpdateTool{}
+// NewTaskTrackingTool creates a new task_tracking tool.
+func NewTaskTrackingTool() *TaskTrackingTool {
+	return &TaskTrackingTool{}
 }
 
 // Name returns the tool name.
-func (t *LLMContextUpdateTool) Name() string {
-	return "llm_context_update"
+func (t *TaskTrackingTool) Name() string {
+	return "task_tracking"
 }
 
 // Description returns the tool description.
-func (t *LLMContextUpdateTool) Description() string {
+func (t *TaskTrackingTool) Description() string {
 	return `A tool to record your current operational state. Call it when task state changes.
 
 Provide markdown content with your current context (task, decisions, known info, pending).
@@ -39,7 +39,7 @@ When you don't need to update content but want to report activity (prevents remi
 
 EXAMPLES:
 # Normal update (task changed)
-content: "## 当前任务\n- Implementing feature X\n- Progress: 50%"
+content: "## Current Task\n- Implementing feature X\n- Progress: 50%"
 
 # Skip update (no significant change)
 skip: true
@@ -48,7 +48,7 @@ reasoning: "No state change, just answering user question"`
 
 // Parameters returns the tool parameter schema.
 // Conditional required: content required when skip=false, reasoning required when skip=true
-func (t *LLMContextUpdateTool) Parameters() map[string]any {
+func (t *TaskTrackingTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -70,7 +70,7 @@ func (t *LLMContextUpdateTool) Parameters() map[string]any {
 }
 
 // Execute runs the tool.
-func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
+func (t *TaskTrackingTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	// Get agent context from context
 	agentCtx := agentctx.ToolExecutionAgentContext(ctx)
 	if agentCtx == nil {
@@ -92,14 +92,14 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 			agentCtx.TaskTrackingState.MarkSkipped(reasoning)
 		}
 
-		traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update_skip",
+		traceevent.Log(ctx, traceevent.CategoryTool, "task_tracking_skip",
 			traceevent.Field{Key: "reasoning", Value: reasoning},
 		)
 
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",
-				Text: fmt.Sprintf("Context update skipped. Reason: %s", reasoning),
+				Text: fmt.Sprintf("Task tracking skipped. Reason: %s", reasoning),
 			},
 		}, nil
 	}
@@ -113,11 +113,11 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 	// Dual-write: persist to overview.md file via LLMContext
 	if agentCtx.LLMContext != nil {
 		if err := agentCtx.LLMContext.WriteContent(content); err != nil {
-			traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update_failed",
+			traceevent.Log(ctx, traceevent.CategoryTool, "task_tracking_failed",
 				traceevent.Field{Key: "error", Value: err.Error()},
 				traceevent.Field{Key: "content_len", Value: len(content)},
 			)
-			return nil, fmt.Errorf("failed to write context: %w", err)
+			return nil, fmt.Errorf("failed to write task tracking: %w", err)
 		}
 	}
 
@@ -127,7 +127,7 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 	}
 
 	// Log successful update
-	traceevent.Log(ctx, traceevent.CategoryTool, "llm_context_update",
+	traceevent.Log(ctx, traceevent.CategoryTool, "task_tracking",
 		traceevent.Field{Key: "content_len", Value: len(content)},
 	)
 
@@ -135,7 +135,7 @@ func (t *LLMContextUpdateTool) Execute(ctx context.Context, params map[string]an
 	return []agentctx.ContentBlock{
 		agentctx.TextContent{
 			Type: "text",
-			Text: "Context updated.",
+			Text: "Task tracking updated.",
 		},
 	}, nil
 }

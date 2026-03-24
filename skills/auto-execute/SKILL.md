@@ -5,7 +5,7 @@ description: Automatically execute tasks from tasks.md using orchestrate.sh with
 
 # Auto-Execute Tasks
 
-This skill automatically executes tasks from `tasks.md` using the orchestrate system, with progress tracking via `llm_context_update`.
+This skill automatically executes tasks from `tasks.md` using the orchestrate system, with progress tracking via `task_tracking`.
 
 ## When to Use
 
@@ -38,7 +38,7 @@ ls -la tasks.md
 Before starting execution, initialize task tracking:
 
 ```
-Use llm_context_update to record:
+Use task_tracking to record:
 - Current phase: "auto_execute"
 - Target: tasks.md
 - Total task count
@@ -99,7 +99,7 @@ After each task or periodically, check status:
 ~/.ai/skills/orchestrate/bin/orchestrate.sh status
 ```
 
-Update `llm_context_update` with:
+Update `task_tracking` with:
 - Completed task count
 - Current in-progress task
 - Any errors or failures
@@ -111,7 +111,7 @@ If a task fails:
 
 1. Check the task output in `/tmp/orchestrate-task-*.txt`
 2. Review task-checker feedback in `/tmp/orchestrate-check-*.txt`
-3. Update `llm_context_update` with error details
+3. Update `task_tracking` with error details
 4. Ask user if they want to:
    - Retry the task
    - Skip the task
@@ -122,13 +122,13 @@ If a task fails:
 When all tasks are done:
 
 - Mark the task as `[X]` in tasks.md (done by orchestrate)
-- Update `llm_context_update` with completion summary
+- Update `task_tracking` with completion summary
 - Provide summary of what was accomplished
 - Report any issues or follow-up tasks needed
 
 ## Progress Tracking Template
 
-Use this template in `llm_context_update`:
+Use this template in `task_tracking`:
 
 ```markdown
 ## Auto-Execution Progress
@@ -178,10 +178,10 @@ User: "Execute the tasks"
 Agent:
 1. Read tasks.md
 2. Check orchestrate status
-3. Update llm_context_update: "Starting auto-execution, 5 tasks total"
+3. Update task_tracking: "Starting auto-execution, 5 tasks total"
 4. Run: ~/.ai/skills/orchestrate/bin/orchestrate.sh
 5. Monitor progress periodically
-6. Update llm_context_update after each task
+6. Update task_tracking after each task
 7. On completion: "All 5 tasks done successfully"
 
 User: "Check progress"
@@ -189,7 +189,7 @@ User: "Check progress"
 Agent:
 1. Run: ~/.ai/skills/orchestrate/bin/orchestrate.sh status
 2. Parse output
-3. Update llm_context_update with current status
+3. Update task_tracking with current status
 4. Report to user
 ```
 
@@ -198,7 +198,7 @@ Agent:
 Auto-execution is successful when:
 - ✅ All tasks marked as `[X]` in tasks.md
 - ✅ No tasks marked as `[!]` (failed)
-- ✅ Progress tracked via llm_context_update
+- ✅ Progress tracked via task_tracking
 - ✅ User notified of completion
 - ✅ Summary of accomplishments provided
 
@@ -206,7 +206,7 @@ Auto-execution is successful when:
 
 | Situation | Action |
 |-----------|--------|
-| Task fails during execution | Check error logs, update llm_context_update, ask user |
+| Task fails during execution | Check error logs, update task_tracking, ask user |
 | Orchestrate script error | Verify dependencies, check permissions, retry |
 | Worker timeout | Check task complexity, may need manual intervention |
 | Task-checker rejects task | Worker will auto-retry (up to 3 cycles), then fail |

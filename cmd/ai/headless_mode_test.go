@@ -28,12 +28,12 @@ func TestRegisterHeadlessToolsIncludesContextDecisionTool(t *testing.T) {
 
 	found := false
 	for _, tool := range registry.All() {
-		if tool.Name() == "llm_context_decision" {
+		if tool.Name() == "context_management" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("expected llm_context_decision to be registered in headless mode")
+		t.Fatal("expected context_management to be registered in headless mode")
 	}
 }

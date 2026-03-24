@@ -361,18 +361,18 @@ func TestInsertBeforeLastUserMessage(t *testing.T) {
 	}
 }
 
-func TestCollectStaleToolOutputStatsProtectsLLMContextUpdate(t *testing.T) {
-	// Create messages with multiple llm_context_update calls
+func TestCollectStaleToolOutputStatsProtectsTaskTracking(t *testing.T) {
+	// Create messages with multiple task_tracking calls
 	msgs := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("first request"),
-		agentctx.NewToolResultMessage("call-1", "llm_context_update", []agentctx.ContentBlock{
+		agentctx.NewToolResultMessage("call-1", "task_tracking", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "old update"},
 		}, false),
 		agentctx.NewToolResultMessage("call-2", "read", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "file content"},
 		}, false),
 		agentctx.NewUserMessage("second request"),
-		agentctx.NewToolResultMessage("call-3", "llm_context_update", []agentctx.ContentBlock{
+		agentctx.NewToolResultMessage("call-3", "task_tracking", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "latest update"},
 		}, false),
 		agentctx.NewToolResultMessage("call-4", "bash", []agentctx.ContentBlock{
@@ -380,17 +380,17 @@ func TestCollectStaleToolOutputStatsProtectsLLMContextUpdate(t *testing.T) {
 		}, false),
 	}
 
-	// Use keepRecent=0 to test the llm_context_update protection specifically
+	// Use keepRecent=0 to test task_tracking protection specifically
 	staleCount, byTool := collectStaleToolOutputStats(msgs, 0)
 
-	// Should have 2 stale: 1 old llm_context_update + 1 read (bash is after last user, latest llm_context_update is protected)
+	// Should have 2 stale: 1 old task_tracking + 1 read (bash is after last user, latest task_tracking is protected)
 	if staleCount != 2 {
 		t.Fatalf("expected 2 stale outputs, got %d", staleCount)
 	}
 
-	// Check that llm_context_update count is 1 (not 2)
-	if byTool["llm_context_update"] != 1 {
-		t.Fatalf("expected 1 stale llm_context_update, got %d", byTool["llm_context_update"])
+	// Check that task_tracking count is 1 (not 2)
+	if byTool["task_tracking"] != 1 {
+		t.Fatalf("expected 1 stale task_tracking, got %d", byTool["task_tracking"])
 	}
 
 	// Check that read is counted
@@ -404,15 +404,15 @@ func TestFindLatestToolCallID(t *testing.T) {
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "first"},
 		}, false),
-		agentctx.NewToolResultMessage("call-2", "llm_context_update", []agentctx.ContentBlock{
+		agentctx.NewToolResultMessage("call-2", "task_tracking", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "old"},
 		}, false),
-		agentctx.NewToolResultMessage("call-3", "llm_context_update", []agentctx.ContentBlock{
+		agentctx.NewToolResultMessage("call-3", "task_tracking", []agentctx.ContentBlock{
 			agentctx.TextContent{Type: "text", Text: "latest"},
 		}, false),
 	}
 
-	id := findLatestToolCallID(msgs, "llm_context_update")
+	id := findLatestToolCallID(msgs, "task_tracking")
 	if id != "call-3" {
 		t.Fatalf("expected call-3, got %s", id)
 	}

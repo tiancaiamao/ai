@@ -5,7 +5,7 @@
 ### Turn Protocol
 
 1. **Check** `<agent:runtime_state>` — Read telemetry YAML, assess pressure
-2. **Manage** — Call `llm_context_decision` proactively if needed
+2. **Manage** — Call `context_management` proactively if needed
 3. **Respond** — Answer the user
 
 ### Decision Options
@@ -16,7 +16,7 @@
 | `compact` | Context ≥30%, topic shift, phase completed | `compact_confidence`: 0-100 |
 | `skip` | Context <20%, promise to check later | `skip_turns`: 1-30 |
 
-When runtime_state shows high context pressure (tokens_percent >= 30% with stale outputs, or >= 50% overall), you MUST call llm_context_decision proactively before continuing with any other work.
+When runtime_state shows high context pressure (tokens_percent >= 30% with stale outputs, or >= 50% overall), you MUST call context_management proactively before continuing with any other work.
 Do not proceed with the next task until you have addressed the context pressure.
 
 ### Truncate Rules
@@ -44,4 +44,4 @@ Do not proceed with the next task until you have addressed the context pressure.
 - `proactive > reminded` → score improves → fewer reminders
 - `reminded > proactive` → score degrades → more frequent reminders
 
-**When you receive `remind`, call `llm_context_decision` immediately.**
+**When you receive `remind`, call `context_management` immediately.**
