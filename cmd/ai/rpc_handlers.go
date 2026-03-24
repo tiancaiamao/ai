@@ -1079,10 +1079,32 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return skillCommands, nil
 	})
 
-	server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
+server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
 		slog.Info("Received get_session_stats")
 		messages := ag.GetMessages()
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
+
+		// Estimate system prompt and tools tokens for display purposes only
+		// Since Go doesn't have built-in tokenization, use character count approximation
+		// Approximately 1 token = 4 characters for text
+		const charsPerToken = 4
+
+		// Build fresh system prompt and get tools for estimation
+		currentSystemPrompt := buildSystemPrompt(sess)
+		tools := registry.All()
+
+		// Estimate tokens from string lengths (for display only)
+		tokens.SystemPromptTokens = len(currentSystemPrompt) / charsPerToken
+
+		// Build tools JSON for estimation
+		toolsJSON, err := json.Marshal(tools)
+		if err == nil {
+			tokens.SystemToolsTokens = len(toolsJSON) / charsPerToken
+		}
+
+		// Note: tokens.Total already includes system + tools + conversation history
+		// from the last LLM call's InputTokens, so we DON'T add them again.
+
 		stateMu.Lock()
 		currentSessionID := sessionID
 		stateMu.Unlock()
@@ -1094,7 +1116,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
 				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
 				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+				WallOutputPerSec:     llmMetrics.WallOutputTokensPerSec,
 				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
 				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
 				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,

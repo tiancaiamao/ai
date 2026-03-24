@@ -130,11 +130,17 @@ type SlashCommand struct {
 
 // SessionTokenStats represents token usage statistics.
 type SessionTokenStats struct {
-	Input      int `json:"input"`
-	Output     int `json:"output"`
-	CacheRead  int `json:"cacheRead"`
-	CacheWrite int `json:"cacheWrite"`
-	Total      int `json:"total"`
+	Input            int `json:"input"`
+	Output           int `json:"output"`
+	CacheRead        int `json:"cacheRead"`
+	CacheWrite       int `json:"cacheWrite"`
+	Total            int `json:"total"`
+	// SystemPromptTokens is an estimated token count for system prompt
+	// Calculated from systemPrompt string length (approx 1 token = 4 chars)
+	SystemPromptTokens int `json:"systemPromptTokens,omitempty"`
+	// SystemToolsTokens is an estimated token count for tools
+	// Calculated from tools string length (approx 1 token = 4 chars)
+	SystemToolsTokens int `json:"systemToolsTokens,omitempty"`
 }
 
 // SessionStats represents usage statistics for a session.

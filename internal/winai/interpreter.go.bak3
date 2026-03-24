@@ -88,10 +88,11 @@ type AiInterpreter struct {
 	deferStatus           bool
 	pendingStatus         []string
 	pendingStateRequests  map[string]stateRequestInfo
-	contextState *rpc.SessionState  // For /context command
-	contextStats *rpc.SessionStats // For /context command
 	rpcSequence           int64
 	workingDir            string
+
+	contextState *rpc.SessionState  // For /context command
+	contextStats *rpc.SessionStats // For /context command
 }
 
 type stateRequestInfo struct {
@@ -1205,106 +1206,6 @@ func (p *AiInterpreter) handleThinkingDisplay(value string, fromControl bool) er
 	return nil
 }
 
-
-func (p *AiInterpreter) handleContext() error {
-	p.pendingStateRequests = make(map[string]stateRequestInfo)
-	p.contextState = nil
-	p.contextStats = nil
-
-	stateID, err := p.sendCommandWithID("get_state", nil, "")
-	if err != nil {
-		return err
-	}
-	p.pendingStateRequests[stateID] = stateRequestInfo{
-		started: time.Now(),
-		show:    false,
-		kind:    "context",
-	}
-
-	statsID, err := p.sendCommandWithID("get_session_stats", nil, "")
-	if err != nil {
-		return err
-	}
-	p.pendingStateRequests[statsID] = stateRequestInfo{
-		started: time.Now(),
-		show:    true,
-		kind:    "context",
-	}
-
-	return nil
-}
-
-func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionStats) {
-	if state == nil || stats == nil {
-		return
-	}
-
-	modelName := "unknown"
-	modelContextWindow := 0
-	if state.Model != nil {
-		modelName = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
-		modelContextWindow = state.Model.ContextWindow
-	}
-
-	tokensMax := modelContextWindow
-	if tokensMax == 0 && state.Compaction != nil {
-		tokensMax = state.Compaction.ContextWindow
-	}
-	if tokensMax == 0 {
-		tokensMax = 200000
-	}
-
-	// Use actual token counts from stats
-	tokensUsed := stats.Tokens.Total
-	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
-	freeTokens := tokensMax - tokensUsed
-
-	totalBars := 30
-	usedBars := int(float64(totalBars) * float64(tokensUsed) / float64(tokensMax))
-	if usedBars > totalBars {
-		usedBars = totalBars
-	}
-	freeBars := totalBars - usedBars
-
-	barBuilder := strings.Builder{}
-	for i := 0; i < usedBars; i++ {
-		barBuilder.WriteString("⛁")
-	}
-	for i := 0; i < freeBars; i++ {
-		barBuilder.WriteString("⛶")
-	}
-
-	p.writeStatus(fmt.Sprintf("  Context Usage"))
-	p.writeStatus(fmt.Sprintf("%s  %s - %d/%d tokens (%.1f%%)",
-		barBuilder.String(), modelName, tokensUsed, tokensMax, tokensPercent))
-
-	// Use estimated token counts from stats for display
-	// Messages = Total - SystemPromptTokens - SystemToolsTokens
-	messagesTokens := tokensUsed - stats.Tokens.SystemPromptTokens - stats.Tokens.SystemToolsTokens
-	p.writeStatus(fmt.Sprintf("     System prompt: ~%d tokens", stats.Tokens.SystemPromptTokens))
-	p.writeStatus(fmt.Sprintf("     System tools: ~%d tokens", stats.Tokens.SystemToolsTokens))
-	p.writeStatus(fmt.Sprintf("     Messages: ~%d tokens", messagesTokens))
-	p.writeStatus(fmt.Sprintf("     Free space: %d (%.1f%%)",
-		freeTokens,
-		float64(freeTokens)/float64(tokensMax)*100,
-	))
-
-	p.writeStatus(fmt.Sprintf(""))
-	p.writeStatus(fmt.Sprintf(" Session Stats"))
-	p.writeStatus(fmt.Sprintf(" Messages: %d total (user %d, assistant %d)",
-		stats.TotalMessages, stats.UserMessages, stats.AssistantMessages))
-	p.writeStatus(fmt.Sprintf(" Tools: %d calls, %d results",
-		stats.ToolCalls, stats.ToolResults))
-	p.writeStatus(fmt.Sprintf(" Compactions: %d", stats.CompactionCount))
-	p.writeStatus(fmt.Sprintf(" Cost: $%.4f", stats.Cost))
-	p.writeStatus(fmt.Sprintf(" Auto-compaction: %s", onOff(state.AutoCompactionEnabled)))
-
-	p.writeStatus(fmt.Sprintf(""))
-	p.writeStatus(fmt.Sprintf(" Model: %s", modelName))
-	p.writeStatus(fmt.Sprintf(" Context window: %d tokens", tokensMax))
-	p.writeStatus(fmt.Sprintf(" Streaming: %s", onOff(state.IsStreaming)))
-}
-
 func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	args = strings.TrimSpace(args)
 	if args == "" {
@@ -2290,7 +2191,6 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /new [name]
   /resume [id|path|index]
   /compact
-  /context
   /trace-events <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
   /follow-up <message>
@@ -2556,28 +2456,6 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 	p.applyState(state)
 
 	if ok {
-		if info.kind == "context" {
-			p.stateMu.Lock()
-			p.contextState = state
-			var shouldShow bool
-			shouldShow = p.contextStats != nil
-			p.stateMu.Unlock()
-
-			if shouldShow {
-				p.stateMu.Lock()
-				stateCopy := p.contextState
-				statsCopy := p.contextStats
-				p.contextState = nil
-				p.contextStats = nil
-				p.stateMu.Unlock()
-
-				if stateCopy != nil && statsCopy != nil {
-					p.showContext(stateCopy, statsCopy)
-				}
-			}
-			return
-		}
-
 		if info.show {
 			p.showState(state)
 			return
@@ -2739,46 +2617,9 @@ func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *rpc.Sessio
 }
 
 func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
-	// Check if this is for /context command
-	p.stateMu.Lock()
-	var contextInfo *stateRequestInfo
-	for id, info := range p.pendingStateRequests {
-		if info.kind == "context" && info.show {
-			contextInfo = &info
-			delete(p.pendingStateRequests, id)
-			break
-		}
-	}
-	p.stateMu.Unlock()
-
 	var stats rpc.SessionStats
 	if err := json.Unmarshal(data, &stats); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid usage response: %v", err))
-		return
-	}
-
-	// If this is for /context command, store stats and try to display
-	if contextInfo != nil {
-		p.stateMu.Lock()
-		p.contextStats = &stats
-		var shouldShow bool
-		// Check if we should show context while holding stateMu
-		shouldShow = p.contextState != nil
-		p.stateMu.Unlock()
-
-		// Call showContext outside the lock to avoid deadlock
-		if shouldShow {
-			p.stateMu.Lock()
-			state := p.contextState
-			statsCopy := p.contextStats
-			p.contextState = nil
-			p.contextStats = nil
-			p.stateMu.Unlock()
-
-			if state != nil && statsCopy != nil {
-				p.showContext(state, statsCopy)
-			}
-		}
 		return
 	}
 
@@ -3487,6 +3328,95 @@ func copyToClipboard(text string) error {
 // 	return abs
 // }
 
+func (p *AiInterpreter) handleContext() error {
+	p.pendingStateRequests = make(map[string]stateRequestInfo)
+	p.contextState = nil
+	p.contextStats = nil
+
+	stateID, err := p.sendCommandWithID("get_state", nil, "")
+	if err != nil {
+		return err
+	}
+	p.pendingStateRequests[stateID] = stateRequestInfo{
+		started: time.Now(),
+		show:    false,
+		kind:    "context",
+	}
+
+	statsID, err := p.sendCommandWithID("get_session_stats", nil, "")
+	if err != nil {
+		return err
+	}
+	p.pendingStateRequests[statsID] = stateRequestInfo{
+		started: time.Now(),
+		show:    true,
+		kind:    "context",
+	}
+
+	return nil
+}
+
+func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionStats) {
+	if state == nil || stats == nil {
+		return
+	}
+
+	modelName := "unknown"
+	modelContextWindow := 0
+	if state.Model != nil {
+		modelName = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
+		modelContextWindow = state.Model.ContextWindow
+	}
+
+	tokensMax := modelContextWindow
+	if tokensMax == 0 && state.Compaction != nil {
+		tokensMax = state.Compaction.ContextWindow
+	}
+	if tokensMax == 0 {
+		tokensMax = 200000
+	}
+
+	tokensUsed := stats.Tokens.Total
+	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
+	freeTokens := tokensMax - tokensUsed
+
+	totalBars := 30
+	usedBars := int(float64(totalBars) * float64(tokensUsed) / float64(tokensMax))
+	if usedBars > totalBars {
+		usedBars = totalBars
+	}
+	freeBars := totalBars - usedBars
+
+	barBuilder := strings.Builder{}
+	for i := 0; i < usedBars; i++ {
+		barBuilder.WriteString("⛁")
+	}
+	for i := 0; i < freeBars; i++ {
+		barBuilder.WriteString("⛶")
+	}
+
+	p.writeStatus(fmt.Sprintf("  Context Usage\n%s  %s · %dk/%dk tokens (%.0f%%)",
+		barBuilder.String(), modelName, tokensUsed, tokensMax, tokensPercent))
+
+	p.writeStatus(fmt.Sprintf("     System prompt: ~%dk tokens\n     System tools: ~%dk tokens\n     Messages: ~%dk tokens\n     Free space: %dk (%.1f%%)",
+		tokensUsed/10,
+		tokensUsed*6/10,
+		tokensUsed - tokensUsed/10 - tokensUsed*6/10,
+		freeTokens,
+		float64(freeTokens)/float64(tokensMax)*100,
+	))
+
+	p.writeStatus(fmt.Sprintf("\n Session Stats\n Messages: %d total (user %d, assistant %d)\n Tools: %d calls, %d results\n Compactions: %d\n Cost: $%.4f\n Auto-compaction: %s\n\n Model: %s\n Context window: %dk\n Streaming: %s",
+		stats.TotalMessages, stats.UserMessages, stats.AssistantMessages,
+		stats.ToolCalls, stats.ToolResults,
+		stats.CompactionCount,
+		stats.Cost,
+		onOff(state.AutoCompactionEnabled),
+		modelName,
+		tokensMax,
+		onOff(state.IsStreaming),
+	))
+}
 var _ repl.Interpreter = (*AiInterpreter)(nil)
 var _ repl.AsyncInterpreter = (*AiInterpreter)(nil)
 var _ repl.ControlInterpreter = (*AiInterpreter)(nil)
