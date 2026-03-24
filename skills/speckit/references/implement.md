@@ -14,29 +14,41 @@ Execute tasks from `tasks.md` checklist systematically. This is the execution ph
 
 You have two ways to execute tasks:
 
-### Option 1: Manual Execution (Default)
+### Option 1: Orchestrate Loop (Recommended)
 
-Execute tasks one by one with your supervision. This gives you full control and visibility.
-
-**When to use**:
-- Complex tasks requiring careful oversight
-- Learning the codebase
-- Debugging tricky issues
-
-**See**: [Manual Execution](#manual-execution) below
-
-### Option 2: Orchestrate Loop (Recommended)
-
-Use the orchestrate loop mode for automated execution with worker → task-checker verification.
+Use orchestrate loop mode for automated execution with worker → task-checker verification.
 
 **When to use**:
-- Well-defined tasks with clear acceptance criteria
-- Want to save time
-- Tasks are straightforward
+- ✅ Well-defined tasks with clear acceptance criteria
+- ✅ Want to save time on routine implementation
+- ✅ Tasks are straightforward and independent
+- ✅ You've approved the task list and want to proceed automatically
+
+**When NOT to use**:
+- ❌ Tasks requiring careful oversight or learning
+- ❌ Debugging tricky issues that need your direct attention
+- ❌ First-time work in unfamiliar codebase areas
 
 **Usage**:
 ```bash
+# Full automatic execution
 ~/.ai/skills/orchestrate/bin/orchestrate.sh
+
+# Or use the auto-execute skill
+/skill:auto-execute
+
+# Execute one task at a time
+~/.ai/skills/orchestrate/bin/orchestrate.sh next
+```
+
+**Progress Monitoring**:
+Use `llm_context_update` to track execution progress:
+```markdown
+## Auto-Execution Progress
+- Phase: executing
+- Total: 5
+- Done: 2
+- In Progress: TASK003
 ```
 
 **How it works**:
@@ -47,12 +59,24 @@ Use the orchestrate loop mode for automated execution with worker → task-check
    - Loops up to 3 times if fixes are needed
    - Marks task as done/failed
 3. Main agent context stays clean throughout
+4. Progress updated via `llm_context_update`
 
 **Benefits**:
-- ✅ Automated execution
-- ✅ Worker subagent has isolated context
-- ✅ Task-checker verifies completion
-- ✅ Main agent supervises, doesn't execute
+- ✅ Automated execution - save time
+- ✅ Worker subagent has isolated context - avoid context bloat
+- ✅ Task-checker verifies completion - quality control
+- ✅ Main agent supervises, doesn't execute - strategic oversight
+
+### Option 2: Manual Execution
+
+Execute tasks one by one with your supervision. This gives you full control and visibility.
+
+**When to use**:
+- Complex tasks requiring careful oversight
+- Learning codebase
+- Debugging tricky issues
+
+**See**: [Manual Execution](#manual-execution) below
 
 ---
 

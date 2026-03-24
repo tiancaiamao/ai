@@ -16,13 +16,15 @@
 | `compact` | Context ≥30%, topic shift, phase completed | `compact_confidence`: 0-100 |
 | `skip` | Context <20%, promise to check later | `skip_turns`: 1-30 |
 
+When runtime_state shows high context pressure (tokens_percent >= 30% with stale outputs, or >= 50% overall), you MUST call llm_context_decision proactively before continuing with any other work.
+Do not proceed with the next task until you have addressed the context pressure.
+
 ### Truncate Rules
 
 - Tool outputs with `stale="N"` show staleness (lower N = older, more obsolete)
-- Get IDs from: (1) `<agent:tool id="..." stale="N" />` tags in context, or (2) reminder message examples
+- Get IDs from `<agent:tool id="..." stale="N" />` tags in context
 - **Batch truncate** 5+ outputs at once (operation itself adds context)
 - **List each ID only ONCE** — no duplicates
-- **IDs expire quickly** — never use IDs from old messages, always check current context
 
 **Anti-patterns:**
 - ❌ Don't copy IDs from previous reminders (likely already expired, results in "0 truncated")
@@ -42,4 +44,4 @@
 - `proactive > reminded` → score improves → fewer reminders
 - `reminded > proactive` → score degrades → more frequent reminders
 
-**When you receive `remind`, call `llm_context_decision` immediately.**
+**When you receive `remind`, call `llm_context_decision` immediately.`

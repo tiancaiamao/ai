@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"reflect"
@@ -9,6 +10,75 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 )
+
+//go:embed "prompt.md"
+var promptTemplate string
+
+//go:embed "base.md"
+var basePrompt string
+
+//go:embed "subagent_base.md"
+var subagentBasePrompt string
+
+//go:embed "headless_base.md"
+var headlessBasePrompt string
+
+//go:embed "context_management.md"
+var contextManagementPrompt string
+
+//go:embed "compact_system.md"
+var compactSystemPrompt string
+
+//go:embed "compact_summarize.md"
+var compactSummarizePrompt string
+
+//go:embed "compact_update.md"
+var compactUpdatePrompt string
+
+//go:embed "subagent.md"
+var DefaultSubagentPrompt string
+
+//go:embed "task_tracking.md"
+var taskTrackingPrompt string
+
+// RPCBasePrompt returns the base system prompt for interactive RPC mode.
+func RPCBasePrompt() string {
+	return basePrompt
+}
+
+// CompactorBasePrompt returns the baseline prompt used by compactor requests.
+func CompactorBasePrompt() string {
+	return "You are a helpful coding assistant."
+}
+
+// HeadlessBasePrompt returns the base system prompt for headless mode.
+func HeadlessBasePrompt(isSubagent bool) string {
+	if isSubagent {
+		return subagentBasePrompt
+	}
+
+	return headlessBasePrompt
+}
+
+// JSONModeBasePrompt returns the base system prompt for JSON mode.
+func JSONModeBasePrompt() string {
+	return HeadlessBasePrompt(false)
+}
+
+// CompactSystemPrompt returns the system prompt for compaction.
+func CompactSystemPrompt() string {
+	return compactSystemPrompt
+}
+
+// CompactSummarizePrompt returns the prompt for initial summarization.
+func CompactSummarizePrompt() string {
+	return compactSummarizePrompt
+}
+
+// CompactUpdatePrompt returns the prompt for updating existing summary.
+func CompactUpdatePrompt() string {
+	return compactUpdatePrompt
+}
 
 // ToolInfo describes a tool for prompt generation.
 type ToolInfo interface {
@@ -25,9 +95,6 @@ type LLMContextInfo interface {
 
 // Builder constructs system prompts with structured sections.
 type Builder struct {
-	// Base system prompt (identity, core behavior)
-	base string
-
 	// Working directory (can be static or dynamic via workspace)
 	cwd       string
 	workspace *tools.Workspace
@@ -56,7 +123,7 @@ type Builder struct {
 	// Token usage percent (for hint message generation)
 	tokensPercent float64
 
-	// Task tracking enabled (controls task_tracking.md inclusion)
+	// Task tracking enabled (controls task tracking inclusion)
 	taskTrackingEnabled bool
 
 	// Context management enabled (controls context_management.md inclusion)
@@ -64,32 +131,26 @@ type Builder struct {
 }
 
 // NewBuilder creates a new prompt builder.
-func NewBuilder(basePrompt, cwd string) *Builder {
+func NewBuilder(_, cwd string) *Builder {
 	return &Builder{
-		base:                     basePrompt,
-		cwd:                      cwd,
-		minimal:                  false,
-		taskTrackingEnabled:      true, // Default: enabled
-		contextManagementEnabled: true, // Default: enabled
+		cwd:                        cwd,
+		minimal:                    false,
+		taskTrackingEnabled:          true,
+		contextManagementEnabled:      true,
 	}
 }
 
 // NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
-// The workspace will be queried for the current directory each time the prompt is built.
-func NewBuilderWithWorkspace(basePrompt string, ws *tools.Workspace) *Builder {
+func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
 	return &Builder{
-		base:                     basePrompt,
-		cwd:                      "", // Not used when workspace is set
-		workspace:                ws,
-		minimal:                  false,
-		taskTrackingEnabled:      true, // Default: enabled
-		contextManagementEnabled: true, // Default: enabled
+		workspace:                  ws,
+		minimal:                    false,
+		taskTrackingEnabled:          true,
+		contextManagementEnabled:      true,
 	}
 }
 
 // GetCWD returns the current working directory.
-// If a workspace is set, it returns the dynamic cwd from the workspace.
-// Otherwise, it returns the static cwd.
 func (b *Builder) GetCWD() string {
 	if b.workspace != nil {
 		return b.workspace.GetCWD()
@@ -104,8 +165,6 @@ func (b *Builder) SetMinimal(minimal bool) *Builder {
 }
 
 // SetNoWorkspace enables/disables no-workspace mode.
-// When enabled, the workspace section is excluded from the prompt.
-// Useful for chat bots (like claw) that don't have a workspace concept.
 func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
 	b.noWorkspace = noWorkspace
 	return b
@@ -118,9 +177,7 @@ func (b *Builder) SetWorkspaceNotes(notes string) *Builder {
 }
 
 // SetTools sets the available tools.
-// Accepts []ToolInfo or any slice whose elements implement ToolInfo.
 func (b *Builder) SetTools(tools interface{}) *Builder {
-	// Convert tools to []ToolInfo
 	b.tools = convertTools(tools)
 	return b
 }
@@ -129,7 +186,6 @@ func convertTools(tools interface{}) []ToolInfo {
 	if tools == nil {
 		return nil
 	}
-
 	v := reflect.ValueOf(tools)
 	if v.Kind() == reflect.Slice {
 		result := make([]ToolInfo, v.Len())
@@ -162,85 +218,139 @@ func (b *Builder) SetContextMeta(meta string) *Builder {
 	return b
 }
 
-// SetTokensPercent sets the token usage percent for hint message generation.
+// SetTokensPercent sets the token usage percent.
 func (b *Builder) SetTokensPercent(percent float64) *Builder {
 	b.tokensPercent = percent
 	return b
 }
 
-// SetTaskTrackingEnabled sets whether task tracking prompt is included.
+// SetTaskTrackingEnabled sets whether task tracking is enabled.
 func (b *Builder) SetTaskTrackingEnabled(enabled bool) *Builder {
 	b.taskTrackingEnabled = enabled
 	return b
 }
 
-// SetContextManagementEnabled sets whether context management prompt is included.
+// SetContextManagementEnabled sets whether context management is enabled.
 func (b *Builder) SetContextManagementEnabled(enabled bool) *Builder {
 	b.contextManagementEnabled = enabled
 	return b
 }
 
-// Build generates the final system prompt.
+// Build builds final system prompt by replacing placeholders in the template.
 func (b *Builder) Build() string {
-	sections := []string{}
+	result := promptTemplate
 
-	// 1. Base (identity, core behavior)
-	if b.base != "" {
-		sections = append(sections, b.base)
-	}
-
-	// 2. Workspace (skip if noWorkspace mode)
+	// Replace workspace section (optional - empty when noWorkspace is true)
+	workspaceSection := ""
 	if !b.noWorkspace {
-		sections = append(sections, b.buildWorkspaceSection())
-	}
-
-	// 3. LLM Context sections (task tracking and context management)
-	if b.llmContext != nil {
-		if b.taskTrackingEnabled {
-			sections = append(sections, b.buildTaskTrackingSection())
+		workspaceDir := b.GetCWD()
+		workspaceNotes := ""
+		if b.workspaceNotes != "" {
+			workspaceNotes = "\n" + b.workspaceNotes
 		}
-		if b.contextManagementEnabled {
-			sections = append(sections, b.buildContextManagementSection())
-		}
+		workspaceSection = fmt.Sprintf(`## Workspace
+Your working directory is: %s
+Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, workspaceDir, workspaceNotes)
 	}
+	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
 
-	// 4. Tooling (always included)
-	if tooling := b.buildToolingSection(); tooling != "" {
-		sections = append(sections, tooling)
+	// Replace task tracking (optional section)
+	taskTracking := ""
+	if b.taskTrackingEnabled {
+		taskTracking = b.buildTaskTrackingContent()
 	}
+	result = strings.ReplaceAll(result, "%TASK_TRACKING_CONTENT%", taskTracking)
 
-	// 5. Skills (only when not minimal and skills exist)
+	// Replace context management (optional section)
+	contextManagement := ""
+	if b.contextManagementEnabled && b.llmContext != nil {
+		contextManagement = contextManagementPrompt
+	}
+	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
+
+	// Replace tools (required)
+	tools := b.buildToolsContent()
+	result = strings.ReplaceAll(result, "%TOOLS%", tools)
+
+	// Replace skills hint (optional, only shown if skills exist)
+	skillsHint := ""
+	if !b.minimal && len(b.skills) > 0 {
+		skillsHint = "\n\nIf you need additional capabilities, check the available Skills below."
+	}
+	result = strings.ReplaceAll(result, "%SKILLS_HINT%", skillsHint)
+
+	// Replace skills (optional section)
+	skills := ""
 	if !b.minimal && len(b.skills) > 0 {
 		if skillsText := skill.FormatForPrompt(b.skills); skillsText != "" {
-			sections = append(sections, skillsText)
+			skills = skillsText
 		}
 	}
+	result = strings.ReplaceAll(result, "%SKILLS%", skills)
 
-	// 6. Project Context (bootstrap files, skip if noWorkspace mode)
+	// Replace project context (optional section)
+	projectContext := ""
 	if !b.minimal && !b.noWorkspace {
-		if context := b.buildProjectContext(); context != "" {
-			sections = append(sections, context)
-		}
+		projectContext = b.buildProjectContext()
 	}
+	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
 
-	result := joinSections(sections)
+	// Remove empty sections (optional sections that were not enabled)
+	result = b.cleanupEmptySections(result)
 
 	return result
 }
 
-func (b *Builder) buildWorkspaceSection() string {
-	notes := ""
-	if b.workspaceNotes != "" {
-		notes = "\n" + b.workspaceNotes
+func (b *Builder) buildToolsContent() string {
+	if len(b.tools) == 0 {
+		return ""
 	}
-	return fmt.Sprintf(`## Workspace
-Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, b.GetCWD(), notes)
+
+	lines := []string{}
+	for _, tool := range b.tools {
+		lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
+	}
+	return joinLines(lines)
 }
 
-func (b *Builder) buildTaskTrackingSection() string {
+func (b *Builder) buildTaskTrackingContent() string {
+	content := `## Task Tracking
+Track multi-step tasks using ` + "`llm_context_update`" + `.
+
+**Update** (with markdown content) when:
+- Task status changes, decisions made, files changed
+- Progress milestone reached, blocker emerged/resolved
+
+**Skip** (with ` + "`skip=true, reasoning=\"...\"`" + `) when:
+- Simple questions, no progress, routine responses
+
+**Important:** Always call ` + "`llm_context_update`" + ` — with content or ` + "`skip=true`" + `. This prevents reminder spam.
+
+### Update Example
+
+**Good:** Specific, actionable status
+
+` + "```markdown" + `
+## Current Task
+- Implementing feature X
+- Status: 60% complete
+- Done: Core logic, unit tests
+- Next: Integration tests
+` + "```" + `
+
+**Bad:** Too vague, no actionable info
+
+` + "```markdown" + `
+Working on it...
+` + "```" + `
+
+**When to skip (skip=true):**
+- Simple questions without task progress
+- Routine responses without state changes
+- Quick clarifications or confirmations`
+
 	if b.contextMeta != "" {
-		return taskTrackingPrompt + `
+		content += `
 
 ---
 
@@ -248,51 +358,11 @@ func (b *Builder) buildTaskTrackingSection() string {
 ` + b.contextMeta + `
 </context_meta>`
 	}
-	return taskTrackingPrompt
-}
 
-func (b *Builder) buildContextManagementSection() string {
-	return contextManagementPrompt
-}
-
-func (b *Builder) buildToolingSection() string {
-	if len(b.tools) == 0 {
-		return ""
-	}
-
-	lines := []string{
-		"## Tooling",
-		"You have access to the following tools:",
-		"",
-	}
-
-	for _, tool := range b.tools {
-		lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
-	}
-
-	// Important reminder about tool limitations
-	lines = append(lines, "")
-	lines = append(lines, "**IMPORTANT**: Only use the tools listed above.")
-	lines = append(lines, "Do NOT assume you have access to any other tools.")
-
-	// Tool usage guidance
-	lines = append(lines, "")
-	lines = append(lines, "### Tool Usage")
-	lines = append(lines, "- Analyze tool errors before retrying.")
-	lines = append(lines, "- If stuck, report blockers with actionable context.")
-	lines = append(lines, "- If a tool appears missing, check available Skills.")
-
-	// Skills hint
-	if !b.minimal && len(b.skills) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, "If you need additional capabilities, check the available Skills below.")
-	}
-
-	return joinLines(lines)
+	return content
 }
 
 // Bootstrap files to search for in workspace.
-// Priority rule: when AGENTS.md exists, CLAUDE.md is skipped to avoid duplicate instructions.
 var bootstrapFiles = []string{
 	"AGENTS.md",   // Agent identity and behavior
 	"CLAUDE.md",   // Project guidelines (fallback when AGENTS.md is absent)
@@ -339,14 +409,46 @@ func (b *Builder) loadBootstrapFile(filename string) string {
 	return ""
 }
 
-func joinSections(sections []string) string {
-	result := []string{}
-	for _, s := range sections {
-		if s != "" {
-			result = append(result, strings.TrimSpace(s))
+func (b *Builder) cleanupEmptySections(prompt string) string {
+	// Remove sections that are completely empty (only section header and blank lines)
+	lines := strings.Split(prompt, "\n")
+	cleaned := []string{}
+
+	for i := 0; i < len(lines); {
+		line := lines[i]
+
+		// Check if this line is a section header
+		if strings.HasPrefix(line, "## ") {
+			// Look ahead to see if the section has any non-empty content
+			hasContent := false
+			nextIdx := i + 1
+
+			for nextIdx < len(lines) {
+				nextLine := lines[nextIdx]
+				if nextLine == "" {
+					nextIdx++
+					continue
+				}
+				if strings.HasPrefix(nextLine, "## ") {
+					// Next section header - no content found
+					break
+				}
+				hasContent = true
+				break
+			}
+
+			if !hasContent {
+				// Skip this empty section (header + empty lines)
+				i = nextIdx
+				continue
+			}
 		}
+
+		cleaned = append(cleaned, line)
+		i++
 	}
-	return strings.Join(result, "\n\n")
+
+	return strings.Join(cleaned, "\n")
 }
 
 func joinLines(lines []string) string {
@@ -355,7 +457,7 @@ func joinLines(lines []string) string {
 
 // ThinkingInstruction returns the thinking instruction for the given level.
 func ThinkingInstruction(level string) string {
-	level = normalizeThinkingLevel(level)
+	level = NormalizeThinkingLevel(level)
 	switch level {
 	case "off":
 		return "Thinking level is off. Do not emit reasoning/thinking content. Respond directly with concise results and tool calls when needed."
@@ -384,8 +486,4 @@ func NormalizeThinkingLevel(level string) string {
 	default:
 		return "high"
 	}
-}
-
-func normalizeThinkingLevel(level string) string {
-	return NormalizeThinkingLevel(level)
 }

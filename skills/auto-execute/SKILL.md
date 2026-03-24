@@ -1,0 +1,222 @@
+---
+name: auto-execute
+description: Automatically execute tasks from tasks.md using orchestrate.sh with progress tracking. Use when you have a tasks.md file ready and want to execute all tasks automatically without manual intervention.
+---
+
+# Auto-Execute Tasks
+
+This skill automatically executes tasks from `tasks.md` using the orchestrate system, with progress tracking via `llm_context_update`.
+
+## When to Use
+
+- After `speckit` has created a `tasks.md` file
+- When the user says "execute the tasks", "run the workflow", "auto-execute"
+- After the user has approved the task list
+
+## Prerequisites
+
+- `tasks.md` must exist in the current directory
+- Tasks should be reviewed and approved by the user
+- `~/.ai/skills/orchestrate/bin/orchestrate.sh` must be available
+
+## Process
+
+### 1. Check Prerequisites
+
+First, verify the workflow can start:
+
+```bash
+# Check if tasks.md exists
+ls -la tasks.md
+
+# Check current status
+~/.ai/skills/orchestrate/bin/orchestrate.sh status
+```
+
+### 2. Initialize Progress Tracking
+
+Before starting execution, initialize task tracking:
+
+```
+Use llm_context_update to record:
+- Current phase: "auto_execute"
+- Target: tasks.md
+- Total task count
+- Starting timestamp
+```
+
+Example:
+```markdown
+## Current Task
+- Auto-executing tasks from tasks.md
+- Status: Starting
+- Total tasks: 5
+- Next: Execute first pending task
+```
+
+### 3. Run Auto-Execution
+
+Determine execution mode based on user request:
+
+**Mode A: Full Auto (default)**
+```bash
+# Run all tasks automatically
+~/.ai/skills/orchestrate/bin/orchestrate.sh
+```
+
+**Mode B: Stop After N Tasks**
+```bash
+# Execute N tasks, then stop for approval
+for i in $(seq 1 $N); do
+    ~/.ai/skills/orchestrate/bin/orchestrate.sh next
+    # Report progress
+    ~/.ai/skills/orchestrate/bin/orchestrate.sh status
+    # Check if more tasks remain
+    remaining=$(grep -c "^- \[ \]" tasks.md)
+    if [ $remaining -eq 0 ]; then
+        echo "All tasks completed!"
+        break
+    fi
+done
+
+# Stop and ask for approval
+echo "Completed $N tasks. Remaining: $remaining"
+echo "Continue with remaining tasks? (yes/no)"
+```
+
+**Mode C: One Task at a Time**
+```bash
+# Execute next task, then report back
+~/.ai/skills/orchestrate/bin/orchestrate.sh next
+```
+
+### 4. Monitor Progress
+
+After each task or periodically, check status:
+
+```bash
+# Check current progress
+~/.ai/skills/orchestrate/bin/orchestrate.sh status
+```
+
+Update `llm_context_update` with:
+- Completed task count
+- Current in-progress task
+- Any errors or failures
+- Next action
+
+### 5. Handle Errors
+
+If a task fails:
+
+1. Check the task output in `/tmp/orchestrate-task-*.txt`
+2. Review task-checker feedback in `/tmp/orchestrate-check-*.txt`
+3. Update `llm_context_update` with error details
+4. Ask user if they want to:
+   - Retry the task
+   - Skip the task
+   - Fix manually and continue
+
+### 6. Completion
+
+When all tasks are done:
+
+- Mark the task as `[X]` in tasks.md (done by orchestrate)
+- Update `llm_context_update` with completion summary
+- Provide summary of what was accomplished
+- Report any issues or follow-up tasks needed
+
+## Progress Tracking Template
+
+Use this template in `llm_context_update`:
+
+```markdown
+## Auto-Execution Progress
+
+**Phase**: auto_execute
+**Tasks File**: tasks.md
+**Started**: 2025-01-15T10:00:00Z
+
+### Progress
+- Total: 5
+- Done: 2
+- Pending: 2
+- Failed: 1
+- In Progress: TASK003
+
+### Current Task
+- ID: TASK003
+- Description: Implement user authentication
+- Status: in_progress
+
+### Issues
+- TASK005: Database connection failed
+  - Error: Connection timeout
+  - Status: User reviewing
+
+### Next Action
+- Monitor TASK003 completion
+- Address TASK005 issue when ready
+```
+
+## Task Status Convention
+
+The orchestrate system uses these checkboxes in tasks.md:
+
+| Checkbox | Status | Meaning |
+|-----------|---------|---------|
+| `[ ]` | pending | Not yet started |
+| `[-]` | in_progress | Currently executing |
+| `[X]` | done | Successfully completed |
+| `[!]` | failed | Failed execution |
+
+## Example Session Flow
+
+```
+User: "Execute the tasks"
+
+Agent:
+1. Read tasks.md
+2. Check orchestrate status
+3. Update llm_context_update: "Starting auto-execution, 5 tasks total"
+4. Run: ~/.ai/skills/orchestrate/bin/orchestrate.sh
+5. Monitor progress periodically
+6. Update llm_context_update after each task
+7. On completion: "All 5 tasks done successfully"
+
+User: "Check progress"
+
+Agent:
+1. Run: ~/.ai/skills/orchestrate/bin/orchestrate.sh status
+2. Parse output
+3. Update llm_context_update with current status
+4. Report to user
+```
+
+## Success Criteria
+
+Auto-execution is successful when:
+- ✅ All tasks marked as `[X]` in tasks.md
+- ✅ No tasks marked as `[!]` (failed)
+- ✅ Progress tracked via llm_context_update
+- ✅ User notified of completion
+- ✅ Summary of accomplishments provided
+
+## Error Recovery
+
+| Situation | Action |
+|-----------|--------|
+| Task fails during execution | Check error logs, update llm_context_update, ask user |
+| Orchestrate script error | Verify dependencies, check permissions, retry |
+| Worker timeout | Check task complexity, may need manual intervention |
+| Task-checker rejects task | Worker will auto-retry (up to 3 cycles), then fail |
+
+## Integration with speckit
+
+This skill works as the final stage of the speckit workflow:
+
+```
+speckit (spec) → speckit (plan) → speckit (tasks) → auto-execute
+```
+
+The user approves each stage before proceeding to the next.

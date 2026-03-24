@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"net/http"
@@ -1290,6 +1291,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return traceevent.GetEnabledEvents(), nil
 	})
 
+	server.SetGetWorkflowStatusHandler(func() (*rpc.WorkflowState, error) {
+		slog.Info("Received get_workflow_status")
+		return getWorkflowStatus(cwd)
+	})
+
 	validSteeringModes := map[string]bool{
 		"all":           true,
 		"one-at-a-time": true,
@@ -1740,4 +1746,100 @@ func (b *bashRunner) Abort() error {
 	}
 	cancel()
 	return nil
+}
+
+// getWorkflowStatus reads .workflow/state.json and tasks.md to return workflow state.
+func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
+	state := &rpc.WorkflowState{
+		Phase:      "not_started",
+		LastUpdate: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	workflowDir := filepath.Join(cwd, ".workflow")
+	stateFile := filepath.Join(workflowDir, "state.json")
+
+	// Read state.json if it exists
+	if data, err := os.ReadFile(stateFile); err == nil {
+		var stateData struct {
+			Phase      string `json:"phase"`
+			StartedAt  string `json:"started_at"`
+			TasksFile  string `json:"tasks_file"`
+		}
+		if err := json.Unmarshal(data, &stateData); err == nil {
+			state.Phase = stateData.Phase
+			state.StartedAt = stateData.StartedAt
+			if stateData.TasksFile != "" {
+				// Handle relative or absolute path
+				if filepath.IsAbs(stateData.TasksFile) {
+					state.TasksFile = stateData.TasksFile
+				} else {
+					state.TasksFile = filepath.Join(cwd, stateData.TasksFile)
+				}
+			}
+		}
+	}
+
+	// Read tasks.md if specified
+	if state.TasksFile != "" {
+		tasksData, err := os.ReadFile(state.TasksFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read tasks file %s: %w", state.TasksFile, err)
+		}
+
+		// Parse task statuses
+		lines := strings.Split(string(tasksData), "\n")
+		var inProgressTask *rpc.WorkflowTask
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "- [") {
+				continue
+			}
+
+			status := "pending"
+			if strings.HasPrefix(line, "- [x]") || strings.HasPrefix(line, "- [X]") {
+				status = "done"
+				state.DoneTasks++
+			} else if strings.HasPrefix(line, "- [-]") {
+				status = "in_progress"
+				state.PendingTasks++ // In-progress also counts toward pending
+			} else if strings.HasPrefix(line, "- [!]") {
+				status = "failed"
+				state.FailedTasks++
+			} else {
+				state.PendingTasks++
+			}
+
+			state.TotalTasks++
+
+			// Extract task ID and description for in-progress task
+			if status == "in_progress" && inProgressTask == nil {
+				// Extract task ID (e.g., TASK001, T01, etc.)
+				var id string
+				idMatch := regexp.MustCompile(`[A-Z]{3,}\d+|[A-Z]\d+`).FindString(line)
+				if idMatch != "" {
+					id = idMatch
+				}
+
+				// Extract description: remove checkbox first, then task ID
+				desc := line
+				// Remove checkbox
+				desc = regexp.MustCompile(`^-\s*\[[xX\-\!]\]\s*`).ReplaceAllString(desc, "")
+				desc = regexp.MustCompile(`^-\s*\[\s*\]\s*`).ReplaceAllString(desc, "")
+				// Remove task ID (e.g., TASK002: or TASK002 )
+				desc = regexp.MustCompile(`^[A-Z]{3,}\d+:?\s*`).ReplaceAllString(desc, "")
+				desc = strings.TrimSpace(desc)
+
+				inProgressTask = &rpc.WorkflowTask{
+					ID:          id,
+					Description: desc,
+					Status:      status,
+				}
+			}
+		}
+
+		state.InProgressTask = inProgressTask
+	}
+
+	return state, nil
 }

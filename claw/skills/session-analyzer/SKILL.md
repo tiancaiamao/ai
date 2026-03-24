@@ -31,6 +31,8 @@ license: MIT
 4. **错误处理**：失败时的重试、fallback 策略
 5. **反模式**：重复失败、无效循环、过度调用
 6. **Subagent 协作**：delegation 是否合理，任务描述是否清晰
+7. **上下文腐烂**：agent 在对话后期是否出现理解偏差、幻觉、指令不服从
+8. **上下文管理**：agent 是否主动调用 llm_context_decision，系统提醒是否正常工作
 
 ## 数据源
 
@@ -160,7 +162,176 @@ cat ~/.ai/sessions/--<cwd>--/<subagent-session-id>/messages.jsonl
 
 ---
 
-#### 模式 E: Traces 性能分析（可选）
+#### 模式 E: 上下文腐烂分析 (`--mode context-rot`)
+
+**关注点**：
+- Agent 在对话后期是否出现理解偏差？
+- 是否出现幻觉（声称完成了实际未完成的任务）？
+- 是否出现指令不服从（持续使用错误方法）？
+- 上下文增长速度是否合理？
+
+**典型问题**：
+```
+User: "基于 master 分支创建 git worktree"
+Agent: 使用 cd 命令（错误工具）→ 失败
+User: "change workspace 才能过去"
+Agent: 继续使用 cd（不服从指令）→ 再次失败
+User: "我没看到你的修复呀"
+Agent: 声称已修复（幻觉）→ 但实际未完成
+```
+
+**根因分析**：
+- 上下文持续增长，agent 注意力被早期信息分散
+- 没有及时清理上下文，导致理解偏差
+- 上下文 > 50K tokens 时，agent 开始出现严重腐烂
+
+**改进建议**：
+在系统提示词中添加：
+```markdown
+## 上下文管理触发条件
+
+当满足以下条件时，必须主动调用 llm_context_decision：
+
+1. **输入 tokens > 50K** → 立即调用
+2. **连续 2 次指令失败** → 可能是上下文腐烂导致
+3. **任务性质变化** → 考虑 compact 清理早期上下文
+```
+
+---
+
+#### 模式 F: 上下文管理分析 (`--mode context-management`)
+
+**关注点**：
+- Agent 是否主动调用 llm_context_decision？
+- 系统是否正确发送 remind 消息？
+- runtime_state 是否被正确注入到对话中？
+- agent 是否检查 runtime_state？
+
+**数据来源**：
+```bash
+# 检查 agent 是否调用 llm_context_decision
+grep '"name":"llm_context_decision"' messages.jsonl
+
+# 检查系统是否发送 remind
+grep "<agent:remind>" messages.jsonl
+
+# 检查 agent 是否检查 runtime_state
+grep "<agent:runtime_state>" messages.jsonl
+```
+
+**典型问题**：
+
+**问题 1：Agent 不主动调用 llm_context_decision**
+```
+Context 增长轨迹：
+- 23:31: 60K tokens (29.4%) ← 应该调用
+- 23:46: 68K tokens (33.6%) ← 应该调用
+- 00:07: 107K tokens (52.5%) ← 必须调用
+- 00:39: 108K tokens (52.7%) ← 终于调用（太晚了）
+```
+
+**问题 2：系统 remind 机制失效**
+```
+期望行为：
+- Context >= 30% 时，系统发送 <agent:remind> 消息
+- Agent 收到 remind 后立即调用 llm_context_decision
+
+实际行为：
+- Context 从 29% 增长到 52.5%，没有收到任何 remind
+- Agent 8 小时内完全依赖自主判断
+```
+
+**问题 3：runtime_state 未被注入**
+```
+期望：
+<agent:runtime_state>
+context_usage_percent: 35.2
+stale_tool_outputs: 12+
+...
+</agent:runtime_state>
+
+实际：
+- Session 中没有 <agent:runtime_state> 标签
+- Agent 无法知道上下文压力
+```
+
+**改进建议**：
+
+**1. 修复系统提醒机制**
+```python
+# 在 ai 项目中添加提醒逻辑
+def check_and_send_remind(messages, context_size, max_size):
+    percent = context_size / max_size * 100
+    
+    if percent >= 30 and not recent_remind:
+        # 注入 remind 消息
+        remind_msg = {
+            "type": "system",
+            "content": f"""
+            <agent:remind>
+            context_usage_percent: {percent}%
+            stale_tool_outputs: {count_stale()}
+            
+            You MUST call llm_context_decision before continuing.
+            </agent:remind>
+            """
+        }
+        messages.append(remind_msg)
+        record_remind()
+```
+
+**2. 确保 runtime_state 被注入**
+```python
+# 在每次 LLM 调用前注入 runtime_state
+def inject_runtime_state(messages):
+    state = {
+        "context_usage_percent": calculate_percent(),
+        "stale_tool_outputs": count_stale(),
+        "tokens_used_approx": calculate_tokens(),
+        # ... 其他指标
+    }
+    
+    runtime_state_msg = {
+        "type": "system",
+        "content": f"<agent:runtime_state>\n{yaml.dump(state)}\n</agent:runtime_state>"
+    }
+    
+    # 注入到 messages 开头（最近一条）
+    messages.insert(0, runtime_state_msg)
+```
+
+**3. 强制 Agent 检查 runtime_state**
+```markdown
+## Turn Protocol (MANDATORY)
+
+在每轮对话开始时，你必须：
+
+1. **检查** `<agent:runtime_state>` — 读取遥测数据
+2. **评估** context_usage_percent 和 stale_tool_outputs
+3. **决定** 是否需要调用 llm_context_decision
+
+示例：
+```
+[User 消息]
+↓
+[系统注入 runtime_state]
+<agent:runtime_state>
+context_usage_percent: 42.3%
+stale_tool_outputs: 15
+...
+</agent:runtime_state>
+↓
+[Agent 检查]
+"我看到 context_usage_percent 是 42.3%，stale_tool_outputs 是 15。
+根据指南，我应该调用 llm_context_decision。"
+```
+
+**不要跳过 runtime_state 检查！**
+```
+
+---
+
+#### 模式 G: Traces 性能分析（可选）
 
 当需要深入理解性能/并发问题时：
 

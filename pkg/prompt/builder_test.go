@@ -18,17 +18,12 @@ func (m mockTool) Name() string        { return m.name }
 func (m mockTool) Description() string { return m.description }
 
 func TestNewBuilder(t *testing.T) {
-	base := "You are a helpful assistant."
 	cwd := "/test/workspace"
 
-	b := NewBuilder(base, cwd)
+	b := NewBuilder("", cwd)
 
 	if b == nil {
 		t.Fatal("NewBuilder returned nil")
-	}
-
-	if b.base != base {
-		t.Errorf("expected base %q, got %q", base, b.base)
 	}
 
 	if b.cwd != cwd {
@@ -39,24 +34,21 @@ func TestNewBuilder(t *testing.T) {
 func TestBuilderBuild(t *testing.T) {
 	tests := []struct {
 		name string
-		base string
 		cwd  string
 	}{
 		{
 			name: "basic prompt",
-			base: "You are an AI assistant.",
 			cwd:  "/workspace",
 		},
 		{
 			name: "empty base",
-			base: "",
 			cwd:  "/workspace",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := NewBuilder(tt.base, tt.cwd)
+			b := NewBuilder("", tt.cwd)
 			result := b.Build()
 
 			if result == "" {
@@ -76,7 +68,6 @@ func TestBuilderBuild(t *testing.T) {
 }
 
 func TestBuilderWithTools(t *testing.T) {
-	base := "You are an AI assistant."
 	cwd := "/workspace"
 
 	tools := []ToolInfo{
@@ -84,7 +75,7 @@ func TestBuilderWithTools(t *testing.T) {
 		mockTool{name: "write", description: "Write files"},
 	}
 
-	b := NewBuilder(base, cwd)
+	b := NewBuilder("", cwd)
 	b.SetTools(tools)
 	result := b.Build()
 
@@ -93,31 +84,26 @@ func TestBuilderWithTools(t *testing.T) {
 	}
 
 	if !contains(result, "read: Read files") {
-		t.Error("agentctx.Tool 'read' missing from result")
+		t.Error("Tool 'read' missing from result")
 	}
 
 	if !contains(result, "write: Write files") {
-		t.Error("agentctx.Tool 'write' missing from result")
+		t.Error("Tool 'write' missing from result")
 	}
 
 	if !contains(result, "Only use the tools listed above") {
-		t.Error("agentctx.Tool limitation warning missing")
-	}
-
-	if !contains(result, "### Tool Usage") {
-		t.Error("tool usage guidance missing")
+		t.Error("Tool limitation warning missing")
 	}
 }
 
 func TestBuilderWithSkills(t *testing.T) {
-	base := "You are an AI assistant."
 	cwd := "/workspace"
 
 	skills := []skill.Skill{
 		{Name: "test", Description: "A test skill"},
 	}
 
-	b := NewBuilder(base, cwd)
+	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	result := b.Build()
 
@@ -131,7 +117,6 @@ func TestBuilderWithSkills(t *testing.T) {
 }
 
 func TestBuilderMinimalMode(t *testing.T) {
-	base := "You are an AI assistant."
 	cwd := "/workspace"
 
 	tools := []ToolInfo{
@@ -141,7 +126,7 @@ func TestBuilderMinimalMode(t *testing.T) {
 		{Name: "test", Description: "A test skill"},
 	}
 
-	b := NewBuilder(base, cwd)
+	b := NewBuilder("", cwd)
 	b.SetTools(tools).SetSkills(skills).SetMinimal(true)
 	result := b.Build()
 
@@ -161,14 +146,13 @@ func TestBuilderMinimalMode(t *testing.T) {
 }
 
 func TestBuilderSkillsRendering(t *testing.T) {
-	base := "You are an AI assistant."
 	cwd := "/workspace"
 	skills := []skill.Skill{
 		{Name: "wf-issue", Description: "issue workflow", FilePath: "/tmp/wf-issue/SKILL.md"},
 		{Name: "subagent", Description: "subagent workflow", FilePath: "/tmp/subagent/SKILL.md"},
 	}
 
-	b := NewBuilder(base, cwd)
+	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	result := b.Build()
 
@@ -282,7 +266,7 @@ func TestProjectContextPrefersAgentsOverClaude(t *testing.T) {
 		t.Fatalf("write CLAUDE.md: %v", err)
 	}
 
-	b := NewBuilder("base", cwd)
+	b := NewBuilder("", cwd)
 	result := b.Build()
 
 	if !contains(result, "### AGENTS.md") {
@@ -299,7 +283,7 @@ func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
 		t.Fatalf("write CLAUDE.md: %v", err)
 	}
 
-	b := NewBuilder("base", cwd)
+	b := NewBuilder("", cwd)
 	result := b.Build()
 
 	if !contains(result, "### CLAUDE.md") {
@@ -310,15 +294,20 @@ func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
 func TestNoWorkspaceMode(t *testing.T) {
 	cwd := t.TempDir()
 
+	// Add minimal tools for both builders
+	tools := []ToolInfo{mockTool{name: "read", description: "Read files"}}
+
 	// Test with workspace (default)
-	builderWithWorkspace := NewBuilder("test prompt", cwd)
+	builderWithWorkspace := NewBuilder("", cwd)
+	builderWithWorkspace.SetTools(tools)
 	resultWith := builderWithWorkspace.Build()
 	if !contains(resultWith, "## Workspace") {
 		t.Error("expected Workspace section when noWorkspace is false")
 	}
 
 	// Test without workspace (noWorkspace mode)
-	builderNoWorkspace := NewBuilder("test prompt", cwd).SetNoWorkspace(true)
+	builderNoWorkspace := NewBuilder("", cwd).SetNoWorkspace(true)
+	builderNoWorkspace.SetTools(tools)
 	resultWithout := builderNoWorkspace.Build()
 	if contains(resultWithout, "## Workspace") {
 		t.Error("expected no Workspace section when noWorkspace is true")
@@ -327,9 +316,9 @@ func TestNoWorkspaceMode(t *testing.T) {
 		t.Error("expected no working directory mention when noWorkspace is true")
 	}
 
-	// Ensure base prompt is still included
-	if !contains(resultWithout, "test prompt") {
-		t.Error("expected base prompt to be included")
+	// Ensure the prompt still has content (it will have Tooling section)
+	if resultWithout == "" {
+		t.Error("expected non-empty prompt even in noWorkspace mode")
 	}
 }
 

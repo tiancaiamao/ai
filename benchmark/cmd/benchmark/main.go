@@ -174,6 +174,7 @@ type AIAgentRunner struct {
 	BinaryPath string
 	MaxTurns   int
 	Timeout    time.Duration
+	CustomPrompt string // Custom system prompt for benchmark tasks
 }
 
 func (r *AIAgentRunner) Name() string {
@@ -821,11 +822,20 @@ func extractArgValue(payload, key string) string {
 	}
 	s := payload[idx+len(pat):]
 	end := len(s)
-	for _, sep := range []string{",", "]"} {
-		if i := strings.Index(s, sep); i >= 0 && i < end {
+	
+	// Find the end of the value, handling both ] and } cases
+	for i := end - 1; i >= 0; i-- {
+		c := s[i]
+		if c == ']' || c == '}' {
 			end = i
+			break
 		}
 	}
+	
+	if end == 0 {
+		end = len(s)
+	}
+	
 	value := strings.TrimSpace(s[:end])
 	return strings.Trim(value, `"'`)
 }
