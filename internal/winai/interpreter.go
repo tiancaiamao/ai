@@ -1022,7 +1022,7 @@ func (p *AiInterpreter) handleSet(args string, fromControl bool) error {
 func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	parts := strings.Fields(args)
 	if len(parts) == 0 {
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|usage")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|pipeline")
 		return nil
 	}
 
@@ -1032,9 +1032,9 @@ func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 	case "pipeline":
 		p.showPipeline(fromControl)
 	case "usage":
-		return p.sendCommand("get_session_stats", nil, "")
+		p.writeStatusMaybeDefer(fromControl, "ai: /show usage has been integrated into /context - use /context instead")
 	default:
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|pipeline|usage")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|pipeline")
 	}
 
 	return nil
@@ -1205,7 +1205,6 @@ func (p *AiInterpreter) handleThinkingDisplay(value string, fromControl bool) er
 	return nil
 }
 
-
 func (p *AiInterpreter) handleContext() error {
 	p.pendingStateRequests = make(map[string]stateRequestInfo)
 	p.contextState = nil
@@ -1254,7 +1253,6 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 		tokensMax = 200000
 	}
 
-	// Use actual token counts from stats
 	tokensUsed := stats.Tokens.Total
 	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
 	freeTokens := tokensMax - tokensUsed
@@ -1275,16 +1273,13 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 	}
 
 	p.writeStatus(fmt.Sprintf("  Context Usage"))
-	p.writeStatus(fmt.Sprintf("%s  %s - %d/%d tokens (%.1f%%)",
+	p.writeStatus(fmt.Sprintf("%s  %s - %dk/%dk tokens (%.0f%%)",
 		barBuilder.String(), modelName, tokensUsed, tokensMax, tokensPercent))
 
-	// Use estimated token counts from stats for display
-	// Messages = Total - SystemPromptTokens - SystemToolsTokens
-	messagesTokens := tokensUsed - stats.Tokens.SystemPromptTokens - stats.Tokens.SystemToolsTokens
-	p.writeStatus(fmt.Sprintf("     System prompt: ~%d tokens", stats.Tokens.SystemPromptTokens))
-	p.writeStatus(fmt.Sprintf("     System tools: ~%d tokens", stats.Tokens.SystemToolsTokens))
-	p.writeStatus(fmt.Sprintf("     Messages: ~%d tokens", messagesTokens))
-	p.writeStatus(fmt.Sprintf("     Free space: %d (%.1f%%)",
+	p.writeStatus(fmt.Sprintf("     System prompt: ~%dk tokens", tokensUsed/10))
+	p.writeStatus(fmt.Sprintf("     System tools: ~%dk tokens", tokensUsed*6/10))
+	p.writeStatus(fmt.Sprintf("     Messages: ~%dk tokens", tokensUsed - tokensUsed/10 - tokensUsed*6/10))
+	p.writeStatus(fmt.Sprintf("     Free space: %dk (%.1f%%)",
 		freeTokens,
 		float64(freeTokens)/float64(tokensMax)*100,
 	))
@@ -1301,7 +1296,7 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 
 	p.writeStatus(fmt.Sprintf(""))
 	p.writeStatus(fmt.Sprintf(" Model: %s", modelName))
-	p.writeStatus(fmt.Sprintf(" Context window: %d tokens", tokensMax))
+	p.writeStatus(fmt.Sprintf(" Context window: %dk tokens", tokensMax))
 	p.writeStatus(fmt.Sprintf(" Streaming: %s", onOff(state.IsStreaming)))
 }
 
@@ -2283,14 +2278,13 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /resume-on-branch <index|entry-id>
   /skills
   /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]
-  /show settings|pipeline|usage
+  /show settings|pipeline
   /thinking [level]                    - Show/set thinking level (off|minimal|low|medium|high|xhigh)
   /model [number|id|provider/id]
   /model-select                        - Alias of /model
   /new [name]
   /resume [id|path|index]
   /compact
-  /context
   /trace-events <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
   /follow-up <message>
@@ -2559,22 +2553,12 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 		if info.kind == "context" {
 			p.stateMu.Lock()
 			p.contextState = state
-			var shouldShow bool
-			shouldShow = p.contextStats != nil
-			p.stateMu.Unlock()
-
-			if shouldShow {
-				p.stateMu.Lock()
-				stateCopy := p.contextState
-				statsCopy := p.contextStats
+			if p.contextStats != nil {
+				p.showContext(p.contextState, p.contextStats)
 				p.contextState = nil
 				p.contextStats = nil
-				p.stateMu.Unlock()
-
-				if stateCopy != nil && statsCopy != nil {
-					p.showContext(stateCopy, statsCopy)
-				}
 			}
+			p.stateMu.Unlock()
 			return
 		}
 
@@ -2761,24 +2745,13 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 	if contextInfo != nil {
 		p.stateMu.Lock()
 		p.contextStats = &stats
-		var shouldShow bool
-		// Check if we should show context while holding stateMu
-		shouldShow = p.contextState != nil
-		p.stateMu.Unlock()
-
-		// Call showContext outside the lock to avoid deadlock
-		if shouldShow {
-			p.stateMu.Lock()
-			state := p.contextState
-			statsCopy := p.contextStats
+		// Try to display context if both state and stats are available
+		if p.contextState != nil {
+			p.showContext(p.contextState, p.contextStats)
 			p.contextState = nil
 			p.contextStats = nil
-			p.stateMu.Unlock()
-
-			if state != nil && statsCopy != nil {
-				p.showContext(state, statsCopy)
-			}
 		}
+		p.stateMu.Unlock()
 		return
 	}
 
