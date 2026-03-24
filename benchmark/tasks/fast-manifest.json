@@ -53,7 +53,6 @@
     "tbench/prove-plus-comm",
     "tbench/pypi-server",
     "tbench/pytorch-model-recovery",
-    "tbench/qemu-alpine-ssh",
     "tbench/regex-chess",
     "tbench/regex-log",
     "tbench/reshard-c4-data",
