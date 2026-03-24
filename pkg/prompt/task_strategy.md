@@ -1,3 +1,4 @@
+## Task Execution Strategy
 **Break down complex work before diving in** — Plan → Execute → Verify iteratively.
 
 ### Task Type Detection
