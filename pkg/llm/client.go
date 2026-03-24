@@ -26,7 +26,7 @@ func StreamLLM(
 ) *EventStream[LLMEvent, LLMMessage] {
 	// Route to Anthropic API if requested
 	if model.API == "anthropic-messages" {
-		return StreamAnthropic(ctx, model, llmCtx, apiKey)
+		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
 	stream := NewEventStream[LLMEvent, LLMMessage](
