@@ -41,6 +41,9 @@ var DefaultSubagentPrompt string
 //go:embed "task_tracking.md"
 var taskTrackingPrompt string
 
+//go:embed "task_strategy.md"
+var taskStrategyPrompt string
+
 // RPCBasePrompt returns the base system prompt for interactive RPC mode.
 func RPCBasePrompt() string {
 	return basePrompt
@@ -105,6 +108,9 @@ type Builder struct {
 	// No workspace mode (excludes workspace section, for chat bots like claw)
 	noWorkspace bool
 
+	// Subagent mode (excludes task strategy section to prevent recursive subagent use)
+	isSubagent bool
+
 	// Workspace notes (optional reminders)
 	workspaceNotes string
 
@@ -167,6 +173,12 @@ func (b *Builder) SetMinimal(minimal bool) *Builder {
 // SetNoWorkspace enables/disables no-workspace mode.
 func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
 	b.noWorkspace = noWorkspace
+	return b
+}
+
+// SetSubagent enables/disables subagent mode.
+func (b *Builder) SetSubagent(isSubagent bool) *Builder {
+	b.isSubagent = isSubagent
 	return b
 }
 
@@ -267,6 +279,13 @@ Treat this directory as the single global workspace for file operations unless e
 		contextManagement = contextManagementPrompt
 	}
 	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
+
+	// Replace task strategy (optional section)
+	taskStrategy := ""
+	if !b.noWorkspace && !b.isSubagent {
+		taskStrategy = taskStrategyPrompt
+	}
+	result = strings.ReplaceAll(result, "%TASK_STRATEGY_CONTENT%", taskStrategy)
 
 	// Replace tools (required)
 	tools := b.buildToolsContent()
