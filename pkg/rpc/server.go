@@ -60,6 +60,7 @@ type Server struct {
 	onExportHTML               func(path string) (string, error)
 	onSetTraceEvents           func(events []string) ([]string, error)
 	onGetTraceEvents           func() ([]string, error)
+	onGetWorkflowStatus        func() (*WorkflowState, error)
 }
 
 // NewServer creates a new RPC server.
@@ -307,6 +308,13 @@ func (s *Server) SetGetTraceEventsHandler(handler func() ([]string, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onGetTraceEvents = handler
+}
+
+// SetGetWorkflowStatusHandler sets the handler for get_workflow_status commands.
+func (s *Server) SetGetWorkflowStatusHandler(handler func() (*WorkflowState, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onGetWorkflowStatus = handler
 }
 
 // SetNewSessionHandler sets the handler for new_session commands.
@@ -943,6 +951,16 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
 		}
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"events": enabledEvents})
+
+	case CommandGetWorkflowStatus:
+		if s.onGetWorkflowStatus == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "No get_workflow_status handler registered")
+		}
+		status, err := s.onGetWorkflowStatus()
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, status)
 
 	case CommandPing:
 		return s.successResponse(cmd.ID, cmd.Type, map[string]any{"ok": true})

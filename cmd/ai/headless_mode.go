@@ -67,7 +67,10 @@ func formatArgsBrief(args map[string]interface{}) string {
 	if len(args) == 0 {
 		return ""
 	}
-	// Show first few args
+	// For bash, show full command; for others, show first few args
+	if cmd, ok := args["command"].(string); ok {
+		return cmd
+	}
 	parts := []string{}
 	for k, v := range args {
 		if len(parts) >= 2 {
@@ -537,7 +540,12 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 							fmt.Fprintln(output, "Tool calls:")
 							for _, tc := range toolCalls {
 								if tc.args != "" {
-									fmt.Fprintf(output, "  • %s: %s\n", tc.name, truncateString(tc.args, 60))
+									// Don't truncate bash commands so constraint checks can find tool names
+									if tc.name == "bash" {
+										fmt.Fprintf(output, "  • %s: %s\n", tc.name, tc.args)
+									} else {
+										fmt.Fprintf(output, "  • %s: %s\n", tc.name, truncateString(tc.args, 60))
+									}
 								} else {
 									fmt.Fprintf(output, "  • %s\n", tc.name)
 								}
