@@ -16,76 +16,47 @@ help:
 	@echo "ai-agent-benchmark"
 	@echo "============================================================"
 	@echo ""
-	@echo "常用命令 (Quick Start):"
-	@echo "  make bench-build                    构建 benchmark 工具"
-	@echo "  make bench-precheck                 检查所有任务初始态是否失败 (确保任务可测)"
-	@echo "  make bench-run                      运行所有任务 (从头开始)"
-	@echo "  make bench-run TASK=agent_002       运行单个任务"
-	@echo "  make bench-resume                   从上次中断处继续"
-	@echo "  make reset                          重置所有任务到初始状态"
-	@echo "  make reset TASK=agent_002           重置单个任务"
+	@echo "Usage:"
+	@echo "  make help                显示此帮助信息"
+	@echo "  make bench-build         构建 benchmark 工具"
+	@echo "  make bench-run           运行所有任务 (从头开始)"
+	@echo "  make bench-resume        从上次中断处继续"
+	@echo "  make bench-run TASK=xxx  运行单个任务"
+	@echo "  make bench-precheck      仅做初始态预检（默认用 agent_v1_manifest）"
+	@echo "  make bench-list          列出所有任务"
+	@echo "  make bench-compare       对比上次结果"
+	@echo "  make bench-baseline      保存当前为基准"
+	@echo "  make bench-clean         清理结果文件"
+	@echo "  make reset               重置 tasks 工作区（保留 benchmark/results/*.json）"
+	@echo "  make reset-task TASK=xx  重置单个任务的 setup"
+	@echo "  make reset-hard          强重置（额外清理 progress/run/临时缓存）"
+	@echo "  make ab-list             列出可用 agent/model/task"
+	@echo "  make ab-test AGENT=xxx   运行 A/B 单 agent 测试"
+	@echo "  make ab-compare AGENTS=\"a b\"  对比多个 agent"
+	@echo "  make ab-benchmark        运行 agents.yaml 里所有 agent"
+	@echo "  make ab-report           输出历史 A/B 报告"
 	@echo ""
-	@echo "所有命令 (All Commands):"
-	@echo "  make help                           显示此帮助信息"
-	@echo "  make bench-build                    构建 benchmark 工具"
-	@echo "  make bench                          运行所有任务 (bench-run 的别名)"
-	@echo "  make bench-run                      运行所有任务 (从头开始)"
-	@echo "  make bench-run TASK=xxx             运行单个任务"
-	@echo "  make bench-resume                   从上次中断处继续"
-	@echo "  make bench-precheck                 检查初始态 (默认 agent_v1_manifest)"
-	@echo "  make bench-list                     列出所有任务"
-	@echo "  make bench-compare                  对比上次结果"
-	@echo "  make bench-baseline                 保存当前为基准"
-	@echo "  make bench-clean                    清理结果文件"
-	@echo "  make reset                          重置所有任务 (保留 results/current.json)"
-	@echo "  make reset TASK=xxx                 重置单个任务"
-	@echo "  make reset-hard                    强重置 (清理 nested repos, progress 等)"
-	@echo "  make reset-all                     清理所有任务和所有结果"
+	@echo "Options:"
+	@echo "  AGENT=ai                 指定 agent 二进制 (默认: /Users/genius/go/bin/ai)"
+	@echo "  AGENTS=\"a b\"            A/B 对比的 agent 列表"
+	@echo "  MODEL=minimax            A/B 运行模型名（会透传到 ab_test.py）"
+	@echo "  TASK=task_id             A/B 或 bench 运行单任务"
+	@echo "  TIMEOUT=0                单任务超时 (默认: 0=不限制)"
+	@echo "  MAX_STEPS_MODE=soft      max_steps 判分模式: soft|hard (可选，不传则使用 runner/manifest 默认)"
+	@echo "  MANIFEST=tasks/xxx.json  按 manifest 精确筛选任务"
+	@echo "  RESUME=results/xxx.json  指定进度文件 (默认: results/progress.json)"
+	@echo "  VERBOSE=1                详细输出"
+	@echo "  ASSERT_INIT_FAIL=1       bench-run 前强制初始态全 FAIL 校验"
 	@echo ""
-	@echo "A/B 测试:"
-	@echo "  make ab-list                        列出可用 agent/model/task"
-	@echo "  make ab-test AGENT=xxx              运行 A/B 单 agent 测试"
-	@echo "  make ab-compare AGENTS=\"a b\"       对比多个 agent"
-	@echo "  make ab-benchmark                   运行 agents.yaml 里所有 agent"
-	@echo "  make ab-report                      输出历史 A/B 报告"
-	@echo ""
-	@echo "参数 (Options):"
-	@echo "  AGENT=ai                           指定 agent 二进制 (默认: ../bin/ai)"
-	@echo "  AGENTS=\"a b\"                      A/B 对比的 agent 列表"
-	@echo "  MODEL=minimax                      A/B 运行模型名 (透传到 ab_test.py)"
-	@echo "  TASK=task_id                       运行单任务 (bench-run 或 reset)"
-	@echo "  TIMEOUT=0                          单任务超时 (默认: 0=不限制)"
-	@echo "  MAX_STEPS_MODE=soft                max_steps 判分模式: soft|hard"
-	@echo "  MANIFEST=tasks/xxx.json            按 manifest 精确筛选任务"
-	@echo "  RESUME=results/xxx.json            指定进度文件 (默认: progress.json)"
-	@echo "  VERBOSE=1                          详细输出"
-	@echo "  ASSERT_INIT_FAIL=1                  bench-run 前强制初始态全 FAIL 校验"
-	@echo ""
-	@echo "使用示例 (Examples):"
-	@echo "  # 基本流程"
-	@echo "  make bench-build && make bench-precheck && make bench-run"
-	@echo ""
-	@echo "  # 单任务测试"
-	@echo "  make bench-build"
-	@echo "  make bench-run TASK=agent_002_rollback"
-	@echo "  make reset TASK=agent_002_rollback"
-	@echo "  make bench-run TASK=agent_002_rollback"
-	@echo ""
-	@echo "  # 续跑和对比"
+	@echo "Examples:"
+	@echo "  make bench-run                      # 从头运行所有任务"
 	@echo "  make bench-resume                   # 从上次中断处继续"
 	@echo "  make bench-resume RESUME=xxx.json   # 从指定进度文件继续"
-	@echo "  make bench-compare                  # 对比 baseline.json 和 current.json"
-	@echo "  make bench-baseline                 # 将 current.json 保存为 baseline.json"
-	@echo ""
-	@echo "  # 使用不同的 manifest"
-	@echo "  make bench-precheck MANIFEST=tasks/agent_v1_manifest.json"
+	@echo "  make bench-precheck                    # 默认 manifest 预检"
+	@echo "  make bench-precheck MANIFEST=tasks/xxx.json"
+	@echo "  make bench-run TASK=001_fix_off_by_one"
 	@echo "  make bench-list MANIFEST=tasks/agent_v1_manifest.json"
-	@echo "  make bench-run MANIFEST=tasks/agent_v1_manifest.json"
-	@echo ""
-	@echo "  # A/B 测试"
 	@echo "  make ab-test AGENT=my-agent MODEL=minimax TASK=agent_001_forced_exploration"
-	@echo "  make ab-compare AGENTS=\"agent-v1 agent-v2\" TASK=agent_002_rollback"
-	@echo "  make ab-benchmark                    # 运行 agents.yaml 里所有 agent"
 	@echo ""
 	@echo "============================================================"
 
@@ -104,29 +75,20 @@ bench: bench-run
 # Run all testable tasks (fresh start)
 bench-run: bench-build
 	@if [ -n "$(TASK)" ]; then \
-		echo "============================================================"; \
 		echo "Running task: $(TASK)"; \
-		echo "============================================================"; \
-		rm -f results/progress.json; \
-		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),../bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
+		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
 	else \
-		echo "============================================================"; \
-		echo "Running all tasks (fresh start)"; \
-		echo "============================================================"; \
-		../../bin/benchmark --agent $(or $(AGENT),../bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
 	fi
 
 # Verify all selected tasks fail before agent modifications
 bench-precheck: bench-build
-	@echo "============================================================"
-	@echo "Precheck: Verifying initial state fails for manifest"
-	@echo "Manifest: $(PRECHECK_MANIFEST)"
-	@echo "============================================================"
+	@echo "Precheck manifest: $(PRECHECK_MANIFEST)"
 	../../bin/benchmark --precheck-only $(PRECHECK_MANIFEST_FLAG)
 
 # Resume from previous progress
 bench-resume: bench-build
-	../../bin/benchmark --agent $(or $(AGENT),../bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
+	../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
 
 # List available benchmark tasks
 bench-list: bench-build
@@ -167,39 +129,30 @@ bench-clean:
 	rm -rf results/.pytest_cache
 	@echo "Done."
 
-# Reset tasks to clean initial state (keep results/current.json)
-# Usage: make reset                    # Reset all tasks
-#         make reset TASK=xxx          # Reset single task (e.g., agent_002_rollback)
-#         make reset-hard              # Force reset (clean nested repos, remove progress)
-#         make reset-hard TASK=xxx     # Hard reset single task
-#
-# What gets cleaned:
-# - Task artifacts: .pytest_cache, __pycache__, compiled binaries (*.test, main, asm, etc.)
-# - Git untracked files under tasks/ (via git clean -fd)
-# - Results: progress.json (temporary), historical result_*.json (keeps current.json)
-# - Baseline results: baseline.json (preserved)
+# Reset tasks to clean initial state (keep benchmark/results/*.json)
 reset:
 	@if [ -n "$(TASK)" ]; then \
-		echo "Resetting task: $(TASK)"; \
 		./reset.sh "$(TASK)"; \
 	else \
-		echo "Resetting all tasks..."; \
 		./reset.sh; \
 	fi
 
-# Hard reset tasks and runtime junk (keep current.json, baseline.json)
-# - Uses git clean -ffd (removes nested git repos in tasks)
-# - Removes progress.json, .pytest_cache in results/
-reset-hard:
-	@echo "Hard resetting all tasks..."
-	@./reset.sh --hard
-	@echo "Done. Kept result files: results/current.json, results/baseline.json"
+# Reset specific task
+reset-task:
+ifndef TASK
+	@echo "Error: TASK is required"
+	@echo "Usage: make reset-task TASK=<task_id>"
+	@exit 1
+endif
+	@./reset.sh "$(TASK)"
 
-# Reset without preserving any results (cleans everything)
-reset-all:
-	@echo "Resetting all tasks and cleaning all results..."
-	@./reset.sh --no-keep-results
-	@echo "Done. All results removed."
+# Hard reset tasks and runtime junk (keep historical results/*.json)
+reset-hard:
+	@./reset.sh --hard
+	@rm -f results/progress.json
+	@rm -rf results/.pytest_cache
+	@rm -f run reset
+	@echo "Done. Kept historical result files (results/*.json except progress.json)."
 
 # A/B list
 ab-list:

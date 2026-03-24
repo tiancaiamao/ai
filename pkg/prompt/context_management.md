@@ -44,4 +44,4 @@ Do not proceed with the next task until you have addressed the context pressure.
 - `proactive > reminded` → score improves → fewer reminders
 - `reminded > proactive` → score degrades → more frequent reminders
 
-**When you receive `remind`, call `llm_context_decision` immediately.`
+**When you receive `remind`, call `llm_context_decision` immediately.**
