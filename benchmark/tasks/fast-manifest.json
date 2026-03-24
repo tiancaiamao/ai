@@ -26,7 +26,6 @@
     "tbench/code-from-image",
     "tbench/configure-git-webserver",
     "tbench/db-wal-recovery",
-    "tbench/dna-insert",
     "tbench/extract-moves-from-video",
     "tbench/feal-differential-cryptanalysis",
     "tbench/filter-js-from-html",
