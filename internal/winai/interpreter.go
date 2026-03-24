@@ -2551,14 +2551,22 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 
 	if ok {
 		if info.kind == "context" {
+			var stateCopy *rpc.SessionState
+			var statsCopy *rpc.SessionStats
+			
 			p.stateMu.Lock()
 			p.contextState = state
 			if p.contextStats != nil {
-				p.showContext(p.contextState, p.contextStats)
+				stateCopy = p.contextState
+				statsCopy = p.contextStats
 				p.contextState = nil
 				p.contextStats = nil
 			}
 			p.stateMu.Unlock()
+			
+			if stateCopy != nil && statsCopy != nil {
+				p.showContext(stateCopy, statsCopy)
+			}
 			return
 		}
 
@@ -2743,15 +2751,23 @@ func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
 
 	// If this is for /context command, store stats and try to display
 	if contextInfo != nil {
+		var stateCopy *rpc.SessionState
+		var statsCopy *rpc.SessionStats
+		
 		p.stateMu.Lock()
 		p.contextStats = &stats
 		// Try to display context if both state and stats are available
 		if p.contextState != nil {
-			p.showContext(p.contextState, p.contextStats)
+			stateCopy = p.contextState
+			statsCopy = p.contextStats
 			p.contextState = nil
 			p.contextStats = nil
 		}
 		p.stateMu.Unlock()
+		
+		if stateCopy != nil && statsCopy != nil {
+			p.showContext(stateCopy, statsCopy)
+		}
 		return
 	}
 
