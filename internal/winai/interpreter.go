@@ -1031,8 +1031,6 @@ func (p *AiInterpreter) handleShow(args string, fromControl bool) error {
 		p.showSettings(fromControl)
 	case "pipeline":
 		p.showPipeline(fromControl)
-	case "usage":
-		p.writeStatusMaybeDefer(fromControl, "ai: /show usage has been integrated into /context - use /context instead")
 	default:
 		p.writeStatusMaybeDefer(fromControl, "ai: usage: /show settings|pipeline")
 	}
@@ -1253,9 +1251,20 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 		tokensMax = 200000
 	}
 
-	tokensUsed := stats.Tokens.Total
+	// Use active window tokens for percentage display (aligns with runtime_state)
+	tokensUsed := stats.Tokens.ActiveWindowTokens
 	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
 	freeTokens := tokensMax - tokensUsed
+
+	// Use breakdown data from RPC response
+	systemPromptTokens := stats.Tokens.SystemPromptTokens
+	systemToolsTokens := stats.Tokens.SystemToolsTokens
+
+	// Messages = ActiveWindow - SystemPrompt - SystemTools
+	messagesTokens := tokensUsed - systemPromptTokens - systemToolsTokens
+	if messagesTokens < 0 {
+		messagesTokens = 0
+	}
 
 	totalBars := 30
 	usedBars := int(float64(totalBars) * float64(tokensUsed) / float64(tokensMax))
@@ -1276,13 +1285,14 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 	p.writeStatus(fmt.Sprintf("%s  %s - %dk/%dk tokens (%.0f%%)",
 		barBuilder.String(), modelName, tokensUsed, tokensMax, tokensPercent))
 
-	p.writeStatus(fmt.Sprintf("     System prompt: ~%dk tokens", tokensUsed/10))
-	p.writeStatus(fmt.Sprintf("     System tools: ~%dk tokens", tokensUsed*6/10))
-	p.writeStatus(fmt.Sprintf("     Messages: ~%dk tokens", tokensUsed - tokensUsed/10 - tokensUsed*6/10))
+	p.writeStatus(fmt.Sprintf("     System prompt: ~%dk tokens (%.1f%%)", systemPromptTokens/1024, float64(systemPromptTokens)/float64(tokensMax)*100))
+	p.writeStatus(fmt.Sprintf("     System tools: ~%dk tokens (%.1f%%)", systemToolsTokens/1024, float64(systemToolsTokens)/float64(tokensMax)*100))
+	p.writeStatus(fmt.Sprintf("     Messages: ~%dk tokens (%.1f%%)", messagesTokens/1024, float64(messagesTokens)/float64(tokensMax)*100))
 	p.writeStatus(fmt.Sprintf("     Free space: %dk (%.1f%%)",
-		freeTokens,
+		freeTokens/1024,
 		float64(freeTokens)/float64(tokensMax)*100,
 	))
+	p.writeStatus(fmt.Sprintf("     (Breakdowns are estimates based on string length)"))
 
 	p.writeStatus(fmt.Sprintf(""))
 	p.writeStatus(fmt.Sprintf(" Session Stats"))
@@ -1297,6 +1307,7 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 	p.writeStatus(fmt.Sprintf(""))
 	p.writeStatus(fmt.Sprintf(" Model: %s", modelName))
 	p.writeStatus(fmt.Sprintf(" Context window: %dk tokens", tokensMax))
+	p.writeStatus(fmt.Sprintf(" Session total: %dk tokens (all turns)", stats.Tokens.Total/1024))
 	p.writeStatus(fmt.Sprintf(" Streaming: %s", onOff(state.IsStreaming)))
 }
 
@@ -2731,45 +2742,30 @@ func (p *AiInterpreter) reportStatePing(info stateRequestInfo, state *rpc.Sessio
 }
 
 func (p *AiInterpreter) handleSessionStats(data json.RawMessage) {
-	// Check if this is for /context command
-	p.stateMu.Lock()
-	var contextInfo *stateRequestInfo
-	for id, info := range p.pendingStateRequests {
-		if info.kind == "context" && info.show {
-			contextInfo = &info
-			delete(p.pendingStateRequests, id)
-			break
-		}
-	}
-	p.stateMu.Unlock()
-
 	var stats rpc.SessionStats
 	if err := json.Unmarshal(data, &stats); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid usage response: %v", err))
 		return
 	}
 
-	// If this is for /context command, store stats and try to display
-	if contextInfo != nil {
-		var stateCopy *rpc.SessionState
-		var statsCopy *rpc.SessionStats
-		
-		p.stateMu.Lock()
+	// Check if this is for /context command by checking if contextState is already set
+	// (get_state response arrives first, sets contextState, then get_session_stats arrives)
+	p.stateMu.Lock()
+	isContextCommand := (p.contextState != nil)
+	if isContextCommand {
 		p.contextStats = &stats
-		// Try to display context if both state and stats are available
-		if p.contextState != nil {
-			stateCopy = p.contextState
-			statsCopy = p.contextStats
-			p.contextState = nil
-			p.contextStats = nil
-		}
+		stateCopy := p.contextState
+		statsCopy := p.contextStats
+		p.contextState = nil
+		p.contextStats = nil
 		p.stateMu.Unlock()
-		
+
 		if stateCopy != nil && statsCopy != nil {
 			p.showContext(stateCopy, statsCopy)
 		}
 		return
 	}
+	p.stateMu.Unlock()
 
 	rateLine := "  token-rate: unavailable"
 	recentLine := "  token-rate-recent: unavailable"

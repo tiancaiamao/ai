@@ -1711,50 +1711,6 @@ func (a *AgentLoop) cmdShowSettings(sess *Session) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// cmdShowUsage shows usage statistics
-func (a *AgentLoop) cmdShowUsage() string {
-	var sb strings.Builder
-
-	sb.WriteString("Usage Statistics:\n")
-
-	// Message count
-	msgCount := a.messageCount.Load()
-	sb.WriteString(fmt.Sprintf("  Messages Processed: %d\n", msgCount))
-
-	// Token count
-	tokens := a.totalTokens.Load()
-	if tokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Total Tokens: %d\n", tokens))
-	}
-
-	// Uptime
-	uptime := time.Since(a.startTime)
-	sb.WriteString(fmt.Sprintf("  Uptime: %s\n", formatDuration(uptime)))
-
-	// Active sessions
-	a.sessionsMu.RLock()
-	sessionCount := len(a.sessions)
-	a.sessionsMu.RUnlock()
-	sb.WriteString(fmt.Sprintf("  Active Sessions: %d\n", sessionCount))
-
-	return strings.TrimSpace(sb.String())
-}
-
-// formatDuration formats a duration in a human-readable way
-func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return d.Round(time.Second).String()
-	}
-	if d < time.Hour {
-		minutes := int(d.Minutes())
-		seconds := int(d.Seconds()) % 60
-		return fmt.Sprintf("%dm %ds", minutes, seconds)
-	}
-	hours := int(d.Hours())
-	minutes := int(d.Minutes()) % 60
-	return fmt.Sprintf("%dh %dm", hours, minutes)
-}
-
 // ensureTraceHandler ensures that a trace handler is initialized if not already set.
 // This allows trace events to be captured even when -trace flag was not used at startup.
 func ensureTraceHandler() {
