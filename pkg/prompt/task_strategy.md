@@ -40,7 +40,7 @@ Task Request
     │           /skill:auto-execute
     │
     └─ Conversation revealed clear task?
-        └─ Yes → Use llm_context_update (task tracking)
+        └─ Yes → Use task_tracking
                      ↓
                  /skill:speckit (create tasks.md)
                      ↓

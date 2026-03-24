@@ -36,10 +36,10 @@ type Config struct {
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 
-	// Task tracking (llm_context_update)
+	// Task tracking (task_tracking)
 	TaskTracking bool `json:"taskTracking"`
 
-	// Context management (llm_context_decision)
+	// Context management (context_management)
 	ContextManagement bool `json:"contextManagement"`
 
 	// Workspace is the working directory path (the git repo path bound at startup)

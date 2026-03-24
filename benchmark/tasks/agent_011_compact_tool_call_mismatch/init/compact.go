@@ -110,7 +110,7 @@ func traceShowsCompactThenMismatch(path string) (bool, error) {
 	compactTS := -1.0
 	for _, ev := range doc.TraceEvents {
 		if ev.Name == "tool_start" {
-			if stringArg(ev.Args, "tool") != "llm_context_decision" {
+			if stringArg(ev.Args, "tool") != "context_management" {
 				continue
 			}
 			if inner, ok := ev.Args["args"].(map[string]any); ok {

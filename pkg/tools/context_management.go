@@ -10,25 +10,25 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// LLMContextDecisionTool allows LLM to declare context management decisions.
-type LLMContextDecisionTool struct {
+// ContextManagementTool allows LLM to declare context management decisions.
+type ContextManagementTool struct {
 	compactor agentctx.Compactor
 }
 
-// NewLLMContextDecisionTool creates a new llm_context_decision tool.
-func NewLLMContextDecisionTool(compactor agentctx.Compactor) *LLMContextDecisionTool {
-	return &LLMContextDecisionTool{
+// NewContextManagementTool creates a new context_management tool.
+func NewContextManagementTool(compactor agentctx.Compactor) *ContextManagementTool {
+	return &ContextManagementTool{
 		compactor: compactor,
 	}
 }
 
 // Name returns the tool name.
-func (t *LLMContextDecisionTool) Name() string {
-	return "llm_context_decision"
+func (t *ContextManagementTool) Name() string {
+	return "context_management"
 }
 
 // Description returns tool description.
-func (t *LLMContextDecisionTool) Description() string {
+func (t *ContextManagementTool) Description() string {
 	return `Declare your context management decision. Call this tool when you need to manage context.
 
 IMPORTANT: This tool is for CONTEXT MANAGEMENT only. Use it to:
@@ -71,7 +71,7 @@ Returns: Confirmation of action taken, with details on what was done.`
 }
 
 // Parameters returns the tool parameter schema.
-func (t *LLMContextDecisionTool) Parameters() map[string]any {
+func (t *ContextManagementTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -107,7 +107,7 @@ func (t *LLMContextDecisionTool) Parameters() map[string]any {
 }
 
 // Execute runs the tool.
-func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
+func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	// Get agent context from context
 	agentCtx := agentctx.ToolExecutionAgentContext(ctx)
 	if agentCtx == nil {
@@ -285,7 +285,7 @@ func (t *LLMContextDecisionTool) Execute(ctx context.Context, params map[string]
 }
 
 // processTruncate truncates the specified tool outputs.
-func (t *LLMContextDecisionTool) processTruncate(ctx context.Context, agentCtx *agentctx.AgentContext, idsToTruncate []string) int {
+func (t *ContextManagementTool) processTruncate(ctx context.Context, agentCtx *agentctx.AgentContext, idsToTruncate []string) int {
 	truncatedCount := 0
 
 	for i := range agentCtx.Messages {
@@ -339,7 +339,7 @@ func (t *LLMContextDecisionTool) processTruncate(ctx context.Context, agentCtx *
 }
 
 // shouldTruncate checks whether a tool_call_id is in the list.
-func (t *LLMContextDecisionTool) shouldTruncate(toolCallID string, idsToTruncate []string) bool {
+func (t *ContextManagementTool) shouldTruncate(toolCallID string, idsToTruncate []string) bool {
 	for _, id := range idsToTruncate {
 		if strings.EqualFold(toolCallID, id) {
 			return true
@@ -350,8 +350,8 @@ func (t *LLMContextDecisionTool) shouldTruncate(toolCallID string, idsToTruncate
 
 // filterAlreadyTruncated filters out already truncated tool call IDs from the provided IDs.
 // This prevents LLM from trying to truncate the same tool output multiple times.
-// Also protects the latest llm_context_update from being truncated.
-func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
+// Also protects the latest task_tracking from being truncated.
+func (t *ContextManagementTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
 	if rawIDs == nil {
 		return nil
 	}
@@ -383,19 +383,19 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 		return nil
 	}
 
-	// Find the latest llm_context_update tool call ID to protect
-	protectedID := findLatestToolCall(agentCtx.Messages, "llm_context_update")
+	// Find the latest task_tracking tool call ID to protect
+	protectedID := findLatestToolCall(agentCtx.Messages, "task_tracking")
 	if protectedID != "" {
-		slog.Debug("[LLMContextDecision] Protecting latest llm_context_update from truncate",
+		slog.Debug("[ContextManagement] Protecting latest task_tracking from truncate",
 			"tool_call_id", protectedID)
 	}
 
 	// Filter out IDs that are already truncated or protected
 	var filteredIDs []string
 	for _, id := range idsToFilter {
-		// Check if this is the protected llm_context_update
+		// Check if this is the protected task_tracking
 		if protectedID != "" && strings.EqualFold(id, protectedID) {
-			slog.Debug("[LLMContextDecision] Skipping protected llm_context_update ID",
+			slog.Debug("[ContextManagement] Skipping protected task_tracking ID",
 				"tool_call_id", id)
 			continue
 		}
@@ -410,7 +410,7 @@ func (t *LLMContextDecisionTool) filterAlreadyTruncated(ctx context.Context, age
 				// Found the tool output, check if it's already truncated
 				if agentctx.IsTruncatedAgentToolTag(msg.ExtractText()) {
 					alreadyTruncated = true
-					slog.Debug("[LLMContextDecision] Skipping already truncated ID",
+					slog.Debug("[ContextManagement] Skipping already truncated ID",
 						"tool_call_id", id)
 				}
 				break

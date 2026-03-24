@@ -79,9 +79,9 @@ func collectStaleToolOutputStats(messages []agentctx.AgentMessage, keepRecent in
 
 	protected := protectedRecentToolResultIndexes(messages, keepRecent)
 	
-	// Also protect the latest llm_context_update from being marked as stale
+	// Also protect the latest task_tracking from being marked as stale
 	// This ensures stale count matches what can actually be truncated
-	latestLLMContextUpdate := findLatestToolCallID(messages, "llm_context_update")
+	latestLLMContextUpdate := findLatestToolCallID(messages, "task_tracking")
 	
 	byTool := make(map[string]int)
 	staleCount := 0
@@ -99,7 +99,7 @@ func collectStaleToolOutputStats(messages []agentctx.AgentMessage, keepRecent in
 		if isTruncatedAgentToolTag(msg.ExtractText()) {
 			continue
 		}
-		// Skip the latest llm_context_update - it's needed for progress tracking
+		// Skip the latest task_tracking - it's needed for progress tracking
 		if latestLLMContextUpdate != "" && msg.ToolCallID == latestLLMContextUpdate {
 			continue
 		}
@@ -167,7 +167,7 @@ func buildToolOutputsSummary(messages []agentctx.AgentMessage) string {
 }
 
 // buildToolOutputsSummaryWithIDs returns summary and list of tool call IDs that can be truncated.
-// It excludes already truncated tool outputs and the latest llm_context_update.
+// It excludes already truncated tool outputs and the latest task_tracking.
 func buildToolOutputsSummaryWithIDs(messages []agentctx.AgentMessage) (string, []string) {
 	staleCount, byTool := collectStaleToolOutputStats(messages, recentToolResultsNoMetadata)
 	if staleCount == 0 || len(byTool) == 0 {
@@ -179,8 +179,8 @@ func buildToolOutputsSummaryWithIDs(messages []agentctx.AgentMessage) (string, [
 	lastUserIndex := findLastVisibleUserIndex(messages)
 	protected := protectedRecentToolResultIndexes(messages, recentToolResultsNoMetadata)
 	
-	// Also protect the latest llm_context_update
-	latestLLMContextUpdate := findLatestToolCallID(messages, "llm_context_update")
+	// Also protect the latest task_tracking
+	latestLLMContextUpdate := findLatestToolCallID(messages, "task_tracking")
 
 	for i, msg := range messages {
 		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
@@ -195,7 +195,7 @@ func buildToolOutputsSummaryWithIDs(messages []agentctx.AgentMessage) (string, [
 		if isTruncatedAgentToolTag(msg.ExtractText()) {
 			continue
 		}
-		// Skip the latest llm_context_update - it's needed for progress tracking
+		// Skip the latest task_tracking - it's needed for progress tracking
 		if latestLLMContextUpdate != "" && msg.ToolCallID == latestLLMContextUpdate {
 			continue
 		}

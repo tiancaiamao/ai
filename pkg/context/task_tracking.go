@@ -12,7 +12,7 @@ const (
 	minRoundsBeforeCheck     = 3
 )
 
-// TaskTrackingState manages the state for llm_context_update tool.
+// TaskTrackingState manages the state for task_tracking tool.
 // This tracks the agent's task tracking behavior and provides reminders.
 type TaskTrackingState struct {
 	mu sync.RWMutex
@@ -99,7 +99,7 @@ func (t *TaskTrackingState) GetReminderUserMessage() string {
 
 💡 Remember to update your llm context to track progress.
 
-Use llm_context_update tool with:
+Use task_tracking tool with:
 - content: markdown with current task, decisions, progress
 - skip: true if no significant change (just answering questions)
 
@@ -109,8 +109,8 @@ Why this matters:
 - Skip when inactive → more reminders (penalty)
 
 Pattern:
-1. Task changed → llm_context_update with content
-2. No change but active → llm_context_update with skip=true + reasoning
+1. Task changed → task_tracking with content
+2. No change but active → task_tracking with skip=true + reasoning
 3. Neither → You get frequent reminders (bad)
 </agent:remind>`
 }
@@ -165,7 +165,7 @@ func (t *TaskTrackingState) SetWasReminded() {
 	t.wasRemindedLastRound = true
 }
 
-// GetUpdateStats returns statistics about llm_context_update tool calls.
+// GetUpdateStats returns statistics about task_tracking tool calls.
 func (t *TaskTrackingState) GetUpdateStats() UpdateStats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

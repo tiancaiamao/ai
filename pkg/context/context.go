@@ -22,7 +22,7 @@ type AgentContext struct {
 	// LLMContext is the agent's llm context file manager.
 	LLMContext *LLMContext `json:"-"`
 
-	// TaskTrackingState tracks llm_context_update behavior for reminders.
+	// TaskTrackingState tracks task_tracking behavior for reminders.
 	TaskTrackingState *TaskTrackingState `json:"-"`
 
 	// Runtime meta snapshot state for stable system-tail injection.
@@ -61,13 +61,13 @@ type ContextMgmtState struct {
 	LastReminderTurn    int    // Turn number of last reminder shown
 	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
 
-	// Decision reminder state (independent from llm_context_update reminder)
+	// Decision reminder state (independent from task_tracking reminder)
 	DecisionPressureTurns int // Consecutive turns under decision pressure
 	LastPressureTurn      int // Last turn when pressure was observed
 
 	// Compliance tracking
 	ReminderShownThisTurn bool // Was reminder shown in current turn?
-	DecisionMadeThisTurn  bool // Did LLM call llm_context_decision this turn?
+	DecisionMadeThisTurn  bool // Did LLM call context_management this turn?
 }
 
 const (
@@ -102,7 +102,7 @@ func (s *ContextMgmtState) MarkReminderShown() {
 	s.ReminderShownThisTurn = true
 }
 
-// MarkDecisionMade marks that LLM called llm_context_decision this turn.
+// MarkDecisionMade marks that LLM called context_management this turn.
 // It also resets pressure counters and adjusts reminder frequency for proactive behavior.
 func (s *ContextMgmtState) MarkDecisionMade() {
 	if s == nil {
@@ -141,7 +141,7 @@ func (s *ContextMgmtState) ResetTurnTracking() {
 }
 
 // CheckAndApplyCompliance checks if LLM complied with the protocol when reminder was shown.
-// If reminder was shown but LLM didn't call llm_context_decision, apply penalty.
+// If reminder was shown but LLM didn't call context_management, apply penalty.
 func (s *ContextMgmtState) CheckAndApplyCompliance() {
 	if s == nil {
 		return
@@ -259,7 +259,7 @@ func (s *ContextMgmtState) RecordReminder(turn int, urgency string) {
 	s.MarkReminderShown()
 }
 
-// DecisionPressureRequired reports whether llm_context_decision should be considered.
+// DecisionPressureRequired reports whether context_management should be considered.
 func DecisionPressureRequired(tokensPercent float64, staleToolOutputs int) bool {
 	return (tokensPercent >= decisionPressureTokensWithStale && staleToolOutputs > 0) ||
 		tokensPercent >= decisionPressureTokensOnly ||
@@ -281,7 +281,7 @@ func DecisionReminderUrgency(tokensPercent float64, staleToolOutputs int) string
 }
 
 // ShouldShowDecisionReminder evaluates decision pressure and decides whether to remind this turn.
-// This logic is independent from llm_context_update reminder state.
+// This logic is independent from task_tracking reminder state.
 func (s *ContextMgmtState) ShouldShowDecisionReminder(turn int, tokensPercent float64, staleToolOutputs int) (bool, string) {
 	if s == nil {
 		return false, "none"
