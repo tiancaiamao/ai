@@ -33,7 +33,7 @@ func TestStreamLLMEmitsDoneOnBareDoneFrame(t *testing.T) {
 		},
 	}
 
-	stream := StreamLLM(context.Background(), model, llmCtx, "test-key")
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
 
 	var sawDone bool
 	for item := range stream.Iterator(context.Background()) {
@@ -82,7 +82,7 @@ func TestStreamLLMHandlesLargeSSELine(t *testing.T) {
 		},
 	}
 
-	stream := StreamLLM(context.Background(), model, llmCtx, "test-key")
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
 
 	var doneContent string
 	for item := range stream.Iterator(context.Background()) {

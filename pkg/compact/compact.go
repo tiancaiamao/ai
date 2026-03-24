@@ -299,7 +299,8 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 	}
 
 	ctx := context.Background()
-	llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey)
+	// Use 0 for chunk timeout to use defaults - compaction is less latency-sensitive
+	llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, 0)
 
 	var summary strings.Builder
 	for event := range llmStream.Iterator(ctx) {
