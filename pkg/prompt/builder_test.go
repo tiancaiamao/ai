@@ -83,15 +83,12 @@ func TestBuilderWithTools(t *testing.T) {
 		t.Error("Tooling section missing")
 	}
 
-	if !contains(result, "read: Read files") {
-		t.Error("Tool 'read' missing from result")
+	// Check for tool guidelines instead of individual tool listings
+	if !contains(result, "bash") || !contains(result, "read/edit") || !contains(result, "write") {
+		t.Error("Tool usage guidelines missing")
 	}
 
-	if !contains(result, "write: Write files") {
-		t.Error("Tool 'write' missing from result")
-	}
-
-	if !contains(result, "Only use the tools listed above") {
+	if !contains(result, "Only use the tools listed in the tool schema") {
 		t.Error("Tool limitation warning missing")
 	}
 }

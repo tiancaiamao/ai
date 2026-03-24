@@ -251,13 +251,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Skill", "name", s.Name, "description", s.Description)
 	}
 
-	// Create agent with skills using structured prompt builder.
-	basePrompt := prompt.RPCBasePrompt()
-
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
 		// Use workspace to get dynamic cwd for each prompt build
-		promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
+		promptBuilder := prompt.NewBuilderWithWorkspace("", ws)
 		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
 		// Set llm context for system prompt explanation (tells LLM about the mechanism)

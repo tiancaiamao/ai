@@ -14,9 +14,6 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-//go:embed "base.md"
-var basePrompt string
-
 //go:embed "subagent_base.md"
 var subagentBasePrompt string
 
@@ -44,11 +41,6 @@ var taskTrackingPrompt string
 //go:embed "task_strategy.md"
 var taskStrategyPrompt string
 
-// RPCBasePrompt returns the base system prompt for interactive RPC mode.
-func RPCBasePrompt() string {
-	return basePrompt
-}
-
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a helpful coding assistant."
@@ -60,6 +52,11 @@ func HeadlessBasePrompt(isSubagent bool) string {
 		return subagentBasePrompt
 	}
 
+	return headlessBasePrompt
+}
+
+// RPCBasePrompt returns the base system prompt for RPC mode.
+func RPCBasePrompt() string {
 	return headlessBasePrompt
 }
 
@@ -285,15 +282,11 @@ Treat this directory as the single global workspace for file operations unless e
 	if !b.noWorkspace && !b.isSubagent {
 		taskStrategy = taskStrategyPrompt
 	}
-	result = strings.ReplaceAll(result, "%TASK_STRATEGY_CONTENT%", taskStrategy)
-
-	// Replace tools (required)
-	tools := b.buildToolsContent()
-	result = strings.ReplaceAll(result, "%TOOLS%", tools)
+	result = strings.ReplaceAll(result, "%TASK_EXECUTION_STRATEGY_CONTENT%", taskStrategy)
 
 	// Replace skills hint (optional, only shown if skills exist)
 	skillsHint := ""
-	if !b.minimal && len(b.skills) > 0 {
+	if !b.minimal && len(b.skills) > 0 && len(b.tools) > 0 {
 		skillsHint = "\n\nIf you need additional capabilities, check the available Skills below."
 	}
 	result = strings.ReplaceAll(result, "%SKILLS_HINT%", skillsHint)
@@ -318,18 +311,6 @@ Treat this directory as the single global workspace for file operations unless e
 	result = b.cleanupEmptySections(result)
 
 	return result
-}
-
-func (b *Builder) buildToolsContent() string {
-	if len(b.tools) == 0 {
-		return ""
-	}
-
-	lines := []string{}
-	for _, tool := range b.tools {
-		lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
-	}
-	return joinLines(lines)
 }
 
 func (b *Builder) buildTaskTrackingContent() string {

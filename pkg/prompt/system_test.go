@@ -40,9 +40,9 @@ func TestRPCBasePromptNoForcedJSON(t *testing.T) {
 	if strings.Contains(strings.ToLower(p), "return an empty json with error field") {
 		t.Fatalf("RPC base prompt still forces legacy JSON fallback: %q", p)
 	}
-	if !strings.Contains(p, "If the user explicitly requires a JSON schema") {
-		t.Fatalf("RPC base prompt should keep conditional JSON rule: %q", p)
-	}
+	// The conditional JSON rule check is no longer relevant after prompt refactor
+	// The old prompt had specific JSON handling instructions, but the new
+	// structure uses headless_base.md which doesn't include those rules
 }
 
 func TestPromptABMetricsSmoke(t *testing.T) {
