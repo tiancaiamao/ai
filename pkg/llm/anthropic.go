@@ -16,12 +16,13 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// StreamAnthropic streams a completion from the Anthropic Messages API.
+// StreamAnthropic streams a completion from Anthropic Messages API.
 func StreamAnthropic(
 	ctx context.Context,
 	model Model,
 	llmCtx LLMContext,
 	apiKey string,
+	chunkIntervalTimeout time.Duration, // Timeout between chunks
 ) *EventStream[LLMEvent, LLMMessage] {
 	stream := NewEventStream[LLMEvent, LLMMessage](
 		func(e LLMEvent) bool {
@@ -106,12 +107,34 @@ func StreamAnthropic(
 		partial := NewPartialMessage()
 		stream.Push(LLMStartEvent{Partial: partial})
 
+		// Set read deadline for chunk interval timeout
+		type deadliner interface {
+			SetReadDeadline(time.Time) error
+		}
+		if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
+			// Each scan should complete within chunkIntervalTimeout
+			dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+		}
+
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		chunkIndex := 0
 		lastUsage := Usage{}
 
 		for scanner.Scan() {
+			// Update read deadline for each chunk
+			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
+				dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+			}
+
+			// Check parent context cancellation
+			select {
+			case <-ctx.Done():
+				stream.Push(LLMErrorEvent{Error: ctx.Err()})
+				return
+			default:
+			}
+
 			line := scanner.Text()
 
 			// SSE format: "data: {...}"

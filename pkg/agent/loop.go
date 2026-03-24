@@ -30,6 +30,8 @@ const (
 	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
+	defaultLLMTotalTimeout             = 10 * time.Minute // Total timeout for LLM request
+	defaultLLMFirstResponseTimeout      = 2 * time.Minute  // Timeout between streaming chunks (2min)
 )
 
 type LoopConfig struct {
@@ -55,6 +57,8 @@ type LoopConfig struct {
 	ContextWindow           int           // Context window for the model (0=use default 128000)
 	TaskTrackingEnabled     bool          // Enable task tracking reminders (llm_context_update)
 	ContextManagementEnabled bool         // Enable context management reminders (llm_context_decision)
+	LLMTotalTimeout         time.Duration // Total timeout for LLM request (default 10min)
+	LLMFirstResponseTimeout  time.Duration // Timeout between streaming chunks (default 2min)
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -84,6 +88,8 @@ func DefaultLoopConfig() *LoopConfig {
 		ContextManagementEnabled:  true,
 		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
 		ToolOutput:                DefaultToolOutputLimits(),
+		LLMTotalTimeout:           defaultLLMTotalTimeout,
+		LLMFirstResponseTimeout:   defaultLLMFirstResponseTimeout,
 	}
 }
 
@@ -699,7 +705,10 @@ func streamAssistantResponse(
 	thinkingLevel := prompt.NormalizeThinkingLevel(config.ThinkingLevel)
 
 	// Create timeout context for LLM calls
-	llmTimeout := 120 * time.Second
+	llmTimeout := config.LLMTotalTimeout
+	if llmTimeout == 0 {
+		llmTimeout = defaultLLMTotalTimeout
+	}
 	llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
 	defer llmCancel()
 
@@ -852,7 +861,13 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-	llmStream := llm.StreamLLM(llmCtx, model, llmCtxParams, getEffectiveAPIKey(config))
+	llmStream := llm.StreamLLM(
+		llmCtx,
+		model,
+		llmCtxParams,
+		getEffectiveAPIKey(config),
+		config.LLMFirstResponseTimeout,
+	)
 
 	type toolCallState struct {
 		id        string
