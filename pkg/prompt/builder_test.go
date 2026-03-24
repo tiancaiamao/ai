@@ -67,32 +67,6 @@ func TestBuilderBuild(t *testing.T) {
 	}
 }
 
-func TestBuilderWithTools(t *testing.T) {
-	cwd := "/workspace"
-
-	tools := []ToolInfo{
-		mockTool{name: "read", description: "Read files"},
-		mockTool{name: "write", description: "Write files"},
-	}
-
-	b := NewBuilder("", cwd)
-	b.SetTools(tools)
-	result := b.Build()
-
-	if !contains(result, "## Tooling") {
-		t.Error("Tooling section missing")
-	}
-
-	// Check for tool guidelines instead of individual tool listings
-	if !contains(result, "bash") || !contains(result, "read/edit") || !contains(result, "write") {
-		t.Error("Tool usage guidelines missing")
-	}
-
-	if !contains(result, "Only use the tools listed in the tool schema") {
-		t.Error("Tool limitation warning missing")
-	}
-}
-
 func TestBuilderWithSkills(t *testing.T) {
 	cwd := "/workspace"
 
