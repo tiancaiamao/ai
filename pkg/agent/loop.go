@@ -1679,6 +1679,15 @@ func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.Co
 	}
 	state := agentCtx.ContextMgmtState
 
+	// Calculate reminders_remaining (turns until next reminder)
+	remindersRemaining := 0
+	if state.ReminderFrequency > 0 {
+		remindersRemaining = state.ReminderFrequency - (state.CurrentTurn - state.LastReminderTurn)
+		if remindersRemaining < 0 {
+			remindersRemaining = 0
+		}
+	}
+
 	// Build update metrics section
 	var updateMetrics string
 	if agentCtx.TaskTrackingState != nil {
@@ -1695,6 +1704,7 @@ context_metrics:
   decision:
     proactive: %d
     reminded: %d
+    reminders_remaining: %d
     score: %s`,
 				updateStats.Total,
 				updateStats.Autonomous,
@@ -1703,9 +1713,10 @@ context_metrics:
 				updateStats.Score,
 				state.ProactiveDecisions,
 				state.ReminderNeeded,
+				remindersRemaining,
 				state.GetScore())
 		} else {
-			updateMetrics = `
+			updateMetrics = fmt.Sprintf(`
 context_metrics:
   update:
     total: 0
@@ -1713,7 +1724,8 @@ context_metrics:
   decision:
     proactive: 0
     reminded: 0
-    score: no_data_yet`
+    reminders_remaining: %d
+    score: no_data_yet`, remindersRemaining)
 		}
 	}
 

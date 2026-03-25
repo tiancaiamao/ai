@@ -5,6 +5,9 @@
 ### Turn Protocol
 
 1. **Check** `<agent:runtime_state>` — Read telemetry YAML, assess pressure
+   - Check `compact_decision_signals.tokens_percent` for context pressure
+   - Check `proactive_score` for your compliance rating (excellent/good/fair/needs_improvement)
+   - Check `reminders_remaining` for turns until next reminder (lower = more urgent)
 2. **Manage** — Call `context_management` proactively if needed
 3. **Respond** — Answer the user
 

@@ -8,6 +8,66 @@ tools: [bash]
 
 使用 codex-rs 的 review 方法论执行代码审查。通过 subagent 运行专业的 review prompt。
 
+## ⚠️ 常见错误（开始前必读！）
+
+### 错误 1: tmux_wait.sh 参数错误
+
+```bash
+❌ 错误:   tmux_wait.sh "$SESSION_NAME" 900
+✅ 正确:   tmux_wait.sh "$SESSION_NAME" /tmp/subagent-output.txt 900
+
+原因: tmux_wait.sh 的第二个参数是 output-file（必需），不是 timeout。
+     现在 tmux_wait.sh 会检测这个常见错误并给出明确提示。
+```
+
+### 错误 2: 使用 sleep 等待
+
+```bash
+❌ 错误:   sleep 30 && tmux capture-pane ...
+✅ 正确:   tmux_wait.sh "$SESSION_NAME" /tmp/output.txt 30
+
+原因: sleep 会浪费时间（如果 subagent 3秒就完成，你等了27秒）。
+     tmux_wait.sh 通过 .done marker 立即检测完成。
+```
+
+### 错误 3: 串行执行而非并行
+
+```bash
+❌ 错误:   串行执行（慢）
+  SESSION=$(start_subagent_tmux.sh /tmp/out.txt 15m @reviewer.md "task")
+  SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+  tmux_wait.sh "$SESSION_NAME" /tmp/out.txt 900
+  # Subagent 需要时间
+  gh pr view $PR  # 本可以并行运行！
+
+✅ 正确:   并行执行（快）
+  SESSION=$(start_subagent_tmux.sh /tmp/out.txt 15m @reviewer.md "task")
+  SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+  # 在 subagent 运行时，立即做独立的工作
+  CI_STATUS=$(gh pr view $PR --json statusCheckRollup)
+  ERROR_LOG=$(gh run view $RUN_ID --log-failed)
+  tmux_wait.sh "$SESSION_NAME" /tmp/out.txt 900  # 只在这里等待
+
+节省时间: 如果 subagent 需要 60s + 其他工作 5s
+- 串行: 65s (60s 等待 + 5s 工作)
+- 并行: 60s (同时运行)
+```
+
+### 错误 4: subagent 失败后私自执行 review
+
+```bash
+❌ 错误:   subagent 失败后自己手动执行检查命令
+  # 这是被严格禁止的！违反了技能的约束。
+
+✅ 正确:   subagent 失败后向用户报告问题，提供选项
+  1) 增加超时时间重试
+  2) 简化 review 范围
+  3) 手动执行 review（需要用户明确授权）
+  4) 放弃 review
+
+参考技能文档中的 "Subagent 失败处理" 章节。
+```
+
 ## 使用方式
 
 ```

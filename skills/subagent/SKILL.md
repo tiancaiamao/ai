@@ -16,7 +16,7 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated t
    → sleep 30 wastes 27s if subagent finishes in 3s
 
 🔴 RULE 2: ALWAYS use tmux_wait.sh to wait for completion
-   → Correct: tmux_wait.sh "$SESSION" 600
+   → Correct: tmux_wait.sh "$SESSION" /tmp/output.txt 600
    → Wrong: sleep 30 && cat output.txt
    → Wrong: while [ ! -f done ]; do sleep 1; done
 
@@ -30,11 +30,69 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated t
    → Let subagents complete naturally
 
 🔴 RULE 6: Set bash timeout to match subagent timeout
-   → tmux_wait.sh respects the timeout you pass (e.g., 600s)
+   → tmux_wait.sh respects timeout you pass (e.g., 600s)
    → But bash tool has its own default (120s)
    → For tasks >2min: pass "timeout" parameter to the script call
    → Example: start_subagent_tmux.sh -w /tmp/out.txt 10m ... → timeout=660
    → The extra margin handles startup overhead
+```
+
+## Common Mistakes (Read Before Starting!)
+
+### Mistake 1: Using sleep to wait for subagent
+
+```bash
+❌ BAD:     sleep 30 && cat /tmp/output.txt
+✅ GOOD:    tmux_wait.sh "$SESSION_NAME" /tmp/output.txt 30
+
+Why: sleep wastes time if subagent finishes early (e.g., 3s). tmux_wait.sh
+detects completion immediately via .done marker.
+```
+
+### Mistake 2: Wrong tmux_wait.sh parameters (missing output-file)
+
+```bash
+❌ BAD:     tmux_wait.sh "$SESSION" 900
+✅ GOOD:    tmux_wait.sh "$SESSION" /tmp/output.txt 900
+
+Why: The second parameter is output-file (REQUIRED), not timeout. Passing 900
+treats it as a filename, causing confusion. The script now detects this common
+mistake and shows an error message.
+```
+
+### Mistake 3: Sequential instead of parallel execution
+
+```bash
+❌ BAD:     Sequential execution (slow)
+  SESSION=$(start_subagent_tmux.sh /tmp/out.txt 10m @persona.md "task")
+  SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+  tmux_wait.sh "$SESSION_NAME" /tmp/out.txt 600
+  # Subagent takes 60s to complete
+  gh pr view $PR  # This could have run in parallel!
+
+✅ GOOD:    Parallel execution (fast)
+  SESSION=$(start_subagent_tmux.sh /tmp/out.txt 10m @persona.md "task")
+  SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+  # Do independent work NOW while subagent runs
+  CI_STATUS=$(gh pr view $PR --json statusCheckRollup)
+  DIFF_SUMMARY=$(gh pr diff $PR | wc -l)
+  tmux_wait.sh "$SESSION_NAME" /tmp/out.txt 600  # Wait here only
+
+Time saved: If subagent takes 60s + other work 5s
+- Sequential: 65s total (60s wait + 5s work)
+- Parallel: 60s total (both run together)
+```
+
+### Mistake 4: Not checking context pressure before starting subagent
+
+```bash
+❌ BAD:     Start subagent without checking context
+  SESSION=$(start_subagent_tmux.sh ...)
+
+✅ GOOD:    Check context pressure first
+  # Before starting, check <agent:runtime_state>
+  # If tokens_percent >= 30%, call context_management first
+  # This prevents stale outputs accumulation during long subagent runs
 ```
 
 ## Correct Command Template
@@ -60,6 +118,90 @@ echo "Started subagent: $SESSION_NAME"
 # STEP 3: Collect results
 cat /tmp/subagent-output.txt
 ```
+
+## Parallel Execution Workflow (Best Practice)
+
+When you have a subagent + independent tasks, run them in parallel to save time:
+
+```bash
+# STEP 1: Start subagent (it runs in background)
+SESSION=$(start_subagent_tmux.sh /tmp/out.txt 10m @persona.md "task")
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+
+# STEP 2: Do independent work NOW (don't wait!)
+# These run in parallel with the subagent
+CI_STATUS=$(gh pr view $PR --json statusCheckRollup)
+DIFF_SUMMARY=$(gh pr diff $PR | wc -l)
+ERROR_LOG=$(gh run view $RUN_ID --log-failed)
+
+# STEP 3: Wait for subagent (only wait here)
+tmux_wait.sh "$SESSION_NAME" /tmp/out.txt 600
+
+# STEP 4: Process results together
+RESULT=$(cat /tmp/review-result.json)
+echo "CI Status: $CI_STATUS"
+echo "Diff: $DIFF_SUMMARY lines"
+echo "Review Result: $RESULT"
+```
+
+**Example Scenario: PR Review + CI Check**
+
+```bash
+# Start review subagent
+cat > /tmp/task.txt << 'EOF'
+Review PR #74. Focus on:
+- Build errors
+- Logic correctness
+- Security issues
+Write result to /tmp/review-74.json
+EOF
+
+SESSION=$(start_subagent_tmux.sh \
+  /tmp/subagent-output.txt \
+  15m \
+  @reviewer.md \
+  "Read task from /tmp/task.txt and follow instructions")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+
+# Parallel: Check CI status while review runs
+PR_INFO=$(gh pr view 74 --json statusCheckRollup,title,headRefName)
+BUILD_FAILURES=$(gh run view 23499957836 --log-failed | head -50)
+
+# Now wait for review to complete
+tmux_wait.sh "$SESSION_NAME" /tmp/subagent-output.txt 900
+
+# Process both results together
+REVIEW=$(cat /tmp/review-74.json)
+echo "PR: $PR_INFO"
+echo "Build Errors: $BUILD_FAILURES"
+echo "Review: $REVIEW"
+```
+
+**Time Savings**:
+
+| Task | Duration |
+|------|----------|
+| Subagent review | 60s |
+| CI check | 5s |
+| Diff analysis | 3s |
+| **Total (sequential)** | **68s** |
+| **Total (parallel)** | **60s** |
+
+Saved 8s (12%) by running independent work in parallel!
+
+**When to use parallel execution**:
+
+- ✅ Subagent + gh pr view/gh run view (GitHub CLI calls)
+- ✅ Subagent + file reading/analysis
+- ✅ Subagent + git operations (git diff, git log)
+- ✅ Multiple subagents (completely independent tasks)
+
+**When NOT to use parallel execution**:
+
+- ❌ Dependent tasks (need subagent result first)
+- ❌ Heavy computation (would compete for resources)
+- ❌ Tasks that modify the same files
 
 ## One-Liner with -w Flag
 

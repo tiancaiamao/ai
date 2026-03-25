@@ -34,6 +34,26 @@ if [ -z "$SESSION_NAME" ] || [ -z "$OUTPUT_FILE" ]; then
     exit 2
 fi
 
+# Detect common mistake: passing timeout as second argument instead of output-file
+# Example of the mistake: tmux_wait.sh "$SESSION" 900
+if [ -z "$3" ] && [[ "$OUTPUT_FILE" =~ ^[0-9]+$ ]]; then
+    echo "⚠️  ERROR: Common mistake detected!" >&2
+    echo "" >&2
+    echo "You wrote: tmux_wait.sh \"$SESSION_NAME\" \"$OUTPUT_FILE\"" >&2
+    echo "" >&2
+    echo "But this treats \"$OUTPUT_FILE\" as output-file, not timeout!" >&2
+    echo "The number $OUTPUT_FILE is likely your intended timeout value." >&2
+    echo "" >&2
+    echo "Correct usage:" >&2
+    echo "  tmux_wait.sh <session-name> <output-file> [timeout]" >&2
+    echo "" >&2
+    echo "Example:" >&2
+    echo "  tmux_wait.sh \"$SESSION_NAME\" /tmp/subagent-output.txt \"$OUTPUT_FILE\"" >&2
+    echo "" >&2
+    echo "Notice: output-file is a REQUIRED parameter (not optional)." >&2
+    exit 2
+fi
+
 if ! command -v tmux &> /dev/null; then
     echo "Error: tmux is not installed" >&2
     exit 2
