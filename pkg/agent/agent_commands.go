@@ -18,12 +18,26 @@ func (a *Agent) processCommand(ctx context.Context, message string) (bool, error
 
 	// Handle command
 	if a.commands == nil {
+		// Send error feedback to user
+		errorMsg := agentctx.NewAssistantMessage()
+		errorMsg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "Command registry not initialized"}}
+		a.emitEvent(NewMessageStartEvent(errorMsg))
+		a.emitEvent(NewMessageEndEvent(errorMsg))
+		a.emitEvent(NewTurnEndEvent(nil, nil))
+		a.emitEvent(NewAgentEndEvent(nil)) // Nil means don't replace session history
 		return true, fmt.Errorf("command registry not initialized")
 	}
 
 	// Parse command: /name args
 	parts := strings.Fields(strings.TrimPrefix(trimmed, "/"))
 	if len(parts) == 0 {
+		// Send error feedback to user
+		errorMsg := agentctx.NewAssistantMessage()
+		errorMsg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "Invalid command format"}}
+		a.emitEvent(NewMessageStartEvent(errorMsg))
+		a.emitEvent(NewMessageEndEvent(errorMsg))
+		a.emitEvent(NewTurnEndEvent(nil, nil))
+		a.emitEvent(NewAgentEndEvent(nil)) // Nil means don't replace session history
 		return true, fmt.Errorf("invalid command format")
 	}
 	name := parts[0]
@@ -40,15 +54,23 @@ func (a *Agent) processCommand(ctx context.Context, message string) (bool, error
 		"", // sessionKey - to be added in Task 7
 	)
 	if err != nil {
+		// Send error feedback to user instead of silent failure
+		errorMsg := agentctx.NewAssistantMessage()
+		errorMsg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Command error: %v", err)}}
+		a.emitEvent(NewMessageStartEvent(errorMsg))
+		a.emitEvent(NewMessageEndEvent(errorMsg))
+		a.emitEvent(NewTurnEndEvent(nil, nil))
+		a.emitEvent(NewAgentEndEvent(nil)) // Nil means don't replace session history
 		return true, err
 	}
 
-	// Emit command response as a system message
-	cmdMsg := agentctx.NewUserMessage(response)
+	// Emit command response as assistant message (not user message)
+	cmdMsg := agentctx.NewAssistantMessage()
+	cmdMsg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: response}}
 	a.emitEvent(NewMessageStartEvent(cmdMsg))
 	a.emitEvent(NewMessageEndEvent(cmdMsg))
 	a.emitEvent(NewTurnEndEvent(nil, nil))
-	a.emitEvent(NewAgentEndEvent([]agentctx.AgentMessage{cmdMsg}))
+	a.emitEvent(NewAgentEndEvent(nil)) // Nil means don't replace session history
 
 	return true, nil
 }
