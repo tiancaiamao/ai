@@ -80,6 +80,7 @@ type Agent struct {
 	traceDone      chan struct{}
 	shutdownOnce   sync.Once
 	traceSeq       atomic.Uint64
+	commands       *CommandRegistry // Command registry for handling /commands
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -134,6 +135,9 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 		cfg.ToolOutput = DefaultToolOutputLimits()
 	}
 
+	// Initialize command registry
+	commands := NewCommandRegistry()
+
 	a := &Agent{
 		mu:           make(chan struct{}, 1),
 		model:        model,
@@ -146,8 +150,13 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 		traceBuf:     traceBuf,
 		traceStop:    make(chan struct{}),
 		traceDone:    make(chan struct{}),
+		commands:    commands,
 		LoopConfig:   *cfg, // Embedded LoopConfig with applied options
 	}
+
+	// Register built-in commands
+	registerBuiltinCommands(a)
+	registerAdditionalCommands(a)
 
 	// Set GetModel callback to enable dynamic model switching during loop execution.
 	// This allows the loop to get the current model value after SetModel() is called.
@@ -211,6 +220,15 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 	a.rotateTraceForPrompt(ctx)
 	defer a.finalizeTraceForPrompt(ctx)
+
+	// Check for command prefix - handle commands before normal processing
+	isCommand, cmdErr := a.processCommand(ctx, message)
+	if isCommand {
+		if cmdErr != nil {
+			slog.Error("[Agent] Command error", "error", cmdErr)
+		}
+		return // Command handled, exit early
+	}
 
 	// Create span for prompt processing - auto-records begin/end
 	span := traceevent.StartSpan(ctx, "prompt", traceevent.CategoryEvent,

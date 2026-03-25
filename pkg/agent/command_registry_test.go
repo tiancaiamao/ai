@@ -1,0 +1,155 @@
+package agent
+
+import (
+	"context"
+	"sync"
+	"testing"
+)
+
+func TestCommandRegistry_RegisterAndGet(t *testing.T) {
+	registry := NewCommandRegistry()
+	ctx := context.Background()
+	agent := &Agent{}
+	sessionKey := "test-session"
+
+	handler := func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
+		return "hello " + args, nil
+	}
+
+	// Test Register
+	registry.Register("test", "test command", handler)
+
+	// Test Get
+	h, exists := registry.Get("test")
+	if !exists {
+		t.Fatalf("expected command to exist")
+	}
+
+	result, err := h(ctx, agent, sessionKey, "world")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "hello world" {
+		t.Fatalf("expected 'hello world', got '%s'", result)
+	}
+}
+
+func TestCommandRegistry_List(t *testing.T) {
+	registry := NewCommandRegistry()
+
+	registry.Register("cmd1", "command 1", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+	registry.Register("cmd2", "command 2", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+	registry.Register("cmd3", "command 3", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+
+	list := registry.List()
+	if len(list) != 3 {
+		t.Fatalf("expected 3 commands, got %d", len(list))
+	}
+
+	// Check that all commands are present
+	cmdMap := make(map[string]bool)
+	for _, cmd := range list {
+		cmdMap[cmd] = true
+	}
+
+	for _, cmd := range []string{"cmd1", "cmd2", "cmd3"} {
+		if !cmdMap[cmd] {
+			t.Fatalf("expected command %s to be in list", cmd)
+		}
+	}
+}
+
+func TestCommandRegistry_ListDescriptors(t *testing.T) {
+	registry := NewCommandRegistry()
+
+	registry.Register("help", "Show help", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+	registry.Register("clear", "Clear context", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+
+	descriptors := registry.ListDescriptors()
+	if len(descriptors) != 2 {
+		t.Fatalf("expected 2 descriptors, got %d", len(descriptors))
+	}
+
+	// Check descriptor content
+	descMap := make(map[string]CommandDescriptor)
+	for _, desc := range descriptors {
+		descMap[desc.Name] = desc
+	}
+
+	if descMap["help"].Description != "Show help" {
+		t.Fatalf("unexpected description for help: %s", descMap["help"].Description)
+	}
+	if descMap["clear"].Description != "Clear context" {
+		t.Fatalf("unexpected description for clear: %s", descMap["clear"].Description)
+	}
+}
+
+func TestCommandRegistry_HandleCommand(t *testing.T) {
+	registry := NewCommandRegistry()
+	ctx := context.Background()
+	agent := &Agent{}
+	sessionKey := "test-session"
+
+	handler := func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
+		return "result: " + args, nil
+	}
+
+	registry.Register("test", "test command", handler)
+
+	result, err := registry.HandleCommand(ctx, "test", "arg1", agent, sessionKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "result: arg1" {
+		t.Fatalf("unexpected result: %s", result)
+	}
+}
+
+func TestCommandRegistry_HandleCommand_NotFound(t *testing.T) {
+	registry := NewCommandRegistry()
+	ctx := context.Background()
+	agent := &Agent{}
+	sessionKey := "test-session"
+
+	_, err := registry.HandleCommand(ctx, "nonexistent", "args", agent, sessionKey)
+	if err == nil {
+		t.Fatalf("expected error for nonexistent command")
+	}
+}
+
+func TestCommandRegistry_ConcurrentAccess(t *testing.T) {
+	registry := NewCommandRegistry()
+
+	var wg sync.WaitGroup
+	numGoroutines := 100
+
+	// Concurrent writes
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := "cmd" + string(rune(i))
+			registry.Register(name, "test", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) {
+				return "", nil
+			})
+		}(i)
+	}
+
+	// Concurrent reads
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			registry.List()
+			registry.ListDescriptors()
+		}()
+	}
+
+	wg.Wait()
+
+	// Verify that all commands are registered (at least some)
+	list := registry.List()
+	if len(list) < numGoroutines/2 {
+		t.Fatalf("expected at least %d commands to be registered, got %d", numGoroutines/2, len(list))
+	}
+}
