@@ -1649,7 +1649,6 @@ func (a *AgentLoop) cmdTraceevent(args string) string {
 //
 //	/show              - show settings (default)
 //	/show settings     - show current settings
-//	/show usage        - show usage statistics
 func (a *AgentLoop) cmdShow(args string, sess *Session) string {
 	args = strings.TrimSpace(args)
 
@@ -1657,11 +1656,7 @@ func (a *AgentLoop) cmdShow(args string, sess *Session) string {
 		return a.cmdShowSettings(sess)
 	}
 
-	if args == "usage" {
-		return a.cmdShowUsage()
-	}
-
-	return fmt.Sprintf("Unknown show command: %s\nUsage: /show [settings|usage]", args)
+	return fmt.Sprintf("Unknown show command: %s\nUsage: /show [settings]", args)
 }
 
 // cmdShowSettings shows current configuration settings
