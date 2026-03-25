@@ -420,7 +420,8 @@ func runInnerLoop(
 		// Update agentctx.LLMContext meta after successful LLM response
 		if agentCtx.LLMContext != nil && msg.Usage != nil {
 			// Use context window from config if available, otherwise use a default
-			tokensMax := 128000 // default context window
+			const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+			tokensMax := defaultContextWindow
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
@@ -752,11 +753,12 @@ func streamAssistantResponse(
 		}
 
 		// Refresh meta from approximate current context state.
-		tokensMax := 128000 // default context window
+		const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+		tokensMax := defaultContextWindow
 		if config.ContextWindow > 0 {
 			tokensMax = config.ContextWindow
 		}
-		tokensUsedApprox := estimateConversationTokens(agentCtx.Messages)
+		tokensUsedApprox := EstimateConversationTokens(agentCtx.Messages)
 		agentCtx.LLMContext.SetMeta(
 			tokensUsedApprox,
 			tokensMax,
@@ -1466,7 +1468,7 @@ func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []
 	start := len(visible)
 
 	for i := len(visible) - 1; i >= 0; i-- {
-		msgTokens := estimateMessageTokens(visible[i])
+		msgTokens := EstimateMessageTokens(visible[i])
 		if used+msgTokens > tokenBudget && start != len(visible) {
 			break
 		}
@@ -1490,10 +1492,11 @@ func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []
 	return result
 }
 
-func estimateConversationTokens(messages []agentctx.AgentMessage) int {
+// EstimateConversationTokens estimates token count for messages.
+func EstimateConversationTokens(messages []agentctx.AgentMessage) int {
 	total := 0
 	for _, msg := range messages {
-		total += estimateMessageTokens(msg)
+		total += EstimateMessageTokens(msg)
 	}
 	return total
 }
@@ -1921,8 +1924,8 @@ func normalizeApprox(value int) int {
 	return (value / 1000) * 1000
 }
 
-// estimateMessageTokens estimates token count for a message.
-func estimateMessageTokens(msg agentctx.AgentMessage) int {
+// EstimateMessageTokens estimates token count for a message.
+func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
 	}

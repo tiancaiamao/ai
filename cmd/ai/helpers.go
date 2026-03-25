@@ -464,6 +464,9 @@ func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, 
 	var tokens rpc.SessionTokenStats
 	var cost float64
 
+	// Track the last prompt tokens (includes system prompt + tools + conversation history)
+	var lastPromptTokens int
+
 	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
@@ -472,21 +475,26 @@ func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, 
 			assistantCount++
 			toolCalls += len(msg.ExtractToolCalls())
 			if msg.Usage != nil {
-				tokens.Input += msg.Usage.InputTokens
+				// Accumulate output tokens (these are always new)
 				tokens.Output += msg.Usage.OutputTokens
-				tokens.CacheRead += msg.Usage.CacheRead
-				tokens.CacheWrite += msg.Usage.CacheWrite
-				tokens.Total += msg.Usage.TotalTokens
 				cost += msg.Usage.Cost.Total
+
+				// Track last prompt tokens (includes system + tools + history)
+				if msg.Usage.InputTokens > 0 {
+					lastPromptTokens = msg.Usage.InputTokens
+				}
 			}
 		case "toolResult":
 			toolResults++
 		}
 	}
 
-	if tokens.Total == 0 {
-		tokens.Total = tokens.Input + tokens.Output + tokens.CacheRead + tokens.CacheWrite
-	}
+	// Calculate total tokens:
+	// - All output tokens (unique, no duplication)
+	// - Last prompt tokens (includes system prompt + tools + full conversation history)
+	// Note: Last prompt tokens already includes system prompt and tools, so we DON'T
+	// add them again here. The GetSessionStatsHandler will add estimates instead.
+	tokens.Total = tokens.Output + lastPromptTokens
 
 	return userCount, assistantCount, toolCalls, toolResults, tokens, cost
 }

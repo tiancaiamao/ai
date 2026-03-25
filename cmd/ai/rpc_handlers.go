@@ -1083,6 +1083,35 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Received get_session_stats")
 		messages := ag.GetMessages()
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
+
+		// Estimate system prompt and tools tokens for display purposes only
+		// Since Go doesn't have built-in tokenization, use character count approximation
+		// Approximately 1 token = 4 characters for text
+		const charsPerToken = 4
+
+		// Build fresh system prompt and get tools for estimation
+		currentSystemPrompt := buildSystemPrompt(sess)
+
+		// Estimate tokens from string lengths (for display only)
+		tokens.SystemPromptTokens = len(currentSystemPrompt) / charsPerToken
+
+		// Build tools JSON for estimation - use ToLLMTools to get serializable format
+		toolsJSON, err := json.Marshal(registry.ToLLMTools())
+		if err != nil {
+			slog.Error("Failed to marshal tools for token estimation", "error", err)
+		} else {
+			slog.Debug("Tools JSON for token estimation", "length", len(toolsJSON), "estimated_tokens", len(toolsJSON)/charsPerToken, "tool_count", len(registry.All()))
+			tokens.SystemToolsTokens = len(toolsJSON) / charsPerToken
+		}
+
+		// Calculate active window tokens (current conversation) for percentage display
+		// This aligns with runtime_state and represents what's actually sent to LLM
+		activeWindowTokens := agent.EstimateConversationTokens(messages)
+		tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
+
+		// Note: tokens.Total is cumulative across the entire session for cost tracking
+		// tokens.ActiveWindowTokens is the current active turn + system prompt + tools
+
 		stateMu.Lock()
 		currentSessionID := sessionID
 		stateMu.Unlock()
@@ -1094,7 +1123,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
 				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
 				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+				WallOutputPerSec:     llmMetrics.WallOutputTokensPerSec,
 				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
 				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
 				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
