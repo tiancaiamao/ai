@@ -535,6 +535,10 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		sess.Session.AppendMessage(*assistantMsg)
 	}
 
+	// 自动存储重要信息到 tiered-memory
+	// 在每次对话后，尝试提取并存储关键信息
+	a.storeToMemoryIfNeeded(ctx, msg.Content, result)
+
 	slog.Info("[AgentLoop] Response", "session_key", sessionKey, "length", len(result), "errors", len(agentErrors))
 	return result, nil
 }
@@ -1830,4 +1834,112 @@ func looksLikeMiniMaxReasoning(text string) bool {
 		}
 	}
 	return false
+}
+
+// storeToMemoryIfNeeded automatically stores important information to tiered-memory after each conversation.
+// It calls the tiered-memory Python CLI to distill and store the conversation.
+func (a *AgentLoop) storeToMemoryIfNeeded(ctx context.Context, userMsg, agentResp string) {
+	// Skip if messages are too short or not meaningful
+	if len(userMsg) < 10 || len(agentResp) < 10 {
+		return
+	}
+
+	// Skip if it looks like a simple greeting or command
+	lowerUserMsg := strings.ToLower(strings.TrimSpace(userMsg))
+	greetings := []string{"hi", "hello", "hey", "你好", "嗨"}
+	for _, g := range greetings {
+		if lowerUserMsg == g || strings.HasPrefix(lowerUserMsg, g+" ") {
+			return
+		}
+	}
+
+	// Skip commands (starting with /)
+	if strings.HasPrefix(strings.TrimSpace(userMsg), "/") {
+		return
+	}
+
+	// Build conversation text for distillation
+	conversationText := fmt.Sprintf("User: %s\n\nAgent: %s", userMsg, agentResp)
+
+	// Call tiered-memory Python CLI
+	// 1. Distill the conversation
+	// 2. Store to warm memory
+
+	// Find tiered-memory skill directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Debug("[Memory] Failed to get home directory", "error", err)
+		return
+	}
+
+	skillsDir := filepath.Join(homeDir, ".aiclaw", "skills")
+	memoryScript := filepath.Join(skillsDir, "tiered-memory", "scripts", "memory_cli.py")
+
+	// Check if tiered-memory skill exists
+	if _, err := os.Stat(memoryScript); os.IsNotExist(err) {
+		slog.Debug("[Memory] Tiered-memory skill not found", "path", memoryScript)
+		return
+	}
+
+	// Run distill + store in background (don't block the response)
+	go func() {
+		// Use a short timeout for memory operations
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Step 1: Distill conversation
+		distillCmd := exec.CommandContext(ctx, "python3", memoryScript, "distill",
+			"--text", conversationText,
+			"--mode", "rule") // Use rule-based mode for speed
+
+		distillOutput, err := distillCmd.CombinedOutput()
+		if err != nil {
+			slog.Debug("[Memory] Distill failed", "error", err, "output", string(distillOutput))
+			return
+		}
+
+		// Parse distill output
+		var distillResult struct {
+			Distilled struct {
+				Fact     string `json:"fact"`
+				Outcome  string `json:"outcome"`
+				Importance float64 `json:"importance,omitempty"`
+			} `json:"distilled"`
+		}
+
+		if err := json.Unmarshal(distillOutput, &distillResult); err != nil {
+			slog.Debug("[Memory] Failed to parse distill output", "error", err)
+			return
+		}
+
+		// Skip if no meaningful fact extracted
+		fact := strings.TrimSpace(distillResult.Distilled.Fact)
+		if fact == "" || len(fact) < 10 {
+			slog.Debug("[Memory] No meaningful fact extracted")
+			return
+		}
+
+		// Determine importance based on outcome
+		importance := 0.5
+		if strings.Contains(strings.ToLower(distillResult.Distilled.Outcome), "decision") {
+			importance = 0.7
+		}
+		if distillResult.Distilled.Importance > 0 {
+			importance = distillResult.Distilled.Importance
+		}
+
+		// Step 2: Store to warm memory
+		storeCmd := exec.CommandContext(ctx, "python3", memoryScript, "store",
+			"--text", fact,
+			"--category", "conversations",
+			"--importance", fmt.Sprintf("%.2f", importance))
+
+		storeOutput, err := storeCmd.CombinedOutput()
+		if err != nil {
+			slog.Debug("[Memory] Store failed", "error", err, "output", string(storeOutput))
+			return
+		}
+
+		slog.Info("[Memory] Stored conversation", "fact", truncate(fact, 80))
+	}()
 }
