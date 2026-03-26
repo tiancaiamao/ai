@@ -636,7 +636,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current model
+	// Get current model ID
 	currentModelID := ""
 	if model, ok := config["model"].(map[string]any); ok {
 		if id, ok := model["id"].(string); ok {
@@ -644,11 +644,15 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get model list
+	// Get model list and find the default model name
 	modelList := []map[string]any{}
+	defaultModelName := ""
 	if models, ok := config["model_list"].([]any); ok {
 		for i, m := range models {
 			if modelMap, ok := m.(map[string]any); ok {
+				modelID, _ := modelMap["model"].(string)
+				modelName, _ := modelMap["model_name"].(string)
+
 				modelInfo := map[string]any{
 					"index":       i,
 					"model_name":  modelMap["model_name"],
@@ -660,11 +664,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 				}
 
 				// Check if this is the current model
-				if modelName, ok := modelMap["model"].(string); ok {
-					// Match by model ID or model name
-					if modelName == currentModelID || strings.HasSuffix(modelName, currentModelID) {
-						modelInfo["is_default"] = true
-					}
+				if modelID == currentModelID || strings.HasSuffix(modelID, currentModelID) || strings.HasSuffix(currentModelID, modelID) {
+					modelInfo["is_default"] = true
+					defaultModelName = modelName
 				}
 
 				modelList = append(modelList, modelInfo)
@@ -675,7 +677,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"models":        modelList,
 		"total":         len(modelList),
-		"default_model": currentModelID,
+		"default_model": defaultModelName, // Return model_name instead of model ID
 	})
 }
 
