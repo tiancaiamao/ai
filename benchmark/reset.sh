@@ -2,6 +2,7 @@
 # Reset benchmark tasks to a clean state.
 # - Restores tracked files under tasks/ via git (if available)
 # - Removes untracked generated files under tasks/ via git clean
+# - Removes Python cache artifacts (__pycache__, .pytest_cache, *.egg-info)
 # - Re-applies init/ -> setup/ overlay when init exists
 # - Optional hard mode uses stronger clean to remove nested git repos in tasks
 
@@ -31,6 +32,17 @@ git_restore_path() {
     fi
 }
 
+# Remove Python cache artifacts that git clean might miss (ignored files)
+clean_python_cache() {
+    local task_dir="$1"
+    # Remove __pycache__, .pytest_cache, *.egg-info directories
+    find "$task_dir" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find "$task_dir" -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+    find "$task_dir" -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+    # Remove .pyc files
+    find "$task_dir" -type f -name "*.pyc" -delete 2>/dev/null || true
+}
+
 reset_task() {
     local task_id=$1
     local task_dir="$TASKS_DIR/$task_id"
@@ -41,16 +53,51 @@ reset_task() {
         return 0
     fi
 
-    # Restore tracked files and remove untracked files for this task.
-    git_restore_path "tasks/$task_id"
+    # Check if init_dir exists BEFORE git clean (which would remove untracked init/)
+    local has_init=0
+    if [ -d "$init_dir" ]; then
+        has_init=1
+    fi
 
-    if [ -d "$init_dir" ] && [ -d "$setup_dir" ]; then
-        # Overlay init files to ensure task starts from canonical initial state.
+    # Restore tracked files and remove untracked files ONLY for setup/ directory.
+    # We intentionally do NOT clean the entire task directory to preserve init/.
+    if is_git_repo; then
+        git -C "$BENCHMARK_DIR" restore --worktree --staged -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+        if [ "$HARD_MODE" -eq 1 ]; then
+            git -C "$BENCHMARK_DIR" clean -fffd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+        else
+            git -C "$BENCHMARK_DIR" clean -fd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Clean Python cache artifacts
+    clean_python_cache "$task_dir"
+
+    # Re-check init_dir after potential git operations
+    if [ "$has_init" -eq 1 ] && [ -d "$init_dir" ] && [ -d "$setup_dir" ]; then
+        # First, remove all files from setup/ to ensure clean slate
+        # (cp -a only adds, doesn't delete existing files)
+        rm -rf "$setup_dir"/*
+        rm -rf "$setup_dir"/.[!.]* 2>/dev/null || true
+        # Then overlay init files to ensure task starts from canonical initial state.
         cp -a "$init_dir"/. "$setup_dir"/ 2>/dev/null || true
         echo "✓ Reset $task_id (git clean + init overlay)"
     elif [ -d "$setup_dir" ]; then
         echo "✓ Reset $task_id (git clean)"
     fi
+}
+
+# Find all task directories with setup/ subdirectory
+find_all_task_dirs() {
+    # Use find to recursively locate all setup/ directories under tasks/
+    # Output the parent directory path relative to tasks/
+    find "$TASKS_DIR" -type d -name "setup" | while read -r setup_dir; do
+        local task_dir
+        task_dir=$(dirname "$setup_dir")
+        # Get relative path from tasks/ directory
+        local rel_path="${task_dir#$TASKS_DIR/}"
+        echo "$rel_path"
+    done | sort -u
 }
 
 if [ -n "$1" ]; then
@@ -65,12 +112,11 @@ else
     fi
     echo ""
 
-    for task_dir in "$TASKS_DIR"/*/; do
-        task_id=$(basename "$task_dir")
-        if [ -d "$task_dir/setup" ]; then
-            reset_task "$task_id"
-        fi
-    done
+    # Use find to get all task directories (including nested ones like tbench/*)
+    while IFS= read -r task_id; do
+        [ -z "$task_id" ] && continue
+        reset_task "$task_id"
+    done < <(find_all_task_dirs)
 
     echo ""
     if [ "$HARD_MODE" -eq 1 ]; then

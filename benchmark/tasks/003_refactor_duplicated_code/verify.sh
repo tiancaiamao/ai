@@ -33,14 +33,16 @@ lines=$(wc -l < main.go)
 if [ "$lines" -lt 60 ]; then
     echo "PASS: Code appears refactored ($lines lines)"
 else
-    echo "WARN: Code still seems long ($lines lines), consider more refactoring"
+    echo "FAIL: Code is too long ($lines lines), needs refactoring to under 60 lines"
+    exit 1
 fi
 
 # Test 4: Check that a helper function exists
 if grep -q "func.*[Vv]alid" main.go || grep -q "func.*[Cc]heck" main.go; then
     echo "PASS: Helper function detected"
 else
-    echo "WARN: No obvious helper function found"
+    echo "FAIL: No helper function found for validation"
+    exit 1
 fi
 
 echo "All tests passed!"
