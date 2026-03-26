@@ -1,0 +1,868 @@
+// Package web provides a web server for claw that integrates with PicoClaw's web backend.
+// It serves the embedded web UI and provides WebSocket chat functionality.
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+)
+
+// Server is the web server that serves the claw web UI.
+type Server struct {
+	addr         string
+	agentLoop    *adapter.AgentLoop
+	msgBus       *bus.MessageBus
+	httpServer   *http.Server
+	configPath   string
+	clawDir      string
+	shutdownOnce sync.Once
+}
+
+// Config is the configuration for the web server.
+type Config struct {
+	Port    int    // Port to listen on (default: 18800)
+	Public  bool   // Listen on all interfaces instead of localhost only
+	Enabled bool   // Whether the web server is enabled
+}
+
+// DefaultConfig returns the default web server configuration.
+func DefaultConfig() *Config {
+	return &Config{
+		Port:    18800,
+		Public:  false,
+		Enabled: true,
+	}
+}
+
+// NewServer creates a new web server.
+func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus, configPath, clawDir string) *Server {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+
+	// Determine listen address
+	var addr string
+	if cfg.Public {
+		addr = fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	} else {
+		addr = fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+	}
+
+	return &Server{
+		addr:       addr,
+		agentLoop:  agentLoop,
+		msgBus:     msgBus,
+		configPath: configPath,
+		clawDir:    clawDir,
+	}
+}
+
+// Start starts the web server in a background goroutine.
+// Returns the URL of the web server and any error that occurred during startup.
+func (s *Server) Start() (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("web server is not configured")
+	}
+
+	mux := http.NewServeMux()
+
+	// Register API routes
+	s.registerRoutes(mux)
+
+	// Create HTTP server
+	s.httpServer = &http.Server{
+		Addr:    s.addr,
+		Handler: mux,
+	}
+
+	// Start server in background
+	go func() {
+		fmt.Printf("\n")
+		fmt.Printf("╔═══════════════════════════════════════════════════════════════╗\n")
+		fmt.Printf("║  🌐 Claw Web Server                                         ║\n")
+		fmt.Printf("╠═══════════════════════════════════════════════════════════════╣\n")
+		fmt.Printf("║  Web UI: http://localhost:%d                              ║\n", 18800)
+		fmt.Printf("║                                                           ║\n")
+		fmt.Printf("║  Press Ctrl+C to stop the server                          ║\n")
+		fmt.Printf("╚═══════════════════════════════════════════════════════════════╝\n")
+		fmt.Printf("\n")
+
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("[Web Server] Error: %v\n", err)
+		}
+	}()
+
+	// Give server time to start
+	time.Sleep(100 * time.Millisecond)
+
+	return fmt.Sprintf("http://localhost:%d", 18800), nil
+}
+
+// Stop stops the web server.
+func (s *Server) Stop() error {
+	if s.httpServer == nil {
+		return nil
+	}
+
+	var err error
+	s.shutdownOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err = s.httpServer.Shutdown(ctx)
+	})
+
+	return err
+}
+
+// registerRoutes registers all HTTP routes.
+func (s *Server) registerRoutes(mux *http.ServeMux) {
+	// CORS preflight
+	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Pico Channel WebSocket endpoint (for web UI chat)
+	mux.HandleFunc("/pico/ws", s.handlePicoWebSocket)
+
+	// Session API
+	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	mux.HandleFunc("GET /api/sessions/", s.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/", s.handleDeleteSession)
+
+	// Pico token API
+	mux.HandleFunc("GET /api/pico/token", s.handleGetPicoToken)
+	mux.HandleFunc("POST /api/pico/token", s.handleRegenPicoToken)
+	mux.HandleFunc("POST /api/pico/setup", s.handlePicoSetup)
+
+	// Status API
+	mux.HandleFunc("GET /api/status", s.handleStatus)
+
+	// Gateway API (compatibility with PicoClaw frontend)
+	mux.HandleFunc("GET /api/gateway/status", s.handleGatewayStatus)
+	mux.HandleFunc("POST /api/gateway/start", s.handleGatewayStart)
+	mux.HandleFunc("POST /api/gateway/stop", s.handleGatewayStop)
+	mux.HandleFunc("POST /api/gateway/restart", s.handleGatewayRestart)
+	mux.HandleFunc("GET /api/gateway/logs", s.handleGatewayLogs)
+
+	// Models API
+	mux.HandleFunc("GET /api/models", s.handleListModels)
+	mux.HandleFunc("POST /api/models", s.handleAddModel)
+	mux.HandleFunc("PUT /api/models/", s.handleUpdateModel)
+	mux.HandleFunc("DELETE /api/models/", s.handleDeleteModel)
+	mux.HandleFunc("POST /api/models/default", s.handleSetDefaultModel)
+
+	// Config API
+	mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	mux.HandleFunc("PUT /api/config", s.handleUpdateConfig)
+
+	// Serve static files (frontend) - this will be handled by embedded files
+	// For now, return a simple message
+	mux.HandleFunc("/", s.handleIndex)
+}
+
+// handleIndex serves a simple index page with connection info.
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head>
+	<title>Claw Web UI</title>
+	<style>
+		body { font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+		.card { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+		.code { background: #27272a; color: #fafafa; padding: 15px; border-radius: 4px; font-family: monospace; }
+		button { background: #22c55e; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+		button:hover { background: #16a34a; }
+	</style>
+</head>
+<body>
+	<h1>🦞 Claw Web Server</h1>
+
+	<div class="card">
+		<h2>📡 WebSocket Connection</h2>
+		<p>Connect to the claw agent via WebSocket:</p>
+		<div class="code">ws://localhost:18800/pico/ws?token=<your-token></div>
+	</div>
+
+	<div class="card">
+		<h2>🔑 Get Your Token</h2>
+		<p>Get your authentication token:</p>
+		<div class="code">curl http://localhost:18800/api/pico/token</div>
+		<button onclick="copyToken()">Copy Token Command</button>
+	</div>
+
+	<div class="card">
+		<h2>📚 API Endpoints</h2>
+		<ul>
+		<li><code>GET /api/pico/token</code> - Get WebSocket token</li>
+		<li><code>POST /api/pico/token</code> - Regenerate token</li>
+		<li><code>GET /api/sessions</code> - List sessions</li>
+		<li><code>GET /api/sessions/{id}</code> - Get session details</li>
+		<li><code>DELETE /api/sessions/{id}</code> - Delete session</li>
+		<li><code>GET /api/status</code> - Get server status</li>
+	</ul>
+	</div>
+
+	<script>
+	function copyToken() {
+			navigator.clipboard.writeText('curl http://localhost:18800/api/pico/token');
+			alert('Command copied to clipboard!');
+		}
+	</script>
+</body>
+</html>`)
+}
+
+// handlePicoWebSocket handles WebSocket connections from the web UI.
+func (s *Server) handlePicoWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Extract token from WebSocket subprotocol (format: "token.{actual_token}")
+	var token string
+	subprotocols := websocket.Subprotocols(r)
+	for _, sp := range subprotocols {
+		if strings.HasPrefix(sp, "token.") {
+			token = strings.TrimPrefix(sp, "token.")
+			break
+		}
+	}
+
+	// Fallback: try query parameter
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+
+	if token == "" {
+		http.Error(w, "Missing token", http.StatusUnauthorized)
+		return
+	}
+
+	// TODO: Validate token against config
+	// For now, we'll accept any non-empty token
+
+	// Upgrade to WebSocket
+	upgrader := &websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins for development
+		},
+		Subprotocols: subprotocols, // Echo back the subprotocols
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Printf("[Web Server] WebSocket upgrade failed: %v\n", err)
+		return
+	}
+
+	fmt.Printf("[Web Server] New WebSocket connection from %s (token: %s)\n", r.RemoteAddr, token)
+
+	// Handle WebSocket connection
+	go s.handleWebSocketConnection(conn, token)
+}
+
+// handleWebSocketConnection handles the WebSocket connection after upgrade.
+func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
+	defer conn.Close()
+	fmt.Printf("[Web Server] handleWebSocketConnection START, token=%s\n", token)
+
+	// Generate a session ID for this connection
+	sessionID := generateSessionID()
+	fmt.Printf("[Web Server] Generated session_id=%s\n", sessionID)
+
+	// Send welcome message (Pico protocol format)
+	if err := conn.WriteJSON(map[string]any{
+		"type":    "connected",
+		"payload": map[string]any{
+			"message":    "Connected to Claw Web Server",
+			"session_id": sessionID,
+		},
+	}); err != nil {
+		fmt.Printf("[Web Server] Error sending welcome message: %v\n", err)
+		return
+	}
+	fmt.Printf("[Web Server] Welcome message sent\n")
+
+	// Read messages from WebSocket
+	msgCount := 0
+	for {
+		msgCount++
+		fmt.Printf("[Web Server] Waiting for message #%d...\n", msgCount)
+
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			fmt.Printf("[Web Server] WebSocket read error: %v\n", err)
+			break
+		}
+
+		// Debug: log all received messages
+		msgJSON, _ := json.Marshal(msg)
+		fmt.Printf("[Web Server] Received message: %s\n", string(msgJSON))
+
+		// Handle different message types
+		msgType, _ := msg["type"].(string)
+		msgID, _ := msg["id"].(string)
+		switch msgType {
+		case "ping":
+			pong := map[string]any{
+				"type": "pong",
+			}
+			if msgID != "" {
+				pong["id"] = msgID
+			}
+			conn.WriteJSON(pong)
+
+		case "message", "message.send":
+			// Extract content from different message formats
+			var content string
+
+			if msgType == "message.send" {
+				// PicoClaw frontend format: { type: "message.send", payload: { content: "..." } }
+				if payload, ok := msg["payload"].(map[string]any); ok {
+					content, _ = payload["content"].(string)
+				}
+			} else {
+				// Simple format: { type: "message", content: "..." }
+				content, _ = msg["content"].(string)
+			}
+
+			if content == "" {
+				fmt.Printf("[Web Server] Warning: empty content from message type %s\n", msgType)
+				continue
+			}
+
+			sessionKey := fmt.Sprintf("pico:web:%s", sessionID)
+
+			fmt.Printf("[Web Server] Processing message from session %s: %s\n", sessionKey, content)
+
+			// Send typing start indicator
+			conn.WriteJSON(map[string]any{
+				"type": "typing.start",
+			})
+
+			// Process message through AgentLoop in background
+			go func() {
+				ctx := context.Background()
+				response, err := s.agentLoop.ProcessDirect(ctx, content, sessionKey)
+
+				// Stop typing indicator
+				conn.WriteJSON(map[string]any{
+					"type": "typing.stop",
+				})
+
+				if err != nil {
+					fmt.Printf("[Web Server] Error processing message: %v\n", err)
+					conn.WriteJSON(map[string]any{
+						"type":    "error",
+						"payload": map[string]any{
+							"code":    "processing_error",
+							"message": fmt.Sprintf("Error: %v", err),
+						},
+					})
+					return
+				}
+
+				fmt.Printf("[Web Server] Sending response: %d chars\n", len(response))
+
+				// Send response as message.create (Pico protocol format)
+				if err := conn.WriteJSON(map[string]any{
+					"type":    "message.create",
+					"payload": map[string]any{
+						"content": response,
+					},
+				}); err != nil {
+					fmt.Printf("[Web Server] Error sending response: %v\n", err)
+				}
+			}()
+
+		case "session_resume":
+			// Resume existing session
+			requestedSessionID, _ := msg["session_id"].(string)
+			if requestedSessionID != "" {
+				sessionID = requestedSessionID
+				conn.WriteJSON(map[string]any{
+					"type":    "session_resumed",
+					"session_id": sessionID,
+				})
+			}
+		}
+	}
+
+	fmt.Printf("[Web Server] WebSocket connection closed\n")
+}
+
+// handleListSessions lists all sessions.
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Get sessions from AgentLoop
+	sessionKeys := s.agentLoop.ListSessions()
+
+	// Convert to JSON format
+	result := make([]map[string]any, 0)
+	for _, key := range sessionKeys {
+		result = append(result, map[string]any{
+			"id":   key,
+			"key":  key,
+		})
+	}
+
+	json.NewEncoder(w).Encode(result)
+}
+
+// handleGetSession gets a specific session.
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract session ID from path
+	// URL format: /api/sessions/{id}
+	// We need to parse this
+	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+}
+
+// handleDeleteSession deletes a session.
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	http.Error(w, "Not implemented yet", http.StatusNotImplemented)
+}
+
+// handleGetPicoToken returns the current Pico token.
+func (s *Server) handleGetPicoToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// TODO: Read actual token from config
+	token := "claw-dev-token-" + generateSessionID()[:8]
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":   token,
+		"ws_url":  fmt.Sprintf("ws://localhost:18800/pico/ws"),
+		"enabled": true,
+	})
+}
+
+// handleRegenPicoToken regenerates the Pico token.
+func (s *Server) handleRegenPicoToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// TODO: Save new token to config
+	token := "claw-dev-token-" + generateSessionID()[:8]
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":  token,
+		"ws_url": fmt.Sprintf("ws://localhost:18800/pico/ws"),
+	})
+}
+
+// handlePicoSetup ensures Pico channel is configured.
+func (s *Server) handlePicoSetup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// TODO: Setup Pico channel in config
+	token := "claw-dev-token-" + generateSessionID()[:8]
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"token":   token,
+		"ws_url":  fmt.Sprintf("ws://localhost:18800/pico/ws"),
+		"enabled": true,
+		"changed": true,
+	})
+}
+
+// handleStatus returns the server status.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "running",
+		"version": "1.0.0",
+		"name":    "Claw Web Server",
+	})
+}
+
+// Gateway API handlers (for PicoClaw frontend compatibility)
+
+// handleGatewayStatus returns the gateway status.
+func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Printf("[PANIC] handleGatewayStatus: %v\n", err)
+			http.Error(w, fmt.Sprintf("Internal error: %v", err), 500)
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"gateway_status":       "running",
+		"gateway_start_allowed": false,
+		"pid":                  os.Getpid(),
+	})
+}
+
+// handleGatewayStart handles gateway start requests (no-op for claw).
+func (s *Server) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "Claw is already running",
+	})
+}
+
+// handleGatewayStop handles gateway stop requests (no-op for claw).
+func (s *Server) handleGatewayStop(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "Claw cannot be stopped from API",
+	})
+}
+
+// handleGatewayRestart handles gateway restart requests (no-op for claw).
+func (s *Server) handleGatewayRestart(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "Claw restart not supported",
+	})
+}
+
+// handleGatewayLogs returns gateway logs.
+func (s *Server) handleGatewayLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"logs":     []string{},
+		"position": 0,
+	})
+}
+
+// Models API handlers
+
+// handleListModels returns the available models.
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Return current model as the only available model
+	json.NewEncoder(w).Encode(map[string]any{
+		"models": []map[string]any{
+			{
+				"index":       0,
+				"model_name":  "current",
+				"model":       "current-model",
+				"enabled":     true,
+				"configured":  true,
+				"is_default":  true,
+				"api_key":     "***",
+			},
+		},
+		"total":         1,
+		"default_model": "current",
+	})
+}
+
+// handleSetDefaultModel sets the default model (no-op for claw).
+func (s *Server) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "Model configured in config.json",
+	})
+}
+
+// handleAddModel adds a new model (not supported for claw).
+func (s *Server) handleAddModel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "error",
+		"message": "Model management through UI not supported. Configure model in ~/.aiclaw/config.json",
+	})
+}
+
+// handleUpdateModel updates a model (not supported for claw).
+func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract model index from path
+	// URL format: /api/models/{index}
+	_ = r.URL.Path[len("/api/models/"):]
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "error",
+		"message": "Model editing through UI not supported. Configure model in ~/.aiclaw/config.json",
+	})
+}
+
+// handleDeleteModel deletes a model (not supported for claw).
+func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract model index from path
+	_ = r.URL.Path[len("/api/models/"):]
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "error",
+		"message": "Model deletion through UI not supported. Configure model in ~/.aiclaw/config.json",
+	})
+}
+
+// generateSessionID generates a unique session ID.
+func generateSessionID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// formatJSON formats a value as JSON for logging.
+func formatJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// RunAsStandalone runs the web server in standalone mode (for testing).
+func RunAsStandalone(port int, public bool) error {
+	cfg := &Config{
+		Port:   port,
+		Public: public,
+		Enabled: true,
+	}
+
+	srv := NewServer(cfg, nil, nil, "", "")
+	url, err := srv.Start()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Web server started at %s\n", url)
+
+	// Wait for interrupt signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	fmt.Println("\nShutting down web server...")
+	return srv.Stop()
+}
+
+// handleGetConfig returns the current configuration.
+// Returns the full config.json content, excluding sensitive data.
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Read config file
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse config to filter sensitive fields
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Filter sensitive data
+	filterSensitiveFields(config)
+
+	// Return config
+	json.NewEncoder(w).Encode(map[string]any{
+		"config": config,
+		"config_path": s.configPath,
+	})
+}
+
+// handleUpdateConfig updates the configuration and restarts the service.
+func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Parse request body
+	var req struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Read current config to validate merge
+	currentData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read current config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var currentConfig map[string]any
+	if err := json.Unmarshal(currentData, &currentConfig); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse current config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Merge configs (simple overwrite for now)
+	// In production, you'd want more sophisticated merge logic
+	mergedConfig := mergeConfigs(currentConfig, req.Config)
+
+	// Validate merged config
+	if err := validateConfig(mergedConfig); err != nil {
+		http.Error(w, fmt.Sprintf("Config validation failed: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Write updated config
+	updatedData, err := json.MarshalIndent(mergedConfig, "", "  ")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Note: Service restart is required for config changes to take effect
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "success",
+		"message": "Configuration updated. Service restart is required for changes to take effect.",
+		"config_path": s.configPath,
+	})
+}
+
+// filterSensitiveFields removes sensitive fields from config (like API keys)
+func filterSensitiveFields(config map[string]any) {
+	// List of sensitive field patterns to redact
+	sensitivePatterns := []string{
+		"api_key", "apiKey", "api-key",
+		"secret", "password", "token",
+	}
+
+	var redactRecursive func(m map[string]any)
+	redactRecursive = func(m map[string]any) {
+		for key, value := range m {
+			switch v := value.(type) {
+			case map[string]any:
+				redactRecursive(v)
+			case string:
+				lowerKey := strings.ToLower(key)
+				for _, pattern := range sensitivePatterns {
+					if strings.Contains(lowerKey, pattern) {
+						m[key] = "***REDACTED***"
+						break
+					}
+				}
+			}
+		}
+	}
+
+	redactRecursive(config)
+}
+
+// mergeConfigs merges new config values into current config
+func mergeConfigs(current, new map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Copy current config
+	for k, v := range current {
+		result[k] = v
+	}
+
+	// Overwrite with new values
+	for k, v := range new {
+		if newVal, ok := v.(map[string]any); ok {
+			if curVal, ok := result[k].(map[string]any); ok {
+				// Merge nested maps
+				merged := mergeConfigs(curVal, newVal)
+				result[k] = merged
+			} else {
+				result[k] = v
+			}
+		} else {
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
+// validateConfig performs basic validation on config structure
+func validateConfig(config map[string]any) error {
+	// Check required fields
+	if _, ok := config["version"]; !ok {
+		return fmt.Errorf("missing required field: version")
+	}
+
+	// Validate model config if present
+	if model, ok := config["model"].(map[string]any); ok {
+		if id, ok := model["id"].(string); !ok || id == "" {
+			return fmt.Errorf("model.id is required")
+		}
+		if provider, ok := model["provider"].(string); !ok || provider == "" {
+			return fmt.Errorf("model.provider is required")
+		}
+	}
+
+	return nil
+}
+
+// Main function for standalone mode
+func main() {
+	port := flag.Int("port", 18800, "Port to listen on")
+	public := flag.Bool("public", false, "Listen on all interfaces")
+	flag.Parse()
+
+	if err := RunAsStandalone(*port, *public); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}

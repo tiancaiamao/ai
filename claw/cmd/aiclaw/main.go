@@ -20,14 +20,18 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	_ "github.com/sipeed/picoclaw/pkg/channels/feishu" // 注册飞书通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/pico"   // 注册 Pico Channel 工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
+	"github.com/tiancaiamao/ai/claw/pkg/web"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -108,6 +112,25 @@ func main() {
 	// 创建 picoclaw 兼容的配置（用于 channels）
 	picoCfg := &picoclawconfig.Config{
 		Channels: cfg.Channels,
+	}
+
+	// Load security.yml to get Pico token
+	securityPath := filepath.Join(filepath.Dir(configPath), ".security.yml")
+	if securityData, err := os.ReadFile(securityPath); err == nil {
+		type SecurityConfig struct {
+			Channels struct {
+				Pico struct {
+					Token string `json:"token" yaml:"token"`
+				} `json:"pico" yaml:"pico"`
+			} `json:"channels" yaml:"channels"`
+		}
+		var sec SecurityConfig
+		if err := yaml.Unmarshal(securityData, &sec); err == nil {
+			if sec.Channels.Pico.Token != "" {
+				picoCfg.Channels.Pico.Token = sec.Channels.Pico.Token
+				slog.Info("Loaded Pico token from security file")
+			}
+		}
 	}
 
 	// 创建消息总线
@@ -268,6 +291,23 @@ func main() {
 		slog.Info("Cron service started", "jobs", len(cronService.ListJobs(false)))
 	}
 	defer cronService.Stop()
+
+	// 启动 Web 服务器（可选）
+	var webSrv *web.Server
+	if cfg.Channels.Pico.Enabled {
+		webCfg := &web.Config{
+			Port:    18800,
+			Public:  false,
+			Enabled: true,
+		}
+		webSrv = web.NewServer(webCfg, agentLoop, msgBus, configPath, clawDir)
+		if webURL, err := webSrv.Start(); err == nil {
+			slog.Info("Web server started", "url", webURL)
+			defer webSrv.Stop()
+		} else {
+			slog.Warn("Failed to start web server", "error", err)
+		}
+	}
 
 	slog.Info("Starting aiclaw",
 		"model", cfg.Model.ID,
@@ -482,6 +522,41 @@ func loadConfig(path string) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Support picoclaw config format: extract model from model_list if model.id is not set
+	if cfg.Model.ID == "" {
+		var rawCfg map[string]any
+		if err := json.Unmarshal(data, &rawCfg); err == nil {
+			// Try to extract from agents.defaults.model_name and model_list
+			if agents, ok := rawCfg["agents"].(map[string]any); ok {
+				if defaults, ok := agents["defaults"].(map[string]any); ok {
+					if modelName, ok := defaults["model_name"].(string); ok {
+						// Find model in model_list
+						if modelList, ok := rawCfg["model_list"].([]any); ok {
+							for _, m := range modelList {
+								if mm, ok := m.(map[string]any); ok {
+									if name, ok := mm["model_name"].(string); ok && name == modelName {
+										cfg.Model.ID = modelName
+										if model, ok := mm["model"].(string); ok {
+											// Extract provider from "provider/model" format
+											if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
+												cfg.Model.Provider = parts[0]
+												cfg.Model.ID = model
+											}
+										}
+										if apiBase, ok := mm["api_base"].(string); ok {
+											cfg.Model.BaseURL = apiBase
+										}
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Validate required model configuration is present from config.json
