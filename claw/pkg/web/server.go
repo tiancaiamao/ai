@@ -737,21 +737,38 @@ func (s *Server) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update current model configuration
-	newModelConfig := map[string]any{
-		"id":       selectedModel["model"],
-		"provider": "",
-	}
+	modelID, _ := selectedModel["model"].(string)
+	apiBase, _ := selectedModel["api_base"].(string)
 
-	// Extract provider from model field (e.g., "zai/glm-4.7" -> provider="zai")
+	// Extract provider from model field or infer from api_base
+	provider := ""
 	if modelStr, ok := selectedModel["model"].(string); ok {
 		if parts := strings.SplitN(modelStr, "/", 2); len(parts) == 2 {
-			newModelConfig["provider"] = parts[0]
+			provider = parts[0]
 		}
 	}
 
-	// Set baseUrl if available
-	if apiBase, ok := selectedModel["api_base"].(string); ok {
-		newModelConfig["baseUrl"] = apiBase
+	// If provider not found in model field, try to infer from api_base
+	if provider == "" && apiBase != "" {
+		if strings.Contains(apiBase, "zai") {
+			provider = "zai"
+		} else if strings.Contains(apiBase, "minimax") {
+			provider = "minimax"
+		} else if strings.Contains(apiBase, "openai") {
+			provider = "openai"
+		} else if strings.Contains(apiBase, "anthropic") {
+			provider = "anthropic"
+		} else if strings.Contains(apiBase, "deepseek") {
+			provider = "deepseek"
+		} else if strings.Contains(apiBase, "qwen") || strings.Contains(apiBase, "dashscope") {
+			provider = "qwen"
+		}
+	}
+
+	newModelConfig := map[string]any{
+		"id":       modelID,
+		"provider": provider,
+		"baseUrl":  apiBase,
 	}
 
 	config["model"] = newModelConfig
