@@ -177,6 +177,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/channels/", s.handleGetChannel)
 	mux.HandleFunc("PUT /api/channels/", s.handleUpdateChannel)
 
+	// WeChat/Weixin flow API (not fully supported in claw)
+	mux.HandleFunc("POST /api/weixin/flows", s.handleWeixinFlow)
+	mux.HandleFunc("GET /api/weixin/flows/", s.handleWeixinFlowPoll)
+
 	// Serve static files (frontend) - this will be handled by embedded files
 	// For now, return a simple message
 	mux.HandleFunc("/", s.handleIndex)
@@ -1040,6 +1044,96 @@ func validateConfig(config map[string]any) error {
 	}
 
 	return nil
+}
+
+// WeChat/Weixin Flow API handlers (placeholder for compatibility)
+
+// handleWeixinFlow starts a WeChat login flow (not supported in claw).
+func (s *Server) handleWeixinFlow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Check if weixin is configured
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Check if weixin channel exists and is enabled
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  "WeChat channel not configured",
+		})
+		return
+	}
+
+	weixinCfg, ok := channels["weixin"].(map[string]any)
+	if !ok || weixinCfg["enabled"] != true {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  "WeChat channel is not enabled",
+		})
+		return
+	}
+
+	// WeChat login flow requires picoclaw's backend service
+	// Return a helpful error message
+	accountID, _ := weixinCfg["account_id"].(string)
+	if accountID != "" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  "WeChat login flow is not supported in claw. Please use the original picoclaw service for WeChat binding. Your current account_id: " + accountID,
+		})
+	} else {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "error",
+			"error":  "WeChat login flow is not supported in claw. Please use the original picoclaw service for WeChat binding.",
+		})
+	}
+}
+
+// handleWeixinFlowPoll polls a WeChat login flow (not supported in claw).
+func (s *Server) handleWeixinFlowPoll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract flow ID from path
+	// URL format: /api/weixin/flows/{flowID}
+	path := r.URL.Path
+	prefix := "/api/weixin/flows/"
+	if !strings.HasPrefix(path, prefix) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	flowID := strings.TrimPrefix(path, prefix)
+	if flowID == "" {
+		http.Error(w, "Flow ID is required", http.StatusBadRequest)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "error",
+		"error":  "WeChat login flow is not supported in claw",
+	})
 }
 
 // Channels API handlers
