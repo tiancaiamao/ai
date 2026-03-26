@@ -47,4 +47,13 @@ Do not proceed with the next task until you have addressed the context pressure.
 - `proactive > reminded` → score improves → fewer reminders
 - `reminded > proactive` → score degrades → more frequent reminders
 
-**When you receive `remind`, call `context_management` immediately.**
+**When you receive `remind`, call `context_management` immediately.**, nothing is urgent than that.
+
+**Bad example:**
+
+```
+thinking: User is reminding me about context management. Let me check runtime_state:
+...
+Context is at 12.8%, which is quite low. But there are many stale outputs (27). User mentioned topic_shift and phase_completed, it's time to consider compact.
+But my current debugging task is more urgent. Let me finish debugging first and do context management then.
+```

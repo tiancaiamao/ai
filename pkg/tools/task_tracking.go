@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
@@ -78,7 +79,10 @@ func (t *TaskTrackingTool) Execute(ctx context.Context, params map[string]any) (
 	}
 
 	// Parse skip parameter
-	skip, _ := params["skip"].(bool)
+	skip, err := parseSkipParameter(params["skip"])
+	if err != nil {
+		return nil, err
+	}
 
 	if skip {
 		// Handle skip mode - LLM is reporting activity but not updating content
@@ -138,4 +142,51 @@ func (t *TaskTrackingTool) Execute(ctx context.Context, params map[string]any) (
 			Text: "Task tracking updated.",
 		},
 	}, nil
+}
+
+func parseSkipParameter(raw any) (bool, error) {
+	if raw == nil {
+		return false, nil
+	}
+
+	switch v := raw.(type) {
+	case bool:
+		return v, nil
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		switch normalized {
+		case "", "false", "0", "no", "n", "off":
+			return false, nil
+		case "true", "1", "yes", "y", "on":
+			return true, nil
+		default:
+			return false, fmt.Errorf("skip parameter must be boolean-like (true/false)")
+		}
+	case float64:
+		if v == 0 {
+			return false, nil
+		}
+		if v == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("skip parameter must be 0 or 1 when numeric")
+	case int:
+		if v == 0 {
+			return false, nil
+		}
+		if v == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("skip parameter must be 0 or 1 when numeric")
+	case int64:
+		if v == 0 {
+			return false, nil
+		}
+		if v == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("skip parameter must be 0 or 1 when numeric")
+	default:
+		return false, fmt.Errorf("skip parameter must be boolean")
+	}
 }

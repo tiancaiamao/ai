@@ -46,7 +46,7 @@ DECISION OPTIONS:
 
 PARAMETERS:
 - decision (required): "truncate", "compact", or "skip"
-- reasoning (required): Explain WHY you made this decision
+- reasoning (required): Explain WHY you made this decision (also accepts "reason")
 - skip_turns (optional, for decision="skip"): How many turns to skip (1-30, default=10)
 - truncate_ids (optional, for decision="truncate"): Tool call IDs to truncate
 - compact_confidence (optional, for decision="compact"): Confidence 0-100
@@ -82,7 +82,11 @@ func (t *ContextManagementTool) Parameters() map[string]any {
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
-				"description": "Explain WHY you made this decision",
+				"description": "Explain WHY you made this decision (also accepts 'reason')",
+			},
+			"reason": map[string]any{
+				"type":        "string",
+				"description": "Alias for 'reasoning' - Explain WHY you made this decision",
 			},
 			"skip_turns": map[string]any{
 				"type":        "integer",
@@ -120,10 +124,14 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		return nil, fmt.Errorf("decision parameter is required")
 	}
 
-	// Parse reasoning
+	// Parse reasoning (accept both "reasoning" and "reason" for tolerance)
 	reasoning, ok := params["reasoning"].(string)
 	if !ok || reasoning == "" {
-		return nil, fmt.Errorf("reasoning parameter is required")
+		// Fallback to "reason" for tolerance
+		reasoning, ok = params["reason"].(string)
+	}
+	if !ok || reasoning == "" {
+		return nil, fmt.Errorf("reasoning (or reason) parameter is required")
 	}
 
 	// Get or create ContextMgmtState

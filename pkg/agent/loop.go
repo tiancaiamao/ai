@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -31,33 +32,37 @@ const (
 	defaultMalformedToolCallRecoveries = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 	defaultLLMTotalTimeout             = 10 * time.Minute // Total timeout for LLM request
-	defaultLLMFirstResponseTimeout      = 2 * time.Minute  // Timeout between streaming chunks (2min)
+	defaultLLMFirstResponseTimeout     = 2 * time.Minute  // Timeout between streaming chunks (2min)
 )
 
 type LoopConfig struct {
-	Model                   llm.Model
-	APIKey                  string
+	Model  llm.Model
+	APIKey string
 	// GetModel returns the current model. If nil, falls back to Model field.
 	// This allows dynamic model switching without restarting the loop.
-	GetModel                 func() llm.Model
+	GetModel func() llm.Model
 	// GetAPIKey returns the current API key. If nil, falls back to APIKey field.
 	// This allows dynamic API key switching without restarting the loop.
-	GetAPIKey                func() string
-	Executor                *ExecutorPool // agentctx.Tool executor with concurrency control
-	Metrics                 *Metrics      // Metrics collector
-	ToolOutput              ToolOutputLimits
-	Compactor               Compactor     // Optional compactor for context-length recovery
-	ToolCallCutoff          int           // Summarize oldest tool outputs when visible tool results exceed this
-	ThinkingLevel           string        // off, minimal, low, medium, high, xhigh
-	MaxLLMRetries           int           // Maximum number of retries for LLM calls
-	RetryBaseDelay          time.Duration // Base delay for exponential backoff
-	MaxConsecutiveToolCalls int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
-	MaxToolCallsPerName     int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
-	MaxTurns                int           // Maximum conversation turns (0=default=unlimited)
-	ContextWindow           int           // Context window for the model (0=use default 128000)
-	TaskTrackingEnabled     bool          // Enable task tracking reminders (task_tracking)
-	ContextManagementEnabled bool         // Enable context management reminders (context_management)
-	LLMTotalTimeout         time.Duration // Total timeout for LLM request (default 10min)
+	GetAPIKey func() string
+	// GetWorkingDir returns the current working directory for runtime_state telemetry.
+	GetWorkingDir func() string
+	// GetStartupPath returns the startup/root path for runtime_state telemetry.
+	GetStartupPath           func() string
+	Executor                 *ExecutorPool // agentctx.Tool executor with concurrency control
+	Metrics                  *Metrics      // Metrics collector
+	ToolOutput               ToolOutputLimits
+	Compactor                Compactor     // Optional compactor for context-length recovery
+	ToolCallCutoff           int           // Summarize oldest tool outputs when visible tool results exceed this
+	ThinkingLevel            string        // off, minimal, low, medium, high, xhigh
+	MaxLLMRetries            int           // Maximum number of retries for LLM calls
+	RetryBaseDelay           time.Duration // Base delay for exponential backoff
+	MaxConsecutiveToolCalls  int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
+	MaxToolCallsPerName      int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
+	MaxTurns                 int           // Maximum conversation turns (0=default=unlimited)
+	ContextWindow            int           // Context window for the model (0=use default 128000)
+	TaskTrackingEnabled      bool          // Enable task tracking reminders (task_tracking)
+	ContextManagementEnabled bool          // Enable context management reminders (context_management)
+	LLMTotalTimeout          time.Duration // Total timeout for LLM request (default 10min)
 	LLMFirstResponseTimeout  time.Duration // Timeout between streaming chunks (default 2min)
 }
 
@@ -80,16 +85,16 @@ func getEffectiveAPIKey(config *LoopConfig) string {
 // DefaultLoopConfig returns a default LoopConfig with sensible values.
 func DefaultLoopConfig() *LoopConfig {
 	return &LoopConfig{
-		ToolCallCutoff:            10,
-		ThinkingLevel:             "high",
-		MaxLLMRetries:             defaultLLMMaxRetries,
-		RetryBaseDelay:            defaultRetryBaseDelay,
-		TaskTrackingEnabled:       true,
-		ContextManagementEnabled:  true,
+		ToolCallCutoff:           10,
+		ThinkingLevel:            "high",
+		MaxLLMRetries:            defaultLLMMaxRetries,
+		RetryBaseDelay:           defaultRetryBaseDelay,
+		TaskTrackingEnabled:      true,
+		ContextManagementEnabled: true,
 		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
-		ToolOutput:                DefaultToolOutputLimits(),
-		LLMTotalTimeout:           defaultLLMTotalTimeout,
-		LLMFirstResponseTimeout:   defaultLLMFirstResponseTimeout,
+		ToolOutput:               DefaultToolOutputLimits(),
+		LLMTotalTimeout:          defaultLLMTotalTimeout,
+		LLMFirstResponseTimeout:  defaultLLMFirstResponseTimeout,
 	}
 }
 
@@ -767,11 +772,20 @@ func streamAssistantResponse(
 
 		meta := agentCtx.LLMContext.GetMeta()
 
-		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns)
+		currentWorkdir := ""
+		if config.GetWorkingDir != nil {
+			currentWorkdir = config.GetWorkingDir()
+		}
+		startupPath := ""
+		if config.GetStartupPath != nil {
+			startupPath = config.GetStartupPath()
+		}
+
+		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
 		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
-		
-		// Only insert runtime_state if not the first message OR after compact recovery
-		if runtimeAppendix != "" && (postCompactRecovery || (agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.CurrentTurn > 1)) {
+
+		// Always insert runtime_state when available so path telemetry is present from turn one.
+		if runtimeAppendix != "" {
 			runtimeMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: runtimeAppendix,
@@ -1648,7 +1662,13 @@ func buildRuntimeSystemAppendix(llmContextContent, runtimeMetaSnapshot string) s
 	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
 }
 
-func updateRuntimeMetaSnapshot(agentCtx *agentctx.AgentContext, meta agentctx.ContextMeta, heartbeatTurns int) (string, bool) {
+func updateRuntimeMetaSnapshot(
+	agentCtx *agentctx.AgentContext,
+	meta agentctx.ContextMeta,
+	heartbeatTurns int,
+	currentWorkdir string,
+	startupPath string,
+) (string, bool) {
 	if agentCtx == nil {
 		return "", false
 	}
@@ -1739,12 +1759,16 @@ context_meta:
   tokens_max: %d
   messages_in_history_bucket: %s
   llm_context_size_bucket: %s
+workspace:
+  current_workdir: %s
+  startup_path: %s
 tool_output_pressure:
   stale_tool_outputs_bucket: %s
   tool_outputs_summary: %s
   large_tool_outputs_bucket: %s
   largest_tool_output_bucket: %s%s
 compact_decision_signals:
+  tokens_percent: %.1f
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
   phase_completed_recently: llm_judge
@@ -1757,11 +1781,14 @@ decision:
 		meta.TokensMax,
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.LLMContextSize),
+		runtimeYAMLString(currentWorkdir),
+		runtimeYAMLString(startupPath),
 		runtimeCountBucket(toolPressure.StaleCount),
 		toolOutputsSummary,
 		runtimeCountBucket(toolPressure.LargeCount),
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
 		updateMetrics,
+		meta.TokensPercent,
 		meta.TokensPercent,
 		yesNo(fastPathAllowed),
 	)
@@ -1771,6 +1798,14 @@ decision:
 	agentCtx.RuntimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+func runtimeYAMLString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		trimmed = "unknown"
+	}
+	return strconv.Quote(trimmed)
 }
 
 type runtimeToolPressure struct {

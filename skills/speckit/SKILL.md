@@ -12,20 +12,20 @@ This is the **primary workflow** for developing features. It guides you from req
 **Default behavior is INTERACTIVE, not automatic.** You MUST pause at each phase gate and get explicit user approval before proceeding.
 
 ```
-┌─────────────┐  ⏸️   ┌─────────────┐  ⏸️   ┌─────────────┐  ⏸️   ┌─────────────┐
-│  SPECIFY    │ ──►  │    PLAN     │ ──►  │   TASKS     │ ──►  │ IMPLEMENT   │
-│  spec.md    │      │  plan.md    │      │  tasks.md   │      │  code       │
-└─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘
-       ↓                    ↓                    ↓
-   Review &            Review &             Review &
-   Approve             Approve              Approve
+┌─────────────┐  ⏸️   ┌─────────────┐  ⏸️   ┌─────────────┐  ⏸️   ┌─────────────┐  ⏸️   ┌─────────────┐
+│  EXPLORE    │ ──►  │  CLARIFY    │ ──►  │    PLAN     │ ──►  │   TASKS     │ ──►  │ IMPLEMENT   │
+│(optional)   │      │(brainstorm) │      │  plan.md    │      │  tasks.md   │      │  code       │
+└─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘
+       ↓                    ↓                    ↓                    ↓
+   (auto for              Review &            Review &             Review &
+    simple)               Approve             Approve              Approve
 ```
 
 ## Phase Gates (MANDATORY)
 
 | Gate | When | Required Action |
 |------|------|-----------------|
-| 🔷 SPEC COMPLETE | After creating spec.md | Present summary, ask questions, get approval to proceed to PLAN |
+| 🔷 CLARIFY COMPLETE | After understanding requirements | Present understanding, ask clarifying questions, get approval |
 | 🔷 PLAN COMPLETE | After creating plan.md | Present key decisions, discuss alternatives, get approval to proceed to TASKS |
 | 🔷 TASKS COMPLETE | After creating tasks.md | Show task list, confirm scope, get approval to start IMPLEMENTATION |
 
@@ -36,13 +36,29 @@ This is the **primary workflow** for developing features. It guides you from req
 
 **If user seems hesitant or asks questions, stay in current phase and iterate.**
 
+## ⚠️ Architecture Changes Require Extra Attention
+
+**If the task involves ANY of these, you MUST clarify before proceeding:**
+- Multiple packages/layers
+- New abstractions or interfaces
+- "Unify", "consolidate", "refactor", "integrate" keywords
+- Changes to core modules (agent, rpc, etc.)
+
+**Clarification must include:**
+1. **What I understand**: Functional goal + Design goal
+2. **Architecture constraints**: What layer? What dependencies?
+3. **Key questions**: Present options for architectural decisions
+
 ## When to Use
 
 ```
-Feature request → Is it complex/unclear?
+Feature request → Is it complex/unclear? → Involves architecture changes?
+                      ↓                           ↓
+                YES → Use explore first     YES → MUST clarify before plan
+                      ↓                           ↓
+                Then brainstorming              Then proceed
                       ↓
-                YES → Use brainstorming first, then speckit
-                NO  → Use speckit directly
+                Then speckit
 ```
 
 **Use speckit for:**
@@ -50,10 +66,11 @@ Feature request → Is it complex/unclear?
 - Bug fixes that need planning
 - Refactoring with clear goals
 
-**Use brainstorming first if:**
+**Use explore + brainstorming first if:**
 - Requirements are unclear
 - Multiple approaches exist
 - Feature is complex
+- **Involves architectural changes**
 
 ## Workflow Overview
 

@@ -256,6 +256,8 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	// Set model and apiKey (not handled by ToLoopConfig)
 	loopCfg.Model = model
 	loopCfg.APIKey = apiKey
+	loopCfg.GetWorkingDir = ws.GetCWD
+	loopCfg.GetStartupPath = ws.GetInitialCWD
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)

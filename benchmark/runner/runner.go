@@ -23,15 +23,15 @@ type TaskResult struct {
 
 // BenchmarkReport represents the full benchmark report
 type BenchmarkReport struct {
-	Timestamp   string       `json:"timestamp"`
-	AgentName   string       `json:"agent_name"`
-	GitCommit   string       `json:"git_commit"`
-	TotalTasks  int          `json:"total_tasks"`
-	PassedTasks int          `json:"passed_tasks"`
-	FailedTasks int          `json:"failed_tasks"`
+	Timestamp   string        `json:"timestamp"`
+	AgentName   string        `json:"agent_name"`
+	GitCommit   string        `json:"git_commit"`
+	TotalTasks  int           `json:"total_tasks"`
+	PassedTasks int           `json:"passed_tasks"`
+	FailedTasks int           `json:"failed_tasks"`
 	Duration    time.Duration `json:"duration"`
-	Results     []TaskResult `json:"results"`
-	PassRate    float64      `json:"pass_rate"`
+	Results     []TaskResult  `json:"results"`
+	PassRate    float64       `json:"pass_rate"`
 }
 
 func main() {
@@ -217,6 +217,9 @@ func runTask(taskID, taskDir string) TaskResult {
 		}
 	}
 
+	// Install dependencies before verification
+	installTaskDependencies(taskID, absTaskDir)
+
 	// Run verification script
 	verifyScript := filepath.Join(absTaskDir, "verify.sh")
 	if _, err := os.Stat(verifyScript); os.IsNotExist(err) {
@@ -243,6 +246,102 @@ func runTask(taskID, taskDir string) TaskResult {
 	}
 
 	return result
+}
+
+// installTaskDependencies checks and installs task-specific dependencies
+func installTaskDependencies(taskID, taskDir string) {
+	testsDir := filepath.Join(taskDir, "tests")
+	testOutputs := filepath.Join(testsDir, "test_outputs.py")
+
+	// Check if test_outputs.py exists
+	if _, err := os.Stat(testOutputs); os.IsNotExist(err) {
+		return
+	}
+
+	// Read test file to check for dependencies
+	content, err := os.ReadFile(testOutputs)
+	if err != nil {
+		return
+	}
+	testContent := string(content)
+
+	installed := make(map[string]bool)
+	installPackage := func(packageName string) {
+		if installed[packageName] {
+			return
+		}
+		installed[packageName] = true
+		fmt.Printf("[%s] Installing %s...\n", taskID, packageName)
+		if !installPythonPackage(taskID, packageName) {
+			fmt.Printf("[%s] Warning: dependency install failed for %s; verification may fail\n", taskID, packageName)
+		}
+	}
+
+	// Install pytest if not present (using the same interpreter as checks)
+	if _, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		installPackage("pytest")
+	}
+
+	// Install Biopython for protein-related tasks
+	if strings.Contains(taskID, "protein") || strings.Contains(taskID, "dna") {
+		if _, err := exec.Command("python3", "-c", "import Bio").CombinedOutput(); err != nil {
+			installPackage("biopython")
+		}
+	}
+
+	// Install numpy for numerical tasks
+	if strings.Contains(taskID, "tensor") || strings.Contains(taskID, "eigen") || strings.Contains(taskID, "matrix") {
+		if _, err := exec.Command("python3", "-c", "import numpy").CombinedOutput(); err != nil {
+			installPackage("numpy")
+		}
+	}
+
+	// Install torch for ML tasks
+	if strings.Contains(taskID, "torch") || strings.Contains(taskID, "pytorch") || strings.Contains(taskID, "model") {
+		if _, err := exec.Command("python3", "-c", "import torch").CombinedOutput(); err != nil {
+			installPackage("torch")
+		}
+	}
+
+	// Check for specific imports in test file
+	if strings.Contains(testContent, "from Bio") || strings.Contains(testContent, "import Bio") {
+		if _, err := exec.Command("python3", "-c", "import Bio").CombinedOutput(); err != nil {
+			installPackage("biopython")
+		}
+	}
+
+	if strings.Contains(testContent, "import torch") {
+		if _, err := exec.Command("python3", "-c", "import torch").CombinedOutput(); err != nil {
+			installPackage("torch")
+		}
+	}
+
+	// Install beautifulsoup4 and selenium for HTML parsing tasks
+	if strings.Contains(testContent, "from bs4") || strings.Contains(testContent, "import bs4") {
+		if _, err := exec.Command("python3", "-c", "import bs4").CombinedOutput(); err != nil {
+			installPackage("beautifulsoup4")
+		}
+	}
+
+	if strings.Contains(testContent, "from selenium") || strings.Contains(testContent, "import selenium") {
+		if _, err := exec.Command("python3", "-c", "import selenium").CombinedOutput(); err != nil {
+			installPackage("selenium")
+		}
+	}
+}
+
+func installPythonPackage(taskID, packageName string) bool {
+	cmd := exec.Command("python3", "-m", "pip", "install", packageName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = "(no output)"
+		}
+		fmt.Printf("[%s] Failed to install %s via python3 -m pip: %v\n%s\n", taskID, packageName, err, msg)
+		return false
+	}
+	return true
 }
 
 func compareResults() {

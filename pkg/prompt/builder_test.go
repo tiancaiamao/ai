@@ -60,8 +60,8 @@ func TestBuilderBuild(t *testing.T) {
 				t.Error("Workspace section missing from result")
 			}
 
-			if !contains(result, tt.cwd) {
-				t.Errorf("CWD %q not found in result", tt.cwd)
+			if contains(result, "Your working directory is:") {
+				t.Error("workspace section should not embed a dynamic working directory")
 			}
 		})
 	}

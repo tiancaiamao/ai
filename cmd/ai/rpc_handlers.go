@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -369,6 +369,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Set model and apiKey
 	loopCfg.Model = model
 	loopCfg.APIKey = apiKey
+	loopCfg.GetWorkingDir = ws.GetCWD
+	loopCfg.GetStartupPath = ws.GetInitialCWD
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
@@ -1123,7 +1125,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
 				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
 				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-				WallOutputPerSec:     llmMetrics.WallOutputTokensPerSec,
+				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
 				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
 				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
 				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
@@ -1153,7 +1155,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.SetBashHandler(func(command string) (*rpc.BashResult, error) {
 		slog.Info("Received bash")
-		return bashRunner.Run(cwd, command, bashTimeout)
+		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
 	})
 
 	server.SetAbortBashHandler(func() error {
@@ -1787,9 +1789,9 @@ func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
 	// Read state.json if it exists
 	if data, err := os.ReadFile(stateFile); err == nil {
 		var stateData struct {
-			Phase      string `json:"phase"`
-			StartedAt  string `json:"started_at"`
-			TasksFile  string `json:"tasks_file"`
+			Phase     string `json:"phase"`
+			StartedAt string `json:"started_at"`
+			TasksFile string `json:"tasks_file"`
 		}
 		if err := json.Unmarshal(data, &stateData); err == nil {
 			state.Phase = stateData.Phase
