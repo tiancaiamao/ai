@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/command"
 )
 
 // processCommand checks if the message is a command and handles it.
@@ -46,12 +47,16 @@ func (a *Agent) processCommand(ctx context.Context, message string) (bool, error
 		args = strings.Join(parts[1:], " ")
 	}
 
+	// Create CommandContext for command execution
+	// Note: sessionKey is not available at Agent level, passing empty string
+	// This may be updated in Task 7 if needed
+	cmdCtx := command.NewSimpleCommandContext(a, "")
+
 	response, err := a.commands.HandleCommand(
 		ctx,
 		name,
 		args,
-		a,
-		"", // sessionKey - to be added in Task 7
+		cmdCtx,
 	)
 	if err != nil {
 		// Send error feedback to user instead of silent failure

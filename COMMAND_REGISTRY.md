@@ -2,30 +2,40 @@
 
 ## Overview
 
-The `ai` project now includes a command registry system for handling slash commands (e.g., `/help`, `/commands`) in user messages. This feature is inspired by the `claw/cmd/aiclaw` pattern and makes the agent run loop more reusable as an SDK.
+The `ai` project now includes a command registry system for handling slash commands (e.g., `/help`, `/commands`) in user messages. This feature is designed to be reusable across multiple projects (ai, claw, etc.).
 
 ## Architecture
 
 ### Core Components
 
-#### CommandRegistry
-- Location: `pkg/agent/command_registry.go`
+#### CommandRegistry (pkg/command/registry.go)
 - Purpose: Thread-safe command storage and execution
 - Methods:
   - `Register(name, description string, handler CommandHandler)` - Register a command
   - `Get(name string) (CommandHandler, bool)` - Get a command handler
   - `List() []string` - List all command names
   - `ListDescriptors() []CommandDescriptor` - List all commands with descriptions
-  - `HandleCommand(ctx, name, args string, agent *Agent, sessionKey string) (string, error)` - Execute a command
+  - `HandleCommand(ctx, name, args string, cmdCtx CommandContext) (string, error)` - Execute a command
+
+#### CommandContext Interface
+```go
+type CommandContext interface {
+    GetAgent() any          // Returns agent implementation (type *any)
+    GetSessionKey() string  // Returns current session key
+}
+```
+- Purpose: Decouples command handlers from specific agent implementations
+- Implementation: `SimpleCommandContext` provided for basic usage
 
 #### CommandHandler
-- Type: `func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error)`
+- Type: `func(ctx context.Context, cmdCtx CommandContext, args string) (string, error)`
 - Purpose: Handler function for executing commands
+- Usage: Type-assert `cmdCtx.GetAgent()` to get the specific agent type
 
-#### Agent Integration
+#### Agent Integration (pkg/agent/)
 - Location: `pkg/agent/agent.go`
 - Changes:
-  - Added `commands *CommandRegistry` field
+  - Added `commands *command.CommandRegistry` field
   - Initialized in `NewAgentFromConfigWithContext`
   - Commands registered via `registerBuiltinCommands` and `registerAdditionalCommands`
 
@@ -34,9 +44,11 @@ The `ai` project now includes a command registry system for handling slash comma
 1. User sends message starting with `/`
 2. `Agent.processPrompt` detects `/` prefix
 3. `Agent.processCommand` parses command name and args
-4. `CommandRegistry.HandleCommand` executes the handler
-5. Response emitted as system message
-6. Loop ends (commands don't trigger LLM calls)
+4. Creates `CommandContext` with agent instance
+5. `CommandRegistry.HandleCommand` executes the handler
+6. Handler type-asserts agent from context
+7. Response emitted as assistant message
+8. Loop ends (commands don't trigger LLM calls)
 
 ### Built-in Commands
 
@@ -57,7 +69,12 @@ agent := agent.NewAgent(model, apiKey, systemPrompt)
 
 // Register custom command
 agent.commands.Register("custom", "Custom command description",
-    func(ctx context.Context, agent *agent.Agent, sessionKey string, args string) (string, error) {
+    func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+        // Type-assert to get the specific agent type
+        agent := cmdCtx.GetAgent().(*agent.Agent)
+        sessionKey := cmdCtx.GetSessionKey()
+
+        // Use agent and sessionKey...
         return "Custom response", nil
     })
 
@@ -66,13 +83,58 @@ agent.Prompt("/help")  // Will display help, not send to LLM
 agent.Prompt("Hello")   // Normal message, sent to LLM
 ```
 
+## Reusability for Other Projects
+
+To use the command registry in another project (e.g., claw):
+
+```go
+import "github.com/tiancaiamao/ai/pkg/command"
+
+// Define your agent type
+type MyAgent struct {
+    commands *command.CommandRegistry
+    // ... other fields
+}
+
+// Register commands
+func (a *MyAgent) RegisterCommands() {
+    a.commands.Register("mycmd", "My custom command",
+        func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+            myAgent := cmdCtx.GetAgent().(*MyAgent)
+            // ... use myAgent
+            return "Response", nil
+        })
+}
+
+// Handle commands in your prompt processing
+func (a *MyAgent) ProcessPrompt(ctx context.Context, message string) {
+    if strings.HasPrefix(message, "/") {
+        cmdCtx := command.NewSimpleCommandContext(a, sessionKey)
+        response, err := a.commands.HandleCommand(ctx, name, args, cmdCtx)
+        // ... handle response
+    }
+    // ... normal processing
+}
+```
+
 ## Files Changed
 
-- `pkg/agent/command_registry.go` - New file
-- `pkg/agent/command_registry_test.go` - New file
-- `pkg/agent/command_builtin.go` - New file
-- `pkg/agent/command_builtin_test.go` - New file
-- `pkg/agent/command_additional.go` - New file
-- `pkg/agent/command_additional_test.go` - New file
-- `pkg/agent/agent_commands.go` - New file
-- `pkg/agent/agent.go` - Modified (added `commands` field, initialization)
+### New Files
+- `pkg/command/registry.go` - CommandRegistry core implementation (shared package)
+- `pkg/command/registry_test.go` - Tests for CommandRegistry (shared package)
+- `pkg/agent/command_builtin.go` - `/help`, `/commands` commands
+- `pkg/agent/command_builtin_test.go` - Tests for built-in commands
+- `pkg/agent/command_additional.go` - `/session`, `/clear`, `/model`, `/set_thinking_level` commands
+- `pkg/agent/command_additional_test.go` - Tests for additional commands
+- `pkg/agent/agent_commands.go` - Command processing logic in Agent
+
+### Modified Files
+- `pkg/agent/agent.go` - Added `commands` field and initialization
+
+## Design Decisions
+
+1. **Shared Package**: `pkg/command` is a standalone package that can be used by any project
+2. **Interface-based Decoupling**: `CommandContext` interface allows different agent implementations
+3. **Type Assertion**: Handlers use type assertion to get specific agent types (flexible but requires care)
+4. **Assistant Messages**: Command responses are emitted as assistant messages (not user messages)
+5. **No Session History Override**: Commands use `NewAgentEndEvent(nil)` to avoid overwriting session history

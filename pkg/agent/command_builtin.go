@@ -4,24 +4,29 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/command"
 )
 
 func registerBuiltinCommands(a *Agent) {
 	// /help - Display help information
 	a.commands.Register("help", "Display help information for all available commands",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleHelpCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleHelpCommand(ctx, cmdCtx, args)
 		})
 
 	// /commands - List all available commands
 	a.commands.Register("commands", "List all available commands",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleCommandsCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleCommandsCommand(ctx, cmdCtx, args)
 		})
 }
 
-func handleHelpCommand(agent *Agent, args string) (string, error) {
+func handleHelpCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	// Get Agent from context
+	agent := cmdCtx.GetAgent().(*Agent)
 	descriptors := agent.commands.ListDescriptors()
+
 	if len(descriptors) == 0 {
 		return "No commands available.", nil
 	}
@@ -35,8 +40,11 @@ func handleHelpCommand(agent *Agent, args string) (string, error) {
 	return sb.String(), nil
 }
 
-func handleCommandsCommand(agent *Agent, args string) (string, error) {
+func handleCommandsCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	// Get Agent from context
+	agent := cmdCtx.GetAgent().(*Agent)
 	commands := agent.commands.List()
+
 	if len(commands) == 0 {
 		return "No commands available.", nil
 	}

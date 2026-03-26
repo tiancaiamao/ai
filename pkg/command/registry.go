@@ -1,4 +1,4 @@
-package agent
+package command
 
 import (
 	"context"
@@ -6,9 +6,54 @@ import (
 	"sync"
 )
 
+// CommandContext provides context for command execution.
+// Commands can access the agent implementation and session key through this interface.
+// This allows the command registry to be shared across different projects (ai, claw, etc.)
+// without coupling to specific agent implementations.
+type CommandContext interface {
+	// GetAgent returns the underlying agent implementation (type *any).
+	// Commands should type-assert to their expected agent type.
+	// Example: agent := ctx.GetAgent().(*pkg.Agent)
+	GetAgent() any
+	// GetSessionKey returns the current session key.
+	GetSessionKey() string
+}
+
+// SimpleCommandContext is a basic implementation of CommandContext.
+type SimpleCommandContext struct {
+	Agent      any
+	SessionKey string
+}
+
+// GetAgent returns the agent implementation.
+func (c *SimpleCommandContext) GetAgent() any {
+	return c.Agent
+}
+
+// GetSessionKey returns the session key.
+func (c *SimpleCommandContext) GetSessionKey() string {
+	return c.SessionKey
+}
+
+// NewSimpleCommandContext creates a new SimpleCommandContext with the given agent and session key.
+func NewSimpleCommandContext(agent any, sessionKey string) *SimpleCommandContext {
+	return &SimpleCommandContext{
+		Agent:      agent,
+		SessionKey: sessionKey,
+	}
+}
+
 // CommandHandler is the function signature for command handlers.
-// Commands can access the agent and session key to read/modify state.
-type CommandHandler func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error)
+// Commands can access the agent and session key through CommandContext.
+// Use type assertion to get the specific agent type.
+//
+// Example for ai project:
+//   handler := func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+//       agent := cmdCtx.GetAgent().(*agentpkg.Agent)
+//       sessionKey := cmdCtx.GetSessionKey()
+//       // ... use agent and sessionKey
+//   }
+type CommandHandler func(ctx context.Context, cmdCtx CommandContext, args string) (string, error)
 
 // CommandDescriptor describes a command for help display.
 type CommandDescriptor struct {
@@ -79,11 +124,11 @@ func (r *CommandRegistry) ListDescriptors() []CommandDescriptor {
 
 // HandleCommand executes a command and returns its response.
 // Returns an error if the command is not found or execution fails.
-func (r *CommandRegistry) HandleCommand(ctx context.Context, name, args string, agent *Agent, sessionKey string) (string, error) {
+func (r *CommandRegistry) HandleCommand(ctx context.Context, name, args string, cmdCtx CommandContext) (string, error) {
 	handler, exists := r.Get(name)
 	if !exists {
 		return "", fmt.Errorf("command not found: %s", name)
 	}
 
-	return handler(ctx, agent, sessionKey, args)
+	return handler(ctx, cmdCtx, args)
 }

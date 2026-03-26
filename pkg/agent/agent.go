@@ -12,6 +12,7 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -80,7 +81,7 @@ type Agent struct {
 	traceDone      chan struct{}
 	shutdownOnce   sync.Once
 	traceSeq       atomic.Uint64
-	commands       *CommandRegistry // Command registry for handling /commands
+	commands       *command.CommandRegistry // Command registry for handling /commands
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -136,7 +137,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	}
 
 	// Initialize command registry
-	commands := NewCommandRegistry()
+	commands := command.NewCommandRegistry()
 
 	a := &Agent{
 		mu:           make(chan struct{}, 1),

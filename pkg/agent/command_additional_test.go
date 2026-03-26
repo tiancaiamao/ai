@@ -5,18 +5,20 @@ import (
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAdditionalCommands(t *testing.T) {
 	agent := setupTestAgent(t)
-	agent.commands = NewCommandRegistry()
+	agent.commands = command.NewCommandRegistry()
 	registerAdditionalCommands(agent)
 
 	t.Run("SessionCommand", func(t *testing.T) {
 		ctx := context.Background()
-		result, err := agent.commands.HandleCommand(ctx, "session", "", agent, "")
+		cmdCtx := command.NewSimpleCommandContext(agent, "")
+		result, err := agent.commands.HandleCommand(ctx, "session", "", cmdCtx)
 		require.NoError(t, err)
 		require.Contains(t, result, "Session:")
 		require.Contains(t, result, "Model:")
@@ -25,14 +27,16 @@ func TestAdditionalCommands(t *testing.T) {
 
 	t.Run("ClearCommand", func(t *testing.T) {
 		ctx := context.Background()
-		result, err := agent.commands.HandleCommand(ctx, "clear", "", agent, "")
+		cmdCtx := command.NewSimpleCommandContext(agent, "")
+		result, err := agent.commands.HandleCommand(ctx, "clear", "", cmdCtx)
 		require.NoError(t, err)
 		require.Contains(t, result, "Conversation context cleared")
 	})
 
 	t.Run("ModelCommand", func(t *testing.T) {
 		ctx := context.Background()
-		result, err := agent.commands.HandleCommand(ctx, "model", "", agent, "")
+		cmdCtx := command.NewSimpleCommandContext(agent, "")
+		result, err := agent.commands.HandleCommand(ctx, "model", "", cmdCtx)
 		require.NoError(t, err)
 		require.Contains(t, result, "Current model:")
 	})
@@ -41,13 +45,14 @@ func TestAdditionalCommands(t *testing.T) {
 		ctx := context.Background()
 
 		// Valid level
-		result, err := agent.commands.HandleCommand(ctx, "set_thinking_level", "high", agent, "")
+		cmdCtx := command.NewSimpleCommandContext(agent, "")
+		result, err := agent.commands.HandleCommand(ctx, "set_thinking_level", "high", cmdCtx)
 		require.NoError(t, err)
 		require.Contains(t, result, "Thinking level set to: high")
 		require.Equal(t, "high", agent.LoopConfig.ThinkingLevel)
 
 		// Invalid level
-		result, err = agent.commands.HandleCommand(ctx, "set_thinking_level", "invalid", agent, "")
+		result, err = agent.commands.HandleCommand(ctx, "set_thinking_level", "invalid", cmdCtx)
 		require.NoError(t, err)
 		require.Contains(t, result, "Invalid thinking level")
 	})
@@ -61,7 +66,7 @@ func setupTestAgent(t *testing.T) *Agent {
 	return &Agent{
 		model:        model,
 		systemPrompt: "Test",
-		commands:     NewCommandRegistry(),
+		commands:     command.NewCommandRegistry(),
 		LoopConfig: LoopConfig{
 			ThinkingLevel: "high",
 		},

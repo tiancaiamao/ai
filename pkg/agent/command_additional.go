@@ -6,43 +6,46 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/command"
 )
 
 // registerAdditionalCommands registers more built-in commands.
 func registerAdditionalCommands(a *Agent) {
 	// /session - Display session information
 	a.commands.Register("session", "Display current session information",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleSessionCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleSessionCommand(ctx, cmdCtx, args)
 		})
 
 	// /clear - Clear conversation context
 	a.commands.Register("clear", "Clear the conversation context",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleClearCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleClearCommand(ctx, cmdCtx, args)
 		})
 
 	// /model - Display or set the current model
 	a.commands.Register("model", "Display or set the current model",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleModelCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleModelCommand(ctx, cmdCtx, args)
 		})
 
 	// /set_thinking_level - Set the thinking level
 	a.commands.Register("set_thinking_level", "Set the thinking level (off, minimal, low, medium, high, xhigh)",
-		func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
-			return handleSetThinkingLevelCommand(agent, args)
+		func(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+			return handleSetThinkingLevelCommand(ctx, cmdCtx, args)
 		})
 }
 
-func handleSessionCommand(agent *Agent, args string) (string, error) {
+func handleSessionCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	agent := cmdCtx.GetAgent().(*Agent)
 	msgCount := len(agent.GetMessages())
 	model := agent.GetModel()
 	return fmt.Sprintf("Session: %d messages in context\nModel: %s\nThinking level: %s",
 		msgCount, model.ID, agent.LoopConfig.ThinkingLevel), nil
 }
 
-func handleClearCommand(agent *Agent, args string) (string, error) {
+func handleClearCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	agent := cmdCtx.GetAgent().(*Agent)
 	agentCtx := agent.GetContext()
 	if agentCtx == nil {
 		return "Error: no agent context", nil
@@ -52,7 +55,8 @@ func handleClearCommand(agent *Agent, args string) (string, error) {
 	return "Conversation context cleared.", nil
 }
 
-func handleModelCommand(agent *Agent, args string) (string, error) {
+func handleModelCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	agent := cmdCtx.GetAgent().(*Agent)
 	if args == "" {
 		return fmt.Sprintf("Current model: %s", agent.GetModel().ID), nil
 	}
@@ -61,7 +65,8 @@ func handleModelCommand(agent *Agent, args string) (string, error) {
 	return fmt.Sprintf("Model setting not yet implemented. Current model: %s", agent.GetModel().ID), nil
 }
 
-func handleSetThinkingLevelCommand(agent *Agent, args string) (string, error) {
+func handleSetThinkingLevelCommand(ctx context.Context, cmdCtx command.CommandContext, args string) (string, error) {
+	agent := cmdCtx.GetAgent().(*Agent)
 	level := strings.TrimSpace(args)
 	validLevels := map[string]bool{
 		"off":     true,

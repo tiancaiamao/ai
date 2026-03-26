@@ -1,4 +1,4 @@
-package agent
+package command
 
 import (
 	"context"
@@ -6,13 +6,19 @@ import (
 	"testing"
 )
 
+// mockAgent is a simple mock for testing
+type mockAgent struct {
+	name string
+}
+
 func TestCommandRegistry_RegisterAndGet(t *testing.T) {
 	registry := NewCommandRegistry()
 	ctx := context.Background()
-	agent := &Agent{}
+	agent := &mockAgent{name: "test"}
 	sessionKey := "test-session"
+	cmdCtx := &SimpleCommandContext{Agent: agent, SessionKey: sessionKey}
 
-	handler := func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
+	handler := func(ctx context.Context, cmdCtx CommandContext, args string) (string, error) {
 		return "hello " + args, nil
 	}
 
@@ -25,7 +31,7 @@ func TestCommandRegistry_RegisterAndGet(t *testing.T) {
 		t.Fatalf("expected command to exist")
 	}
 
-	result, err := h(ctx, agent, sessionKey, "world")
+	result, err := h(ctx, cmdCtx, "world")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,9 +43,9 @@ func TestCommandRegistry_RegisterAndGet(t *testing.T) {
 func TestCommandRegistry_List(t *testing.T) {
 	registry := NewCommandRegistry()
 
-	registry.Register("cmd1", "command 1", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
-	registry.Register("cmd2", "command 2", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
-	registry.Register("cmd3", "command 3", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+	registry.Register("cmd1", "command 1", func(_ context.Context, _ CommandContext, _ string) (string, error) { return "", nil })
+	registry.Register("cmd2", "command 2", func(_ context.Context, _ CommandContext, _ string) (string, error) { return "", nil })
+	registry.Register("cmd3", "command 3", func(_ context.Context, _ CommandContext, _ string) (string, error) { return "", nil })
 
 	list := registry.List()
 	if len(list) != 3 {
@@ -62,8 +68,8 @@ func TestCommandRegistry_List(t *testing.T) {
 func TestCommandRegistry_ListDescriptors(t *testing.T) {
 	registry := NewCommandRegistry()
 
-	registry.Register("help", "Show help", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
-	registry.Register("clear", "Clear context", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) { return "", nil })
+	registry.Register("help", "Show help", func(_ context.Context, _ CommandContext, _ string) (string, error) { return "", nil })
+	registry.Register("clear", "Clear context", func(_ context.Context, _ CommandContext, _ string) (string, error) { return "", nil })
 
 	descriptors := registry.ListDescriptors()
 	if len(descriptors) != 2 {
@@ -87,16 +93,17 @@ func TestCommandRegistry_ListDescriptors(t *testing.T) {
 func TestCommandRegistry_HandleCommand(t *testing.T) {
 	registry := NewCommandRegistry()
 	ctx := context.Background()
-	agent := &Agent{}
+	agent := &mockAgent{name: "test"}
 	sessionKey := "test-session"
+	cmdCtx := &SimpleCommandContext{Agent: agent, SessionKey: sessionKey}
 
-	handler := func(ctx context.Context, agent *Agent, sessionKey string, args string) (string, error) {
+	handler := func(ctx context.Context, cmdCtx CommandContext, args string) (string, error) {
 		return "result: " + args, nil
 	}
 
 	registry.Register("test", "test command", handler)
 
-	result, err := registry.HandleCommand(ctx, "test", "arg1", agent, sessionKey)
+	result, err := registry.HandleCommand(ctx, "test", "arg1", cmdCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,10 +115,9 @@ func TestCommandRegistry_HandleCommand(t *testing.T) {
 func TestCommandRegistry_HandleCommand_NotFound(t *testing.T) {
 	registry := NewCommandRegistry()
 	ctx := context.Background()
-	agent := &Agent{}
-	sessionKey := "test-session"
+	cmdCtx := &SimpleCommandContext{}
 
-	_, err := registry.HandleCommand(ctx, "nonexistent", "args", agent, sessionKey)
+	_, err := registry.HandleCommand(ctx, "nonexistent", "args", cmdCtx)
 	if err == nil {
 		t.Fatalf("expected error for nonexistent command")
 	}
@@ -129,7 +135,7 @@ func TestCommandRegistry_ConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			name := "cmd" + string(rune(i))
-			registry.Register(name, "test", func(_ context.Context, _ *Agent, _ string, _ string) (string, error) {
+			registry.Register(name, "test", func(_ context.Context, _ CommandContext, _ string) (string, error) {
 				return "", nil
 			})
 		}(i)
@@ -151,5 +157,22 @@ func TestCommandRegistry_ConcurrentAccess(t *testing.T) {
 	list := registry.List()
 	if len(list) < numGoroutines/2 {
 		t.Fatalf("expected at least %d commands to be registered, got %d", numGoroutines/2, len(list))
+	}
+}
+
+// TestCommandContext verifies that CommandContext interface works correctly
+func TestCommandContext(t *testing.T) {
+	agent := &mockAgent{name: "test"}
+	sessionKey := "test-session"
+	cmdCtx := &SimpleCommandContext{Agent: agent, SessionKey: sessionKey}
+
+	retrievedAgent := cmdCtx.GetAgent()
+	retrievedSessionKey := cmdCtx.GetSessionKey()
+
+	if retrievedAgent != agent {
+		t.Fatalf("expected agent to be the same instance")
+	}
+	if retrievedSessionKey != sessionKey {
+		t.Fatalf("expected session key %s, got %s", sessionKey, retrievedSessionKey)
 	}
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"strings"
 	"testing"
@@ -15,8 +16,9 @@ func TestBuiltinCommands_Help(t *testing.T) {
 	model := llm.Model{ID: "test-model"}
 	agent := NewAgentWithContext(model, "test-api-key", agentCtx)
 
-	// Test /help command
-	result, err := agent.commands.HandleCommand(ctx, "help", "", agent, "test-session")
+	// Test /help command with CommandContext
+	cmdCtx := command.NewSimpleCommandContext(agent, "test-session")
+	result, err := agent.commands.HandleCommand(ctx, "help", "", cmdCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,8 +47,9 @@ func TestBuiltinCommands_Commands(t *testing.T) {
 	model := llm.Model{ID: "test-model"}
 	agent := NewAgentWithContext(model, "test-api-key", agentCtx)
 
-	// Test /commands command
-	result, err := agent.commands.HandleCommand(ctx, "commands", "", agent, "test-session")
+	// Test /commands command with CommandContext
+	cmdCtx := command.NewSimpleCommandContext(agent, "test-session")
+	result, err := agent.commands.HandleCommand(ctx, "commands", "", cmdCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
