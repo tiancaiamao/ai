@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -374,6 +375,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 
+	// Initialize command registry with builtin commands
+	commandRegistry := command.NewRegistry()
+	command.RegisterBuiltinCommands(commandRegistry)
+
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
@@ -404,6 +409,60 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Helper function to expand /skill:name commands
 	expandSkillCommands := func(text string) string {
 		return skill.ExpandCommand(text, skillResult.Skills)
+	}
+
+	// Helper function to handle slash commands
+	handleSlashCommand := func(message string, ag *agent.Agent, sess *session.Session, server *rpc.Server, registry *command.Registry) error {
+		slog.Info("Processing slash command", "command", message)
+
+		// Parse command: /name args
+		parts := strings.Fields(strings.TrimPrefix(message, "/"))
+		if len(parts) == 0 {
+			return fmt.Errorf("invalid command format")
+		}
+
+		name := parts[0]
+		args := ""
+		if len(parts) > 1 {
+			args = strings.Join(parts[1:], " ")
+		}
+
+		// Create command context
+		sessionKey := ""
+		if sess != nil {
+			sessionKey = sess.GetID()
+		}
+		cmdCtx := command.NewSimpleCommandContext(ag, sessionKey)
+
+		// Execute command
+		ctx := context.Background()
+		response, err := registry.Handle(ctx, name, args, cmdCtx)
+		if err != nil {
+			slog.Error("Command execution failed", "command", name, "error", err)
+			// Send error message to user
+			server.EmitEvent(map[string]any{
+				"type": "text_delta",
+				"content": map[string]any{
+					"role":    "assistant",
+					"text":    fmt.Sprintf("Command error: %v", err),
+					"partial": false,
+				},
+			})
+			return err
+		}
+
+		// Send response to user
+		server.EmitEvent(map[string]any{
+			"type": "text_delta",
+			"content": map[string]any{
+				"role":    "assistant",
+				"text":    response,
+				"partial": false,
+			},
+		})
+
+		slog.Info("Command executed successfully", "command", name)
+		return nil
 	}
 
 	// Trigger automatic compaction right before a new request is executed
@@ -487,6 +546,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		if len(req.Images) > 0 {
 			return fmt.Errorf("images are not supported in this RPC implementation")
+		}
+
+		// Handle slash commands before skill expansion
+		if strings.HasPrefix(message, "/") {
+			return handleSlashCommand(message, ag, sess, server, commandRegistry)
 		}
 
 		// Expand /skill:name commands
