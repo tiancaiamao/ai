@@ -31,10 +31,10 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
+	"github.com/tiancaiamao/ai/claw/pkg/memory"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/claw/pkg/web"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -635,36 +635,33 @@ func resolveAPIKey(clawDir, provider string) (string, error) {
 	return "", fmt.Errorf("API key not found for provider %s in auth.json", provider)
 }
 
-// buildSystemPrompt 构建 system prompt
-// 使用 prompt.Builder，支持从 ~/.aiclaw/AGENTS.md 加载身份
+// buildSystemPrompt 构建 system prompt (picoclaw style)
+// 支持从 ~/.aiclaw/AGENTS.md 加载自定义身份
+// 集成 memory 系统 (MEMORY.md + daily notes)
 func buildSystemPrompt(clawDir string, skills []skill.Skill) string {
-	// 默认身份
-	defaultIdentity := `# Claw Assistant
+	// Picoclaw 风格的默认身份
+	defaultIdentity := fmt.Sprintf(`# Claw 🦀
 
-You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, etc).
+You are claw, a helpful AI assistant.
 
 ## Important Rules
 
-1. **Be helpful and accurate** - Provide clear, useful responses.
+1. **ALWAYS use tools** - When you need to perform an action (read files, execute commands, send messages, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it.
 
-2. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
+2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Be friendly** - Maintain a warm, approachable tone.
+3. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
 
-4. **Use tools when needed** - When you need to perform actions, call the appropriate tool.
+4. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
 
-## Capabilities
+## Current Environment
 
-- Answer questions and provide information
-- Help with various tasks
-- Remember conversation context within a session
+- Config dir: %s
+- Memory: %s/memory/MEMORY.md
+- Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
+- Skills: %s/skills/{skill-name}/SKILL.md
+`, clawDir, clawDir, clawDir, clawDir, clawDir)
 
-## Limitations
-
-- You cannot access the internet directly unless tools are available
-- You cannot execute code unless tools are available
-- Each chat session is independent - you don't share memory across different groups/private chats
-`
 	// 尝试从 ~/.aiclaw/AGENTS.md 加载自定义身份
 	basePrompt := defaultIdentity
 	agentsPath := filepath.Join(clawDir, "AGENTS.md")
@@ -673,12 +670,41 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 		slog.Info("Loaded custom identity from AGENTS.md", "path", agentsPath)
 	}
 
-	// 使用 prompt.Builder 构建
-	builder := prompt.NewBuilder(basePrompt, "").
-		SetNoWorkspace(true).
-		SetSkills(skills)
+	// 构建提示词部分
+	parts := []string{basePrompt}
 
-	return builder.Build()
+	// 添加 memory 上下文
+	memStore := memory.NewStore(clawDir)
+	if memoryContext := memStore.GetMemoryContext(); memoryContext != "" {
+		parts = append(parts, memoryContext)
+	}
+
+	// 添加技能列表
+	if len(skills) > 0 {
+		skillsSummary := buildSkillsSummary(skills)
+		if skillsSummary != "" {
+			parts = append(parts, fmt.Sprintf(`# Skills
+
+The following skills extend your capabilities.
+
+%s`, skillsSummary))
+		}
+	}
+
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// buildSkillsSummary 构建技能摘要
+func buildSkillsSummary(skills []skill.Skill) string {
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var lines []string
+	for _, s := range skills {
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", s.Name, s.Description))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // registerCronCommands registers cron control commands.
