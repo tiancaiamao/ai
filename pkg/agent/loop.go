@@ -784,8 +784,8 @@ func streamAssistantResponse(
 		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
 		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
 
-		// Only insert runtime_state if not the first message OR after compact recovery
-		if runtimeAppendix != "" && (postCompactRecovery || (agentCtx.ContextMgmtState != nil && agentCtx.ContextMgmtState.CurrentTurn > 1)) {
+		// Always insert runtime_state when available so path telemetry is present from turn one.
+		if runtimeAppendix != "" {
 			runtimeMsg := llm.LLMMessage{
 				Role:    "user",
 				Content: runtimeAppendix,

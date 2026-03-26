@@ -412,7 +412,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	loopCfg.Model = model
 	loopCfg.APIKey = apiKey
 	loopCfg.GetWorkingDir = ws.GetCWD
-	loopCfg.GetStartupPath = ws.GetGitRoot
+	loopCfg.GetStartupPath = ws.GetInitialCWD
 
 	// Set task tracking and context management based on config
 	loopCfg.TaskTrackingEnabled = cfg.TaskTracking

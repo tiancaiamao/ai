@@ -106,9 +106,11 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 			BaseURL:  server.URL,
 			API:      "openai-completions",
 		},
-		APIKey:        "test-key",
-		ThinkingLevel: "high",
-		ContextWindow: 128000,
+		APIKey:         "test-key",
+		ThinkingLevel:  "high",
+		ContextWindow:  128000,
+		GetWorkingDir:  func() string { return "/tmp/worktree-a" },
+		GetStartupPath: func() string { return "/tmp/project-root" },
 	}
 
 	stream := newTestAgentEventStream()
@@ -135,16 +137,26 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 		t.Fatalf("expected runtime payload outside system prompt, got system content: %q", systemContent)
 	}
 
-	// First message: runtime_state should NOT be injected
+	// First message: runtime_state should be injected as a user message.
+	foundRuntimeState := false
 	for _, msg := range observedMessages {
 		if msg.Role == "user" {
 			var runtimeContent string
 			if err := json.Unmarshal(msg.Content, &runtimeContent); err == nil {
-				if strings.Contains(runtimeContent, "<agent:runtime_state>") {
-					t.Fatalf("expected runtime_state NOT to be injected on first message, got: %q", runtimeContent)
+				if strings.Contains(runtimeContent, "<agent:runtime_state") {
+					foundRuntimeState = true
+					if !strings.Contains(runtimeContent, `current_workdir: "/tmp/worktree-a"`) {
+						t.Fatalf("expected runtime_state to include current_workdir, got: %q", runtimeContent)
+					}
+					if !strings.Contains(runtimeContent, `startup_path: "/tmp/project-root"`) {
+						t.Fatalf("expected runtime_state to include startup_path, got: %q", runtimeContent)
+					}
 				}
 			}
 		}
+	}
+	if !foundRuntimeState {
+		t.Fatal("expected runtime_state to be injected on first message")
 	}
 }
 

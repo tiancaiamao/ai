@@ -370,7 +370,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.Model = model
 	loopCfg.APIKey = apiKey
 	loopCfg.GetWorkingDir = ws.GetCWD
-	loopCfg.GetStartupPath = ws.GetGitRoot
+	loopCfg.GetStartupPath = ws.GetInitialCWD
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
