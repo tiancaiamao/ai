@@ -579,35 +579,162 @@ func (s *Server) handleGatewayLogs(w http.ResponseWriter, r *http.Request) {
 
 // handleListModels returns the available models.
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Return current model as the only available model
+	// Read config file
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse config
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get current model
+	currentModelID := ""
+	if model, ok := config["model"].(map[string]any); ok {
+		if id, ok := model["id"].(string); ok {
+			currentModelID = id
+		}
+	}
+
+	// Get model list
+	modelList := []map[string]any{}
+	if models, ok := config["model_list"].([]any); ok {
+		for i, m := range models {
+			if modelMap, ok := m.(map[string]any); ok {
+				modelInfo := map[string]any{
+					"index":       i,
+					"model_name":  modelMap["model_name"],
+					"model":       modelMap["model"],
+					"api_base":    modelMap["api_base"],
+					"configured":  true,
+					"is_default":  false,
+					"is_virtual":  false,
+				}
+
+				// Check if this is the current model
+				if modelName, ok := modelMap["model"].(string); ok {
+					// Match by model ID or model name
+					if modelName == currentModelID || strings.HasSuffix(modelName, currentModelID) {
+						modelInfo["is_default"] = true
+					}
+				}
+
+				modelList = append(modelList, modelInfo)
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"models": []map[string]any{
-			{
-				"index":       0,
-				"model_name":  "current",
-				"model":       "current-model",
-				"enabled":     true,
-				"configured":  true,
-				"is_default":  true,
-				"api_key":     "***",
-			},
-		},
-		"total":         1,
-		"default_model": "current",
+		"models":        modelList,
+		"total":         len(modelList),
+		"default_model": currentModelID,
 	})
 }
 
-// handleSetDefaultModel sets the default model (no-op for claw).
+// handleSetDefaultModel sets the default model.
 func (s *Server) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	// Parse request body
+	var req struct {
+		ModelName string `json:"model_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.ModelName == "" {
+		http.Error(w, "model_name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Read current config
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the model in model_list
+	var selectedModel map[string]any
+	if models, ok := config["model_list"].([]any); ok {
+		for _, m := range models {
+			if modelMap, ok := m.(map[string]any); ok {
+				if name, ok := modelMap["model_name"].(string); ok && name == req.ModelName {
+					selectedModel = modelMap
+					break
+				}
+			}
+		}
+	}
+
+	if selectedModel == nil {
+		http.Error(w, fmt.Sprintf("Model '%s' not found in model_list", req.ModelName), http.StatusNotFound)
+		return
+	}
+
+	// Update current model configuration
+	newModelConfig := map[string]any{
+		"id":       selectedModel["model"],
+		"provider": "",
+	}
+
+	// Extract provider from model field (e.g., "zai/glm-4.7" -> provider="zai")
+	if modelStr, ok := selectedModel["model"].(string); ok {
+		if parts := strings.SplitN(modelStr, "/", 2); len(parts) == 2 {
+			newModelConfig["provider"] = parts[0]
+		}
+	}
+
+	// Set baseUrl if available
+	if apiBase, ok := selectedModel["api_base"].(string); ok {
+		newModelConfig["baseUrl"] = apiBase
+	}
+
+	config["model"] = newModelConfig
+
+	// Write updated config
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"message": "Model configured in config.json",
+		"status":        "ok",
+		"message":       fmt.Sprintf("Model switched to '%s'. Service restart is required.", req.ModelName),
+		"default_model": req.ModelName,
 	})
 }
 
