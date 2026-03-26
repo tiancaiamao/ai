@@ -27,6 +27,7 @@ type LLMMessage struct {
 	Role         string        `json:"role"` // "system", "user", "assistant", "tool"
 	Content      string        `json:"-"`    // Use custom marshaling
 	ContentParts []ContentPart `json:"-"`    // Use custom marshaling
+	Thinking     string        `json:"-"`    // Thinking/reasoning content (separate from main content)
 	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID   string        `json:"tool_call_id,omitempty"`
 }
@@ -211,6 +212,11 @@ func (pm *PartialMessage) ToLLMMessage() LLMMessage {
 	msg := LLMMessage{
 		Role:    pm.Role,
 		Content: pm.Content.String(),
+	}
+
+	// Include thinking content if present (for reasoning models)
+	if pm.Thinking.Len() > 0 {
+		msg.Thinking = pm.Thinking.String()
 	}
 
 	if len(pm.ToolCalls) > 0 {

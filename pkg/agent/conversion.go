@@ -341,6 +341,14 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) agentctx.AgentMessage {
 	agentMsg := agentctx.NewAssistantMessage()
 	agentMsg.Content = []agentctx.ContentBlock{}
 
+	// Add thinking content first (for reasoning models)
+	if llmMsg.Thinking != "" {
+		agentMsg.Content = append(agentMsg.Content, agentctx.ThinkingContent{
+			Type:     "thinking",
+			Thinking: llmMsg.Thinking,
+		})
+	}
+
 	// Add text content
 	if llmMsg.Content != "" {
 		agentMsg.Content = append(agentMsg.Content, agentctx.TextContent{
