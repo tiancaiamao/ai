@@ -24,8 +24,9 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
-	_ "github.com/sipeed/picoclaw/pkg/channels/feishu" // 注册飞书通道工厂
-	_ "github.com/sipeed/picoclaw/pkg/channels/pico"   // 注册 Pico Channel 工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"    // 注册飞书通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/pico"      // 注册 Pico Channel 工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"    // 注册微信通道工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
@@ -114,7 +115,7 @@ func main() {
 		Channels: cfg.Channels,
 	}
 
-	// Load security.yml to get Pico token
+	// Load security.yml to get Pico and Weixin tokens
 	securityPath := filepath.Join(filepath.Dir(configPath), ".security.yml")
 	if securityData, err := os.ReadFile(securityPath); err == nil {
 		type SecurityConfig struct {
@@ -122,13 +123,20 @@ func main() {
 				Pico struct {
 					Token string `json:"token" yaml:"token"`
 				} `json:"pico" yaml:"pico"`
+				Weixin struct {
+					Token string `json:"token" yaml:"token"`
+				} `json:"weixin" yaml:"weixin"`
 			} `json:"channels" yaml:"channels"`
 		}
 		var sec SecurityConfig
 		if err := yaml.Unmarshal(securityData, &sec); err == nil {
 			if sec.Channels.Pico.Token != "" {
-				picoCfg.Channels.Pico.Token = sec.Channels.Pico.Token
+				picoCfg.Channels.Pico.SetToken(sec.Channels.Pico.Token)
 				slog.Info("Loaded Pico token from security file")
+			}
+			if sec.Channels.Weixin.Token != "" {
+				picoCfg.Channels.Weixin.SetToken(sec.Channels.Weixin.Token)
+				slog.Info("Loaded Weixin token from security file")
 			}
 		}
 	}
@@ -237,7 +245,7 @@ func main() {
 		ClawDir:         clawDir, // 传递 claw 配置目录
 		Transcriber:     transcriber,
 		FeishuAppID:     cfg.Channels.Feishu.AppID,
-		FeishuAppSecret: cfg.Channels.Feishu.AppSecret,
+		FeishuAppSecret: cfg.Channels.Feishu.AppSecret(),
 		Skills:          skillResult.Skills,
 	}
 

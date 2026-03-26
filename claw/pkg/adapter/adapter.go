@@ -366,8 +366,7 @@ func (a *AgentLoop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			slog.Info("[AgentLoop] Stopped by context")
 			return nil
-		default:
-			msg, ok := a.bus.ConsumeInbound(ctx)
+		case msg, ok := <-a.bus.InboundChan():
 			if !ok {
 				continue
 			}

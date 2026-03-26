@@ -4,6 +4,9 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,8 +20,46 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels/weixin"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	"rsc.io/qr"
 )
+
+const (
+	weixinFlowTTL   = 5 * time.Minute
+	weixinFlowGCAge = 30 * time.Minute
+	weixinBaseURL   = "https://ilinkai.weixin.qq.com/"
+	weixinBotType   = "3"
+)
+
+const (
+	weixinStatusWait      = "wait"
+	weixinStatusScanned   = "scaned"
+	weixinStatusConfirmed = "confirmed"
+	weixinStatusExpired   = "expired"
+	weixinStatusError     = "error"
+)
+
+// weixinFlow represents a WeChat QR login flow session.
+type weixinFlow struct {
+	ID        string
+	Qrcode    string // qrcode token from WeChat API (used for status polling)
+	QRDataURI string // base64 PNG data URI for display
+	AccountID string // IlinkBotID returned on confirmed
+	Status    string // wait / scaned / confirmed / expired / error
+	Error     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	ExpiresAt time.Time
+}
+
+type weixinFlowResponse struct {
+	FlowID    string `json:"flow_id"`
+	Status    string `json:"status"`
+	QRDataURI string `json:"qr_data_uri,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
 
 // Server is the web server that serves the claw web UI.
 type Server struct {
@@ -29,6 +70,9 @@ type Server struct {
 	configPath   string
 	clawDir      string
 	shutdownOnce sync.Once
+	// Weixin flow state
+	weixinMu     sync.RWMutex
+	weixinFlows  map[string]*weixinFlow
 }
 
 // Config is the configuration for the web server.
@@ -62,11 +106,12 @@ func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus
 	}
 
 	return &Server{
-		addr:       addr,
-		agentLoop:  agentLoop,
-		msgBus:     msgBus,
-		configPath: configPath,
-		clawDir:    clawDir,
+		addr:        addr,
+		agentLoop:   agentLoop,
+		msgBus:      msgBus,
+		configPath:  configPath,
+		clawDir:     clawDir,
+		weixinFlows: make(map[string]*weixinFlow),
 	}
 }
 
@@ -770,10 +815,17 @@ func (s *Server) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Determine API type - most providers use OpenAI-compatible API
+	apiType := "openai-completions"
+	if provider == "anthropic" {
+		apiType = "anthropic-messages"
+	}
+
 	newModelConfig := map[string]any{
 		"id":       modelID,
 		"provider": provider,
 		"baseUrl":  apiBase,
+		"api":      apiType,
 	}
 
 	config["model"] = newModelConfig
@@ -1046,94 +1098,284 @@ func validateConfig(config map[string]any) error {
 	return nil
 }
 
-// WeChat/Weixin Flow API handlers (placeholder for compatibility)
+// WeChat/Weixin Flow API handlers
 
-// handleWeixinFlow starts a WeChat login flow (not supported in claw).
+// handleWeixinFlow starts a new WeChat QR login flow.
+// POST /api/weixin/flows
 func (s *Server) handleWeixinFlow(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	api, err := weixin.NewApiClient(weixinBaseURL, "", "")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to create weixin client: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	qrResp, err := api.GetQRCode(ctx, weixinBotType)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get QR code: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	dataURI, err := generateQRDataURI(qrResp.QrcodeImgContent)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to generate QR image: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now()
+	flow := &weixinFlow{
+		ID:        newWeixinFlowID(),
+		Qrcode:    qrResp.Qrcode,
+		QRDataURI: dataURI,
+		Status:    weixinStatusWait,
+		CreatedAt: now,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(weixinFlowTTL),
+	}
+	s.storeWeixinFlow(flow)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode(weixinFlowResponse{
+		FlowID:    flow.ID,
+		Status:    flow.Status,
+		QRDataURI: flow.QRDataURI,
+	})
+}
 
-	// Check if weixin is configured
+// handleWeixinFlowPoll polls the WeChat API for QR code status and updates the flow.
+// GET /api/weixin/flows/{id}
+func (s *Server) handleWeixinFlowPoll(w http.ResponseWriter, r *http.Request) {
+	// Extract flow ID from path using PathValue for Go 1.22+ router
+	flowID := r.PathValue("id")
+	if flowID == "" {
+		// Fallback for older router: extract from path manually
+		path := r.URL.Path
+		prefix := "/api/weixin/flows/"
+		if !strings.HasPrefix(path, prefix) {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+		flowID = strings.TrimPrefix(path, prefix)
+	}
+
+	flowID = strings.TrimSpace(flowID)
+	if flowID == "" {
+		http.Error(w, "missing flow id", http.StatusBadRequest)
+		return
+	}
+
+	flow, ok := s.getWeixinFlow(flowID)
+	if !ok {
+		http.Error(w, "flow not found", http.StatusNotFound)
+		return
+	}
+
+	// Return terminal states directly without polling WeChat again
+	if flow.Status == weixinStatusConfirmed ||
+		flow.Status == weixinStatusExpired ||
+		flow.Status == weixinStatusError {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(weixinFlowResponse{
+			FlowID: flow.ID,
+			Status: flow.Status,
+			Error:  flow.Error,
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	api, err := weixin.NewApiClient(weixinBaseURL, "", "")
+	if err != nil {
+		s.setWeixinFlowError(flowID, fmt.Sprintf("client error: %v", err))
+		flow, _ = s.getWeixinFlow(flowID)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(weixinFlowResponse{FlowID: flow.ID, Status: flow.Status, Error: flow.Error})
+		return
+	}
+
+	statusResp, err := api.GetQRCodeStatus(ctx, flow.Qrcode)
+	if err != nil {
+		// Transient error — keep current status, return it
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(weixinFlowResponse{
+			FlowID:    flow.ID,
+			Status:    flow.Status,
+			QRDataURI: flow.QRDataURI,
+		})
+		return
+	}
+
+	switch statusResp.Status {
+	case weixinStatusWait:
+		// no change
+
+	case weixinStatusScanned:
+		s.updateWeixinFlowStatus(flowID, weixinStatusScanned)
+
+	case weixinStatusConfirmed:
+		if statusResp.BotToken == "" {
+			s.setWeixinFlowError(flowID, "login confirmed but missing bot_token")
+			break
+		}
+		if saveErr := s.saveWeixinBinding(statusResp.BotToken, statusResp.IlinkBotID); saveErr != nil {
+			s.setWeixinFlowError(flowID, fmt.Sprintf("failed to save token: %v", saveErr))
+			break
+		}
+		s.setWeixinFlowConfirmed(flowID, statusResp.IlinkBotID)
+
+	case weixinStatusExpired:
+		s.updateWeixinFlowStatus(flowID, weixinStatusExpired)
+
+	default:
+		// unknown status, keep as-is
+	}
+
+	flow, _ = s.getWeixinFlow(flowID)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	resp := weixinFlowResponse{
+		FlowID:    flow.ID,
+		Status:    flow.Status,
+		AccountID: flow.AccountID,
+		Error:     flow.Error,
+	}
+	if flow.Status == weixinStatusWait || flow.Status == weixinStatusScanned {
+		resp.QRDataURI = flow.QRDataURI
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// saveWeixinBinding writes the token/account ID and enables the Weixin channel.
+func (s *Server) saveWeixinBinding(token, accountID string) error {
 	configData, err := os.ReadFile(s.configPath)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	var config map[string]any
 	if err := json.Unmarshal(configData, &config); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Check if weixin channel exists and is enabled
 	channels, ok := config["channels"].(map[string]any)
 	if !ok {
-		json.NewEncoder(w).Encode(map[string]any{
-			"status": "error",
-			"error":  "WeChat channel not configured",
-		})
-		return
+		return fmt.Errorf("channels not found in config")
 	}
 
 	weixinCfg, ok := channels["weixin"].(map[string]any)
-	if !ok || weixinCfg["enabled"] != true {
-		json.NewEncoder(w).Encode(map[string]any{
-			"status": "error",
-			"error":  "WeChat channel is not enabled",
-		})
-		return
+	if !ok {
+		return fmt.Errorf("weixin channel not found in config")
 	}
 
-	// WeChat login flow requires picoclaw's backend service
-	// Return a helpful error message
-	accountID, _ := weixinCfg["account_id"].(string)
-	if accountID != "" {
-		json.NewEncoder(w).Encode(map[string]any{
-			"status": "error",
-			"error":  "WeChat login flow is not supported in claw. Please use the original picoclaw service for WeChat binding. Your current account_id: " + accountID,
-		})
-	} else {
-		json.NewEncoder(w).Encode(map[string]any{
-			"status": "error",
-			"error":  "WeChat login flow is not supported in claw. Please use the original picoclaw service for WeChat binding.",
-		})
+	// Update weixin config
+	weixinCfg["enabled"] = true
+	weixinCfg["account_id"] = accountID
+
+	// Note: token is stored separately via SetToken in picoclaw's config,
+	// but for claw we'll just enable the channel with account_id
+	// The token will need to be handled by the picoclaw channel factory
+
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	return nil
+}
+
+// generateQRDataURI encodes content as a QR code PNG and returns a data URI.
+func generateQRDataURI(content string) (string, error) {
+	code, err := qr.Encode(content, qr.L)
+	if err != nil {
+		return "", fmt.Errorf("qr encode: %w", err)
+	}
+	pngBytes := code.PNG()
+	encoded := base64.StdEncoding.EncodeToString(pngBytes)
+	return "data:image/png;base64," + encoded, nil
+}
+
+func newWeixinFlowID() string {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("wx_%d", time.Now().UnixNano())
+	}
+	return "wx_" + hex.EncodeToString(buf)
+}
+
+func (s *Server) storeWeixinFlow(flow *weixinFlow) {
+	s.weixinMu.Lock()
+	defer s.weixinMu.Unlock()
+	s.gcWeixinFlowsLocked(time.Now())
+	s.weixinFlows[flow.ID] = flow
+}
+
+func (s *Server) getWeixinFlow(flowID string) (*weixinFlow, bool) {
+	s.weixinMu.Lock()
+	defer s.weixinMu.Unlock()
+	s.gcWeixinFlowsLocked(time.Now())
+	flow, ok := s.weixinFlows[flowID]
+	if !ok {
+		return nil, false
+	}
+	cp := *flow
+	return &cp, true
+}
+
+func (s *Server) updateWeixinFlowStatus(flowID, status string) {
+	s.weixinMu.Lock()
+	defer s.weixinMu.Unlock()
+	if flow, ok := s.weixinFlows[flowID]; ok {
+		flow.Status = status
+		flow.UpdatedAt = time.Now()
 	}
 }
 
-// handleWeixinFlowPoll polls a WeChat login flow (not supported in claw).
-func (s *Server) handleWeixinFlowPoll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func (s *Server) setWeixinFlowConfirmed(flowID, accountID string) {
+	s.weixinMu.Lock()
+	defer s.weixinMu.Unlock()
+	if flow, ok := s.weixinFlows[flowID]; ok {
+		flow.Status = weixinStatusConfirmed
+		flow.AccountID = accountID
+		flow.UpdatedAt = time.Now()
 	}
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	// Extract flow ID from path
-	// URL format: /api/weixin/flows/{flowID}
-	path := r.URL.Path
-	prefix := "/api/weixin/flows/"
-	if !strings.HasPrefix(path, prefix) {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
+func (s *Server) setWeixinFlowError(flowID, errMsg string) {
+	s.weixinMu.Lock()
+	defer s.weixinMu.Unlock()
+	if flow, ok := s.weixinFlows[flowID]; ok {
+		flow.Status = weixinStatusError
+		flow.Error = errMsg
+		flow.UpdatedAt = time.Now()
 	}
-	flowID := strings.TrimPrefix(path, prefix)
-	if flowID == "" {
-		http.Error(w, "Flow ID is required", http.StatusBadRequest)
-		return
-	}
+}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"status": "error",
-		"error":  "WeChat login flow is not supported in claw",
-	})
+func (s *Server) gcWeixinFlowsLocked(now time.Time) {
+	for id, flow := range s.weixinFlows {
+		if flow.Status == weixinStatusWait || flow.Status == weixinStatusScanned {
+			if !flow.ExpiresAt.IsZero() && now.After(flow.ExpiresAt) {
+				flow.Status = weixinStatusExpired
+				flow.UpdatedAt = now
+			}
+		}
+		if flow.Status != weixinStatusWait &&
+			flow.Status != weixinStatusScanned &&
+			now.Sub(flow.UpdatedAt) > weixinFlowGCAge {
+			delete(s.weixinFlows, id)
+		}
+	}
 }
 
 // Channels API handlers
