@@ -652,15 +652,16 @@ You are claw, a helpful AI assistant.
 
 3. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
 
-4. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
+4. **Memory** - When you learn something memorable about the user (preferences, decisions, important facts), use the tiered-memory skill via Bash tool:
+   - To store: 'python3 ~/.aiclaw/skills/tiered-memory/scripts/memory_cli.py store --text "fact" --category "category" --importance 0.8'
+   - Categories: preferences, decisions, projects, lessons, conversations
+   - For more details, read the tiered-memory skill file using the Read tool
 
 ## Current Environment
 
 - Config dir: %s
-- Memory: %s/memory/MEMORY.md
-- Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
 - Skills: %s/skills/{skill-name}/SKILL.md
-`, clawDir, clawDir, clawDir, clawDir, clawDir)
+`, clawDir, clawDir)
 
 	// 尝试从 ~/.aiclaw/AGENTS.md 加载自定义身份
 	basePrompt := defaultIdentity
