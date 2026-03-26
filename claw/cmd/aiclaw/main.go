@@ -20,16 +20,21 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
-	_ "github.com/sipeed/picoclaw/pkg/channels/feishu" // 注册飞书通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"    // 注册飞书通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/pico"      // 注册 Pico Channel 工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"    // 注册微信通道工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
+	"github.com/tiancaiamao/ai/claw/pkg/tieredmemory"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
+	"github.com/tiancaiamao/ai/claw/pkg/web"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -108,6 +113,32 @@ func main() {
 	// 创建 picoclaw 兼容的配置（用于 channels）
 	picoCfg := &picoclawconfig.Config{
 		Channels: cfg.Channels,
+	}
+
+	// Load security.yml to get Pico and Weixin tokens
+	securityPath := filepath.Join(filepath.Dir(configPath), ".security.yml")
+	if securityData, err := os.ReadFile(securityPath); err == nil {
+		type SecurityConfig struct {
+			Channels struct {
+				Pico struct {
+					Token string `json:"token" yaml:"token"`
+				} `json:"pico" yaml:"pico"`
+				Weixin struct {
+					Token string `json:"token" yaml:"token"`
+				} `json:"weixin" yaml:"weixin"`
+			} `json:"channels" yaml:"channels"`
+		}
+		var sec SecurityConfig
+		if err := yaml.Unmarshal(securityData, &sec); err == nil {
+			if sec.Channels.Pico.Token != "" {
+				picoCfg.Channels.Pico.SetToken(sec.Channels.Pico.Token)
+				slog.Info("Loaded Pico token from security file")
+			}
+			if sec.Channels.Weixin.Token != "" {
+				picoCfg.Channels.Weixin.SetToken(sec.Channels.Weixin.Token)
+				slog.Info("Loaded Weixin token from security file")
+			}
+		}
 	}
 
 	// 创建消息总线
@@ -214,7 +245,7 @@ func main() {
 		ClawDir:         clawDir, // 传递 claw 配置目录
 		Transcriber:     transcriber,
 		FeishuAppID:     cfg.Channels.Feishu.AppID,
-		FeishuAppSecret: cfg.Channels.Feishu.AppSecret,
+		FeishuAppSecret: cfg.Channels.Feishu.AppSecret(),
 		Skills:          skillResult.Skills,
 	}
 
@@ -268,6 +299,23 @@ func main() {
 		slog.Info("Cron service started", "jobs", len(cronService.ListJobs(false)))
 	}
 	defer cronService.Stop()
+
+	// 启动 Web 服务器（可选）
+	var webSrv *web.Server
+	if cfg.Channels.Pico.Enabled {
+		webCfg := &web.Config{
+			Port:    18800,
+			Public:  false,
+			Enabled: true,
+		}
+		webSrv = web.NewServer(webCfg, agentLoop, msgBus, configPath, clawDir)
+		if webURL, err := webSrv.Start(); err == nil {
+			slog.Info("Web server started", "url", webURL)
+			defer webSrv.Stop()
+		} else {
+			slog.Warn("Failed to start web server", "error", err)
+		}
+	}
 
 	slog.Info("Starting aiclaw",
 		"model", cfg.Model.ID,
@@ -484,6 +532,41 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Support picoclaw config format: extract model from model_list if model.id is not set
+	if cfg.Model.ID == "" {
+		var rawCfg map[string]any
+		if err := json.Unmarshal(data, &rawCfg); err == nil {
+			// Try to extract from agents.defaults.model_name and model_list
+			if agents, ok := rawCfg["agents"].(map[string]any); ok {
+				if defaults, ok := agents["defaults"].(map[string]any); ok {
+					if modelName, ok := defaults["model_name"].(string); ok {
+						// Find model in model_list
+						if modelList, ok := rawCfg["model_list"].([]any); ok {
+							for _, m := range modelList {
+								if mm, ok := m.(map[string]any); ok {
+									if name, ok := mm["model_name"].(string); ok && name == modelName {
+										cfg.Model.ID = modelName
+										if model, ok := mm["model"].(string); ok {
+											// Extract provider from "provider/model" format
+											if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
+												cfg.Model.Provider = parts[0]
+												cfg.Model.ID = model
+											}
+										}
+										if apiBase, ok := mm["api_base"].(string); ok {
+											cfg.Model.BaseURL = apiBase
+										}
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Validate required model configuration is present from config.json
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -552,36 +635,34 @@ func resolveAPIKey(clawDir, provider string) (string, error) {
 	return "", fmt.Errorf("API key not found for provider %s in auth.json", provider)
 }
 
-// buildSystemPrompt 构建 system prompt
-// 使用 prompt.Builder，支持从 ~/.aiclaw/AGENTS.md 加载身份
+// buildSystemPrompt 构建 system prompt (picoclaw style)
+// 支持从 ~/.aiclaw/AGENTS.md 加载自定义身份
+// 集成 memory 系统 (MEMORY.md + daily notes)
 func buildSystemPrompt(clawDir string, skills []skill.Skill) string {
-	// 默认身份
-	defaultIdentity := `# Claw Assistant
+	// Picoclaw 风格的默认身份
+	defaultIdentity := fmt.Sprintf(`# Claw 🦀
 
-You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, etc).
+You are claw, a helpful AI assistant.
 
 ## Important Rules
 
-1. **Be helpful and accurate** - Provide clear, useful responses.
+1. **ALWAYS use tools** - When you need to perform an action (read files, execute commands, send messages, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it.
 
-2. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
+2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Be friendly** - Maintain a warm, approachable tone.
+3. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
 
-4. **Use tools when needed** - When you need to perform actions, call the appropriate tool.
+4. **Memory** - When you learn something memorable about the user (preferences, decisions, important facts), use the tiered-memory skill via Bash tool:
+   - To store: 'python3 ~/.aiclaw/skills/tiered-memory/scripts/memory_cli.py store --text "fact" --category "category" --importance 0.8'
+   - Categories: preferences, decisions, projects, lessons, conversations
+   - For more details, read the tiered-memory skill file using the Read tool
 
-## Capabilities
+## Current Environment
 
-- Answer questions and provide information
-- Help with various tasks
-- Remember conversation context within a session
+- Config dir: %s
+- Skills: %s/skills/{skill-name}/SKILL.md
+`, clawDir, clawDir)
 
-## Limitations
-
-- You cannot access the internet directly unless tools are available
-- You cannot execute code unless tools are available
-- Each chat session is independent - you don't share memory across different groups/private chats
-`
 	// 尝试从 ~/.aiclaw/AGENTS.md 加载自定义身份
 	basePrompt := defaultIdentity
 	agentsPath := filepath.Join(clawDir, "AGENTS.md")
@@ -590,12 +671,42 @@ You are a helpful AI assistant accessible via chat platforms (Feishu, Telegram, 
 		slog.Info("Loaded custom identity from AGENTS.md", "path", agentsPath)
 	}
 
-	// 使用 prompt.Builder 构建
-	builder := prompt.NewBuilder(basePrompt, "").
-		SetNoWorkspace(true).
-		SetSkills(skills)
+	// 构建提示词部分
+	parts := []string{basePrompt}
 
-	return builder.Build()
+	// 添加 tiered-memory 上下文（包含 hot state 和检索到的相关记忆）
+	memStore := tieredmemory.NewStore(clawDir)
+	// 使用通用查询检索记忆（会在对话中根据具体查询细化）
+	if memoryContext, err := memStore.GetMemoryContext(""); err == nil && memoryContext != "" {
+		parts = append(parts, memoryContext)
+	}
+
+	// 添加技能列表
+	if len(skills) > 0 {
+		skillsSummary := buildSkillsSummary(skills)
+		if skillsSummary != "" {
+			parts = append(parts, fmt.Sprintf(`# Skills
+
+The following skills extend your capabilities.
+
+%s`, skillsSummary))
+		}
+	}
+
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// buildSkillsSummary 构建技能摘要
+func buildSkillsSummary(skills []skill.Skill) string {
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var lines []string
+	for _, s := range skills {
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", s.Name, s.Description))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // registerCronCommands registers cron control commands.

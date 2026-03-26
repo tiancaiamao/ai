@@ -366,8 +366,7 @@ func (a *AgentLoop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			slog.Info("[AgentLoop] Stopped by context")
 			return nil
-		default:
-			msg, ok := a.bus.ConsumeInbound(ctx)
+		case msg, ok := <-a.bus.InboundChan():
 			if !ok {
 				continue
 			}
@@ -496,7 +495,10 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		switch event.Type {
 		case agent.EventTurnEnd:
 			if event.Message != nil {
-				response.WriteString(event.Message.ExtractText())
+				text := event.Message.ExtractText()
+				// Clean MiniMax reasoning content if present
+				text = cleanMiniMaxReasoningFromText(text)
+				response.WriteString(text)
 				assistantMsg = event.Message
 			}
 		case agent.EventAgentEnd:
@@ -1165,6 +1167,7 @@ func (a *AgentLoop) cmdHelp() string {
 	sort.Strings(commands)
 
 	var b strings.Builder
+	b.WriteString("```\n")
 	b.WriteString("Control Commands:\n\n")
 	for _, cmd := range commands {
 		desc := descriptions[cmd]
@@ -1174,8 +1177,9 @@ func (a *AgentLoop) cmdHelp() string {
 			b.WriteString(fmt.Sprintf("  /%s\n", cmd))
 		}
 	}
-	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.")
-	return strings.TrimSpace(b.String())
+	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.\n")
+	b.WriteString("```")
+	return b.String()
 }
 
 // cmdCommands lists available skills
@@ -1185,6 +1189,7 @@ func (a *AgentLoop) cmdCommands() string {
 	}
 
 	var b strings.Builder
+	b.WriteString("```\n")
 	b.WriteString(fmt.Sprintf("Available Skills (%d):\n\n", len(a.skills)))
 
 	for i, s := range a.skills {
@@ -1194,7 +1199,9 @@ func (a *AgentLoop) cmdCommands() string {
 		}
 	}
 
-	return strings.TrimSpace(b.String())
+	b.WriteString("```")
+
+	return b.String()
 }
 
 // cmdSession 显示当前会话信息
@@ -1243,6 +1250,7 @@ func (a *AgentLoop) cmdHistory(sess *Session) string {
 	}
 
 	var b strings.Builder
+	b.WriteString("```\n")
 	b.WriteString(fmt.Sprintf("Message History (%d messages):\n\n", len(messages)))
 
 	// 显示最近 20 条消息
@@ -1263,7 +1271,9 @@ func (a *AgentLoop) cmdHistory(sess *Session) string {
 		b.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, role, preview))
 	}
 
-	return strings.TrimSpace(b.String())
+	b.WriteString("```")
+
+	return b.String()
 }
 
 // cmdClear 清空当前会话消息
@@ -1342,6 +1352,7 @@ func (a *AgentLoop) listModels() string {
 	}
 
 	var b strings.Builder
+	b.WriteString("```\n")
 	b.WriteString(fmt.Sprintf("Available Models (%d):\n\n", len(specs)))
 
 	// Display with numeric indices for easy selection
@@ -1361,9 +1372,10 @@ func (a *AgentLoop) listModels() string {
 		}
 	}
 
-	b.WriteString("\nUsage: /model <number> to switch (e.g., /model 0)")
+	b.WriteString("\nUsage: /model <number> to switch (e.g., /model 0)\n")
+	b.WriteString("```")
 
-	return strings.TrimSpace(b.String())
+	return b.String()
 }
 
 // switchModel switches to the specified model
@@ -1663,6 +1675,7 @@ func (a *AgentLoop) cmdShow(args string, sess *Session) string {
 func (a *AgentLoop) cmdShowSettings(sess *Session) string {
 	var sb strings.Builder
 
+	sb.WriteString("```\n")
 	sb.WriteString("Current Settings:\n")
 
 	// Model info
@@ -1703,7 +1716,9 @@ func (a *AgentLoop) cmdShowSettings(sess *Session) string {
 		sb.WriteString("  Cron: enabled\n")
 	}
 
-	return strings.TrimSpace(sb.String())
+	sb.WriteString("```")
+
+	return sb.String()
 }
 
 // ensureTraceHandler ensures that a trace handler is initialized if not already set.
@@ -1788,4 +1803,44 @@ func (a *AgentLoop) cmdThinking(args string, sess *Session) string {
 	a.sessionsMu.RUnlock()
 
 	return fmt.Sprintf("Thinking level: %s", newLevel)
+}
+
+// cleanMiniMaxReasoningFromText removes MiniMax's reasoning prefix from text.
+// MiniMax reasoning models prefix their output with internal reasoning like:
+// "用户问\"XXX\"，这是简单问题...\n\n\n实际回答"
+// This function extracts only the actual answer part.
+func cleanMiniMaxReasoningFromText(content string) string {
+	// MiniMax reasoning typically ends with "\n\n\n" followed by the actual answer
+	if idx := strings.Index(content, "\n\n\n"); idx != -1 && idx < len(content)-10 {
+		before := content[:idx]
+		after := strings.TrimSpace(content[idx+3:])
+
+		// If the part before contains reasoning patterns, extract the after part
+		if looksLikeMiniMaxReasoning(before) {
+			return after
+		}
+	}
+
+	// Also try "\n\n" pattern
+	if idx := strings.Index(content, "\n\n"); idx != -1 && idx < len(content)-10 {
+		before := content[:idx]
+		after := strings.TrimSpace(content[idx+2:])
+
+		if looksLikeMiniMaxReasoning(before) {
+			return after
+		}
+	}
+
+	return content
+}
+
+// looksLikeMiniMaxReasoning checks if text looks like MiniMax's internal reasoning
+func looksLikeMiniMaxReasoning(text string) bool {
+	patterns := []string{"用户问", "用户用", "这是", "应该", "需要", "根据提示", "根据系统", "分析"}
+	for _, p := range patterns {
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
 }
