@@ -524,11 +524,46 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"gateway_status":       "running",
-		"gateway_start_allowed": false,
-		"pid":                  os.Getpid(),
-	})
+	// Read current model from config and find its model_name
+	currentModelName := ""
+	if configData, err := os.ReadFile(s.configPath); err == nil {
+		var config map[string]any
+		if json.Unmarshal(configData, &config) == nil {
+			// Get current model ID
+			currentModelID := ""
+			if model, ok := config["model"].(map[string]any); ok {
+				if id, ok := model["id"].(string); ok {
+					currentModelID = id
+				}
+			}
+
+			// Find matching model in model_list to get the correct model_name
+			if models, ok := config["model_list"].([]any); ok {
+				for _, m := range models {
+					if modelMap, ok := m.(map[string]any); ok {
+						if modelID, ok := modelMap["model"].(string); ok && modelID == currentModelID {
+							// Found match, use model_name
+							if name, ok := modelMap["model_name"].(string); ok {
+								currentModelName = name
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	response := map[string]any{
+		"gateway_status":           "running",
+		"gateway_start_allowed":    false,
+		"gateway_restart_required": false,
+		"pid":                      os.Getpid(),
+		"boot_default_model":       currentModelName,
+		"config_default_model":     currentModelName,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleGatewayStart handles gateway start requests (no-op for claw).
