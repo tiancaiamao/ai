@@ -1,0 +1,31 @@
+{
+  "version": "v1",
+  "frozen_at": "2026-03-19",
+  "tasks": [
+    "agent_001_forced_exploration",
+    "agent_002_rollback",
+    "agent_003_hidden_dep",
+    "agent_004_context_overflow",
+    "agent_005_delayed_signal",
+    "agent_006_tool_trap",
+    "agent_007_misleading",
+    "agent_008_budget",
+    "agent_009_partial_info",
+    "agent_010_memory",
+    "agent_011_compact_tool_call_mismatch"
+  ],
+  "global_defaults": {
+    "max_steps_mode": "soft"
+  },
+  "task_overrides": {
+    "agent_008_budget": {
+      "max_steps_mode": "hard"
+    }
+  },
+  "report_dimensions": [
+    "pass_rate",
+    "functional_pass_rate",
+    "agentic_pass_rate",
+    "avg_agentic_score"
+  ]
+}

@@ -1,0 +1,6 @@
+2024-03-18 10:00:00 [INFO] Processing order #12345
+2024-03-18 10:00:01 [INFO] Items: [{"name": "Widget A", "price": 50.0, "quantity": 2}]
+2024-03-18 10:00:02 [INFO] Subtotal calculated: $100.00
+2024-03-18 10:00:03 [INFO] Discount requested: 10%
+2024-03-18 10:00:04 [INFO] Final total: $102.60
+2024-03-18 10:00:05 [ERROR] Customer expected total: $97.20 (10% off $100 + 8% tax)

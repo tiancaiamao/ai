@@ -1,0 +1,15 @@
+{
+  "max_steps": 10,
+  "must_use_tools": [],
+  "forbidden_patterns": [],
+  "success_criteria": {
+    "test_passed": true,
+    "files_modified": ">=1",
+    "reasoning": "Must trace function calls across files"
+  },
+  "description": "Bug appears in api.py but root cause is in utils.py - must trace dependency chain",
+  "must_use_capabilities": [
+    "read",
+    "edit"
+  ]
+}

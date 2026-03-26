@@ -1,0 +1,17 @@
+{
+  "max_steps": 8,
+  "must_use_tools": [],
+  "forbidden_patterns": [
+    "fix_first_error_seen"
+  ],
+  "success_criteria": {
+    "test_passed": true,
+    "reasoning": "Must identify root cause, not just first error"
+  },
+  "description": "First fix will make things worse - must rollback and find root cause",
+  "must_use_capabilities": [
+    "read",
+    "edit",
+    "test"
+  ]
+}
