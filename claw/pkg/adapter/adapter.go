@@ -496,7 +496,10 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		switch event.Type {
 		case agent.EventTurnEnd:
 			if event.Message != nil {
-				response.WriteString(event.Message.ExtractText())
+				text := event.Message.ExtractText()
+				// Clean MiniMax reasoning content if present
+				text = cleanMiniMaxReasoningFromText(text)
+				response.WriteString(text)
 				assistantMsg = event.Message
 			}
 		case agent.EventAgentEnd:
@@ -1788,4 +1791,44 @@ func (a *AgentLoop) cmdThinking(args string, sess *Session) string {
 	a.sessionsMu.RUnlock()
 
 	return fmt.Sprintf("Thinking level: %s", newLevel)
+}
+
+// cleanMiniMaxReasoningFromText removes MiniMax's reasoning prefix from text.
+// MiniMax reasoning models prefix their output with internal reasoning like:
+// "用户问\"XXX\"，这是简单问题...\n\n\n实际回答"
+// This function extracts only the actual answer part.
+func cleanMiniMaxReasoningFromText(content string) string {
+	// MiniMax reasoning typically ends with "\n\n\n" followed by the actual answer
+	if idx := strings.Index(content, "\n\n\n"); idx != -1 && idx < len(content)-10 {
+		before := content[:idx]
+		after := strings.TrimSpace(content[idx+3:])
+
+		// If the part before contains reasoning patterns, extract the after part
+		if looksLikeMiniMaxReasoning(before) {
+			return after
+		}
+	}
+
+	// Also try "\n\n" pattern
+	if idx := strings.Index(content, "\n\n"); idx != -1 && idx < len(content)-10 {
+		before := content[:idx]
+		after := strings.TrimSpace(content[idx+2:])
+
+		if looksLikeMiniMaxReasoning(before) {
+			return after
+		}
+	}
+
+	return content
+}
+
+// looksLikeMiniMaxReasoning checks if text looks like MiniMax's internal reasoning
+func looksLikeMiniMaxReasoning(text string) bool {
+	patterns := []string{"用户问", "用户用", "这是", "应该", "需要", "根据提示", "根据系统", "分析"}
+	for _, p := range patterns {
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
 }
