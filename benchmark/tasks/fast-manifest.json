@@ -1,6 +1,6 @@
 {
-  "version": "1.1",
-  "frozen_at": "2026-03-26T01:45:00+08:00",
+  "version": "1.2",
+  "frozen_at": "2026-03-27T00:45:00+08:00",
   "description": "Tasks that complete in under 10 minutes (based on benchmark results) - environment-dependent cases removed",
   "tasks": [
     "001_fix_off_by_one",
@@ -20,16 +20,28 @@
     "agent_009_partial_info",
     "agent_010_memory",
     "agent_011_compact_tool_call_mismatch",
+    "tbench/bn-fit-modify",
     "tbench/cancel-async-tasks",
     "tbench/chess-best-move",
     "tbench/code-from-image",
+    "tbench/count-dataset-tokens",
     "tbench/db-wal-recovery",
+    "tbench/dna-insert",
     "tbench/extract-moves-from-video",
     "tbench/feal-differential-cryptanalysis",
     "tbench/fix-code-vulnerability",
     "tbench/gcode-to-text",
     "tbench/kv-store-grpc",
     "tbench/log-summary-date-ranges",
-    "tbench/pypi-server"
+    "tbench/mteb-leaderboard",
+    "tbench/password-recovery",
+    "tbench/portfolio-optimization",
+    "tbench/protein-assembly",
+    "tbench/prove-plus-comm",
+    "tbench/pypi-server",
+    "tbench/regex-chess",
+    "tbench/regex-log",
+    "tbench/torch-tensor-parallelism",
+    "tbench/vulnerable-secret"
   ]
 }
