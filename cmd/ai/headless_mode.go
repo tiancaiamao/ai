@@ -130,7 +130,12 @@ func joinLines(lines []string) string {
 	return strings.Join(lines, "\n")
 }
 
-func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compactor *compact.Compactor, cfg *config.Config) {
+func registerHeadlessTools(
+	registry *tools.Registry,
+	ws *tools.Workspace,
+	compactor *compact.Compactor,
+	cfg *config.Config,
+) {
 	readTool := tools.NewReadTool(ws)
 	editTool := tools.NewEditTool(ws)
 
@@ -149,15 +154,27 @@ func registerHeadlessTools(registry *tools.Registry, ws *tools.Workspace, compac
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 	if compactor != nil {
-		// Only register task_tracking when taskTracking is enabled
+		// Register task_tracking only when enabled by effective config.
 		if cfg.TaskTracking {
 			registry.Register(tools.NewTaskTrackingTool())
 		}
-		// Only register context_management when contextManagement is enabled
+		// Register context_management only when enabled by effective config.
 		if cfg.ContextManagement {
 			registry.Register(tools.NewContextManagementTool(compactor.ToContextCompactor()))
 		}
 	}
+}
+
+func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string) *config.Config {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	effective := *cfg
+	if strings.TrimSpace(customSystemPrompt) != "" {
+		effective.TaskTracking = false
+		effective.ContextManagement = false
+	}
+	return &effective
 }
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
@@ -180,9 +197,13 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 	}
+	effectiveCfg := headlessEffectiveConfig(cfg, customSystemPrompt)
+	if customSystemPrompt != "" && (cfg.TaskTracking || cfg.ContextManagement) {
+		slog.Info("Custom system prompt detected: disabling built-in task/context management features")
+	}
 
 	// Convert config to llm.Model
-	model := cfg.GetLLMModel()
+	model := effectiveCfg.GetLLMModel()
 
 	// Resolve API key
 	apiKey, err := config.ResolveAPIKey(model.Provider)
@@ -291,7 +312,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	registry := tools.NewRegistry()
 
 	// Resolve context window and create compactor for automatic context compression
-	activeSpec, err := resolveActiveModelSpec(cfg)
+	activeSpec, err := resolveActiveModelSpec(effectiveCfg)
 	if err != nil {
 		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
 	}
@@ -299,7 +320,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if currentContextWindow <= 0 {
 		currentContextWindow = 128000 // default context window
 	}
-	compactorConfig := cfg.Compactor
+	compactorConfig := effectiveCfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
 	}
@@ -310,7 +331,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		prompt.CompactorBasePrompt(),
 		currentContextWindow,
 	)
-	registerHeadlessTools(registry, ws, compactor, cfg)
+
+	registerHeadlessTools(registry, ws, compactor, effectiveCfg)
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
@@ -346,8 +368,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Set task tracking and context management based on config
-	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
-	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+	promptBuilder.SetTaskTrackingEnabled(effectiveCfg.TaskTracking)
+	promptBuilder.SetContextManagementEnabled(effectiveCfg.ContextManagement)
 
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
@@ -367,7 +389,9 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		if sessionDir != "" {
 			wm := agentctx.NewLLMContext(sessionDir)
 			agentCtx.LLMContext = wm
-			agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
+			if effectiveCfg.TaskTracking {
+				agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
+			}
 		}
 	}
 
@@ -402,7 +426,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Build LoopConfig from application config
-	loopCfg := cfg.ToLoopConfig(
+	loopCfg := effectiveCfg.ToLoopConfig(
 		config.WithCompactor(sessionComp),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
@@ -415,8 +439,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	loopCfg.GetStartupPath = ws.GetInitialCWD
 
 	// Set task tracking and context management based on config
-	loopCfg.TaskTrackingEnabled = cfg.TaskTracking
-	loopCfg.ContextManagementEnabled = cfg.ContextManagement
+	loopCfg.TaskTrackingEnabled = effectiveCfg.TaskTracking
+	loopCfg.ContextManagementEnabled = effectiveCfg.ContextManagement
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
@@ -436,7 +460,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Set up executor and tool output limits
-	concurrencyConfig := cfg.Concurrency
+	concurrencyConfig := effectiveCfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
@@ -447,7 +471,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	})
 	ag.SetExecutor(executor)
 
-	toolOutputConfig := cfg.ToolOutput
+	toolOutputConfig := effectiveCfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
