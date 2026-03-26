@@ -171,6 +171,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handleUpdateConfig)
 
+	// Channels API
+	mux.HandleFunc("GET /api/channels", s.handleListChannels)
+	mux.HandleFunc("GET /api/channels/", s.handleGetChannel)
+	mux.HandleFunc("PUT /api/channels/", s.handleUpdateChannel)
+
 	// Serve static files (frontend) - this will be handled by embedded files
 	// For now, return a simple message
 	mux.HandleFunc("/", s.handleIndex)
@@ -853,6 +858,207 @@ func validateConfig(config map[string]any) error {
 	}
 
 	return nil
+}
+
+// Channels API handlers
+
+// handleListChannels returns the list of all channels and their status.
+func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Read config file
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse config
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Extract channels
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]any{
+			"channels": map[string]any{},
+			"total":    0,
+		})
+		return
+	}
+
+	// Filter sensitive fields from each channel
+	filterSensitiveFields(channels)
+
+	// Convert to response format
+	channelList := make([]map[string]any, 0)
+	for name, cfg := range channels {
+		if cfgMap, ok := cfg.(map[string]any); ok {
+			channelInfo := map[string]any{
+				"name": name,
+			}
+			// Copy all fields from channel config
+			for k, v := range cfgMap {
+				channelInfo[k] = v
+			}
+			channelList = append(channelList, channelInfo)
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"channels": channelList,
+		"total":    len(channelList),
+	})
+}
+
+// handleGetChannel returns a specific channel's configuration.
+func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract channel name from path
+	// URL format: /api/channels/{channel_name}
+	path := r.URL.Path
+	prefix := "/api/channels/"
+	if !strings.HasPrefix(path, prefix) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	channelName := strings.TrimPrefix(path, prefix)
+	if channelName == "" {
+		http.Error(w, "Channel name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Read config file
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse config
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Extract channels
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		http.Error(w, "Channels not found in config", http.StatusNotFound)
+		return
+	}
+
+	// Get specific channel
+	channel, ok := channels[channelName]
+	if !ok {
+		http.Error(w, fmt.Sprintf("Channel '%s' not found", channelName), http.StatusNotFound)
+		return
+	}
+
+	// Filter sensitive fields
+	if channelMap, ok := channel.(map[string]any); ok {
+		filterSensitiveFields(channelMap)
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":     channelName,
+			"config":   channelMap,
+		})
+	} else {
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":   channelName,
+			"config": channel,
+		})
+	}
+}
+
+// handleUpdateChannel updates a specific channel's configuration.
+func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Extract channel name from path
+	path := r.URL.Path
+	prefix := "/api/channels/"
+	if !strings.HasPrefix(path, prefix) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	channelName := strings.TrimPrefix(path, prefix)
+	if channelName == "" {
+		http.Error(w, "Channel name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Read current config
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get channels map
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		channels = make(map[string]any)
+		config["channels"] = channels
+	}
+
+	// Update channel config
+	channels[channelName] = req.Config
+
+	// Write updated config
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "success",
+		"message": fmt.Sprintf("Channel '%s' updated. Service restart is required for changes to take effect.", channelName),
+		"channel": channelName,
+	})
 }
 
 // Main function for standalone mode
