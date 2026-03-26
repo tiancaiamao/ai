@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/stretchr/testify/assert"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 func TestBashToolTimeoutParameter(t *testing.T) {
@@ -110,4 +110,31 @@ func TestBashToolLargeSingleLineOutput(t *testing.T) {
 
 	// Cleanup
 	tool.Execute(ctx, map[string]any{"command": "rm -f /tmp/large_single_line.txt", "timeout": float64(1)})
+}
+
+func TestBashToolRejectsBareCD(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := tool.Execute(ctx, map[string]any{"command": "cd /tmp"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "does not persist workspace")
+	assert.Contains(t, err.Error(), "change_workspace")
+}
+
+func TestBashToolAllowsCommandLocalCD(t *testing.T) {
+	ws, _ := NewWorkspace("/")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	blocks, err := tool.Execute(ctx, map[string]any{"command": "cd /tmp && pwd"})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, blocks)
+	result := blocks[0].(agentctx.TextContent)
+	assert.Contains(t, result.Text, "/tmp")
 }

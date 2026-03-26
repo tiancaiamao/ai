@@ -470,12 +470,15 @@ Task Description:
 
 Instructions:
 1. Read the files in the setup directory
-2. Fix the bugs or implement the required functionality
-3. Make sure the code compiles
-4. Do NOT modify verify.sh
+2. IMPORTANT: Read ../tests/test_outputs.py to understand exact expected format and requirements
+3. Fix the bugs or implement the required functionality
+4. Make sure the code compiles
+5. CRITICAL: Run ./verify.sh after completing your implementation
+6. If verify.sh fails, read the error output and fix the issues before re-running
+7. Do NOT modify verify.sh
 %s
 
-Please start by reading the task files.`, task.ID, task.Dir, task.Description, appShimNote)
+Please start by reading the task files and ../tests/test_outputs.py to understand the exact requirements.`, task.ID, task.Dir, task.Description, appShimNote)
 }
 
 // verifyTask runs the verification script

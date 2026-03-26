@@ -40,6 +40,31 @@ Explore codebases, repositories, or topics and collect key information for later
 | **worker** | 执行实现 | 修改的代码 |
 | **review** | 验收代码 | `reviews/*.md` |
 
+## ⚠️ Architecture Constraint Exploration
+
+**For tasks involving architecture changes, explore MUST include:**
+
+1. **Layer/Package boundaries**
+   - Where should the code live?
+   - What are the dependency directions?
+   - Which packages should stay pure?
+
+2. **Existing patterns**
+   - How does similar functionality exist elsewhere?
+   - What patterns should be followed?
+
+3. **Integration points**
+   - Who will use this code?
+   - How will they integrate?
+
+**Output section to add:**
+```markdown
+## 架构约束
+- [ ] [约束 1]: 例如 "agent core 不应该依赖 RPC"
+- [ ] [约束 2]: 例如 "命令处理应该在 agent 外部"
+- [ ] [约束 3]: 例如 "新包应该可被多个项目复用"
+```
+
 ## Subagent 执行
 
 类似 review 技能，explore 可以通过 subagent 独立执行：

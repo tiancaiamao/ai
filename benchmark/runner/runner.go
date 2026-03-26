@@ -217,6 +217,9 @@ func runTask(taskID, taskDir string) TaskResult {
 		}
 	}
 
+	// Install dependencies before verification
+	installTaskDependencies(taskID, absTaskDir)
+
 	// Run verification script
 	verifyScript := filepath.Join(absTaskDir, "verify.sh")
 	if _, err := os.Stat(verifyScript); os.IsNotExist(err) {
@@ -243,6 +246,84 @@ func runTask(taskID, taskDir string) TaskResult {
 	}
 
 	return result
+}
+
+// installTaskDependencies checks and installs task-specific dependencies
+func installTaskDependencies(taskID, taskDir string) {
+	testsDir := filepath.Join(taskDir, "tests")
+	testOutputs := filepath.Join(testsDir, "test_outputs.py")
+
+	// Check if test_outputs.py exists
+	if _, err := os.Stat(testOutputs); os.IsNotExist(err) {
+		return
+	}
+
+	// Read test file to check for dependencies
+	content, err := os.ReadFile(testOutputs)
+	if err != nil {
+		return
+	}
+	testContent := string(content)
+
+	// Install pytest if not present
+	if _, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		fmt.Printf("[%s] Installing pytest...\n", taskID)
+		exec.Command("pip3", "install", "pytest").Run()
+	}
+
+	// Install Biopython for protein-related tasks
+	if strings.Contains(taskID, "protein") || strings.Contains(taskID, "dna") {
+		if _, err := exec.Command("python3", "-c", "import Bio").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing biopython...\n", taskID)
+			exec.Command("pip3", "install", "biopython").Run()
+		}
+	}
+
+	// Install numpy for numerical tasks
+	if strings.Contains(taskID, "tensor") || strings.Contains(taskID, "eigen") || strings.Contains(taskID, "matrix") {
+		if _, err := exec.Command("python3", "-c", "import numpy").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing numpy...\n", taskID)
+			exec.Command("pip3", "install", "numpy").Run()
+		}
+	}
+
+	// Install torch for ML tasks
+	if strings.Contains(taskID, "torch") || strings.Contains(taskID, "pytorch") || strings.Contains(taskID, "model") {
+		if _, err := exec.Command("python3", "-c", "import torch").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing torch...\n", taskID)
+			exec.Command("pip3", "install", "torch").Run()
+		}
+	}
+
+	// Check for specific imports in test file
+	if strings.Contains(testContent, "from Bio") || strings.Contains(testContent, "import Bio") {
+		if _, err := exec.Command("python3", "-c", "import Bio").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing biopython (detected in test file)...\n", taskID)
+			exec.Command("pip3", "install", "biopython").Run()
+		}
+	}
+
+	if strings.Contains(testContent, "import torch") {
+		if _, err := exec.Command("python3", "-c", "import torch").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing torch (detected in test file)...\n", taskID)
+			exec.Command("pip3", "install", "torch").Run()
+		}
+	}
+
+	// Install beautifulsoup4 and selenium for HTML parsing tasks
+	if strings.Contains(testContent, "from bs4") || strings.Contains(testContent, "import bs4") {
+		if _, err := exec.Command("python3", "-c", "import bs4").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing beautifulsoup4...\n", taskID)
+			exec.Command("pip3", "install", "beautifulsoup4").Run()
+		}
+	}
+
+	if strings.Contains(testContent, "from selenium") || strings.Contains(testContent, "import selenium") {
+		if _, err := exec.Command("python3", "-c", "import selenium").CombinedOutput(); err != nil {
+			fmt.Printf("[%s] Installing selenium...\n", taskID)
+			exec.Command("pip3", "install", "selenium").Run()
+		}
+	}
 }
 
 func compareResults() {

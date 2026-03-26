@@ -281,7 +281,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 	fmt.Fprintln(output)
 
-
 	// Create tool registry and register tools
 	// Create a shared workspace object for all tools to track directory changes
 	ws, err := tools.NewWorkspace(cwd)
@@ -412,6 +411,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	// Set model and apiKey (not handled by ToLoopConfig)
 	loopCfg.Model = model
 	loopCfg.APIKey = apiKey
+	loopCfg.GetWorkingDir = ws.GetCWD
+	loopCfg.GetStartupPath = ws.GetGitRoot
 
 	// Set task tracking and context management based on config
 	loopCfg.TaskTrackingEnabled = cfg.TaskTracking

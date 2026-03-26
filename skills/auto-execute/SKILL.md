@@ -19,6 +19,30 @@ This skill automatically executes tasks from `tasks.md` using the orchestrate sy
 - Tasks should be reviewed and approved by the user
 - `~/.ai/skills/orchestrate/bin/orchestrate.sh` must be available
 
+## ⚠️ Pre-flight Checks (MANDATORY)
+
+**Before starting auto-execution, verify:**
+
+1. **Explore complete?** - For complex tasks, was explore phase done?
+2. **Requirements clarified?** - For architecture changes, was design direction confirmed?
+3. **Plan approved?** - User explicitly approved the plan?
+4. **Tasks approved?** - User explicitly approved the task list?
+
+**If any check fails, ask user:**
+```
+Before auto-execution, I need to confirm:
+- [ ] Design direction is clear (especially for architecture changes)
+- [ ] Plan was reviewed and approved
+- [ ] Tasks list was reviewed and approved
+
+Should I proceed, or do you want to review first?
+```
+
+**Architecture changes MUST have explicit confirmation:**
+- Multiple packages/layers involved
+- "Unify", "consolidate", "refactor", "integrate" keywords
+- Changes to core modules
+
 ## Process
 
 ### 1. Check Prerequisites
@@ -196,11 +220,23 @@ Agent:
 ## Success Criteria
 
 Auto-execution is successful when:
-- ✅ All tasks marked as `[X]` in tasks.md
+- ✅ All tasks marked as `[X]` in tasks.md (orchestrate handles this automatically)
 - ✅ No tasks marked as `[!]` (failed)
 - ✅ Progress tracked via task_tracking
 - ✅ User notified of completion
 - ✅ Summary of accomplishments provided
+
+## ⚠️ IMPORTANT: tasks.md is Source of Truth
+
+The `tasks.md` file is the **source of truth** for task progress.
+
+**Orchestrate automatically updates tasks.md:**
+- When a task starts: `[ ]` → `[-]`
+- When a task completes: `[-]` → `[X]`
+- When a task fails: `[-]` → `[!]`
+
+**You do NOT need to manually edit tasks.md** when using orchestrate.
+The `update_tasks.sh` script handles checkbox updates.
 
 ## Error Recovery
 

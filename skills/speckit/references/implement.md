@@ -82,7 +82,28 @@ For each task:
 2. **Understand Context**: Review related spec and plan sections
 3. **Implement**: Use test-driven-development skill to write code
 4. **Verify**: Run tests, check behavior
-5. **Mark Complete**: Update `[ ]` to `[X]` in tasks.md
+5. **Mark Complete**: ⚠️ **MANDATORY** — Update `[ ]` to `[X]` in tasks.md immediately after verification
+
+### ⚠️ CRITICAL: Always Update tasks.md Progress
+
+**After completing EACH task, you MUST:**
+
+```
+1. Verify the task works (tests pass, behavior correct)
+2. IMMEDIATELY edit tasks.md
+3. Change [ ] → [X] for that task
+4. Save the file
+```
+
+**Do NOT:**
+- ❌ Complete multiple tasks before updating tasks.md
+- ❌ Rely on memory to batch-update later
+- ❌ Skip this step because "it's tracked elsewhere"
+
+**Why this matters:**
+- tasks.md is the source of truth for progress
+- User needs visibility into what's done
+- Context loss between tasks can cause confusion
 
 ### Step 4: Progress Tracking
 
@@ -147,5 +168,5 @@ When all tasks are complete:
 - ❌ Not running tests after each task
 - ❌ Making changes out of dependency order
 - ❌ Not verifying spec requirements during implementation
-- ❌ Forgetting to mark tasks as complete
+- ❌ **Forgetting to mark tasks as complete in tasks.md** — This is the #1 mistake!
 - ❌ Not documenting blockers or edge cases

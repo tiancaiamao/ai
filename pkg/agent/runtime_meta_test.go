@@ -17,7 +17,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		LLMContextSize:    3000,
 	}
 
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if !refreshed {
 		t.Fatal("expected initial snapshot refresh")
 	}
@@ -31,7 +31,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		t.Fatalf("expected light_compression hint, got: %s", snapshot)
 	}
 
-	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if refreshed2 {
 		t.Fatal("did not expect refresh before heartbeat")
 	}
@@ -39,12 +39,12 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		t.Fatal("expected snapshot to stay stable before refresh")
 	}
 
-	_, refreshed3 := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	_, refreshed3 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if refreshed3 {
 		t.Fatal("did not expect refresh on second non-heartbeat turn")
 	}
 
-	snapshot4, refreshed4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot4, refreshed4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if !refreshed4 {
 		t.Fatal("expected heartbeat refresh")
 	}
@@ -53,7 +53,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	}
 
 	meta.TokensPercent = 61.0
-	snapshot5, refreshed5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot5, refreshed5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if !refreshed5 {
 		t.Fatal("expected refresh on band change")
 	}
@@ -205,7 +205,7 @@ func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 		LLMContextSize:    1200,
 	}
 
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}
@@ -236,7 +236,7 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 		LLMContextSize:    1000,
 	}
 
-	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}
@@ -437,7 +437,18 @@ func TestUpdateRuntimeMetaSnapshotIncludesContextMetrics(t *testing.T) {
 		LLMContextSize:    500,
 	}
 
-	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3)
+	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+
+	// Should contain workspace section even when values are missing
+	if !containsString(snapshot, "workspace:") {
+		t.Fatalf("expected workspace section in snapshot:\n%s", snapshot)
+	}
+	if !containsString(snapshot, `current_workdir: "unknown"`) {
+		t.Fatalf("expected unknown current_workdir in snapshot:\n%s", snapshot)
+	}
+	if !containsString(snapshot, `startup_path: "unknown"`) {
+		t.Fatalf("expected unknown startup_path in snapshot:\n%s", snapshot)
+	}
 
 	// Should contain context_metrics section
 	if !containsString(snapshot, "context_metrics:") {
@@ -455,5 +466,24 @@ func TestUpdateRuntimeMetaSnapshotIncludesContextMetrics(t *testing.T) {
 	// Should have decision subsection
 	if !containsString(snapshot, "decision:") {
 		t.Fatalf("expected decision subsection:\n%s", snapshot)
+	}
+}
+
+func TestUpdateRuntimeMetaSnapshotIncludesWorkspacePaths(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	meta := agentctx.ContextMeta{
+		TokensUsed:        1000,
+		TokensMax:         128000,
+		TokensPercent:     1.0,
+		MessagesInHistory: 1,
+		LLMContextSize:    10,
+	}
+
+	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "/repo/worktrees/feature-x", "/repo")
+	if !containsString(snapshot, `current_workdir: "/repo/worktrees/feature-x"`) {
+		t.Fatalf("expected current_workdir in snapshot:\n%s", snapshot)
+	}
+	if !containsString(snapshot, `startup_path: "/repo"`) {
+		t.Fatalf("expected startup_path in snapshot:\n%s", snapshot)
 	}
 }

@@ -1,6 +1,27 @@
 ## Task Execution Strategy
 **Break down complex work before diving in** — Plan → Execute → Verify iteratively.
 
+### Debugging & Bug Fixing (MANDATORY)
+
+When fixing bugs or debugging issues, follow this order:
+
+1. **Run tests first** — Before making any changes, run the existing tests to:
+   - Understand what's failing and why
+   - See the actual error messages
+   - Identify which functions/modules are affected
+
+2. **Search before reading** — Use `grep` to locate relevant code:
+   - Search for error messages, function names, or keywords
+   - Don't read all files blindly — target your investigation
+   - Only read files after identifying relevant locations
+
+3. **Fix with verification** — After each fix, re-run tests immediately
+
+```
+WRONG: Read all files → Guess the bug → Make changes → Run tests
+RIGHT: Run tests → Grep for error → Read targeted code → Fix → Verify
+```
+
 ### Task Type Detection
 
 Before decomposing, detect task type:

@@ -85,6 +85,13 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	if !ok {
 		return nil, fmt.Errorf("invalid command argument")
 	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
+	}
+	if isBareCDCommand(command) {
+		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
+	}
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
@@ -274,4 +281,26 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 // SetTimeout sets the timeout for command execution.
 func (t *BashTool) SetTimeout(timeout time.Duration) {
 	t.execTimeout = timeout
+}
+
+func isBareCDCommand(command string) bool {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return false
+	}
+	if cmd == "cd" {
+		return true
+	}
+	if !strings.HasPrefix(cmd, "cd ") && !strings.HasPrefix(cmd, "cd\t") {
+		return false
+	}
+	// Allow command-local directory changes such as `cd dir && make`.
+	if strings.Contains(cmd, "&&") || strings.Contains(cmd, "||") {
+		return false
+	}
+	// Any shell operator indicates this is more than a bare cd invocation.
+	if strings.ContainsAny(cmd, ";&|\n") {
+		return false
+	}
+	return true
 }

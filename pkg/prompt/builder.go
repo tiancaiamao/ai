@@ -136,20 +136,20 @@ type Builder struct {
 // NewBuilder creates a new prompt builder.
 func NewBuilder(_, cwd string) *Builder {
 	return &Builder{
-		cwd:                        cwd,
-		minimal:                    false,
-		taskTrackingEnabled:          true,
-		contextManagementEnabled:      true,
+		cwd:                      cwd,
+		minimal:                  false,
+		taskTrackingEnabled:      true,
+		contextManagementEnabled: true,
 	}
 }
 
 // NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
 func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
 	return &Builder{
-		workspace:                  ws,
-		minimal:                    false,
-		taskTrackingEnabled:          true,
-		contextManagementEnabled:      true,
+		workspace:                ws,
+		minimal:                  false,
+		taskTrackingEnabled:      true,
+		contextManagementEnabled: true,
 	}
 }
 
@@ -252,14 +252,18 @@ func (b *Builder) Build() string {
 	// Replace workspace section (optional - empty when noWorkspace is true)
 	workspaceSection := ""
 	if !b.noWorkspace {
-		workspaceDir := b.GetCWD()
 		workspaceNotes := ""
 		if b.workspaceNotes != "" {
 			workspaceNotes = "\n" + b.workspaceNotes
 		}
 		workspaceSection = fmt.Sprintf(`## Workspace
-Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.%s`, workspaceDir, workspaceNotes)
+Workspace location is runtime-managed and may change during execution (for example, when switching git worktrees).
+Do not assume a fixed directory in the system prompt.
+Use runtime_state fields for path truth:
+- current_workdir
+- startup_path
+For command-local directory changes, use bash with "cd <dir> && <command>".
+For persistent workspace switching across subsequent tool calls, use change_workspace when available.%s`, workspaceNotes)
 	}
 	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
 
