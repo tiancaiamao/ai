@@ -172,6 +172,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config", s.handleUpdateConfig)
 
 	// Channels API
+	mux.HandleFunc("GET /api/channels/catalog", s.handleChannelsCatalog)
 	mux.HandleFunc("GET /api/channels", s.handleListChannels)
 	mux.HandleFunc("GET /api/channels/", s.handleGetChannel)
 	mux.HandleFunc("PUT /api/channels/", s.handleUpdateChannel)
@@ -1042,6 +1043,81 @@ func validateConfig(config map[string]any) error {
 }
 
 // Channels API handlers
+
+// handleChannelsCatalog returns the catalog of supported channels.
+func (s *Server) handleChannelsCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Read config file
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse config
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Extract channels
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]any{
+			"channels": []map[string]any{},
+		})
+		return
+	}
+
+	// Build catalog with supported channels
+	supportedChannels := []map[string]any{}
+
+	// Display names for channels
+	displayNames := map[string]string{
+		"dingtalk":  "DingTalk",
+		"discord":   "Discord",
+		"feishu":     "Feishu/Lark",
+		"irc":       "IRC",
+		"line":      "LINE",
+		"maixcam":   "MaixCAM",
+		"matrix":    "Matrix",
+		"onebot":    "OneBot",
+		"pico":      "PicoClaw Web",
+		"pico_client": "PicoClaw Client",
+		"qq":        "QQ",
+		"slack":     "Slack",
+		"telegram":  "Telegram",
+		"wecom":     "WeCom",
+		"wecom_aibot": "WeCom AiBot",
+		"wecom_app": "WeCom App",
+		"weixin":    "Weixin",
+		"whatsapp":  "WhatsApp",
+	}
+
+	for name, cfg := range channels {
+		if cfgMap, ok := cfg.(map[string]any); ok {
+			channelInfo := map[string]any{
+				"name":        name,
+				"display_name": displayNames[name],
+				"config_key":  fmt.Sprintf("channels.%s", name),
+				"enabled":     cfgMap["enabled"],
+			}
+			supportedChannels = append(supportedChannels, channelInfo)
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"channels": supportedChannels,
+	})
+}
 
 // handleListChannels returns the list of all channels and their status.
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
