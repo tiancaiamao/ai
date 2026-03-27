@@ -141,8 +141,8 @@ PR_NUM=42
 gh pr diff $PR_NUM > /tmp/pr${PR_NUM}.diff
 
 cat > /tmp/task.txt << 'EOF'
-Read the diff from /tmp/pr42.diff and review it.
-Write your result to /tmp/review-42.json in JSON format.
+Read the diff from /tmp/pr42.diff and review it thoroughly.
+Output your result to /tmp/review-42.json in JSON format using the write tool.
 EOF
 
 SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
@@ -167,8 +167,8 @@ cat /tmp/review-42.json
 git diff > /tmp/changes.diff
 
 cat > /tmp/task.txt << 'EOF'
-Read the diff from /tmp/changes.diff and review it.
-Write your result to /tmp/review-uncommitted.json in JSON format.
+Read the diff from /tmp/changes.diff and review it thoroughly.
+Output your result to /tmp/review-uncommitted.json in JSON format using the write tool.
 EOF
 
 SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \
@@ -190,8 +190,8 @@ COMMIT="abc1234"
 git show $COMMIT > /tmp/commit-${COMMIT}.diff
 
 cat > /tmp/task.txt << EOF
-Read the commit diff from /tmp/commit-${COMMIT}.diff and review it.
-Write your result to /tmp/review-${COMMIT}.json in JSON format.
+Read the commit diff from /tmp/commit-${COMMIT}.diff and review it thoroughly.
+Output your result to /tmp/review-${COMMIT}.json in JSON format using the write tool.
 EOF
 
 SESSION=$(/Users/genius/.ai/skills/subagent/bin/start_subagent_tmux.sh \

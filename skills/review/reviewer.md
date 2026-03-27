@@ -39,8 +39,19 @@ When flagging a bug, provide an accompanying comment:
 
 ### Output Format
 
-Output **all** findings that the original author would fix. If no qualifying finding, output no findings.
+Output **all** findings that the original author would fix.
 
+If no findings found, output complete JSON with empty findings array:
+```json
+{
+  "findings": [],
+  "overall_correctness": "patch is correct",
+  "overall_explanation": "No issues found",
+  "overall_confidence_score": 0.9
+}
+```
+
+If findings found, output:
 ```json
 {
   "findings": [
@@ -60,6 +71,13 @@ Output **all** findings that the original author would fix. If no qualifying fin
   "overall_confidence_score": <float 0.0-1.0>
 }
 ```
+
+### Completion Criteria
+
+1. **Output immediately after review** - Once you've reviewed all changed files and identified findings, write the JSON result using the `write` tool
+2. **Do NOT continue analyzing** - After outputting JSON, do not perform additional code checks or verification
+3. **Review scope** - Focus only on files changed in the diff/patch. Do not explore beyond these changes
+4. **Stop condition** - You have completed review when you've examined all changed files and decided on the findings list
 
 ### Rules
 
