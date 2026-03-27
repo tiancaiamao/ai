@@ -321,11 +321,12 @@ func resolveModel(cfg *AppConfig) llm.Model {
 			// 查找匹配的模型
 			for _, spec := range specs {
 				if spec.ID == cfg.Model {
-					// 使用 models.json 中的配置补充缺失字段
-					if model.Provider == "" {
+					// models.json 中的配置优先级更高
+					// 因为它包含了模型特定的 API 类型信息
+					if spec.Provider != "" {
 						model.Provider = spec.Provider
 					}
-					if model.BaseURL == "" {
+					if spec.BaseURL != "" {
 						model.BaseURL = spec.BaseURL
 					}
 					// 始终使用 models.json 中的 API 类型（如果存在）
