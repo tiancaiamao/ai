@@ -321,15 +321,16 @@ func resolveModel(cfg *AppConfig) llm.Model {
 			// 查找匹配的模型
 			for _, spec := range specs {
 				if spec.ID == cfg.Model {
-					// models.json 中的配置优先级更高
-					// 因为它包含了模型特定的 API 类型信息
-					if spec.Provider != "" {
+					// 只在 config.json 中的值为空时，才使用 models.json 的值
+					// 这样可以保留用户在 config.json 中的自定义配置
+					if model.Provider == "" && spec.Provider != "" {
 						model.Provider = spec.Provider
 					}
-					if spec.BaseURL != "" {
+					if model.BaseURL == "" && spec.BaseURL != "" {
 						model.BaseURL = spec.BaseURL
 					}
-					// 始终使用 models.json 中的 API 类型（如果存在）
+					// API 类型始终使用 models.json 中的值（如果存在）
+					// 因为 config.json 不会包含这个字段
 					if spec.API != "" {
 						model.API = spec.API
 					}
@@ -1533,6 +1534,7 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 		"id":       model.ID,
 		"provider": model.Provider,
 		"baseUrl":  model.BaseURL,
+		"api":      model.API,
 	}
 	cfg["model"] = modelCfg
 

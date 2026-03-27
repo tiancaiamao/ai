@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels/weixin"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	aiconfig "github.com/tiancaiamao/ai/pkg/config"
 	"rsc.io/qr"
 )
 
@@ -672,21 +674,33 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Read config file
+	// Load models from models.json (same source as SwitchModel)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get home directory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
+	specs, err := aiconfig.LoadModelSpecs(modelsPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load models: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get current model ID from config
 	configData, err := os.ReadFile(s.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Parse config
 	var config map[string]any
 	if err := json.Unmarshal(configData, &config); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Get current model ID
 	currentModelID := ""
 	if model, ok := config["model"].(map[string]any); ok {
 		if id, ok := model["id"].(string); ok {
@@ -694,40 +708,39 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get model list and find the default model name
+	// Build model list
 	modelList := []map[string]any{}
 	defaultModelName := ""
-	if models, ok := config["model_list"].([]any); ok {
-		for i, m := range models {
-			if modelMap, ok := m.(map[string]any); ok {
-				modelID, _ := modelMap["model"].(string)
-				modelName, _ := modelMap["model_name"].(string)
 
-				modelInfo := map[string]any{
-					"index":       i,
-					"model_name":  modelMap["model_name"],
-					"model":       modelMap["model"],
-					"api_base":    modelMap["api_base"],
-					"configured":  true,
-					"is_default":  false,
-					"is_virtual":  false,
-				}
-
-				// Check if this is the current model
-				if modelID == currentModelID || strings.HasSuffix(modelID, currentModelID) || strings.HasSuffix(currentModelID, modelID) {
-					modelInfo["is_default"] = true
-					defaultModelName = modelName
-				}
-
-				modelList = append(modelList, modelInfo)
-			}
+	for i, spec := range specs {
+		displayName := spec.ID
+		if spec.Name != "" && spec.Name != spec.ID {
+			displayName = spec.Name
 		}
+
+		modelInfo := map[string]any{
+			"index":       i,
+			"model_name":  displayName,     // Display name for UI
+			"model":       spec.ID,          // Model ID for switching
+			"api_base":    spec.BaseURL,
+			"configured":  true,
+			"is_default":  false,
+			"is_virtual":  false,
+		}
+
+		// Check if this is the current model
+		if spec.ID == currentModelID || strings.HasSuffix(spec.ID, currentModelID) || strings.HasSuffix(currentModelID, spec.ID) {
+			modelInfo["is_default"] = true
+			defaultModelName = spec.ID // Use ID for switching
+		}
+
+		modelList = append(modelList, modelInfo)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"models":        modelList,
 		"total":         len(modelList),
-		"default_model": defaultModelName, // Return model_name instead of model ID
+		"default_model": defaultModelName, // Return model ID for consistency
 	})
 }
 
