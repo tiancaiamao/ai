@@ -1,98 +1,85 @@
 ## Task Execution Strategy
-**Break down complex work before diving in** — Plan → Execute → Verify iteratively.
 
-### Debugging & Bug Fixing (MANDATORY)
+### Debugging Workflow (MANDATORY)
 
-When fixing bugs or debugging issues, follow this order:
-
-1. **Run tests first** — Before making any changes, run the existing tests to:
-   - Understand what's failing and why
-   - See the actual error messages
-   - Identify which functions/modules are affected
-
-2. **Search before reading** — Use `grep` to locate relevant code:
-   - Search for error messages, function names, or keywords
-   - Don't read all files blindly — target your investigation
-   - Only read files after identifying relevant locations
-
-3. **Fix with verification** — After each fix, re-run tests immediately
-
-```
-WRONG: Read all files → Guess the bug → Make changes → Run tests
-RIGHT: Run tests → Grep for error → Read targeted code → Fix → Verify
-```
+1. Run tests first → Grep for error → Fix with verification
+2. Don't read blindly — target your investigation
 
 ### Task Type Detection
 
-Before decomposing, detect task type:
+**Simple** (<15min, single file): Handle directly
+**Complex** (>3 steps, multiple files): Use structured workflows
 
-**Simple Tasks** (handle directly):
-- Single file change
-- Clear requirement, no ambiguity
-- Single logical step
-- < 15 min estimated
-
-**Complex Tasks** (use structured approach):
-- Multiple files/components
-- Unknown dependencies
-- Ambiguous requirements
-- >3 logical steps
-- > 30 min estimated
-
-### Routing Logic
+### Routing Logic (MUST FOLLOW - IN ORDER)
 
 ```
 Task Request
     ↓
-[Check for existing artifacts]
-    ├─ tasks.md exists?
-    │   └─ Yes → /skill:auto-execute (direct execution)
-    │
-    ├─ Clear feature requirement?
-    │   └─ Yes → /skill:speckit (spec → plan → tasks → auto-execute)
-    │
-    ├─ Exploratory/unclear?
-    │   └─ Yes → /skill:explore or /skill:brainstorming
-    │               ↓
-    │           Clarify requirements
-    │               ↓
-    │           /skill:speckit (generate tasks.md)
-    │               ↓
-    │           /skill:auto-execute
-    │
-    └─ Conversation revealed clear task?
-        └─ Yes → Use task_tracking
-                     ↓
-                 /skill:speckit (create tasks.md)
-                     ↓
-                 /skill:auto-execute
+[1] tasks.md exists with pending tasks?
+    └─ Yes → /skill:auto-execute
+
+[2] User said "execute", "run tasks"?
+    └─ Yes → /skill:auto-execute (if tasks.md exists)
+
+[3] User said "review"?
+    └─ Yes → /skill:review
+
+[4] User said "explore", "understand"?
+    └─ Yes → /skill:explore
+
+[5] User said "brainstorm", "ideas"?
+    └─ Yes → /skill:brainstorming
+
+[6] Needs specialized persona (review, security, performance)?
+    └─ Yes → /skill:subagent with @persona.md
+
+[7] Can split into 2-8 independent subtasks?
+    └─ Yes → Use subagent for parallel execution
+
+[8] Task >5min with independent work?
+    └─ Yes → /skill:subagent (run independent work while waiting)
+
+[9] User said "feature", "implement", "build" AND no tasks.md?
+    └─ Yes → /skill:speckit
+
+[Default] → Handle directly with task_tracking
 ```
 
-**Key Principles**:
-- If tasks.md exists and approved → use auto-execute directly
-- If starting new feature work → use speckit to create tasks.md first
-- If requirements unclear → explore/brainstorm, then speckit
-- If evolving from conversation → track context, then speckit
+### Subagent Usage (MUST)
 
-### When to Decompose
+**MUST USE** subagent when:
+- Needs specialized persona
+- Can parallelize independent subtasks
+- Task >5min with independent work to do
 
-Use decomposition when task has:
-- Multiple files/components
-- Unknown dependencies
-- Ambiguous requirements
-- >3 logical steps
+**NEVER USE** for:
+- Simple edits (<5min)
+- Tasks needing frequent interaction
 
-### Simple Framework
+### Auto-Execute (MUST)
 
-1. **Understand first** — Read relevant files, clarify ambiguity
-2. **Plan briefly** — List main components + dependencies
-3. **Execute in order** — Tackle independent parts in parallel if possible
-4. **Verify each step** — Don't batch-fix at end
+**MUST USE** when:
+- tasks.md exists AND pending
+- User said "execute"
 
-**Or use structured workflows**:
-- `/skill:speckit` - For feature development (spec → plan → tasks)
-- `/skill:auto-execute` - For executing existing tasks.md
-- `/skill:brainstorming` - For exploring unclear requirements
-- `/skill:explore` - For understanding codebases
+**NEVER USE** when:
+- tasks.md doesn't exist
+- User hasn't approved
 
-For detailed decomposition patterns and examples, check available skills.
+### Speckit (MUST)
+
+**MUST USE** when:
+- User said "feature", "implement", "build" AND no tasks.md
+
+**NEVER USE** when:
+- tasks.md exists (use auto-execute)
+- Simple bug fix
+
+### Workflows
+
+- `/skill:speckit` - Feature development (spec → plan → tasks)
+- `/skill:auto-execute` - Execute tasks.md
+- `/skill:subagent` - Parallel or specialized tasks
+- `/skill:review` - Code review
+- `/skill:explore` - Understand codebase
+- `/skill:brainstorming` - Explore options

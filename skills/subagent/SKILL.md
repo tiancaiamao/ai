@@ -203,6 +203,50 @@ Saved 8s (12%) by running independent work in parallel!
 - ❌ Heavy computation (would compete for resources)
 - ❌ Tasks that modify the same files
 
+## Wait for Fastest Subagent (Exploration/Research)
+
+Use `wait_any_subagent.sh` when you have multiple subagents exploring options and want the fastest result:
+
+```bash
+# STEP 1: Start multiple subagents in parallel
+SESSION1=$(start_subagent_tmux.sh /tmp/opt1.txt 5m @researcher.md "Research option A")
+SESSION2=$(start_subagent_tmux.sh /tmp/opt2.txt 5m @researcher.md "Research option B")
+SESSION3=$(start_subagent_tmux.sh /tmp/opt3.txt 5m @researcher.md "Research option C")
+
+# STEP 2: Wait for first to complete
+FIRST=$(~/.ai/skills/subagent/bin/wait_any_subagent.sh \
+  subagent-1 subagent-2 subagent-3)
+
+# STEP 3: Get result from the first
+case $FIRST in
+  subagent-1) BEST=$(cat /tmp/opt1.txt) ;;
+  subagent-2) BEST=$(cat /tmp/opt2.txt) ;;
+  subagent-3) BEST=$(cat /tmp/opt3.txt) ;;
+esac
+
+# STEP 4: Kill others (optional)
+# tmux kill-session -t subagent-1
+# tmux kill-session -t subagent-2
+# tmux kill-session -t subagent-3
+
+echo "Best option: $BEST"
+```
+
+**Use case: Researching multiple approaches**
+
+- Option A: Use PostgreSQL for storage
+- Option B: Use MongoDB for storage
+- Option C: Use Redis for storage
+
+Start 3 subagents researching each option, wait for first to complete (e.g., option A finishes in 120s), use that result, kill others.
+
+**vs Wait for All:**
+
+| Pattern | When to use | Example |
+|---------|-------------|---------|
+| **Wait for all** | Need all results | Implement user model + auth middleware + routes |
+| **Wait for fastest** | Need best/first result | Research database options, use fastest |
+
 ## One-Liner with -w Flag
 
 Use `-w` flag to start and wait in one command:
