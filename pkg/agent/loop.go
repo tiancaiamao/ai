@@ -256,6 +256,9 @@ func runInnerLoop(
 	// Turn counter for MaxTurns limit
 	turnCount := 0
 
+	// Track if previous turn had tool calls for reminder timing
+	previousHadToolCalls := false
+
 	for {
 		// Check for context cancellation
 		select {
@@ -264,6 +267,13 @@ func runInnerLoop(
 			return
 		default:
 		}
+
+		// Set AllowReminders based on turn context:
+		// - First turn (turnCount == 0): allow (user initiated)
+		// - Subsequent turns: only if previous turn had tool calls
+		// This prevents reminders from triggering unwanted LLM responses
+		// when the assistant is about to end the conversation.
+		agentCtx.AllowReminders = (turnCount == 0) || previousHadToolCalls
 
 		// Check for max turns limit
 		if config.MaxTurns > 0 && turnCount >= config.MaxTurns {
@@ -499,6 +509,9 @@ func runInnerLoop(
 			// Reset per-turn tracking for next turn
 			agentCtx.ContextMgmtState.ResetTurnTracking()
 		}
+
+		// Update previousHadToolCalls for next iteration's reminder timing
+		previousHadToolCalls = hasMoreToolCalls
 
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
@@ -805,8 +818,12 @@ func streamAssistantResponse(
 	}
 
 	// Inject llm context reminder if LLM hasn't updated it for too many rounds
-	// Only if task tracking is enabled
-	if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled {
+	// Only if:
+	// 1. Task tracking is enabled
+	// 2. AllowReminders is true (first turn or previous turn had tool calls)
+	// This prevents reminders from triggering unwanted LLM responses when
+	// the assistant is about to end the conversation.
+	if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled && agentCtx.AllowReminders {
 		reminderContent := agentCtx.TaskTrackingState.GetReminderUserMessage()
 		reminderMsg := llm.LLMMessage{
 			Role:    "user",
@@ -822,8 +839,10 @@ func streamAssistantResponse(
 	}
 
 	// Inject decision reminder based on independent decision-pressure state.
-	// Only if context management is enabled
-	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled {
+	// Only if:
+	// 1. Context management is enabled
+	// 2. AllowReminders is true (first turn or previous turn had tool calls)
+	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled && agentCtx.AllowReminders {
 		meta := agentCtx.LLMContext.GetMeta()
 		currentTurn := agentCtx.ContextMgmtState.GetCurrentTurn()
 		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
