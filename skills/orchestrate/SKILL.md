@@ -1,308 +1,184 @@
 ---
 name: orchestrate
-description: Multi-agent orchestration methodology. Use chain/parallel/loop patterns to coordinate multiple subagents for complex tasks. Current: loop mode for tasks.md execution.
+description: Multi-agent orchestration methodology. Use chain/parallel/loop patterns to coordinate multiple subagents for complex tasks. Current: phase-level execution with review loops.
 allowed-tools: [bash, read, write, edit, grep]
 ---
 
-# Orchestrate - Multi-Agent Orchestration
+# Orchestrate - Phase-Level Execution
 
-**Orchestrate** is a methodology for coordinating multiple specialized agents to complete complex tasks. Like how `speckit` provides a spec-driven development workflow, `orchestrate` provides patterns for multi-agent collaboration.
+**Orchestrate** executes speckit phases with review loops and automatic commits.
 
-## What Problem Does It Solve?
-
-When working on complex tasks, you often need:
-- **Exploration** → Research existing code/docs
-- **Planning** → Design the approach
-- **Implementation** → Write the code
-- **Verification** → Check if it works
-
-Doing all of this in a single agent context leads to:
-- Context bloat (accumulated garbage)
-- No isolation between phases
-- Hard to recover from failures
-
-**Orchestrate solves this** by using isolated subagents for each phase.
-
-## Core Principles
-
-1. **Isolated Context** - Each subagent has a fresh context window
-2. **Clear Roles** - Each subagent has a focused persona
-3. **Composable Patterns** - Chain, parallel, loop modes can be combined
-4. **Main Agent Supervision** - The main agent coordinates, subagents execute
-
-## Supported Patterns (Phase 1)
-
-### Loop Mode (Current Default)
-
-Execute tasks with a worker → checker loop:
+## Core Workflow
 
 ```
-for each task:
-    while not approved:
-        worker subagent executes
-        task-checker subagent verifies
-        if approved: move to next task
-        if needs fixes: loop back to worker
+for each phase (SPECIFY → PLAN → TASKS → IMPLEMENT):
+    while not approved (max 3 cycles):
+        1. phase-worker: execute entire phase
+        2. phase-reviewer: review phase output
+        3. if APPROVED: commit, move to next phase
+        4. if CHANGES_REQUESTED: loop back with feedback
 ```
 
-**Use case**: Executing `tasks.md` from speckit
+## Key Difference from Task-Level
 
-**Usage**:
+| Old (Task-Level) | New (Phase-Level) |
+|------------------|-------------------|
+| Review after EACH task | Review after ENTIRE phase |
+| No commits during execution | Commit after each phase |
+| Many review cycles | 4 review cycles max (one per phase) |
+
+## Commands
+
 ```bash
+# Run full workflow
 ~/.ai/skills/orchestrate/bin/orchestrate.sh
+
+# Show status
+~/.ai/skills/orchestrate/bin/orchestrate.sh status
+
+# Execute next phase only
+~/.ai/skills/orchestrate/bin/orchestrate.sh next
+
+# Initialize workflow
+~/.ai/skills/orchestrate/bin/orchestrate.sh init
 ```
 
-**How it works**:
-1. Reads `tasks.md`
-2. For each pending task:
-   - Spawns a worker subagent to implement
-   - Spawns a task-checker subagent to verify
-   - Loops up to 3 times if fixes are needed
-   - Marks task as done/failed
+## Phases
 
-## Parallel Execution Pattern
+| Phase | Output | Worker Does | Reviewer Checks |
+|-------|--------|-------------|-----------------|
+| **SPECIFY** | spec.md | Gather requirements, write spec | Complete? Testable? |
+| **PLAN** | plan.md | Read spec, explore, write plan | Addresses spec? Feasible? |
+| **TASKS** | tasks.md | Break plan into tasks | Actionable? Complete? |
+| **IMPLEMENT** | code | Execute all tasks | Tests pass? Criteria met? |
 
-### Wait for All (Most Common)
+## Review Loop
 
-Use when you have 2-8 independent subtasks:
+Each phase goes through:
 
-```bash
-# Start all subagents in parallel
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/out1.txt 10m @worker.md "Create user model")
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/out2.txt 10m @worker.md "Create auth middleware")
-SESSION3=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/out3.txt 10m @worker.md "Create auth routes")
-
-# Do independent work while they run
-# Example: Review related code, prepare integration tests
-
-# Wait for all (using session names)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$(echo $SESSION1 | cut -d: -f1)" /tmp/out1.txt 600
-~/.ai/skills/tmux/bin/tmux_wait.sh "$(echo $SESSION2 | cut -d: -f1)" /tmp/out2.txt 600
-~/.ai/skills/tmux/bin/tmux_wait.sh "$(echo $SESSION3 | cut -d: -f1)" /tmp/out3.txt 600
-
-# Collect all results
-RESULT1=$(cat /tmp/out1.txt)
-RESULT2=$(cat /tmp/out2.txt)
-RESULT3=$(cat /tmp/out3.txt)
-
-# Verify integration
-go test ./...
 ```
-
-### Wait for Fastest (For Exploration/Research)
-
-```bash
-# Start multiple subagents exploring different options
-SESSION1=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/opt1.txt 5m @researcher.md "Research option A")
-SESSION2=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/opt2.txt 5m @researcher.md "Research option B")
-SESSION3=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/opt3.txt 5m @researcher.md "Research option C")
-
-# Wait for first to complete
-FIRST=$(~/.ai/skills/subagent/bin/wait_any_subagent.sh \
-  subagent-1 subagent-2 subagent-3)
-
-# Get result from the first
-case $FIRST in
-  subagent-1) BEST=$(cat /tmp/opt1.txt) ;;
-  subagent-2) BEST=$(cat /tmp/opt2.txt) ;;
-  subagent-3) BEST=$(cat /tmp/opt3.txt) ;;
-esac
-
-# Kill others (optional)
-# tmux kill-session -t ...
+Cycle 1: worker executes → reviewer checks
+         ↓ if CHANGES_REQUESTED
+Cycle 2: worker fixes → reviewer checks
+         ↓ if CHANGES_REQUESTED  
+Cycle 3: worker fixes → reviewer checks
+         ↓ if still not approved
+Manual intervention needed
 ```
-
-## When to Use Parallel Subagents
-
-**MUST USE** when ALL conditions are met:
-- Task can be split into 2-8 independent subtasks
-- Each subtask has its own output file/destination
-- No dependencies between subtasks
-- Convergence verification is automatable (tests, scripts)
-
-**Example: Implement User Authentication**
-```
-Subtask 1: Create user model (→ models/user.go)
-Subtask 2: Create auth middleware (→ middleware/auth.go)
-Subtask 3: Create auth routes (→ routes/auth.go)
-Subtask 4: Write auth tests (→ auth_test.go)
-
-Convergence: Run integration tests to verify all parts work together
-```
-
-**Counter-Example: DON'T Parallelize**
-```
-Subtask 1: Create user model (→ models/user.go)
-Subtask 2: Create user service (needs models/user.go) ❌ DEPENDENCY
-Subtask 3: Create user routes (needs user service) ❌ DEPENDENCY
-
-This should be serial, not parallel.
-```
-
-## Parallel Task Decomposition Pattern
-
-When speckit generates tasks.md, check for parallelizable tasks:
-
-```markdown
-## Example tasks.md (Good for parallel)
-
-- [ ] Create user model
-- [ ] Create auth middleware
-- [ ] Create auth routes
-- [ ] Write auth tests
-```
-
-These are independent → Can run in parallel with subagents.
-
-```markdown
-## Example tasks.md (Must be serial)
-
-- [ ] Create user model
-- [ ] Create user service (depends on model)
-- [ ] Create user routes (depends on service)
-- [ ] Write integration tests (depends on all above)
-```
-
-These have dependencies → Must run serially.
 
 ## Internal Personas
 
-Orchestrate uses internal personas (not exposed as skills):
+| Persona | Role | File |
+|---------|------|------|
+| **phase-worker** | Execute entire phase | `references/phase-worker.md` |
+| **phase-reviewer** | Review phase completion | `references/phase-reviewer.md` |
 
-| Persona | Role | Location |
-|---------|------|----------|
-| **worker** | Executes implementation tasks | `orchestrate/references/worker.md` |
-| **task-checker** | Verifies task completion | `orchestrate/references/task-checker.md` |
+## Output Format
 
-These are **internal** - use them via orchestrate, don't call directly.
+### Phase-Worker Output
 
-## Error Handling
+```
+## Phase Complete: [PHASE_NAME]
 
-### Subagent Failure
+**Output**: [files created/modified]
+**Summary**: [what was done]
+
+### Key Changes
+- [change 1]
+- [change 2]
+
+### Verification
+- [how verified]
+```
+
+### Phase-Reviewer Output
+
+```json
+PHASE_REVIEW_RESULT: {
+  "status": "APPROVED" | "CHANGES_REQUESTED" | "FAILED",
+  "phase": "SPECIFY" | "PLAN" | "TASKS" | "IMPLEMENT",
+  "completed_well": ["..."],
+  "blocking_issues": ["..."],
+  "next_steps": "specific fixes needed"
+}
+```
+
+## Commits
+
+After each approved phase:
 
 ```bash
-# If subagent fails, check:
-# 1. /tmp/output.txt for error details
-# 2. tmux attach -t <session> to see full context
-
-# Retry with different approach:
-# - Increase timeout if needed
-# - Simplify task
-# - Break into smaller subtasks
+git add -A
+git commit -m "feat(specify): complete specify phase"
+git commit -m "feat(plan): complete plan phase"
+git commit -m "feat(tasks): complete tasks phase"
+git commit -m "feat(implement): complete implement phase"
 ```
 
-### Timeout Handling
+## State Tracking
 
-```bash
-# Default timeout is 10m, adjust for task complexity:
-# - Quick search/analysis: 5m
-# - Code review: 10m
-# - Multi-file refactoring: 15m
-# - Complex investigation: 15-30m
+Workflow state in `.workflow/state.json`:
 
-# If timeout occurs, task may still be running:
-# - Check with tmux ls
-# - Attach to see progress
-# - Or kill and restart with longer timeout
+```json
+{
+  "phase": "PLAN",
+  "status": "in_progress",
+  "cycle": 1,
+  "updated_at": "2024-01-15T10:30:00Z"
+}
 ```
-
-## Planned Patterns (Phase 2)
-
-### Chain Mode
-
-Sequential execution with output passing:
-
-```
-task → scout → {context} → planner → {plan} → worker → {code}
-```
-
-**Use case**: Explore → Research → Implement pipeline
-
-### Debate Mode
-
-Multiple perspectives synthesis:
-
-```
-task → researcher A (观点 A)
-     → researcher B (观点 B)
-     → synthesizer (综合)
-```
-
-**Use case**: Evaluating different approaches
-
-## vs Other Skills
-
-| Skill | Focus | Subagents? |
-|-------|-------|------------|
-| **speckit** | Spec-driven workflow | No (main agent does all work) |
-| **orchestrate** | Multi-agent coordination | Yes (core feature) |
-| **explore** | Codebase exploration | Yes (uses subagent) |
-| **review** | Code review | Yes (uses subagent) |
 
 ## Typical Workflow
 
 ```
-1. /skill:explore      → explorer/*.md (optional, for context)
-2. /skill:brainstorming → decisions.md (optional, for decisions)
-3. /skill:speckit      → spec.md, plan.md, tasks.md
-4. orchestrate.sh      → executes all tasks with worker→checker loop
+1. /skill:explore      → context (optional)
+2. /skill:brainstorming → decisions (optional)
+3. /skill:speckit      → creates spec.md, plan.md, tasks.md
+4. orchestrate.sh      → executes all phases with review loops
 ```
 
-## Commands
+## Parallel Execution (Advanced)
 
-### Run orchestration
+For independent tasks in IMPLEMENT phase, you can parallelize manually:
+
 ```bash
-~/.ai/skills/orchestrate/bin/orchestrate.sh
+# Start parallel workers for independent tasks
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh /tmp/task1.txt 10m @worker.md "Task 1"
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh /tmp/task2.txt 10m @worker.md "Task 2"
+
+# Wait and collect
+~/.ai/skills/tmux/bin/tmux_wait.sh session1 /tmp/task1.txt 600
+~/.ai/skills/tmux/bin/tmux_wait.sh session2 /tmp/task2.txt 600
 ```
-
-### Check status
-```bash
-~/.ai/skills/orchestrate/bin/orchestrate.sh status
-```
-
-### Execute next task only
-```bash
-~/.ai/skills/orchestrate/bin/orchestrate.sh next
-```
-
-### Initialize workflow
-```bash
-~/.ai/skills/orchestrate/bin/orchestrate.sh init
-```
-
-## Roadmap
-
-| Phase | Features | Status |
-|-------|----------|--------|
-| **1** | Loop mode for tasks.md | ✅ Current |
-| **2** | Parallel execution with subagents | 🚧 In Progress |
-| **3** | Chain/debate modes | 📋 Planned |
-| **4** | Integration with speckit phases | 📋 Future |
-
-## Key Benefits
-
-- ✅ **Clean main agent context** - All execution in subagents
-- ✅ **Crash recovery** - Each subagent session is isolated
-- ✅ **Parallel processing** - Can run multiple subagents at once
-- ✅ **Specialized roles** - Each subagent has focused expertise
-- ✅ **Composable** - Patterns can be combined
 
 ## Troubleshooting
 
-### Task stuck in loop
-- Check `/tmp/orchestrate-check-*.txt` for feedback
-- Max cycles is 3 - after that it stops for manual intervention
+### Phase stuck in loop
+- Check `/tmp/orchestrate-review-*.txt` for feedback
+- Max 3 cycles - then stops for manual intervention
+- Attach to tmux session to see full context
 
-### Subagent fails to start
-- Ensure `ai` binary is in PATH
-- Check tmux is installed: `tmux -V`
+### Commit fails
+- Check if git is initialized
+- Check for merge conflicts
+- Commit is best-effort (won't fail the phase)
 
-### Task-checker not parsing
-- Ensure task-checker.md outputs `TASK_CHECK_RESULT` JSON
-- Check `/tmp/orchestrate-check-*.txt` for raw output
+### Reviewer not parsing
+- Ensure phase-reviewer outputs `PHASE_REVIEW_RESULT` JSON
+- Check `/tmp/orchestrate-review-*.txt` for raw output
+
+## vs Other Skills
+
+| Skill | Focus | Commits? | Review Level |
+|-------|-------|----------|--------------|
+| **speckit** | Create spec/plan/tasks | No | None |
+| **orchestrate** | Execute with review loops | Yes | Phase-level |
+| **review** | Detailed code review | No | Code-level |
+
+## Key Benefits
+
+- ✅ **Phase-level review** - Not micro-managing each task
+- ✅ **Automatic commits** - Clean history after each phase
+- ✅ **Feedback loops** - Fix issues before moving on
+- ✅ **Clean context** - Each subagent is isolated
+- ✅ **Max 3 cycles** - Won't loop forever
