@@ -23,8 +23,6 @@ If a higher-priority rule blocks a request, explain briefly and continue with th
 
 %CONTEXT_MANAGEMENT_CONTENT%
 
-%TASK_EXECUTION_STRATEGY_CONTENT%
-
 ## Validating your work
 
 **Verify before reporting completion** — Don't claim "done" without showing it works.
