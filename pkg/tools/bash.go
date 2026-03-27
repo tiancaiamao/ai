@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -89,6 +91,27 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	if command == "" {
 		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
 	}
+
+	// Detect sleep commands with duration >= 30 seconds
+	if sleepDuration, hasSleep := detectSleepCommand(command); hasSleep && sleepDuration >= 30 {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf(
+					"Error: sleep with duration >= 30 seconds is not allowed in bash tool (detected: %d seconds).\n\n"+
+						"For long-running tasks, use the /tmux skill instead.\n\n"+
+						"Quick guide:\n"+
+						"• Start in tmux: tmux new -s <name> -d \"<your command>\"\n"+
+						"• Check progress: tmux capture-pane -t <name> -p\n"+
+						"• Attach to see: tmux attach -t <name>\n"+
+						"• Wait in script: ~/.ai/skills/tmux/bin/tmux_wait.sh <name> [timeout]\n\n"+
+						"See /tmux skill documentation for more details.",
+					sleepDuration,
+				),
+			},
+		}, nil
+	}
+
 	if isBareCDCommand(command) {
 		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
 	}
@@ -303,4 +326,44 @@ func isBareCDCommand(command string) bool {
 		return false
 	}
 	return true
+}
+
+// detectSleepCommand detects sleep commands and returns the duration in seconds.
+// Returns (duration, true) if a sleep command is found, (0, false) otherwise.
+// Handles patterns like:
+// - sleep 90
+// - sleep 30s
+// - /bin/sleep 120
+// - command && sleep 60
+// - sleep 2m
+func detectSleepCommand(command string) (int, bool) {
+	// Match sleep command followed by a number (possibly with unit)
+	// Pattern: sleep<space>[number][unit]
+	// Supports: sleep 90, sleep 30s, /bin/sleep 120, command && sleep 60
+	sleepPattern := regexp.MustCompile(`\bsleep\s+(\d+)([smh]?\b)`)
+
+	matches := sleepPattern.FindStringSubmatch(command)
+	if matches == nil {
+		return 0, false
+	}
+
+	// Parse the numeric duration
+	durationStr := matches[1]
+	duration, err := strconv.Atoi(durationStr)
+	if err != nil {
+		return 0, false
+	}
+
+	// Handle time units
+	unit := matches[2]
+	switch unit {
+	case "s", "":
+		// Already in seconds
+	case "m":
+		duration *= 60
+	case "h":
+		duration *= 3600
+	}
+
+	return duration, true
 }
