@@ -895,7 +895,7 @@ func formatSchedule(s *cron.CronSchedule) string {
 		}
 		return "at <unknown>"
 	default:
-		return s.Kind
+		return "unknown"
 	}
 }
 

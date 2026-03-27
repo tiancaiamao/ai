@@ -1,247 +1,110 @@
 ---
 name: find-skills
-description: Helps users discover, install, and manage goclaw skills. Use when users ask "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities. Provides guidance for finding skills in the goclaw ecosystem and the broader open agent skills community.
-version: 1.0.0
+description: 搜索和安装技能。当用户问"有没有 X 的 skill"、"搜索 skill"、"安装 skill"时使用。
+version: 2.0.0
 author: Ducc
 metadata:
   openclaw:
     emoji: 🔍
     always: false
-    requires:
-      os: [darwin, linux, windows]
 ---
 
 # Find Skills
 
-Helps discover and install skills for goclaw.
+从 ClawHub 技能市场搜索和安装技能。
 
-## Triggers
+## 使用方式
 
-**Discovery requests:**
-- "find a skill for X", "is there a skill for X"
-- "how do I do X" where X might have an existing skill
-- "can you do X" for specialized capabilities
-- "I need help with X"
+直接跟 Agent 说：
 
-**Extension interest:**
-- "I wish I had X capability"
-- "Is there a tool for X?"
-- "extend agent capabilities"
-- "add new functionality"
+```
+"有没有 GitHub 操作的 skill？"
+"搜索网页抓取相关的 skill"
+"安装 crawl4ai skill"
+```
 
-**Management:**
-- "list skills", "show installed skills"
-- "update skills", "remove skill"
-- "install skill", "add skill"
+## 搜索技能
 
----
-
-## Quick Start
-
-### List Installed Skills
+使用 ClawHub API 搜索：
 
 ```bash
-goclaw skills list
-goclaw skills list --verbose  # Show detailed info including content
+# 搜索 GitHub 相关技能
+curl -s "https://clawhub.ai/api/v1/search?q=github&limit=5" | jq .
 ```
 
-### Install from URL
+返回结果包含：
+- `slug` - 技能唯一标识
+- `displayName` - 显示名称
+- `summary` - 描述
+- `version` - 版本号
+- `score` - 相关度评分
+
+## 安装技能
+
+找到想要的技能后，下载并解压：
 
 ```bash
-# From Git repository
-goclaw skills install https://github.com/user/skill-repo
+# 下载技能 ZIP
+curl -L -o /tmp/skill.zip "https://clawhub.ai/api/v1/download?slug=<slug>"
 
-# From local path
-goclaw skills install ./path/to/skill
+# 解压到技能目录
+unzip -o /tmp/skill.zip -d ~/.aiclaw/skills/<slug>
+
+# 刷新技能列表
+/skills reload
 ```
 
-### Validate Skills
+## 示例对话
+
+```
+用户: 有没有可以帮我操作 GitHub PR 的 skill？
+
+Agent: [搜索 ClawHub]
+找到了 3 个相关技能：
+
+1. **github** v1.2.0 (评分: 0.95)
+   GitHub PR/Issue/Branch 操作
+
+2. **github-actions** v0.8.0 (评分: 0.72)
+   CI/CD 工作流管理
+
+要安装哪个？
+
+用户: 安装 github
+
+Agent: [下载并安装]
+正在安装 github 技能...
+✓ 已安装到 ~/.aiclaw/skills/github
+
+执行 /skills reload 加载新技能...
+
+用户: /skills reload
+
+Agent: Reloaded 15 skills
+```
+
+## 技能目录
+
+- `~/.aiclaw/skills/` - 用户安装的技能
+- ClawHub: https://clawhub.ai - 默认技能市场
+
+## 命令
+
+| 命令 | 说明 |
+|------|------|
+| `/skills` | 列出已加载的技能 |
+| `/skills list` | 同上 |
+| `/skills reload` | 热加载新安装的技能 |
+
+## 手动安装
+
+从 Git 仓库安装：
 
 ```bash
-# Check if skill dependencies are satisfied
-goclaw skills validate skill-name
+git clone https://github.com/user/skill-repo ~/.aiclaw/skills/skill-name
+/skills reload
 ```
 
-### Test Skills
+## 创建自定义技能
 
-```bash
-# Test a skill with a prompt
-goclaw skills test skill-name --prompt "your test prompt here"
-```
-
----
-
-## Skill Locations
-
-Skills are stored in a unified location:
-
-| Location | Description |
-|----------|-------------|
-| `~/.goclaw/skills` | All skills (user-installed and built-in) |
-
-Built-in skills are automatically copied to this directory on first run.
-
----
-
-## Installing Skills
-
-### From Git Repository
-
-```bash
-# Basic installation
-goclaw skills install https://github.com/user/repo
-
-# The skill will be installed to ~/.goclaw/skills/<repo-name>
-```
-
-### From Local Path
-
-```bash
-# From a directory containing SKILL.md
-goclaw skills install /path/to/skill
-```
-
-### Updating Skills
-
-```bash
-# Update a specific skill (must be a Git repo)
-goclaw skills update skill-name
-```
-
-### Uninstalling Skills
-
-```bash
-# Remove a skill
-goclaw skills uninstall skill-name
-```
-
----
-
-## Finding Relevant Skills
-
-### 1. Search Built-in Skills
-
-Use `goclaw skills list` to see what's available:
-
-```bash
-goclaw skills list --verbose
-```
-
-### 2. Browse External Sources
-
-**Official goclaw skills:** Check the project repository for bundled skills.
-
-**Community sources:**
-- GitHub: Search for `goclaw skill` or `agent skill`
-- Skills compatible with OpenClaw/Agent Skills format can often be adapted
-
-### 3. Check Skill Metadata
-
-Each skill has a `description` field in its YAML frontmatter that indicates when it should be used:
-
-```yaml
----
-name: crawl4ai
-description: This skill should be used when users need to scrape websites,
-extract structured data, handle JavaScript-heavy pages, or build automated
-web data pipelines.
----
-```
-
----
-
-## Creating Custom Skills
-
-If no existing skill meets your needs, create one:
-
-### Initialize New Skill
-
-```bash
-cd ~/.goclaw/skills
-mkdir my-skill
-cd my-skill
-
-# Create SKILL.md with proper frontmatter
-```
-
-### SKILL.md Template
-
-```markdown
----
-name: my-skill
-description: Brief description of what this skill does and when to use it.
-version: 1.0.0
-author: Your Name
-metadata:
-  openclaw:
-    emoji: 🎯
-    always: false
-    requires:
-      bins: []        # Required binaries
-      anyBins: []     # At least one of these must exist
-      env: []         # Required environment variables
-      config: []      # Required config keys
-      os: [darwin, linux, windows]
----
-
-# My Skill
-
-## Overview
-
-Brief description of what this skill does.
-
-## Triggers
-
-When this skill should activate.
-
-## Quick Start
-
-Basic usage examples.
-
-## Reference
-
-Detailed documentation.
-```
-
----
-
-## Best Practices
-
-1. **Search first** - Check if a skill already exists before creating
-2. **Validate before use** - Run `goclaw skills validate <name>` to check dependencies
-3. **Test skills** - Use `goclaw skills test <name>` to verify behavior
-4. **Keep skills lean** - Skills should be concise and focused
-5. **Use references** - Move detailed docs to `references/` directory
-
----
-
-## Troubleshooting
-
-### Skill not found
-
-```bash
-# Check skill is in correct location
-ls -la ~/.goclaw/skills/
-
-# Verify skill has SKILL.md
-ls ~/.goclaw/skills/<skill-name>/SKILL.md
-```
-
-### Dependencies not satisfied
-
-```bash
-# Validate to see what's missing
-goclaw skills validate <skill-name>
-
-# Install missing binaries or set environment variables
-```
-
-### Skill not loading
-
-```bash
-# Check skill format is valid
-cat ~/.goclaw/skills/<skill-name>/SKILL.md
-
-# YAML frontmatter must start with `---`
-# and have a name and description field
-```
+参考 `skill-creator` 技能了解如何创建自己的技能。
