@@ -769,6 +769,7 @@ func cmdCronList(cronService *cron.CronService) string {
 	}
 
 	var b strings.Builder
+	b.WriteString("```\n")
 	b.WriteString(fmt.Sprintf("Cron Jobs (%d):\n\n", len(jobs)))
 	for i, job := range jobs {
 		status := "enabled"
@@ -791,7 +792,8 @@ func cmdCronList(cronService *cron.CronService) string {
 		}
 		b.WriteString("\n")
 	}
-	return strings.TrimSpace(b.String())
+	b.WriteString("```")
+	return b.String()
 }
 
 // cmdCronAdd 添加 cron 任务
