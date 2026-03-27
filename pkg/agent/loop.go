@@ -516,6 +516,8 @@ func runInnerLoop(
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
 			if maybeRecoverMalformedToolCall(ctx, agentCtx, &newMessages, stream, msg, &malformedToolCallRecoveries) {
+				// Recovery injected a user message, allow reminders for the recovery turn
+				previousHadToolCalls = true
 				continue
 			}
 			break

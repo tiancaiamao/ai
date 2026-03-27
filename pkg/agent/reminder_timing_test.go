@@ -245,3 +245,136 @@ func TestReminderTiming_FirstTurnAllowsReminders(t *testing.T) {
 		t.Error("Reminder was NOT injected on first turn")
 	}
 }
+
+// TestReminderTiming_MalformedToolCallRecoveryAllowsReminders verifies that
+// after a malformed tool call recovery injects a user message, reminders
+// ARE allowed on the subsequent turn.
+func TestReminderTiming_MalformedToolCallRecoveryAllowsReminders(t *testing.T) {
+	// This test verifies the fix for the edge case where:
+	// 1. Assistant has no tool calls (hasMoreToolCalls = false)
+	// 2. maybeRecoverMalformedToolCall returns true (injects recovery message)
+	// 3. Loop continues with previousHadToolCalls = true
+	// 4. AllowReminders should be true for the recovery turn
+
+	agentCtx := &agentctx.AgentContext{
+		SystemPrompt:      "test",
+		Messages:          []agentctx.AgentMessage{{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Text: "hello"}}}},
+		AllowReminders:    true, // Simulate: recovery turn (previousHadToolCalls = true after fix)
+		TaskTrackingState: agentctx.NewTaskTrackingState(t.TempDir()),
+	}
+
+	// Advance the task tracking state to make it need a reminder
+	for i := 0; i < 12; i++ {
+		agentCtx.TaskTrackingState.NeedsReminderMessage()
+	}
+
+	var reminderInjected bool
+	origFn := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = origFn }()
+
+	streamAssistantResponseFn = func(
+		ctx context.Context,
+		agentCtx *agentctx.AgentContext,
+		config *LoopConfig,
+		stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		selectedMessages, _ := selectMessagesForLLM(agentCtx)
+		llmMessages := ConvertMessagesToLLM(ctx, selectedMessages)
+
+		if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled && agentCtx.AllowReminders {
+			reminderMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: "REMINDER",
+			}
+			llmMessages = append(llmMessages, reminderMsg)
+			reminderInjected = true
+		}
+
+		return &agentctx.AgentMessage{
+			Role:       "assistant",
+			Content:    []agentctx.ContentBlock{agentctx.TextContent{Text: "recovered"}},
+			StopReason: "end_turn",
+		}, nil
+	}
+
+	config := &LoopConfig{
+		TaskTrackingEnabled:      true,
+		ContextManagementEnabled: true,
+	}
+
+	stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+		func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
+	)
+
+	_, err := streamAssistantResponseWithRetry(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Verify: Reminder SHOULD be injected on recovery turn
+	if !reminderInjected {
+		t.Error("Reminder was NOT injected on malformed tool call recovery turn - this indicates the fix is missing")
+	}
+}
+
+// TestReminderTiming_ContextManagementReminderRespectsFlag verifies that
+// context_management reminders also respect the AllowReminders flag.
+func TestReminderTiming_ContextManagementReminderRespectsFlag(t *testing.T) {
+	// Test with AllowReminders = false - context management reminder should NOT be injected
+	agentCtx := &agentctx.AgentContext{
+		SystemPrompt:      "test",
+		Messages:          []agentctx.AgentMessage{{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Text: "hello"}}}},
+		AllowReminders:    false,
+		LLMContext:        agentctx.NewLLMContext(t.TempDir()),
+		ContextMgmtState:  agentctx.DefaultContextMgmtState(),
+		TaskTrackingState: agentctx.NewTaskTrackingState(t.TempDir()),
+	}
+
+	// Set up context management state to trigger a reminder
+	agentCtx.ContextMgmtState.SetCurrentTurn(15) // High turn count
+
+	var contextReminderInjected bool
+	origFn := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = origFn }()
+
+	streamAssistantResponseFn = func(
+		ctx context.Context,
+		agentCtx *agentctx.AgentContext,
+		config *LoopConfig,
+		stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		_, _ = selectMessagesForLLM(agentCtx) // Used for side effects
+
+		// Check if context management reminder would be injected
+		if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled && agentCtx.AllowReminders {
+			contextReminderInjected = true
+		}
+
+		return &agentctx.AgentMessage{
+			Role:       "assistant",
+			Content:    []agentctx.ContentBlock{agentctx.TextContent{Text: "done"}},
+			StopReason: "end_turn",
+		}, nil
+	}
+
+	config := &LoopConfig{
+		TaskTrackingEnabled:      true,
+		ContextManagementEnabled: true,
+	}
+
+	stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+		func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+		func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
+	)
+
+	_, err := streamAssistantResponseWithRetry(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Verify: Context management reminder should NOT be injected when AllowReminders is false
+	if contextReminderInjected {
+		t.Error("Context management reminder was injected when AllowReminders was false")
+	}
+}
