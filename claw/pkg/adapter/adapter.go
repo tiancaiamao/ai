@@ -321,14 +321,16 @@ func resolveModel(cfg *AppConfig) llm.Model {
 			// 查找匹配的模型
 			for _, spec := range specs {
 				if spec.ID == cfg.Model {
-					// 使用 models.json 中的配置补充缺失字段
-					if model.Provider == "" {
+					// 只在 config.json 中的值为空时，才使用 models.json 的值
+					// 这样可以保留用户在 config.json 中的自定义配置
+					if model.Provider == "" && spec.Provider != "" {
 						model.Provider = spec.Provider
 					}
-					if model.BaseURL == "" {
+					if model.BaseURL == "" && spec.BaseURL != "" {
 						model.BaseURL = spec.BaseURL
 					}
-					// 始终使用 models.json 中的 API 类型（如果存在）
+					// API 类型始终使用 models.json 中的值（如果存在）
+					// 因为 config.json 不会包含这个字段
 					if spec.API != "" {
 						model.API = spec.API
 					}
@@ -1323,7 +1325,7 @@ func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
 	}
 
 	// Otherwise, try to switch to the specified model
-	err := a.switchModel(args, sess)
+	err := a.SwitchModel(args, sess)
 	if err != nil {
 		return "", err
 	}
@@ -1378,8 +1380,8 @@ func (a *AgentLoop) listModels() string {
 	return b.String()
 }
 
-// switchModel switches to the specified model
-func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
+// SwitchModel switches to the specified model
+func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 	modelID = strings.TrimSpace(modelID)
 
 	// Load available models
@@ -1532,6 +1534,7 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 		"id":       model.ID,
 		"provider": model.Provider,
 		"baseUrl":  model.BaseURL,
+		"api":      model.API,
 	}
 	cfg["model"] = modelCfg
 
