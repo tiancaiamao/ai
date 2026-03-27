@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -201,5 +202,97 @@ func TestContextManagementTruncateCleansOnlyCurrentToolCallArguments(t *testing.
 	}
 	if got := currentCalls[0].Arguments["reasoning"]; got != "current call" {
 		t.Fatalf("expected reasoning to be preserved, got %#v", got)
+	}
+}
+
+func TestContextManagementConcurrentTruncateCallsKeepBothCleanups(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_1",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "truncate",
+				"reasoning":    "cleanup first",
+				"truncate_ids": "call_1",
+			},
+		},
+		agentctx.ToolCallContent{
+			ID:   "call_cm_2",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "truncate",
+				"reasoning":    "cleanup second",
+				"truncate_ids": "call_2",
+			},
+		},
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{
+			assistant,
+			agentctx.NewToolResultMessage("call_1", "read", []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "content 1"},
+			}, false),
+			agentctx.NewToolResultMessage("call_2", "grep", []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "content 2"},
+			}, false),
+		},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+	agentCtx.ContextMgmtState.SetCurrentTurn(1)
+
+	tool := NewContextManagementTool(nil)
+
+	runCall := func(callID, truncateIDs string) error {
+		execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+		execCtx = agentctx.WithToolExecutionCallID(execCtx, callID)
+		_, err := tool.Execute(execCtx, map[string]any{
+			"decision":     "truncate",
+			"reasoning":    "concurrent cleanup",
+			"truncate_ids": truncateIDs,
+		})
+		return err
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs <- runCall("call_cm_1", "call_1")
+	}()
+	go func() {
+		defer wg.Done()
+		errs <- runCall("call_cm_2", "call_2")
+	}()
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+	}
+
+	toolCalls := agentCtx.Messages[0].ExtractToolCalls()
+	if len(toolCalls) != 2 {
+		t.Fatalf("expected 2 context_management tool calls, got %d", len(toolCalls))
+	}
+	for _, tc := range toolCalls {
+		if _, exists := tc.Arguments["truncate_ids"]; exists {
+			t.Fatalf("expected truncate_ids removed for %s", tc.ID)
+		}
+	}
+
+	for _, msg := range agentCtx.Messages[1:] {
+		if msg.Role != "toolResult" {
+			continue
+		}
+		if !agentctx.IsTruncatedAgentToolTag(msg.ExtractText()) {
+			t.Fatalf("expected tool result %s to be truncated", msg.ToolCallID)
+		}
 	}
 }

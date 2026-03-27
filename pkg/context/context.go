@@ -3,6 +3,7 @@ package context
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -40,10 +41,16 @@ type AgentContext struct {
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
+
+	// contextMgmtMu serializes context_management mutations to shared turn state
+	// and assistant message tool-call arguments.
+	contextMgmtMu sync.Mutex `json:"-"`
 }
 
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
 type ContextMgmtState struct {
+	mu sync.RWMutex
+
 	// Frequency adjustment (turns between reminders)
 	ReminderFrequency int // Current: 5-30, Default: 10
 	SkipUntilTurn     int // Skip reminders until this turn (set by LLM via skip_turns)
@@ -68,6 +75,16 @@ type ContextMgmtState struct {
 	// Compliance tracking
 	ReminderShownThisTurn bool // Was reminder shown in current turn?
 	DecisionMadeThisTurn  bool // Did LLM call context_management this turn?
+}
+
+// ContextMgmtSnapshot is an immutable runtime view of ContextMgmtState.
+type ContextMgmtSnapshot struct {
+	ReminderFrequency  int
+	ProactiveDecisions int
+	ReminderNeeded     int
+	CurrentTurn        int
+	LastReminderTurn   int
+	Score              string
 }
 
 const (
@@ -99,6 +116,8 @@ func (s *ContextMgmtState) MarkReminderShown() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.ReminderShownThisTurn = true
 }
 
@@ -108,6 +127,8 @@ func (s *ContextMgmtState) MarkDecisionMade() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.DecisionMadeThisTurn = true
 
 	// Reset pressure counters when LLM makes a decision
@@ -136,6 +157,8 @@ func (s *ContextMgmtState) ResetTurnTracking() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.ReminderShownThisTurn = false
 	s.DecisionMadeThisTurn = false
 }
@@ -146,10 +169,12 @@ func (s *ContextMgmtState) CheckAndApplyCompliance() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// If reminder was shown but LLM didn't make a decision, apply penalty
 	if s.ReminderShownThisTurn && !s.DecisionMadeThisTurn {
 		s.ReminderNeeded++
-		s.AdjustFrequency()
+		s.adjustFrequencyLocked()
 		slog.Info("[ContextMgmt] LLM ignored reminder, applying penalty",
 			"reminder_shown", s.ReminderShownThisTurn,
 			"decision_made", s.DecisionMadeThisTurn,
@@ -165,7 +190,12 @@ func (s *ContextMgmtState) AdjustFrequency() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adjustFrequencyLocked()
+}
 
+func (s *ContextMgmtState) adjustFrequencyLocked() {
 	// Calculate ratio: positive means proactive, negative means needs reminders
 	ratio := s.ProactiveDecisions - s.ReminderNeeded
 
@@ -187,6 +217,8 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.LastDecisionTurn = turn
 	s.LastActionTaken = action
@@ -199,7 +231,7 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 	s.DecisionPressureTurns = 0
 	s.LastPressureTurn = 0
 
-	s.AdjustFrequency()
+	s.adjustFrequencyLocked()
 }
 
 // SetSkipUntil sets the skip period.
@@ -208,6 +240,8 @@ func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, _ bool) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.SkipUntilTurn = turn + skipTurns
 }
@@ -219,6 +253,8 @@ func (s *ContextMgmtState) ShouldShowReminder(turn int, actionRequired string, u
 	if s == nil {
 		return false
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	// Always show for critical urgency
 	if urgency == "critical" {
@@ -253,10 +289,12 @@ func (s *ContextMgmtState) RecordReminder(turn int, urgency string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.LastReminderTurn = turn
 	s.LastReminderUrgency = urgency
-	s.MarkReminderShown()
+	s.ReminderShownThisTurn = true
 }
 
 // DecisionPressureRequired reports whether context_management should be considered.
@@ -286,6 +324,8 @@ func (s *ContextMgmtState) ShouldShowDecisionReminder(turn int, tokensPercent fl
 	if s == nil {
 		return false, "none"
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	pressure := DecisionPressureRequired(tokensPercent, staleToolOutputs)
 	urgency := DecisionReminderUrgency(tokensPercent, staleToolOutputs)
@@ -322,9 +362,14 @@ func (s *ContextMgmtState) GetScore() string {
 	if s == nil {
 		return "unknown"
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return scoreFromCounts(s.ProactiveDecisions, s.ReminderNeeded)
+}
 
-	ratio := s.ProactiveDecisions - s.ReminderNeeded
-	total := s.ProactiveDecisions + s.ReminderNeeded
+func scoreFromCounts(proactiveDecisions, reminderNeeded int) string {
+	ratio := proactiveDecisions - reminderNeeded
+	total := proactiveDecisions + reminderNeeded
 	if total == 0 {
 		return "no_data"
 	}
@@ -338,6 +383,55 @@ func (s *ContextMgmtState) GetScore() string {
 		return "fair"
 	default:
 		return "needs_improvement"
+	}
+}
+
+// SetCurrentTurn updates the state's current turn counter.
+func (s *ContextMgmtState) SetCurrentTurn(turn int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CurrentTurn = turn
+}
+
+// GetCurrentTurn returns the current turn number.
+func (s *ContextMgmtState) GetCurrentTurn() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.CurrentTurn
+}
+
+// GetTurnAndReminderStatus returns the current turn and whether this turn
+// has already been marked as reminded.
+func (s *ContextMgmtState) GetTurnAndReminderStatus() (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	turn := s.CurrentTurn
+	return turn, s.LastReminderTurn == turn
+}
+
+// Snapshot returns a consistent view for read-heavy callers.
+func (s *ContextMgmtState) Snapshot() ContextMgmtSnapshot {
+	if s == nil {
+		return ContextMgmtSnapshot{Score: "unknown"}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return ContextMgmtSnapshot{
+		ReminderFrequency:  s.ReminderFrequency,
+		ProactiveDecisions: s.ProactiveDecisions,
+		ReminderNeeded:     s.ReminderNeeded,
+		CurrentTurn:        s.CurrentTurn,
+		LastReminderTurn:   s.LastReminderTurn,
+		Score:              scoreFromCounts(s.ProactiveDecisions, s.ReminderNeeded),
 	}
 }
 
@@ -426,6 +520,22 @@ func NewAgentContextWithSkills(systemPrompt string, skills []skill.Skill) *Agent
 // AddMessage adds a message to the context.
 func (c *AgentContext) AddMessage(message AgentMessage) {
 	c.Messages = append(c.Messages, message)
+}
+
+// LockContextManagement serializes context_management updates on this context.
+func (c *AgentContext) LockContextManagement() {
+	if c == nil {
+		return
+	}
+	c.contextMgmtMu.Lock()
+}
+
+// UnlockContextManagement releases the context_management serialization lock.
+func (c *AgentContext) UnlockContextManagement() {
+	if c == nil {
+		return
+	}
+	c.contextMgmtMu.Unlock()
 }
 
 // AddTool adds a tool to the context.

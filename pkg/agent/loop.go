@@ -280,7 +280,7 @@ func runInnerLoop(
 		}
 
 		// Update current turn counter
-		agentCtx.ContextMgmtState.CurrentTurn = turnCount + 1
+		agentCtx.ContextMgmtState.SetCurrentTurn(turnCount + 1)
 
 		turnCount++
 
@@ -825,8 +825,9 @@ func streamAssistantResponse(
 	// Only if context management is enabled
 	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled {
 		meta := agentCtx.LLMContext.GetMeta()
+		currentTurn := agentCtx.ContextMgmtState.GetCurrentTurn()
 		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
-			agentCtx.ContextMgmtState.CurrentTurn,
+			currentTurn,
 			meta.TokensPercent,
 			staleCount,
 		)
@@ -844,7 +845,7 @@ func streamAssistantResponse(
 			llmMessages = append(llmMessages, decisionReminderMsg)
 
 			// Record that a reminder was shown this turn (for proactive/reminded tracking)
-			agentCtx.ContextMgmtState.RecordReminder(agentCtx.ContextMgmtState.CurrentTurn, urgency)
+			agentCtx.ContextMgmtState.RecordReminder(currentTurn, urgency)
 			agentCtx.ContextMgmtState.MarkReminderShown()
 
 			// Trace event for context decision reminder
@@ -1701,11 +1702,12 @@ func updateRuntimeMetaSnapshot(
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 	}
 	state := agentCtx.ContextMgmtState
+	stateSnapshot := state.Snapshot()
 
 	// Calculate reminders_remaining (turns until next reminder)
 	remindersRemaining := 0
-	if state.ReminderFrequency > 0 {
-		remindersRemaining = state.ReminderFrequency - (state.CurrentTurn - state.LastReminderTurn)
+	if stateSnapshot.ReminderFrequency > 0 {
+		remindersRemaining = stateSnapshot.ReminderFrequency - (stateSnapshot.CurrentTurn - stateSnapshot.LastReminderTurn)
 		if remindersRemaining < 0 {
 			remindersRemaining = 0
 		}
@@ -1734,10 +1736,10 @@ context_metrics:
 				updateStats.Prompted,
 				updateStats.ConsciousPct,
 				updateStats.Score,
-				state.ProactiveDecisions,
-				state.ReminderNeeded,
+				stateSnapshot.ProactiveDecisions,
+				stateSnapshot.ReminderNeeded,
 				remindersRemaining,
-				state.GetScore())
+				stateSnapshot.Score)
 		} else {
 			updateMetrics = fmt.Sprintf(`
 context_metrics:

@@ -134,6 +134,11 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		return nil, fmt.Errorf("reasoning (or reason) parameter is required")
 	}
 
+	// context_management may be called multiple times in one assistant message.
+	// Serialize state/message mutations to avoid races and lost updates.
+	agentCtx.LockContextManagement()
+	defer agentCtx.UnlockContextManagement()
+
 	// Get or create ContextMgmtState
 	if agentCtx.ContextMgmtState == nil {
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
@@ -142,10 +147,7 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 	// Mark that LLM made a decision this turn (compliance tracking)
 	agentCtx.ContextMgmtState.MarkDecisionMade()
 
-	// Get current turn from context (updated every loop iteration)
-	turn := agentCtx.ContextMgmtState.CurrentTurn
-	// wasReminded indicates whether a reminder was shown THIS turn
-	wasReminded := agentCtx.ContextMgmtState.LastReminderTurn == turn
+	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
@@ -280,11 +282,12 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 
 	// Add stats summary
 	if decision != "skip" {
+		stats := agentCtx.ContextMgmtState.Snapshot()
 		result.WriteString(fmt.Sprintf("\n**Stats:** proactive=%d, reminded=%d, frequency=%d turns, score=%s\n",
-			agentCtx.ContextMgmtState.ProactiveDecisions,
-			agentCtx.ContextMgmtState.ReminderNeeded,
-			agentCtx.ContextMgmtState.ReminderFrequency,
-			agentCtx.ContextMgmtState.GetScore()))
+			stats.ProactiveDecisions,
+			stats.ReminderNeeded,
+			stats.ReminderFrequency,
+			stats.Score))
 	}
 
 	return []agentctx.ContentBlock{
@@ -445,6 +448,11 @@ func (t *ContextManagementTool) filterAlreadyTruncated(ctx context.Context, agen
 // The cleanup prevents these IDs from wasting context space after truncation has been
 // executed, and avoids misleading the LLM into thinking they're still usable.
 func (t *ContextManagementTool) CleanupContextManagementInput(agentCtx *agentctx.AgentContext) {
+	if agentCtx == nil {
+		return
+	}
+	agentCtx.LockContextManagement()
+	defer agentCtx.UnlockContextManagement()
 	t.cleanupContextManagementInput(agentCtx, "")
 }
 
