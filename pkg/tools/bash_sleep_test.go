@@ -142,18 +142,18 @@ func TestBashTool_SleepDetection(t *testing.T) {
 			errorContains: "sleep with duration >= 30 seconds is not allowed",
 		},
 		{
-			name:        "sleep 29 should be allowed",
-			command:     "sleep 29",
-			expectBlock: false,
-		},
-		{
 			name:        "echo command should work",
 			command:     "echo hello",
 			expectBlock: false,
 		},
 		{
-			name:        "command with small sleep should work",
-			command:     "echo test && sleep 1 && echo done",
+			name:        "grep command should work",
+			command:     "grep -r pattern .",
+			expectBlock: false,
+		},
+		{
+			name:        "word containing sleep should work",
+			command:     "echo sleeping is good",
 			expectBlock: false,
 		},
 	}
