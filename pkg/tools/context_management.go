@@ -134,6 +134,11 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		return nil, fmt.Errorf("reasoning (or reason) parameter is required")
 	}
 
+	// context_management may be called multiple times in one assistant message.
+	// Serialize state/message mutations to avoid races and lost updates.
+	agentCtx.LockContextManagement()
+	defer agentCtx.UnlockContextManagement()
+
 	// Get or create ContextMgmtState
 	if agentCtx.ContextMgmtState == nil {
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
@@ -142,10 +147,7 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 	// Mark that LLM made a decision this turn (compliance tracking)
 	agentCtx.ContextMgmtState.MarkDecisionMade()
 
-	// Get current turn from context (updated every loop iteration)
-	turn := agentCtx.ContextMgmtState.CurrentTurn
-	// wasReminded indicates whether a reminder was shown THIS turn
-	wasReminded := agentCtx.ContextMgmtState.LastReminderTurn == turn
+	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
@@ -215,6 +217,9 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 			result.WriteString("No truncate_ids provided, skipped truncation.\n")
 		}
 
+		// Clean up truncate_ids from the assistant message that called this tool
+		t.cleanupContextManagementInput(agentCtx, agentctx.ToolExecutionCallID(ctx))
+
 		// Record decision
 		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
 		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
@@ -277,11 +282,12 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 
 	// Add stats summary
 	if decision != "skip" {
+		stats := agentCtx.ContextMgmtState.Snapshot()
 		result.WriteString(fmt.Sprintf("\n**Stats:** proactive=%d, reminded=%d, frequency=%d turns, score=%s\n",
-			agentCtx.ContextMgmtState.ProactiveDecisions,
-			agentCtx.ContextMgmtState.ReminderNeeded,
-			agentCtx.ContextMgmtState.ReminderFrequency,
-			agentCtx.ContextMgmtState.GetScore()))
+			stats.ProactiveDecisions,
+			stats.ReminderNeeded,
+			stats.ReminderFrequency,
+			stats.Score))
 	}
 
 	return []agentctx.ContentBlock{
@@ -431,6 +437,118 @@ func (t *ContextManagementTool) filterAlreadyTruncated(ctx context.Context, agen
 	}
 
 	return filteredIDs
+}
+
+// CleanupContextManagementInput removes the truncate_ids parameter from the assistant message
+// that called the context_management tool.
+//
+// This public method is exported for testing purposes. It's called automatically during
+// Execute() when a truncate operation is performed.
+//
+// The cleanup prevents these IDs from wasting context space after truncation has been
+// executed, and avoids misleading the LLM into thinking they're still usable.
+func (t *ContextManagementTool) CleanupContextManagementInput(agentCtx *agentctx.AgentContext) {
+	if agentCtx == nil {
+		return
+	}
+	agentCtx.LockContextManagement()
+	defer agentCtx.UnlockContextManagement()
+	t.cleanupContextManagementInput(agentCtx, "")
+}
+
+// cleanupContextManagementInput removes truncate_ids parameter from the assistant message
+// that called context_management tool. This prevents these IDs from wasting context space
+// after the truncation has been executed, and avoids misleading LLM into thinking they're still usable.
+func (t *ContextManagementTool) cleanupContextManagementInput(agentCtx *agentctx.AgentContext, currentCallID string) {
+	if agentCtx == nil {
+		return
+	}
+
+	// Find the assistant message that made this tool call.
+	// If currentCallID is empty, fallback to cleaning the latest context_management call.
+	for i := len(agentCtx.Messages) - 1; i >= 0; i-- {
+		msg := agentCtx.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+
+		toolCalls := msg.ExtractToolCalls()
+		found := false
+		for _, tc := range toolCalls {
+			if tc.Name != "context_management" {
+				continue
+			}
+			if currentCallID != "" && tc.ID != currentCallID {
+				continue
+			}
+			if _, hasTruncateIDs := tc.Arguments["truncate_ids"]; !hasTruncateIDs {
+				continue
+			}
+			if currentCallID != "" {
+				found = true
+				break
+			}
+			// Fallback mode: clean the latest context_management call that still has truncate_ids.
+			found = true
+			break
+		}
+
+		if found {
+			// Found the assistant message with the target context_management call.
+			// Remove truncate_ids from its arguments.
+			cleanedContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
+			updated := false
+
+			for _, block := range msg.Content {
+				tc, ok := block.(agentctx.ToolCallContent)
+				if !ok || tc.Name != "context_management" {
+					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+				if currentCallID != "" && tc.ID != currentCallID {
+					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+				if _, hasTruncateIDs := tc.Arguments["truncate_ids"]; !hasTruncateIDs {
+					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+
+				newArgs := make(map[string]any, len(tc.Arguments))
+				for k, v := range tc.Arguments {
+					if k != "truncate_ids" {
+						newArgs[k] = v
+					}
+				}
+				tc.Arguments = newArgs
+				cleanedContent = append(cleanedContent, tc)
+				updated = true
+				slog.Debug("[ContextManagement] Removed truncate_ids from tool call input",
+					"tool_call_id", tc.ID)
+
+				// In fallback mode we only clean the latest matching call once.
+				if currentCallID == "" {
+					cleanedContent = append(cleanedContent, msg.Content[len(cleanedContent):]...)
+					break
+				}
+			}
+
+			if updated {
+				agentCtx.Messages[i].Content = cleanedContent
+				return
+			}
+
+			// Matching call exists but no update occurred; continue searching older messages.
+		}
+	}
+
+	if currentCallID == "" {
+		slog.Warn("[ContextManagement] cleanupContextManagementInput: no target context_management call found")
+		return
+	}
+
+	slog.Warn("[ContextManagement] cleanupContextManagementInput: assistant message not found",
+		"tool_call_id", currentCallID)
 }
 
 // findLatestToolCall finds the most recent tool call ID for a given tool name.
