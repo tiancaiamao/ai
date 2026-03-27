@@ -755,96 +755,16 @@ func (s *Server) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read current config
-	configData, err := os.ReadFile(s.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(configData, &config); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Find the model in model_list
-	var selectedModel map[string]any
-	if models, ok := config["model_list"].([]any); ok {
-		for _, m := range models {
-			if modelMap, ok := m.(map[string]any); ok {
-				if name, ok := modelMap["model_name"].(string); ok && name == req.ModelName {
-					selectedModel = modelMap
-					break
-				}
-			}
-		}
-	}
-
-	if selectedModel == nil {
-		http.Error(w, fmt.Sprintf("Model '%s' not found in model_list", req.ModelName), http.StatusNotFound)
-		return
-	}
-
-	// Update current model configuration
-	modelID, _ := selectedModel["model"].(string)
-	apiBase, _ := selectedModel["api_base"].(string)
-
-	// Extract provider from model field or infer from api_base
-	provider := ""
-	if modelStr, ok := selectedModel["model"].(string); ok {
-		if parts := strings.SplitN(modelStr, "/", 2); len(parts) == 2 {
-			provider = parts[0]
-		}
-	}
-
-	// If provider not found in model field, try to infer from api_base
-	if provider == "" && apiBase != "" {
-		if strings.Contains(apiBase, "zai") {
-			provider = "zai"
-		} else if strings.Contains(apiBase, "minimax") {
-			provider = "minimax"
-		} else if strings.Contains(apiBase, "openai") {
-			provider = "openai"
-		} else if strings.Contains(apiBase, "anthropic") {
-			provider = "anthropic"
-		} else if strings.Contains(apiBase, "deepseek") {
-			provider = "deepseek"
-		} else if strings.Contains(apiBase, "qwen") || strings.Contains(apiBase, "dashscope") {
-			provider = "qwen"
-		}
-	}
-
-	// Determine API type - most providers use OpenAI-compatible API
-	apiType := "openai-completions"
-	if provider == "anthropic" {
-		apiType = "anthropic-messages"
-	}
-
-	newModelConfig := map[string]any{
-		"id":       modelID,
-		"provider": provider,
-		"baseUrl":  apiBase,
-		"api":      apiType,
-	}
-
-	config["model"] = newModelConfig
-
-	// Write updated config
-	updatedData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to marshal config: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+	// Use AgentLoop's SwitchModel method to dynamically switch the model
+	// This supports both numeric index and model name
+	if err := s.agentLoop.SwitchModel(req.ModelName, nil); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to switch model: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":        "ok",
-		"message":       fmt.Sprintf("Model switched to '%s'. Service restart is required.", req.ModelName),
+		"message":       fmt.Sprintf("Model switched to '%s'", req.ModelName),
 		"default_model": req.ModelName,
 	})
 }

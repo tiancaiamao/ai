@@ -1323,7 +1323,7 @@ func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
 	}
 
 	// Otherwise, try to switch to the specified model
-	err := a.switchModel(args, sess)
+	err := a.SwitchModel(args, sess)
 	if err != nil {
 		return "", err
 	}
@@ -1378,8 +1378,8 @@ func (a *AgentLoop) listModels() string {
 	return b.String()
 }
 
-// switchModel switches to the specified model
-func (a *AgentLoop) switchModel(modelID string, sess *Session) error {
+// SwitchModel switches to the specified model
+func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 	modelID = strings.TrimSpace(modelID)
 
 	// Load available models
