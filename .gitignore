@@ -8,3 +8,5 @@ ai
 __pycache__/
 *.pyc
 benchmark/results/progress.json
+benchmark/tasks/*/setup/
+benchmark/tasks/*/*/setup/
