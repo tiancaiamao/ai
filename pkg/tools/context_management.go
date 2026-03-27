@@ -216,7 +216,7 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		}
 
 		// Clean up truncate_ids from the assistant message that called this tool
-		t.cleanupContextManagementInput(agentCtx)
+		t.cleanupContextManagementInput(agentCtx, agentctx.ToolExecutionCallID(ctx))
 
 		// Record decision
 		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
@@ -445,21 +445,19 @@ func (t *ContextManagementTool) filterAlreadyTruncated(ctx context.Context, agen
 // The cleanup prevents these IDs from wasting context space after truncation has been
 // executed, and avoids misleading the LLM into thinking they're still usable.
 func (t *ContextManagementTool) CleanupContextManagementInput(agentCtx *agentctx.AgentContext) {
-	t.cleanupContextManagementInput(agentCtx)
+	t.cleanupContextManagementInput(agentCtx, "")
 }
 
 // cleanupContextManagementInput removes truncate_ids parameter from the assistant message
 // that called context_management tool. This prevents these IDs from wasting context space
 // after the truncation has been executed, and avoids misleading LLM into thinking they're still usable.
-func (t *ContextManagementTool) cleanupContextManagementInput(agentCtx *agentctx.AgentContext) {
-	// Get the current tool call ID (the context_management call)
-	currentCallID := agentCtx.CurrentToolCallID
-	if currentCallID == "" {
-		slog.Warn("[ContextManagement] cleanupContextManagementInput: no current tool call ID")
+func (t *ContextManagementTool) cleanupContextManagementInput(agentCtx *agentctx.AgentContext, currentCallID string) {
+	if agentCtx == nil {
 		return
 	}
 
-	// Find the assistant message that made this tool call
+	// Find the assistant message that made this tool call.
+	// If currentCallID is empty, fallback to cleaning the latest context_management call.
 	for i := len(agentCtx.Messages) - 1; i >= 0; i-- {
 		msg := agentCtx.Messages[i]
 		if msg.Role != "assistant" {
@@ -469,38 +467,76 @@ func (t *ContextManagementTool) cleanupContextManagementInput(agentCtx *agentctx
 		toolCalls := msg.ExtractToolCalls()
 		found := false
 		for _, tc := range toolCalls {
-			if tc.ID == currentCallID && tc.Name == "context_management" {
+			if tc.Name != "context_management" {
+				continue
+			}
+			if currentCallID != "" && tc.ID != currentCallID {
+				continue
+			}
+			if _, hasTruncateIDs := tc.Arguments["truncate_ids"]; !hasTruncateIDs {
+				continue
+			}
+			if currentCallID != "" {
 				found = true
 				break
 			}
+			// Fallback mode: clean the latest context_management call that still has truncate_ids.
+			found = true
+			break
 		}
 
 		if found {
-			// Found the assistant message with the context_management call
-			// Remove truncate_ids from its arguments
-			cleanedContent := []agentctx.ContentBlock{}
+			// Found the assistant message with the target context_management call.
+			// Remove truncate_ids from its arguments.
+			cleanedContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
+			updated := false
 
 			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok && tc.ID == currentCallID && tc.Name == "context_management" {
-					// Remove truncate_ids from arguments
-					newArgs := make(map[string]any)
-					for k, v := range tc.Arguments {
-						if k != "truncate_ids" {
-							newArgs[k] = v
-						}
-					}
-					tc.Arguments = newArgs
-					cleanedContent = append(cleanedContent, tc)
-					slog.Debug("[ContextManagement] Removed truncate_ids from tool call input",
-						"tool_call_id", currentCallID)
-				} else {
+				tc, ok := block.(agentctx.ToolCallContent)
+				if !ok || tc.Name != "context_management" {
 					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+				if currentCallID != "" && tc.ID != currentCallID {
+					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+				if _, hasTruncateIDs := tc.Arguments["truncate_ids"]; !hasTruncateIDs {
+					cleanedContent = append(cleanedContent, block)
+					continue
+				}
+
+				newArgs := make(map[string]any, len(tc.Arguments))
+				for k, v := range tc.Arguments {
+					if k != "truncate_ids" {
+						newArgs[k] = v
+					}
+				}
+				tc.Arguments = newArgs
+				cleanedContent = append(cleanedContent, tc)
+				updated = true
+				slog.Debug("[ContextManagement] Removed truncate_ids from tool call input",
+					"tool_call_id", tc.ID)
+
+				// In fallback mode we only clean the latest matching call once.
+				if currentCallID == "" {
+					cleanedContent = append(cleanedContent, msg.Content[len(cleanedContent):]...)
+					break
 				}
 			}
 
-			agentCtx.Messages[i].Content = cleanedContent
-			return
+			if updated {
+				agentCtx.Messages[i].Content = cleanedContent
+				return
+			}
+
+			// Matching call exists but no update occurred; continue searching older messages.
 		}
+	}
+
+	if currentCallID == "" {
+		slog.Warn("[ContextManagement] cleanupContextManagementInput: no target context_management call found")
+		return
 	}
 
 	slog.Warn("[ContextManagement] cleanupContextManagementInput: assistant message not found",

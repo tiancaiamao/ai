@@ -1345,21 +1345,16 @@ func executeToolCalls(
 		wg.Add(1)
 		go func(plan toolExecutionPlan) {
 			defer wg.Done()
-
-			// Set current tool call ID for tools that need to reference their own call (e.g., context_management)
-			agentCtx.CurrentToolCallID = plan.normalized.ID
+			executionCtx := agentctx.WithToolExecutionCallID(toolExecCtx, plan.normalized.ID)
 
 			start := time.Now()
 			var content []agentctx.ContentBlock
 			var err error
 			if executor != nil {
-				content, err = executor.Execute(toolExecCtx, plan.tool, plan.normalized.Arguments)
+				content, err = executor.Execute(executionCtx, plan.tool, plan.normalized.Arguments)
 			} else {
-				content, err = plan.tool.Execute(toolExecCtx, plan.normalized.Arguments)
+				content, err = plan.tool.Execute(executionCtx, plan.normalized.Arguments)
 			}
-
-			// Clear current tool call ID after execution
-			agentCtx.CurrentToolCallID = ""
 
 			outcomes <- toolExecutionOutcome{
 				plan:     plan,

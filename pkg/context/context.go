@@ -40,10 +40,6 @@ type AgentContext struct {
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
-
-	// CurrentToolCallID is the tool call ID being executed in the current tool execution.
-	// Used by context_management to identify and modify the assistant message that called it.
-	CurrentToolCallID string `json:"-"`
 }
 
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
@@ -361,6 +357,7 @@ type Tool interface {
 }
 
 type toolExecutionAgentContextKey struct{}
+type toolExecutionCallIDKey struct{}
 
 // WithToolExecutionAgentContext stores the current loop AgentContext in ctx so
 // tools can mutate the active turn state instead of stale outer pointers.
@@ -379,6 +376,25 @@ func ToolExecutionAgentContext(ctx context.Context) *AgentContext {
 	}
 	agentCtx, _ := ctx.Value(toolExecutionAgentContextKey{}).(*AgentContext)
 	return agentCtx
+}
+
+// WithToolExecutionCallID stores the current tool call ID in ctx so tools can
+// access their own call metadata without sharing mutable state across goroutines.
+func WithToolExecutionCallID(ctx context.Context, toolCallID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, toolExecutionCallIDKey{}, toolCallID)
+}
+
+// ToolExecutionCallID returns the current tool call ID for the running tool
+// execution, when available.
+func ToolExecutionCallID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	toolCallID, _ := ctx.Value(toolExecutionCallIDKey{}).(string)
+	return toolCallID
 }
 
 // NewAgentContext creates a new AgentContext with the given system prompt.
