@@ -40,6 +40,10 @@ type AgentContext struct {
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
+
+	// CurrentToolCallID is the tool call ID being executed in the current tool execution.
+	// Used by context_management to identify and modify the assistant message that called it.
+	CurrentToolCallID string `json:"-"`
 }
 
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
