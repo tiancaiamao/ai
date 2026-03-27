@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "templates": {
+    "feature": {
+      "name": "Feature Development",
+      "description": "Develop a new feature from spec to ship",
+      "phases": ["spec", "plan", "implement", "test", "ship"],
+      "category": "features",
+      "complexity": "medium",
+      "estimated_tasks": "4-8",
+      "aliases": ["feat", "new", "add"]
+    },
+    "bugfix": {
+      "name": "Bug Fix",
+      "description": "Fix bugs with root-cause analysis",
+      "phases": ["triage", "fix", "verify", "ship"],
+      "category": "bugfixes",
+      "complexity": "low",
+      "estimated_tasks": "2-4",
+      "aliases": ["bug", "fix", "issue", "error"]
+    },
+    "refactor": {
+      "name": "Refactor",
+      "description": "Restructure code without changing behavior",
+      "phases": ["assess", "plan", "execute", "verify", "ship"],
+      "category": "refactors",
+      "complexity": "medium",
+      "estimated_tasks": "3-6",
+      "aliases": ["restructure", "cleanup", "improve"]
+    },
+    "spike": {
+      "name": "Spike",
+      "description": "Research and exploration",
+      "phases": ["research", "document", "present"],
+      "category": "spikes",
+      "complexity": "low",
+      "estimated_tasks": "1-2",
+      "aliases": ["research", "explore", "investigate", "prototype"]
+    },
+    "hotfix": {
+      "name": "Hotfix",
+      "description": "Emergency production fix with minimal ceremony",
+      "phases": ["identify", "fix", "deploy"],
+      "category": "hotfixes",
+      "complexity": "minimal",
+      "estimated_tasks": "1-2",
+      "aliases": ["hot", "emergency", "urgent", "prod"]
+    },
+    "security": {
+      "name": "Security Audit",
+      "description": "Security review and remediation",
+      "phases": ["scan", "analyze", "remediate", "verify", "document"],
+      "category": "security",
+      "complexity": "medium",
+      "estimated_tasks": "3-5",
+      "aliases": ["security", "vulnerability", "audit"]
+    }
+  }
+}
