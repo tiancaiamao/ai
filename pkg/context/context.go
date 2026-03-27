@@ -38,6 +38,14 @@ type AgentContext struct {
 	// Set after compact completes, reset after injection.
 	PostCompactRecovery bool `json:"-"`
 
+	// AllowReminders controls whether reminders should be injected in this turn.
+	// Set to true only when:
+	// 1. First turn (user initiated)
+	// 2. Previous turn had tool calls (loop will continue)
+	// This prevents reminders from triggering unwanted LLM responses when
+	// the assistant is about to end the conversation.
+	AllowReminders bool `json:"-"`
+
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
