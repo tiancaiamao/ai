@@ -97,6 +97,7 @@ type AgentLoop struct {
 	systemPrompt string
 	tools      []agentctx.Tool
 	sessionsDir string // session storage directory
+	clawDir    string // claw config directory (~/.aiclaw)
 	compactor   *compact.Compactor
 
 	// Voice transcription support
@@ -283,6 +284,7 @@ func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
 		systemPrompt:    cfg.SystemPrompt,
 		tools:           cfg.Tools,
 		sessionsDir:     sessionsDir,
+		clawDir:         cfg.ClawDir,
 		compactor:       compactor,
 		transcriber:     cfg.Transcriber,
 		feishuClient:    feishuClient,
@@ -722,11 +724,23 @@ func (a *AgentLoop) registerBuiltinCommands() {
 	a.commands.Register("help", func(args string, sess *Session) (string, error) {
 		return a.cmdHelp(), nil
 	})
-	// /commands or /skills - list available skills (aliases)
+	// /commands - list available skills
 	a.commands.Register("commands", func(args string, sess *Session) (string, error) {
 		return a.cmdCommands(), nil
 	})
+	// /skills - list skills or reload
 	a.commands.Register("skills", func(args string, sess *Session) (string, error) {
+		if args == "reload" {
+			count, warnings, err := a.ReloadSkills()
+			if err != nil {
+				return fmt.Sprintf("Failed to reload skills: %v", err), nil
+			}
+			result := fmt.Sprintf("Reloaded %d skills", count)
+			if len(warnings) > 0 {
+				result += "\nWarnings:\n" + strings.Join(warnings, "\n")
+			}
+			return result, nil
+		}
 		return a.cmdCommands(), nil
 	})
 	a.commands.Register("session", func(args string, sess *Session) (string, error) {
@@ -1404,7 +1418,14 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 		}
 		targetSpec = specs[idx]
 	} else {
-		targetSpec, err = modelselect.SelectByQuery(specs, modelID, func(spec ModelSpec) modelselect.Keys {
+		// Handle provider/ID format (e.g., "minimax/MiniMax-M2.5")
+		// Extract just the ID part for matching
+		query := modelID
+		if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
+			query = parts[1] // Use the ID part after the slash
+		}
+
+		targetSpec, err = modelselect.SelectByQuery(specs, query, func(spec ModelSpec) modelselect.Keys {
 			return modelselect.Keys{
 				Provider: spec.Provider,
 				ID:       spec.ID,
@@ -1846,4 +1867,31 @@ func looksLikeMiniMaxReasoning(text string) bool {
 		}
 	}
 	return false
+}
+
+// ReloadSkills reloads skills from the skills directory.
+// This allows hot-reloading of skills without restarting the agent.
+func (a *AgentLoop) ReloadSkills() (int, []string, error) {
+	if a.clawDir == "" {
+		return 0, nil, fmt.Errorf("claw directory not configured")
+	}
+
+	skillLoader := skill.NewLoader(a.clawDir)
+	result := skillLoader.Load(nil)
+
+	var warnings []string
+	for _, diag := range result.Diagnostics {
+		warnings = append(warnings, fmt.Sprintf("%s: %s", diag.Path, diag.Message))
+	}
+
+	a.skills = result.Skills
+	a.systemPrompt = "" // Will be rebuilt on next turn
+
+	slog.Info("[AgentLoop] Skills reloaded", "count", len(result.Skills))
+	return len(result.Skills), warnings, nil
+}
+
+// GetSkills returns the currently loaded skills.
+func (a *AgentLoop) GetSkills() []skill.Skill {
+	return a.skills
 }
