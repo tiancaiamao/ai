@@ -360,11 +360,7 @@ func ConvertLLMMessageToAgent(llmMsg llm.LLMMessage) agentctx.AgentMessage {
 	// Add tool calls
 	if len(llmMsg.ToolCalls) > 0 {
 		for _, tc := range llmMsg.ToolCalls {
-			// Parse arguments JSON string
-			var args map[string]any
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				args = make(map[string]any)
-			}
+			args := llm.ParseToolCallArguments(tc.Function.Arguments)
 
 			agentMsg.Content = append(agentMsg.Content, agentctx.ToolCallContent{
 				ID:        tc.ID,

@@ -942,12 +942,7 @@ func streamAssistantResponse(
 
 		for _, idx := range indexes {
 			call := calls[idx]
-			argsMap := make(map[string]any)
-			if call.arguments != "" {
-				if err := json.Unmarshal([]byte(call.arguments), &argsMap); err != nil {
-					argsMap = make(map[string]any)
-				}
-			}
+			argsMap := llm.ParseToolCallArguments(call.arguments)
 
 			content = append(content, agentctx.ToolCallContent{
 				ID:        call.id,

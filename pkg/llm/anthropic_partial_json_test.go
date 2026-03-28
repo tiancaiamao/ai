@@ -61,10 +61,10 @@ func TestExtractFieldFromPartialJSON(t *testing.T) {
 
 func TestTryParsePartialToolCallArguments(t *testing.T) {
 	tests := []struct {
-		name           string
-		args           string
-		wantFields     map[string]string
-		wantPartial    bool
+		name        string
+		args        string
+		wantFields  map[string]string
+		wantPartial bool
 	}{
 		{
 			name: "valid complete JSON",
@@ -182,6 +182,72 @@ func TestTryParsePartialToolCallArguments_RealCase(t *testing.T) {
 	}
 
 	t.Logf("Successfully extracted content of length %d", len(content))
+}
+
+func TestParseToolCallArguments_NestedProperties(t *testing.T) {
+	args := `{"properties":"{\"command\":\"echo hi\"}"}`
+	got := ParseToolCallArguments(args)
+
+	if _, has := got["properties"]; has {
+		t.Fatalf("unexpected properties wrapper remained: %#v", got)
+	}
+	if cmd, ok := got["command"].(string); !ok || cmd != "echo hi" {
+		t.Fatalf("command parse failed: %#v", got)
+	}
+}
+
+func TestParseToolCallArguments_PartialPathKeepsBackslashes(t *testing.T) {
+	args := `{"path":"C:\\new\\file.txt`
+	got := ParseToolCallArguments(args)
+
+	path, ok := got["path"].(string)
+	if !ok {
+		t.Fatalf("path missing or wrong type: %#v", got)
+	}
+	if path != `C:\new\file.txt` {
+		t.Fatalf("path parse mismatch: got %q", path)
+	}
+}
+
+func TestBuildAnthropicRequest_UsesParsedToolArguments(t *testing.T) {
+	req := buildAnthropicRequest(Model{ID: "test-model"}, LLMContext{
+		Messages: []LLMMessage{
+			{
+				Role: "assistant",
+				ToolCalls: []ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: FunctionCall{
+							Name:      "bash",
+							Arguments: `{"properties":"{\"command\":\"echo hi\"}"}`,
+						},
+					},
+				},
+			},
+		},
+	})
+
+	messages, ok := req["messages"].([]map[string]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages shape mismatch: %#v", req["messages"])
+	}
+
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content shape mismatch: %#v", messages[0]["content"])
+	}
+
+	input, ok := content[0]["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("input shape mismatch: %#v", content[0]["input"])
+	}
+	if _, has := input["properties"]; has {
+		t.Fatalf("unexpected properties wrapper remained: %#v", input)
+	}
+	if got := input["command"]; got != "echo hi" {
+		t.Fatalf("command parse failed: %#v", input)
+	}
 }
 
 func min(a, b int) int {

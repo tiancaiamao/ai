@@ -181,7 +181,7 @@ func StreamAnthropic(
 
 			case "content_block_start":
 				var blockEvent struct {
-					Index        int    `json:"index"`
+					Index        int `json:"index"`
 					ContentBlock struct {
 						Type string `json:"type"`
 						ID   string `json:"id,omitempty"`
@@ -211,11 +211,11 @@ func StreamAnthropic(
 				var deltaEvent struct {
 					Index int `json:"index"`
 					Delta struct {
-						Type         string `json:"type"`
-						Text         string `json:"text,omitempty"`
-						PartialJSON  string `json:"partial_json,omitempty"`
-						Thinking     string `json:"thinking,omitempty"`
-						Signature    string `json:"signature,omitempty"`
+						Type        string `json:"type"`
+						Text        string `json:"text,omitempty"`
+						PartialJSON string `json:"partial_json,omitempty"`
+						Thinking    string `json:"thinking,omitempty"`
+						Signature   string `json:"signature,omitempty"`
 					} `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(data), &deltaEvent); err == nil {
@@ -365,40 +365,7 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 
 			// Add tool calls
 			for _, tc := range msg.ToolCalls {
-				// Parse arguments from JSON string to object
-				var argsObj map[string]any
-				if tc.Function.Arguments != "" {
-					// Try partial JSON parsing first (handles truncated JSON from max_tokens)
-					if parsed, isPartial := tryParsePartialToolCallArguments(tc.Function.Arguments); isPartial {
-						argsObj = parsed
-					} else if parsed != nil {
-						argsObj = parsed
-					} else {
-						// MiniMax returns nested JSON: {"properties": "{\"command\": \"...\"}"}
-						// Try to parse the outer JSON
-						var outerObj map[string]any
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &outerObj); err == nil {
-							// Check if it has "properties" field with a JSON string value
-							if props, ok := outerObj["properties"].(string); ok {
-								// Parse the inner JSON string
-								if err := json.Unmarshal([]byte(props), &argsObj); err != nil {
-									// If inner parsing fails, try XML-tag style
-									if strings.Contains(props, "\">") {
-										argsObj = parseXMLTagStyleArguments(tc.Function.Arguments)
-									} else {
-										argsObj = make(map[string]any)
-									}
-								}
-							} else {
-								argsObj = outerObj
-							}
-						} else {
-							argsObj = make(map[string]any)
-						}
-					}
-				} else {
-					argsObj = make(map[string]any)
-				}
+				argsObj := ParseToolCallArguments(tc.Function.Arguments)
 
 				content = append(content, map[string]any{
 					"type":  "tool_use",
@@ -454,10 +421,10 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	}
 
 	reqBody := map[string]any{
-		"model":     model.ID,
-		"messages":  messages,
+		"model":      model.ID,
+		"messages":   messages,
 		"max_tokens": 8192,
-		"stream":    true,
+		"stream":     true,
 	}
 
 	if len(systemBlocks) > 0 {
@@ -569,23 +536,56 @@ func parseXMLTagStyleArguments(args string) map[string]any {
 	return result
 }
 
+// ParseToolCallArguments parses tool call arguments from standard or malformed JSON.
+// It keeps backward compatibility with MiniMax nested "properties" payloads and
+// falls back to partial extraction when input is truncated.
+func ParseToolCallArguments(args string) map[string]any {
+	if strings.TrimSpace(args) == "" {
+		return make(map[string]any)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(args), &parsed); err == nil {
+		// MiniMax compatibility: {"properties":"{\"command\":\"...\"}"}
+		if props, ok := parsed["properties"].(string); ok {
+			var inner map[string]any
+			if err := json.Unmarshal([]byte(props), &inner); err == nil {
+				return inner
+			}
+			if strings.Contains(props, "\">") {
+				xmlStyle := parseXMLTagStyleArguments(args)
+				if len(xmlStyle) > 0 {
+					return xmlStyle
+				}
+			}
+		}
+		return parsed
+	}
+
+	if partial, _ := tryParsePartialToolCallArguments(args); partial != nil {
+		return partial
+	}
+	return make(map[string]any)
+}
+
 // extractFieldFromPartialJSON extracts a field value from incomplete JSON using regex
 // This is a fallback for when JSON is truncated (e.g., due to max_tokens limit)
 func extractFieldFromPartialJSON(jsonStr, fieldName string) string {
+	quotedFieldName := regexp.QuoteMeta(fieldName)
+
 	// Pattern 1: "fieldName": "value" (handles escaped quotes in value)
-	pattern1 := fmt.Sprintf(`"%s"\s*:\s*"((?:[^"\\]|\\.)*)`, fieldName)
+	pattern1 := fmt.Sprintf(`"%s"\s*:\s*"((?:[^"\\]|\\.)*)`, quotedFieldName)
 	if matches := regexp.MustCompile(pattern1).FindStringSubmatch(jsonStr); len(matches) > 1 {
-		// Unescape JSON string
-		value := matches[1]
-		value = strings.ReplaceAll(value, `\n`, "\n")
-		value = strings.ReplaceAll(value, `\t`, "\t")
-		value = strings.ReplaceAll(value, `\"`, `"`)
-		value = strings.ReplaceAll(value, `\\`, `\`)
-		return value
+		// Best-effort unescape while preserving literal backslashes.
+		// Example: `C:\\new\\file.txt` should not become `C:\n...`.
+		if unquoted, err := strconv.Unquote(`"` + matches[1] + `"`); err == nil {
+			return unquoted
+		}
+		return matches[1]
 	}
 
 	// Pattern 2: "fieldName": number or boolean
-	pattern2 := fmt.Sprintf(`"%s"\s*:\s*(\d+(?:\.\d+)?|true|false|null)`, fieldName)
+	pattern2 := fmt.Sprintf(`"%s"\s*:\s*(\d+(?:\.\d+)?|true|false|null)`, quotedFieldName)
 	if matches := regexp.MustCompile(pattern2).FindStringSubmatch(jsonStr); len(matches) > 1 {
 		return matches[1]
 	}
