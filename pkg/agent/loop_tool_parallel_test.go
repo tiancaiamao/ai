@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,30 +62,6 @@ func (t *contextMutationTool) Execute(ctx context.Context, _ map[string]any) ([]
 		current.Messages = append(current.Messages, agentctx.NewUserMessage("mutated-by-tool"))
 	}
 	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "ok"}}, nil
-}
-
-type captureArgsTool struct {
-	name string
-	args map[string]any
-}
-
-func (t *captureArgsTool) Name() string {
-	return t.name
-}
-
-func (t *captureArgsTool) Description() string {
-	return "capture args test tool"
-}
-
-func (t *captureArgsTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-	}
-}
-
-func (t *captureArgsTool) Execute(_ context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
-	t.args = args
-	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "captured"}}, nil
 }
 
 func newLoopTestEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
@@ -208,7 +185,7 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 	}
 }
 
-func TestExecuteToolCallsRecoversWritePathFromUserHintOnLength(t *testing.T) {
+func TestExecuteToolCallsReportsTruncatedWriteArgsOnLength(t *testing.T) {
 	assistant := agentctx.NewAssistantMessage()
 	assistant.StopReason = "length"
 	assistant.Content = []agentctx.ContentBlock{
@@ -221,18 +198,11 @@ func TestExecuteToolCallsRecoversWritePathFromUserHintOnLength(t *testing.T) {
 			},
 		},
 	}
-	loopCtx := &agentctx.AgentContext{
-		Messages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("Output MUST be a single self-contained HTML file (e.g., golden_gate_bridge.html)."),
-		},
-	}
-	writeTool := &captureArgsTool{name: "write"}
-	tools := []agentctx.Tool{writeTool}
 
 	results := executeToolCalls(
 		context.Background(),
-		loopCtx,
-		tools,
+		&agentctx.AgentContext{},
+		nil,
 		nil,
 		&assistant,
 		newLoopTestEventStream(),
@@ -244,20 +214,21 @@ func TestExecuteToolCallsRecoversWritePathFromUserHintOnLength(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].IsError {
-		t.Fatalf("expected recovery success, got error result: %s", results[0].ExtractText())
+	if !results[0].IsError {
+		t.Fatalf("expected error result for truncated args")
 	}
-	if writeTool.args == nil {
-		t.Fatalf("expected write tool to receive args")
+	text := results[0].ExtractText()
+	if !strings.Contains(text, "truncated by max_tokens") {
+		t.Fatalf("expected truncation reason in error message, got: %s", text)
 	}
-	if got := writeTool.args["path"]; got != "golden_gate_bridge.html" {
-		t.Fatalf("expected recovered path golden_gate_bridge.html, got %#v", got)
+	if !strings.Contains(text, "missing path/content") {
+		t.Fatalf("expected missing fields detail in error message, got: %s", text)
 	}
 }
 
-func TestExecuteToolCallsRecoversWritePathWithDefaultHTMLName(t *testing.T) {
+func TestExecuteToolCallsKeepsRegularInvalidArgsMessageWhenNotLength(t *testing.T) {
 	assistant := agentctx.NewAssistantMessage()
-	assistant.StopReason = "length"
+	assistant.StopReason = "toolUse"
 	assistant.Content = []agentctx.ContentBlock{
 		agentctx.ToolCallContent{
 			ID:   "call-1",
@@ -268,18 +239,11 @@ func TestExecuteToolCallsRecoversWritePathWithDefaultHTMLName(t *testing.T) {
 			},
 		},
 	}
-	loopCtx := &agentctx.AgentContext{
-		Messages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("Please generate a page."),
-		},
-	}
-	writeTool := &captureArgsTool{name: "write"}
-	tools := []agentctx.Tool{writeTool}
 
 	results := executeToolCalls(
 		context.Background(),
-		loopCtx,
-		tools,
+		&agentctx.AgentContext{},
+		nil,
 		nil,
 		&assistant,
 		newLoopTestEventStream(),
@@ -291,10 +255,14 @@ func TestExecuteToolCallsRecoversWritePathWithDefaultHTMLName(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].IsError {
-		t.Fatalf("expected recovery success, got error result: %s", results[0].ExtractText())
+	if !results[0].IsError {
+		t.Fatalf("expected invalid args error")
 	}
-	if got := writeTool.args["path"]; got != "index.html" {
-		t.Fatalf("expected default recovered path index.html, got %#v", got)
+	text := results[0].ExtractText()
+	if !strings.Contains(text, "Invalid tool arguments for 'write': missing path/content") {
+		t.Fatalf("expected regular invalid args message, got: %s", text)
+	}
+	if strings.Contains(text, "truncated by max_tokens") {
+		t.Fatalf("did not expect truncation message when stopReason is not length")
 	}
 }
