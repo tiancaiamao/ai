@@ -16,8 +16,11 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
-func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T) {
-	thinking := "我需要查看正确的行。让我使用 sed 命令来查看第1370-1385行：\n<tool_call>bash\n<arg_key>command</arg_key>\n<arg_value>sed -n '1370,1385p' Client/GameInit.cpp</arg_value>\n</tool_call>"
+// TestStreamAssistantResponse_ToolCallsInThinkingAreNotExtracted verifies that tool calls
+// appearing in thinking content are NOT extracted and executed.
+// Thinking is internal reasoning - any tool calls there are hallucinated/incomplete.
+func TestStreamAssistantResponse_ToolCallsInThinkingAreNotExtracted(t *testing.T) {
+	thinking := "我需要查看正确的行。让我使用 sed 命令来查看第1370-1385行"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
@@ -49,17 +52,13 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 		t.Fatalf("streamAssistantResponse returned error: %v", err)
 	}
 
+	// Tool calls from thinking should NOT be extracted
 	calls := msg.ExtractToolCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected one recovered tool call, got %d", len(calls))
-	}
-	if calls[0].Name != "bash" {
-		t.Fatalf("expected recovered tool name bash, got %q", calls[0].Name)
-	}
-	if got := calls[0].Arguments["command"]; got != "sed -n '1370,1385p' Client/GameInit.cpp" {
-		t.Fatalf("unexpected recovered command: %v", got)
+	if len(calls) != 0 {
+		t.Fatalf("expected NO tool calls from thinking, got %d", len(calls))
 	}
 }
+
 
 func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
 	sessionDir := t.TempDir()
