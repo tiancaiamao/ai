@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -367,26 +368,33 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 				// Parse arguments from JSON string to object
 				var argsObj map[string]any
 				if tc.Function.Arguments != "" {
-					// MiniMax returns nested JSON: {"properties": "{\"command\": \"...\"}"}
-					// Try to parse the outer JSON
-					var outerObj map[string]any
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &outerObj); err == nil {
-						// Check if it has "properties" field with a JSON string value
-						if props, ok := outerObj["properties"].(string); ok {
-							// Parse the inner JSON string
-							if err := json.Unmarshal([]byte(props), &argsObj); err != nil {
-								// If inner parsing fails, try XML-tag style
-								if strings.Contains(props, "\">") {
-									argsObj = parseXMLTagStyleArguments(tc.Function.Arguments)
-								} else {
-									argsObj = make(map[string]any)
+					// Try partial JSON parsing first (handles truncated JSON from max_tokens)
+					if parsed, isPartial := tryParsePartialToolCallArguments(tc.Function.Arguments); isPartial {
+						argsObj = parsed
+					} else if parsed != nil {
+						argsObj = parsed
+					} else {
+						// MiniMax returns nested JSON: {"properties": "{\"command\": \"...\"}"}
+						// Try to parse the outer JSON
+						var outerObj map[string]any
+						if err := json.Unmarshal([]byte(tc.Function.Arguments), &outerObj); err == nil {
+							// Check if it has "properties" field with a JSON string value
+							if props, ok := outerObj["properties"].(string); ok {
+								// Parse the inner JSON string
+								if err := json.Unmarshal([]byte(props), &argsObj); err != nil {
+									// If inner parsing fails, try XML-tag style
+									if strings.Contains(props, "\">") {
+										argsObj = parseXMLTagStyleArguments(tc.Function.Arguments)
+									} else {
+										argsObj = make(map[string]any)
+									}
 								}
+							} else {
+								argsObj = outerObj
 							}
 						} else {
-							argsObj = outerObj
+							argsObj = make(map[string]any)
 						}
-					} else {
-						argsObj = make(map[string]any)
 					}
 				} else {
 					argsObj = make(map[string]any)
@@ -559,6 +567,67 @@ func parseXMLTagStyleArguments(args string) map[string]any {
 		}
 	}
 	return result
+}
+
+// extractFieldFromPartialJSON extracts a field value from incomplete JSON using regex
+// This is a fallback for when JSON is truncated (e.g., due to max_tokens limit)
+func extractFieldFromPartialJSON(jsonStr, fieldName string) string {
+	// Pattern 1: "fieldName": "value" (handles escaped quotes in value)
+	pattern1 := fmt.Sprintf(`"%s"\s*:\s*"((?:[^"\\]|\\.)*)`, fieldName)
+	if matches := regexp.MustCompile(pattern1).FindStringSubmatch(jsonStr); len(matches) > 1 {
+		// Unescape JSON string
+		value := matches[1]
+		value = strings.ReplaceAll(value, `\n`, "\n")
+		value = strings.ReplaceAll(value, `\t`, "\t")
+		value = strings.ReplaceAll(value, `\"`, `"`)
+		value = strings.ReplaceAll(value, `\\`, `\`)
+		return value
+	}
+
+	// Pattern 2: "fieldName": number or boolean
+	pattern2 := fmt.Sprintf(`"%s"\s*:\s*(\d+(?:\.\d+)?|true|false|null)`, fieldName)
+	if matches := regexp.MustCompile(pattern2).FindStringSubmatch(jsonStr); len(matches) > 1 {
+		return matches[1]
+	}
+
+	return ""
+}
+
+// tryParsePartialToolCallArguments attempts to parse tool call arguments from possibly truncated JSON
+// Returns: (parsed map, wasPartial bool)
+// wasPartial is true when we extracted fields from malformed JSON (e.g., truncated by max_tokens)
+func tryParsePartialToolCallArguments(args string) (map[string]any, bool) {
+	if args == "" {
+		return nil, false
+	}
+
+	// Try standard JSON parse first
+	var result map[string]any
+	if err := json.Unmarshal([]byte(args), &result); err == nil {
+		return result, false // Successfully parsed, not partial
+	}
+
+	// JSON is malformed (likely truncated by max_tokens)
+	// Try to extract known fields heuristically
+	partial := make(map[string]any)
+
+	// Common tool call field names to extract
+	fieldNames := []string{
+		"path", "content", "command", "pattern", "oldText", "newText",
+		"filePattern", "timeout", "text", "query", "file", "old", "new", "cmd",
+	}
+
+	for _, field := range fieldNames {
+		if value := extractFieldFromPartialJSON(args, field); value != "" {
+			partial[field] = value
+		}
+	}
+
+	if len(partial) > 0 {
+		return partial, true // Partial parse succeeded
+	}
+
+	return nil, false
 }
 
 func parseRetryAfterHeaderAnthropic(value string) time.Duration {
