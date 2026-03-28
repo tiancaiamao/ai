@@ -1,0 +1,7 @@
+# Agent Lifecycle Test
+
+This is a test file created by the symphony orchestration agent to verify the full lifecycle.
+
+- Task ID: 34f90bf3-afcc-49ec-8232-6048b6d4112b
+- Created: 2024-03-28
+- Purpose: Verify agent can create, commit, push, and PR
