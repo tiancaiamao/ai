@@ -41,8 +41,8 @@ run_hook() {
     return 0
   fi
   
-  # Worktree may not exist, run from parent directory
-  timeout "$timeout_ms" sh -lc "$hook_name" 2>/dev/null || true
+  # Use subshell to avoid polluting current directory
+  (cd "$workspace" && timeout "$timeout_ms" sh -lc "$hook_name") 2>/dev/null || true
 }
 ```
 

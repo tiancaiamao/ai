@@ -109,8 +109,8 @@ run_hook() {
     return 0
   fi
   
-  cd "$workspace"
-  timeout "$timeout_ms" sh -lc "$hook_name" 2>/dev/null || true
+  # Use subshell to avoid polluting current directory
+  (cd "$workspace" && timeout "$timeout_ms" sh -lc "$hook_name") 2>/dev/null || true
 }
 ```
 
