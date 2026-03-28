@@ -55,3 +55,48 @@ func TestNormalizeToolCallInfersGenericWrapperName(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeToolCallUnwrapsPropertiesStringForWrite(t *testing.T) {
+	got := normalizeToolCall(agentctx.ToolCallContent{
+		Name: "write",
+		Arguments: map[string]any{
+			"properties": `{"path":"/tmp/a.txt","content":"hello world"}`,
+		},
+	})
+
+	args, err := coerceToolArguments(got.Name, got.Arguments)
+	if err != nil {
+		t.Fatalf("coerceToolArguments returned error: %v", err)
+	}
+
+	if args["path"] != "/tmp/a.txt" {
+		t.Fatalf("expected path=/tmp/a.txt, got %v", args["path"])
+	}
+	if args["content"] != "hello world" {
+		t.Fatalf("expected content=hello world, got %v", args["content"])
+	}
+}
+
+func TestNormalizeToolCallUnwrapsPropertiesMapForWrite(t *testing.T) {
+	got := normalizeToolCall(agentctx.ToolCallContent{
+		Name: "write",
+		Arguments: map[string]any{
+			"properties": map[string]any{
+				"path":    "/tmp/b.txt",
+				"content": "abc",
+			},
+		},
+	})
+
+	args, err := coerceToolArguments(got.Name, got.Arguments)
+	if err != nil {
+		t.Fatalf("coerceToolArguments returned error: %v", err)
+	}
+
+	if args["path"] != "/tmp/b.txt" {
+		t.Fatalf("expected path=/tmp/b.txt, got %v", args["path"])
+	}
+	if args["content"] != "abc" {
+		t.Fatalf("expected content=abc, got %v", args["content"])
+	}
+}
