@@ -61,6 +61,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	if err != nil {
 		slog.Info("Model spec fallback", "error", err)
 	}
+	model = applyModelLimitsFromSpec(model, activeSpec)
 	currentContextWindow := activeSpec.ContextWindow
 
 	// Get current working directory

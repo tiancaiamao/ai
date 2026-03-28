@@ -64,7 +64,8 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"id": "custom-model",
 			"provider": "custom-provider",
 			"baseUrl": "https://custom.api.com",
-			"api": "custom-api"
+			"api": "custom-api",
+			"maxTokens": 77777
 		},
 		"compactor": {
 			"maxMessages": 100,
@@ -105,6 +106,9 @@ func TestLoadConfigFromFile(t *testing.T) {
 
 	if cfg.Model.BaseURL != "https://custom.api.com" {
 		t.Errorf("Expected BaseURL 'https://custom.api.com', got '%s'", cfg.Model.BaseURL)
+	}
+	if cfg.Model.MaxTokens != 77777 {
+		t.Errorf("Expected model MaxTokens 77777, got %d", cfg.Model.MaxTokens)
 	}
 
 	if cfg.Compactor.MaxMessages != 100 {
@@ -193,8 +197,10 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	// Set environment variables
 	os.Setenv("ZAI_MODEL", "env-model")
 	os.Setenv("ZAI_BASE_URL", "https://env.api.com")
+	os.Setenv("ZAI_MAX_TOKENS", "88888")
 	defer os.Unsetenv("ZAI_MODEL")
 	defer os.Unsetenv("ZAI_BASE_URL")
+	defer os.Unsetenv("ZAI_MAX_TOKENS")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -208,6 +214,9 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 
 	if cfg.Model.BaseURL != "https://env.api.com" {
 		t.Errorf("Expected BaseURL from env 'https://env.api.com', got '%s'", cfg.Model.BaseURL)
+	}
+	if cfg.Model.MaxTokens != 88888 {
+		t.Errorf("Expected MaxTokens from env 88888, got %d", cfg.Model.MaxTokens)
 	}
 
 	// Provider should still be from file
@@ -268,10 +277,11 @@ func TestSaveConfig(t *testing.T) {
 func TestGetLLMModel(t *testing.T) {
 	cfg := &Config{
 		Model: ModelConfig{
-			ID:       "test-model",
-			Provider: "test-provider",
-			BaseURL:  "https://test.api.com",
-			API:      "openai-completions",
+			ID:        "test-model",
+			Provider:  "test-provider",
+			BaseURL:   "https://test.api.com",
+			API:       "openai-completions",
+			MaxTokens: 45678,
 		},
 	}
 
@@ -291,6 +301,9 @@ func TestGetLLMModel(t *testing.T) {
 
 	if model.API != "openai-completions" {
 		t.Errorf("Expected API 'openai-completions', got '%s'", model.API)
+	}
+	if model.MaxTokens != 45678 {
+		t.Errorf("Expected MaxTokens 45678, got %d", model.MaxTokens)
 	}
 }
 

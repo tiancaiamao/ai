@@ -13,6 +13,7 @@ type Model struct {
 	BaseURL       string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
 	API           string `json:"api"`           // e.g., "openai-completions"
 	ContextWindow int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
+	MaxTokens     int    `json:"maxTokens,omitempty"`
 }
 
 // LLMContext represents the context for an LLM request.

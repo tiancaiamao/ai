@@ -316,6 +316,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
 	}
+	model = applyModelLimitsFromSpec(model, activeSpec)
 	currentContextWindow := activeSpec.ContextWindow
 	if currentContextWindow <= 0 {
 		currentContextWindow = 128000 // default context window

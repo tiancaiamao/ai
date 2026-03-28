@@ -1,10 +1,10 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"errors"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -72,11 +72,13 @@ func resolveSessionName(sessionMgr *session.SessionManager, sessionID string) st
 
 func modelInfoFromModel(model llm.Model) rpc.ModelInfo {
 	return rpc.ModelInfo{
-		ID:       model.ID,
-		Name:     model.ID,
-		Provider: model.Provider,
-		API:      model.API,
-		Input:    []string{"text"},
+		ID:            model.ID,
+		Name:          model.ID,
+		Provider:      model.Provider,
+		API:           model.API,
+		Input:         []string{"text"},
+		ContextWindow: model.ContextWindow,
+		MaxTokens:     model.MaxTokens,
 	}
 }
 
@@ -103,13 +105,24 @@ func modelInfoFromSpec(spec config.ModelSpec) rpc.ModelInfo {
 
 func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
 	return config.ModelSpec{
-		ID:       cfg.Model.ID,
-		Name:     cfg.Model.ID,
-		Provider: cfg.Model.Provider,
-		BaseURL:  cfg.Model.BaseURL,
-		API:      cfg.Model.API,
-		Input:    []string{"text"},
+		ID:        cfg.Model.ID,
+		Name:      cfg.Model.ID,
+		Provider:  cfg.Model.Provider,
+		BaseURL:   cfg.Model.BaseURL,
+		API:       cfg.Model.API,
+		Input:     []string{"text"},
+		MaxTokens: cfg.Model.MaxTokens,
 	}
+}
+
+func applyModelLimitsFromSpec(model llm.Model, spec config.ModelSpec) llm.Model {
+	if model.ContextWindow <= 0 && spec.ContextWindow > 0 {
+		model.ContextWindow = spec.ContextWindow
+	}
+	if model.MaxTokens <= 0 && spec.MaxTokens > 0 {
+		model.MaxTokens = spec.MaxTokens
+	}
+	return model
 }
 
 func resolveActiveModelSpec(cfg *config.Config) (config.ModelSpec, error) {

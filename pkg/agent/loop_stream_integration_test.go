@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
@@ -394,5 +395,73 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 		if gotTail[i] != wantTail[i] {
 			t.Fatalf("expected tail user turns %v, got %v", wantTail, gotTail)
 		}
+	}
+}
+
+func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"content\\\":\\\"hello\\\"}\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16}}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("write a file"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey: "test-key",
+	}
+
+	stream := newTestAgentEventStream()
+	assistant, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+	if assistant.StopReason != "length" {
+		t.Fatalf("expected stopReason=length, got %q", assistant.StopReason)
+	}
+
+	calls := assistant.ExtractToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(calls))
+	}
+	if _, ok := calls[0].Arguments["content"]; !ok {
+		t.Fatalf("expected truncated args to preserve content field, got %+v", calls[0].Arguments)
+	}
+
+	results := executeToolCalls(
+		context.Background(),
+		agentCtx,
+		[]agentctx.Tool{&delayTool{name: "write", delay: 10 * time.Millisecond}},
+		nil,
+		assistant,
+		newLoopTestEventStream(),
+		nil,
+		nil,
+		DefaultToolOutputLimits(),
+	)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(results))
+	}
+	if !results[0].IsError {
+		t.Fatal("expected tool result to be error")
+	}
+
+	toolMsg := results[0].ExtractText()
+	if !strings.Contains(toolMsg, "max_tokens") {
+		t.Fatalf("expected tool error to mention max_tokens, got: %s", toolMsg)
+	}
+	if !strings.Contains(toolMsg, "Please resend the SAME tool call with COMPLETE arguments") {
+		t.Fatalf("expected clear retry guidance for LLM, got: %s", toolMsg)
 	}
 }

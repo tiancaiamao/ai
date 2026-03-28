@@ -79,7 +79,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	if err != nil {
 		slog.Info("Model spec fallback", "error", err)
 	}
+	model = applyModelLimitsFromSpec(model, activeSpec)
 	currentModelInfo := modelInfoFromSpec(activeSpec)
+	currentModelInfo.MaxTokens = model.MaxTokens
+	currentModelInfo.ContextWindow = model.ContextWindow
 	currentContextWindow := activeSpec.ContextWindow
 
 	// Get current working directory
@@ -971,10 +974,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		model = llm.Model{
-			ID:       spec.ID,
-			Provider: spec.Provider,
-			BaseURL:  spec.BaseURL,
-			API:      spec.API,
+			ID:            spec.ID,
+			Provider:      spec.Provider,
+			BaseURL:       spec.BaseURL,
+			API:           spec.API,
+			ContextWindow: spec.ContextWindow,
+			MaxTokens:     spec.MaxTokens,
 		}
 		apiKey = newAPIKey
 
@@ -982,6 +987,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		cfg.Model.Provider = spec.Provider
 		cfg.Model.BaseURL = spec.BaseURL
 		cfg.Model.API = spec.API
+		cfg.Model.MaxTokens = spec.MaxTokens
 
 		ag.SetModel(model)
 		ag.SetAPIKey(apiKey)
@@ -1037,10 +1043,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		model = llm.Model{
-			ID:       next.ID,
-			Provider: next.Provider,
-			BaseURL:  next.BaseURL,
-			API:      next.API,
+			ID:            next.ID,
+			Provider:      next.Provider,
+			BaseURL:       next.BaseURL,
+			API:           next.API,
+			ContextWindow: next.ContextWindow,
+			MaxTokens:     next.MaxTokens,
 		}
 		apiKey = newAPIKey
 
@@ -1048,6 +1056,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		cfg.Model.Provider = next.Provider
 		cfg.Model.BaseURL = next.BaseURL
 		cfg.Model.API = next.API
+		cfg.Model.MaxTokens = next.MaxTokens
 
 		ag.SetModel(model)
 		ag.SetAPIKey(apiKey)

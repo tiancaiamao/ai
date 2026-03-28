@@ -91,14 +91,14 @@ type AgentLoop struct {
 	running    atomic.Bool
 
 	// 配置
-	appConfig  *aiconfig.Config // Application config for LoopConfig
-	model      llm.Model
-	apiKey     string
+	appConfig    *aiconfig.Config // Application config for LoopConfig
+	model        llm.Model
+	apiKey       string
 	systemPrompt string
-	tools      []agentctx.Tool
-	sessionsDir string // session storage directory
-	clawDir    string // claw config directory (~/.aiclaw)
-	compactor   *compact.Compactor
+	tools        []agentctx.Tool
+	sessionsDir  string // session storage directory
+	clawDir      string // claw config directory (~/.aiclaw)
+	compactor    *compact.Compactor
 
 	// Voice transcription support
 	transcriber voice.Transcriber
@@ -337,6 +337,7 @@ func resolveModel(cfg *AppConfig) llm.Model {
 						model.API = spec.API
 					}
 					model.ContextWindow = spec.ContextWindow
+					model.MaxTokens = spec.MaxTokens
 					slog.Info("[AgentLoop] Loaded model config from models.json",
 						"id", spec.ID,
 						"provider", spec.Provider,
@@ -1443,6 +1444,7 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 		BaseURL:       targetSpec.BaseURL,
 		API:           targetSpec.API,
 		ContextWindow: targetSpec.ContextWindow,
+		MaxTokens:     targetSpec.MaxTokens,
 	}
 
 	// Update the agent loop's model
@@ -1545,10 +1547,12 @@ func (a *AgentLoop) saveModelConfig(model llm.Model) error {
 		cfg = make(map[string]any)
 	}
 	modelCfg := map[string]any{
-		"id":       model.ID,
-		"provider": model.Provider,
-		"baseUrl":  model.BaseURL,
-		"api":      model.API,
+		"id":            model.ID,
+		"provider":      model.Provider,
+		"baseUrl":       model.BaseURL,
+		"api":           model.API,
+		"contextWindow": model.ContextWindow,
+		"maxTokens":     model.MaxTokens,
 	}
 	cfg["model"] = modelCfg
 

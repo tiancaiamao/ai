@@ -16,6 +16,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+const defaultAnthropicMaxTokens = 65536
+
 // StreamAnthropic streams a completion from Anthropic Messages API.
 func StreamAnthropic(
 	ctx context.Context,
@@ -180,7 +182,7 @@ func StreamAnthropic(
 
 			case "content_block_start":
 				var blockEvent struct {
-					Index        int    `json:"index"`
+					Index        int `json:"index"`
 					ContentBlock struct {
 						Type string `json:"type"`
 						ID   string `json:"id,omitempty"`
@@ -210,11 +212,11 @@ func StreamAnthropic(
 				var deltaEvent struct {
 					Index int `json:"index"`
 					Delta struct {
-						Type         string `json:"type"`
-						Text         string `json:"text,omitempty"`
-						PartialJSON  string `json:"partial_json,omitempty"`
-						Thinking     string `json:"thinking,omitempty"`
-						Signature    string `json:"signature,omitempty"`
+						Type        string `json:"type"`
+						Text        string `json:"text,omitempty"`
+						PartialJSON string `json:"partial_json,omitempty"`
+						Thinking    string `json:"thinking,omitempty"`
+						Signature   string `json:"signature,omitempty"`
 					} `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(data), &deltaEvent); err == nil {
@@ -446,10 +448,10 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	}
 
 	reqBody := map[string]any{
-		"model":     model.ID,
-		"messages":  messages,
-		"max_tokens": 8192,
-		"stream":    true,
+		"model":      model.ID,
+		"messages":   messages,
+		"max_tokens": resolveAnthropicMaxTokens(model),
+		"stream":     true,
 	}
 
 	if len(systemBlocks) > 0 {
@@ -481,6 +483,13 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	}
 
 	return reqBody
+}
+
+func resolveAnthropicMaxTokens(model Model) int {
+	if model.MaxTokens > 0 {
+		return model.MaxTokens
+	}
+	return defaultAnthropicMaxTokens
 }
 
 // convertToolResultContent converts tool result content to Anthropic format

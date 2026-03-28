@@ -1,8 +1,9 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,5 +182,48 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 	}
 	if len(staleCtx.Messages) != 1 {
 		t.Fatalf("expected stale context to remain unchanged, got %d messages", len(staleCtx.Messages))
+	}
+}
+
+func TestExecuteToolCallsReportsMaxTokensTruncationClearly(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.StopReason = "length"
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:        "call-1",
+			Type:      "toolCall",
+			Name:      "write",
+			Arguments: map[string]any{"content": "hello"},
+		},
+	}
+
+	results := executeToolCalls(
+		context.Background(),
+		&agentctx.AgentContext{},
+		[]agentctx.Tool{&delayTool{name: "write", delay: 10 * time.Millisecond}},
+		nil,
+		&assistant,
+		newLoopTestEventStream(),
+		nil,
+		nil,
+		DefaultToolOutputLimits(),
+	)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if !results[0].IsError {
+		t.Fatal("expected tool result to be error")
+	}
+
+	text := results[0].ExtractText()
+	if !strings.Contains(text, "max_tokens") {
+		t.Fatalf("expected truncation message to mention max_tokens, got: %s", text)
+	}
+	if !strings.Contains(text, "stopReason=length") {
+		t.Fatalf("expected truncation message to mention stopReason=length, got: %s", text)
+	}
+	if !strings.Contains(text, "Please resend the SAME tool call with COMPLETE arguments") {
+		t.Fatalf("expected truncation guidance in message, got: %s", text)
 	}
 }
