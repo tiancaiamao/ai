@@ -1,0 +1,14 @@
+# Hacker News
+https://news.ycombinator.com/rss
+
+# 36氪
+https://www.36kr.com/information/feed/
+
+# 钛媒体
+https://www.tmtpost.com/feed
+
+# 极客公园
+https://www.geekpark.net/feed
+
+# 量子位
+https://www.qbitai.com/feed

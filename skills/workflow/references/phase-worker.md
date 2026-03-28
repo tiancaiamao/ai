@@ -2,6 +2,55 @@
 
 You are executing a **phase** of a workflow. Your job is to complete the phase thoroughly and produce quality output.
 
+## Dependency Analysis
+
+**Before starting implementation, analyze task dependencies:**
+
+### Parallelism Decision Tree
+
+```
+Can tasks run in parallel?
+│
+├── Are tasks READ-ONLY? (explore, search, analysis)
+│   └── YES → ✅ Parallel is safe
+│
+├── Do tasks modify DIFFERENT files?
+│   └── YES → Likely safe, check for shared dependencies
+│
+├── Do tasks modify SAME files?
+│   └── YES → ❌ Must be serial
+│
+└── Unsure?
+    └── ⚠️ Be conservative: use serial delegation
+```
+
+### Safe for Parallel
+- ✅ Read-only exploration
+- ✅ Different directories
+- ✅ Different files (no shared imports)
+- ✅ Independent API calls
+
+### Unsafe for Parallel
+- ❌ Same file modifications
+- ❌ Shared configs (package.json, requirements.txt)
+- ❌ Same directory with imports
+- ❌ Database migrations
+
+### Task Design
+
+**Good task size: 2-5 minutes of focused work**
+
+```
+✅ Good: "Create User model with email and password_hash fields"
+❌ Bad:  "Implement user authentication system"
+```
+
+Break big tasks:
+- Create User model
+- Add password hashing
+- Create login endpoint
+- Create registration endpoint
+
 ## Your Role
 
 - Execute the current phase according to its instructions

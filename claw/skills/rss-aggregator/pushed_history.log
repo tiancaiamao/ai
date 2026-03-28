@@ -1,0 +1,36 @@
+今日AI资讯 (2026-03-28)
+
+标题：Telnyx Python SDK供应链攻击事件
+
+摘要：Telnyx Python SDK在PyPI上遭遇供应链攻击，短时间内发布了恶意版本。攻击者利用PyPI平台漏洞上传了被篡改的SDK版本，可能影响使用该SDK的开发者。建议用户检查依赖版本并及时更新。
+
+链接：
+https://telnyx.com/resources/telnyx-python-sdk-supply-chain-security-notice-march-2026
+
+标题：Cursor Composer通过实时RL进行优化
+
+摘要：Cursor团队宣布其代码编辑器Composer通过实时强化学习技术进行重大优化，提升了代码补全和生成质量。该技术允许模型在用户交互过程中持续学习和适应。
+
+链接：
+https://cursor.com/blog/real-time-rl-for-composer
+
+标题：LG推出1Hz低功耗显示技术
+
+摘要：LG Display发布新型1Hz刷新率显示面板技术，可显著延长笔记本电脑电池续航。该技术通过优化面板驱动电路实现超低功耗显示，已被多家PC厂商采用。
+
+链接：
+https://www.pcworld.com/article/3096432/lgs-new-1hz-display-is-the-secret-behind-a-new-laptops-battery-life.html
+
+标题：DOJ证实FBI Director Kash Patel个人邮箱被黑客入侵
+
+摘要：美国司法部确认FBI局长Kash Patel的个人邮箱于近期遭到黑客攻击。目前调查正在进行中尚不清楚是否有机密信息泄露。此事件再次引发对政府官员数字安全的关注。
+
+链接：
+https://arstechnica.com/tech-policy/2026/03/doj-confirms-fbi-director-kash-patels-personal-email-was-hacked/
+
+标题：微软内部员工呼吁移除Windows 11强制微软账户要求
+
+摘要：微软内部员工正在游说管理层，希望在Windows 11安装过程中移除强制绑定微软账户的要求。目前用户在新机设置时必须登录Microsoft账户，引发隐私争议。
+
+链接：
+https://www.windowscentral.com/microsoft/windows-11/people-inside-microsoft-are-fighting-to-drop-windows-11s-mandatory-microsoft-account-requirements-during-setup

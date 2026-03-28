@@ -1106,9 +1106,10 @@ func streamAssistantResponse(
 			}
 
 			// Try to inject tool calls from tagged text
+			// NOTE: Do NOT extract tool calls from thinking content.
+			// Thinking is the LLM's internal reasoning - tool calls appearing there
+			// are hallucinated/incomplete and should NOT be executed.
 			if updated, ok := injectToolCallsFromTaggedText(finalMessage); ok {
-				finalMessage = updated
-			} else if updated, ok := injectToolCallsFromThinking(finalMessage); ok {
 				finalMessage = updated
 			} else {
 				// Check for incomplete tool calls and log for debugging
