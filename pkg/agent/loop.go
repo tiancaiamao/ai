@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strconv"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -103,6 +104,8 @@ var streamAssistantResponseFn = streamAssistantResponse
 type llmAttemptKeyType struct{}
 
 var llmAttemptKey = llmAttemptKeyType{}
+
+var writePathHintPattern = regexp.MustCompile(`(?i)\b([a-z0-9][a-z0-9._/-]{0,255}\.(?:html?|css|js|jsx|ts|tsx|json|md|txt|go|py|java|c|cc|cpp|h|hpp|rs|sh|yaml|yml|toml|xml|sql))\b`)
 
 func shouldRetryLLMError(err error) bool {
 	if err == nil {
@@ -1244,6 +1247,15 @@ func executeToolCalls(
 				"normalizedName", normalized.Name,
 				"availableTools", availableToolNames)
 		}
+		if recovered, reason, ok := maybeRecoverTruncatedWriteArguments(agentCtx, assistantMsg, normalized.Name, normalized.Arguments); ok {
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_args_recovered",
+				traceevent.Field{Key: "tool", Value: normalized.Name},
+				traceevent.Field{Key: "tool_call_id", Value: normalized.ID},
+				traceevent.Field{Key: "stop_reason", Value: assistantMsg.StopReason},
+				traceevent.Field{Key: "reason", Value: reason},
+			)
+			normalized.Arguments = recovered
+		}
 		args, argErr := coerceToolArguments(normalized.Name, normalized.Arguments)
 		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
 			traceevent.Field{Key: "tool", Value: normalized.Name},
@@ -1437,6 +1449,100 @@ func executeToolCalls(
 		}
 	}
 	return results
+}
+
+func maybeRecoverTruncatedWriteArguments(
+	agentCtx *agentctx.AgentContext,
+	assistantMsg *agentctx.AgentMessage,
+	toolName string,
+	args map[string]any,
+) (map[string]any, string, bool) {
+	if normalizeToolCallName(toolName) != "write" {
+		return nil, "", false
+	}
+	if assistantMsg == nil || assistantMsg.StopReason != "length" {
+		return nil, "", false
+	}
+
+	content := getStringArg(args, "content", "text")
+	if content == "" {
+		return nil, "", false
+	}
+	if getStringArg(args, "path", "file") != "" {
+		return nil, "", false
+	}
+
+	inferredPath := inferWritePathFromRecentUserMessages(agentCtx)
+	reason := "user_hint"
+	if inferredPath == "" {
+		inferredPath = inferDefaultWritePath(content)
+		reason = "content_default"
+	}
+	if inferredPath == "" {
+		return nil, "", false
+	}
+
+	recovered := cloneArguments(args)
+	recovered["path"] = inferredPath
+	recovered["content"] = content
+	return recovered, reason, true
+}
+
+func inferWritePathFromRecentUserMessages(agentCtx *agentctx.AgentContext) string {
+	if agentCtx == nil || len(agentCtx.Messages) == 0 {
+		return ""
+	}
+
+	for i := len(agentCtx.Messages) - 1; i >= 0; i-- {
+		msg := agentCtx.Messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+		if hint := extractWritePathHint(msg.ExtractText()); hint != "" {
+			return hint
+		}
+	}
+	return ""
+}
+
+func extractWritePathHint(text string) string {
+	matches := writePathHintPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	for i := len(matches) - 1; i >= 0; i-- {
+		candidate := strings.TrimSpace(matches[i])
+		if candidate == "" || strings.Contains(candidate, "://") {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+func inferDefaultWritePath(content string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(content))
+	switch {
+	case strings.HasPrefix(trimmed, "<!doctype html"), strings.HasPrefix(trimmed, "<html"), strings.Contains(trimmed, "<html"):
+		return "index.html"
+	case strings.HasPrefix(trimmed, "{"), strings.HasPrefix(trimmed, "["):
+		return "output.json"
+	case strings.HasPrefix(trimmed, "#"):
+		return "output.md"
+	default:
+		return "output.txt"
+	}
+}
+
+func cloneArguments(args map[string]any) map[string]any {
+	if args == nil {
+		return map[string]any{}
+	}
+	copied := make(map[string]any, len(args)+1)
+	for k, v := range args {
+		copied[k] = v
+	}
+	return copied
 }
 
 func buildInvalidToolArgsMessage(toolName string, argErr error) string {
