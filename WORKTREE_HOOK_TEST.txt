@@ -1,0 +1,5 @@
+# Worktree Hook Test
+
+This file confirms the after_create hook executed successfully.
+
+The worktree was created at this path with the correct branch.
