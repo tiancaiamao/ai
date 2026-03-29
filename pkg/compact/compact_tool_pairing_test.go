@@ -286,3 +286,286 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 		}
 	}
 }
+
+// TestEnsureToolCallPairingWithGrace_ProtectsRecentToolResults tests that grace period protects recent tool results
+func TestEnsureToolCallPairingWithGrace_ProtectsRecentToolResults(t *testing.T) {
+	config := &Config{
+		GracePeriod: 1, // Protect 1 most recent tool result
+	}
+
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+
+	// Scenario: tool_call in oldMessages, tool_result in recentMessages
+	// With grace period = 1, the most recent tool_result should be protected (not archived)
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-123",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/test.txt"},
+				},
+			},
+		},
+	}
+
+	recentMessages := []agentctx.AgentMessage{
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-123",
+			ToolName:   "read",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "file content here"},
+			},
+		},
+		agentctx.NewUserMessage("next user message"),
+	}
+
+	result := compactor.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+
+	// The tool_result should be protected by grace period and remain visible
+	toolResultFound := false
+	for _, msg := range result {
+		if msg.Role == "toolResult" && msg.ToolCallID == "call-123" {
+			toolResultFound = true
+			if !msg.IsAgentVisible() {
+				t.Error("tool_result should be visible due to grace period protection")
+			}
+		}
+	}
+
+	if !toolResultFound {
+		t.Error("tool_result should still be present in messages")
+	}
+}
+
+// TestEnsureToolCallPairingWithGrace_OlderResultsArchived tests that older tool results are archived
+func TestEnsureToolCallPairingWithGrace_OlderResultsArchived(t *testing.T) {
+	config := &Config{
+		GracePeriod: 1, // Protect only 1 most recent tool result
+	}
+
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+
+	// Scenario: 2 tool_results in recentMessages, both with calls in oldMessages
+	// First (older) should be archived, second (most recent) should be protected
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-old",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/old.txt"},
+				},
+			},
+		},
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-newer",
+					Type: "toolCall",
+					Name: "bash",
+					Arguments: map[string]any{"command": "ls"},
+				},
+			},
+		},
+	}
+
+	// Most recent message first
+	recentMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("recent turn"),
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-newer",
+			ToolName:   "bash",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "newer result"},
+			},
+		},
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-old",
+			ToolName:   "read",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "older result"},
+			},
+		},
+	}
+
+	result := compactor.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+
+	// Count visible vs hidden tool_results
+	visibleCount := 0
+	hiddenCount := 0
+	for _, msg := range result {
+		if msg.Role == "toolResult" {
+			if msg.IsAgentVisible() {
+				visibleCount++
+			} else {
+				hiddenCount++
+			}
+		}
+	}
+
+	// With grace period = 1, only the most recent (call-newer) should be visible
+	if visibleCount != 1 {
+		t.Errorf("expected 1 visible tool_result, got %d", visibleCount)
+	}
+	if hiddenCount != 1 {
+		t.Errorf("expected 1 hidden tool_result, got %d", hiddenCount)
+	}
+}
+
+// TestEnsureToolCallPairingWithGrace_GracePeriodZeroFallsBack tests that GracePeriod=0 defaults to 1
+func TestEnsureToolCallPairingWithGrace_GracePeriodZeroFallsBack(t *testing.T) {
+	config := &Config{
+		GracePeriod: 0, // Defaults to 1 internally
+	}
+
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-123",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/test.txt"},
+				},
+			},
+		},
+	}
+
+	recentMessages := []agentctx.AgentMessage{
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-123",
+			ToolName:   "read",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "file content here"},
+			},
+		},
+		agentctx.NewUserMessage("next user message"),
+	}
+
+	result := compactor.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+
+	// When GracePeriod=0, it defaults to 1 internally, so the tool_result should be protected
+	toolResultFound := false
+	for _, msg := range result {
+		if msg.Role == "toolResult" && msg.ToolCallID == "call-123" {
+			toolResultFound = true
+			// GracePeriod=0 defaults to 1, so tool_result should be visible
+			if !msg.IsAgentVisible() {
+				t.Error("tool_result should be visible when GracePeriod defaults to 1")
+			}
+		}
+	}
+
+	if !toolResultFound {
+		t.Error("tool_result should still be present in messages")
+	}
+}
+
+// TestEnsureToolCallPairingWithGrace_LargerGracePeriod protects multiple recent tool results
+func TestEnsureToolCallPairingWithGrace_LargerGracePeriod(t *testing.T) {
+	config := &Config{
+		GracePeriod: 2, // Protect 2 most recent tool results
+	}
+
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+
+	oldMessages := []agentctx.AgentMessage{
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-1",
+					Type: "toolCall",
+					Name: "read",
+					Arguments: map[string]any{"path": "/1.txt"},
+				},
+			},
+		},
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-2",
+					Type: "toolCall",
+					Name: "bash",
+					Arguments: map[string]any{"command": "ls"},
+				},
+			},
+		},
+		{
+			Role: "assistant",
+			Content: []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call-3",
+					Type: "toolCall",
+					Name: "grep",
+					Arguments: map[string]any{"pattern": "test"},
+				},
+			},
+		},
+	}
+
+	recentMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("recent turn"),
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-3",
+			ToolName:   "grep",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "result 3"},
+			},
+		},
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-2",
+			ToolName:   "bash",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "result 2"},
+			},
+		},
+		{
+			Role:       "toolResult",
+			ToolCallID: "call-1",
+			ToolName:   "read",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "result 1"},
+			},
+		},
+	}
+
+	result := compactor.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+
+	// Count visible vs hidden tool_results
+	visibleCount := 0
+	hiddenCount := 0
+	for _, msg := range result {
+		if msg.Role == "toolResult" {
+			if msg.IsAgentVisible() {
+				visibleCount++
+			} else {
+				hiddenCount++
+			}
+		}
+	}
+
+	// With grace period = 2, 2 most recent should be visible, 1 older should be hidden
+	if visibleCount != 2 {
+		t.Errorf("expected 2 visible tool_results with GracePeriod=2, got %d", visibleCount)
+	}
+	if hiddenCount != 1 {
+		t.Errorf("expected 1 hidden tool_result with GracePeriod=2, got %d", hiddenCount)
+	}
+}
