@@ -1,7 +1,7 @@
 package main
 
 import (
-	orchestrate "github.com/genius/orchestrate"
+	orchestrate "orchestrate"
 )
 
 func main() {

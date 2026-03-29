@@ -20,37 +20,23 @@ Workflow is the **execution engine** that turns plans into shipped code. It comb
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  User Command                                               │
-│  /workflow start bugfix "fix login timeout"                 │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│  commands.md - Template Resolution                          │
-│  1. resolveByName() → find template                        │
-│  2. autoDetect() → guess from keywords                     │
-│  3. loadTemplate() → load .md template                      │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│  State File: .workflow/STATE.json                           │
-│  { template, phases, currentPhase, startedAt, artifactDir } │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│  prompts/workflow-start.md - Dispatch Prompt                │
-│  Send structured prompt to main agent with phases           │
-└─────────────────────────────────────────────────────────────┘
-                            ↓
-┌─────────────────────────────────────────────────────────────┐
-│  Auto Mode - Phase Execution                                │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐      │
-│  │ triage  │→ │  fix    │→ │ verify  │→ │  ship   │      │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘      │
-│                                                             │
-│  Each phase: subagent → review → commit on success         │
-└─────────────────────────────────────────────────────────────┘
+/workflow start bugfix "fix login timeout"
+    ↓
+Workflow Skill (Frontend)
+  - User-friendly commands
+  - Template selection
+  - Parameter parsing
+    ↓
+~/.ai/skills/orchestrate/bin/orchestrate (Backend)
+  - Task scheduling
+  - State management
+  - Worker execution
 ```
+
+**Orchestrate CLI:**
+- **Location:** `skills/orchestrate/` (self-contained skill)
+- **Binary:** `~/.ai/skills/orchestrate/bin/orchestrate`
+- **Build:** `cd skills/orchestrate && go build -o bin/orchestrate ./cmd/main.go`
 
 ## Commands
 
