@@ -81,8 +81,10 @@ func StreamAnthropic(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 
-		// Execute request
-		client := &http.Client{}
+// Execute request
+	client := &http.Client{
+			Timeout: 2 * time.Minute, // Timeout for waiting for response headers + body
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			if strings.Contains(err.Error(), "no such host") {
