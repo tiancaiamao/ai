@@ -1419,7 +1419,14 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 		}
 		targetSpec = specs[idx]
 	} else {
-		targetSpec, err = modelselect.SelectByQuery(specs, modelID, func(spec ModelSpec) modelselect.Keys {
+		// Handle provider/ID format (e.g., "minimax/MiniMax-M2.5")
+		// Extract just the ID part for matching
+		query := modelID
+		if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
+			query = parts[1] // Use the ID part after the slash
+		}
+
+		targetSpec, err = modelselect.SelectByQuery(specs, query, func(spec ModelSpec) modelselect.Keys {
 			return modelselect.Keys{
 				Provider: spec.Provider,
 				ID:       spec.ID,
