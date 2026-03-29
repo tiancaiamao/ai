@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -294,5 +295,381 @@ func TestContextManagementConcurrentTruncateCallsKeepBothCleanups(t *testing.T) 
 		if !agentctx.IsTruncatedAgentToolTag(msg.ExtractText()) {
 			t.Fatalf("expected tool result %s to be truncated", msg.ToolCallID)
 		}
+	}
+}
+
+// TestContextManagementSkipDenied tests that skip is denied when ratio <= 0
+func TestContextManagementSkipDenied(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_skip",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "skip",
+				"reasoning":    "Test skip denied",
+				"skip_turns":   30,
+			},
+		},
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{assistant},
+		ContextMgmtState: func() *agentctx.ContextMgmtState {
+			state := agentctx.DefaultContextMgmtState()
+			state.ProactiveDecisions = 0
+			state.ReminderNeeded = 5
+			state.ReminderFrequency = 10
+			state.CurrentTurn = 10
+			return state
+		}(),
+	}
+
+	tool := NewContextManagementTool(nil)
+
+	execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_skip")
+
+	resultBlocks, err := tool.Execute(execCtx, map[string]any{
+		"decision":   "skip",
+		"reasoning":  "Test skip denied",
+		"skip_turns": 30.0,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Check that skip was denied with proper message
+	// ratio = 0 - 5 = -5
+	if !strings.Contains(resultText, "⚠️ skip request denied") {
+		t.Errorf("Expected skip denied message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "ratio=-5") {
+		t.Errorf("Expected ratio message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "not allowed to skip 30 turns") {
+		t.Errorf("Expected turns message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "within 10 turns (turn 20)") {
+		t.Errorf("Expected reminder timing message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "You must be more proactive") {
+		t.Errorf("Expected proactive encouragement message, got: %s", resultText)
+	}
+
+	// Verify that skip was NOT actually applied
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
+		t.Errorf("Expected SkipUntilTurn to remain 0, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestContextManagementSkipReduced tests that skip is reduced when skipTurns > maxSkip
+func TestContextManagementSkipReduced(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_skip",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "skip",
+				"reasoning":    "Test skip reduced",
+				"skip_turns":   20,
+			},
+		},
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{assistant},
+		ContextMgmtState: func() *agentctx.ContextMgmtState {
+			state := agentctx.DefaultContextMgmtState()
+			state.ProactiveDecisions = 5
+			state.ReminderNeeded = 3
+			state.ReminderFrequency = 10
+			state.CurrentTurn = 10
+			return state
+		}(),
+	}
+
+	tool := NewContextManagementTool(nil)
+
+	execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_skip")
+
+	resultBlocks, err := tool.Execute(execCtx, map[string]any{
+		"decision":   "skip",
+		"reasoning":  "Test skip reduced",
+		"skip_turns": 20,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Check that skip was reduced with proper message
+	if !strings.Contains(resultText, "⚠️ skip_turns reduced from 20 to 2") {
+		t.Errorf("Expected skip reduced message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "ratio is 2") {
+		t.Errorf("Expected ratio message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "max skip allowed: 2") {
+		t.Errorf("Expected max allowed message, got: %s", resultText)
+	}
+
+	// Verify that reduced skip was applied (maxSkip = 5 - 3 = 2)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 12 {
+		t.Errorf("Expected SkipUntilTurn to be 12, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestContextManagementSkipSuccess tests that skip succeeds when within limits
+func TestContextManagementSkipSuccess(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_skip",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "skip",
+				"reasoning":    "Test skip success",
+				"skip_turns":   5,
+			},
+		},
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{assistant},
+		ContextMgmtState: func() *agentctx.ContextMgmtState {
+			state := agentctx.DefaultContextMgmtState()
+			state.ProactiveDecisions = 10
+			state.ReminderNeeded = 2
+			state.ReminderFrequency = 10
+			state.CurrentTurn = 10
+			return state
+		}(),
+	}
+
+	tool := NewContextManagementTool(nil)
+
+	execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_skip")
+
+	resultBlocks, err := tool.Execute(execCtx, map[string]any{
+		"decision":   "skip",
+		"reasoning":  "Test skip success",
+		"skip_turns": 5,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Check that skip succeeded normally (no reduction since 5 <= 8)
+	if !strings.Contains(resultText, "Skipping reminders for 5 turns") {
+		t.Errorf("Expected success message, got: %s", resultText)
+	}
+	if !strings.Contains(resultText, "Next reminder at turn 15") {
+		t.Errorf("Expected next reminder message, got: %s", resultText)
+	}
+
+	// Verify that skip was applied
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 15 {
+		t.Errorf("Expected SkipUntilTurn to be 15, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestContextManagementSkipExactMaxSkip tests that skip succeeds when skipTurns == maxSkip
+func TestContextManagementSkipExactMaxSkip(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_skip",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":     "skip",
+				"reasoning":    "Test skip exact max",
+				"skip_turns":   3,
+			},
+		},
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{assistant},
+		ContextMgmtState: func() *agentctx.ContextMgmtState {
+			state := agentctx.DefaultContextMgmtState()
+			state.ProactiveDecisions = 5
+			state.ReminderNeeded = 2
+			state.ReminderFrequency = 10
+			state.CurrentTurn = 10
+			return state
+		}(),
+	}
+
+	tool := NewContextManagementTool(nil)
+
+	execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_skip")
+
+	resultBlocks, err := tool.Execute(execCtx, map[string]any{
+		"decision":   "skip",
+		"reasoning":  "Test skip exact max",
+		"skip_turns": 3,
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Check that skip succeeded normally (no reduction since 3 == 3)
+	if !strings.Contains(resultText, "Skipping reminders for 3 turns") {
+		t.Errorf("Expected success message, got: %s", resultText)
+	}
+
+	// Verify that skip was applied
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 13 {
+		t.Errorf("Expected SkipUntilTurn to be 13, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestContextManagementSkipEdgeCases tests edge cases (zero proactive, max limits, etc.)
+func TestContextManagementSkipEdgeCases(t *testing.T) {
+	tests := []struct {
+		name               string
+		proactiveDecisions int
+		reminderNeeded     int
+		requestedSkip      int
+		expectedResult     string
+		expectedSkipUntil  int
+	}{
+		{
+			name:               "zero proactive, many reminders needed",
+			proactiveDecisions: 0,
+			reminderNeeded:     10,
+			requestedSkip:      15,
+			expectedResult:     "skip request denied",
+			expectedSkipUntil:  0,
+		},
+		{
+			name:               "equal proactive and reminders",
+			proactiveDecisions: 5,
+			reminderNeeded:     5,
+			requestedSkip:      10,
+			expectedResult:     "skip request denied",
+			expectedSkipUntil:  0,
+		},
+		{
+			name:               "max skip capped at 30",
+			proactiveDecisions: 50,
+			reminderNeeded:     0,
+			requestedSkip:      50,
+			expectedResult:     "Skipping reminders for 30 turns",
+			expectedSkipUntil:  40,
+		},
+		{
+			name:               "min skip capped at 1",
+			proactiveDecisions: 1,
+			reminderNeeded:     0,
+			requestedSkip:      0,
+			expectedResult:     "Skipping reminders for 1 turns",
+			expectedSkipUntil:  11,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assistant := agentctx.NewAssistantMessage()
+			assistant.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:   "call_cm_skip",
+					Type: "toolCall",
+					Name: "context_management",
+					Arguments: map[string]any{
+						"decision":     "skip",
+						"reasoning":    tt.name,
+						"skip_turns":   tt.requestedSkip,
+					},
+				},
+			}
+
+			agentCtx := &agentctx.AgentContext{
+				Messages: []agentctx.AgentMessage{assistant},
+				ContextMgmtState: func() *agentctx.ContextMgmtState {
+					state := agentctx.DefaultContextMgmtState()
+					state.ProactiveDecisions = tt.proactiveDecisions
+					state.ReminderNeeded = tt.reminderNeeded
+					state.ReminderFrequency = 10
+					state.CurrentTurn = 10
+					return state
+				}(),
+			}
+
+			tool := NewContextManagementTool(nil)
+
+			execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+			execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_skip")
+
+			resultBlocks, err := tool.Execute(execCtx, map[string]any{
+				"decision":   "skip",
+				"reasoning":  tt.name,
+				"skip_turns": tt.requestedSkip,
+			})
+			if err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+
+			if len(resultBlocks) == 0 {
+				t.Fatal("Expected result blocks, got none")
+			}
+
+			resultText := ""
+			if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+				resultText = tc.Text
+			}
+
+			if !strings.Contains(resultText, tt.expectedResult) {
+				t.Errorf("Expected result to contain '%s', got: %s", tt.expectedResult, resultText)
+			}
+
+			if agentCtx.ContextMgmtState.SkipUntilTurn != tt.expectedSkipUntil {
+				t.Errorf("Expected SkipUntilTurn to be %d, got: %d", tt.expectedSkipUntil, agentCtx.ContextMgmtState.SkipUntilTurn)
+			}
+		})
 	}
 }
