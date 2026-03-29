@@ -296,3 +296,366 @@ func TestContextManagementConcurrentTruncateCallsKeepBothCleanups(t *testing.T) 
 		}
 	}
 }
+
+// TestSkipDeniedWhenRatioZeroOrNegative tests that skip is denied when proactive ratio <= 0
+func TestSkipDeniedWhenRatioZeroOrNegative(t *testing.T) {
+	agentCtx := &agentctx.AgentContext{
+		Messages:         []agentctx.AgentMessage{},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+
+	// Simulate poor proactive behavior: proactive=0, remind=5, ratio=-5
+	state := agentCtx.ContextMgmtState
+	state.RecordDecision(1, "truncate", true)  // reminded
+	state.RecordDecision(2, "truncate", true)  // reminded
+	state.RecordDecision(3, "truncate", true)  // reminded
+	state.RecordDecision(4, "truncate", true)  // reminded
+	state.RecordDecision(5, "truncate", true)  // reminded
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip")
+
+	resultBlocks, err := tool.Execute(ctx, map[string]any{
+		"decision":  "skip",
+		"reasoning": "Want to skip 30 turns",
+		"skip_turns": 30.0,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute should not return error, got: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Verify error message contains "skip request denied"
+	if !contains(resultText, "skip request denied") {
+		t.Errorf("Expected result to contain 'skip request denied', got: %s", resultText)
+	}
+
+	// Verify ratio is -4 (1 proactive - 5 reminded = -4, MarkDecisionMade incremented proactive)
+	if !contains(resultText, "ratio=-4") {
+		t.Errorf("Expected result to mention ratio=-4, got: %s", resultText)
+	}
+
+	// Verify SkipUntilTurn is NOT set (should still be 0)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
+		t.Errorf("Expected SkipUntilTurn to be 0 (not set), got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+
+	// Verify decision tracking: MarkDecisionMade() increments ProactiveDecisions
+	// When skip is denied, we accept this because it still marks a decision was made
+	snapshot := agentCtx.ContextMgmtState.Snapshot()
+	if snapshot.ProactiveDecisions != 1 { // MarkDecisionMade() increments this
+		t.Errorf("Expected ProactiveDecisions=1 (MarkDecisionMade increments it), got: %d", snapshot.ProactiveDecisions)
+	}
+	if snapshot.ReminderNeeded != 5 {
+		t.Errorf("Expected ReminderNeeded=5, got: %d", snapshot.ReminderNeeded)
+	}
+}
+
+// TestSkipReducedWhenOverLimit tests that skip_turns is reduced when requested > maxSkip
+func TestSkipReducedWhenOverLimit(t *testing.T) {
+	agentCtx := &agentctx.AgentContext{
+		Messages:         []agentctx.AgentMessage{},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+
+	// Simulate proactive behavior: proactive=10, remind=0, ratio=10, maxSkip=10
+	state := agentCtx.ContextMgmtState
+	state.RecordDecision(1, "truncate", false) // proactive
+	state.RecordDecision(2, "truncate", false) // proactive
+	state.RecordDecision(3, "truncate", false) // proactive
+	state.RecordDecision(4, "truncate", false) // proactive
+	state.RecordDecision(5, "truncate", false) // proactive
+	state.RecordDecision(6, "compact", false)  // proactive
+	state.RecordDecision(7, "compact", false)  // proactive
+	state.RecordDecision(8, "compact", false)  // proactive
+	state.RecordDecision(9, "compact", false)  // proactive
+	state.RecordDecision(10, "compact", false) // proactive
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip")
+
+	resultBlocks, err := tool.Execute(ctx, map[string]any{
+		"decision":  "skip",
+		"reasoning": "Want to skip 30 turns",
+		"skip_turns": 30.0,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute should not return error, got: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Verify message contains "reduced from 30 to 11"
+	if !contains(resultText, "reduced from 30 to 11") {
+		t.Errorf("Expected result to contain 'reduced from 30 to 11', got: %s", resultText)
+	}
+
+	// Verify SkipUntilTurn is set to 21 (turn 10 + maxSkip 11)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 21 {
+		t.Errorf("Expected SkipUntilTurn=21, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestSkipCappedAt30 tests that maxSkip is capped at 30 even with higher ratio
+func TestSkipCappedAt30(t *testing.T) {
+	agentCtx := &agentctx.AgentContext{
+		Messages:         []agentctx.AgentMessage{},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+	agentCtx.ContextMgmtState.SetCurrentTurn(5)
+
+	// Simulate very proactive behavior: proactive=40, remind=0, ratio=40, maxSkip=30 (capped)
+	state := agentCtx.ContextMgmtState
+	for i := 0; i < 40; i++ {
+		state.RecordDecision(i+1, "truncate", false) // proactive
+	}
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip")
+
+	resultBlocks, err := tool.Execute(ctx, map[string]any{
+		"decision":  "skip",
+		"reasoning": "Want to skip 30 turns",
+		"skip_turns": 30.0,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute should not return error, got: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// With ratio=40 and request=30, should succeed (not reduced)
+	if contains(resultText, "reduced") {
+		t.Errorf("Expected skip to succeed (not reduced), got: %s", resultText)
+	}
+
+	// Verify SkipUntilTurn is set to 35 (turn 5 + 30)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 35 {
+		t.Errorf("Expected SkipUntilTurn=35, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestSkipSuccessWithinLimit tests normal success when skipTurns <= maxSkip
+func TestSkipSuccessWithinLimit(t *testing.T) {
+	agentCtx := &agentctx.AgentContext{
+		Messages:         []agentctx.AgentMessage{},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+
+	// Simulate proactive behavior: proactive=10, remind=0, ratio=10, maxSkip=10
+	state := agentCtx.ContextMgmtState
+	state.RecordDecision(1, "truncate", false) // proactive
+	state.RecordDecision(2, "truncate", false) // proactive
+	state.RecordDecision(3, "truncate", false) // proactive
+	state.RecordDecision(4, "truncate", false) // proactive
+	state.RecordDecision(5, "truncate", false) // proactive
+	state.RecordDecision(6, "compact", false)  // proactive
+	state.RecordDecision(7, "compact", false)  // proactive
+	state.RecordDecision(8, "compact", false)  // proactive
+	state.RecordDecision(9, "compact", false)  // proactive
+	state.RecordDecision(10, "compact", false) // proactive
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip")
+
+	resultBlocks, err := tool.Execute(ctx, map[string]any{
+		"decision":  "skip",
+		"reasoning": "Want to skip 5 turns",
+		"skip_turns": 5.0,
+	})
+
+	if err != nil {
+		t.Fatalf("Execute should not return error, got: %v", err)
+	}
+
+	if len(resultBlocks) == 0 {
+		t.Fatal("Expected result blocks, got none")
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Verify normal success message
+	if !contains(resultText, "Skipping reminders for 5 turns") {
+		t.Errorf("Expected result to contain 'Skipping reminders for 5 turns', got: %s", resultText)
+	}
+
+	// Verify no "reduced" message
+	if contains(resultText, "reduced") {
+		t.Errorf("Expected normal success (not reduced), got: %s", resultText)
+	}
+
+	// Verify SkipUntilTurn is set to 15 (turn 10 + 5)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 15 {
+		t.Errorf("Expected SkipUntilTurn=15, got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+// TestSkipBoundaryCases tests edge cases: ratio=0, ratio=1, etc.
+func TestSkipBoundaryCases(t *testing.T) {
+	testCases := []struct {
+		name              string
+		proactive         int
+		reminded          int
+		requestSkipTurns  int
+		expectDeny        bool
+		expectReduce      bool
+		expectedMaxSkip    int
+	}{
+		{
+			name:             "ratio=0 should deny",
+			proactive:        4,
+			reminded:         5,
+			requestSkipTurns: 10,
+			expectDeny:       true,
+			expectReduce:     false,
+			expectedMaxSkip:   0,
+		},
+		{
+			name:             "ratio=1 should allow maxSkip=1",
+			proactive:        5,
+			reminded:         5,
+			requestSkipTurns: 10,
+			expectDeny:       false,
+			expectReduce:     true,
+			expectedMaxSkip:   1,
+		},
+		{
+			name:             "ratio=1, request=1 should succeed",
+			proactive:        5,
+			reminded:         5,
+			requestSkipTurns: 1,
+			expectDeny:       false,
+			expectReduce:     false,
+			expectedMaxSkip:   1,
+		},
+		{
+			name:             "ratio=2 should allow maxSkip=2",
+			proactive:        6,
+			reminded:         5,
+			requestSkipTurns: 10,
+			expectDeny:       false,
+			expectReduce:     true,
+			expectedMaxSkip:   2,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			agentCtx := &agentctx.AgentContext{
+				Messages:         []agentctx.AgentMessage{},
+				ContextMgmtState: agentctx.DefaultContextMgmtState(),
+			}
+			agentCtx.ContextMgmtState.SetCurrentTurn(10)
+
+			// Set up proactive/reminded counts
+			state := agentCtx.ContextMgmtState
+			for i := 0; i < tc.proactive; i++ {
+				state.RecordDecision(i+1, "truncate", false)
+			}
+			for i := 0; i < tc.reminded; i++ {
+				state.RecordDecision(tc.proactive+i+1, "truncate", true)
+			}
+
+			tool := NewContextManagementTool(nil)
+			ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+			ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip")
+
+			resultBlocks, err := tool.Execute(ctx, map[string]any{
+				"decision":  "skip",
+				"reasoning": tc.name,
+				"skip_turns": float64(tc.requestSkipTurns),
+			})
+
+			if err != nil {
+				t.Fatalf("Execute should not return error, got: %v", err)
+			}
+
+			if len(resultBlocks) == 0 {
+				t.Fatal("Expected result blocks, got none")
+			}
+
+			resultText := ""
+			if block, ok := resultBlocks[0].(agentctx.TextContent); ok {
+				resultText = block.Text
+			}
+
+			if tc.expectDeny {
+				if !contains(resultText, "skip request denied") {
+					t.Errorf("Expected 'skip request denied', got: %s", resultText)
+				}
+				// Verify SkipUntilTurn NOT set
+				if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
+					t.Errorf("Expected SkipUntilTurn=0 (not set), got: %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+				}
+			} else if tc.expectReduce {
+				if !contains(resultText, "reduced") {
+					t.Errorf("Expected 'reduced', got: %s", resultText)
+				}
+				// Verify SkipUntilTurn set correctly
+				expectedSkipUntil := 10 + tc.expectedMaxSkip
+				if agentCtx.ContextMgmtState.SkipUntilTurn != expectedSkipUntil {
+					t.Errorf("Expected SkipUntilTurn=%d, got: %d", expectedSkipUntil, agentCtx.ContextMgmtState.SkipUntilTurn)
+				}
+			} else {
+				if contains(resultText, "reduced") || contains(resultText, "denied") {
+					t.Errorf("Expected normal success, got: %s", resultText)
+				}
+				// Verify SkipUntilTurn set correctly
+				expectedSkipUntil := 10 + tc.requestSkipTurns
+				if agentCtx.ContextMgmtState.SkipUntilTurn != expectedSkipUntil {
+					t.Errorf("Expected SkipUntilTurn=%d, got: %d", expectedSkipUntil, agentCtx.ContextMgmtState.SkipUntilTurn)
+				}
+			}
+		})
+	}
+}
+
+// Helper function to check if string contains substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > len(substr) && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
