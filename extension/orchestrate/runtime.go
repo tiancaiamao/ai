@@ -1,4 +1,4 @@
-package team
+package orchestrate
 
 import (
 	"fmt"
@@ -610,4 +610,38 @@ func LoadWorkflowFromTemplate(name string) (*Workflow, error) {
 	}
 
 	return nil, fmt.Errorf("workflow template not found: %s", name)
+}
+// LoadState loads the current team state
+func (r *Runtime) LoadState() (*TeamState, []*Task, error) {
+	state, err := r.storage.ReadState()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tasks, err := r.storage.ListTasks()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return state, tasks, nil
+}
+
+// GetLogs retrieves all logs
+func (r *Runtime) GetLogs() ([]*LogEntry, error) {
+	return r.storage.ReadLogs()
+}
+
+// ApproveTask marks a task as approved
+func (r *Runtime) ApproveTask(taskID string) error {
+	task, err := r.storage.ReadTask(taskID)
+	if err != nil {
+		return err
+	}
+
+	if task.Status != StatePending {
+		return fmt.Errorf("task %s is not pending", taskID)
+	}
+
+	task.Status = StateApproved
+	return r.storage.WriteTask(task)
 }

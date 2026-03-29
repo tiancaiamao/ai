@@ -1,4 +1,4 @@
-package team
+package orchestrate
 
 import (
 	"encoding/json"
@@ -356,4 +356,36 @@ func (s *Storage) ReadReviewResult(taskID string) (*ReviewResult, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+// ReadLogs reads all log entries
+func (s *Storage) ReadLogs() ([]*LogEntry, error) {
+	var logs []*LogEntry
+
+	// Read from logs directory
+	logDir := filepath.Join(s.root, "logs")
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(logDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		// Parse log entry
+		var log LogEntry
+		if err := json.Unmarshal(data, &log); err != nil {
+			continue
+		}
+
+		logs = append(logs, &log)
+	}
+
+	return logs, nil
 }

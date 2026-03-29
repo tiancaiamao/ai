@@ -1,4 +1,4 @@
-package team
+package orchestrate
 
 import "time"
 
@@ -11,6 +11,8 @@ const (
 	StateInProgress TaskState = "in_progress"
 	StateCompleted  TaskState = "completed"
 	StateFailed     TaskState = "failed"
+	StateBlocked    TaskState = "blocked"
+	StateApproved   TaskState = "approved"
 )
 
 // Task represents a task in the team
@@ -115,3 +117,51 @@ type AIAgentIntegration struct {
 	// AutoStart automatically start team when ai agent starts in project
 	AutoStart bool `json:"auto_start" yaml:"auto_start"`
 }
+// TemplateInfo describes a workflow template
+type TemplateInfo struct {
+	Name        string
+	Description string
+	Path        string
+}
+
+// ListTemplates returns available templates from all sources
+func ListTemplates() []*TemplateInfo {
+	var templates []*TemplateInfo
+
+	// Built-in templates
+	templates = append(templates, &TemplateInfo{
+		Name:        "feature",
+		Description: "New feature development",
+		Path:        "builtin",
+	})
+	templates = append(templates, &TemplateInfo{
+		Name:        "bugfix",
+		Description: "Bug fix with root cause analysis",
+		Path:        "builtin",
+	})
+	templates = append(templates, &TemplateInfo{
+		Name:        "hotfix",
+		Description: "Urgent production fix",
+		Path:        "builtin",
+	})
+	templates = append(templates, &TemplateInfo{
+		Name:        "refactor",
+		Description: "Code restructuring",
+		Path:        "builtin",
+	})
+	templates = append(templates, &TemplateInfo{
+		Name:        "spike",
+		Description: "Research/exploration",
+		Path:        "builtin",
+	})
+
+	return templates
+}
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	Timestamp string
+	TaskID    string
+	Message   string
+}
+
