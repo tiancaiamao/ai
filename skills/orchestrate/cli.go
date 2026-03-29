@@ -19,6 +19,7 @@ func Execute() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(approveCmd)
 	rootCmd.AddCommand(templatesCmd)
+	rootCmd.AddCommand(apiCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		panic(err)

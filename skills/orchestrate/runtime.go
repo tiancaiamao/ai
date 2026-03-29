@@ -14,23 +14,23 @@ import (
 
 // Runtime manages team execution
 type Runtime struct {
-	config       *TeamConfig
-	storage      *Storage
-	api          *API
-	workers      map[string]*Worker
-	workerMu     sync.RWMutex
-	stopCh       chan struct{}
-	cwd          string
-	tmux         *TmuxManager
-	heartbeatCh  chan string // worker name sent on heartbeat
+	config      *TeamConfig
+	storage     *Storage
+	api         *API
+	workers     map[string]*Worker
+	workerMu    sync.RWMutex
+	stopCh      chan struct{}
+	cwd         string
+	tmux        *TmuxManager
+	heartbeatCh chan string // worker name sent on heartbeat
 }
 
 // RuntimeConfig holds runtime configuration
 type RuntimeConfig struct {
-	TaskTimeout    time.Duration // default: 30m
-	HeartbeatTTL   time.Duration // default: 5m
-	MonitorTick    time.Duration // default: 5s
-	UseTmux        bool          // default: true if available
+	TaskTimeout  time.Duration // default: 30m
+	HeartbeatTTL time.Duration // default: 5m
+	MonitorTick  time.Duration // default: 5s
+	UseTmux      bool          // default: true if available
 }
 
 // DefaultRuntimeConfig returns default runtime config
@@ -67,6 +67,10 @@ func (r *Runtime) StartWithConfig(config *TeamConfig, workflow *Workflow, rc *Ru
 
 	// Initialize storage
 	if err := r.storage.Init(); err != nil {
+		return err
+	}
+	// Clear stale stop request from previous runs
+	if err := r.storage.ClearStopRequest(); err != nil {
 		return err
 	}
 
@@ -135,6 +139,12 @@ func (r *Runtime) monitorLoop(rc *RuntimeConfig) {
 
 // reconcile checks tasks and dispatches workers
 func (r *Runtime) reconcile(rc *RuntimeConfig) {
+	if r.storage.IsStopRequested() {
+		r.storage.AppendLog("runtime", "received stop request")
+		r.Stop()
+		return
+	}
+
 	tasks, err := r.storage.ListTasks()
 	if err != nil {
 		r.storage.AppendLog("runtime", fmt.Sprintf("reconcile error: %v", err))
@@ -164,7 +174,7 @@ func (r *Runtime) reconcile(rc *RuntimeConfig) {
 			if r.isTaskTimedOut(task, rc.TaskTimeout) {
 				r.storage.AppendLog(task.ID, fmt.Sprintf("task timed out after %v", rc.TaskTimeout))
 				r.api.FailTask(task.ID, task.ClaimToken, "task timed out")
-				
+
 				// Kill worker if running
 				r.workerMu.RLock()
 				if worker, ok := r.workers[task.ID]; ok {
@@ -199,7 +209,7 @@ func (r *Runtime) reconcile(rc *RuntimeConfig) {
 func (r *Runtime) heartbeatMonitor(rc *RuntimeConfig) {
 	// Map of worker name -> last heartbeat time
 	heartbeats := make(map[string]time.Time)
-	
+
 	ticker := time.NewTicker(rc.MonitorTick)
 	defer ticker.Stop()
 
@@ -276,15 +286,25 @@ func (r *Runtime) inferState(tasks []*Task) *TeamState {
 
 // hasCapacity checks if we can start more workers
 func (r *Runtime) hasCapacity() bool {
-	r.workerMu.RLock()
-	defer r.workerMu.RUnlock()
-	return len(r.workers) < r.config.WorkerCount
+	tasks, err := r.storage.ListTasks()
+	if err != nil {
+		r.storage.AppendLog("runtime", fmt.Sprintf("failed to check capacity: %v", err))
+		return false
+	}
+
+	active := 0
+	for _, task := range tasks {
+		if task.Status == StateClaimed || task.Status == StateInProgress {
+			active++
+		}
+	}
+	return active < r.config.WorkerCount
 }
 
 // dispatchWorker starts a worker for a task
 func (r *Runtime) dispatchWorker(task *Task) {
 	workerName := fmt.Sprintf("worker-%s", task.ID)
-	
+
 	// Claim task
 	_, claimToken, err := r.api.ClaimTask(task.ID, workerName)
 	if err != nil {
@@ -301,13 +321,21 @@ func (r *Runtime) dispatchWorker(task *Task) {
 		heartbeatCh: r.heartbeatCh,
 		tmux:        r.tmux,
 	}
-	
+
 	r.workerMu.Lock()
 	r.workers[task.ID] = worker
 	r.workerMu.Unlock()
 
 	// Start worker in background
-	go worker.Start()
+	taskID := task.ID
+	go func() {
+		worker.Start()
+		r.workerMu.Lock()
+		if existing, ok := r.workers[taskID]; ok && existing == worker {
+			delete(r.workers, taskID)
+		}
+		r.workerMu.Unlock()
+	}()
 }
 
 // Stop stops the runtime
@@ -317,13 +345,13 @@ func (r *Runtime) Stop() {
 		// Already stopped
 	default:
 		close(r.stopCh)
-		
+
 		r.workerMu.Lock()
 		for _, w := range r.workers {
 			w.Stop()
 		}
 		r.workerMu.Unlock()
-		
+
 		// Kill tmux session
 		if r.tmux != nil {
 			r.tmux.KillSession()
@@ -352,19 +380,19 @@ func (r *Runtime) Status() (*TeamState, []*Task, error) {
 // AggregateLogs returns aggregated logs from all tasks
 func (r *Runtime) AggregateLogs() (map[string]string, error) {
 	logs := make(map[string]string)
-	
+
 	tasks, err := r.storage.ListTasks()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	for _, task := range tasks {
 		logPath := filepath.Join(r.storage.root, "logs", task.ID+".log")
 		if data, err := os.ReadFile(logPath); err == nil {
 			logs[task.ID] = string(data)
 		}
 	}
-	
+
 	return logs, nil
 }
 
@@ -387,6 +415,7 @@ type Worker struct {
 	heartbeatCh chan string
 	tmux        *TmuxManager
 	stopCh      chan struct{}
+	stopMu      sync.Mutex
 }
 
 // Start starts the worker
@@ -443,7 +472,7 @@ func (w *Worker) heartbeatLoop() {
 				status.UpdatedAt = now
 				w.Storage.WriteWorkerStatus(status)
 			}
-			
+
 			// Send heartbeat to runtime
 			if w.heartbeatCh != nil {
 				select {
@@ -452,7 +481,7 @@ func (w *Worker) heartbeatLoop() {
 					// Channel full, skip
 				}
 			}
-			
+
 			// Append to log
 			w.Storage.AppendLog(w.TaskID, "heartbeat")
 		}
@@ -467,11 +496,29 @@ func (w *Worker) startInTmux(task *Task) {
 		w.startDirect(task)
 		return
 	}
-	
+
 	w.Storage.AppendLog(w.TaskID, fmt.Sprintf("started in tmux window: %s", w.Name))
-	
-	// Wait for stop signal
-	<-w.stopCh
+
+	// Poll task state so this worker exits when task reaches terminal state.
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case <-ticker.C:
+			currentTask, err := w.Storage.ReadTask(w.TaskID)
+			if err != nil {
+				continue
+			}
+			if currentTask.Status != StateClaimed && currentTask.Status != StateInProgress {
+				w.updateStatus(string(currentTask.Status))
+				w.closeStopCh()
+				return
+			}
+		}
+	}
 }
 
 // startDirect starts the worker directly using headless mode
@@ -483,7 +530,7 @@ func (w *Worker) startDirect(task *Task) {
 		w.Storage.AppendLog(w.TaskID, fmt.Sprintf("failed to read inbox: %v", err))
 		return
 	}
-	
+
 	// Start ai in headless mode with inbox content as prompt
 	cmd := exec.Command("ai", "--mode", "headless", "--timeout", "60m", string(inboxContent))
 	cmd.Dir = w.Cwd
@@ -494,31 +541,31 @@ func (w *Worker) startDirect(task *Task) {
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	
+
 	w.cmd = cmd
-	
+
 	w.Storage.AppendLog(w.TaskID, "starting worker process in headless mode")
-	
+
 	if err := cmd.Run(); err != nil {
 		w.Storage.AppendLog(w.TaskID, fmt.Sprintf("worker error: %v", err))
 	}
+
+	w.updateStatusFromTask()
+	w.closeStopCh()
 }
 
 // Stop stops the worker
 func (w *Worker) Stop() {
-	if w.stopCh != nil {
-		select {
-		case <-w.stopCh:
-			// Already stopped
-		default:
-			close(w.stopCh)
-		}
+	w.closeStopCh()
+
+	if w.tmux != nil {
+		_ = w.tmux.KillWindow(w.Name)
 	}
-	
+
 	if w.cmd != nil && w.cmd.Process != nil {
-		w.cmd.Process.Kill()
+		_ = w.cmd.Process.Kill()
 	}
-	
+
 	// Update status
 	now := time.Now().UTC()
 	status, _ := w.Storage.ReadWorkerStatus(w.Name)
@@ -527,8 +574,46 @@ func (w *Worker) Stop() {
 		status.UpdatedAt = now
 		w.Storage.WriteWorkerStatus(status)
 	}
-	
+
 	w.Storage.AppendLog(w.TaskID, "worker stopped")
+}
+
+func (w *Worker) closeStopCh() {
+	w.stopMu.Lock()
+	defer w.stopMu.Unlock()
+
+	if w.stopCh == nil {
+		return
+	}
+	select {
+	case <-w.stopCh:
+	default:
+		close(w.stopCh)
+	}
+}
+
+func (w *Worker) updateStatus(statusValue string) {
+	now := time.Now().UTC()
+	status, err := w.Storage.ReadWorkerStatus(w.Name)
+	if err != nil || status == nil {
+		status = &WorkerStatus{
+			Name:      w.Name,
+			TaskID:    w.TaskID,
+			StartedAt: &now,
+		}
+	}
+	status.Status = statusValue
+	status.UpdatedAt = now
+	_ = w.Storage.WriteWorkerStatus(status)
+}
+
+func (w *Worker) updateStatusFromTask() {
+	task, err := w.Storage.ReadTask(w.TaskID)
+	if err != nil {
+		w.updateStatus("stopped")
+		return
+	}
+	w.updateStatus(string(task.Status))
 }
 
 // GenerateOverlay generates worker prompt overlay
@@ -577,8 +662,8 @@ Before you exit, you MUST either:
 1. complete-task with a summary, OR
 2. fail-task with an error message
 `, w.Name, task.ID, task.Subject, task.Description,
-	task.ID, w.Name, task.ID, task.ID, task.ID, task.ID, task.ID,
-	w.Name, task.ID)
+		task.ID, w.Name, task.ID, task.ID, task.ID, task.ID,
+		w.Name, task.ID)
 }
 
 // LoadWorkflow loads a workflow from file
@@ -596,21 +681,40 @@ func LoadWorkflow(path string) (*Workflow, error) {
 
 // LoadWorkflowFromTemplate loads a workflow from template directory
 func LoadWorkflowFromTemplate(name string) (*Workflow, error) {
-	// Check user templates first
-	userPath := filepath.Join(".ai", "workflows", name+".yaml")
-	if _, err := os.Stat(userPath); err == nil {
-		return LoadWorkflow(userPath)
+	var candidates []string
+
+	// Project-local templates
+	candidates = append(candidates, filepath.Join(".ai", "workflows", name+".yaml"))
+
+	// User-level templates
+	home, _ := os.UserHomeDir()
+	candidates = append(candidates, filepath.Join(home, ".ai", "templates", "workflows", name+".yaml"))
+
+	// Templates bundled next to the installed orchestrate binary
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "..", "templates", name+".yaml"),
+			filepath.Join(exeDir, "templates", name+".yaml"),
+		)
 	}
 
-	// Check built-in templates
-	home, _ := os.UserHomeDir()
-	builtinPath := filepath.Join(home, ".ai", "templates", "workflows", name+".yaml")
-	if _, err := os.Stat(builtinPath); err == nil {
-		return LoadWorkflow(builtinPath)
+	// Development-time fallbacks
+	candidates = append(candidates,
+		filepath.Join("templates", name+".yaml"),
+		filepath.Join("skills", "orchestrate", "templates", name+".yaml"),
+	)
+
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if _, err := os.Stat(candidate); err == nil {
+			return LoadWorkflow(candidate)
+		}
 	}
 
 	return nil, fmt.Errorf("workflow template not found: %s", name)
 }
+
 // LoadState loads the current team state
 func (r *Runtime) LoadState() (*TeamState, []*Task, error) {
 	state, err := r.storage.ReadState()
@@ -632,16 +736,9 @@ func (r *Runtime) GetLogs() ([]*LogEntry, error) {
 }
 
 // ApproveTask marks a task as approved
-func (r *Runtime) ApproveTask(taskID string) error {
-	task, err := r.storage.ReadTask(taskID)
-	if err != nil {
-		return err
+func (r *Runtime) ApproveTask(taskID, comment string) error {
+	if comment == "" {
+		comment = "Approved"
 	}
-
-	if task.Status != StatePending {
-		return fmt.Errorf("task %s is not pending", taskID)
-	}
-
-	task.Status = StateApproved
-	return r.storage.WriteTask(task)
+	return r.api.SubmitReview(taskID, true, comment, "human")
 }

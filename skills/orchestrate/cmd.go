@@ -175,11 +175,15 @@ var stopCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cwd := getCwd()
-		runtime := NewRuntime(cwd)
+		storage := NewStorage(cwd)
+		if err := storage.Init(); err != nil {
+			return fmt.Errorf("failed to initialize storage: %w", err)
+		}
+		if err := storage.RequestStop(); err != nil {
+			return fmt.Errorf("failed to request stop: %w", err)
+		}
 
-		runtime.Stop()
-
-		fmt.Println("Team stopped")
+		fmt.Println("Stop requested")
 		return nil
 	},
 }
@@ -192,6 +196,7 @@ var logsCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cwd := getCwd()
 		runtime := NewRuntime(cwd)
+		taskFilter, _ := cmd.Flags().GetString("task")
 
 		logs, err := runtime.GetLogs()
 		if err != nil {
@@ -199,6 +204,9 @@ var logsCmd = &cobra.Command{
 		}
 
 		for _, log := range logs {
+			if taskFilter != "" && log.TaskID != taskFilter {
+				continue
+			}
 			fmt.Printf("[%s] %s: %s\n", log.Timestamp, log.TaskID, log.Message)
 		}
 
@@ -219,14 +227,19 @@ var approveCmd = &cobra.Command{
 		taskID := args[0]
 		cwd := getCwd()
 		runtime := NewRuntime(cwd)
+		comment, _ := cmd.Flags().GetString("comment")
 
-		if err := runtime.ApproveTask(taskID); err != nil {
+		if err := runtime.ApproveTask(taskID, comment); err != nil {
 			return fmt.Errorf("failed to approve task: %w", err)
 		}
 
 		fmt.Printf("Task '%s' approved\n", taskID)
 		return nil
 	},
+}
+
+func init() {
+	approveCmd.Flags().String("comment", "Approved", "Approval comment")
 }
 
 // templatesCmd represents the templates command

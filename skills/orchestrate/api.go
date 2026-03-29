@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -101,7 +103,7 @@ func (a *API) ClaimTask(taskID, workerName string) (*Task, string, error) {
 		claimToken = generateToken()
 		task.ClaimToken = claimToken
 		task.StartedAt = &now
-		
+
 		claimedTask = task
 		return nil
 	})
@@ -208,7 +210,7 @@ func (a *API) IsReady(task *Task) bool {
 	}
 	for _, depID := range task.BlockedBy {
 		dep, err := a.storage.ReadTask(depID)
-		if err != nil || dep.Status != StateCompleted {
+		if err != nil || (dep.Status != StateCompleted && dep.Status != StateApproved) {
 			return false
 		}
 	}
@@ -249,6 +251,18 @@ func (a *API) RequestReview(taskID, phaseID, workerName, summary, outputFile str
 
 // SubmitReview submits a review decision
 func (a *API) SubmitReview(taskID string, approved bool, comment, reviewer string) error {
+	if _, err := a.storage.ReadReviewRequest(taskID); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("review request for task %s not found", taskID)
+		}
+		return err
+	}
+	if _, err := a.storage.ReadReviewResult(taskID); err == nil {
+		return fmt.Errorf("task %s already reviewed", taskID)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
 	result := ReviewResult{
 		TaskID:     taskID,
 		Approved:   approved,
@@ -259,6 +273,9 @@ func (a *API) SubmitReview(taskID string, approved bool, comment, reviewer strin
 
 	// Update task based on review
 	err := a.storage.AtomicUpdate(taskID, func(task *Task) error {
+		if !strings.HasPrefix(task.Result, "[AWAITING REVIEW]") {
+			return fmt.Errorf("task %s is not awaiting review", taskID)
+		}
 		if approved {
 			now := time.Now().UTC()
 			task.Status = StateCompleted

@@ -1,10 +1,13 @@
 package orchestrate
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -55,7 +58,7 @@ func (s *Storage) AcquireTaskLock(taskID string) (*LockHandle, error) {
 	defer s.mu.Unlock()
 
 	lockPath := filepath.Join(s.root, "tasks", taskID+".lock")
-	
+
 	// O_CREAT | O_EXCL - atomic create, fails if exists
 	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
@@ -357,35 +360,79 @@ func (s *Storage) ReadReviewResult(taskID string) (*ReviewResult, error) {
 	}
 	return &result, nil
 }
+
 // ReadLogs reads all log entries
 func (s *Storage) ReadLogs() ([]*LogEntry, error) {
 	var logs []*LogEntry
 
-	// Read from logs directory
 	logDir := filepath.Join(s.root, "logs")
 	entries, err := os.ReadDir(logDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
 			continue
 		}
+		taskID := strings.TrimSuffix(entry.Name(), ".log")
+		path := filepath.Join(logDir, entry.Name())
 
-		data, err := os.ReadFile(filepath.Join(logDir, entry.Name()))
+		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-
-		// Parse log entry
-		var log LogEntry
-		if err := json.Unmarshal(data, &log); err != nil {
-			continue
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+			timestamp, message := parseLogLine(line)
+			logs = append(logs, &LogEntry{
+				Timestamp: timestamp,
+				TaskID:    taskID,
+				Message:   message,
+			})
 		}
-
-		logs = append(logs, &log)
+		_ = f.Close()
 	}
 
+	sort.Slice(logs, func(i, j int) bool {
+		return logs[i].Timestamp < logs[j].Timestamp
+	})
+
 	return logs, nil
+}
+
+func parseLogLine(line string) (timestamp, message string) {
+	if strings.HasPrefix(line, "[") {
+		if idx := strings.Index(line, "] "); idx > 1 {
+			return line[1:idx], line[idx+2:]
+		}
+	}
+	return "", line
+}
+
+// RequestStop writes a stop request marker for a running runtime process.
+func (s *Storage) RequestStop() error {
+	path := filepath.Join(s.root, "stop")
+	content := []byte(time.Now().UTC().Format(time.RFC3339) + "\n")
+	return os.WriteFile(path, content, 0644)
+}
+
+// IsStopRequested checks whether a stop request marker exists.
+func (s *Storage) IsStopRequested() bool {
+	path := filepath.Join(s.root, "stop")
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ClearStopRequest removes a stale stop request marker if it exists.
+func (s *Storage) ClearStopRequest() error {
+	path := filepath.Join(s.root, "stop")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
