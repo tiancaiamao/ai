@@ -1,8 +1,9 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"encoding/json"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,8 +14,9 @@ var toolCallSeq uint64
 func normalizeToolCall(tc agentctx.ToolCallContent) agentctx.ToolCallContent {
 	normalized := tc
 	normalized.Name = normalizeToolCallName(tc.Name)
+	normalized.Arguments = unwrapPropertiesArguments(tc.Arguments)
 	if isGenericToolName(normalized.Name) {
-		if inferredName, inferredArgs, ok := inferToolFromArgs(tc.Arguments); ok {
+		if inferredName, inferredArgs, ok := inferToolFromArgs(normalized.Arguments); ok {
 			normalized.Name = inferredName
 			normalized.Arguments = inferredArgs
 		}
@@ -53,7 +55,7 @@ func isGenericToolName(name string) bool {
 }
 
 func inferToolFromArgs(args map[string]any) (string, map[string]any, bool) {
-	argSource := args
+	argSource := unwrapPropertiesArguments(args)
 	if argSource == nil {
 		argSource = map[string]any{}
 	}
@@ -133,6 +135,7 @@ func sanitizeToolCallID(id string) string {
 
 func coerceToolArguments(toolName string, args map[string]any) (map[string]any, error) {
 	name := normalizeToolCallName(toolName)
+	args = unwrapPropertiesArguments(args)
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -227,4 +230,35 @@ func getMapArg(args map[string]any, keys ...string) map[string]any {
 		}
 	}
 	return nil
+}
+
+func unwrapPropertiesArguments(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+
+	props, ok := args["properties"]
+	if !ok {
+		return args
+	}
+
+	switch p := props.(type) {
+	case map[string]any:
+		if len(p) == 0 {
+			return args
+		}
+		return p
+	case string:
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			return args
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil && len(parsed) > 0 {
+			return parsed
+		}
+		return args
+	default:
+		return args
+	}
 }

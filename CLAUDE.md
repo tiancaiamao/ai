@@ -69,6 +69,7 @@ No `Makefile` is used in this repo.
 - Respect context cancellation through loop/tool execution paths.
 - Keep behavior compatible with session persistence format in `pkg/session/`.
 - Prefer minimal, targeted changes; avoid broad refactors unless requested.
+- Never push directly to `main`. Always push to a feature branch and open/update a PR for review.
 
 ## Runtime/Storage Notes
 

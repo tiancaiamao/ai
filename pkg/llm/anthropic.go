@@ -461,19 +461,12 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	if len(llmCtx.Tools) > 0 {
 		tools := []map[string]any{}
 		for _, tool := range llmCtx.Tools {
-			// Get input_schema from tool parameters
-			inputSchema := map[string]any{}
-			if tool.Function.Parameters != nil {
-				inputSchema = tool.Function.Parameters
-			}
+			inputSchema := normalizeAnthropicInputSchema(tool.Function.Parameters)
 
 			tools = append(tools, map[string]any{
-				"name":        tool.Function.Name,
-				"description": tool.Function.Description,
-				"input_schema": map[string]any{
-					"type":       "object",
-					"properties": inputSchema,
-				},
+				"name":         tool.Function.Name,
+				"description":  tool.Function.Description,
+				"input_schema": inputSchema,
 			})
 		}
 		reqBody["tools"] = tools
@@ -490,6 +483,33 @@ func resolveAnthropicMaxTokens(model Model) int {
 		return model.MaxTokens
 	}
 	return defaultAnthropicMaxTokens
+}
+
+func normalizeAnthropicInputSchema(params map[string]any) map[string]any {
+	if params == nil {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+
+	if _, ok := params["type"]; ok {
+		return params
+	}
+	if _, ok := params["properties"]; ok {
+		return params
+	}
+	if _, ok := params["required"]; ok {
+		return params
+	}
+	if _, ok := params["additionalProperties"]; ok {
+		return params
+	}
+
+	return map[string]any{
+		"type":       "object",
+		"properties": params,
+	}
 }
 
 // convertToolResultContent converts tool result content to Anthropic format
