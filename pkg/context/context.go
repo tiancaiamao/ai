@@ -92,6 +92,7 @@ type ContextMgmtSnapshot struct {
 	ReminderNeeded     int
 	CurrentTurn        int
 	LastReminderTurn   int
+	SkipUntilTurn      int // Skip reminders until this turn (set by LLM via skip_turns)
 	Score              string
 }
 
@@ -439,6 +440,7 @@ func (s *ContextMgmtState) Snapshot() ContextMgmtSnapshot {
 		ReminderNeeded:     s.ReminderNeeded,
 		CurrentTurn:        s.CurrentTurn,
 		LastReminderTurn:   s.LastReminderTurn,
+		SkipUntilTurn:      s.SkipUntilTurn,
 		Score:              scoreFromCounts(s.ProactiveDecisions, s.ReminderNeeded),
 	}
 }
