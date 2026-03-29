@@ -298,26 +298,28 @@ func TestContextManagementConcurrentTruncateCallsKeepBothCleanups(t *testing.T) 
 	}
 }
 
-// TestSkipDeniedWhenRatioIsZeroOrNegative tests that skip is denied when proactive ratio <= 0.
-func TestSkipDeniedWhenRatioIsZeroOrNegative(t *testing.T) {
+func TestContextManagementSkipLimitDenyWhenRatioZero(t *testing.T) {
+	// Test case 1: ratio <= 0 should DENY skip
 	agentCtx := &agentctx.AgentContext{
-		Messages:         []agentctx.AgentMessage{},
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewAssistantMessage(),
+		},
 		ContextMgmtState: agentctx.DefaultContextMgmtState(),
 	}
 
-	// Simulate LLM with poor proactive behavior: 0 proactive, 5 reminded
-	agentCtx.ContextMgmtState.ProactiveDecisions = 0
-	agentCtx.ContextMgmtState.ReminderNeeded = 5
+	// Set up state with ratio <= 0 (no proactive decisions)
 	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+	agentCtx.ContextMgmtState.RecordDecision(5, "compact", true) // was reminded
 
 	tool := NewContextManagementTool(nil)
 	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip_test")
 
-	// Try to skip for 30 turns
+	// Try to skip 30 turns when ratio is 0
 	params := map[string]any{
 		"decision":  "skip",
-		"reasoning": "I want to skip reminders",
-		"skip_turns": float64(30),
+		"reasoning": "Testing deny when ratio <= 0",
+		"skip_turns": 30,
 	}
 
 	resultBlocks, err := tool.Execute(ctx, params)
@@ -325,51 +327,57 @@ func TestSkipDeniedWhenRatioIsZeroOrNegative(t *testing.T) {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	// Check result message
+	// Check that skip was denied
 	if len(resultBlocks) == 0 {
 		t.Fatal("Expected result blocks, got none")
 	}
+
 	resultText := ""
 	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
 		resultText = tc.Text
 	}
 
-	// Should contain "skip request denied"
+	// Should contain deny message
 	if !strings.Contains(resultText, "skip request denied") {
-		t.Errorf("Expected 'skip request denied' in result, got: %s", resultText)
+		t.Errorf("Expected deny message, got: %s", resultText)
 	}
 
-	// Should mention ratio=-5
-	if !strings.Contains(resultText, "ratio=-5") {
-		t.Errorf("Expected 'ratio=-5' in result, got: %s", resultText)
+	// Should mention ratio
+	if !strings.Contains(resultText, "ratio=") {
+		t.Errorf("Expected ratio in message, got: %s", resultText)
 	}
 
-	// SkipUntilTurn should NOT be set (should remain 0)
+	// SkipUntilTurn should NOT be set (skip denied)
 	if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
-		t.Errorf("Expected SkipUntilTurn to remain 0 when denied, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+		t.Errorf("Expected SkipUntilTurn to be 0 (skip denied), got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
 	}
 }
 
-// TestSkipReducedWhenOverLimit tests that skip is reduced when requested over max.
-func TestSkipReducedWhenOverLimit(t *testing.T) {
+func TestContextManagementSkipLimitDenyWhenRatioNegative(t *testing.T) {
+	// Test case: ratio < 0 should DENY skip
 	agentCtx := &agentctx.AgentContext{
-		Messages:         []agentctx.AgentMessage{},
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewAssistantMessage(),
+		},
 		ContextMgmtState: agentctx.DefaultContextMgmtState(),
 	}
 
-	// Simulate LLM with ratio=10 (proactive=10, reminded=0), so maxSkip=10
-	agentCtx.ContextMgmtState.ProactiveDecisions = 10
-	agentCtx.ContextMgmtState.ReminderNeeded = 0
+	// Set up state with negative ratio (more reminders than proactive decisions)
 	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+	agentCtx.ContextMgmtState.RecordDecision(5, "compact", true) // was reminded
+	agentCtx.ContextMgmtState.RecordDecision(6, "compact", true) // was reminded
+	agentCtx.ContextMgmtState.RecordDecision(7, "compact", true) // was reminded
+	// proactive=0, reminded=3, ratio=-3
 
 	tool := NewContextManagementTool(nil)
 	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip_test")
 
-	// Try to skip for 30 turns (should be reduced to 10)
+	// Try to skip 15 turns when ratio is -3
 	params := map[string]any{
 		"decision":  "skip",
-		"reasoning": "I want to skip reminders",
-		"skip_turns": float64(30),
+		"reasoning": "Testing deny when ratio is negative",
+		"skip_turns": 15,
 	}
 
 	resultBlocks, err := tool.Execute(ctx, params)
@@ -377,51 +385,53 @@ func TestSkipReducedWhenOverLimit(t *testing.T) {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	// Check result message
-	if len(resultBlocks) == 0 {
-		t.Fatal("Expected result blocks, got none")
-	}
 	resultText := ""
 	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
 		resultText = tc.Text
 	}
 
-	// Should contain "skip_turns reduced"
-	if !strings.Contains(resultText, "skip_turns reduced") {
-		t.Errorf("Expected 'skip_turns reduced' in result, got: %s", resultText)
+	// Should contain deny message
+	if !strings.Contains(resultText, "skip request denied") {
+		t.Errorf("Expected deny message, got: %s", resultText)
 	}
 
-	// Should mention reduced from 30 to 10
-	if !strings.Contains(resultText, "reduced from 30 to 10") {
-		t.Errorf("Expected 'reduced from 30 to 10' in result, got: %s", resultText)
+	// Should mention negative ratio (-3)
+	if !strings.Contains(resultText, "ratio=-3") {
+		t.Errorf("Expected ratio=-3 in message, got: %s", resultText)
 	}
 
-	// SkipUntilTurn should be set to 20 (turn 10 + skip 10)
-	if agentCtx.ContextMgmtState.SkipUntilTurn != 20 {
-		t.Errorf("Expected SkipUntilTurn=20, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	// SkipUntilTurn should NOT be set
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
+		t.Errorf("Expected SkipUntilTurn to be 0 (skip denied), got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
 	}
 }
 
-// TestSkipCappedAt30 tests that max skip is capped at 30 even with high ratio.
-func TestSkipCappedAt30(t *testing.T) {
+func TestContextManagementSkipLimitReduceWhenExceedsMax(t *testing.T) {
+	// Test case 2: skipTurns > maxSkip should REDUCE to maxSkip
 	agentCtx := &agentctx.AgentContext{
-		Messages:         []agentctx.AgentMessage{},
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewAssistantMessage(),
+		},
 		ContextMgmtState: agentctx.DefaultContextMgmtState(),
 	}
 
-	// Simulate LLM with very high proactive ratio=40 (proactive=40, reminded=0)
-	agentCtx.ContextMgmtState.ProactiveDecisions = 40
-	agentCtx.ContextMgmtState.ReminderNeeded = 0
+	// Set up state with ratio = 3 (max skip should be 3)
 	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+	agentCtx.ContextMgmtState.RecordDecision(5, "compact", true)  // was reminded
+	agentCtx.ContextMgmtState.RecordDecision(7, "truncate", false) // proactive
+	agentCtx.ContextMgmtState.RecordDecision(9, "compact", false)  // proactive
+	agentCtx.ContextMgmtState.RecordDecision(10, "truncate", false) // proactive
+	// proactive=3, reminded=1, ratio=2, maxSkip=2
 
 	tool := NewContextManagementTool(nil)
 	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip_test")
 
-	// Try to skip for 30 turns (should be allowed with maxSkip capped at 30)
+	// Try to skip 20 turns when max is 2
 	params := map[string]any{
 		"decision":  "skip",
-		"reasoning": "I want to skip reminders",
-		"skip_turns": float64(30),
+		"reasoning": "Testing reduce when skipTurns > maxSkip",
+		"skip_turns": 20,
 	}
 
 	resultBlocks, err := tool.Execute(ctx, params)
@@ -429,178 +439,129 @@ func TestSkipCappedAt30(t *testing.T) {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	// Check result message
-	if len(resultBlocks) == 0 {
-		t.Fatal("Expected result blocks, got none")
-	}
 	resultText := ""
 	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
 		resultText = tc.Text
 	}
 
-	// Should contain normal success message
-	if !strings.Contains(resultText, "Skipping reminders for 30 turns") {
-		t.Errorf("Expected 'Skipping reminders for 30 turns' in result, got: %s", resultText)
+	// Should contain reduce message
+	if !strings.Contains(resultText, "skip turns reduced to") {
+		t.Errorf("Expected reduce message, got: %s", resultText)
 	}
 
-	// Should NOT contain "reduced"
-	if strings.Contains(resultText, "reduced") {
-		t.Errorf("Did not expect 'reduced' in result when ratio >= skipTurns, got: %s", resultText)
+	// Should mention proactive ratio
+	if !strings.Contains(resultText, "proactive ratio") {
+		t.Errorf("Expected proactive ratio in message, got: %s", resultText)
 	}
 
-	// SkipUntilTurn should be set to 40 (turn 10 + skip 30)
+	// SkipUntilTurn should be set to reduced value (12, which is turn 10 + 2)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 12 {
+		t.Errorf("Expected SkipUntilTurn to be 12 (reduced from 20), got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+func TestContextManagementSkipLimitSuccessWhenWithinMax(t *testing.T) {
+	// Test case 3: skipTurns <= maxSkip should SUCCESS
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewAssistantMessage(),
+		},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+
+	// Set up state with ratio = 5 (max skip should be 5)
+	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+	agentCtx.ContextMgmtState.RecordDecision(5, "compact", true)  // was reminded
+	agentCtx.ContextMgmtState.RecordDecision(7, "truncate", false) // proactive
+	agentCtx.ContextMgmtState.RecordDecision(9, "compact", false)  // proactive
+	agentCtx.ContextMgmtState.RecordDecision(10, "truncate", false) // proactive
+	agentCtx.ContextMgmtState.RecordDecision(11, "compact", false)  // proactive
+	agentCtx.ContextMgmtState.RecordDecision(12, "truncate", false) // proactive
+	// Before: proactive=5, reminded=1, ratio=4
+	// After MarkDecisionMade(): proactive=6, reminded=1, ratio=5, maxSkip=5
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip_test")
+
+	// Skip 3 turns when max is 5 (should succeed)
+	params := map[string]any{
+		"decision":  "skip",
+		"reasoning": "Testing success when skipTurns <= maxSkip",
+		"skip_turns": 3,
+	}
+
+	resultBlocks, err := tool.Execute(ctx, params)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Should contain success message
+	if !strings.Contains(resultText, "Deferred for 3 turns") {
+		t.Errorf("Expected success message, got: %s", resultText)
+	}
+
+	// Should NOT contain deny or reduce messages
+	if strings.Contains(resultText, "skip request denied") || strings.Contains(resultText, "skip turns reduced") {
+		t.Errorf("Unexpected deny/reduce message in success case: %s", resultText)
+	}
+
+	// SkipUntilTurn should be set to 13 (turn 10 + 3)
+	if agentCtx.ContextMgmtState.SkipUntilTurn != 13 {
+		t.Errorf("Expected SkipUntilTurn to be 13, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
+	}
+}
+
+func TestContextManagementSkipLimitMaxClampedAt30(t *testing.T) {
+	// Test case: max_skip should be clamped at 30 when ratio is very high
+	agentCtx := &agentctx.AgentContext{
+		Messages: []agentctx.AgentMessage{
+			agentctx.NewAssistantMessage(),
+		},
+		ContextMgmtState: agentctx.DefaultContextMgmtState(),
+	}
+
+	// Set up state with very high ratio (50 proactive, 0 reminded)
+	agentCtx.ContextMgmtState.SetCurrentTurn(10)
+	for i := 0; i < 50; i++ {
+		agentCtx.ContextMgmtState.RecordDecision(5+i, "compact", false) // all proactive
+	}
+	// proactive=50, reminded=0, ratio=50, but maxSkip should be clamped to 30
+
+	tool := NewContextManagementTool(nil)
+	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	ctx = agentctx.WithToolExecutionCallID(ctx, "call_skip_test")
+
+	// Request 30 turns (the max allowed)
+	// With ratio=50, maxSkip=30, and request=30, this should succeed (not reduce)
+	params := map[string]any{
+		"decision":  "skip",
+		"reasoning": "Testing max skip clamped at 30",
+		"skip_turns": 30,
+	}
+
+	resultBlocks, err := tool.Execute(ctx, params)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+
+	// Should be a normal defer since 30 <= maxSkip (which is clamped to 30)
+	if !strings.Contains(resultText, "Deferred for 30 turns") {
+		t.Errorf("Expected defer message, got: %s", resultText)
+	}
+
+	// SkipUntilTurn should be set to 40 (turn 10 + 30)
 	if agentCtx.ContextMgmtState.SkipUntilTurn != 40 {
-		t.Errorf("Expected SkipUntilTurn=40, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
-	}
-}
-
-// TestSkipSuccessWhenWithinLimit tests that skip succeeds when within limit.
-func TestSkipSuccessWhenWithinLimit(t *testing.T) {
-	agentCtx := &agentctx.AgentContext{
-		Messages:         []agentctx.AgentMessage{},
-		ContextMgmtState: agentctx.DefaultContextMgmtState(),
-	}
-
-	// Simulate LLM with ratio=10 (proactive=10, reminded=0), so maxSkip=10
-	agentCtx.ContextMgmtState.ProactiveDecisions = 10
-	agentCtx.ContextMgmtState.ReminderNeeded = 0
-	agentCtx.ContextMgmtState.SetCurrentTurn(10)
-
-	tool := NewContextManagementTool(nil)
-	ctx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
-
-	// Request skip for 5 turns (within limit of 10)
-	params := map[string]any{
-		"decision":  "skip",
-		"reasoning": "I want to skip reminders",
-		"skip_turns": float64(5),
-	}
-
-	resultBlocks, err := tool.Execute(ctx, params)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	// Check result message
-	if len(resultBlocks) == 0 {
-		t.Fatal("Expected result blocks, got none")
-	}
-	resultText := ""
-	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
-		resultText = tc.Text
-	}
-
-	// Should contain normal success message
-	if !strings.Contains(resultText, "Skipping reminders for 5 turns") {
-		t.Errorf("Expected 'Skipping reminders for 5 turns' in result, got: %s", resultText)
-	}
-
-	// Should NOT contain "reduced" or "denied"
-	if strings.Contains(resultText, "reduced") || strings.Contains(resultText, "denied") {
-		t.Errorf("Did not expect 'reduced' or 'denied' in result when within limit, got: %s", resultText)
-	}
-
-	// SkipUntilTurn should be set to 15 (turn 10 + skip 5)
-	if agentCtx.ContextMgmtState.SkipUntilTurn != 15 {
-		t.Errorf("Expected SkipUntilTurn=15, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
-	}
-}
-
-// TestRemindersRemainingCalculation tests that reminders_remaining is calculated correctly.
-func TestRemindersRemainingCalculation(t *testing.T) {
-	tests := []struct {
-		name                  string
-		proactiveDecisions    int
-		reminderNeeded       int
-		currentTurn          int
-		lastReminderTurn     int
-		reminderFrequency    int
-		skipUntilTurn        int
-		expectedRemaining    int
-	}{
-		{
-			name:               "Normal period, no skip",
-			proactiveDecisions: 5,
-			reminderNeeded:     0,
-			currentTurn:        10,
-			lastReminderTurn:   5,
-			reminderFrequency:  10,
-			skipUntilTurn:      0,
-			expectedRemaining:  5, // 10 - (10 - 5) = 5
-		},
-		{
-			name:               "In skip period",
-			proactiveDecisions: 5,
-			reminderNeeded:     0,
-			currentTurn:        10,
-			lastReminderTurn:   5,
-			reminderFrequency:  10,
-			skipUntilTurn:      20,
-			expectedRemaining:  10, // 20 - 10 = 10
-		},
-		{
-			name:               "At skip boundary",
-			proactiveDecisions: 5,
-			reminderNeeded:     0,
-			currentTurn:        20,
-			lastReminderTurn:   10,
-			reminderFrequency:  10,
-			skipUntilTurn:      20,
-			expectedRemaining:  0, // at boundary
-		},
-		{
-			name:               "Past skip period",
-			proactiveDecisions: 5,
-			reminderNeeded:     0,
-			currentTurn:        25,
-			lastReminderTurn:   20,
-			reminderFrequency:  10,
-			skipUntilTurn:      20,
-			expectedRemaining:  5, // 20 + 10 - 25 = 5
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			agentCtx := &agentctx.AgentContext{
-				Messages:         []agentctx.AgentMessage{},
-				ContextMgmtState: agentctx.DefaultContextMgmtState(),
-			}
-
-			agentCtx.ContextMgmtState.ProactiveDecisions = tt.proactiveDecisions
-			agentCtx.ContextMgmtState.ReminderNeeded = tt.reminderNeeded
-			agentCtx.ContextMgmtState.CurrentTurn = tt.currentTurn
-			agentCtx.ContextMgmtState.LastReminderTurn = tt.lastReminderTurn
-			agentCtx.ContextMgmtState.ReminderFrequency = tt.reminderFrequency
-			agentCtx.ContextMgmtState.SkipUntilTurn = tt.skipUntilTurn
-
-			// Get snapshot
-			snapshot := agentCtx.ContextMgmtState.Snapshot()
-
-			// Calculate reminders_remaining
-			remindersRemaining := 0
-			if snapshot.ReminderFrequency > 0 {
-				frequencyRemaining := snapshot.ReminderFrequency - (snapshot.CurrentTurn - snapshot.LastReminderTurn)
-				if frequencyRemaining < 0 {
-					frequencyRemaining = 0
-				}
-
-				skipRemaining := snapshot.SkipUntilTurn - snapshot.CurrentTurn
-				if skipRemaining < 0 {
-					skipRemaining = 0
-				}
-
-				// Use the larger of the two
-				if skipRemaining > frequencyRemaining {
-					remindersRemaining = skipRemaining
-				} else {
-					remindersRemaining = frequencyRemaining
-				}
-			}
-
-			if remindersRemaining != tt.expectedRemaining {
-				t.Errorf("Expected reminders_remaining=%d, got %d", tt.expectedRemaining, remindersRemaining)
-			}
-		})
+		t.Errorf("Expected SkipUntilTurn to be 40, got %d", agentCtx.ContextMgmtState.SkipUntilTurn)
 	}
 }

@@ -1784,11 +1784,26 @@ func updateRuntimeMetaSnapshot(
 	stateSnapshot := state.Snapshot()
 
 	// Calculate reminders_remaining (turns until next reminder)
+	// Consider both SkipUntilTurn and ReminderFrequency
 	remindersRemaining := 0
 	if stateSnapshot.ReminderFrequency > 0 {
-		remindersRemaining = stateSnapshot.ReminderFrequency - (stateSnapshot.CurrentTurn - stateSnapshot.LastReminderTurn)
-		if remindersRemaining < 0 {
-			remindersRemaining = 0
+		// Calculate based on frequency
+		frequencyRemaining := stateSnapshot.ReminderFrequency - (stateSnapshot.CurrentTurn - stateSnapshot.LastReminderTurn)
+		if frequencyRemaining < 0 {
+			frequencyRemaining = 0
+		}
+
+		// Calculate based on skip (if active)
+		skipRemaining := stateSnapshot.SkipUntilTurn - stateSnapshot.CurrentTurn
+		if skipRemaining < 0 {
+			skipRemaining = 0
+		}
+
+		// Use the larger of the two (skip can extend the reminder period)
+		if skipRemaining > frequencyRemaining {
+			remindersRemaining = skipRemaining
+		} else {
+			remindersRemaining = frequencyRemaining
 		}
 	}
 

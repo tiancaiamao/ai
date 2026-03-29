@@ -144,13 +144,16 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 	}
 
-	// Get snapshot BEFORE MarkDecisionMade() to calculate ratio based on historical behavior
-	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
-	snapshot := agentCtx.ContextMgmtState.Snapshot()
-	ratio := snapshot.ProactiveDecisions - snapshot.ReminderNeeded
+	// Calculate proactive ratio BEFORE any state modifications
+	// This ensures the limit is based on historical behavior, not the current decision
+	stateBefore := agentCtx.ContextMgmtState.Snapshot()
+	proactiveBefore := stateBefore.ProactiveDecisions
+	ratio := proactiveBefore - stateBefore.ReminderNeeded
 
 	// Mark that LLM made a decision this turn (compliance tracking)
 	agentCtx.ContextMgmtState.MarkDecisionMade()
+
+	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
@@ -161,6 +164,8 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		skipTurns := 10 // default
 		if st, ok := params["skip_turns"].(float64); ok {
 			skipTurns = int(st)
+		} else if st, ok := params["skip_turns"].(int); ok {
+			skipTurns = st
 		}
 		if skipTurns < 1 {
 			skipTurns = 1
@@ -169,67 +174,53 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 			skipTurns = 30
 		}
 
-		// Calculate max skip based on proactive ratio (already calculated above)
-		// maxSkip = ProactiveDecisions - ReminderNeeded
-		// Hard cap at 30, floor at 0
+		// Calculate max allowed skip turns
+		// Formula: max_skip = proactiveDecisions - reminderNeeded
+		// Uses the ratio calculated BEFORE any state modifications
 		maxSkip := ratio
-		if maxSkip > 30 {
-			maxSkip = 30
-		}
 		if maxSkip < 0 {
 			maxSkip = 0
 		}
+		if maxSkip > 30 {
+			maxSkip = 30
+		}
 
-		// Handle three cases based on ratio and skipTurns
+		// Handle skip based on proactive ratio
 		if ratio <= 0 {
-			// Case 1: Skip DENIED - ratio <= 0 means not proactive enough
-			nextReminderTurn := turn + agentCtx.ContextMgmtState.ReminderFrequency
+			// Case 1: DENY skip when not proactive enough
 			result.WriteString(fmt.Sprintf("⚠️ skip request denied\n\n"))
 			result.WriteString(fmt.Sprintf("Since you are not proactive enough (ratio=%d), you are not allowed to skip %d turns.\n\n", ratio, skipTurns))
-			result.WriteString(fmt.Sprintf("You will still receive a remind within %d turns (turn %d).\n", agentCtx.ContextMgmtState.ReminderFrequency, nextReminderTurn))
-			result.WriteString(fmt.Sprintf("You must be more proactive before you receive the next remind.\n\n"))
-			result.WriteString(fmt.Sprintf("Next reminder at: turn %d\n", nextReminderTurn))
-			result.WriteString(fmt.Sprintf("Current stats: proactive=%d, reminded=%d, ratio=%d, frequency=%d turns\n",
-				snapshot.ProactiveDecisions, snapshot.ReminderNeeded, ratio, agentCtx.ContextMgmtState.ReminderFrequency))
+			result.WriteString(fmt.Sprintf("You will still receive a remind within %d turns (turn %d).\n\n", stateBefore.ReminderFrequency, turn+stateBefore.ReminderFrequency))
+			result.WriteString(fmt.Sprintf("You must be more proactive before you receive the next remind.\n"))
 
-			// Do NOT call SetSkipUntil when denied - reminders still trigger normally
-			// Record the denied decision so LastDecisionTurn is updated
-			agentCtx.ContextMgmtState.RecordDecision(turn, "skip_denied", wasReminded)
-
+			// Don't call SetSkipUntil - skip is denied
 			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip_denied",
 				traceevent.Field{Key: "requested_skip_turns", Value: skipTurns},
-				traceevent.Field{Key: "ratio", Value: ratio},
-				traceevent.Field{Key: "proactive_decisions", Value: snapshot.ProactiveDecisions},
-				traceevent.Field{Key: "reminder_needed", Value: snapshot.ReminderNeeded},
+				traceevent.Field{Key: "proactive_ratio", Value: ratio},
 				traceevent.Field{Key: "was_reminded", Value: wasReminded},
 			)
 		} else if skipTurns > maxSkip {
-			// Case 2: Skip REDUCED - requested more than allowed
-			originalSkipTurns := skipTurns
-			skipTurns = maxSkip // Reduce to max allowed
+			// Case 2: REDUCE skip to max allowed
+			skipTurns = maxSkip
 			agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
-			nextReminderTurn := turn + skipTurns
+			result.WriteString(fmt.Sprintf("⚠️ skip turns reduced to %d (max allowed based on your proactive ratio of %d).\n", skipTurns, ratio))
+			result.WriteString(fmt.Sprintf("Next reminder at turn %d.\n", turn+skipTurns))
 
-			result.WriteString(fmt.Sprintf("⚠️ skip_turns reduced from %d to %d\n\n", originalSkipTurns, skipTurns))
-			result.WriteString(fmt.Sprintf("Reason: Your proactive ratio is %d (max skip allowed: %d)\n", ratio, maxSkip))
-			result.WriteString(fmt.Sprintf("To skip more turns, make more proactive context management decisions.\n\n"))
-			result.WriteString(fmt.Sprintf("Next reminder at: turn %d\n", nextReminderTurn))
-
-			// Record the reduced skip decision so LastDecisionTurn is updated
-			agentCtx.ContextMgmtState.RecordDecision(turn, "skip_reduced", wasReminded)
+			// Record the skip decision so LastDecisionTurn is updated
+			agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
 
 			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip_reduced",
-				traceevent.Field{Key: "requested_skip_turns", Value: originalSkipTurns},
-				traceevent.Field{Key: "reduced_skip_turns", Value: skipTurns},
+				traceevent.Field{Key: "requested_skip_turns", Value: skipTurns},
 				traceevent.Field{Key: "max_skip", Value: maxSkip},
-				traceevent.Field{Key: "ratio", Value: ratio},
-				traceevent.Field{Key: "skip_until_turn", Value: nextReminderTurn},
+				traceevent.Field{Key: "proactive_ratio", Value: ratio},
+				traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
 				traceevent.Field{Key: "was_reminded", Value: wasReminded},
 			)
 		} else {
-			// Case 3: Skip SUCCESS - within allowed limit
+			// Case 3: SUCCESS - skip allowed
 			agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
-			result.WriteString(fmt.Sprintf("Skipping reminders for %d turns. Next reminder at turn %d.\n", skipTurns, turn+skipTurns))
+			result.WriteString(fmt.Sprintf("Deferred for %d turns.\n", skipTurns))
+			result.WriteString(fmt.Sprintf("Next reminder at turn %d.\n", turn+skipTurns))
 
 			// Record the skip decision so LastDecisionTurn is updated
 			agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
@@ -237,8 +228,6 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
 				traceevent.Field{Key: "skip_turns", Value: skipTurns},
 				traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
-				traceevent.Field{Key: "ratio", Value: ratio},
-				traceevent.Field{Key: "max_skip", Value: maxSkip},
 				traceevent.Field{Key: "was_reminded", Value: wasReminded},
 			)
 		}
