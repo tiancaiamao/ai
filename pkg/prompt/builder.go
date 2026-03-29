@@ -38,9 +38,6 @@ var DefaultSubagentPrompt string
 //go:embed "task_tracking.md"
 var taskTrackingPrompt string
 
-//go:embed "task_strategy.md"
-var taskStrategyPrompt string
-
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a helpful coding assistant."
@@ -280,13 +277,6 @@ For persistent workspace switching across subsequent tool calls, use change_work
 		contextManagement = contextManagementPrompt
 	}
 	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
-
-	// Replace task strategy (optional section)
-	taskStrategy := ""
-	if !b.noWorkspace && !b.isSubagent {
-		taskStrategy = taskStrategyPrompt
-	}
-	result = strings.ReplaceAll(result, "%TASK_EXECUTION_STRATEGY_CONTENT%", taskStrategy)
 
 	// Replace skills hint (optional, only shown if skills exist)
 	skillsHint := ""

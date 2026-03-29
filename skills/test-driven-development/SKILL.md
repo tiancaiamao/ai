@@ -10,7 +10,7 @@ description: Use during IMPLEMENTATION phase. Write test first, watch it fail, t
 This is a **coding technique** - how to write code correctly. It is NOT a project workflow.
 
 ```
-Project workflow:    brainstorming → speckit → (implementation)
+Project workflow:    brainstorming → /workflow start feature → (implementation)
 Coding technique:                          → test-driven-development
 ```
 
@@ -100,7 +100,7 @@ Run tests after each change. Stay green.
 
 ## Relation to Other Skills
 
-- **speckit**: Uses TDD during IMPLEMENT phase
+- **workflow**: Uses TDD during IMPLEMENT phase
 - **systematic-debugging**: Uses TDD to fix bugs (write failing test first)
 
 ---

@@ -36,7 +36,7 @@ Explore codebases, repositories, or topics and collect key information for later
 |------|------|------|
 | **explore** | 收集信息，理解现状 | `explorer/*.md` |
 | **brainstorming** | 基于收集的信息决策 | `decisions.md` |
-| **speckit** | 制定计划 | `spec.md`, `plan.md`, `tasks.md` |
+| **/workflow start feature** | 制定计划 | artifact 目录中的 SPEC.md, PLAN.md |
 | **worker** | 执行实现 | 修改的代码 |
 | **review** | 验收代码 | `reviews/*.md` |
 
@@ -190,7 +190,7 @@ explorer/*.md
 decisions.md
            ↓
 ┌─────────────────────┐
-│  /skill:speckit     │  ← 制定计划
+│  /workflow start feature │  ← 制定计划
 └──────────┬──────────┘
            ↓
 spec.md, plan.md, tasks.md

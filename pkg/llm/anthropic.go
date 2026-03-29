@@ -16,6 +16,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+const defaultAnthropicMaxTokens = 65536
+
 // StreamAnthropic streams a completion from Anthropic Messages API.
 func StreamAnthropic(
 	ctx context.Context,
@@ -79,8 +81,10 @@ func StreamAnthropic(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 
-		// Execute request
-		client := &http.Client{}
+// Execute request
+	client := &http.Client{
+			Timeout: 2 * time.Minute, // Timeout for waiting for response headers + body
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			if strings.Contains(err.Error(), "no such host") {
@@ -180,7 +184,7 @@ func StreamAnthropic(
 
 			case "content_block_start":
 				var blockEvent struct {
-					Index        int    `json:"index"`
+					Index        int `json:"index"`
 					ContentBlock struct {
 						Type string `json:"type"`
 						ID   string `json:"id,omitempty"`
@@ -210,11 +214,11 @@ func StreamAnthropic(
 				var deltaEvent struct {
 					Index int `json:"index"`
 					Delta struct {
-						Type         string `json:"type"`
-						Text         string `json:"text,omitempty"`
-						PartialJSON  string `json:"partial_json,omitempty"`
-						Thinking     string `json:"thinking,omitempty"`
-						Signature    string `json:"signature,omitempty"`
+						Type        string `json:"type"`
+						Text        string `json:"text,omitempty"`
+						PartialJSON string `json:"partial_json,omitempty"`
+						Thinking    string `json:"thinking,omitempty"`
+						Signature   string `json:"signature,omitempty"`
 					} `json:"delta"`
 				}
 				if err := json.Unmarshal([]byte(data), &deltaEvent); err == nil {
@@ -446,10 +450,10 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	}
 
 	reqBody := map[string]any{
-		"model":     model.ID,
-		"messages":  messages,
-		"max_tokens": 8192,
-		"stream":    true,
+		"model":      model.ID,
+		"messages":   messages,
+		"max_tokens": resolveAnthropicMaxTokens(model),
+		"stream":     true,
 	}
 
 	if len(systemBlocks) > 0 {
@@ -459,19 +463,12 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	if len(llmCtx.Tools) > 0 {
 		tools := []map[string]any{}
 		for _, tool := range llmCtx.Tools {
-			// Get input_schema from tool parameters
-			inputSchema := map[string]any{}
-			if tool.Function.Parameters != nil {
-				inputSchema = tool.Function.Parameters
-			}
+			inputSchema := normalizeAnthropicInputSchema(tool.Function.Parameters)
 
 			tools = append(tools, map[string]any{
-				"name":        tool.Function.Name,
-				"description": tool.Function.Description,
-				"input_schema": map[string]any{
-					"type":       "object",
-					"properties": inputSchema,
-				},
+				"name":         tool.Function.Name,
+				"description":  tool.Function.Description,
+				"input_schema": inputSchema,
 			})
 		}
 		reqBody["tools"] = tools
@@ -481,6 +478,40 @@ func buildAnthropicRequest(model Model, llmCtx LLMContext) map[string]any {
 	}
 
 	return reqBody
+}
+
+func resolveAnthropicMaxTokens(model Model) int {
+	if model.MaxTokens > 0 {
+		return model.MaxTokens
+	}
+	return defaultAnthropicMaxTokens
+}
+
+func normalizeAnthropicInputSchema(params map[string]any) map[string]any {
+	if params == nil {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}
+	}
+
+	if _, ok := params["type"]; ok {
+		return params
+	}
+	if _, ok := params["properties"]; ok {
+		return params
+	}
+	if _, ok := params["required"]; ok {
+		return params
+	}
+	if _, ok := params["additionalProperties"]; ok {
+		return params
+	}
+
+	return map[string]any{
+		"type":       "object",
+		"properties": params,
+	}
 }
 
 // convertToolResultContent converts tool result content to Anthropic format

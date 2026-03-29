@@ -1267,7 +1267,7 @@ func executeToolCalls(
 				traceevent.Field{Key: "args", Value: normalized.Arguments},
 				traceevent.Field{Key: "error", Value: argErr.Error()},
 			)
-			errorMsg := buildInvalidToolArgsMessage(normalized.Name, argErr)
+			errorMsg := buildInvalidToolArgsMessage(normalized.Name, argErr, assistantMsg.StopReason)
 			result := agentctx.NewToolResultMessage(normalized.ID, normalized.Name, []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: errorMsg},
 			}, true)
@@ -1444,7 +1444,11 @@ func executeToolCalls(
 	return results
 }
 
-func buildInvalidToolArgsMessage(toolName string, argErr error) string {
+func buildInvalidToolArgsMessage(toolName string, argErr error, stopReason string) string {
+	if isLikelyTruncatedToolArguments(stopReason, argErr) {
+		return buildTruncatedToolArgsMessage(toolName, argErr)
+	}
+
 	errorMsg := fmt.Sprintf("Invalid tool arguments for '%s': %v\n\nCorrect format:\n", toolName, argErr)
 	switch toolName {
 	case "read":
@@ -1476,6 +1480,60 @@ Alternatively:
 </grep>`
 	}
 	return errorMsg
+}
+
+func isLikelyTruncatedToolArguments(stopReason string, argErr error) bool {
+	if argErr == nil {
+		return false
+	}
+	if strings.TrimSpace(stopReason) != "length" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(argErr.Error())), "missing ")
+}
+
+func buildTruncatedToolArgsMessage(toolName string, argErr error) string {
+	msg := fmt.Sprintf(
+		"Tool call arguments for '%s' were truncated because the assistant response hit max_tokens (stopReason=length).\n\n"+
+			"This is a truncation issue, not a normal schema mistake.\n"+
+			"Please resend the SAME tool call with COMPLETE arguments (all required fields) in one response.\n"+
+			"Validation error after truncation: %v\n\n"+
+			"Expected format:\n",
+		toolName,
+		argErr,
+	)
+
+	switch toolName {
+	case "read":
+		msg += `<read>
+  <path>file.txt</path>
+</read>`
+	case "write":
+		msg += `<write>
+  <path>file.txt</path>
+  <content>content here</content>
+</write>`
+	case "edit":
+		msg += `<edit>
+  <path>file.txt</path>
+  <oldText>old text</oldText>
+  <newText>new text</newText>
+</edit>`
+	case "bash":
+		msg += `<bash>
+  <command>your command here</command>
+</bash>
+
+Alternatively:
+<bash>command here</bash>`
+	case "grep":
+		msg += `<grep>
+  <pattern>search pattern</pattern>
+  <path>optional path</path>
+</grep>`
+	}
+
+	return msg
 }
 
 // extractRecentMessages extracts recent messages from the message list.

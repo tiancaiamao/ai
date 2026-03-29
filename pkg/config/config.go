@@ -55,10 +55,11 @@ type LogConfig struct {
 
 // ModelConfig contains model configuration.
 type ModelConfig struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	BaseURL  string `json:"baseUrl"`
-	API      string `json:"api"`
+	ID        string `json:"id"`
+	Provider  string `json:"provider"`
+	BaseURL   string `json:"baseUrl"`
+	API       string `json:"api"`
+	MaxTokens int    `json:"maxTokens,omitempty"`
 }
 
 // ConcurrencyConfig contains concurrency control settings.
@@ -185,6 +186,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	// Environment variables override config file
 	cfg.Model.ID = getEnv("ZAI_MODEL", cfg.Model.ID)
 	cfg.Model.BaseURL = getEnv("ZAI_BASE_URL", cfg.Model.BaseURL)
+	cfg.Model.MaxTokens = getEnvInt("ZAI_MAX_TOKENS", cfg.Model.MaxTokens)
 
 	cfg.ToolOutput = normalizeToolOutputConfig(cfg.ToolOutput)
 
@@ -216,10 +218,11 @@ func SaveConfig(cfg *Config, configPath string) error {
 // GetLLMModel converts ModelConfig to llm.Model.
 func (c *Config) GetLLMModel() llm.Model {
 	return llm.Model{
-		ID:       c.Model.ID,
-		Provider: c.Model.Provider,
-		BaseURL:  c.Model.BaseURL,
-		API:      c.Model.API,
+		ID:        c.Model.ID,
+		Provider:  c.Model.Provider,
+		BaseURL:   c.Model.BaseURL,
+		API:       c.Model.API,
+		MaxTokens: c.Model.MaxTokens,
 	}
 }
 
@@ -241,6 +244,18 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+func getEnvInt(key string, defaultValue int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return parsed
+}
+
 // DefaultConfig returns a default Config with sensible values.
 // This is the base configuration that can be overridden by LoadConfig.
 func DefaultConfig() *Config {
@@ -252,10 +267,10 @@ func DefaultConfig() *Config {
 			API:      "openai-completions",
 		},
 		Compactor:         compact.DefaultConfig(),
-		Concurrency:      DefaultConcurrencyConfig(),
-		ToolOutput:       DefaultToolOutputConfig(),
-		Log:              DefaultLogConfig(),
-		TaskTracking:     true, // Default enabled
+		Concurrency:       DefaultConcurrencyConfig(),
+		ToolOutput:        DefaultToolOutputConfig(),
+		Log:               DefaultLogConfig(),
+		TaskTracking:      true, // Default enabled
 		ContextManagement: true, // Default enabled
 	}
 }
