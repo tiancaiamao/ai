@@ -15,7 +15,7 @@ Use `/workflow ...` commands as the frontend entrypoint.
 
 `/workflow ...` (frontend) calls:
 
-`~/.ai/skills/orchestrate/bin/orchestrate` (backend runtime)
+`~/.ai/skills/workflow/orchestrate/bin/orchestrate` (backend runtime)
 
 Backend responsibilities:
 - task scheduling and dependency checks
@@ -26,7 +26,7 @@ Backend responsibilities:
 ## Build
 
 ```bash
-cd ~/.ai/skills/orchestrate
+cd ~/.ai/skills/workflow/orchestrate
 go build -o bin/orchestrate ./cmd/main.go
 ```
 

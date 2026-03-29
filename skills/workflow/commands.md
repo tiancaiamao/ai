@@ -49,7 +49,7 @@ if [ "$template" = "auto" ]; then
 fi
 
 # 3. Call orchestrate CLI
-~/.ai/skills/orchestrate/bin/orchestrate start \
+~/.ai/skills/workflow/orchestrate/bin/orchestrate start \
   --workflow "$template" \
   --name "$description" \
   --project "$(basename $PWD)"
@@ -64,10 +64,10 @@ Show current workflow state.
 ensure_orchestrate_binary
 
 # Show all workflows
-~/.ai/skills/orchestrate/bin/orchestrate status
+~/.ai/skills/workflow/orchestrate/bin/orchestrate status
 
 # Show specific workflow
-~/.ai/skills/orchestrate/bin/orchestrate status --project myproject
+~/.ai/skills/workflow/orchestrate/bin/orchestrate status --project myproject
 ```
 
 ### `/workflow stop`
@@ -78,7 +78,7 @@ Stop running workflow.
 # Ensure orchestrate binary exists
 ensure_orchestrate_binary
 
-~/.ai/skills/orchestrate/bin/orchestrate stop
+~/.ai/skills/workflow/orchestrate/bin/orchestrate stop
 ```
 
 ### `/workflow logs`
@@ -90,10 +90,10 @@ Show workflow logs.
 ensure_orchestrate_binary
 
 # All logs
-~/.ai/skills/orchestrate/bin/orchestrate logs
+~/.ai/skills/workflow/orchestrate/bin/orchestrate logs
 
 # Specific phase
-~/.ai/skills/orchestrate/bin/orchestrate logs --phase diagnose
+~/.ai/skills/workflow/orchestrate/bin/orchestrate logs --phase diagnose
 ```
 
 ### `/workflow approve <task-id>`
@@ -101,7 +101,7 @@ ensure_orchestrate_binary
 Approve a pending review.
 
 ```bash
-~/.ai/skills/orchestrate/bin/orchestrate approve "$task-id"
+~/.ai/skills/workflow/orchestrate/bin/orchestrate approve "$task-id"
 ```
 
 ### `/workflow templates [info <name>]`
@@ -110,10 +110,10 @@ List or show template details.
 
 ```bash
 # List all templates
-~/.ai/skills/orchestrate/bin/orchestrate templates
+~/.ai/skills/workflow/orchestrate/bin/orchestrate templates
 
 # Show template info
-~/.ai/skills/orchestrate/bin/orchestrate templates info bugfix
+~/.ai/skills/workflow/orchestrate/bin/orchestrate templates info bugfix
 ```
 
 ## Template Resolution
@@ -252,7 +252,7 @@ orchestrate templates [info <template>]
 ```bash
 # Ensure orchestrate binary exists before use
 ensure_orchestrate_binary() {
-  local script_dir="$HOME/.ai/skills/orchestrate"
+  local script_dir="$HOME/.ai/skills/workflow/orchestrate"
   local binary="$script_dir/bin/orchestrate"
 
   if [ ! -f "$binary" ]; then
@@ -269,7 +269,7 @@ run_orchestrate() {
   ensure_orchestrate_binary
 
   local output
-  output=$(~/.ai/skills/orchestrate/bin/orchestrate "$@" 2>&1)
+  output=$(~/.ai/skills/workflow/orchestrate/bin/orchestrate "$@" 2>&1)
   local exit_code=$?
 
   if [ $exit_code -ne 0 ]; then
@@ -288,7 +288,7 @@ To add custom templates:
 
 ```bash
 # 1. Create template file
-~/.ai/skills/orchestrate/templates/my-template.yaml
+~/.ai/skills/workflow/orchestrate/templates/my-template.yaml
 
 # 2. Use it
 /workflow start my-template "My custom workflow"

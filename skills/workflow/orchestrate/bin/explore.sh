@@ -49,7 +49,7 @@ for topic in "${TOPICS[@]}"; do
     ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
         "$TOPIC_OUTPUT" \
         5m \
-        @~/.ai/skills/orchestrate/references/explorer.md \
+        @~/.ai/skills/workflow/orchestrate/references/explorer.md \
         "Topic: $topic\nQuestion: $QUESTION"
     
     SESSION_NAME=$(head -1 "$TOPIC_OUTPUT" | cut -d: -f1 2>/dev/null || echo "")

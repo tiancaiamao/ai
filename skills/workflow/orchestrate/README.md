@@ -14,7 +14,7 @@
 ## 安装
 
 ```bash
-cd extension/team
+cd skills/workflow/orchestrate
 go install ./cmd
 ```
 
@@ -276,7 +276,7 @@ func NewTeamTool() *Tool {
 ## 文件结构
 
 ```
-extension/team/
+skills/workflow/orchestrate/
 ├── go.mod
 ├── go.sum
 ├── README.md
