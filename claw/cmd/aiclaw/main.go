@@ -115,7 +115,7 @@ func main() {
 		Channels: cfg.Channels,
 	}
 
-	// Load security.yml to get Pico and Weixin tokens
+	// Load security.yml to get Pico, Weixin, and Feishu secrets
 	securityPath := filepath.Join(filepath.Dir(configPath), ".security.yml")
 	if securityData, err := os.ReadFile(securityPath); err == nil {
 		type SecurityConfig struct {
@@ -126,6 +126,10 @@ func main() {
 				Weixin struct {
 					Token string `json:"token" yaml:"token"`
 				} `json:"weixin" yaml:"weixin"`
+				Feishu struct {
+					AppID     string `json:"app_id" yaml:"app_id"`
+					AppSecret string `json:"app_secret" yaml:"app_secret"`
+				} `json:"feishu" yaml:"feishu"`
 			} `json:"channels" yaml:"channels"`
 		}
 		var sec SecurityConfig
@@ -137,6 +141,14 @@ func main() {
 			if sec.Channels.Weixin.Token != "" {
 				picoCfg.Channels.Weixin.SetToken(sec.Channels.Weixin.Token)
 				slog.Info("Loaded Weixin token from security file")
+			}
+			if sec.Channels.Feishu.AppID != "" {
+				picoCfg.Channels.Feishu.AppID = sec.Channels.Feishu.AppID
+				slog.Info("Loaded Feishu app_id from security file")
+			}
+			if sec.Channels.Feishu.AppSecret != "" {
+				picoCfg.Channels.Feishu.SetAppSecret(sec.Channels.Feishu.AppSecret)
+				slog.Info("Loaded Feishu app_secret from security file")
 			}
 		}
 	}
