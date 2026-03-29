@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // ContextManagementTool allows LLM to declare context management decisions.
@@ -147,266 +146,252 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 	// Mark that LLM made a decision this turn (compliance tracking)
 	agentCtx.ContextMgmtState.MarkDecisionMade()
 
-	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
-
-	var result strings.Builder
-	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
-	result.WriteString(fmt.Sprintf("Reasoning: %s\n\n", reasoning))
-
+	// Handle decision types
 	switch decision {
 	case "skip":
-		skipTurns := 10 // default
-		if st, ok := params["skip_turns"].(float64); ok {
-			skipTurns = int(st)
-		}
-		if skipTurns < 1 {
-			skipTurns = 1
-		}
-		if skipTurns > 30 {
-			skipTurns = 30
-		}
-
-		agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
-		result.WriteString(fmt.Sprintf("Deferred for %d turns.\n", skipTurns))
-		result.WriteString(fmt.Sprintf("Next reminder at turn %d.\n", turn+skipTurns))
-
-		// Record the skip decision so LastDecisionTurn is updated
-		agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
-
-		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
-			traceevent.Field{Key: "skip_turns", Value: skipTurns},
-			traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
-			traceevent.Field{Key: "was_reminded", Value: wasReminded},
-		)
-
+		return t.handleSkip(ctx, agentCtx, params)
 	case "truncate":
-		truncatedCount := 0
-		// Support both string (comma-separated) and array formats for backwards compatibility
-		var idsToTruncate []string
-		if ids, ok := params["truncate_ids"].(string); ok && ids != "" {
-			// Parse comma-separated string
-			for _, id := range strings.Split(ids, ",") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					idsToTruncate = append(idsToTruncate, id)
-				}
-			}
-		} else if ids, ok := params["truncate_ids"].([]any); ok && len(ids) > 0 {
-			// Fallback to array format
-			for _, id := range ids {
-				if idStr, ok := id.(string); ok {
-					idsToTruncate = append(idsToTruncate, idStr)
-				}
-			}
-		}
-
-		if len(idsToTruncate) > 0 {
-			// Filter out already truncated IDs to avoid redundant operations
-			// Pass the original raw IDs (string or []any) to filterAlreadyTruncated
-			idsToTruncate = t.filterAlreadyTruncated(ctx, agentCtx, params["truncate_ids"])
-
-			truncatedCount = t.processTruncate(ctx, agentCtx, idsToTruncate)
-			result.WriteString(fmt.Sprintf("Truncated %d tool output(s).\n", truncatedCount))
-
-			if truncatedCount > 0 {
-				result.WriteString(fmt.Sprintf("Freed up approximately %d message slots.\n", truncatedCount))
-			} else {
-				result.WriteString("No outputs were truncated (already truncated or IDs not found).\n")
-			}
-		} else {
-			result.WriteString("No truncate_ids provided, skipped truncation.\n")
-		}
-
-		// Clean up truncate_ids from the assistant message that called this tool
-		t.cleanupContextManagementInput(agentCtx, agentctx.ToolExecutionCallID(ctx))
-
-		// Record decision
-		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
-		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
-			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
-			traceevent.Field{Key: "was_reminded", Value: wasReminded},
-		)
-
+		return t.handleTruncate(ctx, agentCtx, params)
 	case "compact":
-		if t.compactor == nil {
-			result.WriteString("Compactor not available, skipped compaction.\n")
-			agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
+		return t.handleCompact(ctx, agentCtx, params)
+	default:
+		return nil, fmt.Errorf("unknown decision: %s", decision)
+	}
+}
+
+// handleSkip implements the skip decision with proactive ratio limits.
+func (t *ContextManagementTool) handleSkip(ctx context.Context, agentCtx *agentctx.AgentContext, params map[string]any) ([]agentctx.ContentBlock, error) {
+	state := agentCtx.ContextMgmtState
+	snapshot := state.Snapshot()
+
+	// Get skip_turns parameter
+	var requestedSkipTurns int
+	if skipTurns, ok := params["skip_turns"].(int); ok && skipTurns > 0 {
+		requestedSkipTurns = skipTurns
+	} else {
+		requestedSkipTurns = 10 // default
+	}
+
+	// Calculate max allowed skip based on proactive ratio
+	ratio := snapshot.ProactiveDecisions - snapshot.ReminderNeeded
+	maxSkip := ratio
+
+	// Hard cap at 30 turns
+	if maxSkip > 30 {
+		maxSkip = 30
+	}
+
+	// Get current turn and calculate next reminder turn
+	currentTurn := state.GetCurrentTurn()
+
+	// Case 1: ratio <= 0 (skip DENIED)
+	if ratio <= 0 {
+		// Calculate when next reminder is due
+		remindersUntil := snapshot.ReminderFrequency
+		reminderDueTurn := currentTurn + remindersUntil
+
+		errorMsg := fmt.Sprintf(`⚠️ skip request denied
+
+Since you are not proactive enough (ratio=%d), you are not allowed to skip %d turns.
+
+You will still receive a remind within %d turns (turn %d).
+You must be more proactive before you receive the next remind.
+
+Next reminder at: turn %d
+Current stats: proactive=%d, reminded=%d, ratio=%d, frequency=%d turns`,
+			ratio, requestedSkipTurns, remindersUntil, reminderDueTurn,
+			reminderDueTurn, snapshot.ProactiveDecisions, snapshot.ReminderNeeded,
+			ratio, snapshot.ReminderFrequency)
+
+		slog.Info("[ContextManagement] Skip denied",
+			"ratio", ratio,
+			"requested_skip", requestedSkipTurns,
+			"proactive_decisions", snapshot.ProactiveDecisions,
+			"reminder_needed", snapshot.ReminderNeeded,
+			"reasoning", params["reasoning"])
+
+		// Do NOT set SkipUntilTurn - reminders will continue normally
+		return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: errorMsg}}, nil
+	}
+
+	// Case 2: requested skip exceeds max (REDUCED)
+	if requestedSkipTurns > maxSkip {
+		// Calculate next reminder with reduced skip
+		nextReminderTurn := currentTurn + maxSkip
+
+		warningMsg := fmt.Sprintf(`⚠️ skip_turns reduced from %d to %d
+
+Reason: Your proactive ratio is %d (max skip allowed: %d)
+To skip more turns, make more proactive context management decisions.
+
+Next reminder at: turn %d`,
+			requestedSkipTurns, maxSkip, ratio, maxSkip, nextReminderTurn)
+
+		slog.Info("[ContextManagement] Skip reduced",
+			"requested_skip", requestedSkipTurns,
+			"allowed_skip", maxSkip,
+			"ratio", ratio,
+			"next_reminder_turn", nextReminderTurn)
+
+		// Set skip with reduced value
+		agentCtx.ContextMgmtState.SkipUntilTurn = nextReminderTurn
+
+		return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: warningMsg}}, nil
+	}
+
+	// Case 3: normal skip within limit (SUCCESS)
+	nextReminderTurn := currentTurn + requestedSkipTurns
+
+	successMsg := fmt.Sprintf(`Skipping reminders for %d turns. Next reminder at turn %d.`,
+		requestedSkipTurns, nextReminderTurn)
+
+	slog.Info("[ContextManagement] Skip allowed",
+		"skip_turns", requestedSkipTurns,
+		"next_reminder_turn", nextReminderTurn,
+		"ratio", ratio)
+
+	// Set skip normally
+	agentCtx.ContextMgmtState.SkipUntilTurn = nextReminderTurn
+
+	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: successMsg}}, nil
+}
+
+// handleTruncate implements the truncate decision.
+func (t *ContextManagementTool) handleTruncate(ctx context.Context, agentCtx *agentctx.AgentContext, params map[string]any) ([]agentctx.ContentBlock, error) {
+	// Get truncate_ids parameter
+	truncateIDsParam, ok := params["truncate_ids"].(string)
+	if !ok || truncateIDsParam == "" {
+		return nil, fmt.Errorf("truncate_ids parameter is required for decision=truncate")
+	}
+
+	// Parse tool call IDs
+	idsToTruncate := t.filterTruncateIDs(agentCtx, truncateIDsParam)
+
+	if len(idsToTruncate) == 0 {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("No tool outputs truncated (all specified IDs were already truncated, protected, or not found)."),
+			},
+		}, nil
+	}
+
+	// Execute truncation
+	truncatedCount := 0
+	for _, id := range idsToTruncate {
+		for i, msg := range agentCtx.Messages {
+			if msg.Role != "toolResult" {
+				continue
+			}
+			if strings.EqualFold(msg.ToolCallID, id) {
+				// Truncate the tool output by modifying the message directly in the slice
+				agentCtx.Messages[i].Content = []agentctx.ContentBlock{
+					agentctx.TextContent{
+						Type: "text",
+						Text: fmt.Sprintf(`<agent:tool name="%s" chars="%d" truncated="true" />`,
+							msg.ToolName, len(msg.ExtractText())),
+					},
+				}
+				truncatedCount++
+				break
+			}
+		}
+	}
+
+	// Cleanup: remove truncate_ids from the assistant message that called this tool
+	currentCallID := agentctx.ToolExecutionCallID(ctx)
+	t.cleanupContextManagementInput(agentCtx, currentCallID)
+
+	resultMsg := fmt.Sprintf(`Truncated %d tool output(s).
+
+IDs truncated: %s
+
+Freed context space by replacing large tool outputs with truncation markers.`,
+		truncatedCount, strings.Join(idsToTruncate, ", "))
+
+	slog.Info("[ContextManagement] Truncate completed",
+		"count", truncatedCount,
+		"ids", strings.Join(idsToTruncate, ", "),
+		"reasoning", params["reasoning"])
+
+	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: resultMsg}}, nil
+}
+
+// handleCompact implements the compact decision.
+func (t *ContextManagementTool) handleCompact(ctx context.Context, agentCtx *agentctx.AgentContext, params map[string]any) ([]agentctx.ContentBlock, error) {
+	// Get compact_confidence parameter
+	confidence := 50 // default
+	if conf, ok := params["compact_confidence"].(int); ok && conf >= 0 && conf <= 100 {
+		confidence = conf
+	}
+
+	if t.compactor == nil {
+		return nil, fmt.Errorf("compactor not configured")
+	}
+
+	// Execute compaction
+	slog.Info("[ContextManagement] Running compaction",
+		"confidence", confidence,
+		"reasoning", params["reasoning"])
+
+	previousSummary := agentCtx.LastCompactionSummary
+	summary, err := t.compactor.Compact(agentCtx.Messages, previousSummary)
+	if err != nil {
+		slog.Error("[ContextManagement] Compaction failed", "error", err)
+		return nil, fmt.Errorf("compaction failed: %w", err)
+	}
+
+	// Update messages with compacted version
+	agentCtx.Messages = summary.Messages
+	agentCtx.LastCompactionSummary = summary.Summary
+
+	resultMsg := fmt.Sprintf(`Compacted conversation history to reduce context size.
+
+Before: %d tokens
+After: %d tokens
+Reduction: %d tokens (%.1f%%)
+
+Summary: %s`,
+		summary.TokensBefore, summary.TokensAfter,
+		summary.TokensBefore-summary.TokensAfter,
+		float64(summary.TokensBefore-summary.TokensAfter)/float64(summary.TokensBefore)*100,
+		summary.Summary)
+
+	slog.Info("[ContextManagement] Compact completed",
+		"tokens_before", summary.TokensBefore,
+		"tokens_after", summary.TokensAfter,
+		"reduction", summary.TokensBefore-summary.TokensAfter)
+
+	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: resultMsg}}, nil
+}
+
+// filterTruncateIDs filters and validates truncate_ids parameter.
+// It removes already-truncated or protected tool outputs.
+func (t *ContextManagementTool) filterTruncateIDs(agentCtx *agentctx.AgentContext, truncateIDsParam string) []string {
+	// Find the protected task_tracking tool call ID
+	protectedID := ""
+	for _, msg := range agentCtx.Messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		toolCalls := msg.ExtractToolCalls()
+		for _, tc := range toolCalls {
+			if tc.Name == "task_tracking" {
+				protectedID = tc.ID
+				break
+			}
+		}
+		if protectedID != "" {
 			break
 		}
-
-		// LLM decided compact, we trust its decision and proceed
-		// No token threshold check - if LLM wants compact, we do compact
-		confidence := 80 // default
-		if c, ok := params["compact_confidence"].(float64); ok {
-			confidence = int(c)
-		}
-
-		before := len(agentCtx.Messages)
-		compacted, err := t.compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
-		if err != nil {
-			slog.Warn("[LLMContextDecision] Compaction failed", "error", err)
-			result.WriteString(fmt.Sprintf("Compaction failed: %v\n", err))
-		} else if compacted != nil {
-			agentCtx.Messages = compacted.Messages
-			agentCtx.LastCompactionSummary = compacted.Summary
-			after := len(compacted.Messages)
-
-			// Set flag to inject overview.md for recovery on next request
-			agentCtx.PostCompactRecovery = true
-
-			// Persist changes to session storage
-			if agentCtx.OnMessagesChanged != nil {
-				if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
-					slog.Warn("[LLMContextDecision] Failed to persist compacted messages", "error", persistErr)
-				}
-			}
-
-			result.WriteString(fmt.Sprintf("Compacted messages: %d → %d (%d removed).\n", before, after, before-after))
-			result.WriteString(fmt.Sprintf("Confidence: %d%%\n", confidence))
-
-			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_compact",
-				traceevent.Field{Key: "before_messages", Value: before},
-				traceevent.Field{Key: "after_messages", Value: after},
-				traceevent.Field{Key: "confidence", Value: confidence},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
-			)
-		} else {
-			result.WriteString("Compaction returned no changes.\n")
-		}
-
-		agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
-
-	default:
-		return nil, fmt.Errorf("invalid decision: %s", decision)
 	}
 
-	// Add stats summary
-	if decision != "skip" {
-		stats := agentCtx.ContextMgmtState.Snapshot()
-		result.WriteString(fmt.Sprintf("\n**Stats:** proactive=%d, reminded=%d, frequency=%d turns, score=%s\n",
-			stats.ProactiveDecisions,
-			stats.ReminderNeeded,
-			stats.ReminderFrequency,
-			stats.Score))
-	}
+	// Parse comma-separated IDs
+	ids := strings.Split(truncateIDsParam, ",")
 
-	return []agentctx.ContentBlock{
-		agentctx.TextContent{
-			Type: "text",
-			Text: result.String(),
-		},
-	}, nil
-}
-
-// processTruncate truncates the specified tool outputs.
-func (t *ContextManagementTool) processTruncate(ctx context.Context, agentCtx *agentctx.AgentContext, idsToTruncate []string) int {
-	truncatedCount := 0
-
-	for i := range agentCtx.Messages {
-		msg := agentCtx.Messages[i]
-		if msg.Role != "toolResult" {
-			continue
-		}
-
-		// Check if this ID should be truncated
-		if !t.shouldTruncate(msg.ToolCallID, idsToTruncate) {
-			continue
-		}
-
-		// Skip if already truncated
-		if agentctx.IsTruncatedAgentToolTag(msg.ExtractText()) {
-			continue
-		}
-
-		// Get original size
-		originalSize := len(msg.ExtractText())
-		if n, ok := agentctx.ParseCharsFromAgentToolTag(msg.ExtractText()); ok {
-			originalSize = n
-		}
-
-		// Replace with truncated tag (no id to prevent reuse)
-		agentCtx.Messages[i] = agentctx.NewToolResultMessage(
-			msg.ToolCallID,
-			msg.ToolName,
-			[]agentctx.ContentBlock{
-				agentctx.TextContent{
-					Type: "text",
-					Text: fmt.Sprintf(
-						`<agent:tool name="%s" chars="%d" truncated="true" />`,
-						msg.ToolName,
-						originalSize,
-					),
-				},
-			},
-			msg.IsError,
-		)
-
-		truncatedCount++
-		traceevent.Log(ctx, traceevent.CategoryTool, "tool_output_truncated_via_decision",
-			traceevent.Field{Key: "tool_call_id", Value: msg.ToolCallID},
-			traceevent.Field{Key: "tool_name", Value: msg.ToolName},
-			traceevent.Field{Key: "original_chars", Value: originalSize},
-		)
-	}
-
-	return truncatedCount
-}
-
-// shouldTruncate checks whether a tool_call_id is in the list.
-func (t *ContextManagementTool) shouldTruncate(toolCallID string, idsToTruncate []string) bool {
-	for _, id := range idsToTruncate {
-		if strings.EqualFold(toolCallID, id) {
-			return true
-		}
-	}
-	return false
-}
-
-// filterAlreadyTruncated filters out already truncated tool call IDs from the provided IDs.
-// This prevents LLM from trying to truncate the same tool output multiple times.
-// Also protects the latest task_tracking from being truncated.
-func (t *ContextManagementTool) filterAlreadyTruncated(ctx context.Context, agentCtx *agentctx.AgentContext, rawIDs any) []string {
-	if rawIDs == nil {
-		return nil
-	}
-
-	// Parse IDs from the input
-	var idsToFilter []string
-
-	// Handle string (comma-separated)
-	if idsStr, ok := rawIDs.(string); ok && idsStr != "" {
-		parts := strings.Split(idsStr, ",")
-		for _, part := range parts {
-			id := strings.TrimSpace(part)
-			if id != "" {
-				idsToFilter = append(idsToFilter, id)
-			}
-		}
-	}
-
-	// Handle array
-	if idsArray, ok := rawIDs.([]any); ok && len(idsArray) > 0 {
-		for _, id := range idsArray {
-			if idStr, ok := id.(string); ok && idStr != "" {
-				idsToFilter = append(idsToFilter, idStr)
-			}
-		}
-	}
-
-	if len(idsToFilter) == 0 {
-		return nil
-	}
-
-	// Find the latest task_tracking tool call ID to protect
-	protectedID := findLatestToolCall(agentCtx.Messages, "task_tracking")
-	if protectedID != "" {
-		slog.Debug("[ContextManagement] Protecting latest task_tracking from truncate",
-			"tool_call_id", protectedID)
-	}
-
-	// Filter out IDs that are already truncated or protected
+	// Filter out already truncated or protected
 	var filteredIDs []string
-	for _, id := range idsToFilter {
+	for _, id := range ids {
 		// Check if this is the protected task_tracking
 		if protectedID != "" && strings.EqualFold(id, protectedID) {
 			slog.Debug("[ContextManagement] Skipping protected task_tracking ID",
