@@ -37,7 +37,10 @@ Start a new workflow.
 
 **Implementation:**
 ```bash
-# 1. Resolve template
+# 1. Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
+# 2. Resolve template
 template="${1:-auto}"
 description="$2"
 
@@ -45,7 +48,7 @@ if [ "$template" = "auto" ]; then
   template=$(auto_detect "$description")
 fi
 
-# 2. Call orchestrate CLI
+# 3. Call orchestrate CLI
 ~/.ai/skills/orchestrate/bin/orchestrate start \
   --workflow "$template" \
   --name "$description" \
@@ -57,6 +60,9 @@ fi
 Show current workflow state.
 
 ```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
 # Show all workflows
 ~/.ai/skills/orchestrate/bin/orchestrate status
 
@@ -69,6 +75,9 @@ Show current workflow state.
 Stop running workflow.
 
 ```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
 ~/.ai/skills/orchestrate/bin/orchestrate stop
 ```
 
@@ -77,6 +86,9 @@ Stop running workflow.
 Show workflow logs.
 
 ```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
 # All logs
 ~/.ai/skills/orchestrate/bin/orchestrate logs
 
@@ -238,8 +250,24 @@ orchestrate templates [info <template>]
 ## Error Handling
 
 ```bash
+# Ensure orchestrate binary exists before use
+ensure_orchestrate_binary() {
+  local script_dir="$HOME/.ai/skills/orchestrate"
+  local binary="$script_dir/bin/orchestrate"
+
+  if [ ! -f "$binary" ]; then
+    echo "🔨 Building orchestrate binary..."
+    cd "$script_dir"
+    go build -o bin/orchestrate ./cmd/main.go
+    echo "✅ Build complete"
+  fi
+}
+
 # Wrapper function
 run_orchestrate() {
+  # Ensure binary exists
+  ensure_orchestrate_binary
+
   local output
   output=$(~/.ai/skills/orchestrate/bin/orchestrate "$@" 2>&1)
   local exit_code=$?

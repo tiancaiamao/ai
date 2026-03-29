@@ -37,6 +37,9 @@ Workflow Skill (Frontend)
 - **Location:** `skills/orchestrate/` (self-contained skill)
 - **Binary:** `~/.ai/skills/orchestrate/bin/orchestrate`
 - **Build:** `cd skills/orchestrate && go build -o bin/orchestrate ./cmd/main.go`
+- **Auto-build:** Binary is built automatically if missing (not in git)
+
+> **Note:** The orchestrate binary is not tracked in git (`.gitignore`). It will be built automatically on first use.
 
 ## Commands
 
