@@ -20,7 +20,7 @@ type Config struct {
 	MaxMessages         int    // Maximum messages before compression
 	MaxTokens           int    // Approximate token limit before compression
 	KeepRecent          int    // Number of recent messages to keep
-	KeepRecentTokens    int    // Token budget to keep from the most recent messages
+	KeepRecentTokens    int    // Token budget to keep from the recent messages
 	ReserveTokens       int    // Tokens to reserve when using context window
 	ToolCallCutoff      int    // Summarize oldest tool outputs when visible tool calls exceed this
 	ToolSummaryStrategy string // llm, heuristic, off
@@ -29,7 +29,11 @@ type Config struct {
 	// - fallback: only run when compactor pressure fallback is triggered
 	// - always: run whenever ToolCallCutoff is exceeded
 	ToolSummaryAutomation string
-	AutoCompact           bool // Whether to automatically compact
+	// GracePeriod protects the N most recent tool results from being archived during
+	// tool call pairing check. This allows tool calls that span compaction boundaries
+	// to complete without their results being hidden. Default is 1 (the most recent).
+	GracePeriod int
+	AutoCompact bool // Whether to automatically compact
 }
 
 // DefaultConfig returns default compression configuration.
@@ -43,6 +47,7 @@ func DefaultConfig() *Config {
 		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
 		ToolSummaryStrategy:   "off", // Tool summary strategy (llm, heuristic, off)
 		ToolSummaryAutomation: "off", // Automatic tool-output summary (off, fallback, always)
+		GracePeriod:           1,     // Protect 1 most recent tool result by default
 		AutoCompact:           true,  // Automatic context compression at 75% threshold
 	}
 }
@@ -234,7 +239,12 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", previousSummary != "")
 
 	// Ensure tool_call and tool_result pairing is preserved
-	recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
+	// Use grace period protection when configured
+	if c.config.GracePeriod > 0 {
+		recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+	} else {
+		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
+	}
 
 	// Create new context with summary + recent messages
 	newMessages := []agentctx.AgentMessage{
@@ -819,6 +829,111 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
 			"archived_tool_results", archivedToolResultCount,
 			"filtered_tool_calls", filteredToolCallCount,
+			"kept", len(keptMessages))
+	}
+
+	return keptMessages
+}
+
+// ensureToolCallPairingWithGrace ensures tool call pairing with grace period protection.
+// The grace period protects the N most recent tool results from being archived,
+// allowing tool calls that span compaction boundaries to complete.
+func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	if len(recentMessages) == 0 {
+		return recentMessages
+	}
+
+	// Collect all tool_call IDs from oldMessages
+	oldToolCallIDs := make(map[string]bool)
+	for _, msg := range oldMessages {
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ExtractToolCalls() {
+				oldToolCallIDs[tc.ID] = true
+			}
+		}
+	}
+
+	// If no tool_calls in oldMessages, nothing to fix
+	if len(oldToolCallIDs) == 0 {
+		return recentMessages
+	}
+
+	// Collect recent tool result indexes for grace period protection
+	gracePeriod := c.config.GracePeriod
+	if gracePeriod <= 0 {
+		gracePeriod = 1
+	}
+
+	// Find tool result indexes (from end to start) within grace period
+	gracePeriodIndexes := make(map[int]struct{})
+	toolResultCount := 0
+	for i := len(recentMessages) - 1; i >= 0; i-- {
+		msg := recentMessages[i]
+		if msg.Role == "toolResult" && msg.IsAgentVisible() {
+			toolResultCount++
+			if toolResultCount <= gracePeriod {
+				gracePeriodIndexes[i] = struct{}{}
+			}
+		}
+	}
+
+	// Process messages, applying grace period protection
+	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
+	archivedToolResultCount := 0
+	filteredToolCallCount := 0
+
+	for i, msg := range recentMessages {
+		// Check if this tool result is within grace period
+		if _, inGracePeriod := gracePeriodIndexes[i]; inGracePeriod {
+			// Within grace period - keep it visible (don't archive)
+			keptMessages = append(keptMessages, msg)
+			continue
+		}
+
+		if msg.Role == "toolResult" && msg.ToolCallID != "" {
+			if oldToolCallIDs[msg.ToolCallID] {
+				// This tool_result's call is in oldMessages - hide it to prevent mismatch
+				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				keptMessages = append(keptMessages, archivedMsg)
+				archivedToolResultCount++
+				continue
+			}
+		}
+
+		if msg.Role == "assistant" {
+			// Check if this assistant message contains tool_calls that are in oldMessages
+			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
+			hasOldToolCalls := false
+
+			for _, block := range msg.Content {
+				if tc, ok := block.(agentctx.ToolCallContent); ok {
+					if oldToolCallIDs[tc.ID] {
+						// This tool_call is in oldMessages - skip it
+						hasOldToolCalls = true
+						filteredToolCallCount++
+						continue
+					}
+				}
+				filteredContent = append(filteredContent, block)
+			}
+
+			if hasOldToolCalls {
+				// Create a new message with filtered content
+				filteredMsg := msg
+				filteredMsg.Content = filteredContent
+				keptMessages = append(keptMessages, filteredMsg)
+				continue
+			}
+		}
+
+		keptMessages = append(keptMessages, msg)
+	}
+
+	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
+		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
+			"archived_tool_results", archivedToolResultCount,
+			"filtered_tool_calls", filteredToolCallCount,
+			"grace_period_protected", gracePeriod,
 			"kept", len(keptMessages))
 	}
 
