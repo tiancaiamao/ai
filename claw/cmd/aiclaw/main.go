@@ -115,7 +115,7 @@ func main() {
 		Channels: cfg.Channels,
 	}
 
-	// Load security.yml to get Pico, Weixin, and Feishu tokens
+	// Load security.yml to get Pico, Weixin, and Feishu secrets
 	securityPath := filepath.Join(filepath.Dir(configPath), ".security.yml")
 	if securityData, err := os.ReadFile(securityPath); err == nil {
 		type SecurityConfig struct {

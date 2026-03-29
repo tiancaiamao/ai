@@ -103,7 +103,7 @@ Time saved: If subagent takes 60s + other work 5s
 SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
   /tmp/subagent-output.txt \
   10m \
-  /Users/genius/.ai/skills/orchestrate/references/explorer.md \
+  /Users/genius/.ai/skills/workflow/orchestrate/references/explorer.md \
   "Your task description here")
 
 # Extract session name (format: "session-name:session-id")

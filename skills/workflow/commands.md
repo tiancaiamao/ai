@@ -1,315 +1,315 @@
 # Workflow Commands
 
-Command handlers for `/workflow` prefix commands.
+User-friendly frontend for orchestrate CLI.
 
-## Command Parsing
+## Architecture
 
 ```
-/workflow <action> [args...]
+User Command
+    ↓
+Workflow Skill (Frontend)
+  - Parse user input
+  - Friendly commands
+  - Template selection
+    ↓
+Orchestrate CLI (Backend)
+  - Task scheduling
+  - State management
+  - Worker execution
+```
 
-Actions:
-  start <template> [description]  Start a workflow
-  auto                          Execute current workflow
-  status                        Show workflow state
-  templates [info <name>]       List or show template info
-  pause                         Pause auto mode
-  resume                        Resume paused workflow
-  stop                          Stop workflow
+## Commands
+
+### `/workflow start <template> [description]`
+
+Start a new workflow.
+
+```bash
+# Examples
+/workflow start bugfix "Fix login timeout"
+/workflow start feature "Add user authentication"
+/workflow start hotfix "Emergency: prod crash"
+
+# Auto-detect template from description
+/workflow start "Fix broken API endpoint"  # → bugfix
+/workflow start "Research new framework"   # → spike
+```
+
+**Implementation:**
+```bash
+# 1. Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
+# 2. Resolve template
+template="${1:-auto}"
+description="$2"
+
+if [ "$template" = "auto" ]; then
+  template=$(auto_detect "$description")
+fi
+
+# 3. Call orchestrate CLI
+~/.ai/skills/workflow/orchestrate/bin/orchestrate start \
+  --workflow "$template" \
+  --name "$description" \
+  --project "$(basename $PWD)"
+```
+
+### `/workflow status`
+
+Show current workflow state.
+
+```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
+# Show all workflows
+~/.ai/skills/workflow/orchestrate/bin/orchestrate status
+
+# Show specific workflow
+~/.ai/skills/workflow/orchestrate/bin/orchestrate status --project myproject
+```
+
+### `/workflow stop`
+
+Stop running workflow.
+
+```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
+~/.ai/skills/workflow/orchestrate/bin/orchestrate stop
+```
+
+### `/workflow logs`
+
+Show workflow logs.
+
+```bash
+# Ensure orchestrate binary exists
+ensure_orchestrate_binary
+
+# All logs
+~/.ai/skills/workflow/orchestrate/bin/orchestrate logs
+
+# Specific phase
+~/.ai/skills/workflow/orchestrate/bin/orchestrate logs --phase diagnose
+```
+
+### `/workflow approve <task-id>`
+
+Approve a pending review.
+
+```bash
+~/.ai/skills/workflow/orchestrate/bin/orchestrate approve "$task-id"
+```
+
+### `/workflow templates [info <name>]`
+
+List or show template details.
+
+```bash
+# List all templates
+~/.ai/skills/workflow/orchestrate/bin/orchestrate templates
+
+# Show template info
+~/.ai/skills/workflow/orchestrate/bin/orchestrate templates info bugfix
 ```
 
 ## Template Resolution
 
-### resolveByName(id)
-
-Find template by exact ID or alias:
-
-```typescript
-const aliases: Record<string, string> = {
-  "bug": "bugfix",
-  "fix": "bugfix",
-  "hot": "hotfix",
-  "feature": "feature",
-  "feat": "feature",
-  "research": "spike",
-  "refactor": "refactor",
-  "security": "security",
-};
-```
-
-### autoDetect(description)
-
-Guess template from keywords:
-
-```typescript
-function autoDetect(desc: string): string {
-  const lower = desc.toLowerCase();
-  
-  if (/bug|issue|error|wrong|broken|fix/.test(lower)) return "bugfix";
-  if (/hot|emergency|prod|urgent/.test(lower)) return "hotfix";
-  if (/security|vulnerability|exploit/.test(lower)) return "security";
-  if (/research|explore|spike|investigate/.test(lower)) return "spike";
-  if (/refactor|restructure|cleanup|technical.?debt/.test(lower)) return "refactor";
-  
-  return "feature"; // default
-}
-```
-
-### loadTemplate(id)
-
-Load template from `templates/<id>.md`:
-
-```markdown
----
-id: bugfix
-name: Bug Fix
-description: Fix bugs with root-cause analysis
-phases: [triage, fix, verify, ship]
-complexity: low
-estimated_tasks: 2-4
----
-
-# Bug Fix Workflow
-
-## Phase 1: Triage
-
-### Goals
-- Reproduce the issue
-- Identify root cause
-- Document findings
-
-### Output
-Write findings to triage.md in artifact directory.
-
-## Phase 2: Fix
-
-### Goals
-- Implement fix based on triage
-- Write or update tests
-- Ensure no regressions
-
-## Phase 3: Verify
-
-### Goals
-- Run test suite
-- Verify fix works
-- Check for edge cases
-
-## Phase 4: Ship
-
-### Goals
-- Commit changes
-- Create PR if applicable
-- Notify stakeholders
-```
-
-## State Management
-
-### Write State
-
-```typescript
-function writeWorkflowState(
-  artifactDir: string,
-  templateId: string,
-  templateName: string,
-  phases: string[],
-  description: string,
-): void {
-  const state = {
-    template: templateId,
-    templateName,
-    description,
-    phases: phases.map((p, i) => ({
-      name: p,
-      index: i,
-      status: i === 0 ? "active" : "pending",
-    })),
-    currentPhase: 0,
-    startedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    artifactDir,
-  };
-  
-  writeFileSync(".workflow/STATE.json", JSON.stringify(state, null, 2));
-}
-```
-
-### Read State
-
-```typescript
-function readWorkflowState(): WorkflowState | null {
-  const path = ".workflow/STATE.json";
-  if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, "utf-8"));
-}
-```
-
-### Update Phase
-
-```typescript
-function advancePhase(): void {
-  const state = readWorkflowState();
-  if (!state) return;
-  
-  // Mark current as completed
-  state.phases[state.currentPhase].status = "completed";
-  
-  // Advance to next
-  if (state.currentPhase < state.phases.length - 1) {
-    state.currentPhase++;
-    state.phases[state.currentPhase].status = "active";
-  }
-  
-  state.updatedAt = new Date().toISOString();
-  writeWorkflowState(state);
-}
-```
-
-## Artifact Directory
-
-### Naming Convention
-
-```
-.workflow/<category>/<YYMMDD>-<num>-<slug>/
-
-Examples:
-  .workflow/bugfixes/250327-1-login-timeout/
-  .workflow/features/250326-1-user-auth/
-  .workflow/spikes/250325-1-api-research/
-```
-
-### Creation
+### Aliases
 
 ```bash
-# Generate slug from description
-slug = description.toLowerCase()
-       .replace(/[^a-z0-9]+/g, "-")
-       .slice(0, 40)
-
-# Get next workflow number for category
-num = max(existing nums) + 1
-```
-
-## Workflow Start Flow
-
-```
-1. Parse command: /workflow start bugfix "login timeout"
-   ↓
-2. Resolve template: "bugfix" → BugfixTemplate
-   ↓
-3. Auto-detect if no template: analyze description
-   ↓
-4. Create artifact directory
-   ↓
-5. Write STATE.json
-   ↓
-6. Load workflow-start.md prompt
-   ↓
-7. Send custom message with workflow prompt
-   ↓
-8. Main agent begins triage phase
-```
-
-## Auto Mode Flow
-
-```
-1. Read STATE.json
-   ↓
-2. Find current active phase
-   ↓
-3. Execute phase (via subagent or main agent)
-   ↓
-4. Review output
-   ↓
-5. If approved: advancePhase() → commit
-   ↓
-6. If failed: retry (max 3)
-   ↓
-7. Repeat until all phases done
-   ↓
-8. Mark workflow complete
-```
-
-## Review Checkpoints
-
-After each phase, reviewer checks:
-
-| Phase | Review Criteria |
-|-------|----------------|
-| triage | Root cause identified? Reproducible? |
-| fix | Fix addresses root cause? Tests pass? |
-| verify | All tests pass? Edge cases covered? |
-| ship | PR ready? Changelog updated? |
-
-## Error Recovery
-
-### Phase Retry
-
-```typescript
-const MAX_RETRIES = 3;
-
-async function executePhase(phase: Phase): Promise<boolean> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await runPhase(phase);
-      const review = await reviewPhase(phase);
-      
-      if (review.status === "APPROVED") {
-        return true;
-      }
-      
-      // Fix feedback and retry
-      await applyFeedback(review.feedback);
-    } catch (err) {
-      if (attempt === MAX_RETRIES) throw err;
-      await delay(1000 * attempt); // backoff
-    }
-  }
-  return false;
+resolve_by_name() {
+  local name="$1"
+  case "$name" in
+    bug|fix)      echo "bugfix" ;;
+    hot)          echo "hotfix" ;;
+    feat|feature) echo "feature" ;;
+    research)     echo "spike" ;;
+    *)            echo "$name" ;;
+  esac
 }
 ```
 
-### Abort Workflow
+### Auto-detect
 
-```typescript
-function abortWorkflow(reason: string): void {
-  const state = readWorkflowState();
-  state.status = "aborted";
-  state.abortedAt = new Date().toISOString();
-  state.abortReason = reason;
-  writeWorkflowState(state);
-  
-  // Cleanup resources
-  cleanupTmuxSessions();
-  notifyUser(`Workflow aborted: ${reason}`);
+```bash
+auto_detect() {
+  local desc="$1"
+  local lower=$(echo "$desc" | tr '[:upper:]' '[:lower:]')
+
+  if echo "$lower" | grep -qE 'bug|issue|error|wrong|broken|fix'; then
+    echo "bugfix"
+  elif echo "$lower" | grep -qE 'hot|emergency|prod|urgent'; then
+    echo "hotfix"
+  elif echo "$lower" | grep -qE 'security|vulnerability|exploit'; then
+    echo "security"
+  elif echo "$lower" | grep -qE 'research|explore|spike|investigate'; then
+    echo "spike"
+  elif echo "$lower" | grep -qE 'refactor|restructure|cleanup|technical.?debt'; then
+    echo "refactor"
+  else
+    echo "feature"
+  fi
 }
 ```
 
-## Integration Points
+## Available Templates
 
-### With subagent skill
+| Template | Description | Phases |
+|----------|-------------|--------|
+| `bugfix` | Fix bugs with root-cause analysis | reproduce, diagnose, fix, verify |
+| `hotfix` | Emergency production fix | reproduce, diagnose, fix, verify, ship |
+| `feature` | Build new features | design, implement, test, review |
+| `refactor` | Improve code structure | analyze, refactor, verify |
+| `spike` | Research and explore | research, document, present |
 
-```bash
-# Execute phase in isolated subagent
-SESSION=$(start_subagent_tmux.sh \
-  /tmp/phase-output.txt \
-  15m \
-  @phase-worker.md \
-  "Execute ${phase} phase. Read ${artifactDir}/instructions.md")
+## Workflow Execution Flow
 
-tmux_wait.sh "$(echo $SESSION | cut -d: -f1)" 900
+```
+1. User: /workflow start bugfix "Fix login bug"
+   ↓
+2. Resolve template → "bugfix"
+   ↓
+3. Call: orchestrate start --workflow bugfix --name "Fix login bug"
+   ↓
+4. Orchestrate loads: templates/bugfix.yaml
+   ↓
+5. Creates tasks:
+   - reproduce (pending, no deps)
+   - diagnose (blocked by: reproduce)
+   - fix (blocked by: diagnose)
+   - verify (blocked by: fix)
+   ↓
+6. Runtime starts monitor loop
+   ↓
+7. reconcile() schedules workers
+   ↓
+8. Workers execute in tmux sessions
+   ↓
+9. Workflow completes when all tasks done
 ```
 
-### With tmux skill
+## State Storage
 
-```bash
-# Monitor auto mode execution
-tmux new -s workflow-monitor
-# Panels: status, logs, progress
+All state is managed by orchestrate CLI:
+
+```
+.ai/team/
+├── config.json       # Team configuration
+├── state.json        # Current runtime state
+├── tasks/            # Individual task states
+├── workers/          # Worker execution directories
+├── logs/             # Execution logs
+└── reviews/          # Review requests
 ```
 
-### With review skill
+## Integration with Orchestrate
+
+### Workflow Skill (Frontend)
+
+**Responsibilities:**
+- User-friendly commands
+- Template selection and aliasing
+- Parameter parsing
+- Human-readable output
+
+### Orchestrate CLI (Backend)
+
+**Responsibilities:**
+- Task scheduling and dependency resolution
+- Worker pool management
+- State persistence
+- Tmux session management
+- Retry and recovery logic
+
+### API Contract
 
 ```bash
-# Review phase output
-# phase-reviewer checks against criteria
+# Start workflow
+orchestrate start --workflow <template> --name <name>
+
+# Show status
+orchestrate status
+
+# Stop workflow
+orchestrate stop
+
+# Show logs
+orchestrate logs [--phase <phase>]
+
+# Approve review
+orchestrate approve <task-id>
+
+# List templates
+orchestrate templates [info <template>]
+```
+
+## Error Handling
+
+```bash
+# Ensure orchestrate binary exists before use
+ensure_orchestrate_binary() {
+  local script_dir="$HOME/.ai/skills/workflow/orchestrate"
+  local binary="$script_dir/bin/orchestrate"
+
+  if [ ! -f "$binary" ]; then
+    echo "🔨 Building orchestrate binary..."
+    cd "$script_dir"
+    go build -o bin/orchestrate ./cmd/main.go
+    echo "✅ Build complete"
+  fi
+}
+
+# Wrapper function
+run_orchestrate() {
+  # Ensure binary exists
+  ensure_orchestrate_binary
+
+  local output
+  output=$(~/.ai/skills/workflow/orchestrate/bin/orchestrate "$@" 2>&1)
+  local exit_code=$?
+
+  if [ $exit_code -ne 0 ]; then
+    echo "❌ Orchestrate error: $output"
+    return $exit_code
+  fi
+
+  echo "$output"
+  return 0
+}
+```
+
+## Custom Templates
+
+To add custom templates:
+
+```bash
+# 1. Create template file
+~/.ai/skills/workflow/orchestrate/templates/my-template.yaml
+
+# 2. Use it
+/workflow start my-template "My custom workflow"
+```
+
+Template format:
+```yaml
+name: My Custom Workflow
+description: Custom workflow for my team
+
+phases:
+  - id: phase1
+    subject: "Phase One"
+    description: "Do phase one work"
+    blocked_by: []
+
+  - id: phase2
+    subject: "Phase Two"
+    description: "Do phase two work"
+    blocked_by: [phase1]
+
+human_loop:
+  checkpoints: [phase2]
 ```

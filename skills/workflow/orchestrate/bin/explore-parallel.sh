@@ -93,7 +93,7 @@ for topic in "${TOPICS[@]}"; do
     ~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
         "$OUTPUT_FILE" \
         "${TIMEOUT}s" \
-        @~/.ai/skills/orchestrate/references/explorer.md \
+        @~/.ai/skills/workflow/orchestrate/references/explorer.md \
         "$topic" &
     
     PIDS+=($!)
