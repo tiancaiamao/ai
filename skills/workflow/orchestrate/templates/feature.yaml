@@ -1,0 +1,97 @@
+name: feature
+description: Feature development workflow with human checkpoints
+
+# Human-in-the-loop configuration
+# Phases in review_phases will pause and wait for human approval
+human_loop:
+  # These phases require human approval before continuing
+  review_phases:
+    - plan  # Review plan before implementation
+  
+  # Checkpoints - specific tasks that require approval (created dynamically)
+  checkpoints: []
+  
+  # Auto-approve after this duration (0 = never, requires manual approval)
+  auto_approve_timeout: 0
+  
+  # Optional: command to run when review is needed
+  # Example: notify_command: "terminal-notifier -title 'AI Team' -message 'Review required'"
+  notify_command: ""
+
+phases:
+  - id: explore
+    subject: "Explore codebase"
+    description: |
+      Explore the affected areas and understand the codebase structure.
+      
+      Focus on:
+      - Relevant modules and their responsibilities
+      - Dependencies and interfaces
+      - Potential impact areas
+      
+      Output your findings to: .ai/team/outbox/explore.md
+
+  - id: plan
+    subject: "Create implementation plan"
+    description: |
+      Based on exploration, create a detailed implementation plan.
+      
+      Steps:
+      1. Analyze the feature requirements
+      2. Break down into concrete implementation tasks
+      3. Identify dependencies between tasks
+      4. Create sub-tasks using:
+         orchestrate api create-task --input '{"subject":"...","description":"...","blocked_by":[]}'
+      
+      After creating tasks, update the review task to depend on them:
+         orchestrate api update-task --input '{"task_id":"review","blocked_by":["task-1","task-2",...]}'
+      
+      Output your plan to: .ai/team/outbox/plan.md
+      
+      *** CHECKPOINT ***
+      After completing this phase, request human review:
+      
+      orchestrate api request-review --input '{
+        "task_id": "plan",
+        "phase_id": "plan",
+        "worker_name": "$AI_TEAM_WORKER",
+        "summary": "Implementation plan created with X tasks",
+        "output_file": ".ai/team/outbox/plan.md"
+      }'
+      
+      Then poll for review result (loop until approved/rejected):
+      
+      orchestrate api check-review --input '{"task_id":"plan"}'
+      
+      If rejected, update the plan and request review again.
+      If approved, continue to implementation tasks.
+      
+    blocked_by:
+      - explore
+
+  - id: review
+    subject: "Final review and testing"
+    description: |
+      Review all implementations and run tests.
+      
+      Steps:
+      1. Review code changes
+      2. Run test suite
+      3. Fix any issues
+      4. Update documentation if needed
+      
+      Output summary to: .ai/team/outbox/review.md
+      
+      *** CHECKPOINT ***
+      Request final human review before completing:
+      
+      orchestrate api request-review --input '{
+        "task_id": "review",
+        "phase_id": "review",
+        "worker_name": "$AI_TEAM_WORKER",
+        "summary": "Implementation complete, ready for final review",
+        "output_file": ".ai/team/outbox/review.md"
+      }'
+      
+    blocked_by:
+      - plan
