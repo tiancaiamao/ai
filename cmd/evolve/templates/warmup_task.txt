@@ -1,0 +1,33 @@
+Complete ALL of the following tasks carefully. Do NOT skip any.
+
+## Task 1: Code exploration
+- Read the file /Users/genius/project/ai/pkg/agent/loop.go and summarize its main functions
+- Read /Users/genius/project/ai/pkg/agent/agent.go and summarize how the agent is configured
+- Read /Users/genius/project/ai/pkg/tools/bash.go and describe how bash commands are executed
+- Write a summary to {{WORK_DIR}}/warmup1.txt
+
+## Task 2: Search and analyze
+- Search for all occurrences of "context_management" in the codebase under /Users/genius/project/ai/
+- List each file and line where it appears
+- Read each file you found and explain what context_management does in that file
+- Write your analysis to {{WORK_DIR}}/warmup2.txt
+
+## Task 3: Deep dive into session handling
+- Read /Users/genius/project/ai/pkg/session/store.go
+- Read /Users/genius/project/ai/pkg/session/loader.go  
+- Read /Users/genius/project/ai/pkg/session/session.go
+- Explain how sessions are stored, loaded, and managed
+- Write your analysis to {{WORK_DIR}}/warmup3.txt
+
+## Task 4: Read a large session file
+- Read the file at ~/.ai/sessions/--Users-genius-project-ai--/298df63d-d402-4f38-a342-6c74788042d5/messages.jsonl
+- This is a ~2.4MB file. Read all of it.
+- Identify all the tool calls made in this session and categorize them
+- Write your findings to {{WORK_DIR}}/warmup4.txt
+
+## Task 5: Architecture summary
+- Based on everything you've read, write a comprehensive architecture summary
+- Include how the agent loop works, how tools are registered, how sessions are managed
+- Write to {{WORK_DIR}}/warmup5.txt
+
+IMPORTANT: Complete ALL tasks. Do NOT take shortcuts. Read every file mentioned.

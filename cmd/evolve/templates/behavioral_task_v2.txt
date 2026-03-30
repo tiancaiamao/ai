@@ -1,0 +1,32 @@
+You are resuming a session that already has significant context from previous work.
+Complete ALL of the following tasks:
+
+Write a final summary to: {{WORK_DIR}}/final_answers.txt
+
+## Task A: Analyze accumulated context
+- Review what you've done in this session so far
+- Read the session file at ~/.ai/sessions/--Users-genius-project-ai--/298df63d-d402-4f38-a342-6c74788042d5/messages.jsonl
+- This file is ~2.4MB. Analyze the main topics and tools used.
+- Write analysis to {{WORK_DIR}}/step2_analysis.txt
+
+## Task B: Cross-reference with new code
+- Read /tmp/autoresearch/program.md
+- Read /tmp/autoresearch/train.py
+- Compare the autoresearch methodology with patterns from the session analysis
+- Write comparison to {{WORK_DIR}}/step3_comparison.txt
+
+## Task C: Knowledge Questions
+After completing Tasks A-B, answer these questions. Write ALL answers to {{WORK_DIR}}/final_answers.txt:
+
+Q1: When should an agent check for context management? (every turn / only when reminded / only on error)
+Q2: What is the minimum context usage percentage that should trigger compact?
+Q3: What should you do with 5+ stale tool outputs? Name the specific action and parameter.
+Q4: What happens if you truncate a useful output and then need to re-read it? Why is this bad?
+Q5: True or False: skip is a valid response when you have been reminded about context management.
+
+Format:
+Q1: <answer>
+Q2: <answer>
+Q3: <answer>
+Q4: <answer>
+Q5: <answer>

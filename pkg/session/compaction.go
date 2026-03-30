@@ -3,6 +3,7 @@ package session
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,6 +205,13 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	s.header.LastCompactionID = entry.ID
 	s.header.ResumeOffset = 0 // File will be rewritten, so offset resets
 
+	// Backup messages.jsonl before rewrite so pre-compact data is preserved.
+	// This allows post-hoc analysis of full session history (e.g., evolve loop
+	// structural checks that need to inspect messages before compaction).
+	if backupErr := s.backupPreCompact(); backupErr != nil {
+		slog.Warn("Failed to backup pre-compact messages", "error", backupErr)
+	}
+
 	// Rewrite the entire file to persist the updated header
 	if err := s.rewriteFile(); err != nil {
 		return nil, err
@@ -218,6 +226,44 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 		TokensBefore:     tokensBefore,
 		TokensAfter:      tokensAfter,
 	}, nil
+}
+
+// backupPreCompact copies the current messages.jsonl to llm-context/detail/
+// before compaction rewrites it. This preserves the full pre-compact history
+// for post-hoc analysis (e.g., behavioral checks in evolve loop).
+func (s *Session) backupPreCompact() error {
+	src := s.filePath()
+	info, err := os.Stat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing to backup
+		}
+		return err
+	}
+
+	dir := GetLLMContextDetailDir(s.sessionDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	dst := filepath.Join(dir, "pre-compact-"+ts+".jsonl")
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode())
+	if err != nil {
+		return err
+	}
+	if _, err := out.ReadFrom(in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {

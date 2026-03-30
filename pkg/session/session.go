@@ -378,6 +378,13 @@ func (s *Session) SaveMessages(messages []agentctx.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Auto-detect compaction: if new messages are fewer than current entries,
+	// backup the file before overwriting. This preserves pre-compact data for
+	// post-hoc analysis (e.g., evolve loop structural checks).
+	if len(messages) < len(s.entries) {
+		_ = s.backupPreCompact()
+	}
+
 	s.entries = make([]*SessionEntry, 0, len(messages))
 	s.byID = make(map[string]*SessionEntry)
 	s.leafID = nil

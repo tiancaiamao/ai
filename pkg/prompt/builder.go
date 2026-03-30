@@ -128,6 +128,9 @@ type Builder struct {
 
 	// Context management enabled (controls context_management.md inclusion)
 	contextManagementEnabled bool
+
+	// Context management override (replaces embedded context_management.md)
+	contextManagementOverride string
 }
 
 // NewBuilder creates a new prompt builder.
@@ -242,6 +245,12 @@ func (b *Builder) SetContextManagementEnabled(enabled bool) *Builder {
 	return b
 }
 
+// SetContextManagementOverride replaces the embedded context_management.md content.
+func (b *Builder) SetContextManagementOverride(content string) *Builder {
+	b.contextManagementOverride = content
+	return b
+}
+
 // Build builds final system prompt by replacing placeholders in the template.
 func (b *Builder) Build() string {
 	result := promptTemplate
@@ -274,7 +283,11 @@ For persistent workspace switching across subsequent tool calls, use change_work
 	// Replace context management (optional section)
 	contextManagement := ""
 	if b.contextManagementEnabled && b.llmContext != nil {
-		contextManagement = contextManagementPrompt
+		if b.contextManagementOverride != "" {
+			contextManagement = b.contextManagementOverride
+		} else {
+			contextManagement = contextManagementPrompt
+		}
 	}
 	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
 

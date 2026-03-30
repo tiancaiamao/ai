@@ -73,7 +73,7 @@ func TestHeadlessEffectiveConfigWithCustomPrompt(t *testing.T) {
 	base.TaskTracking = true
 	base.ContextManagement = true
 
-	effective := headlessEffectiveConfig(base, "custom prompt")
+	effective := headlessEffectiveConfig(base, "custom prompt", false)
 	if effective.TaskTracking {
 		t.Fatal("expected TaskTracking to be disabled for custom system prompt")
 	}

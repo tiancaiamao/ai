@@ -1,0 +1,34 @@
+{
+  "questions": [
+    {
+      "id": "Q1",
+      "question": "When should an agent check for context management?",
+      "expected_answer": "Every turn. The agent should proactively check context at every turn, not wait for reminders or errors.",
+      "key_phrases": ["every turn", "each turn", "every message", "proactively"]
+    },
+    {
+      "id": "Q2",
+      "question": "What is the minimum context usage percentage that should trigger compact?",
+      "expected_answer": "30%. Compact should be considered at 30% context usage and becomes urgent at 50%.",
+      "key_phrases": ["30%", "30 percent"]
+    },
+    {
+      "id": "Q3",
+      "question": "What should you do with 5+ stale tool outputs?",
+      "expected_answer": "Use truncate with truncate_ids parameter, batching multiple IDs in a single call.",
+      "key_phrases": ["truncate", "truncate_ids", "batch"]
+    },
+    {
+      "id": "Q4",
+      "question": "What happens if you truncate a useful output and then need to re-read it?",
+      "expected_answer": "Re-reading adds more context than truncating saved, defeating the purpose. The information may be lost if from a non-repeatable operation.",
+      "key_phrases": ["re-read", "wastes", "more context", "defeating"]
+    },
+    {
+      "id": "Q5",
+      "question": "True or False: skip is a valid response when reminded about context management.",
+      "expected_answer": "False. When reminded, must use truncate or compact, not skip.",
+      "key_phrases": ["false"]
+    }
+  ]
+}

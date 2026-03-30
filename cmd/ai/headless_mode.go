@@ -165,12 +165,12 @@ func registerHeadlessTools(
 	}
 }
 
-func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string) *config.Config {
+func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string, keepTools bool) *config.Config {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	effective := *cfg
-	if strings.TrimSpace(customSystemPrompt) != "" {
+	if strings.TrimSpace(customSystemPrompt) != "" && !keepTools {
 		effective.TaskTracking = false
 		effective.ContextManagement = false
 	}
@@ -179,7 +179,7 @@ func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string) *con
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, keepTools bool, cmPromptOverride string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
 	slog.Info("Starting headless mode", "prompts", len(prompts), "max_turns", maxTurns, "tools", allowedTools, "timeout", timeout, "has_custom_prompt", customSystemPrompt != "")
 
@@ -197,8 +197,8 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 	}
-	effectiveCfg := headlessEffectiveConfig(cfg, customSystemPrompt)
-	if customSystemPrompt != "" && (cfg.TaskTracking || cfg.ContextManagement) {
+	effectiveCfg := headlessEffectiveConfig(cfg, customSystemPrompt, keepTools)
+	if customSystemPrompt != "" && !keepTools && (cfg.TaskTracking || cfg.ContextManagement) {
 		slog.Info("Custom system prompt detected: disabling built-in task/context management features")
 	}
 
@@ -371,6 +371,12 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	// Set task tracking and context management based on config
 	promptBuilder.SetTaskTrackingEnabled(effectiveCfg.TaskTracking)
 	promptBuilder.SetContextManagementEnabled(effectiveCfg.ContextManagement)
+
+	// Override context management section if provided
+	if cmPromptOverride != "" {
+		promptBuilder.SetContextManagementOverride(cmPromptOverride)
+		slog.Info("Using context management override", "length", len(cmPromptOverride))
+	}
 
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
