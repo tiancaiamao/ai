@@ -65,8 +65,11 @@ func TestDecisionReminderResetsAfterPressureClears(t *testing.T) {
 
 func TestDecisionReminderFrequencyChangesWithAutonomy(t *testing.T) {
 	proactive := DefaultContextMgmtState()
-	proactive.RecordDecision(1, "truncate", false)
-	proactive.RecordDecision(2, "truncate", false)
+	proactive.SetCurrentTurn(1)
+	proactive.RecordDecisionForCurrentTurn("truncate")
+	proactive.ResetTurnTracking()
+	proactive.SetCurrentTurn(2)
+	proactive.RecordDecisionForCurrentTurn("truncate")
 	if proactive.ReminderFrequency <= 10 {
 		t.Fatalf("expected proactive decisions to reduce reminder frequency, got %d", proactive.ReminderFrequency)
 	}

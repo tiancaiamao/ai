@@ -146,7 +146,6 @@ func copyAndFixTests(src, dst string) error {
 }
 
 func fixAppPaths(content string) string {
-	// Add WORK_DIR import after "from pathlib import Path"
 	lines := strings.Split(content, "\n")
 	var newLines []string
 	added := false
@@ -158,6 +157,17 @@ func fixAppPaths(content string) string {
 			newLines = append(newLines, "WORK_DIR = Path(os.environ.get(\"WORK_DIR\", Path(__file__).parent.parent / \"setup\"))")
 			added = true
 		}
+	}
+
+	// If no "from pathlib import" line was found, insert at top of file
+	if !added {
+		header := []string{
+			"from pathlib import Path",
+			"import os",
+			"WORK_DIR = Path(os.environ.get(\"WORK_DIR\", Path(__file__).parent.parent / \"setup\"))",
+			"",
+		}
+		newLines = append(header, newLines...)
 	}
 
 	result := strings.Join(newLines, "\n")

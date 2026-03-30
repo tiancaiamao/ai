@@ -27,9 +27,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	if !containsString(snapshot, "tokens_band: 20-40") {
 		t.Fatalf("expected 20-40 band, got: %s", snapshot)
 	}
-	if !containsString(snapshot, "action_hint: light_compression") {
-		t.Fatalf("expected light_compression hint, got: %s", snapshot)
-	}
+	// action_hint field has been removed
 
 	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
 	if refreshed2 {
@@ -60,9 +58,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	if !containsString(snapshot5, "tokens_band: 60-75") {
 		t.Fatalf("expected 60-75 band, got: %s", snapshot5)
 	}
-	if !containsString(snapshot5, "action_hint: heavy_compression") {
-		t.Fatalf("expected heavy_compression hint, got: %s", snapshot5)
-	}
+	// action_hint field has been removed
 }
 
 func TestBuildRuntimeSystemAppendix(t *testing.T) {
@@ -244,26 +240,8 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 	// not in updateRuntimeMetaSnapshot which is telemetry-only
 }
 
-func TestRuntimeContextManagementHintByUsageStage(t *testing.T) {
-	cases := []struct {
-		percent float64
-		expect  string
-	}{
-		{percent: 12, expect: "only TRUNCATE"},
-		{percent: 25, expect: "TRUNCATE stale outputs in batches"},
-		{percent: 32, expect: "consider COMPACT only after completing current task phase"},
-		{percent: 60, expect: "prepare for COMPACT"},
-		{percent: 70, expect: "COMPACT now"},
-		{percent: 90, expect: "COMPACT immediately"},
-	}
-
-	for _, tc := range cases {
-		got := runtimeContextManagementHint(tc.percent)
-		if !containsString(got, tc.expect) {
-			t.Fatalf("percent %.1f expected hint containing %q, got %q", tc.percent, tc.expect, got)
-		}
-	}
-}
+// TestRuntimeContextManagementHintByUsageStage removed - runtimeContextManagementHint function
+// was removed in refactor. Usage stage hints are now handled differently.
 
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || containsSubstring(s, substr))
@@ -485,5 +463,49 @@ func TestUpdateRuntimeMetaSnapshotIncludesWorkspacePaths(t *testing.T) {
 	}
 	if !containsString(snapshot, `startup_path: "/repo"`) {
 		t.Fatalf("expected startup_path in snapshot:\n%s", snapshot)
+	}
+}
+
+// TestUpdateRuntimeMetaSnapshotDecisionMetricsWithoutTaskTracking verifies that
+// context_metrics.decision is shown even when TaskTrackingState is nil.
+// This is a regression test for the bug where proactive_score was not displayed.
+func TestUpdateRuntimeMetaSnapshotDecisionMetricsWithoutTaskTracking(t *testing.T) {
+	agentCtx := agentctx.NewAgentContext("sys")
+	// Note: TaskTrackingState is intentionally NOT set (nil)
+	// This simulates the case where task tracking is disabled or not initialized
+
+	meta := agentctx.ContextMeta{
+		TokensUsed:        5000,
+		TokensMax:         128000,
+		TokensPercent:     5.0,
+		MessagesInHistory: 5,
+		LLMContextSize:    100,
+	}
+
+	snapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+
+	// Must contain context_metrics section even without TaskTrackingState
+	if !containsString(snapshot, "context_metrics:") {
+		t.Fatalf("expected context_metrics section even without TaskTrackingState:\n%s", snapshot)
+	}
+
+	// Must contain decision subsection with proactive score
+	if !containsString(snapshot, "decision:") {
+		t.Fatalf("expected decision subsection:\n%s", snapshot)
+	}
+
+	// Must show proactive count (even if 0)
+	if !containsString(snapshot, "proactive:") {
+		t.Fatalf("expected proactive field in decision:\n%s", snapshot)
+	}
+
+	// Must show reminded count (even if 0)
+	if !containsString(snapshot, "reminded:") {
+		t.Fatalf("expected reminded field in decision:\n%s", snapshot)
+	}
+
+	// Must show score
+	if !containsString(snapshot, "score:") {
+		t.Fatalf("expected score field in decision:\n%s", snapshot)
 	}
 }

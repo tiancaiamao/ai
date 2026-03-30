@@ -1773,8 +1773,6 @@ func updateRuntimeMetaSnapshot(
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
 	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
-	actionHint := runtimeActionHint(band)
-	fastPathAllowed := actionHint == "normal" && toolPressure.StaleCount == 0 && toolPressure.LargeCount == 0
 
 	// Get or initialize ContextMgmtState
 	if agentCtx.ContextMgmtState == nil {
@@ -1793,6 +1791,8 @@ func updateRuntimeMetaSnapshot(
 	}
 
 	// Build update metrics section
+	// Always show context_metrics.decision (ContextMgmtState is always initialized)
+	// TaskTrackingState may be nil if task tracking is disabled
 	var updateMetrics string
 	if agentCtx.TaskTrackingState != nil {
 		updateStats := agentCtx.TaskTrackingState.GetUpdateStats()
@@ -1826,11 +1826,28 @@ context_metrics:
     total: 0
     score: no_data
   decision:
-    proactive: 0
-    reminded: 0
+    proactive: %d
+    reminded: %d
     reminders_remaining: %d
-    score: no_data_yet`, remindersRemaining)
+    score: %s`,
+				stateSnapshot.ProactiveDecisions,
+				stateSnapshot.ReminderNeeded,
+				remindersRemaining,
+				stateSnapshot.Score)
 		}
+	} else {
+		// TaskTrackingState is nil, but still show decision metrics from ContextMgmtState
+		updateMetrics = fmt.Sprintf(`
+context_metrics:
+  decision:
+    proactive: %d
+    reminded: %d
+    reminders_remaining: %d
+    score: %s`,
+			stateSnapshot.ProactiveDecisions,
+			stateSnapshot.ReminderNeeded,
+			remindersRemaining,
+			stateSnapshot.Score)
 	}
 
 	// runtime_state is purely informational - no directives or commands
@@ -1838,7 +1855,6 @@ context_metrics:
 	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
 context_meta:
   tokens_band: %s
-  action_hint: %s
   tokens_used_approx: %d
   tokens_max: %d
   messages_in_history_bucket: %s
@@ -1847,34 +1863,30 @@ workspace:
   current_workdir: %s
   startup_path: %s
 tool_output_pressure:
-  stale_tool_outputs_bucket: %s
+  stale_tool_outputs: %d
   tool_outputs_summary: %s
-  large_tool_outputs_bucket: %s
+  large_tool_outputs: %d
   largest_tool_output_bucket: %s%s
 compact_decision_signals:
   tokens_percent: %.1f
   context_usage_percent: %.1f
   topic_shift_since_last_user: llm_judge
   phase_completed_recently: llm_judge
-  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.
-decision:
-  fast_path_allowed: %s`,
+  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.`,
 		band,
-		actionHint,
 		tokensUsedApprox,
 		meta.TokensMax,
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.LLMContextSize),
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
-		runtimeCountBucket(toolPressure.StaleCount),
+		toolPressure.StaleCount,
 		toolOutputsSummary,
-		runtimeCountBucket(toolPressure.LargeCount),
+		toolPressure.LargeCount,
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
 		updateMetrics,
 		meta.TokensPercent,
 		meta.TokensPercent,
-		yesNo(fastPathAllowed),
 	)
 
 	agentCtx.RuntimeMetaSnapshot = snapshot
@@ -1937,40 +1949,6 @@ func runtimeTokenBand(percent float64) string {
 		return "60-75"
 	default:
 		return "75+"
-	}
-}
-
-func runtimeActionHint(band string) string {
-	switch band {
-	case "0-20":
-		return "normal"
-	case "20-40":
-		return "light_compression"
-	case "40-60":
-		return "medium_compression"
-	case "60-75":
-		return "heavy_compression"
-	default:
-		return "emergency_compression"
-	}
-}
-
-func runtimeContextManagementHint(percent float64) string {
-	// COMPACT is expensive (requires LLM call), only recommend when truly needed
-	// ShouldCompact rejects when token usage < 75% of available threshold
-	switch {
-	case percent < 20:
-		return "Low usage (10-20%% tone): stay on task, only TRUNCATE obviously stale/large tool outputs. COMPACT is NOT recommended at this level."
-	case percent < 30:
-		return "Mild pressure (20-30%% tone): proactively TRUNCATE stale outputs in batches (50-100 at once). COMPACT is optional and may be rejected."
-	case percent < 50:
-		return "Moderate pressure (30-50%% tone): TRUNCATE stale outputs, consider COMPACT only after completing current task phase."
-	case percent < 65:
-		return "High pressure (50-65%% tone): prepare for COMPACT, keep only active context and key decisions."
-	case percent < 75:
-		return "Critical pressure (65-75%% tone): COMPACT now, fallback auto-compaction is getting close."
-	default:
-		return "Emergency pressure (75%%+ tone): COMPACT immediately, forced fallback compaction may trigger next."
 	}
 }
 

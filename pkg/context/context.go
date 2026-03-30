@@ -32,6 +32,7 @@ type AgentContext struct {
 	RuntimeMetaTurns    int    `json:"-"`
 
 	// ContextMgmtState tracks LLM's context management behavior for adaptive reminders.
+	// Persisted across compacts/restarts so proactive/reminded counters survive.
 	ContextMgmtState *ContextMgmtState `json:"-"`
 
 	// PostCompactRecovery indicates that overview.md should be injected for recovery after compact.
@@ -56,33 +57,34 @@ type AgentContext struct {
 }
 
 // ContextMgmtState tracks LLM's context management decisions for adaptive reminder frequency.
+// Runtime state only — resets on agent restart, which is expected behavior.
 type ContextMgmtState struct {
-	mu sync.RWMutex
+	mu sync.RWMutex `json:"-"`
 
 	// Frequency adjustment (turns between reminders)
-	ReminderFrequency int // Current: 5-30, Default: 10
-	SkipUntilTurn     int // Skip reminders until this turn (set by LLM via skip_turns)
+	ReminderFrequency int `json:"-"`
+	SkipUntilTurn     int `json:"-"` // Skip reminders until this turn (set by LLM via skip_turns)
 
 	// Statistics for adaptive adjustment
-	ProactiveDecisions int // LLM made decisions without being reminded
-	ReminderNeeded     int // LLM needed reminders to make decisions
+	ProactiveDecisions int `json:"-"` // LLM made decisions without being reminded
+	ReminderNeeded     int `json:"-"` // LLM needed reminders to make decisions
 
 	// Turn tracking
-	CurrentTurn int // Current turn number (updated every loop iteration)
+	CurrentTurn int `json:"-"` // Current turn number (updated every loop iteration)
 
 	// Last action state
-	LastDecisionTurn    int    // Turn number of last decision
-	LastActionTaken     string // "truncate", "compact", "both", "skip"
-	LastReminderTurn    int    // Turn number of last reminder shown
-	LastReminderUrgency string // "none", "low", "medium", "high", "critical"
+	LastDecisionTurn    int    `json:"-"` // Turn number of last decision
+	LastActionTaken     string `json:"-"` // "truncate", "compact", "both", "skip"
+	LastReminderTurn    int    `json:"-"` // Turn number of last reminder shown
+	LastReminderUrgency string `json:"-"` // "none", "low", "medium", "high", "critical"
 
 	// Decision reminder state (independent from task_tracking reminder)
-	DecisionPressureTurns int // Consecutive turns under decision pressure
-	LastPressureTurn      int // Last turn when pressure was observed
+	DecisionPressureTurns int `json:"-"` // Consecutive turns under decision pressure
+	LastPressureTurn      int `json:"-"` // Last turn when pressure was observed
 
-	// Compliance tracking
-	ReminderShownThisTurn bool // Was reminder shown in current turn?
-	DecisionMadeThisTurn  bool // Did LLM call context_management this turn?
+	// Compliance tracking (ephemeral per-turn, not persisted)
+	ReminderShownThisTurn bool `json:"-"` // Was reminder shown in current turn?
+	DecisionMadeThisTurn  bool `json:"-"` // Did LLM call context_management this turn?
 }
 
 // ContextMgmtSnapshot is an immutable runtime view of ContextMgmtState.
@@ -129,35 +131,18 @@ func (s *ContextMgmtState) MarkReminderShown() {
 	s.ReminderShownThisTurn = true
 }
 
-// MarkDecisionMade marks that LLM called context_management this turn.
-// It also resets pressure counters and adjusts reminder frequency for proactive behavior.
-func (s *ContextMgmtState) MarkDecisionMade() {
+// RecordDecisionForCurrentTurn records a decision using the state's current turn
+// and reminder flags. Returns whether the decision was reminded.
+func (s *ContextMgmtState) RecordDecisionForCurrentTurn(action string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.DecisionMadeThisTurn = true
 
-	// Reset pressure counters when LLM makes a decision
-	s.DecisionPressureTurns = 0
-	s.LastDecisionTurn = s.CurrentTurn
-
-	// If this was a proactive decision (no reminder shown), reward it
-	if !s.ReminderShownThisTurn {
-		s.ProactiveDecisions++
-		// Increase reminder interval for proactive behavior
-		if s.ProactiveDecisions > s.ReminderNeeded && s.ReminderFrequency < 30 {
-			s.ReminderFrequency++
-			slog.Debug("[ContextMgmt] Increasing reminder interval (proactive decision)",
-				"frequency", s.ReminderFrequency,
-				"proactive", s.ProactiveDecisions,
-				"reminded", s.ReminderNeeded)
-		}
-	}
-
-	// Update LastReminderTurn to simulate "self-reminder" and prevent immediate re-reminder
-	s.LastReminderTurn = s.CurrentTurn
+	wasReminded := s.ReminderShownThisTurn
+	s.recordDecisionLocked(s.CurrentTurn, action, wasReminded)
+	return wasReminded
 }
 
 // ResetTurnTracking resets per-turn tracking flags at the start of each turn.
@@ -220,15 +205,12 @@ func (s *ContextMgmtState) adjustFrequencyLocked() {
 	// If ratio is between -1 and 1, keep current frequency
 }
 
-// RecordDecision records a context management decision made by LLM.
-func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded bool) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *ContextMgmtState) recordDecisionLocked(turn int, action string, wasReminded bool) {
+	s.DecisionMadeThisTurn = true
 	s.LastDecisionTurn = turn
+	if action == "" {
+		action = "none"
+	}
 	s.LastActionTaken = action
 
 	if wasReminded {
@@ -243,8 +225,8 @@ func (s *ContextMgmtState) RecordDecision(turn int, action string, wasReminded b
 }
 
 // SetSkipUntil sets the skip period.
-// Decision statistics are recorded by RecordDecision only, to avoid double counting.
-func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int, _ bool) {
+// Decision statistics are recorded by RecordDecisionForCurrentTurn.
+func (s *ContextMgmtState) SetSkipUntil(turn, skipTurns int) {
 	if s == nil {
 		return
 	}
@@ -387,9 +369,10 @@ func scoreFromCounts(proactiveDecisions, reminderNeeded int) string {
 		return "excellent"
 	case ratio >= 2:
 		return "good"
-	case ratio >= -1:
+	case ratio >= 1:
 		return "fair"
 	default:
+		// proactive <= reminded: needs improvement
 		return "needs_improvement"
 	}
 }
@@ -412,18 +395,6 @@ func (s *ContextMgmtState) GetCurrentTurn() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.CurrentTurn
-}
-
-// GetTurnAndReminderStatus returns the current turn and whether this turn
-// has already been marked as reminded.
-func (s *ContextMgmtState) GetTurnAndReminderStatus() (int, bool) {
-	if s == nil {
-		return 0, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	turn := s.CurrentTurn
-	return turn, s.LastReminderTurn == turn
 }
 
 // Snapshot returns a consistent view for read-heavy callers.

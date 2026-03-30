@@ -450,7 +450,13 @@ func (b *Benchmark) resetTask(task Task) error {
 	return os.MkdirAll(setupDir, 0755)
 }
 
-// generatePrompt creates the prompt for a task
+// generatePrompt creates the prompt for a task.
+//
+// Verification strategy varies by task type:
+//   - tbench tasks: agent may use check.py (weak verification) if present,
+//     but does NOT get verify.sh (full scoring oracle).
+//   - Other tasks: no verification hints at all. verify.sh is only used
+//     by the benchmark runner for scoring after the agent finishes.
 func (b *Benchmark) generatePrompt(task Task) string {
 	appShimNote := ""
 	if task.NeedsAppShim {
@@ -460,6 +466,50 @@ func (b *Benchmark) generatePrompt(task Task) string {
 		)
 	}
 
+	isTbench := strings.HasPrefix(task.ID, "tbench/")
+
+	if isTbench {
+		return b.generateTbenchPrompt(task, appShimNote)
+	}
+	return b.generateCustomPrompt(task, appShimNote)
+}
+
+// generateTbenchPrompt builds the prompt for Terminal Bench tasks.
+// The agent gets the task description and may use check.py for basic
+// self-checking, but does NOT receive the full scoring test suite
+// (test_outputs.py) or verify.sh.
+func (b *Benchmark) generateTbenchPrompt(task Task, appShimNote string) string {
+	checkNote := ""
+	checkPath := filepath.Join(task.Dir, "setup", "check.py")
+	if _, err := os.Stat(checkPath); err == nil {
+		checkNote = "\n8. You may run \"python3 check.py\" to do a basic self-check of your solution."
+	}
+
+	return fmt.Sprintf(`You are given a coding task. Read the task description and implement the solution.
+
+Task ID: %s
+Working Directory: %s/setup
+
+Task Description:
+%s
+
+Instructions:
+1. Read the files in the setup directory carefully
+2. Understand the problem and plan your approach
+3. Implement the required functionality
+4. Make sure the code runs correctly
+5. Test edge cases yourself by running the code with sample inputs
+6. Do NOT modify any files outside the setup directory unless the task requires it
+7. Do NOT use sudo%s
+%s
+
+Focus on producing a correct and complete solution. Start by reading the task files to understand the requirements.`, task.ID, task.Dir, task.Description, checkNote, appShimNote)
+}
+
+// generateCustomPrompt builds the prompt for non-tbench tasks.
+// No verification scripts are mentioned — the agent must produce
+// correct code on its own. verify.sh is only used for scoring.
+func (b *Benchmark) generateCustomPrompt(task Task, appShimNote string) string {
 	return fmt.Sprintf(`You are given a coding task. Read the task description and fix/implement the code.
 
 Task ID: %s
@@ -470,15 +520,13 @@ Task Description:
 
 Instructions:
 1. Read the files in the setup directory
-2. IMPORTANT: Read ../tests/test_outputs.py to understand exact expected format and requirements
-3. Fix the bugs or implement the required functionality
-4. Make sure the code compiles
-5. CRITICAL: Run ./verify.sh after completing your implementation
-6. If verify.sh fails, read the error output and fix the issues before re-running
-7. Do NOT modify verify.sh
+2. Fix the bugs or implement the required functionality
+3. Make sure the code compiles and runs correctly
+4. Test your changes by running the code with sample inputs
+5. Do NOT modify any files outside the setup directory unless the task requires it
 %s
 
-Please start by reading the task files and ../tests/test_outputs.py to understand the exact requirements.`, task.ID, task.Dir, task.Description, appShimNote)
+Please start by reading the task files to understand the requirements.`, task.ID, task.Dir, task.Description, appShimNote)
 }
 
 // verifyTask runs the verification script

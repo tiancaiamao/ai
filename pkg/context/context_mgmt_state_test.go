@@ -122,10 +122,14 @@ func TestAdjustFrequency_FlooredAt5(t *testing.T) {
 	}
 }
 
-func TestRecordDecision_Proactive(t *testing.T) {
+func TestRecordDecisionForCurrentTurn_Proactive(t *testing.T) {
 	state := DefaultContextMgmtState()
+	state.SetCurrentTurn(1)
 
-	state.RecordDecision(1, "truncate", false) // not reminded
+	wasReminded := state.RecordDecisionForCurrentTurn("truncate")
+	if wasReminded {
+		t.Fatalf("expected proactive decision (wasReminded=false)")
+	}
 
 	if state.ProactiveDecisions != 1 {
 		t.Fatalf("expected ProactiveDecisions 1, got %d", state.ProactiveDecisions)
@@ -141,10 +145,15 @@ func TestRecordDecision_Proactive(t *testing.T) {
 	}
 }
 
-func TestRecordDecision_Reminded(t *testing.T) {
+func TestRecordDecisionForCurrentTurn_Reminded(t *testing.T) {
 	state := DefaultContextMgmtState()
+	state.SetCurrentTurn(1)
+	state.MarkReminderShown()
 
-	state.RecordDecision(1, "compact", true) // was reminded
+	wasReminded := state.RecordDecisionForCurrentTurn("compact")
+	if !wasReminded {
+		t.Fatalf("expected reminded decision (wasReminded=true)")
+	}
 
 	if state.ProactiveDecisions != 0 {
 		t.Fatalf("expected ProactiveDecisions 0, got %d", state.ProactiveDecisions)
@@ -164,7 +173,7 @@ func TestSetSkipUntil(t *testing.T) {
 	state := DefaultContextMgmtState()
 	state.LastReminderTurn = 5
 
-	state.SetSkipUntil(10, 15, false) // not reminded
+	state.SetSkipUntil(10, 15)
 
 	if state.SkipUntilTurn != 25 { // 10 + 15
 		t.Fatalf("expected SkipUntilTurn 25, got %d", state.SkipUntilTurn)
@@ -177,9 +186,10 @@ func TestSetSkipUntil(t *testing.T) {
 
 func TestSkipDecisionCountedOnce(t *testing.T) {
 	state := DefaultContextMgmtState()
+	state.SetCurrentTurn(10)
 
-	state.SetSkipUntil(10, 5, false)
-	state.RecordDecision(10, "skip", false)
+	state.SetSkipUntil(10, 5)
+	state.RecordDecisionForCurrentTurn("skip")
 
 	if state.ProactiveDecisions != 1 {
 		t.Fatalf("expected skip to increase proactive decisions once, got %d", state.ProactiveDecisions)
@@ -341,13 +351,19 @@ func TestGetScore(t *testing.T) {
 			expected:  "good",
 		},
 		{
-			name:      "fair",
-			proactive: 3,
+			name:      "fair - equal counts",
+			proactive: 4,
 			reminded:  3,
 			expected:  "fair",
 		},
 		{
-			name:      "needs improvement",
+			name:      "needs_improvement - proactive equals reminded",
+			proactive: 3,
+			reminded:  3,
+			expected:  "needs_improvement",
+		},
+		{
+			name:      "needs_improvement - more reminded",
 			proactive: 2,
 			reminded:  8,
 			expected:  "needs_improvement",

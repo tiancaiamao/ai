@@ -144,17 +144,19 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
 	}
 
-	// Mark that LLM made a decision this turn (compliance tracking)
-	// Capture snapshot BEFORE MarkDecisionMade for accurate ratio calculation
-	// (MarkDecisionMade will increment ProactiveDecisions, affecting the ratio)
+	// Capture snapshot BEFORE any decision recording for accurate ratio calculation.
 	snapshot := agentCtx.ContextMgmtState.Snapshot()
-	agentCtx.ContextMgmtState.MarkDecisionMade()
-
-	turn, wasReminded := agentCtx.ContextMgmtState.GetTurnAndReminderStatus()
+	turn := snapshot.CurrentTurn
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("**Context Management Decision: %s**\n\n", strings.ToUpper(decision)))
 	result.WriteString(fmt.Sprintf("Reasoning: %s\n\n", reasoning))
+
+	// decisionRecorded tracks whether RecordDecisionForCurrentTurn was called.
+	// Skip denied does NOT record a decision — the LLM tried to avoid context
+	// management, not actually manage it. Only successful decisions count.
+	var decisionRecorded bool
+	var wasReminded bool
 
 	switch decision {
 	case "skip":
@@ -185,62 +187,68 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 
 		if ratio <= 0 {
 			// Case 1: Deny skip when ratio <= 0
-			nextReminderTurn := agentCtx.ContextMgmtState.LastReminderTurn + snapshot.ReminderFrequency
+			// Do NOT record a decision — skip denied means LLM tried to avoid
+			// context management, not actually manage it.
+			nextReminderTurn := snapshot.LastReminderTurn + snapshot.ReminderFrequency
 			if nextReminderTurn <= turn {
 				nextReminderTurn = turn + snapshot.ReminderFrequency
 			}
+			turnsUntilReminder := nextReminderTurn - turn
+			if turnsUntilReminder < 0 {
+				turnsUntilReminder = 0
+			}
 			result.WriteString("⚠️ skip request denied\n\n")
-			result.WriteString(fmt.Sprintf("Since you are not proactive enough (ratio=%d), you are not allowed to skip %d turns.\n\n", ratio, skipTurns))
-			result.WriteString(fmt.Sprintf("You will still receive a remind within %d turns (turn %d).\n", snapshot.ReminderFrequency, nextReminderTurn))
-			result.WriteString("You must be more proactive before you receive the next remind.\n\n")
+			result.WriteString(fmt.Sprintf("Since you are not proactive enough (proactive=%d, reminded=%d, ratio=%d), you are not allowed to skip %d turns.\n\n",
+				snapshot.ProactiveDecisions, snapshot.ReminderNeeded, ratio, skipTurns))
+			result.WriteString(fmt.Sprintf("You will receive another reminder within %d turns (turn %d).\n\n", turnsUntilReminder, nextReminderTurn))
+			result.WriteString("You must make proactive context management decisions (truncate/compact) WITHOUT being reminded to improve your score.\n\n")
 			result.WriteString(fmt.Sprintf("Next reminder at: turn %d\n", nextReminderTurn))
-			result.WriteString(fmt.Sprintf("Current stats: proactive=%d, reminded=%d, ratio=%d, frequency=%d turns\n",
-				snapshot.ProactiveDecisions, snapshot.ReminderNeeded, ratio, snapshot.ReminderFrequency))
+			result.WriteString(fmt.Sprintf("Current stats: proactive=%d, reminded=%d, ratio=%d, frequency=%d turns, score=%s\n",
+				snapshot.ProactiveDecisions, snapshot.ReminderNeeded, ratio, snapshot.ReminderFrequency, snapshot.Score))
 
 			// Don't call SetSkipUntil, skip is denied
 			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip_denied",
 				traceevent.Field{Key: "requested_skip_turns", Value: skipTurns},
 				traceevent.Field{Key: "ratio", Value: ratio},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
-			)
-		} else if skipTurns > maxSkip {
-			// Case 2: Reduce skipTurns when over limit
-			skipTurns = maxSkip
-			agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
-			result.WriteString(fmt.Sprintf("⚠️ skip_turns reduced from %d to %d\n\n", originalSkipTurns, skipTurns))
-			result.WriteString(fmt.Sprintf("Reason: Your proactive ratio is %d (max skip allowed: %d)\n", ratio, maxSkip))
-			result.WriteString("To skip more turns, make more proactive context management decisions.\n\n")
-			result.WriteString(fmt.Sprintf("Next reminder at: turn %d\n", turn+skipTurns))
-
-			// Record the skip decision so LastDecisionTurn is updated
-			agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
-
-			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip_reduced",
-				traceevent.Field{Key: "requested_skip_turns", Value: originalSkipTurns},
-				traceevent.Field{Key: "actual_skip_turns", Value: skipTurns},
-				traceevent.Field{Key: "max_skip", Value: maxSkip},
-				traceevent.Field{Key: "ratio", Value: ratio},
-				traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
 			)
 		} else {
-			// Case 3: Allow skip within limit
-			agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns, wasReminded)
-			result.WriteString(fmt.Sprintf("Skipping reminders for %d turns. Next reminder at turn %d.\n", skipTurns, turn+skipTurns))
+			// Case 2 & 3: skip allowed or reduced — record the decision
+			wasReminded = agentCtx.ContextMgmtState.RecordDecisionForCurrentTurn(decision)
+			decisionRecorded = true
 
-			// Record the skip decision so LastDecisionTurn is updated
-			agentCtx.ContextMgmtState.RecordDecision(turn, "skip", wasReminded)
+			if skipTurns > maxSkip {
+				// Case 2: Reduce skipTurns when over limit
+				skipTurns = maxSkip
+				agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns)
+				result.WriteString(fmt.Sprintf("⚠️ skip_turns reduced from %d to %d\n\n", originalSkipTurns, skipTurns))
+				result.WriteString(fmt.Sprintf("Reason: Your proactive ratio is low. Skipping too many turns reduces responsiveness.\n\n"))
+				result.WriteString(fmt.Sprintf("To skip more turns, make more proactive context management decisions.\n\n"))
+				result.WriteString(fmt.Sprintf("Next reminder at: turn %d\n", turn+skipTurns))
 
-			traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
-				traceevent.Field{Key: "skip_turns", Value: skipTurns},
-				traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
-				traceevent.Field{Key: "was_reminded", Value: wasReminded},
-			)
+				traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip_reduced",
+					traceevent.Field{Key: "requested_skip_turns", Value: originalSkipTurns},
+					traceevent.Field{Key: "actual_skip_turns", Value: skipTurns},
+					traceevent.Field{Key: "max_skip", Value: maxSkip},
+					traceevent.Field{Key: "ratio", Value: ratio},
+					traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
+					traceevent.Field{Key: "was_reminded", Value: wasReminded},
+				)
+			} else {
+				// Case 3: Allow skip within limit
+				agentCtx.ContextMgmtState.SetSkipUntil(turn, skipTurns)
+				result.WriteString(fmt.Sprintf("Skipping reminders for %d turns. Next reminder at turn %d.\n", skipTurns, turn+skipTurns))
+
+				traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_skip",
+					traceevent.Field{Key: "skip_turns", Value: skipTurns},
+					traceevent.Field{Key: "skip_until_turn", Value: turn + skipTurns},
+					traceevent.Field{Key: "was_reminded", Value: wasReminded},
+				)
+			}
 		}
 
 	case "truncate":
+		// Parse truncate_ids BEFORE recording decision, so we can check effectiveness.
 		truncatedCount := 0
-		// Support both string (comma-separated) and array formats for backwards compatibility
 		var idsToTruncate []string
 		if ids, ok := params["truncate_ids"].(string); ok && ids != "" {
 			// Parse comma-separated string
@@ -260,8 +268,11 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		}
 
 		if len(idsToTruncate) > 0 {
+			// Record decision only when truncate_ids are provided (effective action).
+			wasReminded = agentCtx.ContextMgmtState.RecordDecisionForCurrentTurn(decision)
+			decisionRecorded = true
+
 			// Filter out already truncated IDs to avoid redundant operations
-			// Pass the original raw IDs (string or []any) to filterAlreadyTruncated
 			idsToTruncate = t.filterAlreadyTruncated(ctx, agentCtx, params["truncate_ids"])
 
 			truncatedCount = t.processTruncate(ctx, agentCtx, idsToTruncate)
@@ -273,23 +284,30 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 				result.WriteString("No outputs were truncated (already truncated or IDs not found).\n")
 			}
 		} else {
-			result.WriteString("No truncate_ids provided, skipped truncation.\n")
+			// No truncate_ids provided: this is a no-op. Do NOT record as a decision
+			// because no actual context management was performed. Return an error so
+			// the LLM receives a strong signal that truncate requires valid IDs.
+			return nil, fmt.Errorf("truncate requires truncate_ids parameter. " +
+				"Provide comma-separated tool call IDs from stale <agent:tool> tags in context. " +
+				"Example: truncate_ids=\"call_abc123, call_def456\". " +
+				"No action taken, this call was NOT counted as a proactive decision")
 		}
 
 		// Clean up truncate_ids from the assistant message that called this tool
 		t.cleanupContextManagementInput(agentCtx, agentctx.ToolExecutionCallID(ctx))
 
-		// Record decision
-		agentCtx.ContextMgmtState.RecordDecision(turn, "truncate", wasReminded)
 		traceevent.Log(ctx, traceevent.CategoryTool, "context_decision_truncate",
 			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
 			traceevent.Field{Key: "was_reminded", Value: wasReminded},
 		)
 
 	case "compact":
+		// Record decision for compact
+		wasReminded = agentCtx.ContextMgmtState.RecordDecisionForCurrentTurn(decision)
+		decisionRecorded = true
+
 		if t.compactor == nil {
 			result.WriteString("Compactor not available, skipped compaction.\n")
-			agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
 			break
 		}
 
@@ -333,14 +351,16 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 			result.WriteString("Compaction returned no changes.\n")
 		}
 
-		agentCtx.ContextMgmtState.RecordDecision(turn, "compact", wasReminded)
-
 	default:
 		return nil, fmt.Errorf("invalid decision: %s", decision)
 	}
 
-	// Add stats summary
-	if decision != "skip" {
+	// Invalidate cached runtime_state so the next turn always rebuilds telemetry.
+	agentCtx.RuntimeMetaSnapshot = ""
+	agentCtx.RuntimeMetaTurns = 0
+
+	// Add stats summary for non-skip decisions and successful skip decisions
+	if decisionRecorded {
 		stats := agentCtx.ContextMgmtState.Snapshot()
 		result.WriteString(fmt.Sprintf("\n**Stats:** proactive=%d, reminded=%d, frequency=%d turns, score=%s\n",
 			stats.ProactiveDecisions,
@@ -356,7 +376,6 @@ func (t *ContextManagementTool) Execute(ctx context.Context, params map[string]a
 		},
 	}, nil
 }
-
 // processTruncate truncates the specified tool outputs.
 func (t *ContextManagementTool) processTruncate(ctx context.Context, agentCtx *agentctx.AgentContext, idsToTruncate []string) int {
 	truncatedCount := 0

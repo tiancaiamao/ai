@@ -298,6 +298,68 @@ func TestContextManagementConcurrentTruncateCallsKeepBothCleanups(t *testing.T) 
 	}
 }
 
+func TestContextManagementRemindedDecisionUpdatesCountersAndInvalidatesRuntimeSnapshot(t *testing.T) {
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ToolCallContent{
+			ID:   "call_cm_reminded",
+			Type: "toolCall",
+			Name: "context_management",
+			Arguments: map[string]any{
+				"decision":  "compact",
+				"reasoning": "reminded decision",
+			},
+		},
+	}
+
+	state := agentctx.DefaultContextMgmtState()
+	state.SetCurrentTurn(5)
+	state.RecordReminder(5, "high")
+	state.MarkReminderShown()
+
+	agentCtx := &agentctx.AgentContext{
+		Messages:            []agentctx.AgentMessage{assistant},
+		ContextMgmtState:    state,
+		RuntimeMetaSnapshot: "<agent:runtime_state/>",
+		RuntimeMetaBand:     "0-20",
+		RuntimeMetaTurns:    2,
+	}
+
+	tool := NewContextManagementTool(nil)
+	execCtx := agentctx.WithToolExecutionAgentContext(context.Background(), agentCtx)
+	execCtx = agentctx.WithToolExecutionCallID(execCtx, "call_cm_reminded")
+
+	resultBlocks, err := tool.Execute(execCtx, map[string]any{
+		"decision":  "compact",
+		"reasoning": "reminded decision",
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if state.ProactiveDecisions != 0 {
+		t.Fatalf("expected proactive decisions to remain 0, got %d", state.ProactiveDecisions)
+	}
+	if state.ReminderNeeded != 1 {
+		t.Fatalf("expected reminder-needed decisions to be 1, got %d", state.ReminderNeeded)
+	}
+
+	resultText := ""
+	if tc, ok := resultBlocks[0].(agentctx.TextContent); ok {
+		resultText = tc.Text
+	}
+	if !strings.Contains(resultText, "proactive=0, reminded=1") {
+		t.Fatalf("expected updated stats in tool result, got: %s", resultText)
+	}
+
+	if agentCtx.RuntimeMetaSnapshot != "" {
+		t.Fatalf("expected runtime snapshot cache to be invalidated, got: %q", agentCtx.RuntimeMetaSnapshot)
+	}
+	if agentCtx.RuntimeMetaTurns != 0 {
+		t.Fatalf("expected runtime meta turns reset to 0, got: %d", agentCtx.RuntimeMetaTurns)
+	}
+}
+
 // TestContextManagementSkipDenied tests that skip is denied when ratio <= 0
 func TestContextManagementSkipDenied(t *testing.T) {
 	assistant := agentctx.NewAssistantMessage()
@@ -307,9 +369,9 @@ func TestContextManagementSkipDenied(t *testing.T) {
 			Type: "toolCall",
 			Name: "context_management",
 			Arguments: map[string]any{
-				"decision":     "skip",
-				"reasoning":    "Test skip denied",
-				"skip_turns":   30,
+				"decision":   "skip",
+				"reasoning":  "Test skip denied",
+				"skip_turns": 30,
 			},
 		},
 	}
@@ -363,9 +425,9 @@ func TestContextManagementSkipDenied(t *testing.T) {
 	if !strings.Contains(resultText, "within 10 turns (turn 20)") {
 		t.Errorf("Expected reminder timing message, got: %s", resultText)
 	}
-	if !strings.Contains(resultText, "You must be more proactive") {
-		t.Errorf("Expected proactive encouragement message, got: %s", resultText)
-	}
+if !strings.Contains(resultText, "You must make proactive context management decisions") {
+			t.Errorf("Expected proactive encouragement message, got: %s", resultText)
+		}
 
 	// Verify that skip was NOT actually applied
 	if agentCtx.ContextMgmtState.SkipUntilTurn != 0 {
@@ -382,9 +444,9 @@ func TestContextManagementSkipReduced(t *testing.T) {
 			Type: "toolCall",
 			Name: "context_management",
 			Arguments: map[string]any{
-				"decision":     "skip",
-				"reasoning":    "Test skip reduced",
-				"skip_turns":   20,
+				"decision":   "skip",
+				"reasoning":  "Test skip reduced",
+				"skip_turns": 20,
 			},
 		},
 	}
@@ -428,11 +490,8 @@ func TestContextManagementSkipReduced(t *testing.T) {
 	if !strings.Contains(resultText, "⚠️ skip_turns reduced from 20 to 2") {
 		t.Errorf("Expected skip reduced message, got: %s", resultText)
 	}
-	if !strings.Contains(resultText, "ratio is 2") {
-		t.Errorf("Expected ratio message, got: %s", resultText)
-	}
-	if !strings.Contains(resultText, "max skip allowed: 2") {
-		t.Errorf("Expected max allowed message, got: %s", resultText)
+	if !strings.Contains(resultText, "proactive ratio is low") {
+		t.Errorf("Expected proactive ratio low message, got: %s", resultText)
 	}
 
 	// Verify that reduced skip was applied (maxSkip = 5 - 3 = 2)
@@ -450,9 +509,9 @@ func TestContextManagementSkipSuccess(t *testing.T) {
 			Type: "toolCall",
 			Name: "context_management",
 			Arguments: map[string]any{
-				"decision":     "skip",
-				"reasoning":    "Test skip success",
-				"skip_turns":   5,
+				"decision":   "skip",
+				"reasoning":  "Test skip success",
+				"skip_turns": 5,
 			},
 		},
 	}
@@ -515,9 +574,9 @@ func TestContextManagementSkipExactMaxSkip(t *testing.T) {
 			Type: "toolCall",
 			Name: "context_management",
 			Arguments: map[string]any{
-				"decision":     "skip",
-				"reasoning":    "Test skip exact max",
-				"skip_turns":   3,
+				"decision":   "skip",
+				"reasoning":  "Test skip exact max",
+				"skip_turns": 3,
 			},
 		},
 	}
@@ -621,9 +680,9 @@ func TestContextManagementSkipEdgeCases(t *testing.T) {
 					Type: "toolCall",
 					Name: "context_management",
 					Arguments: map[string]any{
-						"decision":     "skip",
-						"reasoning":    tt.name,
-						"skip_turns":   tt.requestedSkip,
+						"decision":   "skip",
+						"reasoning":  tt.name,
+						"skip_turns": tt.requestedSkip,
 					},
 				},
 			}
