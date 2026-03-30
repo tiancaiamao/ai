@@ -127,8 +127,10 @@ func main() {
 					Token string `json:"token" yaml:"token"`
 				} `json:"weixin" yaml:"weixin"`
 				Feishu struct {
-					AppID     string `json:"app_id" yaml:"app_id"`
-					AppSecret string `json:"app_secret" yaml:"app_secret"`
+					AppID             string `json:"app_id" yaml:"app_id"`
+					AppSecret         string `json:"app_secret" yaml:"app_secret"`
+					EncryptKey        string `json:"encrypt_key" yaml:"encrypt_key"`
+					VerificationToken string `json:"verification_token" yaml:"verification_token"`
 				} `json:"feishu" yaml:"feishu"`
 			} `json:"channels" yaml:"channels"`
 		}
@@ -149,6 +151,14 @@ func main() {
 			if sec.Channels.Feishu.AppSecret != "" {
 				picoCfg.Channels.Feishu.SetAppSecret(sec.Channels.Feishu.AppSecret)
 				slog.Info("Loaded Feishu app_secret from security file")
+			}
+			if sec.Channels.Feishu.EncryptKey != "" {
+				picoCfg.Channels.Feishu.SetEncryptKey(sec.Channels.Feishu.EncryptKey)
+				slog.Info("Loaded Feishu encrypt_key from security file")
+			}
+			if sec.Channels.Feishu.VerificationToken != "" {
+				picoCfg.Channels.Feishu.SetVerificationToken(sec.Channels.Feishu.VerificationToken)
+				slog.Info("Loaded Feishu verification_token from security file")
 			}
 		}
 	}
@@ -246,6 +256,8 @@ func main() {
 	toolRegistry.Register(tools.NewGrepTool(workspace))
 	toolRegistry.Register(tools.NewEditTool(workspace))
 
+	slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
+
 	agentConfig := &adapter.AppConfig{
 		Model:           cfg.Model.ID,
 		Provider:        cfg.Model.Provider,
@@ -256,8 +268,8 @@ func main() {
 		Tools:           toolRegistry.All(),
 		ClawDir:         clawDir, // 传递 claw 配置目录
 		Transcriber:     transcriber,
-		FeishuAppID:     cfg.Channels.Feishu.AppID,
-		FeishuAppSecret: cfg.Channels.Feishu.AppSecret(),
+		FeishuAppID:     picoCfg.Channels.Feishu.AppID,
+		FeishuAppSecret: picoCfg.Channels.Feishu.AppSecret(),
 		Skills:          skillResult.Skills,
 	}
 
@@ -320,7 +332,7 @@ func main() {
 			Public:  false,
 			Enabled: true,
 		}
-		webSrv = web.NewServer(webCfg, agentLoop, msgBus, configPath, clawDir)
+		webSrv = web.NewServer(webCfg, agentLoop, msgBus, configPath, securityPath, clawDir)
 		if webURL, err := webSrv.Start(); err == nil {
 			slog.Info("Web server started", "url", webURL)
 			defer webSrv.Stop()

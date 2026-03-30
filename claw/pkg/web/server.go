@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels/weixin"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	aiconfig "github.com/tiancaiamao/ai/pkg/config"
+	"gopkg.in/yaml.v3"
 	"rsc.io/qr"
 )
 
@@ -70,6 +72,7 @@ type Server struct {
 	msgBus       *bus.MessageBus
 	httpServer   *http.Server
 	configPath   string
+	securityPath string
 	clawDir      string
 	shutdownOnce sync.Once
 	// Weixin flow state
@@ -94,7 +97,7 @@ func DefaultConfig() *Config {
 }
 
 // NewServer creates a new web server.
-func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus, configPath, clawDir string) *Server {
+func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus, configPath, securityPath, clawDir string) *Server {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
@@ -108,12 +111,13 @@ func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus
 	}
 
 	return &Server{
-		addr:        addr,
-		agentLoop:   agentLoop,
-		msgBus:      msgBus,
-		configPath:  configPath,
-		clawDir:     clawDir,
-		weixinFlows: make(map[string]*weixinFlow),
+		addr:         addr,
+		agentLoop:    agentLoop,
+		msgBus:       msgBus,
+		configPath:   configPath,
+		securityPath: securityPath,
+		clawDir:      clawDir,
+		weixinFlows:  make(map[string]*weixinFlow),
 	}
 }
 
@@ -178,7 +182,7 @@ func (s *Server) Stop() error {
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// CORS preflight
 	mux.HandleFunc("OPTIONS /api/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.WriteHeader(http.StatusNoContent)
@@ -217,6 +221,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Config API
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handleUpdateConfig)
+	mux.HandleFunc("PATCH /api/config", s.handlePatchConfig)
 
 	// Channels API
 	mux.HandleFunc("GET /api/channels/catalog", s.handleChannelsCatalog)
@@ -868,7 +873,7 @@ func RunAsStandalone(port int, public bool) error {
 		Enabled: true,
 	}
 
-	srv := NewServer(cfg, nil, nil, "", "")
+	srv := NewServer(cfg, nil, nil, "", "", "")
 	url, err := srv.Start()
 	if err != nil {
 		return err
@@ -886,7 +891,9 @@ func RunAsStandalone(port int, public bool) error {
 }
 
 // handleGetConfig returns the current configuration.
-// Returns the full config.json content, excluding sensitive data.
+// Returns the full config.json content with sensitive fields redacted.
+// Secret placeholders are injected from .security.yml so the frontend
+// knows which fields have been configured.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -903,21 +910,21 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse config to filter sensitive fields
+	// Parse config
 	var config map[string]any
 	if err := json.Unmarshal(configData, &config); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Filter sensitive data
+	// Inject ***REDACTED*** placeholders from .security.yml so frontend knows secrets exist
+	s.injectChannelSecrets(config)
+
+	// Filter other sensitive data (API keys, passwords, etc.)
 	filterSensitiveFields(config)
 
-	// Return config
-	json.NewEncoder(w).Encode(map[string]any{
-		"config": config,
-		"config_path": s.configPath,
-	})
+	// Return raw config object directly (picoclaw frontend compatibility)
+	json.NewEncoder(w).Encode(config)
 }
 
 // handleUpdateConfig updates the configuration and restarts the service.
@@ -974,12 +981,228 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: Service restart is required for config changes to take effect
+// Note: Service restart is required for config changes to take effect
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "success",
 		"message": "Configuration updated. Service restart is required for changes to take effect.",
 		"config_path": s.configPath,
 	})
+}
+
+// handlePatchConfig partially updates the configuration using JSON Merge Patch (RFC 7396).
+// Only the fields present in the request body will be updated; all other fields remain unchanged.
+// Sensitive channel fields (app_secret, token, etc.) are extracted and saved to .security.yml.
+//
+//	PATCH /api/config
+func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Parse patch body
+	var patch map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Read current config
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Recursively merge patch into config (JSON Merge Patch semantics)
+	slog.Info("PATCH config", "patch", patch)
+	mergeMap(config, patch)
+
+	// Debug: show merged feishu config
+	if ch, ok := config["channels"].(map[string]any); ok {
+		if fs, ok := ch["feishu"].(map[string]any); ok {
+			slog.Info("PATCH merged feishu", "fields", fs)
+		}
+	}
+
+	// Extract sensitive fields from channel configs and save to .security.yml
+	channelSecrets := extractChannelSecrets(config)
+	slog.Info("PATCH extracted secrets", "channels", channelSecrets, "count", len(channelSecrets))
+	if len(channelSecrets) > 0 {
+		slog.Info("PATCH updating security.yml", "path", s.securityPath)
+		if err := s.updateSecurityYaml(channelSecrets); err != nil {
+			slog.Warn("Failed to update security.yml", "error", err)
+		} else {
+			slog.Info("PATCH security.yml updated successfully")
+		}
+	}
+
+	// Write updated config (secrets already removed by extractChannelSecrets)
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "success",
+		"message": "Configuration updated. Service restart is required for changes to take effect.",
+	})
+}
+
+// mergeMap recursively merges src into dst (JSON Merge Patch semantics).
+func mergeMap(dst, src map[string]any) {
+	for key, srcVal := range src {
+		if srcVal == nil {
+			delete(dst, key)
+			continue
+		}
+		srcMap, srcIsMap := srcVal.(map[string]any)
+		dstMap, dstIsMap := dst[key].(map[string]any)
+		if srcIsMap && dstIsMap {
+			mergeMap(dstMap, srcMap)
+		} else {
+			dst[key] = srcVal
+		}
+	}
+}
+
+// Sensitive field names that should be stored in .security.yml instead of config.json
+var channelSecretFields = []string{
+	"app_secret", "encrypt_key", "verification_token",
+	"token", "client_secret", "corp_secret", "channel_secret",
+	"channel_access_token", "access_token", "bot_token", "app_token",
+	"encoding_aes_key", "password", "nickserv_password", "sasl_password",
+}
+
+// loadSecurityYaml reads and parses .security.yml into a generic map structure.
+func (s *Server) loadSecurityYaml() map[string]any {
+	result := make(map[string]any)
+	if s.securityPath == "" {
+		return result
+	}
+	data, err := os.ReadFile(s.securityPath)
+	if err != nil {
+		return result
+	}
+	var sec map[string]any
+	if err := yaml.Unmarshal(data, &sec); err != nil {
+		return result
+	}
+	return sec
+}
+
+// saveSecurityYaml writes the security map back to .security.yml.
+func (s *Server) saveSecurityYaml(sec map[string]any) error {
+	if s.securityPath == "" {
+		return nil
+	}
+	data, err := yaml.Marshal(sec)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.securityPath, data, 0644)
+}
+
+// extractChannelSecrets extracts sensitive fields from channel configs,
+// removes them from the config map, and returns them organized by channel name.
+// e.g., {"feishu": {"app_secret": "xxx"}, "telegram": {"token": "xxx"}}
+func extractChannelSecrets(config map[string]any) map[string]map[string]any {
+	secrets := make(map[string]map[string]any)
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		return secrets
+	}
+	secretSet := make(map[string]bool, len(channelSecretFields))
+	for _, f := range channelSecretFields {
+		secretSet[f] = true
+	}
+	for chName, chVal := range channels {
+		chMap, ok := chVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, fieldName := range channelSecretFields {
+			val, exists := chMap[fieldName]
+			if !exists {
+				continue
+			}
+			strVal, ok := val.(string)
+			if !ok || strVal == "" || strVal == "***REDACTED***" {
+				// Don't extract empty or placeholder values
+				continue
+			}
+			if secrets[chName] == nil {
+				secrets[chName] = make(map[string]any)
+			}
+			secrets[chName][fieldName] = strVal
+			delete(chMap, fieldName) // Remove from config.json data
+		}
+	}
+	return secrets
+}
+
+// injectChannelSecrets reads secrets from .security.yml and injects them into
+// the config map under the respective channel entries (as ***REDACTED*** placeholders).
+func (s *Server) injectChannelSecrets(config map[string]any) {
+	sec := s.loadSecurityYaml()
+	chSec, ok := sec["channels"].(map[string]any)
+	if !ok {
+		return
+	}
+	channels, ok := config["channels"].(map[string]any)
+	if !ok {
+		return
+	}
+	for chName, chSecVal := range chSec {
+		chSecMap, ok := chSecVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		chMap, ok := channels[chName].(map[string]any)
+		if !ok {
+			chMap = make(map[string]any)
+			channels[chName] = chMap
+		}
+		for field := range chSecMap {
+			if _, exists := chMap[field]; !exists {
+				chMap[field] = "***REDACTED***"
+			}
+		}
+	}
+}
+
+// updateSecurityYaml merges extracted channel secrets into .security.yml.
+func (s *Server) updateSecurityYaml(channelSecrets map[string]map[string]any) error {
+	if len(channelSecrets) == 0 {
+		return nil
+	}
+	sec := s.loadSecurityYaml()
+	chSec, ok := sec["channels"].(map[string]any)
+	if !ok {
+		chSec = make(map[string]any)
+		sec["channels"] = chSec
+	}
+	for chName, fields := range channelSecrets {
+		existing, ok := chSec[chName].(map[string]any)
+		if !ok {
+			existing = make(map[string]any)
+			chSec[chName] = existing
+		}
+		for k, v := range fields {
+			existing[k] = v
+		}
+	}
+	return s.saveSecurityYaml(sec)
 }
 
 // filterSensitiveFields removes sensitive fields from config (like API keys)
@@ -1403,7 +1626,7 @@ func (s *Server) handleChannelsCatalog(w http.ResponseWriter, r *http.Request) {
 			channelInfo := map[string]any{
 				"name":        name,
 				"display_name": displayNames[name],
-				"config_key":  fmt.Sprintf("channels.%s", name),
+				"config_key":  name,
 				"enabled":     cfgMap["enabled"],
 			}
 			supportedChannels = append(supportedChannels, channelInfo)

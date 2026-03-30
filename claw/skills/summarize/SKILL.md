@@ -7,7 +7,6 @@ metadata:
     "goclaw":
       {
         "emoji": "🧾",
-        "requires": { "bins": ["summarize"] },
         "install":
           [
             {
