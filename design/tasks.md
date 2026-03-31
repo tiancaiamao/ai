@@ -2077,9 +2077,9 @@ func (s *Server) handleSteerNew(cmd rpc.PromptRequest) error {
 - 可以并行存在旧和新实现（通过配置选择）
 
 **验收标准**:
-- [ ] handleSteerNew 正确调用新 agent
-- [ ] RPC 接口兼容
-- [ ] 事件正确发送
+- [X] handleSteerNew 正确调用新 agent
+- [X] RPC 接口兼容
+- [X] 事件正确发送
 
 ---
 
