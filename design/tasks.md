@@ -2144,9 +2144,9 @@ func LogContextMgmtModeSwitch(ctx context.Context, from, to, reason string) {
 ```
 
 **验收标准**:
-- [ ] 所有 trace event 定义
-- [ ] 所有 logging helper 函数
-- [ ] 在适当的代码位置调用
+- [X] 所有 trace event 定义
+- [X] 所有 logging helper 函数
+- [X] 在适当的代码位置调用
 
 ---
 
@@ -2174,8 +2174,8 @@ var eventNameToBit = map[string]uint64{
 ```
 
 **验收标准**:
-- [ ] 新事件正确注册
-- [ ] 位分配不冲突
+- [X] 新事件正确注册
+- [X] 位分配不冲突
 
 ---
 
@@ -2226,9 +2226,9 @@ func TestTriggerChecker_ShouldTrigger_SkipWhenHealthy(t *testing.T) {
 ```
 
 **验收标准**:
-- [ ] 所有触发条件有测试
-- [ ] 边界情况覆盖
-- [ ] 测试通过
+- [X] 所有触发条件有测试
+- [X] 边界情况覆盖
+- [X] 测试通过
 
 ---
 
@@ -2240,9 +2240,9 @@ func TestTriggerChecker_ShouldTrigger_SkipWhenHealthy(t *testing.T) {
 为快照重建逻辑编写单元测试。
 
 **验收标准**:
-- [ ] 测试消息重放
-- [ ] 测试 truncate 事件应用
-- [ ] 测试边界情况
+- [X] 测试消息重放
+- [X] 测试 truncate 事件应用
+- [X] 测试边界情况
 
 ---
 
@@ -2254,9 +2254,9 @@ func TestTriggerChecker_ShouldTrigger_SkipWhenHealthy(t *testing.T) {
 编写端到端的集成测试。
 
 **验收标准**:
-- [ ] 测试完整的对话流程
-- [ ] 测试上下文管理触发
-- [ ] 测试 checkpoint 创建和恢复
+- [X] 测试完整的对话流程
+- [X] 测试上下文管理触发
+- [X] 测试 checkpoint 创建和恢复
 
 ---
 
