@@ -1,11 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"log/slog"
+
+	"github.com/tiancaiamao/ai/pkg/agent"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
 func parseToolsFlag(toolsFlag string) []string {
@@ -55,7 +64,7 @@ func parseSystemPrompt(systemPromptFlag string) string {
 }
 
 func main() {
-	mode := flag.String("mode", "", "Run mode (rpc|win). Default: win")
+	mode := flag.String("mode", "", "Run mode (rpc|win|headless). Default: win")
 	sessionPathFlag := flag.String("session", "", "Session file path")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
@@ -67,14 +76,219 @@ func main() {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
+	case "headless":
+		if err := runHeadless(*sessionPathFlag, *debugAddr, flag.Args(), os.Stdout); err != nil {
+			slog.Error("headless error", "error", err)
+			os.Exit(1)
+		}
 	case "win", "":
 		if err := runWinAI(*windowName, *sessionPathFlag, *debugAddr); err != nil {
 			slog.Error("win-ai error", "error", err)
 			os.Exit(1)
 		}
 	default:
-		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win")
-		slog.Info("Note: json and headless modes are temporarily disabled during architecture migration")
+		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win|headless")
+		slog.Info("Note: json mode is temporarily disabled during architecture migration")
 		os.Exit(1)
 	}
+}
+
+type headlessRPCResponse struct {
+	ID      string          `json:"id,omitempty"`
+	Type    string          `json:"type"`
+	Command string          `json:"command"`
+	Success bool            `json:"success"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type headlessStreamState struct {
+	lastAssistantText string
+}
+
+func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writer) error {
+	if len(prompts) == 0 {
+		return fmt.Errorf("headless mode requires at least one prompt argument")
+	}
+
+	rpcInReader, rpcInWriter := io.Pipe()
+	rpcOutReader, rpcOutWriter := io.Pipe()
+
+	rpcErrCh := make(chan error, 1)
+	go func() {
+		defer rpcOutWriter.Close()
+		rpcErrCh <- runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter)
+	}()
+
+	lineCh := make(chan []byte, 256)
+	lineErrCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(rpcOutReader)
+		buf := make([]byte, 0, 1024*1024)
+		scanner.Buffer(buf, 64*1024*1024)
+		for scanner.Scan() {
+			line := append([]byte(nil), scanner.Bytes()...)
+			lineCh <- line
+		}
+		close(lineCh)
+		lineErrCh <- scanner.Err()
+		close(lineErrCh)
+	}()
+
+	var state headlessStreamState
+	printed := false
+
+	for i, promptText := range prompts {
+		state.lastAssistantText = ""
+
+		promptID := fmt.Sprintf("headless-prompt-%d", i+1)
+		if err := writeHeadlessCommand(rpcInWriter, rpc.RPCCommand{
+			ID:      promptID,
+			Type:    rpc.CommandPrompt,
+			Message: promptText,
+		}); err != nil {
+			return err
+		}
+
+		resp, err := waitHeadlessResponse(lineCh, lineErrCh, promptID, &state)
+		if err != nil {
+			return err
+		}
+		if !resp.Success {
+			return fmt.Errorf("prompt failed: %s", resp.Error)
+		}
+
+		text := strings.TrimSpace(state.lastAssistantText)
+		if text == "" {
+			msgID := fmt.Sprintf("headless-messages-%d", i+1)
+			if err := writeHeadlessCommand(rpcInWriter, rpc.RPCCommand{
+				ID:   msgID,
+				Type: rpc.CommandGetMessages,
+			}); err != nil {
+				return err
+			}
+
+			msgResp, err := waitHeadlessResponse(lineCh, lineErrCh, msgID, &state)
+			if err != nil {
+				return err
+			}
+			if !msgResp.Success {
+				return fmt.Errorf("get_messages failed: %s", msgResp.Error)
+			}
+
+			text = strings.TrimSpace(extractLastAssistantText(msgResp.Data))
+		}
+
+		if text != "" {
+			if printed {
+				fmt.Fprintln(output)
+				fmt.Fprintln(output)
+			}
+			fmt.Fprint(output, text)
+			printed = true
+		}
+	}
+
+	_ = rpcInWriter.Close()
+
+	select {
+	case err := <-rpcErrCh:
+		if err != nil {
+			return err
+		}
+	case <-time.After(2 * time.Second):
+	}
+
+	if !printed {
+		fmt.Fprintln(output)
+	}
+
+	return nil
+}
+
+func writeHeadlessCommand(w io.Writer, cmd rpc.RPCCommand) error {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("marshal command: %w", err)
+	}
+	data = append(data, '\n')
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write command: %w", err)
+	}
+	return nil
+}
+
+func waitHeadlessResponse(lines <-chan []byte, lineErr <-chan error, targetID string, state *headlessStreamState) (headlessRPCResponse, error) {
+	for line := range lines {
+
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &envelope); err != nil {
+			continue
+		}
+
+		if envelope.Type == "response" {
+			var resp headlessRPCResponse
+			if err := json.Unmarshal(line, &resp); err != nil {
+				return headlessRPCResponse{}, fmt.Errorf("decode response: %w", err)
+			}
+			if resp.ID == targetID {
+				return resp, nil
+			}
+			continue
+		}
+
+		updateHeadlessStreamStateFromEvent(line, state)
+	}
+
+	err, ok := <-lineErr
+	if ok && err != nil {
+		return headlessRPCResponse{}, fmt.Errorf("read rpc output: %w", err)
+	}
+
+	return headlessRPCResponse{}, io.EOF
+}
+
+func updateHeadlessStreamStateFromEvent(line []byte, state *headlessStreamState) {
+	var evt struct {
+		Type                  string                       `json:"type"`
+		Message               *agentctx.AgentMessage       `json:"message,omitempty"`
+		AssistantMessageEvent *agent.AssistantMessageEvent `json:"assistantMessageEvent,omitempty"`
+	}
+	if err := json.Unmarshal(line, &evt); err != nil {
+		return
+	}
+
+	if evt.Message != nil && evt.Message.Role == "assistant" {
+		if text := strings.TrimSpace(evt.Message.ExtractText()); text != "" {
+			state.lastAssistantText = text
+		}
+	}
+	if evt.AssistantMessageEvent != nil && evt.AssistantMessageEvent.Type == "text_delta" {
+		if delta := strings.TrimSpace(evt.AssistantMessageEvent.Delta); delta != "" {
+			state.lastAssistantText = delta
+		}
+	}
+}
+
+func extractLastAssistantText(data json.RawMessage) string {
+	var payload struct {
+		Messages []agentctx.AgentMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+
+	for i := len(payload.Messages) - 1; i >= 0; i-- {
+		msg := payload.Messages[i]
+		if msg.Role != "assistant" {
+			continue
+		}
+		if text := strings.TrimSpace(msg.ExtractText()); text != "" {
+			return text
+		}
+	}
+
+	return ""
 }

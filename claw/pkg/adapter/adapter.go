@@ -646,20 +646,9 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 
 // loopConfig builds LoopConfig from AgentLoop's configuration.
 func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
-	// Start with config defaults (if available)
-	var cfg *agent.LoopConfig
-	if a.appConfig != nil {
-		cfg = a.appConfig.ToLoopConfig(
-			aiconfig.WithCompactor(compactor),
-			aiconfig.WithContextWindow(a.model.ContextWindow),
-		)
-	}
-	// Fallback if appConfig is nil or ToLoopConfig returned nil
-	if cfg == nil {
-		cfg = agent.DefaultLoopConfig()
-		cfg.Compactor = compactor
-		cfg.ContextWindow = a.model.ContextWindow
-	}
+	cfg := agent.DefaultLoopConfig()
+	cfg.Compactor = compactor
+	cfg.ContextWindow = a.model.ContextWindow
 
 	// Override with runtime thinking level
 	a.thinkingLevelMu.RLock()

@@ -8,6 +8,8 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
@@ -195,6 +198,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionID,
 		&model,
 		apiKey,
+		configPath,
+		cfg,
+		config.ResolveLogPath(cfg.Log),
 		sessionMgr,
 		sess,
 		registry,
@@ -209,6 +215,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Create RPC server
 	server := rpc.NewServer()
 	server.SetOutput(output)
+	agentServer.SetEventEmitter(server)
 
 	// Set up handlers using AgentNew
 	SetupAgentNewHandlers(server, agentServer)
@@ -235,10 +242,13 @@ type AgentNewServer struct {
 	sessionID  string
 
 	// Configuration
-	model          *llm.Model
-	apiKey         string
-	sessionMgr     *session.SessionManager
-	currentSession *session.Session
+	model           *llm.Model
+	apiKey          string
+	configPath      string
+	cfg             *config.Config
+	traceOutputPath string
+	sessionMgr      *session.SessionManager
+	currentSession  *session.Session
 
 	// Event emission
 	eventEmitter agent.EventEmitter
@@ -253,11 +263,14 @@ type AgentNewServer struct {
 	workspace *tools.Workspace
 
 	// State tracking
-	isStreaming  bool
-	isCompacting bool
-	pendingSteer bool
-	steeringMode string
-	followUpMode string
+	isStreaming           bool
+	isCompacting          bool
+	pendingSteer          bool
+	steeringMode          string
+	followUpMode          string
+	thinkingLevel         string
+	autoRetry             bool
+	autoCompactionEnabled bool
 }
 
 // NewAgentNewServer creates a new server wrapping AgentNew.
@@ -266,6 +279,9 @@ func NewAgentNewServer(
 	sessionID string,
 	model *llm.Model,
 	apiKey string,
+	configPath string,
+	cfg *config.Config,
+	traceOutputPath string,
 	sessionMgr *session.SessionManager,
 	sess *session.Session,
 	registry *tools.Registry,
@@ -275,26 +291,36 @@ func NewAgentNewServer(
 	// Create event emitter that wraps server.EmitEvent
 	eventEmitter := &rpcEventEmitterAdapter{}
 
-	// Create new agent
-	ag, err := agent.NewAgentNew(sessionDir, sessionID, model, apiKey, eventEmitter)
+	// Load existing snapshot/checkpoints when present.
+	ag, err := agent.LoadSession(context.Background(), sessionDir, model, apiKey, eventEmitter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
 
+	autoCompactionEnabled := true
+	if cfg != nil && cfg.Compactor != nil {
+		autoCompactionEnabled = cfg.Compactor.AutoCompact
+	}
+
 	return &AgentNewServer{
-		agent:          ag,
-		sessionDir:     sessionDir,
-		sessionID:      sessionID,
-		model:          model,
-		apiKey:         apiKey,
-		sessionMgr:     sessionMgr,
-		currentSession: sess,
-		eventEmitter:   eventEmitter,
-		registry:       registry,
-		skills:         skills,
-		workspace:      workspace,
-		steeringMode:   "all",
-		followUpMode:   "all",
+		agent:                 ag,
+		sessionDir:            sessionDir,
+		sessionID:             sessionID,
+		model:                 model,
+		apiKey:                apiKey,
+		configPath:            configPath,
+		cfg:                   cfg,
+		traceOutputPath:       traceOutputPath,
+		sessionMgr:            sessionMgr,
+		currentSession:        sess,
+		eventEmitter:          eventEmitter,
+		registry:              registry,
+		skills:                skills,
+		workspace:             workspace,
+		steeringMode:          "all",
+		followUpMode:          "all",
+		thinkingLevel:         "medium",
+		autoCompactionEnabled: autoCompactionEnabled,
 	}, nil
 }
 
@@ -331,12 +357,81 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 		s.mu.Unlock()
 	}()
 
-	// Execute one full turn (includes automatic context management flow)
-	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
-		return fmt.Errorf("failed to execute turn: %w", err)
+	beforeCount := 0
+	if snapshot := s.agent.GetSnapshot(); snapshot != nil {
+		beforeCount = len(snapshot.RecentMessages)
 	}
 
+	s.emitEvent(agent.NewAgentStartEvent())
+	s.emitEvent(agent.NewTurnStartEvent())
+
+	// Execute one full turn (includes automatic context management flow)
+	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+		s.emitEvent(agent.NewErrorEvent(err))
+		s.emitEvent(agent.NewAgentEndEvent(nil))
+		return fmt.Errorf("failed to execute turn: %w", err)
+	}
+	s.mu.Lock()
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session after prompt", "error", err)
+	}
+	s.mu.Unlock()
+
+	assistantMessage, toolResults := s.emitPostTurnEvents(beforeCount)
+	s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
+	s.emitEvent(agent.NewAgentEndEvent(nil))
+
 	return nil
+}
+
+func (s *AgentNewServer) emitEvent(event agent.AgentEvent) {
+	if s.eventEmitter == nil {
+		return
+	}
+	s.eventEmitter.Emit(event)
+}
+
+func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMessage, []agentctx.AgentMessage) {
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return nil, nil
+	}
+
+	if beforeCount < 0 || beforeCount > len(snapshot.RecentMessages) {
+		beforeCount = len(snapshot.RecentMessages)
+	}
+
+	newMessages := snapshot.RecentMessages[beforeCount:]
+	var lastAssistant *agentctx.AgentMessage
+	toolResults := make([]agentctx.AgentMessage, 0, len(newMessages))
+
+	for _, msg := range newMessages {
+		switch msg.Role {
+		case "assistant":
+			s.emitEvent(agent.NewMessageStartEvent(msg))
+			if text := msg.ExtractText(); text != "" {
+				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
+					Type:  "text_delta",
+					Delta: text,
+				}))
+			}
+			s.emitEvent(agent.NewMessageEndEvent(msg))
+
+			msgCopy := msg
+			lastAssistant = &msgCopy
+		case "toolResult":
+			msgCopy := msg
+			toolResults = append(toolResults, msgCopy)
+			s.emitEvent(agent.NewToolExecutionEndEvent(
+				msgCopy.ToolCallID,
+				msgCopy.ToolName,
+				&msgCopy,
+				msgCopy.IsError,
+			))
+		}
+	}
+
+	return lastAssistant, toolResults
 }
 
 // Steer handles the steer command using AgentNew.
@@ -362,13 +457,29 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 			s.pendingSteer = false
 			s.mu.Unlock()
 		}()
-		return s.agent.ExecuteTurn(ctx, message)
+		if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.syncSessionFromSnapshotLocked(); err != nil {
+			slog.Warn("[AgentNew] Failed to sync session after steer", "error", err)
+		}
+		return nil
 	}
 
 	// If streaming, the agent should handle the steer internally
 	// For now, we'll cancel and restart
 	slog.Info("[AgentNew] Steer during streaming - restart execution", "message", message)
-	return s.agent.ExecuteTurn(ctx, message)
+	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session after streaming steer", "error", err)
+	}
+	return nil
 }
 
 // FollowUp handles the follow_up command using AgentNew.
@@ -382,19 +493,71 @@ func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 		// This would need to be tracked in AgentNew
 	}
 
-	return s.agent.ExecuteTurn(ctx, message)
+	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session after follow-up", "error", err)
+	}
+	return nil
 }
 
 // Abort stops the current execution.
 func (s *AgentNewServer) Abort() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	slog.Info("[AgentNew] Abort called")
-	if s.agent != nil {
-		return s.agent.Close()
+	// AgentNew currently has no cancellable in-flight turn API.
+	// Keep this command as a no-op to preserve command compatibility.
+	return nil
+}
+
+func (s *AgentNewServer) syncSessionFromSnapshotLocked() error {
+	if s.currentSession == nil || s.agent == nil {
+		return nil
+	}
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	if err := s.currentSession.SaveMessages(snapshot.RecentMessages); err != nil {
+		return err
+	}
+	if s.sessionMgr != nil {
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
 	}
 	return nil
+}
+
+func (s *AgentNewServer) reloadAgentLocked(ctx context.Context) error {
+	if s.agent != nil {
+		if err := s.agent.Close(); err != nil {
+			slog.Warn("[AgentNew] Failed to close previous agent", "error", err)
+		}
+	}
+	ag, err := agent.LoadSession(ctx, s.sessionDir, s.model, s.apiKey, s.eventEmitter)
+	if err != nil {
+		return err
+	}
+	s.agent = ag
+	return nil
+}
+
+func (s *AgentNewServer) applySessionMessagesToSnapshotLocked() {
+	if s.currentSession == nil || s.agent == nil {
+		return
+	}
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return
+	}
+	snapshot.RecentMessages = s.currentSession.GetMessages()
+	snapshot.AgentState.SessionID = s.sessionID
+	if s.model != nil && s.model.ContextWindow > 0 {
+		snapshot.AgentState.TokensLimit = s.model.ContextWindow
+	}
 }
 
 // GetMessages returns the current messages from the agent.
@@ -415,24 +578,858 @@ func (s *AgentNewServer) GetMessages() []any {
 }
 
 // GetState returns the current agent state.
-func (s *AgentNewServer) GetState() map[string]any {
+func (s *AgentNewServer) GetState() (*rpc.SessionState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	snapshot := s.agent.GetSnapshot()
 	if snapshot == nil {
-		return map[string]any{}
+		return &rpc.SessionState{}, nil
 	}
 
-	return map[string]any{
-		"sessionDir":   s.sessionDir,
-		"sessionID":    s.sessionID,
-		"totalTurns":   snapshot.AgentState.TotalTurns,
-		"tokensUsed":   snapshot.AgentState.TokensUsed,
-		"tokensLimit":  snapshot.AgentState.TokensLimit,
-		"isStreaming":  s.isStreaming,
-		"isCompacting": s.isCompacting,
+	var modelInfo *rpc.ModelInfo
+	if s.model != nil {
+		info := modelInfoFromModel(*s.model)
+		modelInfo = &info
 	}
+
+	sessionName := resolveSessionName(s.sessionMgr, s.sessionID)
+	if sessionName == "" && s.currentSession != nil {
+		sessionName = s.currentSession.GetSessionName()
+	}
+
+	sessionFile := ""
+	if s.currentSession != nil {
+		sessionFile = s.currentSession.GetPath()
+	}
+
+	aiLogPath := s.traceOutputPath
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			aiLogPath = fh.TraceFilePath("")
+		}
+	}
+
+	startupPath := ""
+	currentWorkdir := ""
+	if s.workspace != nil {
+		startupPath = s.workspace.GetGitRoot()
+		currentWorkdir = s.workspace.GetCWD()
+	}
+
+	pendingCount := 0
+	if s.pendingSteer {
+		pendingCount = 1
+	}
+
+	var compactorCfg = (*config.Config)(nil)
+	if s.cfg != nil {
+		compactorCfg = s.cfg
+	}
+
+	var compactionState *rpc.CompactionState
+	if compactorCfg != nil {
+		compactionState = buildCompactionState(compactorCfg.Compactor, nil)
+	}
+
+	return &rpc.SessionState{
+		Model:                 modelInfo,
+		ThinkingLevel:         s.thinkingLevel,
+		IsStreaming:           s.isStreaming,
+		IsCompacting:          s.isCompacting,
+		SteeringMode:          s.steeringMode,
+		FollowUpMode:          s.followUpMode,
+		SessionFile:           sessionFile,
+		SessionID:             s.sessionID,
+		SessionName:           sessionName,
+		AIPid:                 os.Getpid(),
+		AILogPath:             aiLogPath,
+		AIWorkingDir:          currentWorkdir,
+		AIStartupPath:         startupPath,
+		AutoCompactionEnabled: s.autoCompactionEnabled,
+		MessageCount:          len(snapshot.RecentMessages),
+		PendingMessageCount:   pendingCount,
+		Compaction:            compactionState,
+	}, nil
+}
+
+func (s *AgentNewServer) ensureConfigLocked() error {
+	if s.cfg != nil {
+		return nil
+	}
+
+	configPath := s.configPath
+	if configPath == "" {
+		path, err := config.GetDefaultConfigPath()
+		if err != nil {
+			return err
+		}
+		configPath = path
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	s.cfg = cfg
+	s.configPath = configPath
+	return nil
+}
+
+func (s *AgentNewServer) withCompactorConfigLocked() error {
+	if err := s.ensureConfigLocked(); err != nil {
+		return err
+	}
+	if s.cfg.Compactor == nil {
+		s.cfg.Compactor = config.DefaultConfig().Compactor
+	}
+	return nil
+}
+
+func (s *AgentNewServer) persistConfigLocked() {
+	if s.cfg == nil || s.configPath == "" {
+		return
+	}
+	if err := config.SaveConfig(s.cfg, s.configPath); err != nil {
+		slog.Info("Failed to save config:", "value", err)
+	}
+}
+
+func (s *AgentNewServer) GetSessionStats() (*rpc.SessionStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return &rpc.SessionStats{}, nil
+	}
+
+	userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(snapshot.RecentMessages)
+	tokens.ActiveWindowTokens = snapshot.EstimateTokens()
+
+	sessionFile := ""
+	compactionCount := 0
+	if s.currentSession != nil {
+		sessionFile = s.currentSession.GetPath()
+		compactionCount = s.currentSession.GetCompactionCount()
+	}
+
+	workspace := ""
+	currentWorkdir := ""
+	if s.workspace != nil {
+		workspace = s.workspace.GetGitRoot()
+		currentWorkdir = s.workspace.GetCWD()
+	}
+
+	return &rpc.SessionStats{
+		SessionFile:       sessionFile,
+		SessionID:         s.sessionID,
+		UserMessages:      userCount,
+		AssistantMessages: assistantCount,
+		ToolCalls:         toolCalls,
+		ToolResults:       toolResults,
+		TotalMessages:     len(snapshot.RecentMessages),
+		CompactionCount:   compactionCount,
+		Tokens:            tokens,
+		Cost:              cost,
+		Workspace:         workspace,
+		CurrentWorkdir:    currentWorkdir,
+	}, nil
+}
+
+func (s *AgentNewServer) GetCommands() ([]rpc.SlashCommand, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	skills := make([]skill.Skill, 0, len(s.skills))
+	for _, sk := range s.skills {
+		if sk == nil {
+			continue
+		}
+		skills = append(skills, *sk)
+	}
+	return buildSkillCommands(skills), nil
+}
+
+func (s *AgentNewServer) GetAvailableModels() ([]rpc.ModelInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureConfigLocked(); err != nil {
+		return nil, err
+	}
+	specs, modelsPath, err := loadModelSpecs(s.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+	}
+	specs = filterModelSpecsWithKeys(specs)
+	models := make([]rpc.ModelInfo, 0, len(specs))
+	for _, spec := range specs {
+		models = append(models, modelInfoFromSpec(spec))
+	}
+	return models, nil
+}
+
+func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.ModelInfo, error) {
+	newAPIKey, err := config.ResolveAPIKey(spec.Provider)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.model == nil {
+		s.model = &llm.Model{}
+	}
+	s.model.ID = spec.ID
+	s.model.Provider = spec.Provider
+	s.model.BaseURL = spec.BaseURL
+	s.model.API = spec.API
+	s.model.ContextWindow = spec.ContextWindow
+	s.model.MaxTokens = spec.MaxTokens
+	s.apiKey = newAPIKey
+
+	if err := s.ensureConfigLocked(); err == nil {
+		s.cfg.Model.ID = spec.ID
+		s.cfg.Model.Provider = spec.Provider
+		s.cfg.Model.BaseURL = spec.BaseURL
+		s.cfg.Model.API = spec.API
+		s.cfg.Model.MaxTokens = spec.MaxTokens
+		s.persistConfigLocked()
+	}
+
+	if err := s.reloadAgentLocked(context.Background()); err != nil {
+		return nil, err
+	}
+	s.applySessionMessagesToSnapshotLocked()
+
+	info := modelInfoFromSpec(spec)
+	return &info, nil
+}
+
+func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	if provider == "" || modelID == "" {
+		return nil, fmt.Errorf("provider and modelId are required")
+	}
+	if err := s.ensureConfigLocked(); err != nil {
+		return nil, err
+	}
+
+	specs, modelsPath, err := loadModelSpecs(s.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+	}
+	filtered := filterModelSpecsWithKeys(specs)
+	spec, ok := findModelSpec(filtered, provider, modelID)
+	if !ok {
+		return nil, fmt.Errorf("model not found: %s/%s", provider, modelID)
+	}
+	return s.applyModelSpecLocked(spec)
+}
+
+func (s *AgentNewServer) CycleModel() (*rpc.CycleModelResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureConfigLocked(); err != nil {
+		return nil, err
+	}
+
+	specs, modelsPath, err := loadModelSpecs(s.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+	}
+	filtered := filterModelSpecsWithKeys(specs)
+	if len(filtered) <= 1 {
+		return nil, nil
+	}
+
+	curProvider := ""
+	curID := ""
+	if s.model != nil {
+		curProvider = s.model.Provider
+		curID = s.model.ID
+	}
+
+	index := -1
+	for i, spec := range filtered {
+		if strings.EqualFold(spec.Provider, curProvider) && spec.ID == curID {
+			index = i
+			break
+		}
+	}
+	next := filtered[0]
+	if index >= 0 {
+		next = filtered[(index+1)%len(filtered)]
+	}
+
+	info, err := s.applyModelSpecLocked(next)
+	if err != nil {
+		return nil, err
+	}
+	return &rpc.CycleModelResult{
+		Model:         *info,
+		ThinkingLevel: s.thinkingLevel,
+		IsScoped:      false,
+	}, nil
+}
+
+func (s *AgentNewServer) ClearSession() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.currentSession != nil {
+		if err := s.currentSession.Clear(); err != nil {
+			return err
+		}
+	}
+	if snapshot := s.agent.GetSnapshot(); snapshot != nil {
+		snapshot.RecentMessages = nil
+		snapshot.AgentState.TokensUsed = 0
+	}
+	if s.sessionMgr != nil {
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	}
+	return nil
+}
+
+func (s *AgentNewServer) NewSession(name, title string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sessionMgr == nil {
+		return "", fmt.Errorf("session manager is not available")
+	}
+
+	name = strings.TrimSpace(name)
+	title = strings.TrimSpace(title)
+	if name == "" {
+		name = time.Now().Format("20060102-150405")
+	}
+	if title == "" {
+		title = name
+	}
+
+	newSess, err := s.sessionMgr.CreateSession(name, title)
+	if err != nil {
+		return "", err
+	}
+	newSessionID := newSess.GetID()
+	if err := s.sessionMgr.SetCurrent(newSessionID); err != nil {
+		return "", err
+	}
+	if err := s.sessionMgr.SaveCurrent(); err != nil {
+		slog.Info("Failed to update session metadata:", "value", err)
+	}
+
+	s.currentSession = newSess
+	s.sessionID = newSessionID
+	s.sessionDir = newSess.GetDir()
+
+	if err := s.reloadAgentLocked(context.Background()); err != nil {
+		return "", err
+	}
+	s.applySessionMessagesToSnapshotLocked()
+	return newSessionID, nil
+}
+
+func (s *AgentNewServer) ListSessions() ([]any, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.sessionMgr == nil {
+		return nil, fmt.Errorf("session manager is not available")
+	}
+	sessions, err := s.sessionMgr.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+
+	startupPath := ""
+	currentWorkdir := ""
+	if s.workspace != nil {
+		startupPath = s.workspace.GetGitRoot()
+		currentWorkdir = s.workspace.GetCWD()
+	}
+
+	result := make([]any, len(sessions))
+	for i := range sessions {
+		sessions[i].Workspace = startupPath
+		sessions[i].CurrentWorkdir = currentWorkdir
+		result[i] = sessions[i]
+	}
+	return result, nil
+}
+
+func (s *AgentNewServer) SwitchSession(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+
+	var newSess *session.Session
+	var newSessionID string
+	var err error
+
+	if strings.Contains(id, string(os.PathSeparator)) || strings.HasSuffix(id, ".jsonl") {
+		sessionPath, err := normalizeSessionPath(id)
+		if err != nil {
+			return err
+		}
+		sessionDir := sessionPath
+		if strings.HasSuffix(sessionPath, ".jsonl") {
+			sessionDir = filepath.Dir(sessionPath)
+		}
+		opts := session.DefaultLoadOptions()
+		newSess, err = session.LoadSessionLazy(sessionDir, opts)
+		if err != nil {
+			return err
+		}
+		newSessionID = newSess.GetID()
+		s.sessionMgr = session.NewSessionManager(filepath.Dir(sessionDir))
+		if err := s.sessionMgr.SetCurrent(newSessionID); err != nil {
+			return err
+		}
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	} else {
+		if s.sessionMgr == nil {
+			return fmt.Errorf("session manager is not available")
+		}
+		if err := s.sessionMgr.SetCurrent(id); err != nil {
+			return err
+		}
+		newSess, err = s.sessionMgr.GetSession(id)
+		if err != nil {
+			return err
+		}
+		newSessionID = newSess.GetID()
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	}
+
+	s.currentSession = newSess
+	s.sessionID = newSessionID
+	s.sessionDir = newSess.GetDir()
+
+	if err := s.reloadAgentLocked(context.Background()); err != nil {
+		return err
+	}
+	s.applySessionMessagesToSnapshotLocked()
+
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			fh.SetSessionID(newSessionID)
+		}
+	}
+
+	return nil
+}
+
+func (s *AgentNewServer) DeleteSession(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sessionMgr == nil {
+		return fmt.Errorf("session manager is not available")
+	}
+	return s.sessionMgr.DeleteSession(strings.TrimSpace(id))
+}
+
+func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
+	return nil, fmt.Errorf("compact is not supported in AgentNew mode")
+}
+
+func (s *AgentNewServer) SetAutoCompaction(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.autoCompactionEnabled = enabled
+	if err := s.withCompactorConfigLocked(); err != nil {
+		return err
+	}
+	s.cfg.Compactor.AutoCompact = enabled
+	s.persistConfigLocked()
+	return nil
+}
+
+func (s *AgentNewServer) SetToolCallCutoff(cutoff int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if cutoff < 0 {
+		return fmt.Errorf("cutoff must be >= 0")
+	}
+	if err := s.withCompactorConfigLocked(); err != nil {
+		return err
+	}
+	s.cfg.Compactor.ToolCallCutoff = cutoff
+	s.persistConfigLocked()
+	return nil
+}
+
+func (s *AgentNewServer) SetToolSummaryStrategy(strategy string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	strategy = strings.ToLower(strings.TrimSpace(strategy))
+	valid := map[string]bool{"llm": true, "heuristic": true, "off": true}
+	if !valid[strategy] {
+		return fmt.Errorf("invalid tool summary strategy")
+	}
+	if err := s.withCompactorConfigLocked(); err != nil {
+		return err
+	}
+	s.cfg.Compactor.ToolSummaryStrategy = strategy
+	s.persistConfigLocked()
+	return nil
+}
+
+func (s *AgentNewServer) SetToolSummaryAutomation(mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	valid := map[string]bool{"off": true, "fallback": true, "always": true}
+	if !valid[mode] {
+		return fmt.Errorf("invalid tool summary automation mode")
+	}
+	if err := s.withCompactorConfigLocked(); err != nil {
+		return err
+	}
+	s.cfg.Compactor.ToolSummaryAutomation = mode
+	s.persistConfigLocked()
+	return nil
+}
+
+func (s *AgentNewServer) SetThinkingLevel(level string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	level = strings.ToLower(strings.TrimSpace(level))
+	valid := map[string]bool{
+		"off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true,
+	}
+	if !valid[level] {
+		return "", fmt.Errorf("invalid thinking level")
+	}
+	s.thinkingLevel = level
+	return level, nil
+}
+
+func (s *AgentNewServer) CycleThinkingLevel() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
+	next := cycle[0]
+	for i, level := range cycle {
+		if level == s.thinkingLevel {
+			next = cycle[(i+1)%len(cycle)]
+			break
+		}
+	}
+	s.thinkingLevel = next
+	return next, nil
+}
+
+func (s *AgentNewServer) SetSteeringMode(mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "all" && mode != "one-at-a-time" {
+		return fmt.Errorf("invalid steering mode")
+	}
+	s.steeringMode = mode
+	return nil
+}
+
+func (s *AgentNewServer) SetFollowUpMode(mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "all" && mode != "one-at-a-time" {
+		return fmt.Errorf("invalid follow-up mode")
+	}
+	s.followUpMode = mode
+	return nil
+}
+
+func (s *AgentNewServer) GetLastAssistantText() (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return "", nil
+	}
+	for i := len(snapshot.RecentMessages) - 1; i >= 0; i-- {
+		if snapshot.RecentMessages[i].Role == "assistant" {
+			return snapshot.RecentMessages[i].ExtractText(), nil
+		}
+	}
+	return "", nil
+}
+
+func (s *AgentNewServer) GetForkMessages() ([]rpc.ForkMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session before get_fork_messages", "error", err)
+	}
+	if s.currentSession == nil {
+		return nil, nil
+	}
+	messages := s.currentSession.GetUserMessagesForForking()
+	result := make([]rpc.ForkMessage, 0, len(messages))
+	for _, msg := range messages {
+		result = append(result, rpc.ForkMessage{
+			EntryID: msg.EntryID,
+			Text:    msg.Text,
+		})
+	}
+	return result, nil
+}
+
+func (s *AgentNewServer) GetTree() ([]rpc.TreeEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session before get_tree", "error", err)
+	}
+	if s.currentSession == nil {
+		return nil, nil
+	}
+	entries := s.currentSession.GetEntries()
+	return buildTreeEntries(entries, s.currentSession.GetLeafID()), nil
+}
+
+func (s *AgentNewServer) ResumeOnBranch(entryID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.isStreaming {
+		return fmt.Errorf("agent is busy")
+	}
+	if s.currentSession == nil {
+		return fmt.Errorf("session is not available")
+	}
+
+	entryID = strings.TrimSpace(entryID)
+	if entryID == "" {
+		return fmt.Errorf("entryId is required")
+	}
+
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session before resume_on_branch", "error", err)
+	}
+
+	if entryID == "root" {
+		s.currentSession.ResetLeaf()
+	} else {
+		if err := s.currentSession.Branch(entryID); err != nil {
+			return err
+		}
+	}
+
+	s.applySessionMessagesToSnapshotLocked()
+	if s.sessionMgr != nil {
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	}
+	return nil
+}
+
+func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sessionMgr == nil || s.currentSession == nil {
+		return nil, fmt.Errorf("session is not available")
+	}
+	if err := s.syncSessionFromSnapshotLocked(); err != nil {
+		slog.Warn("[AgentNew] Failed to sync session before fork", "error", err)
+	}
+
+	entryID = strings.TrimSpace(entryID)
+	entry, ok := s.currentSession.GetEntry(entryID)
+	if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
+		return nil, fmt.Errorf("invalid entryId: %s", entryID)
+	}
+
+	name := fmt.Sprintf("fork-%s", time.Now().Format("20060102-150405"))
+	title := "Forked Session"
+	newSess, err := s.sessionMgr.ForkSessionFrom(s.currentSession, entry.ParentID, name, title)
+	if err != nil {
+		return nil, err
+	}
+	newSessionID := newSess.GetID()
+	if err := s.sessionMgr.SetCurrent(newSessionID); err != nil {
+		return nil, err
+	}
+	if err := s.sessionMgr.SaveCurrent(); err != nil {
+		slog.Info("Failed to update session metadata:", "value", err)
+	}
+
+	s.currentSession = newSess
+	s.sessionID = newSessionID
+	s.sessionDir = newSess.GetDir()
+
+	if err := s.reloadAgentLocked(context.Background()); err != nil {
+		return nil, err
+	}
+	s.applySessionMessagesToSnapshotLocked()
+
+	return &rpc.ForkResult{
+		Cancelled: false,
+		Text:      entry.Message.ExtractText(),
+	}, nil
+}
+
+func (s *AgentNewServer) SetSessionName(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.currentSession == nil {
+		return fmt.Errorf("session is not available")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("session name cannot be empty")
+	}
+	if _, err := s.currentSession.AppendSessionInfo(name, ""); err != nil {
+		return err
+	}
+	if s.sessionMgr != nil {
+		if err := s.sessionMgr.UpdateSessionName(s.sessionID, name, ""); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+		if err := s.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+	}
+	return nil
+}
+
+func (s *AgentNewServer) SetAutoRetry(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoRetry = enabled
+	return nil
+}
+
+func (s *AgentNewServer) AbortRetry() error {
+	return s.Abort()
+}
+
+func (s *AgentNewServer) Bash(command string) (*rpc.BashResult, error) {
+	return nil, fmt.Errorf("bash is not supported in AgentNew mode")
+}
+
+func (s *AgentNewServer) AbortBash() error {
+	return fmt.Errorf("abort_bash is not supported in AgentNew mode")
+}
+
+func (s *AgentNewServer) ExportHTML(path string) (string, error) {
+	return "", fmt.Errorf("export_html is not supported in AgentNew mode")
+}
+
+func (s *AgentNewServer) SetTraceEvents(events []string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(events) == 0 {
+		return traceevent.ResetToDefaultEvents(), nil
+	}
+
+	normalized := make([]string, 0, len(events))
+	for _, event := range events {
+		event = strings.ToLower(strings.TrimSpace(event))
+		if event != "" {
+			normalized = append(normalized, event)
+		}
+	}
+	if len(normalized) == 0 {
+		return traceevent.ResetToDefaultEvents(), nil
+	}
+
+	applyExpanded := func(expanded []string, replace bool) []string {
+		if replace {
+			traceevent.DisableAllEvents()
+		}
+		for _, eventName := range expanded {
+			traceevent.EnableEvent(eventName)
+		}
+		return traceevent.GetEnabledEvents()
+	}
+
+	switch normalized[0] {
+	case "on", "default":
+		return traceevent.ResetToDefaultEvents(), nil
+	case "all":
+		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
+		return applyExpanded(expanded, true), nil
+	case "off", "none":
+		traceevent.DisableAllEvents()
+		return []string{}, nil
+	case "enable":
+		if len(normalized) == 1 {
+			return nil, fmt.Errorf("trace-events enable requires at least one selector")
+		}
+		expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+		}
+		return applyExpanded(expanded, false), nil
+	case "disable":
+		if len(normalized) == 1 {
+			return nil, fmt.Errorf("trace-events disable requires at least one selector")
+		}
+		expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+		}
+		for _, eventName := range expanded {
+			traceevent.DisableEvent(eventName)
+		}
+		return traceevent.GetEnabledEvents(), nil
+	default:
+		expanded, unknown := traceevent.ExpandEventSelectors(normalized)
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+		}
+		return applyExpanded(expanded, true), nil
+	}
+}
+
+func (s *AgentNewServer) GetTraceEvents() ([]string, error) {
+	return traceevent.GetEnabledEvents(), nil
+}
+
+func (s *AgentNewServer) GetWorkflowStatus() (*rpc.WorkflowState, error) {
+	return &rpc.WorkflowState{
+		Phase:      "not_started",
+		LastUpdate: time.Now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 // Close closes the agent and releases resources.
@@ -452,7 +1449,7 @@ type rpcEventEmitterAdapter struct {
 	server interface{}
 }
 
-// Emit converts AgentNew events to RPC events and emits them.
+// Emit forwards AgentNew events to RPC clients without dropping fields.
 func (a *rpcEventEmitterAdapter) Emit(event agent.AgentEvent) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -461,94 +1458,308 @@ func (a *rpcEventEmitterAdapter) Emit(event agent.AgentEvent) {
 		return
 	}
 
-	// Convert AgentNew event to RPC event format
-	rpcEvent := map[string]any{
-		"type": event.Type,
-	}
-
-	// Add event-specific fields
-	switch event.Type {
-	case "agent_start":
-		// No additional fields needed for agent_start
-	case "agent_end":
-		rpcEvent["messages"] = event.Messages
-	case "message_end":
-		if event.Message != nil {
-			rpcEvent["message"] = event.Message
-		}
-	case "tool_call_start":
-		rpcEvent["toolName"] = event.ToolName
-		rpcEvent["toolCallId"] = event.ToolCallID
-	case "tool_execution_end":
-		if event.Result != nil {
-			rpcEvent["result"] = event.Result
-		}
-		rpcEvent["isError"] = event.IsError
-	case "error":
-		rpcEvent["error"] = event.Error
-		if event.ErrorStack != "" {
-			rpcEvent["errorStack"] = event.ErrorStack
-		}
-	}
-
 	// Emit via RPC server
 	if emitter, ok := a.server.(interface{ EmitEvent(any) }); ok {
-		emitter.EmitEvent(rpcEvent)
+		emitter.EmitEvent(event)
 	}
 }
 
+type rpcCommandRegisterFunc func(registrar *rpcHandlerRegistrar)
+
+type rpcCommandRegistry struct {
+	mu       sync.RWMutex
+	commands map[string]rpcCommandRegisterFunc
+}
+
+type rpcHandlerRegistrar struct {
+	server *rpc.Server
+	agent  *AgentNewServer
+}
+
+func newRPCCommandRegistry() *rpcCommandRegistry {
+	return &rpcCommandRegistry{
+		commands: make(map[string]rpcCommandRegisterFunc),
+	}
+}
+
+func (r *rpcCommandRegistry) Register(name string, fn rpcCommandRegisterFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands[name] = fn
+}
+
+func (r *rpcCommandRegistry) Apply(server *rpc.Server, agentServer *AgentNewServer) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	registrar := &rpcHandlerRegistrar{
+		server: server,
+		agent:  agentServer,
+	}
+	names := make([]string, 0, len(r.commands))
+	for name := range r.commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		r.commands[name](registrar)
+	}
+}
+
+func (r *rpcCommandRegistry) registerBuiltinCommands() {
+	r.Register(rpc.CommandPrompt, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetPromptHandler(func(req rpc.PromptRequest) error {
+			message := strings.TrimSpace(req.Message)
+			if message == "" {
+				return fmt.Errorf("empty prompt message")
+			}
+			return registrar.agent.Prompt(registrar.server.Context(), message)
+		})
+	})
+
+	r.Register(rpc.CommandSteer, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSteerHandler(func(message string) error {
+			message = strings.TrimSpace(message)
+			if message == "" {
+				return fmt.Errorf("empty steer message")
+			}
+			return registrar.agent.Steer(registrar.server.Context(), message)
+		})
+	})
+
+	r.Register(rpc.CommandFollowUp, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetFollowUpHandler(func(message string) error {
+			message = strings.TrimSpace(message)
+			if message == "" {
+				return fmt.Errorf("empty follow-up message")
+			}
+			return registrar.agent.FollowUp(registrar.server.Context(), message)
+		})
+	})
+
+	r.Register(rpc.CommandAbort, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetAbortHandler(func() error {
+			return registrar.agent.Abort()
+		})
+	})
+
+	r.Register(rpc.CommandGetMessages, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetMessagesHandler(func() ([]any, error) {
+			return registrar.agent.GetMessages(), nil
+		})
+	})
+
+	r.Register(rpc.CommandGetState, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetStateHandler(func() (*rpc.SessionState, error) {
+			return registrar.agent.GetState()
+		})
+	})
+
+	r.Register(rpc.CommandGetSessionStats, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
+			return registrar.agent.GetSessionStats()
+		})
+	})
+
+	r.Register(rpc.CommandGetCommands, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetCommandsHandler(func() ([]rpc.SlashCommand, error) {
+			return registrar.agent.GetCommands()
+		})
+	})
+
+	r.Register(rpc.CommandNewSession, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetNewSessionHandler(func(name, title string) (string, error) {
+			return registrar.agent.NewSession(name, title)
+		})
+	})
+
+	r.Register(rpc.CommandClearSession, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetClearSessionHandler(func() error {
+			return registrar.agent.ClearSession()
+		})
+	})
+
+	r.Register(rpc.CommandListSessions, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetListSessionsHandler(func() ([]any, error) {
+			return registrar.agent.ListSessions()
+		})
+	})
+
+	r.Register(rpc.CommandSwitchSession, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSwitchSessionHandler(func(id string) error {
+			return registrar.agent.SwitchSession(id)
+		})
+	})
+
+	r.Register(rpc.CommandDeleteSession, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetDeleteSessionHandler(func(id string) error {
+			return registrar.agent.DeleteSession(id)
+		})
+	})
+
+	r.Register(rpc.CommandCompact, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetCompactHandler(func() (*rpc.CompactResult, error) {
+			return registrar.agent.Compact()
+		})
+	})
+
+	r.Register(rpc.CommandGetAvailableModels, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
+			return registrar.agent.GetAvailableModels()
+		})
+	})
+
+	r.Register(rpc.CommandSetModel, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetModelHandler(func(provider, modelID string) (*rpc.ModelInfo, error) {
+			return registrar.agent.SetModel(provider, modelID)
+		})
+	})
+
+	r.Register(rpc.CommandCycleModel, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetCycleModelHandler(func() (*rpc.CycleModelResult, error) {
+			return registrar.agent.CycleModel()
+		})
+	})
+
+	r.Register(rpc.CommandSetAutoCompaction, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetAutoCompactionHandler(func(enabled bool) error {
+			return registrar.agent.SetAutoCompaction(enabled)
+		})
+	})
+
+	r.Register(rpc.CommandSetToolCallCutoff, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetToolCallCutoffHandler(func(cutoff int) error {
+			return registrar.agent.SetToolCallCutoff(cutoff)
+		})
+	})
+
+	r.Register(rpc.CommandSetToolSummaryStrategy, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
+			return registrar.agent.SetToolSummaryStrategy(strategy)
+		})
+	})
+
+	r.Register(rpc.CommandSetToolSummaryAutomation, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetToolSummaryAutomationHandler(func(mode string) error {
+			return registrar.agent.SetToolSummaryAutomation(mode)
+		})
+	})
+
+	r.Register(rpc.CommandSetThinkingLevel, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetThinkingLevelHandler(func(level string) (string, error) {
+			return registrar.agent.SetThinkingLevel(level)
+		})
+	})
+
+	r.Register(rpc.CommandCycleThinkingLevel, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetCycleThinkingLevelHandler(func() (string, error) {
+			return registrar.agent.CycleThinkingLevel()
+		})
+	})
+
+	r.Register(rpc.CommandSetSteeringMode, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetSteeringModeHandler(func(mode string) error {
+			return registrar.agent.SetSteeringMode(mode)
+		})
+	})
+
+	r.Register(rpc.CommandSetFollowUpMode, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetFollowUpModeHandler(func(mode string) error {
+			return registrar.agent.SetFollowUpMode(mode)
+		})
+	})
+
+	r.Register(rpc.CommandGetLastAssistantText, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetLastAssistantTextHandler(func() (string, error) {
+			return registrar.agent.GetLastAssistantText()
+		})
+	})
+
+	r.Register(rpc.CommandGetForkMessages, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetForkMessagesHandler(func() ([]rpc.ForkMessage, error) {
+			return registrar.agent.GetForkMessages()
+		})
+	})
+
+	r.Register(rpc.CommandFork, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetForkHandler(func(entryID string) (*rpc.ForkResult, error) {
+			return registrar.agent.Fork(entryID)
+		})
+	})
+
+	r.Register(rpc.CommandGetTree, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetTreeHandler(func() ([]rpc.TreeEntry, error) {
+			return registrar.agent.GetTree()
+		})
+	})
+
+	r.Register(rpc.CommandResumeOnBranch, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetResumeOnBranchHandler(func(entryID string) error {
+			return registrar.agent.ResumeOnBranch(entryID)
+		})
+	})
+
+	r.Register(rpc.CommandSetSessionName, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetSessionNameHandler(func(name string) error {
+			return registrar.agent.SetSessionName(name)
+		})
+	})
+
+	r.Register(rpc.CommandSetAutoRetry, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetAutoRetryHandler(func(enabled bool) error {
+			return registrar.agent.SetAutoRetry(enabled)
+		})
+	})
+
+	r.Register(rpc.CommandAbortRetry, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetAbortRetryHandler(func() error {
+			return registrar.agent.AbortRetry()
+		})
+	})
+
+	r.Register(rpc.CommandBash, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetBashHandler(func(command string) (*rpc.BashResult, error) {
+			return registrar.agent.Bash(command)
+		})
+	})
+
+	r.Register(rpc.CommandAbortBash, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetAbortBashHandler(func() error {
+			return registrar.agent.AbortBash()
+		})
+	})
+
+	r.Register(rpc.CommandExportHTML, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetExportHTMLHandler(func(path string) (string, error) {
+			return registrar.agent.ExportHTML(path)
+		})
+	})
+
+	r.Register(rpc.CommandSetTraceEvents, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetSetTraceEventsHandler(func(events []string) ([]string, error) {
+			return registrar.agent.SetTraceEvents(events)
+		})
+	})
+
+	r.Register(rpc.CommandGetTraceEvents, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetTraceEventsHandler(func() ([]string, error) {
+			return registrar.agent.GetTraceEvents()
+		})
+	})
+
+	r.Register(rpc.CommandGetWorkflowStatus, func(registrar *rpcHandlerRegistrar) {
+		registrar.server.SetGetWorkflowStatusHandler(func() (*rpc.WorkflowState, error) {
+			return registrar.agent.GetWorkflowStatus()
+		})
+	})
+}
+
 // SetupAgentNewHandlers configures RPC server handlers to use AgentNew.
-func SetupAgentNewHandlers(
-	server *rpc.Server,
-	agentNewServer *AgentNewServer,
-) {
-	// Set prompt handler
-	server.SetPromptHandler(func(req rpc.PromptRequest) error {
-		slog.Info("[AgentNew] Received prompt:", "value", req.Message)
-		message := req.Message
-		if message == "" {
-			return fmt.Errorf("empty prompt message")
-		}
-
-		ctx := server.Context()
-		return agentNewServer.Prompt(ctx, message)
-	})
-
-	// Set steer handler
-	server.SetSteerHandler(func(message string) error {
-		slog.Info("[AgentNew] Received steer:", "value", message)
-		if message == "" {
-			return fmt.Errorf("empty steer message")
-		}
-
-		ctx := server.Context()
-		return agentNewServer.Steer(ctx, message)
-	})
-
-	// Set follow-up handler
-	server.SetFollowUpHandler(func(message string) error {
-		slog.Info("[AgentNew] Received follow_up:", "value", message)
-		if message == "" {
-			return fmt.Errorf("empty follow-up message")
-		}
-
-		ctx := server.Context()
-		return agentNewServer.FollowUp(ctx, message)
-	})
-
-	// Set abort handler
-	server.SetAbortHandler(func() error {
-		slog.Info("[AgentNew] Received abort")
-		return agentNewServer.Abort()
-	})
-
-	// Set get_messages handler
-	server.SetGetMessagesHandler(func() ([]any, error) {
-		slog.Info("[AgentNew] Received get_messages")
-		return agentNewServer.GetMessages(), nil
-	})
-
-	slog.Info("[AgentNew] RPC handlers configured successfully")
+func SetupAgentNewHandlers(server *rpc.Server, agentNewServer *AgentNewServer) {
+	registry := newRPCCommandRegistry()
+	registry.registerBuiltinCommands()
+	registry.Apply(server, agentNewServer)
+	slog.Info("[AgentNew] RPC handlers configured", "count", len(registry.commands))
 }
 
 // LoadOrNewAgentSession loads an existing session or creates a new one using AgentNew.
@@ -613,6 +1824,9 @@ func LoadOrNewAgentSession(
 		sessionID,
 		model,
 		apiKey,
+		"",
+		nil,
+		"",
 		sessionMgr,
 		sess,
 		registry,
