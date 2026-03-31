@@ -13,9 +13,9 @@ import (
 
 	"log/slog"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/config"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/rpc"
@@ -226,7 +226,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	return server.RunWithIO(input, output)
 }
 
-
 // AgentNewServer wraps AgentNew with RPC-compatible methods.
 type AgentNewServer struct {
 	// Core state
@@ -254,11 +253,11 @@ type AgentNewServer struct {
 	workspace *tools.Workspace
 
 	// State tracking
-	isStreaming    bool
-	isCompacting   bool
-	pendingSteer   bool
-	steeringMode   string
-	followUpMode   string
+	isStreaming  bool
+	isCompacting bool
+	pendingSteer bool
+	steeringMode string
+	followUpMode string
 }
 
 // NewAgentNewServer creates a new server wrapping AgentNew.
@@ -332,9 +331,9 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 		s.mu.Unlock()
 	}()
 
-	// Execute normal mode
-	if err := s.agent.ExecuteNormalMode(ctx, message); err != nil {
-		return fmt.Errorf("failed to execute normal mode: %w", err)
+	// Execute one full turn (includes automatic context management flow)
+	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+		return fmt.Errorf("failed to execute turn: %w", err)
 	}
 
 	return nil
@@ -363,13 +362,13 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 			s.pendingSteer = false
 			s.mu.Unlock()
 		}()
-		return s.agent.ExecuteNormalMode(ctx, message)
+		return s.agent.ExecuteTurn(ctx, message)
 	}
 
 	// If streaming, the agent should handle the steer internally
 	// For now, we'll cancel and restart
 	slog.Info("[AgentNew] Steer during streaming - restart execution", "message", message)
-	return s.agent.ExecuteNormalMode(ctx, message)
+	return s.agent.ExecuteTurn(ctx, message)
 }
 
 // FollowUp handles the follow_up command using AgentNew.
@@ -383,7 +382,7 @@ func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 		// This would need to be tracked in AgentNew
 	}
 
-	return s.agent.ExecuteNormalMode(ctx, message)
+	return s.agent.ExecuteTurn(ctx, message)
 }
 
 // Abort stops the current execution.

@@ -7,7 +7,7 @@ import (
 // GetContextMgmtTools returns the tools available in Context Management mode.
 func GetContextMgmtTools(sessionDir string, snapshot *agentctx.ContextSnapshot, journal *agentctx.Journal) []agentctx.Tool {
 	return []agentctx.Tool{
-		NewUpdateLLMContextTool(sessionDir),
+		NewUpdateLLMContextTool(snapshot),
 		NewTruncateMessagesTool(snapshot, journal),
 		NewNoActionTool(snapshot),
 	}

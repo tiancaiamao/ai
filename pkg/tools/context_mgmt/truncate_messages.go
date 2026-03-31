@@ -93,9 +93,18 @@ func (t *TruncateMessagesTool) Execute(ctx context.Context, params map[string]an
 
 // isValidToolCallID checks if the ID is a valid tool call ID.
 func (t *TruncateMessagesTool) isValidToolCallID(id string) bool {
+	protectedStart := len(t.snapshot.RecentMessages) - agentctx.RecentMessagesKeep
+	if protectedStart < 0 {
+		protectedStart = 0
+	}
+
 	// Check if there's a message with this ToolCallID that is a tool result
-	for _, msg := range t.snapshot.RecentMessages {
-		if msg.ToolCallID == id && msg.Role == "toolResult" {
+	for i, msg := range t.snapshot.RecentMessages {
+		if msg.ToolCallID == id && msg.Role == "toolResult" && !msg.Truncated {
+			// The most recent N messages are protected and can never be truncated.
+			if i >= protectedStart {
+				return false
+			}
 			return true
 		}
 	}
@@ -114,12 +123,18 @@ func (t *TruncateMessagesTool) applyTruncate(ctx context.Context, ids []string) 
 				t.snapshot.RecentMessages[i].OriginalSize = len(t.snapshot.RecentMessages[i].ExtractText())
 
 				// Record to journal
-				t.journal.AppendTruncate(agentctx.TruncateEvent{
+				if err := t.journal.AppendTruncate(agentctx.TruncateEvent{
 					ToolCallID: id,
 					Turn:       t.snapshot.AgentState.TotalTurns,
 					Trigger:    "context_management",
 					Timestamp:  time.Now().Format(time.RFC3339),
-				})
+				}); err != nil {
+					traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_journal_append_failed",
+						traceevent.Field{Key: "tool_call_id", Value: id},
+						traceevent.Field{Key: "error", Value: err.Error()},
+					)
+					continue
+				}
 
 				count++
 				break

@@ -19,7 +19,9 @@ func (a *AgentNew) ExecuteNormalMode(ctx context.Context, userMessage string) er
 	defer a.snapshotMu.Unlock()
 
 	// 1. Check trigger conditions
+	agentctx.LogSnapshotEvaluated(ctx, a.snapshot)
 	shouldTrigger, urgency, reason := a.triggerChecker.ShouldTrigger(a.snapshot)
+	agentctx.LogTriggerChecked(ctx, shouldTrigger, urgency, reason, a.snapshot)
 	if shouldTrigger && urgency != agentctx.UrgencySkip {
 		slog.Info("[AgentNew] Context management trigger detected",
 			"urgency", urgency,
@@ -211,7 +213,7 @@ func (a *AgentNew) processLLMResponse(
 					call.Function.Name = e.ToolCall.Function.Name
 				}
 				if e.ToolCall.Function.Arguments != "" {
-					call.Function.Arguments = e.ToolCall.Function.Arguments
+					call.Function.Arguments += e.ToolCall.Function.Arguments
 				}
 
 				// Update message content with tool calls
@@ -227,10 +229,13 @@ func (a *AgentNew) processLLMResponse(
 					if tc.ID != "" {
 						argsMap := make(map[string]any)
 						if tc.Function.Arguments != "" {
-							// Parse arguments
-							// For simplicity, we'll just store the raw string
-							argsMap = map[string]any{
-								"raw": tc.Function.Arguments,
+							if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+								slog.Warn("[AgentNew] Failed to parse tool call arguments",
+									"tool", tc.Function.Name,
+									"toolCallID", tc.ID,
+									"error", err,
+								)
+								argsMap = make(map[string]any)
 							}
 						}
 

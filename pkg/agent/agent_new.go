@@ -51,7 +51,11 @@ type EventEmitter interface {
 // NewAgentNew creates a new agent with ContextSnapshot architecture.
 func NewAgentNew(sessionDir, sessionID string, model *ModelSpec, apiKey string, eventEmitter EventEmitter) (*AgentNew, error) {
 	// 1. Load or create snapshot
-	snapshot := agentctx.NewContextSnapshot(sessionID, sessionDir)
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd = sessionDir
+	}
+	snapshot := agentctx.NewContextSnapshot(sessionID, cwd)
 
 	// 2. Open journal
 	journal, err := agentctx.OpenJournal(sessionDir)
@@ -111,9 +115,6 @@ func loadAllTools() []agentctx.Tool {
 
 // createCheckpoint creates a new checkpoint from the current snapshot.
 func (a *AgentNew) createCheckpoint(ctx context.Context) error {
-	a.snapshotMu.Lock()
-	defer a.snapshotMu.Unlock()
-
 	// Get message index from journal
 	messageIndex := a.journal.GetLength()
 
@@ -136,6 +137,7 @@ func (a *AgentNew) createCheckpoint(ctx context.Context) error {
 		"turn", checkpointInfo.Turn,
 		"path", checkpointInfo.Path,
 	)
+	agentctx.LogCheckpointCreated(ctx, checkpointInfo)
 
 	return nil
 }

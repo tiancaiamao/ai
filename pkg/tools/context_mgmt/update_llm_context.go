@@ -3,8 +3,6 @@ package context_mgmt
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
@@ -12,13 +10,13 @@ import (
 
 // UpdateLLMContextTool updates the LLMContext.
 type UpdateLLMContextTool struct {
-	sessionDir string
+	snapshot *agentctx.ContextSnapshot
 }
 
 // NewUpdateLLMContextTool creates a new UpdateLLMContextTool.
-func NewUpdateLLMContextTool(sessionDir string) *UpdateLLMContextTool {
+func NewUpdateLLMContextTool(snapshot *agentctx.ContextSnapshot) *UpdateLLMContextTool {
 	return &UpdateLLMContextTool{
-		sessionDir: sessionDir,
+		snapshot: snapshot,
 	}
 }
 
@@ -52,23 +50,18 @@ func (t *UpdateLLMContextTool) Execute(ctx context.Context, params map[string]an
 	if !ok || llmContext == "" {
 		return nil, fmt.Errorf("llm_context is required and must be non-empty")
 	}
-
-	// Save to current checkpoint directory
-	currentCheckpointPath := filepath.Join(t.sessionDir, "current")
-	llmContextPath := filepath.Join(currentCheckpointPath, "llm_context.txt")
-
-	// Validate checkpoint directory exists
-	if _, err := os.Stat(currentCheckpointPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("checkpoint directory does not exist: %s", currentCheckpointPath)
+	if t.snapshot == nil {
+		return nil, fmt.Errorf("context snapshot is not available")
 	}
 
-	if err := os.WriteFile(llmContextPath, []byte(llmContext), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write llm_context.txt: %w", err)
-	}
+	charsDelta := len(llmContext) - len(t.snapshot.LLMContext)
+	t.snapshot.LLMContext = llmContext
+	t.snapshot.AgentState.LastLLMContextUpdate = t.snapshot.AgentState.TotalTurns
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_llm_context_updated",
 		traceevent.Field{Key: "chars", Value: len(llmContext)},
-		traceevent.Field{Key: "checkpoint_path", Value: currentCheckpointPath},
+		traceevent.Field{Key: "chars_delta", Value: charsDelta},
+		traceevent.Field{Key: "turn", Value: t.snapshot.AgentState.TotalTurns},
 	)
 
 	return []agentctx.ContentBlock{

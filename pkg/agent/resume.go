@@ -42,6 +42,7 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 		slog.Warn("[AgentNew] Failed to get latest checkpoint, creating new session", "error", err)
 		return createNewSession(sessionDir, model, apiKey, eventEmitter)
 	}
+	agentctx.LogCheckpointLoaded(ctx, latestCheckpoint.Path, latestCheckpoint.MessageIndex, latestCheckpoint.Turn)
 
 	// 3. Load checkpoint data
 	snapshot, err := agentctx.LoadCheckpoint(sessionDir, latestCheckpoint)
@@ -56,8 +57,8 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 		return nil, fmt.Errorf("failed to open journal: %w", err)
 	}
 
-	// 5. Read journal entries after checkpoint
-	entries, err := journal.ReadFromIndex(latestCheckpoint.MessageIndex)
+	// 5. Read full journal and reconstruct from checkpoint.MessageIndex once.
+	entries, err := journal.ReadAll()
 	if err != nil {
 		slog.Warn("[AgentNew] Failed to read journal, using checkpoint only", "error", err)
 		// Continue with checkpoint data only
@@ -75,6 +76,7 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 				return nil, fmt.Errorf("failed to reload checkpoint: %w", err)
 			}
 		}
+		agentctx.LogSnapshotReconstructed(ctx, latestCheckpoint.Path, len(entries), len(snapshot.RecentMessages))
 	}
 
 	// 7. Create agent

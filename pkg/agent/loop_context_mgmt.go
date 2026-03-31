@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -206,7 +207,8 @@ func (a *AgentNew) renderToolResultForMgmt(msg agentctx.AgentMessage) string {
 
 // extractToolCallsFromStream extracts tool calls from the LLM stream.
 func (a *AgentNew) extractToolCallsFromStream(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) ([]llm.ToolCall, error) {
-	var toolCalls []llm.ToolCall
+	toolCallsByIndex := make(map[int]*llm.ToolCall)
+	order := make([]int, 0)
 
 	for event := range stream.Iterator(ctx) {
 		if event.Done {
@@ -215,16 +217,37 @@ func (a *AgentNew) extractToolCallsFromStream(ctx context.Context, stream *llm.E
 
 		switch e := event.Value.(type) {
 		case llm.LLMToolCallDeltaEvent:
-			// Collect tool calls
-			toolCalls = append(toolCalls, llm.ToolCall{
-				ID: e.ToolCall.ID,
-				Function: llm.FunctionCall{
-					Name:      e.ToolCall.Function.Name,
-					Arguments: e.ToolCall.Function.Arguments,
-				},
-			})
+			call, ok := toolCallsByIndex[e.Index]
+			if !ok {
+				call = &llm.ToolCall{}
+				toolCallsByIndex[e.Index] = call
+				order = append(order, e.Index)
+			}
+			if e.ToolCall.ID != "" {
+				call.ID = e.ToolCall.ID
+			}
+			if e.ToolCall.Function.Name != "" {
+				call.Function.Name = e.ToolCall.Function.Name
+			}
+			if e.ToolCall.Function.Arguments != "" {
+				call.Function.Arguments += e.ToolCall.Function.Arguments
+			}
 
 		case llm.LLMDoneEvent:
+			if len(order) == 0 && e.Message != nil && len(e.Message.ToolCalls) > 0 {
+				return e.Message.ToolCalls, nil
+			}
+			toolCalls := make([]llm.ToolCall, 0, len(order))
+			for _, idx := range order {
+				call := toolCallsByIndex[idx]
+				if call == nil {
+					continue
+				}
+				if call.Function.Name == "" && call.ID == "" {
+					continue
+				}
+				toolCalls = append(toolCalls, *call)
+			}
 			return toolCalls, nil
 
 		case llm.LLMErrorEvent:
@@ -232,6 +255,17 @@ func (a *AgentNew) extractToolCallsFromStream(ctx context.Context, stream *llm.E
 		}
 	}
 
+	toolCalls := make([]llm.ToolCall, 0, len(order))
+	for _, idx := range order {
+		call := toolCallsByIndex[idx]
+		if call == nil {
+			continue
+		}
+		if call.Function.Name == "" && call.ID == "" {
+			continue
+		}
+		toolCalls = append(toolCalls, *call)
+	}
 	return toolCalls, nil
 }
 
@@ -279,11 +313,10 @@ func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.Tool
 	}
 
 	// Parse arguments
-	var args map[string]any
-	if toolCall.Function.Arguments != "" {
-		// For simplicity, assume arguments are already parsed or handle raw string
-		args = map[string]any{
-			"raw": toolCall.Function.Arguments,
+	args := make(map[string]any)
+	if strings.TrimSpace(toolCall.Function.Arguments) != "" {
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+			return fmt.Errorf("failed to parse arguments for %s: %w", toolCall.Function.Name, err)
 		}
 	}
 
