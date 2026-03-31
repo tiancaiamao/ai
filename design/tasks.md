@@ -1339,9 +1339,9 @@ Keep the LLM Context concise but complete. Aim for 500-1000 tokens.
 ```
 
 **验收标准**:
-- [ ] BuildSystemPrompt 正确返回模式特定的 prompt
-- [ ] NormalSystemPrompt 简洁、聚焦任务
-- [ ] ContextMgmtSystemPrompt 包含完整的指导
+- [X] BuildSystemPrompt 正确返回模式特定的 prompt
+- [X] NormalSystemPrompt 简洁、聚焦任务
+- [X] ContextMgmtSystemPrompt 包含完整的指导
 
 ---
 
@@ -1508,12 +1508,12 @@ type LLMRequest struct {
 - 旧代码: `pkg/agent/loop.go` 中的请求构建逻辑
 
 **验收标准**:
-- [ ] BuildRequest 正确构建 LLM 请求
-- [ ] System prompt 根据模式变化
-- [ ] 工具结果在 ContextMgmt 模式下正确渲染
-- [ ] llm_context 在 Normal 模式下注入
-- [ ] runtime_state 在两种模式下都注入
-- [ ] 消息插入到最后一个用户消息之前
+- [X] BuildRequest 正确构建 LLM 请求
+- [X] System prompt 根据模式变化
+- [X] 工具结果在 ContextMgmt 模式下正确渲染
+- [X] llm_context 在 Normal 模式下注入
+- [X] runtime_state 在两种模式下都注入
+- [X] 消息插入到最后一个用户消息之前
 
 ---
 
@@ -1601,10 +1601,10 @@ func getLastNMessages(messages []context.AgentMessage, n int) []context.AgentMes
 ```
 
 **验收标准**:
-- [ ] BuildContextMgmtInput 包含所有必需部分
-- [ ] 当前状态正确显示
-- [ ] Stale 工具输出按陈旧度排序
-- [ ] 最近消息数量正确限制
+- [X] BuildContextMgmtInput 包含所有必需部分
+- [X] 当前状态正确显示
+- [X] Stale 工具输出按陈旧度排序
+- [X] 最近消息数量正确限制
 
 ---
 
