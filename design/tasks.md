@@ -42,9 +42,9 @@ const (
 ```
 
 **验收标准**:
-- [ ] `AgentMode` 类型定义
-- [ ] 两个模式常量
-- [ ] 基本的类型验证方法（如果需要）
+- [X] `AgentMode` 类型定义
+- [X] 两个模式常量
+- [X] 基本的类型验证方法（如果需要）
 
 ---
 
@@ -90,10 +90,10 @@ type AgentState struct {
 **参考**: 旧代码中的 `pkg/context/context.go` 中的 AgentContext，但简化许多字段。
 
 **验收标准**:
-- [ ] AgentState 结构体定义
-- [ ] 所有必需字段
-- [ ] JSON 序列化支持
-- [ ] 基本的初始化函数 `NewAgentState(sessionID, cwd string)`
+- [X] AgentState 结构体定义
+- [X] 所有必需字段
+- [X] JSON 序列化支持
+- [X] 基本的初始化函数 `NewAgentState(sessionID, cwd string)`
 
 ---
 
@@ -153,11 +153,11 @@ type AgentMessage struct {
 - 旧代码: `pkg/context/context.go` 中的 AgentContext
 
 **验收标准**:
-- [ ] ContextSnapshot 结构体定义
-- [ ] NewContextSnapshot 初始化函数
-- [ ] Clone 方法实现
-- [ ] AgentMessage 结构体定义（包含新字段）
-- [ ] 结构体可以通过 json.Marshal/Unmarshal 正确序列化
+- [X] ContextSnapshot 结构体定义
+- [X] NewContextSnapshot 初始化函数
+- [X] Clone 方法实现
+- [X] AgentMessage 结构体定义（包含新字段）
+- [X] 结构体可以通过 json.Marshal/Unmarshal 正确序列化
 
 ---
 
@@ -197,11 +197,11 @@ func NewTruncateEntry(toolCallID string, turn int, trigger string) JournalEntry
 ```
 
 **验收标准**:
-- [ ] JournalEntry 结构体定义
-- [ ] TruncateEvent 结构体定义
-- [ ] NewMessageEntry 工厂函数
-- [ ] NewTruncateEntry 工厂函数
-- [ ] 正确的 JSON 序列化
+- [X] JournalEntry 结构体定义
+- [X] TruncateEvent 结构体定义
+- [X] NewMessageEntry 工厂函数
+- [X] NewTruncateEntry 工厂函数
+- [X] 正确的 JSON 序列化
 
 ---
 
@@ -279,10 +279,10 @@ func LoadCheckpointAtTurn(sessionDir string, turn int) (*CheckpointInfo, error)
 **参考**: 旧代码中的 session 目录结构，但新设计有 checkpoint 子目录。
 
 **验收标准**:
-- [ ] checkpoint 目录正确创建
-- [ ] current/ 符号链接正确更新
-- [ ] 在 macOS/Linux 上符号链接工作
-- [ ] 错误处理完善
+- [X] checkpoint 目录正确创建
+- [X] current/ 符号链接正确更新
+- [X] 在 macOS/Linux 上符号链接工作
+- [X] 错误处理完善
 
 ---
 
@@ -343,11 +343,11 @@ func (idx *CheckpointIndex) GetCheckpointAtTurn(turn int) (*CheckpointInfo, erro
 ```
 
 **验收标准**:
-- [ ] CheckpointIndex 结构体定义
-- [ ] LoadCheckpointIndex 正确解析 JSON
-- [ ] SaveCheckpointIndex 原子写入（使用临时文件 + rename）
-- [ ] AddCheckpoint 更新 latest 指针
-- [ ] 错误处理：文件不存在时返回空索引
+- [X] CheckpointIndex 结构体定义
+- [X] LoadCheckpointIndex 正确解析 JSON
+- [X] SaveCheckpointIndex 原子写入（使用临时文件 + rename）
+- [X] AddCheckpoint 更新 latest 指针
+- [X] 错误处理：文件不存在时返回空索引
 
 ---
 
@@ -404,11 +404,11 @@ func LoadCheckpointAgentState(checkpointPath string) (*AgentState, error)
 - 但新格式更简单：只有两个文件
 
 **验收标准**:
-- [ ] SaveCheckpoint 正确保存所有数据
-- [ ] LoadCheckpoint 正确恢复数据
-- [ ] 文件格式符合设计文档
-- [ ] 原子写入，避免损坏
-- [ ] 错误处理完善
+- [X] SaveCheckpoint 正确保存所有数据
+- [X] LoadCheckpoint 正确恢复数据
+- [X] 文件格式符合设计文档
+- [X] 原子写入，避免损坏
+- [X] 错误处理完善
 
 ---
 
@@ -465,12 +465,12 @@ func (j *Journal) Close() error
 **参考**: 旧代码 `pkg/session/entries.go`，但新格式支持 truncate 事件。
 
 **验收标准**:
-- [ ] Journal 结构体和基本方法
-- [ ] AppendMessage 正确写入 JSON
-- [ ] AppendTruncate 正确写入 JSON
-- [ ] ReadAll 正确解析所有条目
-- [ ] ReadFromIndex 正确跳过前 N 行
-- [ ] 并发安全
+- [X] Journal 结构体和基本方法
+- [X] AppendMessage 正确写入 JSON
+- [X] AppendTruncate 正确写入 JSON
+- [X] ReadAll 正确解析所有条目
+- [X] ReadFromIndex 正确跳过前 N 行
+- [X] 并发安全
 
 ---
 
@@ -525,10 +525,10 @@ func (m AgentMessage) IsAgentVisible() bool {
 4. 最终的 RecentMessages 包含所有消息，部分被标记为 truncated
 
 **验收标准**:
-- [ ] ReconstructSnapshot 正确重放事件
-- [ ] truncate 事件正确标记消息
-- [ ] 最终的 snapshot 状态正确
-- [ ] 错误处理：找不到消息时返回错误
+- [X] ReconstructSnapshot 正确重放事件
+- [X] truncate 事件正确标记消息
+- [X] 最终的 snapshot 状态正确
+- [X] 错误处理：找不到消息时返回错误
 
 ---
 
@@ -574,8 +574,8 @@ const (
 ```
 
 **验收标准**:
-- [ ] 所有常量定义
-- [ ] 常量值与设计文档一致
+- [X] 所有常量定义
+- [X] 常量值与设计文档一致
 
 ---
 
@@ -635,10 +635,10 @@ func (s *ContextSnapshot) EstimateTokenPercent() float64 {
 - 旧代码: `pkg/context/context.go` 中的 token 估算逻辑
 
 **验收标准**:
-- [ ] EstimateTokens 返回合理的估算值
-- [ ] EstimateTokenPercent 正确计算百分比
-- [ ] ExtractText 正确提取文本内容
-- [ ] 跳过 truncated 和不可见消息
+- [X] EstimateTokens 返回合理的估算值
+- [X] EstimateTokenPercent 正确计算百分比
+- [X] ExtractText 正确提取文本内容
+- [X] 跳过 truncated 和不可见消息
 
 ---
 
@@ -683,9 +683,9 @@ func (s *ContextSnapshot) GetVisibleToolResults() []AgentMessage {
 ```
 
 **验收标准**:
-- [ ] CalculateStale 正确计算陈旧度
-- [ ] CountStaleOutputs 正确计数
-- [ ] GetVisibleToolResults 返回正确的消息子集
+- [X] CalculateStale 正确计算陈旧度
+- [X] CountStaleOutputs 正确计数
+- [X] GetVisibleToolResults 返回正确的消息子集
 
 ---
 
@@ -802,11 +802,11 @@ func (t *TriggerChecker) ShouldTrigger(snapshot *ContextSnapshot) (bool, string,
 - 但新逻辑更简单：直接返回是否触发
 
 **验收标准**:
-- [ ] ShouldTrigger 实现所有触发条件
-- [ ] Urgent 模式忽略 minInterval
-- [ ] Skip 条件正确工作
-- [ ] 返回正确的 urgency 和 reason
-- [ ] 单元测试覆盖所有触发条件
+- [X] ShouldTrigger 实现所有触发条件
+- [X] Urgent 模式忽略 minInterval
+- [X] Skip 条件正确工作
+- [X] 返回正确的 urgency 和 reason
+- [X] 单元测试覆盖所有触发条件
 
 ---
 
@@ -874,10 +874,10 @@ func (m AgentMessage) RenderContent() string {
 ```
 
 **验收标准**:
-- [ ] Normal 模式隐藏 tool_call_id
-- [ ] ContextMgmt 模式暴露完整的 `<agent:tool>` 标签
-- [ ] 大输出预览正确截断
-- [ ] stale 和 chars 正确显示
+- [X] Normal 模式隐藏 tool_call_id
+- [X] ContextMgmt 模式暴露完整的 `<agent:tool>` 标签
+- [X] 大输出预览正确截断
+- [X] stale 和 chars 正确显示
 
 ---
 
@@ -957,10 +957,10 @@ func (t *UpdateLLMContextTool) Execute(ctx context.Context, params map[string]an
 ```
 
 **验收标准**:
-- [ ] 工具实现符合 Tool 接口
-- [ ] 正确写入 llm_context.txt
-- [ ] emit traceevent
-- [ ] 错误处理完善
+- [X] 工具实现符合 Tool 接口
+- [X] 正确写入 llm_context.txt
+- [X] emit traceevent
+- [X] 错误处理完善
 
 ---
 
@@ -1097,10 +1097,10 @@ func (t *TruncateMessagesTool) applyTruncate(ctx context.Context, ids []string) 
 - [ ] 工具实现符合 Tool 接口
 - [ ] 正确解析逗号分隔的 ID 列表
 - [ ] 验证 ID 有效性
-- [ ] 标记消息为 truncated
-- [ ] 写入 truncate 事件到 journal
-- [ ] emit traceevent
-- [ ] 错误处理完善
+- [X] 标记消息为 truncated
+- [X] 写入 truncate 事件到 journal
+- [X] emit traceevent
+- [X] 错误处理完善
 
 ---
 
@@ -1162,10 +1162,10 @@ func (t *NoActionTool) Execute(ctx context.Context, params map[string]any) ([]co
 ```
 
 **验收标准**:
-- [ ] 工具实现符合 Tool 接口
-- [ ] 更新 LastTriggerTurn
-- [ ] emit traceevent
-- [ ] 不创建 checkpoint（调用方决定）
+- [X] 工具实现符合 Tool 接口
+- [X] 更新 LastTriggerTurn
+- [X] emit traceevent
+- [X] 不创建 checkpoint（调用方决定）
 
 ---
 
@@ -1195,8 +1195,8 @@ func GetContextMgmtTools(snapshot *context.ContextSnapshot, journal *context.Jou
 ```
 
 **验收标准**:
-- [ ] 返回三个上下文管理工具
-- [ ] 工具正确初始化（传入必要的依赖）
+- [X] 返回三个上下文管理工具
+- [X] 工具正确初始化（传入必要的依赖）
 
 ---
 
