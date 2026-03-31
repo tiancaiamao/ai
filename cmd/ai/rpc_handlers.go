@@ -397,10 +397,77 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 }
 
 func (s *AgentNewServer) emitEvent(event agent.AgentEvent) {
-	if s.eventEmitter == nil {
-		return
+	if s.eventEmitter != nil {
+		s.eventEmitter.Emit(event)
 	}
-	s.eventEmitter.Emit(event)
+
+	traceFields := []traceevent.Field{
+		{Key: "event_at", Value: event.EventAt},
+	}
+	if event.Message != nil {
+		traceFields = append(traceFields,
+			traceevent.Field{Key: "role", Value: event.Message.Role},
+			traceevent.Field{Key: "stop_reason", Value: event.Message.StopReason},
+		)
+	}
+	if event.ToolName != "" {
+		traceFields = append(traceFields,
+			traceevent.Field{Key: "tool_name", Value: event.ToolName},
+			traceevent.Field{Key: "tool_call_id", Value: event.ToolCallID},
+		)
+	}
+	if event.Error != "" {
+		traceFields = append(traceFields, traceevent.Field{Key: "error_message", Value: event.Error})
+	}
+	if event.ErrorStack != "" {
+		traceFields = append(traceFields, traceevent.Field{Key: "error_stack", Value: event.ErrorStack})
+	}
+
+	traceevent.Log(context.Background(), traceevent.CategoryEvent, event.Type, traceFields...)
+	if event.Type == agent.EventError {
+		traceevent.Log(context.Background(), traceevent.CategoryEvent, "run_loop_error", traceFields...)
+	}
+
+	switch update := event.AssistantMessageEvent.(type) {
+	case agent.AssistantMessageEvent:
+		s.traceAssistantMessageUpdate(update)
+	case *agent.AssistantMessageEvent:
+		if update != nil {
+			s.traceAssistantMessageUpdate(*update)
+		}
+	}
+}
+
+func (s *AgentNewServer) traceAssistantMessageUpdate(update agent.AssistantMessageEvent) {
+	traceevent.Log(context.Background(), traceevent.CategoryEvent, "message_update",
+		traceevent.Field{Key: "update_type", Value: update.Type},
+		traceevent.Field{Key: "content_index", Value: update.ContentIndex},
+	)
+
+	switch update.Type {
+	case "text_start":
+		traceevent.Log(context.Background(), traceevent.CategoryLLM, "assistant_text",
+			traceevent.Field{Key: "state", Value: "start"},
+		)
+	case "text_end":
+		traceevent.Log(context.Background(), traceevent.CategoryLLM, "assistant_text",
+			traceevent.Field{Key: "state", Value: "end"},
+		)
+	case "text_delta":
+		traceevent.Log(context.Background(), traceevent.CategoryLLM, "text_delta",
+			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
+			traceevent.Field{Key: "delta", Value: update.Delta},
+		)
+	case "thinking_delta":
+		traceevent.Log(context.Background(), traceevent.CategoryLLM, "thinking_delta",
+			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
+			traceevent.Field{Key: "delta", Value: update.Delta},
+		)
+	case "toolcall_delta":
+		traceevent.Log(context.Background(), traceevent.CategoryLLM, "tool_call_delta",
+			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
+		)
+	}
 }
 
 func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMessage, []agentctx.AgentMessage) {

@@ -10,6 +10,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 	"log/slog"
 )
 
@@ -47,6 +48,14 @@ func (a *AgentNew) ExecuteNormalMode(ctx context.Context, userMessage string) er
 	}
 
 	a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, userMsg)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "message_start",
+		traceevent.Field{Key: "role", Value: "user"},
+		traceevent.Field{Key: "chars", Value: len(userMessage)},
+	)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "message_end",
+		traceevent.Field{Key: "role", Value: "user"},
+		traceevent.Field{Key: "chars", Value: len(userMessage)},
+	)
 
 	// 3. Persist to journal
 	if err := a.journal.AppendMessage(userMsg); err != nil {
@@ -64,6 +73,14 @@ func (a *AgentNew) ExecuteNormalMode(ctx context.Context, userMessage string) er
 
 	// 5. Call LLM
 	llmStart := time.Now()
+	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
+		traceevent.Field{Key: "model", Value: a.model.ID},
+		traceevent.Field{Key: "provider", Value: a.model.Provider},
+		traceevent.Field{Key: "api", Value: a.model.API},
+		traceevent.Field{Key: "timeout_ms", Value: int64((2 * time.Minute) / time.Millisecond)},
+	)
+	defer llmSpan.End()
+
 	stream := llm.StreamLLM(
 		ctx,
 		*a.model,
@@ -75,11 +92,26 @@ func (a *AgentNew) ExecuteNormalMode(ctx context.Context, userMessage string) er
 	// 6. Process response
 	assistantMsg, toolResults, err := a.processLLMResponse(ctx, stream, llmStart)
 	if err != nil {
+		llmSpan.AddField("error", true)
+		llmSpan.AddField("error_message", err.Error())
 		return err
+	}
+	if assistantMsg != nil {
+		llmSpan.AddField("stop_reason", assistantMsg.StopReason)
+		if assistantMsg.Usage != nil {
+			llmSpan.AddField("input_tokens", assistantMsg.Usage.InputTokens)
+			llmSpan.AddField("output_tokens", assistantMsg.Usage.OutputTokens)
+			llmSpan.AddField("total_tokens", assistantMsg.Usage.TotalTokens)
+		}
 	}
 
 	// 7. Append assistant message
 	a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, *assistantMsg)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "message_end",
+		traceevent.Field{Key: "role", Value: "assistant"},
+		traceevent.Field{Key: "stop_reason", Value: assistantMsg.StopReason},
+		traceevent.Field{Key: "chars", Value: len(assistantMsg.ExtractText())},
+	)
 	if err := a.journal.AppendMessage(*assistantMsg); err != nil {
 		return fmt.Errorf("failed to append assistant message: %w", err)
 	}
@@ -185,12 +217,22 @@ func (a *AgentNew) processLLMResponse(
 
 		switch e := event.Value.(type) {
 		case llm.LLMStartEvent:
+			traceevent.Log(ctx, traceevent.CategoryEvent, "message_start",
+				traceevent.Field{Key: "role", Value: "assistant"},
+			)
+			traceevent.Log(ctx, traceevent.CategoryLLM, "assistant_text",
+				traceevent.Field{Key: "state", Value: "start"},
+			)
 			partialMessage = &agentctx.AgentMessage{}
 			*partialMessage = agentctx.NewAssistantMessage()
 			textBuilder.Reset()
 			toolCalls = map[int]*llm.ToolCall{}
 
 		case llm.LLMTextDeltaEvent:
+			traceevent.Log(ctx, traceevent.CategoryLLM, "text_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "delta", Value: e.Delta},
+			)
 			if partialMessage != nil {
 				textBuilder.WriteString(e.Delta)
 				partialMessage.Content = []agentctx.ContentBlock{
@@ -198,7 +240,24 @@ func (a *AgentNew) processLLMResponse(
 				}
 			}
 
+		case llm.LLMThinkingDeltaEvent:
+			traceevent.Log(ctx, traceevent.CategoryLLM, "thinking_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "delta", Value: e.Delta},
+			)
+
 		case llm.LLMToolCallDeltaEvent:
+			toolCallID := ""
+			toolName := ""
+			if e.ToolCall != nil {
+				toolCallID = e.ToolCall.ID
+				toolName = e.ToolCall.Function.Name
+			}
+			traceevent.Log(ctx, traceevent.CategoryLLM, "tool_call_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "tool_name", Value: toolName},
+			)
 			if partialMessage != nil {
 				call, ok := toolCalls[e.Index]
 				if !ok {
@@ -206,13 +265,13 @@ func (a *AgentNew) processLLMResponse(
 					toolCalls[e.Index] = call
 				}
 
-				if e.ToolCall.ID != "" {
+				if e.ToolCall != nil && e.ToolCall.ID != "" {
 					call.ID = e.ToolCall.ID
 				}
-				if e.ToolCall.Function.Name != "" {
+				if e.ToolCall != nil && e.ToolCall.Function.Name != "" {
 					call.Function.Name = e.ToolCall.Function.Name
 				}
-				if e.ToolCall.Function.Arguments != "" {
+				if e.ToolCall != nil && e.ToolCall.Function.Arguments != "" {
 					call.Function.Arguments += e.ToolCall.Function.Arguments
 				}
 
@@ -253,6 +312,9 @@ func (a *AgentNew) processLLMResponse(
 
 		case llm.LLMDoneEvent:
 			elapsed := time.Since(startTime)
+			traceevent.Log(ctx, traceevent.CategoryLLM, "assistant_text",
+				traceevent.Field{Key: "state", Value: "end"},
+			)
 			slog.Info("[AgentNew] LLM call completed",
 				"duration_ms", elapsed.Milliseconds(),
 				"input_tokens", e.Usage.InputTokens,
@@ -319,16 +381,34 @@ func (a *AgentNew) executeToolsFromMessage(
 		toolName := tc.Name
 		toolCallID := tc.ID
 		arguments := tc.Arguments
+		toolStart := time.Now()
+		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+			traceevent.Field{Key: "tool", Value: toolName},
+			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+		)
 
 		slog.Info("[AgentNew] Executing tool",
 			"tool", toolName,
 			"toolCallID", toolCallID,
 			"args", arguments,
 		)
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+			traceevent.Field{Key: "tool", Value: toolName},
+			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+			traceevent.Field{Key: "args", Value: arguments},
+		)
 
 		// Find the tool
 		tool := toolsByName[toolName]
 		if tool == nil {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", "tool not found")
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
+				traceevent.Field{Key: "normalized_name", Value: toolName},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "args", Value: arguments},
+			)
 			slog.Warn("[AgentNew] Tool not found",
 				"tool", toolName,
 				"availableTools", len(toolsByName),
@@ -342,12 +422,22 @@ func (a *AgentNew) executeToolsFromMessage(
 			}
 			result := agentctx.NewToolResultMessage(toolCallID, toolName, errorContent, true)
 			results = append(results, result)
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: toolName},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: "tool not found"},
+			)
 			continue
 		}
 
 		// Execute the tool
 		content, err := tool.Execute(ctx, arguments)
 		if err != nil {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", err.Error())
+			toolSpan.End()
 			slog.Error("[AgentNew] Tool execution failed",
 				"tool", toolName,
 				"error", err,
@@ -361,12 +451,27 @@ func (a *AgentNew) executeToolsFromMessage(
 			}
 			result := agentctx.NewToolResultMessage(toolCallID, toolName, errorContent, true)
 			results = append(results, result)
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: toolName},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: err.Error()},
+			)
 			continue
 		}
 
 		// Return success result
 		result := agentctx.NewToolResultMessage(toolCallID, toolName, content, false)
 		results = append(results, result)
+		toolSpan.AddField("duration_ms", time.Since(toolStart).Milliseconds())
+		toolSpan.End()
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: toolName},
+			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+			traceevent.Field{Key: "error", Value: false},
+		)
 
 		slog.Info("[AgentNew] Tool execution completed",
 			"tool", toolName,

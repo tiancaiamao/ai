@@ -11,6 +11,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/tools/context_mgmt"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 	"log/slog"
 )
 
@@ -18,6 +19,13 @@ import (
 func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) error {
 	a.snapshotMu.Lock()
 	defer a.snapshotMu.Unlock()
+
+	mgmtSpan := traceevent.StartSpan(ctx, "context_management", traceevent.CategoryEvent,
+		traceevent.Field{Key: "urgency", Value: urgency},
+		traceevent.Field{Key: "turn", Value: a.snapshot.AgentState.TotalTurns},
+	)
+	defer mgmtSpan.End()
+	ctx = mgmtSpan.Context()
 
 	slog.Info("[AgentNew] Entering context management mode",
 		"urgency", urgency,
@@ -42,6 +50,13 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 	}
 
 	// 4. Call LLM
+	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
+		traceevent.Field{Key: "mode", Value: "context_management"},
+		traceevent.Field{Key: "model", Value: a.model.ID},
+		traceevent.Field{Key: "provider", Value: a.model.Provider},
+		traceevent.Field{Key: "api", Value: a.model.API},
+		traceevent.Field{Key: "timeout_ms", Value: int64((2 * time.Minute) / time.Millisecond)},
+	)
 	stream := llm.StreamLLM(
 		ctx,
 		*a.model,
@@ -53,9 +68,18 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 	// 5. Process tool calls
 	toolCalls, err := a.extractToolCallsFromStream(ctx, stream)
 	if err != nil {
+		llmSpan.AddField("error", true)
+		llmSpan.AddField("error_message", err.Error())
+		llmSpan.End()
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+			traceevent.Field{Key: "action", Value: "retry"},
+			traceevent.Field{Key: "reason", Value: err.Error()},
+		)
 		slog.Warn("[AgentNew] Context management LLM call failed, retrying", "error", err)
 		return a.retryContextMgmt(ctx, urgency, err)
 	}
+	llmSpan.AddField("tool_calls", len(toolCalls))
+	llmSpan.End()
 
 	// 6. Execute tool calls
 	actionTaken := false
@@ -66,13 +90,23 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 		)
 
 		if toolCall.Function.Name == "no_action" {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+				traceevent.Field{Key: "action", Value: "no_action"},
+				traceevent.Field{Key: "reason", Value: "llm_selected_no_action"},
+			)
 			// Update LastTriggerTurn but don't create checkpoint
 			if err := a.executeNoAction(ctx, toolCall); err != nil {
 				slog.Warn("[AgentNew] no_action execution failed", "error", err)
 			}
 		} else {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+				traceevent.Field{Key: "action", Value: toolCall.Function.Name},
+				traceevent.Field{Key: "reason", Value: "tool_selected"},
+			)
 			// Execute the tool
 			if err := a.executeContextMgmtTool(ctx, toolCall, ctxMgmtTools); err != nil {
+				mgmtSpan.AddField("error", true)
+				mgmtSpan.AddField("error_message", err.Error())
 				slog.Error("[AgentNew] Context management tool execution failed",
 					"tool", toolCall.Function.Name,
 					"error", err,
@@ -87,6 +121,8 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 	if actionTaken {
 		slog.Info("[AgentNew] Creating checkpoint after context management")
 		if err := a.createCheckpoint(ctx); err != nil {
+			mgmtSpan.AddField("error", true)
+			mgmtSpan.AddField("error_message", err.Error())
 			return fmt.Errorf("failed to create checkpoint: %w", err)
 		}
 	}
@@ -99,6 +135,7 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 	slog.Info("[AgentNew] Context management mode completed",
 		"action_taken", actionTaken,
 	)
+	mgmtSpan.AddField("action_taken", actionTaken)
 
 	return nil
 }
@@ -216,20 +253,44 @@ func (a *AgentNew) extractToolCallsFromStream(ctx context.Context, stream *llm.E
 		}
 
 		switch e := event.Value.(type) {
+		case llm.LLMTextDeltaEvent:
+			traceevent.Log(ctx, traceevent.CategoryLLM, "text_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "delta", Value: e.Delta},
+			)
+
+		case llm.LLMThinkingDeltaEvent:
+			traceevent.Log(ctx, traceevent.CategoryLLM, "thinking_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "delta", Value: e.Delta},
+			)
+
 		case llm.LLMToolCallDeltaEvent:
+			toolCallID := ""
+			toolName := ""
+			if e.ToolCall != nil {
+				toolCallID = e.ToolCall.ID
+				toolName = e.ToolCall.Function.Name
+			}
+			traceevent.Log(ctx, traceevent.CategoryLLM, "tool_call_delta",
+				traceevent.Field{Key: "content_index", Value: e.Index},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "tool_name", Value: toolName},
+			)
+
 			call, ok := toolCallsByIndex[e.Index]
 			if !ok {
 				call = &llm.ToolCall{}
 				toolCallsByIndex[e.Index] = call
 				order = append(order, e.Index)
 			}
-			if e.ToolCall.ID != "" {
+			if e.ToolCall != nil && e.ToolCall.ID != "" {
 				call.ID = e.ToolCall.ID
 			}
-			if e.ToolCall.Function.Name != "" {
+			if e.ToolCall != nil && e.ToolCall.Function.Name != "" {
 				call.Function.Name = e.ToolCall.Function.Name
 			}
-			if e.ToolCall.Function.Arguments != "" {
+			if e.ToolCall != nil && e.ToolCall.Function.Arguments != "" {
 				call.Function.Arguments += e.ToolCall.Function.Arguments
 			}
 
@@ -293,12 +354,29 @@ func (a *AgentNew) executeNoAction(ctx context.Context, toolCall llm.ToolCall) e
 	slog.Info("[AgentNew] Context management: no action taken",
 		"turn", a.snapshot.AgentState.TotalTurns,
 	)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_skipped",
+		traceevent.Field{Key: "reason", Value: "no_action"},
+		traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+	)
 
 	return nil
 }
 
 // executeContextMgmtTool executes a context management tool.
 func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.ToolCall, availableTools []agentctx.Tool) error {
+	toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+		traceevent.Field{Key: "mode", Value: "context_management"},
+		traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+		traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+	)
+	defer toolSpan.End()
+
+	traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+		traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+		traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+		traceevent.Field{Key: "args", Value: toolCall.Function.Arguments},
+	)
+
 	// Find the tool
 	var targetTool agentctx.Tool
 	for _, tool := range availableTools {
@@ -309,6 +387,14 @@ func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.Tool
 	}
 
 	if targetTool == nil {
+		toolSpan.AddField("error", true)
+		toolSpan.AddField("error_message", "tool not found")
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+			traceevent.Field{Key: "error", Value: true},
+			traceevent.Field{Key: "error_message", Value: "tool not found"},
+		)
 		return fmt.Errorf("tool not found: %s", toolCall.Function.Name)
 	}
 
@@ -316,13 +402,37 @@ func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.Tool
 	args := make(map[string]any)
 	if strings.TrimSpace(toolCall.Function.Arguments) != "" {
 		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", err.Error())
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_invalid_args",
+				traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+				traceevent.Field{Key: "args", Value: toolCall.Function.Arguments},
+				traceevent.Field{Key: "error", Value: err.Error()},
+			)
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: err.Error()},
+			)
 			return fmt.Errorf("failed to parse arguments for %s: %w", toolCall.Function.Name, err)
 		}
 	}
 
 	// Execute the tool
+	start := time.Now()
 	content, err := targetTool.Execute(ctx, args)
 	if err != nil {
+		toolSpan.AddField("error", true)
+		toolSpan.AddField("error_message", err.Error())
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(start).Milliseconds()},
+			traceevent.Field{Key: "error", Value: true},
+			traceevent.Field{Key: "error_message", Value: err.Error()},
+		)
 		return err
 	}
 
@@ -330,6 +440,12 @@ func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.Tool
 	slog.Info("[AgentNew] Context management tool executed",
 		"tool", toolCall.Function.Name,
 		"result", content,
+	)
+	traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+		traceevent.Field{Key: "tool", Value: toolCall.Function.Name},
+		traceevent.Field{Key: "tool_call_id", Value: toolCall.ID},
+		traceevent.Field{Key: "duration_ms", Value: time.Since(start).Milliseconds()},
+		traceevent.Field{Key: "error", Value: false},
 	)
 
 	return nil
