@@ -144,6 +144,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
+	traceOutputPath := ""
+	_, traceOutputPath, err = initTraceFileHandler(sessionID)
+	if err != nil {
+		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
+		traceOutputPath = ""
+	} else {
+		slog.Info("Trace handler initialized", "output", traceOutputPath)
+	}
+
 	// Load skills
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -200,7 +209,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		apiKey,
 		configPath,
 		cfg,
-		config.ResolveLogPath(cfg.Log),
+		traceOutputPath,
 		sessionMgr,
 		sess,
 		registry,
@@ -362,6 +371,9 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 		beforeCount = len(snapshot.RecentMessages)
 	}
 
+	ctx, finalizeTrace := s.beginTurnTrace(ctx)
+	defer finalizeTrace()
+
 	s.emitEvent(agent.NewAgentStartEvent())
 	s.emitEvent(agent.NewTurnStartEvent())
 
@@ -450,6 +462,9 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 	s.pendingSteer = true
 	s.mu.Unlock()
 
+	ctx, finalizeTrace := s.beginTurnTrace(ctx)
+	defer finalizeTrace()
+
 	// If not streaming, execute immediately
 	if !streaming {
 		defer func() {
@@ -493,6 +508,9 @@ func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 		// This would need to be tracked in AgentNew
 	}
 
+	ctx, finalizeTrace := s.beginTurnTrace(ctx)
+	defer finalizeTrace()
+
 	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
 		return err
 	}
@@ -502,6 +520,27 @@ func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 		slog.Warn("[AgentNew] Failed to sync session after follow-up", "error", err)
 	}
 	return nil
+}
+
+func (s *AgentNewServer) beginTurnTrace(ctx context.Context) (context.Context, func()) {
+	tb := traceevent.NewTraceBuf()
+	seq := 0
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			seq = fh.IncrementPromptCount()
+		}
+	}
+	tb.SetTraceID(traceevent.GenerateTraceID("session", seq))
+
+	traceCtx := traceevent.WithTraceBuf(ctx, tb)
+	traceevent.SetActiveTraceBuf(tb)
+
+	return traceCtx, func() {
+		if err := tb.DiscardOrFlush(traceCtx); err != nil {
+			slog.Warn("[AgentNew] Failed to flush trace buffer", "error", err)
+		}
+		traceevent.ClearActiveTraceBuf(tb)
+	}
 }
 
 // Abort stops the current execution.

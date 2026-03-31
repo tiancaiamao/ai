@@ -730,7 +730,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("compact", nil, "")
 	case "context":
 		return true, p.handleContext()
-	case "trace-events":
+	case "traceevent", "trace-events":
 		return true, p.handleTraceEvents(args, fromControl)
 	case "fork":
 		return true, p.handleFork(args)
@@ -1297,7 +1297,7 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /traceevent <all|default|off|list|enable selectors|disable selectors>")
 		return nil
 	}
 
@@ -1321,7 +1321,7 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 		rawSelectors := strings.TrimSpace(args[len(parts[0]):])
 		selectors := parseTraceEventSelectors(rawSelectors)
 		if len(selectors) == 0 {
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /trace-events %s <selectors>", cmd))
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /traceevent %s <selectors>", cmd))
 			return nil
 		}
 
@@ -1331,7 +1331,7 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 		// Backward-compatible absolute set.
 		selectors := parseTraceEventSelectors(args)
 		if len(selectors) == 0 {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /traceevent <all|default|off|list|enable selectors|disable selectors>")
 			return nil
 		}
 
@@ -2279,7 +2279,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /new [name]
   /resume [id|path|index]
   /compact
-  /trace-events <all|default|off|list|enable selectors|disable selectors>
+  /traceevent <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
   /follow-up <message>
   /abort
