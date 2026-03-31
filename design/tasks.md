@@ -1672,9 +1672,9 @@ func NewAgentNew(sessionDir, sessionID string, model *ModelSpec, eventEmitter Ev
 ```
 
 **验收标准**:
-- [ ] AgentNew 结构体定义
-- [ ] NewAgentNew 工厂函数
-- [ ] 正确初始化所有组件
+- [X] AgentNew 结构体定义
+- [X] NewAgentNew 工厂函数
+- [X] 正确初始化所有组件
 
 ---
 
@@ -1754,11 +1754,11 @@ func (a *AgentNew) processLLMResponse(ctx context.Context, stream *llm.EventStre
 - 复用流式响应处理逻辑
 
 **验收标准**:
-- [ ] 正确处理用户输入
-- [ ] 正确调用 LLM
-- [ ] 正确执行工具
-- [ ] 正确持久化消息
-- [ ] 正确更新 turn count
+- [X] 正确处理用户输入
+- [X] 正确调用 LLM
+- [X] 正确执行工具
+- [X] 正确持久化消息
+- [X] 正确更新 turn count
 
 ---
 
@@ -1893,13 +1893,13 @@ func (a *AgentNew) createCheckpoint(ctx context.Context) error {
 ```
 
 **验收标准**:
-- [ ] 正确构建 context management 输入
-- [ ] 正确调用 LLM
-- [ ] 正确执行工具
-- [ ] no_action 时更新 LastTriggerTurn 但不创建 checkpoint
-- [ ] 其他操作时创建 checkpoint
-- [ ] 失败时正确重试
-- [ ] emit traceevent
+- [X] 正确构建 context management 输入
+- [X] 正确调用 LLM
+- [X] 正确执行工具
+- [X] no_action 时更新 LastTriggerTurn 但不创建 checkpoint
+- [X] 其他操作时创建 checkpoint
+- [X] 失败时正确重试
+- [X] emit traceevent
 
 ---
 
@@ -2021,10 +2021,10 @@ func loadAllTools() []context.Tool {
 ```
 
 **验收标准**:
-- [ ] LoadSession 正确加载现有会话
-- [ ] createNewSession 正确创建新会话
-- [ ] checkpoint + journal 正确重放
-- [ ] 最终 snapshot 状态正确
+- [X] LoadSession 正确加载现有会话
+- [X] createNewSession 正确创建新会话
+- [X] checkpoint + journal 正确重放
+- [X] 最终 snapshot 状态正确
 
 ---
 
