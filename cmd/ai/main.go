@@ -55,39 +55,16 @@ func parseSystemPrompt(systemPromptFlag string) string {
 }
 
 func main() {
-	mode := flag.String("mode", "", "Run mode (rpc|win|json|headless). Default: win")
-	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json/headless mode)")
-	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, headless mode only)")
-	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
-	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited, headless mode only)")
-	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
-	keepToolsFlag := flag.Bool("keep-tools", false, "Keep task_tracking and context_management enabled even with custom system prompt (headless mode only)")
-	cmPromptFlag := flag.String("cm-prompt", "", "Override context management section of system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md). Headless mode only.")
+	mode := flag.String("mode", "", "Run mode (rpc|win). Default: win")
+	sessionPathFlag := flag.String("session", "", "Session file path")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
-
-	// Parse system-prompt flag: if starts with '@', read file content
-	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
 	case "rpc":
 		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
 			slog.Error("rpc error", "error", err)
-			os.Exit(1)
-		}
-	case "json":
-		prompts := flag.Args()
-		if err := runJSON(*sessionPathFlag, *debugAddr, prompts, os.Stdout); err != nil {
-			slog.Error("json error", "error", err)
-			os.Exit(1)
-		}
-	case "headless":
-		prompts := flag.Args()
-		tools := parseToolsFlag(*toolsFlag)
-		cmPrompt := parseSystemPrompt(*cmPromptFlag) // reuse @file parsing
-		if err := runHeadless(*sessionPathFlag, *maxTurnsFlag, tools, *timeoutFlag, systemPrompt, *keepToolsFlag, cmPrompt, prompts, os.Stdout); err != nil {
-			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}
 	case "win", "":
@@ -96,7 +73,8 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win|json|headless")
+		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win")
+		slog.Info("Note: json and headless modes are temporarily disabled during architecture migration")
 		os.Exit(1)
 	}
 }

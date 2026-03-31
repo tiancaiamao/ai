@@ -14,6 +14,10 @@ import (
 	"github.com/tiancaiamao/ai/pkg/config"
 )
 
+const (
+	sendPrefix = ";; "
+)
+
 func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 	// Initialize logger early so all slog calls become trace events.
 	configPath, err := config.GetDefaultConfigPath()

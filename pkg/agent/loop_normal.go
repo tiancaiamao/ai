@@ -412,3 +412,28 @@ func convertLLMMessageToAgent(msg llm.LLMMessage) agentctx.AgentMessage {
 
 	return agentMsg
 }
+
+// insertBeforeLastUserMessage inserts a message before the last user message in the list.
+// If there's no user message, it appends to the end.
+func insertBeforeLastUserMessage(messages []llm.LLMMessage, newMsg llm.LLMMessage) []llm.LLMMessage {
+	// Find the last user message index
+	lastUserIndex := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIndex = i
+			break
+		}
+	}
+
+	// If no user message found, append to end
+	if lastUserIndex == -1 {
+		return append(messages, newMsg)
+	}
+
+	// Insert before the last user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:lastUserIndex]...)
+	result = append(result, newMsg)
+	result = append(result, messages[lastUserIndex:]...)
+	return result
+}

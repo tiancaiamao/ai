@@ -10,7 +10,6 @@ import (
 
 	"log/slog"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/logger"
@@ -275,87 +274,87 @@ func DefaultConfig() *Config {
 	}
 }
 
-// ToLoopConfig converts Config to agent.LoopConfig.
-// This establishes the relationship between application config and agent config.
-//
-// Usage:
-//
-//	cfg := config.LoadConfig(path)
-//	loopCfg := cfg.ToLoopConfig(
-//	    config.WithCompactor(myCompactor),
-//	    config.WithContextWindow(204800),
-//	)
-//	agent := agent.NewAgentFromConfig(model, apiKey, prompt, loopCfg)
-func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
-	loopCfg := agent.DefaultLoopConfig()
-
-	// Override with config file values if present
-	if c.Concurrency != nil {
-		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
-			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
-			"queueTimeout":       c.Concurrency.QueueTimeout,
-		})
-	}
-
-	if c.ToolOutput != nil {
-		loopCfg.ToolOutput = agent.ToolOutputLimits{
-			MaxChars: c.ToolOutput.MaxChars,
-		}
-	}
-
-	// Explicitly set these flags based on config (not just conditional set to true)
-	loopCfg.TaskTrackingEnabled = c.TaskTracking
-	loopCfg.ContextManagementEnabled = c.ContextManagement
-
-	// Apply options last (they can override config values)
-	for _, opt := range opts {
-		opt(loopCfg)
-	}
-
-	return loopCfg
-}
-
-// LoopConfigOption is a functional option for configuring LoopConfig.
-type LoopConfigOption func(*agent.LoopConfig)
-
-// WithCompactor sets the compactor for context compression.
-func WithCompactor(compactor agent.Compactor) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.Compactor = compactor
-	}
-}
-
-// WithContextWindow sets the model context window size.
-func WithContextWindow(window int) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ContextWindow = window
-	}
-}
-
-// WithThinkingLevel sets the thinking level.
-func WithThinkingLevel(level string) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ThinkingLevel = level
-	}
-}
-
-// WithToolCallCutoff sets the tool call cutoff.
-func WithToolCallCutoff(cutoff int) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ToolCallCutoff = cutoff
-	}
-}
-
-// WithExecutor sets the executor for the loop config.
-func WithExecutor(executor *agent.ExecutorPool) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.Executor = executor
-	}
-}
-
-// WithToolOutputLimits sets the tool output limits for the loop config.
-func WithToolOutputLimits(limits agent.ToolOutputLimits) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ToolOutput = limits
-	}
-}
+// DEPRECATED: Old architecture - // ToLoopConfig converts Config to agent.LoopConfig.
+// DEPRECATED: Old architecture - // This establishes the relationship between application config and agent config.
+// DEPRECATED: Old architecture - //
+// DEPRECATED: Old architecture - // Usage:
+// DEPRECATED: Old architecture - //
+// DEPRECATED: Old architecture - //	cfg := config.LoadConfig(path)
+// DEPRECATED: Old architecture - //	loopCfg := cfg.ToLoopConfig(
+// DEPRECATED: Old architecture - //	    config.WithCompactor(myCompactor),
+// DEPRECATED: Old architecture - //	    config.WithContextWindow(204800),
+// DEPRECATED: Old architecture - //	)
+// DEPRECATED: Old architecture - //	agent := agent.NewAgentFromConfig(model, apiKey, prompt, loopCfg)
+// DEPRECATED: Old architecture - func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
+// DEPRECATED: Old architecture - 	loopCfg := agent.DefaultLoopConfig()
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - 	// Override with config file values if present
+// DEPRECATED: Old architecture - 	if c.Concurrency != nil {
+// DEPRECATED: Old architecture - 		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
+// DEPRECATED: Old architecture - 			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
+// DEPRECATED: Old architecture - 			"queueTimeout":       c.Concurrency.QueueTimeout,
+// DEPRECATED: Old architecture - 		})
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - 	if c.ToolOutput != nil {
+// DEPRECATED: Old architecture - 		loopCfg.ToolOutput = agent.ToolOutputLimits{
+// DEPRECATED: Old architecture - 			MaxChars: c.ToolOutput.MaxChars,
+// DEPRECATED: Old architecture - 		}
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - 	// Explicitly set these flags based on config (not just conditional set to true)
+// DEPRECATED: Old architecture - 	loopCfg.TaskTrackingEnabled = c.TaskTracking
+// DEPRECATED: Old architecture - 	loopCfg.ContextManagementEnabled = c.ContextManagement
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - 	// Apply options last (they can override config values)
+// DEPRECATED: Old architecture - 	for _, opt := range opts {
+// DEPRECATED: Old architecture - 		opt(loopCfg)
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - 	return loopCfg
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // LoopConfigOption is a functional option for configuring LoopConfig.
+// DEPRECATED: Old architecture - type LoopConfigOption func(*agent.LoopConfig)
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithCompactor sets the compactor for context compression.
+// DEPRECATED: Old architecture - func WithCompactor(compactor agent.Compactor) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.Compactor = compactor
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithContextWindow sets the model context window size.
+// DEPRECATED: Old architecture - func WithContextWindow(window int) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.ContextWindow = window
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithThinkingLevel sets the thinking level.
+// DEPRECATED: Old architecture - func WithThinkingLevel(level string) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.ThinkingLevel = level
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithToolCallCutoff sets the tool call cutoff.
+// DEPRECATED: Old architecture - func WithToolCallCutoff(cutoff int) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.ToolCallCutoff = cutoff
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithExecutor sets the executor for the loop config.
+// DEPRECATED: Old architecture - func WithExecutor(executor *agent.ExecutorPool) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.Executor = executor
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }
+// DEPRECATED: Old architecture - 
+// DEPRECATED: Old architecture - // WithToolOutputLimits sets the tool output limits for the loop config.
+// DEPRECATED: Old architecture - func WithToolOutputLimits(limits agent.ToolOutputLimits) LoopConfigOption {
+// DEPRECATED: Old architecture - 	return func(cfg *agent.LoopConfig) {
+// DEPRECATED: Old architecture - 		cfg.ToolOutput = limits
+// DEPRECATED: Old architecture - 	}
+// DEPRECATED: Old architecture - }

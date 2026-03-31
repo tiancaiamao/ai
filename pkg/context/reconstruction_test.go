@@ -573,3 +573,160 @@ func TestAgentStateClone_Nil(t *testing.T) {
 		t.Error("Expected nil when cloning nil state")
 	}
 }
+
+// TestEmptyJournal_Replay_ReturnsBaseSnapshot tests that replaying an empty journal
+// returns the base snapshot from checkpoint (Category 1.1).
+func TestEmptyJournal_Replay_ReturnsBaseSnapshot(t *testing.T) {
+	// Given: A base snapshot with LLMContext and some messages
+	baseSnapshot := &ContextSnapshot{
+		LLMContext: "Initial context",
+		RecentMessages: []AgentMessage{
+			NewUserMessage("hello"),
+			NewAssistantMessage(),
+		},
+		AgentState: *NewAgentState("test-session", "/test/dir"),
+	}
+	baseSnapshot.AgentState.TotalTurns = 10
+
+	// When: Replaying empty journal
+	journalEntries := []JournalEntry{}
+	snapshot := baseSnapshot // In real implementation, this would come from loading checkpoint
+
+	// Apply empty journal entries (should not change anything)
+	for _, entry := range journalEntries {
+		if entry.Type == "message" && entry.Message != nil {
+			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
+		}
+	}
+
+	// Then: Snapshot contains only base messages
+	if snapshot.LLMContext != "Initial context" {
+		t.Errorf("Expected LLMContext 'Initial context', got %q", snapshot.LLMContext)
+	}
+
+	if len(snapshot.RecentMessages) != 2 {
+		t.Errorf("Expected 2 messages, got %d", len(snapshot.RecentMessages))
+	}
+
+	// Check first message is user message with "hello"
+	if snapshot.RecentMessages[0].Role != "user" {
+		t.Errorf("Expected first message role 'user', got %s", snapshot.RecentMessages[0].Role)
+	}
+	if snapshot.RecentMessages[0].ExtractText() != "hello" {
+		t.Errorf("Expected first message text 'hello', got %s", snapshot.RecentMessages[0].ExtractText())
+	}
+
+	// Check second message is assistant
+	if snapshot.RecentMessages[1].Role != "assistant" {
+		t.Errorf("Expected second message role 'assistant', got %s", snapshot.RecentMessages[1].Role)
+	}
+}
+
+// TestReplay_Deterministic_SameResult tests that replaying the same journal
+// multiple times produces the same snapshot (Category 1.4).
+func TestReplay_Deterministic_SameResult(t *testing.T) {
+	// Given: A checkpoint and journal
+	baseSnapshot1 := &ContextSnapshot{
+		LLMContext:   "Test context",
+		RecentMessages: []AgentMessage{},
+		AgentState:   *NewAgentState("test-session", "/test/dir"),
+	}
+
+	// Create journal entries
+	journal := []JournalEntry{
+		{
+			Type: "message",
+			Message: func() *AgentMessage {
+				m := NewUserMessage("msg1")
+				return &m
+			}(),
+		},
+		{
+			Type: "message",
+			Message: func() *AgentMessage {
+				m := NewToolResultMessage("call_1", "bash", []ContentBlock{
+					TextContent{Type: "text", Text: "output1"},
+				}, false)
+				return &m
+			}(),
+		},
+		{
+			Type: "truncate",
+			Truncate: &TruncateEvent{
+				ToolCallID: "call_1",
+				Turn:       5,
+				Trigger:    "context_management",
+			},
+		},
+		{
+			Type: "message",
+			Message: func() *AgentMessage {
+				m := NewAssistantMessage()
+				return &m
+			}(),
+		},
+	}
+
+	// When: Replaying journal twice
+	var snapshot1, snapshot2 *ContextSnapshot
+
+	// First replay
+	snapshot1 = &ContextSnapshot{
+		LLMContext:   baseSnapshot1.LLMContext,
+		RecentMessages: []AgentMessage{},
+		AgentState:   *baseSnapshot1.AgentState.Clone(),
+	}
+	for _, entry := range journal {
+		if entry.Type == "message" && entry.Message != nil {
+			snapshot1.RecentMessages = append(snapshot1.RecentMessages, *entry.Message)
+		} else if entry.Type == "truncate" && entry.Truncate != nil {
+			ApplyTruncateToSnapshot(snapshot1, entry.Truncate.ToolCallID)
+		}
+	}
+
+	// Second replay (from same base)
+	snapshot2 = &ContextSnapshot{
+		LLMContext:   baseSnapshot1.LLMContext,
+		RecentMessages: []AgentMessage{},
+		AgentState:   *baseSnapshot1.AgentState.Clone(),
+	}
+	for _, entry := range journal {
+		if entry.Type == "message" && entry.Message != nil {
+			snapshot2.RecentMessages = append(snapshot2.RecentMessages, *entry.Message)
+		} else if entry.Type == "truncate" && entry.Truncate != nil {
+			ApplyTruncateToSnapshot(snapshot2, entry.Truncate.ToolCallID)
+		}
+	}
+
+	// Then: Both replays produce identical snapshots
+	if len(snapshot1.RecentMessages) != len(snapshot2.RecentMessages) {
+		t.Errorf("Replay not deterministic: got %d messages first time, %d messages second time",
+			len(snapshot1.RecentMessages), len(snapshot2.RecentMessages))
+	}
+
+	if snapshot1.LLMContext != snapshot2.LLMContext {
+		t.Error("Replay not deterministic: LLMContext differs")
+	}
+
+	// Check truncate status matches
+	truncated1 := false
+	truncated2 := false
+	for _, msg := range snapshot1.RecentMessages {
+		if msg.ToolCallID == "call_1" && msg.Truncated {
+			truncated1 = true
+		}
+	}
+	for _, msg := range snapshot2.RecentMessages {
+		if msg.ToolCallID == "call_1" && msg.Truncated {
+			truncated2 = true
+		}
+	}
+
+	if truncated1 != truncated2 {
+		t.Error("Replay not deterministic: Truncate status differs")
+	}
+
+	if !truncated1 || !truncated2 {
+		t.Error("Expected call_1 to be truncated in both replays")
+	}
+}

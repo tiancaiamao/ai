@@ -36,6 +36,23 @@ func (r *Registry) All() []agentctx.Tool {
 	return tools
 }
 
+// GetAllTools returns all default tools for the agent.
+func GetAllTools() []agentctx.Tool {
+	registry := NewRegistry()
+
+	// Register all standard tools
+	registry.Register(&ReadTool{})
+	registry.Register(&WriteTool{})
+	registry.Register(&EditTool{})
+	registry.Register(&BashTool{})
+	registry.Register(&GrepTool{})
+	registry.Register(&LLMContextRecallTool{})
+	registry.Register(&ChangeWorkspaceTool{})
+	registry.Register(&TaskTrackingTool{})
+
+	return registry.All()
+}
+
 // ToLLMTools converts all tools to LLM format.
 func (r *Registry) ToLLMTools() []map[string]any {
 	tools := make([]map[string]any, 0)

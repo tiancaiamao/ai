@@ -2281,7 +2281,7 @@ func TestTriggerChecker_ShouldTrigger_SkipWhenHealthy(t *testing.T) {
 - `pkg/prompt/context_management.md` (旧 prompt)
 
 **验收标准**:
-- [ ] 旧代码删除
+- [ ] 旧代码删除 (DEFERRED - 新旧架构并存)
 - [ ] 编译通过
 - [ ] 测试通过
 
@@ -2295,8 +2295,8 @@ func TestTriggerChecker_ShouldTrigger_SkipWhenHealthy(t *testing.T) {
 更新文档以反映新架构。
 
 **验收标准**:
-- [ ] 文档更新
-- [ ] 示例代码更新
+- [X] 文档更新
+- [X] 示例代码更新
 
 ---
 
