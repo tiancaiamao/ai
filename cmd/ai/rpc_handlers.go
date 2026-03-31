@@ -1441,10 +1441,13 @@ func (s *AgentNewServer) SetTraceEvents(events []string) ([]string, error) {
 
 	switch normalized[0] {
 	case "on", "default":
+		traceevent.SetEnableUnknownEvents(false)
 		return traceevent.ResetToDefaultEvents(), nil
 	case "all":
 		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
-		return applyExpanded(expanded, true), nil
+		_ = applyExpanded(expanded, true)
+		traceevent.SetEnableUnknownEvents(true)
+		return traceevent.GetEnabledEvents(), nil
 	case "off", "none":
 		traceevent.DisableAllEvents()
 		return []string{}, nil
@@ -1477,6 +1480,7 @@ func (s *AgentNewServer) SetTraceEvents(events []string) ([]string, error) {
 			sort.Strings(unknown)
 			return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
 		}
+		traceevent.SetEnableUnknownEvents(false)
 		return applyExpanded(expanded, true), nil
 	}
 }

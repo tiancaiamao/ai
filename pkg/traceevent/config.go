@@ -9,6 +9,7 @@ import (
 
 var (
 	enabledEvents       atomic.Uint64 // Per-event enablement (bit flags)
+	enableUnknownEvents atomic.Bool
 	dynamicEventsMu     sync.RWMutex
 	enabledDynamicEvent = make(map[string]struct{})
 )
@@ -33,9 +34,16 @@ func KnownEvents() []string {
 // DisableAllEvents disables all known events.
 func DisableAllEvents() {
 	enabledEvents.Store(0)
+	enableUnknownEvents.Store(false)
 	dynamicEventsMu.Lock()
 	clear(enabledDynamicEvent)
 	dynamicEventsMu.Unlock()
+}
+
+// SetEnableUnknownEvents controls whether unknown event names are treated as enabled.
+// This is useful for "trace all" mode so newly added events don't require registry updates.
+func SetEnableUnknownEvents(enabled bool) {
+	enableUnknownEvents.Store(enabled)
 }
 
 // ResetToDefaultEvents resets enablement to the default set and returns them.
@@ -97,6 +105,9 @@ func IsEventEnabled(eventName string) bool {
 		dynamicEventsMu.RUnlock()
 		return ok
 	}
+	if enableUnknownEvents.Load() {
+		return true
+	}
 	return false
 }
 
@@ -114,6 +125,9 @@ func GetEnabledEvents() []string {
 		events = append(events, name)
 	}
 	dynamicEventsMu.RUnlock()
+	if enableUnknownEvents.Load() {
+		events = append(events, "all:*")
+	}
 	sort.Strings(events)
 	return events
 }
