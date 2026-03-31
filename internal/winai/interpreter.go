@@ -88,8 +88,8 @@ type AiInterpreter struct {
 	deferStatus           bool
 	pendingStatus         []string
 	pendingStateRequests  map[string]stateRequestInfo
-	contextState *rpc.SessionState  // For /context command
-	contextStats *rpc.SessionStats // For /context command
+	contextState          *rpc.SessionState // For /context command
+	contextStats          *rpc.SessionStats // For /context command
 	rpcSequence           int64
 	workingDir            string
 }
@@ -688,23 +688,6 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendStateRequest(false, "ping", false)
 	case "messages":
 		return true, p.sendCommand("get_messages", nil, "")
-	case "tree":
-		if strings.TrimSpace(args) == "" {
-			p.pendingTreeList = true
-			return true, p.sendCommand("get_tree", nil, "")
-		}
-
-		if err := p.resumeOnBranchFromInput(strings.TrimSpace(args)); err != nil {
-			if errors.Is(err, errTreeListRequired) {
-				p.pendingTreeSelect = strings.TrimSpace(args)
-				return true, p.sendCommand("get_tree", nil, "")
-			}
-
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
-			return true, nil
-		}
-
-		return true, nil
 	case "skills":
 		return true, p.sendCommand("get_commands", nil, "")
 	case "set":
@@ -751,9 +734,9 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.handleTraceEvents(args, fromControl)
 	case "fork":
 		return true, p.handleFork(args)
-	case "resume-on-branch":
+	case "rewind":
 		if strings.TrimSpace(args) == "" {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /resume-on-branch <index|entry-id>")
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /rewind <index|entry-id>")
 			return true, nil
 		}
 
@@ -2284,9 +2267,9 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, `Commands:
   /help
   /session
+  /context
   /messages
-  /tree
-  /resume-on-branch <index|entry-id>
+  /rewind <index|entry-id>
   /skills
   /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]
   /show settings|pipeline
@@ -2564,7 +2547,7 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 		if info.kind == "context" {
 			var stateCopy *rpc.SessionState
 			var statsCopy *rpc.SessionStats
-			
+
 			p.stateMu.Lock()
 			p.contextState = state
 			if p.contextStats != nil {
@@ -2574,7 +2557,7 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 				p.contextStats = nil
 			}
 			p.stateMu.Unlock()
-			
+
 			if stateCopy != nil && statsCopy != nil {
 				p.showContext(stateCopy, statsCopy)
 			}
@@ -3199,7 +3182,7 @@ func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 	}
 
 	p.writeRaw(sectionLine + "\n")
-	p.writeRaw("Usage:\n  - /resume-on-branch <index|entry-id>\n")
+	p.writeRaw("Usage:\n  - /rewind <index|entry-id>\n")
 	p.scrollToBottom()
 }
 

@@ -622,14 +622,35 @@ func (s *AgentNewServer) GetState() (*rpc.SessionState, error) {
 		pendingCount = 1
 	}
 
-	var compactorCfg = (*config.Config)(nil)
-	if s.cfg != nil {
-		compactorCfg = s.cfg
-	}
-
 	var compactionState *rpc.CompactionState
-	if compactorCfg != nil {
-		compactionState = buildCompactionState(compactorCfg.Compactor, nil)
+	if s.cfg != nil && s.cfg.Compactor != nil {
+		contextWindow := 0
+		if s.model != nil {
+			contextWindow = s.model.ContextWindow
+		}
+		tokenLimit := s.cfg.Compactor.MaxTokens
+		tokenLimitSource := "max_tokens"
+		if tokenLimit <= 0 && contextWindow > 0 {
+			tokenLimit = contextWindow
+			tokenLimitSource = "context_window"
+		}
+		if tokenLimit <= 0 {
+			tokenLimitSource = ""
+		}
+
+		compactionState = &rpc.CompactionState{
+			MaxMessages:           s.cfg.Compactor.MaxMessages,
+			MaxTokens:             s.cfg.Compactor.MaxTokens,
+			KeepRecent:            s.cfg.Compactor.KeepRecent,
+			KeepRecentTokens:      s.cfg.Compactor.KeepRecentTokens,
+			ReserveTokens:         s.cfg.Compactor.ReserveTokens,
+			ToolCallCutoff:        s.cfg.Compactor.ToolCallCutoff,
+			ToolSummaryStrategy:   s.cfg.Compactor.ToolSummaryStrategy,
+			ToolSummaryAutomation: s.cfg.Compactor.ToolSummaryAutomation,
+			ContextWindow:         contextWindow,
+			TokenLimit:            tokenLimit,
+			TokenLimitSource:      tokenLimitSource,
+		}
 	}
 
 	return &rpc.SessionState{
