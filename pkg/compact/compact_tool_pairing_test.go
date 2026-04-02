@@ -65,7 +65,9 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 	// Scenario: both tool_call and tool_result in recentMessages - should stay visible
 	recentMessages := []agentctx.AgentMessage{
 		{
-			Role: "assistant",
+			Role:         "assistant",
+			AgentVisible: true,
+			UserVisible:  true,
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
 					ID:   "call-456",
@@ -76,9 +78,11 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 			},
 		},
 		{
-			Role:       "toolResult",
-			ToolCallID: "call-456",
-			ToolName:   "write",
+			Role:         "toolResult",
+			AgentVisible: true,
+			UserVisible:  true,
+			ToolCallID:   "call-456",
+			ToolName:     "write",
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "ok"},
 			},
@@ -111,9 +115,11 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 
 	recentMessages := []agentctx.AgentMessage{
 		{
-			Role:       "toolResult",
-			ToolCallID: "call-789",
-			ToolName:   "read",
+			Role:         "toolResult",
+			AgentVisible: true,
+			UserVisible:  true,
+			ToolCallID:   "call-789",
+			ToolName:     "read",
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "result"},
 			},

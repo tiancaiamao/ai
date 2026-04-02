@@ -670,6 +670,11 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 		idx := visibleToolIndexes[i]
 		original := compacted[idx]
 		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
+		// Mark as truncated so buildNormalModeRequest filters it out
+		// This ensures the message is hidden from LLM in all code paths
+		compacted[idx].Truncated = true
+		compacted[idx].TruncatedAt = 0 // No specific turn - compaction archival
+		compacted[idx].OriginalSize = len(original.ExtractText())
 		if strings.TrimSpace(original.ToolCallID) != "" {
 			archivedToolCallIDs[strings.TrimSpace(original.ToolCallID)] = struct{}{}
 		}
@@ -790,6 +795,10 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 			if oldToolCallIDs[msg.ToolCallID] {
 				// This tool_result's call is in oldMessages - hide it to prevent mismatch
 				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				// Mark as truncated so buildNormalModeRequest filters it out
+				archivedMsg.Truncated = true
+				archivedMsg.TruncatedAt = 0
+				archivedMsg.OriginalSize = len(msg.ExtractText())
 				keptMessages = append(keptMessages, archivedMsg)
 				archivedToolResultCount++
 				continue
@@ -865,11 +874,13 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 	}
 
 	// Find tool result indexes (from end to start) within grace period
+	// We protect the N most recent tool_results regardless of their current visibility,
+	// since the grace period is about allowing tool calls to complete, not about visibility.
 	gracePeriodIndexes := make(map[int]struct{})
 	toolResultCount := 0
 	for i := len(recentMessages) - 1; i >= 0; i-- {
 		msg := recentMessages[i]
-		if msg.Role == "toolResult" && msg.IsAgentVisible() {
+		if msg.Role == "toolResult" {
 			toolResultCount++
 			if toolResultCount <= gracePeriod {
 				gracePeriodIndexes[i] = struct{}{}
@@ -886,6 +897,10 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 		// Check if this tool result is within grace period
 		if _, inGracePeriod := gracePeriodIndexes[i]; inGracePeriod {
 			// Within grace period - keep it visible (don't archive)
+			// Ensure the message is visible since it's protected by grace period
+			if !msg.IsAgentVisible() {
+				msg = msg.WithVisibility(true, msg.IsUserVisible())
+			}
 			keptMessages = append(keptMessages, msg)
 			continue
 		}
@@ -894,6 +909,10 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 			if oldToolCallIDs[msg.ToolCallID] {
 				// This tool_result's call is in oldMessages - hide it to prevent mismatch
 				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				// Mark as truncated so buildNormalModeRequest filters it out
+				archivedMsg.Truncated = true
+				archivedMsg.TruncatedAt = 0
+				archivedMsg.OriginalSize = len(msg.ExtractText())
 				keptMessages = append(keptMessages, archivedMsg)
 				archivedToolResultCount++
 				continue

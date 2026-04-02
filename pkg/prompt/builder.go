@@ -139,7 +139,7 @@ func NewBuilder(_, cwd string) *Builder {
 		cwd:                      cwd,
 		minimal:                  false,
 		taskTrackingEnabled:      true,
-		contextManagementEnabled: true,
+		contextManagementEnabled: false,
 	}
 }
 
@@ -149,7 +149,7 @@ func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
 		workspace:                ws,
 		minimal:                  false,
 		taskTrackingEnabled:      true,
-		contextManagementEnabled: true,
+		contextManagementEnabled: false,
 	}
 }
 

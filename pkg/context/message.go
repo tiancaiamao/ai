@@ -93,38 +93,53 @@ type AgentMessage struct {
 	ToolCallID string `json:"toolCallId,omitempty"`
 	ToolName   string `json:"toolName,omitempty"`
 	IsError    bool   `json:"isError,omitempty"`
+
+	// Truncation tracking
+	Truncated    bool `json:"truncated,omitempty"`
+	TruncatedAt  int  `json:"truncated_at,omitempty"`
+	OriginalSize int  `json:"original_size,omitempty"`
+
+	// Visibility control
+	AgentVisible bool `json:"agent_visible"`
+	UserVisible  bool `json:"user_visible"`
 }
 
 // NewUserMessage creates a new user message with text content.
 func NewUserMessage(text string) AgentMessage {
 	return AgentMessage{
-		Role:      "user",
-		Content:   []ContentBlock{TextContent{Type: "text", Text: text}},
-		Timestamp: time.Now().UnixMilli(),
-		Metadata:  &MessageMetadata{Kind: "user"},
+		Role:         "user",
+		Content:      []ContentBlock{TextContent{Type: "text", Text: text}},
+		Timestamp:    time.Now().UnixMilli(),
+		Metadata:     &MessageMetadata{Kind: "user"},
+		AgentVisible: true,
+		UserVisible:  true,
 	}
 }
 
 // NewAssistantMessage creates a new assistant message placeholder.
 func NewAssistantMessage() AgentMessage {
 	return AgentMessage{
-		Role:      "assistant",
-		Content:   []ContentBlock{},
-		Timestamp: time.Now().UnixMilli(),
-		Metadata:  &MessageMetadata{Kind: "assistant"},
+		Role:         "assistant",
+		Content:      []ContentBlock{},
+		Timestamp:    time.Now().UnixMilli(),
+		Metadata:     &MessageMetadata{Kind: "assistant"},
+		AgentVisible: true,
+		UserVisible:  true,
 	}
 }
 
 // NewToolResultMessage creates a new tool result message.
 func NewToolResultMessage(toolCallID, toolName string, content []ContentBlock, isError bool) AgentMessage {
 	return AgentMessage{
-		Role:       "toolResult",
-		Content:    content,
-		Timestamp:  time.Now().UnixMilli(),
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		IsError:    isError,
-		Metadata:   &MessageMetadata{Kind: "tool_result"},
+		Role:         "toolResult",
+		Content:      content,
+		Timestamp:    time.Now().UnixMilli(),
+		ToolCallID:   toolCallID,
+		ToolName:     toolName,
+		IsError:      isError,
+		Metadata:     &MessageMetadata{Kind: "tool_result"},
+		AgentVisible: true,
+		UserVisible:  true,
 	}
 }
 
@@ -163,18 +178,25 @@ func (m *AgentMessage) ExtractToolCalls() []ToolCallContent {
 
 // IsAgentVisible returns true if the message should be sent to the model.
 func (m AgentMessage) IsAgentVisible() bool {
+	// Check the direct field first (new field)
 	if m.Metadata == nil || m.Metadata.AgentVisible == nil {
-		return true
+		return m.AgentVisible // Fall back to direct field
 	}
 	return *m.Metadata.AgentVisible
 }
 
 // IsUserVisible returns true if the message should be shown to users.
 func (m AgentMessage) IsUserVisible() bool {
+	// Check the direct field first (new field)
 	if m.Metadata == nil || m.Metadata.UserVisible == nil {
-		return true
+		return m.UserVisible // Fall back to direct field
 	}
 	return *m.Metadata.UserVisible
+}
+
+// IsTruncated checks if a message is truncated
+func (m AgentMessage) IsTruncated() bool {
+	return m.Truncated
 }
 
 // WithVisibility returns a copy of the message with explicit visibility flags.
@@ -209,18 +231,23 @@ func boolPtr(v bool) *bool {
 func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	// Define a raw type for unmarshaling
 	type rawMessage struct {
-		Role       string            `json:"role"`
-		Content    []json.RawMessage `json:"content"`
-		Timestamp  int64             `json:"timestamp"`
-		Metadata   *MessageMetadata  `json:"metadata,omitempty"`
-		API        string            `json:"api,omitempty"`
-		Provider   string            `json:"provider,omitempty"`
-		Model      string            `json:"model,omitempty"`
-		Usage      *Usage            `json:"usage,omitempty"`
-		StopReason string            `json:"stopReason,omitempty"`
-		ToolCallID string            `json:"toolCallId,omitempty"`
-		ToolName   string            `json:"toolName,omitempty"`
-		IsError    bool              `json:"isError,omitempty"`
+		Role         string            `json:"role"`
+		Content      []json.RawMessage `json:"content"`
+		Timestamp    int64             `json:"timestamp"`
+		Metadata     *MessageMetadata  `json:"metadata,omitempty"`
+		AgentVisible bool              `json:"agent_visible"`
+		UserVisible  bool              `json:"user_visible"`
+		API          string            `json:"api,omitempty"`
+		Provider     string            `json:"provider,omitempty"`
+		Model        string            `json:"model,omitempty"`
+		Usage        *Usage            `json:"usage,omitempty"`
+		StopReason   string            `json:"stopReason,omitempty"`
+		ToolCallID   string            `json:"toolCallId,omitempty"`
+		ToolName     string            `json:"toolName,omitempty"`
+		IsError      bool              `json:"isError,omitempty"`
+		Truncated    bool              `json:"truncated,omitempty"`
+		TruncatedAt  int               `json:"truncated_at,omitempty"`
+		OriginalSize int               `json:"original_size,omitempty"`
 	}
 
 	var raw rawMessage
@@ -232,6 +259,8 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.Role = raw.Role
 	m.Timestamp = raw.Timestamp
 	m.Metadata = raw.Metadata
+	m.AgentVisible = raw.AgentVisible
+	m.UserVisible = raw.UserVisible
 	m.API = raw.API
 	m.Provider = raw.Provider
 	m.Model = raw.Model
@@ -240,6 +269,9 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.ToolCallID = raw.ToolCallID
 	m.ToolName = raw.ToolName
 	m.IsError = raw.IsError
+	m.Truncated = raw.Truncated
+	m.TruncatedAt = raw.TruncatedAt
+	m.OriginalSize = raw.OriginalSize
 
 	// Parse content blocks
 	m.Content = make([]ContentBlock, 0, len(raw.Content))

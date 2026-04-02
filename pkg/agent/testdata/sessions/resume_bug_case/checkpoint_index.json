@@ -1,0 +1,20 @@
+{
+  "latest_checkpoint_turn": 7,
+  "latest_checkpoint_path": "checkpoints/checkpoint_00008",
+  "checkpoints": [
+    {
+      "turn": 0,
+      "message_index": 0,
+      "path": "checkpoints/checkpoint_00000",
+      "created_at": "2026-04-01T13:24:35+08:00"
+    },
+    {
+      "turn": 7,
+      "message_index": 100,
+      "path": "checkpoints/checkpoint_00008",
+      "created_at": "2026-04-01T16:42:21+08:00",
+      "llm_context_chars": 2983,
+      "recent_messages_count": 72
+    }
+  ]
+}

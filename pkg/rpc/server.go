@@ -14,7 +14,8 @@ import (
 
 // Server handles RPC communication via stdin/stdout.
 type Server struct {
-	mu     sync.Mutex
+	cbMu   sync.RWMutex // protects callback registration (read during dispatch, write during SetXxxHandler)
+	mu     sync.Mutex   // protects server-wide state (context, wait group)
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -74,274 +75,274 @@ func NewServer() *Server {
 
 // SetPromptHandler sets the handler for prompt commands.
 func (s *Server) SetPromptHandler(handler func(req PromptRequest) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onPrompt = handler
 }
 
 // SetSteerHandler sets the handler for steer commands.
 func (s *Server) SetSteerHandler(handler func(message string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSteer = handler
 }
 
 // SetFollowUpHandler sets the handler for follow_up commands.
 func (s *Server) SetFollowUpHandler(handler func(message string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onFollowUp = handler
 }
 
 // SetAbortHandler sets the handler for abort commands.
 func (s *Server) SetAbortHandler(handler func() error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onAbort = handler
 }
 
 // SetClearSessionHandler sets the handler for clear_session commands.
 func (s *Server) SetClearSessionHandler(handler func() error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onClearSession = handler
 }
 
 // SetGetStateHandler sets the handler for get_state commands.
 func (s *Server) SetGetStateHandler(handler func() (*SessionState, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetState = handler
 }
 
 // SetGetMessagesHandler sets the handler for get_messages commands.
 func (s *Server) SetGetMessagesHandler(handler func() ([]any, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetMessages = handler
 }
 
 // SetCompactHandler sets the handler for compact commands.
 func (s *Server) SetCompactHandler(handler func() (*CompactResult, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onCompact = handler
 }
 
 // SetGetAvailableModelsHandler sets the handler for get_available_models commands.
 func (s *Server) SetGetAvailableModelsHandler(handler func() ([]ModelInfo, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetAvailableModels = handler
 }
 
 // SetSetModelHandler sets the handler for set_model commands.
 func (s *Server) SetSetModelHandler(handler func(provider, modelID string) (*ModelInfo, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetModel = handler
 }
 
 // SetCycleModelHandler sets the handler for cycle_model commands.
 func (s *Server) SetCycleModelHandler(handler func() (*CycleModelResult, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onCycleModel = handler
 }
 
 // SetGetCommandsHandler sets the handler for get_commands commands.
 func (s *Server) SetGetCommandsHandler(handler func() ([]SlashCommand, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetCommands = handler
 }
 
 // SetGetSessionStatsHandler sets the handler for get_session_stats commands.
 func (s *Server) SetGetSessionStatsHandler(handler func() (*SessionStats, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetSessionStats = handler
 }
 
 // SetSetAutoCompactionHandler sets the handler for set_auto_compaction commands.
 func (s *Server) SetSetAutoCompactionHandler(handler func(enabled bool) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetAutoCompaction = handler
 }
 
 // SetSetToolCallCutoffHandler sets the handler for set_tool_call_cutoff commands.
 func (s *Server) SetSetToolCallCutoffHandler(handler func(cutoff int) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetToolCallCutoff = handler
 }
 
 // SetSetToolSummaryStrategyHandler sets the handler for set_tool_summary_strategy commands.
 func (s *Server) SetSetToolSummaryStrategyHandler(handler func(strategy string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetToolSummaryStrategy = handler
 }
 
 // SetSetToolSummaryAutomationHandler sets the handler for set_tool_summary_automation commands.
 func (s *Server) SetSetToolSummaryAutomationHandler(handler func(mode string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetToolSummaryAutomation = handler
 }
 
 // SetSetThinkingLevelHandler sets the handler for set_thinking_level commands.
 func (s *Server) SetSetThinkingLevelHandler(handler func(level string) (string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetThinkingLevel = handler
 }
 
 // SetCycleThinkingLevelHandler sets the handler for cycle_thinking_level commands.
 func (s *Server) SetCycleThinkingLevelHandler(handler func() (string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onCycleThinkingLevel = handler
 }
 
 // SetGetLastAssistantTextHandler sets the handler for get_last_assistant_text commands.
 func (s *Server) SetGetLastAssistantTextHandler(handler func() (string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetLastAssistantText = handler
 }
 
 // SetGetForkMessagesHandler sets the handler for get_fork_messages commands.
 func (s *Server) SetGetForkMessagesHandler(handler func() ([]ForkMessage, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetForkMessages = handler
 }
 
 // SetForkHandler sets the handler for fork commands.
 func (s *Server) SetForkHandler(handler func(entryID string) (*ForkResult, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onFork = handler
 }
 
 // SetGetTreeHandler sets the handler for get_tree commands.
 func (s *Server) SetGetTreeHandler(handler func() ([]TreeEntry, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetTree = handler
 }
 
 // SetResumeOnBranchHandler sets the handler for resume_on_branch commands.
 func (s *Server) SetResumeOnBranchHandler(handler func(entryID string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onResumeOnBranch = handler
 }
 
 // SetSetSteeringModeHandler sets the handler for set_steering_mode commands.
 func (s *Server) SetSetSteeringModeHandler(handler func(mode string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetSteeringMode = handler
 }
 
 // SetSetFollowUpModeHandler sets the handler for set_follow_up_mode commands.
 func (s *Server) SetSetFollowUpModeHandler(handler func(mode string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetFollowUpMode = handler
 }
 
 // SetSetSessionNameHandler sets the handler for set_session_name commands.
 func (s *Server) SetSetSessionNameHandler(handler func(name string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetSessionName = handler
 }
 
 // SetSetAutoRetryHandler sets the handler for set_auto_retry commands.
 func (s *Server) SetSetAutoRetryHandler(handler func(enabled bool) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetAutoRetry = handler
 }
 
 // SetAbortRetryHandler sets the handler for abort_retry commands.
 func (s *Server) SetAbortRetryHandler(handler func() error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onAbortRetry = handler
 }
 
 // SetBashHandler sets the handler for bash commands.
 func (s *Server) SetBashHandler(handler func(command string) (*BashResult, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onBash = handler
 }
 
 // SetAbortBashHandler sets the handler for abort_bash commands.
 func (s *Server) SetAbortBashHandler(handler func() error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onAbortBash = handler
 }
 
 // SetExportHTMLHandler sets the handler for export_html commands.
 func (s *Server) SetExportHTMLHandler(handler func(path string) (string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onExportHTML = handler
 }
 
 // SetSetTraceEventsHandler sets the handler for set_trace_events commands.
 func (s *Server) SetSetTraceEventsHandler(handler func(events []string) ([]string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSetTraceEvents = handler
 }
 
 // SetGetTraceEventsHandler sets the handler for get_trace_events commands.
 func (s *Server) SetGetTraceEventsHandler(handler func() ([]string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetTraceEvents = handler
 }
 
 // SetGetWorkflowStatusHandler sets the handler for get_workflow_status commands.
 func (s *Server) SetGetWorkflowStatusHandler(handler func() (*WorkflowState, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onGetWorkflowStatus = handler
 }
 
 // SetNewSessionHandler sets the handler for new_session commands.
 func (s *Server) SetNewSessionHandler(handler func(name, title string) (string, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onNewSession = handler
 }
 
 // SetListSessionsHandler sets the handler for list_sessions commands.
 func (s *Server) SetListSessionsHandler(handler func() ([]any, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onListSessions = handler
 }
 
 // SetSwitchSessionHandler sets the handler for switch_session commands.
 func (s *Server) SetSwitchSessionHandler(handler func(id string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onSwitchSession = handler
 }
 
 // SetDeleteSessionHandler sets the handler for delete_session commands.
 func (s *Server) SetDeleteSessionHandler(handler func(id string) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
 	s.onDeleteSession = handler
 }
 
@@ -349,6 +350,17 @@ func (s *Server) SetDeleteSessionHandler(handler func(id string) error) {
 // This method blocks until an error occurs or stdin is closed.
 func (s *Server) Run() error {
 	return s.RunWithIO(os.Stdin, os.Stdout)
+}
+
+// isAsyncCommand returns true for commands whose handlers run for a long time
+// (LLM calls, tool execution) and must be dispatched in a goroutine so the
+// scanner loop can keep reading subsequent commands (steer, abort, etc.).
+func isAsyncCommand(cmdType string) bool {
+	switch cmdType {
+	case CommandPrompt, CommandSteer, CommandFollowUp, CommandBash, CommandCompact:
+		return true
+	}
+	return false
 }
 
 // RunWithIO starts the RPC server using the provided reader and writer.
@@ -369,8 +381,15 @@ func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
 			continue
 		}
 
-		resp := s.handleCommand(cmd)
-		s.sendResponse(resp)
+		if isAsyncCommand(cmd.Type) {
+			// Long-running commands are dispatched to a goroutine so the
+			// scanner loop can immediately read the next command (e.g. steer
+			// or abort while a prompt is being processed).
+			s.dispatchAsync(cmd)
+		} else {
+			resp := s.handleCommand(cmd)
+			s.sendResponse(resp)
+		}
 	}
 
 	// Wait for all background tasks to complete
@@ -385,10 +404,28 @@ func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
 	return nil
 }
 
+// dispatchAsync runs a long-running command in a goroutine and sends the
+// response when it completes. The scanner loop does NOT wait for this.
+func (s *Server) dispatchAsync(cmd RPCCommand) {
+	s.mu.Lock()
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			s.wg.Done()
+			s.mu.Unlock()
+		}()
+		resp := s.handleCommand(cmd)
+		s.sendResponse(resp)
+	}()
+}
+
 // handleCommand processes a single command.
 func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.cbMu.RLock()
+	defer s.cbMu.RUnlock()
 
 	switch cmd.Type {
 	case CommandPrompt:

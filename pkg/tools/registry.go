@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
@@ -34,6 +36,27 @@ func (r *Registry) All() []agentctx.Tool {
 		tools = append(tools, tool)
 	}
 	return tools
+}
+
+// GetAllTools returns all default tools for the agent.
+func GetAllTools() []agentctx.Tool {
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd = "."
+	}
+	ws, _ := NewWorkspace(cwd)
+
+	registry := NewRegistry()
+
+	// Register all standard tools
+	registry.Register(NewReadTool(ws))
+	registry.Register(NewWriteTool(ws))
+	registry.Register(NewEditTool(ws))
+	registry.Register(NewBashTool(ws))
+	registry.Register(NewGrepTool(ws))
+	registry.Register(NewChangeWorkspaceTool(ws))
+
+	return registry.All()
 }
 
 // ToLLMTools converts all tools to LLM format.

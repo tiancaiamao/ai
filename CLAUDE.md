@@ -55,6 +55,18 @@ No `Makefile` is used in this repo.
 
 ## High-Value Code Paths
 
+### New Architecture (Context Snapshot)
+- **Core data structures**: `pkg/context/types.go`, `agent_state.go`, `snapshot.go`, `message.go`, `journal.go`
+- **Persistence layer**: `pkg/context/checkpoint.go`, `checkpoint_io.go`, `journal_io.go`, `reconstruction.go`
+- **Trigger system**: `pkg/context/trigger.go`, `trigger_config.go`, `token_estimation.go`, `stale.go`
+- **Context management tools**: `pkg/tools/context_mgmt/*.go`
+- **New agent loop**: `pkg/agent/agent_new.go`, `loop_normal.go`, `loop_context_mgmt.go`, `resume.go`
+- **LLM request building**: `pkg/llm/request_builder.go`, `context_mgmt_input.go`
+- **Prompt building**: `pkg/prompt/builder_new.go`
+- **Observability**: `pkg/context/events.go`
+- **RPC integration**: `cmd/ai/rpc_handlers_new.go`
+
+### Legacy Architecture (Still Available)
 - RPC entrypoint: `cmd/ai/rpc_handlers.go`
 - Agent loop: `pkg/agent/loop.go`
 - Agent context/model wiring: `pkg/agent/agent.go`
@@ -73,11 +85,39 @@ No `Makefile` is used in this repo.
 
 ## Runtime/Storage Notes
 
-- Sessions are isolated by working directory.
-- Session files live under `~/.ai/sessions/--<cwd>--/`.
+### New Architecture Storage Layout
+- Sessions are isolated by working directory: `~/.ai/sessions/--<cwd>--/`
+- Checkpoint system: `checkpoints/checkpoint_000XX/` (versioned snapshots)
+- Current checkpoint symlink: `current/` → `checkpoints/checkpoint_000XX/`
+- Event log: `messages.jsonl` (append-only journal)
+- Checkpoint index: `checkpoint_index.json` (metadata about all checkpoints)
+- Each checkpoint contains:
+  - `llm_context.txt` - LLM-maintained structured context
+  - `agent_state.json` - System-maintained metadata
 - Skills load from:
   - `~/.ai/skills/`
   - `.ai/skills/`
+
+### Architecture Overview
+
+The new **Context Snapshot Architecture** introduces:
+
+1. **Event Sourcing Pattern**: Messages stored as immutable journal (messages.jsonl), active state reconstructed from checkpoint + journal
+2. **Two-Mode Operation**:
+   - **Normal mode**: Task execution
+   - **Context Management mode**: Context reshaping (triggered automatically)
+3. **System-Monitored, LLM-Driven**: System checks trigger conditions (token usage, stale outputs), LLM decides how to manage context
+4. **Structured Context Separation**:
+   - LLMContext: LLM-maintained structured context
+   - RecentMessages: Recent conversation history
+   - AgentState: System-maintained metadata
+5. **Trigger Conditions**:
+   - Token usage thresholds (40% normal, 75% urgent)
+   - Stale output counts (15+ stale outputs)
+   - Periodic checks (every 10 turns)
+   - Min interval enforcement (3 turns between normal triggers)
+
+See `design/context_snapshot_architecture.md` for full details.
 
 ## Testing Guidance
 
@@ -137,3 +177,18 @@ For debugging event emission or runtime behavior:
 - `llm`: API calls, streaming, retries
 - `event`: Agent lifecycle, turns, messages
 - `log`: slog bridge output (info/warn/error)
+
+### Context Management Trace Events
+
+The new architecture adds these trace events for observability:
+- `context_snapshot_evaluated`: When snapshot is evaluated for triggers
+- `context_trigger_checked`: Trigger check result
+- `context_checkpoint_created`: When checkpoint is created
+- `context_checkpoint_loaded`: When checkpoint is loaded
+- `context_journal_entry_appended`: When journal entry is appended
+- `context_snapshot_reconstructed`: When snapshot is reconstructed
+- `context_message_truncated`: When message is truncated
+- `context_truncate_applied`: When truncate is applied
+- `context_management`: Context management operation (span)
+- `context_management_decision`: Decision made by context management
+- `context_management_skipped`: When context management is skipped

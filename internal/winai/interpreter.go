@@ -56,6 +56,7 @@ type AiInterpreter struct {
 	showThinking     bool
 	showTools        bool
 	showToolsVerbose bool
+	showUser         bool
 	showPrefixes     bool
 
 	currentMessageRole     string
@@ -88,8 +89,8 @@ type AiInterpreter struct {
 	deferStatus           bool
 	pendingStatus         []string
 	pendingStateRequests  map[string]stateRequestInfo
-	contextState *rpc.SessionState  // For /context command
-	contextStats *rpc.SessionStats // For /context command
+	contextState          *rpc.SessionState // For /context command
+	contextStats          *rpc.SessionStats // For /context command
 	rpcSequence           int64
 	workingDir            string
 }
@@ -199,6 +200,7 @@ func newBaseInterpreter() *AiInterpreter {
 		showThinking:         true,
 		showTools:            true,
 		showToolsVerbose:     false,
+		showUser:             true,
 		showPrefixes:         true,
 		busyMode:             "steer",
 		pendingStateRequests: make(map[string]stateRequestInfo),
@@ -688,23 +690,6 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendStateRequest(false, "ping", false)
 	case "messages":
 		return true, p.sendCommand("get_messages", nil, "")
-	case "tree":
-		if strings.TrimSpace(args) == "" {
-			p.pendingTreeList = true
-			return true, p.sendCommand("get_tree", nil, "")
-		}
-
-		if err := p.resumeOnBranchFromInput(strings.TrimSpace(args)); err != nil {
-			if errors.Is(err, errTreeListRequired) {
-				p.pendingTreeSelect = strings.TrimSpace(args)
-				return true, p.sendCommand("get_tree", nil, "")
-			}
-
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: %v", err))
-			return true, nil
-		}
-
-		return true, nil
 	case "skills":
 		return true, p.sendCommand("get_commands", nil, "")
 	case "set":
@@ -747,13 +732,13 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("compact", nil, "")
 	case "context":
 		return true, p.handleContext()
-	case "trace-events":
+	case "traceevent":
 		return true, p.handleTraceEvents(args, fromControl)
 	case "fork":
 		return true, p.handleFork(args)
-	case "resume-on-branch":
+	case "rewind":
 		if strings.TrimSpace(args) == "" {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /resume-on-branch <index|entry-id>")
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /rewind <index|entry-id>")
 			return true, nil
 		}
 
@@ -1314,7 +1299,7 @@ func (p *AiInterpreter) showContext(state *rpc.SessionState, stats *rpc.SessionS
 func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+		p.writeStatusMaybeDefer(fromControl, "ai: usage: /traceevent <all|default|off|list|enable selectors|disable selectors>")
 		return nil
 	}
 
@@ -1338,7 +1323,7 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 		rawSelectors := strings.TrimSpace(args[len(parts[0]):])
 		selectors := parseTraceEventSelectors(rawSelectors)
 		if len(selectors) == 0 {
-			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /trace-events %s <selectors>", cmd))
+			p.writeStatusMaybeDefer(fromControl, fmt.Sprintf("ai: usage: /traceevent %s <selectors>", cmd))
 			return nil
 		}
 
@@ -1348,7 +1333,7 @@ func (p *AiInterpreter) handleTraceEvents(args string, fromControl bool) error {
 		// Backward-compatible absolute set.
 		selectors := parseTraceEventSelectors(args)
 		if len(selectors) == 0 {
-			p.writeStatusMaybeDefer(fromControl, "ai: usage: /trace-events <all|default|off|list|enable selectors|disable selectors>")
+			p.writeStatusMaybeDefer(fromControl, "ai: usage: /traceevent <all|default|off|list|enable selectors|disable selectors>")
 			return nil
 		}
 
@@ -1994,6 +1979,8 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 		enabled = showThinking
 	case "tool":
 		enabled = showTools
+	case "user":
+		enabled = p.showUser
 	}
 
 	p.writeStream(role, content, enabled)
@@ -2015,7 +2002,9 @@ func renderMessageContent(msg *agentctx.AgentMessage, showThinking bool, showToo
 			}
 
 		case agentctx.ToolCallContent:
-			if showTools {
+			// Only show toolcall markers when tools display is disabled
+			// When showTools is true, tool execution will be shown via trace events
+			if !showTools {
 				b.WriteString(fmt.Sprintf("[toolcall %s]", v.Name))
 			}
 
@@ -2284,9 +2273,9 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, `Commands:
   /help
   /session
+  /context
   /messages
-  /tree
-  /resume-on-branch <index|entry-id>
+  /rewind <index|entry-id>
   /skills
   /set <tools|prefix|thinking|auto-compaction|busy-mode> [value]
   /show settings|pipeline
@@ -2296,7 +2285,7 @@ func (p *AiInterpreter) showHelp(fromControl bool) {
   /new [name]
   /resume [id|path|index]
   /compact
-  /trace-events <all|default|off|list|enable selectors|disable selectors>
+  /traceevent <all|default|off|list|enable selectors|disable selectors>
   /fork [entry-id|index]
   /follow-up <message>
   /abort
@@ -2342,6 +2331,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
   model: %s
   show-thinking: %s
+  show-user: %s
   tools: %s
   prefix: %s
   thinking-level: %s
@@ -2356,6 +2346,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
   compaction-keep-recent-tokens: %s`,
 		model,
 		onOff(showThinking),
+		onOff(p.showUser),
 		toolsMode(showTools, showToolsVerbose),
 		onOff(showPrefixes),
 		orUnknown(thinkingLevel),
@@ -2564,7 +2555,7 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 		if info.kind == "context" {
 			var stateCopy *rpc.SessionState
 			var statsCopy *rpc.SessionStats
-			
+
 			p.stateMu.Lock()
 			p.contextState = state
 			if p.contextStats != nil {
@@ -2574,7 +2565,7 @@ func (p *AiInterpreter) handleStateResponse(resp rpcResponse) {
 				p.contextStats = nil
 			}
 			p.stateMu.Unlock()
-			
+
 			if stateCopy != nil && statsCopy != nil {
 				p.showContext(stateCopy, statsCopy)
 			}
@@ -3199,7 +3190,7 @@ func (p *AiInterpreter) handleTreeEntries(data json.RawMessage) {
 	}
 
 	p.writeRaw(sectionLine + "\n")
-	p.writeRaw("Usage:\n  - /resume-on-branch <index|entry-id>\n")
+	p.writeRaw("Usage:\n  - /rewind <index|entry-id>\n")
 	p.scrollToBottom()
 }
 
