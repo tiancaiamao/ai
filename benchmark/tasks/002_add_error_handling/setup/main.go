@@ -1,56 +1,26 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 )
 
-// Divide divides two numbers and returns an error if dividing by zero
-func Divide(a, b float64) (float64, error) {
-	if b == 0 {
-		return 0, errors.New("division by zero")
-	}
-	return a / b, nil
+// Divide divides two numbers
+// BUG: No error handling for division by zero
+func Divide(a, b float64) float64 {
+	return a / b // Will return Inf when b is 0
 }
 
 // GetUserAge returns the age of a user from a map
-// Returns an error if the user doesn't exist
-func GetUserAge(users map[string]int, name string) (int, error) {
-	age, ok := users[name]
-	if !ok {
-		return 0, fmt.Errorf("user %q not found", name)
-	}
-	return age, nil
+// BUG: No error handling for missing key
+func GetUserAge(users map[string]int, name string) int {
+	return users[name] // Returns 0 if key doesn't exist
 }
 
 func main() {
-	result, err := Divide(10, 2)
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println(result) // Works: 5
-	}
-
-	result, err = Divide(10, 0)
-	if err != nil {
-		fmt.Println("Error:", err) // Error: division by zero
-	} else {
-		fmt.Println(result)
-	}
+	fmt.Println(Divide(10, 2)) // Works: 5
+	fmt.Println(Divide(10, 0)) // Bug: should return error
 
 	users := map[string]int{"Alice": 30}
-
-	age, err := GetUserAge(users, "Alice")
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println(age) // Works: 30
-	}
-
-	age, err = GetUserAge(users, "Unknown")
-	if err != nil {
-		fmt.Println("Error:", err) // Error: user "Unknown" not found
-	} else {
-		fmt.Println(age)
-	}
+	fmt.Println(GetUserAge(users, "Alice"))   // Works: 30
+	fmt.Println(GetUserAge(users, "Unknown")) // Bug: should return error
 }
