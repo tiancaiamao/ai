@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -68,16 +70,18 @@ func main() {
 	sessionPathFlag := flag.String("session", "", "Session file path")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
+	maxTurns := flag.Int("max-turns", 0, "Maximum agent turns in headless mode (0 = unlimited)")
+	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout in headless mode (0 = unlimited, e.g., 10m)")
 	flag.Parse()
 
 	switch *mode {
 	case "rpc":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
+		if err := runRPC(*sessionPathFlag, *debugAddr, *maxTurns, os.Stdin, os.Stdout); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
 	case "headless":
-		if err := runHeadless(*sessionPathFlag, *debugAddr, flag.Args(), os.Stdout); err != nil {
+		if err := runHeadless(*sessionPathFlag, *debugAddr, *maxTurns, *timeoutFlag, flag.Args(), os.Stdout); err != nil {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}
@@ -106,9 +110,21 @@ type headlessStreamState struct {
 	lastAssistantText string
 }
 
-func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath, debugAddr string, maxTurns int, timeout time.Duration, prompts []string, output io.Writer) error {
 	if len(prompts) == 0 {
 		return fmt.Errorf("headless mode requires at least one prompt argument")
+	}
+
+	// Create overall timeout context
+	var overallCtx context.Context
+	var overallCancel context.CancelFunc
+	if timeout > 0 {
+		overallCtx, overallCancel = context.WithTimeout(context.Background(), timeout)
+		defer overallCancel()
+		slog.Info("Headless mode timeout set", "timeout", timeout)
+	} else {
+		overallCtx, overallCancel = context.WithCancel(context.Background())
+		defer overallCancel()
 	}
 
 	rpcInReader, rpcInWriter := io.Pipe()
@@ -117,7 +133,7 @@ func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writ
 	rpcErrCh := make(chan error, 1)
 	go func() {
 		defer rpcOutWriter.Close()
-		rpcErrCh <- runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter)
+		rpcErrCh <- runRPC(sessionPath, debugAddr, maxTurns, rpcInReader, rpcOutWriter)
 	}()
 
 	lineCh := make(chan []byte, 256)
@@ -138,7 +154,15 @@ func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writ
 	var state headlessStreamState
 	printed := false
 
+	// Process prompts with timeout check
 	for i, promptText := range prompts {
+		// Check timeout before processing each prompt
+		select {
+		case <-overallCtx.Done():
+			return fmt.Errorf("timeout after %s", timeout)
+		default:
+		}
+
 		state.lastAssistantText = ""
 
 		promptID := fmt.Sprintf("headless-prompt-%d", i+1)
@@ -150,8 +174,11 @@ func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writ
 			return err
 		}
 
-		resp, err := waitHeadlessResponse(lineCh, lineErrCh, promptID, &state)
+		resp, err := waitHeadlessResponseWithContext(lineCh, lineErrCh, overallCtx, promptID, &state)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return fmt.Errorf("timeout after %s", timeout)
+			}
 			return err
 		}
 		if !resp.Success {
@@ -168,8 +195,11 @@ func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writ
 				return err
 			}
 
-			msgResp, err := waitHeadlessResponse(lineCh, lineErrCh, msgID, &state)
+			msgResp, err := waitHeadlessResponseWithContext(lineCh, lineErrCh, overallCtx, msgID, &state)
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					return fmt.Errorf("timeout after %s", timeout)
+				}
 				return err
 			}
 			if !msgResp.Success {
@@ -197,6 +227,8 @@ func runHeadless(sessionPath, debugAddr string, prompts []string, output io.Writ
 			return err
 		}
 	case <-time.After(2 * time.Second):
+	case <-overallCtx.Done():
+		return fmt.Errorf("timeout after %s", timeout)
 	}
 
 	if !printed {
@@ -218,36 +250,46 @@ func writeHeadlessCommand(w io.Writer, cmd rpc.RPCCommand) error {
 	return nil
 }
 
+func waitHeadlessResponseWithContext(lines <-chan []byte, lineErr <-chan error, ctx context.Context, targetID string, state *headlessStreamState) (headlessRPCResponse, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return headlessRPCResponse{}, ctx.Err()
+		case line, ok := <-lines:
+			if !ok {
+				// lines channel closed
+				err, ok := <-lineErr
+				if ok && err != nil {
+					return headlessRPCResponse{}, fmt.Errorf("read rpc output: %w", err)
+				}
+				return headlessRPCResponse{}, io.EOF
+			}
+
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(line, &envelope); err != nil {
+				continue
+			}
+
+			if envelope.Type == "response" {
+				var resp headlessRPCResponse
+				if err := json.Unmarshal(line, &resp); err != nil {
+					return headlessRPCResponse{}, fmt.Errorf("decode response: %w", err)
+				}
+				if resp.ID == targetID {
+					return resp, nil
+				}
+				continue
+			}
+
+			updateHeadlessStreamStateFromEvent(line, state)
+		}
+	}
+}
+
 func waitHeadlessResponse(lines <-chan []byte, lineErr <-chan error, targetID string, state *headlessStreamState) (headlessRPCResponse, error) {
-	for line := range lines {
-
-		var envelope struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			continue
-		}
-
-		if envelope.Type == "response" {
-			var resp headlessRPCResponse
-			if err := json.Unmarshal(line, &resp); err != nil {
-				return headlessRPCResponse{}, fmt.Errorf("decode response: %w", err)
-			}
-			if resp.ID == targetID {
-				return resp, nil
-			}
-			continue
-		}
-
-		updateHeadlessStreamStateFromEvent(line, state)
-	}
-
-	err, ok := <-lineErr
-	if ok && err != nil {
-		return headlessRPCResponse{}, fmt.Errorf("read rpc output: %w", err)
-	}
-
-	return headlessRPCResponse{}, io.EOF
+	return waitHeadlessResponseWithContext(lines, lineErr, context.Background(), targetID, state)
 }
 
 func updateHeadlessStreamStateFromEvent(line []byte, state *headlessStreamState) {

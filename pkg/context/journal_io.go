@@ -53,6 +53,18 @@ func (j *Journal) AppendTruncate(event TruncateEvent) error {
 	return j.appendEntry(entry)
 }
 
+// AppendCompact appends a compact event to the journal
+func (j *Journal) AppendCompact(event CompactEvent) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	entry := NewCompactEntry(event.Summary, event.KeptMessageCount, event.Turn)
+	// Update the Compact field with the provided event
+	entry.Compact = &event
+
+	return j.appendEntry(entry)
+}
+
 // appendEntry writes a single entry to the journal
 func (j *Journal) appendEntry(entry JournalEntry) error {
 	data, err := json.Marshal(entry)

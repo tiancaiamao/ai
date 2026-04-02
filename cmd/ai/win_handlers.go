@@ -74,7 +74,8 @@ func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 
 	go func() {
 		defer rpcOutWriter.Close()
-		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
+		// Win mode doesn't limit max turns (0 = unlimited)
+		if err := runRPC(sessionPath, debugAddr, 0, rpcInReader, rpcOutWriter); err != nil {
 			slog.Error("rpc error", "error", err)
 		}
 	}()

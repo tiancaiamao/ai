@@ -14,10 +14,11 @@ type AgentState struct {
 	TokensLimit  int
 
 	// Tracking
-	LastLLMContextUpdate int  // Last turn when LLMContext was updated
-	LastCheckpoint       int  // Last turn when checkpoint was created
-	LastTriggerTurn      int  // Last turn when context management was triggered
-	TurnsSinceLastTrigger int // Turns elapsed since last trigger
+	LastLLMContextUpdate       int // Last turn when LLMContext was updated
+	LastCheckpoint             int // Last turn when checkpoint was created
+	LastTriggerTurn            int // Last turn when context management was triggered
+	TurnsSinceLastTrigger      int // Turns elapsed since last trigger (legacy)
+	ToolCallsSinceLastTrigger  int // Tool calls elapsed since last trigger
 
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
@@ -58,18 +59,19 @@ func (a *AgentState) Clone() *AgentState {
 	copy(activeToolCalls, a.ActiveToolCalls)
 
 	return &AgentState{
-		WorkspaceRoot:         a.WorkspaceRoot,
-		CurrentWorkingDir:     a.CurrentWorkingDir,
-		TotalTurns:            a.TotalTurns,
-		TokensUsed:            a.TokensUsed,
-		TokensLimit:           a.TokensLimit,
-		LastLLMContextUpdate:  a.LastLLMContextUpdate,
-		LastCheckpoint:        a.LastCheckpoint,
-		LastTriggerTurn:       a.LastTriggerTurn,
-		TurnsSinceLastTrigger: a.TurnsSinceLastTrigger,
-		ActiveToolCalls:       activeToolCalls,
-		SessionID:             a.SessionID,
-		CreatedAt:             a.CreatedAt,
-		UpdatedAt:             a.UpdatedAt,
+		WorkspaceRoot:            a.WorkspaceRoot,
+		CurrentWorkingDir:        a.CurrentWorkingDir,
+		TotalTurns:               a.TotalTurns,
+		TokensUsed:               a.TokensUsed,
+		TokensLimit:              a.TokensLimit,
+		LastLLMContextUpdate:     a.LastLLMContextUpdate,
+		LastCheckpoint:           a.LastCheckpoint,
+		LastTriggerTurn:          a.LastTriggerTurn,
+		TurnsSinceLastTrigger:    a.TurnsSinceLastTrigger,
+		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
+		ActiveToolCalls:          activeToolCalls,
+		SessionID:                a.SessionID,
+		CreatedAt:                a.CreatedAt,
+		UpdatedAt:                a.UpdatedAt,
 	}
 }
