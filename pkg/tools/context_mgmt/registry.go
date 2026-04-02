@@ -9,6 +9,7 @@ func GetContextMgmtTools(sessionDir string, snapshot *agentctx.ContextSnapshot, 
 	return []agentctx.Tool{
 		NewUpdateLLMContextTool(snapshot),
 		NewTruncateMessagesTool(snapshot, journal),
+		NewCompactMessagesTool(snapshot),
 		NewNoActionTool(snapshot),
 	}
 }

@@ -24,6 +24,8 @@ type CheckpointInfo struct {
 }
 
 // CreateCheckpointDir creates a new checkpoint directory
+// Uses a sequential counter instead of turn number to avoid overwriting checkpoints
+// when multiple operations (like compact) happen at the same turn.
 func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 	// Create checkpoints directory if it doesn't exist
 	checkpointsDir := filepath.Join(sessionDir, "checkpoints")
@@ -31,8 +33,22 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 		return nil, fmt.Errorf("failed to create checkpoints directory: %w", err)
 	}
 
-	// Create checkpoint directory with turn number
-	checkpointName := fmt.Sprintf(CheckpointDirPattern, turn)
+	// Load checkpoint index to find the next checkpoint ID
+	idx, err := LoadCheckpointIndex(sessionDir)
+	if err != nil {
+		// If index doesn't exist yet, start from 0
+		if os.IsNotExist(err) {
+			idx = &CheckpointIndex{
+				Checkpoints: []CheckpointInfo{},
+			}
+		} else {
+			return nil, fmt.Errorf("failed to load checkpoint index: %w", err)
+		}
+	}
+
+	// Determine next checkpoint ID
+	nextID := len(idx.Checkpoints)
+	checkpointName := fmt.Sprintf(CheckpointDirPattern, nextID)
 	checkpointPath := filepath.Join(checkpointsDir, checkpointName)
 
 	if err := os.MkdirAll(checkpointPath, 0755); err != nil {

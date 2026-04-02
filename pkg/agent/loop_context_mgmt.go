@@ -15,25 +15,18 @@ import (
 	"log/slog"
 )
 
-// ExecuteContextMgmtMode executes the context management flow.
-func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) error {
-	a.snapshotMu.Lock()
-	defer a.snapshotMu.Unlock()
-
-	mgmtSpan := traceevent.StartSpan(ctx, "context_management", traceevent.CategoryEvent,
-		traceevent.Field{Key: "urgency", Value: urgency},
-		traceevent.Field{Key: "turn", Value: a.snapshot.AgentState.TotalTurns},
-	)
-	defer mgmtSpan.End()
-	ctx = mgmtSpan.Context()
-
+// executeContextMgmtTools executes the context management tools (LLM call + tool execution).
+// This is called by executeContextMgmtStep (span and trigger tracking are handled by caller).
+//
+// The caller must hold the snapshot lock.
+func (a *AgentNew) executeContextMgmtTools(ctx context.Context, urgency string) error {
 	slog.Info("[AgentNew] Entering context management mode",
 		"urgency", urgency,
 		"turn", a.snapshot.AgentState.TotalTurns,
 	)
 
-	// 1. Build context management input
-	input := a.buildContextMgmtInput()
+	// 1. Build context management messages (multi-message structure)
+	messages := a.buildContextMgmtMessages()
 
 	// 2. Get context management tools
 	ctxMgmtTools := context_mgmt.GetContextMgmtTools(a.sessionDir, a.snapshot, a.journal)
@@ -43,10 +36,8 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 
 	llmCtx := llm.LLMContext{
 		SystemPrompt: systemPrompt,
-		Messages: []llm.LLMMessage{
-			{Role: "user", Content: input},
-		},
-		Tools: ConvertToolsToLLM(ctx, ctxMgmtTools),
+		Messages:     messages,
+		Tools:        ConvertToolsToLLM(ctx, ctxMgmtTools),
 	}
 
 	// 4. Call LLM
@@ -75,14 +66,16 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 			traceevent.Field{Key: "action", Value: "retry"},
 			traceevent.Field{Key: "reason", Value: err.Error()},
 		)
-		slog.Warn("[AgentNew] Context management LLM call failed, retrying", "error", err)
-		return a.retryContextMgmt(ctx, urgency, err)
+		slog.Warn("[AgentNew] Context management LLM call failed", "error", err)
+		return fmt.Errorf("context management LLM call failed: %w", err)
 	}
 	llmSpan.AddField("tool_calls", len(toolCalls))
 	llmSpan.End()
 
 	// 6. Execute tool calls
-	actionTaken := false
+	// Track whether checkpoint is needed (only for update_llm_context)
+	// Note: compact_messages creates its own checkpoint in performCompaction
+	needsCheckpoint := false
 	for _, toolCall := range toolCalls {
 		slog.Info("[AgentNew] Context management tool call",
 			"tool", toolCall.Function.Name,
@@ -94,53 +87,184 @@ func (a *AgentNew) ExecuteContextMgmtMode(ctx context.Context, urgency string) e
 				traceevent.Field{Key: "action", Value: "no_action"},
 				traceevent.Field{Key: "reason", Value: "llm_selected_no_action"},
 			)
-			// Update LastTriggerTurn but don't create checkpoint
-			if err := a.executeNoAction(ctx, toolCall); err != nil {
-				slog.Warn("[AgentNew] no_action execution failed", "error", err)
-			}
-		} else {
-			traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
-				traceevent.Field{Key: "action", Value: toolCall.Function.Name},
-				traceevent.Field{Key: "reason", Value: "tool_selected"},
+			// No action needed
+			continue
+		}
+
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+			traceevent.Field{Key: "action", Value: toolCall.Function.Name},
+			traceevent.Field{Key: "reason", Value: "tool_selected"},
+		)
+		// Execute the tool
+		if err := a.executeContextMgmtTool(ctx, toolCall, ctxMgmtTools); err != nil {
+			slog.Error("[AgentNew] Context management tool execution failed",
+				"tool", toolCall.Function.Name,
+				"error", err,
 			)
-			// Execute the tool
-			if err := a.executeContextMgmtTool(ctx, toolCall, ctxMgmtTools); err != nil {
-				mgmtSpan.AddField("error", true)
-				mgmtSpan.AddField("error_message", err.Error())
-				slog.Error("[AgentNew] Context management tool execution failed",
-					"tool", toolCall.Function.Name,
-					"error", err,
-				)
-				return err
-			}
-			actionTaken = true
+			return fmt.Errorf("context management tool execution failed: %w", err)
+		}
+
+		// Check if this tool requires checkpoint creation
+		// Only update_llm_context needs checkpoint here
+		// compact_messages creates its own checkpoint in performCompaction
+		// truncate_messages only records event to journal
+		if toolCall.Function.Name == "update_llm_context" {
+			needsCheckpoint = true
 		}
 	}
 
-	// 7. Create checkpoint if action was taken
-	if actionTaken {
-		slog.Info("[AgentNew] Creating checkpoint after context management")
+	// 7. Create checkpoint if needed (only for update_llm_context)
+	if needsCheckpoint {
+		slog.Info("[AgentNew] Creating checkpoint after update_llm_context")
 		if err := a.createCheckpoint(ctx); err != nil {
-			mgmtSpan.AddField("error", true)
-			mgmtSpan.AddField("error_message", err.Error())
 			return fmt.Errorf("failed to create checkpoint: %w", err)
 		}
 	}
 
-	// 8. Update trigger tracking
+	// 8. Reset trigger counters after context management completes
+	// This ensures that the next trigger check starts fresh
 	a.snapshot.AgentState.LastTriggerTurn = a.snapshot.AgentState.TotalTurns
 	a.snapshot.AgentState.TurnsSinceLastTrigger = 0
+	a.snapshot.AgentState.ToolCallsSinceLastTrigger = 0
 	a.snapshot.AgentState.UpdatedAt = time.Now()
 
 	slog.Info("[AgentNew] Context management mode completed",
-		"action_taken", actionTaken,
+		"needs_checkpoint", needsCheckpoint,
+		"tool_calls_reset", a.snapshot.AgentState.ToolCallsSinceLastTrigger,
 	)
-	mgmtSpan.AddField("action_taken", actionTaken)
 
 	return nil
 }
 
-// buildContextMgmtInput builds the specialized input for Context Management mode.
+// buildContextMgmtMessages builds the message sequence for context management mode.
+// This uses a multi-message structure instead of putting everything in one user message.
+func (a *AgentNew) buildContextMgmtMessages() []llm.LLMMessage {
+	messages := []llm.LLMMessage{}
+
+	// 1. Current state and request
+	tokenPercent := a.snapshot.EstimateTokenPercent()
+	staleCount := a.snapshot.CountStaleOutputs(10)
+
+	stateMsg := fmt.Sprintf(`<current_state>
+Recent messages: %d
+Tokens used: %.1f%%
+Stale outputs: %d
+Tool calls since last management: %d
+Total turns: %d
+</current_state>
+
+Please review the context and decide what action to take.
+- **update_llm_context** - Rewrite the LLM Context to reflect current state
+- **truncate_messages** - Remove old tool outputs to save space (specify message_ids)
+- **compact_messages** - Summarize old messages and keep recent ones (aggressive space saving)
+- **no_action** - Context is healthy, no action needed`,
+		len(a.snapshot.RecentMessages),
+		tokenPercent*100,
+		staleCount,
+		a.snapshot.AgentState.ToolCallsSinceLastTrigger,
+		a.snapshot.AgentState.TotalTurns,
+	)
+
+	messages = append(messages, llm.LLMMessage{
+		Role:    "user",
+		Content: stateMsg,
+	})
+
+	// 2. Current LLMContext (if exists)
+	if a.snapshot.LLMContext != "" {
+		messages = append(messages, llm.LLMMessage{
+			Role:    "user",
+			Content: "## Current LLM Context\n" + a.snapshot.LLMContext,
+		})
+	}
+
+	// 3. Stale tool outputs (candidates for truncation)
+	staleOutputs := a.getStaleToolOutputs()
+	if len(staleOutputs) > 0 {
+		var staleBuilder strings.Builder
+		staleBuilder.WriteString("## Stale Tool Outputs (candidates for truncation)\n")
+		for _, output := range staleOutputs {
+			staleBuilder.WriteString(a.renderToolResultForMgmt(output))
+			staleBuilder.WriteString("\n")
+		}
+		messages = append(messages, llm.LLMMessage{
+			Role:    "user",
+			Content: staleBuilder.String(),
+		})
+	}
+
+	// 4. Recent messages (last N, maintaining original structure)
+	// Only include messages that are relevant for context understanding
+	recent := a.getLastNMessages(agentctx.RecentMessagesShowInMgmt)
+	for _, msg := range recent {
+		// Skip truncated messages
+		if msg.IsTruncated() {
+			continue
+		}
+		// Convert to LLM message format
+		llmMsg := a.convertMessageToLLMFormat(msg)
+		if llmMsg != nil {
+			messages = append(messages, *llmMsg)
+		}
+	}
+
+	return messages
+}
+
+// convertMessageToLLMFormat converts an AgentMessage to LLM message format.
+// For context management mode, we include all messages regardless of agent_visible flag.
+func (a *AgentNew) convertMessageToLLMFormat(msg agentctx.AgentMessage) *llm.LLMMessage {
+	// Extract text content
+	content := msg.ExtractText()
+
+	// Handle tool calls
+	var toolCalls []llm.ToolCall
+	if msg.Role == "assistant" {
+		calls := msg.ExtractToolCalls()
+		for _, tc := range calls {
+			// Convert arguments to JSON string
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			toolCalls = append(toolCalls, llm.ToolCall{
+				ID:   tc.ID,
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      tc.Name,
+					Arguments: string(argsJSON),
+				},
+			})
+		}
+	}
+
+	// Build LLM message based on role
+	switch msg.Role {
+	case "user":
+		return &llm.LLMMessage{
+			Role:    "user",
+			Content: content,
+		}
+	case "assistant":
+		return &llm.LLMMessage{
+			Role:      "assistant",
+			Content:   content,
+			ToolCalls: toolCalls,
+		}
+	case "toolResult":
+		// Tool results are represented as tool messages with tool call ID
+		// This follows OpenAI's API format
+		return &llm.LLMMessage{
+			Role:        "tool",
+			Content:     content,
+			ToolCallID:  msg.ToolCallID,
+		}
+	}
+
+	return nil
+}
+
+// buildContextMgmtInput builds the context management input string (legacy, deprecated).
+// This function is kept for reference but should not be used.
+// Use buildContextMgmtMessages instead for better structure.
+// Deprecated: Use buildContextMgmtMessages instead.
 func (a *AgentNew) buildContextMgmtInput() string {
 	var input strings.Builder
 
@@ -152,8 +276,8 @@ func (a *AgentNew) buildContextMgmtInput() string {
 	input.WriteString(fmt.Sprintf("Recent messages: %d\n", len(a.snapshot.RecentMessages)))
 	input.WriteString(fmt.Sprintf("Tokens used: %.1f%%\n", tokenPercent*100))
 	input.WriteString(fmt.Sprintf("Stale outputs: %d\n", staleCount))
-	input.WriteString(fmt.Sprintf("Turns since last management: %d\n",
-		a.snapshot.AgentState.TurnsSinceLastTrigger))
+	input.WriteString(fmt.Sprintf("Tool calls since last management: %d\n",
+		a.snapshot.AgentState.ToolCallsSinceLastTrigger))
 	input.WriteString(fmt.Sprintf("Total turns: %d\n", a.snapshot.AgentState.TotalTurns))
 	input.WriteString("</current_state>\n\n")
 
@@ -191,7 +315,9 @@ func (a *AgentNew) buildContextMgmtInput() string {
 func (a *AgentNew) getStaleToolOutputs() []agentctx.AgentMessage {
 	var results []agentctx.AgentMessage
 	for _, msg := range a.snapshot.RecentMessages {
-		if msg.Role == "toolResult" && !msg.IsTruncated() && msg.IsAgentVisible() {
+		// Include all tool results regardless of agent_visible flag
+		// Context management needs to see ALL tool outputs to make compression decisions
+		if msg.Role == "toolResult" && !msg.IsTruncated() {
 			results = append(results, msg)
 		}
 	}
@@ -350,6 +476,7 @@ func (a *AgentNew) executeNoAction(ctx context.Context, toolCall llm.ToolCall) e
 	// Update snapshot state
 	a.snapshot.AgentState.LastTriggerTurn = a.snapshot.AgentState.TotalTurns
 	a.snapshot.AgentState.TurnsSinceLastTrigger = 0
+	a.snapshot.AgentState.ToolCallsSinceLastTrigger = 0
 
 	slog.Info("[AgentNew] Context management: no action taken",
 		"turn", a.snapshot.AgentState.TotalTurns,
@@ -434,6 +561,21 @@ func (a *AgentNew) executeContextMgmtTool(ctx context.Context, toolCall llm.Tool
 			traceevent.Field{Key: "error_message", Value: err.Error()},
 		)
 		return err
+	}
+
+	// Special handling for compact_messages tool
+	// The tool just indicates intent, we need to perform the actual compaction
+	if toolCall.Function.Name == "compact_messages" {
+		slog.Info("[AgentNew] Performing actual compaction",
+			"turn", a.snapshot.AgentState.TotalTurns,
+			"message_count", len(a.snapshot.RecentMessages),
+		)
+
+		if err := a.performCompaction(ctx); err != nil {
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", err.Error())
+			return fmt.Errorf("compaction failed: %w", err)
+		}
 	}
 
 	// Log result

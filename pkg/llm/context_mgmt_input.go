@@ -21,6 +21,8 @@ func BuildContextMgmtInput(snapshot *agentctx.ContextSnapshot) string {
 	input.WriteString(fmt.Sprintf("Stale outputs: %d\n", staleCount))
 	input.WriteString(fmt.Sprintf("Turns since last management: %d\n",
 		snapshot.AgentState.TurnsSinceLastTrigger))
+	input.WriteString(fmt.Sprintf("Tool calls since last management: %d\n",
+		snapshot.AgentState.ToolCallsSinceLastTrigger))
 	input.WriteString(fmt.Sprintf("Urgency: %s\n", determineUrgency(snapshot, agentctx.ModeContextMgmt)))
 	input.WriteString("</current_state>\n\n")
 

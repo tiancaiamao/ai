@@ -360,7 +360,7 @@ func TestContextMgmt_Truncate_ReplayAppliesCorrectly(t *testing.T) {
 		if entry.Type == "message" && entry.Message != nil {
 			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
 		} else if entry.Type == "truncate" && entry.Truncate != nil {
-			ApplyTruncateToSnapshot(snapshot, entry.Truncate.ToolCallID)
+			ApplyTruncateToSnapshot(snapshot, *entry.Truncate)
 		}
 	}
 

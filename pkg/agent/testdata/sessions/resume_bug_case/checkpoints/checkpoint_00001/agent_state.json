@@ -1,0 +1,16 @@
+{
+  "WorkspaceRoot": "/Users/genius/.ai/sessions/--Users-genius-project-ai--/ed7fbccd-5f01-42da-ba0a-a0b7023214bc",
+  "CurrentWorkingDir": "/Users/genius/.ai/sessions/--Users-genius-project-ai--/ed7fbccd-5f01-42da-ba0a-a0b7023214bc",
+  "TotalTurns": 1,
+  "TokensUsed": 69339,
+  "TokensLimit": 200000,
+  "LastLLMContextUpdate": 1,
+  "LastCheckpoint": 0,
+  "LastTriggerTurn": 0,
+  "TurnsSinceLastTrigger": 1,
+  "ToolCallsSinceLastTrigger": 0,
+  "ActiveToolCalls": [],
+  "SessionID": "ed7fbccd-5f01-42da-ba0a-a0b7023214bc",
+  "CreatedAt": "2026-04-01T13:24:35.035715+08:00",
+  "UpdatedAt": "2026-04-01T15:45:40.144615+08:00"
+}

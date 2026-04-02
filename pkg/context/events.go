@@ -23,6 +23,7 @@ func LogSnapshotEvaluated(ctx context.Context, snapshot *ContextSnapshot) {
 		traceevent.Field{Key: "stale_outputs", Value: snapshot.CountStaleOutputs(10)},
 		traceevent.Field{Key: "messages_count", Value: len(snapshot.RecentMessages)},
 		traceevent.Field{Key: "turns_since_last_trigger", Value: snapshot.AgentState.TurnsSinceLastTrigger},
+		traceevent.Field{Key: "tool_calls_since_last_trigger", Value: snapshot.AgentState.ToolCallsSinceLastTrigger},
 	)
 }
 

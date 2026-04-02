@@ -1,0 +1,37 @@
+## Current Task
+Redesigning the context management trigger mechanism — **implementation complete, all tests passing, build succeeds**. All three bugs addressed: Bug #1 (`isTool` role mismatch) is **FIXED** (both locations in `loop_normal.go`). Bug #2 (compact summary not persisted) is **FIXED** — `performCompaction` now calls `journal.AppendCompact()` and `SaveCheckpoint()` which writes `llm_context.txt`. Bug #3 (trigger never firing) is **FIXED** — redesigned to tool-call-based token-tiered triggers.
+
+Status: **completed** — all changes build and tests pass.
+
+## Completed Steps
+1. Diagnosed and fixed Bug #1: `isTool := msg.Role == "tool" || msg.Role == "toolResult"` at lines 185 and 825 of `loop_normal.go`
+2. Fixed Bug #2: `performCompaction` in `agent_new.go` now persists compact summary via `SaveCheckpoint` and appends compact event via `journal.AppendCompact`
+3. Fixed Bug #3: Redesigned trigger from turn-based to tool-call-based token-tiered system
+4. Rewrote `trigger.go` and `trigger_config.go` with tier-based `ShouldTrigger`
+5. Added `ToolCallsSinceLastTrigger` to `AgentState` with increment/reset in all relevant files
+6. Rewrote `trigger_test.go` — all passing
+7. Updated `context_mgmt_fast_test.go` and `e2e_suite_test.go` — all passing
+8. Refactored `checkpoint_io.go`: saves/loads `messages.jsonl` in checkpoints
+9. Refactored `reconstruction.go`: loads messages from checkpoint, replays only after `MessageIndex`
+10. Updated `checkpoint_test.go` to verify messages preserved — all passing
+11. Build succeeds, all tests pass
+
+## Key Files
+- `pkg/context/trigger.go`: REWRITTEN — token-tiered `ShouldTrigger`
+- `pkg/context/trigger_config.go`: REWRITTEN — token tiers (urgent/high/medium/low) + intervals
+- `pkg/context/agent_state.go`: MODIFIED — added `ToolCallsSinceLastTrigger`
+- `pkg/context/checkpoint_io.go`: MODIFIED — saves/loads `messages.jsonl`
+- `pkg/context/reconstruction.go`: MODIFIED — efficient checkpoint-based reconstruction
+- `pkg/agent/loop_normal.go`: MODIFIED — Bug #1 fix at lines 185 and 825
+- `pkg/agent/agent_new.go`: MODIFIED — Bug #2 fix: `performCompaction` persists via `SaveCheckpoint` + `AppendCompact`
+- `pkg/agent/turn.go`, `loop_context_mgmt.go`, `agent_new.go`: MODIFIED — `ToolCallsSinceLastTrigger` increment/reset
+- `pkg/context/trigger_test.go`, `checkpoint_test.go`: REWRITTEN/MODIFIED — all passing
+
+## Key Design
+- Token tiers: <20% minimal, 20-30% periodic, 30-50% normal, 50-70% aggressive, 70%+ urgent
+- Tool call intervals per tier: urgent=1, high=5, medium=15, low=30
+- Stale output fallback: below 20%, trigger if `CountStaleOutputs(10) >= 15`
+- Checkpoints save messages as JSONL for efficient reconstruction
+
+## Uncommitted Changes
+- All changes are in working tree (not committed). Large diff in `agent_new.go` includes new fields (`thinkingLevel`, `maxTurns`, `pendingInput`), `SetPendingInput`, `GetAndClearPendingInput`, `HasPendingInput`, `SetThinkingLevel` methods.

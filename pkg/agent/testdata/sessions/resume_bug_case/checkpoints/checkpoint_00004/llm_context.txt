@@ -1,0 +1,55 @@
+## Current Task
+Redesigning the context management trigger mechanism — **implementation and testing complete**. All code changes build and pass tests. Three bugs: Bug #1 (`isTool` role mismatch) and Bug #2 (compact summary not persisted) are **unfixed**. Bug #3 (trigger never firing) is **FIXED**.
+
+## Status: in_progress
+
+## Completed Steps
+1. Diagnosed Bug #3: Context management never triggered because `TotalTurns=1 < MinTurns=5` blocks all triggers
+2. Rewrote trigger mechanism: New token-tiered + tool-call-interval design in `trigger.go` and `trigger_config.go`
+3. Added `ToolCallsSinceLastTrigger` to `AgentState`, updated increment/reset in all relevant files
+4. Rewrote `trigger_test.go` with new token escalation tests — all passing
+5. Updated `context_mgmt_fast_test.go` and `e2e_suite_test.go` for new trigger logic — all passing
+6. Build succeeds, all `pkg/context` and `pkg/agent` tests pass (fast unit tests only; E2E suite times out on API calls — expected)
+
+## Next Steps
+1. Fix Bug #1: change `loop_normal.go` line 154 to `isTool := msg.Role == "tool" || msg.Role == "toolResult"`
+2. Fix Bug #2: add persistence to `performCompaction` so compact summary writes to disk (llm_context.txt + journal compact event)
+3. Add regression test for Bug #1 (empty tool result not being filtered)
+
+## Key Files
+- `pkg/context/trigger.go`: **REWRITTEN** — token-tiered `ShouldTrigger`
+- `pkg/context/trigger_config.go`: **REWRITTEN** — `TokenUrgent=0.70`, `TokenHigh=0.50`, `TokenMedium=0.30`, `TokenLow=0.20`, intervals: `1/5/15/30`
+- `pkg/context/agent_state.go`: **MODIFIED** — added `ToolCallsSinceLastTrigger int`
+- `pkg/context/trigger_test.go`: **REWRITTEN** — new tier-based trigger tests
+- `pkg/agent/loop_normal.go`: **MODIFIED** — `ToolCallsSinceLastTrigger += len(toolResults)` after tool calls; Bug #1 at line 154 still unfixed
+- `pkg/agent/turn.go`: **MODIFIED** — `ToolCallsSinceLastTrigger = 0` reset in `executeContextMgmtStep`
+- `pkg/agent/loop_context_mgmt.go`: **MODIFIED** — state display "Tool calls since", reset in `executeNoAction`
+- `pkg/agent/agent_new.go`: **MODIFIED** — reset in `resetTurnTracking`; Bug #2 (`performCompaction`) still unfixed
+- `pkg/tools/context_mgmt/no_action.go`: **MODIFIED** — reset `ToolCallsSinceLastTrigger = 0`
+- `pkg/llm/context_mgmt_input.go`: **MODIFIED** — added "Tool calls since last management"
+- `pkg/context/events.go`: **MODIFIED** — added `tool_calls_since_last_trigger` to log output
+
+## Key Design
+- `ShouldTrigger(snapshot)`: checks `tokenPercent` against tiers (urgent/high/medium/low), then checks `ToolCallsSinceLastTrigger >= intervalForTier`
+- Token tiers: <20% minimal, 20-30% periodic, 30-50% normal, 50-70% aggressive, 70%+ urgent
+- Tool call intervals: urgent=1, high=5, medium=15, low=30
+- Stale output fallback: below 20%, still trigger if `CountStaleOutputs(10) >= 15` and interval met
+
+## Errors / Bugs
+- **Bug #1 (UNFIXED)**: `isTool := msg.Role == "tool"` at `loop_normal.go:154` doesn't match `"toolResult"` → fix: `isTool := msg.Role == "tool" || msg.Role == "toolResult"`
+- **Bug #2 (UNFIXED)**: `performCompaction` sets `snapshot.LLMContext` in memory but never persists to disk (no `WriteContent`/`SaveCompactionSummary`/journal compact event)
+- **Bug #3 (FIXED)**: Trigger never fired due to turn-based design → redesigned to tool-call-based
+
+## Decisions
+- Trigger based on tool call count, NOT turns (user: "一轮中会有许多许多次的工具调用")
+- Token usage tiers determine trigger aggressiveness
+- Keep `TurnsSinceLastTrigger` as legacy field (not removed to avoid breaking code)
+- Old config constants (`IntervalTurns`, `MinTurns`, `TokenThreshold=0.40`, `MinInterval`) replaced by new tier constants
+
+## Reconstruction Note
+Current `ReconstructSnapshotWithCheckpoint` replays ALL journal entries from scratch (ignores `MessageIndex`). Design doc says checkpoint only saves `llm_context.txt` + `agent_state.json` (no messages), so full replay is needed. This is a potential performance issue for long sessions but not a bug per se.
+
+## Open Issues
+- Bug #1 isTool role mismatch (status: open)
+- Bug #2 compact summary persistence (status: open)
+- E2E suite tests time out due to API calls (status: known, expected)

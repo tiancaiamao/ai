@@ -17,55 +17,59 @@ func ReconstructSnapshot(checkpoint *CheckpointInfo, journalEntries []JournalEnt
 	return nil, fmt.Errorf("ReconstructSnapshot should be called with a pre-loaded snapshot")
 }
 
-// ReconstructSnapshotWithCheckpoint builds a ContextSnapshot from a checkpoint path and journal entries
+// ReconstructSnapshotWithCheckpoint builds a ContextSnapshot from a checkpoint and journal entries.
+// It loads the checkpoint (which includes LLMContext and AgentState), then:
+// - If checkpoint has messages.jsonl with RecentMessages: replay journal entries AFTER checkpoint.MessageIndex
+// - If checkpoint has no/empty messages.jsonl: replay ALL journal entries from the beginning
 func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *CheckpointInfo, journalEntries []JournalEntry) (*ContextSnapshot, error) {
-	// 1. Load checkpoint data (LLMContext, AgentState)
+	// 1. Load checkpoint data (LLMContext, AgentState, RecentMessages)
 	snapshot, err := LoadCheckpoint(sessionDir, checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load checkpoint: %w", err)
 	}
 
-	// 2. Replay journal entries starting from checkpoint.MessageIndex
-	entries := journalEntries
-	if len(entries) > 0 && checkpoint.MessageIndex > 0 {
-		// Filter entries to only those after the checkpoint
-		startIndex := checkpoint.MessageIndex
-		if startIndex < len(entries) {
-			entries = entries[startIndex:]
-		} else {
-			// All journal entries are from before the checkpoint
-			entries = []JournalEntry{}
-		}
+	// 2. Determine where to start replaying
+	// If checkpoint has RecentMessages (from messages.jsonl), replay from checkpoint.MessageIndex
+	// Otherwise, replay from the beginning (messageIndex 0)
+	var startIndex int
+	if len(snapshot.RecentMessages) > 0 {
+		// Checkpoint has messages, replay only the增量 after checkpoint
+		startIndex = checkpoint.MessageIndex
+	} else {
+		// Checkpoint has no messages (or old format), replay from beginning
+		startIndex = 0
 	}
 
-	// 3. For each entry:
-	//    - type="message": append to RecentMessages
-	//    - type="truncate": mark message as truncated
-	for _, entry := range entries {
+	// Ensure startIndex is within bounds
+	if startIndex > len(journalEntries) {
+		startIndex = len(journalEntries)
+	}
+
+	// 3. Replay journal entries from startIndex
+	for i := startIndex; i < len(journalEntries); i++ {
+		entry := journalEntries[i]
 		if entry.Type == "message" && entry.Message != nil {
-			// Append message to RecentMessages
 			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
 		} else if entry.Type == "truncate" && entry.Truncate != nil {
-			// Mark message as truncated
-			if err := ApplyTruncateToSnapshot(snapshot, entry.Truncate.ToolCallID); err != nil {
-				// Log error but continue processing
-				// The message might have been removed by truncation
+			if err := ApplyTruncateToSnapshot(snapshot, *entry.Truncate); err != nil {
 				continue
 			}
+		} else if entry.Type == "compact" && entry.Compact != nil {
+			snapshot.LLMContext = entry.Compact.Summary
+			snapshot.RecentMessages = []AgentMessage{}
 		}
 	}
 
-	// 4. Return reconstructed snapshot
 	return snapshot, nil
 }
 
 // ApplyTruncateToSnapshot marks a message as truncated in the snapshot
-func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, toolCallID string) error {
+func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEvent) error {
 	// Find message by ToolCallID and set Truncated=true
 	for i := range snapshot.RecentMessages {
-		if snapshot.RecentMessages[i].ToolCallID == toolCallID {
+		if snapshot.RecentMessages[i].ToolCallID == truncateEvent.ToolCallID {
 			snapshot.RecentMessages[i].Truncated = true
-			snapshot.RecentMessages[i].TruncatedAt = snapshot.AgentState.TotalTurns
+			snapshot.RecentMessages[i].TruncatedAt = truncateEvent.Turn
 			// OriginalSize should be set when truncate is applied
 			if snapshot.RecentMessages[i].OriginalSize == 0 {
 				snapshot.RecentMessages[i].OriginalSize = len(snapshot.RecentMessages[i].ExtractText())
@@ -74,27 +78,24 @@ func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, toolCallID string) error
 		}
 	}
 
-	return fmt.Errorf("message with tool_call_id %s not found", toolCallID)
+	return fmt.Errorf("message with tool_call_id %s not found", truncateEvent.ToolCallID)
 }
 
-// ReconstructSnapshotMessages rebuilds RecentMessages from journal entries
+// ReconstructSnapshotMessages rebuilds RecentMessages from journal entries starting at startIndex.
 func ReconstructSnapshotMessages(snapshot *ContextSnapshot, journalEntries []JournalEntry, startIndex int) error {
-	// Clear existing messages
-	snapshot.RecentMessages = []AgentMessage{}
-
 	// Replay journal entries starting from startIndex
 	for i := startIndex; i < len(journalEntries); i++ {
 		entry := journalEntries[i]
 
 		if entry.Type == "message" && entry.Message != nil {
-			// Append message to RecentMessages
 			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
 		} else if entry.Type == "truncate" && entry.Truncate != nil {
-			// Mark message as truncated
-			if err := ApplyTruncateToSnapshot(snapshot, entry.Truncate.ToolCallID); err != nil {
-				// Log error but continue processing
+			if err := ApplyTruncateToSnapshot(snapshot, *entry.Truncate); err != nil {
 				continue
 			}
+		} else if entry.Type == "compact" && entry.Compact != nil {
+			snapshot.LLMContext = entry.Compact.Summary
+			snapshot.RecentMessages = []AgentMessage{}
 		}
 	}
 

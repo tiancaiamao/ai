@@ -13,56 +13,62 @@ func TestNewTriggerChecker(t *testing.T) {
 	}
 
 	// Verify default values
-	if checker.IntervalTurns != IntervalTurns {
-		t.Errorf("Expected IntervalTurns %d, got %d", IntervalTurns, checker.IntervalTurns)
-	}
-	if checker.MinTurns != MinTurns {
-		t.Errorf("Expected MinTurns %d, got %d", MinTurns, checker.MinTurns)
-	}
-	if checker.TokenThreshold != TokenThreshold {
-		t.Errorf("Expected TokenThreshold %f, got %f", TokenThreshold, checker.TokenThreshold)
-	}
 	if checker.TokenUrgent != TokenUrgent {
 		t.Errorf("Expected TokenUrgent %f, got %f", TokenUrgent, checker.TokenUrgent)
 	}
+	if checker.TokenHigh != TokenHigh {
+		t.Errorf("Expected TokenHigh %f, got %f", TokenHigh, checker.TokenHigh)
+	}
+	if checker.TokenMedium != TokenMedium {
+		t.Errorf("Expected TokenMedium %f, got %f", TokenMedium, checker.TokenMedium)
+	}
+	if checker.TokenLow != TokenLow {
+		t.Errorf("Expected TokenLow %f, got %f", TokenLow, checker.TokenLow)
+	}
+	if checker.IntervalAtLow != IntervalAtLow {
+		t.Errorf("Expected IntervalAtLow %d, got %d", IntervalAtLow, checker.IntervalAtLow)
+	}
+	if checker.IntervalAtMedium != IntervalAtMedium {
+		t.Errorf("Expected IntervalAtMedium %d, got %d", IntervalAtMedium, checker.IntervalAtMedium)
+	}
+	if checker.IntervalAtHigh != IntervalAtHigh {
+		t.Errorf("Expected IntervalAtHigh %d, got %d", IntervalAtHigh, checker.IntervalAtHigh)
+	}
+	if checker.IntervalAtUrgent != IntervalAtUrgent {
+		t.Errorf("Expected IntervalAtUrgent %d, got %d", IntervalAtUrgent, checker.IntervalAtUrgent)
+	}
 	if checker.StaleCount != StaleCount {
 		t.Errorf("Expected StaleCount %d, got %d", StaleCount, checker.StaleCount)
-	}
-	if checker.MinInterval != MinInterval {
-		t.Errorf("Expected MinInterval %d, got %d", MinInterval, checker.MinInterval)
 	}
 }
 
 // TestNewTriggerCheckerWithConfig tests creating a trigger checker with custom config.
 func TestNewTriggerCheckerWithConfig(t *testing.T) {
 	config := TriggerConfig{
-		IntervalTurns:  5,
-		MinTurns:       3,
-		TokenThreshold: 0.5,
-		TokenUrgent:    0.8,
-		StaleCount:     20,
-		MinInterval:    2,
+		TokenUrgent:      0.8,
+		TokenHigh:        0.6,
+		TokenMedium:      0.4,
+		TokenLow:         0.2,
+		IntervalAtLow:    20,
+		IntervalAtMedium: 10,
+		IntervalAtHigh:   3,
+		IntervalAtUrgent: 1,
+		StaleCount:       20,
 	}
 
 	checker := NewTriggerCheckerWithConfig(config)
 
-	if checker.IntervalTurns != 5 {
-		t.Errorf("Expected IntervalTurns 5, got %d", checker.IntervalTurns)
-	}
-	if checker.MinTurns != 3 {
-		t.Errorf("Expected MinTurns 3, got %d", checker.MinTurns)
-	}
-	if checker.TokenThreshold != 0.5 {
-		t.Errorf("Expected TokenThreshold 0.5, got %f", checker.TokenThreshold)
-	}
 	if checker.TokenUrgent != 0.8 {
 		t.Errorf("Expected TokenUrgent 0.8, got %f", checker.TokenUrgent)
 	}
+	if checker.TokenHigh != 0.6 {
+		t.Errorf("Expected TokenHigh 0.6, got %f", checker.TokenHigh)
+	}
+	if checker.IntervalAtLow != 20 {
+		t.Errorf("Expected IntervalAtLow 20, got %d", checker.IntervalAtLow)
+	}
 	if checker.StaleCount != 20 {
 		t.Errorf("Expected StaleCount 20, got %d", checker.StaleCount)
-	}
-	if checker.MinInterval != 2 {
-		t.Errorf("Expected MinInterval 2, got %d", checker.MinInterval)
 	}
 }
 
@@ -83,55 +89,34 @@ func TestShouldTrigger_NilSnapshot(t *testing.T) {
 	}
 }
 
-// TestShouldTrigger_BelowMinTurns tests trigger check below minimum turns.
-func TestShouldTrigger_BelowMinTurns(t *testing.T) {
+// TestShouldTrigger_BelowAllThresholds tests that low token usage doesn't trigger.
+func TestShouldTrigger_BelowAllThresholds(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 3 // Below MinTurns (5)
+	snapshot.AgentState.TokensUsed = 10000 // 5% of 200000
+	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 50
 
 	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
 
 	if shouldTrigger {
-		t.Error("Expected shouldTrigger to be false below min turns")
+		t.Error("Expected shouldTrigger to be false for very low token usage")
 	}
-	if urgency != "" {
-		t.Errorf("Expected empty urgency, got %s", urgency)
+	if urgency != UrgencySkip {
+		t.Errorf("Expected urgency %s, got %s", UrgencySkip, urgency)
 	}
-	if reason != "below_min_turns" {
-		t.Errorf("Expected reason 'below_min_turns', got %s", reason)
-	}
-}
-
-// TestShouldTrigger_WithinMinInterval tests trigger check within minimum interval.
-func TestShouldTrigger_WithinMinInterval(t *testing.T) {
-	checker := NewTriggerChecker()
-	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 10
-	snapshot.AgentState.TurnsSinceLastTrigger = 2 // Below MinInterval (3)
-	snapshot.AgentState.TokensUsed = 80000        // 40% of 200000
-	snapshot.AgentState.TokensLimit = 200000
-
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
-
-	if shouldTrigger {
-		t.Error("Expected shouldTrigger to be false within min interval")
-	}
-	if urgency != "" {
-		t.Errorf("Expected empty urgency, got %s", urgency)
-	}
-	if reason != "within_min_interval" {
-		t.Errorf("Expected reason 'within_min_interval', got %s", reason)
+	if reason != "context_healthy_5%" {
+		t.Errorf("Expected reason 'context_healthy_5%%', got %s", reason)
 	}
 }
 
-// TestShouldTrigger_TokenUrgent tests urgent trigger due to high token usage.
-func TestShouldTrigger_TokenUrgent(t *testing.T) {
+// TestShouldTrigger_UrgentTokenUsage tests urgent trigger at high token usage.
+func TestShouldTrigger_UrgentTokenUsage(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 10
-	snapshot.AgentState.TurnsSinceLastTrigger = 2 // Below MinInterval, but urgent mode ignores it
-	snapshot.AgentState.TokensUsed = 150000       // 75% of 200000 - urgent
+	snapshot.AgentState.TokensUsed = 150000       // 75% of 200000
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 1 // IntervalAtUrgent = 1
 
 	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
 
@@ -146,92 +131,88 @@ func TestShouldTrigger_TokenUrgent(t *testing.T) {
 	}
 }
 
-// TestShouldTrigger_TokenAndStaleThreshold tests normal trigger with token and stale.
-func TestShouldTrigger_TokenAndStaleThreshold(t *testing.T) {
+// TestShouldTrigger_UrgentButWaitingInterval tests urgent but waiting for interval.
+func TestShouldTrigger_UrgentButWaitingInterval(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 10
-	snapshot.AgentState.TurnsSinceLastTrigger = 5 // Above MinInterval (3)
-	snapshot.AgentState.TokensUsed = 80000        // 40% of 200000
+	snapshot.AgentState.TokensUsed = 150000 // 75% of 200000
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 0 // Not yet 1 tool call
 
-	// Add 10 stale tool outputs
-	for i := 0; i < 10; i++ {
-		msg := NewToolResultMessage("call-123", "test_tool", []ContentBlock{
-			TextContent{Type: "text", Text: "Tool output content"},
-		}, false)
-		snapshot.RecentMessages = append(snapshot.RecentMessages, msg)
+	shouldTrigger, _, reason := checker.ShouldTrigger(snapshot)
+
+	if shouldTrigger {
+		t.Error("Expected shouldTrigger to be false when interval not met")
 	}
+	if reason != "urgent_but_interval_0/1" {
+		t.Errorf("Expected reason 'urgent_but_interval_0/1', got %s", reason)
+	}
+}
 
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
+// TestShouldTrigger_HighTokenUsage tests high token usage trigger.
+func TestShouldTrigger_HighTokenUsage(t *testing.T) {
+	checker := NewTriggerChecker()
+	snapshot := NewContextSnapshot("test-session", "/test/dir")
+	snapshot.AgentState.TokensUsed = 110000       // 55% of 200000
+	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 5 // IntervalAtHigh = 5
+
+	shouldTrigger, urgency, _ := checker.ShouldTrigger(snapshot)
 
 	if !shouldTrigger {
-		t.Error("Expected shouldTrigger to be true for token and stale threshold")
+		t.Error("Expected shouldTrigger to be true for high token usage")
 	}
 	if urgency != UrgencyNormal {
 		t.Errorf("Expected urgency %s, got %s", UrgencyNormal, urgency)
 	}
-	// The reason should be either token_and_stale_threshold or token_usage_40% depending on condition order
-	if reason != "token_and_stale_threshold" && reason != "token_usage_40%" {
-		t.Errorf("Expected reason 'token_and_stale_threshold' or 'token_usage_40%%', got %s", reason)
-	}
 }
 
-// TestShouldTrigger_TokenUsage30Percent tests trigger at 30% token usage.
-func TestShouldTrigger_TokenUsage30Percent(t *testing.T) {
+// TestShouldTrigger_MediumTokenUsage tests medium token usage trigger.
+func TestShouldTrigger_MediumTokenUsage(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 10
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 60000 // 30% of 200000
+	snapshot.AgentState.TokensUsed = 70000        // 35% of 200000
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 15 // IntervalAtMedium = 15
 
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
+	shouldTrigger, urgency, _ := checker.ShouldTrigger(snapshot)
 
 	if !shouldTrigger {
-		t.Error("Expected shouldTrigger to be true for 30% token usage")
+		t.Error("Expected shouldTrigger to be true for medium token usage")
 	}
 	if urgency != UrgencyNormal {
 		t.Errorf("Expected urgency %s, got %s", UrgencyNormal, urgency)
 	}
-	if reason != "token_usage_30%" {
-		t.Errorf("Expected reason 'token_usage_30%%', got %s", reason)
-	}
 }
 
-// TestShouldTrigger_PeriodicTokenCheck tests periodic token check at turn 15.
-func TestShouldTrigger_PeriodicTokenCheck(t *testing.T) {
+// TestShouldTrigger_LowTokenUsage tests low token usage trigger.
+func TestShouldTrigger_LowTokenUsage(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 15
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 50000 // 25% of 200000
+	snapshot.AgentState.TokensUsed = 45000        // 22.5% of 200000
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 30 // IntervalAtLow = 30
 
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
+	shouldTrigger, urgency, _ := checker.ShouldTrigger(snapshot)
 
 	if !shouldTrigger {
-		t.Error("Expected shouldTrigger to be true for periodic token check")
+		t.Error("Expected shouldTrigger to be true for low token usage with enough tool calls")
 	}
-	if urgency != UrgencyNormal {
-		t.Errorf("Expected urgency %s, got %s", UrgencyNormal, urgency)
-	}
-	if reason != "periodic_token_check" {
-		t.Errorf("Expected reason 'periodic_token_check', got %s", reason)
+	if urgency != UrgencyPeriodic {
+		t.Errorf("Expected urgency %s, got %s", UrgencyPeriodic, urgency)
 	}
 }
 
-// TestShouldTrigger_StaleOutputs tests trigger due to stale outputs.
-func TestShouldTrigger_StaleOutputs(t *testing.T) {
+// TestShouldTrigger_StaleOutputFallback tests stale output trigger below token threshold.
+func TestShouldTrigger_StaleOutputFallback(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 11 // Not at interval (10)
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 40000 // 20% of 200000
+	snapshot.AgentState.TokensUsed = 30000        // 15% — below 20% threshold
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 30
 
-	// Add 25 tool outputs to ensure we have at least 15 with stale >= 10
-	// With 25 outputs, the oldest 15 will have stale >= 10 (stale = 25 - index - 1)
+	// Need 25 tool results so that CountStaleOutputs(10) >= StaleCount(15)
+	// With 25 results: stale >= 10 means the 15 oldest (indices 10-24) qualify
 	for i := 0; i < 25; i++ {
 		msg := NewToolResultMessage("call-123", "test_tool", []ContentBlock{
 			TextContent{Type: "text", Text: "Tool output content"},
@@ -242,130 +223,152 @@ func TestShouldTrigger_StaleOutputs(t *testing.T) {
 	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
 
 	if !shouldTrigger {
-		t.Logf("DEBUG: shouldTrigger=false, urgency=%q, reason=%q", urgency, reason)
-		t.Error("Expected shouldTrigger to be true for stale outputs threshold")
-	}
-	if urgency != UrgencyNormal && urgency != "" {
-		t.Errorf("Expected urgency %s or empty, got %s", UrgencyNormal, urgency)
-	}
-	// The reason should be something like "stale_outputs_15"
-	if len(reason) >= 14 {
-		prefix := reason[:14]
-		if prefix != "stale_outputs_" {
-			t.Errorf("Expected reason to start with 'stale_outputs_', got %s (prefix: %s)", reason, prefix)
-		}
-	} else {
-		t.Errorf("Expected reason to be at least 14 chars, got %d (%s)", len(reason), reason)
-	}
-	// Actually verify the full reason matches expected pattern
-	if reason != "stale_outputs_15" && reason != "stale_outputs_16" && reason != "stale_outputs_17" {
-		t.Logf("Note: Got reason '%s', expected something like 'stale_outputs_15'", reason)
-	}
-}
-
-// TestShouldTrigger_ContextHealthySkip tests skip when context is healthy.
-func TestShouldTrigger_ContextHealthySkip(t *testing.T) {
-	checker := NewTriggerChecker()
-	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 21 // Not at interval (20 or 10)
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 40000 // 20% of 200000 - below 25%
-	snapshot.AgentState.TokensLimit = 200000
-
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
-
-	if shouldTrigger {
-		t.Error("Expected shouldTrigger to be false when context is healthy")
-	}
-	if urgency != UrgencySkip {
-		t.Errorf("Expected urgency %s, got %s", UrgencySkip, urgency)
-	}
-	if reason != "context_healthy" {
-		t.Errorf("Expected reason 'context_healthy', got %s", reason)
-	}
-}
-
-// TestShouldTrigger_PeriodicCheck tests periodic check at interval turns.
-func TestShouldTrigger_PeriodicCheck(t *testing.T) {
-	checker := NewTriggerChecker()
-	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 10 // IntervalTurns is 10
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 40000 // 20% of 200000
-	snapshot.AgentState.TokensLimit = 200000
-
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
-
-	if !shouldTrigger {
-		t.Error("Expected shouldTrigger to be true for periodic check")
+		t.Error("Expected shouldTrigger to be true for stale outputs")
 	}
 	if urgency != UrgencyPeriodic {
 		t.Errorf("Expected urgency %s, got %s", UrgencyPeriodic, urgency)
 	}
-	if reason != "periodic_check" {
-		t.Errorf("Expected reason 'periodic_check', got %s", reason)
+	if reason != "stale_outputs_15" {
+		t.Errorf("Expected reason 'stale_outputs_15', got %s", reason)
 	}
 }
 
-// TestShouldTrigger_NoTrigger tests case where no trigger condition is met.
-func TestShouldTrigger_NoTrigger(t *testing.T) {
+// TestShouldTrigger_StaleOutputButIntervalNotMet tests stale outputs with interval not met.
+func TestShouldTrigger_StaleOutputButIntervalNotMet(t *testing.T) {
 	checker := NewTriggerChecker()
 	snapshot := NewContextSnapshot("test-session", "/test/dir")
-	snapshot.AgentState.TotalTurns = 12 // Not at interval
-	snapshot.AgentState.TurnsSinceLastTrigger = 5
-	snapshot.AgentState.TokensUsed = 40000 // 20% of 200000
+	snapshot.AgentState.TokensUsed = 30000 // 15%
 	snapshot.AgentState.TokensLimit = 200000
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 5 // Below IntervalAtLow (30)
 
-	shouldTrigger, urgency, reason := checker.ShouldTrigger(snapshot)
+	// Add 25 tool results
+	for i := 0; i < 25; i++ {
+		msg := NewToolResultMessage("call-123", "test_tool", []ContentBlock{
+			TextContent{Type: "text", Text: "Tool output content"},
+		}, false)
+		snapshot.RecentMessages = append(snapshot.RecentMessages, msg)
+	}
+
+	shouldTrigger, _, reason := checker.ShouldTrigger(snapshot)
 
 	if shouldTrigger {
-		t.Error("Expected shouldTrigger to be false when no condition is met")
+		t.Error("Expected shouldTrigger to be false when interval not met")
 	}
-	if urgency != "" {
-		t.Errorf("Expected empty urgency, got %s", urgency)
-	}
-	if reason != "no_trigger" {
-		t.Errorf("Expected reason 'no_trigger', got %s", reason)
+	if reason != "stale_but_interval_5/30" {
+		t.Errorf("Expected reason 'stale_but_interval_5/30', got %s", reason)
 	}
 }
 
-// TestCalculateStale tests the stale calculation.
+// TestShouldTrigger_TokenEscalation tests that higher token usage needs fewer tool calls.
+func TestShouldTrigger_TokenEscalation(t *testing.T) {
+	checker := NewTriggerChecker()
+
+	tests := []struct {
+		name              string
+		tokensPercent     float64
+		toolCallsSince    int
+		expectTrigger     bool
+		expectedUrgency   string
+	}{
+		// At 75% (urgent): needs 1 tool call
+		{"urgent_0_calls", 0.75, 0, false, ""},
+		{"urgent_1_call", 0.75, 1, true, UrgencyUrgent},
+
+		// At 55% (high): needs 5 tool calls
+		{"high_4_calls", 0.55, 4, false, ""},
+		{"high_5_calls", 0.55, 5, true, UrgencyNormal},
+
+		// At 35% (medium): needs 15 tool calls
+		{"medium_14_calls", 0.35, 14, false, ""},
+		{"medium_15_calls", 0.35, 15, true, UrgencyNormal},
+
+		// At 25% (low): needs 30 tool calls
+		{"low_29_calls", 0.25, 29, false, ""},
+		{"low_30_calls", 0.25, 30, true, UrgencyPeriodic},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := NewContextSnapshot("test-session", "/test/dir")
+			snapshot.AgentState.TokensUsed = int(tt.tokensPercent * 200000)
+			snapshot.AgentState.TokensLimit = 200000
+			snapshot.AgentState.ToolCallsSinceLastTrigger = tt.toolCallsSince
+
+			shouldTrigger, urgency, _ := checker.ShouldTrigger(snapshot)
+
+			if shouldTrigger != tt.expectTrigger {
+				t.Errorf("Expected shouldTrigger=%v, got %v", tt.expectTrigger, shouldTrigger)
+			}
+			if shouldTrigger && urgency != tt.expectedUrgency {
+				t.Errorf("Expected urgency=%s, got %s", tt.expectedUrgency, urgency)
+			}
+		})
+	}
+}
+
+// TestShouldTrigger_CurrentRealState tests with the user's actual runtime state.
+// tokens_percent: 23.3%, recent_messages: 199, stale_outputs: 85, turn: 2
+func TestShouldTrigger_CurrentRealState(t *testing.T) {
+	checker := NewTriggerChecker()
+	snapshot := NewContextSnapshot("test-session", "/test/dir")
+	snapshot.AgentState.TokensUsed = 46609
+	snapshot.AgentState.TokensLimit = 200000
+	// ToolCallsSinceLastTrigger would be ~100 if 199 messages with many tool calls
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 100
+
+	// At 23.3%, this is in the "low" band (20-30%), interval = 30
+	// With 100 tool calls since last trigger, should trigger
+	shouldTrigger, urgency, _ := checker.ShouldTrigger(snapshot)
+
+	if !shouldTrigger {
+		t.Error("Expected shouldTrigger to be true with 23.3% tokens and 100 tool calls")
+	}
+	if urgency != UrgencyPeriodic {
+		t.Errorf("Expected urgency %s, got %s", UrgencyPeriodic, urgency)
+	}
+}
+
+// ============================================================================
+// Stale and token estimation tests (kept from original)
+// ============================================================================
+
+// TestCalculateStale tests the stale calculation function.
 func TestCalculateStale(t *testing.T) {
 	tests := []struct {
-		name                   string
-		resultIndex            int
+		name                    string
+		resultIndex             int
 		totalVisibleToolResults int
-		expected               int
+		expected                int
 	}{
 		{
-			name:                   "First result (newest)",
-			resultIndex:            0,
+			name:                    "First result (newest)",
+			resultIndex:             0,
 			totalVisibleToolResults: 10,
-			expected:               9,
+			expected:                9,
 		},
 		{
-			name:                   "Middle result",
-			resultIndex:            5,
+			name:                    "Middle result",
+			resultIndex:             5,
 			totalVisibleToolResults: 10,
-			expected:               4,
+			expected:                4,
 		},
 		{
-			name:                   "Last result (oldest)",
-			resultIndex:            9,
+			name:                    "Last result (oldest)",
+			resultIndex:             9,
 			totalVisibleToolResults: 10,
-			expected:               0,
+			expected:                0,
 		},
 		{
-			name:                   "Single result",
-			resultIndex:            0,
+			name:                    "Single result",
+			resultIndex:             0,
 			totalVisibleToolResults: 1,
-			expected:               0,
+			expected:                0,
 		},
 		{
-			name:                   "Zero total results",
-			resultIndex:            0,
+			name:                    "Zero total results",
+			resultIndex:             0,
 			totalVisibleToolResults: 0,
-			expected:               0,
+			expected:                0,
 		},
 	}
 
@@ -393,14 +396,12 @@ func TestCountStaleOutputs(t *testing.T) {
 	}
 
 	// Count with threshold 10
-	// Oldest 10 results should have stale >= 10
 	count := snapshot.CountStaleOutputs(10)
 	if count != 10 {
 		t.Errorf("CountStaleOutputs(10) = %d, expected 10", count)
 	}
 
 	// Count with threshold 5
-	// Oldest 15 results should have stale >= 5
 	count = snapshot.CountStaleOutputs(5)
 	if count != 15 {
 		t.Errorf("CountStaleOutputs(5) = %d, expected 15", count)
@@ -461,7 +462,6 @@ func TestEstimateTokens(t *testing.T) {
 		t.Error("EstimateTokens() returned 0, expected > 0")
 	}
 
-	// Check that it's reasonable (should include context, messages, and overhead)
 	expectedMin := (len(snapshot.LLMContext) + len("Hello, this is a test message")) / 4
 	if tokens < expectedMin {
 		t.Errorf("EstimateTokens() = %d, expected at least %d", tokens, expectedMin)
@@ -475,7 +475,7 @@ func TestEstimateTokenPercent(t *testing.T) {
 	snapshot.AgentState.TokensUsed = 50000
 
 	percent := snapshot.EstimateTokenPercent()
-	expected := 0.25 // 50000 / 200000 = 0.25
+	expected := 0.25
 
 	if percent != expected {
 		t.Errorf("EstimateTokenPercent() = %f, expected %f", percent, expected)

@@ -42,6 +42,7 @@ func (t *NoActionTool) Execute(ctx context.Context, params map[string]any) ([]ag
 	// Update LastTriggerTurn to enforce minInterval before next trigger
 	t.snapshot.AgentState.LastTriggerTurn = t.snapshot.AgentState.TotalTurns
 	t.snapshot.AgentState.TurnsSinceLastTrigger = 0
+	t.snapshot.AgentState.ToolCallsSinceLastTrigger = 0
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_no_action",
 		traceevent.Field{Key: "turn", Value: t.snapshot.AgentState.TotalTurns})

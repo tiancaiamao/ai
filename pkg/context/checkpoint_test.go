@@ -72,9 +72,11 @@ func TestCheckpoint_SaveLoad_PreservesState(t *testing.T) {
 			originalSnapshot.LLMContext, loadedSnapshot.LLMContext)
 	}
 
-	// Note: RecentMessages is empty in loaded snapshot (comes from journal)
+	// Per design: RecentMessages is NOT preserved in checkpoint
+	// Checkpoint only contains LLMContext and AgentState
+	// RecentMessages is rebuilt by replaying journal from message_index
 	if len(loadedSnapshot.RecentMessages) != 0 {
-		t.Errorf("RecentMessages should be empty (loaded from journal), got %d",
+		t.Errorf("RecentMessages should be empty after loading checkpoint, got %d messages",
 			len(loadedSnapshot.RecentMessages))
 	}
 

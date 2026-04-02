@@ -56,6 +56,7 @@ type AiInterpreter struct {
 	showThinking     bool
 	showTools        bool
 	showToolsVerbose bool
+	showUser         bool
 	showPrefixes     bool
 
 	currentMessageRole     string
@@ -199,6 +200,7 @@ func newBaseInterpreter() *AiInterpreter {
 		showThinking:         true,
 		showTools:            true,
 		showToolsVerbose:     false,
+		showUser:             true,
 		showPrefixes:         true,
 		busyMode:             "steer",
 		pendingStateRequests: make(map[string]stateRequestInfo),
@@ -1977,6 +1979,8 @@ func (p *AiInterpreter) writeMessageIfEmpty(msg *agentctx.AgentMessage) {
 		enabled = showThinking
 	case "tool":
 		enabled = showTools
+	case "user":
+		enabled = p.showUser
 	}
 
 	p.writeStream(role, content, enabled)
@@ -1998,7 +2002,9 @@ func renderMessageContent(msg *agentctx.AgentMessage, showThinking bool, showToo
 			}
 
 		case agentctx.ToolCallContent:
-			if showTools {
+			// Only show toolcall markers when tools display is disabled
+			// When showTools is true, tool execution will be shown via trace events
+			if !showTools {
 				b.WriteString(fmt.Sprintf("[toolcall %s]", v.Name))
 			}
 
@@ -2325,6 +2331,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
 	p.writeStatusMaybeDefer(fromControl, fmt.Sprintf(`Display Settings:
   model: %s
   show-thinking: %s
+  show-user: %s
   tools: %s
   prefix: %s
   thinking-level: %s
@@ -2339,6 +2346,7 @@ func (p *AiInterpreter) showSettings(fromControl bool) {
   compaction-keep-recent-tokens: %s`,
 		model,
 		onOff(showThinking),
+		onOff(p.showUser),
 		toolsMode(showTools, showToolsVerbose),
 		onOff(showPrefixes),
 		orUnknown(thinkingLevel),

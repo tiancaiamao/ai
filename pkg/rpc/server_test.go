@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"bufio"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,9 +408,9 @@ func TestErrorResponse(t *testing.T) {
 func TestConcurrentCommands(t *testing.T) {
 	server := NewServer()
 
-	promptCount := 0
+	var promptCount atomic.Int32
 	server.SetPromptHandler(func(req PromptRequest) error {
-		promptCount++
+		promptCount.Add(1)
 		time.Sleep(10 * time.Millisecond) // Simulate work
 		return nil
 	})
@@ -432,8 +434,8 @@ func TestConcurrentCommands(t *testing.T) {
 		}
 	}
 
-	if promptCount != 10 {
-		t.Errorf("Expected 10 prompts, got %d", promptCount)
+	if got := promptCount.Load(); got != 10 {
+		t.Errorf("Expected 10 prompts, got %d", got)
 	}
 }
 
@@ -510,5 +512,168 @@ func TestErrorHandlingInHandlers(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Error("Expected error message to be set")
+	}
+}
+
+// TestAsyncDispatchDuringPrompt verifies that the scanner loop is NOT blocked
+// while a long-running prompt command is being processed. This is the core fix
+// for the "RPC server single-threaded blocking" issue.
+func TestAsyncDispatchDuringPrompt(t *testing.T) {
+	promptStarted := make(chan struct{})
+	promptDone := make(chan struct{})
+
+	inReader, inWriter := io.Pipe()
+	outReader, outWriter := io.Pipe()
+	defer inWriter.Close()
+	defer outReader.Close()
+
+	server := NewServer()
+	server.SetPromptHandler(func(req PromptRequest) error {
+		close(promptStarted)
+		// Simulate long-running LLM call
+		select {
+		case <-time.After(2 * time.Second):
+		case <-promptDone:
+		}
+		return nil
+	})
+	server.SetSteerHandler(func(message string) error {
+		return nil
+	})
+
+	// Start the server in a goroutine
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.RunWithIO(inReader, outWriter)
+	}()
+
+	// Send a prompt command
+	promptCmd := `{"type":"prompt","message":"hello","id":"p1"}` + "\n"
+	inWriter.Write([]byte(promptCmd))
+
+	// Wait for prompt to start processing
+	select {
+	case <-promptStarted:
+		// Prompt is running in a goroutine — scanner loop should be free
+	case <-time.After(1 * time.Second):
+		t.Fatal("Prompt never started")
+	}
+
+	// Now send a steer command while prompt is still running.
+	// Before the fix, this would block on io.Pipe because the scanner
+	// loop was stuck in handleCommand. After the fix, it should succeed.
+	steerCmd := `{"type":"steer","data":{"message":"steer msg"},"id":"s1"}` + "\n"
+	inWriter.Write([]byte(steerCmd))
+
+	// Read responses from the server. We should see the steer response
+	// arrive before (or around the same time as) the prompt response,
+	// proving the scanner loop was not blocked.
+	outScanner := bufio.NewScanner(outReader)
+	outScanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+
+	gotSteer := false
+	gotPrompt := false
+	deadline := time.After(3 * time.Second)
+
+	for (!gotSteer || !gotPrompt) && outScanner.Scan() {
+		line := outScanner.Text()
+		var resp RPCResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			continue
+		}
+		if resp.Command == CommandSteer {
+			gotSteer = true
+		}
+		if resp.Command == CommandPrompt {
+			gotPrompt = true
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for responses (steer=%v, prompt=%v)", gotSteer, gotPrompt)
+		default:
+		}
+	}
+
+	if !gotSteer {
+		t.Error("Steer response never received — scanner loop was blocked!")
+	}
+	if !gotPrompt {
+		t.Error("Prompt response never received")
+	}
+
+	// Clean up
+	close(promptDone)
+	inWriter.Close()
+	outWriter.Close()
+}
+
+// TestSyncCommandsNotAsync verifies that quick commands (get_state, ping, etc.)
+// are still handled synchronously and return responses immediately.
+func TestSyncCommandsNotAsync(t *testing.T) {
+	inReader, inWriter := io.Pipe()
+	outReader, outWriter := io.Pipe()
+	defer inReader.Close()
+	defer outReader.Close()
+
+	server := NewServer()
+	server.SetGetStateHandler(func() (*SessionState, error) {
+		return &SessionState{MessageCount: 5}, nil
+	})
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.RunWithIO(inReader, outWriter)
+	}()
+
+	// Send get_state (sync command)
+	cmd := `{"type":"get_state","id":"gs1"}` + "\n"
+	inWriter.Write([]byte(cmd))
+
+	outScanner := bufio.NewScanner(outReader)
+	outScanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+
+	if !outScanner.Scan() {
+		t.Fatal("Expected response from get_state")
+	}
+
+	var resp RPCResponse
+	if err := json.Unmarshal([]byte(outScanner.Text()), &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.Command != CommandGetState {
+		t.Errorf("Expected get_state response, got %s", resp.Command)
+	}
+	if !resp.Success {
+		t.Errorf("Expected success, got error: %s", resp.Error)
+	}
+
+	inWriter.Close()
+	outWriter.Close()
+}
+
+// TestIsAsyncCommandClassification tests the isAsyncCommand helper.
+func TestIsAsyncCommandClassification(t *testing.T) {
+	async := map[string]bool{
+		CommandPrompt:   true,
+		CommandSteer:    true,
+		CommandFollowUp: true,
+		CommandBash:     true,
+		CommandCompact:  true,
+	}
+	for cmd, expected := range async {
+		if isAsyncCommand(cmd) != expected {
+			t.Errorf("isAsyncCommand(%q) = %v, want %v", cmd, !expected, expected)
+		}
+	}
+
+	sync := []string{
+		CommandAbort, CommandPing, CommandGetState, CommandGetMessages,
+		CommandSetModel, CommandNewSession, CommandSetSteeringMode,
+	}
+	for _, cmd := range sync {
+		if isAsyncCommand(cmd) {
+			t.Errorf("isAsyncCommand(%q) = true, want false", cmd)
+		}
 	}
 }

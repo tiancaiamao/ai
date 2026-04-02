@@ -231,18 +231,23 @@ func boolPtr(v bool) *bool {
 func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	// Define a raw type for unmarshaling
 	type rawMessage struct {
-		Role       string            `json:"role"`
-		Content    []json.RawMessage `json:"content"`
-		Timestamp  int64             `json:"timestamp"`
-		Metadata   *MessageMetadata  `json:"metadata,omitempty"`
-		API        string            `json:"api,omitempty"`
-		Provider   string            `json:"provider,omitempty"`
-		Model      string            `json:"model,omitempty"`
-		Usage      *Usage            `json:"usage,omitempty"`
-		StopReason string            `json:"stopReason,omitempty"`
-		ToolCallID string            `json:"toolCallId,omitempty"`
-		ToolName   string            `json:"toolName,omitempty"`
-		IsError    bool              `json:"isError,omitempty"`
+		Role         string            `json:"role"`
+		Content      []json.RawMessage `json:"content"`
+		Timestamp    int64             `json:"timestamp"`
+		Metadata     *MessageMetadata  `json:"metadata,omitempty"`
+		AgentVisible bool              `json:"agent_visible"`
+		UserVisible  bool              `json:"user_visible"`
+		API          string            `json:"api,omitempty"`
+		Provider     string            `json:"provider,omitempty"`
+		Model        string            `json:"model,omitempty"`
+		Usage        *Usage            `json:"usage,omitempty"`
+		StopReason   string            `json:"stopReason,omitempty"`
+		ToolCallID   string            `json:"toolCallId,omitempty"`
+		ToolName     string            `json:"toolName,omitempty"`
+		IsError      bool              `json:"isError,omitempty"`
+		Truncated    bool              `json:"truncated,omitempty"`
+		TruncatedAt  int               `json:"truncated_at,omitempty"`
+		OriginalSize int               `json:"original_size,omitempty"`
 	}
 
 	var raw rawMessage
@@ -254,6 +259,8 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.Role = raw.Role
 	m.Timestamp = raw.Timestamp
 	m.Metadata = raw.Metadata
+	m.AgentVisible = raw.AgentVisible
+	m.UserVisible = raw.UserVisible
 	m.API = raw.API
 	m.Provider = raw.Provider
 	m.Model = raw.Model
@@ -262,6 +269,9 @@ func (m *AgentMessage) UnmarshalJSON(data []byte) error {
 	m.ToolCallID = raw.ToolCallID
 	m.ToolName = raw.ToolName
 	m.IsError = raw.IsError
+	m.Truncated = raw.Truncated
+	m.TruncatedAt = raw.TruncatedAt
+	m.OriginalSize = raw.OriginalSize
 
 	// Parse content blocks
 	m.Content = make([]ContentBlock, 0, len(raw.Content))

@@ -4,104 +4,121 @@ import "fmt"
 
 // TriggerChecker evaluates trigger conditions.
 type TriggerChecker struct {
-	// Configuration (use constants from trigger_config.go)
-	IntervalTurns int
-	MinTurns      int
-	TokenThreshold float64
-	TokenUrgent    float64
-	StaleCount     int
-	MinInterval    int
+	// Token thresholds
+	TokenUrgent float64
+	TokenHigh   float64
+	TokenMedium float64
+	TokenLow    float64
+
+	// Tool-call intervals (how many tool calls between triggers)
+	IntervalAtLow    int
+	IntervalAtMedium int
+	IntervalAtHigh   int
+	IntervalAtUrgent int
+
+	// Stale output threshold
+	StaleCount int
 }
 
 // NewTriggerChecker creates a new TriggerChecker with default config.
 func NewTriggerChecker() *TriggerChecker {
 	return &TriggerChecker{
-		IntervalTurns:  IntervalTurns,
-		MinTurns:       MinTurns,
-		TokenThreshold: TokenThreshold,
-		TokenUrgent:    TokenUrgent,
-		StaleCount:     StaleCount,
-		MinInterval:    MinInterval,
+		TokenUrgent:       TokenUrgent,
+		TokenHigh:         TokenHigh,
+		TokenMedium:       TokenMedium,
+		TokenLow:          TokenLow,
+		IntervalAtLow:     IntervalAtLow,
+		IntervalAtMedium:  IntervalAtMedium,
+		IntervalAtHigh:    IntervalAtHigh,
+		IntervalAtUrgent:  IntervalAtUrgent,
+		StaleCount:        StaleCount,
 	}
 }
 
 // NewTriggerCheckerWithConfig creates a TriggerChecker with custom config (for testing).
 func NewTriggerCheckerWithConfig(config TriggerConfig) *TriggerChecker {
 	return &TriggerChecker{
-		IntervalTurns:  config.IntervalTurns,
-		MinTurns:       config.MinTurns,
-		TokenThreshold: config.TokenThreshold,
-		TokenUrgent:    config.TokenUrgent,
-		StaleCount:     config.StaleCount,
-		MinInterval:    config.MinInterval,
+		TokenUrgent:       config.TokenUrgent,
+		TokenHigh:         config.TokenHigh,
+		TokenMedium:       config.TokenMedium,
+		TokenLow:          config.TokenLow,
+		IntervalAtLow:     config.IntervalAtLow,
+		IntervalAtMedium:  config.IntervalAtMedium,
+		IntervalAtHigh:    config.IntervalAtHigh,
+		IntervalAtUrgent:  config.IntervalAtUrgent,
+		StaleCount:        config.StaleCount,
 	}
 }
 
 // TriggerConfig allows custom trigger configuration.
 type TriggerConfig struct {
-	IntervalTurns  int
-	MinTurns       int
-	TokenThreshold float64
-	TokenUrgent    float64
-	StaleCount     int
-	MinInterval    int
+	TokenUrgent      float64
+	TokenHigh        float64
+	TokenMedium      float64
+	TokenLow         float64
+	IntervalAtLow    int
+	IntervalAtMedium int
+	IntervalAtHigh   int
+	IntervalAtUrgent int
+	StaleCount       int
 }
 
 // ShouldTrigger checks if context management should be triggered.
+// The primary signal is token usage percentage. Tool call counts determine
+// the interval between triggers — higher token usage means more frequent triggers.
+//
 // Returns (shouldTrigger, urgency, reason).
 func (t *TriggerChecker) ShouldTrigger(snapshot *ContextSnapshot) (bool, string, string) {
 	if snapshot == nil {
 		return false, "", "no_snapshot"
 	}
 
-	state := snapshot.AgentState
-
-	// 1. Check minimum turn requirement
-	if state.TotalTurns < t.MinTurns {
-		return false, "", "below_min_turns"
-	}
-
 	tokenPercent := snapshot.EstimateTokenPercent()
-	staleCount := snapshot.CountStaleOutputs(10) // Count outputs with stale >= 10
+	toolCallsSince := snapshot.AgentState.ToolCallsSinceLastTrigger
 
-	// 2. URGENT mode: token usage critical - ignore minInterval
+	// 1. URGENT: token usage critical — trigger immediately
 	if tokenPercent >= t.TokenUrgent {
-		return true, UrgencyUrgent, fmt.Sprintf("token_usage_%.0f%%", tokenPercent*100)
+		if toolCallsSince >= t.IntervalAtUrgent {
+			return true, UrgencyUrgent, fmt.Sprintf("token_usage_%.0f%%", tokenPercent*100)
+		}
+		return false, "", fmt.Sprintf("urgent_but_interval_%d/%d", toolCallsSince, t.IntervalAtUrgent)
 	}
 
-	// 3. Check minimum interval for normal triggers
-	if state.TurnsSinceLastTrigger < t.MinInterval {
-		return false, "", "within_min_interval"
+	// 2. HIGH: aggressive truncation
+	if tokenPercent >= t.TokenHigh {
+		if toolCallsSince >= t.IntervalAtHigh {
+			return true, UrgencyNormal, fmt.Sprintf("token_high_%.0f%%", tokenPercent*100)
+		}
+		return false, "", fmt.Sprintf("high_but_interval_%d/%d", toolCallsSince, t.IntervalAtHigh)
 	}
 
-	// 4. Normal trigger conditions
-	if tokenPercent >= t.TokenThreshold && staleCount >= 10 {
-		return true, UrgencyNormal, "token_and_stale_threshold"
+	// 3. MEDIUM: start truncating old outputs
+	if tokenPercent >= t.TokenMedium {
+		if toolCallsSince >= t.IntervalAtMedium {
+			return true, UrgencyNormal, fmt.Sprintf("token_medium_%.0f%%", tokenPercent*100)
+		}
+		return false, "", fmt.Sprintf("medium_but_interval_%d/%d", toolCallsSince, t.IntervalAtMedium)
 	}
 
-	if tokenPercent >= 0.30 {
-		return true, UrgencyNormal, fmt.Sprintf("token_usage_%.0f%%", tokenPercent*100)
+	// 4. LOW: minimal intervention
+	if tokenPercent >= t.TokenLow {
+		if toolCallsSince >= t.IntervalAtLow {
+			return true, UrgencyPeriodic, fmt.Sprintf("token_low_%.0f%%", tokenPercent*100)
+		}
+		return false, "", fmt.Sprintf("low_but_interval_%d/%d", toolCallsSince, t.IntervalAtLow)
 	}
 
-	if state.TotalTurns >= 15 && tokenPercent >= 0.25 {
-		return true, UrgencyNormal, "periodic_token_check"
-	}
-
+	// 5. Below 20% — only trigger if stale outputs are very high
+	staleCount := snapshot.CountStaleOutputs(10)
 	if staleCount >= t.StaleCount {
-		return true, UrgencyNormal, fmt.Sprintf("stale_outputs_%d", staleCount)
+		if toolCallsSince >= t.IntervalAtLow {
+			return true, UrgencyPeriodic, fmt.Sprintf("stale_outputs_%d", staleCount)
+		}
+		return false, "", fmt.Sprintf("stale_but_interval_%d/%d", toolCallsSince, t.IntervalAtLow)
 	}
 
-	// 5. Skip condition: context is healthy
-	if state.TotalTurns >= 20 && tokenPercent < 0.30 {
-		return false, UrgencySkip, "context_healthy"
-	}
-
-	// 6. Periodic check
-	if state.TotalTurns%t.IntervalTurns == 0 {
-		return true, UrgencyPeriodic, "periodic_check"
-	}
-
-	return false, "", "no_trigger"
+	// 6. Context is healthy
+	return false, UrgencySkip, fmt.Sprintf("context_healthy_%.0f%%", tokenPercent*100)
 }
 
 // Trigger urgency levels.

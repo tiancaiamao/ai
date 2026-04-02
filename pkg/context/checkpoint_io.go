@@ -1,6 +1,7 @@
 package context
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,10 +19,10 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 	// Update message index
 	info.MessageIndex = messageIndex
 
-	// 2. Save llm_context.txt
 	checkpointPath := filepath.Join(sessionDir, info.Path)
-	llmContextPath := filepath.Join(checkpointPath, "llm_context.txt")
 
+	// 2. Save llm_context.txt
+	llmContextPath := filepath.Join(checkpointPath, "llm_context.txt")
 	if err := saveAtomic(llmContextPath, []byte(snapshot.LLMContext)); err != nil {
 		return nil, fmt.Errorf("failed to save llm_context.txt: %w", err)
 	}
@@ -32,36 +33,40 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal agent state: %w", err)
 	}
-
 	if err := saveAtomic(agentStatePath, agentStateData); err != nil {
 		return nil, fmt.Errorf("failed to save agent_state.json: %w", err)
 	}
 
-	// Update metadata in info
+	// 4. DO NOT save messages.jsonl
+	// Per design: Checkpoints should only contain llm_context.txt and agent_state.json
+	// RecentMessages is rebuilt by replaying the journal from message_index
+	// The journal (session root messages.jsonl) is the Single Source of Truth
+
+	// Update metadata in info (for debugging/monitoring only)
 	info.LLMContextChars = len(snapshot.LLMContext)
 	info.RecentMessagesCount = len(snapshot.RecentMessages)
 
-	// 4. Update checkpoint_index.json
+	// 5. Update checkpoint_index.json
 	idx, err := LoadCheckpointIndex(sessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load checkpoint index: %w", err)
 	}
-
 	idx.AddCheckpoint(*info)
 	if err := idx.Save(sessionDir); err != nil {
 		return nil, fmt.Errorf("failed to save checkpoint index: %w", err)
 	}
 
-	// 5. Update current/ symlink
+	// 6. Update current/ symlink
 	if err := UpdateCurrentLink(sessionDir, info.Path); err != nil {
 		return nil, fmt.Errorf("failed to update current link: %w", err)
 	}
 
-	// 6. Return CheckpointInfo
 	return info, nil
 }
 
-// LoadCheckpoint loads a ContextSnapshot from a checkpoint directory
+// LoadCheckpoint loads a ContextSnapshot from a checkpoint directory.
+// Loads LLMContext and AgentState. RecentMessages will be empty.
+// Per design, RecentMessages is rebuilt by replaying the journal from message_index.
 func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*ContextSnapshot, error) {
 	checkpointPath := filepath.Join(sessionDir, checkpointInfo.Path)
 
@@ -84,11 +89,12 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 		return nil, fmt.Errorf("failed to read llm_context.txt: %w", err)
 	}
 
-	// 3. Return ContextSnapshot with empty RecentMessages
-	// RecentMessages will be loaded from journal separately
+	// 3. DO NOT load messages.jsonl
+	// Per design: RecentMessages is rebuilt by replaying journal from message_index
+	// Checkpoint only provides LLMContext and AgentState (which contains message_index)
 	snapshot := &ContextSnapshot{
 		LLMContext:     string(llmContextData),
-		RecentMessages: []AgentMessage{}, // Will be populated from journal
+		RecentMessages: []AgentMessage{}, // Empty - will be rebuilt from journal
 		AgentState:     agentState,
 	}
 
@@ -137,4 +143,53 @@ func saveAtomic(filePath string, data []byte) error {
 	}
 
 	return nil
+}
+
+// saveMessagesJSONL writes RecentMessages as JSONL to a file.
+func saveMessagesJSONL(filePath string, messages []AgentMessage) error {
+	var buf []byte
+	for _, msg := range messages {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+		buf = append(buf, data...)
+		buf = append(buf, '\n')
+	}
+	return saveAtomic(filePath, buf)
+}
+
+// loadMessagesJSONL reads messages from raw JSONL bytes.
+func loadMessagesJSONL(data []byte) ([]AgentMessage, error) {
+	var messages []AgentMessage
+	for _, line := range splitLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var msg AgentMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue // skip malformed lines
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// splitLines splits byte data into lines (without trailing newlines).
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			if len(data) > 0 {
+				lines = append(lines, data)
+			}
+			break
+		}
+		if i > 0 {
+			lines = append(lines, data[:i])
+		}
+		data = data[i+1:]
+	}
+	return lines
 }

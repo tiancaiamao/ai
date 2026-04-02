@@ -14,122 +14,126 @@ import (
 	"log/slog"
 )
 
-// ExecuteNormalMode executes a turn in normal mode.
-func (a *AgentNew) ExecuteNormalMode(ctx context.Context, userMessage string) error {
-	a.snapshotMu.Lock()
-	defer a.snapshotMu.Unlock()
+// executeConversationLoop executes the conversation loop in normal mode.
+// It implements: LLM → (tools) → LLM → ... → final response
+//
+// This is called by executeNormalStep (user message is already appended).
+//
+// Returns:
+// - ExecutionMode: ModeDone (complete), ModeContextMgmt (need context management), ModeError
+// - error: any error that occurred
+func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, error) {
+	// Track duplicate tool call signatures to detect infinite loops
+	const maxDuplicateCalls = 7
+	duplicateSignatureCount := make(map[string]int) // signature -> consecutive count
 
-	// 1. Check trigger conditions
-	agentctx.LogSnapshotEvaluated(ctx, a.snapshot)
-	shouldTrigger, urgency, reason := a.triggerChecker.ShouldTrigger(a.snapshot)
-	agentctx.LogTriggerChecked(ctx, shouldTrigger, urgency, reason, a.snapshot)
-	if shouldTrigger && urgency != agentctx.UrgencySkip {
-		slog.Info("[AgentNew] Context management trigger detected",
-			"urgency", urgency,
-			"reason", reason,
+	for cycle := 0; ; cycle++ {
+		// Check for context cancellation at the start of each cycle
+		// This allows steer/follow-up to interrupt before LLM call
+		select {
+		case <-ctx.Done():
+			slog.Info("[AgentNew] Context canceled at start of conversation loop cycle",
+				"cycle", cycle+1,
+			)
+			return ModeDone, ctx.Err()
+		default:
+			// Context is still valid, continue
+		}
+
+		// Check max turns limit (if set, typically only in headless mode)
+		if a.maxTurns > 0 && cycle >= a.maxTurns {
+			return ModeError, fmt.Errorf("reached maximum turns (%d) with pending tool calls", a.maxTurns)
+		}
+
+		// Build LLM request
+		llmMessages, systemPrompt := a.buildNormalModeRequest(ctx)
+
+		llmCtx := llm.LLMContext{
+			SystemPrompt:  systemPrompt,
+			Messages:      llmMessages,
+			Tools:         ConvertToolsToLLM(ctx, a.allTools),
+			ThinkingLevel: a.thinkingLevel,
+		}
+
+		// Call LLM with retry logic
+		assistantMsg, toolResults, err := a.callLLMWithRetry(ctx, llmCtx, cycle)
+		if err != nil {
+			return ModeError, err
+		}
+
+		// Append assistant message
+		a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, *assistantMsg)
+		traceevent.Log(ctx, traceevent.CategoryEvent, "message_end",
+			traceevent.Field{Key: "role", Value: "assistant"},
+			traceevent.Field{Key: "stop_reason", Value: assistantMsg.StopReason},
+			traceevent.Field{Key: "chars", Value: len(assistantMsg.ExtractText())},
+		)
+		if err := a.journal.AppendMessage(*assistantMsg); err != nil {
+			return ModeError, fmt.Errorf("failed to append assistant message: %w", err)
+		}
+
+		// Append tool results
+		for _, result := range toolResults {
+			a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, result)
+			if err := a.journal.AppendMessage(result); err != nil {
+				slog.Warn("[AgentNew] Failed to append tool result", "error", err)
+			}
+		}
+
+		// Track tool calls since last trigger
+		a.snapshot.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
+		a.snapshot.AgentState.UpdatedAt = time.Now()
+
+		// Check for context cancellation (e.g., from /abort or /steer)
+		select {
+		case <-ctx.Done():
+			slog.Info("[AgentNew] Context canceled during conversation loop",
+				"cycle", cycle+1,
+				"tool_count", len(toolResults),
+			)
+			return ModeDone, ctx.Err()
+		default:
+			// Context is still valid, continue
+		}
+
+		// Check for pending input (from /steer or /follow-up)
+		if pendingMessage, hasPending := a.GetAndClearPendingInput(); hasPending {
+			slog.Info("[AgentNew] Pending input detected, exiting conversation loop",
+				"pending_message", pendingMessage,
+				"cycle", cycle+1,
+			)
+			// Store the pending message for the next turn
+			// We return ModeDone so the trampoline will exit and the RPC handler can process the pending input
+			return ModeDone, nil
+		}
+
+		// If no tool calls were made, we're done
+		if len(toolResults) == 0 {
+			return ModeDone, nil
+		}
+
+		// Tool calls were made, check if we need context management before next LLM call
+		shouldTrigger, urgency, _ := a.triggerChecker.ShouldTrigger(a.snapshot)
+		if shouldTrigger && urgency != agentctx.UrgencySkip {
+			slog.Info("[AgentNew] Context management needed during conversation loop",
+				"urgency", urgency,
+				"cycle", cycle+1,
+			)
+			return ModeContextMgmt, nil
+		}
+
+		// Continue the loop to get the final response
+		slog.Info("[AgentNew] Tool calls completed, continuing conversation",
+			"tool_count", len(toolResults),
+			"cycle", cycle+1,
 		)
 
-		// We need to switch to context management mode
-		// But we can't do it while holding the lock, so we'll return a special error
-		// The caller should handle this by calling ExecuteContextMgmtMode
-		return &ContextMgmtTriggerError{
-			Urgency: urgency,
-			Reason:  reason,
+		// Check for duplicate tool call signatures (same tool + parameters repeated)
+		// This detects infinite loops where the agent keeps calling the same tool with same args
+		if err := a.checkDuplicateToolSignatures(assistantMsg, duplicateSignatureCount, maxDuplicateCalls); err != nil {
+			return ModeError, err
 		}
 	}
-
-	// 2. Append user message to snapshot
-	userMsg := agentctx.AgentMessage{
-		Role:         "user",
-		Content:      []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: userMessage}},
-		Timestamp:    time.Now().Unix(),
-		AgentVisible: true,
-		UserVisible:  true,
-	}
-
-	a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, userMsg)
-	traceevent.Log(ctx, traceevent.CategoryEvent, "message_start",
-		traceevent.Field{Key: "role", Value: "user"},
-		traceevent.Field{Key: "chars", Value: len(userMessage)},
-	)
-	traceevent.Log(ctx, traceevent.CategoryEvent, "message_end",
-		traceevent.Field{Key: "role", Value: "user"},
-		traceevent.Field{Key: "chars", Value: len(userMessage)},
-	)
-
-	// 3. Persist to journal
-	if err := a.journal.AppendMessage(userMsg); err != nil {
-		return fmt.Errorf("failed to append message: %w", err)
-	}
-
-	// 4. Build LLM request
-	llmMessages, systemPrompt := a.buildNormalModeRequest(ctx)
-
-	llmCtx := llm.LLMContext{
-		SystemPrompt: systemPrompt,
-		Messages:     llmMessages,
-		Tools:        ConvertToolsToLLM(ctx, a.allTools),
-	}
-
-	// 5. Call LLM
-	llmStart := time.Now()
-	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
-		traceevent.Field{Key: "model", Value: a.model.ID},
-		traceevent.Field{Key: "provider", Value: a.model.Provider},
-		traceevent.Field{Key: "api", Value: a.model.API},
-		traceevent.Field{Key: "timeout_ms", Value: int64((2 * time.Minute) / time.Millisecond)},
-	)
-	defer llmSpan.End()
-
-	stream := llm.StreamLLM(
-		ctx,
-		*a.model,
-		llmCtx,
-		a.apiKey,
-		2*time.Minute, // Chunk interval timeout
-	)
-
-	// 6. Process response
-	assistantMsg, toolResults, err := a.processLLMResponse(ctx, stream, llmStart)
-	if err != nil {
-		llmSpan.AddField("error", true)
-		llmSpan.AddField("error_message", err.Error())
-		return err
-	}
-	if assistantMsg != nil {
-		llmSpan.AddField("stop_reason", assistantMsg.StopReason)
-		if assistantMsg.Usage != nil {
-			llmSpan.AddField("input_tokens", assistantMsg.Usage.InputTokens)
-			llmSpan.AddField("output_tokens", assistantMsg.Usage.OutputTokens)
-			llmSpan.AddField("total_tokens", assistantMsg.Usage.TotalTokens)
-		}
-	}
-
-	// 7. Append assistant message
-	a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, *assistantMsg)
-	traceevent.Log(ctx, traceevent.CategoryEvent, "message_end",
-		traceevent.Field{Key: "role", Value: "assistant"},
-		traceevent.Field{Key: "stop_reason", Value: assistantMsg.StopReason},
-		traceevent.Field{Key: "chars", Value: len(assistantMsg.ExtractText())},
-	)
-	if err := a.journal.AppendMessage(*assistantMsg); err != nil {
-		return fmt.Errorf("failed to append assistant message: %w", err)
-	}
-
-	// 8. Append tool results
-	for _, result := range toolResults {
-		a.snapshot.RecentMessages = append(a.snapshot.RecentMessages, result)
-		if err := a.journal.AppendMessage(result); err != nil {
-			slog.Warn("[AgentNew] Failed to append tool result", "error", err)
-		}
-	}
-
-	// 9. Update turn count
-	a.snapshot.AgentState.TotalTurns++
-	a.snapshot.AgentState.TurnsSinceLastTrigger++
-	a.snapshot.AgentState.UpdatedAt = time.Now()
-
-	return nil
 }
 
 // buildNormalModeRequest builds the LLM request for normal mode.
@@ -137,39 +141,98 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 	// Build system prompt
 	systemPrompt := prompt.BuildSystemPrompt(agentctx.ModeNormal)
 
-	// Convert recent messages to LLM format
+	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage
 
 	for _, msg := range a.snapshot.RecentMessages {
-		if !msg.IsAgentVisible() || msg.IsTruncated() {
+		// Filter out messages that are not visible to agent
+		// Compaction sets agent_visible=false to hide old messages from LLM (saves tokens)
+		// Users can still see them (user_visible=true)
+		if !msg.IsAgentVisible() {
 			continue
+		}
+		// Filter out truncated messages - they have been replaced with summaries
+		if msg.IsTruncated() {
+			continue
+		}
+
+		// Extract text content and tool calls
+		content := msg.ExtractText()
+		toolCalls := msg.ExtractToolCalls()
+
+		// Skip empty messages
+		// Assistant messages with only tool_calls should be preserved
+		// Tool messages should be preserved even with empty content
+		isEmpty := content == "" && len(toolCalls) == 0
+		isTool := msg.Role == "tool" || msg.Role == "toolResult"
+		if isEmpty && !isTool {
+			continue
+		}
+
+		// Skip empty assistant messages (content == "" && no tool_calls)
+		// These are typically failed or incomplete responses
+		if msg.Role == "assistant" && isEmpty {
+			continue
+		}
+
+		// Convert internal role to LLM API role
+		// - toolResult → tool (OpenAI API format)
+		// - other roles → keep as-is
+		role := msg.Role
+		if msg.Role == "toolResult" {
+			role = "tool"  // Convert to OpenAI API format
 		}
 
 		// Convert message to LLM format
 		llmMsg := llm.LLMMessage{
-			Role:    msg.Role,
-			Content: msg.ExtractText(),
+			Role:    role,
+			Content: content,
 		}
+
+		// Extract and convert tool calls for assistant messages
+		if len(toolCalls) > 0 {
+			llmMsg.ToolCalls = make([]llm.ToolCall, 0, len(toolCalls))
+			for _, tc := range toolCalls {
+				// Convert arguments map back to JSON string
+				argsJSON := "{}"
+				if tc.Arguments != nil {
+					if bytes, err := json.Marshal(tc.Arguments); err == nil {
+						argsJSON = string(bytes)
+					}
+				}
+				llmMsg.ToolCalls = append(llmMsg.ToolCalls, llm.ToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      tc.Name,
+						Arguments: argsJSON,
+					},
+				})
+			}
+		}
+
+		// For tool messages, we need the tool_call_id
+		if msg.Role == "toolResult" {
+			llmMsg.ToolCallID = msg.ToolCallID
+		}
+
 		llmMessages = append(llmMessages, llmMsg)
 	}
 
-	// Inject runtime state before last user message
+	// Normalize message sequence to ensure valid role alternation
+	llmMessages = normalizeMessageSequence(ctx, llmMessages)
+
+	// Inject runtime state and LLM context
+	// These should be part of the last user message, not separate messages
 	runtimeState := a.buildRuntimeState()
-	if runtimeState != "" {
-		runtimeMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: runtimeState,
-		}
-		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
+	llmContext := ""
+	if a.snapshot.LLMContext != "" {
+		llmContext = fmt.Sprintf("<agent:llm_context>\n%s\n</agent:llm_context>", a.snapshot.LLMContext)
 	}
 
-	// Inject LLM context if available
-	if a.snapshot.LLMContext != "" {
-		llmContextMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: fmt.Sprintf("<agent:llm_context>\n%s\n</agent:llm_context>", a.snapshot.LLMContext),
-		}
-		llmMessages = insertBeforeLastUserMessage(llmMessages, llmContextMsg)
+	// Append runtime state and LLM context to the last user message
+	if runtimeState != "" || llmContext != "" {
+		llmMessages = appendToLastUserMessage(llmMessages, runtimeState, llmContext, ctx)
 	}
 
 	return llmMessages, systemPrompt
@@ -200,6 +263,247 @@ turn: %d
 }
 
 // processLLMResponse processes the LLM streaming response and executes tools.
+// callLLMWithRetry wraps the LLM call + response processing with retry logic.
+// It mirrors the retry strategy from main branch's streamAssistantResponseWithRetry:
+//   - Rate limit errors: up to 8 retries with exponential backoff (base 3s, cap 30s)
+//   - Other retryable errors (5xx, network): up to 1 retry with exponential backoff (base 1s)
+//   - Non-retryable errors (4xx, context length exceeded): no retry
+//   - Context cancellation: immediate abort
+func (a *AgentNew) callLLMWithRetry(
+	ctx context.Context,
+	llmCtx llm.LLMContext,
+	cycle int,
+) (*agentctx.AgentMessage, []agentctx.AgentMessage, error) {
+	// Resolve retry configuration
+	maxRetries := a.maxLLMRetries
+	if maxRetries < 0 {
+		// Retry explicitly disabled
+		maxRetries = 0
+	} else if maxRetries == 0 {
+		maxRetries = defaultLLMMaxRetries
+	}
+	baseDelay := a.retryBaseDelay
+	if baseDelay <= 0 {
+		baseDelay = defaultRetryBaseDelay
+	}
+
+	var lastErr error
+	var isRateLimitError bool
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Compute backoff delay
+			if isRateLimitError {
+				// Extend retry budget for rate limit errors
+				rlMaxRetries := defaultRateLimitMaxRetries
+				if maxRetries > defaultRateLimitMaxRetries {
+					rlMaxRetries = maxRetries
+				}
+				if attempt > maxRetries && attempt <= rlMaxRetries {
+					maxRetries = rlMaxRetries
+				}
+
+				baseDelay = defaultRateLimitBaseDelay
+				delay := baseDelay * time.Duration(1<<(attempt-1))
+				if delay > 30*time.Second {
+					delay = 30 * time.Second
+				}
+
+				// Respect provider backoff hint
+				retryAfter := llm.RetryAfter(lastErr)
+				if retryAfter > delay {
+					delay = retryAfter
+				}
+				if delay < 2*time.Second {
+					delay = 2 * time.Second
+				}
+				delay = jitterDelay(delay)
+
+				// Emit retry event
+				a.emitRetryEvent(LLMRetryInfo{
+					Attempt:    attempt,
+					MaxRetries: maxRetries,
+					Delay:      delay,
+					ErrorType:  "rate_limit",
+					Error:      lastErr.Error(),
+				})
+
+				slog.Info("[AgentNew] Retrying LLM call (rate limit)",
+					"attempt", attempt,
+					"maxRetries", maxRetries,
+					"delay", delay)
+
+				select {
+				case <-time.After(delay):
+					// Continue with retry
+				case <-ctx.Done():
+					traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+						traceevent.Field{Key: "attempt", Value: attempt},
+						traceevent.Field{Key: "max_retries", Value: maxRetries},
+						traceevent.Field{Key: "reason", Value: "context_done"},
+					)
+					if lastErr != nil {
+						return nil, nil, lastErr
+					}
+					return nil, nil, ctx.Err()
+				}
+			} else {
+				// Standard retry for non-rate-limit errors
+				delay := baseDelay * time.Duration(1<<(attempt-1))
+				delay = jitterDelay(delay)
+
+				slog.Info("[AgentNew] Retrying LLM call",
+					"attempt", attempt,
+					"maxRetries", maxRetries,
+					"delay", delay,
+					"errorType", classifyLLMError(lastErr).ErrorType)
+
+				select {
+				case <-time.After(delay):
+					// Continue with retry
+				case <-ctx.Done():
+					traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+						traceevent.Field{Key: "attempt", Value: attempt},
+						traceevent.Field{Key: "max_retries", Value: maxRetries},
+						traceevent.Field{Key: "reason", Value: "context_done"},
+					)
+					if lastErr != nil {
+						return nil, nil, lastErr
+					}
+					return nil, nil, ctx.Err()
+				}
+			}
+		}
+
+		// Start trace span for this attempt
+		llmStart := time.Now()
+		llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
+			traceevent.Field{Key: "model", Value: a.model.ID},
+			traceevent.Field{Key: "provider", Value: a.model.Provider},
+			traceevent.Field{Key: "api", Value: a.model.API},
+			traceevent.Field{Key: "attempt", Value: attempt},
+			traceevent.Field{Key: "timeout_ms", Value: int64((2 * time.Minute) / time.Millisecond)},
+		)
+
+		stream := llm.StreamLLM(
+			ctx,
+			*a.model,
+			llmCtx,
+			a.apiKey,
+			2*time.Minute, // Chunk interval timeout
+		)
+
+		// Process response
+		assistantMsg, toolResults, err := a.processLLMResponse(ctx, stream, llmStart)
+		if err == nil {
+			// Success — record metadata and return
+			if assistantMsg != nil {
+				llmSpan.AddField("stop_reason", assistantMsg.StopReason)
+				if assistantMsg.Usage != nil {
+					llmSpan.AddField("input_tokens", assistantMsg.Usage.InputTokens)
+					llmSpan.AddField("output_tokens", assistantMsg.Usage.OutputTokens)
+					llmSpan.AddField("total_tokens", assistantMsg.Usage.TotalTokens)
+				}
+			}
+			llmSpan.End()
+			return assistantMsg, toolResults, nil
+		}
+
+		// Error path
+		llmSpan.AddField("error", true)
+		llmSpan.AddField("error_message", err.Error())
+		meta := classifyLLMError(err)
+		llmSpan.AddField("error_type", meta.ErrorType)
+		if meta.StatusCode > 0 {
+			llmSpan.AddField("error_status_code", meta.StatusCode)
+		}
+		if meta.RetryAfter > 0 {
+			llmSpan.AddField("retry_after_ms", meta.RetryAfter.Milliseconds())
+		}
+		llmSpan.AddField("retryable", shouldRetryLLMError(err))
+		llmSpan.End()
+
+		isRateLimitError = llm.IsRateLimit(err)
+
+		// Context length exceeded — never retry, escalate to context management
+		if llm.IsContextLengthExceeded(err) {
+			slog.Error("[AgentNew] LLM call failed (context length exceeded)",
+				"attempt", attempt,
+				"error", err)
+			return nil, nil, err
+		}
+
+		lastErr = err
+		slog.Error("[AgentNew] LLM call failed",
+			"attempt", attempt,
+			"maxRetries", maxRetries,
+			"isRateLimit", isRateLimitError,
+			"error", err)
+
+		// Don't retry on context cancellation
+		if ctx.Err() != nil {
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+				traceevent.Field{Key: "attempt", Value: attempt},
+				traceevent.Field{Key: "max_retries", Value: maxRetries},
+				traceevent.Field{Key: "reason", Value: "context_done_after_error"},
+			)
+			return nil, nil, lastErr
+		}
+
+		// Check if error is retryable
+		if !shouldRetryLLMError(lastErr) {
+			traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_aborted",
+				traceevent.Field{Key: "attempt", Value: attempt},
+				traceevent.Field{Key: "max_retries", Value: maxRetries},
+				traceevent.Field{Key: "reason", Value: "non_retryable"},
+				traceevent.Field{Key: "error_type", Value: meta.ErrorType},
+				traceevent.Field{Key: "error_message", Value: lastErr.Error()},
+			)
+			return nil, nil, lastErr
+		}
+
+		// For rate limit errors, allow more retries beyond initial maxRetries
+		if isRateLimitError && attempt >= maxRetries {
+			rlMaxRetries := defaultRateLimitMaxRetries
+			if a.maxLLMRetries > defaultRateLimitMaxRetries {
+				rlMaxRetries = a.maxLLMRetries
+			}
+			if attempt < rlMaxRetries {
+				maxRetries = rlMaxRetries
+				continue
+			}
+		}
+	}
+
+	// All retries exhausted
+	if lastErr != nil {
+		meta := classifyLLMError(lastErr)
+		exhaustedFields := []traceevent.Field{
+			{Key: "max_retries", Value: maxRetries},
+			{Key: "error_type", Value: meta.ErrorType},
+			{Key: "error_message", Value: lastErr.Error()},
+		}
+		if meta.StatusCode > 0 {
+			exhaustedFields = append(exhaustedFields, traceevent.Field{Key: "error_status_code", Value: meta.StatusCode})
+		}
+		traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry_exhausted", exhaustedFields...)
+	}
+	return nil, nil, lastErr
+}
+
+// emitRetryEvent emits an LLM retry event through the event emitter (if available).
+func (a *AgentNew) emitRetryEvent(info LLMRetryInfo) {
+	if a.eventEmitter != nil {
+		a.eventEmitter.Emit(NewLLMRetryEvent(info))
+	}
+	traceevent.Log(context.Background(), traceevent.CategoryLLM, "llm_retry",
+		traceevent.Field{Key: "attempt", Value: info.Attempt},
+		traceevent.Field{Key: "max_retries", Value: info.MaxRetries},
+		traceevent.Field{Key: "delay", Value: info.Delay.String()},
+		traceevent.Field{Key: "error_type", Value: info.ErrorType},
+	)
+}
+
 func (a *AgentNew) processLLMResponse(
 	ctx context.Context,
 	stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage],
@@ -207,6 +511,7 @@ func (a *AgentNew) processLLMResponse(
 ) (*agentctx.AgentMessage, []agentctx.AgentMessage, error) {
 	var partialMessage *agentctx.AgentMessage
 	var textBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	toolCalls := map[int]*llm.ToolCall{}
 
 	// Wait for the stream to complete
@@ -223,9 +528,17 @@ func (a *AgentNew) processLLMResponse(
 			traceevent.Log(ctx, traceevent.CategoryLLM, "assistant_text",
 				traceevent.Field{Key: "state", Value: "start"},
 			)
-			partialMessage = &agentctx.AgentMessage{}
-			*partialMessage = agentctx.NewAssistantMessage()
+			// Emit message_start event for win UI
+			if a.eventEmitter != nil {
+				partialMessage = &agentctx.AgentMessage{}
+				*partialMessage = agentctx.NewAssistantMessage()
+				a.eventEmitter.Emit(NewMessageStartEvent(*partialMessage))
+			} else {
+				partialMessage = &agentctx.AgentMessage{}
+				*partialMessage = agentctx.NewAssistantMessage()
+			}
 			textBuilder.Reset()
+			thinkingBuilder.Reset()
 			toolCalls = map[int]*llm.ToolCall{}
 
 		case llm.LLMTextDeltaEvent:
@@ -235,8 +548,47 @@ func (a *AgentNew) processLLMResponse(
 			)
 			if partialMessage != nil {
 				textBuilder.WriteString(e.Delta)
-				partialMessage.Content = []agentctx.ContentBlock{
-					agentctx.TextContent{Type: "text", Text: textBuilder.String()},
+				// Update content to include all existing blocks
+				var contentBlocks []agentctx.ContentBlock
+				if thinkingBuilder.Len() > 0 {
+					contentBlocks = append(contentBlocks, agentctx.ThinkingContent{
+						Type:     "thinking",
+						Thinking: thinkingBuilder.String(),
+					})
+				}
+				if textBuilder.Len() > 0 {
+					contentBlocks = append(contentBlocks, agentctx.TextContent{
+						Type: "text",
+						Text: textBuilder.String(),
+					})
+				}
+				// Preserve tool calls if any
+				if len(toolCalls) > 0 {
+					for _, tc := range toolCalls {
+						if tc.ID != "" {
+							argsMap := make(map[string]any)
+							if tc.Function.Arguments != "" {
+								if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+									argsMap = make(map[string]any)
+								}
+							}
+							contentBlocks = append(contentBlocks, agentctx.ToolCallContent{
+								ID:        tc.ID,
+								Type:      "toolCall",
+								Name:      tc.Function.Name,
+								Arguments: argsMap,
+							})
+						}
+					}
+				}
+				partialMessage.Content = contentBlocks
+				// Emit text_delta event for win UI
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+						Type:         "text_delta",
+						ContentIndex: e.Index,
+						Delta:        e.Delta,
+					}))
 				}
 			}
 
@@ -245,6 +597,51 @@ func (a *AgentNew) processLLMResponse(
 				traceevent.Field{Key: "content_index", Value: e.Index},
 				traceevent.Field{Key: "delta", Value: e.Delta},
 			)
+			if partialMessage != nil {
+				thinkingBuilder.WriteString(e.Delta)
+				// Update content to include thinking
+				var contentBlocks []agentctx.ContentBlock
+				if thinkingBuilder.Len() > 0 {
+					contentBlocks = append(contentBlocks, agentctx.ThinkingContent{
+						Type:     "thinking",
+						Thinking: thinkingBuilder.String(),
+					})
+				}
+				if textBuilder.Len() > 0 {
+					contentBlocks = append(contentBlocks, agentctx.TextContent{
+						Type: "text",
+						Text: textBuilder.String(),
+					})
+				}
+				// Preserve tool calls if any
+				if len(toolCalls) > 0 {
+					for _, tc := range toolCalls {
+						if tc.ID != "" {
+							argsMap := make(map[string]any)
+							if tc.Function.Arguments != "" {
+								if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+									argsMap = make(map[string]any)
+								}
+							}
+							contentBlocks = append(contentBlocks, agentctx.ToolCallContent{
+								ID:        tc.ID,
+								Type:      "toolCall",
+								Name:      tc.Function.Name,
+								Arguments: argsMap,
+							})
+						}
+					}
+				}
+				partialMessage.Content = contentBlocks
+				// Emit thinking_delta event for win UI
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
+						Type:         "thinking_delta",
+						ContentIndex: e.Index,
+						Delta:        e.Delta,
+					}))
+				}
+			}
 
 		case llm.LLMToolCallDeltaEvent:
 			toolCallID := ""
@@ -275,8 +672,14 @@ func (a *AgentNew) processLLMResponse(
 					call.Function.Arguments += e.ToolCall.Function.Arguments
 				}
 
-				// Update message content with tool calls
+				// Update message content with all blocks
 				var contentBlocks []agentctx.ContentBlock
+				if thinkingBuilder.Len() > 0 {
+					contentBlocks = append(contentBlocks, agentctx.ThinkingContent{
+						Type:     "thinking",
+						Thinking: thinkingBuilder.String(),
+					})
+				}
 				if textBuilder.Len() > 0 {
 					contentBlocks = append(contentBlocks, agentctx.TextContent{
 						Type: "text",
@@ -337,6 +740,11 @@ func (a *AgentNew) processLLMResponse(
 				a.snapshot.AgentState.TokensUsed = e.Usage.TotalTokens
 				a.snapshot.AgentState.LastLLMContextUpdate = a.snapshot.AgentState.TotalTurns
 
+				// Emit message_end event for win UI
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewMessageEndEvent(*partialMessage))
+				}
+
 				// Execute tool calls if present
 				toolResults := a.executeToolsFromMessage(ctx, partialMessage)
 				return partialMessage, toolResults, nil
@@ -344,6 +752,12 @@ func (a *AgentNew) processLLMResponse(
 
 			if e.Message != nil {
 				msg := convertLLMMessageToAgent(*e.Message)
+
+				// Emit message_end event for win UI
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewMessageEndEvent(msg))
+				}
+
 				// Execute tool calls if present
 				toolResults := a.executeToolsFromMessage(ctx, &msg)
 				return &msg, toolResults, nil
@@ -378,6 +792,21 @@ func (a *AgentNew) executeToolsFromMessage(
 	results := make([]agentctx.AgentMessage, 0, len(toolCalls))
 
 	for _, tc := range toolCalls {
+		// Check for context cancellation before executing each tool
+		// This allows steer/follow-up to interrupt long-running tool executions
+		select {
+		case <-ctx.Done():
+			slog.Info("[AgentNew] Context canceled during tool execution",
+				"tool", tc.Name,
+				"toolCallID", tc.ID,
+				"remaining_tools", len(toolCalls)-len(results),
+			)
+			// Return partial results
+			return results
+		default:
+			// Context is still valid, continue
+		}
+
 		toolName := tc.Name
 		toolCallID := tc.ID
 		arguments := tc.Arguments
@@ -398,6 +827,11 @@ func (a *AgentNew) executeToolsFromMessage(
 			traceevent.Field{Key: "args", Value: arguments},
 		)
 
+		// Emit tool_execution_start event for win mode
+		if a.eventEmitter != nil {
+			a.eventEmitter.Emit(NewToolExecutionStartEvent(toolCallID, toolName, arguments))
+		}
+
 		// Find the tool
 		tool := toolsByName[toolName]
 		if tool == nil {
@@ -413,15 +847,22 @@ func (a *AgentNew) executeToolsFromMessage(
 				"tool", toolName,
 				"availableTools", len(toolsByName),
 			)
-			// Return error result
+			// Return error result (truncated)
 			errorContent := []agentctx.ContentBlock{
 				agentctx.TextContent{
 					Type: "text",
 					Text: fmt.Sprintf("Tool '%s' not found", toolName),
 				},
 			}
-			result := agentctx.NewToolResultMessage(toolCallID, toolName, errorContent, true)
+			truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+			result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
 			results = append(results, result)
+
+			// Emit tool_execution_end event for win UI
+			if a.eventEmitter != nil {
+				a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
+			}
+
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 				traceevent.Field{Key: "tool", Value: toolName},
 				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
@@ -442,15 +883,22 @@ func (a *AgentNew) executeToolsFromMessage(
 				"tool", toolName,
 				"error", err,
 			)
-			// Return error result
+			// Return error result (truncated)
 			errorContent := []agentctx.ContentBlock{
 				agentctx.TextContent{
 					Type: "text",
 					Text: fmt.Sprintf("Tool execution failed: %v", err),
 				},
 			}
-			result := agentctx.NewToolResultMessage(toolCallID, toolName, errorContent, true)
+			truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+			result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
 			results = append(results, result)
+
+			// Emit tool_execution_end event for win UI
+			if a.eventEmitter != nil {
+				a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
+			}
+
 			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 				traceevent.Field{Key: "tool", Value: toolName},
 				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
@@ -461,11 +909,18 @@ func (a *AgentNew) executeToolsFromMessage(
 			continue
 		}
 
-		// Return success result
-		result := agentctx.NewToolResultMessage(toolCallID, toolName, content, false)
+		// Truncate tool output to prevent context window overflow
+		truncatedContent := truncateToolContent(ctx, content, DefaultToolOutputLimits(), toolName)
+		result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, false)
 		results = append(results, result)
 		toolSpan.AddField("duration_ms", time.Since(toolStart).Milliseconds())
 		toolSpan.End()
+
+		// Emit tool_execution_end event for win UI
+		if a.eventEmitter != nil {
+			a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, false))
+		}
+
 		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 			traceevent.Field{Key: "tool", Value: toolName},
 			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
@@ -479,17 +934,12 @@ func (a *AgentNew) executeToolsFromMessage(
 		)
 	}
 
+	// Increment tool call counter for trigger detection
+	// This tracks how many tool calls have happened since the last context management trigger
+	a.snapshot.AgentState.ToolCallsSinceLastTrigger += len(toolCalls)
+	a.snapshot.AgentState.UpdatedAt = time.Now()
+
 	return results
-}
-
-// ContextMgmtTriggerError is returned when context management should be triggered.
-type ContextMgmtTriggerError struct {
-	Urgency string
-	Reason  string
-}
-
-func (e *ContextMgmtTriggerError) Error() string {
-	return fmt.Sprintf("context management triggered: urgency=%s, reason=%s", e.Urgency, e.Reason)
 }
 
 // convertLLMMessageToAgent converts an LLM message to an AgentMessage.
@@ -546,4 +996,406 @@ func insertBeforeLastUserMessage(messages []llm.LLMMessage, newMsg llm.LLMMessag
 	result = append(result, newMsg)
 	result = append(result, messages[lastUserIndex:]...)
 	return result
+}
+
+// normalizeMessageSequence ensures the message sequence conforms to OpenAI API requirements.
+// OpenAI API format: system -> user -> assistant -> tool × n -> user -> assistant -> tool × n -> ...
+// Multiple tool messages CAN follow one assistant message (parallel tool calls).
+//
+// Strategy: Work backwards from the end, finding the longest valid suffix.
+// Then work forwards through that suffix to validate the sequence.
+func normalizeMessageSequence(ctx context.Context, messages []llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	originalCount := len(messages)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_start",
+		traceevent.Field{Key: "original_count", Value: originalCount},
+	)
+
+	// Step 1: Find the longest valid suffix (working backwards)
+	// Valid pattern (from end): [tool × n] -> user -> assistant -> [tool × n] -> user -> ... -> [system]
+	suffix := findValidSuffix(ctx, messages)
+	if len(suffix) == 0 {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_empty_suffix",
+			traceevent.Field{Key: "original_count", Value: originalCount},
+		)
+		return suffix
+	}
+
+	// Step 2: Validate the suffix sequence and filter out invalid messages
+	result := validateSequence(ctx, suffix)
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_complete",
+		traceevent.Field{Key: "original_count", Value: originalCount},
+		traceevent.Field{Key: "filtered_count", Value: len(result)},
+		traceevent.Field{Key: "dropped_count", Value: originalCount - len(result)},
+	)
+
+	return result
+}
+
+// findValidSuffix finds the longest valid suffix working backwards.
+// The message pattern from the front is: ... → user → assistant → tool × n → user → assistant → ...
+// When working backwards, we see: ... → tool × n → assistant → user → tool × n → assistant → ...
+func findValidSuffix(ctx context.Context, messages []llm.LLMMessage) []llm.LLMMessage {
+
+	type state int
+	const (
+		stateStart state = iota
+		stateAfterUser      // Just saw a user message (expecting assistant or tools from previous round)
+		stateAfterAssistant // Just saw an assistant message (expecting tools)
+		stateInTools        // In a sequence of tool messages
+	)
+
+	currentState := stateStart
+	suffix := make([]llm.LLMMessage, 0, len(messages))
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+
+		// Skip empty messages
+		// BUT: assistant messages with tool_calls should be preserved
+		// AND: tool messages with empty content should be preserved
+		isEmpty := msg.Content == ""
+		hasToolCalls := len(msg.ToolCalls) > 0
+		isTool := msg.Role == "tool" || msg.Role == "toolResult"
+
+		if isEmpty && !hasToolCalls && !isTool {
+			continue
+		}
+
+		accepted := false
+
+		switch currentState {
+		case stateStart:
+			// At the end, we can have user, assistant, or tool
+			if msg.Role == "user" {
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateAfterUser
+			} else if msg.Role == "assistant" {
+				// CRITICAL: If the first message is an assistant with tool_calls,
+				// we MUST include at least one tool result after it.
+				// If we can't find a tool result, this is likely a bug and we should
+				// reject this assistant message to prevent sending an invalid sequence.
+				hasToolCalls := len(msg.ToolCalls) > 0
+				if hasToolCalls {
+					// Check if there's a tool result after this assistant message
+					hasToolResult := false
+					for j := i + 1; j < len(messages); j++ {
+						if messages[j].Role == "tool" {
+							hasToolResult = true
+							break
+						}
+					}
+					if !hasToolResult {
+						// Assistant with tool_calls but no tool result - this is invalid!
+						// Skip this message and continue looking for valid messages
+						toolCallID := "unknown"
+						if len(msg.ToolCalls) > 0 {
+							toolCallID = msg.ToolCalls[0].ID
+						}
+						slog.Warn("[AgentNew] Skipping assistant message with tool_calls but no tool result",
+							"tool_call_id", toolCallID,
+							"index", i,
+							"total_messages", len(messages),
+						)
+						traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_skip_assistant_no_result",
+							traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+							traceevent.Field{Key: "index", Value: i},
+							traceevent.Field{Key: "total_messages", Value: len(messages)},
+						)
+						continue
+					}
+				}
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateAfterAssistant
+			} else if msg.Role == "tool" {
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateInTools
+			}
+
+		case stateAfterUser:
+			// After user, expect assistant (from this round) or tool (from previous round)
+			// When going backward, we can also encounter a user message from a previous round
+			if msg.Role == "assistant" {
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateAfterAssistant
+			} else if msg.Role == "tool" {
+				// Tools from previous round
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateInTools
+			} else if msg.Role == "user" {
+				// User from previous round (when going backward through multi-round conversation)
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				// Stay in stateAfterUser to continue looking for assistant/tools from earlier rounds
+			} else {
+				// Unexpected role (e.g., system, etc.) - skip and continue
+				// This allows us to skip over unexpected messages rather than breaking
+				continue
+			}
+
+		case stateAfterAssistant:
+			// After assistant, expect tools or user (for multi-round conversations)
+			if msg.Role == "tool" {
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateInTools
+			} else if msg.Role == "user" {
+				// User message from previous round (multi-round conversation without tools)
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateAfterUser
+			} else if msg.Role == "assistant" {
+				// Consecutive assistant messages - this is invalid but may happen due to bugs
+				// Skip this message and continue looking for a valid pattern
+				// This prevents losing all previous messages when we encounter invalid consecutive assistants
+				toolCallID := "unknown"
+				if len(msg.ToolCalls) > 0 {
+					toolCallID = msg.ToolCalls[0].ID
+				}
+				slog.Warn("[AgentNew] Skipping consecutive assistant message during normalization",
+					"tool_call_id", toolCallID,
+					"index", i,
+					"total_messages", len(messages),
+				)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_skip_consecutive_assistant",
+					traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+					traceevent.Field{Key: "index", Value: i},
+					traceevent.Field{Key: "remaining_messages", Value: len(suffix)},
+				)
+				continue
+			}
+
+		case stateInTools:
+			// In tool sequence, expect more tools or the assistant that created them
+			if msg.Role == "tool" {
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				// Stay in stateInTools
+			} else if msg.Role == "assistant" {
+				// We expect this assistant to have tool_calls (it created the tools)
+				// If it doesn't have tool_calls, this might be an invalid sequence
+				hasToolCalls := len(msg.ToolCalls) > 0
+				if !hasToolCalls {
+					// Assistant without tool_calls in a tool sequence - this is suspicious
+					// Skip this message and continue looking
+					slog.Warn("[AgentNew] Skipping assistant message without tool_calls in tool sequence",
+						"index", i,
+						"total_messages", len(messages),
+					)
+					traceevent.Log(ctx, traceevent.CategoryEvent, "message_normalize_skip_assistant_no_calls",
+						traceevent.Field{Key: "index", Value: i},
+						traceevent.Field{Key: "total_messages", Value: len(messages)},
+					)
+					continue
+				}
+				suffix = append([]llm.LLMMessage{msg}, suffix...)
+				accepted = true
+				currentState = stateAfterUser
+			}
+		}
+
+		// If we didn't accept this message, stop
+		if !accepted {
+			break
+		}
+	}
+
+	return suffix
+}
+
+// validateSequence validates and filters a message sequence.
+func validateSequence(ctx context.Context, messages []llm.LLMMessage) []llm.LLMMessage {
+
+	type state int
+	const (
+		stateStart state = iota  // Can start with system, user, or assistant
+		stateExpectAssistant      // After system or user
+		stateExpectToolOrUser     // After assistant (tool × n or user)
+	)
+
+	currentState := stateStart
+	valid := make([]llm.LLMMessage, 0, len(messages))
+
+	for _, msg := range messages {
+		accepted := false
+
+		switch currentState {
+		case stateStart:
+			// Can start with system, user, or assistant
+			// Assistant (with or without tool_calls) is valid as start for multi-round conversations
+			if msg.Role == "system" || msg.Role == "user" {
+				valid = append(valid, msg)
+				accepted = true
+				currentState = stateExpectAssistant
+			} else if msg.Role == "assistant" {
+				// Assistant messages are valid as start (middle of multi-round conversation)
+				valid = append(valid, msg)
+				accepted = true
+				currentState = stateExpectToolOrUser
+			}
+
+		case stateExpectAssistant:
+			if msg.Role == "assistant" {
+				valid = append(valid, msg)
+				accepted = true
+				currentState = stateExpectToolOrUser
+			}
+
+		case stateExpectToolOrUser:
+			// After assistant, expect tools or user
+			// Assistant with tool_calls is also valid (new round starting after tool responses)
+			// Regular assistant (without tool_calls) is also valid (end of conversation)
+			if msg.Role == "tool" || msg.Role == "user" {
+				valid = append(valid, msg)
+				accepted = true
+				if msg.Role == "user" {
+					currentState = stateExpectAssistant
+				}
+				// If tool, stay in stateExpectToolOrUser
+			} else if msg.Role == "assistant" {
+				// Accept all assistant messages (with or without tool_calls)
+				valid = append(valid, msg)
+				accepted = true
+				// Stay in stateExpectToolOrUser (expecting more tools or user)
+			}
+		}
+
+		if !accepted {
+			break
+		}
+	}
+
+	return valid
+}
+
+// appendToLastUserMessage appends runtime state and LLM context to the last user message.
+// This avoids creating consecutive user messages which would break the API format.
+func appendToLastUserMessage(messages []llm.LLMMessage, runtimeState, llmContext string, ctx context.Context) []llm.LLMMessage {
+	// Find the last user message
+	lastUserIndex := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIndex = i
+			break
+		}
+	}
+
+	// If no user message found, create one with the content
+	if lastUserIndex == -1 {
+		if runtimeState == "" && llmContext == "" {
+			return messages
+		}
+		content := runtimeState
+		if llmContext != "" {
+			if content != "" {
+				content += "\n\n" + llmContext
+			} else {
+				content = llmContext
+			}
+		}
+		return append(messages, llm.LLMMessage{
+			Role:    "user",
+			Content: content,
+		})
+	}
+
+	// Append to the last user message
+	lastMsg := messages[lastUserIndex]
+	content := lastMsg.Content
+
+	if runtimeState != "" {
+		if content != "" {
+			content += "\n\n" + runtimeState
+		} else {
+			content = runtimeState
+		}
+	}
+	if llmContext != "" {
+		if content != "" {
+			content += "\n\n" + llmContext
+		} else {
+			content = llmContext
+		}
+	}
+
+	messages[lastUserIndex] = llm.LLMMessage{
+		Role:    "user",
+		Content: content,
+	}
+
+	return messages
+}
+
+// checkDuplicateToolSignatures checks if the same tool call signature (name + parameters)
+// is repeated too many times consecutively, which indicates an infinite loop.
+func (a *AgentNew) checkDuplicateToolSignatures(
+	assistantMsg *agentctx.AgentMessage,
+	signatureCount map[string]int,
+	maxDuplicates int,
+) error {
+	toolCalls := assistantMsg.ExtractToolCalls()
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	// Build signature for each tool call
+	// Signature is: toolName + sorted args hash
+	for _, tc := range toolCalls {
+		// Create signature from tool name and parameters
+		signature := buildToolCallSignature(tc)
+
+		// Increment consecutive count for this signature
+		signatureCount[signature]++
+
+		slog.Info("[AgentNew] Tool call signature tracked",
+			"signature", signature,
+			"tool", tc.Name,
+			"count", signatureCount[signature],
+			"max", maxDuplicates,
+		)
+
+		// Check if we've exceeded the max duplicates
+		if signatureCount[signature] >= maxDuplicates {
+			return fmt.Errorf("agent appears to be stuck in a loop: tool call '%s' repeated %d times consecutively",
+				tc.Name, maxDuplicates)
+		}
+	}
+
+	// Reset counts for signatures that weren't in this batch
+	// This ensures we only count CONSECUTIVE duplicates
+	currentSignatures := make(map[string]bool)
+	for _, tc := range toolCalls {
+		signature := buildToolCallSignature(tc)
+		currentSignatures[signature] = true
+	}
+
+	for sig := range signatureCount {
+		if !currentSignatures[sig] {
+			delete(signatureCount, sig)
+		}
+	}
+
+	return nil
+}
+
+// buildToolCallSignature creates a unique signature for a tool call.
+// The signature is based on tool name and normalized parameters.
+func buildToolCallSignature(tc agentctx.ToolCallContent) string {
+	// Convert arguments to a stable string representation
+	argsJSON := "{}"
+	if tc.Arguments != nil {
+		if bytes, err := json.Marshal(tc.Arguments); err == nil {
+			argsJSON = string(bytes)
+		}
+	}
+	return tc.Name + ":" + argsJSON
 }
