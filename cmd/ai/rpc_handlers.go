@@ -27,7 +27,19 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader, output io.Writer) error {
+// RPCOption configures runRPC behavior.
+type RPCOption struct {
+	SystemPrompt string
+	Tools        []string
+	KeepTools    bool
+	CMPrompt     string
+}
+
+func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader, output io.Writer, opts ...RPCOption) error {
+	var opt RPCOption
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -215,6 +227,10 @@ func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader,
 		registry,
 		convertSkillsToPtrs(skillResult.Skills),
 		ws,
+		opt.SystemPrompt,
+		opt.CMPrompt,
+		opt.Tools,
+		opt.KeepTools,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create agent server: %w", err)
@@ -231,6 +247,7 @@ func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader,
 	server := rpc.NewServer()
 	server.SetOutput(output)
 	agentServer.SetEventEmitter(server)
+	agentServer.SetContext(server.Context())
 
 	// Set up handlers using AgentNew
 	SetupAgentNewHandlers(server, agentServer)
@@ -255,6 +272,7 @@ type AgentNewServer struct {
 	agent      *agent.AgentNew
 	sessionDir string
 	sessionID  string
+	ctx        context.Context // base context for operations (set from RPC server)
 
 	// Configuration
 	model           *llm.Model
@@ -264,6 +282,12 @@ type AgentNewServer struct {
 	traceOutputPath string
 	sessionMgr      *session.SessionManager
 	currentSession  *session.Session
+
+	// CLI options
+	systemPrompt string
+	cmPrompt     string
+	toolList     []string
+	keepTools    bool
 
 	// Event emission
 	eventEmitter agent.EventEmitter
@@ -305,6 +329,10 @@ func NewAgentNewServer(
 	registry *tools.Registry,
 	skills []*skill.Skill,
 	workspace *tools.Workspace,
+	systemPrompt string,
+	cmPrompt string,
+	toolList []string,
+	keepTools bool,
 ) (*AgentNewServer, error) {
 	// Create event emitter that wraps server.EmitEvent
 	eventEmitter := &rpcEventEmitterAdapter{}
@@ -324,6 +352,7 @@ func NewAgentNewServer(
 		agent:                 ag,
 		sessionDir:            sessionDir,
 		sessionID:             sessionID,
+		ctx:                   context.Background(), // will be updated via SetContext
 		model:                 model,
 		apiKey:                apiKey,
 		configPath:            configPath,
@@ -335,6 +364,10 @@ func NewAgentNewServer(
 		registry:              registry,
 		skills:                skills,
 		workspace:             workspace,
+		systemPrompt:          systemPrompt,
+		cmPrompt:              cmPrompt,
+		toolList:              toolList,
+		keepTools:             keepTools,
 		steeringMode:          "all",
 		followUpMode:          "all",
 		thinkingLevel:         "medium",
@@ -349,6 +382,24 @@ func (s *AgentNewServer) SetEventEmitter(emitter interface{}) {
 	if adapter, ok := s.eventEmitter.(*rpcEventEmitterAdapter); ok {
 		adapter.server = emitter
 	}
+}
+
+// SetContext sets the base context for operations, replacing the default context.Background().
+// This should be called after construction to enable proper tracing context propagation.
+func (s *AgentNewServer) SetContext(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ctx = ctx
+}
+
+// context returns the base context for operations.
+func (s *AgentNewServer) context() context.Context {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
 }
 
 // GetSnapshot returns the current snapshot from the agent.
@@ -494,9 +545,9 @@ func (s *AgentNewServer) emitEvent(event agent.AgentEvent) {
 		traceFields = append(traceFields, traceevent.Field{Key: "error_stack", Value: event.ErrorStack})
 	}
 
-	traceevent.Log(context.Background(), traceevent.CategoryEvent, event.Type, traceFields...)
+	traceevent.Log(s.context(), traceevent.CategoryEvent, event.Type, traceFields...)
 	if event.Type == agent.EventError {
-		traceevent.Log(context.Background(), traceevent.CategoryEvent, "run_loop_error", traceFields...)
+		traceevent.Log(s.context(), traceevent.CategoryEvent, "run_loop_error", traceFields...)
 	}
 
 	switch update := event.AssistantMessageEvent.(type) {
@@ -510,32 +561,32 @@ func (s *AgentNewServer) emitEvent(event agent.AgentEvent) {
 }
 
 func (s *AgentNewServer) traceAssistantMessageUpdate(update agent.AssistantMessageEvent) {
-	traceevent.Log(context.Background(), traceevent.CategoryEvent, "message_update",
+	traceevent.Log(s.context(), traceevent.CategoryEvent, "message_update",
 		traceevent.Field{Key: "update_type", Value: update.Type},
 		traceevent.Field{Key: "content_index", Value: update.ContentIndex},
 	)
 
 	switch update.Type {
 	case "text_start":
-		traceevent.Log(context.Background(), traceevent.CategoryLLM, "assistant_text",
+		traceevent.Log(s.context(), traceevent.CategoryLLM, "assistant_text",
 			traceevent.Field{Key: "state", Value: "start"},
 		)
 	case "text_end":
-		traceevent.Log(context.Background(), traceevent.CategoryLLM, "assistant_text",
+		traceevent.Log(s.context(), traceevent.CategoryLLM, "assistant_text",
 			traceevent.Field{Key: "state", Value: "end"},
 		)
 	case "text_delta":
-		traceevent.Log(context.Background(), traceevent.CategoryLLM, "text_delta",
+		traceevent.Log(s.context(), traceevent.CategoryLLM, "text_delta",
 			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
 			traceevent.Field{Key: "delta", Value: update.Delta},
 		)
 	case "thinking_delta":
-		traceevent.Log(context.Background(), traceevent.CategoryLLM, "thinking_delta",
+		traceevent.Log(s.context(), traceevent.CategoryLLM, "thinking_delta",
 			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
 			traceevent.Field{Key: "delta", Value: update.Delta},
 		)
 	case "toolcall_delta":
-		traceevent.Log(context.Background(), traceevent.CategoryLLM, "tool_call_delta",
+		traceevent.Log(s.context(), traceevent.CategoryLLM, "tool_call_delta",
 			traceevent.Field{Key: "content_index", Value: update.ContentIndex},
 		)
 	}
@@ -1076,7 +1127,7 @@ func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.Model
 		s.persistConfigLocked()
 	}
 
-	if err := s.reloadAgentLocked(context.Background()); err != nil {
+	if err := s.reloadAgentLocked(s.context()); err != nil {
 		return nil, err
 	}
 	s.applySessionMessagesToSnapshotLocked()
@@ -1108,53 +1159,6 @@ func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, err
 		return nil, fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
 	return s.applyModelSpecLocked(spec)
-}
-
-func (s *AgentNewServer) CycleModel() (*rpc.CycleModelResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if err := s.ensureConfigLocked(); err != nil {
-		return nil, err
-	}
-
-	specs, modelsPath, err := loadModelSpecs(s.cfg)
-	if err != nil {
-		return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
-	}
-	filtered := filterModelSpecsWithKeys(specs)
-	if len(filtered) <= 1 {
-		return nil, nil
-	}
-
-	curProvider := ""
-	curID := ""
-	if s.model != nil {
-		curProvider = s.model.Provider
-		curID = s.model.ID
-	}
-
-	index := -1
-	for i, spec := range filtered {
-		if strings.EqualFold(spec.Provider, curProvider) && spec.ID == curID {
-			index = i
-			break
-		}
-	}
-	next := filtered[0]
-	if index >= 0 {
-		next = filtered[(index+1)%len(filtered)]
-	}
-
-	info, err := s.applyModelSpecLocked(next)
-	if err != nil {
-		return nil, err
-	}
-	return &rpc.CycleModelResult{
-		Model:         *info,
-		ThinkingLevel: s.thinkingLevel,
-		IsScoped:      false,
-	}, nil
 }
 
 func (s *AgentNewServer) ClearSession() error {
@@ -1211,7 +1215,7 @@ func (s *AgentNewServer) NewSession(name, title string) (string, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(context.Background()); err != nil {
+	if err := s.reloadAgentLocked(s.context()); err != nil {
 		return "", err
 	}
 	s.applySessionMessagesToSnapshotLocked()
@@ -1302,7 +1306,7 @@ func (s *AgentNewServer) SwitchSession(id string) error {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(context.Background()); err != nil {
+	if err := s.reloadAgentLocked(s.context()); err != nil {
 		return err
 	}
 	s.applySessionMessagesToSnapshotLocked()
@@ -1349,7 +1353,7 @@ func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	)
 
 	// Perform compaction using the new architecture
-	if err := s.agent.Compact(context.Background()); err != nil {
+	if err := s.agent.Compact(s.context()); err != nil {
 		return nil, fmt.Errorf("compact failed: %w", err)
 	}
 
@@ -1448,22 +1452,6 @@ func (s *AgentNewServer) SetThinkingLevel(level string) (string, error) {
 	return level, nil
 }
 
-func (s *AgentNewServer) CycleThinkingLevel() (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	cycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
-	next := cycle[0]
-	for i, level := range cycle {
-		if level == s.thinkingLevel {
-			next = cycle[(i+1)%len(cycle)]
-			break
-		}
-	}
-	s.thinkingLevel = next
-	return next, nil
-}
-
 func (s *AgentNewServer) SetSteeringMode(mode string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1525,6 +1513,8 @@ func (s *AgentNewServer) GetForkMessages() ([]rpc.ForkMessage, error) {
 	return result, nil
 }
 
+// GetTree returns the message tree for the /rewind command.
+// It is invoked internally by /rewind when the user needs to select a branch point.
 func (s *AgentNewServer) GetTree() ([]rpc.TreeEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1611,7 +1601,7 @@ func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(context.Background()); err != nil {
+	if err := s.reloadAgentLocked(s.context()); err != nil {
 		return nil, err
 	}
 	s.applySessionMessagesToSnapshotLocked()
@@ -1755,13 +1745,6 @@ func (s *AgentNewServer) SetTraceEvents(events []string) ([]string, error) {
 
 func (s *AgentNewServer) GetTraceEvents() ([]string, error) {
 	return traceevent.GetEnabledEvents(), nil
-}
-
-func (s *AgentNewServer) GetWorkflowStatus() (*rpc.WorkflowState, error) {
-	return &rpc.WorkflowState{
-		Phase:      "not_started",
-		LastUpdate: time.Now().UTC().Format(time.RFC3339),
-	}, nil
 }
 
 // Close closes the agent and releases resources.
@@ -1947,12 +1930,6 @@ func (r *rpcCommandRegistry) registerBuiltinCommands() {
 		})
 	})
 
-	r.Register(rpc.CommandCycleModel, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetCycleModelHandler(func() (*rpc.CycleModelResult, error) {
-			return registrar.agent.CycleModel()
-		})
-	})
-
 	r.Register(rpc.CommandSetAutoCompaction, func(registrar *rpcHandlerRegistrar) {
 		registrar.server.SetSetAutoCompactionHandler(func(enabled bool) error {
 			return registrar.agent.SetAutoCompaction(enabled)
@@ -1980,12 +1957,6 @@ func (r *rpcCommandRegistry) registerBuiltinCommands() {
 	r.Register(rpc.CommandSetThinkingLevel, func(registrar *rpcHandlerRegistrar) {
 		registrar.server.SetSetThinkingLevelHandler(func(level string) (string, error) {
 			return registrar.agent.SetThinkingLevel(level)
-		})
-	})
-
-	r.Register(rpc.CommandCycleThinkingLevel, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetCycleThinkingLevelHandler(func() (string, error) {
-			return registrar.agent.CycleThinkingLevel()
 		})
 	})
 
@@ -2079,11 +2050,6 @@ func (r *rpcCommandRegistry) registerBuiltinCommands() {
 		})
 	})
 
-	r.Register(rpc.CommandGetWorkflowStatus, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetWorkflowStatusHandler(func() (*rpc.WorkflowState, error) {
-			return registrar.agent.GetWorkflowStatus()
-		})
-	})
 }
 
 // SetupAgentNewHandlers configures RPC server handlers to use AgentNew.
@@ -2164,6 +2130,10 @@ func LoadOrNewAgentSession(
 		registry,
 		skills,
 		workspace,
+		"",    // systemPrompt: not available in this code path
+		"",    // cmPrompt: not available in this code path
+		nil,   // toolList: not available in this code path
+		false, // keepTools: not available in this code path
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create agent server: %w", err)

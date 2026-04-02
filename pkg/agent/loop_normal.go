@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -320,7 +321,7 @@ func (a *AgentNew) callLLMWithRetry(
 				delay = jitterDelay(delay)
 
 				// Emit retry event
-				a.emitRetryEvent(LLMRetryInfo{
+				a.emitRetryEvent(ctx, LLMRetryInfo{
 					Attempt:    attempt,
 					MaxRetries: maxRetries,
 					Delay:      delay,
@@ -492,11 +493,11 @@ func (a *AgentNew) callLLMWithRetry(
 }
 
 // emitRetryEvent emits an LLM retry event through the event emitter (if available).
-func (a *AgentNew) emitRetryEvent(info LLMRetryInfo) {
+func (a *AgentNew) emitRetryEvent(ctx context.Context, info LLMRetryInfo) {
 	if a.eventEmitter != nil {
 		a.eventEmitter.Emit(NewLLMRetryEvent(info))
 	}
-	traceevent.Log(context.Background(), traceevent.CategoryLLM, "llm_retry",
+	traceevent.Log(ctx, traceevent.CategoryLLM, "llm_retry",
 		traceevent.Field{Key: "attempt", Value: info.Attempt},
 		traceevent.Field{Key: "max_retries", Value: info.MaxRetries},
 		traceevent.Field{Key: "delay", Value: info.Delay.String()},
@@ -774,6 +775,7 @@ func (a *AgentNew) processLLMResponse(
 }
 
 // executeToolsFromMessage executes tool calls from an assistant message.
+// When multiple tool calls are present, they are executed concurrently.
 func (a *AgentNew) executeToolsFromMessage(
 	ctx context.Context,
 	assistantMsg *agentctx.AgentMessage,
@@ -789,153 +791,353 @@ func (a *AgentNew) executeToolsFromMessage(
 		toolsByName[tool.Name()] = tool
 	}
 
-	results := make([]agentctx.AgentMessage, 0, len(toolCalls))
+	// If only one tool call, execute sequentially (avoids goroutine overhead)
+	if len(toolCalls) == 1 {
+		return a.executeToolSingle(ctx, toolsByName, toolCalls[0])
+	}
 
-	for _, tc := range toolCalls {
-		// Check for context cancellation before executing each tool
-		// This allows steer/follow-up to interrupt long-running tool executions
-		select {
-		case <-ctx.Done():
-			slog.Info("[AgentNew] Context canceled during tool execution",
+	// Execute multiple tool calls concurrently
+	return a.executeToolsConcurrent(ctx, toolsByName, toolCalls)
+}
+
+// toolExecutionOutcome holds the result of a single tool execution.
+type toolExecutionOutcome struct {
+	index   int
+	toolMsg agentctx.AgentMessage
+}
+
+// executeToolSingle executes a single tool call sequentially.
+func (a *AgentNew) executeToolSingle(
+	ctx context.Context,
+	toolsByName map[string]agentctx.Tool,
+	tc agentctx.ToolCallContent,
+) (msgResult []agentctx.AgentMessage) {
+	// Recover from panics in tool execution to prevent crashing the agent.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("[AgentNew] Tool execution panicked (single)",
 				"tool", tc.Name,
-				"toolCallID", tc.ID,
-				"remaining_tools", len(toolCalls)-len(results),
+				"tool_call_id", tc.ID,
+				"panic", r,
 			)
-			// Return partial results
-			return results
-		default:
-			// Context is still valid, continue
+			errorContent := []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Tool '%s' panicked: %v", tc.Name, r)},
+			}
+			msgResult = []agentctx.AgentMessage{
+				{
+					Role:       "tool",
+					Content:    errorContent,
+					ToolCallID: tc.ID,
+					Timestamp:  time.Now().Unix(),
+				},
+			}
 		}
+	}()
 
-		toolName := tc.Name
-		toolCallID := tc.ID
-		arguments := tc.Arguments
-		toolStart := time.Now()
-		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
-			traceevent.Field{Key: "tool", Value: toolName},
-			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
-		)
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
 
-		slog.Info("[AgentNew] Executing tool",
-			"tool", toolName,
-			"toolCallID", toolCallID,
-			"args", arguments,
-		)
-		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
-			traceevent.Field{Key: "tool", Value: toolName},
+	toolName := tc.Name
+	toolCallID := tc.ID
+	arguments := tc.Arguments
+	toolStart := time.Now()
+	toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+		traceevent.Field{Key: "tool", Value: toolName},
+		traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+	)
+
+	slog.Info("[AgentNew] Executing tool",
+		"tool", toolName,
+		"toolCallID", toolCallID,
+		"args", arguments,
+	)
+	traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+		traceevent.Field{Key: "tool", Value: toolName},
+		traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+		traceevent.Field{Key: "args", Value: arguments},
+	)
+
+	// Emit tool_execution_start event for win mode
+	if a.eventEmitter != nil {
+		a.eventEmitter.Emit(NewToolExecutionStartEvent(toolCallID, toolName, arguments))
+	}
+
+	// Find the tool
+	tool := toolsByName[toolName]
+	if tool == nil {
+		toolSpan.AddField("error", true)
+		toolSpan.AddField("error_message", "tool not found")
+		toolSpan.End()
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
+			traceevent.Field{Key: "normalized_name", Value: toolName},
 			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
 			traceevent.Field{Key: "args", Value: arguments},
 		)
-
-		// Emit tool_execution_start event for win mode
+		slog.Warn("[AgentNew] Tool not found",
+			"tool", toolName,
+			"availableTools", len(toolsByName),
+		)
+		errorContent := []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Tool '%s' not found", toolName),
+			},
+		}
+		truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+		result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
 		if a.eventEmitter != nil {
-			a.eventEmitter.Emit(NewToolExecutionStartEvent(toolCallID, toolName, arguments))
+			a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
 		}
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: toolName},
+			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+			traceevent.Field{Key: "error", Value: true},
+			traceevent.Field{Key: "error_message", Value: "tool not found"},
+		)
+		a.snapshot.AgentState.ToolCallsSinceLastTrigger++
+		a.snapshot.AgentState.UpdatedAt = time.Now()
+		return []agentctx.AgentMessage{result}
+	}
 
-		// Find the tool
-		tool := toolsByName[toolName]
-		if tool == nil {
-			toolSpan.AddField("error", true)
-			toolSpan.AddField("error_message", "tool not found")
-			toolSpan.End()
-			traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
-				traceevent.Field{Key: "normalized_name", Value: toolName},
-				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
-				traceevent.Field{Key: "args", Value: arguments},
-			)
-			slog.Warn("[AgentNew] Tool not found",
-				"tool", toolName,
-				"availableTools", len(toolsByName),
-			)
-			// Return error result (truncated)
-			errorContent := []agentctx.ContentBlock{
-				agentctx.TextContent{
-					Type: "text",
-					Text: fmt.Sprintf("Tool '%s' not found", toolName),
-				},
-			}
-			truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
-			result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
-			results = append(results, result)
-
-			// Emit tool_execution_end event for win UI
-			if a.eventEmitter != nil {
-				a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
-			}
-
-			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
-				traceevent.Field{Key: "tool", Value: toolName},
-				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
-				traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
-				traceevent.Field{Key: "error", Value: true},
-				traceevent.Field{Key: "error_message", Value: "tool not found"},
-			)
-			continue
+	// Execute the tool
+	content, err := tool.Execute(ctx, arguments)
+	var result agentctx.AgentMessage
+	if err != nil {
+		toolSpan.AddField("error", true)
+		toolSpan.AddField("error_message", err.Error())
+		toolSpan.End()
+		slog.Error("[AgentNew] Tool execution failed",
+			"tool", toolName,
+			"error", err,
+		)
+		errorContent := []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Tool execution failed: %v", err),
+			},
 		}
-
-		// Execute the tool
-		content, err := tool.Execute(ctx, arguments)
-		if err != nil {
-			toolSpan.AddField("error", true)
-			toolSpan.AddField("error_message", err.Error())
-			toolSpan.End()
-			slog.Error("[AgentNew] Tool execution failed",
-				"tool", toolName,
-				"error", err,
-			)
-			// Return error result (truncated)
-			errorContent := []agentctx.ContentBlock{
-				agentctx.TextContent{
-					Type: "text",
-					Text: fmt.Sprintf("Tool execution failed: %v", err),
-				},
-			}
-			truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
-			result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
-			results = append(results, result)
-
-			// Emit tool_execution_end event for win UI
-			if a.eventEmitter != nil {
-				a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
-			}
-
-			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
-				traceevent.Field{Key: "tool", Value: toolName},
-				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
-				traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
-				traceevent.Field{Key: "error", Value: true},
-				traceevent.Field{Key: "error_message", Value: err.Error()},
-			)
-			continue
+		truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+		result = agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
+		if a.eventEmitter != nil {
+			a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
 		}
-
-		// Truncate tool output to prevent context window overflow
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: toolName},
+			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+			traceevent.Field{Key: "error", Value: true},
+			traceevent.Field{Key: "error_message", Value: err.Error()},
+		)
+	} else {
 		truncatedContent := truncateToolContent(ctx, content, DefaultToolOutputLimits(), toolName)
-		result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, false)
-		results = append(results, result)
+		result = agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, false)
 		toolSpan.AddField("duration_ms", time.Since(toolStart).Milliseconds())
 		toolSpan.End()
-
-		// Emit tool_execution_end event for win UI
 		if a.eventEmitter != nil {
 			a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, false))
 		}
-
 		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 			traceevent.Field{Key: "tool", Value: toolName},
 			traceevent.Field{Key: "tool_call_id", Value: toolCallID},
 			traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
 			traceevent.Field{Key: "error", Value: false},
 		)
-
 		slog.Info("[AgentNew] Tool execution completed",
 			"tool", toolName,
 			"toolCallID", toolCallID,
 		)
 	}
 
+	a.snapshot.AgentState.ToolCallsSinceLastTrigger++
+	a.snapshot.AgentState.UpdatedAt = time.Now()
+	return []agentctx.AgentMessage{result}
+}
+
+// executeToolsConcurrent executes multiple tool calls concurrently using fan-out/fan-in pattern.
+func (a *AgentNew) executeToolsConcurrent(
+	ctx context.Context,
+	toolsByName map[string]agentctx.Tool,
+	toolCalls []agentctx.ToolCallContent,
+) []agentctx.AgentMessage {
+	type indexedResult struct {
+		index    int
+		toolMsg  agentctx.AgentMessage
+	}
+
+	outcomes := make(chan indexedResult, len(toolCalls))
+	var wg sync.WaitGroup
+
+	for i, tc := range toolCalls {
+		// Check for context cancellation before launching each goroutine
+		select {
+		case <-ctx.Done():
+			slog.Info("[AgentNew] Context canceled, skipping remaining tool executions",
+				"tool", tc.Name,
+				"index", i,
+				"remaining", len(toolCalls)-i,
+			)
+			// Drain: send empty results for remaining tools
+			go func(idx int) {
+				outcomes <- indexedResult{index: idx}
+			}(i)
+			continue
+		default:
+		}
+
+		wg.Add(1)
+		go func(idx int, tc agentctx.ToolCallContent) {
+			defer wg.Done()
+			// Recover from panics in tool execution to prevent crashing the agent.
+			// If a tool panics, we return an error result for that tool call,
+			// preserving the correct index so results are ordered correctly.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("[AgentNew] Tool execution panicked",
+						"tool", tc.Name,
+						"tool_call_id", tc.ID,
+						"panic", r,
+					)
+					errorContent := []agentctx.ContentBlock{
+						agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Tool '%s' panicked: %v", tc.Name, r)},
+					}
+					outcomes <- indexedResult{
+						index: idx,
+						toolMsg: agentctx.AgentMessage{
+							Role:       "tool",
+							Content:    errorContent,
+							ToolCallID: tc.ID,
+							Timestamp:  time.Now().Unix(),
+						},
+					}
+				}
+			}()
+
+			toolName := tc.Name
+			toolCallID := tc.ID
+			arguments := tc.Arguments
+			toolStart := time.Now()
+
+			toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+				traceevent.Field{Key: "tool", Value: toolName},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+			)
+
+			slog.Info("[AgentNew] Executing tool (concurrent)",
+				"tool", toolName,
+				"toolCallID", toolCallID,
+				"index", idx,
+			)
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+				traceevent.Field{Key: "tool", Value: toolName},
+				traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				traceevent.Field{Key: "args", Value: arguments},
+			)
+
+			if a.eventEmitter != nil {
+				a.eventEmitter.Emit(NewToolExecutionStartEvent(toolCallID, toolName, arguments))
+			}
+
+			// Find the tool
+			tool := toolsByName[toolName]
+			if tool == nil {
+				toolSpan.AddField("error", true)
+				toolSpan.AddField("error_message", "tool not found")
+				toolSpan.End()
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_call_unresolved",
+					traceevent.Field{Key: "normalized_name", Value: toolName},
+					traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+				)
+				errorContent := []agentctx.ContentBlock{
+					agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Tool '%s' not found", toolName)},
+				}
+				truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+				result := agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
+				}
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+					traceevent.Field{Key: "tool", Value: toolName},
+					traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+					traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+					traceevent.Field{Key: "error", Value: true},
+					traceevent.Field{Key: "error_message", Value: "tool not found"},
+				)
+				outcomes <- indexedResult{index: idx, toolMsg: result}
+				return
+			}
+
+			// Execute the tool
+			content, err := tool.Execute(ctx, arguments)
+			var result agentctx.AgentMessage
+			if err != nil {
+				toolSpan.AddField("error", true)
+				toolSpan.AddField("error_message", err.Error())
+				toolSpan.End()
+				slog.Error("[AgentNew] Tool execution failed",
+					"tool", toolName,
+					"error", err,
+				)
+				errorContent := []agentctx.ContentBlock{
+					agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Tool execution failed: %v", err)},
+				}
+				truncatedContent := truncateToolContent(ctx, errorContent, DefaultToolOutputLimits(), toolName)
+				result = agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, true)
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, true))
+				}
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+					traceevent.Field{Key: "tool", Value: toolName},
+					traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+					traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+					traceevent.Field{Key: "error", Value: true},
+					traceevent.Field{Key: "error_message", Value: err.Error()},
+				)
+			} else {
+				truncatedContent := truncateToolContent(ctx, content, DefaultToolOutputLimits(), toolName)
+				result = agentctx.NewToolResultMessage(toolCallID, toolName, truncatedContent, false)
+				toolSpan.AddField("duration_ms", time.Since(toolStart).Milliseconds())
+				toolSpan.End()
+				if a.eventEmitter != nil {
+					a.eventEmitter.Emit(NewToolExecutionEndEvent(toolCallID, toolName, &result, false))
+				}
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+					traceevent.Field{Key: "tool", Value: toolName},
+					traceevent.Field{Key: "tool_call_id", Value: toolCallID},
+					traceevent.Field{Key: "duration_ms", Value: time.Since(toolStart).Milliseconds()},
+					traceevent.Field{Key: "error", Value: false},
+				)
+				slog.Info("[AgentNew] Tool execution completed (concurrent)",
+					"tool", toolName,
+					"toolCallID", toolCallID,
+					"index", idx,
+				)
+			}
+			outcomes <- indexedResult{index: idx, toolMsg: result}
+		}(i, tc)
+	}
+
+	wg.Wait()
+	close(outcomes)
+
+	// Collect results and preserve original order
+	resultByIndex := make(map[int]agentctx.AgentMessage, len(toolCalls))
+	for outcome := range outcomes {
+		resultByIndex[outcome.index] = outcome.toolMsg
+	}
+
+	results := make([]agentctx.AgentMessage, 0, len(toolCalls))
+	for i := range toolCalls {
+		if msg, ok := resultByIndex[i]; ok {
+			results = append(results, msg)
+		}
+	}
+
 	// Increment tool call counter for trigger detection
-	// This tracks how many tool calls have happened since the last context management trigger
 	a.snapshot.AgentState.ToolCallsSinceLastTrigger += len(toolCalls)
 	a.snapshot.AgentState.UpdatedAt = time.Now()
 

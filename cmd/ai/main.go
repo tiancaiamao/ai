@@ -72,7 +72,14 @@ func main() {
 	windowName := flag.String("name", "", "window name (default +ai)")
 	maxTurns := flag.Int("max-turns", 0, "Maximum agent turns in headless mode (0 = unlimited)")
 	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout in headless mode (0 = unlimited, e.g., 10m)")
+	systemPromptFlag := flag.String("system-prompt", "", "System prompt (use @file to load from file)")
+	toolsFlag := flag.String("tools", "", "Comma-separated list of tools to enable")
+	keepToolsFlag := flag.Bool("keep-tools", false, "Keep existing tools when adding new ones")
+	contextManagementPromptFlag := flag.String("context-management-prompt", "", "Custom context management prompt")
 	flag.Parse()
+
+	systemPrompt := parseSystemPrompt(*systemPromptFlag)
+	tools := parseToolsFlag(*toolsFlag)
 
 	switch *mode {
 	case "rpc":
@@ -81,7 +88,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "headless":
-		if err := runHeadless(*sessionPathFlag, *debugAddr, *maxTurns, *timeoutFlag, flag.Args(), os.Stdout); err != nil {
+		if err := runHeadless(*sessionPathFlag, *debugAddr, *maxTurns, *timeoutFlag, systemPrompt, tools, *keepToolsFlag, *contextManagementPromptFlag, flag.Args(), os.Stdout); err != nil {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}
@@ -110,7 +117,7 @@ type headlessStreamState struct {
 	lastAssistantText string
 }
 
-func runHeadless(sessionPath, debugAddr string, maxTurns int, timeout time.Duration, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath, debugAddr string, maxTurns int, timeout time.Duration, systemPrompt string, toolList []string, keepTools bool, cmPrompt string, prompts []string, output io.Writer) error {
 	if len(prompts) == 0 {
 		return fmt.Errorf("headless mode requires at least one prompt argument")
 	}
@@ -133,7 +140,12 @@ func runHeadless(sessionPath, debugAddr string, maxTurns int, timeout time.Durat
 	rpcErrCh := make(chan error, 1)
 	go func() {
 		defer rpcOutWriter.Close()
-		rpcErrCh <- runRPC(sessionPath, debugAddr, maxTurns, rpcInReader, rpcOutWriter)
+		rpcErrCh <- runRPC(sessionPath, debugAddr, maxTurns, rpcInReader, rpcOutWriter, RPCOption{
+			SystemPrompt: systemPrompt,
+			Tools:        toolList,
+			KeepTools:    keepTools,
+			CMPrompt:     cmPrompt,
+		})
 	}()
 
 	lineCh := make(chan []byte, 256)

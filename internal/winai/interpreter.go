@@ -732,7 +732,7 @@ func (p *AiInterpreter) handleCommand(cmdLine string, fromControl bool) (bool, e
 		return true, p.sendCommand("compact", nil, "")
 	case "context":
 		return true, p.handleContext()
-	case "traceevent", "trace-events":
+	case "traceevent":
 		return true, p.handleTraceEvents(args, fromControl)
 	case "fork":
 		return true, p.handleFork(args)
