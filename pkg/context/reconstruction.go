@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"log/slog"
 )
 
 // ReconstructSnapshot builds a ContextSnapshot from a checkpoint and journal entries
@@ -52,9 +53,26 @@ func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *Checkpoint
 			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
 		} else if entry.Type == "truncate" && entry.Truncate != nil {
 			if err := ApplyTruncateToSnapshot(snapshot, *entry.Truncate); err != nil {
+				// Message not found - this can happen if:
+				// 1. The message was compacted (removed) in a previous compact event
+				// 2. The tool_call_id is invalid
+				// Log but continue processing - the truncate is no longer applicable
+				slog.Debug("[Reconstruction] Truncate target not found, skipping",
+					"tool_call_id", entry.Truncate.ToolCallID,
+					"turn", entry.Truncate.Turn,
+					"reason", err.Error(),
+				)
 				continue
 			}
 		} else if entry.Type == "compact" && entry.Compact != nil {
+			// Compact event: LLM generated a summary, RecentMessages was cleared
+			// Any subsequent truncate events that reference messages before this point
+			// will not find their targets (expected behavior)
+			slog.Debug("[Reconstruction] Processing compact event",
+				"turn", entry.Compact.Turn,
+				"kept_messages", entry.Compact.KeptMessageCount,
+				"summary_chars", len(entry.Compact.Summary),
+			)
 			snapshot.LLMContext = entry.Compact.Summary
 			snapshot.RecentMessages = []AgentMessage{}
 		}

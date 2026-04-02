@@ -51,9 +51,9 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 	if err != nil {
 		return nil, fmt.Errorf("failed to load checkpoint index: %w", err)
 	}
-	idx.AddCheckpoint(*info)
-	if err := idx.Save(sessionDir); err != nil {
-		return nil, fmt.Errorf("failed to save checkpoint index: %w", err)
+	// Use AddAndSave for atomic operation to prevent race conditions
+	if err := idx.AddAndSave(*info, sessionDir); err != nil {
+		return nil, fmt.Errorf("failed to add and save checkpoint index: %w", err)
 	}
 
 	// 6. Update current/ symlink

@@ -84,6 +84,43 @@ func (idx *CheckpointIndex) AddCheckpoint(info CheckpointInfo) {
 	idx.LatestCheckpointPath = info.Path
 }
 
+// AddAndSave atomically adds a checkpoint and saves the index to disk.
+// This prevents race conditions when multiple goroutines try to create checkpoints concurrently.
+func (idx *CheckpointIndex) AddAndSave(info CheckpointInfo, sessionDir string) error {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	// Add checkpoint to list
+	idx.Checkpoints = append(idx.Checkpoints, info)
+
+	// Update latest pointers
+	idx.LatestCheckpointTurn = info.Turn
+	idx.LatestCheckpointPath = info.Path
+
+	// Save to disk (still holding lock to ensure atomicity)
+	indexPath := filepath.Join(sessionDir, "checkpoint_index.json")
+
+	// Marshal to JSON with pretty printing
+	data, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal checkpoint index: %w", err)
+	}
+
+	// Atomic write: write to temporary file then rename
+	tmpPath := indexPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temporary index file: %w", err)
+	}
+
+	// Rename to actual path
+	if err := os.Rename(tmpPath, indexPath); err != nil {
+		os.Remove(tmpPath) // Clean up temp file
+		return fmt.Errorf("failed to rename index file: %w", err)
+	}
+
+	return nil
+}
+
 // GetCheckpointAtTurn retrieves checkpoint info for a specific turn
 func (idx *CheckpointIndex) GetCheckpointAtTurn(turn int) (*CheckpointInfo, error) {
 	idx.mu.RLock()
