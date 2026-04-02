@@ -27,7 +27,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
+func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader, output io.Writer) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -221,6 +221,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	defer agentServer.Close()
 
+	// Set max turns if specified (typically for headless mode)
+	if maxTurns > 0 {
+		agentServer.GetAgent().SetMaxTurns(maxTurns)
+		slog.Info("[AgentNew] Max turns limit set", "max_turns", maxTurns)
+	}
+
 	// Create RPC server
 	server := rpc.NewServer()
 	server.SetOutput(output)
@@ -280,6 +286,9 @@ type AgentNewServer struct {
 	thinkingLevel         string
 	autoRetry             bool
 	autoCompactionEnabled bool
+
+	// Cancellation support
+	cancel context.CancelFunc
 }
 
 // NewAgentNewServer creates a new server wrapping AgentNew.
@@ -349,6 +358,13 @@ func (s *AgentNewServer) GetSnapshot() *agentctx.ContextSnapshot {
 	return s.agent.GetSnapshot()
 }
 
+// GetAgent returns the underlying AgentNew instance.
+func (s *AgentNewServer) GetAgent() *agent.AgentNew {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agent
+}
+
 // Prompt handles the prompt command using AgentNew.
 func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	s.mu.Lock()
@@ -357,12 +373,18 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 		return fmt.Errorf("agent is busy")
 	}
 	s.isStreaming = true
+
+	// Create a cancellable context for this turn
+	turnCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+
 	s.mu.Unlock()
 
 	defer func() {
 		s.mu.Lock()
 		s.isStreaming = false
 		s.pendingSteer = false
+		s.cancel = nil
 		s.mu.Unlock()
 	}()
 
@@ -371,18 +393,67 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 		beforeCount = len(snapshot.RecentMessages)
 	}
 
-	ctx, finalizeTrace := s.beginTurnTrace(ctx)
-	defer finalizeTrace()
+	turnTraceCtx, finalizeTurnTrace := s.beginTurnTrace(turnCtx)
 
 	s.emitEvent(agent.NewAgentStartEvent())
 	s.emitEvent(agent.NewTurnStartEvent())
 
 	// Execute one full turn (includes automatic context management flow)
-	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
-		s.emitEvent(agent.NewErrorEvent(err))
+	execErr := s.agent.ExecuteTurn(turnTraceCtx, message)
+	if execErr != nil {
+		s.emitEvent(agent.NewErrorEvent(execErr))
 		s.emitEvent(agent.NewAgentEndEvent(nil))
-		return fmt.Errorf("failed to execute turn: %w", err)
 	}
+
+	// Check for pending input (from /steer or /follow-up)
+	if pendingMessage, hasPending := s.agent.GetAndClearPendingInput(); hasPending {
+		slog.Info("[AgentNew] Prompt found pending input after ExecuteTurn",
+			"pending_message", pendingMessage,
+			"execError", execErr,
+		)
+
+		// Finalize the current trace and start a new one for the pending input
+		finalizeTurnTrace()
+
+		// Create new context for the pending input
+		newTurnCtx, newCancel := context.WithCancel(ctx)
+		s.mu.Lock()
+		s.cancel = newCancel
+		s.mu.Unlock()
+
+		newTurnTraceCtx, finalizeNewTurnTrace := s.beginTurnTrace(newTurnCtx)
+		defer finalizeNewTurnTrace()
+
+		s.emitEvent(agent.NewTurnStartEvent())
+
+		// Execute turn with pending message
+		if err := s.agent.ExecuteTurn(newTurnTraceCtx, pendingMessage); err != nil {
+			s.emitEvent(agent.NewErrorEvent(err))
+			s.emitEvent(agent.NewAgentEndEvent(nil))
+			return fmt.Errorf("failed to execute turn with pending input: %w", err)
+		}
+
+		s.mu.Lock()
+		if err := s.syncSessionFromSnapshotLocked(); err != nil {
+			slog.Warn("[AgentNew] Failed to sync session after pending input", "error", err)
+		}
+		s.mu.Unlock()
+
+		assistantMessage, toolResults := s.emitPostTurnEvents(beforeCount)
+		s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
+		s.emitEvent(agent.NewAgentEndEvent(nil))
+
+		return nil
+	}
+
+	// No pending input, finalize the trace normally
+	finalizeTurnTrace()
+
+	// If there was an error and no pending input, return it
+	if execErr != nil {
+		return fmt.Errorf("failed to execute turn: %w", execErr)
+	}
+
 	s.mu.Lock()
 	if err := s.syncSessionFromSnapshotLocked(); err != nil {
 		slog.Warn("[AgentNew] Failed to sync session after prompt", "error", err)
@@ -488,12 +559,32 @@ func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMes
 		switch msg.Role {
 		case "assistant":
 			s.emitEvent(agent.NewMessageStartEvent(msg))
+
+			// Emit thinking_delta event
+			if thinking := msg.ExtractThinking(); thinking != "" {
+				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
+					Type:  "thinking_delta",
+					Delta: thinking,
+				}))
+			}
+
+			// Emit text_delta event
 			if text := msg.ExtractText(); text != "" {
 				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
 					Type:  "text_delta",
 					Delta: text,
 				}))
 			}
+
+			// Emit toolcall_delta events
+			toolCalls := msg.ExtractToolCalls()
+			for _, tc := range toolCalls {
+				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
+					Type:  "toolcall_delta",
+					Delta: fmt.Sprintf("[toolcall %s]", tc.Name),
+				}))
+			}
+
 			s.emitEvent(agent.NewMessageEndEvent(msg))
 
 			msgCopy := msg
@@ -514,31 +605,34 @@ func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMes
 }
 
 // Steer handles the steer command using AgentNew.
+// Steer interrupts the current turn and immediately processes the new input.
 func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 	s.mu.Lock()
 	mode := s.steeringMode
 	pending := s.pendingSteer
-	streaming := s.isStreaming
+	isStreaming := s.isStreaming
+	cancel := s.cancel
 	s.mu.Unlock()
 
 	if mode == "one-at-a-time" && pending {
 		return fmt.Errorf("steer already pending")
 	}
 
-	s.mu.Lock()
-	s.pendingSteer = true
-	s.mu.Unlock()
+	// If not currently streaming, execute immediately
+	if !isStreaming {
+		s.mu.Lock()
+		s.pendingSteer = true
+		s.mu.Unlock()
 
-	ctx, finalizeTrace := s.beginTurnTrace(ctx)
-	defer finalizeTrace()
+		ctx, finalizeTrace := s.beginTurnTrace(ctx)
+		defer finalizeTrace()
 
-	// If not streaming, execute immediately
-	if !streaming {
 		defer func() {
 			s.mu.Lock()
 			s.pendingSteer = false
 			s.mu.Unlock()
 		}()
+
 		if err := s.agent.ExecuteTurn(ctx, message); err != nil {
 			return err
 		}
@@ -550,42 +644,76 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 		return nil
 	}
 
-	// If streaming, the agent should handle the steer internally
-	// For now, we'll cancel and restart
-	slog.Info("[AgentNew] Steer during streaming - restart execution", "message", message)
-	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
-		return err
+	// If streaming, interrupt the current turn and queue the new input
+	slog.Info("[AgentNew] Steer during streaming - canceling current turn",
+		"message", message,
+		"steering_mode", mode,
+	)
+
+	// Set pending input in agent (will be picked up by conversation loop)
+	s.agent.SetPendingInput(message)
+
+	// Cancel the current turn
+	if cancel != nil {
+		slog.Info("[AgentNew] Canceling current turn for steer")
+		cancel()
 	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.syncSessionFromSnapshotLocked(); err != nil {
-		slog.Warn("[AgentNew] Failed to sync session after streaming steer", "error", err)
-	}
+	s.pendingSteer = true
+	s.mu.Unlock()
+
 	return nil
 }
 
 // FollowUp handles the follow_up command using AgentNew.
+// FollowUp queues the message to be processed after the current turn completes (without cancellation).
 func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 	s.mu.Lock()
 	mode := s.followUpMode
+	isStreaming := s.isStreaming
+	pendingSteer := s.pendingSteer
 	s.mu.Unlock()
 
-	if mode == "one-at-a-time" {
-		// Check if there's already a pending follow-up
-		// This would need to be tracked in AgentNew
+	if mode == "one-at-a-time" && pendingSteer {
+		return fmt.Errorf("follow-up not allowed while steer is pending")
 	}
 
-	ctx, finalizeTrace := s.beginTurnTrace(ctx)
-	defer finalizeTrace()
+	// If not currently streaming, execute immediately
+	if !isStreaming {
+		s.mu.Lock()
+		s.pendingSteer = true
+		s.mu.Unlock()
 
-	if err := s.agent.ExecuteTurn(ctx, message); err != nil {
-		return err
+		ctx, finalizeTrace := s.beginTurnTrace(ctx)
+		defer finalizeTrace()
+
+		defer func() {
+			s.mu.Lock()
+			s.pendingSteer = false
+			s.mu.Unlock()
+		}()
+
+		if err := s.agent.ExecuteTurn(ctx, message); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.syncSessionFromSnapshotLocked(); err != nil {
+			slog.Warn("[AgentNew] Failed to sync session after follow-up", "error", err)
+		}
+		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.syncSessionFromSnapshotLocked(); err != nil {
-		slog.Warn("[AgentNew] Failed to sync session after follow-up", "error", err)
-	}
+
+	// If streaming, queue the message without canceling (will be processed after current turn completes)
+	slog.Info("[AgentNew] Follow-up during streaming - queueing message",
+		"message", message,
+		"followUpMode", mode,
+	)
+
+	// Set pending input in agent (will be picked up by Prompt after ExecuteTurn completes)
+	s.agent.SetPendingInput(message)
+
 	return nil
 }
 
@@ -612,10 +740,24 @@ func (s *AgentNewServer) beginTurnTrace(ctx context.Context) (context.Context, f
 
 // Abort stops the current execution.
 func (s *AgentNewServer) Abort() error {
-	slog.Info("[AgentNew] Abort called")
-	// AgentNew currently has no cancellable in-flight turn API.
-	// Keep this command as a no-op to preserve command compatibility.
-	return nil
+	s.mu.Lock()
+	cancel := s.cancel
+	isStreaming := s.isStreaming
+	s.mu.Unlock()
+
+	slog.Info("[AgentNew] Abort called", "is_streaming", isStreaming)
+
+	if !isStreaming {
+		return fmt.Errorf("agent is not executing")
+	}
+
+	if cancel != nil {
+		slog.Info("[AgentNew] Canceling current turn")
+		cancel()
+		return nil
+	}
+
+	return fmt.Errorf("no cancel function available")
 }
 
 func (s *AgentNewServer) syncSessionFromSnapshotLocked() error {
@@ -626,9 +768,19 @@ func (s *AgentNewServer) syncSessionFromSnapshotLocked() error {
 	if snapshot == nil {
 		return nil
 	}
-	if err := s.currentSession.SaveMessages(snapshot.RecentMessages); err != nil {
-		return err
-	}
+
+	// DON'T use SaveMessages() - it rewrites the entire messages.jsonl file,
+	// which overwrites journal entries (like compact events) that were appended.
+	// New architecture uses journal-based persistence, which is already handled
+	// by the agent layer (journal.AppendMessage, journal.AppendCompact, etc.)
+	//
+	// Note: This means currentSession.entries will be out of sync with snapshot.RecentMessages,
+	// but that's expected - currentSession is kept for legacy compatibility only.
+
+	// if err := s.currentSession.SaveMessages(snapshot.RecentMessages); err != nil {
+	// 	return err
+	// }
+
 	if s.sessionMgr != nil {
 		if err := s.sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
@@ -1175,7 +1327,48 @@ func (s *AgentNewServer) DeleteSession(id string) error {
 }
 
 func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
-	return nil, fmt.Errorf("compact is not supported in AgentNew mode")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.agent == nil {
+		return nil, fmt.Errorf("agent is not available")
+	}
+
+	// Get snapshot before compaction
+	snapshot := s.agent.GetSnapshot()
+	if snapshot == nil {
+		return nil, fmt.Errorf("snapshot is not available")
+	}
+
+	beforeCount := len(snapshot.RecentMessages)
+	beforeTokens := snapshot.EstimateTokens()
+
+	slog.Info("[RPC] Performing manual compaction",
+		"message_count", beforeCount,
+		"tokens", beforeTokens,
+	)
+
+	// Perform compaction using the new architecture
+	if err := s.agent.Compact(context.Background()); err != nil {
+		return nil, fmt.Errorf("compact failed: %w", err)
+	}
+
+	// Get snapshot after compaction
+	snapshot = s.agent.GetSnapshot()
+	afterCount := len(snapshot.RecentMessages)
+	afterTokens := snapshot.EstimateTokens()
+
+	slog.Info("[RPC] Compaction successful",
+		"before_count", beforeCount,
+		"after_count", afterCount,
+		"before_tokens", beforeTokens,
+		"after_tokens", afterTokens,
+	)
+
+	return &rpc.CompactResult{
+		TokensBefore: beforeTokens,
+		TokensAfter:  afterTokens,
+	}, nil
 }
 
 func (s *AgentNewServer) SetAutoCompaction(enabled bool) error {
@@ -1458,6 +1651,14 @@ func (s *AgentNewServer) SetAutoRetry(enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.autoRetry = enabled
+	// Wire through to the agent's retry configuration
+	if s.agent != nil {
+		if enabled {
+			s.agent.SetMaxLLMRetries(0) // use defaults (1 retry, 8 for rate limit)
+		} else {
+			s.agent.SetMaxLLMRetries(-1) // disable retry
+		}
+	}
 	return nil
 }
 
