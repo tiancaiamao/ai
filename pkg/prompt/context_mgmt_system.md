@@ -1,45 +1,4 @@
-package prompt
-
-import (
-	"github.com/tiancaiamao/ai/pkg/context"
-)
-
-// BuildSystemPrompt builds the system prompt for the given mode.
-func BuildSystemPrompt(mode context.AgentMode) string {
-	switch mode {
-	case context.ModeNormal:
-		return NormalSystemPrompt
-	case context.ModeContextMgmt:
-		return ContextMgmtSystemPrompt
-	default:
-		return NormalSystemPrompt
-	}
-}
-
-const (
-	// NormalSystemPrompt is the system prompt for normal mode.
-	NormalSystemPrompt = `You are a helpful coding assistant. Help users with their programming tasks.
-
-<capabilities>
-- Read and write files
-- Run commands
-- Search code
-- Analyze problems
-- Debug issues
-</capabilities>
-
-<guidelines>
-- Respond concisely
-- Focus on the task at hand
-- Show reasoning when helpful
-- Ask for clarification when needed
-</guidelines>
-
-The system will automatically manage context size. You don't need to worry about token limits.
-`
-
-	// ContextMgmtSystemPrompt is the system prompt for context management mode.
-	ContextMgmtSystemPrompt = `<system mode="context_management">
+<system mode="context_management">
 
 You are in CONTEXT MANAGEMENT MODE. Your task is to review and reshape the conversation context.
 
@@ -112,5 +71,3 @@ Keep the LLM Context concise but complete. Aim for 500-1000 tokens.
 </instructions>
 
 </system>
-`
-)

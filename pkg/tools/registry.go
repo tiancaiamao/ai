@@ -7,35 +7,36 @@ import (
 )
 
 // Registry manages tool registration and lookup.
+// It wraps agentctx.ToolRegistry with convenience methods for tool setup.
 type Registry struct {
-	tools map[string]agentctx.Tool
+	inner *agentctx.ToolRegistry
 }
 
 // NewRegistry creates a new tool registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]agentctx.Tool),
+		inner: agentctx.NewToolRegistry(),
 	}
 }
 
 // Register registers a tool.
 func (r *Registry) Register(tool agentctx.Tool) {
-	r.tools[tool.Name()] = tool
+	r.inner.Register(tool)
 }
 
 // Get returns a tool by name.
 func (r *Registry) Get(name string) (agentctx.Tool, bool) {
-	tool, ok := r.tools[name]
-	return tool, ok
+	return r.inner.Get(name)
 }
 
 // All returns all registered tools.
 func (r *Registry) All() []agentctx.Tool {
-	tools := make([]agentctx.Tool, 0, len(r.tools))
-	for _, tool := range r.tools {
-		tools = append(tools, tool)
-	}
-	return tools
+	return r.inner.All()
+}
+
+// Inner returns the underlying agentctx.ToolRegistry.
+func (r *Registry) Inner() *agentctx.ToolRegistry {
+	return r.inner
 }
 
 // GetAllTools returns all default tools for the agent.
@@ -61,9 +62,10 @@ func GetAllTools() []agentctx.Tool {
 
 // ToLLMTools converts all tools to LLM format.
 func (r *Registry) ToLLMTools() []map[string]any {
-	tools := make([]map[string]any, 0)
-	for _, tool := range r.tools {
-		tools = append(tools, map[string]any{
+	tools := r.inner.All()
+	result := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		result = append(result, map[string]any{
 			"type": "function",
 			"function": map[string]any{
 				"name":        tool.Name(),
@@ -72,5 +74,5 @@ func (r *Registry) ToLLMTools() []map[string]any {
 			},
 		})
 	}
-	return tools
+	return result
 }

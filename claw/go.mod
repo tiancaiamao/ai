@@ -9,6 +9,7 @@ require (
 	github.com/sipeed/picoclaw v0.2.4
 	github.com/tiancaiamao/ai v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -31,6 +32,7 @@ require (
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/caarlos0/env/v11 v11.4.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/github/copilot-sdk/go v0.1.32 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
@@ -40,7 +42,9 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mdp/qrterminal/v3 v3.2.1 // indirect
 	github.com/openai/openai-go/v3 v3.22.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tencent-connect/botgo v0.2.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -52,7 +56,6 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )
 
 replace github.com/tiancaiamao/ai => ../

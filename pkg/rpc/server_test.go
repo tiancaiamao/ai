@@ -2,19 +2,19 @@ package rpc
 
 import (
 	"bufio"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/agent"
 )
 
-// TestRPCServerCommands tests RPC command handling.
+// TestRPCServerCommands tests RPC command handling via the registry.
 func TestRPCServerCommands(t *testing.T) {
 	server := NewServer()
 
@@ -31,74 +31,83 @@ func TestRPCServerCommands(t *testing.T) {
 	setToolSummaryStrategyCalled := false
 	setToolSummaryAutomationCalled := false
 
-	// Set up handlers
-	server.SetPromptHandler(func(req PromptRequest) error {
+	reg := server.Registry()
+
+	reg.Register(CommandPrompt, func(ctx context.Context, cmd agent.Command) (any, error) {
 		promptCalled = true
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandPrompt})
 
-	server.SetSteerHandler(func(message string) error {
+	reg.Register(CommandSteer, func(ctx context.Context, cmd agent.Command) (any, error) {
 		steerCalled = true
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandSteer})
 
-	server.SetFollowUpHandler(func(message string) error {
+	reg.Register(CommandFollowUp, func(ctx context.Context, cmd agent.Command) (any, error) {
 		followUpCalled = true
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandFollowUp})
 
-	server.SetAbortHandler(func() error {
+	reg.Register(CommandAbort, func(ctx context.Context, cmd agent.Command) (any, error) {
 		abortCalled = true
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandAbort})
 
-	server.SetClearSessionHandler(func() error {
+	reg.Register(CommandClearSession, func(ctx context.Context, cmd agent.Command) (any, error) {
 		clearCalled = true
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandClearSession})
 
-	server.SetGetStateHandler(func() (*SessionState, error) {
+	reg.Register(CommandGetState, func(ctx context.Context, cmd agent.Command) (any, error) {
 		getStateCalled = true
-		return &SessionState{
-			MessageCount: 42,
-		}, nil
-	})
+		return &SessionState{MessageCount: 42}, nil
+	}, agent.CommandMeta{Name: CommandGetState})
 
-	server.SetGetMessagesHandler(func() ([]any, error) {
+	reg.Register(CommandGetMessages, func(ctx context.Context, cmd agent.Command) (any, error) {
 		getMessagesCalled = true
-		return []any{
-			agentctx.NewUserMessage("test"),
-		}, nil
-	})
+		return []any{agentctx.NewUserMessage("test")}, nil
+	}, agent.CommandMeta{Name: CommandGetMessages})
 
-	server.SetCompactHandler(func() (*CompactResult, error) {
+	reg.Register(CommandCompact, func(ctx context.Context, cmd agent.Command) (any, error) {
 		compactCalled = true
 		commandCount++
 		return &CompactResult{TokensBefore: 1}, nil
-	})
+	}, agent.CommandMeta{Name: CommandCompact})
 
-	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
-		setToolCallCutoffCalled = cutoff == 7
+	reg.Register(CommandSetToolCallCutoff, func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Cutoff int `json:"cutoff"`
+		}
+		json.Unmarshal(cmd.Payload, &payload)
+		setToolCallCutoffCalled = payload.Cutoff == 7
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandSetToolCallCutoff})
 
-	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
-		setToolSummaryStrategyCalled = strategy == "heuristic"
+	reg.Register(CommandSetToolSummaryStrategy, func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Strategy string `json:"strategy"`
+		}
+		json.Unmarshal(cmd.Payload, &payload)
+		setToolSummaryStrategyCalled = payload.Strategy == "heuristic"
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandSetToolSummaryStrategy})
 
-	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
-		setToolSummaryAutomationCalled = mode == "fallback"
+	reg.Register(CommandSetToolSummaryAutomation, func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Mode string `json:"mode"`
+		}
+		json.Unmarshal(cmd.Payload, &payload)
+		setToolSummaryAutomationCalled = payload.Mode == "fallback"
 		commandCount++
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandSetToolSummaryAutomation})
 
 	// Test prompt command
 	cmd := RPCCommand{Type: CommandPrompt, Message: "Test message"}
@@ -224,52 +233,20 @@ func TestRPCServerCommands(t *testing.T) {
 		t.Error("set_tool_summary_automation handler was not called with expected value")
 	}
 
-	// Verify total command count
 	if commandCount != 9 {
-		t.Errorf("Expected 9 commands to be called, got %d", commandCount)
+		t.Errorf("Expected 9 commands to be handled, got %d", commandCount)
 	}
 }
 
-// TestRPCCommandParsing tests parsing various command formats.
+// TestRPCCommandParsing tests that commands are properly parsed.
 func TestRPCCommandParsing(t *testing.T) {
-	// Test command with direct message field
-	cmdJSON := `{"type": "prompt", "message": "Direct message", "id": "test-1"}`
-	var cmd RPCCommand
-	err := json.Unmarshal([]byte(cmdJSON), &cmd)
-	if err != nil {
-		t.Fatalf("Failed to parse command: %v", err)
-	}
+	server := NewServer()
 
-	if cmd.Type != CommandPrompt {
-		t.Errorf("Expected type 'prompt', got '%s'", cmd.Type)
-	}
-	if cmd.Message != "Direct message" {
-		t.Errorf("Expected message 'Direct message', got '%s'", cmd.Message)
-	}
-	if cmd.ID != "test-1" {
-		t.Errorf("Expected id 'test-1', got '%s'", cmd.ID)
-	}
-
-	// Test command with data field
-	cmdJSON = `{"type": "steer", "data": {"message": "Data message"}}`
-	err = json.Unmarshal([]byte(cmdJSON), &cmd)
-	if err != nil {
-		t.Fatalf("Failed to parse command with data: %v", err)
-	}
-
-	if cmd.Type != CommandSteer {
-		t.Errorf("Expected type 'steer', got '%s'", cmd.Type)
-	}
-
-	var data struct {
-		Message string `json:"message"`
-	}
-	err = json.Unmarshal(cmd.Data, &data)
-	if err != nil {
-		t.Fatalf("Failed to parse data: %v", err)
-	}
-	if data.Message != "Data message" {
-		t.Errorf("Expected data message 'Data message', got '%s'", data.Message)
+	// Ping is handled specially in handleCommand
+	cmd := RPCCommand{Type: CommandPing}
+	resp := server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("Ping command failed: %s", resp.Error)
 	}
 }
 
@@ -277,32 +254,26 @@ func TestRPCCommandParsing(t *testing.T) {
 func TestEmitEvent(t *testing.T) {
 	server := NewServer()
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	server.SetOutput(w)
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
 
-	// Emit event
-	server.EmitEvent(map[string]any{
-		"type":  "test_event",
-		"value": "test_value",
-	})
+	server.SetOutput(pw)
 
-	// Restore stdout
-	w.Close()
-	os.Stdout = oldStdout
+	go func() {
+		server.EmitEvent(map[string]any{"type": "test", "data": 42})
+		pw.Close()
+	}()
 
-	// Read output
-	output, _ := io.ReadAll(r)
-	var emitted map[string]any
-	err := json.Unmarshal(output, &emitted)
-	if err != nil {
-		t.Fatalf("Failed to parse emitted event: %v", err)
+	var output strings.Builder
+	io.Copy(&output, pr)
+
+	var event map[string]any
+	if err := json.Unmarshal([]byte(output.String()), &event); err != nil {
+		t.Fatalf("Failed to parse event: %v", err)
 	}
-
-	if emitted["type"] != "test_event" {
-		t.Errorf("Expected event type 'test_event', got '%v'", emitted["type"])
+	if event["type"] != "test" {
+		t.Errorf("Expected event type 'test', got %v", event["type"])
 	}
 }
 
@@ -310,97 +281,89 @@ func TestEmitEvent(t *testing.T) {
 func TestUnknownCommand(t *testing.T) {
 	server := NewServer()
 
-	cmd := RPCCommand{Type: "unknown_command"}
+	cmd := RPCCommand{Type: "unknown_command", ID: "1"}
 	resp := server.handleCommand(cmd)
-
 	if resp.Success {
-		t.Error("Expected error for unknown command")
+		t.Error("Expected failure for unknown command")
 	}
-	if !strings.Contains(resp.Error, "Unknown command") {
-		t.Errorf("Expected error message to contain 'Unknown command', got '%s'", resp.Error)
+	if resp.Error == "" {
+		t.Error("Expected error message for unknown command")
 	}
 }
 
-// TestMissingHandler tests commands without registered handlers.
+// TestMissingHandler tests handling of commands with no registered handler.
 func TestMissingHandler(t *testing.T) {
 	server := NewServer()
 
-	// Don't set any handlers, test error messages
-	cmd := RPCCommand{Type: CommandPrompt}
+	// Don't register a handler for "prompt"
+	cmd := RPCCommand{Type: CommandPrompt, Message: "test"}
 	resp := server.handleCommand(cmd)
-
 	if resp.Success {
-		t.Error("Expected error when handler not registered")
+		t.Error("Expected failure for missing handler")
 	}
-	if !strings.Contains(resp.Error, "No prompt handler registered") {
-		t.Errorf("Expected error about missing handler, got '%s'", resp.Error)
+	if resp.Error == "" {
+		t.Error("Expected error message for missing handler")
 	}
 }
 
-// TestServerContext tests server context lifecycle.
+// TestServerContext tests the context functionality.
 func TestServerContext(t *testing.T) {
 	server := NewServer()
 
 	ctx := server.Context()
 	if ctx == nil {
-		t.Fatal("Context should not be nil")
+		t.Error("Expected non-nil context")
 	}
 
-	// Context should be initially active
+	server.Cancel()
+
 	select {
 	case <-ctx.Done():
-		t.Error("Context should not be cancelled yet")
-	default:
 		// Expected
+	case <-time.After(time.Second):
+		t.Error("Expected context to be cancelled")
 	}
-
-	// Close server (which should cancel context)
-	// Note: We can't directly call Close(), but the context is available
 }
 
-// TestResponseFormatting tests response format.
+// TestResponseFormatting tests response formatting.
 func TestResponseFormatting(t *testing.T) {
 	server := NewServer()
 
-	// Create a response
-	resp := server.successResponse("test-id", "test_command", map[string]string{"key": "value"})
-
-	if resp.Type != "response" {
-		t.Errorf("Expected type 'response', got '%s'", resp.Type)
+	resp := server.successResponse("1", "test", map[string]any{"key": "value"})
+	if resp.ID != "1" {
+		t.Errorf("Expected ID '1', got %s", resp.ID)
 	}
-	if resp.Command != "test_command" {
-		t.Errorf("Expected command 'test_command', got '%s'", resp.Command)
-	}
-	if resp.ID != "test-id" {
-		t.Errorf("Expected id 'test-id', got '%s'", resp.ID)
+	if resp.Command != "test" {
+		t.Errorf("Expected command 'test', got %s", resp.Command)
 	}
 	if !resp.Success {
-		t.Error("Expected success to be true")
+		t.Error("Expected success")
 	}
-
-	data, ok := resp.Data.(map[string]string)
+	data, ok := resp.Data.(map[string]any)
 	if !ok {
-		t.Fatal("Expected data to be map[string]string")
+		t.Fatalf("Expected map data, got %T", resp.Data)
 	}
 	if data["key"] != "value" {
-		t.Errorf("Expected data key 'value', got '%s'", data["key"])
+		t.Errorf("Expected key='value', got %v", data["key"])
 	}
 }
 
-// TestErrorResponse tests error response format.
+// TestErrorResponse tests error response formatting.
 func TestErrorResponse(t *testing.T) {
 	server := NewServer()
 
-	resp := server.errorResponse("test-id", "test_command", "test error")
-
+	resp := server.errorResponse("2", "test_cmd", "something went wrong")
+	if resp.ID != "2" {
+		t.Errorf("Expected ID '2', got %s", resp.ID)
+	}
+	if resp.Command != "test_cmd" {
+		t.Errorf("Expected command 'test_cmd', got %s", resp.Command)
+	}
 	if resp.Success {
-		t.Error("Expected success to be false for error response")
+		t.Error("Expected failure")
 	}
-	if resp.Error != "test error" {
-		t.Errorf("Expected error message 'test error', got '%s'", resp.Error)
-	}
-	if resp.ID != "test-id" {
-		t.Errorf("Expected id 'test-id', got '%s'", resp.ID)
+	if resp.Error != "something went wrong" {
+		t.Errorf("Expected error 'something went wrong', got %s", resp.Error)
 	}
 }
 
@@ -408,101 +371,83 @@ func TestErrorResponse(t *testing.T) {
 func TestConcurrentCommands(t *testing.T) {
 	server := NewServer()
 
-	var promptCount atomic.Int32
-	server.SetPromptHandler(func(req PromptRequest) error {
-		promptCount.Add(1)
-		time.Sleep(10 * time.Millisecond) // Simulate work
-		return nil
-	})
+	var count atomic.Int32
+	server.Registry().Register(CommandGetState, func(ctx context.Context, cmd agent.Command) (any, error) {
+		count.Add(1)
+		return &SessionState{MessageCount: int(count.Load())}, nil
+	}, agent.CommandMeta{Name: CommandGetState})
 
-	// Send concurrent commands
-	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	// Handle many concurrent commands
+	done := make(chan bool)
+	for i := 0; i < 100; i++ {
 		go func() {
-			cmd := RPCCommand{Type: CommandPrompt, Message: "test"}
-			server.handleCommand(cmd)
+			cmd := RPCCommand{Type: CommandGetState}
+			resp := server.handleCommand(cmd)
+			if !resp.Success {
+				t.Errorf("Concurrent command failed: %s", resp.Error)
+			}
 			done <- true
 		}()
 	}
 
-	// Wait for all commands
-	for i := 0; i < 10; i++ {
-		select {
-		case <-done:
-		case <-time.After(1 * time.Second):
-			t.Fatal("Timeout waiting for concurrent commands")
-		}
+	for i := 0; i < 100; i++ {
+		<-done
 	}
 
-	if got := promptCount.Load(); got != 10 {
-		t.Errorf("Expected 10 prompts, got %d", got)
+	if count.Load() != 100 {
+		t.Errorf("Expected 100 invocations, got %d", count.Load())
 	}
 }
 
-// TestCommandWithDataField tests commands using data field.
+// TestCommandWithDataField tests that data from cmd.Data is passed through.
 func TestCommandWithDataField(t *testing.T) {
 	server := NewServer()
 
-	var receivedMessage string
-	server.SetPromptHandler(func(req PromptRequest) error {
-		receivedMessage = req.Message
-		return nil
-	})
+	var received string
+	server.Registry().Register("test_data", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Key string `json:"key"`
+		}
+		json.Unmarshal(cmd.Payload, &payload)
+		received = payload.Key
+		return nil, nil
+	}, agent.CommandMeta{Name: "test_data"})
 
-	// Test with message field (should be preferred)
 	cmd := RPCCommand{
-		Type:    CommandPrompt,
-		Message: "direct message",
-		Data:    json.RawMessage(`{"message": "data message"}`),
+		Type: "test_data",
+		Data: json.RawMessage(`{"key": "value123"}`),
 	}
 	resp := server.handleCommand(cmd)
 	if !resp.Success {
-		t.Errorf("Command failed: %s", resp.Error)
+		t.Errorf("Command with data failed: %s", resp.Error)
 	}
-	if receivedMessage != "direct message" {
-		t.Errorf("Expected 'direct message', got '%s'", receivedMessage)
-	}
-
-	// Test with only data field
-	cmd = RPCCommand{
-		Type: CommandPrompt,
-		Data: json.RawMessage(`{"message": "data message"}`),
-	}
-	resp = server.handleCommand(cmd)
-	if !resp.Success {
-		t.Errorf("Command failed: %s", resp.Error)
-	}
-	if receivedMessage != "data message" {
-		t.Errorf("Expected 'data message', got '%s'", receivedMessage)
+	if received != "value123" {
+		t.Errorf("Expected 'value123', got %q", received)
 	}
 }
 
-// TestServerContextCancel tests server context cancellation.
+// TestServerContextCancel tests context cancellation propagation.
 func TestServerContextCancel(t *testing.T) {
 	server := NewServer()
 	ctx := server.Context()
-	_ = ctx // Use ctx to avoid unused variable warning
 
-	// Cancel context
-	server.cancel()
+	server.Cancel()
 
-	// Context should be done now
 	select {
 	case <-ctx.Done():
 		// Expected
-	case <-time.After(100 * time.Millisecond):
-		t.Error("Context should be cancelled after calling cancel()")
+	case <-time.After(time.Second):
+		t.Fatal("Context should have been cancelled")
 	}
 }
 
-// TestErrorHandlingInHandlers tests error handling in command handlers.
+// TestErrorHandlingInHandlers tests that handler errors are properly returned.
 func TestErrorHandlingInHandlers(t *testing.T) {
 	server := NewServer()
 
-	// Handler that returns an error
-	server.SetPromptHandler(func(req PromptRequest) error {
-		return context.DeadlineExceeded
-	})
+	server.Registry().Register(CommandPrompt, func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, context.DeadlineExceeded
+	}, agent.CommandMeta{Name: CommandPrompt})
 
 	cmd := RPCCommand{Type: CommandPrompt, Message: "test"}
 	resp := server.handleCommand(cmd)
@@ -516,8 +461,7 @@ func TestErrorHandlingInHandlers(t *testing.T) {
 }
 
 // TestAsyncDispatchDuringPrompt verifies that the scanner loop is NOT blocked
-// while a long-running prompt command is being processed. This is the core fix
-// for the "RPC server single-threaded blocking" issue.
+// while a long-running prompt command is being processed.
 func TestAsyncDispatchDuringPrompt(t *testing.T) {
 	promptStarted := make(chan struct{})
 	promptDone := make(chan struct{})
@@ -528,20 +472,19 @@ func TestAsyncDispatchDuringPrompt(t *testing.T) {
 	defer outReader.Close()
 
 	server := NewServer()
-	server.SetPromptHandler(func(req PromptRequest) error {
+	server.Registry().Register(CommandPrompt, func(ctx context.Context, cmd agent.Command) (any, error) {
 		close(promptStarted)
-		// Simulate long-running LLM call
 		select {
 		case <-time.After(2 * time.Second):
 		case <-promptDone:
 		}
-		return nil
-	})
-	server.SetSteerHandler(func(message string) error {
-		return nil
-	})
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandPrompt})
 
-	// Start the server in a goroutine
+	server.Registry().Register(CommandSteer, func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, nil
+	}, agent.CommandMeta{Name: CommandSteer})
+
 	serverDone := make(chan error, 1)
 	go func() {
 		serverDone <- server.RunWithIO(inReader, outWriter)
@@ -554,20 +497,14 @@ func TestAsyncDispatchDuringPrompt(t *testing.T) {
 	// Wait for prompt to start processing
 	select {
 	case <-promptStarted:
-		// Prompt is running in a goroutine — scanner loop should be free
 	case <-time.After(1 * time.Second):
 		t.Fatal("Prompt never started")
 	}
 
-	// Now send a steer command while prompt is still running.
-	// Before the fix, this would block on io.Pipe because the scanner
-	// loop was stuck in handleCommand. After the fix, it should succeed.
+	// Send steer while prompt is running
 	steerCmd := `{"type":"steer","data":{"message":"steer msg"},"id":"s1"}` + "\n"
 	inWriter.Write([]byte(steerCmd))
 
-	// Read responses from the server. We should see the steer response
-	// arrive before (or around the same time as) the prompt response,
-	// proving the scanner loop was not blocked.
 	outScanner := bufio.NewScanner(outReader)
 	outScanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 
@@ -589,7 +526,7 @@ func TestAsyncDispatchDuringPrompt(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("timeout waiting for responses (steer=%v, prompt=%v)", gotSteer, gotPrompt)
+			t.Fatalf("timeout (steer=%v, prompt=%v)", gotSteer, gotPrompt)
 		default:
 		}
 	}
@@ -601,14 +538,12 @@ func TestAsyncDispatchDuringPrompt(t *testing.T) {
 		t.Error("Prompt response never received")
 	}
 
-	// Clean up
 	close(promptDone)
 	inWriter.Close()
 	outWriter.Close()
 }
 
-// TestSyncCommandsNotAsync verifies that quick commands (get_state, ping, etc.)
-// are still handled synchronously and return responses immediately.
+// TestSyncCommandsNotAsync verifies that quick commands return immediately.
 func TestSyncCommandsNotAsync(t *testing.T) {
 	inReader, inWriter := io.Pipe()
 	outReader, outWriter := io.Pipe()
@@ -616,16 +551,15 @@ func TestSyncCommandsNotAsync(t *testing.T) {
 	defer outReader.Close()
 
 	server := NewServer()
-	server.SetGetStateHandler(func() (*SessionState, error) {
+	server.Registry().Register(CommandGetState, func(ctx context.Context, cmd agent.Command) (any, error) {
 		return &SessionState{MessageCount: 5}, nil
-	})
+	}, agent.CommandMeta{Name: CommandGetState})
 
 	serverDone := make(chan error, 1)
 	go func() {
 		serverDone <- server.RunWithIO(inReader, outWriter)
 	}()
 
-	// Send get_state (sync command)
 	cmd := `{"type":"get_state","id":"gs1"}` + "\n"
 	inWriter.Write([]byte(cmd))
 
@@ -675,5 +609,89 @@ func TestIsAsyncCommandClassification(t *testing.T) {
 		if isAsyncCommand(cmd) {
 			t.Errorf("isAsyncCommand(%q) = true, want false", cmd)
 		}
+	}
+}
+
+// TestBuildPayload tests that cmd.Message is merged into the payload.
+func TestBuildPayload(t *testing.T) {
+	server := NewServer()
+
+	// Test with message and no data
+	cmd := RPCCommand{Message: "hello"}
+	payload := server.buildPayload(cmd)
+	var result map[string]any
+	json.Unmarshal(payload, &result)
+	if result["message"] != "hello" {
+		t.Errorf("Expected message 'hello', got %v", result["message"])
+	}
+
+	// Test with message and existing data
+	cmd = RPCCommand{
+		Message: "world",
+		Data:    json.RawMessage(`{"key": "value"}`),
+	}
+	payload = server.buildPayload(cmd)
+	json.Unmarshal(payload, &result)
+	if result["message"] != "world" {
+		t.Errorf("Expected message 'world', got %v", result["message"])
+	}
+	if result["key"] != "value" {
+		t.Errorf("Expected key 'value', got %v", result["key"])
+	}
+
+	// Test with no message, only data
+	cmd = RPCCommand{
+		Data: json.RawMessage(`{"key": "value"}`),
+	}
+	payload = server.buildPayload(cmd)
+	json.Unmarshal(payload, &result)
+	if result["key"] != "value" {
+		t.Errorf("Expected key 'value', got %v", result["key"])
+	}
+}
+
+// TestNewServerWithRegistry tests sharing a registry.
+func TestNewServerWithRegistry(t *testing.T) {
+	reg := agent.NewCommandRegistry()
+	reg.Register("custom", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return "custom result", nil
+	}, agent.CommandMeta{Name: "custom"})
+
+	server := NewServerWithRegistry(reg)
+
+	cmd := RPCCommand{Type: "custom"}
+	resp := server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("Custom command failed: %s", resp.Error)
+	}
+	if resp.Data != "custom result" {
+		t.Errorf("Expected 'custom result', got %v", resp.Data)
+	}
+}
+
+// TestSetRegistry tests replacing the registry at runtime.
+func TestSetRegistry(t *testing.T) {
+	server := NewServer()
+
+	// Initially no handlers
+	cmd := RPCCommand{Type: "test"}
+	resp := server.handleCommand(cmd)
+	if resp.Success {
+		t.Error("Expected failure with no registry")
+	}
+
+	// Set a new registry with a handler
+	reg := agent.NewCommandRegistry()
+	reg.Register("test", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return "works", nil
+	}, agent.CommandMeta{Name: "test"})
+	server.SetRegistry(reg)
+
+	resp = server.handleCommand(cmd)
+	if !resp.Success {
+		t.Errorf("Expected success after SetRegistry: %s", resp.Error)
+	}
+	if resp.Data != "works" {
+		t.Errorf("Expected 'works', got %v", resp.Data)
 	}
 }

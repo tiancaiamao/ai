@@ -139,8 +139,8 @@ func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, 
 
 // buildNormalModeRequest builds the LLM request for normal mode.
 func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage, string) {
-	// Build system prompt
-	systemPrompt := prompt.BuildSystemPrompt(agentctx.ModeNormal)
+	// Build system prompt with thinking level instruction, skills, and project context
+	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra)
 
 	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage

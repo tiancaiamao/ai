@@ -52,6 +52,10 @@ type AgentNew struct {
 	pendingInputMu sync.RWMutex
 	pendingInput   string // For steer: new message to process
 	hasPendingInput bool
+
+	// System prompt extras (skills and project context injected at construction time)
+	skillsExtra        string
+	projectContextExtra string
 }
 
 // ModelSpec wraps the model specification from config.
@@ -181,6 +185,13 @@ func (a *AgentNew) GetThinkingLevel() string {
 	a.snapshotMu.RLock()
 	defer a.snapshotMu.RUnlock()
 	return a.thinkingLevel
+}
+
+// SetSystemPromptExtras sets the skills and project context strings for system prompt injection.
+// These are pre-computed at construction time and substituted into %SKILLS% and %PROJECT_CONTEXT% placeholders.
+func (a *AgentNew) SetSystemPromptExtras(skillsText string, projectContext string) {
+	a.skillsExtra = skillsText
+	a.projectContextExtra = projectContext
 }
 
 // SetMaxTurns sets the maximum number of turns allowed (0 means unlimited).
