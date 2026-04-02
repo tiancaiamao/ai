@@ -29,7 +29,11 @@ jobs:
 
       - name: Download dependencies
         working-directory: claw
-        run: make deps
+        run: go mod download
+
+      - name: Tidy go.mod
+        working-directory: claw
+        run: go mod tidy
 
       - name: Build
         working-directory: claw
