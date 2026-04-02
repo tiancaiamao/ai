@@ -103,6 +103,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Tidy go.mod
+        run: go mod tidy
+
       - name: Build all packages
         run: go build ./...
 
