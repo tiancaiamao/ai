@@ -5,53 +5,28 @@ import (
 	"fmt"
 )
 
-// parseJSON parses a JSON string and returns an error for invalid JSON
-func parseJSON(s string) (map[string]interface{}, error) {
-	if !json.Valid([]byte(s)) {
-		return nil, fmt.Errorf("invalid JSON: %s", s)
-	}
+// parseJSON parses a JSON string
+// BUG: No error handling for invalid JSON
+func parseJSON(s string) map[string]interface{} {
 	var result map[string]interface{}
-	err := json.Unmarshal([]byte(s), &result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	json.Unmarshal([]byte(s), &result)
+	return result
 }
 
-// toJSON converts a map to JSON string and returns an error if marshaling fails
-func toJSON(m map[string]interface{}) (string, error) {
-	bytes, err := json.Marshal(m)
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), nil
+// toJSON converts a map to JSON string
+func toJSON(m map[string]interface{}) string {
+	bytes, _ := json.Marshal(m)
+	return string(bytes)
 }
 
 func main() {
 	// Valid JSON
 	valid := `{"name": "Alice", "age": 30}`
-	result, err := parseJSON(valid)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	} else {
-		fmt.Printf("Name: %s, Age: %v\n", result["name"], result["age"])
-	}
+	result := parseJSON(valid)
+	fmt.Printf("Name: %s, Age: %v\n", result["name"], result["age"])
 
 	// Invalid JSON - should return error
 	invalid := `{"name": "Bob", "age": }`
-	result2, err2 := parseJSON(invalid)
-	if err2 != nil {
-		fmt.Printf("Error parsing invalid JSON: %v\n", err2)
-	} else {
-		fmt.Printf("Result2: %v\n", result2)
-	}
-
-	// Test toJSON
-	m := map[string]interface{}{"name": "Charlie", "age": 25}
-	jsonStr, err := toJSON(m)
-	if err != nil {
-		fmt.Printf("Error marshaling: %v\n", err)
-	} else {
-		fmt.Printf("JSON: %s\n", jsonStr)
-	}
+	result2 := parseJSON(invalid)
+	fmt.Printf("Result2: %v\n", result2)
 }
