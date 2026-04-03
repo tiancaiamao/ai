@@ -650,8 +650,17 @@ func convertSingleParamChunkNoComma(chunk string) string {
 	if len(parts) == 2 {
 		key := strings.Trim(parts[0], `"`)
 		value := parts[1]
-		// Remove trailing quotes/braces from value
-		value = strings.TrimRight(value, `",}`)
+		// Remove trailing markers from value:
+		// - "}" -> remove both (MiniMax format ending)
+		// - " -> remove only the quote (value ending)
+		// - } -> remove only the brace (MiniMax format ending)
+		if strings.HasSuffix(value, `"}`) {
+			value = value[:len(value)-2]
+		} else if strings.HasSuffix(value, `"`) {
+			value = value[:len(value)-1]
+		} else if strings.HasSuffix(value, `}`) {
+			value = value[:len(value)-1]
+		}
 		// Return standard JSON format
 		return fmt.Sprintf(`"%s": "%s"`, key, value)
 	}

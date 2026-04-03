@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage
 
-	slog.Info("[AgentNew] Converting snapshot messages to LLM format",
+	slog.Debug("[AgentNew] Converting snapshot messages to LLM format",
 		"total_messages", len(a.snapshot.RecentMessages),
 	)
 
@@ -240,7 +241,7 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 		llmMessages = append(llmMessages, llmMsg)
 	}
 
-	slog.Info("[AgentNew] Converted messages to LLM format",
+	slog.Debug("[AgentNew] Converted messages to LLM format",
 		"converted_count", len(llmMessages),
 		"total_snapshot_messages", len(a.snapshot.RecentMessages),
 	)
@@ -263,7 +264,7 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 		for i := 0; i < lastCount; i++ {
 			lastRoles[i] = llmMessages[len(llmMessages)-lastCount+i].Role
 		}
-		slog.Info("[AgentNew] Sample of converted messages",
+		slog.Debug("[AgentNew] Sample of converted messages",
 			"first_3_roles", firstRoles,
 			"last_3_roles", lastRoles,
 		)
@@ -1220,18 +1221,15 @@ func convertLLMMessageToAgent(msg llm.LLMMessage) agentctx.AgentMessage {
 			argsMap := make(map[string]any)
 			if tc.Function.Arguments != "" {
 				argsJSON := tc.Function.Arguments
-				// Debug logging for MiniMax - ALWAYS log
 				// Clean up trailing commas that may result from MiniMax format conversion
-				// Replace ", }" with " }" to fix trailing comma before closing brace
-				argsJSON = strings.ReplaceAll(argsJSON, ", }", " }")
+				// Use regex to match comma followed by optional whitespace and closing brace
+				trailingCommaRegex := regexp.MustCompile(`,\s*}`)
+				argsJSON = trailingCommaRegex.ReplaceAllString(argsJSON, " }")
 
 				if err := json.Unmarshal([]byte(argsJSON), &argsMap); err != nil {
-					// If parsing fails, log error
+					// If parsing fails, use empty map
 					argsMap = make(map[string]any)
-				} else {
 				}
-			} else {
-				// Log empty arguments
 			}
 
 			agentMsg.Content = append(agentMsg.Content, agentctx.ToolCallContent{
