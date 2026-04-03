@@ -60,9 +60,9 @@ func TestContextMgmt_CheckpointOperations(t *testing.T) {
 		assert.Equal(t, snapshot.AgentState.TokensUsed, loadedSnapshot.AgentState.TokensUsed)
 		assert.Equal(t, snapshot.LLMContext, loadedSnapshot.LLMContext)
 
-		// RecentMessages is NOT preserved in checkpoint (per event sourcing design)
-		assert.Equal(t, 0, len(loadedSnapshot.RecentMessages),
-			"RecentMessages should be empty; rebuilt from journal")
+		// RecentMessages is preserved in checkpoint via messages.jsonl
+		assert.Equal(t, len(snapshot.RecentMessages), len(loadedSnapshot.RecentMessages),
+			"RecentMessages should be preserved from checkpoint")
 	})
 
 	t.Run("checkpoint_index_operations", func(t *testing.T) {
@@ -567,7 +567,7 @@ func TestSession_ResumeBug_NoMessagesInCheckpoint(t *testing.T) {
 			MinMessageCount:    50,  // Should recover at least 50 messages
 			FirstMessageRole:   "user",
 			LLMContextNotEmpty: true,
-			CheckpointHadMessages: boolPtr(false), // Checkpoint should NOT have messages
+			CheckpointHadMessages: boolPtr(false), // Old checkpoint format: no messages.jsonl
 		},
 	})
 	defer helper.Cleanup()
