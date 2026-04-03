@@ -1901,7 +1901,11 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 		if len(cmd.Payload) > 0 {
 			json.Unmarshal(cmd.Payload, &payload)
 		}
-		return s.NewSession(payload.Name, payload.Title)
+		sessionID, err := s.NewSession(payload.Name, payload.Title)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessionId": sessionID, "cancelled": false}, nil
 	}, agent.CommandMeta{Name: "new_session", Description: "Create a new session", Source: "builtin"})
 
 	cr.Register("clear_session", func(ctx context.Context, cmd agent.Command) (any, error) {
@@ -1909,7 +1913,11 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 	}, agent.CommandMeta{Name: "clear_session", Description: "Clear current session", Source: "builtin"})
 
 	cr.Register("list_sessions", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.ListSessions()
+		sessions, err := s.ListSessions()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sessions": sessions}, nil
 	}, agent.CommandMeta{Name: "list_sessions", Description: "List all sessions", Source: "builtin"})
 
 	cr.Register("switch_session", func(ctx context.Context, cmd agent.Command) (any, error) {
@@ -1938,7 +1946,8 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 	}, agent.CommandMeta{Name: "get_state", Description: "Get session state", Source: "builtin"})
 
 	cr.Register("get_messages", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.GetMessages(), nil
+		messages := s.GetMessages()
+		return map[string]any{"messages": messages}, nil
 	}, agent.CommandMeta{Name: "get_messages", Description: "Get session messages", Source: "builtin"})
 
 	cr.Register("get_session_stats", func(ctx context.Context, cmd agent.Command) (any, error) {
@@ -1946,12 +1955,20 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 	}, agent.CommandMeta{Name: "get_session_stats", Description: "Get session statistics", Source: "builtin"})
 
 	cr.Register("get_commands", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.GetCommands()
+		commands, err := s.GetCommands()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"commands": commands}, nil
 	}, agent.CommandMeta{Name: "get_commands", Description: "List available commands", Source: "builtin"})
 
 	// --- Model management ---
 	cr.Register("get_available_models", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.GetAvailableModels()
+		models, err := s.GetAvailableModels()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"models": models}, nil
 	}, agent.CommandMeta{Name: "get_available_models", Description: "List available models", Source: "builtin"})
 
 	cr.Register("set_model", func(ctx context.Context, cmd agent.Command) (any, error) {
@@ -2049,7 +2066,11 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 	}, agent.CommandMeta{Name: "get_last_assistant_text", Description: "Get last assistant text", Source: "builtin"})
 
 	cr.Register("get_fork_messages", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.GetForkMessages()
+		messages, err := s.GetForkMessages()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"messages": messages}, nil
 	}, agent.CommandMeta{Name: "get_fork_messages", Description: "Get fork messages", Source: "builtin"})
 
 	cr.Register("fork", func(ctx context.Context, cmd agent.Command) (any, error) {
@@ -2063,7 +2084,11 @@ func (s *AgentNewServer) registerBuiltinCommands() {
 	}, agent.CommandMeta{Name: "fork", Description: "Fork at a message", Source: "builtin"})
 
 	cr.Register("get_tree", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return s.GetTree()
+		entries, err := s.GetTree()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"entries": entries}, nil
 	}, agent.CommandMeta{Name: "get_tree", Description: "Get session tree", Source: "builtin"})
 
 	cr.Register("resume_on_branch", func(ctx context.Context, cmd agent.Command) (any, error) {

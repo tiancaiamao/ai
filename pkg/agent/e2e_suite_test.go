@@ -34,6 +34,10 @@ type E2ETestHelper struct {
 
 // SetupE2E creates a test environment with temp directory
 func SetupE2E(t *testing.T) *E2ETestHelper {
+	if testing.Short() {
+		t.Skip("Skipping E2E test in short mode (requires real LLM API calls)")
+	}
+
 	tempDir := t.TempDir()
 	sessionDir := filepath.Join(tempDir, "sessions")
 
