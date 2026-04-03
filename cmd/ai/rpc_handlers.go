@@ -1112,7 +1112,7 @@ func (s *AgentNewServer) GetAvailableModels() ([]rpc.ModelInfo, error) {
 	return models, nil
 }
 
-func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.ModelInfo, error) {
+func (s *AgentNewServer) applyModelSpecLocked(ctx context.Context, spec config.ModelSpec) (*rpc.ModelInfo, error) {
 	newAPIKey, err := config.ResolveAPIKey(spec.Provider)
 	if err != nil {
 		return nil, err
@@ -1138,16 +1138,18 @@ func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.Model
 		s.persistConfigLocked()
 	}
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return nil, err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	info := modelInfoFromSpec(spec)
 	return &info, nil
 }
 
 func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1169,7 +1171,7 @@ func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, err
 	if !ok {
 		return nil, fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
-	return s.applyModelSpecLocked(spec)
+	return s.applyModelSpecLocked(ctx, spec)
 }
 
 func (s *AgentNewServer) ClearSession() error {
@@ -1194,6 +1196,8 @@ func (s *AgentNewServer) ClearSession() error {
 }
 
 func (s *AgentNewServer) NewSession(name, title string) (string, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1226,10 +1230,10 @@ func (s *AgentNewServer) NewSession(name, title string) (string, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return "", err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 	return newSessionID, nil
 }
 
@@ -1262,6 +1266,8 @@ func (s *AgentNewServer) ListSessions() ([]any, error) {
 }
 
 func (s *AgentNewServer) SwitchSession(id string) error {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1317,10 +1323,10 @@ func (s *AgentNewServer) SwitchSession(id string) error {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	if handler := traceevent.GetHandler(); handler != nil {
 		if fh, ok := handler.(*traceevent.FileHandler); ok {
@@ -1343,7 +1349,22 @@ func (s *AgentNewServer) DeleteSession(id string) error {
 
 func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.isStreaming {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("agent is busy")
+	}
+	s.isStreaming = true
+
+	// Get context before unlocking to avoid RWMutex deadlock
+	ctx := s.context()
+
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.isStreaming = false
+		s.mu.Unlock()
+	}()
 
 	if s.agent == nil {
 		return nil, fmt.Errorf("agent is not available")
@@ -1364,7 +1385,8 @@ func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	)
 
 	// Perform compaction using the new architecture
-	if err := s.agent.Compact(s.context()); err != nil {
+	// Note: This is done without holding s.mu, so other commands can check isStreaming
+	if err := s.agent.Compact(ctx); err != nil {
 		return nil, fmt.Errorf("compact failed: %w", err)
 	}
 
@@ -1381,8 +1403,10 @@ func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	)
 
 	return &rpc.CompactResult{
-		TokensBefore: beforeTokens,
-		TokensAfter:  afterTokens,
+		TokensBefore:   beforeTokens,
+		TokensAfter:    afterTokens,
+		MessagesBefore: beforeCount,
+		MessagesAfter:  afterCount,
 	}, nil
 }
 
@@ -1568,7 +1592,7 @@ func (s *AgentNewServer) ResumeOnBranch(entryID string) error {
 		}
 	}
 
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 	if s.sessionMgr != nil {
 		if err := s.sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
@@ -1578,6 +1602,8 @@ func (s *AgentNewServer) ResumeOnBranch(entryID string) error {
 }
 
 func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1612,10 +1638,10 @@ func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return nil, err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	return &rpc.ForkResult{
 		Cancelled: false,

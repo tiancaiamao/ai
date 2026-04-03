@@ -429,6 +429,13 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 	if data, err := os.ReadFile(metaPath); err == nil {
 		var meta SessionMeta
 		if err := json.Unmarshal(data, &meta); err == nil {
+			// If messageCount is 0, try to get it from checkpoint_index.json
+			// (for new checkpoint-based architecture)
+			if meta.MessageCount == 0 {
+				if count := sm.getMessageCountFromCheckpoint(sessDir); count > 0 {
+					meta.MessageCount = count
+				}
+			}
 			return &meta, nil
 		}
 	}
@@ -578,4 +585,30 @@ func countLegacyMessages(sessPath string) int {
 // GetSessionsDir returns the sessions directory path.
 func (sm *SessionManager) GetSessionsDir() string {
 	return sm.sessionsDir
+}
+
+// getMessageCountFromCheckpoint reads message count from checkpoint_index.json.
+func (sm *SessionManager) getMessageCountFromCheckpoint(sessDir string) int {
+	checkpointIndexPath := filepath.Join(sessDir, "checkpoint_index.json")
+	data, err := os.ReadFile(checkpointIndexPath)
+	if err != nil {
+		return 0
+	}
+
+	var checkpointIndex struct {
+		Checkpoints []struct {
+			RecentMessagesCount int `json:"recent_messages_count"`
+		} `json:"checkpoints"`
+	}
+	if err := json.Unmarshal(data, &checkpointIndex); err != nil {
+		return 0
+	}
+
+	// Get message count from the latest checkpoint
+	if len(checkpointIndex.Checkpoints) > 0 {
+		latest := checkpointIndex.Checkpoints[len(checkpointIndex.Checkpoints)-1]
+		return latest.RecentMessagesCount
+	}
+
+	return 0
 }
