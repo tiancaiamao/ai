@@ -146,15 +146,21 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage
 
-	for _, msg := range a.snapshot.RecentMessages {
+	slog.Info("[AgentNew] Converting snapshot messages to LLM format",
+		"total_messages", len(a.snapshot.RecentMessages),
+	)
+
+	for i, msg := range a.snapshot.RecentMessages {
 		// Filter out messages that are not visible to agent
 		// Compaction sets agent_visible=false to hide old messages from LLM (saves tokens)
 		// Users can still see them (user_visible=true)
 		if !msg.IsAgentVisible() {
+			slog.Debug("[AgentNew] Skipping non-agent-visible message", "index", i, "role", msg.Role)
 			continue
 		}
 		// Filter out truncated messages - they have been replaced with summaries
 		if msg.IsTruncated() {
+			slog.Debug("[AgentNew] Skipping truncated message", "index", i, "role", msg.Role)
 			continue
 		}
 
@@ -167,14 +173,27 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 		// Tool messages should be preserved even with empty content
 		isEmpty := content == "" && len(toolCalls) == 0
 		isTool := msg.Role == "tool" || msg.Role == "toolResult"
-		if isEmpty && !isTool {
-			continue
-		}
 
-		// Skip empty assistant messages (content == "" && no tool_calls)
-		// These are typically failed or incomplete responses
-		if msg.Role == "assistant" && isEmpty {
-			continue
+		// For empty assistant messages without thinking, tool_calls, or content,
+		// skip them. The normalizeMessageSequence function will handle any
+		// sequence validation issues. This is better than using "..." placeholder
+		// which sends incorrect content to the LLM.
+		if isEmpty && !isTool {
+			thinking := msg.ExtractThinking()
+			if msg.Role == "assistant" && thinking != "" {
+				// Use thinking content instead of skipping
+				content = thinking
+				isEmpty = false
+			} else {
+				// Skip empty messages (including empty assistant messages)
+				// normalizeMessageSequence will handle sequence validation
+				slog.Debug("[AgentNew] Skipping empty message",
+					"index", i,
+					"role", msg.Role,
+					"content_blocks", len(msg.Content),
+				)
+				continue
+			}
 		}
 
 		// Convert internal role to LLM API role
@@ -219,6 +238,35 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 		}
 
 		llmMessages = append(llmMessages, llmMsg)
+	}
+
+	slog.Info("[AgentNew] Converted messages to LLM format",
+		"converted_count", len(llmMessages),
+		"total_snapshot_messages", len(a.snapshot.RecentMessages),
+	)
+
+	// Log first few converted messages for debugging
+	if len(llmMessages) > 0 {
+		firstCount := 3
+		if len(llmMessages) < firstCount {
+			firstCount = len(llmMessages)
+		}
+		lastCount := 3
+		if len(llmMessages) < lastCount {
+			lastCount = len(llmMessages)
+		}
+		firstRoles := make([]string, firstCount)
+		lastRoles := make([]string, lastCount)
+		for i := 0; i < firstCount; i++ {
+			firstRoles[i] = llmMessages[i].Role
+		}
+		for i := 0; i < lastCount; i++ {
+			lastRoles[i] = llmMessages[len(llmMessages)-lastCount+i].Role
+		}
+		slog.Info("[AgentNew] Sample of converted messages",
+			"first_3_roles", firstRoles,
+			"last_3_roles", lastRoles,
+		)
 	}
 
 	// Normalize message sequence to ensure valid role alternation
@@ -571,6 +619,8 @@ func (a *AgentNew) processLLMResponse(
 							argsMap := make(map[string]any)
 							if tc.Function.Arguments != "" {
 								if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+									// JSON incomplete or parsing failed - use empty map
+									// This is OK since we'll use e.Message for actual tool execution
 									argsMap = make(map[string]any)
 								}
 							}
@@ -622,6 +672,8 @@ func (a *AgentNew) processLLMResponse(
 							argsMap := make(map[string]any)
 							if tc.Function.Arguments != "" {
 								if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
+									// JSON incomplete or parsing failed - use empty map
+									// This is OK since we'll use e.Message for actual tool execution
 									argsMap = make(map[string]any)
 								}
 							}
@@ -694,11 +746,8 @@ func (a *AgentNew) processLLMResponse(
 						argsMap := make(map[string]any)
 						if tc.Function.Arguments != "" {
 							if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
-								slog.Warn("[AgentNew] Failed to parse tool call arguments",
-									"tool", tc.Function.Name,
-									"toolCallID", tc.ID,
-									"error", err,
-								)
+								// JSON incomplete or parsing failed - use empty map
+								// This is OK since we'll use e.Message for actual tool execution
 								argsMap = make(map[string]any)
 							}
 						}
@@ -746,14 +795,19 @@ func (a *AgentNew) processLLMResponse(
 				if a.eventEmitter != nil {
 					a.eventEmitter.Emit(NewMessageEndEvent(*partialMessage))
 				}
-
-				// Execute tool calls if present
-				toolResults := a.executeToolsFromMessage(ctx, partialMessage)
-				return partialMessage, toolResults, nil
 			}
 
+			// Always prefer e.Message for tool execution, as it contains complete Arguments strings
 			if e.Message != nil {
 				msg := convertLLMMessageToAgent(*e.Message)
+
+				// If partialMessage exists, use it as base but override Content with properly parsed tool calls
+				if partialMessage != nil {
+					partialMessage.Content = msg.Content
+					// Execute tool calls using partialMessage (with updated Content)
+					toolResults := a.executeToolsFromMessage(ctx, partialMessage)
+					return partialMessage, toolResults, nil
+				}
 
 				// Emit message_end event for win UI
 				if a.eventEmitter != nil {
@@ -763,6 +817,13 @@ func (a *AgentNew) processLLMResponse(
 				// Execute tool calls if present
 				toolResults := a.executeToolsFromMessage(ctx, &msg)
 				return &msg, toolResults, nil
+			}
+
+			// Fallback to partialMessage if e.Message is nil (shouldn't happen)
+			if partialMessage != nil {
+				// Execute tool calls if present
+				toolResults := a.executeToolsFromMessage(ctx, partialMessage)
+				return partialMessage, toolResults, nil
 			}
 
 			return nil, nil, fmt.Errorf("no message in LLM response")
@@ -1158,10 +1219,19 @@ func convertLLMMessageToAgent(msg llm.LLMMessage) agentctx.AgentMessage {
 			// Parse arguments from JSON string to map
 			argsMap := make(map[string]any)
 			if tc.Function.Arguments != "" {
-				if err := json.Unmarshal([]byte(tc.Function.Arguments), &argsMap); err != nil {
-					// If parsing fails, create empty map
+				argsJSON := tc.Function.Arguments
+				// Debug logging for MiniMax - ALWAYS log
+				// Clean up trailing commas that may result from MiniMax format conversion
+				// Replace ", }" with " }" to fix trailing comma before closing brace
+				argsJSON = strings.ReplaceAll(argsJSON, ", }", " }")
+
+				if err := json.Unmarshal([]byte(argsJSON), &argsMap); err != nil {
+					// If parsing fails, log error
 					argsMap = make(map[string]any)
+				} else {
 				}
+			} else {
+				// Log empty arguments
 			}
 
 			agentMsg.Content = append(agentMsg.Content, agentctx.ToolCallContent{

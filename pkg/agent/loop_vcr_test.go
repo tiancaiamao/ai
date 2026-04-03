@@ -19,6 +19,26 @@ import (
 	"github.com/tiancaiamao/ai/pkg/testutil"
 )
 
+// vcrShouldRecord returns true if the VCR_RECORD environment variable is set to "1".
+// By default, VCR tests only run the Replay phase (fast, no network calls).
+// To re-record cassettes, run: VCR_RECORD=1 go test ./pkg/agent -v -run TestVCR
+func vcrShouldRecord() bool {
+	return os.Getenv("VCR_RECORD") == "1"
+}
+
+// vcrMaybeRun runs the Record subtest only if VCR_RECORD=1 is set.
+// Otherwise, skips it. This ensures tests only re-record when explicitly requested.
+func vcrMaybeRun(t *testing.T, name string, fn func(t *testing.T)) {
+	t.Helper()
+	if vcrShouldRecord() {
+		t.Run(name, fn)
+	} else {
+		t.Run(name, func(t *testing.T) {
+			t.Skip("Skipping Record phase (set VCR_RECORD=1 to re-record cassettes)")
+		})
+	}
+}
+
 // ============================================================================
 // VCR Test: Duplicate Tool Call Detection
 // ============================================================================
@@ -57,8 +77,8 @@ func TestVCR_DuplicateToolCallDetection_20DifferentCalls_ShouldPass(t *testing.T
 
 	cassetteDir := filepath.Join("testdata", "vcr", "duplicate_detection")
 
-	// Phase 1: Record (run once with VCR_MODE=record)
-	t.Run("Record", func(t *testing.T) {
+	// Phase 1: Record (only runs when VCR_RECORD=1 is set)
+	vcrMaybeRun(t, "Record", func(t *testing.T) {
 		vcr := testutil.NewVCR(t, cassetteDir, "20_different_calls")
 		vcr.Record()
 		defer vcr.Cleanup()
