@@ -90,6 +90,7 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 		triggerChecker: agentctx.NewTriggerChecker(),
 		eventEmitter:   eventEmitter,
 		allTools:       tools.GetAllTools(),
+		thinkingLevel:  "high", // Default; caller should override via SetThinkingLevel
 	}
 
 	// Update context window if model provides it

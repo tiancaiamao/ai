@@ -370,7 +370,7 @@ func NewAgentNewServer(
 		keepTools:             keepTools,
 		steeringMode:          "all",
 		followUpMode:          "all",
-		thinkingLevel:         "medium",
+		thinkingLevel:         "high",
 		autoCompactionEnabled: autoCompactionEnabled,
 		commands:              agent.NewCommandRegistry(),
 	}
@@ -382,6 +382,12 @@ func NewAgentNewServer(
 		projectContext = prompt.BuildProjectContext(workspace.GetCWD())
 	}
 	agentServer.agent.SetSystemPromptExtras(skillsText, projectContext)
+
+	// Set custom system prompt from --system-prompt flag if provided
+	if systemPrompt != "" {
+		agentServer.agent.SetCustomSystemPrompt(systemPrompt)
+		slog.Info("[AgentNew] Custom system prompt applied from CLI flag", "length", len(systemPrompt))
+	}
 
 	// Register built-in commands
 	agentServer.registerBuiltinCommands()
@@ -855,14 +861,40 @@ func (s *AgentNewServer) syncSessionFromSnapshotLocked() error {
 }
 
 func (s *AgentNewServer) reloadAgentLocked(ctx context.Context) error {
+	// Preserve extras from the previous agent before closing it.
+	var skillsText, projectContext string
+	var thinkingLevel string
+	var customSystemPrompt string
 	if s.agent != nil {
+		skillsText = s.agent.GetSkillsExtra()
+		projectContext = s.agent.GetProjectContextExtra()
+		thinkingLevel = s.agent.GetThinkingLevel()
+		customSystemPrompt = s.agent.GetCustomSystemPrompt()
 		if err := s.agent.Close(); err != nil {
 			slog.Warn("[AgentNew] Failed to close previous agent", "error", err)
 		}
+	} else {
+		// Fallback: re-derive from server fields (first-time initialization).
+		skillsText = formatSkillsForPrompt(s.skills)
+		if s.workspace != nil {
+			projectContext = prompt.BuildProjectContext(s.workspace.GetCWD())
+		}
+		thinkingLevel = s.thinkingLevel
+		customSystemPrompt = s.systemPrompt // Use server's stored systemPrompt
 	}
 	ag, err := agent.LoadSession(ctx, s.sessionDir, s.model, s.apiKey, s.eventEmitter)
 	if err != nil {
 		return err
+	}
+	// Re-inject extras into the new agent.
+	ag.SetSystemPromptExtras(skillsText, projectContext)
+	if customSystemPrompt != "" {
+		ag.SetCustomSystemPrompt(customSystemPrompt)
+	}
+	if thinkingLevel != "" {
+		if _, err := ag.SetThinkingLevel(thinkingLevel); err != nil {
+			slog.Warn("[AgentNew] Failed to restore thinking level", "level", thinkingLevel, "error", err)
+		}
 	}
 	s.agent = ag
 	return nil

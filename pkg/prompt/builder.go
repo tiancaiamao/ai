@@ -56,21 +56,38 @@ func BuildSystemPromptWithThinking(mode context.AgentMode, thinkingLevel string)
 
 // BuildSystemPromptWithExtras builds the system prompt for normal mode with skills and project context
 // substituted into their respective placeholders, then appends the thinking level instruction.
-func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, skillsText string, projectContext string) string {
+// If customPrompt is non-empty, it replaces the base system prompt while still appending
+// skills and project context sections.
+func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, skillsText string, projectContext string, customPrompt ...string) string {
 	if mode != context.ModeNormal {
 		return BuildSystemPrompt(mode)
 	}
 
+	// Determine base prompt: custom or default
 	base := normalSystemPrompt
+	if len(customPrompt) > 0 && customPrompt[0] != "" {
+		base = customPrompt[0]
+	}
 
-	// Substitute %SKILLS% placeholder
+	// Substitute %SKILLS% placeholder (only present in default template)
 	result := strings.ReplaceAll(base, "%SKILLS%", skillsText)
 
-	// Substitute %PROJECT_CONTEXT% placeholder
+	// Substitute %PROJECT_CONTEXT% placeholder (only present in default template)
 	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
 
 	// Clean up empty sections (e.g., "## Skills" with no content below it)
 	result = cleanupEmptySections(result)
+
+	// For custom prompts, append skills and project context as sections if they exist
+	// and the custom prompt doesn't contain the % placeholders
+	if len(customPrompt) > 0 && customPrompt[0] != "" {
+		if skillsText != "" && !strings.Contains(customPrompt[0], "%SKILLS%") {
+			result = result + "\n\n## Skills\n\n" + skillsText
+		}
+		if projectContext != "" && !strings.Contains(customPrompt[0], "%PROJECT_CONTEXT%") {
+			result = result + "\n\n" + projectContext
+		}
+	}
 
 	// Append thinking instruction
 	normalized := NormalizeThinkingLevel(thinkingLevel)

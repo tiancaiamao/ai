@@ -295,7 +295,7 @@ var defaultEnabledEvents = []string{
 	"message_start",
 	"message_end",
 	// "message_update",    // high frequency
-	"assistant_text",
+	// "assistant_text",
 	// "text_delta",        // high frequency, enable via -trace or config
 	// "thinking_delta",    // high frequency, enable via -trace or config
 	// "tool_call_delta",   // high frequency, enable via -trace or config
