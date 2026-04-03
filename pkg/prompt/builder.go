@@ -4,370 +4,17 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"reflect"
+	"path/filepath"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/skill"
-	"github.com/tiancaiamao/ai/pkg/tools"
+	"github.com/tiancaiamao/ai/pkg/context"
 )
 
-//go:embed "prompt.md"
-var promptTemplate string
-
-//go:embed "subagent_base.md"
-var subagentBasePrompt string
-
-//go:embed "headless_base.md"
-var headlessBasePrompt string
-
-//go:embed "context_management.md"
-var contextManagementPrompt string
-
-//go:embed "compact_system.md"
-var compactSystemPrompt string
-
-//go:embed "compact_summarize.md"
-var compactSummarizePrompt string
-
-//go:embed "compact_update.md"
-var compactUpdatePrompt string
-
-//go:embed "subagent.md"
-var DefaultSubagentPrompt string
-
-//go:embed "task_tracking.md"
-var taskTrackingPrompt string
-
-// CompactorBasePrompt returns the baseline prompt used by compactor requests.
-func CompactorBasePrompt() string {
-	return "You are a helpful coding assistant."
-}
-
-// HeadlessBasePrompt returns the base system prompt for headless mode.
-func HeadlessBasePrompt(isSubagent bool) string {
-	if isSubagent {
-		return subagentBasePrompt
-	}
-
-	return headlessBasePrompt
-}
-
-// RPCBasePrompt returns the base system prompt for RPC mode.
-func RPCBasePrompt() string {
-	return headlessBasePrompt
-}
-
-// JSONModeBasePrompt returns the base system prompt for JSON mode.
-func JSONModeBasePrompt() string {
-	return HeadlessBasePrompt(false)
-}
-
-// CompactSystemPrompt returns the system prompt for compaction.
-func CompactSystemPrompt() string {
-	return compactSystemPrompt
-}
-
-// CompactSummarizePrompt returns the prompt for initial summarization.
-func CompactSummarizePrompt() string {
-	return compactSummarizePrompt
-}
-
-// CompactUpdatePrompt returns the prompt for updating existing summary.
-func CompactUpdatePrompt() string {
-	return compactUpdatePrompt
-}
-
-// ToolInfo describes a tool for prompt generation.
-type ToolInfo interface {
-	Name() string
-	Description() string
-}
-
-// LLMContextInfo provides llm context content for prompt generation.
-type LLMContextInfo interface {
-	Load() (string, error)
-	GetPath() string
-	GetDetailDir() string
-}
-
-// Builder constructs system prompts with structured sections.
-type Builder struct {
-	// Working directory (can be static or dynamic via workspace)
-	cwd       string
-	workspace *tools.Workspace
-
-	// Minimal mode (excludes optional sections like skills, project context)
-	minimal bool
-
-	// No workspace mode (excludes workspace section, for chat bots like claw)
-	noWorkspace bool
-
-	// Subagent mode (excludes task strategy section to prevent recursive subagent use)
-	isSubagent bool
-
-	// Workspace notes (optional reminders)
-	workspaceNotes string
-
-	// Available tools (for Tooling section)
-	tools []ToolInfo
-
-	// Skills (for Skills section)
-	skills []skill.Skill
-
-	// Resident prompt (for LLM Context section)
-	llmContext LLMContextInfo
-
-	// Context meta (for LLM Context section, set by agent loop)
-	contextMeta string
-
-	// Token usage percent (for hint message generation)
-	tokensPercent float64
-
-	// Task tracking enabled (controls task tracking inclusion)
-	taskTrackingEnabled bool
-
-	// Context management enabled (controls context_management.md inclusion)
-	contextManagementEnabled bool
-
-	// Context management override (replaces embedded context_management.md)
-	contextManagementOverride string
-}
-
-// NewBuilder creates a new prompt builder.
-func NewBuilder(_, cwd string) *Builder {
-	return &Builder{
-		cwd:                      cwd,
-		minimal:                  false,
-		taskTrackingEnabled:      true,
-		contextManagementEnabled: false,
-	}
-}
-
-// NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
-func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
-	return &Builder{
-		workspace:                ws,
-		minimal:                  false,
-		taskTrackingEnabled:      true,
-		contextManagementEnabled: false,
-	}
-}
-
-// GetCWD returns the current working directory.
-func (b *Builder) GetCWD() string {
-	if b.workspace != nil {
-		return b.workspace.GetCWD()
-	}
-	return b.cwd
-}
-
-// SetMinimal enables/disables minimal mode.
-func (b *Builder) SetMinimal(minimal bool) *Builder {
-	b.minimal = minimal
-	return b
-}
-
-// SetNoWorkspace enables/disables no-workspace mode.
-func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
-	b.noWorkspace = noWorkspace
-	return b
-}
-
-// SetSubagent enables/disables subagent mode.
-func (b *Builder) SetSubagent(isSubagent bool) *Builder {
-	b.isSubagent = isSubagent
-	return b
-}
-
-// SetWorkspaceNotes sets optional workspace notes.
-func (b *Builder) SetWorkspaceNotes(notes string) *Builder {
-	b.workspaceNotes = notes
-	return b
-}
-
-// SetTools sets the available tools.
-func (b *Builder) SetTools(tools interface{}) *Builder {
-	b.tools = convertTools(tools)
-	return b
-}
-
-func convertTools(tools interface{}) []ToolInfo {
-	if tools == nil {
-		return nil
-	}
-	v := reflect.ValueOf(tools)
-	if v.Kind() == reflect.Slice {
-		result := make([]ToolInfo, v.Len())
-		for i := 0; i < v.Len(); i++ {
-			elem := v.Index(i).Interface()
-			if tool, ok := elem.(ToolInfo); ok {
-				result[i] = tool
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-// SetSkills sets the available skills.
-func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
-	b.skills = skills
-	return b
-}
-
-// SetLLMContext sets the llm context for the prompt.
-func (b *Builder) SetLLMContext(wm LLMContextInfo) *Builder {
-	b.llmContext = wm
-	return b
-}
-
-// SetContextMeta sets the context metadata string.
-func (b *Builder) SetContextMeta(meta string) *Builder {
-	b.contextMeta = meta
-	return b
-}
-
-// SetTokensPercent sets the token usage percent.
-func (b *Builder) SetTokensPercent(percent float64) *Builder {
-	b.tokensPercent = percent
-	return b
-}
-
-// SetTaskTrackingEnabled sets whether task tracking is enabled.
-func (b *Builder) SetTaskTrackingEnabled(enabled bool) *Builder {
-	b.taskTrackingEnabled = enabled
-	return b
-}
-
-// SetContextManagementEnabled sets whether context management is enabled.
-func (b *Builder) SetContextManagementEnabled(enabled bool) *Builder {
-	b.contextManagementEnabled = enabled
-	return b
-}
-
-// SetContextManagementOverride replaces the embedded context_management.md content.
-func (b *Builder) SetContextManagementOverride(content string) *Builder {
-	b.contextManagementOverride = content
-	return b
-}
-
-// Build builds final system prompt by replacing placeholders in the template.
-func (b *Builder) Build() string {
-	result := promptTemplate
-
-	// Replace workspace section (optional - empty when noWorkspace is true)
-	workspaceSection := ""
-	if !b.noWorkspace {
-		workspaceNotes := ""
-		if b.workspaceNotes != "" {
-			workspaceNotes = "\n" + b.workspaceNotes
-		}
-		workspaceSection = fmt.Sprintf(`## Workspace
-Workspace location is runtime-managed and may change during execution (for example, when switching git worktrees).
-Do not assume a fixed directory in the system prompt.
-Use runtime_state fields for path truth:
-- current_workdir
-- startup_path
-For command-local directory changes, use bash with "cd <dir> && <command>".
-For persistent workspace switching across subsequent tool calls, use change_workspace when available.%s`, workspaceNotes)
-	}
-	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
-
-	// Replace task tracking (optional section)
-	taskTracking := ""
-	if b.taskTrackingEnabled {
-		taskTracking = b.buildTaskTrackingContent()
-	}
-	result = strings.ReplaceAll(result, "%TASK_TRACKING_CONTENT%", taskTracking)
-
-	// Replace context management (optional section)
-	contextManagement := ""
-	if b.contextManagementEnabled && b.llmContext != nil {
-		if b.contextManagementOverride != "" {
-			contextManagement = b.contextManagementOverride
-		} else {
-			contextManagement = contextManagementPrompt
-		}
-	}
-	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
-
-	// Replace skills hint (optional, only shown if skills exist)
-	skillsHint := ""
-	if !b.minimal && len(b.skills) > 0 && len(b.tools) > 0 {
-		skillsHint = "\n\nIf you need additional capabilities, check the available Skills below."
-	}
-	result = strings.ReplaceAll(result, "%SKILLS_HINT%", skillsHint)
-
-	// Replace skills (optional section)
-	skills := ""
-	if !b.minimal && len(b.skills) > 0 {
-		if skillsText := skill.FormatForPrompt(b.skills); skillsText != "" {
-			skills = skillsText
-		}
-	}
-	result = strings.ReplaceAll(result, "%SKILLS%", skills)
-
-	// Replace project context (optional section)
-	projectContext := ""
-	if !b.minimal && !b.noWorkspace {
-		projectContext = b.buildProjectContext()
-	}
-	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
-
-	// Remove empty sections (optional sections that were not enabled)
-	result = b.cleanupEmptySections(result)
-
-	return result
-}
-
-func (b *Builder) buildTaskTrackingContent() string {
-	content := `## Task Tracking
-Track multi-step tasks using ` + "`task_tracking`" + `.
-
-**Update** (with markdown content) when:
-- Task status changes, decisions made, files changed
-- Progress milestone reached, blocker emerged/resolved
-
-**Skip** (with ` + "`skip=true, reasoning=\"...\"`" + `) when:
-- Simple questions, no progress, routine responses
-
-**Important:** Always call ` + "`task_tracking`" + ` — with content or ` + "`skip=true`" + `. This prevents reminder spam.
-
-### Update Example
-
-**Good:** Specific, actionable status
-
-` + "```markdown" + `
-## Current Task
-- Implementing feature X
-- Status: 60% complete
-- Done: Core logic, unit tests
-- Next: Integration tests
-` + "```" + `
-
-**Bad:** Too vague, no actionable info
-
-` + "```markdown" + `
-Working on it...
-` + "```" + `
-
-**When to skip (skip=true):**
-- Simple questions without task progress
-- Routine responses without state changes
-- Quick clarifications or confirmations`
-
-	if b.contextMeta != "" {
-		content += `
-
----
-
-<context_meta>
-` + b.contextMeta + `
-</context_meta>`
-	}
-
-	return content
-}
+//go:embed "normal_system.md"
+var normalSystemPrompt string
+
+//go:embed "context_mgmt_system.md"
+var contextMgmtSystemPrompt string
 
 // Bootstrap files to search for in workspace.
 var bootstrapFiles = []string{
@@ -377,15 +24,95 @@ var bootstrapFiles = []string{
 	"IDENTITY.md", // User/owner identity
 }
 
-func (b *Builder) buildProjectContext() string {
+// BuildSystemPrompt builds the system prompt for the given mode.
+func BuildSystemPrompt(mode context.AgentMode) string {
+	switch mode {
+	case context.ModeNormal:
+		return normalSystemPrompt
+	case context.ModeContextMgmt:
+		return contextMgmtSystemPrompt
+	default:
+		return normalSystemPrompt
+	}
+}
+
+// BuildSystemPromptWithThinking builds the system prompt with a thinking level instruction appended.
+// Only ModeNormal gets a thinking instruction; other modes return the base prompt as-is.
+func BuildSystemPromptWithThinking(mode context.AgentMode, thinkingLevel string) string {
+	base := BuildSystemPrompt(mode)
+	if mode != context.ModeNormal {
+		return base
+	}
+	normalized := NormalizeThinkingLevel(thinkingLevel)
+	if normalized == "off" {
+		return base
+	}
+	instruction := ThinkingInstruction(normalized)
+	if instruction == "" {
+		return base
+	}
+	return fmt.Sprintf("%s\n\n<thinking_instruction>\n%s\n</thinking_instruction>", base, instruction)
+}
+
+// BuildSystemPromptWithExtras builds the system prompt for normal mode with skills and project context
+// substituted into their respective placeholders, then appends the thinking level instruction.
+// If customPrompt is non-empty, it replaces the base system prompt while still appending
+// skills and project context sections.
+func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, skillsText string, projectContext string, customPrompt ...string) string {
+	if mode != context.ModeNormal {
+		return BuildSystemPrompt(mode)
+	}
+
+	// Determine base prompt: custom or default
+	base := normalSystemPrompt
+	if len(customPrompt) > 0 && customPrompt[0] != "" {
+		base = customPrompt[0]
+	}
+
+	// Substitute %SKILLS% placeholder (only present in default template)
+	result := strings.ReplaceAll(base, "%SKILLS%", skillsText)
+
+	// Substitute %PROJECT_CONTEXT% placeholder (only present in default template)
+	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
+
+	// Clean up empty sections (e.g., "## Skills" with no content below it)
+	result = cleanupEmptySections(result)
+
+	// For custom prompts, append skills and project context as sections if they exist
+	// and the custom prompt doesn't contain the % placeholders
+	if len(customPrompt) > 0 && customPrompt[0] != "" {
+		if skillsText != "" && !strings.Contains(customPrompt[0], "%SKILLS%") {
+			result = result + "\n\n## Skills\n\n" + skillsText
+		}
+		if projectContext != "" && !strings.Contains(customPrompt[0], "%PROJECT_CONTEXT%") {
+			result = result + "\n\n" + projectContext
+		}
+	}
+
+	// Append thinking instruction
+	normalized := NormalizeThinkingLevel(thinkingLevel)
+	if normalized != "off" {
+		if instruction := ThinkingInstruction(normalized); instruction != "" {
+			result = fmt.Sprintf("%s\n\n<thinking_instruction>\n%s\n</thinking_instruction>", result, instruction)
+		}
+	}
+
+	return result
+}
+
+// BuildProjectContext reads bootstrap files (AGENTS.md, CLAUDE.md, TOOLS.md, IDENTITY.md)
+// from the given working directory and formats them as project context.
+// Looks in .ai/<file> first, then <cwd>/<file>.
+// If AGENTS.md exists, CLAUDE.md is skipped.
+func BuildProjectContext(cwd string) string {
 	contexts := []string{}
-	hasAgents := b.loadBootstrapFile("AGENTS.md") != ""
+	hasAgents := loadBootstrapFile(cwd, "AGENTS.md") != ""
 
 	for _, filename := range bootstrapFiles {
 		if filename == "CLAUDE.md" && hasAgents {
 			continue
 		}
-		content := b.loadBootstrapFile(filename)
+		content := loadBootstrapFile(cwd, filename)
 		if content != "" {
 			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
 		}
@@ -395,20 +122,20 @@ func (b *Builder) buildProjectContext() string {
 		return ""
 	}
 
-	return "## Project Context\n" + joinLines(contexts)
+	return "## Project Context\n" + strings.Join(contexts, "\n\n")
 }
 
-func (b *Builder) loadBootstrapFile(filename string) string {
-	cwd := b.GetCWD()
-
+// loadBootstrapFile reads a bootstrap file from the workspace.
+// Tries .ai/<filename> first, then <cwd>/<filename>.
+func loadBootstrapFile(cwd string, filename string) string {
 	// Try project-local first: .ai/<filename>
-	projectPath := fmt.Sprintf("%s/.ai/%s", cwd, filename)
+	projectPath := filepath.Join(cwd, ".ai", filename)
 	if content, err := os.ReadFile(projectPath); err == nil {
 		return string(content)
 	}
 
 	// Try workspace root: <cwd>/<filename>
-	rootPath := fmt.Sprintf("%s/%s", cwd, filename)
+	rootPath := filepath.Join(cwd, filename)
 	if content, err := os.ReadFile(rootPath); err == nil {
 		return string(content)
 	}
@@ -416,8 +143,9 @@ func (b *Builder) loadBootstrapFile(filename string) string {
 	return ""
 }
 
-func (b *Builder) cleanupEmptySections(prompt string) string {
-	// Remove sections that are completely empty (only section header and blank lines)
+// cleanupEmptySections removes sections that are completely empty
+// (section header with only blank lines following it, until the next section or EOF).
+func cleanupEmptySections(prompt string) string {
 	lines := strings.Split(prompt, "\n")
 	cleaned := []string{}
 
@@ -428,25 +156,27 @@ func (b *Builder) cleanupEmptySections(prompt string) string {
 		if strings.HasPrefix(line, "## ") {
 			// Look ahead to see if the section has any non-empty content
 			hasContent := false
-			nextIdx := i + 1
-
-			for nextIdx < len(lines) {
-				nextLine := lines[nextIdx]
-				if nextLine == "" {
-					nextIdx++
-					continue
-				}
-				if strings.HasPrefix(nextLine, "## ") {
-					// Next section header - no content found
+			j := i + 1
+			for j < len(lines) {
+				nextLine := lines[j]
+				// Stop at next section header
+				if strings.HasPrefix(nextLine, "## ") || strings.HasPrefix(nextLine, "# ") {
 					break
 				}
-				hasContent = true
-				break
+				if strings.TrimSpace(nextLine) != "" {
+					hasContent = true
+					break
+				}
+				j++
 			}
 
 			if !hasContent {
-				// Skip this empty section (header + empty lines)
-				i = nextIdx
+				// Skip this section header and its trailing blank lines
+				i = j
+				// Skip any trailing blank lines after the removed section
+				for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+					i++
+				}
 				continue
 			}
 		}
@@ -455,42 +185,12 @@ func (b *Builder) cleanupEmptySections(prompt string) string {
 		i++
 	}
 
-	return strings.Join(cleaned, "\n")
-}
+	result := strings.Join(cleaned, "\n")
 
-func joinLines(lines []string) string {
-	return strings.Join(lines, "\n")
-}
-
-// ThinkingInstruction returns the thinking instruction for the given level.
-func ThinkingInstruction(level string) string {
-	level = NormalizeThinkingLevel(level)
-	switch level {
-	case "off":
-		return "Thinking level is off. Do not emit reasoning/thinking content. Respond directly with concise results and tool calls when needed."
-	case "minimal":
-		return "Thinking level is minimal. Keep reasoning very brief and only include what is strictly necessary."
-	case "low":
-		return "Thinking level is low. Keep reasoning concise and focused."
-	case "medium":
-		return "Thinking level is medium. Use balanced reasoning depth."
-	case "high":
-		return "Thinking level is high. Use thorough reasoning where needed."
-	case "xhigh":
-		return "Thinking level is xhigh. Use very thorough reasoning before final answers and tool calls."
-	default:
-		return ""
+	// Clean up multiple consecutive blank lines
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
 	}
-}
 
-// NormalizeThinkingLevel normalizes the thinking level string.
-func NormalizeThinkingLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "off", "minimal", "low", "medium", "high", "xhigh":
-		return strings.ToLower(strings.TrimSpace(level))
-	case "":
-		return "high"
-	default:
-		return "high"
-	}
+	return strings.TrimSpace(result)
 }

@@ -52,6 +52,11 @@ type AgentNew struct {
 	pendingInputMu sync.RWMutex
 	pendingInput   string // For steer: new message to process
 	hasPendingInput bool
+
+	// System prompt extras (skills and project context injected at construction time)
+	skillsExtra         string
+	projectContextExtra string
+	customSystemPrompt  string // Custom system prompt from --system-prompt flag (headless mode)
 }
 
 // ModelSpec wraps the model specification from config.
@@ -93,7 +98,7 @@ func NewAgentNew(sessionDir, sessionID string, model *ModelSpec, apiKey string, 
 		model:          model,
 		apiKey:         apiKey,
 		triggerChecker: triggerChecker,
-		thinkingLevel:  "medium", // Default thinking level
+		thinkingLevel:  "high", // Default thinking level
 		eventEmitter:   eventEmitter,
 		allTools:       allTools,
 	}
@@ -183,6 +188,43 @@ func (a *AgentNew) GetThinkingLevel() string {
 	return a.thinkingLevel
 }
 
+// SetSystemPromptExtras sets the skills and project context strings for system prompt injection.
+// These are pre-computed at construction time and substituted into %SKILLS% and %PROJECT_CONTEXT% placeholders.
+func (a *AgentNew) SetSystemPromptExtras(skillsText string, projectContext string) {
+	a.skillsExtra = skillsText
+	a.projectContextExtra = projectContext
+	slog.Info("[AgentNew] System prompt extras set", "skillsLen", len(skillsText), "projectLen", len(projectContext))
+}
+
+// SetCustomSystemPrompt sets a custom system prompt from the --system-prompt flag.
+// When non-empty, this content replaces the base system prompt (normal_system.md),
+// while still appending skills and project context sections.
+func (a *AgentNew) SetCustomSystemPrompt(customPrompt string) {
+	a.customSystemPrompt = customPrompt
+	slog.Info("[AgentNew] Custom system prompt set", "len", len(customPrompt))
+}
+
+// GetCustomSystemPrompt returns the custom system prompt.
+func (a *AgentNew) GetCustomSystemPrompt() string {
+	a.snapshotMu.RLock()
+	defer a.snapshotMu.RUnlock()
+	return a.customSystemPrompt
+}
+
+// GetSkillsExtra returns the skills text for system prompt injection.
+func (a *AgentNew) GetSkillsExtra() string {
+	a.snapshotMu.RLock()
+	defer a.snapshotMu.RUnlock()
+	return a.skillsExtra
+}
+
+// GetProjectContextExtra returns the project context text for system prompt injection.
+func (a *AgentNew) GetProjectContextExtra() string {
+	a.snapshotMu.RLock()
+	defer a.snapshotMu.RUnlock()
+	return a.projectContextExtra
+}
+
 // SetMaxTurns sets the maximum number of turns allowed (0 means unlimited).
 // This is typically used in headless mode to prevent infinite loops.
 func (a *AgentNew) SetMaxTurns(maxTurns int) {
@@ -265,8 +307,8 @@ func (a *AgentNew) performCompaction(ctx context.Context) error {
 		traceevent.Field{Key: "tokens", Value: beforeTokens},
 	)
 
-	// Create compactor
-	systemPrompt := prompt.BuildSystemPrompt(agentctx.ModeNormal)
+	// Create compactor — use BuildSystemPromptWithExtras so skills/project context are included
+	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra, a.customSystemPrompt)
 	compactor := compact.NewCompactor(
 		compact.DefaultConfig(),
 		*a.model,  // Dereference pointer

@@ -166,6 +166,36 @@ func runHeadless(sessionPath, debugAddr string, maxTurns int, timeout time.Durat
 	var state headlessStreamState
 	printed := false
 
+	// Give RPC server a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Get and output session ID (for subagent script capture)
+	stateID := fmt.Sprintf("headless-state-%d", 0)
+	if err := writeHeadlessCommand(rpcInWriter, rpc.RPCCommand{
+		ID:   stateID,
+		Type: rpc.CommandGetState,
+	}); err != nil {
+		return err
+	}
+
+	// Wait for response with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stateResp, err := waitHeadlessResponseWithContext(lineCh, lineErrCh, ctx, stateID, &state)
+	if err != nil {
+		// Timeout or error waiting for get_state response - log and continue
+		slog.Warn("Failed to get session ID for headless mode", "error", err)
+	} else if stateResp.Success {
+		var sessionState struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(stateResp.Data, &sessionState); err == nil && sessionState.SessionID != "" {
+			fmt.Fprintf(output, "=== Session Info ===\n")
+			fmt.Fprintf(output, "Session ID: %s\n", sessionState.SessionID)
+			fmt.Fprintln(output)
+		}
+	}
+
 	// Process prompts with timeout check
 	for i, promptText := range prompts {
 		// Check timeout before processing each prompt

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -195,13 +196,6 @@ func runRPC(sessionPath string, debugAddr string, maxTurns int, input io.Reader,
 
 	slog.Info("Loaded skills", "count", len(skillResult.Skills))
 
-	// Build system prompt
-	promptBuilder := prompt.NewBuilderWithWorkspace("", ws)
-	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
-	systemPrompt := promptBuilder.Build()
-
-	_ = systemPrompt // Used by AgentNew internally
-
 	// Start debug server if requested
 	if debugAddr != "" {
 		go func() {
@@ -313,7 +307,13 @@ type AgentNewServer struct {
 
 	// Cancellation support
 	cancel context.CancelFunc
+
+	// Command registry (unified mechanism)
+	commands *agent.CommandRegistry
 }
+
+// Compile-time interface check: AgentNewServer implements agent.AgentBackend.
+var _ agent.AgentBackend = (*AgentNewServer)(nil)
 
 // NewAgentNewServer creates a new server wrapping AgentNew.
 func NewAgentNewServer(
@@ -348,7 +348,7 @@ func NewAgentNewServer(
 		autoCompactionEnabled = cfg.Compactor.AutoCompact
 	}
 
-	return &AgentNewServer{
+	agentServer := &AgentNewServer{
 		agent:                 ag,
 		sessionDir:            sessionDir,
 		sessionID:             sessionID,
@@ -370,9 +370,29 @@ func NewAgentNewServer(
 		keepTools:             keepTools,
 		steeringMode:          "all",
 		followUpMode:          "all",
-		thinkingLevel:         "medium",
+		thinkingLevel:         "high",
 		autoCompactionEnabled: autoCompactionEnabled,
-	}, nil
+		commands:              agent.NewCommandRegistry(),
+	}
+
+	// Inject skills and project context into agent's system prompt
+	skillsText := formatSkillsForPrompt(skills)
+	var projectContext string
+	if workspace != nil {
+		projectContext = prompt.BuildProjectContext(workspace.GetCWD())
+	}
+	agentServer.agent.SetSystemPromptExtras(skillsText, projectContext)
+
+	// Set custom system prompt from --system-prompt flag if provided
+	if systemPrompt != "" {
+		agentServer.agent.SetCustomSystemPrompt(systemPrompt)
+		slog.Info("[AgentNew] Custom system prompt applied from CLI flag", "length", len(systemPrompt))
+	}
+
+	// Register built-in commands
+	agentServer.registerBuiltinCommands()
+
+	return agentServer, nil
 }
 
 // SetEventEmitter sets the event emitter (typically the RPC server).
@@ -841,14 +861,40 @@ func (s *AgentNewServer) syncSessionFromSnapshotLocked() error {
 }
 
 func (s *AgentNewServer) reloadAgentLocked(ctx context.Context) error {
+	// Preserve extras from the previous agent before closing it.
+	var skillsText, projectContext string
+	var thinkingLevel string
+	var customSystemPrompt string
 	if s.agent != nil {
+		skillsText = s.agent.GetSkillsExtra()
+		projectContext = s.agent.GetProjectContextExtra()
+		thinkingLevel = s.agent.GetThinkingLevel()
+		customSystemPrompt = s.agent.GetCustomSystemPrompt()
 		if err := s.agent.Close(); err != nil {
 			slog.Warn("[AgentNew] Failed to close previous agent", "error", err)
 		}
+	} else {
+		// Fallback: re-derive from server fields (first-time initialization).
+		skillsText = formatSkillsForPrompt(s.skills)
+		if s.workspace != nil {
+			projectContext = prompt.BuildProjectContext(s.workspace.GetCWD())
+		}
+		thinkingLevel = s.thinkingLevel
+		customSystemPrompt = s.systemPrompt // Use server's stored systemPrompt
 	}
 	ag, err := agent.LoadSession(ctx, s.sessionDir, s.model, s.apiKey, s.eventEmitter)
 	if err != nil {
 		return err
+	}
+	// Re-inject extras into the new agent.
+	ag.SetSystemPromptExtras(skillsText, projectContext)
+	if customSystemPrompt != "" {
+		ag.SetCustomSystemPrompt(customSystemPrompt)
+	}
+	if thinkingLevel != "" {
+		if _, err := ag.SetThinkingLevel(thinkingLevel); err != nil {
+			slog.Warn("[AgentNew] Failed to restore thinking level", "level", thinkingLevel, "error", err)
+		}
 	}
 	s.agent = ag
 	return nil
@@ -1101,7 +1147,7 @@ func (s *AgentNewServer) GetAvailableModels() ([]rpc.ModelInfo, error) {
 	return models, nil
 }
 
-func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.ModelInfo, error) {
+func (s *AgentNewServer) applyModelSpecLocked(ctx context.Context, spec config.ModelSpec) (*rpc.ModelInfo, error) {
 	newAPIKey, err := config.ResolveAPIKey(spec.Provider)
 	if err != nil {
 		return nil, err
@@ -1127,16 +1173,18 @@ func (s *AgentNewServer) applyModelSpecLocked(spec config.ModelSpec) (*rpc.Model
 		s.persistConfigLocked()
 	}
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return nil, err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	info := modelInfoFromSpec(spec)
 	return &info, nil
 }
 
 func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1158,7 +1206,7 @@ func (s *AgentNewServer) SetModel(provider, modelID string) (*rpc.ModelInfo, err
 	if !ok {
 		return nil, fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
-	return s.applyModelSpecLocked(spec)
+	return s.applyModelSpecLocked(ctx, spec)
 }
 
 func (s *AgentNewServer) ClearSession() error {
@@ -1183,6 +1231,8 @@ func (s *AgentNewServer) ClearSession() error {
 }
 
 func (s *AgentNewServer) NewSession(name, title string) (string, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1215,10 +1265,10 @@ func (s *AgentNewServer) NewSession(name, title string) (string, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return "", err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 	return newSessionID, nil
 }
 
@@ -1251,6 +1301,8 @@ func (s *AgentNewServer) ListSessions() ([]any, error) {
 }
 
 func (s *AgentNewServer) SwitchSession(id string) error {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1306,10 +1358,10 @@ func (s *AgentNewServer) SwitchSession(id string) error {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	if handler := traceevent.GetHandler(); handler != nil {
 		if fh, ok := handler.(*traceevent.FileHandler); ok {
@@ -1332,7 +1384,22 @@ func (s *AgentNewServer) DeleteSession(id string) error {
 
 func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.isStreaming {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("agent is busy")
+	}
+	s.isStreaming = true
+
+	// Get context before unlocking to avoid RWMutex deadlock
+	ctx := s.context()
+
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.isStreaming = false
+		s.mu.Unlock()
+	}()
 
 	if s.agent == nil {
 		return nil, fmt.Errorf("agent is not available")
@@ -1353,7 +1420,8 @@ func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	)
 
 	// Perform compaction using the new architecture
-	if err := s.agent.Compact(s.context()); err != nil {
+	// Note: This is done without holding s.mu, so other commands can check isStreaming
+	if err := s.agent.Compact(ctx); err != nil {
 		return nil, fmt.Errorf("compact failed: %w", err)
 	}
 
@@ -1370,8 +1438,10 @@ func (s *AgentNewServer) Compact() (*rpc.CompactResult, error) {
 	)
 
 	return &rpc.CompactResult{
-		TokensBefore: beforeTokens,
-		TokensAfter:  afterTokens,
+		TokensBefore:   beforeTokens,
+		TokensAfter:    afterTokens,
+		MessagesBefore: beforeCount,
+		MessagesAfter:  afterCount,
 	}, nil
 }
 
@@ -1557,7 +1627,7 @@ func (s *AgentNewServer) ResumeOnBranch(entryID string) error {
 		}
 	}
 
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 	if s.sessionMgr != nil {
 		if err := s.sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
@@ -1567,6 +1637,8 @@ func (s *AgentNewServer) ResumeOnBranch(entryID string) error {
 }
 
 func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
+	// Get context before acquiring lock to avoid RWMutex deadlock
+	ctx := s.context()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1601,10 +1673,10 @@ func (s *AgentNewServer) Fork(entryID string) (*rpc.ForkResult, error) {
 	s.sessionID = newSessionID
 	s.sessionDir = newSess.GetDir()
 
-	if err := s.reloadAgentLocked(s.context()); err != nil {
+	if err := s.reloadAgentLocked(ctx); err != nil {
 		return nil, err
 	}
-	s.applySessionMessagesToSnapshotLocked()
+	// applySessionMessagesToSnapshotLocked removed - not needed for new architecture
 
 	return &rpc.ForkResult{
 		Cancelled: false,
@@ -1758,6 +1830,325 @@ func (s *AgentNewServer) Close() error {
 	return nil
 }
 
+// HandleCommand dispatches a command through the unified CommandRegistry.
+// This is the AgentBackend extension point for all non-interface operations.
+func (s *AgentNewServer) HandleCommand(ctx context.Context, cmd agent.Command) (any, error) {
+	return s.commands.Handle(ctx, cmd)
+}
+
+// Commands returns the underlying CommandRegistry for direct registration.
+func (s *AgentNewServer) Commands() *agent.CommandRegistry {
+	return s.commands
+}
+
+// registerBuiltinCommands registers all built-in commands using the unified CommandRegistry.
+func (s *AgentNewServer) registerBuiltinCommands() {
+	cr := s.commands
+
+	// --- Core conversation ---
+	cr.Register("prompt", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			return nil, fmt.Errorf("empty prompt message")
+		}
+		return nil, s.Prompt(s.context(), message)
+	}, agent.CommandMeta{Name: "prompt", Description: "Send a prompt", Source: "builtin"})
+
+	cr.Register("steer", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			return nil, fmt.Errorf("empty steer message")
+		}
+		return nil, s.Steer(s.context(), message)
+	}, agent.CommandMeta{Name: "steer", Description: "Steer the conversation", Source: "builtin"})
+
+	cr.Register("follow_up", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			return nil, fmt.Errorf("empty follow-up message")
+		}
+		return nil, s.FollowUp(s.context(), message)
+	}, agent.CommandMeta{Name: "follow_up", Description: "Send a follow-up message", Source: "builtin"})
+
+	cr.Register("abort", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, s.Abort()
+	}, agent.CommandMeta{Name: "abort", Description: "Abort current operation", Source: "builtin"})
+
+	// --- Session management ---
+	cr.Register("new_session", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Name  string `json:"name"`
+			Title string `json:"title"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.NewSession(payload.Name, payload.Title)
+	}, agent.CommandMeta{Name: "new_session", Description: "Create a new session", Source: "builtin"})
+
+	cr.Register("clear_session", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, s.ClearSession()
+	}, agent.CommandMeta{Name: "clear_session", Description: "Clear current session", Source: "builtin"})
+
+	cr.Register("list_sessions", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.ListSessions()
+	}, agent.CommandMeta{Name: "list_sessions", Description: "List all sessions", Source: "builtin"})
+
+	cr.Register("switch_session", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SwitchSession(payload.ID)
+	}, agent.CommandMeta{Name: "switch_session", Description: "Switch to a session", Source: "builtin"})
+
+	cr.Register("delete_session", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			ID string `json:"id"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.DeleteSession(payload.ID)
+	}, agent.CommandMeta{Name: "delete_session", Description: "Delete a session", Source: "builtin"})
+
+	// --- State & queries ---
+	cr.Register("get_state", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetState()
+	}, agent.CommandMeta{Name: "get_state", Description: "Get session state", Source: "builtin"})
+
+	cr.Register("get_messages", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetMessages(), nil
+	}, agent.CommandMeta{Name: "get_messages", Description: "Get session messages", Source: "builtin"})
+
+	cr.Register("get_session_stats", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetSessionStats()
+	}, agent.CommandMeta{Name: "get_session_stats", Description: "Get session statistics", Source: "builtin"})
+
+	cr.Register("get_commands", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetCommands()
+	}, agent.CommandMeta{Name: "get_commands", Description: "List available commands", Source: "builtin"})
+
+	// --- Model management ---
+	cr.Register("get_available_models", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetAvailableModels()
+	}, agent.CommandMeta{Name: "get_available_models", Description: "List available models", Source: "builtin"})
+
+	cr.Register("set_model", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Provider string `json:"provider"`
+			ModelID  string `json:"modelId"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.SetModel(payload.Provider, payload.ModelID)
+	}, agent.CommandMeta{Name: "set_model", Description: "Set the active model", Source: "builtin"})
+
+	// --- Compaction ---
+	cr.Register("compact", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.Compact()
+	}, agent.CommandMeta{Name: "compact", Description: "Trigger compaction", Source: "builtin"})
+
+	cr.Register("set_auto_compaction", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Enabled bool `json:"enabled"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetAutoCompaction(payload.Enabled)
+	}, agent.CommandMeta{Name: "set_auto_compaction", Description: "Toggle auto compaction", Source: "builtin"})
+
+	// --- Thinking ---
+	cr.Register("set_thinking_level", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Level string `json:"level"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.SetThinkingLevel(payload.Level)
+	}, agent.CommandMeta{Name: "set_thinking_level", Description: "Set thinking level", Source: "builtin"})
+
+	// --- Tool configuration ---
+	cr.Register("set_tool_call_cutoff", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Cutoff int `json:"cutoff"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetToolCallCutoff(payload.Cutoff)
+	}, agent.CommandMeta{Name: "set_tool_call_cutoff", Description: "Set tool call cutoff", Source: "builtin"})
+
+	cr.Register("set_tool_summary_strategy", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Strategy string `json:"strategy"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetToolSummaryStrategy(payload.Strategy)
+	}, agent.CommandMeta{Name: "set_tool_summary_strategy", Description: "Set tool summary strategy", Source: "builtin"})
+
+	cr.Register("set_tool_summary_automation", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetToolSummaryAutomation(payload.Mode)
+	}, agent.CommandMeta{Name: "set_tool_summary_automation", Description: "Set tool summary automation", Source: "builtin"})
+
+	// --- Steering / follow-up modes ---
+	cr.Register("set_steering_mode", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetSteeringMode(payload.Mode)
+	}, agent.CommandMeta{Name: "set_steering_mode", Description: "Set steering mode", Source: "builtin"})
+
+	cr.Register("set_follow_up_mode", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Mode string `json:"mode"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetFollowUpMode(payload.Mode)
+	}, agent.CommandMeta{Name: "set_follow_up_mode", Description: "Set follow-up mode", Source: "builtin"})
+
+	// --- Fork / branch ---
+	cr.Register("get_last_assistant_text", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetLastAssistantText()
+	}, agent.CommandMeta{Name: "get_last_assistant_text", Description: "Get last assistant text", Source: "builtin"})
+
+	cr.Register("get_fork_messages", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetForkMessages()
+	}, agent.CommandMeta{Name: "get_fork_messages", Description: "Get fork messages", Source: "builtin"})
+
+	cr.Register("fork", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			EntryID string `json:"entryId"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.Fork(payload.EntryID)
+	}, agent.CommandMeta{Name: "fork", Description: "Fork at a message", Source: "builtin"})
+
+	cr.Register("get_tree", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetTree()
+	}, agent.CommandMeta{Name: "get_tree", Description: "Get session tree", Source: "builtin"})
+
+	cr.Register("resume_on_branch", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			EntryID string `json:"entryId"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.ResumeOnBranch(payload.EntryID)
+	}, agent.CommandMeta{Name: "resume_on_branch", Description: "Resume on a branch", Source: "builtin"})
+
+	// --- Session settings ---
+	cr.Register("set_session_name", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetSessionName(payload.Name)
+	}, agent.CommandMeta{Name: "set_session_name", Description: "Set session name", Source: "builtin"})
+
+	// --- Auto retry ---
+	cr.Register("set_auto_retry", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Enabled bool `json:"enabled"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return nil, s.SetAutoRetry(payload.Enabled)
+	}, agent.CommandMeta{Name: "set_auto_retry", Description: "Toggle auto retry", Source: "builtin"})
+
+	cr.Register("abort_retry", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, s.AbortRetry()
+	}, agent.CommandMeta{Name: "abort_retry", Description: "Abort retry", Source: "builtin"})
+
+	// --- Bash ---
+	cr.Register("bash", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Command string `json:"command"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.Bash(payload.Command)
+	}, agent.CommandMeta{Name: "bash", Description: "Execute a bash command", Source: "builtin"})
+
+	cr.Register("abort_bash", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return nil, s.AbortBash()
+	}, agent.CommandMeta{Name: "abort_bash", Description: "Abort bash execution", Source: "builtin"})
+
+	// --- Export ---
+	cr.Register("export_html", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Path string `json:"path"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.ExportHTML(payload.Path)
+	}, agent.CommandMeta{Name: "export_html", Description: "Export session as HTML", Source: "builtin"})
+
+	// --- Trace events ---
+	cr.Register("set_trace_events", func(ctx context.Context, cmd agent.Command) (any, error) {
+		var payload struct {
+			Events []string `json:"events"`
+		}
+		if len(cmd.Payload) > 0 {
+			json.Unmarshal(cmd.Payload, &payload)
+		}
+		return s.SetTraceEvents(payload.Events)
+	}, agent.CommandMeta{Name: "set_trace_events", Description: "Set trace events", Source: "builtin"})
+
+	cr.Register("get_trace_events", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetTraceEvents()
+	}, agent.CommandMeta{Name: "get_trace_events", Description: "Get trace events", Source: "builtin"})
+
+	// --- Workflow ---
+	cr.Register("get_workflow_status", func(ctx context.Context, cmd agent.Command) (any, error) {
+		return s.GetState() // TODO: implement workflow status
+	}, agent.CommandMeta{Name: "get_workflow_status", Description: "Get workflow status", Source: "builtin"})
+}
+
 // rpcEventEmitterAdapter adapts AgentNew events to RPC events.
 type rpcEventEmitterAdapter struct {
 	mu     sync.Mutex
@@ -1779,285 +2170,12 @@ func (a *rpcEventEmitterAdapter) Emit(event agent.AgentEvent) {
 	}
 }
 
-type rpcCommandRegisterFunc func(registrar *rpcHandlerRegistrar)
-
-type rpcCommandRegistry struct {
-	mu       sync.RWMutex
-	commands map[string]rpcCommandRegisterFunc
-}
-
-type rpcHandlerRegistrar struct {
-	server *rpc.Server
-	agent  *AgentNewServer
-}
-
-func newRPCCommandRegistry() *rpcCommandRegistry {
-	return &rpcCommandRegistry{
-		commands: make(map[string]rpcCommandRegisterFunc),
-	}
-}
-
-func (r *rpcCommandRegistry) Register(name string, fn rpcCommandRegisterFunc) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.commands[name] = fn
-}
-
-func (r *rpcCommandRegistry) Apply(server *rpc.Server, agentServer *AgentNewServer) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	registrar := &rpcHandlerRegistrar{
-		server: server,
-		agent:  agentServer,
-	}
-	names := make([]string, 0, len(r.commands))
-	for name := range r.commands {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		r.commands[name](registrar)
-	}
-}
-
-func (r *rpcCommandRegistry) registerBuiltinCommands() {
-	r.Register(rpc.CommandPrompt, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetPromptHandler(func(req rpc.PromptRequest) error {
-			message := strings.TrimSpace(req.Message)
-			if message == "" {
-				return fmt.Errorf("empty prompt message")
-			}
-			return registrar.agent.Prompt(registrar.server.Context(), message)
-		})
-	})
-
-	r.Register(rpc.CommandSteer, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSteerHandler(func(message string) error {
-			message = strings.TrimSpace(message)
-			if message == "" {
-				return fmt.Errorf("empty steer message")
-			}
-			return registrar.agent.Steer(registrar.server.Context(), message)
-		})
-	})
-
-	r.Register(rpc.CommandFollowUp, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetFollowUpHandler(func(message string) error {
-			message = strings.TrimSpace(message)
-			if message == "" {
-				return fmt.Errorf("empty follow-up message")
-			}
-			return registrar.agent.FollowUp(registrar.server.Context(), message)
-		})
-	})
-
-	r.Register(rpc.CommandAbort, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetAbortHandler(func() error {
-			return registrar.agent.Abort()
-		})
-	})
-
-	r.Register(rpc.CommandGetMessages, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetMessagesHandler(func() ([]any, error) {
-			return registrar.agent.GetMessages(), nil
-		})
-	})
-
-	r.Register(rpc.CommandGetState, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetStateHandler(func() (*rpc.SessionState, error) {
-			return registrar.agent.GetState()
-		})
-	})
-
-	r.Register(rpc.CommandGetSessionStats, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
-			return registrar.agent.GetSessionStats()
-		})
-	})
-
-	r.Register(rpc.CommandGetCommands, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetCommandsHandler(func() ([]rpc.SlashCommand, error) {
-			return registrar.agent.GetCommands()
-		})
-	})
-
-	r.Register(rpc.CommandNewSession, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetNewSessionHandler(func(name, title string) (string, error) {
-			return registrar.agent.NewSession(name, title)
-		})
-	})
-
-	r.Register(rpc.CommandClearSession, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetClearSessionHandler(func() error {
-			return registrar.agent.ClearSession()
-		})
-	})
-
-	r.Register(rpc.CommandListSessions, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetListSessionsHandler(func() ([]any, error) {
-			return registrar.agent.ListSessions()
-		})
-	})
-
-	r.Register(rpc.CommandSwitchSession, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSwitchSessionHandler(func(id string) error {
-			return registrar.agent.SwitchSession(id)
-		})
-	})
-
-	r.Register(rpc.CommandDeleteSession, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetDeleteSessionHandler(func(id string) error {
-			return registrar.agent.DeleteSession(id)
-		})
-	})
-
-	r.Register(rpc.CommandCompact, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetCompactHandler(func() (*rpc.CompactResult, error) {
-			return registrar.agent.Compact()
-		})
-	})
-
-	r.Register(rpc.CommandGetAvailableModels, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
-			return registrar.agent.GetAvailableModels()
-		})
-	})
-
-	r.Register(rpc.CommandSetModel, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetModelHandler(func(provider, modelID string) (*rpc.ModelInfo, error) {
-			return registrar.agent.SetModel(provider, modelID)
-		})
-	})
-
-	r.Register(rpc.CommandSetAutoCompaction, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetAutoCompactionHandler(func(enabled bool) error {
-			return registrar.agent.SetAutoCompaction(enabled)
-		})
-	})
-
-	r.Register(rpc.CommandSetToolCallCutoff, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetToolCallCutoffHandler(func(cutoff int) error {
-			return registrar.agent.SetToolCallCutoff(cutoff)
-		})
-	})
-
-	r.Register(rpc.CommandSetToolSummaryStrategy, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
-			return registrar.agent.SetToolSummaryStrategy(strategy)
-		})
-	})
-
-	r.Register(rpc.CommandSetToolSummaryAutomation, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetToolSummaryAutomationHandler(func(mode string) error {
-			return registrar.agent.SetToolSummaryAutomation(mode)
-		})
-	})
-
-	r.Register(rpc.CommandSetThinkingLevel, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetThinkingLevelHandler(func(level string) (string, error) {
-			return registrar.agent.SetThinkingLevel(level)
-		})
-	})
-
-	r.Register(rpc.CommandSetSteeringMode, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetSteeringModeHandler(func(mode string) error {
-			return registrar.agent.SetSteeringMode(mode)
-		})
-	})
-
-	r.Register(rpc.CommandSetFollowUpMode, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetFollowUpModeHandler(func(mode string) error {
-			return registrar.agent.SetFollowUpMode(mode)
-		})
-	})
-
-	r.Register(rpc.CommandGetLastAssistantText, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetLastAssistantTextHandler(func() (string, error) {
-			return registrar.agent.GetLastAssistantText()
-		})
-	})
-
-	r.Register(rpc.CommandGetForkMessages, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetForkMessagesHandler(func() ([]rpc.ForkMessage, error) {
-			return registrar.agent.GetForkMessages()
-		})
-	})
-
-	r.Register(rpc.CommandFork, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetForkHandler(func(entryID string) (*rpc.ForkResult, error) {
-			return registrar.agent.Fork(entryID)
-		})
-	})
-
-	r.Register(rpc.CommandGetTree, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetTreeHandler(func() ([]rpc.TreeEntry, error) {
-			return registrar.agent.GetTree()
-		})
-	})
-
-	r.Register(rpc.CommandResumeOnBranch, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetResumeOnBranchHandler(func(entryID string) error {
-			return registrar.agent.ResumeOnBranch(entryID)
-		})
-	})
-
-	r.Register(rpc.CommandSetSessionName, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetSessionNameHandler(func(name string) error {
-			return registrar.agent.SetSessionName(name)
-		})
-	})
-
-	r.Register(rpc.CommandSetAutoRetry, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetAutoRetryHandler(func(enabled bool) error {
-			return registrar.agent.SetAutoRetry(enabled)
-		})
-	})
-
-	r.Register(rpc.CommandAbortRetry, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetAbortRetryHandler(func() error {
-			return registrar.agent.AbortRetry()
-		})
-	})
-
-	r.Register(rpc.CommandBash, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetBashHandler(func(command string) (*rpc.BashResult, error) {
-			return registrar.agent.Bash(command)
-		})
-	})
-
-	r.Register(rpc.CommandAbortBash, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetAbortBashHandler(func() error {
-			return registrar.agent.AbortBash()
-		})
-	})
-
-	r.Register(rpc.CommandExportHTML, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetExportHTMLHandler(func(path string) (string, error) {
-			return registrar.agent.ExportHTML(path)
-		})
-	})
-
-	r.Register(rpc.CommandSetTraceEvents, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetSetTraceEventsHandler(func(events []string) ([]string, error) {
-			return registrar.agent.SetTraceEvents(events)
-		})
-	})
-
-	r.Register(rpc.CommandGetTraceEvents, func(registrar *rpcHandlerRegistrar) {
-		registrar.server.SetGetTraceEventsHandler(func() ([]string, error) {
-			return registrar.agent.GetTraceEvents()
-		})
-	})
-
-}
-
-// SetupAgentNewHandlers configures RPC server handlers to use AgentNew.
+// SetupAgentNewHandlers shares the AgentNewServer's command registry with the RPC server.
+// All commands registered on AgentNewServer (via registerBuiltinCommands or Commands().Register)
+// are automatically available to the RPC dispatch.
 func SetupAgentNewHandlers(server *rpc.Server, agentNewServer *AgentNewServer) {
-	registry := newRPCCommandRegistry()
-	registry.registerBuiltinCommands()
-	registry.Apply(server, agentNewServer)
-	slog.Info("[AgentNew] RPC handlers configured", "count", len(registry.commands))
+	server.SetRegistry(agentNewServer.Commands())
+	slog.Info("[AgentNew] RPC handlers configured", "count", len(agentNewServer.Commands().ListNames()))
 }
 
 // LoadOrNewAgentSession loads an existing session or creates a new one using AgentNew.
@@ -2149,4 +2267,15 @@ func convertSkillsToPtrs(skills []skill.Skill) []*skill.Skill {
 		result[i] = &skills[i]
 	}
 	return result
+}
+
+// formatSkillsForPrompt formats []*skill.Skill for inclusion in the system prompt.
+func formatSkillsForPrompt(skills []*skill.Skill) string {
+	concrete := make([]skill.Skill, 0, len(skills))
+	for _, s := range skills {
+		if s != nil {
+			concrete = append(concrete, *s)
+		}
+	}
+	return skill.FormatForPrompt(concrete)
 }

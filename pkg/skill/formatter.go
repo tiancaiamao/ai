@@ -38,19 +38,25 @@ func FormatForPrompt(skills []Skill) string {
 	lines := []string{
 		"## Skills",
 		"The following skills provide specialized instructions for additional capabilities.",
+		"",
+		"**Skill Locations:**",
+		"  - Global skills: ~/.ai/skills/",
+		"  - Project skills: .ai/skills/",
+		"  - Use bash tool to list skills: `ls ~/.ai/skills/*/SKILL.md` or `ls .ai/skills/*/SKILL.md`",
+		"",
 		"Skills may provide:",
 		"  - New tools or utilities",
 		"  - Domain-specific knowledge",
 		"  - Workflow patterns",
 		"",
 		"Use the read tool to load a skill's file when the task matches its description.",
-		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"Skill files are located at: ~/.ai/skills/<skill-name>/SKILL.md or .ai/skills/<skill-name>/SKILL.md",
 		"",
 	}
 
 	for _, skill := range visibleSkills {
 		description := trimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
-		lines = append(lines, fmt.Sprintf("- **%s**: %s (%s)", skill.Name, description, skill.FilePath))
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, description))
 	}
 
 	if omitted > 0 {

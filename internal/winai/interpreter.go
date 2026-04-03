@@ -3221,7 +3221,34 @@ func (p *AiInterpreter) handleCompactResult(data json.RawMessage) {
 		return
 	}
 
-	p.writeStatus("ai: compacted")
+	// Display compaction results
+	var parts []string
+
+	// Token reduction
+	if result.TokensBefore > 0 && result.TokensAfter > 0 {
+		reduction := result.TokensBefore - result.TokensAfter
+		reductionPercent := 0.0
+		if result.TokensBefore > 0 {
+			reductionPercent = float64(reduction) / float64(result.TokensBefore) * 100
+		}
+		parts = append(parts, fmt.Sprintf("%d → %d tokens (%.1f%% reduction)",
+			result.TokensBefore, result.TokensAfter, reductionPercent))
+	} else if result.TokensAfter > 0 {
+		parts = append(parts, fmt.Sprintf("%d tokens", result.TokensAfter))
+	}
+
+	// Message reduction
+	if result.MessagesBefore > 0 && result.MessagesAfter > 0 {
+		msgReduction := result.MessagesBefore - result.MessagesAfter
+		parts = append(parts, fmt.Sprintf("%d → %d messages (-%d)",
+			result.MessagesBefore, result.MessagesAfter, msgReduction))
+	}
+
+	if len(parts) > 0 {
+		p.writeStatus("ai: compacted " + strings.Join(parts, ", "))
+	} else {
+		p.writeStatus("ai: compacted")
+	}
 }
 
 func (p *AiInterpreter) noteAiActivity() {
