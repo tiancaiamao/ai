@@ -3,8 +3,8 @@
 
 set -e
 
-API_BASE="http://localhost:8080/api"
-BOARD_URL="http://localhost:8080/board"
+API_BASE="http://localhost:8081/api"
+BOARD_URL="http://localhost:8081/board"
 
 # Colors
 RED='\033[0;31m'
@@ -24,7 +24,7 @@ json_pp() {
 
 # Helper: Check if server is running
 check_server() {
-    if ! curl -s http://localhost:8080/health > /dev/null 2>&1; then
+    if ! curl -s http://localhost:8081/health > /dev/null 2>&1; then
         echo -e "${RED}Error: Symphony server is not running${NC}"
         echo "Start it with: cd go && go run cmd/server/main.go"
         exit 1

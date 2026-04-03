@@ -307,6 +307,7 @@ var defaultEnabledEvents = []string{
 	"assistant_tool_tag_parse_failed",
 	"llm_request_snapshot",
 	"llm_request_json",
+	"llm_response_json",
 	"llm_retry_scheduled",
 	"llm_retry_aborted",
 	"llm_retry_exhausted",
