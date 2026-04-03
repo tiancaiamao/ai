@@ -312,6 +312,9 @@ type AgentNewServer struct {
 	commands *agent.CommandRegistry
 }
 
+// Compile-time interface check: AgentNewServer implements agent.AgentBackend.
+var _ agent.AgentBackend = (*AgentNewServer)(nil)
+
 // NewAgentNewServer creates a new server wrapping AgentNew.
 func NewAgentNewServer(
 	sessionDir string,

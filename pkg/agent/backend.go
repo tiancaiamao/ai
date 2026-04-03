@@ -114,10 +114,14 @@ var NewToolRegistry = agentctx.NewToolRegistry
 // AgentBackend — transport-agnostic agent interface
 //
 // This is the primary interface for consuming ai as an SDK.
-// Core operations (Prompt, Steer, Abort, session management, model control)
-// are interface methods.
-// Extended operations (fork, bash, export, custom commands) go through
-// HandleCommand which delegates to the CommandRegistry.
+// It keeps a minimal surface: core conversation operations and a generic
+// command dispatch. Everything else (state queries, model management,
+// compaction, session CRUD) is accessed through HandleCommand, which
+// delegates to the CommandRegistry.
+//
+// Concrete implementations (AgentNewServer, AgentLoop) expose their own
+// rich methods for their specific consumers (RPC, web server), but any
+// code that wants to be backend-agnostic should use this interface.
 // ---------------------------------------------------------------------------
 
 // AgentBackend defines what an agent wrapper can do.
@@ -129,68 +133,15 @@ type AgentBackend interface {
 	FollowUp(ctx context.Context, message string) error
 	Abort() error
 
-	// --- Session management ---
-	NewSession(name, title string) (string, error)
-	ClearSession() error
-	ListSessions() ([]any, error)
-	SwitchSession(id string) error
-	DeleteSession(id string) error
-
-	// --- Model ---
-	GetAvailableModels() ([]BackendModelInfo, error)
-	SetModel(provider, modelID string) (*BackendModelInfo, error)
-
-	// --- State ---
-	GetState() (*BackendState, error)
-	GetMessages() []any
-
-	// --- Compaction ---
-	Compact() (*BackendCompactResult, error)
-	SetAutoCompaction(enabled bool) error
-
-	// --- Thinking ---
-	SetThinkingLevel(level string) (string, error)
-
 	// --- Extension point ---
 	// HandleCommand dispatches arbitrary commands through the CommandRegistry.
-	// This is the escape hatch for everything not in the interface:
-	// fork, bash, export_html, trace_events, custom extensions, etc.
+	// All operations beyond the core four (Prompt/Steer/FollowUp/Abort)
+	// go through this: session management, model switching, state queries,
+	// compaction, thinking level, fork, bash, export, custom extensions, etc.
 	HandleCommand(ctx context.Context, cmd Command) (any, error)
-
-	// --- Discovery ---
-	GetCommands() ([]CommandMeta, error)
 
 	// --- Lifecycle ---
 	Close() error
-}
-
-// BackendState is the transport-agnostic session state.
-type BackendState struct {
-	ModelID               string `json:"modelId"`
-	ModelProvider         string `json:"modelProvider"`
-	ThinkingLevel         string `json:"thinkingLevel"`
-	IsStreaming           bool   `json:"isStreaming"`
-	IsCompacting          bool   `json:"isCompacting"`
-	SteeringMode          string `json:"steeringMode"`
-	FollowUpMode          string `json:"followUpMode"`
-	SessionID             string `json:"sessionId,omitempty"`
-	SessionName           string `json:"sessionName,omitempty"`
-	AutoCompactionEnabled bool   `json:"autoCompactionEnabled"`
-	MessageCount          int    `json:"messageCount"`
-}
-
-// BackendModelInfo describes a model available to the backend.
-type BackendModelInfo struct {
-	ID            string `json:"id"`
-	Provider      string `json:"provider"`
-	BaseURL       string `json:"baseUrl,omitempty"`
-	ContextWindow int    `json:"contextWindow,omitempty"`
-}
-
-// BackendCompactResult represents the result of a compaction operation.
-type BackendCompactResult struct {
-	TokensBefore int `json:"tokensBefore,omitempty"`
-	TokensAfter  int `json:"tokensAfter,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
