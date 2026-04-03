@@ -20,6 +20,11 @@ type AgentState struct {
 	TurnsSinceLastTrigger      int // Turns elapsed since last trigger (legacy)
 	ToolCallsSinceLastTrigger  int // Tool calls elapsed since last trigger
 
+	// Runaway detection: counts consecutive context management triggers without progress.
+	// Reset when the agent produces a text response (no tool calls).
+	// If this exceeds a threshold, force compact instead of truncate.
+	ConsecutiveContextMgmtTriggers int
+
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
 
@@ -59,19 +64,20 @@ func (a *AgentState) Clone() *AgentState {
 	copy(activeToolCalls, a.ActiveToolCalls)
 
 	return &AgentState{
-		WorkspaceRoot:            a.WorkspaceRoot,
-		CurrentWorkingDir:        a.CurrentWorkingDir,
-		TotalTurns:               a.TotalTurns,
-		TokensUsed:               a.TokensUsed,
-		TokensLimit:              a.TokensLimit,
-		LastLLMContextUpdate:     a.LastLLMContextUpdate,
-		LastCheckpoint:           a.LastCheckpoint,
-		LastTriggerTurn:          a.LastTriggerTurn,
-		TurnsSinceLastTrigger:    a.TurnsSinceLastTrigger,
-		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
-		ActiveToolCalls:          activeToolCalls,
-		SessionID:                a.SessionID,
-		CreatedAt:                a.CreatedAt,
-		UpdatedAt:                a.UpdatedAt,
+		WorkspaceRoot:                 a.WorkspaceRoot,
+		CurrentWorkingDir:             a.CurrentWorkingDir,
+		TotalTurns:                    a.TotalTurns,
+		TokensUsed:                    a.TokensUsed,
+		TokensLimit:                   a.TokensLimit,
+		LastLLMContextUpdate:          a.LastLLMContextUpdate,
+		LastCheckpoint:                a.LastCheckpoint,
+		LastTriggerTurn:               a.LastTriggerTurn,
+		TurnsSinceLastTrigger:         a.TurnsSinceLastTrigger,
+		ToolCallsSinceLastTrigger:     a.ToolCallsSinceLastTrigger,
+		ConsecutiveContextMgmtTriggers: a.ConsecutiveContextMgmtTriggers,
+		ActiveToolCalls:               activeToolCalls,
+		SessionID:                     a.SessionID,
+		CreatedAt:                     a.CreatedAt,
+		UpdatedAt:                     a.UpdatedAt,
 	}
 }

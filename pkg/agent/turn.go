@@ -187,6 +187,14 @@ func (a *AgentNew) executeNormalStep(
 	a.snapshot.AgentState.TurnsSinceLastTrigger++
 	a.snapshot.AgentState.UpdatedAt = time.Now()
 
+	// If the agent produced a text response (ModeDone), it made progress.
+	// Reset the runaway counter so context management can work normally next time.
+	if nextMode == ModeDone {
+		a.snapshot.AgentState.ConsecutiveContextMgmtTriggers = 0
+		// Also reset loop detector since the agent made meaningful progress
+		a.loopDetector.reset()
+	}
+
 	return nextMode, msgAppended, err
 }
 
@@ -210,29 +218,57 @@ func (a *AgentNew) executeContextMgmtStep(ctx context.Context) (nextMode Executi
 		return ModeNormal, nil
 	}
 
+	// Runaway detection: if context management has been triggered too many times
+	// consecutively without progress, force compact instead of letting the LLM choose.
+	const maxConsecutiveTriggers = 3
+	a.snapshot.AgentState.ConsecutiveContextMgmtTriggers++
+
 	slog.Info("[AgentNew] Executing context management",
 		"urgency", urgency,
 		"reason", reason,
+		"consecutive_triggers", a.snapshot.AgentState.ConsecutiveContextMgmtTriggers,
 	)
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
 		traceevent.Field{Key: "action", Value: "execute"},
 		traceevent.Field{Key: "urgency", Value: urgency},
 		traceevent.Field{Key: "reason", Value: reason},
+		traceevent.Field{Key: "consecutive_triggers", Value: a.snapshot.AgentState.ConsecutiveContextMgmtTriggers},
 	)
 
 	// Execute context management
 	mgmtSpan := traceevent.StartSpan(ctx, "context_management", traceevent.CategoryEvent,
 		traceevent.Field{Key: "urgency", Value: urgency},
 		traceevent.Field{Key: "turn", Value: a.snapshot.AgentState.TotalTurns},
+		traceevent.Field{Key: "consecutive_triggers", Value: a.snapshot.AgentState.ConsecutiveContextMgmtTriggers},
 	)
 	ctx = mgmtSpan.Context()
 
-	if err := a.executeContextMgmtTools(ctx, urgency); err != nil {
-		mgmtSpan.AddField("error", true)
-		mgmtSpan.AddField("error_message", err.Error())
-		mgmtSpan.End()
-		return ModeError, fmt.Errorf("context management failed: %w", err)
+	if a.snapshot.AgentState.ConsecutiveContextMgmtTriggers >= maxConsecutiveTriggers {
+		// Force compact: the LLM's truncate choices are not making progress
+		slog.Warn("[AgentNew] Runaway context management detected, forcing compact",
+			"consecutive_triggers", a.snapshot.AgentState.ConsecutiveContextMgmtTriggers,
+			"max", maxConsecutiveTriggers,
+		)
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+			traceevent.Field{Key: "action", Value: "force_compact"},
+			traceevent.Field{Key: "reason", Value: "runaway_detection"},
+			traceevent.Field{Key: "consecutive_triggers", Value: a.snapshot.AgentState.ConsecutiveContextMgmtTriggers},
+		)
+
+		if err := a.performCompaction(ctx); err != nil {
+			mgmtSpan.AddField("error", true)
+			mgmtSpan.AddField("error_message", err.Error())
+			mgmtSpan.End()
+			return ModeError, fmt.Errorf("forced compaction failed: %w", err)
+		}
+	} else {
+		if err := a.executeContextMgmtTools(ctx, urgency); err != nil {
+			mgmtSpan.AddField("error", true)
+			mgmtSpan.AddField("error_message", err.Error())
+			mgmtSpan.End()
+			return ModeError, fmt.Errorf("context management failed: %w", err)
+		}
 	}
 
 	mgmtSpan.AddField("action_taken", true)
@@ -246,10 +282,10 @@ func (a *AgentNew) executeContextMgmtStep(ctx context.Context) (nextMode Executi
 
 	slog.Info("[AgentNew] Context management completed",
 		"urgency", urgency,
+		"consecutive_triggers", a.snapshot.AgentState.ConsecutiveContextMgmtTriggers,
 	)
 
 	// Return to Normal mode to continue processing
-	// (or if user message was already processed, this might be the final step)
 	return ModeNormal, nil
 }
 

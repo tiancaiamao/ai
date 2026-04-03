@@ -57,6 +57,9 @@ type AgentNew struct {
 	skillsExtra         string
 	projectContextExtra string
 	customSystemPrompt  string // Custom system prompt from --system-prompt flag (headless mode)
+
+	// Loop detection (persistent across executeConversationLoop calls)
+	loopDetector *loopDetector
 }
 
 // ModelSpec wraps the model specification from config.
@@ -101,6 +104,7 @@ func NewAgentNew(sessionDir, sessionID string, model *ModelSpec, apiKey string, 
 		thinkingLevel:  "high", // Default thinking level
 		eventEmitter:   eventEmitter,
 		allTools:       allTools,
+		loopDetector:   newLoopDetector(defaultMaxDuplicateCalls),
 	}
 
 	// Update context window in snapshot

@@ -76,7 +76,26 @@ func (t *TruncateMessagesTool) Execute(ctx context.Context, params map[string]an
 	}
 
 	if len(validIDs) == 0 {
-		return nil, fmt.Errorf("no valid tool call IDs provided")
+		// Provide helpful error message with available IDs so the LLM can retry correctly.
+		// This typically happens after compaction removes old messages whose IDs are stale.
+		availableIDs := t.getAvailableToolCallIDs()
+		if len(availableIDs) == 0 {
+			return nil, fmt.Errorf("no valid tool call IDs provided, and no truncatable messages exist. Consider using compact_messages instead")
+		}
+		// Show up to 10 available IDs to avoid overwhelming the context
+		showIDs := availableIDs
+		if len(showIDs) > 10 {
+			showIDs = showIDs[:10]
+		}
+		return nil, fmt.Errorf("no valid tool call IDs provided. The provided IDs may have been removed by a previous compaction. Available truncatable tool call IDs: %s%s. Consider using compact_messages if these IDs are not suitable",
+			strings.Join(showIDs, ", "),
+			func() string {
+				if len(availableIDs) > 10 {
+					return fmt.Sprintf(" (and %d more)", len(availableIDs)-10)
+				}
+				return ""
+			}(),
+		)
 	}
 
 	// Apply truncate
@@ -109,6 +128,23 @@ func (t *TruncateMessagesTool) isValidToolCallID(id string) bool {
 		}
 	}
 	return false
+}
+
+// getAvailableToolCallIDs returns IDs of tool results that can be truncated.
+// These are non-truncated, non-protected tool result messages.
+func (t *TruncateMessagesTool) getAvailableToolCallIDs() []string {
+	protectedStart := len(t.snapshot.RecentMessages) - agentctx.RecentMessagesKeep
+	if protectedStart < 0 {
+		protectedStart = 0
+	}
+
+	var ids []string
+	for i, msg := range t.snapshot.RecentMessages {
+		if msg.Role == "toolResult" && !msg.Truncated && i < protectedStart {
+			ids = append(ids, msg.ToolCallID)
+		}
+	}
+	return ids
 }
 
 // applyTruncate marks messages as truncated and records to journal.

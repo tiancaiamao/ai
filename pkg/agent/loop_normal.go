@@ -24,10 +24,6 @@ import (
 // - ExecutionMode: ModeDone (complete), ModeContextMgmt (need context management), ModeError
 // - error: any error that occurred
 func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, error) {
-	// Track duplicate tool call signatures to detect infinite loops
-	const maxDuplicateCalls = 7
-	duplicateSignatureCount := make(map[string]int) // signature -> consecutive count
-
 	for cycle := 0; ; cycle++ {
 		// Check for context cancellation at the start of each cycle
 		// This allows steer/follow-up to interrupt before LLM call
@@ -129,10 +125,11 @@ func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, 
 			"cycle", cycle+1,
 		)
 
-		// Check for duplicate tool call signatures (same tool + parameters repeated)
-		// This detects infinite loops where the agent keeps calling the same tool with same args
-		if err := a.checkDuplicateToolSignatures(assistantMsg, duplicateSignatureCount, maxDuplicateCalls); err != nil {
-			return ModeError, err
+		// Check for duplicate tool call patterns (same tool repeated or oscillation).
+		// Uses persistent loopDetector on AgentNew, so detection survives
+		// context management interruptions and trampoline re-entries.
+		if _, loopErr := a.loopDetector.check(assistantMsg); loopErr != nil {
+			return ModeError, loopErr
 		}
 	}
 }
@@ -1536,69 +1533,4 @@ func appendToLastUserMessage(messages []llm.LLMMessage, runtimeState, llmContext
 	}
 
 	return messages
-}
-
-// checkDuplicateToolSignatures checks if the same tool call signature (name + parameters)
-// is repeated too many times consecutively, which indicates an infinite loop.
-func (a *AgentNew) checkDuplicateToolSignatures(
-	assistantMsg *agentctx.AgentMessage,
-	signatureCount map[string]int,
-	maxDuplicates int,
-) error {
-	toolCalls := assistantMsg.ExtractToolCalls()
-	if len(toolCalls) == 0 {
-		return nil
-	}
-
-	// Build signature for each tool call
-	// Signature is: toolName + sorted args hash
-	for _, tc := range toolCalls {
-		// Create signature from tool name and parameters
-		signature := buildToolCallSignature(tc)
-
-		// Increment consecutive count for this signature
-		signatureCount[signature]++
-
-		slog.Info("[AgentNew] Tool call signature tracked",
-			"signature", signature,
-			"tool", tc.Name,
-			"count", signatureCount[signature],
-			"max", maxDuplicates,
-		)
-
-		// Check if we've exceeded the max duplicates
-		if signatureCount[signature] >= maxDuplicates {
-			return fmt.Errorf("agent appears to be stuck in a loop: tool call '%s' repeated %d times consecutively",
-				tc.Name, maxDuplicates)
-		}
-	}
-
-	// Reset counts for signatures that weren't in this batch
-	// This ensures we only count CONSECUTIVE duplicates
-	currentSignatures := make(map[string]bool)
-	for _, tc := range toolCalls {
-		signature := buildToolCallSignature(tc)
-		currentSignatures[signature] = true
-	}
-
-	for sig := range signatureCount {
-		if !currentSignatures[sig] {
-			delete(signatureCount, sig)
-		}
-	}
-
-	return nil
-}
-
-// buildToolCallSignature creates a unique signature for a tool call.
-// The signature is based on tool name and normalized parameters.
-func buildToolCallSignature(tc agentctx.ToolCallContent) string {
-	// Convert arguments to a stable string representation
-	argsJSON := "{}"
-	if tc.Arguments != nil {
-		if bytes, err := json.Marshal(tc.Arguments); err == nil {
-			argsJSON = string(bytes)
-		}
-	}
-	return tc.Name + ":" + argsJSON
 }

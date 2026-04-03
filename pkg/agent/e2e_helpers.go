@@ -107,6 +107,7 @@ func ResumeAgentForE2E(
 		apiKey:         apiKey,
 		allTools:       loadAllTools(),
 		triggerChecker: agentctx.NewTriggerChecker(),
+		loopDetector:   newLoopDetector(defaultMaxDuplicateCalls),
 	}
 
 	return ag, nil
