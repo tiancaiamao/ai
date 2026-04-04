@@ -48,10 +48,9 @@ type AgentNew struct {
 	maxLLMRetries  int           // Maximum retries for LLM calls (0 = use default)
 	retryBaseDelay time.Duration // Base delay for exponential backoff
 
-	// Pending inputs (for steer/follow-up)
-	pendingInputMu sync.RWMutex
-	pendingInput   string // For steer: new message to process
-	hasPendingInput bool
+	// Follow-up queue (for steer/follow-up)
+	// Messages are queued here and drained by Prompt's outer loop after each turn.
+	followUpQueue chan string
 
 	// System prompt extras (skills and project context injected at construction time)
 	skillsExtra         string
@@ -101,6 +100,7 @@ func NewAgentNew(sessionDir, sessionID string, model *ModelSpec, apiKey string, 
 		thinkingLevel:  "high", // Default thinking level
 		eventEmitter:   eventEmitter,
 		allTools:       allTools,
+		followUpQueue:  make(chan string, 100),
 	}
 
 	// Update context window in snapshot
@@ -124,40 +124,40 @@ func (a *AgentNew) GetSessionID() string {
 	return a.sessionID
 }
 
-// SetPendingInput sets a pending input message (for steer/follow-up).
-// This is called when the user sends new input during tool execution.
-func (a *AgentNew) SetPendingInput(message string) {
-	a.pendingInputMu.Lock()
-	defer a.pendingInputMu.Unlock()
-	a.pendingInput = message
-	a.hasPendingInput = true
-	slog.Info("[AgentNew] Pending input set",
-		"message", message,
-		"hasPendingInput", a.hasPendingInput,
-	)
-}
-
-// GetAndClearPendingInput gets and clears any pending input message.
-// This is called by the conversation loop after each tool execution.
-// Returns (message, hasPending) where hasPending indicates if there was a pending input.
-func (a *AgentNew) GetAndClearPendingInput() (string, bool) {
-	a.pendingInputMu.Lock()
-	defer a.pendingInputMu.Unlock()
-	message := a.pendingInput
-	hasPending := a.hasPendingInput
-	a.pendingInput = ""
-	a.hasPendingInput = false
-	if hasPending {
-		slog.Info("[AgentNew] Pending input retrieved", "message", message)
+// QueueFollowUp adds a message to the follow-up queue.
+// This is called by Steer and FollowUp to queue messages for processing after the current turn.
+// Returns an error if the queue is uninitialized or full.
+func (a *AgentNew) QueueFollowUp(message string) error {
+	if a.followUpQueue == nil {
+		return fmt.Errorf("follow-up queue uninitialized")
 	}
-	return message, hasPending
+
+	select {
+	case a.followUpQueue <- message:
+		slog.Info("[AgentNew] Follow-up queued", "message", message)
+		return nil
+	default:
+		return fmt.Errorf("follow-up queue full (len=%d cap=%d)", len(a.followUpQueue), cap(a.followUpQueue))
+	}
 }
 
-// HasPendingInput checks if there's a pending input message.
-func (a *AgentNew) HasPendingInput() bool {
-	a.pendingInputMu.RLock()
-	defer a.pendingInputMu.RUnlock()
-	return a.hasPendingInput
+// DrainFollowUps drains all messages from the follow-up queue.
+// Returns the messages in FIFO order, or nil if the queue is empty.
+func (a *AgentNew) DrainFollowUps() []string {
+	var messages []string
+	for {
+		select {
+		case msg := <-a.followUpQueue:
+			messages = append(messages, msg)
+		default:
+			return messages
+		}
+	}
+}
+
+// PendingFollowUpCount returns the number of pending follow-up messages.
+func (a *AgentNew) PendingFollowUpCount() int {
+	return len(a.followUpQueue)
 }
 
 // GetSessionDir returns the session directory.

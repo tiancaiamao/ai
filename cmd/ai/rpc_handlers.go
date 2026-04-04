@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -437,6 +438,14 @@ func (s *AgentNewServer) GetAgent() *agent.AgentNew {
 }
 
 // Prompt handles the prompt command using AgentNew.
+// It implements the two-layer loop pattern from the old Agent architecture:
+//
+//	Inner loop: ExecuteTurn processes one user message (LLM → tools → LLM → ...)
+//	Outer loop: drains followUpQueue after each turn completes
+//
+// Steer cancels the current turn's context, causing ExecuteTurn to return;
+// the outer loop then picks up the queued message from followUpQueue.
+// FollowUp just queues a message; it's picked up after the current turn finishes naturally.
 func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	s.mu.Lock()
 	if s.isStreaming {
@@ -452,6 +461,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	s.mu.Unlock()
 
 	defer func() {
+		cancel() // Release context-scoped resources for the initial turn
 		s.mu.Lock()
 		s.isStreaming = false
 		s.pendingSteer = false
@@ -469,61 +479,28 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	s.emitEvent(agent.NewAgentStartEvent())
 	s.emitEvent(agent.NewTurnStartEvent())
 
-	// Execute one full turn (includes automatic context management flow)
+	// --- Inner loop: execute one turn ---
+	// Context cancellation (from Steer) causes ExecuteTurn to return.
+	// We don't treat context.Canceled as a fatal error here — the outer loop
+	// will drain any follow-up messages that were queued by Steer/FollowUp.
 	execErr := s.agent.ExecuteTurn(turnTraceCtx, message)
-	if execErr != nil {
-		s.emitEvent(agent.NewErrorEvent(execErr))
-		s.emitEvent(agent.NewAgentEndEvent(nil))
-	}
-
-	// Check for pending input (from /steer or /follow-up)
-	if pendingMessage, hasPending := s.agent.GetAndClearPendingInput(); hasPending {
-		slog.Info("[AgentNew] Prompt found pending input after ExecuteTurn",
-			"pending_message", pendingMessage,
-			"execError", execErr,
-		)
-
-		// Finalize the current trace and start a new one for the pending input
-		finalizeTurnTrace()
-
-		// Create new context for the pending input
-		newTurnCtx, newCancel := context.WithCancel(ctx)
-		s.mu.Lock()
-		s.cancel = newCancel
-		s.mu.Unlock()
-
-		newTurnTraceCtx, finalizeNewTurnTrace := s.beginTurnTrace(newTurnCtx)
-		defer finalizeNewTurnTrace()
-
-		s.emitEvent(agent.NewTurnStartEvent())
-
-		// Execute turn with pending message
-		if err := s.agent.ExecuteTurn(newTurnTraceCtx, pendingMessage); err != nil {
-			s.emitEvent(agent.NewErrorEvent(err))
+	if execErr != nil && !errors.Is(execErr, context.Canceled) {
+		// Check if there are follow-ups queued — if so, don't abort;
+		// let the outer loop process them (e.g., Steer cancels then queues).
+		if s.agent.PendingFollowUpCount() == 0 {
+			s.emitEvent(agent.NewErrorEvent(execErr))
 			s.emitEvent(agent.NewAgentEndEvent(nil))
-			return fmt.Errorf("failed to execute turn with pending input: %w", err)
+			finalizeTurnTrace()
+			return fmt.Errorf("failed to execute turn: %w", execErr)
 		}
-
-		s.mu.Lock()
-		if err := s.syncSessionFromSnapshotLocked(); err != nil {
-			slog.Warn("[AgentNew] Failed to sync session after pending input", "error", err)
-		}
-		s.mu.Unlock()
-
-		assistantMessage, toolResults := s.collectPostTurnResults(beforeCount)
-		s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
-		s.emitEvent(agent.NewAgentEndEvent(nil))
-
-		return nil
+		slog.Info("[AgentNew] Turn ended with error but follow-ups pending, continuing",
+			"error", execErr,
+			"pending_count", s.agent.PendingFollowUpCount(),
+		)
 	}
 
-	// No pending input, finalize the trace normally
+	// Finalize the first turn's trace
 	finalizeTurnTrace()
-
-	// If there was an error and no pending input, return it
-	if execErr != nil {
-		return fmt.Errorf("failed to execute turn: %w", execErr)
-	}
 
 	s.mu.Lock()
 	if err := s.syncSessionFromSnapshotLocked(); err != nil {
@@ -533,8 +510,72 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 
 	assistantMessage, toolResults := s.collectPostTurnResults(beforeCount)
 	s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
-	s.emitEvent(agent.NewAgentEndEvent(nil))
 
+	// --- Outer loop: drain follow-up queue ---
+	// This handles both Steer (cancel + queue) and FollowUp (queue only).
+	// After the inner turn completes (either normally or via cancellation),
+	// we drain any messages that were queued during that turn.
+	for {
+		followUps := s.agent.DrainFollowUps()
+		if len(followUps) == 0 {
+			break
+		}
+
+		for _, followUpMsg := range followUps {
+			slog.Info("[AgentNew] Processing follow-up from queue",
+				"message", followUpMsg,
+			)
+
+			s.mu.Lock()
+			s.pendingSteer = false
+			s.mu.Unlock()
+
+			// Create fresh context for this follow-up turn
+			followUpCtx, followUpCancel := context.WithCancel(ctx)
+			s.mu.Lock()
+			s.cancel = followUpCancel
+			s.mu.Unlock()
+
+			beforeCount = 0
+			if snapshot := s.agent.GetSnapshot(); snapshot != nil {
+				beforeCount = len(snapshot.RecentMessages)
+			}
+
+			followUpTraceCtx, finalizeFollowUpTrace := s.beginTurnTrace(followUpCtx)
+
+			s.emitEvent(agent.NewTurnStartEvent())
+
+			followUpErr := s.agent.ExecuteTurn(followUpTraceCtx, followUpMsg)
+			if followUpErr != nil && !errors.Is(followUpErr, context.Canceled) {
+				if s.agent.PendingFollowUpCount() == 0 {
+					s.emitEvent(agent.NewErrorEvent(followUpErr))
+					finalizeFollowUpTrace()
+					followUpCancel()
+					s.emitEvent(agent.NewAgentEndEvent(nil))
+					return fmt.Errorf("failed to execute follow-up turn: %w", followUpErr)
+				}
+				slog.Info("[AgentNew] Follow-up turn ended with error but more follow-ups pending",
+					"error", followUpErr,
+				)
+			}
+
+			finalizeFollowUpTrace()
+
+			s.mu.Lock()
+			if err := s.syncSessionFromSnapshotLocked(); err != nil {
+				slog.Warn("[AgentNew] Failed to sync session after follow-up", "error", err)
+			}
+			s.mu.Unlock()
+
+			assistantMessage, toolResults = s.collectPostTurnResults(beforeCount)
+			s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
+
+			// Cancel the follow-up context to release associated resources
+			followUpCancel()
+		}
+	}
+
+	s.emitEvent(agent.NewAgentEndEvent(nil))
 	return nil
 }
 
@@ -646,6 +687,8 @@ func (s *AgentNewServer) collectPostTurnResults(beforeCount int) (*agentctx.Agen
 
 // Steer handles the steer command using AgentNew.
 // Steer interrupts the current turn and immediately processes the new input.
+// It follows the old Agent pattern: cancel the current context + queue the message.
+// Prompt's outer loop will drain the queue and process the message after ExecuteTurn returns.
 func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 	s.mu.Lock()
 	mode := s.steeringMode
@@ -684,14 +727,27 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 		return nil
 	}
 
-	// If streaming, interrupt the current turn and queue the new input
-	slog.Info("[AgentNew] Steer during streaming - canceling current turn",
+	// Streaming: cancel current turn + queue message
+	// This matches the old Agent.Steer pattern:
+	// 1. Cancel the current context → ExecuteTurn returns with context.Canceled
+	// 2. Queue the message → Prompt's outer loop drains it and processes it
+	slog.Info("[AgentNew] Steer during streaming - canceling current turn and queuing message",
 		"message", message,
 		"steering_mode", mode,
 	)
 
-	// Set pending input in agent (will be picked up by conversation loop)
-	s.agent.SetPendingInput(message)
+	// Queue the message first (before cancel, to avoid race where Prompt drains before we queue)
+	if err := s.agent.QueueFollowUp(message); err != nil {
+		slog.Warn("[AgentNew] Failed to queue steer message, canceling turn anyway",
+			"message", message,
+			"error", err,
+		)
+		// Still cancel the current turn even if queue is full
+		if cancel != nil {
+			cancel()
+		}
+		return fmt.Errorf("failed to queue steer message: %w", err)
+	}
 
 	// Cancel the current turn
 	if cancel != nil {
@@ -708,6 +764,7 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 
 // FollowUp handles the follow_up command using AgentNew.
 // FollowUp queues the message to be processed after the current turn completes (without cancellation).
+// Prompt's outer loop will drain the queue after ExecuteTurn finishes naturally.
 func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 	s.mu.Lock()
 	mode := s.followUpMode
@@ -745,14 +802,16 @@ func (s *AgentNewServer) FollowUp(ctx context.Context, message string) error {
 		return nil
 	}
 
-	// If streaming, queue the message without canceling (will be processed after current turn completes)
+	// Streaming: queue the message without canceling
+	// Prompt's outer loop will drain it after the current turn completes naturally.
 	slog.Info("[AgentNew] Follow-up during streaming - queueing message",
 		"message", message,
 		"followUpMode", mode,
 	)
 
-	// Set pending input in agent (will be picked up by Prompt after ExecuteTurn completes)
-	s.agent.SetPendingInput(message)
+	if err := s.agent.QueueFollowUp(message); err != nil {
+		return fmt.Errorf("failed to queue follow-up message: %w", err)
+	}
 
 	return nil
 }
@@ -941,8 +1000,8 @@ func (s *AgentNewServer) GetState() (*rpc.SessionState, error) {
 		currentWorkdir = s.workspace.GetCWD()
 	}
 
-	pendingCount := 0
-	if s.pendingSteer {
+	pendingCount := s.agent.PendingFollowUpCount()
+	if s.pendingSteer && pendingCount == 0 {
 		pendingCount = 1
 	}
 

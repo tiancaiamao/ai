@@ -98,17 +98,6 @@ func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, 
 			// Context is still valid, continue
 		}
 
-		// Check for pending input (from /steer or /follow-up)
-		if pendingMessage, hasPending := a.GetAndClearPendingInput(); hasPending {
-			slog.Info("[AgentNew] Pending input detected, exiting conversation loop",
-				"pending_message", pendingMessage,
-				"cycle", cycle+1,
-			)
-			// Store the pending message for the next turn
-			// We return ModeDone so the trampoline will exit and the RPC handler can process the pending input
-			return ModeDone, nil
-		}
-
 		// If no tool calls were made, we're done
 		if len(toolResults) == 0 {
 			return ModeDone, nil
