@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -482,7 +483,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	// We don't treat context.Canceled as a fatal error here — the outer loop
 	// will drain any follow-up messages that were queued by Steer/FollowUp.
 	execErr := s.agent.ExecuteTurn(turnTraceCtx, message)
-	if execErr != nil && execErr != context.Canceled {
+	if execErr != nil && !errors.Is(execErr, context.Canceled) {
 		// Check if there are follow-ups queued — if so, don't abort;
 		// let the outer loop process them (e.g., Steer cancels then queues).
 		if s.agent.PendingFollowUpCount() == 0 {
@@ -544,7 +545,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 			s.emitEvent(agent.NewTurnStartEvent())
 
 			followUpErr := s.agent.ExecuteTurn(followUpTraceCtx, followUpMsg)
-			if followUpErr != nil && followUpErr != context.Canceled {
+			if followUpErr != nil && !errors.Is(followUpErr, context.Canceled) {
 				if s.agent.PendingFollowUpCount() == 0 {
 					s.emitEvent(agent.NewErrorEvent(followUpErr))
 					finalizeFollowUpTrace()
@@ -566,6 +567,9 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 
 			assistantMessage, toolResults = s.collectPostTurnResults(beforeCount)
 			s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
+
+			// Cancel the follow-up context to release associated resources
+			followUpCancel()
 		}
 	}
 

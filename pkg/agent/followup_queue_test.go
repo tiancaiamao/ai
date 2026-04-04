@@ -85,9 +85,15 @@ func TestDrainFollowUpsPartialDrain(t *testing.T) {
 	}
 
 	// Queue messages
-	agent.QueueFollowUp("a")
-	agent.QueueFollowUp("b")
-	agent.QueueFollowUp("c")
+	if err := agent.QueueFollowUp("a"); err != nil {
+		t.Fatalf("QueueFollowUp 'a' failed: %v", err)
+	}
+	if err := agent.QueueFollowUp("b"); err != nil {
+		t.Fatalf("QueueFollowUp 'b' failed: %v", err)
+	}
+	if err := agent.QueueFollowUp("c"); err != nil {
+		t.Fatalf("QueueFollowUp 'c' failed: %v", err)
+	}
 
 	// First drain gets all of them
 	msgs := agent.DrainFollowUps()
@@ -96,7 +102,9 @@ func TestDrainFollowUpsPartialDrain(t *testing.T) {
 	}
 
 	// Queue more
-	agent.QueueFollowUp("d")
+	if err := agent.QueueFollowUp("d"); err != nil {
+		t.Fatalf("QueueFollowUp 'd' failed: %v", err)
+	}
 
 	// Second drain only gets new one
 	msgs = agent.DrainFollowUps()
