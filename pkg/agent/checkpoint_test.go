@@ -53,9 +53,9 @@ func TestCheckpoint_Structure(t *testing.T) {
 	agentStatePath := filepath.Join(checkpointPath, "agent_state.json")
 	assert.FileExists(t, agentStatePath, "Checkpoint must have agent_state.json")
 
-	// 3. Should NOT have messages.jsonl (per design: checkpoint doesn't save messages)
+	// 3. Should have messages.jsonl (RecentMessages is persisted for fast resume)
 	messagesPath := filepath.Join(checkpointPath, "messages.jsonl")
-	assert.NoFileExists(t, messagesPath, "Checkpoint should NOT have messages.jsonl")
+	assert.FileExists(t, messagesPath, "Checkpoint should have messages.jsonl")
 
 	// 4. Should NOT have other files
 	entries, err := os.ReadDir(checkpointPath)
@@ -64,6 +64,7 @@ func TestCheckpoint_Structure(t *testing.T) {
 	expectedFiles := map[string]bool{
 		"llm_context.txt":  false,
 		"agent_state.json": false,
+		"messages.jsonl":   false,
 	}
 
 	for _, entry := range entries {
@@ -81,9 +82,9 @@ func TestCheckpoint_Structure(t *testing.T) {
 	}
 }
 
-// TestCheckpoint_MessagesNotSaved verifies that checkpoint does NOT save
-// messages.jsonl. Per the event sourcing design, RecentMessages is rebuilt
-// by replaying the journal from message_index.
+// TestCheckpoint_MessagesJSONLIsSnapshot verifies that checkpoint saves
+// messages.jsonl with RecentMessages. This enables fast resume without
+// replaying the entire journal.
 func TestCheckpoint_MessagesJSONLIsSnapshot(t *testing.T) {
 	tempDir := t.TempDir()
 	sessionDir := filepath.Join(tempDir, "test-session")
@@ -107,20 +108,20 @@ func TestCheckpoint_MessagesJSONLIsSnapshot(t *testing.T) {
 	info, err := agentctx.SaveCheckpoint(sessionDir, snapshot, 3, 10)
 	require.NoError(t, err)
 
-	// Verify checkpoint does NOT have messages.jsonl
+	// Verify checkpoint HAS messages.jsonl
 	checkpointPath := filepath.Join(sessionDir, info.Path)
 	messagesPath := filepath.Join(checkpointPath, "messages.jsonl")
-	assert.NoFileExists(t, messagesPath, "Checkpoint should NOT have messages.jsonl")
+	assert.FileExists(t, messagesPath, "Checkpoint should have messages.jsonl")
 
 	// Load checkpoint back
 	loaded, err := agentctx.LoadCheckpoint(sessionDir, info)
 	require.NoError(t, err)
 
-	// Verify RecentMessages is empty (will be rebuilt from journal)
-	assert.Equal(t, 0, len(loaded.RecentMessages),
-		"Checkpoint should NOT save RecentMessages; it should be empty")
+	// Verify RecentMessages is preserved (loaded from messages.jsonl)
+	assert.Equal(t, 3, len(loaded.RecentMessages),
+		"Checkpoint should preserve RecentMessages via messages.jsonl")
 
-	// Verify messageIndex is preserved (for journal replay)
+	// Verify messageIndex is preserved (for incremental journal replay)
 	assert.Equal(t, 10, info.MessageIndex,
 		"messageIndex should point to journal position")
 
@@ -271,10 +272,10 @@ func TestRegression_Bug2_DoubleCheckpointPrevention(t *testing.T) {
 func TestRegression_Bug4_CheckpointMessagesClarification(t *testing.T) {
 	// This test documents the design fix
 	t.Log("Bug #4: Confusion about checkpoint containing messages.jsonl")
-	t.Log("Design fix (per event sourcing pattern):")
+	t.Log("Design fix:")
 	t.Log("  - Session root messages.jsonl = Complete append-only journal (SSOT)")
-	t.Log("  - Checkpoint does NOT save messages.jsonl")
-	t.Log("  - RecentMessages is rebuilt by replaying journal from message_index")
+	t.Log("  - Checkpoint DOES save messages.jsonl with RecentMessages for fast resume")
+	t.Log("  - Resume loads RecentMessages from checkpoint, then replays only增量 journal entries")
 
 	tempDir := t.TempDir()
 	sessionDir := filepath.Join(tempDir, "test-session")
@@ -292,15 +293,15 @@ func TestRegression_Bug4_CheckpointMessagesClarification(t *testing.T) {
 	info, err := agentctx.SaveCheckpoint(sessionDir, snapshot, 1, 5)
 	require.NoError(t, err)
 
-	// Verify checkpoint does NOT have messages.jsonl
+	// Verify checkpoint DOES have messages.jsonl
 	checkpointPath := filepath.Join(sessionDir, info.Path)
 	messagesPath := filepath.Join(checkpointPath, "messages.jsonl")
-	assert.NoFileExists(t, messagesPath,
-		"Checkpoint should NOT have messages.jsonl (per event sourcing design)")
+	assert.FileExists(t, messagesPath,
+		"Checkpoint should have messages.jsonl with RecentMessages")
 
-	// Verify message_index is preserved for journal replay
+	// Verify message_index is preserved for incremental journal replay
 	assert.Equal(t, 5, info.MessageIndex,
-		"message_index should be preserved for journal replay")
+		"message_index should be preserved for incremental journal replay")
 
 	// Verify RecentMessagesCount metadata is saved (for debugging)
 	assert.Equal(t, 1, info.RecentMessagesCount,

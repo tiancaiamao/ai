@@ -37,10 +37,15 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 		return nil, fmt.Errorf("failed to save agent_state.json: %w", err)
 	}
 
-	// 4. DO NOT save messages.jsonl
-	// Per design: Checkpoints should only contain llm_context.txt and agent_state.json
-	// RecentMessages is rebuilt by replaying the journal from message_index
-	// The journal (session root messages.jsonl) is the Single Source of Truth
+	// 4. Save messages.jsonl with RecentMessages
+	// RecentMessages is persisted to the checkpoint so that resume can load them
+	// directly instead of replaying the entire journal from the beginning.
+	if len(snapshot.RecentMessages) > 0 {
+		messagesPath := filepath.Join(checkpointPath, "messages.jsonl")
+		if err := saveMessagesJSONL(messagesPath, snapshot.RecentMessages); err != nil {
+			return nil, fmt.Errorf("failed to save messages.jsonl: %w", err)
+		}
+	}
 
 	// Update metadata in info (for debugging/monitoring only)
 	info.LLMContextChars = len(snapshot.LLMContext)
@@ -89,12 +94,21 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 		return nil, fmt.Errorf("failed to read llm_context.txt: %w", err)
 	}
 
-	// 3. DO NOT load messages.jsonl
-	// Per design: RecentMessages is rebuilt by replaying journal from message_index
-	// Checkpoint only provides LLMContext and AgentState (which contains message_index)
+	// 3. Load messages.jsonl if present (backward compatible)
+	// Newer checkpoints include RecentMessages for faster resume.
+	// Older checkpoints without messages.jsonl will return empty RecentMessages
+	// and the caller will replay the entire journal to rebuild them.
+	recentMessages := []AgentMessage{}
+	messagesPath := filepath.Join(checkpointPath, "messages.jsonl")
+	if data, err := os.ReadFile(messagesPath); err == nil && len(data) > 0 {
+		if loaded, err := loadMessagesJSONL(data); err == nil {
+			recentMessages = loaded
+		}
+	}
+
 	snapshot := &ContextSnapshot{
 		LLMContext:     string(llmContextData),
-		RecentMessages: []AgentMessage{}, // Empty - will be rebuilt from journal
+		RecentMessages: recentMessages,
 		AgentState:     agentState,
 	}
 
