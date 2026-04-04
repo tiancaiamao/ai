@@ -2,7 +2,7 @@ version: v1
 interactions:
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -17,7 +17,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -29,7 +29,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -44,7 +44,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -56,7 +56,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -71,7 +71,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -83,7 +83,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -98,7 +98,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -110,7 +110,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -125,7 +125,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -137,7 +137,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -152,7 +152,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:52 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 
@@ -164,7 +164,7 @@ interactions:
 
     - request:
         method: POST
-        url: http://127.0.0.1:51024/chat/completions
+        url: http://127.0.0.1:63662/chat/completions
         headers:
             Authorization:
                 - '[REDACTED]'
@@ -179,7 +179,7 @@ interactions:
             Content-Type:
                 - text/event-stream
             Date:
-                - Fri, 03 Apr 2026 03:06:50 GMT
+                - Sat, 04 Apr 2026 08:17:53 GMT
         body: |+
             data: {"choices":[{"delta":{"content":"Let me check..."}}]}
 

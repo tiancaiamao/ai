@@ -506,7 +506,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	}
 	s.mu.Unlock()
 
-	assistantMessage, toolResults := s.emitPostTurnEvents(beforeCount)
+	assistantMessage, toolResults := s.collectPostTurnResults(beforeCount)
 	s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
 
 	// --- Outer loop: drain follow-up queue ---
@@ -564,7 +564,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 			}
 			s.mu.Unlock()
 
-			assistantMessage, toolResults = s.emitPostTurnEvents(beforeCount)
+			assistantMessage, toolResults = s.collectPostTurnResults(beforeCount)
 			s.emitEvent(agent.NewTurnEndEvent(assistantMessage, toolResults))
 		}
 	}
@@ -647,7 +647,11 @@ func (s *AgentNewServer) traceAssistantMessageUpdate(update agent.AssistantMessa
 	}
 }
 
-func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMessage, []agentctx.AgentMessage) {
+// collectPostTurnResults extracts the last assistant message and tool results from
+// new messages added during this turn. It does NOT emit any events — those are
+// already streamed in real-time by the agent loop (pkg/agent/loop_normal.go).
+// The returned values are used by NewTurnEndEvent.
+func (s *AgentNewServer) collectPostTurnResults(beforeCount int) (*agentctx.AgentMessage, []agentctx.AgentMessage) {
 	snapshot := s.agent.GetSnapshot()
 	if snapshot == nil {
 		return nil, nil
@@ -664,46 +668,11 @@ func (s *AgentNewServer) emitPostTurnEvents(beforeCount int) (*agentctx.AgentMes
 	for _, msg := range newMessages {
 		switch msg.Role {
 		case "assistant":
-			s.emitEvent(agent.NewMessageStartEvent(msg))
-
-			// Emit thinking_delta event
-			if thinking := msg.ExtractThinking(); thinking != "" {
-				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
-					Type:  "thinking_delta",
-					Delta: thinking,
-				}))
-			}
-
-			// Emit text_delta event
-			if text := msg.ExtractText(); text != "" {
-				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
-					Type:  "text_delta",
-					Delta: text,
-				}))
-			}
-
-			// Emit toolcall_delta events
-			toolCalls := msg.ExtractToolCalls()
-			for _, tc := range toolCalls {
-				s.emitEvent(agent.NewMessageUpdateEvent(msg, agent.AssistantMessageEvent{
-					Type:  "toolcall_delta",
-					Delta: fmt.Sprintf("[toolcall %s]", tc.Name),
-				}))
-			}
-
-			s.emitEvent(agent.NewMessageEndEvent(msg))
-
 			msgCopy := msg
 			lastAssistant = &msgCopy
 		case "toolResult":
 			msgCopy := msg
 			toolResults = append(toolResults, msgCopy)
-			s.emitEvent(agent.NewToolExecutionEndEvent(
-				msgCopy.ToolCallID,
-				msgCopy.ToolName,
-				&msgCopy,
-				msgCopy.IsError,
-			))
 		}
 	}
 
