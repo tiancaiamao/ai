@@ -147,21 +147,15 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage
 
-	slog.Debug("[AgentNew] Converting snapshot messages to LLM format",
-		"total_messages", len(a.snapshot.RecentMessages),
-	)
-
-	for i, msg := range a.snapshot.RecentMessages {
+	for _, msg := range a.snapshot.RecentMessages {
 		// Filter out messages that are not visible to agent
 		// Compaction sets agent_visible=false to hide old messages from LLM (saves tokens)
 		// Users can still see them (user_visible=true)
 		if !msg.IsAgentVisible() {
-			slog.Debug("[AgentNew] Skipping non-agent-visible message", "index", i, "role", msg.Role)
 			continue
 		}
 		// Filter out truncated messages - they have been replaced with summaries
 		if msg.IsTruncated() {
-			slog.Debug("[AgentNew] Skipping truncated message", "index", i, "role", msg.Role)
 			continue
 		}
 
@@ -177,8 +171,11 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 
 		// For empty assistant messages without thinking, tool_calls, or content,
 		// skip them. The normalizeMessageSequence function will handle any
-		// sequence validation issues. This is better than using "..." placeholder
-		// which sends incorrect content to the LLM.
+		// sequence validation issues.
+		//
+		// NOTE: We only skip empty non-tool messages here. Tool result messages
+		// must always be preserved to maintain the tool_call/tool_result pairing
+		// required by Anthropic API and other strict APIs.
 		if isEmpty && !isTool {
 			thinking := msg.ExtractThinking()
 			if msg.Role == "assistant" && thinking != "" {
@@ -186,13 +183,6 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 				content = thinking
 				isEmpty = false
 			} else {
-				// Skip empty messages (including empty assistant messages)
-				// normalizeMessageSequence will handle sequence validation
-				slog.Debug("[AgentNew] Skipping empty message",
-					"index", i,
-					"role", msg.Role,
-					"content_blocks", len(msg.Content),
-				)
 				continue
 			}
 		}
@@ -239,35 +229,6 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 		}
 
 		llmMessages = append(llmMessages, llmMsg)
-	}
-
-	slog.Debug("[AgentNew] Converted messages to LLM format",
-		"converted_count", len(llmMessages),
-		"total_snapshot_messages", len(a.snapshot.RecentMessages),
-	)
-
-	// Log first few converted messages for debugging
-	if len(llmMessages) > 0 {
-		firstCount := 3
-		if len(llmMessages) < firstCount {
-			firstCount = len(llmMessages)
-		}
-		lastCount := 3
-		if len(llmMessages) < lastCount {
-			lastCount = len(llmMessages)
-		}
-		firstRoles := make([]string, firstCount)
-		lastRoles := make([]string, lastCount)
-		for i := 0; i < firstCount; i++ {
-			firstRoles[i] = llmMessages[i].Role
-		}
-		for i := 0; i < lastCount; i++ {
-			lastRoles[i] = llmMessages[len(llmMessages)-lastCount+i].Role
-		}
-		slog.Debug("[AgentNew] Sample of converted messages",
-			"first_3_roles", firstRoles,
-			"last_3_roles", lastRoles,
-		)
 	}
 
 	// Normalize message sequence to ensure valid role alternation

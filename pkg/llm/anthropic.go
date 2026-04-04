@@ -192,15 +192,6 @@ func StreamAnthropic(
 					} `json:"content_block"`
 				}
 				if err := json.Unmarshal([]byte(data), &blockEvent); err == nil {
-					// Log content_block_start for debugging
-					if strings.Contains(model.Provider, "minimax") {
-						traceevent.Log(ctx, traceevent.CategoryLLM, "content_block_start",
-							traceevent.Field{Key: "index", Value: blockEvent.Index},
-							traceevent.Field{Key: "type", Value: blockEvent.ContentBlock.Type},
-							traceevent.Field{Key: "id", Value: blockEvent.ContentBlock.ID},
-							traceevent.Field{Key: "name", Value: blockEvent.ContentBlock.Name},
-						)
-					}
 					if blockEvent.ContentBlock.Type == "tool_use" {
 						// Create tool call with ID and name
 						tc := &ToolCall{

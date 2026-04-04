@@ -1,8 +1,6 @@
 package session
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -589,32 +587,28 @@ func (sm *SessionManager) GetSessionsDir() string {
 	return sm.sessionsDir
 }
 
-// getMessageCountFromCheckpoint counts messages from messages.jsonl.
-// Note: This function name is misleading - it should be countMessagesFromJournal,
-// but we keep it for compatibility.
+// getMessageCountFromCheckpoint reads message count from checkpoint_index.json.
 func (sm *SessionManager) getMessageCountFromCheckpoint(sessDir string) int {
-	return sm.countMessagesFromJournal(sessDir)
-}
-
-// countMessagesFromJournal counts message-type entries in messages.jsonl.
-func (sm *SessionManager) countMessagesFromJournal(sessDir string) int {
-	journalPath := filepath.Join(sessDir, "messages.jsonl")
-	data, err := os.ReadFile(journalPath)
+	checkpointIndexPath := filepath.Join(sessDir, "checkpoint_index.json")
+	data, err := os.ReadFile(checkpointIndexPath)
 	if err != nil {
 		return 0
 	}
 
-	count := 0
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		var entry struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err == nil {
-			if entry.Type == "message" {
-				count++
-			}
-		}
+	var checkpointIndex struct {
+		Checkpoints []struct {
+			RecentMessagesCount int `json:"recent_messages_count"`
+		} `json:"checkpoints"`
 	}
-	return count
+	if err := json.Unmarshal(data, &checkpointIndex); err != nil {
+		return 0
+	}
+
+	// Get message count from the latest checkpoint
+	if len(checkpointIndex.Checkpoints) > 0 {
+		latest := checkpointIndex.Checkpoints[len(checkpointIndex.Checkpoints)-1]
+		return latest.RecentMessagesCount
+	}
+
+	return 0
 }
