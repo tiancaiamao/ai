@@ -54,6 +54,14 @@ func TestFollowUpQueue(t *testing.T) {
 	}
 }
 
+func TestFollowUpQueueNil(t *testing.T) {
+	agent := &AgentNew{} // followUpQueue is nil
+
+	if err := agent.QueueFollowUp("test"); err == nil {
+		t.Fatal("expected uninitialized queue error, got nil")
+	}
+}
+
 func TestFollowUpQueueFull(t *testing.T) {
 	agent := &AgentNew{
 		followUpQueue: make(chan string, 2),

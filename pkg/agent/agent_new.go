@@ -126,14 +126,18 @@ func (a *AgentNew) GetSessionID() string {
 
 // QueueFollowUp adds a message to the follow-up queue.
 // This is called by Steer and FollowUp to queue messages for processing after the current turn.
-// Returns an error if the queue is full.
+// Returns an error if the queue is uninitialized or full.
 func (a *AgentNew) QueueFollowUp(message string) error {
+	if a.followUpQueue == nil {
+		return fmt.Errorf("follow-up queue uninitialized")
+	}
+
 	select {
 	case a.followUpQueue <- message:
 		slog.Info("[AgentNew] Follow-up queued", "message", message)
 		return nil
 	default:
-		return fmt.Errorf("follow-up queue full")
+		return fmt.Errorf("follow-up queue full (len=%d cap=%d)", len(a.followUpQueue), cap(a.followUpQueue))
 	}
 }
 
