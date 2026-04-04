@@ -104,7 +104,9 @@ func StreamLLM(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 
 		// Execute request
-		client := &http.Client{}
+		client := &http.Client{
+			Timeout: 2 * time.Minute, // Timeout for waiting for response headers + body
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			// Provide helpful error message for DNS/connection issues
