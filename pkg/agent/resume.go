@@ -79,7 +79,7 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 		agentctx.LogSnapshotReconstructed(ctx, latestCheckpoint.Path, len(entries), len(snapshot.RecentMessages))
 	}
 
-	// 7. Create agent
+	// Create agent
 	agent := &AgentNew{
 		snapshot:       snapshot,
 		sessionDir:     sessionDir,
@@ -91,6 +91,7 @@ func LoadSession(ctx context.Context, sessionDir string, model *ModelSpec, apiKe
 		eventEmitter:   eventEmitter,
 		allTools:       tools.GetAllTools(),
 		thinkingLevel:  "high", // Default; caller should override via SetThinkingLevel
+		followUpQueue:  make(chan string, 100),
 	}
 
 	// Update context window if model provides it
@@ -159,6 +160,7 @@ func createNewSession(sessionDir string, model *ModelSpec, apiKey string, eventE
 		triggerChecker: agentctx.NewTriggerChecker(),
 		eventEmitter:   eventEmitter,
 		allTools:       tools.GetAllTools(),
+		followUpQueue:  make(chan string, 100),
 	}
 
 	slog.Info("[AgentNew] New session created",
