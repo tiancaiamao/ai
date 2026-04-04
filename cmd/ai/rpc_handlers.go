@@ -461,6 +461,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 	s.mu.Unlock()
 
 	defer func() {
+		cancel() // Release context-scoped resources for the initial turn
 		s.mu.Lock()
 		s.isStreaming = false
 		s.pendingSteer = false
@@ -549,6 +550,7 @@ func (s *AgentNewServer) Prompt(ctx context.Context, message string) error {
 				if s.agent.PendingFollowUpCount() == 0 {
 					s.emitEvent(agent.NewErrorEvent(followUpErr))
 					finalizeFollowUpTrace()
+					followUpCancel()
 					s.emitEvent(agent.NewAgentEndEvent(nil))
 					return fmt.Errorf("failed to execute follow-up turn: %w", followUpErr)
 				}
@@ -736,6 +738,14 @@ func (s *AgentNewServer) Steer(ctx context.Context, message string) error {
 
 	// Queue the message first (before cancel, to avoid race where Prompt drains before we queue)
 	if err := s.agent.QueueFollowUp(message); err != nil {
+		slog.Warn("[AgentNew] Failed to queue steer message, canceling turn anyway",
+			"message", message,
+			"error", err,
+		)
+		// Still cancel the current turn even if queue is full
+		if cancel != nil {
+			cancel()
+		}
 		return fmt.Errorf("failed to queue steer message: %w", err)
 	}
 
