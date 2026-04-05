@@ -140,6 +140,25 @@ func (a *AgentNew) executeNormalStep(
 
 	// If user message not yet appended, append it now
 	if !msgAppended {
+		// Check if the last message in RecentMessages is the same user message
+		// This can happen if a previous turn failed (e.g., DNS error) and the user retried
+		if len(a.snapshot.RecentMessages) > 0 {
+			lastMsg := a.snapshot.RecentMessages[len(a.snapshot.RecentMessages)-1]
+			if lastMsg.Role == "user" {
+				lastContent := lastMsg.ExtractText()
+				if lastContent == userMessage {
+					// Duplicate user message detected - skip adding it
+					slog.Info("[AgentNew] Skipping duplicate user message",
+						"recent_messages_count", len(a.snapshot.RecentMessages),
+					)
+					msgAppended = true
+				}
+			}
+		}
+	}
+
+	// If user message still not appended, add it now
+	if !msgAppended {
 		userMsg := agentctx.AgentMessage{
 			Role:         "user",
 			Content:      []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: userMessage}},
