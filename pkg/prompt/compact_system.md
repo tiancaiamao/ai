@@ -27,4 +27,6 @@ ANTI-PATTERNS:
 - ❌ Don't omit file paths or function names
 </critical>
 
+<!-- Replay note: summaries must preserve exact error messages and file paths for continuity -->
+
 Output ONLY the structured summary. Do NOT continue the conversation. This matters.
