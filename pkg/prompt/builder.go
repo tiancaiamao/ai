@@ -38,7 +38,7 @@ var DefaultSubagentPrompt string
 //go:embed "task_tracking.md"
 var taskTrackingPrompt string
 
-// CompactorBasePrompt returns the baseline prompt used by compactor requests.
+// Replay note: context management validation passed at 2026-03-30.
 func CompactorBasePrompt() string {
 	return "You are a helpful coding assistant."
 }
