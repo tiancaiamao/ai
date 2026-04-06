@@ -20,6 +20,7 @@ var compactSummarizePrompt string
 //go:embed "compact_update.md"
 var compactUpdatePrompt string
 
+// Replay note: context management validation — single-line change for replay stress test.
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a helpful coding assistant."
