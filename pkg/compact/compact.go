@@ -15,6 +15,12 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+const (
+	previousConversationSummaryPrefix = "[Previous conversation summary]"
+	pinnedSessionInstructionsPrefix   = "[Pinned session instructions]"
+	pinnedInstructionMaxRunes         = 20000
+)
+
 // Config contains configuration for context compression.
 type Config struct {
 	MaxMessages         int    // Maximum messages before compression
@@ -246,10 +252,21 @@ func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary st
 		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
 	}
 
-	// Create new context with summary + recent messages
-	newMessages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
+	// Preserve pinned session-level instructions so compaction cannot silently
+	// remove unfinished user constraints from early conversation turns.
+	pinnedInstructions := extractPinnedSessionInstructions(messages)
+	recentMessages = removeCompactionControlMessages(recentMessages)
+
+	// Create new context with pinned instructions + summary + recent messages.
+	newMessages := make([]agentctx.AgentMessage, 0, len(recentMessages)+2)
+	if strings.TrimSpace(pinnedInstructions) != "" {
+		newMessages = append(newMessages, agentctx.NewUserMessage(
+			fmt.Sprintf("%s\n\n%s", pinnedSessionInstructionsPrefix, pinnedInstructions),
+		))
 	}
+	newMessages = append(newMessages, agentctx.NewUserMessage(
+		fmt.Sprintf("%s\n\n%s", previousConversationSummaryPrefix, summary),
+	))
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newMessages = append(newMessages, recentMessages...)
@@ -616,6 +633,9 @@ func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.Agen
 		if !msg.IsAgentVisible() {
 			continue
 		}
+		if isCompactionControlMessage(msg) {
+			continue
+		}
 
 		if msg.Role != "toolResult" {
 			projected = append(projected, msg)
@@ -756,6 +776,62 @@ func extractText(msg agentctx.AgentMessage) string {
 		return msg.ExtractText()
 	}
 	return b.String()
+}
+
+func isCompactionControlMessage(msg agentctx.AgentMessage) bool {
+	if msg.Role != "user" {
+		return false
+	}
+	text := strings.TrimSpace(extractText(msg))
+	if text == "" {
+		return false
+	}
+	return strings.HasPrefix(text, previousConversationSummaryPrefix) ||
+		strings.HasPrefix(text, pinnedSessionInstructionsPrefix)
+}
+
+func removeCompactionControlMessages(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	filtered := make([]agentctx.AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		if isCompactionControlMessage(msg) {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
+}
+
+func extractPinnedSessionInstructions(messages []agentctx.AgentMessage) string {
+	// 1) Reuse existing pinned instructions if present.
+	for _, msg := range messages {
+		if msg.Role != "user" || !msg.IsAgentVisible() {
+			continue
+		}
+		text := strings.TrimSpace(extractText(msg))
+		if !strings.HasPrefix(text, pinnedSessionInstructionsPrefix) {
+			continue
+		}
+		body := strings.TrimSpace(strings.TrimPrefix(text, pinnedSessionInstructionsPrefix))
+		if body != "" {
+			return trimRunes(body, pinnedInstructionMaxRunes)
+		}
+	}
+
+	// 2) Fallback to the first real user instruction message.
+	for _, msg := range messages {
+		if msg.Role != "user" || !msg.IsAgentVisible() {
+			continue
+		}
+		text := strings.TrimSpace(extractText(msg))
+		if text == "" {
+			continue
+		}
+		if strings.HasPrefix(text, previousConversationSummaryPrefix) {
+			continue
+		}
+		return trimRunes(text, pinnedInstructionMaxRunes)
+	}
+	return ""
 }
 
 // ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.

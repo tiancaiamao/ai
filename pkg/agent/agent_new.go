@@ -313,8 +313,8 @@ func (a *AgentNew) performCompaction(ctx context.Context) error {
 		traceevent.Field{Key: "tokens", Value: beforeTokens},
 	)
 
-	// Create compactor — use BuildSystemPromptWithExtras so skills/project context are included
-	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra, a.customSystemPrompt)
+	// Create compactor — use BuildSystemPromptWithExtras so workspace, skills/project context are included
+	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra, a.snapshot.AgentState.WorkspaceRoot, a.customSystemPrompt)
 	compactor := compact.NewCompactor(
 		compact.DefaultConfig(),
 		*a.model,  // Dereference pointer

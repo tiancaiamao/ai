@@ -58,6 +58,8 @@ For detailed guidelines and templates, check available skills.
 - Make targeted edits
 - Run tests to verify changes
 
+%WORKSPACE%
+
 %SKILLS%
 
 %PROJECT_CONTEXT%

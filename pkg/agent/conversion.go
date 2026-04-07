@@ -22,6 +22,15 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 	lastUserIndex := findLastVisibleUserIndex(messages)
 	protectedToolResults := protectedRecentToolResultIndexes(messages, recentToolResultsNoMetadata)
 
+	// Build a set of tool call IDs whose results have been truncated
+	// This prevents us from sending tool calls that have no corresponding results
+	truncatedToolCallIDs := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg.Role == "toolResult" && msg.Truncated {
+			truncatedToolCallIDs[msg.ToolCallID] = struct{}{}
+		}
+	}
+
 	// Pre-calculate age rank for each tool result message
 	toolResultAgeRanks := make(map[int]int)
 	toolResultCount := 0
@@ -75,9 +84,18 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 		// Extract tool calls (from assistant messages)
 		if msg.Role == "assistant" {
 			toolCalls := msg.ExtractToolCalls()
-			if len(toolCalls) > 0 {
-				llmMsg.ToolCalls = make([]llm.ToolCall, len(toolCalls))
-				for i, tc := range toolCalls {
+			// Filter out tool calls whose results have been truncated
+			// This prevents LLM from seeing orphaned tool calls with no corresponding results
+			var validToolCalls []agentctx.ToolCallContent
+			for _, tc := range toolCalls {
+				if _, truncated := truncatedToolCallIDs[tc.ID]; truncated {
+					continue
+				}
+				validToolCalls = append(validToolCalls, tc)
+			}
+			if len(validToolCalls) > 0 {
+				llmMsg.ToolCalls = make([]llm.ToolCall, len(validToolCalls))
+				for i, tc := range validToolCalls {
 					// Convert arguments map to JSON string
 					argsJSON, _ := json.Marshal(tc.Arguments)
 					llmMsg.ToolCalls[i] = llm.ToolCall{

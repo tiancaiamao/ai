@@ -3034,21 +3034,19 @@ func (p *AiInterpreter) handleTraceEventsResponse(data json.RawMessage) {
 }
 
 func (p *AiInterpreter) handleTraceEventsList(data json.RawMessage) {
-	var payload struct {
-		Events []string `json:"events"`
-	}
+	var events []string
 
-	if err := json.Unmarshal(data, &payload); err != nil {
+	if err := json.Unmarshal(data, &events); err != nil {
 		p.writeStatus(fmt.Sprintf("ai: invalid trace events list response: %v", err))
 		return
 	}
 
-	if len(payload.Events) == 0 {
+	if len(events) == 0 {
 		p.writeStatus("ai: no trace events enabled")
 		return
 	}
 
-	p.writeStatus(fmt.Sprintf("ai: enabled trace events: %s", strings.Join(payload.Events, ", ")))
+	p.writeStatus(fmt.Sprintf("ai: enabled trace events: %s", strings.Join(events, ", ")))
 }
 
 func (p *AiInterpreter) handleLastAssistantText(data json.RawMessage) {

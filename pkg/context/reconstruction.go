@@ -81,22 +81,54 @@ func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *Checkpoint
 	return snapshot, nil
 }
 
-// ApplyTruncateToSnapshot marks a message as truncated in the snapshot
+// ApplyTruncateToSnapshot marks a message as truncated in the snapshot.
+// It replaces the content with a head/tail preserved summary, matching the behavior
+// of TruncateMessagesTool.applyTruncate().
 func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEvent) error {
 	// Find message by ToolCallID and set Truncated=true
 	for i := range snapshot.RecentMessages {
 		if snapshot.RecentMessages[i].ToolCallID == truncateEvent.ToolCallID {
-			snapshot.RecentMessages[i].Truncated = true
-			snapshot.RecentMessages[i].TruncatedAt = truncateEvent.Turn
-			// OriginalSize should be set when truncate is applied
-			if snapshot.RecentMessages[i].OriginalSize == 0 {
-				snapshot.RecentMessages[i].OriginalSize = len(snapshot.RecentMessages[i].ExtractText())
+			msg := &snapshot.RecentMessages[i]
+			originalText := msg.ExtractText()
+
+			msg.Truncated = true
+			msg.TruncatedAt = truncateEvent.Turn
+			if msg.OriginalSize == 0 {
+				msg.OriginalSize = len(originalText)
 			}
+
+			// Replace content with head/tail preserved summary
+			msg.Content = []ContentBlock{
+				TextContent{
+					Type: "text",
+					Text: TruncateWithHeadTail(originalText),
+				},
+			}
+
 			return nil
 		}
 	}
 
 	return fmt.Errorf("message with tool_call_id %s not found", truncateEvent.ToolCallID)
+}
+
+// TruncateWithHeadTail preserves the first and last portion of text,
+// replacing the middle with a truncation marker.
+func TruncateWithHeadTail(text string) string {
+	const (
+		headKeep = 200 // Keep first 200 chars
+		tailKeep = 200 // Keep last 200 chars
+		minSize  = 800 // Only apply truncation if text is longer than this
+	)
+
+	if len(text) <= minSize {
+		return fmt.Sprintf(".. [output truncated, %d chars total] ..", len(text))
+	}
+
+	head := text[:headKeep]
+	tail := text[len(text)-tailKeep:]
+	truncatedChars := len(text) - headKeep - tailKeep
+	return fmt.Sprintf("%s\n.. [%d chars truncated] ..\n%s", head, truncatedChars, tail)
 }
 
 // ReconstructSnapshotMessages rebuilds RecentMessages from journal entries starting at startIndex.

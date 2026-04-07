@@ -129,22 +129,27 @@ func (a *AgentNew) executeConversationLoop(ctx context.Context) (ExecutionMode, 
 
 // buildNormalModeRequest builds the LLM request for normal mode.
 func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage, string) {
-	// Build system prompt with thinking level instruction, skills, and project context
+	// Build system prompt with thinking level instruction, workspace, skills, and project context
 	slog.Info("[AgentNew] buildNormalModeRequest", "skillsExtraLen", len(a.skillsExtra), "projectContextExtraLen", len(a.projectContextExtra), "thinkingLevel", a.thinkingLevel, "customSystemPromptLen", len(a.customSystemPrompt))
-	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra, a.customSystemPrompt)
+	systemPrompt := prompt.BuildSystemPromptWithExtras(agentctx.ModeNormal, a.thinkingLevel, a.skillsExtra, a.projectContextExtra, a.snapshot.AgentState.WorkspaceRoot, a.customSystemPrompt)
+
+	// Build a set of tool call IDs whose results have been hidden (agent_visible=false).
+	// Truncated results are still sent to LLM (with head/tail summary), so they are NOT hidden.
+	hiddenToolCallIDs := make(map[string]struct{})
+	for _, msg := range a.snapshot.RecentMessages {
+		if msg.Role == "toolResult" && !msg.IsAgentVisible() {
+			hiddenToolCallIDs[msg.ToolCallID] = struct{}{}
+		}
+	}
 
 	// Convert recent messages to LLM format with validation
 	var llmMessages []llm.LLMMessage
 
 	for _, msg := range a.snapshot.RecentMessages {
-		// Filter out messages that are not visible to agent
-		// Compaction sets agent_visible=false to hide old messages from LLM (saves tokens)
-		// Users can still see them (user_visible=true)
+		// Truncated messages: their content has been replaced with head/tail summary.
+		// Still include them so the LLM has context about what happened.
+		// But skip if not agent-visible.
 		if !msg.IsAgentVisible() {
-			continue
-		}
-		// Filter out truncated messages - they have been replaced with summaries
-		if msg.IsTruncated() {
 			continue
 		}
 
@@ -192,23 +197,34 @@ func (a *AgentNew) buildNormalModeRequest(ctx context.Context) ([]llm.LLMMessage
 
 		// Extract and convert tool calls for assistant messages
 		if len(toolCalls) > 0 {
-			llmMsg.ToolCalls = make([]llm.ToolCall, 0, len(toolCalls))
+			// Filter out tool calls whose results have been hidden (agent_visible=false)
+			// Truncated results are still included (with head/tail summary), so their calls are kept.
+			var validToolCalls []agentctx.ToolCallContent
 			for _, tc := range toolCalls {
-				// Convert arguments map back to JSON string
-				argsJSON := "{}"
-				if tc.Arguments != nil {
-					if bytes, err := json.Marshal(tc.Arguments); err == nil {
-						argsJSON = string(bytes)
-					}
+				if a.isToolResultHidden(tc.ID, hiddenToolCallIDs) {
+					continue
 				}
-				llmMsg.ToolCalls = append(llmMsg.ToolCalls, llm.ToolCall{
-					ID:   tc.ID,
-					Type: "function",
-					Function: llm.FunctionCall{
-						Name:      tc.Name,
-						Arguments: argsJSON,
-					},
-				})
+				validToolCalls = append(validToolCalls, tc)
+			}
+			if len(validToolCalls) > 0 {
+				llmMsg.ToolCalls = make([]llm.ToolCall, 0, len(validToolCalls))
+				for _, tc := range validToolCalls {
+					// Convert arguments map back to JSON string
+					argsJSON := "{}"
+					if tc.Arguments != nil {
+						if bytes, err := json.Marshal(tc.Arguments); err == nil {
+							argsJSON = string(bytes)
+						}
+					}
+					llmMsg.ToolCalls = append(llmMsg.ToolCalls, llm.ToolCall{
+						ID:   tc.ID,
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      tc.Name,
+							Arguments: argsJSON,
+						},
+					})
+				}
 			}
 		}
 
@@ -251,6 +267,8 @@ tokens_percent: %.1f
 recent_messages: %d
 stale_outputs: %d
 turn: %d
+workspace:
+  current_workdir: %s
 </agent:runtime_state>`,
 		a.snapshot.EstimateTokens(),
 		a.snapshot.AgentState.TokensLimit,
@@ -258,6 +276,7 @@ turn: %d
 		len(a.snapshot.RecentMessages),
 		staleCount,
 		a.snapshot.AgentState.TotalTurns,
+		a.snapshot.AgentState.CurrentWorkingDir,
 	)
 
 	return content
@@ -509,6 +528,13 @@ func (a *AgentNew) emitRetryEvent(ctx context.Context, info LLMRetryInfo) {
 		traceevent.Field{Key: "delay", Value: info.Delay.String()},
 		traceevent.Field{Key: "error_type", Value: info.ErrorType},
 	)
+}
+
+// isToolResultHidden checks if a tool call's result has been hidden (agent_visible=false).
+// This is used to filter out tool calls whose results are no longer visible.
+func (a *AgentNew) isToolResultHidden(toolCallID string, hiddenIDs map[string]struct{}) bool {
+	_, hidden := hiddenIDs[toolCallID]
+	return hidden
 }
 
 func (a *AgentNew) processLLMResponse(

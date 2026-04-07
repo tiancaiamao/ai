@@ -257,6 +257,27 @@ func (a *AgentNew) executeContextMgmtStep(ctx context.Context) (nextMode Executi
 	mgmtSpan.AddField("action_taken", true)
 	mgmtSpan.End()
 
+	// Check if compact is needed as a last resort
+	afterTokenPercent := a.snapshot.EstimateTokenPercent()
+	if afterTokenPercent > 0.75 {
+		slog.Info("[AgentNew] Context management insufficient, triggering compact as last resort",
+			"token_percent", afterTokenPercent,
+		)
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_management_decision",
+			traceevent.Field{Key: "action", Value: "compact_fallback"},
+			traceevent.Field{Key: "reason", Value: "token_still_high"},
+			traceevent.Field{Key: "token_percent", Value: afterTokenPercent},
+		)
+
+		if err := a.performCompaction(ctx); err != nil {
+			return ModeError, fmt.Errorf("fallback compaction failed: %w", err)
+		}
+
+		slog.Info("[AgentNew] Compaction completed",
+			"token_percent_after", a.snapshot.EstimateTokenPercent(),
+		)
+	}
+
 	// After context management, update trigger tracking
 	a.snapshot.AgentState.LastTriggerTurn = a.snapshot.AgentState.TotalTurns
 	a.snapshot.AgentState.TurnsSinceLastTrigger = 0
@@ -265,6 +286,7 @@ func (a *AgentNew) executeContextMgmtStep(ctx context.Context) (nextMode Executi
 
 	slog.Info("[AgentNew] Context management completed",
 		"urgency", urgency,
+		"final_token_percent", a.snapshot.EstimateTokenPercent(),
 	)
 
 	// Return to Normal mode to continue processing

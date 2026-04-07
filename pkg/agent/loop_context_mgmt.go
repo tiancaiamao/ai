@@ -142,82 +142,168 @@ func (a *AgentNew) executeContextMgmtTools(ctx context.Context, urgency string) 
 }
 
 // buildContextMgmtMessages builds the message sequence for context management mode.
-// This uses a multi-message structure instead of putting everything in one user message.
+// The key design principle: send the FULL conversation context so the LLM can judge
+// whether each tool output is still useful for the current task, not just blindly
+// truncate everything marked as "stale".
 func (a *AgentNew) buildContextMgmtMessages() []llm.LLMMessage {
 	messages := []llm.LLMMessage{}
 
-	// 1. Current state and request
+	// 1. Calculate protected region boundary (shared by state message and conversation builder)
+	protectedStart := len(a.snapshot.RecentMessages) - agentctx.RecentMessagesKeep
+	if protectedStart < 0 {
+		protectedStart = 0
+	}
+
+	// 2. Current state and decision guidance
 	tokenPercent := a.snapshot.EstimateTokenPercent()
 	staleCount := a.snapshot.CountStaleOutputs(10)
 
+	truncatableCount := 0
+	for i := range protectedStart {
+		if i < len(a.snapshot.RecentMessages) {
+			msg := a.snapshot.RecentMessages[i]
+			if msg.Role == "toolResult" && !msg.IsTruncated() {
+				truncatableCount++
+			}
+		}
+	}
+
 	stateMsg := fmt.Sprintf(`<current_state>
 Recent messages: %d
+Truncatable tool outputs: %d (protected region: last %d messages)
 Tokens used: %.1f%%
 Stale outputs: %d
 Tool calls since last management: %d
 Total turns: %d
 </current_state>
 
-Please review the context and decide what action to take.
+Review the conversation above and decide which tool outputs are no longer needed.
+**Decision principle**: A tool output should be truncated only if its information is no longer useful for the current task.
+Do NOT truncate outputs just because they are old — consider whether the task still needs them.
+
+Note: Messages marked [PROTECTED] are in the protected region and cannot be truncated. Only tool outputs with an "id=" field are truncatable.
+
+Available actions:
+- **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed)
 - **update_llm_context** - Rewrite the LLM Context to reflect current state
-- **truncate_messages** - Remove old tool outputs to save space (specify message_ids)
-- **compact_messages** - Summarize old messages and keep recent ones (aggressive space saving)
 - **no_action** - Context is healthy, no action needed`,
 		len(a.snapshot.RecentMessages),
+		truncatableCount,
+		agentctx.RecentMessagesKeep,
 		tokenPercent*100,
 		staleCount,
 		a.snapshot.AgentState.ToolCallsSinceLastTrigger,
 		a.snapshot.AgentState.TotalTurns,
 	)
 
+	// 2. Current LLMContext (if exists) — sent BEFORE conversation
+	llmContextMsg := ""
+	if a.snapshot.LLMContext != "" {
+		llmContextMsg = "## Current LLM Context\n" + a.snapshot.LLMContext
+	}
+
+	// 3. Build conversation history for context management.
+	// Key design: only expose tool call IDs that are actually truncatable.
+	// Messages in the protected region (last RecentMessagesKeep messages) cannot be
+	// truncated, so we don't show their IDs — this prevents the LLM from selecting
+	// IDs that would be rejected by TruncateMessagesTool.Execute().
+
+	toolResults := a.getStaleToolOutputs()
+	toolResultStaleMap := make(map[string]int) // toolCallID -> stale score
+	for i, result := range toolResults {
+		toolResultStaleMap[result.ToolCallID] = len(toolResults) - i - 1
+	}
+
+	// Build conversation as a single user message with stale annotations
+	var conversationBuilder strings.Builder
+	if llmContextMsg != "" {
+		conversationBuilder.WriteString(llmContextMsg)
+		conversationBuilder.WriteString("\n\n")
+	}
+	conversationBuilder.WriteString("## Full Conversation Context\n\n")
+
+	for msgIdx, msg := range a.snapshot.RecentMessages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+		if msg.IsTruncated() {
+			// Already truncated — show the summary
+			conversationBuilder.WriteString(fmt.Sprintf("[%s] (already truncated)\n%s\n\n",
+				msg.Role, msg.ExtractText()))
+			continue
+		}
+
+		switch msg.Role {
+		case "user":
+			conversationBuilder.WriteString("[user]\n")
+			conversationBuilder.WriteString(msg.ExtractText())
+			conversationBuilder.WriteString("\n\n")
+		case "assistant":
+			content := msg.ExtractText()
+			toolCalls := msg.ExtractToolCalls()
+			if len(toolCalls) > 0 {
+				conversationBuilder.WriteString("[assistant] (tool calls)\n")
+				for _, tc := range toolCalls {
+					conversationBuilder.WriteString(fmt.Sprintf("  -> %s(%s)\n", tc.Name, compactArgs(tc.Arguments)))
+				}
+			} else if content != "" {
+				conversationBuilder.WriteString("[assistant]\n")
+				conversationBuilder.WriteString(content)
+			}
+			conversationBuilder.WriteString("\n\n")
+		case "toolResult":
+			stale := toolResultStaleMap[msg.ToolCallID]
+			content := msg.ExtractText()
+			// For large outputs, show preview with stale annotation
+			if len(content) > ToolOutputMgmtPreviewMax {
+				head := content[:ToolOutputMgmtPreviewHead]
+				tail := content[len(content)-ToolOutputMgmtPreviewTail:]
+				truncatedChars := len(content) - ToolOutputMgmtPreviewHead - ToolOutputMgmtPreviewTail
+				content = fmt.Sprintf("%s\n... (%d chars omitted) ...\n%s", head, truncatedChars, tail)
+			}
+			// Protected messages: show content but do NOT expose the ID.
+			// This ensures the LLM can only select IDs that are actually truncatable.
+			if msgIdx >= protectedStart {
+				conversationBuilder.WriteString(fmt.Sprintf("[tool:%s stale=%d chars=%d PROTECTED]\n%s\n\n",
+					msg.ToolName, stale, len(msg.ExtractText()), content))
+			} else {
+				conversationBuilder.WriteString(fmt.Sprintf("[tool:%s stale=%d chars=%d] id=%s\n%s\n\n",
+					msg.ToolName, stale, len(msg.ExtractText()), msg.ToolCallID, content))
+			}
+		}
+	}
+
+	messages = append(messages, llm.LLMMessage{
+		Role:    "user",
+		Content: conversationBuilder.String(),
+	})
+
+	// 4. State message as the last user message (so LLM sees conversation first, then instruction)
 	messages = append(messages, llm.LLMMessage{
 		Role:    "user",
 		Content: stateMsg,
 	})
 
-	// 2. Current LLMContext (if exists)
-	if a.snapshot.LLMContext != "" {
-		messages = append(messages, llm.LLMMessage{
-			Role:    "user",
-			Content: "## Current LLM Context\n" + a.snapshot.LLMContext,
-		})
-	}
-
-	// 3. Stale tool outputs (candidates for truncation)
-	staleOutputs := a.getStaleToolOutputs()
-	if len(staleOutputs) > 0 {
-		var staleBuilder strings.Builder
-		staleBuilder.WriteString("## Stale Tool Outputs (candidates for truncation)\n")
-		for _, output := range staleOutputs {
-			staleBuilder.WriteString(a.renderToolResultForMgmt(output))
-			staleBuilder.WriteString("\n")
-		}
-		messages = append(messages, llm.LLMMessage{
-			Role:    "user",
-			Content: staleBuilder.String(),
-		})
-	}
-
-	// 4. Recent messages (last N, maintaining original structure)
-	// Only include messages that are relevant for context understanding
-	recent := a.getLastNMessages(agentctx.RecentMessagesShowInMgmt)
-	for _, msg := range recent {
-		// Skip truncated messages
-		if msg.IsTruncated() {
-			continue
-		}
-		// Convert to LLM message format
-		llmMsg := a.convertMessageToLLMFormat(msg)
-		if llmMsg != nil {
-			messages = append(messages, *llmMsg)
-		}
-	}
-
 	return messages
+}
+
+// compactArgs returns a compact string representation of tool call arguments.
+func compactArgs(args map[string]any) string {
+	if args == nil || len(args) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(args)
+	s := string(b)
+	if len(s) > 100 {
+		return s[:100] + "..."
+	}
+	return s
 }
 
 // convertMessageToLLMFormat converts an AgentMessage to LLM message format.
 // For context management mode, we include all messages regardless of agent_visible flag.
+// IMPORTANT: For assistant messages, we only include tool calls that have corresponding
+// non-truncated tool results. This prevents LLM from trying to truncate IDs that no longer exist.
 func (a *AgentNew) convertMessageToLLMFormat(msg agentctx.AgentMessage) *llm.LLMMessage {
 	// Extract text content
 	content := msg.ExtractText()
@@ -227,6 +313,11 @@ func (a *AgentNew) convertMessageToLLMFormat(msg agentctx.AgentMessage) *llm.LLM
 	if msg.Role == "assistant" {
 		calls := msg.ExtractToolCalls()
 		for _, tc := range calls {
+			// Only include tool calls that have corresponding non-truncated results
+			// This prevents LLM from seeing tool call IDs that no longer exist in the context
+			if !a.hasValidToolResult(tc.ID) {
+				continue
+			}
 			// Convert arguments to JSON string
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			toolCalls = append(toolCalls, llm.ToolCall{
@@ -264,6 +355,16 @@ func (a *AgentNew) convertMessageToLLMFormat(msg agentctx.AgentMessage) *llm.LLM
 	}
 
 	return nil
+}
+
+// hasValidToolResult checks if there's a non-truncated tool result for the given tool call ID.
+func (a *AgentNew) hasValidToolResult(toolCallID string) bool {
+	for _, msg := range a.snapshot.RecentMessages {
+		if msg.Role == "toolResult" && msg.ToolCallID == toolCallID && !msg.Truncated {
+			return true
+		}
+	}
+	return false
 }
 
 // buildContextMgmtInput builds the context management input string (legacy, deprecated).
@@ -337,6 +438,13 @@ func (a *AgentNew) getLastNMessages(n int) []agentctx.AgentMessage {
 	}
 	return a.snapshot.RecentMessages[len(a.snapshot.RecentMessages)-n:]
 }
+
+// Constants for tool output preview in context management mode.
+const (
+	ToolOutputMgmtPreviewMax  = 1500 // Max chars for tool output in mgmt preview
+	ToolOutputMgmtPreviewHead = 800  // Keep first N chars
+	ToolOutputMgmtPreviewTail = 200  // Keep last N chars
+)
 
 // renderToolResultForMgmt renders a tool result for context management mode.
 func (a *AgentNew) renderToolResultForMgmt(msg agentctx.AgentMessage) string {

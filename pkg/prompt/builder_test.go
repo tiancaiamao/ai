@@ -197,7 +197,7 @@ func TestBuildSystemPromptWithExtras(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSystemPromptWithExtras(tt.mode, tt.level, tt.skills, tt.context)
+			result := BuildSystemPromptWithExtras(tt.mode, tt.level, tt.skills, tt.context, "")
 
 			if result == "" {
 				t.Error("result is empty")

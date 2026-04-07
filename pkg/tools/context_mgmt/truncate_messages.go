@@ -112,15 +112,28 @@ func (t *TruncateMessagesTool) isValidToolCallID(id string) bool {
 }
 
 // applyTruncate marks messages as truncated and records to journal.
+// Instead of completely removing content, it preserves head/tail with a truncation marker.
 func (t *TruncateMessagesTool) applyTruncate(ctx context.Context, ids []string) int {
 	count := 0
 	for _, id := range ids {
 		// Mark as truncated in snapshot
 		for i := range t.snapshot.RecentMessages {
 			if t.snapshot.RecentMessages[i].ToolCallID == id {
-				t.snapshot.RecentMessages[i].Truncated = true
-				t.snapshot.RecentMessages[i].TruncatedAt = t.snapshot.AgentState.TotalTurns
-				t.snapshot.RecentMessages[i].OriginalSize = len(t.snapshot.RecentMessages[i].ExtractText())
+				msg := &t.snapshot.RecentMessages[i]
+				originalText := msg.ExtractText()
+				originalSize := len(originalText)
+
+				msg.Truncated = true
+				msg.TruncatedAt = t.snapshot.AgentState.TotalTurns
+				msg.OriginalSize = originalSize
+
+				// Replace content with head/tail preserved summary
+				msg.Content = []agentctx.ContentBlock{
+					agentctx.TextContent{
+						Type: "text",
+						Text: agentctx.TruncateWithHeadTail(originalText),
+					},
+				}
 
 				// Record to journal
 				if err := t.journal.AppendTruncate(agentctx.TruncateEvent{

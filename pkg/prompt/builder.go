@@ -54,11 +54,11 @@ func BuildSystemPromptWithThinking(mode context.AgentMode, thinkingLevel string)
 	return fmt.Sprintf("%s\n\n<thinking_instruction>\n%s\n</thinking_instruction>", base, instruction)
 }
 
-// BuildSystemPromptWithExtras builds the system prompt for normal mode with skills and project context
+// BuildSystemPromptWithExtras builds the system prompt for normal mode with workspace, skills and project context
 // substituted into their respective placeholders, then appends the thinking level instruction.
 // If customPrompt is non-empty, it replaces the base system prompt while still appending
 // skills and project context sections.
-func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, skillsText string, projectContext string, customPrompt ...string) string {
+func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, skillsText string, projectContext string, workspaceDir string, customPrompt ...string) string {
 	if mode != context.ModeNormal {
 		return BuildSystemPrompt(mode)
 	}
@@ -69,8 +69,11 @@ func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, s
 		base = customPrompt[0]
 	}
 
+	// Substitute %WORKSPACE% placeholder (only present in default template)
+	result := strings.ReplaceAll(base, "%WORKSPACE%", buildWorkspaceSection(workspaceDir))
+
 	// Substitute %SKILLS% placeholder (only present in default template)
-	result := strings.ReplaceAll(base, "%SKILLS%", skillsText)
+	result = strings.ReplaceAll(result, "%SKILLS%", skillsText)
 
 	// Substitute %PROJECT_CONTEXT% placeholder (only present in default template)
 	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
@@ -78,9 +81,12 @@ func BuildSystemPromptWithExtras(mode context.AgentMode, thinkingLevel string, s
 	// Clean up empty sections (e.g., "## Skills" with no content below it)
 	result = cleanupEmptySections(result)
 
-	// For custom prompts, append skills and project context as sections if they exist
+	// For custom prompts, append workspace, skills and project context as sections if they exist
 	// and the custom prompt doesn't contain the % placeholders
 	if len(customPrompt) > 0 && customPrompt[0] != "" {
+		if workspaceDir != "" && !strings.Contains(customPrompt[0], "%WORKSPACE%") {
+			result = result + "\n\n" + buildWorkspaceSection(workspaceDir)
+		}
 		if skillsText != "" && !strings.Contains(customPrompt[0], "%SKILLS%") {
 			result = result + "\n\n## Skills\n\n" + skillsText
 		}
@@ -123,6 +129,20 @@ func BuildProjectContext(cwd string) string {
 	}
 
 	return "## Project Context\n" + strings.Join(contexts, "\n\n")
+}
+
+// buildWorkspaceSection builds the workspace section for the system prompt.
+// This contains the immutable startup directory that the LLM should know about.
+func buildWorkspaceSection(workspaceDir string) string {
+	if workspaceDir == "" {
+		return ""
+	}
+	return fmt.Sprintf(`## Workspace
+Startup directory: %s
+The current working directory may change during execution (e.g., git worktree switching).
+Check <agent:runtime_state> for the current CWD.
+For one-off directory changes: use bash with "cd <dir> && <command>".
+For persistent workspace switching across tool calls: use the change_workspace tool.`, workspaceDir)
 }
 
 // loadBootstrapFile reads a bootstrap file from the workspace.
