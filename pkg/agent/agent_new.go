@@ -18,6 +18,11 @@ import (
 	"log/slog"
 )
 
+// LLMCaller is the function signature for making LLM calls.
+// This allows injecting a custom LLM caller for testing (e.g., ScriptedLLM).
+// When nil on AgentNew, the default llm.StreamLLM is used.
+type LLMCaller func(ctx context.Context, model llm.Model, llmCtx llm.LLMContext, apiKey string, timeout time.Duration) *llm.EventStream[llm.LLMEvent, llm.LLMMessage]
+
 // AgentNew represents the new agent implementation with ContextSnapshot.
 type AgentNew struct {
 	// Core state
@@ -42,7 +47,8 @@ type AgentNew struct {
 	allTools []agentctx.Tool
 
 	// LLM configuration
-	apiKey string
+	apiKey  string
+	callLLM LLMCaller // nil means use llm.StreamLLM
 
 	// Retry configuration
 	maxLLMRetries  int           // Maximum retries for LLM calls (0 = use default)

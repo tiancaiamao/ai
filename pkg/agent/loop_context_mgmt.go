@@ -48,7 +48,12 @@ func (a *AgentNew) executeContextMgmtTools(ctx context.Context, urgency string) 
 		traceevent.Field{Key: "api", Value: a.model.API},
 		traceevent.Field{Key: "timeout_ms", Value: int64((2 * time.Minute) / time.Millisecond)},
 	)
-	stream := llm.StreamLLM(
+	// Resolve LLM caller: use injected caller for testing, or default to llm.StreamLLM
+	callFn := a.callLLM
+	if callFn == nil {
+		callFn = llm.StreamLLM
+	}
+	stream := callFn(
 		ctx,
 		*a.model,
 		llmCtx,
