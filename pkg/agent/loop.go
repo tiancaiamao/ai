@@ -463,8 +463,7 @@ func runInnerLoop(
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			agentCtx.LLMContext.SetMeta(// TODO: Remove old LLMContext file manager
-					agentCtx.LLMContext.SetMeta(
+			agentCtx.LLMContext.SetMeta(
 				msg.Usage.TotalTokens,
 				tokensMax,
 				len(agentCtx.Messages),
@@ -810,8 +809,7 @@ func streamAssistantResponse(
 			tokensMax = config.ContextWindow
 		}
 		tokensUsedApprox := EstimateConversationTokens(agentCtx.Messages)
-		agentCtx.LLMContext.SetMeta(// TODO: Remove old LLMContext file manager
-				agentCtx.LLMContext.SetMeta(
+		agentCtx.LLMContext.SetMeta(
 			tokensUsedApprox,
 			tokensMax,
 			len(agentCtx.Messages),
