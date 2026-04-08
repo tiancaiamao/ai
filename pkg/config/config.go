@@ -270,8 +270,8 @@ func DefaultConfig() *Config {
 		Concurrency:       DefaultConcurrencyConfig(),
 		ToolOutput:        DefaultToolOutputConfig(),
 		Log:               DefaultLogConfig(),
-		TaskTracking:      true, // Default enabled
-		ContextManagement: true, // Default enabled
+		TaskTracking:      false, // Default disabled
+		ContextManagement: false, // Default disabled
 	}
 }
 

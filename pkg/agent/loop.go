@@ -47,23 +47,39 @@ type LoopConfig struct {
 	// GetWorkingDir returns the current working directory for runtime_state telemetry.
 	GetWorkingDir func() string
 	// GetStartupPath returns the startup/root path for runtime_state telemetry.
-	GetStartupPath           func() string
-	Executor                 *ExecutorPool // agentctx.Tool executor with concurrency control
-	Metrics                  *Metrics      // Metrics collector
-	ToolOutput               ToolOutputLimits
-	Compactor                Compactor     // Optional compactor for context-length recovery
-	ToolCallCutoff           int           // Summarize oldest tool outputs when visible tool results exceed this
-	ThinkingLevel            string        // off, minimal, low, medium, high, xhigh
-	MaxLLMRetries            int           // Maximum number of retries for LLM calls
-	RetryBaseDelay           time.Duration // Base delay for exponential backoff
-	MaxConsecutiveToolCalls  int           // Loop guard: max consecutive identical tool call signature (0=default, <0=disabled)
-	MaxToolCallsPerName      int           // Loop guard: max total tool calls per tool name in one run (0=default, <0=disabled)
-	MaxTurns                 int           // Maximum conversation turns (0=default=unlimited)
-	ContextWindow            int           // Context window for the model (0=use default 128000)
-	TaskTrackingEnabled      bool          // Enable task tracking reminders (task_tracking)
-	ContextManagementEnabled bool          // Enable context management reminders (context_management)
-	LLMTotalTimeout          time.Duration // Total timeout for LLM request (default 10min)
-	LLMFirstResponseTimeout  time.Duration // Timeout between streaming chunks (default 2min)
+	GetStartupPath func() string
+	// GetSessionDir returns the session directory for checkpoint management.
+	GetSessionDir func() string
+	Executor    *ExecutorPool // agentctx.Tool executor with concurrency control
+	Metrics     *Metrics      // Metrics collector
+	ToolOutput  ToolOutputLimits
+	Compactor   Compactor // Optional compactor for context-length recovery
+	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
+	ToolCallCutoff int
+	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
+	ThinkingLevel string
+	// MaxLLMRetries is the maximum number of retries for LLM calls.
+	MaxLLMRetries int
+	// RetryBaseDelay is the base delay for exponential backoff.
+	RetryBaseDelay time.Duration
+	// MaxConsecutiveToolCalls is the maximum number of consecutive identical tool call signatures (0=default, <0=disabled).
+	MaxConsecutiveToolCalls int
+	// MaxToolCallsPerName is the maximum number of tool calls per tool name in one run (0=default, <0=disabled).
+	MaxToolCallsPerName int
+	// MaxTurns is the maximum number of conversation turns (0=default=unlimited).
+	MaxTurns int
+	// ContextWindow is the context window for the model (0=use default 128000).
+	ContextWindow int
+	// TaskTrackingEnabled enables task tracking reminders (task_tracking tool).
+	TaskTrackingEnabled bool
+	// ContextManagementEnabled enables context management reminders (context_management tool).
+	ContextManagementEnabled bool
+	// LLMTotalTimeout is the total timeout for an LLM request (default 10min).
+	LLMTotalTimeout time.Duration
+	// LLMFirstResponseTimeout is the timeout between streaming chunks (default 2min).
+	LLMFirstResponseTimeout time.Duration
+	// EnableCheckpoint enables automatic checkpoint creation (default true).
+	EnableCheckpoint bool
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -89,12 +105,13 @@ func DefaultLoopConfig() *LoopConfig {
 		ThinkingLevel:            "high",
 		MaxLLMRetries:            defaultLLMMaxRetries,
 		RetryBaseDelay:           defaultRetryBaseDelay,
-		TaskTrackingEnabled:      true,
-		ContextManagementEnabled: true,
+		TaskTrackingEnabled:      false,
+		ContextManagementEnabled: false,
 		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
 		ToolOutput:               DefaultToolOutputLimits(),
 		LLMTotalTimeout:          defaultLLMTotalTimeout,
 		LLMFirstResponseTimeout:  defaultLLMFirstResponseTimeout,
+		EnableCheckpoint:         true,
 	}
 }
 
@@ -256,8 +273,20 @@ func runInnerLoop(
 	// Turn counter for MaxTurns limit
 	turnCount := 0
 
-	// Track if previous turn had tool calls for reminder timing
-	previousHadToolCalls := false
+	// Initialize checkpoint manager if enabled
+	var checkpointMgr *AgentContextCheckpointManager
+	var checkpointErr error
+	if config.EnableCheckpoint && config.GetSessionDir != nil {
+		checkpointMgr, checkpointErr = NewAgentContextCheckpointManager(config.GetSessionDir())
+		if checkpointErr != nil {
+			slog.Warn("[Loop] Failed to initialize checkpoint manager", "error", checkpointErr)
+		}
+		defer func() {
+			if checkpointMgr != nil {
+				_ = checkpointMgr.Close()
+			}
+		}()
+	}
 
 	for {
 		// Check for context cancellation
@@ -268,13 +297,6 @@ func runInnerLoop(
 		default:
 		}
 
-		// Set AllowReminders based on turn context:
-		// - First turn (turnCount == 0): allow (user initiated)
-		// - Subsequent turns: only if previous turn had tool calls
-		// This prevents reminders from triggering unwanted LLM responses
-		// when the assistant is about to end the conversation.
-		agentCtx.AllowReminders = (turnCount == 0) || previousHadToolCalls
-
 		// Check for max turns limit
 		if config.MaxTurns > 0 && turnCount >= config.MaxTurns {
 			slog.Info("[Loop] max turns limit reached",
@@ -283,14 +305,6 @@ func runInnerLoop(
 			stream.Push(NewAgentEndEvent(agentCtx.Messages))
 			return
 		}
-
-		// Initialize ContextMgmtState if needed
-		if agentCtx.ContextMgmtState == nil {
-			agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
-		}
-
-		// Update current turn counter
-		agentCtx.ContextMgmtState.SetCurrentTurn(turnCount + 1)
 
 		turnCount++
 
@@ -500,24 +514,31 @@ func runInnerLoop(
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
-		// Check if LLM complied with context management protocol
-		// If reminder was shown but LLM didn't call context_management, apply penalty
-		if agentCtx.ContextMgmtState != nil {
-			agentCtx.ContextMgmtState.CheckAndApplyCompliance()
-		}
-		if agentCtx.ContextMgmtState != nil {
-			// Reset per-turn tracking for next turn
-			agentCtx.ContextMgmtState.ResetTurnTracking()
+		// Append messages to journal if checkpoint manager is available
+		if checkpointMgr != nil {
+			for _, result := range toolResults {
+				if err := checkpointMgr.AppendMessage(result); err != nil {
+					slog.Warn("[Loop] Failed to append tool result to journal", "error", err)
+				}
+			}
 		}
 
-		// Update previousHadToolCalls for next iteration's reminder timing
-		previousHadToolCalls = hasMoreToolCalls
+		// Create checkpoint periodically (every 10 turns)
+		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint(turnCount) {
+			var llmContextContent string
+			if agentCtx.LLMContext != nil {
+				llmContextContent, _ = agentCtx.LLMContext.Load()
+			}
+			if _, err := checkpointMgr.CreateSnapshot(llmContextContent, agentCtx.Messages, turnCount); err != nil {
+				slog.Warn("[Loop] Failed to create checkpoint", "error", err, "turn", turnCount)
+			} else {
+				slog.Info("[Loop] Checkpoint created", "turn", turnCount)
+			}
+		}
 
 		// If no more tool calls, end the conversation
 		if !hasMoreToolCalls {
 			if maybeRecoverMalformedToolCall(ctx, agentCtx, &newMessages, stream, msg, &malformedToolCallRecoveries) {
-				// Recovery injected a user message, allow reminders for the recovery turn
-				previousHadToolCalls = true
 				continue
 			}
 			break
@@ -817,65 +838,6 @@ func streamAssistantResponse(
 	}
 	if agentCtx.LLMContext != nil {
 		agentCtx.LLMContext.SetStaleToolCount(staleCount)
-	}
-
-	// Inject llm context reminder if LLM hasn't updated it for too many rounds
-	// Only if:
-	// 1. Task tracking is enabled
-	// 2. AllowReminders is true (first turn or previous turn had tool calls)
-	// This prevents reminders from triggering unwanted LLM responses when
-	// the assistant is about to end the conversation.
-	if agentCtx.TaskTrackingState != nil && agentCtx.TaskTrackingState.NeedsReminderMessage() && config.TaskTrackingEnabled && agentCtx.AllowReminders {
-		reminderContent := agentCtx.TaskTrackingState.GetReminderUserMessage()
-		reminderMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: reminderContent,
-		}
-		llmMessages = append(llmMessages, reminderMsg)
-		agentCtx.TaskTrackingState.SetWasReminded()
-
-		// Trace event for context update reminder
-		traceevent.Log(ctx, traceevent.CategoryEvent, "context_update_reminder",
-			traceevent.Field{Key: "reminder_type", Value: "task_tracking"},
-		)
-	}
-
-	// Inject decision reminder based on independent decision-pressure state.
-	// Only if:
-	// 1. Context management is enabled
-	// 2. AllowReminders is true (first turn or previous turn had tool calls)
-	if agentCtx.LLMContext != nil && agentCtx.ContextMgmtState != nil && config.ContextManagementEnabled && agentCtx.AllowReminders {
-		meta := agentCtx.LLMContext.GetMeta()
-		currentTurn := agentCtx.ContextMgmtState.GetCurrentTurn()
-		showDecisionReminder, urgency := agentCtx.ContextMgmtState.ShouldShowDecisionReminder(
-			currentTurn,
-			meta.TokensPercent,
-			staleCount,
-		)
-		if showDecisionReminder {
-			// Minimal reminder - just nudge LLM to check runtime_state and stale outputs
-			// LLM should autonomously decide what to truncate based on stale="N" attributes
-			decisionReminderContent := `<agent:remind comment="system message by agent, not from real user">
-
-💡 Context management may be needed. Check runtime_state and stale tool outputs.
-</agent:remind>`
-			decisionReminderMsg := llm.LLMMessage{
-				Role:    "user",
-				Content: decisionReminderContent,
-			}
-			llmMessages = append(llmMessages, decisionReminderMsg)
-
-			// Record that a reminder was shown this turn (for proactive/reminded tracking)
-			agentCtx.ContextMgmtState.RecordReminder(currentTurn, urgency)
-			agentCtx.ContextMgmtState.MarkReminderShown()
-
-			// Trace event for context decision reminder
-			traceevent.Log(ctx, traceevent.CategoryEvent, "context_decision_reminder",
-				traceevent.Field{Key: "reminder_type", Value: "context_management"},
-				traceevent.Field{Key: "stale_tool_outputs", Value: staleCount},
-				traceevent.Field{Key: "urgency", Value: urgency},
-			)
-		}
 	}
 
 	// Convert tools to LLM format
@@ -1774,84 +1736,7 @@ func updateRuntimeMetaSnapshot(
 	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
 	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
 
-	// Get or initialize ContextMgmtState
-	if agentCtx.ContextMgmtState == nil {
-		agentCtx.ContextMgmtState = agentctx.DefaultContextMgmtState()
-	}
-	state := agentCtx.ContextMgmtState
-	stateSnapshot := state.Snapshot()
-
-	// Calculate reminders_remaining (turns until next reminder)
-	remindersRemaining := 0
-	if stateSnapshot.ReminderFrequency > 0 {
-		remindersRemaining = stateSnapshot.ReminderFrequency - (stateSnapshot.CurrentTurn - stateSnapshot.LastReminderTurn)
-		if remindersRemaining < 0 {
-			remindersRemaining = 0
-		}
-	}
-
-	// Build update metrics section
-	// Always show context_metrics.decision (ContextMgmtState is always initialized)
-	// TaskTrackingState may be nil if task tracking is disabled
-	var updateMetrics string
-	if agentCtx.TaskTrackingState != nil {
-		updateStats := agentCtx.TaskTrackingState.GetUpdateStats()
-		if updateStats.Total > 0 {
-			updateMetrics = fmt.Sprintf(`
-context_metrics:
-  update:
-    total: %d
-    autonomous: %d
-    prompted: %d
-    consciousness: %d%%
-    score: %s
-  decision:
-    proactive: %d
-    reminded: %d
-    reminders_remaining: %d
-    score: %s`,
-				updateStats.Total,
-				updateStats.Autonomous,
-				updateStats.Prompted,
-				updateStats.ConsciousPct,
-				updateStats.Score,
-				stateSnapshot.ProactiveDecisions,
-				stateSnapshot.ReminderNeeded,
-				remindersRemaining,
-				stateSnapshot.Score)
-		} else {
-			updateMetrics = fmt.Sprintf(`
-context_metrics:
-  update:
-    total: 0
-    score: no_data
-  decision:
-    proactive: %d
-    reminded: %d
-    reminders_remaining: %d
-    score: %s`,
-				stateSnapshot.ProactiveDecisions,
-				stateSnapshot.ReminderNeeded,
-				remindersRemaining,
-				stateSnapshot.Score)
-		}
-	} else {
-		// TaskTrackingState is nil, but still show decision metrics from ContextMgmtState
-		updateMetrics = fmt.Sprintf(`
-context_metrics:
-  decision:
-    proactive: %d
-    reminded: %d
-    reminders_remaining: %d
-    score: %s`,
-			stateSnapshot.ProactiveDecisions,
-			stateSnapshot.ReminderNeeded,
-			remindersRemaining,
-			stateSnapshot.Score)
-	}
-
 	// runtime_state is purely informational - no directives or commands
-	// Reminders are handled separately via NeedsReminderMessage/NeedsDecisionReminder
 	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
 context_meta:
   tokens_band: %s
@@ -1866,7 +1751,7 @@ tool_output_pressure:
   stale_tool_outputs: %d
   tool_outputs_summary: %s
   large_tool_outputs: %d
-  largest_tool_output_bucket: %s%s
+  largest_tool_output_bucket: %s
 compact_decision_signals:
   tokens_percent: %.1f
   context_usage_percent: %.1f
@@ -1884,7 +1769,6 @@ compact_decision_signals:
 		toolOutputsSummary,
 		toolPressure.LargeCount,
 		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
-		updateMetrics,
 		meta.TokensPercent,
 		meta.TokensPercent,
 	)

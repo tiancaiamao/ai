@@ -153,16 +153,7 @@ func registerHeadlessTools(
 	registry.Register(tools.NewGrepTool(ws))
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
-	if compactor != nil {
-		// Register task_tracking only when enabled by effective config.
-		if cfg.TaskTracking {
-			registry.Register(tools.NewTaskTrackingTool())
-		}
-		// Register context_management only when enabled by effective config.
-		if cfg.ContextManagement {
-			registry.Register(tools.NewContextManagementTool(compactor.ToContextCompactor()))
-		}
-	}
+	// Note: task_tracking and context_management tools removed in backport
 }
 
 func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string, keepTools bool) *config.Config {
@@ -396,9 +387,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		if sessionDir != "" {
 			wm := agentctx.NewLLMContext(sessionDir)
 			agentCtx.LLMContext = wm
-			if effectiveCfg.TaskTracking {
-				agentCtx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
-			}
 		}
 	}
 

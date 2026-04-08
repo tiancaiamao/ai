@@ -202,15 +202,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentContextWindow,
 	)
 
-	// Register llm_context tools
-	// Only register task_tracking when taskTracking is enabled
-	if cfg.TaskTracking {
-		registry.Register(tools.NewTaskTrackingTool())
-	}
-	// Only register context_management when contextManagement is enabled
-	if cfg.ContextManagement {
-		registry.Register(tools.NewContextManagementTool(compactor.ToContextCompactor()))
-	}
+	// Note: task_tracking and context_management tools removed in backport
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -319,7 +311,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if sessionDir != "" {
 				wm := agentctx.NewLLMContext(sessionDir)
 				ctx.LLMContext = wm
-				ctx.TaskTrackingState = agentctx.NewTaskTrackingState(sessionDir)
 				sess.SetLLMContext(wm) // Set llm context on session
 			}
 			// Restore conversation history from session
@@ -374,6 +365,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.APIKey = apiKey
 	loopCfg.GetWorkingDir = ws.GetCWD
 	loopCfg.GetStartupPath = ws.GetInitialCWD
+	loopCfg.GetSessionDir = func() string {
+		if sess != nil {
+			return sess.GetDir()
+		}
+		return ""
+	}
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)

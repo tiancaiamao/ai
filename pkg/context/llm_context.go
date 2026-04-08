@@ -65,38 +65,33 @@ func GetOverviewTemplate(overviewPath, detailPath string) string {
 	return fmt.Sprintf(`# LLM Context
 
 <!--
-这是你的外部记忆。
-使用 task_tracking tool 更新此文件：%s
+This is your external memory.
+This file's content will be injected into your prompt for context recovery.
 
-这个文件的内容会：
-1. 在你调用 task_tracking 工具后，通过 tool output 留在上下文窗口中
-2. 在 compact 后被注入到 prompt 中恢复记忆
-
-这是 YOUR memory。你控制你看到的内容。
+This is YOUR memory. You control what you see.
 -->
 
-## 当前任务
-<!-- 用户让你做什么？当前进度？ -->
+## Current Task
+<!-- What did the user ask you to do? Current progress? -->
 
 
-## 关键决策
-<!-- 你做过什么重要决定？为什么？ -->
+## Key Decisions
+<!-- Important decisions made and why? -->
 
 
-## 已知信息
-<!-- 项目结构、技术栈、关键文件等 -->
+## Known Information
+<!-- Project structure, tech stack, key files, etc. -->
 
 
-## 待解决
-<!-- 待处理的问题或阻塞项 -->
+## Pending
+<!-- Issues or blockers to resolve -->
 
 
 <!--
-提示：
-- 需要保存详细内容时，写入 %s 目录
-- 使用 task_tracking tool 更新此文件
+Tip:
+- Write detailed content to the %s directory when needed
 -->
-`, overviewPath, detailPath)
+`, detailPath)
 }
 
 // ensureLLMContext creates the llm-context directory structure if needed.
@@ -271,11 +266,3 @@ func (wm *LLMContext) SaveCompactionSummary(summary string) (string, error) {
 	return summaryPath, nil
 }
 
-// UpdateStats contains statistics about task_tracking tool calls.
-type UpdateStats struct {
-	Total        int
-	Autonomous   int
-	Prompted     int
-	Score        string
-	ConsciousPct int
-}

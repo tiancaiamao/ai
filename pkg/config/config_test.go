@@ -445,25 +445,25 @@ func TestCompactorDefaults(t *testing.T) {
 }
 
 // TestTaskTrackingContextManagementDefaults tests that task tracking and context management
-// are enabled by default and work correctly with simple boolean config.
+// are disabled by default and work correctly with simple boolean config.
 func TestTaskTrackingContextManagementDefaults(t *testing.T) {
-	// Test 1: default config should have both enabled
+	// Test 1: default config should have both disabled
 	cfg := DefaultConfig()
-	if !cfg.TaskTracking {
-		t.Error("Expected TaskTracking to default to true")
+	if cfg.TaskTracking {
+		t.Error("Expected TaskTracking to default to false")
 	}
-	if !cfg.ContextManagement {
-		t.Error("Expected ContextManagement to default to true")
+	if cfg.ContextManagement {
+		t.Error("Expected ContextManagement to default to false")
 	}
 
-	// Test 2: explicit false should work
+	// Test 2: explicit true should work
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "explicit_false.json")
-	explicitFalseConfig := `{
-		"taskTracking": false,
-		"contextManagement": false
+	configPath := filepath.Join(tmpDir, "explicit_true.json")
+	explicitTrueConfig := `{
+		"taskTracking": true,
+		"contextManagement": true
 	}`
-	err := os.WriteFile(configPath, []byte(explicitFalseConfig), 0644)
+	err := os.WriteFile(configPath, []byte(explicitTrueConfig), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
@@ -473,33 +473,10 @@ func TestTaskTrackingContextManagementDefaults(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg2.TaskTracking != false {
-		t.Errorf("Expected taskTracking to be false, got %v", cfg2.TaskTracking)
+	if cfg2.TaskTracking != true {
+		t.Errorf("Expected taskTracking to be true, got %v", cfg2.TaskTracking)
 	}
-	if cfg2.ContextManagement != false {
-		t.Errorf("Expected contextManagement to be false, got %v", cfg2.ContextManagement)
-	}
-
-	// Test 3: explicit true should work
-	configPath3 := filepath.Join(tmpDir, "explicit_true.json")
-	explicitTrueConfig := `{
-		"taskTracking": true,
-		"contextManagement": true
-	}`
-	err = os.WriteFile(configPath3, []byte(explicitTrueConfig), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
-	cfg3, err := LoadConfig(configPath3)
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if cfg3.TaskTracking != true {
-		t.Errorf("Expected taskTracking to be true, got %v", cfg3.TaskTracking)
-	}
-	if cfg3.ContextManagement != true {
-		t.Errorf("Expected contextManagement to be true, got %v", cfg3.ContextManagement)
+	if cfg2.ContextManagement != true {
+		t.Errorf("Expected contextManagement to be true, got %v", cfg2.ContextManagement)
 	}
 }
