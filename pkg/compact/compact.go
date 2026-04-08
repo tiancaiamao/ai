@@ -76,7 +76,7 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 }
 
 // ShouldCompact determines if context should be compressed.
-func (c *Compactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
+func (c *Compactor) ShouldCompactOld(messages []agentctx.AgentMessage) bool {
 	if !c.config.AutoCompact {
 		return false
 	}
@@ -182,7 +182,7 @@ type CompactionResult struct {
 
 // Compact compresses the context by summarizing old messages.
 // If previousSummary is non-empty, it will be used to incrementally update the summary.
-func (c *Compactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (c *Compactor) CompactOld(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
 	if len(messages) == 0 {
 		return &CompactionResult{
 			Messages:     messages,
@@ -416,7 +416,7 @@ func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
 }
 
 // EstimateContextTokens estimates context tokens using usage when available.
-func (c *Compactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+func (c *Compactor) EstimateContextTokensOld(messages []agentctx.AgentMessage) int {
 	systemPromptTokens := 0
 	if c != nil && strings.TrimSpace(c.systemPrompt) != "" {
 		systemPromptTokens = int(math.Ceil(float64(len(c.systemPrompt)) / 4.0))
@@ -941,41 +941,120 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 }
 
 // ToContextCompactor adapts this Compactor to implement context.Compactor interface.
-// This allows the compact.Compactor to be used where context.Compactor is expected.
-func (c *Compactor) ToContextCompactor() agentctx.Compactor {
-	return &contextCompactorAdapter{c: c}
+// Since compact.Compactor implements context.Compactor interface directly
+// via ShouldCompactAgent, CompactAgent, and EstimateContextTokensAgent,
+// we can just return the compactor itself.
+func (c *Compactor) ToContextCompactor() context.Compactor {
+	return c
 }
 
-// contextCompactorAdapter adapts compact.Compactor to context.Compactor interface.
-type contextCompactorAdapter struct {
-	c *Compactor
-}
+// Note: No contextCompactorAdapter needed anymore.
+// compact.Compactor now implements context.Compactor interface directly
+// via CompactAgent(), ShouldCompactAgent(), and EstimateContextTokensAgent().
 
-// ShouldCompact checks if context compression is needed.
-func (a *contextCompactorAdapter) ShouldCompact(messages []agentctx.AgentMessage) bool {
-	return a.c.ShouldCompact(messages)
-}
-
-// Compact performs context compression and returns a context.CompactionResult.
-func (a *contextCompactorAdapter) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agentctx.CompactionResult, error) {
-	result, err := a.c.Compact(messages, previousSummary)
-	if err != nil {
-		return nil, err
+// CompactAgent compacts context by summarizing old messages using AgentContext.
+// This method implements the new context.Compactor interface.
+func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	if len(ctx.RecentMessages) == 0 {
+		return &agentctx.CompactionResult{
+			TokensBefore: 0,
+			TokensAfter:  0,
+		}, nil
 	}
+
+	tokensBefore := c.EstimateContextTokensAgent(ctx)
+
+	keepRecentTokens := c.calculateKeepRecentBudget()
+	var oldMessages []agentctx.AgentMessage
+	var recentMessages []agentctx.AgentMessage
+
+	if keepRecentTokens > 0 {
+		oldMessages, recentMessages = splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
+		if len(oldMessages) == 0 {
+			return &agentctx.CompactionResult{
+				TokensBefore: tokensBefore,
+				TokensAfter:  tokensBefore,
+			}, nil
+		}
+		slog.Info("[CompactAgent] Compressing messages",
+			"count", len(ctx.RecentMessages),
+			"keepTokens", keepRecentTokens,
+			"threshold", c.CalculateDynamicThreshold(),
+			"contextWindow", c.contextWindow,
+			"hasPreviousSummary", ctx.LastCompactionSummary != "")
+	} else {
+		keepCount := c.keepRecentMessages()
+		if len(ctx.RecentMessages) <= keepCount {
+			return &agentctx.CompactionResult{
+				TokensBefore: tokensBefore,
+				TokensAfter:  tokensBefore,
+			}, nil
+		}
+		slog.Info("[CompactAgent] Compressing messages",
+			"count", len(ctx.RecentMessages),
+			"keepRecent", keepCount,
+			"threshold", c.CalculateDynamicThreshold(),
+			"hasPreviousSummary", ctx.LastCompactionSummary != "")
+		splitIndex := len(ctx.RecentMessages) - keepCount
+		oldMessages = ctx.RecentMessages[:splitIndex]
+		recentMessages = ctx.RecentMessages[splitIndex:]
+	}
+
+	// Generate summary of old messages (with previous summary for incremental update)
+	summary, err := c.GenerateSummaryWithPrevious(oldMessages, ctx.LastCompactionSummary)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate summary: %w", err)
+	}
+
+	slog.Info("[CompactAgent] Generated summary", "chars", len(summary), "hasPrevious", ctx.LastCompactionSummary != "")
+
+	// Ensure tool_call and tool_result pairing is preserved
+	if c.config.GracePeriod > 0 {
+		recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+	} else {
+		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
+	}
+
+	// Create new recent messages with summary
+	newRecentMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
+	}
+
+	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
+	newRecentMessages = append(newRecentMessages, recentMessages...)
+
+	// Update AgentContext directly
+	ctx.RecentMessages = newRecentMessages
+	ctx.LastCompactionSummary = summary
+	// Optionally update LLMContext with the summary
+	ctx.LLMContext = summary
+
+	tokensAfter := ctx.EstimateTokens()
+	slog.Info("[CompactAgent] Compressed context", "messages", len(newRecentMessages))
+
 	return &agentctx.CompactionResult{
-		Summary:      result.Summary,
-		Messages:     result.Messages,
-		TokensBefore: result.TokensBefore,
-		TokensAfter:  result.TokensAfter,
+		Summary:      summary,
+		TokensBefore: tokensBefore,
+		TokensAfter:  tokensAfter,
 	}, nil
 }
 
-// CalculateDynamicThreshold returns the token threshold for compaction.
-func (a *contextCompactorAdapter) CalculateDynamicThreshold() int {
-	return a.c.CalculateDynamicThreshold()
+// ShouldCompactAgent determines if context should be compressed using AgentContext.
+func (c *Compactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+	if !c.config.AutoCompact {
+		return false
+	}
+
+	threshold := c.CalculateDynamicThreshold()
+	if threshold > 0 {
+		tokens := c.EstimateContextTokensAgent(ctx)
+		return tokens >= threshold
+	}
+	return false
 }
 
-// EstimateContextTokens estimates the token count of messages.
-func (a *contextCompactorAdapter) EstimateContextTokens(messages []agentctx.AgentMessage) int {
-	return a.c.EstimateContextTokens(messages)
+// EstimateContextTokensAgent estimates context tokens using AgentContext.
+func (c *Compactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
+	// Use AgentContext's own estimation
+	return ctx.EstimateTokens()
 }

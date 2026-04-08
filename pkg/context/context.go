@@ -9,23 +9,18 @@ import (
 
 // AgentContext represents the context for agent execution.
 type AgentContext struct {
-	SystemPrompt          string         `json:"systemPrompt,omitempty"`
-	Messages              []AgentMessage `json:"messages"`
-	Tools                 []Tool         `json:"tools,omitempty"`
-	Skills                []skill.Skill  `json:"skills,omitempty"`                // Loaded skills
-	LastCompactionSummary string         `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
+	// Core components
+	SystemPrompt string         `json:"systemPrompt,omitempty"`
+	Tools        []Tool         `json:"tools,omitempty"`
+	Skills       []skill.Skill  `json:"skills,omitempty"` // Loaded skills
 
-	// allowedTools restricts which tools can be executed.
-	// nil means all tools are allowed, non-nil is a whitelist.
-	allowedTools map[string]bool `json:"-"`
+	// Unified context state
+	LLMContext     string         `json:"llmContext,omitempty"` // Structured LLM context content (not file manager)
+	RecentMessages []AgentMessage `json:"recentMessages"`         // Recent messages (not full history)
+	AgentState     AgentState     `json:"agentState"`            // System-maintained metadata
 
-	// LLMContext is the agent's llm context file manager.
-	LLMContext *LLMContext `json:"-"`
-
-	// Runtime meta snapshot state for stable system-tail injection.
-	RuntimeMetaSnapshot string `json:"-"`
-	RuntimeMetaBand     string `json:"-"`
-	RuntimeMetaTurns    int    `json:"-"`
+	// Compaction state
+	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
 
 	// PostCompactRecovery indicates that overview.md should be injected for recovery after compact.
 	// Set after compact completes, reset after injection.
@@ -34,6 +29,10 @@ type AgentContext struct {
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
+
+	// allowedTools restricts which tools can be executed.
+	// nil means all tools are allowed, non-nil is a whitelist.
+	allowedTools map[string]bool `json:"-"`
 
 	// contextMgmtMu serializes mutations to shared turn state
 	// and assistant message tool-call arguments.
@@ -99,11 +98,26 @@ func ToolExecutionCallID(ctx context.Context) string {
 // NewAgentContext creates a new AgentContext with the given system prompt.
 func NewAgentContext(systemPrompt string) *AgentContext {
 	return &AgentContext{
-		SystemPrompt: systemPrompt,
-		Messages:     make([]AgentMessage, 0),
-		Tools:        make([]Tool, 0),
-		Skills:       make([]skill.Skill, 0),
+		SystemPrompt:   systemPrompt,
+		LLMContext:     "",
+		RecentMessages: make([]AgentMessage, 0),
+		Tools:          make([]Tool, 0),
+		Skills:         make([]skill.Skill, 0),
+		AgentState:     *NewAgentState("", ""),
 	}
+}
+
+// NewAgentContextWithSessionID creates a new AgentContext with session ID and working directory.
+func NewAgentContextWithSessionID(systemPrompt, sessionID, cwd string) *AgentContext {
+	ctx := &AgentContext{
+		SystemPrompt:   systemPrompt,
+		LLMContext:     "",
+		RecentMessages: make([]AgentMessage, 0),
+		Tools:          make([]Tool, 0),
+		Skills:         make([]skill.Skill, 0),
+		AgentState:     *NewAgentState(sessionID, cwd),
+	}
+	return ctx
 }
 
 // NewAgentContextWithSkills creates a new AgentContext with skills.
@@ -122,9 +136,44 @@ func NewAgentContextWithSkills(systemPrompt string, skills []skill.Skill) *Agent
 	return ctx
 }
 
-// AddMessage adds a message to the context.
+// AddRecentMessage adds a message to the recent messages.
+func (c *AgentContext) AddRecentMessage(message AgentMessage) {
+	c.RecentMessages = append(c.RecentMessages, message)
+}
+
+// AddMessage adds a message to the recent messages (alias for AddRecentMessage).
 func (c *AgentContext) AddMessage(message AgentMessage) {
-	c.Messages = append(c.Messages, message)
+	c.AddRecentMessage(message)
+}
+
+// EstimateTokens provides a rough token estimate based on message text length.
+// Uses ~4 chars per token heuristic.
+func (c *AgentContext) EstimateTokens() int {
+	total := len(c.LLMContext)
+	for _, msg := range c.RecentMessages {
+		total += len(msg.ExtractText())
+	}
+	return total / 4
+}
+
+// EstimateTokenPercent returns token usage as a fraction of the limit.
+func (c *AgentContext) EstimateTokenPercent() float64 {
+	if c.AgentState.TokensLimit <= 0 {
+		return 0
+	}
+	return float64(c.EstimateTokens()) / float64(c.AgentState.TokensLimit)
+}
+
+// CountStaleOutputs counts tool result messages older than maxAge turns.
+func (c *AgentContext) CountStaleOutputs(maxAge int) int {
+	count := 0
+	currentTurn := c.AgentState.TotalTurns
+	for _, msg := range c.RecentMessages {
+		if msg.Role == "toolResult" && currentTurn-msg.TruncatedAt > maxAge {
+			count++
+		}
+	}
+	return count
 }
 
 // LockContextManagement serializes context mutations on this context.

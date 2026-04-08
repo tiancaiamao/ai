@@ -66,7 +66,7 @@ type Agent struct {
 	apiKey        string
 	systemPrompt  string
 	context       *agentctx.AgentContext
-	ctxMu         sync.RWMutex // Protects context.Messages access
+	ctxMu         sync.RWMutex // Protects context.RecentMessages access
 	eventChan     chan AgentEvent
 	currentStream *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	streamMu      sync.RWMutex
@@ -219,7 +219,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 
 	// Create child span for event iteration
 	eventLoopSpan := span.StartChild("event_loop",
-		traceevent.Field{Key: "turn_count", Value: len(a.context.Messages)})
+		traceevent.Field{Key: "turn_count", Value: len(a.context.RecentMessages)})
 	defer eventLoopSpan.End()
 
 	prompts := []agentctx.AgentMessage{agentctx.NewUserMessage(message)}
@@ -327,7 +327,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			// Keep in-memory context consistent with loop-side mutations
 			// (e.g. auto-compaction editing older messages).
 			a.ctxMu.Lock()
-			a.context.Messages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
+			a.context.RecentMessages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
 			a.ctxMu.Unlock()
 		}
 
@@ -491,7 +491,7 @@ func (a *Agent) GetState() map[string]any {
 	return map[string]any{
 		"model":        a.model,
 		"systemPrompt": a.systemPrompt,
-		"messageCount": len(a.context.Messages),
+		"messageCount": len(a.context.RecentMessages),
 		"toolCount":    len(a.context.Tools),
 	}
 }
@@ -516,7 +516,7 @@ func (a *Agent) GetModel() llm.Model {
 func (a *Agent) GetMessages() []agentctx.AgentMessage {
 	a.ctxMu.RLock()
 	defer a.ctxMu.RUnlock()
-	return a.context.Messages
+	return a.context.RecentMessages
 }
 
 // AddTool adds a tool to the agent.
@@ -635,19 +635,16 @@ func (a *Agent) GetPendingFollowUps() int {
 	return len(a.followUpQueue)
 }
 
-// Compact compacts the agent's context messages using the provided compactor.
+// Compact compacts the agent's context using the provided compactor.
 func (a *Agent) Compact(compactor Compactor) error {
-	messages := a.context.Messages
-	compacted, err := compactor.Compact(messages, a.context.LastCompactionSummary)
+	_, err := compactor.Compact(a.context)
 	if err != nil {
 		return fmt.Errorf("failed to compact: %w", err)
 	}
 
-	// Replace messages with compacted version and save summary
-	if compacted != nil {
-		a.context.Messages = compacted.Messages
-		a.context.LastCompactionSummary = compacted.Summary
-	}
+	// Note: a.context.RecentMessages and a.context.LastCompactionSummary are already
+	// updated by Compactor's Compact() method, so we don't need to set them here.
+
 	return nil
 }
 
@@ -657,10 +654,9 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 		return
 	}
 
-	messages := a.context.Messages
 	var triggerCompactor Compactor
 	for _, c := range a.LoopConfig.Compactors {
-		if c.ShouldCompact(messages) {
+		if c.ShouldCompact(a.context) {
 			triggerCompactor = c
 			break
 		}
@@ -670,7 +666,7 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 		return
 	}
 
-	before := len(messages)
+	before := len(a.context.RecentMessages)
 	slog.Info("[Agent] Auto-compacting", "beforeCount", before, "compactor", fmt.Sprintf("%T", triggerCompactor))
 	compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 		traceevent.Field{Key: "source", Value: "auto_threshold"},
@@ -699,7 +695,7 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 			Trigger: "threshold",
 		}))
 	} else {
-		after := len(a.context.Messages)
+		after := len(a.context.RecentMessages)
 		slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
 		compactSpan.AddField("after_messages", after)
 		compactSpan.End()
@@ -739,8 +735,8 @@ func (a *Agent) abortCurrentStream() bool {
 		return false
 	}
 	// Force an agent_end event so UI state can reset even if the iterator stops on ctx cancel.
-	stream.Push(NewAgentEndEvent(a.context.Messages))
-	a.emitEvent(NewAgentEndEvent(a.context.Messages))
+	stream.Push(NewAgentEndEvent(a.context.RecentMessages))
+	a.emitEvent(NewAgentEndEvent(a.context.RecentMessages))
 	return true
 }
 
