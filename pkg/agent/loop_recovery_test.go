@@ -75,7 +75,7 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
-		Compactor: compactor,
+		Compactors: []Compactor{compactor},
 	}
 
 	stream := newTestAgentEventStream()
@@ -127,7 +127,7 @@ func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 	stream := newTestAgentEventStream()
-	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: compactor}, stream)
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{compactor}}, stream)
 
 	var sawStart, sawEnd bool
 	for item := range stream.Iterator(context.Background()) {
@@ -436,7 +436,7 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
 
-	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: brokenCompactor}, stream)
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{brokenCompactor}}, stream)
 
 	var sawAgentEnd bool
 	for item := range stream.Iterator(context.Background()) {
@@ -555,7 +555,7 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	})
 
 	config := &LoopConfig{
-		Compactor: &recoveryCompactor{},
+		Compactors: []Compactor{&recoveryCompactor{}},
 		Executor:  executor,
 		MaxTurns:  3, // Limit to 3 turns
 	}
@@ -612,7 +612,7 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	})
 
 	config := &LoopConfig{
-		Compactor: &recoveryCompactor{},
+		Compactors: []Compactor{&recoveryCompactor{}},
 		Executor:  executor,
 		MaxTurns:  0, // Unlimited
 	}

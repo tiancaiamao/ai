@@ -318,10 +318,21 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 // LoopConfigOption is a functional option for configuring LoopConfig.
 type LoopConfigOption func(*agent.LoopConfig)
 
-// WithCompactor sets the compactor for context compression.
+// WithCompactor sets a single compactor for context compression.
+// Deprecated: Use WithCompactors([]agent.Compactor{...}) for multiple compactors.
 func WithCompactor(compactor agent.Compactor) LoopConfigOption {
 	return func(cfg *agent.LoopConfig) {
-		cfg.Compactor = compactor
+		if compactor != nil {
+			cfg.Compactors = []agent.Compactor{compactor}
+		}
+	}
+}
+
+// WithCompactors sets multiple compactors for context compression.
+// Array order determines execution priority (first trigger wins).
+func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Compactors = compactors
 	}
 }
 

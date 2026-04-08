@@ -538,8 +538,11 @@ func (a *Agent) GetContext() *agentctx.AgentContext {
 }
 
 // SetCompactor sets the compactor for automatic context compression.
+// Deprecated: Use SetCompactors([]Compactor{...}) for multiple compactors.
 func (a *Agent) SetCompactor(compactor Compactor) {
-	a.LoopConfig.Compactor = compactor
+	if compactor != nil {
+		a.LoopConfig.Compactors = []Compactor{compactor}
+	}
 }
 
 // SetExecutor sets the tool executor pool for concurrency control.
@@ -650,54 +653,64 @@ func (a *Agent) Compact(compactor Compactor) error {
 
 // tryAutoCompact attempts automatic compression if thresholds exceeded.
 func (a *Agent) tryAutoCompact(ctx context.Context) {
-	if a.LoopConfig.Compactor == nil {
+	if len(a.LoopConfig.Compactors) == 0 {
 		return
 	}
 
 	messages := a.context.Messages
-	if a.LoopConfig.Compactor.ShouldCompact(messages) {
-		before := len(messages)
-		slog.Info("[Agent] Auto-compacting", "beforeCount", before)
-		compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-			traceevent.Field{Key: "source", Value: "auto_threshold"},
-			traceevent.Field{Key: "auto", Value: true},
-			traceevent.Field{Key: "before_messages", Value: before},
-			traceevent.Field{Key: "trigger", Value: "threshold"},
-		)
-		a.emitEvent(NewCompactionStartEvent(CompactionInfo{
-			Auto:    true,
-			Before:  before,
-			Trigger: "threshold",
-		}))
-		if err := a.Compact(a.LoopConfig.Compactor); err != nil {
-			err = WithErrorStack(err)
-			slog.Error("[Agent] Auto-compact failed", "error", err)
-			compactSpan.AddField("error", true)
-			compactSpan.AddField("error_message", err.Error())
-			if stack := ErrorStack(err); stack != "" {
-				compactSpan.AddField("error_stack", stack)
-			}
-			compactSpan.End()
-			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-				Auto:    true,
-				Before:  before,
-				Error:   err.Error(),
-				Trigger: "threshold",
-			}))
-		} else {
-			after := len(a.context.Messages)
-			slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
-			compactSpan.AddField("after_messages", after)
-			compactSpan.End()
-			a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-				Auto:    true,
-				Before:  before,
-				After:   after,
-				Trigger: "threshold",
-			}))
+	var triggerCompactor Compactor
+	for _, c := range a.LoopConfig.Compactors {
+		if c.ShouldCompact(messages) {
+			triggerCompactor = c
+			break
 		}
 	}
-}
+
+	if triggerCompactor == nil {
+		return
+	}
+
+	before := len(messages)
+	slog.Info("[Agent] Auto-compacting", "beforeCount", before, "compactor", fmt.Sprintf("%T", triggerCompactor))
+	compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+		traceevent.Field{Key: "source", Value: "auto_threshold"},
+		traceevent.Field{Key: "auto", Value: true},
+		traceevent.Field{Key: "before_messages", Value: before},
+		traceevent.Field{Key: "trigger", Value: "threshold"},
+	)
+	a.emitEvent(NewCompactionStartEvent(CompactionInfo{
+		Auto:    true,
+		Before:  before,
+		Trigger: "threshold",
+	}))
+	if err := a.Compact(triggerCompactor); err != nil {
+		err = WithErrorStack(err)
+		slog.Error("[Agent] Auto-compact failed", "error", err)
+		compactSpan.AddField("error", true)
+		compactSpan.AddField("error_message", err.Error())
+		if stack := ErrorStack(err); stack != "" {
+			compactSpan.AddField("error_stack", stack)
+		}
+		compactSpan.End()
+		a.emitEvent(NewCompactionEndEvent(CompactionInfo{
+			Auto:    true,
+			Before:  before,
+			Error:   err.Error(),
+			Trigger: "threshold",
+		}))
+	} else {
+		after := len(a.context.Messages)
+		slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
+		compactSpan.AddField("after_messages", after)
+		compactSpan.End()
+		a.emitEvent(NewCompactionEndEvent(CompactionInfo{
+			Auto:    true,
+			Before:  before,
+			After:   after,
+			Trigger: "threshold",
+		}))
+	}
+	}
 
 func (a *Agent) emitEvent(event AgentEvent) {
 	select {

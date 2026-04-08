@@ -53,7 +53,7 @@ type LoopConfig struct {
 	Executor    *ExecutorPool // agentctx.Tool executor with concurrency control
 	Metrics     *Metrics      // Metrics collector
 	ToolOutput  ToolOutputLimits
-	Compactor   Compactor // Optional compactor for context-length recovery
+	Compactors   []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
 	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
@@ -308,47 +308,47 @@ func runInnerLoop(
 
 		turnCount++
 
-		// Fallback auto-compact as safety net (only if LLM didn't handle it via context_management)
-		// This is a last resort when context grows too large without LLM intervention.
-		if config.Compactor != nil && config.Compactor.ShouldCompact(agentCtx.Messages) {
-			before := len(agentCtx.Messages)
-			compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-				traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
-				traceevent.Field{Key: "auto", Value: true},
-				traceevent.Field{Key: "before_messages", Value: before},
-				traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
-			)
-			stream.Push(NewCompactionStartEvent(CompactionInfo{
-				Auto:    true,
-				Before:  before,
-				Trigger: "pre_llm_threshold",
-			}))
-
-			compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
-			if compactErr != nil {
-				compactErr = WithErrorStack(compactErr)
-				slog.Error("Pre-LLM compaction failed", "error", compactErr)
-				compactionSpan.AddField("error", true)
-				compactionSpan.AddField("error_message", compactErr.Error())
-				if stack := ErrorStack(compactErr); stack != "" {
-					compactionSpan.AddField("error_stack", stack)
+		// Try each compactor in order (first trigger wins)
+		var compacted *agentctx.CompactionResult
+		var compactErr error
+		for _, c := range config.Compactors {
+			if c.ShouldCompact(agentCtx.Messages) {
+				slog.Info("[Loop] Pre-LLM compaction triggered", "compactor", fmt.Sprintf("%T", c))
+				compacted, compactErr = c.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
+				if compactErr == nil {
+					break // First successful compaction wins
+				} else {
+					slog.Warn("[Loop] Pre-LLM compaction failed", "compactor", fmt.Sprintf("%T", c), "error", compactErr)
 				}
-				compactionSpan.End()
-				stream.Push(NewCompactionEndEvent(CompactionInfo{
+			}
+		}
+
+		// Process compaction result
+		if compacted != nil {
+			if compactErr != nil {
+				// Compaction returned result but error is non-nil - skip this result
+				slog.Warn("[Loop] Skipping compaction result due to error", "error", compactErr)
+				compacted = nil
+			} else {
+				before := len(agentCtx.Messages)
+				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+					traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
+					traceevent.Field{Key: "auto", Value: true},
+					traceevent.Field{Key: "before_messages", Value: before},
+					traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
+				)
+				stream.Push(NewCompactionStartEvent(CompactionInfo{
 					Auto:    true,
 					Before:  before,
-					Error:   compactErr.Error(),
 					Trigger: "pre_llm_threshold",
 				}))
-			} else {
-				if compacted != nil {
-					agentCtx.Messages = compacted.Messages
-					agentCtx.LastCompactionSummary = compacted.Summary
-					// Persist changes to session storage
-					if agentCtx.OnMessagesChanged != nil {
-						if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
-							slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
-						}
+
+				agentCtx.Messages = compacted.Messages
+				agentCtx.LastCompactionSummary = compacted.Summary
+				// Persist changes to session storage
+				if agentCtx.OnMessagesChanged != nil {
+					if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
+						slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
 					}
 				}
 				// Set flag to inject overview.md for recovery on next request
@@ -368,7 +368,7 @@ func runInnerLoop(
 		// Stream assistant response with retry logic
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
-			if llm.IsContextLengthExceeded(err) && config.Compactor != nil && compactionRecoveries < maxCompactionRecoveries {
+			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && compactionRecoveries < maxCompactionRecoveries {
 				before := len(agentCtx.Messages)
 				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 					traceevent.Field{Key: "source", Value: "context_limit_recovery"},
@@ -381,27 +381,36 @@ func runInnerLoop(
 					Before:  before,
 					Trigger: "context_limit_recovery",
 				}))
-				compacted, compactErr := config.Compactor.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
-				if compactErr != nil {
-					compactErr = WithErrorStack(compactErr)
-					slog.Error("Compaction recovery failed", "error", compactErr)
+
+				// Try each compactor in order (first success wins)
+				var recoveryCompacted *agentctx.CompactionResult
+				var recoveryErr error
+				for _, c := range config.Compactors {
+					recoveryCompacted, recoveryErr = c.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
+					if recoveryErr == nil {
+						break // First successful compaction wins
+					}
+				}
+
+				if recoveryErr != nil {
+					slog.Error("All compactors failed for recovery", "error", recoveryErr)
 					compactionSpan.AddField("error", true)
-					compactionSpan.AddField("error_message", compactErr.Error())
-					if stack := ErrorStack(compactErr); stack != "" {
+					compactionSpan.AddField("error_message", recoveryErr.Error())
+					if stack := ErrorStack(recoveryErr); stack != "" {
 						compactionSpan.AddField("error_stack", stack)
 					}
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
-						Error:   compactErr.Error(),
+						Error:   recoveryErr.Error(),
 						Trigger: "context_limit_recovery",
 					}))
 				} else {
 					compactionRecoveries++
-					if compacted != nil {
-						agentCtx.Messages = compacted.Messages
-						agentCtx.LastCompactionSummary = compacted.Summary
+					if recoveryCompacted != nil {
+						agentCtx.Messages = recoveryCompacted.Messages
+						agentCtx.LastCompactionSummary = recoveryCompacted.Summary
 						// Persist changes to session storage
 						if agentCtx.OnMessagesChanged != nil {
 							if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
@@ -411,12 +420,12 @@ func runInnerLoop(
 					}
 					// Set flag to inject overview.md for recovery on next request
 					agentCtx.PostCompactRecovery = true
-					compactionSpan.AddField("after_messages", len(compacted.Messages))
+					compactionSpan.AddField("after_messages", len(recoveryCompacted.Messages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
-						After:   len(compacted.Messages),
+						After:   len(recoveryCompacted.Messages),
 						Trigger: "context_limit_recovery",
 					}))
 					continue
