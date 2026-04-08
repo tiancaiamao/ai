@@ -16,18 +16,19 @@ type recoveryCompactor struct {
 	shouldCompact bool
 }
 
-func (c *recoveryCompactor) ShouldCompact(_ []agentctx.AgentMessage) bool {
+func (c *recoveryCompactor) ShouldCompact(_ *agentctx.AgentContext) bool {
 	return c.shouldCompact
 }
 
-func (c *recoveryCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (c *recoveryCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
-	return &CompactionResult{
+	// Compactor directly modifies ctx.RecentMessages
+	ctx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("[summary]"),
+		agentctx.NewUserMessage("latest request"),
+	}
+	return &agentctx.CompactionResult{
 		Summary: "[summary]",
-		Messages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("[summary]"),
-			agentctx.NewUserMessage("latest request"),
-		},
 	}, nil
 }
 
@@ -35,8 +36,8 @@ func (c *recoveryCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
 }
 
-func (c *recoveryCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
-	return len(messages) * 100 // Simple estimation for tests
+func (c *recoveryCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
+	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 func newTestAgentEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
@@ -72,7 +73,7 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
 		Compactors: []Compactor{compactor},
@@ -125,7 +126,7 @@ func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{compactor}}, stream)
 
@@ -179,7 +180,7 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
 		MaxConsecutiveToolCalls: 2,
@@ -242,7 +243,7 @@ func TestRunInnerLoopStopsRepeatedToolCallsByDefaultGuard(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -287,7 +288,7 @@ func TestRunInnerLoopPersistsAssistantMessagesInContext(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -297,7 +298,7 @@ func TestRunInnerLoopPersistsAssistantMessagesInContext(t *testing.T) {
 
 	var sawToolCallAssistant bool
 	var sawFinalAssistant bool
-	for _, msg := range agentCtx.Messages {
+	for _, msg := range agentCtx.RecentMessages {
 		if msg.Role != "assistant" {
 			continue
 		}
@@ -434,7 +435,7 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 	brokenCompactor := &failingCompactor{}
 	stream := newTestAgentEventStream()
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{brokenCompactor}}, stream)
 
@@ -469,7 +470,7 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 
 	stream := newTestAgentEventStream()
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -504,11 +505,11 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 
 type failingCompactor struct{}
 
-func (f *failingCompactor) ShouldCompact(_ []agentctx.AgentMessage) bool {
+func (f *failingCompactor) ShouldCompact(_ *agentctx.AgentContext) bool {
 	return false
 }
 
-func (f *failingCompactor) Compact(_ []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
+func (f *failingCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return nil, errors.New("compaction failed")
 }
 
@@ -516,8 +517,8 @@ func (f *failingCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
 }
 
-func (f *failingCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
-	return len(messages) * 100 // Simple estimation for tests
+func (f *failingCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
+	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 // TestRunInnerLoopMaxTurnsLimit tests that the loop stops when max turns is reached
@@ -652,7 +653,7 @@ func TestRunInnerLoopRecoversMalformedToolCallResponse(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -661,7 +662,7 @@ func TestRunInnerLoopRecoversMalformedToolCallResponse(t *testing.T) {
 	}
 
 	var sawRepairPrompt bool
-	for _, msg := range agentCtx.Messages {
+	for _, msg := range agentCtx.RecentMessages {
 		if msg.Role != "user" || msg.Metadata == nil || msg.Metadata.Kind != "tool_call_repair" {
 			continue
 		}
@@ -699,7 +700,7 @@ func TestRunInnerLoopMalformedToolCallRecoveryRespectsLimit(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -734,7 +735,7 @@ func TestRunInnerLoopRecoversWhenToolCallOnlyInThinking(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -769,7 +770,7 @@ func TestRunInnerLoopEmitsToolCallRecoveryEvent(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 	stream := newTestAgentEventStream()
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
@@ -831,7 +832,7 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("start"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
 
 	// Set a very low limit - without the fix, this would stop at 61 calls (default)
 	// With the fix, task_tracking should be exempt and not trigger loop guard

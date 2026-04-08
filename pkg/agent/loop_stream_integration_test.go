@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +29,7 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("show me lines"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("show me lines"))
 
 	config := &LoopConfig{
 		Model: llm.Model{
@@ -63,11 +61,9 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 }
 
 func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
-	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
-	if _, err := wm.Load(); err != nil {
-		t.Fatalf("failed to initialize llm context: %v", err)
-	}
+	// sessionDir := t.TempDir()
+	// Use string LLMContext instead of file manager
+	llmContextContent := "# Test LLM Context\n\nThis is test content."
 
 	var observedMessages []struct {
 		Role    string          `json:"role"`
@@ -97,8 +93,8 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = wm
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("hello"))
+	agentCtx.LLMContext = llmContextContent
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
 		Model: llm.Model{
@@ -162,11 +158,12 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 }
 
 func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
-	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
-	if _, err := wm.Load(); err != nil {
-		t.Fatalf("failed to initialize llm context: %v", err)
-	}
+	// sessionDir := t.TempDir()
+	// Use string LLMContext instead of file manager
+	llmContextContent := `# LLM Context
+
+## Current Task
+Test task for post-compact recovery`
 
 	var observedMessages []struct {
 		Role    string          `json:"role"`
@@ -196,21 +193,10 @@ func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = wm
+	agentCtx.LLMContext = llmContextContent
 	// Simulate post-compact recovery state
 	agentCtx.PostCompactRecovery = true
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("continue"))
-
-	// Set llm_context content to simulate post-compact recovery
-	// Write a minimal overview.md with actual content
-	overviewPath := filepath.Join(sessionDir, "llm-context", "overview.md")
-	overviewContent := `# LLM Context
-
-## 当前任务
-Test task for post-compact recovery`
-	if err := os.WriteFile(overviewPath, []byte(overviewContent), 0644); err != nil {
-		t.Fatalf("failed to write overview.md: %v", err)
-	}
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("continue"))
 
 	config := &LoopConfig{
 		Model: llm.Model{
@@ -260,16 +246,9 @@ Test task for post-compact recovery`
 }
 
 func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
-	sessionDir := t.TempDir()
-	wm := agentctx.NewLLMContext(sessionDir)
-	if _, err := wm.Load(); err != nil {
-		t.Fatalf("failed to initialize llm context: %v", err)
-	}
-	// Mark llm context as maintained to mirror the production path where
-	// runtime state is injected and history selection previously regressed.
-	if err := wm.WriteContent("# LLM Context\n\n## 当前任务\n- keep recent user turns\n"); err != nil {
-		t.Fatalf("failed to write llm context content: %v", err)
-	}
+	// sessionDir := t.TempDir()
+	// Use string LLMContext instead of file manager
+	llmContextContent := "# LLM Context\n\n## Current Task\n- keep recent user turns\n"
 
 	var observedMessages []struct {
 		Role    string          `json:"role"`
@@ -299,7 +278,7 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = wm
+	agentCtx.LLMContext = llmContextContent
 
 	userTurn1 := "user-turn-1: first requirement"
 	userTurn2 := "user-turn-2: second requirement"
@@ -329,7 +308,7 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 
 	largeToolOutput := strings.Repeat("X", 22000)
 
-	agentCtx.Messages = append(agentCtx.Messages,
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages,
 		agentctx.NewUserMessage(userTurn1),
 		assistantCall1,
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
@@ -410,7 +389,7 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage("write a file"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("write a file"))
 
 	config := &LoopConfig{
 		Model: llm.Model{

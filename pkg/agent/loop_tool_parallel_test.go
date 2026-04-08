@@ -59,7 +59,7 @@ func (t *contextMutationTool) Parameters() map[string]any {
 func (t *contextMutationTool) Execute(ctx context.Context, _ map[string]any) ([]agentctx.ContentBlock, error) {
 	current := agentctx.ToolExecutionAgentContext(ctx)
 	if current != nil {
-		current.Messages = append(current.Messages, agentctx.NewUserMessage("mutated-by-tool"))
+		current.RecentMessages = append(current.RecentMessages, agentctx.NewUserMessage("mutated-by-tool"))
 	}
 	return []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "ok"}}, nil
 }
@@ -152,10 +152,10 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "mutate", Arguments: map[string]any{}},
 	}
 	loopCtx := &agentctx.AgentContext{
-		Messages: []agentctx.AgentMessage{agentctx.NewUserMessage("before")},
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("before")},
 	}
 	staleCtx := &agentctx.AgentContext{
-		Messages: []agentctx.AgentMessage{agentctx.NewUserMessage("stale")},
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("stale")},
 	}
 
 	tools := []agentctx.Tool{
@@ -177,11 +177,11 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if len(loopCtx.Messages) != 2 {
-		t.Fatalf("expected loop context to be mutated, got %d messages", len(loopCtx.Messages))
+	if len(loopCtx.RecentMessages) != 2 {
+		t.Fatalf("expected loop context to be mutated, got %d messages", len(loopCtx.RecentMessages))
 	}
-	if len(staleCtx.Messages) != 1 {
-		t.Fatalf("expected stale context to remain unchanged, got %d messages", len(staleCtx.Messages))
+	if len(staleCtx.RecentMessages) != 1 {
+		t.Fatalf("expected stale context to remain unchanged, got %d messages", len(staleCtx.RecentMessages))
 	}
 }
 

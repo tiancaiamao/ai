@@ -23,6 +23,11 @@ type AgentState struct {
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
 
+	// Runtime metadata (for telemetry snapshot)
+	RuntimeMetaTurns    int    // Turns since last runtime metadata refresh
+	RuntimeMetaSnapshot string // Cached runtime metadata snapshot
+	RuntimeMetaBand     string // Current token usage band
+
 	// Metadata
 	SessionID string
 	CreatedAt time.Time
@@ -44,6 +49,9 @@ func NewAgentState(sessionID, cwd string) *AgentState {
 		TurnsSinceLastTrigger:    0,
 		ToolCallsSinceLastTrigger: 0,
 		ActiveToolCalls:          []string{},
+		RuntimeMetaTurns:         0,
+		RuntimeMetaSnapshot:      "",
+		RuntimeMetaBand:          "",
 		SessionID:                sessionID,
 		CreatedAt:                now,
 		UpdatedAt:                now,
@@ -70,6 +78,9 @@ func (a *AgentState) Clone() *AgentState {
 		TurnsSinceLastTrigger:    a.TurnsSinceLastTrigger,
 		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
 		ActiveToolCalls:          activeToolCalls,
+		RuntimeMetaTurns:         a.RuntimeMetaTurns,
+		RuntimeMetaSnapshot:      a.RuntimeMetaSnapshot,
+		RuntimeMetaBand:          a.RuntimeMetaBand,
 		SessionID:                a.SessionID,
 		CreatedAt:                a.CreatedAt,
 		UpdatedAt:                a.UpdatedAt,

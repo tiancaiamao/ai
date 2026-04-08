@@ -119,18 +119,18 @@ type mockCompactor struct {
 	called        bool
 }
 
-func (m *mockCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
+func (m *mockCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	m.called = true
 	return m.shouldCompact
 }
 
-func (m *mockCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*CompactionResult, error) {
-	// Return simplified messages
-	return &CompactionResult{
+func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	// Compactor directly modifies ctx.RecentMessages
+	ctx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("[Summary]"),
+	}
+	return &agentctx.CompactionResult{
 		Summary: "[Summary]",
-		Messages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("[Summary]"),
-		},
 	}, nil
 }
 
@@ -138,8 +138,8 @@ func (m *mockCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
 }
 
-func (m *mockCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
-	return len(messages) * 100 // Simple estimation for tests
+func (m *mockCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
+	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 // TestAgentEvents tests the event channel.
@@ -170,8 +170,8 @@ func TestAgentContext(t *testing.T) {
 		t.Fatal("Context should not be nil")
 	}
 
-	if len(ctx.Messages) != 0 {
-		t.Errorf("Expected 0 messages, got %d", len(ctx.Messages))
+	if len(ctx.RecentMessages) != 0 {
+		t.Errorf("Expected 0 messages, got %d", len(ctx.RecentMessages))
 	}
 
 	// Test setting context
@@ -249,8 +249,8 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 	}
 
 	ag.SetContext(&agentctx.AgentContext{
-		SystemPrompt: "test",
-		Messages: []agentctx.AgentMessage{
+		SystemPrompt:    "test",
+		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("before-compact"),
 		},
 	})

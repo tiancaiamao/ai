@@ -182,7 +182,7 @@ func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) 
 
 func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.Messages = []agentctx.AgentMessage{
+	agentCtx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("修复 truncate compact 协议"),
 		func() agentctx.AgentMessage {
 			m := agentctx.NewAssistantMessage()
@@ -197,7 +197,7 @@ func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 		TokensUsed:        64000,
 		TokensMax:         128000,
 		TokensPercent:     50.0,
-		MessagesInHistory: len(agentCtx.Messages),
+		MessagesInHistory: len(agentCtx.RecentMessages),
 		LLMContextSize:    1200,
 	}
 

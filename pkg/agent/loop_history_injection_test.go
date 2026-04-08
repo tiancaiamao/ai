@@ -32,7 +32,7 @@ func TestSelectMessagesForLLM_UsesAllAvailableMessagesWhenLLMContextUnconfirmed(
 	agentCtx := agentctx.NewAgentContext("sys")
 	longPayload := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for i := 0; i < 700; i++ {
-		agentCtx.Messages = append(agentCtx.Messages, agentctx.NewUserMessage(fmt.Sprintf("message-%03d %s %s %s %s", i, longPayload, longPayload, longPayload, longPayload)))
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage(fmt.Sprintf("message-%03d %s %s %s %s", i, longPayload, longPayload, longPayload, longPayload)))
 	}
 
 	selected, mode := selectMessagesForLLM(agentCtx)
@@ -42,8 +42,8 @@ func TestSelectMessagesForLLM_UsesAllAvailableMessagesWhenLLMContextUnconfirmed(
 	if len(selected) == 0 {
 		t.Fatal("expected selected messages to be non-empty")
 	}
-	if len(selected) != len(agentCtx.Messages) {
-		t.Fatalf("expected full history to be sent: selected=%d total=%d", len(selected), len(agentCtx.Messages))
+	if len(selected) != len(agentCtx.RecentMessages) {
+		t.Fatalf("expected full history to be sent: selected=%d total=%d", len(selected), len(agentCtx.RecentMessages))
 	}
 }
 
@@ -72,7 +72,7 @@ func TestSelectMessagesForLLM_UsesAllAvailableMessages(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	oldAssistant := agentctx.NewAssistantMessage()
 	oldAssistant.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "old-assistant"}}
-	agentCtx.Messages = append(agentCtx.Messages,
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages,
 		agentctx.NewUserMessage("old-user"),
 		oldAssistant,
 		agentctx.NewUserMessage("new-user"),
@@ -82,8 +82,8 @@ func TestSelectMessagesForLLM_UsesAllAvailableMessages(t *testing.T) {
 	if mode != "all_available_messages_no_runtime_clip" {
 		t.Fatalf("expected all_available_messages_no_runtime_clip mode, got %q", mode)
 	}
-	if len(selected) != len(agentCtx.Messages) {
-		t.Fatalf("expected full history in no-inject mode: selected=%d total=%d", len(selected), len(agentCtx.Messages))
+	if len(selected) != len(agentCtx.RecentMessages) {
+		t.Fatalf("expected full history in no-inject mode: selected=%d total=%d", len(selected), len(agentCtx.RecentMessages))
 	}
 	if selected[0].ExtractText() != "old-user" || selected[2].ExtractText() != "new-user" {
 		t.Fatalf("expected original ordering to be preserved")

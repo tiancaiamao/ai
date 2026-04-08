@@ -234,10 +234,11 @@ func RunLoop(
 
 		newMessages := append([]agentctx.AgentMessage{}, prompts...)
 		currentCtx := &agentctx.AgentContext{
-			SystemPrompt: agentCtx.SystemPrompt,
-			Messages:     append(agentCtx.Messages, prompts...),
-			Tools:        agentCtx.Tools,
-			LLMContext:   agentCtx.LLMContext,
+			SystemPrompt:    agentCtx.SystemPrompt,
+			RecentMessages:  append(agentCtx.RecentMessages, prompts...),
+			Tools:           agentCtx.Tools,
+			LLMContext:      agentCtx.LLMContext,
+			AgentState:      agentCtx.AgentState,
 		}
 
 		stream.Push(NewAgentStartEvent())
@@ -292,7 +293,7 @@ func runInnerLoop(
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
-			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		default:
 		}
@@ -302,7 +303,7 @@ func runInnerLoop(
 			slog.Info("[Loop] max turns limit reached",
 				"turns", turnCount,
 				"maxTurns", config.MaxTurns)
-			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
@@ -312,9 +313,9 @@ func runInnerLoop(
 		var compacted *agentctx.CompactionResult
 		var compactErr error
 		for _, c := range config.Compactors {
-			if c.ShouldCompact(agentCtx.Messages) {
+			if c.ShouldCompact(agentCtx) {
 				slog.Info("[Loop] Pre-LLM compaction triggered", "compactor", fmt.Sprintf("%T", c))
-				compacted, compactErr = c.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
+				compacted, compactErr = c.Compact(agentCtx)
 				if compactErr == nil {
 					break // First successful compaction wins
 				} else {
@@ -330,7 +331,7 @@ func runInnerLoop(
 				slog.Warn("[Loop] Skipping compaction result due to error", "error", compactErr)
 				compacted = nil
 			} else {
-				before := len(agentCtx.Messages)
+				before := len(agentCtx.RecentMessages)
 				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 					traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
 					traceevent.Field{Key: "auto", Value: true},
@@ -343,7 +344,8 @@ func runInnerLoop(
 					Trigger: "pre_llm_threshold",
 				}))
 
-				agentCtx.Messages = compacted.Messages
+				// Note: Compactor now directly modifies agentCtx.RecentMessages
+				// We just need to update the summary and persist changes
 				agentCtx.LastCompactionSummary = compacted.Summary
 				// Persist changes to session storage
 				if agentCtx.OnMessagesChanged != nil {
@@ -351,9 +353,9 @@ func runInnerLoop(
 						slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
 					}
 				}
-				// Set flag to inject overview.md for recovery on next request
+				// Set flag to inject LLMContext for recovery on next request
 				agentCtx.PostCompactRecovery = true
-				after := len(agentCtx.Messages)
+				after := len(agentCtx.RecentMessages)
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
 				stream.Push(NewCompactionEndEvent(CompactionInfo{
@@ -369,7 +371,7 @@ func runInnerLoop(
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
 			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && compactionRecoveries < maxCompactionRecoveries {
-				before := len(agentCtx.Messages)
+				before := len(agentCtx.RecentMessages)
 				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 					traceevent.Field{Key: "source", Value: "context_limit_recovery"},
 					traceevent.Field{Key: "auto", Value: true},
@@ -386,7 +388,7 @@ func runInnerLoop(
 				var recoveryCompacted *agentctx.CompactionResult
 				var recoveryErr error
 				for _, c := range config.Compactors {
-					recoveryCompacted, recoveryErr = c.Compact(agentCtx.Messages, agentCtx.LastCompactionSummary)
+					recoveryCompacted, recoveryErr = c.Compact(agentCtx)
 					if recoveryErr == nil {
 						break // First successful compaction wins
 					}
@@ -409,7 +411,7 @@ func runInnerLoop(
 				} else {
 					compactionRecoveries++
 					if recoveryCompacted != nil {
-						agentCtx.Messages = recoveryCompacted.Messages
+						// Compactor directly modified agentCtx.RecentMessages
 						agentCtx.LastCompactionSummary = recoveryCompacted.Summary
 						// Persist changes to session storage
 						if agentCtx.OnMessagesChanged != nil {
@@ -418,14 +420,14 @@ func runInnerLoop(
 							}
 						}
 					}
-					// Set flag to inject overview.md for recovery on next request
+					// Set flag to inject LLMContext for recovery on next request
 					agentCtx.PostCompactRecovery = true
-					compactionSpan.AddField("after_messages", len(recoveryCompacted.Messages))
+					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
 						Auto:    true,
 						Before:  before,
-						After:   len(recoveryCompacted.Messages),
+						After:   len(agentCtx.RecentMessages),
 						Trigger: "context_limit_recovery",
 					}))
 					continue
@@ -442,40 +444,37 @@ func runInnerLoop(
 			traceevent.Log(ctx, traceevent.CategoryEvent, "run_loop_error", traceFields...)
 			stream.Push(NewErrorEvent(err))
 			stream.Push(NewTurnEndEvent(msg, nil))
-			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
 		if msg == nil {
 			// Message was nil (aborted)
-			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
-		agentCtx.Messages = append(agentCtx.Messages, *msg)
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, *msg)
 		newMessages = append(newMessages, *msg)
 
-		// Update agentctx.LLMContext meta after successful LLM response
-		if agentCtx.LLMContext != nil && msg.Usage != nil {
+		// Update AgentState with token usage after successful LLM response
+		if msg.Usage != nil && msg.Usage.TotalTokens > 0 {
 			// Use context window from config if available, otherwise use a default
 			const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
 			tokensMax := defaultContextWindow
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			agentCtx.LLMContext.SetMeta(
-				msg.Usage.TotalTokens,
-				tokensMax,
-				len(agentCtx.Messages),
-			)
-			// Invalidate cache so next Load() will re-read
-			agentCtx.LLMContext.InvalidateCache()
+			// Update AgentState with usage info
+			agentCtx.AgentState.TokensUsed = msg.Usage.TotalTokens
+			agentCtx.AgentState.TokensLimit = tokensMax
+			agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
 		}
 
 		// Check for error or abort (special cases that end the loop immediately)
 		if msg.StopReason == "error" || msg.StopReason == "aborted" {
 			stream.Push(NewTurnEndEvent(msg, nil))
-			stream.Push(NewAgentEndEvent(agentCtx.Messages))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
@@ -487,7 +486,7 @@ func runInnerLoop(
 			traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
 				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
 			// Update the message in both arrays to include the error notification
-			agentCtx.Messages[len(agentCtx.Messages)-1] = *msg
+			agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
 			newMessages[len(newMessages)-1] = *msg
 		}
 
@@ -506,7 +505,7 @@ func runInnerLoop(
 					traceevent.Field{Key: "call_count", Value: len(toolCalls)},
 				)
 				sanitizeMessageForToolLoopGuard(msg, reason)
-				agentCtx.Messages[len(agentCtx.Messages)-1] = *msg
+				agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
 				newMessages[len(newMessages)-1] = *msg
 				hasMoreToolCalls = false
 			}
@@ -516,7 +515,7 @@ func runInnerLoop(
 		if hasMoreToolCalls {
 			toolResults = executeToolCalls(ctx, agentCtx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
 			for _, result := range toolResults {
-				agentCtx.Messages = append(agentCtx.Messages, result)
+				agentCtx.RecentMessages = append(agentCtx.RecentMessages, result)
 				newMessages = append(newMessages, result)
 			}
 		}
@@ -534,11 +533,9 @@ func runInnerLoop(
 
 		// Create checkpoint periodically (every 10 turns)
 		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint(turnCount) {
-			var llmContextContent string
-			if agentCtx.LLMContext != nil {
-				llmContextContent, _ = agentCtx.LLMContext.Load()
-			}
-			if _, err := checkpointMgr.CreateSnapshot(llmContextContent, agentCtx.Messages, turnCount); err != nil {
+			// Use LLMContext string directly
+			llmContextContent := agentCtx.LLMContext
+			if _, err := checkpointMgr.CreateSnapshot(llmContextContent, agentCtx.RecentMessages, turnCount); err != nil {
 				slog.Warn("[Loop] Failed to create checkpoint", "error", err, "turn", turnCount)
 			} else {
 				slog.Info("[Loop] Checkpoint created", "turn", turnCount)
@@ -554,7 +551,7 @@ func runInnerLoop(
 		}
 	}
 
-	stream.Push(NewAgentEndEvent(agentCtx.Messages))
+	stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 }
 
 // streamAssistantResponseWithRetry streams assistant's response with retry logic.
@@ -781,23 +778,17 @@ func streamAssistantResponse(
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
-	// NOTE: overview.md content is NOT injected by default. It's only injected:
+	// NOTE: LLMContext (string) is NOT injected by default. It's only injected:
 	// 1. After compact (PostCompactRecovery = true) for recovery
 	// 2. The LLM should use task_tracking tool to record state, which stays in tool output
-	if agentCtx.LLMContext != nil {
-		// Determine if we should inject overview.md content
+	if agentCtx.LLMContext != "" {
+		// Determine if we should inject LLM context content
 		// Only inject after compact for recovery
 		var content string
 		postCompactRecovery := agentCtx.PostCompactRecovery
 		if postCompactRecovery {
-			// Invalidate cache to ensure we read the latest content
-			agentCtx.LLMContext.InvalidateCache()
-			loadedContent, err := agentCtx.LLMContext.Load()
-			if err != nil {
-				slog.Warn("[Loop] Failed to load llm context for recovery", "error", err)
-			} else {
-				content = loadedContent
-			}
+			// Use the LLMContext string directly
+			content = agentCtx.LLMContext
 			// Reset the flag after injection
 			agentCtx.PostCompactRecovery = false
 		}
@@ -808,14 +799,13 @@ func streamAssistantResponse(
 		if config.ContextWindow > 0 {
 			tokensMax = config.ContextWindow
 		}
-		tokensUsedApprox := EstimateConversationTokens(agentCtx.Messages)
-		agentCtx.LLMContext.SetMeta(
-			tokensUsedApprox,
-			tokensMax,
-			len(agentCtx.Messages),
-		)
+		tokensUsedApprox := EstimateConversationTokens(agentCtx.RecentMessages)
 
-		meta := agentCtx.LLMContext.GetMeta()
+		// Update AgentState with token usage info
+		agentCtx.AgentState.TokensUsed = tokensUsedApprox
+		agentCtx.AgentState.TokensLimit = tokensMax
+		agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
+
 
 		currentWorkdir := ""
 		if config.GetWorkingDir != nil {
@@ -824,6 +814,28 @@ func streamAssistantResponse(
 		startupPath := ""
 		if config.GetStartupPath != nil {
 			startupPath = config.GetStartupPath()
+		}
+
+		// Build meta for runtime snapshot from AgentState
+		metaTokensUsed := agentCtx.AgentState.TokensUsed
+		if metaTokensUsed == 0 {
+			metaTokensUsed = tokensUsedApprox
+		}
+		metaTokensMax := agentCtx.AgentState.TokensLimit
+		if metaTokensMax == 0 {
+			metaTokensMax = tokensMax
+		}
+		metaTokensPercent := float64(0)
+		if metaTokensMax > 0 {
+			metaTokensPercent = float64(metaTokensUsed) / float64(metaTokensMax) * 100
+		}
+
+		meta := agentctx.ContextMeta{
+			TokensUsed:        metaTokensUsed,
+			TokensMax:         metaTokensMax,
+			TokensPercent:     metaTokensPercent,
+			MessagesInHistory: len(agentCtx.RecentMessages),
+			LLMContextSize:    len(agentCtx.LLMContext),
 		}
 
 		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
@@ -841,13 +853,8 @@ func streamAssistantResponse(
 
 	}
 
-	staleCount := 0
-	if len(agentCtx.Messages) > 0 {
-		staleCount, _ = collectStaleToolOutputStats(agentCtx.Messages, recentToolResultsNoMetadata)
-	}
-	if agentCtx.LLMContext != nil {
-		agentCtx.LLMContext.SetStaleToolCount(staleCount)
-	}
+	// Note: staleCount is collected for telemetry but no longer set on a file manager
+	// The LLMContext is now a string, not a file manager with SetStaleToolCount method
 
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
@@ -1606,10 +1613,10 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	if agentCtx == nil {
 		return nil, "empty_context"
 	}
-	if len(agentCtx.Messages) == 0 {
+	if len(agentCtx.RecentMessages) == 0 {
 		return nil, "no_messages"
 	}
-	return agentCtx.Messages, "all_available_messages_no_runtime_clip"
+	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
 
 func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
@@ -1730,20 +1737,20 @@ func updateRuntimeMetaSnapshot(
 		heartbeatTurns = defaultRuntimeMetaHeartbeatTurns
 	}
 
-	agentCtx.RuntimeMetaTurns++
+	agentCtx.AgentState.RuntimeMetaTurns++
 	band := runtimeTokenBand(meta.TokensPercent)
 
-	shouldRefresh := strings.TrimSpace(agentCtx.RuntimeMetaSnapshot) == "" ||
-		agentCtx.RuntimeMetaBand != band ||
-		agentCtx.RuntimeMetaTurns >= heartbeatTurns
+	shouldRefresh := strings.TrimSpace(agentCtx.AgentState.RuntimeMetaSnapshot) == "" ||
+		agentCtx.AgentState.RuntimeMetaBand != band ||
+		agentCtx.AgentState.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
-		return agentCtx.RuntimeMetaSnapshot, false
+		return agentCtx.AgentState.RuntimeMetaSnapshot, false
 	}
 
 	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
-	toolPressure := collectRuntimeToolPressure(agentCtx.Messages)
-	toolOutputsSummary := buildToolOutputsSummary(agentCtx.Messages)
+	toolPressure := collectRuntimeToolPressure(agentCtx.RecentMessages)
+	toolOutputsSummary := buildToolOutputsSummary(agentCtx.RecentMessages)
 
 	// runtime_state is purely informational - no directives or commands
 	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
@@ -1782,9 +1789,9 @@ compact_decision_signals:
 		meta.TokensPercent,
 	)
 
-	agentCtx.RuntimeMetaSnapshot = snapshot
-	agentCtx.RuntimeMetaBand = band
-	agentCtx.RuntimeMetaTurns = 0
+	agentCtx.AgentState.RuntimeMetaSnapshot = snapshot
+	agentCtx.AgentState.RuntimeMetaBand = band
+	agentCtx.AgentState.RuntimeMetaTurns = 0
 
 	return snapshot, true
 }

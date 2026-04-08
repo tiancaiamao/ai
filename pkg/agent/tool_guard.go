@@ -181,7 +181,7 @@ func maybeRecoverMalformedToolCall(
 
 	*recoveryCount = *recoveryCount + 1
 	recoveryMsg := buildMalformedToolCallRecoveryMessage(reason, *recoveryCount)
-	agentCtx.Messages = append(agentCtx.Messages, recoveryMsg)
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, recoveryMsg)
 	if newMessages != nil {
 		*newMessages = append(*newMessages, recoveryMsg)
 	}
