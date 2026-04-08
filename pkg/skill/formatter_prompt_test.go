@@ -35,20 +35,19 @@ func TestFormatForPromptTruncatesDescription(t *testing.T) {
 		FilePath:    "/tmp/demo/SKILL.md",
 	}})
 
-	// Check markdown format: - **demo**: <description>
+	// Check markdown format: - **demo**: <description> (/path)
 	expectedPrefix := "- **demo**:"
 	if !strings.Contains(out, expectedPrefix) {
 		t.Fatalf("expected markdown list item in output: %s", out)
 	}
 
-	// Extract description from markdown line: - **demo**: <description>
+	// Extract description from markdown line: - **demo**: <description> (/path)
 	start := strings.Index(out, expectedPrefix) + len(expectedPrefix)
-	// Find the end of line (since we removed the path, description ends at newline)
-	end := strings.Index(out[start:], "\n")
-	if end == -1 {
-		end = len(out) - start
+	end := strings.Index(out, " (/tmp/demo/SKILL.md)")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatalf("description not found in output: %s", out)
 	}
-	desc := strings.TrimSpace(out[start : start+end])
+	desc := strings.TrimSpace(out[start:end])
 	if len([]rune(desc)) != maxSkillDescriptionRunes {
 		t.Fatalf("expected description length=%d, got %d", maxSkillDescriptionRunes, len([]rune(desc)))
 	}

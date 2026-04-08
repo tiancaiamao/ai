@@ -2,21 +2,19 @@ package context_mgmt
 
 import (
 	"context"
+	"fmt"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// NoActionTool indicates no context management is needed.
+// NoActionTool indicates that no context management action is needed.
 type NoActionTool struct {
-	snapshot *agentctx.ContextSnapshot
+	agentCtx *agentctx.AgentContext
 }
 
 // NewNoActionTool creates a new NoActionTool.
-func NewNoActionTool(snapshot *agentctx.ContextSnapshot) *NoActionTool {
-	return &NoActionTool{
-		snapshot: snapshot,
-	}
+func NewNoActionTool(agentCtx *agentctx.AgentContext) *NoActionTool {
+	return &NoActionTool{agentCtx: agentCtx}
 }
 
 // Name returns the tool name.
@@ -26,28 +24,30 @@ func (t *NoActionTool) Name() string {
 
 // Description returns the tool description.
 func (t *NoActionTool) Description() string {
-	return "Indicate that no context management is needed this cycle. Context is healthy."
+	return "No context management action is needed at this time. Use when the context is healthy."
 }
 
 // Parameters returns the JSON schema for parameters.
 func (t *NoActionTool) Parameters() map[string]any {
 	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
+		"type": "object",
+		"properties": map[string]any{
+			"reason": map[string]any{
+				"type":        "string",
+				"description": "Reason for no action (optional)",
+			},
+		},
 	}
 }
 
-// Execute handles the no_action case.
+// Execute does nothing but returns a confirmation.
 func (t *NoActionTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
-	// Update LastTriggerTurn to enforce minInterval before next trigger
-	t.snapshot.AgentState.LastTriggerTurn = t.snapshot.AgentState.TotalTurns
-	t.snapshot.AgentState.TurnsSinceLastTrigger = 0
-	t.snapshot.AgentState.ToolCallsSinceLastTrigger = 0
-
-	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_no_action",
-		traceevent.Field{Key: "turn", Value: t.snapshot.AgentState.TotalTurns})
+	reason := "context is healthy"
+	if r, ok := params["reason"].(string); ok && r != "" {
+		reason = r
+	}
 
 	return []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: "No action taken. Context is healthy."},
+		agentctx.TextContent{Type: "text", Text: fmt.Sprintf("No action taken: %s.", reason)},
 	}, nil
 }

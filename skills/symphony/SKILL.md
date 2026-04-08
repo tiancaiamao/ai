@@ -184,7 +184,7 @@ Research and document:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Symphony Server (localhost:8080)                       │
+│  Symphony Server (localhost:8081)                       │
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
 │  │  Kanban  │  │   API    │  │Scheduler │            │
@@ -299,20 +299,20 @@ If you need direct API access:
 
 ```bash
 # Create task
-curl -X POST http://localhost:8080/api/tasks \
+curl -X POST http://localhost:8081/api/tasks \
   -H "Content-Type: application/json" \
   -d '{"title": "Fix bug", "description": "..."}'
 
 # List tasks
-curl http://localhost:8080/api/tasks
+curl http://localhost:8081/api/tasks
 
 # Update task
-curl -X PUT http://localhost:8080/api/tasks/<id> \
+curl -X PUT http://localhost:8081/api/tasks/<id> \
   -H "Content-Type: application/json" \
   -d '{"state": "todo"}'
 
 # Get status
-curl http://localhost:8080/api/status
+curl http://localhost:8081/api/status
 ```
 
 ## Anti-Patterns

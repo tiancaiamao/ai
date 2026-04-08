@@ -65,9 +65,7 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 	// Scenario: both tool_call and tool_result in recentMessages - should stay visible
 	recentMessages := []agentctx.AgentMessage{
 		{
-			Role:         "assistant",
-			AgentVisible: true,
-			UserVisible:  true,
+			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
 					ID:   "call-456",
@@ -78,11 +76,9 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 			},
 		},
 		{
-			Role:         "toolResult",
-			AgentVisible: true,
-			UserVisible:  true,
-			ToolCallID:   "call-456",
-			ToolName:     "write",
+			Role:       "toolResult",
+			ToolCallID: "call-456",
+			ToolName:   "write",
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "ok"},
 			},
@@ -115,11 +111,9 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 
 	recentMessages := []agentctx.AgentMessage{
 		{
-			Role:         "toolResult",
-			AgentVisible: true,
-			UserVisible:  true,
-			ToolCallID:   "call-789",
-			ToolName:     "read",
+			Role:       "toolResult",
+			ToolCallID: "call-789",
+			ToolName:   "read",
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "result"},
 			},
@@ -267,7 +261,7 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 		agentctx.NewUserMessage("last message"),
 	}
 
-	result, err := compactor.Compact(messages, "")
+	result, err := compactor.CompactOld(messages, "")
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}

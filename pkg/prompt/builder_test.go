@@ -2,11 +2,141 @@ package prompt
 
 import (
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/skill"
 )
+
+// mockTool implements ToolInfo for testing
+type mockTool struct {
+	name        string
+	description string
+}
+
+func (m mockTool) Name() string        { return m.name }
+func (m mockTool) Description() string { return m.description }
+
+func TestNewBuilder(t *testing.T) {
+	cwd := "/test/workspace"
+
+	b := NewBuilder("", cwd)
+
+	if b == nil {
+		t.Fatal("NewBuilder returned nil")
+	}
+
+	if b.cwd != cwd {
+		t.Errorf("expected cwd %q, got %q", cwd, b.cwd)
+	}
+}
+
+func TestBuilderBuild(t *testing.T) {
+	tests := []struct {
+		name string
+		cwd  string
+	}{
+		{
+			name: "basic prompt",
+			cwd:  "/workspace",
+		},
+		{
+			name: "empty base",
+			cwd:  "/workspace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewBuilder("", tt.cwd)
+			result := b.Build()
+
+			if result == "" {
+				t.Error("Build() returned empty string")
+			}
+
+			// Check that workspace section is included
+			if !contains(result, "## Workspace") {
+				t.Error("Workspace section missing from result")
+			}
+
+			if contains(result, "Your working directory is:") {
+				t.Error("workspace section should not embed a dynamic working directory")
+			}
+		})
+	}
+}
+
+func TestBuilderWithSkills(t *testing.T) {
+	cwd := "/workspace"
+
+	skills := []skill.Skill{
+		{Name: "test", Description: "A test skill"},
+	}
+
+	b := NewBuilder("", cwd)
+	b.SetSkills(skills)
+	result := b.Build()
+
+	if !contains(result, "## Skills") {
+		t.Error("Skills section missing")
+	}
+
+	if !contains(result, "A test skill") {
+		t.Error("Skill description missing")
+	}
+}
+
+func TestBuilderMinimalMode(t *testing.T) {
+	cwd := "/workspace"
+
+	tools := []ToolInfo{
+		mockTool{name: "read", description: "Read files"},
+	}
+	skills := []skill.Skill{
+		{Name: "test", Description: "A test skill"},
+	}
+
+	b := NewBuilder("", cwd)
+	b.SetTools(tools).SetSkills(skills).SetMinimal(true)
+	result := b.Build()
+
+	// In minimal mode, skills should be excluded
+	if contains(result, "## Skills") {
+		t.Error("Skills section should not appear in minimal mode")
+	}
+
+	// But tools and workspace should still be there
+	if !contains(result, "## Tooling") {
+		t.Error("Tooling section missing in minimal mode")
+	}
+
+	if !contains(result, "## Workspace") {
+		t.Error("Workspace section missing in minimal mode")
+	}
+}
+
+func TestBuilderSkillsRendering(t *testing.T) {
+	cwd := "/workspace"
+	skills := []skill.Skill{
+		{Name: "wf-issue", Description: "issue workflow", FilePath: "/tmp/wf-issue/SKILL.md"},
+		{Name: "subagent", Description: "subagent workflow", FilePath: "/tmp/subagent/SKILL.md"},
+	}
+
+	b := NewBuilder("", cwd)
+	b.SetSkills(skills)
+	result := b.Build()
+
+	if !contains(result, "## Skills") {
+		t.Error("skills header missing")
+	}
+	if !contains(result, "- **wf-issue**: issue workflow (/tmp/wf-issue/SKILL.md)") {
+		t.Error("full skill entry missing")
+	}
+	if !contains(result, "- **subagent**: subagent workflow (/tmp/subagent/SKILL.md)") {
+		t.Error("full skill entry missing")
+	}
+}
 
 func TestThinkingInstruction(t *testing.T) {
 	tests := []struct {
@@ -27,7 +157,7 @@ func TestThinkingInstruction(t *testing.T) {
 		t.Run(tt.level, func(t *testing.T) {
 			result := ThinkingInstruction(tt.level)
 
-			if !strings.Contains(result, tt.contains) {
+			if !contains(result, tt.contains) {
 				t.Errorf("ThinkingInstruction(%q) = %q, want to contain %q", tt.level, result, tt.contains)
 			}
 		})
@@ -61,224 +191,118 @@ func TestNormalizeThinkingLevel(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt(t *testing.T) {
-	result := BuildSystemPrompt(agentctx.ModeNormal)
-	if result == "" {
-		t.Error("BuildSystemPrompt for normal mode returned empty string")
+func TestConvertTools(t *testing.T) {
+	tools := []ToolInfo{
+		mockTool{name: "tool1", description: "Desc 1"},
+		mockTool{name: "tool2", description: "Desc 2"},
 	}
 
-	result = BuildSystemPrompt(agentctx.ModeContextMgmt)
-	if result == "" {
-		t.Error("BuildSystemPrompt for context mgmt mode returned empty string")
-	}
-}
+	result := convertTools(tools)
 
-func TestBuildSystemPromptWithThinking(t *testing.T) {
-	tests := []struct {
-		name        string
-		mode        agentctx.AgentMode
-		level       string
-		wantContain string
-		dontContain string
-	}{
-		{
-			name:        "normal off level omits thinking instruction",
-			mode:        agentctx.ModeNormal,
-			level:       "off",
-			dontContain: "thinking_instruction",
-		},
-		{
-			name:        "normal high level includes thinking instruction",
-			mode:        agentctx.ModeNormal,
-			level:       "high",
-			wantContain: "Thinking level is high",
-		},
-		{
-			name:        "normal empty level defaults to high",
-			mode:        agentctx.ModeNormal,
-			level:       "",
-			wantContain: "Thinking level is high",
-		},
-		{
-			name:        "normal medium level",
-			mode:        agentctx.ModeNormal,
-			level:       "medium",
-			wantContain: "Thinking level is medium",
-		},
-		{
-			name:        "context_mgmt mode never gets thinking instruction",
-			mode:        agentctx.ModeContextMgmt,
-			level:       "high",
-			dontContain: "thinking_instruction",
-		},
+	if len(result) != 2 {
+		t.Fatalf("convertTools() returned %d items, want 2", len(result))
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSystemPromptWithThinking(tt.mode, tt.level)
+	if result[0].Name() != "tool1" {
+		t.Errorf("result[0].Name() = %q, want %q", result[0].Name(), "tool1")
+	}
 
-			if tt.wantContain != "" && !strings.Contains(result, tt.wantContain) {
-				t.Errorf("expected result to contain %q", tt.wantContain)
-			}
-			if tt.dontContain != "" && strings.Contains(result, tt.dontContain) {
-				t.Errorf("expected result NOT to contain %q", tt.dontContain)
-			}
-		})
+	if result[1].Description() != "Desc 2" {
+		t.Errorf("result[1].Description() = %q, want %q", result[1].Description(), "Desc 2")
 	}
 }
 
-func TestBuildSystemPromptWithExtras(t *testing.T) {
-	tests := []struct {
-		name        string
-		mode        agentctx.AgentMode
-		level       string
-		skills      string
-		context     string
-		wantContain string
-		dontContain string
-	}{
-		{
-			name:        "normal mode with skills and project context",
-			mode:        agentctx.ModeNormal,
-			level:       "high",
-			skills:      "## Skills\n- **bash**: Run commands",
-			context:     "## Project Context\n### AGENTS.md\n\nBe concise.",
-			wantContain: "## Skills",
-		},
-		{
-			name:        "normal mode with project context",
-			mode:        agentctx.ModeNormal,
-			level:       "high",
-			skills:      "",
-			context:     "## Project Context\n### AGENTS.md\n\nBe concise.",
-			wantContain: "## Project Context",
-		},
-		{
-			name:        "normal mode without skills cleans up empty section",
-			mode:        agentctx.ModeNormal,
-			level:       "high",
-			skills:      "",
-			context:     "",
-			dontContain: "%SKILLS%",
-		},
-		{
-			name:        "normal mode without project context cleans up",
-			mode:        agentctx.ModeNormal,
-			level:       "high",
-			skills:      "",
-			context:     "",
-			dontContain: "%PROJECT_CONTEXT%",
-		},
-		{
-			name:        "normal mode with thinking and skills",
-			mode:        agentctx.ModeNormal,
-			level:       "medium",
-			skills:      "## Skills\n- **tmux**: Background tasks",
-			context:     "",
-			wantContain: "thinking_instruction",
-		},
-		{
-			name:        "normal mode off level no thinking instruction",
-			mode:        agentctx.ModeNormal,
-			level:       "off",
-			skills:      "",
-			context:     "",
-			dontContain: "thinking_instruction",
-		},
-		{
-			name:        "context_mgmt mode ignores extras",
-			mode:        agentctx.ModeContextMgmt,
-			level:       "high",
-			skills:      "## Skills\n- **bash**: Run commands",
-			context:     "## Project Context\n### AGENTS.md\n\nBe concise.",
-			dontContain: "## Skills",
-		},
-	}
+func TestConvertToolsNil(t *testing.T) {
+	result := convertTools(nil)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSystemPromptWithExtras(tt.mode, tt.level, tt.skills, tt.context, "")
-
-			if result == "" {
-				t.Error("result is empty")
-			}
-			if tt.wantContain != "" && !strings.Contains(result, tt.wantContain) {
-				t.Errorf("expected result to contain %q", tt.wantContain)
-			}
-			if tt.dontContain != "" && strings.Contains(result, tt.dontContain) {
-				t.Errorf("expected result NOT to contain %q", tt.dontContain)
-			}
-			// Verify no placeholders remain
-			if strings.Contains(result, "%SKILLS%") {
-				t.Error("result still contains %SKILLS% placeholder")
-			}
-			if strings.Contains(result, "%PROJECT_CONTEXT%") {
-				t.Error("result still contains %PROJECT_CONTEXT% placeholder")
-			}
-		})
+	if result != nil {
+		t.Errorf("convertTools(nil) = %v, want nil", result)
 	}
 }
 
-func TestBuildProjectContext(t *testing.T) {
-	t.Run("empty directory returns empty string", func(t *testing.T) {
-		result := BuildProjectContext(t.TempDir())
-		if result != "" {
-			t.Errorf("expected empty string, got %q", result)
-		}
-	})
+func TestConvertToolsNonSlice(t *testing.T) {
+	result := convertTools("not a slice")
 
-	t.Run("reads AGENTS.md from cwd", func(t *testing.T) {
-		dir := t.TempDir()
-		os.WriteFile(dir+"/AGENTS.md", []byte("Be concise."), 0644)
-		result := BuildProjectContext(dir)
-		if !strings.Contains(result, "Be concise.") {
-			t.Errorf("expected to contain 'Be concise.', got %q", result)
-		}
-		if !strings.Contains(result, "## Project Context") {
-			t.Errorf("expected to contain '## Project Context', got %q", result)
-		}
-	})
+	if result != nil {
+		t.Errorf("convertTools(\"not a slice\") = %v, want nil", result)
+	}
+}
 
-	t.Run("reads AGENTS.md from .ai directory", func(t *testing.T) {
-		dir := t.TempDir()
-		os.MkdirAll(dir+"/.ai", 0755)
-		os.WriteFile(dir+"/.ai/AGENTS.md", []byte("AI agent rules."), 0644)
-		result := BuildProjectContext(dir)
-		if !strings.Contains(result, "AI agent rules.") {
-			t.Errorf("expected to contain 'AI agent rules.', got %q", result)
-		}
-	})
+func TestProjectContextPrefersAgentsOverClaude(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
 
-	t.Run("prefers .ai/AGENTS.md over root AGENTS.md", func(t *testing.T) {
-		dir := t.TempDir()
-		os.MkdirAll(dir+"/.ai", 0755)
-		os.WriteFile(dir+"/AGENTS.md", []byte("root version"), 0644)
-		os.WriteFile(dir+"/.ai/AGENTS.md", []byte("ai version"), 0644)
-		result := BuildProjectContext(dir)
-		if !strings.Contains(result, "ai version") {
-			t.Errorf("expected to prefer .ai/AGENTS.md, got %q", result)
-		}
-	})
+	b := NewBuilder("", cwd)
+	result := b.Build()
 
-	t.Run("skips CLAUDE.md when AGENTS.md exists", func(t *testing.T) {
-		dir := t.TempDir()
-		os.WriteFile(dir+"/AGENTS.md", []byte("agents"), 0644)
-		os.WriteFile(dir+"/CLAUDE.md", []byte("claude"), 0644)
-		result := BuildProjectContext(dir)
-		if !strings.Contains(result, "agents") {
-			t.Errorf("expected to contain 'agents', got %q", result)
-		}
-		if strings.Contains(result, "claude") {
-			t.Errorf("expected NOT to contain 'claude' when AGENTS.md exists, got %q", result)
-		}
-	})
+	if !contains(result, "### AGENTS.md") {
+		t.Fatalf("expected AGENTS.md in project context")
+	}
+	if contains(result, "### CLAUDE.md") {
+		t.Fatalf("expected CLAUDE.md to be skipped when AGENTS.md exists")
+	}
+}
 
-	t.Run("uses CLAUDE.md when AGENTS.md does not exist", func(t *testing.T) {
-		dir := t.TempDir()
-		os.WriteFile(dir+"/CLAUDE.md", []byte("claude rules"), 0644)
-		result := BuildProjectContext(dir)
-		if !strings.Contains(result, "claude rules") {
-			t.Errorf("expected to contain 'claude rules', got %q", result)
+func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+
+	b := NewBuilder("", cwd)
+	result := b.Build()
+
+	if !contains(result, "### CLAUDE.md") {
+		t.Fatalf("expected CLAUDE.md in project context when AGENTS.md is missing")
+	}
+}
+
+func TestNoWorkspaceMode(t *testing.T) {
+	cwd := t.TempDir()
+
+	// Add minimal tools for both builders
+	tools := []ToolInfo{mockTool{name: "read", description: "Read files"}}
+
+	// Test with workspace (default)
+	builderWithWorkspace := NewBuilder("", cwd)
+	builderWithWorkspace.SetTools(tools)
+	resultWith := builderWithWorkspace.Build()
+	if !contains(resultWith, "## Workspace") {
+		t.Error("expected Workspace section when noWorkspace is false")
+	}
+
+	// Test without workspace (noWorkspace mode)
+	builderNoWorkspace := NewBuilder("", cwd).SetNoWorkspace(true)
+	builderNoWorkspace.SetTools(tools)
+	resultWithout := builderNoWorkspace.Build()
+	if contains(resultWithout, "## Workspace") {
+		t.Error("expected no Workspace section when noWorkspace is true")
+	}
+	if contains(resultWithout, "Your working directory is:") {
+		t.Error("expected no working directory mention when noWorkspace is true")
+	}
+
+	// Ensure the prompt still has content (it will have Tooling section)
+	if resultWithout == "" {
+		t.Error("expected non-empty prompt even in noWorkspace mode")
+	}
+}
+
+// Helper function
+func contains(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
 		}
-	})
+	}
+	return false
 }

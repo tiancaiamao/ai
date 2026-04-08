@@ -2,14 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, scratch0]
+    branches: [main]
   pull_request:
     branches: [main]
 
 jobs:
-  # Quick tests - no API key required
-  test-short:
-    name: Quick Tests (No API)
+  build:
+    name: Build and Test
     runs-on: ubuntu-latest
 
     steps:
@@ -23,17 +22,26 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        run: make deps
+
+      - name: Build
+        run: make build
 
       - name: Run vet
-        run: go vet ./...
+        run: make vet
 
-      - name: Run quick tests
-        run: go test -short -race ./...
+      - name: Run tests
+        run: make test
 
-  # VCR Replay Tests - no API key required (uses recorded responses)
-  test-vcr:
-    name: VCR Replay Tests
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  claw-build:
+    name: Build and Test (claw)
     runs-on: ubuntu-latest
 
     steps:
@@ -47,107 +55,24 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        working-directory: claw
+        run: make deps
 
-      - name: Run testutil VCR tests
-        run: go test -v ./pkg/testutil -run TestVCR -short
+      - name: Build
+        working-directory: claw
+        run: make build
 
-      - name: Run agent VCR tests (if any)
-        run: go test -v ./pkg/agent -run "TestE2E_1_4|TestE2E_4|TestE2E_7" -short || true
+      - name: Run vet
+        working-directory: claw
+        run: make vet
 
-  # Unit tests for specific packages
-  test-units:
-    name: Unit Tests
-    runs-on: ubuntu-latest
+      - name: Run tests
+        working-directory: claw
+        run: make test
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
         with:
-          go-version: '1.26'
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Test context package
-        run: go test -v ./pkg/context -short
-
-      - name: Test truncate package
-        run: go test -v ./pkg/truncate -short
-
-      - name: Test tools package
-        run: go test -v ./pkg/tools -short
-
-      - name: Test config package
-        run: go test -v ./pkg/config -short
-
-  # Build verification
-  build:
-    name: Build Verification
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Tidy go.mod
-        run: go mod tidy
-
-      - name: Build all packages
-        run: go build ./...
-
-      - name: Build main binary
-        run: go build -o ./bin/ai ./cmd/ai
-
-  # Optional: Integration tests (only with secrets)
-  test-integration:
-    name: Integration Tests (Requires API)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run integration tests
-        env:
-          AI_CONFIG_PATH: ${{ github.workspace }}/test_config.json
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-        run: |
-          # Create minimal config for testing
-          cat > test_config.json << EOF
-          {
-            "model": {
-              "id": "glm-4-flash",
-              "provider": "zai",
-              "baseUrl": "https://api.z.ai/api/coding/paas/v4",
-              "api": "openai-completions",
-              "maxTokens": 128000
-            }
-          }
-          EOF
-
-          # Run a few integration tests
-          go test -v ./pkg/agent -run "TestE2E_1_1|TestE2E_1_2" -timeout 120s || true
+          name: claw-coverage
+          path: claw/coverage.out
+          retention-days: 7

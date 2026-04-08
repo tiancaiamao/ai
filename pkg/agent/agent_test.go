@@ -1,0 +1,321 @@
+package agent
+
+import (
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/tiancaiamao/ai/pkg/llm"
+)
+
+// TestFollowUpQueue tests the follow-up queue functionality.
+func TestFollowUpQueue(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Test adding follow-up messages
+	err := agent.FollowUp("First follow-up")
+	if err != nil {
+		t.Fatalf("Failed to add first follow-up: %v", err)
+	}
+
+	err = agent.FollowUp("Second follow-up")
+	if err != nil {
+		t.Fatalf("Failed to add second follow-up: %v", err)
+	}
+
+	// Verify queue has capacity (100 total)
+	// Can't directly access channel, but we can verify by adding more
+	for i := 0; i < 98; i++ {
+		err = agent.FollowUp(fmt.Sprintf("Additional follow-up %d", i))
+		if err != nil {
+			t.Fatalf("Failed to add follow-up %d: %v", i, err)
+		}
+	}
+
+	// Queue should be full now (capacity is 100)
+	err = agent.FollowUp("Should fail")
+	if err == nil {
+		t.Error("Expected error when queue is full, got nil")
+	}
+}
+
+// TestFollowUpConcurrency tests concurrent follow-up additions.
+func TestFollowUpConcurrency(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Add follow-ups concurrently
+	done := make(chan bool, 5)
+	for i := 0; i < 5; i++ {
+		go func(n int) {
+			err := agent.FollowUp("Concurrent follow-up")
+			if err != nil {
+				t.Errorf("Goroutine %d failed: %v", n, err)
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 5; i++ {
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Timeout waiting for concurrent follow-ups")
+		}
+	}
+}
+
+// TestAgentSteer tests steering functionality.
+func TestAgentSteer(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Steer should not block
+	agent.Steer("Steer message")
+
+	// Verify context was reset
+	ctx := agent.GetContext()
+	if ctx == nil {
+		t.Error("Context should not be nil after steer")
+	}
+}
+
+// TestAgentAbort tests abort functionality.
+func TestAgentAbort(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Abort should not block
+	agent.Abort()
+
+	// Verify we can prompt again after abort
+	err := agent.Prompt("Test after abort")
+	if err != nil {
+		t.Errorf("Failed to prompt after abort: %v", err)
+	}
+}
+
+// TestCompactorInterface tests the Compactor interface.
+func TestCompactorInterface(t *testing.T) {
+	// Create a mock compactor
+	mockCompactor := &mockCompactor{
+		shouldCompact: true,
+	}
+
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+	agent.SetCompactor(mockCompactor)
+
+	// Trigger auto-compact check
+	agent.tryAutoCompact(context.Background())
+
+	if !mockCompactor.called {
+		t.Error("Expected compactor to be called")
+	}
+}
+
+// mockCompactor is a test double for Compactor.
+type mockCompactor struct {
+	shouldCompact bool
+	called        bool
+}
+
+func (m *mockCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+	m.called = true
+	return m.shouldCompact
+}
+
+func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	// Compactor directly modifies ctx.RecentMessages
+	ctx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("[Summary]"),
+	}
+	return &agentctx.CompactionResult{
+		Summary: "[Summary]",
+	}, nil
+}
+
+func (m *mockCompactor) CalculateDynamicThreshold() int {
+	return 100000 // Default threshold for tests
+}
+
+func (m *mockCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
+	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
+}
+
+// TestAgentEvents tests the event channel.
+func TestAgentEvents(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	events := agent.Events()
+	if events == nil {
+		t.Fatal("Event channel should not be nil")
+	}
+
+	// Verify channel is readable (non-blocking)
+	select {
+	case <-events:
+		// Channel has events (unlikely in this test, but ok)
+	default:
+		// Channel is empty, which is expected
+	}
+}
+
+// TestAgentContext tests agent context operations.
+func TestAgentContext(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	// Test initial state
+	ctx := agent.GetContext()
+	if ctx == nil {
+		t.Fatal("Context should not be nil")
+	}
+
+	if len(ctx.RecentMessages) != 0 {
+		t.Errorf("Expected 0 messages, got %d", len(ctx.RecentMessages))
+	}
+
+	// Test setting context
+	newCtx := agentctx.NewAgentContext("new system prompt")
+	agent.SetContext(newCtx)
+
+	retrievedCtx := agent.GetContext()
+	if retrievedCtx.SystemPrompt != "new system prompt" {
+		t.Errorf("Expected system prompt 'new system prompt', got '%s'", retrievedCtx.SystemPrompt)
+	}
+
+	// Existing tools should not be dropped when replacing context.
+	agent.AddTool(&mockTool{name: "ctx_tool"})
+	agent.SetContext(agentctx.NewAgentContext("another prompt"))
+	if len(agent.GetContext().Tools) != 1 {
+		t.Fatalf("expected tools to be preserved on SetContext, got %d", len(agent.GetContext().Tools))
+	}
+	if agent.GetContext().Tools[0].Name() != "ctx_tool" {
+		t.Fatalf("expected preserved tool ctx_tool, got %s", agent.GetContext().Tools[0].Name())
+	}
+}
+
+func TestAgentAutoRetryDefaultsAndToggle(t *testing.T) {
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+
+	if !ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry enabled by default")
+	}
+
+	ag.SetAutoRetry(false)
+	if ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry disabled")
+	}
+
+	ag.SetAutoRetry(true)
+	if !ag.AutoRetryEnabled() {
+		t.Fatal("expected auto retry re-enabled")
+	}
+}
+
+// TestAgentWithTools tests adding tools to agent.
+func TestAgentWithTools(t *testing.T) {
+	agent := NewAgent(llm.Model{}, "test-key", "test")
+
+	mockTool := &mockTool{
+		name: "test_tool",
+	}
+
+	agent.AddTool(mockTool)
+
+	ctx := agent.GetContext()
+	if len(ctx.Tools) != 1 {
+		t.Errorf("Expected 1 tool, got %d", len(ctx.Tools))
+	}
+}
+
+func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
+	finalMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("compacted history state"),
+	}
+
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+	defer ag.Shutdown()
+	ag.runLoopFn = func(_ context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+		stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+			func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
+		)
+		go func() {
+			stream.Push(NewAgentStartEvent())
+			stream.Push(NewAgentEndEvent(finalMessages))
+			stream.End(nil)
+		}()
+		return stream
+	}
+
+	ag.SetContext(&agentctx.AgentContext{
+		SystemPrompt:    "test",
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("before-compact"),
+		},
+	})
+
+	ag.processPrompt(context.Background(), "trigger")
+
+	got := ag.GetMessages()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message after sync, got %d", len(got))
+	}
+	if text := got[0].ExtractText(); text != "compacted history state" {
+		t.Fatalf("expected synced message text, got %q", text)
+	}
+}
+
+// mockTool is a test double for agentctx.Tool.
+type mockTool struct {
+	name string
+}
+
+func (m *mockTool) Name() string {
+	return m.name
+}
+
+func (m *mockTool) Description() string {
+	return "Mock tool for testing"
+}
+
+func (m *mockTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"param": map[string]interface{}{
+			"type":        "string",
+			"description": "Test parameter",
+		},
+	}
+}
+
+func (m *mockTool) Execute(ctx context.Context, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "Mock result"},
+	}, nil
+}
+
+// TestAgentState tests getting agent state.
+func TestAgentState(t *testing.T) {
+	agent := NewAgent(llm.Model{
+		ID:       "test-model",
+		Provider: "test-provider",
+	}, "test-key", "test system prompt")
+
+	state := agent.GetState()
+
+	if state["model"] == nil {
+		t.Error("Model should be in state")
+	}
+
+	if state["systemPrompt"] != "test system prompt" {
+		t.Errorf("Expected system prompt 'test system prompt', got '%v'", state["systemPrompt"])
+	}
+
+	if state["messageCount"].(int) != 0 {
+		t.Errorf("Expected 0 messages, got %d", state["messageCount"].(int))
+	}
+
+	if state["toolCount"].(int) != 0 {
+		t.Errorf("Expected 0 tools, got %d", state["toolCount"].(int))
+	}
+}

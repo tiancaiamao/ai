@@ -219,37 +219,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	elapsed := time.Since(startTime)
 
-	// Check if context was canceled (e.g., by /abort command)
-	if cmdCtx.Err() == context.Canceled {
-		// Kill entire process group to ensure all child processes are terminated
-		if cmd.Process != nil {
-			pgid, err := syscall.Getpgid(cmd.Process.Pid)
-			if err == nil {
-				// Kill the process group (negative PID)
-				syscall.Kill(-pgid, syscall.SIGKILL)
-				slog.Info("[Bash] Killed process group due to cancellation", "pgid", pgid)
-			} else {
-				// Fallback: kill just the process
-				syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
-				slog.Info("[Bash] Killed single process due to cancellation (no process group)", "pid", cmd.Process.Pid)
-			}
-		}
-
-		slog.Info("[Bash] Command canceled",
-			"command", command,
-			"elapsed", elapsed.Seconds(),
-			"outputSize", output.Len())
-
-		resultText := fmt.Sprintf("Command canceled.\n\nPartial output (%d bytes):\n%s", output.Len(), output.String())
-		return []agentctx.ContentBlock{
-			agentctx.TextContent{
-				Type: "text",
-				Text: resultText,
-			},
-		}, nil
-	}
-
-	// Check if command timed out
+	// Check result
 	if cmdCtx.Err() == context.DeadlineExceeded {
 		// Kill entire process group to ensure all child processes are terminated
 		if cmd.Process != nil {
@@ -277,6 +247,21 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				"For long-running tasks, use the /tmux skill for proper background management.",
 			execTimeout, output.Len(), output.String())
 
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: resultText,
+			},
+		}, nil
+	}
+
+	if cmdCtx.Err() == context.Canceled {
+		slog.Info("[Bash] Command canceled",
+			"command", command,
+			"elapsed", elapsed.Seconds(),
+			"outputSize", output.Len())
+
+		resultText := fmt.Sprintf("Command canceled.\n\nOutput:\n%s", output.String())
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",

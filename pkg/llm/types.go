@@ -21,7 +21,6 @@ type LLMContext struct {
 	SystemPrompt string       `json:"systemPrompt,omitempty"`
 	Messages     []LLMMessage `json:"messages"`
 	Tools        []LLMTool    `json:"tools,omitempty"`
-	ThinkingLevel string       `json:"thinkingLevel,omitempty"` // Level of thinking to include in responses
 }
 
 // LLMMessage represents a message in the LLM conversation.

@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/logger"
@@ -269,8 +270,103 @@ func DefaultConfig() *Config {
 		Concurrency:       DefaultConcurrencyConfig(),
 		ToolOutput:        DefaultToolOutputConfig(),
 		Log:               DefaultLogConfig(),
-		TaskTracking:      true, // Default enabled
-		ContextManagement: true, // Default enabled
+		TaskTracking:      false, // Default disabled
+		ContextManagement: false, // Default disabled
 	}
 }
 
+// ToLoopConfig converts Config to agent.LoopConfig.
+// This establishes the relationship between application config and agent config.
+//
+// Usage:
+//
+//	cfg := config.LoadConfig(path)
+//	loopCfg := cfg.ToLoopConfig(
+//	    config.WithCompactor(myCompactor),
+//	    config.WithContextWindow(204800),
+//	)
+//	agent := agent.NewAgentFromConfig(model, apiKey, prompt, loopCfg)
+func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
+	loopCfg := agent.DefaultLoopConfig()
+
+	// Override with config file values if present
+	if c.Concurrency != nil {
+		loopCfg.Executor = agent.NewExecutorPool(map[string]int{
+			"maxConcurrentTools": c.Concurrency.MaxConcurrentTools,
+			"queueTimeout":       c.Concurrency.QueueTimeout,
+		})
+	}
+
+	if c.ToolOutput != nil {
+		loopCfg.ToolOutput = agent.ToolOutputLimits{
+			MaxChars: c.ToolOutput.MaxChars,
+		}
+	}
+
+	// Explicitly set these flags based on config (not just conditional set to true)
+	loopCfg.TaskTrackingEnabled = c.TaskTracking
+	loopCfg.ContextManagementEnabled = c.ContextManagement
+
+	// Apply options last (they can override config values)
+	for _, opt := range opts {
+		opt(loopCfg)
+	}
+
+	return loopCfg
+}
+
+// LoopConfigOption is a functional option for configuring LoopConfig.
+type LoopConfigOption func(*agent.LoopConfig)
+
+// WithCompactor sets a single compactor for context compression.
+// Deprecated: Use WithCompactors([]agent.Compactor{...}) for multiple compactors.
+func WithCompactor(compactor agent.Compactor) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		if compactor != nil {
+			cfg.Compactors = []agent.Compactor{compactor}
+		}
+	}
+}
+
+// WithCompactors sets multiple compactors for context compression.
+// Array order determines execution priority (first trigger wins).
+func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Compactors = compactors
+	}
+}
+
+// WithContextWindow sets the model context window size.
+func WithContextWindow(window int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ContextWindow = window
+	}
+}
+
+// WithThinkingLevel sets the thinking level.
+func WithThinkingLevel(level string) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ThinkingLevel = level
+	}
+}
+
+// WithToolCallCutoff sets the tool call cutoff.
+func WithToolCallCutoff(cutoff int) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolCallCutoff = cutoff
+	}
+}
+
+// WithExecutor sets the executor for the loop config.
+func WithExecutor(executor *agent.ExecutorPool) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.Executor = executor
+	}
+}
+
+// WithToolOutputLimits sets the tool output limits for the loop config.
+func WithToolOutputLimits(limits agent.ToolOutputLimits) LoopConfigOption {
+	return func(cfg *agent.LoopConfig) {
+		cfg.ToolOutput = limits
+	}
+}

@@ -234,24 +234,22 @@ func StreamAnthropic(
 						// Format: {"properties": "{\"   then   "path\">value"}"   then   "}"}
 						// We need to convert this to standard JSON
 						rawJSON := deltaEvent.Delta.PartialJSON
-
 						// Try to detect and fix XML-tag-style format
 						if strings.Contains(rawJSON, "\">") {
-							convertedJSON := normalizeMiniMaxArguments(rawJSON)
-							if convertedJSON != "" {
-								rawJSON = convertedJSON
-							}
+							// This looks like XML-tag format, try to extract the actual JSON
+							// Format seems to be: {"properties": "{\" followed by "param\">value" followed by "}"}
+							// We'll need to parse this specially
+							// For now, accumulate as-is and handle in ToLLMMessage
 						}
-
-						// Create tool call with this chunk
+						// Update tool call arguments by appending to existing
 						tc := &ToolCall{
 							Function: FunctionCall{
 								Arguments: rawJSON,
 							},
 						}
 						partial.AppendToolCall(deltaEvent.Index, tc)
-
-						// Send delta event
+						// For the event, send the current accumulated state (with ID, name, and arguments)
+						// We need to get the current state from partial.ToolCalls
 						partial.mu.Lock()
 						if existingTC, ok := partial.ToolCalls[deltaEvent.Index]; ok {
 							stream.Push(LLMToolCallDeltaEvent{
@@ -558,105 +556,6 @@ func mapAnthropicStopReason(reason string) string {
 	default:
 		return reason
 	}
-}
-
-// normalizeMiniMaxArguments converts MiniMax's XML-tag style partial JSON to standard JSON
-// MiniMax sends chunks like: {"properties": "{\" followed by "param">value" followed by "}"}
-// This converts each chunk to valid JSON that can be accumulated
-func normalizeMiniMaxArguments(rawJSON string) string {
-	trimmed := strings.TrimSpace(rawJSON)
-
-	// Handle the starting chunk: {"properties": "{"
-	if trimmed == `{"properties": "{\"` || trimmed == `{"properties": "{\""` {
-		return "{" // Start of standard JSON object
-	}
-
-	// Handle the ending chunk: }" or }}"}
-	if trimmed == "\"}" || trimmed == "}\"" {
-		return "}"
-	}
-	if trimmed == "}" || trimmed == "\"}}}" {
-		return "}"
-	}
-
-	// Handle middle chunks with "param">value" pattern
-	// Pattern: "param">value or "param">value",
-	// Also handle comma-delimited: "param1">value1","param2">value2
-	if strings.Contains(trimmed, "\">") {
-		// Check if we have multiple comma-delimited params
-		if strings.Contains(trimmed, `","`) {
-			// Split by comma and convert each part (WITHOUT trailing commas)
-			parts := strings.Split(trimmed, `","`)
-			var results []string
-			for i, part := range parts {
-				part = strings.TrimSpace(part)
-				if strings.Contains(part, `">`) {
-					converted := convertSingleParamChunkNoComma(part)
-					if converted != "" {
-						results = append(results, converted)
-					}
-				} else if i == 0 {
-					// First part without ">" might be a continuation
-					results = append(results, part)
-				}
-			}
-			if len(results) > 0 {
-				return strings.Join(results, ", ")
-			}
-		} else {
-			// Single param chunk - add trailing comma
-			return convertSingleParamChunk(trimmed)
-		}
-	}
-
-	// Handle continuation chunks (just values or partial JSON)
-	// If it looks like a value continuation, just return as-is
-	// This handles cases where the value spans multiple chunks
-	if !strings.HasPrefix(trimmed, `"`) && !strings.HasPrefix(trimmed, `{`) {
-		return trimmed
-	}
-
-	// Default: return as-is (might be valid JSON already)
-	return rawJSON
-}
-
-// convertSingleParamChunk converts a single "param">value chunk to JSON WITH trailing comma
-func convertSingleParamChunk(chunk string) string {
-	result := convertSingleParamChunkNoComma(chunk)
-	if result != "" {
-		return result + ", "
-	}
-	return result
-}
-
-// convertSingleParamChunkNoComma converts a single "param">value chunk to JSON WITHOUT trailing comma
-func convertSingleParamChunkNoComma(chunk string) string {
-	chunk = strings.TrimSpace(chunk)
-	if !strings.Contains(chunk, `">`) {
-		return chunk
-	}
-
-	// Split on ">"
-	parts := strings.SplitN(chunk, `">`, 2)
-	if len(parts) == 2 {
-		key := strings.Trim(parts[0], `"`)
-		value := parts[1]
-		// Remove trailing markers from value:
-		// - "}" -> remove both (MiniMax format ending)
-		// - " -> remove only the quote (value ending)
-		// - } -> remove only the brace (MiniMax format ending)
-		if strings.HasSuffix(value, `"}`) {
-			value = value[:len(value)-2]
-		} else if strings.HasSuffix(value, `"`) {
-			value = value[:len(value)-1]
-		} else if strings.HasSuffix(value, `}`) {
-			value = value[:len(value)-1]
-		}
-		// Return standard JSON format
-		return fmt.Sprintf(`"%s": "%s"`, key, value)
-	}
-
-	return chunk
 }
 
 // parseXMLTagStyleArguments parses MiniMax's XML-tag style arguments

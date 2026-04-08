@@ -9,7 +9,6 @@ import (
 
 var (
 	enabledEvents       atomic.Uint64 // Per-event enablement (bit flags)
-	enableUnknownEvents atomic.Bool
 	dynamicEventsMu     sync.RWMutex
 	enabledDynamicEvent = make(map[string]struct{})
 )
@@ -34,16 +33,9 @@ func KnownEvents() []string {
 // DisableAllEvents disables all known events.
 func DisableAllEvents() {
 	enabledEvents.Store(0)
-	enableUnknownEvents.Store(false)
 	dynamicEventsMu.Lock()
 	clear(enabledDynamicEvent)
 	dynamicEventsMu.Unlock()
-}
-
-// SetEnableUnknownEvents controls whether unknown event names are treated as enabled.
-// This is useful for "trace all" mode so newly added events don't require registry updates.
-func SetEnableUnknownEvents(enabled bool) {
-	enableUnknownEvents.Store(enabled)
 }
 
 // ResetToDefaultEvents resets enablement to the default set and returns them.
@@ -105,9 +97,6 @@ func IsEventEnabled(eventName string) bool {
 		dynamicEventsMu.RUnlock()
 		return ok
 	}
-	if enableUnknownEvents.Load() {
-		return true
-	}
 	return false
 }
 
@@ -125,9 +114,6 @@ func GetEnabledEvents() []string {
 		events = append(events, name)
 	}
 	dynamicEventsMu.RUnlock()
-	if enableUnknownEvents.Load() {
-		events = append(events, "all:*")
-	}
 	sort.Strings(events)
 	return events
 }
@@ -230,53 +216,34 @@ var eventNameToBit = map[string]int{
 	"event_loop_end":       3,  // legacy alias
 
 	// Log events.
-	"log:info":                            24,
-	"log:warn":                            25,
-	"log:error":                           26,
-	"trace_overflow":                      28,
-	"tool_call_normalized":                29,
-	"tool_call_unresolved":                30,
-	"tool_call_invalid_args":              31,
-	"assistant_tool_tag_parse_failed":     32,
-	"llm_request_snapshot":                33,
-	"llm_request_json":                    34,
-	"llm_response_json":                   35,
-	"tool_summary":                        36,
-	"tool_summary_batch":                  37,
-	"llm_retry_scheduled":                 38,
-	"llm_retry_aborted":                   39,
-	"llm_retry_exhausted":                 40,
-	"tool_output_truncated":               41,
-	"truncate_compact_hint_read":          42,
-	"truncate_compact_hint_processed":     43,
-	"tool_output_truncated_via_hint":      44,
+	"log:info":                        24,
+	"log:warn":                        25,
+	"log:error":                       26,
+	"trace_overflow":                  28,
+	"tool_call_normalized":            29,
+	"tool_call_unresolved":            30,
+	"tool_call_invalid_args":          31,
+	"assistant_tool_tag_parse_failed": 32,
+	"llm_request_snapshot":            33,
+	"llm_request_json":                34,
+	"llm_response_json":               35,
+	"tool_summary":                    36,
+	"tool_summary_batch":              37,
+	"llm_retry_scheduled":             38,
+	"llm_retry_aborted":               39,
+	"llm_retry_exhausted":                40,
+	"tool_output_truncated":              41,
+	"truncate_compact_hint_read":         42,
+	"truncate_compact_hint_processed":      43,
+	"tool_output_truncated_via_hint":     44,
 	"compact_skipped_via_hint_confidence": 45,
-	"compact_performed_via_hint":          46,
-	"hint_processing_disabled":            47,
+	"compact_performed_via_hint":         46,
+	"hint_processing_disabled":              47,
 	"truncate_compact_hint_start":         48,
 	"truncate_compact_hint_skip":          49,
-	"truncate_compact_hint_read_attempt":  50,
-	"context_update_reminder":             51,
-	"context_decision_reminder":           52,
-	"context_snapshot_evaluated":          53,
-	"context_trigger_checked":             54,
-	"context_mgmt_trigger":                54, // alias
-	"context_checkpoint_created":          55,
-	"context_checkpoint_loaded":           56,
-	"context_journal_entry_appended":      57,
-	"context_snapshot_reconstructed":      58,
-	"context_message_truncated":           59,
-	"context_mgmt_messages_truncated":     59, // alias
-	"context_truncate_applied":            60,
-	"context_mgmt_invalid_id":             60, // alias
-	"context_mgmt_journal_append_failed":  60, // alias
-	"context_management":                  61,
-	"context_mgmt_mode_switch":            61, // alias
-	"context_management_decision":         62,
-	"context_mgmt_tool_call":              62, // alias
-	"context_mgmt_llm_context_updated":    62, // alias
-	"context_management_skipped":          63,
-	"context_mgmt_no_action":              63, // alias
+	"truncate_compact_hint_read_attempt":   50,
+	"context_update_reminder":              51,
+	"context_decision_reminder":            52,
 }
 
 var defaultEnabledEvents = []string{
@@ -295,7 +262,7 @@ var defaultEnabledEvents = []string{
 	"message_start",
 	"message_end",
 	// "message_update",    // high frequency
-	// "assistant_text",
+	"assistant_text",
 	// "text_delta",        // high frequency, enable via -trace or config
 	// "thinking_delta",    // high frequency, enable via -trace or config
 	// "tool_call_delta",   // high frequency, enable via -trace or config
@@ -320,17 +287,6 @@ var defaultEnabledEvents = []string{
 	"compact_performed_via_hint",
 	"context_update_reminder",
 	"context_decision_reminder",
-	"context_snapshot_evaluated",
-	"context_trigger_checked",
-	"context_checkpoint_created",
-	"context_checkpoint_loaded",
-	"context_journal_entry_appended",
-	"context_snapshot_reconstructed",
-	"context_message_truncated",
-	"context_truncate_applied",
-	"context_management",
-	"context_management_decision",
-	"context_management_skipped",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -363,8 +319,6 @@ var eventSelectorGroups = map[string][]string{
 		"tool_summary_batch",
 		"tool_output_truncated",
 		"truncate_compact_hint_read",
-		"context_message_truncated",
-		"context_truncate_applied",
 	},
 	"event": {
 		"prompt",
@@ -379,15 +333,6 @@ var eventSelectorGroups = map[string][]string{
 		"compaction",
 		"context_update_reminder",
 		"context_decision_reminder",
-		"context_snapshot_evaluated",
-		"context_trigger_checked",
-		"context_checkpoint_created",
-		"context_checkpoint_loaded",
-		"context_journal_entry_appended",
-		"context_snapshot_reconstructed",
-		"context_management",
-		"context_management_decision",
-		"context_management_skipped",
 	},
 	"log": {
 		"log:info",

@@ -220,8 +220,6 @@ type CompactResult struct {
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
 	TokensAfter      int    `json:"tokensAfter,omitempty"`
-	MessagesBefore   int    `json:"messagesBefore,omitempty"`
-	MessagesAfter    int    `json:"messagesAfter,omitempty"`
 }
 
 // WorkflowTask represents a single task in a workflow.

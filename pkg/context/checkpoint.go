@@ -13,40 +13,34 @@ const (
 	CurrentLinkName      = "current"
 )
 
-// CheckpointInfo represents metadata about a checkpoint
+// CheckpointInfo represents metadata about a checkpoint.
 type CheckpointInfo struct {
-	Turn               int    `json:"turn"`
-	MessageIndex       int    `json:"message_index"`
-	Path               string `json:"path"`
-	CreatedAt          string `json:"created_at"`
-	LLMContextChars    int    `json:"llm_context_chars,omitempty"`
-	RecentMessagesCount int   `json:"recent_messages_count,omitempty"`
+	Turn                int    `json:"turn"`
+	MessageIndex        int    `json:"message_index"`
+	Path                string `json:"path"`
+	CreatedAt           string `json:"created_at"`
+	LLMContextChars     int    `json:"llm_context_chars,omitempty"`
+	RecentMessagesCount int    `json:"recent_messages_count,omitempty"`
 }
 
-// CreateCheckpointDir creates a new checkpoint directory
-// Uses a sequential counter instead of turn number to avoid overwriting checkpoints
-// when multiple operations (like compact) happen at the same turn.
+// CreateCheckpointDir creates a new checkpoint directory.
+// Uses a sequential counter instead of turn number to avoid overwriting
+// when multiple operations happen at the same turn.
 func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
-	// Create checkpoints directory if it doesn't exist
 	checkpointsDir := filepath.Join(sessionDir, "checkpoints")
 	if err := os.MkdirAll(checkpointsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create checkpoints directory: %w", err)
 	}
 
-	// Load checkpoint index to find the next checkpoint ID
 	idx, err := LoadCheckpointIndex(sessionDir)
 	if err != nil {
-		// If index doesn't exist yet, start from 0
 		if os.IsNotExist(err) {
-			idx = &CheckpointIndex{
-				Checkpoints: []CheckpointInfo{},
-			}
+			idx = &CheckpointIndex{Checkpoints: []CheckpointInfo{}}
 		} else {
 			return nil, fmt.Errorf("failed to load checkpoint index: %w", err)
 		}
 	}
 
-	// Determine next checkpoint ID
 	nextID := len(idx.Checkpoints)
 	checkpointName := fmt.Sprintf(CheckpointDirPattern, nextID)
 	checkpointPath := filepath.Join(checkpointsDir, checkpointName)
@@ -57,7 +51,7 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 
 	info := &CheckpointInfo{
 		Turn:        turn,
-		MessageIndex: 0, // Will be set by caller
+		MessageIndex: 0,
 		Path:        filepath.Join("checkpoints", checkpointName),
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -65,25 +59,18 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 	return info, nil
 }
 
-// UpdateCurrentLink updates the current/ symlink to point to the latest checkpoint
+// UpdateCurrentLink updates the current/ symlink to point to the latest checkpoint.
 func UpdateCurrentLink(sessionDir string, checkpointPath string) error {
 	currentLinkPath := filepath.Join(sessionDir, CurrentLinkName)
-	targetPath := checkpointPath
 
-	// Remove existing symlink if it exists
 	if _, err := os.Lstat(currentLinkPath); err == nil {
 		if err := os.Remove(currentLinkPath); err != nil {
 			return fmt.Errorf("failed to remove existing current link: %w", err)
 		}
 	}
 
-	// Create new symlink
-	// On Windows, we need to handle junctions differently, but Windows 10+ supports symlinks
-	if err := os.Symlink(targetPath, currentLinkPath); err != nil {
-		// If symlink fails on Windows, try creating a junction
+	if err := os.Symlink(checkpointPath, currentLinkPath); err != nil {
 		if runtime.GOOS == "windows" {
-			// Fallback to directory junction logic could go here
-			// For now, return error
 			return fmt.Errorf("failed to create symlink: %w (note: symlinks require Developer Mode on Windows)", err)
 		}
 		return fmt.Errorf("failed to create symlink: %w", err)
@@ -92,7 +79,7 @@ func UpdateCurrentLink(sessionDir string, checkpointPath string) error {
 	return nil
 }
 
-// LoadLatestCheckpoint loads the most recent checkpoint
+// LoadLatestCheckpoint loads the most recent checkpoint info.
 func LoadLatestCheckpoint(sessionDir string) (*CheckpointInfo, error) {
 	idx, err := LoadCheckpointIndex(sessionDir)
 	if err != nil {
@@ -106,7 +93,7 @@ func LoadLatestCheckpoint(sessionDir string) (*CheckpointInfo, error) {
 	return &idx.Checkpoints[len(idx.Checkpoints)-1], nil
 }
 
-// LoadCheckpointAtTurn loads a checkpoint at a specific turn
+// LoadCheckpointAtTurn loads a checkpoint at a specific turn.
 func LoadCheckpointAtTurn(sessionDir string, turn int) (*CheckpointInfo, error) {
 	idx, err := LoadCheckpointIndex(sessionDir)
 	if err != nil {
@@ -121,17 +108,15 @@ func LoadCheckpointAtTurn(sessionDir string, turn int) (*CheckpointInfo, error) 
 	return info, nil
 }
 
-// GetCurrentCheckpointPath returns the absolute path that the current/ symlink points to
+// GetCurrentCheckpointPath returns the absolute path the current/ symlink points to.
 func GetCurrentCheckpointPath(sessionDir string) (string, error) {
 	currentLinkPath := filepath.Join(sessionDir, CurrentLinkName)
 
-	// Read the symlink
 	target, err := os.Readlink(currentLinkPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read current link: %w", err)
 	}
 
-	// Convert to absolute path if relative
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(sessionDir, target)
 	}

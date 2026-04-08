@@ -13,7 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,13 +37,49 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// Compile-time check: AgentLoop satisfies agent.AgentBackend.
-var _ agent.AgentBackend = (*AgentLoop)(nil)
+// CommandHandler is the function signature for handling control commands.
+// args: the remaining arguments after the command name
+// sess: the current session (may be nil for commands that don't need session)
+// Returns the response text and an optional error.
+type CommandHandler func(args string, sess *Session) (string, error)
 
-// controlPayload is the JSON payload for AgentLoop control commands.
-type controlPayload struct {
-	Args       string `json:"args"`
-	SessionKey string `json:"sessionKey"`
+// CommandRegistry stores registered control commands.
+type CommandRegistry struct {
+	commands map[string]CommandHandler
+	mu       sync.RWMutex
+}
+
+// NewCommandRegistry creates a new command registry.
+func NewCommandRegistry() *CommandRegistry {
+	return &CommandRegistry{
+		commands: make(map[string]CommandHandler),
+	}
+}
+
+// Register registers a command handler.
+func (r *CommandRegistry) Register(name string, handler CommandHandler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands[name] = handler
+}
+
+// Get retrieves a command handler by name.
+func (r *CommandRegistry) Get(name string) (CommandHandler, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	handler, ok := r.commands[name]
+	return handler, ok
+}
+
+// List returns all registered command names.
+func (r *CommandRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.commands))
+	for name := range r.commands {
+		names = append(names, name)
+	}
+	return names
 }
 
 // AgentLoop implements the message processing loop using ai agent core.
@@ -83,7 +119,7 @@ type AgentLoop struct {
 	thinkingLevelMu sync.RWMutex
 
 	// Command registry
-	commands *agent.CommandRegistry
+	commands *CommandRegistry
 
 	// Statistics
 	messageCount atomic.Int64
@@ -113,7 +149,7 @@ func (c *clawCompactor) Update(sess *session.Session, comp *compact.Compactor) {
 	c.compactor = comp
 }
 
-func (c *clawCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
+func (c *clawCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	c.mu.Lock()
 	sess := c.sess
 	comp := c.compactor
@@ -122,33 +158,35 @@ func (c *clawCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 	if comp == nil || sess == nil {
 		return false
 	}
-	if !comp.ShouldCompact(messages) {
+	if !comp.ShouldCompact(ctx) {
 		return false
 	}
 	return sess.CanCompact(comp)
 }
 
-func (c *clawCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
+func (c *clawCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.mu.Lock()
 	sess := c.sess
 	comp := c.compactor
 	c.mu.Unlock()
 
 	if sess == nil || comp == nil {
-		return &agent.CompactionResult{Messages: messages}, nil
+		return &agentctx.CompactionResult{}, nil
 	}
 
 	sessionResult, err := sess.Compact(comp)
 	if err != nil {
 		if session.IsNonActionableCompactionError(err) {
-			return &agent.CompactionResult{Messages: messages}, nil
+			return &agentctx.CompactionResult{}, nil
 		}
 		return nil, err
 	}
 
-	return &agent.CompactionResult{
+	// Update ctx.RecentMessages with compacted messages
+	ctx.RecentMessages = sess.GetMessages()
+
+	return &agentctx.CompactionResult{
 		Summary:      sessionResult.Summary,
-		Messages:     sess.GetMessages(),
 		TokensBefore: sessionResult.TokensBefore,
 		TokensAfter:  sessionResult.TokensAfter,
 	}, nil
@@ -165,7 +203,7 @@ func (c *clawCompactor) CalculateDynamicThreshold() int {
 	return comp.CalculateDynamicThreshold()
 }
 
-func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+func (c *clawCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
 	c.mu.Lock()
 	comp := c.compactor
 	c.mu.Unlock()
@@ -173,7 +211,7 @@ func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) 
 	if comp == nil {
 		return 0
 	}
-	return comp.EstimateContextTokens(messages)
+	return comp.EstimateContextTokens(ctx)
 }
 
 // Config 是 AgentLoop 的配置
@@ -238,7 +276,7 @@ func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
 	}
 
 	// 创建命令注册表
-	commands := agent.NewCommandRegistry()
+	commands := NewCommandRegistry()
 
 	loop := &AgentLoop{
 		bus:             msgBus,
@@ -576,7 +614,7 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 	// 从 session 恢复消息
 	existingMessages := sess.GetMessages()
 	if len(existingMessages) > 0 {
-		agentCtx.Messages = existingMessages
+		agentCtx.RecentMessages = existingMessages
 		slog.Info("[AgentLoop] Restored messages from session", "count", len(existingMessages))
 	}
 
@@ -610,9 +648,20 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 
 // loopConfig builds LoopConfig from AgentLoop's configuration.
 func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
-	cfg := agent.DefaultLoopConfig()
-	cfg.Compactor = compactor
-	cfg.ContextWindow = a.model.ContextWindow
+	// Start with config defaults (if available)
+	var cfg *agent.LoopConfig
+	if a.appConfig != nil {
+		cfg = a.appConfig.ToLoopConfig(
+			aiconfig.WithCompactor(compactor),
+			aiconfig.WithContextWindow(a.model.ContextWindow),
+		)
+	}
+	// Fallback if appConfig is nil or ToLoopConfig returned nil
+	if cfg == nil {
+		cfg = agent.DefaultLoopConfig()
+		cfg.Compactors = []agentctx.Compactor{compactor}
+		cfg.ContextWindow = a.model.ContextWindow
+	}
 
 	// Override with runtime thinking level
 	a.thinkingLevelMu.RLock()
@@ -654,7 +703,7 @@ func (a *AgentLoop) CloseSession(sessionKey string) {
 }
 
 // Close 关闭所有会话
-func (a *AgentLoop) Close() error {
+func (a *AgentLoop) Close() {
 	a.Stop()
 
 	a.sessionsMu.Lock()
@@ -664,97 +713,30 @@ func (a *AgentLoop) Close() error {
 		sess.Agent.Shutdown()
 	}
 	a.sessions = make(map[string]*Session)
-
-	return nil
 }
 
-// ---------------------------------------------------------------------------
-// AgentBackend interface implementation
-// ---------------------------------------------------------------------------
-
-const defaultSessionKey = "default"
-
-// HandleCommand dispatches a command through the agent.CommandRegistry.
-func (a *AgentLoop) HandleCommand(ctx context.Context, cmd agent.Command) (any, error) {
-	return a.commands.Handle(ctx, cmd)
-}
-
-// Prompt sends a user message and waits for the response.
-func (a *AgentLoop) Prompt(ctx context.Context, message string) error {
-	_, err := a.ProcessDirect(ctx, message, defaultSessionKey)
-	return err
-}
-
-// Steer injects a steering message into the current conversation.
-func (a *AgentLoop) Steer(ctx context.Context, message string) error {
-	_, err := a.ProcessDirect(ctx, message, defaultSessionKey)
-	return err
-}
-
-// FollowUp sends a follow-up message in the current conversation.
-func (a *AgentLoop) FollowUp(ctx context.Context, message string) error {
-	_, err := a.ProcessDirect(ctx, message, defaultSessionKey)
-	return err
-}
-
-// Abort cancels the current ongoing request.
-// NOTE: aiclaw's underlying Agent does not yet support mid-request cancellation,
-// so this is currently a no-op. Future work: add cancel context to Agent.
-func (a *AgentLoop) Abort() error {
-	// No-op until Agent supports external cancellation.
-	return nil
-}
-
-// parseControlPayload extracts controlPayload from an agent.Command.
-func (a *AgentLoop) parseControlPayload(cmd agent.Command) (controlPayload, *Session, error) {
-	var p controlPayload
-	if len(cmd.Payload) > 0 {
-		if err := json.Unmarshal(cmd.Payload, &p); err != nil {
-			return p, nil, fmt.Errorf("invalid payload: %w", err)
-		}
-	}
-	sess, _ := a.GetSession(p.SessionKey)
-	return p, sess, nil
-}
-
-// RegisterCommand registers a custom control command using the legacy signature.
-// The handler receives (args, session) and returns (response, error).
-func (a *AgentLoop) RegisterCommand(name string, handler func(args string, sess *Session) (string, error)) {
-	a.commands.Register(name, func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		return handler(p.Args, sess)
-	}, agent.CommandMeta{Source: "external"})
+// RegisterCommand registers a custom control command.
+// name: the command name (without the "/" prefix)
+// handler: the function to handle the command
+func (a *AgentLoop) RegisterCommand(name string, handler CommandHandler) {
+	a.commands.Register(name, handler)
 }
 
 // registerBuiltinCommands registers the built-in control commands.
 func (a *AgentLoop) registerBuiltinCommands() {
-	meta := func(desc string) agent.CommandMeta {
-		return agent.CommandMeta{Description: desc, Source: "builtin"}
-	}
-
-	// /help - show available commands
-	a.commands.Register("help", func(ctx context.Context, cmd agent.Command) (any, error) {
+	a.commands.Register("help", func(args string, sess *Session) (string, error) {
 		return a.cmdHelp(), nil
-	}, meta("Show available commands"))
-
+	})
 	// /commands - list available skills
-	a.commands.Register("commands", func(ctx context.Context, cmd agent.Command) (any, error) {
+	a.commands.Register("commands", func(args string, sess *Session) (string, error) {
 		return a.cmdCommands(), nil
-	}, meta("List available skills"))
-
-	// /skills - list or reload skills
-	a.commands.Register("skills", func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, _, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		if p.Args == "reload" {
-			count, warnings, reloadErr := a.ReloadSkills()
-			if reloadErr != nil {
-				return fmt.Sprintf("Failed to reload skills: %v", reloadErr), nil
+	})
+	// /skills - list skills or reload
+	a.commands.Register("skills", func(args string, sess *Session) (string, error) {
+		if args == "reload" {
+			count, warnings, err := a.ReloadSkills()
+			if err != nil {
+				return fmt.Sprintf("Failed to reload skills: %v", err), nil
 			}
 			result := fmt.Sprintf("Reloaded %d skills", count)
 			if len(warnings) > 0 {
@@ -763,83 +745,33 @@ func (a *AgentLoop) registerBuiltinCommands() {
 			return result, nil
 		}
 		return a.cmdCommands(), nil
-	}, meta("List or reload skills"))
-
-	// /session - show session info
-	a.commands.Register("session", func(ctx context.Context, cmd agent.Command) (any, error) {
-		_, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
+	})
+	a.commands.Register("session", func(args string, sess *Session) (string, error) {
 		return a.cmdSession(sess), nil
-	}, meta("Show current session info"))
-
-	// /history - show conversation history
-	a.commands.Register("history", func(ctx context.Context, cmd agent.Command) (any, error) {
-		_, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
+	})
+	a.commands.Register("history", func(args string, sess *Session) (string, error) {
 		return a.cmdHistory(sess), nil
-	}, meta("Show conversation history"))
-
-	// /messages - alias for /history
-	a.commands.Register("messages", func(ctx context.Context, cmd agent.Command) (any, error) {
-		_, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
+	})
+	a.commands.Register("messages", func(args string, sess *Session) (string, error) {
 		return a.cmdHistory(sess), nil
-	}, meta("Show conversation messages (alias for /history)"))
-
-	// /clear - clear conversation
-	a.commands.Register("clear", func(ctx context.Context, cmd agent.Command) (any, error) {
-		_, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
+	})
+	a.commands.Register("clear", func(args string, sess *Session) (string, error) {
 		return a.cmdClear(sess), nil
-	}, meta("Clear conversation history"))
-
-	// /model - switch or show model
-	a.commands.Register("model", func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		return a.cmdModel(p.Args, sess)
-	}, meta("Switch or show model"))
-
-	// /traceevent - send trace events
-	a.commands.Register("traceevent", func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, _, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		return a.cmdTraceevent(p.Args), nil
-	}, meta("Send trace events"))
-
-	// /show - show settings and usage
-	a.commands.Register("show", func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		return a.cmdShow(p.Args, sess), nil
-	}, meta("Show settings and usage"))
-
-	// /thinking - toggle thinking mode
-	a.commands.Register("thinking", func(ctx context.Context, cmd agent.Command) (any, error) {
-		p, sess, err := a.parseControlPayload(cmd)
-		if err != nil {
-			return nil, err
-		}
-		return a.cmdThinking(p.Args, sess), nil
-	}, meta("Toggle thinking mode"))
-
-	a.commands.Register("abort", func(ctx context.Context, cmd agent.Command) (any, error) {
-		return nil, a.Abort()
-	}, meta("Abort current operation"))
+	})
+	a.commands.Register("model", func(args string, sess *Session) (string, error) {
+		return a.cmdModel(args, sess)
+	})
+	a.commands.Register("traceevent", func(args string, sess *Session) (string, error) {
+		return a.cmdTraceevent(args), nil
+	})
+	// show commands - show settings and usage
+	a.commands.Register("show", func(args string, sess *Session) (string, error) {
+		return a.cmdShow(args, sess), nil
+	})
+	// thinking command - toggle thinking mode
+	a.commands.Register("thinking", func(args string, sess *Session) (string, error) {
+		return a.cmdThinking(args, sess), nil
+	})
 }
 
 // Helper
@@ -1219,50 +1151,49 @@ func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKe
 		return "", fmt.Errorf("empty command")
 	}
 
-	cmdName := fields[0]
-	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmdName))
+	cmd := fields[0]
+	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmd))
 
-	// Build control payload and dispatch through agent.CommandRegistry
-	payload, _ := json.Marshal(controlPayload{
-		Args:       args,
-		SessionKey: sessionKey,
-	})
-
-	agentCmd := agent.Command{
-		Name:    cmdName,
-		Payload: payload,
+	// 从命令注册表中查找处理器
+	handler, ok := a.commands.Get(cmd)
+	if ok {
+		return handler(args, sess)
 	}
 
-	result, err := a.commands.Handle(ctx, agentCmd)
-	if err != nil {
-		// If command not found, return helpful message
-		var notFound agent.ErrCommandNotFound
-		if errors.As(err, &notFound) {
-			return fmt.Sprintf("Unknown command: %s\nUse /help for available commands", cmdName), nil
-		}
-		return "", err
-	}
-
-	// Convert result to string
-	if s, ok := result.(string); ok {
-		return s, nil
-	}
-	b, _ := json.Marshal(result)
-	return string(b), nil
+	// 命令未找到
+	return fmt.Sprintf("Unknown command: %s\nUse /help for available commands", cmd), nil
 }
 
 // cmdHelp 显示帮助信息
 func (a *AgentLoop) cmdHelp() string {
-	metas := a.commands.ListCommands()
+	// Define command descriptions
+	descriptions := map[string]string{
+		"help":       "Show this help message",
+		"commands":   "List available skills (alias: /skills)",
+		"skills":     "List available skills (alias: /commands)",
+		"session":    "Show current session info",
+		"history":    "Show message history (alias: /messages)",
+		"messages":   "Show message history (alias: /history)",
+		"clear":      "Clear current session messages",
+		"model":      "List or switch AI models",
+		"traceevent": "Manage trace events for debugging",
+		"cron":       "Manage cron jobs",
+		"show":       "Show settings or usage (usage: /show [settings|usage])",
+		"thinking":   "Toggle or set thinking level (usage: /thinking [off|minimal|low|medium|high|xhigh])",
+	}
+
+	commands := a.commands.List()
+	sort.Strings(commands)
 
 	var b strings.Builder
 	b.WriteString("```\n")
 	b.WriteString("Control Commands:\n\n")
-	for _, m := range metas {
-		if m.Description != "" {
-			b.WriteString(fmt.Sprintf("  /%-15s %s\n", m.Name, m.Description))
+	for _, cmd := range commands {
+		desc := descriptions[cmd]
+		if desc != "" {
+			b.WriteString(fmt.Sprintf("  /%-15s %s\n", cmd, desc))
 		} else {
-			b.WriteString(fmt.Sprintf("  /%s\n", m.Name))
+			b.WriteString(fmt.Sprintf("  /%s\n", cmd))
 		}
 	}
 	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.\n")

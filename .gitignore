@@ -13,7 +13,3 @@ benchmark/tasks/*/*/setup/
 
 claw/skills/self-improving-agent/.learnings/
 claw/skills/.*
--e 
-# Symphony work files
-WORKFLOW.md
-WORKPAD.md

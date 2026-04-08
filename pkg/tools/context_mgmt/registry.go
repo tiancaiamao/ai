@@ -1,15 +1,24 @@
 package context_mgmt
 
 import (
+	"context"
+
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// GetContextMgmtTools returns the tools available in Context Management mode.
-// Note: compact_messages is NOT included - it's used as a system fallback when token usage remains critically high (>75%) after truncate+update.
-func GetContextMgmtTools(sessionDir string, snapshot *agentctx.ContextSnapshot, journal *agentctx.Journal) []agentctx.Tool {
-	return []agentctx.Tool{
-		NewTruncateMessagesTool(snapshot, journal),
-		NewUpdateLLMContextTool(snapshot),
-		NewNoActionTool(snapshot),
+// Tool is the interface for context management tools.
+type Tool interface {
+	Name() string
+	Description() string
+	Parameters() map[string]any
+	Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error)
+}
+
+// GetMiniCompactTools returns tools available for mini compact mode.
+func GetMiniCompactTools(agentCtx *agentctx.AgentContext) []Tool {
+	return []Tool{
+		NewTruncateMessagesTool(agentCtx),
+		NewUpdateLLMContextTool(agentCtx),
+		NewNoActionTool(agentCtx),
 	}
 }

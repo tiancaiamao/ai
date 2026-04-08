@@ -9,19 +9,24 @@ type AgentState struct {
 	CurrentWorkingDir string
 
 	// Statistics
-	TotalTurns   int
-	TokensUsed   int
-	TokensLimit  int
+	TotalTurns  int
+	TokensUsed  int
+	TokensLimit int
 
 	// Tracking
-	LastLLMContextUpdate       int // Last turn when LLMContext was updated
-	LastCheckpoint             int // Last turn when checkpoint was created
-	LastTriggerTurn            int // Last turn when context management was triggered
-	TurnsSinceLastTrigger      int // Turns elapsed since last trigger (legacy)
-	ToolCallsSinceLastTrigger  int // Tool calls elapsed since last trigger
+	LastLLMContextUpdate      int // Last turn when LLMContext was updated
+	LastCheckpoint            int // Last turn when checkpoint was created
+	LastTriggerTurn           int // Last turn when context management was triggered
+	TurnsSinceLastTrigger     int // Turns elapsed since last trigger
+	ToolCallsSinceLastTrigger int // Tool calls elapsed since last trigger
 
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
+
+	// Runtime metadata (for telemetry snapshot)
+	RuntimeMetaTurns    int    // Turns since last runtime metadata refresh
+	RuntimeMetaSnapshot string // Cached runtime metadata snapshot
+	RuntimeMetaBand     string // Current token usage band
 
 	// Metadata
 	SessionID string
@@ -29,23 +34,27 @@ type AgentState struct {
 	UpdatedAt time.Time
 }
 
-// NewAgentState creates a new AgentState
+// NewAgentState creates a new AgentState.
 func NewAgentState(sessionID, cwd string) *AgentState {
 	now := time.Now()
 	return &AgentState{
-		WorkspaceRoot:        cwd,
-		CurrentWorkingDir:    cwd,
-		TotalTurns:           0,
-		TokensUsed:           0,
-		TokensLimit:          200000, // Default, will be updated
-		LastLLMContextUpdate: 0,
-		LastCheckpoint:       0,
-		LastTriggerTurn:      0,
-		TurnsSinceLastTrigger: 0,
-		ActiveToolCalls:      []string{},
-		SessionID:            sessionID,
-		CreatedAt:            now,
-		UpdatedAt:            now,
+		WorkspaceRoot:            cwd,
+		CurrentWorkingDir:        cwd,
+		TotalTurns:               0,
+		TokensUsed:               0,
+		TokensLimit:              200000,
+		LastLLMContextUpdate:     0,
+		LastCheckpoint:           0,
+		LastTriggerTurn:          0,
+		TurnsSinceLastTrigger:    0,
+		ToolCallsSinceLastTrigger: 0,
+		ActiveToolCalls:          []string{},
+		RuntimeMetaTurns:         0,
+		RuntimeMetaSnapshot:      "",
+		RuntimeMetaBand:          "",
+		SessionID:                sessionID,
+		CreatedAt:                now,
+		UpdatedAt:                now,
 	}
 }
 
@@ -54,7 +63,6 @@ func (a *AgentState) Clone() *AgentState {
 	if a == nil {
 		return nil
 	}
-	// Copy ActiveToolCalls slice
 	activeToolCalls := make([]string, len(a.ActiveToolCalls))
 	copy(activeToolCalls, a.ActiveToolCalls)
 
@@ -70,6 +78,9 @@ func (a *AgentState) Clone() *AgentState {
 		TurnsSinceLastTrigger:    a.TurnsSinceLastTrigger,
 		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
 		ActiveToolCalls:          activeToolCalls,
+		RuntimeMetaTurns:         a.RuntimeMetaTurns,
+		RuntimeMetaSnapshot:      a.RuntimeMetaSnapshot,
+		RuntimeMetaBand:          a.RuntimeMetaBand,
 		SessionID:                a.SessionID,
 		CreatedAt:                a.CreatedAt,
 		UpdatedAt:                a.UpdatedAt,

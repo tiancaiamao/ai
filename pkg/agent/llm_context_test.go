@@ -24,62 +24,6 @@ func TestLLMContext_Load(t *testing.T) {
 	}
 }
 
-func TestTaskTrackingState_GetReminderUserMessage(t *testing.T) {
-	sessionDir := t.TempDir()
-	tt := agentctx.NewTaskTrackingState(sessionDir)
-
-	// Get reminder message
-	msg := tt.GetReminderUserMessage()
-
-	// Check message content
-	if !strings.Contains(msg, "system message by agent, not from real user") {
-		t.Error("Expected marker for agent-generated message")
-	}
-	if !strings.Contains(msg, "💡") {
-		t.Error("Expected reminder emoji")
-	}
-}
-
-func TestTaskTrackingState_NeedsReminderMessage(t *testing.T) {
-	sessionDir := t.TempDir()
-	tt := agentctx.NewTaskTrackingState(sessionDir)
-
-	// Should not need reminder initially (rounds = 0)
-	if tt.NeedsReminderMessage() {
-		t.Fatal("Should not need reminder initially")
-	}
-
-	// Increment to threshold (default 10)
-	for i := 0; i < 9; i++ {
-		tt.NeedsReminderMessage()
-	}
-
-	// Should need reminder now
-	if !tt.NeedsReminderMessage() {
-		t.Fatal("Should need reminder at threshold")
-	}
-}
-
-func TestTaskTrackingState_MarkUpdated(t *testing.T) {
-	sessionDir := t.TempDir()
-	tt := agentctx.NewTaskTrackingState(sessionDir)
-
-	// Simulate rounds
-	for i := 0; i < 5; i++ {
-		tt.NeedsReminderMessage()
-	}
-
-	if tt.GetRoundsSinceUpdate() != 5 {
-		t.Fatalf("Expected 5 rounds, got %d", tt.GetRoundsSinceUpdate())
-	}
-
-	// Mark updated
-	tt.MarkUpdated()
-
-	if tt.GetRoundsSinceUpdate() != 0 {
-		t.Fatalf("Expected 0 rounds after update, got %d", tt.GetRoundsSinceUpdate())
-	}
-}
 
 func TestLLMContext_PathMethods(t *testing.T) {
 	sessionDir := t.TempDir()

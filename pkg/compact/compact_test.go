@@ -24,7 +24,7 @@ func TestShouldCompact(t *testing.T) {
 		fewMessages[i] = agentctx.NewUserMessage("test message")
 	}
 
-	if compactor.ShouldCompact(fewMessages) {
+	if compactor.ShouldCompactOld(fewMessages) {
 		t.Error("Should not compact when token threshold is not reached")
 	}
 
@@ -35,7 +35,7 @@ func TestShouldCompact(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 	}
 
-	if !compactor.ShouldCompact(manyMessages) {
+	if !compactor.ShouldCompactOld(manyMessages) {
 		t.Error("Should compact when token threshold is exceeded")
 	}
 }
@@ -56,7 +56,7 @@ func TestShouldCompactTokenLimit(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 	}
 
-	if !compactor.ShouldCompact(messages) {
+	if !compactor.ShouldCompactOld(messages) {
 		t.Error("Should compact when token limit is exceeded")
 	}
 }
@@ -76,7 +76,7 @@ func TestShouldCompactMessageLimitDoesNotTriggerWithContextWindow(t *testing.T) 
 		agentctx.NewUserMessage("b"),
 	}
 
-	if compactor.ShouldCompact(messages) {
+	if compactor.ShouldCompactOld(messages) {
 		t.Fatal("expected message-count alone not to trigger compaction in manual mode fallback")
 	}
 }
@@ -113,7 +113,7 @@ func TestCompactDisabled(t *testing.T) {
 		messages[i] = agentctx.NewUserMessage("test")
 	}
 
-	if compactor.ShouldCompact(messages) {
+	if compactor.ShouldCompactOld(messages) {
 		t.Error("Should not compact when AutoCompact is disabled")
 	}
 }
@@ -128,7 +128,7 @@ func TestCompactFewMessages(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 	}
 
-	result, err := compactor.Compact(messages, "")
+	result, err := compactor.CompactOld(messages, "")
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}
@@ -156,46 +156,5 @@ func TestSplitMessagesByTokenBudget(t *testing.T) {
 	}
 	if recentMessages[0].ExtractText() != "dddd" || recentMessages[1].ExtractText() != "eeee" {
 		t.Errorf("Unexpected recent messages order")
-	}
-}
-
-func TestExtractPinnedSessionInstructions_UsesExistingPinnedMessage(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[Pinned session instructions]\n\nmust run tests before finish"),
-		agentctx.NewUserMessage("later user message"),
-	}
-
-	got := extractPinnedSessionInstructions(messages)
-	if got != "must run tests before finish" {
-		t.Fatalf("unexpected pinned instructions: %q", got)
-	}
-}
-
-func TestExtractPinnedSessionInstructions_FallsBackToFirstUserMessage(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[Previous conversation summary]\n\nold summary"),
-		agentctx.NewUserMessage("do not modify generated files"),
-		agentctx.NewUserMessage("another message"),
-	}
-
-	got := extractPinnedSessionInstructions(messages)
-	if got != "do not modify generated files" {
-		t.Fatalf("unexpected fallback instructions: %q", got)
-	}
-}
-
-func TestRemoveCompactionControlMessages(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[Pinned session instructions]\n\nkeep constraints"),
-		agentctx.NewUserMessage("[Previous conversation summary]\n\nsummary"),
-		agentctx.NewUserMessage("active user question"),
-	}
-
-	filtered := removeCompactionControlMessages(messages)
-	if len(filtered) != 1 {
-		t.Fatalf("expected 1 message after filtering, got %d", len(filtered))
-	}
-	if filtered[0].ExtractText() != "active user question" {
-		t.Fatalf("unexpected remaining message: %q", filtered[0].ExtractText())
 	}
 }

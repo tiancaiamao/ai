@@ -1,7 +1,7 @@
 Summarize this coding conversation for context preservation.
 
 ## Current Task (MOST IMPORTANT)
-[What is being actively worked on RIGHT NOW? Be specific.]
+[What is being actively worked on RIGHT NOW? Be specific about the exact goal.]
 
 ## Files Involved
 - path/to/file: [status/changes]
@@ -23,10 +23,6 @@ Summarize this coding conversation for context preservation.
 1. [completed task]
 2. [completed task]
 
-## Outstanding Constraints
-[Unfinished requirements, obligations, prohibitions, workflow constraints]
-- Constraint: [exact requirement] — Status: [pending/satisfied]
-
 ## Next Steps
 1. [immediate action]
 2. [following action]
@@ -35,11 +31,9 @@ Summarize this coding conversation for context preservation.
 [Explicit constraints from user]
 
 <critical>
-- Preserve EXACT paths, errors, names, commands, and requirements
+- Preserve EXACT paths, errors, names (use quotes)
 - Keep ALL sections even if empty — write "None" if truly empty
 - Keep "What's Complete" — never drop this section
-- Keep "Outstanding Constraints" — never drop unresolved requirements
-- If user gave multi-step workflow, preserve unfinished steps explicitly
-- Keep under 900 tokens total
+- Keep under 800 tokens total
 - Omit pleasantries
 </critical>

@@ -14,35 +14,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/config"
 )
 
-const (
-	sendPrefix = ";; "
-)
-
-func buildWinReplConfig(windowName, aiLogPath string) repl.Config {
-	name := windowName
-	if name == "" {
-		name = "+ai"
-	}
-
-	return repl.Config{
-		Prompt:     "",
-		WindowName: name,
-		WelcomeMessage: `# Ai REPL
-#
-# Type in this window and press Enter to send prompts.
-# Use send-to-win with prefix ";; " for external prompts.
-# Controls: use win-ctl or send /command via send-to-win.
-#
-`,
-		SendPrefix:            sendPrefix,
-		InputPrefix:           "",
-		EchoSendInput:         false,
-		EnableKeyboardExecute: true,
-		EnableExecute:         true,
-		LogPath:               aiLogPath,
-	}
-}
-
 func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 	// Initialize logger early so all slog calls become trace events.
 	configPath, err := config.GetDefaultConfigPath()
@@ -74,8 +45,7 @@ func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 
 	go func() {
 		defer rpcOutWriter.Close()
-		// Win mode doesn't limit max turns (0 = unlimited)
-		if err := runRPC(sessionPath, debugAddr, 0, rpcInReader, rpcOutWriter); err != nil {
+		if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter); err != nil {
 			slog.Error("rpc error", "error", err)
 		}
 	}()
@@ -93,7 +63,27 @@ func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 	interpreter.SetAdClient(client)
 	defer interpreter.Stop()
 
-	replCfg := buildWinReplConfig(windowName, aiLogPath)
+	name := windowName
+	if name == "" {
+		name = "+ai"
+	}
+
+	replCfg := repl.Config{
+		Prompt:     "",
+		WindowName: name,
+		WelcomeMessage: `# Ai REPL
+#
+# Use send-to-win to send prompts (prefix ";; ").
+# Controls: use win-ctl or send /command via send-to-win.
+#
+`,
+		SendPrefix:            sendPrefix,
+		InputPrefix:           "",
+		EchoSendInput:         false,
+		EnableKeyboardExecute: false,
+		EnableExecute:         false,
+		LogPath:               aiLogPath,
+	}
 
 	handler, err := repl.NewHandler(replCfg, client, interpreter)
 	if err != nil {

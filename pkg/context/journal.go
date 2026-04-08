@@ -8,25 +8,20 @@ import (
 type EntryType string
 
 const (
-	// EntryTypeMessage represents a message entry.
-	EntryTypeMessage EntryType = "message"
-
-	// EntryTypeTruncate represents a truncation event entry.
+	EntryTypeMessage  EntryType = "message"
 	EntryTypeTruncate EntryType = "truncate"
-
-	// EntryTypeCompact represents a compaction event entry.
-	EntryTypeCompact EntryType = "compact"
+	EntryTypeCompact  EntryType = "compact"
 )
 
-// JournalEntry represents a line in messages.jsonl
+// JournalEntry represents a line in messages.jsonl.
 type JournalEntry struct {
-	Type     string        `json:"type"` // "message" | "truncate" | "compact"
-	Message  *AgentMessage `json:"message,omitempty"`
+	Type     string         `json:"type"` // "message" | "truncate" | "compact"
+	Message  *AgentMessage  `json:"message,omitempty"`
 	Truncate *TruncateEvent `json:"truncate,omitempty"`
 	Compact  *CompactEvent  `json:"compact,omitempty"`
 }
 
-// TruncateEvent represents a truncate operation
+// TruncateEvent represents a truncate operation.
 type TruncateEvent struct {
 	ToolCallID string `json:"tool_call_id"`
 	Turn       int    `json:"turn"`
@@ -34,7 +29,15 @@ type TruncateEvent struct {
 	Timestamp  string `json:"timestamp"`
 }
 
-// NewMessageEntry creates a journal entry for a message
+// CompactEvent represents a compact operation.
+type CompactEvent struct {
+	Summary          string `json:"summary"`
+	KeptMessageCount int    `json:"kept_message_count"`
+	Turn             int    `json:"turn"`
+	Timestamp        string `json:"timestamp"`
+}
+
+// NewMessageEntry creates a journal entry for a message.
 func NewMessageEntry(msg AgentMessage) JournalEntry {
 	return JournalEntry{
 		Type:    "message",
@@ -42,7 +45,7 @@ func NewMessageEntry(msg AgentMessage) JournalEntry {
 	}
 }
 
-// NewTruncateEntry creates a journal entry for a truncate operation
+// NewTruncateEntry creates a journal entry for a truncate operation.
 func NewTruncateEntry(toolCallID string, turn int, trigger string) JournalEntry {
 	return JournalEntry{
 		Type: "truncate",
@@ -55,15 +58,7 @@ func NewTruncateEntry(toolCallID string, turn int, trigger string) JournalEntry 
 	}
 }
 
-// CompactEvent represents a compact operation
-type CompactEvent struct {
-	Summary          string `json:"summary"`
-	KeptMessageCount int    `json:"kept_message_count"`
-	Turn             int    `json:"turn"`
-	Timestamp        string `json:"timestamp"`
-}
-
-// NewCompactEntry creates a journal entry for a compact operation
+// NewCompactEntry creates a journal entry for a compact operation.
 func NewCompactEntry(summary string, keptMessageCount int, turn int) JournalEntry {
 	return JournalEntry{
 		Type: "compact",

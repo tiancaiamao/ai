@@ -116,11 +116,10 @@ func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
 }
 
 func applyModelLimitsFromSpec(model llm.Model, spec config.ModelSpec) llm.Model {
-	// Respect explicit limits from models.json even when provider defaults exist.
-	if spec.ContextWindow > 0 {
+	if model.ContextWindow <= 0 && spec.ContextWindow > 0 {
 		model.ContextWindow = spec.ContextWindow
 	}
-	if spec.MaxTokens > 0 {
+	if model.MaxTokens <= 0 && spec.MaxTokens > 0 {
 		model.MaxTokens = spec.MaxTokens
 	}
 	return model
