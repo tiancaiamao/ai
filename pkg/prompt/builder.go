@@ -38,6 +38,15 @@ var DefaultSubagentPrompt string
 //go:embed "task_tracking.md"
 var taskTrackingPrompt string
 
+//go:embed "mini_compact_system.md"
+var miniCompactSystemPrompt string
+
+//go:embed "mini_compact_summarize.md"
+var miniCompactSummarizePrompt string
+
+//go:embed "mini_compact_update.md"
+var miniCompactUpdatePrompt string
+
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a helpful coding assistant."
@@ -493,4 +502,19 @@ func NormalizeThinkingLevel(level string) string {
 	default:
 		return "high"
 	}
+}
+
+// MiniCompactSystemPrompt returns system prompt for mini compact protocol.
+func MiniCompactSystemPrompt() string {
+	return miniCompactSystemPrompt
+}
+
+// MiniCompactSummarizePrompt returns prompt for mini compact initial summarization.
+func MiniCompactSummarizePrompt() string {
+	return miniCompactSummarizePrompt
+}
+
+// MiniCompactUpdatePrompt returns prompt for updating mini compact summary.
+func MiniCompactUpdatePrompt() string {
+	return miniCompactUpdatePrompt
 }
