@@ -38,18 +38,12 @@ var DefaultSubagentPrompt string
 //go:embed "task_tracking.md"
 var taskTrackingPrompt string
 
-//go:embed "mini_compact_system.md"
-var miniCompactSystemPrompt string
-
-//go:embed "mini_compact_summarize.md"
-var miniCompactSummarizePrompt string
-
-//go:embed "mini_compact_update.md"
-var miniCompactUpdatePrompt string
+//go:embed "llm_mini_compact_system.md"
+var llmMiniCompactSystemPrompt string
 
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
-	return "You are a helpful coding assistant."
+	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }
 
 // HeadlessBasePrompt returns the base system prompt for headless mode.
@@ -505,16 +499,8 @@ func NormalizeThinkingLevel(level string) string {
 }
 
 // MiniCompactSystemPrompt returns system prompt for mini compact protocol.
-func MiniCompactSystemPrompt() string {
-	return miniCompactSystemPrompt
+func LLMMiniCompactSystemPrompt() string {
+	return llmMiniCompactSystemPrompt
 }
 
-// MiniCompactSummarizePrompt returns prompt for mini compact initial summarization.
-func MiniCompactSummarizePrompt() string {
-	return miniCompactSummarizePrompt
-}
 
-// MiniCompactUpdatePrompt returns prompt for updating mini compact summary.
-func MiniCompactUpdatePrompt() string {
-	return miniCompactUpdatePrompt
-}

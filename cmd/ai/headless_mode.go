@@ -361,7 +361,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 
 	// Set task tracking and context management based on config
 	promptBuilder.SetTaskTrackingEnabled(effectiveCfg.TaskTracking)
-	promptBuilder.SetContextManagementEnabled(effectiveCfg.ContextManagement)
+	promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
 
 	// Override context management section if provided
 	if cmPromptOverride != "" {

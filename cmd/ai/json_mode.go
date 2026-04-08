@@ -205,7 +205,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 
 	// Set task tracking and context management based on config
 	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
-	promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+	promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
 
 	systemPrompt := promptBuilder.Build()
 

@@ -189,7 +189,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		registry.Register(tools.NewLLMContextRecallTool(memoryMgr))
 	}
 
-	// Create compactor for automatic context compression
+	// Create compactors for automatic context compression
 	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
@@ -200,6 +200,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		apiKey,
 		prompt.CompactorBasePrompt(),
 		currentContextWindow,
+	)
+
+	// LLM-driven mini compactor for lightweight context management
+	miniCompactor := compact.NewLLMMiniCompactor(
+		compact.DefaultLLMMiniCompactorConfig(),
+		model,
+		apiKey,
+		currentContextWindow,
+		prompt.LLMMiniCompactSystemPrompt(),
 	)
 
 	// Note: task_tracking and context_management tools removed in backport
@@ -264,7 +273,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		// Set task tracking and context management based on config
 		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
-		promptBuilder.SetContextManagementEnabled(cfg.ContextManagement)
+		promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
 
 		return promptBuilder.Build()
 	}
@@ -351,7 +360,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Build LoopConfig with all settings
 	loopCfg := cfg.ToLoopConfig(
-		config.WithCompactor(sessionComp),
+		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),
