@@ -117,7 +117,14 @@ func (c *LLMMiniCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 }
 
 // Compact runs the LLM-driven context management cycle.
+// Uses context.Background() internally. For context-aware cancellation,
+// use CompactWithCtx instead.
 func (c *LLMMiniCompactor) Compact(agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	return c.CompactWithCtx(context.Background(), agentCtx)
+}
+
+// CompactWithCtx runs the LLM-driven context management cycle with context support.
+func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	start := time.Now()
 	tokensBefore := agentCtx.EstimateTokens()
 
@@ -139,7 +146,7 @@ func (c *LLMMiniCompactor) Compact(agentCtx *agentctx.AgentContext) (*agentctx.C
 	}}, messages...)
 
 	stream := llm.StreamLLM(
-		context.Background(),
+		parent,
 		c.model,
 		llm.LLMContext{
 			Messages: llmMessages,
@@ -150,14 +157,14 @@ func (c *LLMMiniCompactor) Compact(agentCtx *agentctx.AgentContext) (*agentctx.C
 	)
 
 	// 4. Extract tool calls from stream
-	toolCalls, err := c.extractToolCalls(context.Background(), stream)
+	toolCalls, err := c.extractToolCalls(parent, stream)
 	if err != nil {
 		slog.Error("[LLMMini] LLM call failed", "error", err)
 		return nil, fmt.Errorf("context management LLM call failed: %w", err)
 	}
 
 	// 5. Execute tool calls
-	c.executeToolCalls(context.Background(), toolCalls, tools)
+	c.executeToolCalls(parent, toolCalls, tools)
 
 	// 6. Reset trigger counters
 	agentCtx.AgentState.LastTriggerTurn = agentCtx.AgentState.TotalTurns

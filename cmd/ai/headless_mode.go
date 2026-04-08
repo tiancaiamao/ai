@@ -324,6 +324,15 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		currentContextWindow,
 	)
 
+	// LLM-driven mini compactor for lightweight context management
+	miniCompactor := compact.NewLLMMiniCompactor(
+		compact.DefaultLLMMiniCompactorConfig(),
+		model,
+		apiKey,
+		currentContextWindow,
+		prompt.LLMMiniCompactSystemPrompt(),
+	)
+
 	registerHeadlessTools(registry, ws, compactor, effectiveCfg)
 
 	// Load skills
@@ -423,7 +432,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 
 	// Build LoopConfig from application config
 	loopCfg := effectiveCfg.ToLoopConfig(
-		config.WithCompactor(sessionComp),
+		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
 	)

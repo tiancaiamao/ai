@@ -65,7 +65,8 @@ When writing LLM Context, use this structure:
 - path/to/file: [status/changes]
 
 ## Key Decisions
-- Decision: [what] — Reason: [why]
+- Decision: [what] 
+— Reason: [why]
 
 ## What's Complete
 1. [completed task]

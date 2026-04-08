@@ -1026,8 +1026,10 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
 	ctx.LastCompactionSummary = summary
-	// Optionally update LLMContext with the summary
-	ctx.LLMContext = summary
+	// Preserve LLMContext maintained by LLMMiniCompactor; do not overwrite.
+	// The summary is already stored in ctx.LastCompactionSummary and injected
+	// as [Previous conversation summary] message in newRecentMessages above.
+	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()
 	slog.Info("[CompactAgent] Compressed context", "messages", len(newRecentMessages))

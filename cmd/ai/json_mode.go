@@ -180,6 +180,15 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		currentContextWindow,
 	)
 
+	// LLM-driven mini compactor for lightweight context management
+	miniCompactor := compact.NewLLMMiniCompactor(
+		compact.DefaultLLMMiniCompactorConfig(),
+		model,
+		apiKey,
+		currentContextWindow,
+		prompt.LLMMiniCompactSystemPrompt(),
+	)
+
 	// Load skills
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -245,7 +254,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 
 	// Build LoopConfig with all settings
 	loopCfg := cfg.ToLoopConfig(
-		config.WithCompactor(sessionComp),
+		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),

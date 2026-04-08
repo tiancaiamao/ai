@@ -522,6 +522,11 @@ func runInnerLoop(
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
+		// Increment tool call counter for compactor trigger intervals
+		if hasMoreToolCalls {
+			agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
+		}
+
 		// Append messages to journal if checkpoint manager is available
 		if checkpointMgr != nil {
 			for _, result := range toolResults {
