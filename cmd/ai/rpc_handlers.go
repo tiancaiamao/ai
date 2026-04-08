@@ -309,15 +309,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if sess != nil {
 			sessionDir := sess.GetDir()
 			if sessionDir != "" {
-				wm := agentctx.NewLLMContext(sessionDir)
-				ctx.LLMContext = wm
-				sess.SetLLMContext(wm) // Set llm context on session
+				// LLMContext is now a string, not a file manager
+				// The file management is handled internally by the session
+				ctx.LLMContext = ""
 			}
 			// Restore conversation history from session
-			ctx.Messages = sess.GetMessages()
+			ctx.RecentMessages = sess.GetMessages()
 			// Set up persistence callback for compact operations
 			ctx.OnMessagesChanged = func() error {
-				return sess.SaveMessages(ctx.Messages)
+				return sess.SaveMessages(ctx.RecentMessages)
 			}
 		}
 		return ctx
@@ -416,14 +416,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		messages := ag.GetMessages()
-		if !compactor.ShouldCompact(messages) {
+		if !compactor.ShouldCompactOld(messages) {
 			return
 		}
 		if !sess.CanCompact(compactor) {
 			slog.Info("Pre-request compaction skipped: session not compactable",
 				"trigger", trigger,
 				"messages", len(messages),
-				"estimatedTokens", compactor.EstimateContextTokens(messages))
+				"estimatedTokens", compactor.EstimateContextTokensOld(messages))
 			return
 		}
 
@@ -454,7 +454,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					return err
 				}
 
-				ag.GetContext().Messages = sess.GetMessages()
+				ag.GetContext().RecentMessages = sess.GetMessages()
 				afterCount := len(ag.GetMessages())
 				compactionInfo.After = afterCount
 
@@ -854,7 +854,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		beforeCount := len(ag.GetMessages())
 
 		// Estimate current context usage
-		estimatedTokens := compactor.EstimateContextTokens(ag.GetMessages())
+		estimatedTokens := compactor.EstimateContextTokensOld(ag.GetMessages())
 		keepTokens := compactor.KeepRecentTokens()
 
 		// Check if compaction is possible before starting
@@ -897,7 +897,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				}
 
 				// Replace messages with compacted version
-				ag.GetContext().Messages = sess.GetMessages()
+				ag.GetContext().RecentMessages = sess.GetMessages()
 
 				afterCount := len(ag.GetMessages())
 				span.AddField("after_messages", afterCount)

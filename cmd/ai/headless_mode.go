@@ -385,8 +385,9 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if sess != nil {
 		sessionDir := sess.GetDir()
 		if sessionDir != "" {
-			wm := agentctx.NewLLMContext(sessionDir)
-			agentCtx.LLMContext = wm
+			// LLMContext is now a string, not a file manager
+			// The file management is handled internally by the session
+			agentCtx.LLMContext = ""
 		}
 	}
 

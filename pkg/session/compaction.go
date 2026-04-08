@@ -155,7 +155,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	messages := refsToMessages(refs)
-	tokensBefore := compactor.EstimateContextTokens(messages)
+	tokensBefore := compactor.EstimateContextTokensOld(messages)
 
 	firstKeptIndex := findFirstKeptIndex(refs, compactor)
 	if firstKeptIndex <= 0 {
@@ -218,7 +218,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	updatedContext := buildSessionContext(s.entries, s.leafID, s.byID)
-	tokensAfter := compactor.EstimateContextTokens(updatedContext)
+	tokensAfter := compactor.EstimateContextTokensOld(updatedContext)
 
 	return &CompactionResult{
 		Summary:          summary,

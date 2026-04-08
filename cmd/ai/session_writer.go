@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
@@ -30,7 +29,7 @@ func (sc *sessionCompactor) Update(sess *session.Session, comp *compact.Compacto
 	sc.mu.Unlock()
 }
 
-func (sc *sessionCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
+func (sc *sessionCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
@@ -38,7 +37,8 @@ func (sc *sessionCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool
 	if comp == nil {
 		return false
 	}
-	if !comp.ShouldCompact(messages) {
+	// Check if underlying compactor should trigger
+	if !comp.ShouldCompact(ctx) {
 		return false
 	}
 	if sess == nil {
@@ -58,50 +58,59 @@ func (sc *sessionCompactor) CalculateDynamicThreshold() int {
 	return comp.CalculateDynamicThreshold()
 }
 
-// EstimateContextTokens estimates the token count of messages.
-func (sc *sessionCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+// EstimateContextTokens estimates the token count of context.
+func (sc *sessionCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
 	sc.mu.Lock()
 	comp := sc.compactor
 	sc.mu.Unlock()
 	if comp == nil {
 		return 0
 	}
-	return comp.EstimateContextTokens(messages)
+	return comp.EstimateContextTokens(ctx)
 }
 
-func (sc *sessionCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
+func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
 	writer := sc.writer
 	sc.mu.Unlock()
 	if sess == nil || comp == nil {
-		return &agent.CompactionResult{Messages: messages}, nil
+		return &agentctx.CompactionResult{}, nil
 	}
 	if writer != nil {
 		compacted, err := writer.Compact(sess, comp)
 		if err != nil {
 			if session.IsNonActionableCompactionError(err) {
-				return &agent.CompactionResult{Messages: messages}, nil
+				return &agentctx.CompactionResult{}, nil
 			}
 			return nil, err
 		}
 		if compacted != nil {
-			return compacted, nil
+			// Update ctx.RecentMessages with compacted messages
+			messages := sess.GetMessages()
+			ctx.RecentMessages = messages
+			return &agentctx.CompactionResult{
+				Summary:      compacted.Summary,
+				TokensBefore: compacted.TokensBefore,
+				TokensAfter:  compacted.TokensAfter,
+			}, nil
 		}
 	}
 	// Session layer handles previousSummary internally via compaction entries
 	sessionResult, err := sess.Compact(comp)
 	if err != nil {
 		if session.IsNonActionableCompactionError(err) {
-			return &agent.CompactionResult{Messages: messages}, nil
+			return &agentctx.CompactionResult{}, nil
 		}
 		return nil, err
 	}
-	// Convert session.CompactionResult to agent.CompactionResult
-	result := &agent.CompactionResult{
+	// Update ctx.RecentMessages with compacted messages
+	messages := sess.GetMessages()
+	ctx.RecentMessages = messages
+	// Convert session.CompactionResult to agentctx.CompactionResult
+	result := &agentctx.CompactionResult{
 		Summary:      sessionResult.Summary,
-		Messages:     sess.GetMessages(),
 		TokensBefore: sessionResult.TokensBefore,
 		TokensAfter:  sessionResult.TokensAfter,
 	}
@@ -190,7 +199,7 @@ func (w *sessionWriter) Append(sess *session.Session, message agentctx.AgentMess
 	w.enqueue(sessionWriteRequest{sess: sess, message: &message})
 }
 
-func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) (*agent.CompactionResult, error) {
+func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) (*agentctx.CompactionResult, error) {
 	if w == nil || sess == nil || comp == nil {
 		return nil, nil
 	}
@@ -202,9 +211,8 @@ func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) 
 	if result.err != nil {
 		return nil, result.err
 	}
-	return &agent.CompactionResult{
-		Summary:  result.summary,
-		Messages: result.messages,
+	return &agentctx.CompactionResult{
+		Summary: result.summary,
 	}, nil
 }
 
