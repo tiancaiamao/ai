@@ -85,7 +85,7 @@ func (c *Compactor) ShouldCompactOld(messages []agentctx.AgentMessage) bool {
 	// Message-count based compaction is intentionally disabled.
 	threshold := c.CalculateDynamicThreshold()
 	if threshold > 0 {
-		tokens := c.EstimateContextTokens(messages)
+		tokens := c.EstimateContextTokensOld(messages)
 		return tokens >= threshold
 	}
 	return false
@@ -200,8 +200,8 @@ func (c *Compactor) CompactOld(messages []agentctx.AgentMessage, previousSummary
 		if len(oldMessages) == 0 {
 			return &CompactionResult{
 				Messages:     messages,
-				TokensBefore: c.EstimateContextTokens(messages),
-				TokensAfter:  c.EstimateContextTokens(messages),
+				TokensBefore: c.EstimateContextTokensOld(messages),
+				TokensAfter:  c.EstimateContextTokensOld(messages),
 			}, nil
 		}
 		slog.Info("[Compact] Compressing messages",
@@ -215,8 +215,8 @@ func (c *Compactor) CompactOld(messages []agentctx.AgentMessage, previousSummary
 		if len(messages) <= keepCount {
 			return &CompactionResult{
 				Messages:     messages,
-				TokensBefore: c.EstimateContextTokens(messages),
-				TokensAfter:  c.EstimateContextTokens(messages),
+				TokensBefore: c.EstimateContextTokensOld(messages),
+				TokensAfter:  c.EstimateContextTokensOld(messages),
 			}, nil
 		}
 		slog.Info("[Compact] Compressing messages",
@@ -230,7 +230,7 @@ func (c *Compactor) CompactOld(messages []agentctx.AgentMessage, previousSummary
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	tokensBefore := c.EstimateContextTokens(messages)
+	tokensBefore := c.EstimateContextTokensOld(messages)
 	summary, err := c.GenerateSummaryWithPrevious(oldMessages, previousSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
@@ -254,7 +254,7 @@ func (c *Compactor) CompactOld(messages []agentctx.AgentMessage, previousSummary
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newMessages = append(newMessages, recentMessages...)
 
-	tokensAfter := c.EstimateContextTokens(newMessages)
+	tokensAfter := c.EstimateTokens(newMessages)
 	slog.Info("[Compact] Compressed to messages", "count", len(newMessages))
 
 	return &CompactionResult{
@@ -436,8 +436,8 @@ func (c *Compactor) EstimateContextTokensOld(messages []agentctx.AgentMessage) i
 // CompactIfNeeded compacts the context if it exceeds limits.
 // Returns the compacted messages and the summary (if compaction occurred).
 func (c *Compactor) CompactIfNeeded(messages []agentctx.AgentMessage, previousSummary string) ([]agentctx.AgentMessage, *CompactionResult, error) {
-	if c.ShouldCompact(messages) {
-		result, err := c.Compact(messages, previousSummary)
+	if c.ShouldCompactOld(messages) {
+		result, err := c.CompactOld(messages, previousSummary)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -940,11 +940,11 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 	return keptMessages
 }
 
-// ToContextCompactor adapts this Compactor to implement context.Compactor interface.
-// Since compact.Compactor implements context.Compactor interface directly
-// via ShouldCompactAgent, CompactAgent, and EstimateContextTokensAgent,
+// ToContextCompactor adapts this Compactor to implement agentctx.Compactor interface.
+// Since compact.Compactor implements agentctx.Compactor interface directly
+// via ShouldCompact, Compact, and EstimateContextTokens,
 // we can just return the compactor itself.
-func (c *Compactor) ToContextCompactor() context.Compactor {
+func (c *Compactor) ToContextCompactor() agentctx.Compactor {
 	return c
 }
 
@@ -962,7 +962,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		}, nil
 	}
 
-	tokensBefore := c.EstimateContextTokensAgent(ctx)
+	tokensBefore := c.EstimateContextTokens(ctx)
 
 	keepRecentTokens := c.calculateKeepRecentBudget()
 	var oldMessages []agentctx.AgentMessage
@@ -1039,7 +1039,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	}, nil
 }
 
-// ShouldCompactAgent determines if context should be compressed using AgentContext.
+// ShouldCompact determines if context should be compressed using AgentContext.
 func (c *Compactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
 		return false
@@ -1047,7 +1047,7 @@ func (c *Compactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 
 	threshold := c.CalculateDynamicThreshold()
 	if threshold > 0 {
-		tokens := c.EstimateContextTokensAgent(ctx)
+		tokens := c.EstimateContextTokens(ctx)
 		return tokens >= threshold
 	}
 	return false

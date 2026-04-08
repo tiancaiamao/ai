@@ -261,7 +261,7 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 		agentctx.NewUserMessage("last message"),
 	}
 
-	result, err := compactor.Compact(messages, "")
+	result, err := compactor.CompactOld(messages, "")
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}
