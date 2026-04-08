@@ -149,7 +149,7 @@ func (c *clawCompactor) Update(sess *session.Session, comp *compact.Compactor) {
 	c.compactor = comp
 }
 
-func (c *clawCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
+func (c *clawCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	c.mu.Lock()
 	sess := c.sess
 	comp := c.compactor
@@ -158,33 +158,35 @@ func (c *clawCompactor) ShouldCompact(messages []agentctx.AgentMessage) bool {
 	if comp == nil || sess == nil {
 		return false
 	}
-	if !comp.ShouldCompact(messages) {
+	if !comp.ShouldCompact(ctx) {
 		return false
 	}
 	return sess.CanCompact(comp)
 }
 
-func (c *clawCompactor) Compact(messages []agentctx.AgentMessage, previousSummary string) (*agent.CompactionResult, error) {
+func (c *clawCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.mu.Lock()
 	sess := c.sess
 	comp := c.compactor
 	c.mu.Unlock()
 
 	if sess == nil || comp == nil {
-		return &agent.CompactionResult{Messages: messages}, nil
+		return &agentctx.CompactionResult{}, nil
 	}
 
 	sessionResult, err := sess.Compact(comp)
 	if err != nil {
 		if session.IsNonActionableCompactionError(err) {
-			return &agent.CompactionResult{Messages: messages}, nil
+			return &agentctx.CompactionResult{}, nil
 		}
 		return nil, err
 	}
 
-	return &agent.CompactionResult{
+	// Update ctx.RecentMessages with compacted messages
+	ctx.RecentMessages = sess.GetMessages()
+
+	return &agentctx.CompactionResult{
 		Summary:      sessionResult.Summary,
-		Messages:     sess.GetMessages(),
 		TokensBefore: sessionResult.TokensBefore,
 		TokensAfter:  sessionResult.TokensAfter,
 	}, nil
@@ -201,7 +203,7 @@ func (c *clawCompactor) CalculateDynamicThreshold() int {
 	return comp.CalculateDynamicThreshold()
 }
 
-func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) int {
+func (c *clawCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
 	c.mu.Lock()
 	comp := c.compactor
 	c.mu.Unlock()
@@ -209,7 +211,7 @@ func (c *clawCompactor) EstimateContextTokens(messages []agentctx.AgentMessage) 
 	if comp == nil {
 		return 0
 	}
-	return comp.EstimateContextTokens(messages)
+	return comp.EstimateContextTokens(ctx)
 }
 
 // Config 是 AgentLoop 的配置
@@ -612,7 +614,7 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 	// 从 session 恢复消息
 	existingMessages := sess.GetMessages()
 	if len(existingMessages) > 0 {
-		agentCtx.Messages = existingMessages
+		agentCtx.RecentMessages = existingMessages
 		slog.Info("[AgentLoop] Restored messages from session", "count", len(existingMessages))
 	}
 
@@ -657,7 +659,7 @@ func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
 	// Fallback if appConfig is nil or ToLoopConfig returned nil
 	if cfg == nil {
 		cfg = agent.DefaultLoopConfig()
-		cfg.Compactor = compactor
+		cfg.Compactors = []agentctx.Compactor{compactor}
 		cfg.ContextWindow = a.model.ContextWindow
 	}
 
