@@ -16,7 +16,7 @@ type recoveryCompactor struct {
 	shouldCompact bool
 }
 
-func (c *recoveryCompactor) ShouldCompact(_ *agentctx.AgentContext) bool {
+func (c *recoveryCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
 	return c.shouldCompact
 }
 
@@ -34,10 +34,6 @@ func (c *recoveryCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.Compa
 
 func (c *recoveryCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
-}
-
-func (c *recoveryCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 func newTestAgentEventStream() *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
@@ -505,7 +501,7 @@ func TestRunInnerLoopEmitsErrorEventOnStreamingFailure(t *testing.T) {
 
 type failingCompactor struct{}
 
-func (f *failingCompactor) ShouldCompact(_ *agentctx.AgentContext) bool {
+func (f *failingCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
 	return false
 }
 
@@ -515,10 +511,6 @@ func (f *failingCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.Compacti
 
 func (f *failingCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
-}
-
-func (f *failingCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 // TestRunInnerLoopMaxTurnsLimit tests that the loop stops when max turns is reached

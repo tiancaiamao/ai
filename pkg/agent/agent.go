@@ -656,7 +656,7 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 
 	var triggerCompactor Compactor
 	for _, c := range a.LoopConfig.Compactors {
-		if c.ShouldCompact(a.context) {
+		if c.ShouldCompact(ctx, a.context) {
 			triggerCompactor = c
 			break
 		}

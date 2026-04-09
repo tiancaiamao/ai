@@ -11,18 +11,18 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/tools/context_mgmt"
-	
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // Trigger thresholds for LLM mini compaction.
 const (
 	MiniTokenLow    = 0.20 // 20%: start periodic checks
-	MiniTokenMedium = 0.40 // 40%: more aggressive checks
-	MiniTokenHigh   = 0.60 // 60%: frequent checks
+	MiniTokenMedium = 0.33 // 30%: more aggressive checks
+	MiniTokenHigh   = 0.50 // 50%: frequent checks
 
-	MiniIntervalLow    = 30 // At 20%: every 30 tool calls
-	MiniIntervalMedium = 15 // At 40%: every 15 tool calls
-	MiniIntervalHigh   = 5  // At 60%: every 5 tool calls
+	MiniIntervalLow    = 15 // At 20%: every 15 tool calls
+	MiniIntervalMedium = 10 // At 40%: every 10 tool calls
+	MiniIntervalHigh   = 7  // At 60%: every 7 tool calls
 
 	// Tool output preview limits for context management messages
 	mgmtPreviewMax  = 1500
@@ -92,28 +92,56 @@ func NewLLMMiniCompactor(
 
 // ShouldCompact checks if the compactor should run.
 // It uses token percentage and tool-call interval to decide.
-func (c *LLMMiniCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+func (c *LLMMiniCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+			traceevent.Field{Key: "decision", Value: false},
+			traceevent.Field{Key: "reason", Value: "auto_compact_disabled"},
+		)
 		return false
 	}
 
-	tokenPercent := c.estimateTokenPercent(ctx)
+	tokenPercent := c.estimateTokenPercent(agentCtx)
 	if tokenPercent < c.config.TokenLow {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+			traceevent.Field{Key: "decision", Value: false},
+			traceevent.Field{Key: "reason", Value: "below_token_low"},
+			traceevent.Field{Key: "token_percent", Value: fmt.Sprintf("%.1f%%", tokenPercent*100)},
+			traceevent.Field{Key: "threshold_low", Value: fmt.Sprintf("%.0f%%", c.config.TokenLow*100)},
+		)
 		return false
 	}
 
-	toolCallsSince := ctx.AgentState.ToolCallsSinceLastTrigger
+	toolCallsSince := agentCtx.AgentState.ToolCallsSinceLastTrigger
 	var interval int
+	var tier string
 	switch {
 	case tokenPercent >= c.config.TokenHigh:
 		interval = c.config.IntervalHigh
+		tier = "high"
 	case tokenPercent >= c.config.TokenMedium:
 		interval = c.config.IntervalMedium
+		tier = "medium"
 	default:
 		interval = c.config.IntervalLow
+		tier = "low"
 	}
 
-	return toolCallsSince >= interval
+	shouldCompact := toolCallsSince >= interval
+	traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+		traceevent.Field{Key: "decision", Value: shouldCompact},
+		traceevent.Field{Key: "token_percent", Value: fmt.Sprintf("%.1f%%", tokenPercent*100)},
+		traceevent.Field{Key: "tier", Value: tier},
+		traceevent.Field{Key: "tool_calls_since", Value: toolCallsSince},
+		traceevent.Field{Key: "interval", Value: interval},
+		traceevent.Field{Key: "reason", Value: func() string {
+			if shouldCompact {
+				return "threshold_met"
+			}
+			return "interval_not_reached"
+		}()},
+	)
+	return shouldCompact
 }
 
 // Compact runs the LLM-driven context management cycle.
@@ -125,6 +153,13 @@ func (c *LLMMiniCompactor) Compact(agentCtx *agentctx.AgentContext) (*agentctx.C
 
 // CompactWithCtx runs the LLM-driven context management cycle with context support.
 func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	span := traceevent.StartSpan(parent, "mini_compact", traceevent.CategoryEvent,
+		traceevent.Field{Key: "messages_before", Value: len(agentCtx.RecentMessages)},
+		traceevent.Field{Key: "token_pct", Value: fmt.Sprintf("%.1f%%", c.estimateTokenPercent(agentCtx)*100)},
+		traceevent.Field{Key: "tool_calls_since", Value: agentCtx.AgentState.ToolCallsSinceLastTrigger},
+	)
+	defer span.End()
+
 	start := time.Now()
 	tokensBefore := agentCtx.EstimateTokens()
 
@@ -174,6 +209,12 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	tokensAfter := agentCtx.EstimateTokens()
 	duration := time.Since(start)
 
+	span.AddField("tokens_before", tokensBefore)
+	span.AddField("tokens_after", tokensAfter)
+	span.AddField("tokens_saved", tokensBefore-tokensAfter)
+	span.AddField("messages_after", len(agentCtx.RecentMessages))
+	span.AddField("tool_calls", len(toolCalls))
+
 	slog.Info("[LLMMini] Compact complete",
 		"tokens_before", tokensBefore,
 		"tokens_after", tokensAfter,
@@ -195,11 +236,6 @@ func (c *LLMMiniCompactor) CalculateDynamicThreshold() int {
 		return 0
 	}
 	return int(float64(c.contextWindow) * c.config.TokenLow)
-}
-
-// EstimateContextTokens estimates the token count of context.
-func (c *LLMMiniCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	return ctx.EstimateTokens()
 }
 
 // --- Internal helpers ---
@@ -373,6 +409,19 @@ func (c *LLMMiniCompactor) extractToolCalls(ctx context.Context, stream *llm.Eve
 // executeToolCalls runs each tool call and logs the result.
 func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) {
 	for _, tc := range toolCalls {
+		startTime := time.Now()
+		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
+			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+		)
+
+		// Log tool_start event
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+			traceevent.Field{Key: "args", Value: tc.Function.Arguments},
+		)
+
 		var target context_mgmt.Tool
 		for _, tool := range tools {
 			if tool.Name() == tc.Function.Name {
@@ -382,6 +431,16 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 		}
 		if target == nil {
 			slog.Warn("[LLMMini] Tool not found", "tool", tc.Function.Name)
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", fmt.Sprintf("tool %q not found", tc.Function.Name))
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: tc.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: fmt.Sprintf("tool %q not found", tc.Function.Name)},
+			)
 			continue
 		}
 
@@ -389,6 +448,16 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 		if tc.Function.Arguments != "" {
 			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 				slog.Warn("[LLMMini] Failed to parse args", "tool", tc.Function.Name, "error", err)
+				toolSpan.AddField("error", true)
+				toolSpan.AddField("error_message", fmt.Sprintf("parse args: %v", err))
+				toolSpan.End()
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+					traceevent.Field{Key: "tool", Value: tc.Function.Name},
+					traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+					traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+					traceevent.Field{Key: "error", Value: true},
+					traceevent.Field{Key: "error_message", Value: fmt.Sprintf("parse args: %v", err)},
+				)
 				continue
 			}
 		}
@@ -396,6 +465,16 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 		content, err := target.Execute(ctx, args)
 		if err != nil {
 			slog.Error("[LLMMini] Tool execution failed", "tool", tc.Function.Name, "error", err)
+			toolSpan.AddField("error", true)
+			toolSpan.AddField("error_message", err.Error())
+			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: tc.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: err.Error()},
+			)
 			continue
 		}
 
@@ -406,6 +485,13 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			}
 		}
 		slog.Info("[LLMMini] Tool executed", "tool", tc.Function.Name, "result", resultText)
+		toolSpan.End()
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+			traceevent.Field{Key: "result", Value: resultText},
+		)
 	}
 }
 

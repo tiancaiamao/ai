@@ -82,7 +82,7 @@ func TestCheckpoint_SaveLoad_PreservesState(t *testing.T) {
 			NewAssistantMessage(),
 			NewUserMessage("Second message"),
 		},
-		AgentState: AgentState{
+		AgentState: &AgentState{
 			WorkspaceRoot:        "/workspace",
 			CurrentWorkingDir:    "/workspace/project",
 			TotalTurns:           10,
@@ -125,7 +125,7 @@ func TestCheckpoint_SavesMessagesJsonl(t *testing.T) {
 			NewAssistantMessage(),
 			NewUserMessage("Message 2"),
 		},
-		AgentState: AgentState{TotalTurns: 3},
+		AgentState: &AgentState{TotalTurns: 3},
 	}
 
 	info, err := SaveCheckpoint(sessionDir, snapshot, 3, 10)
@@ -145,7 +145,7 @@ func TestCheckpoint_EmptyRecentMessagesNotSaved(t *testing.T) {
 	snapshot := &ContextSnapshot{
 		LLMContext:     "Test context",
 		RecentMessages: []AgentMessage{},
-		AgentState:     AgentState{TotalTurns: 0},
+		AgentState:     &AgentState{TotalTurns: 0},
 	}
 
 	info, err := SaveCheckpoint(sessionDir, snapshot, 0, 0)
@@ -166,7 +166,7 @@ func TestCurrentSymlink_PointsToLatest(t *testing.T) {
 		snapshot := &ContextSnapshot{
 			LLMContext:     "Context",
 			RecentMessages: []AgentMessage{NewUserMessage("msg")},
-			AgentState:     *NewAgentState("session", "/workspace"),
+			AgentState:     NewAgentState("session", "/workspace"),
 		}
 		snapshot.AgentState.TotalTurns = turn
 		_, err := SaveCheckpoint(sessionDir, snapshot, turn, 1)
@@ -345,7 +345,7 @@ func TestReconstructSnapshotWithCheckpoint(t *testing.T) {
 	snapshot := &ContextSnapshot{
 		LLMContext:     "Initial context",
 		RecentMessages: []AgentMessage{},
-		AgentState:     *NewAgentState("session-1", "/workspace"),
+		AgentState:     NewAgentState("session-1", "/workspace"),
 	}
 
 	info, err := SaveCheckpoint(sessionDir, snapshot, 0, 0)
@@ -384,7 +384,7 @@ func TestReconstructSnapshotWithCheckpoint_TruncateReplay(t *testing.T) {
 	snapshot := &ContextSnapshot{
 		LLMContext:     "Initial context",
 		RecentMessages: []AgentMessage{},
-		AgentState:     *NewAgentState("session-1", "/workspace"),
+		AgentState:     NewAgentState("session-1", "/workspace"),
 	}
 
 	info, err := SaveCheckpoint(sessionDir, snapshot, 0, 0)
@@ -452,7 +452,7 @@ func TestReconstructSnapshotWithCheckpoint_IncrementalReplay(t *testing.T) {
 	snapshot := &ContextSnapshot{
 		LLMContext:     "Context after initial work",
 		RecentMessages: msgs,
-		AgentState:     *NewAgentState("session-1", "/workspace"),
+		AgentState:     NewAgentState("session-1", "/workspace"),
 	}
 
 	info, err := SaveCheckpoint(sessionDir, snapshot, 5, 5)

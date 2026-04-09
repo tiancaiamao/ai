@@ -24,8 +24,12 @@ func TestCheckpointManager_CreateSnapshot(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 		agentctx.NewUserMessage("World"),
 	}
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: messages,
+		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
+	}
 
-	turn, err := mgr.CreateSnapshot(llmContext, messages, 5)
+	turn, err := mgr.CreateSnapshot(agentCtx, llmContext, 5)
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}
@@ -89,7 +93,11 @@ func TestCheckpointManager_Reconstruct(t *testing.T) {
 		agentctx.NewUserMessage("Initial"),
 	}
 
-	_, _ = mgr.CreateSnapshot(llmContext, messages, 1)
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: messages,
+		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
+	}
+	_, _ = mgr.CreateSnapshot(agentCtx, llmContext, 1)
 
 	// Append more messages
 	for i := 0; i < 3; i++ {
@@ -128,24 +136,50 @@ func TestCheckpointManager_ShouldCheckpoint(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	// Initially should not checkpoint (turn 0 < 10)
-	if mgr.ShouldCheckpoint(0) {
-		t.Error("Should not checkpoint at turn 0")
+	// ShouldCheckpoint now always returns true when enabled (event-driven)
+	if !mgr.ShouldCheckpoint() {
+		t.Error("ShouldCheckpoint should return true when enabled")
+	}
+}
+
+func TestCheckpointManager_ShouldCheckpoint_Disabled(t *testing.T) {
+	mgr, err := NewAgentContextCheckpointManager("")
+	if err != nil {
+		t.Fatalf("Failed to create checkpoint manager: %v", err)
 	}
 
-	// Should checkpoint at turn 10
-	if !mgr.ShouldCheckpoint(10) {
-		t.Error("Should checkpoint at turn 10")
+	// ShouldCheckpoint returns false when disabled (empty sessionDir)
+	if mgr.ShouldCheckpoint() {
+		t.Error("ShouldCheckpoint should return false when disabled")
+	}
+}
+
+func TestHasToolResultNamed(t *testing.T) {
+	results := []agentctx.AgentMessage{
+		agentctx.NewToolResultMessage("id1", "bash", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "output"},
+		}, false),
+		agentctx.NewToolResultMessage("id2", "update_llm_context", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "LLM Context updated."},
+		}, false),
+		agentctx.NewToolResultMessage("id3", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "file content"},
+		}, false),
 	}
 
-	// After checkpoint, should not checkpoint again until turn 20
-	_, _ = mgr.CreateSnapshot("test", nil, 10)
-	if mgr.ShouldCheckpoint(15) {
-		t.Error("Should not checkpoint at turn 15 (last checkpoint at 10)")
+	if !hasToolResultNamed(results, "update_llm_context") {
+		t.Error("Expected to find update_llm_context")
 	}
-
-	// Should checkpoint at turn 20
-	if !mgr.ShouldCheckpoint(20) {
-		t.Error("Should checkpoint at turn 20")
+	if !hasToolResultNamed(results, "bash") {
+		t.Error("Expected to find bash")
+	}
+	if hasToolResultNamed(results, "write") {
+		t.Error("Should not find write")
+	}
+	if hasToolResultNamed(nil, "update_llm_context") {
+		t.Error("Should return false for nil results")
+	}
+	if hasToolResultNamed([]agentctx.AgentMessage{}, "update_llm_context") {
+		t.Error("Should return false for empty results")
 	}
 }

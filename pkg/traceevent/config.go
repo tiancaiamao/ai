@@ -244,6 +244,8 @@ var eventNameToBit = map[string]int{
 	"truncate_compact_hint_read_attempt":   50,
 	"context_update_reminder":              51,
 	"context_decision_reminder":            52,
+	"mini_compact_check":                   53,
+	"context_mgmt_messages_truncated":      54,
 }
 
 var defaultEnabledEvents = []string{
@@ -287,6 +289,7 @@ var defaultEnabledEvents = []string{
 	"compact_performed_via_hint",
 	"context_update_reminder",
 	"context_decision_reminder",
+	"context_mgmt_messages_truncated",
 	// Default log events
 	"log:info",
 	"log:warn",

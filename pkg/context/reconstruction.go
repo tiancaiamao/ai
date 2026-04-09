@@ -9,6 +9,8 @@ import (
 // It loads the checkpoint (which includes LLMContext, AgentState, RecentMessages), then:
 //   - If checkpoint has RecentMessages: replay journal entries AFTER checkpoint.MessageIndex
 //   - If checkpoint has no RecentMessages: replay ALL journal entries from the beginning
+// After replaying messages, it recalculates runtime counters (tool calls, turns) from the replayed messages
+// to ensure accurate state after resume operations.
 func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *CheckpointInfo, journalEntries []JournalEntry) (*ContextSnapshot, error) {
 	snapshot, err := LoadCheckpoint(sessionDir, checkpoint)
 	if err != nil {
@@ -26,10 +28,33 @@ func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *Checkpoint
 		startIndex = len(journalEntries)
 	}
 
+	// Track counters for messages replayed after checkpoint
+	toolCallsAfterCheckpoint := 0
+	turnsAfterCheckpoint := 0
+	lastTurn := snapshot.AgentState.TotalTurns
+	lastLLMContextUpdate := snapshot.AgentState.LastLLMContextUpdate
+
 	for i := startIndex; i < len(journalEntries); i++ {
 		entry := journalEntries[i]
 		if entry.Type == "message" && entry.Message != nil {
-			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
+			msg := entry.Message
+			snapshot.RecentMessages = append(snapshot.RecentMessages, *msg)
+
+			// Count tool calls for trigger counters
+			if msg.Role == "toolResult" {
+				toolCallsAfterCheckpoint++
+			}
+
+			// Count turns (each assistant message is a new turn)
+			if msg.Role == "assistant" {
+				turnsAfterCheckpoint++
+				lastTurn++
+			}
+
+			// Track last LLM context update (from update_llm_context tool)
+			if msg.Role == "toolResult" && msg.ToolName == "update_llm_context" {
+				lastLLMContextUpdate = lastTurn
+			}
 		} else if entry.Type == "truncate" && entry.Truncate != nil {
 			if err := ApplyTruncateToSnapshot(snapshot, *entry.Truncate); err != nil {
 				slog.Debug("[Reconstruction] Truncate target not found, skipping",
@@ -47,7 +72,27 @@ func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *Checkpoint
 			)
 			snapshot.LLMContext = entry.Compact.Summary
 			snapshot.RecentMessages = []AgentMessage{}
+			// Reset counters on compact (same behavior as during normal execution)
+			toolCallsAfterCheckpoint = 0
+			turnsAfterCheckpoint = 0
+			lastTurn = entry.Compact.Turn
+			lastLLMContextUpdate = entry.Compact.Turn
 		}
+	}
+
+	// Update agent state with recalculated counters from replayed messages
+	if toolCallsAfterCheckpoint > 0 || turnsAfterCheckpoint > 0 || lastTurn != snapshot.AgentState.TotalTurns {
+		snapshot.AgentState.ToolCallsSinceLastTrigger = toolCallsAfterCheckpoint
+		snapshot.AgentState.TurnsSinceLastTrigger = turnsAfterCheckpoint
+		snapshot.AgentState.TotalTurns = lastTurn
+		snapshot.AgentState.LastLLMContextUpdate = lastLLMContextUpdate
+
+		slog.Debug("[Reconstruction] Updated agent state from replayed messages",
+			"tool_calls_since", toolCallsAfterCheckpoint,
+			"turns_since", turnsAfterCheckpoint,
+			"total_turns", lastTurn,
+			"last_llm_update", lastLLMContextUpdate,
+		)
 	}
 
 	return snapshot, nil
