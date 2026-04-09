@@ -2,10 +2,7 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"strings"
 
@@ -18,30 +15,9 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 	span := traceevent.StartSpan(ctx, "ConvertMessagesToLLM", traceevent.CategoryEvent)
 	defer span.End()
 
-	messages = dedupeMessagesForLLM(messages)
-	lastUserIndex := findLastVisibleUserIndex(messages)
-	protectedToolResults := protectedRecentToolResultIndexes(messages, recentToolResultsNoMetadata)
-
-	// Pre-calculate age rank for each tool result message
-	toolResultAgeRanks := make(map[int]int)
-	toolResultCount := 0
-	for i, msg := range messages {
-		if !msg.IsAgentVisible() || msg.Role != "toolResult" {
-			continue
-		}
-		if lastUserIndex < 0 || i >= lastUserIndex {
-			continue
-		}
-		if _, protected := protectedToolResults[i]; protected {
-			continue
-		}
-		toolResultCount++
-		toolResultAgeRanks[i] = toolResultCount
-	}
-
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
 
-	for i, msg := range messages {
+	for _, msg := range messages {
 		if !msg.IsAgentVisible() {
 			continue
 		}
@@ -95,31 +71,7 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 		// agentctx.Tool result message
 		if msg.Role == "toolResult" {
 			llmMsg.ToolCallID = msg.ToolCallID
-			content := msg.ExtractText()
-			if shouldInjectStaleToolMetadata(msg, i, lastUserIndex, protectedToolResults) {
-				charCount := len(content)
-				if n, ok := parseCharsFromAgentToolTag(content); ok {
-					charCount = n
-				}
-				toolName := strings.TrimSpace(msg.ToolName)
-				if toolName == "" {
-					toolName = "unknown"
-				}
-				ageRank := toolResultAgeRanks[i]
-				staleTag := fmt.Sprintf(
-					`<agent:tool id="%s" name="%s" chars="%d" stale="%d" />`,
-					msg.ToolCallID,
-					toolName,
-					charCount,
-					ageRank,
-				)
-				if content == "" {
-					content = staleTag
-				} else {
-					content = staleTag + "\n" + content
-				}
-			}
-			llmMsg.Content = content
+			llmMsg.Content = msg.ExtractText()
 		}
 
 		llmMessages = append(llmMessages, llmMsg)
@@ -209,131 +161,6 @@ func stripPendingToolCallsFromLastAssistant(messages []llm.LLMMessage, pending m
 	}
 
 	return messages
-}
-
-func shouldInjectStaleToolMetadata(
-	msg agentctx.AgentMessage,
-	messageIndex int,
-	lastUserIndex int,
-	protectedToolResults map[int]struct{},
-) bool {
-	if msg.Role != "toolResult" {
-		return false
-	}
-	if lastUserIndex < 0 || messageIndex >= lastUserIndex {
-		return false
-	}
-	if _, protected := protectedToolResults[messageIndex]; protected {
-		return false
-	}
-	return !hasAgentToolMetadataTag(msg.ExtractText())
-}
-
-func dedupeMessagesForLLM(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(messages) <= 1 {
-		return messages
-	}
-
-	seenToolResults := make(map[string]struct{}, len(messages))
-	seenSummaries := make(map[string]struct{}, len(messages))
-	seenAssistantToolCalls := make(map[string]struct{}, len(messages))
-	keptReverse := make([]agentctx.AgentMessage, 0, len(messages))
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		if key, ok := toolResultDedupKey(msg); ok {
-			if _, seen := seenToolResults[key]; seen {
-				continue
-			}
-			seenToolResults[key] = struct{}{}
-		}
-
-		if key, ok := toolSummaryDedupKey(msg); ok {
-			if _, seen := seenSummaries[key]; seen {
-				continue
-			}
-			seenSummaries[key] = struct{}{}
-		}
-
-		// Deduplicate assistant messages with duplicate tool call sets.
-		if key, ok := assistantToolCallsDedupKey(msg); ok {
-			if _, seen := seenAssistantToolCalls[key]; seen {
-				continue
-			}
-			seenAssistantToolCalls[key] = struct{}{}
-		}
-
-		keptReverse = append(keptReverse, msg)
-	}
-
-	for i, j := 0, len(keptReverse)-1; i < j; i, j = i+1, j-1 {
-		keptReverse[i], keptReverse[j] = keptReverse[j], keptReverse[i]
-	}
-
-	return keptReverse
-}
-
-func toolResultDedupKey(msg agentctx.AgentMessage) (string, bool) {
-	if msg.Role != "toolResult" {
-		return "", false
-	}
-	if callID := strings.TrimSpace(msg.ToolCallID); callID != "" {
-		return "call_id:" + callID, true
-	}
-	toolName := strings.TrimSpace(msg.ToolName)
-	if toolName == "" {
-		toolName = "unknown"
-	}
-	return "tool_name:" + toolName + "|text_hash:" + hashString(msg.ExtractText()), true
-}
-
-func toolSummaryDedupKey(msg agentctx.AgentMessage) (string, bool) {
-	if msg.Metadata == nil || msg.Metadata.Kind != "tool_summary" {
-		return "", false
-	}
-	text := strings.TrimSpace(msg.ExtractText())
-	if text == "" {
-		return "", false
-	}
-	return hashString(text), true
-}
-
-func assistantToolCallsDedupKey(msg agentctx.AgentMessage) (string, bool) {
-	if msg.Role != "assistant" {
-		return "", false
-	}
-
-	toolCalls := msg.ExtractToolCalls()
-	if len(toolCalls) == 0 {
-		return "", false
-	}
-
-	parts := make([]string, 0, len(toolCalls))
-	for i, tc := range toolCalls {
-		callID := strings.TrimSpace(tc.ID)
-		if callID != "" {
-			parts = append(parts, "id:"+callID)
-			continue
-		}
-
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		parts = append(parts, fmt.Sprintf(
-			"idx:%d|name:%s|args:%s",
-			i,
-			strings.TrimSpace(tc.Name),
-			string(argsJSON),
-		))
-	}
-	return strings.Join(parts, ";"), true
-}
-
-func hashString(input string) string {
-	sum := sha256.Sum256([]byte(input))
-	return hex.EncodeToString(sum[:])
 }
 
 // ConvertLLMMessageToAgent converts an LLM message to an agent message.
