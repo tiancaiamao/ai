@@ -324,24 +324,56 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 			// Restore conversation history from session
 			ctx.RecentMessages = sess.GetMessages()
-			// Restore agent runtime state from checkpoint (preserves trigger counters, CWD, tokens, etc.)
+			// Restore agent state and messages from checkpoint (preserves trigger counters, CWD, tokens, etc.)
+			// Checkpoint messages are compacted, so prefer them over full session history to reduce token pressure.
 			if sessionDir != "" {
 				if cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir); err == nil && cpInfo != nil {
 					cpPath := filepath.Join(sessionDir, cpInfo.Path)
-					if savedState, err := agentctx.LoadCheckpointAgentState(cpPath); err == nil {
-						ctx.AgentState = savedState
-						// Restore CWD from checkpoint if available
-						if savedState.CurrentWorkingDir != "" {
-							if err := ws.SetCWD(savedState.CurrentWorkingDir); err != nil {
-								slog.Warn("Failed to restore CWD from checkpoint", "cwd", savedState.CurrentWorkingDir, "error", err)
-							}
+					// Try loading full snapshot (messages + state) from checkpoint
+					if snapshot, err := agentctx.LoadCheckpoint(sessionDir, cpInfo); err == nil && snapshot != nil {
+						if len(snapshot.RecentMessages) > 0 {
+							sessionMsgCount := len(ctx.RecentMessages)
+							ctx.RecentMessages = snapshot.RecentMessages
+							slog.Info("Restored messages from checkpoint",
+								"checkpoint_messages", len(snapshot.RecentMessages),
+								"session_messages", sessionMsgCount,
+								"saved", sessionMsgCount-len(snapshot.RecentMessages),
+							)
 						}
-						slog.Info("Restored agent state from checkpoint",
-							"turns", savedState.TotalTurns,
-							"tokens", savedState.TokensUsed,
-							"toolCallsSince", savedState.ToolCallsSinceLastTrigger,
-							"cwd", savedState.CurrentWorkingDir,
-						)
+						if snapshot.AgentState != nil {
+							ctx.AgentState = snapshot.AgentState
+							if snapshot.AgentState.CurrentWorkingDir != "" {
+								if err := ws.SetCWD(snapshot.AgentState.CurrentWorkingDir); err != nil {
+									slog.Warn("Failed to restore CWD from checkpoint", "cwd", snapshot.AgentState.CurrentWorkingDir, "error", err)
+								}
+							}
+							slog.Info("Restored agent state from checkpoint",
+								"turns", snapshot.AgentState.TotalTurns,
+								"tokens", snapshot.AgentState.TokensUsed,
+								"toolCallsSince", snapshot.AgentState.ToolCallsSinceLastTrigger,
+								"cwd", snapshot.AgentState.CurrentWorkingDir,
+							)
+						}
+						// Restore LLM context from checkpoint if available
+						if snapshot.LLMContext != "" {
+							ctx.LLMContext = snapshot.LLMContext
+						}
+					} else {
+						// Fallback: load only agent state if full snapshot fails
+						if savedState, err := agentctx.LoadCheckpointAgentState(cpPath); err == nil {
+							ctx.AgentState = savedState
+							if savedState.CurrentWorkingDir != "" {
+								if err := ws.SetCWD(savedState.CurrentWorkingDir); err != nil {
+									slog.Warn("Failed to restore CWD from checkpoint", "cwd", savedState.CurrentWorkingDir, "error", err)
+								}
+							}
+							slog.Info("Restored agent state from checkpoint (no messages)",
+								"turns", savedState.TotalTurns,
+								"tokens", savedState.TokensUsed,
+								"toolCallsSince", savedState.ToolCallsSinceLastTrigger,
+								"cwd", savedState.CurrentWorkingDir,
+							)
+						}
 					}
 				}
 			}
@@ -405,6 +437,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
+
+	// Initialize checkpoint manager for persistent state
+	var checkpointMgr *agent.AgentContextCheckpointManager
+	if sess != nil {
+		sessionDir := sess.GetDir()
+		if mgr, err := agent.NewAgentContextCheckpointManager(sessionDir); err != nil {
+			slog.Warn("Failed to create checkpoint manager", "error", err)
+			checkpointMgr = nil
+		} else {
+			checkpointMgr = mgr
+			defer func() {
+				if checkpointMgr != nil {
+					checkpointMgr.Close()
+				}
+			}()
+		}
+	}
 
 	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
@@ -940,6 +989,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					FirstKeptEntryID: result.FirstKeptEntryID,
 					TokensBefore:     result.TokensBefore,
 					TokensAfter:      result.TokensAfter,
+				}
+
+				// Create checkpoint after manual compaction to preserve AgentState for resume
+				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
+					agentCtx := ag.GetContext()
+					if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, agentCtx.AgentState.TotalTurns); err != nil {
+						slog.Warn("[Loop] Failed to create checkpoint after manual compact", "error", err)
+					} else {
+						slog.Info("[Loop] Checkpoint created after manual compact", "trigger", "manual_command")
+					}
 				}
 				return nil
 			},

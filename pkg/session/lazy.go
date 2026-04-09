@@ -50,8 +50,9 @@ func FullLoadOptions() LoadOptions {
 func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
-			entries: make([]*SessionEntry, 0),
-			byID:    make(map[string]*SessionEntry),
+			entries:    make([]*SessionEntry, 0),
+			byID:       make(map[string]*SessionEntry),
+			llmContext: opts.LLMContext,
 		}
 		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil
@@ -73,6 +74,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 				entries:    make([]*SessionEntry, 0),
 				byID:       make(map[string]*SessionEntry),
 				persist:    true,
+				llmContext: opts.LLMContext,
 			}
 			sess.header = newSessionHeader(id, cwd, "")
 			return sess, nil
@@ -94,6 +96,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 		byID:       make(map[string]*SessionEntry),
 		header:     *header,
 		persist:    true,
+		llmContext: opts.LLMContext,
 	}
 
 	// Fast path: use ResumeOffset

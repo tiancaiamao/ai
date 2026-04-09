@@ -409,8 +409,17 @@ func (c *LLMMiniCompactor) extractToolCalls(ctx context.Context, stream *llm.Eve
 // executeToolCalls runs each tool call and logs the result.
 func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) {
 	for _, tc := range toolCalls {
-		toolSpan := traceevent.StartSpan(ctx, "mini_compact_tool", traceevent.CategoryTool,
+		startTime := time.Now()
+		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
 			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+		)
+
+		// Log tool_start event
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_start",
+			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+			traceevent.Field{Key: "args", Value: tc.Function.Arguments},
 		)
 
 		var target context_mgmt.Tool
@@ -425,6 +434,13 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			toolSpan.AddField("error", true)
 			toolSpan.AddField("error_message", fmt.Sprintf("tool %q not found", tc.Function.Name))
 			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: tc.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: fmt.Sprintf("tool %q not found", tc.Function.Name)},
+			)
 			continue
 		}
 
@@ -435,6 +451,13 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 				toolSpan.AddField("error", true)
 				toolSpan.AddField("error_message", fmt.Sprintf("parse args: %v", err))
 				toolSpan.End()
+				traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+					traceevent.Field{Key: "tool", Value: tc.Function.Name},
+					traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+					traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+					traceevent.Field{Key: "error", Value: true},
+					traceevent.Field{Key: "error_message", Value: fmt.Sprintf("parse args: %v", err)},
+				)
 				continue
 			}
 		}
@@ -445,6 +468,13 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			toolSpan.AddField("error", true)
 			toolSpan.AddField("error_message", err.Error())
 			toolSpan.End()
+			traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+				traceevent.Field{Key: "tool", Value: tc.Function.Name},
+				traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+				traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+				traceevent.Field{Key: "error", Value: true},
+				traceevent.Field{Key: "error_message", Value: err.Error()},
+			)
 			continue
 		}
 
@@ -456,6 +486,12 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 		}
 		slog.Info("[LLMMini] Tool executed", "tool", tc.Function.Name, "result", resultText)
 		toolSpan.End()
+		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
+			traceevent.Field{Key: "tool", Value: tc.Function.Name},
+			traceevent.Field{Key: "tool_call_id", Value: tc.ID},
+			traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
+			traceevent.Field{Key: "result", Value: resultText},
+		)
 	}
 }
 
