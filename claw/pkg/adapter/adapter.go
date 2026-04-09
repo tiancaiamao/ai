@@ -211,7 +211,7 @@ func (c *clawCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
 	if comp == nil {
 		return 0
 	}
-	return comp.EstimateContextTokens(ctx)
+	return comp.EstimateContextTokensOld(ctx.RecentMessages)
 }
 
 // Config 是 AgentLoop 的配置
