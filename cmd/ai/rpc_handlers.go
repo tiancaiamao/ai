@@ -324,6 +324,27 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 			// Restore conversation history from session
 			ctx.RecentMessages = sess.GetMessages()
+			// Restore agent runtime state from checkpoint (preserves trigger counters, CWD, tokens, etc.)
+			if sessionDir != "" {
+				if cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir); err == nil && cpInfo != nil {
+					cpPath := filepath.Join(sessionDir, cpInfo.Path)
+					if savedState, err := agentctx.LoadCheckpointAgentState(cpPath); err == nil {
+						ctx.AgentState = savedState
+						// Restore CWD from checkpoint if available
+						if savedState.CurrentWorkingDir != "" {
+							if err := ws.SetCWD(savedState.CurrentWorkingDir); err != nil {
+								slog.Warn("Failed to restore CWD from checkpoint", "cwd", savedState.CurrentWorkingDir, "error", err)
+							}
+						}
+						slog.Info("Restored agent state from checkpoint",
+							"turns", savedState.TotalTurns,
+							"tokens", savedState.TokensUsed,
+							"toolCallsSince", savedState.ToolCallsSinceLastTrigger,
+							"cwd", savedState.CurrentWorkingDir,
+						)
+					}
+				}
+			}
 			// Set up persistence callback for compact operations
 			ctx.OnMessagesChanged = func() error {
 				return sess.SaveMessages(ctx.RecentMessages)
@@ -1102,24 +1123,18 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
 
 		// Estimate system prompt and tools tokens for display purposes only
-		// Since Go doesn't have built-in tokenization, use character count approximation
-		// Approximately 1 token = 4 characters for text
-		const charsPerToken = 4
+		// Uses the unified token estimation from AgentContext for consistency
+		// with runtime compaction decisions.
+		agentCtx := ag.GetContext()
 
-		// Build fresh system prompt and get tools for estimation
+		// Build fresh system prompt for estimation
 		currentSystemPrompt := buildSystemPrompt(sess)
 
-		// Estimate tokens from string lengths (for display only)
-		tokens.SystemPromptTokens = len(currentSystemPrompt) / charsPerToken
+		// Estimate tokens from string lengths
+		tokens.SystemPromptTokens = len(currentSystemPrompt) / 4
 
-		// Build tools JSON for estimation - use ToLLMTools to get serializable format
-		toolsJSON, err := json.Marshal(registry.ToLLMTools())
-		if err != nil {
-			slog.Error("Failed to marshal tools for token estimation", "error", err)
-		} else {
-			slog.Debug("Tools JSON for token estimation", "length", len(toolsJSON), "estimated_tokens", len(toolsJSON)/charsPerToken, "tool_count", len(registry.All()))
-			tokens.SystemToolsTokens = len(toolsJSON) / charsPerToken
-		}
+		// Use unified tools token estimation
+		tokens.SystemToolsTokens = agentCtx.EstimateToolsTokens()
 
 		// Calculate active window tokens (current conversation) for percentage display
 		// This aligns with runtime_state and represents what's actually sent to LLM

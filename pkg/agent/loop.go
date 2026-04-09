@@ -313,7 +313,7 @@ func runInnerLoop(
 		var compacted *agentctx.CompactionResult
 		var compactErr error
 		for _, c := range config.Compactors {
-			if c.ShouldCompact(agentCtx) {
+			if c.ShouldCompact(ctx, agentCtx) {
 				slog.Info("[Loop] Pre-LLM compaction triggered", "compactor", fmt.Sprintf("%T", c))
 				compacted, compactErr = c.Compact(agentCtx)
 				if compactErr == nil {
@@ -364,6 +364,15 @@ func runInnerLoop(
 					After:   after,
 					Trigger: "pre_llm_threshold",
 				}))
+
+				// Create checkpoint after compaction to preserve AgentState for resume
+				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
+					if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+						slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+					} else {
+						slog.Info("[Loop] Checkpoint created after compaction", "trigger", "pre_llm_threshold", "turn", turnCount)
+					}
+				}
 			}
 		}
 
@@ -430,6 +439,15 @@ func runInnerLoop(
 						After:   len(agentCtx.RecentMessages),
 						Trigger: "context_limit_recovery",
 					}))
+
+					// Create checkpoint after compaction to preserve AgentState for resume
+					if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
+						if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+						} else {
+							slog.Info("[Loop] Checkpoint created after compaction", "trigger", "context_limit_recovery", "turn", turnCount)
+						}
+					}
 					continue
 				}
 			}
@@ -536,14 +554,13 @@ func runInnerLoop(
 			}
 		}
 
-		// Create checkpoint periodically (every 10 turns)
-		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint(turnCount) {
-			// Use LLMContext string directly
+		// Create checkpoint after update_llm_context tool execution
+		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() && hasToolResultNamed(toolResults, "update_llm_context") {
 			llmContextContent := agentCtx.LLMContext
-			if _, err := checkpointMgr.CreateSnapshot(llmContextContent, agentCtx.RecentMessages, turnCount); err != nil {
-				slog.Warn("[Loop] Failed to create checkpoint", "error", err, "turn", turnCount)
+			if _, err := checkpointMgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
+				slog.Warn("[Loop] Failed to create checkpoint after update_llm_context", "error", err, "turn", turnCount)
 			} else {
-				slog.Info("[Loop] Checkpoint created", "turn", turnCount)
+				slog.Info("[Loop] Checkpoint created after update_llm_context", "turn", turnCount)
 			}
 		}
 
@@ -811,11 +828,15 @@ func streamAssistantResponse(
 		agentCtx.AgentState.TokensLimit = tokensMax
 		agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
 
-
-		currentWorkdir := ""
+		// Update CWD in AgentState so checkpoints preserve it for session restore
 		if config.GetWorkingDir != nil {
-			currentWorkdir = config.GetWorkingDir()
+			agentCtx.AgentState.CurrentWorkingDir = config.GetWorkingDir()
 		}
+		if config.GetStartupPath != nil {
+			agentCtx.AgentState.WorkspaceRoot = config.GetStartupPath()
+		}
+
+		currentWorkdir := agentCtx.AgentState.CurrentWorkingDir
 		startupPath := ""
 		if config.GetStartupPath != nil {
 			startupPath = config.GetStartupPath()
@@ -1573,10 +1594,11 @@ func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []
 }
 
 // EstimateConversationTokens estimates token count for messages.
+// EstimateConversationTokens estimates total tokens for a slice of messages.
 func EstimateConversationTokens(messages []agentctx.AgentMessage) int {
 	total := 0
 	for _, msg := range messages {
-		total += EstimateMessageTokens(msg)
+		total += agentctx.EstimateMessageTokens(msg)
 	}
 	return total
 }
@@ -1938,41 +1960,20 @@ func normalizeApprox(value int) int {
 	return (value / 1000) * 1000
 }
 
-// EstimateMessageTokens estimates token count for a message.
-func EstimateMessageTokens(msg agentctx.AgentMessage) int {
-	if !msg.IsAgentVisible() {
-		return 0
-	}
-
-	charCount := 0
-	for _, block := range msg.Content {
-		switch b := block.(type) {
-		case agentctx.TextContent:
-			charCount += len(b.Text)
-		case agentctx.ThinkingContent:
-			charCount += len(b.Thinking)
-		case agentctx.ToolCallContent:
-			charCount += len(b.Name)
-			if b.Arguments != nil {
-				if argBytes, err := json.Marshal(b.Arguments); err == nil {
-					charCount += len(argBytes)
-				}
-			}
-		case agentctx.ImageContent:
-			// Roughly estimate images as 1200 tokens (4800 chars)
-			charCount += 4800
+// hasToolResultNamed checks if any tool result in the list is from the given tool name.
+func hasToolResultNamed(results []agentctx.AgentMessage, toolName string) bool {
+	for _, r := range results {
+		if r.ToolName == toolName {
+			return true
 		}
 	}
+	return false
+}
 
-	if charCount == 0 {
-		charCount = len(msg.ExtractText())
-	}
-	if charCount == 0 {
-		return 0
-	}
-
-	// Rough approximation: 1 token per 4 characters
-	return (charCount + 3) / 4
+// EstimateMessageTokens estimates token count for a message.
+// Deprecated: Use agentctx.EstimateMessageTokens instead.
+func EstimateMessageTokens(msg agentctx.AgentMessage) int {
+	return agentctx.EstimateMessageTokens(msg)
 }
 
 // randFloat64 returns a random float64 in [0, 1)

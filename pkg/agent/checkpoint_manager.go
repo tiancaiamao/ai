@@ -53,21 +53,23 @@ func (m *AgentContextCheckpointManager) AppendMessage(msg agentctx.AgentMessage)
 // CreateSnapshot creates a checkpoint from current AgentContext state.
 // Returns turn number and error.
 func (m *AgentContextCheckpointManager) CreateSnapshot(
+	agentCtx *agentctx.AgentContext,
 	llmContext string,
-	messages []agentctx.AgentMessage,
 	totalTurns int,
 ) (int, error) {
 	if !m.enabled {
 		return totalTurns, nil
 	}
 
+	// Capture the full AgentState from the running context.
+	// This preserves runtime state like ToolCallsSinceLastTrigger, CWD, tokens, etc.
+	agentState := agentCtx.AgentState.Clone()
+	agentState.TotalTurns = totalTurns
+
 	snapshot := &agentctx.ContextSnapshot{
 		LLMContext:     llmContext,
-		RecentMessages: messages,
-		AgentState: agentctx.AgentState{
-			TotalTurns:  totalTurns,
-			TokensLimit: 200000,
-		},
+		RecentMessages: agentCtx.RecentMessages,
+		AgentState:     agentState,
 	}
 
 	info, err := agentctx.SaveCheckpoint(m.sessionDir, snapshot, totalTurns, m.messageIndex)
@@ -115,13 +117,10 @@ func (m *AgentContextCheckpointManager) Reconstruct() (
 	return snapshot.LLMContext, snapshot.RecentMessages, snapshot.AgentState.TotalTurns, nil
 }
 
-// ShouldCheckpoint returns true if a checkpoint should be created at this turn.
-// Uses checkpoint interval of 10 turns by default.
-func (m *AgentContextCheckpointManager) ShouldCheckpoint(turn int) bool {
-	if !m.enabled {
-		return false
-	}
-	return turn-m.lastTurn >= 10
+// ShouldCheckpoint returns true if an event-driven checkpoint should be created.
+// Always returns true when enabled — the caller decides when to trigger.
+func (m *AgentContextCheckpointManager) ShouldCheckpoint() bool {
+	return m.enabled
 }
 
 // Close closes the journal file.

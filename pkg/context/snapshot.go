@@ -11,7 +11,7 @@ type ContextSnapshot struct {
 	RecentMessages []AgentMessage
 
 	// AgentState - System-maintained metadata
-	AgentState AgentState
+	AgentState *AgentState
 }
 
 // NewContextSnapshot creates a new empty snapshot.
@@ -19,7 +19,7 @@ func NewContextSnapshot(sessionID, cwd string) *ContextSnapshot {
 	return &ContextSnapshot{
 		LLMContext:     "",
 		RecentMessages: []AgentMessage{},
-		AgentState:     *NewAgentState(sessionID, cwd),
+		AgentState:     NewAgentState(sessionID, cwd),
 	}
 }
 
@@ -53,39 +53,9 @@ func (s *ContextSnapshot) Clone() *ContextSnapshot {
 		}
 	}
 
-	return &ContextSnapshot{
+		return &ContextSnapshot{
 		LLMContext:     s.LLMContext,
 		RecentMessages: messages,
-		AgentState:     *s.AgentState.Clone(),
+		AgentState:     s.AgentState.Clone(),
 	}
-}
-
-// EstimateTokens provides a rough token estimate based on message text length.
-// Uses ~4 chars per token heuristic.
-func (s *ContextSnapshot) EstimateTokens() int {
-	total := len(s.LLMContext)
-	for _, msg := range s.RecentMessages {
-		total += len(msg.ExtractText())
-	}
-	return total / 4
-}
-
-// EstimateTokenPercent returns token usage as a fraction of the limit.
-func (s *ContextSnapshot) EstimateTokenPercent() float64 {
-	if s.AgentState.TokensLimit <= 0 {
-		return 0
-	}
-	return float64(s.EstimateTokens()) / float64(s.AgentState.TokensLimit)
-}
-
-// CountStaleOutputs counts tool result messages older than maxAge turns.
-func (s *ContextSnapshot) CountStaleOutputs(maxAge int) int {
-	count := 0
-	currentTurn := s.AgentState.TotalTurns
-	for _, msg := range s.RecentMessages {
-		if msg.Role == "toolResult" && currentTurn-msg.TruncatedAt > maxAge {
-			count++
-		}
-	}
-	return count
 }

@@ -1,12 +1,13 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"context"
 	"errors"
 	"log/slog"
 	"reflect"
 	"sync"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
@@ -29,7 +30,7 @@ func (sc *sessionCompactor) Update(sess *session.Session, comp *compact.Compacto
 	sc.mu.Unlock()
 }
 
-func (sc *sessionCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+func (sc *sessionCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	sc.mu.Lock()
 	sess := sc.session
 	comp := sc.compactor
@@ -38,7 +39,7 @@ func (sc *sessionCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 		return false
 	}
 	// Check if underlying compactor should trigger
-	if !comp.ShouldCompact(ctx) {
+	if !comp.ShouldCompact(ctx, agentCtx) {
 		return false
 	}
 	if sess == nil {
@@ -56,17 +57,6 @@ func (sc *sessionCompactor) CalculateDynamicThreshold() int {
 		return 0
 	}
 	return comp.CalculateDynamicThreshold()
-}
-
-// EstimateContextTokens estimates the token count of context.
-func (sc *sessionCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	sc.mu.Lock()
-	comp := sc.compactor
-	sc.mu.Unlock()
-	if comp == nil {
-		return 0
-	}
-	return comp.EstimateContextTokens(ctx)
 }
 
 func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {

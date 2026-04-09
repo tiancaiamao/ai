@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -17,7 +18,7 @@ type AgentContext struct {
 	// Unified context state
 	LLMContext     string         `json:"llmContext,omitempty"` // Structured LLM context content (not file manager)
 	RecentMessages []AgentMessage `json:"recentMessages"`         // Recent messages (not full history)
-	AgentState     AgentState     `json:"agentState"`            // System-maintained metadata
+	AgentState     *AgentState    `json:"agentState"`             // System-maintained metadata
 
 	// Compaction state
 	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
@@ -103,7 +104,7 @@ func NewAgentContext(systemPrompt string) *AgentContext {
 		RecentMessages: make([]AgentMessage, 0),
 		Tools:          make([]Tool, 0),
 		Skills:         make([]skill.Skill, 0),
-		AgentState:     *NewAgentState("", ""),
+		AgentState:     NewAgentState("", ""),
 	}
 }
 
@@ -115,7 +116,7 @@ func NewAgentContextWithSessionID(systemPrompt, sessionID, cwd string) *AgentCon
 		RecentMessages: make([]AgentMessage, 0),
 		Tools:          make([]Tool, 0),
 		Skills:         make([]skill.Skill, 0),
-		AgentState:     *NewAgentState(sessionID, cwd),
+		AgentState:     NewAgentState(sessionID, cwd),
 	}
 	return ctx
 }
@@ -146,14 +147,131 @@ func (c *AgentContext) AddMessage(message AgentMessage) {
 	c.AddRecentMessage(message)
 }
 
-// EstimateTokens provides a rough token estimate based on message text length.
+// EstimateMessageTokens estimates token count for a single message.
+// Accounts for all content block types (text, thinking, tool calls, images).
+// Non-agent-visible messages return 0.
+// Uses ~4 chars per token heuristic.
+func EstimateMessageTokens(msg AgentMessage) int {
+	if !msg.IsAgentVisible() {
+		return 0
+	}
+
+	charCount := 0
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case TextContent:
+			charCount += len(b.Text)
+		case ThinkingContent:
+			charCount += len(b.Thinking)
+		case ToolCallContent:
+			charCount += len(b.Name)
+			if b.Arguments != nil {
+				if argBytes, err := json.Marshal(b.Arguments); err == nil {
+					charCount += len(argBytes)
+				}
+			}
+		case ImageContent:
+			// Roughly estimate images as 1200 tokens (4800 chars)
+			charCount += 4800
+		}
+	}
+
+	if charCount == 0 {
+		charCount = len(msg.ExtractText())
+	}
+	if charCount == 0 {
+		return 0
+	}
+
+	// Rough approximation: 1 token per 4 characters
+	return (charCount + 3) / 4
+}
+
+// EstimateToolsTokens estimates token count for all registered tool schemas.
+// Serializes tool definitions to JSON and applies chars/4 heuristic.
+func (c *AgentContext) EstimateToolsTokens() int {
+	if len(c.Tools) == 0 {
+		return 0
+	}
+
+	// Build a lightweight JSON representation matching what's sent to the LLM
+	type toolFunc struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+	}
+	type toolDef struct {
+		Type     string   `json:"type"`
+		Function toolFunc `json:"function"`
+	}
+
+	tools := make([]toolDef, 0, len(c.Tools))
+	for _, t := range c.Tools {
+		if t == nil {
+			continue
+		}
+		tools = append(tools, toolDef{
+			Type: "function",
+			Function: toolFunc{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Parameters:  t.Parameters(),
+			},
+		})
+	}
+
+	data, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return len(data) / 4
+}
+
+// EstimateTokens estimates total token usage for the current context.
+// Accounts for system prompt, tools schema, LLM context, and all messages
+// (including thinking, tool calls, and images).
 // Uses ~4 chars per token heuristic.
 func (c *AgentContext) EstimateTokens() int {
-	total := len(c.LLMContext)
+	total := len(c.SystemPrompt) + len(c.LLMContext)
+
+	// Include tool schema tokens
+	total += c.EstimateToolsTokens() * 4 // convert back to chars for summation
+
 	for _, msg := range c.RecentMessages {
-		total += len(msg.ExtractText())
+		total += estimateMessageChars(msg)
 	}
 	return total / 4
+}
+
+// estimateMessageChars counts characters in a message for token estimation.
+func estimateMessageChars(msg AgentMessage) int {
+	if !msg.IsAgentVisible() {
+		return 0
+	}
+
+	charCount := 0
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case TextContent:
+			charCount += len(b.Text)
+		case ThinkingContent:
+			charCount += len(b.Thinking)
+		case ToolCallContent:
+			charCount += len(b.Name)
+			if b.Arguments != nil {
+				if argBytes, err := json.Marshal(b.Arguments); err == nil {
+					charCount += len(argBytes)
+				}
+			}
+		case ImageContent:
+			charCount += 4800
+		}
+	}
+
+	if charCount == 0 {
+		charCount = len(msg.ExtractText())
+	}
+	return charCount
 }
 
 // EstimateTokenPercent returns token usage as a fraction of the limit.

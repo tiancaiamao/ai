@@ -149,7 +149,7 @@ func (c *clawCompactor) Update(sess *session.Session, comp *compact.Compactor) {
 	c.compactor = comp
 }
 
-func (c *clawCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+func (c *clawCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	c.mu.Lock()
 	sess := c.sess
 	comp := c.compactor
@@ -158,7 +158,7 @@ func (c *clawCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
 	if comp == nil || sess == nil {
 		return false
 	}
-	if !comp.ShouldCompact(ctx) {
+	if !comp.ShouldCompact(ctx, agentCtx) {
 		return false
 	}
 	return sess.CanCompact(comp)

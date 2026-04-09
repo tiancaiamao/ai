@@ -93,11 +93,11 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 	}
 
 	return &ContextSnapshot{
-		LLMContext:     string(llmContextData),
-		RecentMessages: recentMessages,
-		AgentState:     agentState,
-	}, nil
-}
+			LLMContext:     string(llmContextData),
+			RecentMessages: recentMessages,
+			AgentState:     &agentState,
+		}, nil
+	}
 
 // LoadCheckpointLLMContext loads only the LLM context from a checkpoint.
 func LoadCheckpointLLMContext(checkpointPath string) (string, error) {

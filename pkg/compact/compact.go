@@ -962,7 +962,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		}, nil
 	}
 
-	tokensBefore := c.EstimateContextTokens(ctx)
+	tokensBefore := ctx.EstimateTokens()
 
 	keepRecentTokens := c.calculateKeepRecentBudget()
 	var oldMessages []agentctx.AgentMessage
@@ -1042,21 +1042,15 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 }
 
 // ShouldCompact determines if context should be compressed using AgentContext.
-func (c *Compactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
 		return false
 	}
 
 	threshold := c.CalculateDynamicThreshold()
 	if threshold > 0 {
-		tokens := c.EstimateContextTokens(ctx)
+		tokens := agentCtx.EstimateTokens()
 		return tokens >= threshold
 	}
 	return false
-}
-
-// EstimateContextTokensAgent estimates context tokens using AgentContext.
-func (c *Compactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	// Use AgentContext's own estimation
-	return ctx.EstimateTokens()
 }

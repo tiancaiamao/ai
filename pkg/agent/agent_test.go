@@ -119,7 +119,7 @@ type mockCompactor struct {
 	called        bool
 }
 
-func (m *mockCompactor) ShouldCompact(ctx *agentctx.AgentContext) bool {
+func (m *mockCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
 	m.called = true
 	return m.shouldCompact
 }
@@ -136,10 +136,6 @@ func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.Compactio
 
 func (m *mockCompactor) CalculateDynamicThreshold() int {
 	return 100000 // Default threshold for tests
-}
-
-func (m *mockCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	return len(ctx.RecentMessages) * 100 // Simple estimation for tests
 }
 
 // TestAgentEvents tests the event channel.
