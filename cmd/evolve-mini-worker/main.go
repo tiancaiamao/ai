@@ -13,6 +13,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/internal/evolvemini"
+	"github.com/tiancaiamao/ai/pkg/config"
 )
 
 func main() {
@@ -51,24 +52,27 @@ func executeCompact(input evolvemini.WorkerInput) evolvemini.WorkerOutput {
 	contextBefore := serializeMessages(agentCtx.RecentMessages)
 	llmContext := snap.LLMContext
 
-	apiKey := os.Getenv("ZAI_API_KEY")
-	if apiKey == "" {
-		return errorOutput("ZAI_API_KEY not set")
+	// Use default model: zai/glm-4.7
+	provider := "zai"
+	modelID := "glm-4.7"
+
+	// Resolve API key
+	apiKey, err := config.ResolveAPIKey(provider)
+	if err != nil {
+		return errorOutput(fmt.Sprintf("resolve API key: %v", err))
 	}
 
-	modelID := os.Getenv("ZAI_MODEL_ID")
-	if modelID == "" {
-		modelID = "gpt-4o-mini"
+	// Resolve model spec
+	modelSpec, err := resolveModelSpec(provider, modelID)
+	if err != nil {
+		return errorOutput(fmt.Sprintf("resolve model config: %v", err))
 	}
-
-	envBaseURL := os.Getenv("ZAI_BASE_URL")
-	envAPI := os.Getenv("ZAI_MODEL_API")
 
 	model := llm.Model{
 		ID:            modelID,
-		Provider:      "zai",
-		BaseURL:       envBaseURL,
-		API:           envAPI,
+		Provider:      provider,
+		BaseURL:       modelSpec.BaseURL,
+		API:           modelSpec.API,
 		ContextWindow: snap.ContextWindow,
 	}
 	if model.API == "" {
@@ -130,6 +134,28 @@ func serializeMessages(msgs []agentctx.AgentMessage) string {
 		b.WriteString("\n---\n")
 	}
 	return b.String()
+}
+
+
+// resolveModelSpec looks up a model spec from models.json.
+func resolveModelSpec(provider, modelID string) (config.ModelSpec, error) {
+	modelsPath, err := config.ResolveModelsPath()
+	if err != nil {
+		return config.ModelSpec{}, fmt.Errorf("resolve models path: %w", err)
+	}
+
+	specs, err := config.LoadModelSpecs(modelsPath)
+	if err != nil {
+		return config.ModelSpec{}, fmt.Errorf("load models: %w", err)
+	}
+
+	for _, spec := range specs {
+		if spec.Provider == provider && spec.ID == modelID {
+			return spec, nil
+		}
+	}
+
+	return config.ModelSpec{}, fmt.Errorf("model not found: %s/%s", provider, modelID)
 }
 
 func errorOutput(errMsg string) evolvemini.WorkerOutput {
