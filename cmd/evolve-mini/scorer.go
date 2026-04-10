@@ -36,7 +36,7 @@ func runScore(workerBinary, suiteDir string) error {
 	for i, snap := range suite.Snapshots {
 		fmt.Printf("\n[%d/%d] Scoring %s ...\n", i+1, len(suite.Snapshots), snap.ID)
 
-		output, err := runWorker(workerBinary, snap)
+		output, err := runWorkerWithRetry(workerBinary, snap, 3)
 		if err != nil {
 			fmt.Printf("  Worker failed: %v\n", err)
 			// Create a failure score with all 1s
@@ -57,7 +57,10 @@ func runScore(workerBinary, suiteDir string) error {
 		fmt.Printf("  Worker succeeded: %d -> %d tokens (saved %d)\n",
 			output.TokensBefore, output.TokensAfter, output.TokensBefore-output.TokensAfter)
 
-		cs, err := judgeLLM(snap, *output)
+		// Small delay between worker and judge to avoid rate limiting
+		time.Sleep(2 * time.Second)
+
+		cs, err := judgeLLMWithRetry(snap, *output, 3)
 		if err != nil {
 			fmt.Printf("  Judge failed: %v\n", err)
 			cs = evolvemini.CaseScore{
@@ -74,6 +77,11 @@ func runScore(workerBinary, suiteDir string) error {
 
 		caseScores = append(caseScores, cs)
 		fmt.Printf("  Score: %d (%s)\n", cs.WeightedTotal, cs.OverallAssessment)
+
+		// Delay between snapshots to avoid rate limiting
+		if i < len(suite.Snapshots)-1 {
+			time.Sleep(3 * time.Second)
+		}
 	}
 
 	suiteScore := aggregateScores(caseScores, 0)
@@ -95,9 +103,59 @@ func runScore(workerBinary, suiteDir string) error {
 	return nil
 }
 
+// runWorkerWithRetry retries the worker binary on rate-limit errors.
+func runWorkerWithRetry(workerBinary string, snap evolvemini.Snapshot, maxRetries int) (*evolvemini.WorkerOutput, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 5 * time.Second
+			fmt.Printf("  Retrying worker (attempt %d/%d, wait %v)...\n", attempt+1, maxRetries+1, backoff)
+			time.Sleep(backoff)
+		}
+		output, err := runWorker(workerBinary, snap)
+		if err == nil {
+			return output, nil
+		}
+		lastErr = err
+		// Only retry on rate limit errors
+		if !strings.Contains(err.Error(), "429") && !strings.Contains(err.Error(), "rate limit") {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+// judgeLLMWithRetry retries the LLM judge on rate-limit errors.
+func judgeLLMWithRetry(snapshot evolvemini.Snapshot, output evolvemini.WorkerOutput, maxRetries int) (evolvemini.CaseScore, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 5 * time.Second
+			fmt.Printf("  Retrying judge (attempt %d/%d, wait %v)...\n", attempt+1, maxRetries+1, backoff)
+			time.Sleep(backoff)
+		}
+		cs, err := judgeLLM(snapshot, output)
+		if err == nil {
+			return cs, nil
+		}
+		lastErr = err
+		// Only retry on rate limit errors
+		if !strings.Contains(err.Error(), "429") && !strings.Contains(err.Error(), "rate limit") {
+			return cs, err
+		}
+	}
+	return evolvemini.CaseScore{}, lastErr
+}
+
 // runWorker executes the worker binary for a single snapshot and returns its output.
 func runWorker(workerBinary string, snap evolvemini.Snapshot) (*evolvemini.WorkerOutput, error) {
-	input := evolvemini.WorkerInput{Snapshot: snap}
+	input := evolvemini.WorkerInput{
+		Snapshot: snap,
+		ModelConfig: evolvemini.ModelConfig{
+			Provider: "zai",
+			ModelID:  "glm-4.7",
+		},
+	}
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
 		return nil, fmt.Errorf("marshal worker input: %w", err)

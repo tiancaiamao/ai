@@ -74,8 +74,15 @@ func (s *SnapshotSuite) Save(dir string) error {
 }
 
 // WorkerInput is sent to the worker binary via stdin JSON.
+// ModelConfig specifies the model to use for LLM operations.
+type ModelConfig struct {
+	Provider string `json:"provider"`
+	ModelID  string `json:"modelID"`
+}
+
 type WorkerInput struct {
-	Snapshot Snapshot `json:"snapshot"`
+	Snapshot    Snapshot     `json:"snapshot"`
+	ModelConfig ModelConfig `json:"modelConfig"`
 }
 
 // WorkerOutput is read from the worker binary via stdout JSON.
