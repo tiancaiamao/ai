@@ -74,8 +74,10 @@ func main() {
 		if len(args) >= 2 {
 			fmt.Sscanf(args[1], "%d", &maxGen)
 		}
-		fmt.Fprintln(os.Stderr, "Error: run command not implemented (Phase 4)")
-		os.Exit(1)
+		if err := runEvolve(args[0], maxGen); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 
 	case "status":
 		if len(args) < 1 {

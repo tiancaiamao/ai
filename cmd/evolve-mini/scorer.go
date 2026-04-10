@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/config"
 )
 
 // runScore executes a worker binary against a snapshot suite, then uses
