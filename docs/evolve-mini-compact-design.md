@@ -292,6 +292,236 @@ type WorkerOutput struct {
 }
 ```
 
+
+
+## 运行指南
+
+### 前置条件
+
+1. **确保 zai API 可用**
+   ```bash
+   # 检查 API 配置
+   cat ~/.ai/auth.json    # 确保包含 zai API key
+   cat ~/.ai/models.json  # 确保包含 glm-4.7 模型配置
+   ```
+
+2. **编译二进制文件**
+   ```bash
+   cd /Users/genius/project/ai
+   go build ./cmd/evolve-mini/
+   go build ./cmd/evolve-mini-worker/
+   ```
+
+### Step 1: 提取 Snapshot Suite
+
+从现有会话中提取代表性的 snapshots：
+
+```bash
+cd /Users/genius/project/ai
+
+# 提取 20 个多样化的 snapshots
+./evolve-mini snapshot extract ~/.ai/sessions/ /tmp/evolve-test/suite/ --max-sessions 20
+
+# 查看提取的 suite
+./evolve-mini snapshot list /tmp/evolve-test/suite/
+```
+
+**输出示例：**
+```
+Extracted 18 snapshots
+Saved to /tmp/evolve-test/suite/
+
+Suite Summary:
+  Total snapshots: 18
+  Tags:
+    exploration_heavy: 5
+    multi_turn: 4
+    bug_fix: 3
+    ...
+```
+
+### Step 2: 修复 Snapshot 格式（如有需要）
+
+如果 snapshot 格式缺少 WorkerInput 包裹，修复它：
+
+```python
+import json, os, glob
+
+# 修复 snapshots，添加 WorkerInput 包裹
+for f in glob.glob("/tmp/evolve-test/suite/*.json"):
+    with open(f, 'r') as file:
+        data = json.load(file)
+    
+    worker_input = {
+        "Snapshot": data,
+        "ModelConfig": {
+            "provider": "zai",
+            "modelID": "glm-4.7"
+        }
+    }
+    
+    output_file = os.path.join("/tmp/evolve-test/suite-fixed/", os.path.basename(f))
+    with open(output_file, 'w') as out_file:
+        json.dump(worker_input, out_file, ensure_ascii=False, indent=2)
+```
+
+### Step 3: 运行完整进化
+
+```bash
+cd /Users/genius/project/ai
+
+# 运行 5 代进化
+./evolve-mini run /tmp/evolve-test/suite-fixed/ 5
+```
+
+**输出示例：**
+```
+=== evolve-mini: Starting evolution ===
+Suite: /tmp/evolve-test/suite-fixed/
+Max generations: 5
+
+Loaded 18 snapshots from suite
+
+=== Generation 0 (baseline) ===
+Loading suite from /tmp/evolve-test/suite-fixed/ ...
+Loaded 18 snapshots
+
+[1/18] Scoring 000_298df63d_62.json ...
+  Worker succeeded: 10019 -> 7338 tokens (saved 2681, 26.7%)
+  Score: 48 (Good compression, minimal information loss)
+
+[2/18] Scoring 001_919b11c9_22.json ...
+  Worker succeeded: 88645 -> 81288 tokens (saved 7357, 8.3%)
+  Score: 52 (Excellent compression with perfect task continuation)
+
+...
+
+=== Generation 1 ===
+Step 1: Generating mutation...
+Step 2: Creating worktree gen_1...
+Step 3: Applying mutations...
+Step 4: Building worker...
+Step 5: Scoring...
+Best score improved! 48.5 -> 51.2
+Accepting generation 1
+
+...
+```
+
+### Step 4: 查看进化结果
+
+```bash
+cd /Users/genius/project/ai
+
+# 查看进化历史
+cat data/evolution_history.json
+
+# 查看各代记录
+ls data/generations/
+for gen in data/generations/gen_*/generation_record.json; do
+  echo "=== $gen ==="
+  cat "$gen" | jq '.SuiteScore.WeightedAverage'
+done
+
+# 查看最佳代的代码变更
+best_gen=$(cat data/evolution_history.json | jq -r '.BestGeneration')
+cat data/generations/gen_$best_gen/generation_record.json | jq '.Changes'
+```
+
+### Step 5: 创建 PR 到主分支
+
+```bash
+cd /Users/genius/project/ai
+
+# 从最佳代创建 PR
+./evolve-mini pr data/generations
+
+# 或者手动应用变更
+./evolve-mini apply data/generations/gen_N
+```
+
+**PR 创建流程：**
+1. 识别最佳 generation（最高 SuiteScore）
+2. 创建单独分支：`evolve-mini/gen-N`
+3. 在分支上 commit 代码变更
+4. 使用 `gh` CLI 创建 PR
+5. 人工审查并合并到 main
+
+**重要：主分支不接受直接合并，只接受 PR！**
+
+### 高级用法
+
+#### 查看特定 generation 的状态
+```bash
+./evolve-mini status data/generations
+```
+
+#### 重新编译 worker 并测试
+```bash
+cd /Users/genius/project/ai
+go build ./cmd/evolve-mini-worker/
+
+# 测试单个 snapshot
+cat /tmp/evolve-test/suite-fixed/000_test.json | ./evolve-mini-worker
+```
+
+#### 只运行 baseline（无进化）
+```bash
+./evolve-mini run /tmp/evolve-test/suite-fixed/ 0
+```
+
+### 故障排查
+
+#### API Rate Limit (429)
+**错误：** `API error (429): Rate limit reached`
+
+**解决：**
+1. 等待 API 配额重置（通常 1 分钟）
+2. 或者切换到其他 provider
+3. 框架会自动重试（最多 4 次）
+
+#### Worker Timeout
+**错误：** `Worker failed: context deadline exceeded`
+
+**解决：**
+1. 增加 timeout（`cmd/evolve-mini/scorer.go` 中的 `5*time.Minute`）
+2. 减少同时运行的 worker 数
+3. 检查 API 连接
+
+#### Judge API Timeout
+**错误：** `Judge failed: context deadline exceeded`
+
+**解决：**
+1. 增加 judge API timeout
+2. 简化 judge prompt（减少 tokens）
+3. 使用更快的模型
+
+### 性能指标
+
+| 指标 | 说明 | 目标值 |
+|--------|------|--------|
+| Token Savings | 压缩节省的 tokens | > 20% |
+| Info Retention | 信息保留程度 | > 4/5 |
+| Task Executability | 任务可执行性 | > 4/5 |
+| Weighted Average | 综合评分 | > 45/55 |
+
+### 输出文件
+
+```
+data/
+  evolution_history.json        # 完整进化历史
+  generations/
+    gen_0/
+      generation_record.json   # 第 0 代记录
+    gen_1/
+      generation_record.json   # 第 1 代记录
+      diff.patch            # 代码变更（如果有）
+    gen_2/
+      ...
+```
+
+
+
 ## 文件结构
 
 ```
