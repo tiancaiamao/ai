@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,10 @@ const (
 	mgmtPreviewMax  = 1500
 	mgmtPreviewHead = 800
 	mgmtPreviewTail = 200
+
+	// When estimated truncation savings is above this threshold, mini compact
+	// should prioritize truncate_messages before update_llm_context.
+	mgmtForceTruncateSavingsTokens = 5000
 )
 
 // LLMMiniCompactorConfig holds configuration.
@@ -247,6 +252,63 @@ func (c *LLMMiniCompactor) estimateTokenPercent(ctx *agentctx.AgentContext) floa
 	return float64(ctx.EstimateTokens()) / float64(c.contextWindow)
 }
 
+type truncationCandidate struct {
+	ID           string
+	ToolName     string
+	Chars        int
+	SavingsToken int
+}
+
+func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart int) ([]truncationCandidate, int, int) {
+	if protectedStart > len(agentCtx.RecentMessages) {
+		protectedStart = len(agentCtx.RecentMessages)
+	}
+
+	candidates := make([]truncationCandidate, 0)
+	truncatedCount := 0
+	nonSelectableCount := 0
+
+	for i := 0; i < protectedStart; i++ {
+		msg := agentCtx.RecentMessages[i]
+		if msg.Role != "toolResult" {
+			continue
+		}
+		if msg.Truncated {
+			truncatedCount++
+			continue
+		}
+
+		id := strings.TrimSpace(msg.ToolCallID)
+		if id == "" {
+			nonSelectableCount++
+			continue
+		}
+
+		text := msg.ExtractText()
+		truncatedText := agentctx.TruncateWithHeadTail(text)
+		savedChars := len(text) - len(truncatedText)
+		if savedChars < 0 {
+			savedChars = 0
+		}
+
+		candidates = append(candidates, truncationCandidate{
+			ID:           id,
+			ToolName:     msg.ToolName,
+			Chars:        len(text),
+			SavingsToken: savedChars / 4,
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].SavingsToken == candidates[j].SavingsToken {
+			return candidates[i].Chars > candidates[j].Chars
+		}
+		return candidates[i].SavingsToken > candidates[j].SavingsToken
+	})
+
+	return candidates, truncatedCount, nonSelectableCount
+}
+
 // buildContextMgmtMessages builds the message sequence for context management.
 // Sends the FULL conversation with annotations so the LLM can judge
 // whether each tool output is still useful.
@@ -256,20 +318,11 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 		protectedStart = 0
 	}
 
-	// Count truncatable and already-truncated outputs
-	truncatableCount := 0
-	truncatedCount := 0
-	for i := range protectedStart {
-		if i < len(agentCtx.RecentMessages) {
-			msg := agentCtx.RecentMessages[i]
-			if msg.Role == "toolResult" {
-				if msg.Truncated {
-					truncatedCount++
-				} else {
-					truncatableCount++
-				}
-			}
-	}
+	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
+	truncatableCount := len(candidates)
+	estimatedSavingsTokens := 0
+	for _, candidate := range candidates {
+		estimatedSavingsTokens += candidate.SavingsToken
 	}
 
 	// Build conversation as a single user message with annotations
@@ -323,6 +376,10 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 				// Protected: show content but hide ID so LLM can't select it
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d PROTECTED]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
+			} else if strings.TrimSpace(msg.ToolCallID) == "" {
+				// Older events may not carry tool_call_id and cannot be targeted by truncate_messages.
+				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
+					msg.ToolName, len(msg.ExtractText()), content))
 			} else {
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d] id=%s\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), msg.ToolCallID, content))
@@ -337,8 +394,11 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 
 	// State message as the final user message
 	tokenPercent := c.estimateTokenPercent(agentCtx)
+	recommendedTruncate := estimatedSavingsTokens >= mgmtForceTruncateSavingsTokens
 	stateMsg := fmt.Sprintf(`<current_state>
-Truncatable tool outputs: %d (protected region: last %d messages)
+Truncatable tool outputs (selectable): %d (protected region: last %d messages)
+Estimated savings if truncating selectable outputs: ~%d tokens
+Non-truncatable old tool outputs (missing ID): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
@@ -347,20 +407,32 @@ Total turns: %d
 
 Review the conversation above and decide the best action.
 
-**Key decision signal**: If "Already truncated outputs" is high (≥10), truncate has diminishing returns — consider that context may need a full compact instead.
+Decision rules:
+1. If truncatable output count is 0, do NOT call truncate_messages.
+2. If estimated savings is >= %d tokens, you SHOULD call truncate_messages first, then optionally update_llm_context.
+3. If estimated savings is low, prioritize update_llm_context for better state continuity.
 
-Messages marked [PROTECTED] are in the protected region and cannot be truncated. Only tool outputs with an "id=" field are truncatable.
+Messages marked [PROTECTED] are in the protected region and cannot be truncated.
+Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
+Only tool outputs with an explicit "id=" field are selectable for truncate_messages.
 
 Available actions:
-- **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed). Best when truncated_count is low.
+- **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed).
 - **update_llm_context** - Rewrite the LLM Context to reflect current state
-- **no_action** - Context is healthy, no action needed`,
+- **no_action** - Context is healthy, no action needed
+
+Policy hint:
+- force_truncate_recommended=%t`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
+		estimatedSavingsTokens,
+		nonSelectableCount,
 		truncatedCount,
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		agentCtx.AgentState.TotalTurns,
+		mgmtForceTruncateSavingsTokens,
+		recommendedTruncate,
 	)
 
 	messages = append(messages, llm.LLMMessage{

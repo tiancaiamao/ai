@@ -71,15 +71,15 @@ type Agent struct {
 	currentStream *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	streamMu      sync.RWMutex
 	// 	ctx             context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	followUpQueue  chan string   // Queue for follow-up messages
-	runLoopFn      func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
-	traceBuf       *traceevent.TraceBuf
-	traceStop      chan struct{}
-	traceDone      chan struct{}
-	shutdownOnce   sync.Once
-	traceSeq       atomic.Uint64
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	followUpQueue chan string // Queue for follow-up messages
+	runLoopFn     func(ctx context.Context, prompts []agentctx.AgentMessage, agentCtx *agentctx.AgentContext, config *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
+	traceBuf      *traceevent.TraceBuf
+	traceStop     chan struct{}
+	traceDone     chan struct{}
+	shutdownOnce  sync.Once
+	traceSeq      atomic.Uint64
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -135,18 +135,18 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	}
 
 	a := &Agent{
-		mu:           make(chan struct{}, 1),
-		model:        model,
-		apiKey:       apiKey,
-		systemPrompt: agentCtx.SystemPrompt,
-		context:      agentCtx,
-		eventChan:    make(chan AgentEvent, 100),
+		mu:            make(chan struct{}, 1),
+		model:         model,
+		apiKey:        apiKey,
+		systemPrompt:  agentCtx.SystemPrompt,
+		context:       agentCtx,
+		eventChan:     make(chan AgentEvent, 100),
 		followUpQueue: make(chan string, 100),
-		runLoopFn:    RunLoop,
-		traceBuf:     traceBuf,
-		traceStop:    make(chan struct{}),
-		traceDone:    make(chan struct{}),
-		LoopConfig:   *cfg, // Embedded LoopConfig with applied options
+		runLoopFn:     RunLoop,
+		traceBuf:      traceBuf,
+		traceStop:     make(chan struct{}),
+		traceDone:     make(chan struct{}),
+		LoopConfig:    *cfg, // Embedded LoopConfig with applied options
 	}
 
 	// Set GetModel callback to enable dynamic model switching during loop execution.
@@ -320,8 +320,8 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			for _, tr := range event.Value.ToolResults {
 				a.context.AddMessage(tr)
 			}
-			// Try automatic compression after each turn
-			a.tryAutoCompact(ctx)
+			// Auto-compaction is owned by runInnerLoop pre-LLM checks.
+			// Keeping a second trigger here causes duplicate mini-compaction runs.
 		}
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
@@ -706,7 +706,7 @@ func (a *Agent) tryAutoCompact(ctx context.Context) {
 			Trigger: "threshold",
 		}))
 	}
-	}
+}
 
 func (a *Agent) emitEvent(event AgentEvent) {
 	select {
