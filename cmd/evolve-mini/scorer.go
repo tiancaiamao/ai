@@ -16,7 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-
+	"github.com/tiancaiamao/ai/pkg/config"
 )
 
 // runScore executes a worker binary against a snapshot suite, then uses
@@ -133,18 +133,23 @@ func runWorker(workerBinary string, snap evolvemini.Snapshot) (*evolvemini.Worke
 // judgeLLM calls an LLM to evaluate the quality of a compact operation.
 // It returns a evolvemini.CaseScore with per-dimension scores and overall assessment.
 func judgeLLM(snapshot evolvemini.Snapshot, output evolvemini.WorkerOutput) (evolvemini.CaseScore, error) {
-	apiKey := os.Getenv("ZAI_API_KEY")
-	if apiKey == "" {
-		return evolvemini.CaseScore{}, fmt.Errorf("ZAI_API_KEY not set")
+	// Use default model: zai/glm-4.7
+	provider := "zai"
+	modelID := "glm-4.7"
+
+	// Resolve API key
+	apiKey, err := config.ResolveAPIKey(provider)
+	if err != nil {
+		return evolvemini.CaseScore{}, fmt.Errorf("resolve judge API key: %w", err)
 	}
-	baseURL := os.Getenv("ZAI_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+
+	// Resolve model spec
+	modelSpec, err := resolveModelSpec(provider, modelID)
+	if err != nil {
+		return evolvemini.CaseScore{}, fmt.Errorf("resolve judge model: %w", err)
 	}
-	modelID := os.Getenv("ZAI_MODEL_ID")
-	if modelID == "" {
-		modelID = "gpt-4o"
-	}
+
+	baseURL := modelSpec.BaseURL
 
 	// Build judge prompt
 	truncateStr := func(s string, maxLen int) string {
