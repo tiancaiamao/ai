@@ -57,8 +57,8 @@ func runScore(workerBinary, suiteDir string) error {
 		fmt.Printf("  Worker succeeded: %d -> %d tokens (saved %d)\n",
 			output.TokensBefore, output.TokensAfter, output.TokensBefore-output.TokensAfter)
 
-		// Small delay between worker and judge to avoid rate limiting
-		time.Sleep(2 * time.Second)
+		// Delay between worker and judge to avoid rate limiting
+		time.Sleep(5 * time.Second)
 
 		cs, err := judgeLLMWithRetry(snap, *output, 3)
 		if err != nil {
@@ -80,7 +80,7 @@ func runScore(workerBinary, suiteDir string) error {
 
 		// Delay between snapshots to avoid rate limiting
 		if i < len(suite.Snapshots)-1 {
-			time.Sleep(3 * time.Second)
+			time.Sleep(8 * time.Second)
 		}
 	}
 
