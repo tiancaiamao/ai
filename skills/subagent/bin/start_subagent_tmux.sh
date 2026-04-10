@@ -2,10 +2,12 @@
 # start_subagent_tmux.sh - Start subagent in tmux session
 #
 # Usage:
-#   start_subagent_tmux.sh [-w] <output_file> <timeout> <system_prompt_file|-> <task_description>
+#   start_subagent_tmux.sh [-w] [--cleanup MODE] <output_file> <timeout> <system_prompt_file|-> <task_description>
 #
 # Options:
 #   -w: Wait for subagent to complete (uses tmux_wait.sh internally)
+#   --cleanup MODE: Cleanup policy for tmux session (always|on-failure|never)
+#                   Default: always when -w, never otherwise
 #
 # Output:
 #   Prints "SESSION_NAME:SESSION_ID" to stdout
@@ -19,20 +21,53 @@
 # Example with -w (wait for completion):
 #   start_subagent_tmux.sh -w /tmp/out.txt 10m @explorer.md "Analyze code"
 
-set -e
+set -euo pipefail
 
 WAIT_FOR_COMPLETE=false
+CLEANUP_MODE=""
+CMD_SCRIPT=""
+SESSION_NAME=""
 
-# Parse -w flag
-while [[ "$1" == -* ]]; do
+cleanup_temp_script() {
+    if [ -n "${CMD_SCRIPT:-}" ]; then
+        rm -f "$CMD_SCRIPT" 2>/dev/null || true
+    fi
+}
+
+session_exists() {
+    if [ -z "${SESSION_NAME:-}" ]; then
+        return 1
+    fi
+    tmux has-session -t "$SESSION_NAME" 2>/dev/null
+}
+
+cleanup_tmux_session() {
+    if session_exists; then
+        tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+    fi
+}
+
+trap cleanup_temp_script EXIT
+
+# Parse options
+while [[ "${1:-}" == -* ]]; do
     case "$1" in
         -w|--wait)
             WAIT_FOR_COMPLETE=true
             shift
             ;;
+        --cleanup)
+            if [ -z "${2:-}" ]; then
+                echo "Error: --cleanup requires a mode (always|on-failure|never)" >&2
+                exit 1
+            fi
+            CLEANUP_MODE="$2"
+            shift 2
+            ;;
         -h|--help)
-            echo "Usage: $0 [-w] <output_file> <timeout> <system_prompt_file|-> <task_description>"
+            echo "Usage: $0 [-w] [--cleanup MODE] <output_file> <timeout> <system_prompt_file|-> <task_description>"
             echo "  -w, --wait: Wait for subagent to complete"
+            echo "  --cleanup MODE: always|on-failure|never"
             exit 0
             ;;
         *)
@@ -42,13 +77,34 @@ while [[ "$1" == -* ]]; do
     esac
 done
 
-OUTPUT_FILE="$1"
-TIMEOUT="$2"
-SYSTEM_PROMPT="$3"
-TASK="$4"
+OUTPUT_FILE="${1:-}"
+TIMEOUT="${2:-}"
+SYSTEM_PROMPT="${3:-}"
+TASK="${4:-}"
 
 if [ -z "$OUTPUT_FILE" ] || [ -z "$TIMEOUT" ] || [ -z "$TASK" ]; then
     echo "Usage: start_subagent_tmux.sh <output_file> <timeout> <system_prompt_file|-> <task_description>" >&2
+    exit 1
+fi
+
+if [ -z "$CLEANUP_MODE" ]; then
+    if [ "$WAIT_FOR_COMPLETE" = true ]; then
+        CLEANUP_MODE="always"
+    else
+        CLEANUP_MODE="never"
+    fi
+fi
+
+case "$CLEANUP_MODE" in
+    always|on-failure|never) ;;
+    *)
+        echo "Error: invalid --cleanup mode '$CLEANUP_MODE' (expected always|on-failure|never)" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$WAIT_FOR_COMPLETE" = false ] && [ "$CLEANUP_MODE" != "never" ]; then
+    echo "Error: --cleanup=$CLEANUP_MODE requires -w/--wait" >&2
     exit 1
 fi
 
@@ -132,7 +188,7 @@ if [ -z "$SESSION_ID" ]; then
     echo -e "\nTmux capture:" >&2
     tmux capture-pane -t "$SESSION_NAME" -p -S - >&2 || true
     # Clean up the session we created
-    tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+    cleanup_tmux_session
     exit 1
 fi
 
@@ -145,24 +201,49 @@ if [ "$WAIT_FOR_COMPLETE" = true ]; then
     echo "Waiting for completion..."
     # Convert timeout to seconds (2m -> 120, 2h -> 7200, 2 -> 2)
     case "$TIMEOUT" in
+        *s) TIMEOUT_SECS="${TIMEOUT%s}" ;;
         *m) TIMEOUT_SECS=$((${TIMEOUT%m} * 60)) ;;
         *h) TIMEOUT_SECS=$((${TIMEOUT%h} * 3600)) ;;
-        *) TIMEOUT_SECS=$((TIMEOUT)) ;;
+        *)
+            if [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+                TIMEOUT_SECS="$TIMEOUT"
+            else
+                echo "Error: unsupported timeout format '$TIMEOUT' (use Ns, Nm, Nh, or integer seconds)" >&2
+                exit 1
+            fi
+            ;;
     esac
     TMUX_WAIT="$HOME/.ai/skills/tmux/bin/tmux_wait.sh"
-    "$TMUX_WAIT" "$SESSION_NAME" "$OUTPUT_FILE" "$TIMEOUT_SECS" 1
+    KILL_ON_FAIL=0
+    if [ "$CLEANUP_MODE" != "never" ]; then
+        KILL_ON_FAIL=1
+    fi
+    set +e
+    "$TMUX_WAIT" "$SESSION_NAME" "$OUTPUT_FILE" "$TIMEOUT_SECS" 1 "$KILL_ON_FAIL"
     EXIT_CODE=$?
-    
-    # Clean up temp script
-    rm -f "$CMD_SCRIPT"
-    
+    set -e
+
     case $EXIT_CODE in
-        0) echo "Subagent completed successfully" ;;
-        1) echo "Error: Subagent timed out"; exit 1 ;;
-        3) echo "Error: Subagent exited unexpectedly"; exit 1 ;;
+        0)
+            if [ "$CLEANUP_MODE" = "always" ]; then
+                cleanup_tmux_session
+            fi
+            echo "Subagent completed successfully"
+            ;;
+        1)
+            if [ "$CLEANUP_MODE" = "on-failure" ] || [ "$CLEANUP_MODE" = "always" ]; then
+                cleanup_tmux_session
+            fi
+            echo "Error: Subagent timed out"
+            exit 1
+            ;;
+        3)
+            if [ "$CLEANUP_MODE" = "on-failure" ] || [ "$CLEANUP_MODE" = "always" ]; then
+                cleanup_tmux_session
+            fi
+            echo "Error: Subagent exited unexpectedly"
+            exit 1
+            ;;
         *) echo "Error: tmux_wait.sh exited with code $EXIT_CODE"; exit 1 ;;
     esac
 fi
-
-# Clean up temp script if not waiting
-rm -f "$CMD_SCRIPT"

@@ -2,13 +2,14 @@
 # tmux_wait.sh - Wait for tmux session to complete via .done marker
 #
 # Usage:
-#   tmux_wait.sh <session-name> <output-file> [timeout] [check-interval]
+#   tmux_wait.sh <session-name> <output-file> [timeout] [check-interval] [kill-on-fail]
 #
 # Arguments:
 #   session-name    - Name of tmux session to wait for
 #   output-file     - Path to output file (waits for ${output-file}.done)
 #   timeout         - Max seconds to wait (default: 600)
 #   check-interval  - Seconds between checks (default: 1)
+#   kill-on-fail    - Kill tmux session on timeout/unexpected exit (0|1, default: 0)
 #
 # Exit codes:
 #   0 - Session completed successfully
@@ -22,15 +23,21 @@ SESSION_NAME="$1"
 OUTPUT_FILE="$2"
 TIMEOUT="${3:-600}"
 CHECK_INTERVAL="${4:-1}"
+KILL_ON_FAIL="${5:-0}"
 
 # Validate arguments
 if [ -z "$SESSION_NAME" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "Usage: tmux_wait.sh <session-name> <output-file> [timeout] [check-interval]" >&2
+    echo "Usage: tmux_wait.sh <session-name> <output-file> [timeout] [check-interval] [kill-on-fail]" >&2
     echo "" >&2
     echo "Example: tmux_wait.sh my-session /tmp/output.txt 600 1" >&2
     echo "" >&2
     echo "This script waits for \${output-file}.done marker to appear." >&2
     echo "Use start_subagent_tmux.sh -w for automatic waiting." >&2
+    exit 2
+fi
+
+if [ "$KILL_ON_FAIL" != "0" ] && [ "$KILL_ON_FAIL" != "1" ]; then
+    echo "Error: kill-on-fail must be 0 or 1, got '$KILL_ON_FAIL'" >&2
     exit 2
 fi
 
@@ -72,6 +79,12 @@ session_exists() {
     tmux ls 2>/dev/null | grep -q "^${SESSION_NAME}:"
 }
 
+kill_session_if_exists() {
+    if session_exists; then
+        tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+    fi
+}
+
 echo "Waiting for tmux session: $SESSION_NAME"
 echo "Output file: $OUTPUT_FILE"
 echo "Waiting for: $DONE_MARKER"
@@ -107,6 +120,9 @@ for i in $(seq 1 $((TIMEOUT / CHECK_INTERVAL))); do
             echo ""
             echo "Last output:"
             tail -20 "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
+            if [ "$KILL_ON_FAIL" = "1" ]; then
+                kill_session_if_exists
+            fi
             exit 3
         fi
     fi
@@ -121,4 +137,7 @@ echo "Done marker not found: $DONE_MARKER"
 echo ""
 echo "Last output:"
 tail -20 "$OUTPUT_FILE" 2>/dev/null || echo "(no output)"
+if [ "$KILL_ON_FAIL" = "1" ]; then
+    kill_session_if_exists
+fi
 exit 1

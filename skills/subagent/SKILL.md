@@ -35,6 +35,11 @@ Spawn a subagent to handle delegated tasks. The subagent runs in an **isolated t
    → For tasks >2min: pass "timeout" parameter to the script call
    → Example: start_subagent_tmux.sh -w /tmp/out.txt 10m ... → timeout=660
    → The extra margin handles startup overhead
+
+🔴 RULE 7: Use cleanup policy intentionally
+   → `-w` mode defaults to `--cleanup always` (prevents stale tmux sessions)
+   → For debugging, override with `--cleanup never`
+   → For background runs (no `-w`), cleanup defaults to `never`
 ```
 
 ## Common Mistakes (Read Before Starting!)
@@ -113,7 +118,7 @@ echo "Started subagent: $SESSION_NAME"
 
 # STEP 2: Wait for completion
 # NOTE: For 10m tasks, use timeout=660 to handle bash default limit
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" 600
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" /tmp/subagent-output.txt 600
 
 # STEP 3: Collect results
 cat /tmp/subagent-output.txt
@@ -263,6 +268,9 @@ Use `-w` flag to start and wait in one command:
 ~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/out.txt 10m @persona.md "Long task"
 # ↑ tmux_wait.sh will wait 600s (10min)
 # ↑ Bash tool default is 120s - MUST set "timeout": 660 in your tool call
+
+# Keep tmux session for debugging (optional)
+~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w --cleanup never /tmp/out.txt 10m @persona.md "Debug task"
 ```
 
 **Why this matters:**
@@ -463,11 +471,14 @@ Useful for debugging subagent behavior after execution.
 | Lost output | Output went to void | Redirect to file: `> /tmp/out.txt 2>&1` |
 | **Wasted time waiting** | **Using sleep instead of tmux_wait.sh** | **Always use tmux_wait.sh** |
 | **Session ID capture fails** | **Long task description** | **Write to file, pass file path** |
-| **Resource leaks** | **Failed start, no cleanup** | **start_subagent_tmux.sh auto-cleans** |
+| **Resource leaks** | **Failed start / wait timeout leaves session** | **Use `-w` (default `--cleanup always`) or manual kill** |
 
 ## Resource Management
 
-**Automatic Cleanup**: `start_subagent_tmux.sh` automatically cleans up tmux sessions on failure:
+**Automatic Cleanup**:
+- Startup failure (Session ID capture fails): auto-clean
+- `-w` mode default (`--cleanup always`): auto-clean on both success and wait failure
+- Optional policy: `--cleanup on-failure` or `--cleanup never`
 
 ```bash
 # If Session ID capture fails, the script:
@@ -475,7 +486,8 @@ Useful for debugging subagent behavior after execution.
 # 2. Kills the tmux session it created
 # 3. Exits with code 1
 
-# This prevents resource leaks when startup fails
+# In -w mode, timeout/unexpected exit can also auto-kill session
+# (unless --cleanup never)
 ```
 
 **Manual Cleanup** (if needed):
@@ -509,7 +521,8 @@ ls -lt /tmp/*-output.txt | head -10
 - ✅ Always set `--timeout` to prevent runaway
 - ✅ Use persona files via `--system-prompt @file`
 - ✅ Run independent tasks in parallel with separate sessions
-- ✅ Keep sessions for debugging
+- ✅ Use `-w` for one-shot tasks to auto-clean sessions
+- ✅ Keep sessions for debugging only when needed (`--cleanup never`)
 - ✅ Use `tmux kill-session` to terminate stuck subagents
 - ✅ Use `tmux capture-pane` to check progress
 - ✅ **For long tasks (>200 chars), write to file and pass file path**
@@ -550,7 +563,7 @@ SESSION=$(start_subagent_tmux.sh \
   "Read task from /tmp/task.txt and follow instructions")
 
 SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
-tmux_wait.sh "$SESSION_NAME" 600
+tmux_wait.sh "$SESSION_NAME" /tmp/output.txt 600
 ```
 
 **Benefits**:
@@ -571,7 +584,7 @@ SESSION=$(start_subagent_tmux.sh \
   @reviewer.md \
   "Review this code. Write result to /tmp/review-result.json")
 
-tmux_wait.sh "$(echo $SESSION | cut -d: -f1)" 600
+tmux_wait.sh "$(echo $SESSION | cut -d: -f1)" /tmp/review-output.txt 600
 
 # Read the structured result
 cat /tmp/review-result.json
