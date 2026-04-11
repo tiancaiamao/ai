@@ -49,7 +49,10 @@ func LoadSuite(dir string) (*SnapshotSuite, error) {
 		}
 		var snap Snapshot
 		if err := json.Unmarshal(data, &snap); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+			continue // skip non-snapshot JSON files (e.g., score.json)
+		}
+		if snap.ID == "" {
+			continue // skip JSON files that aren't valid snapshots
 		}
 		suite.Snapshots = append(suite.Snapshots, snap)
 	}
