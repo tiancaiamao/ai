@@ -37,7 +37,7 @@ const (
 
 	// If there are any messages with char count above this threshold,
 	// the compactor should consider truncating them even if total savings is low.
-	mgmtLargeMessageThreshold = 2000
+	mgmtLargeMessageThreshold = 3000
 )
 
 // LLMMiniCompactorConfig holds configuration.
@@ -410,7 +410,7 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
 Estimated savings if truncating selectable outputs: ~%d tokens
-Large outputs (>2000 chars): %d
+Large outputs (>3000 chars): %d
 Non-truncatable old tool outputs (missing ID): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
@@ -433,6 +433,8 @@ Decision rules:
 5. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
 6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task.
 7. If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate.
+8. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
+9. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
 
 Messages marked [PROTECTED] are in the protected region and cannot be truncated.
 Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.

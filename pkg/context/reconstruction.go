@@ -129,13 +129,24 @@ func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEv
 // replacing the middle with a truncation marker.
 func TruncateWithHeadTail(text string) string {
 	const (
-		headKeep = 400
-		tailKeep = 400
-		minSize  = 1200
+		headKeep      = 400
+		tailKeep      = 400
+		minSize       = 1200
+		smallThreshold = 500
 	)
 
-	if len(text) <= minSize {
+	if len(text) <= smallThreshold {
 		return fmt.Sprintf(".. [output truncated, %d chars total] ..", len(text))
+	}
+
+	if len(text) <= minSize {
+		// For medium-length outputs, preserve the head which typically contains
+		// the most important information (grep matches, file headers, error details).
+		mediumHead := 300
+		if len(text) < mediumHead {
+			mediumHead = len(text)
+		}
+		return fmt.Sprintf("%s\n.. [%d chars truncated] ..", text[:mediumHead], len(text)-mediumHead)
 	}
 
 	head := text[:headKeep]
