@@ -50,43 +50,13 @@ Concentrate on: pkg/compact/, pkg/prompt/, pkg/tools/context_mgmt/
 		return fmt.Errorf("write system prompt: %w", err)
 	}
 
-	// Use start_subagent_tmux.sh for reliable process management
-	subagentBin := os.Getenv("HOME") + "/.ai/skills/subagent/bin/start_subagent_tmux.sh"
+	// Run headless agent directly in worktree (not via subagent script)
+	// subagent script has premature completion detection issues
 	outputFile := filepath.Join(ws.Worktree, "optimizer-output.txt")
-
-	if _, err := os.Stat(subagentBin); err != nil {
-		// Fallback: direct ai invocation
-		return oa.runDirect(ctx, ws, taskPath, systemPromptPath, outputFile)
-	}
-
-	return oa.runViaSubagent(ws, taskPath, systemPromptPath, outputFile, subagentBin)
+	return oa.runDirect(ctx, ws, taskPath, systemPromptPath, outputFile)
 }
 
-// runViaSubagent uses start_subagent_tmux.sh for reliable process management.
-func (oa *OptimizeAgent) runViaSubagent(ws *GenerationWorkspace, taskPath, systemPromptPath, outputFile, subagentBin string) error {
-	// Build task description
-	desc := fmt.Sprintf("Read task from %s and follow instructions. System prompt at %s. Output progress to %s",
-		taskPath, systemPromptPath, outputFile)
-
-	cmd := exec.Command(subagentBin,
-		outputFile,
-		"20m",
-		fmt.Sprintf("@%s", systemPromptPath),
-		desc,
-	)
-	cmd.Dir = ws.Worktree
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	fmt.Printf("  Running optimizer via subagent in %s ...\n", ws.Worktree)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("optimizer subagent: %w\n%s", err, string(output))
-	}
-
-	return oa.checkWorktreeChanges(ws)
-}
-
-// runDirect is a fallback when subagent script is unavailable.
+// runDirect runs the headless ai binary directly in the worktree.
 func (oa *OptimizeAgent) runDirect(ctx context.Context, ws *GenerationWorkspace, taskPath, systemPromptPath, outputFile string) error {
 	ctx, cancel := context.WithTimeout(ctx, optimizerTimeout)
 	defer cancel()
