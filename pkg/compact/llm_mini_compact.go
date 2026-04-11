@@ -32,7 +32,12 @@ const (
 
 	// When estimated truncation savings is above this threshold, mini compact
 	// should prioritize truncate_messages before update_llm_context.
-	mgmtForceTruncateSavingsTokens = 5000
+	// Reduced from 5000 to 2500 to be more aggressive about truncation.
+	mgmtForceTruncateSavingsTokens = 2500
+
+	// If there are any messages with char count above this threshold,
+	// the compactor should consider truncating them even if total savings is low.
+	mgmtLargeMessageThreshold = 3000
 )
 
 // LLMMiniCompactorConfig holds configuration.
@@ -321,8 +326,12 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
 	truncatableCount := len(candidates)
 	estimatedSavingsTokens := 0
+	largeMessageCount := 0
 	for _, candidate := range candidates {
 		estimatedSavingsTokens += candidate.SavingsToken
+		if candidate.Chars > mgmtLargeMessageThreshold {
+			largeMessageCount++
+		}
 	}
 
 	// Build conversation as a single user message with annotations
@@ -392,25 +401,40 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 		Content: conv.String(),
 	}}
 
+	// Extract latest user request for task grounding
+	latestUserRequest := extractLatestUserRequest(agentCtx.RecentMessages)
+
 	// State message as the final user message
 	tokenPercent := c.estimateTokenPercent(agentCtx)
 	recommendedTruncate := estimatedSavingsTokens >= mgmtForceTruncateSavingsTokens
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
 Estimated savings if truncating selectable outputs: ~%d tokens
+Large outputs (>3000 chars): %d
 Non-truncatable old tool outputs (missing ID): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
 Total turns: %d
+Current LLM Context exists: %t
 </current_state>
+
+<latest_user_request>
+%s
+</latest_user_request>
 
 Review the conversation above and decide the best action.
 
 Decision rules:
 1. If truncatable output count is 0, do NOT call truncate_messages.
-2. If estimated savings is >= %d tokens, you SHOULD call truncate_messages first, then optionally update_llm_context.
-3. If estimated savings is low, prioritize update_llm_context for better state continuity.
+2. If estimated savings is >= %d tokens, you MUST call truncate_messages first, then update_llm_context.
+3. If large outputs (%d) exist, consider truncating them even if total savings is modest.
+4. ALWAYS prefer truncate over no_action when large old outputs are present.
+5. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
+6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task.
+7. If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate.
+8. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
+9. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
 
 Messages marked [PROTECTED] are in the protected region and cannot be truncated.
 Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
@@ -422,16 +446,21 @@ Available actions:
 - **no_action** - Context is healthy, no action needed
 
 Policy hint:
-- force_truncate_recommended=%t`,
+- force_truncate_recommended=%t
+- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
 		estimatedSavingsTokens,
+		largeMessageCount,
 		nonSelectableCount,
 		truncatedCount,
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		agentCtx.AgentState.TotalTurns,
+		agentCtx.LLMContext != "",
+		latestUserRequest,
 		mgmtForceTruncateSavingsTokens,
+		largeMessageCount,
 		recommendedTruncate,
 	)
 
@@ -565,6 +594,27 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			traceevent.Field{Key: "result", Value: resultText},
 		)
 	}
+}
+
+// extractLatestUserRequest finds the most recent user message text from the
+// conversation to provide task grounding for the context management LLM.
+// It searches from the end of the message list and returns up to 500 chars.
+func extractLatestUserRequest(messages []agentctx.AgentMessage) string {
+	const maxChars = 500
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == "user" && msg.IsAgentVisible() {
+			text := msg.ExtractText()
+			if text == "" {
+				continue
+			}
+			if len(text) > maxChars {
+				return text[:maxChars] + "..."
+			}
+			return text
+		}
+	}
+	return "(no user request found)"
 }
 
 // compactArgsStr returns a compact string representation of tool call arguments.
