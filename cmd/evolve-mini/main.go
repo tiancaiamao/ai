@@ -60,7 +60,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Usage: evolve-mini score <worker-binary> <suite-dir>")
 			os.Exit(1)
 		}
-		if err := runScore(args[0], args[1]); err != nil {
+		if _, err := runScore(args[0], args[1], 0); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}

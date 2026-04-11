@@ -21,14 +21,15 @@ import (
 
 // runScore executes a worker binary against a snapshot suite, then uses
 // LLM-as-judge to score each case, and aggregates into a evolvemini.SuiteScore.
-func runScore(workerBinary, suiteDir string) error {
+func runScore(workerBinary, suiteDir string, generation int) (evolvemini.SuiteScore, error) {
 	fmt.Printf("Loading suite from %s ...\n", suiteDir)
 	suite, err := evolvemini.LoadSuite(suiteDir)
+	zeroScore := evolvemini.SuiteScore{Generation: generation, DimensionScores: make(map[string]float64)}
 	if err != nil {
-		return fmt.Errorf("load suite: %w", err)
+		return zeroScore, fmt.Errorf("load suite: %w", err)
 	}
 	if len(suite.Snapshots) == 0 {
-		return fmt.Errorf("no snapshots found in %s", suiteDir)
+		return zeroScore, fmt.Errorf("no snapshots found in %s", suiteDir)
 	}
 	fmt.Printf("Loaded %d snapshots\n", len(suite.Snapshots))
 
@@ -116,7 +117,7 @@ func runScore(workerBinary, suiteDir string) error {
 		}
 	}
 
-	suiteScore := aggregateScores(caseScores, 0)
+	suiteScore := aggregateScores(caseScores, generation)
 
 	// Print summary table
 	printScoreTable(suiteScore)
@@ -125,14 +126,14 @@ func runScore(workerBinary, suiteDir string) error {
 	scorePath := filepath.Join(suiteDir, "score.json")
 	data, err := json.MarshalIndent(suiteScore, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal suite score: %w", err)
+		return zeroScore, fmt.Errorf("marshal suite score: %w", err)
 	}
 	if err := os.WriteFile(scorePath, data, 0o644); err != nil {
-		return fmt.Errorf("write score.json: %w", err)
+		return zeroScore, fmt.Errorf("write score.json: %w", err)
 	}
 	fmt.Printf("\nSuite score saved to %s\n", scorePath)
 
-	return nil
+	return suiteScore, nil
 }
 
 // runWorkerWithRetry retries the worker binary on rate-limit errors.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tiancaiamao/ai/internal/evolvemini"
@@ -89,49 +90,44 @@ func (wm *WorktreeManager) BuildWorker(ws *GenerationWorkspace) (string, error) 
 	return filepath.Join(ws.Path, "worker"), nil
 }
 
-// CommitBaseline commits current worktree changes to evolve-baseline branch.
-// Call this when a generation is accepted to establish new baseline.
-func (wm *WorktreeManager) CommitBaseline(gen int) error {
-	fmt.Println("  Committing baseline changes...")
+// CommitBaseline commits worktree changes to evolve-baseline branch for future inheritance.
+func (wm *WorktreeManager) CommitBaseline(ws *GenerationWorkspace) error {
+	// Commit changes in the worktree (detached HEAD → temporary commit)
+	cmd := exec.Command("git", "add", "-A")
+	cmd.Dir = ws.Worktree
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("stage in worktree: %w\n%s", err, output)
+	}
 
-	// Create/checkout evolve-baseline branch
-	cmd := exec.Command("git", "checkout", "-B", "evolve-baseline")
+	cmd = exec.Command("git", "commit", "-m", fmt.Sprintf("evolve gen %d (%s)", ws.Generation, time.Now().Format("2006-01-02")))
+	cmd.Dir = ws.Worktree
+	// Allow empty commits (in case nothing changed)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=evolve", "GIT_AUTHOR_EMAIL=evolve@local", "GIT_COMMITTER_NAME=evolve", "GIT_COMMITTER_EMAIL=evolve@local")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		// If nothing to commit, that's ok
+		if !strings.Contains(string(output), "nothing to commit") {
+			return fmt.Errorf("commit in worktree: %w\n%s", err, output)
+		}
+		return nil
+	}
+
+	// Get the commit hash from worktree
+	cmd = exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = ws.Worktree
+	hashBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("get worktree HEAD: %w", err)
+	}
+	commitHash := strings.TrimSpace(string(hashBytes))
+
+	// Update or create evolve-baseline branch to point at this commit
+	cmd = exec.Command("git", "branch", "-f", "evolve-baseline", commitHash)
 	cmd.Dir = wm.BaseRepo
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout baseline branch: %w\n%s", err, output)
+		return fmt.Errorf("update evolve-baseline branch: %w\n%s", err, output)
 	}
 
-	// Apply changes from current worktree to the working tree
-	genDir := filepath.Join(wm.Generations, fmt.Sprintf("gen_%d", gen))
-	// Use git to copy uncommitted changes
-	cmd2 := exec.Command("git", "read-tree", "-u", genDir)
-	cmd2.Dir = wm.BaseRepo
-	cmd2.Env = append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(wm.BaseRepo, ".git", "index"))
-
-	// Simpler: just use git worktree's working tree as source
-	// Copy changed files to main repo's working tree
-	cmd3 := exec.Command("git", "checkout", "--force", "--theirs", "--")
-	cmd3.Dir = wm.BaseRepo
-	_, _ = cmd3.CombinedOutput()
-
-	// Stage and commit
-	cmd4 := exec.Command("git", "add", "-A")
-	cmd4.Dir = wm.BaseRepo
-	if output, err := cmd4.CombinedOutput(); err != nil {
-		return fmt.Errorf("stage baseline: %w\n%s", err, output)
-	}
-
-	cmd5 := exec.Command("git", "commit", "-m", fmt.Sprintf("baseline gen %d (%s)", gen, time.Now().Format("2006-01-02")))
-	cmd5.Dir = wm.BaseRepo
-	if output, err := cmd5.CombinedOutput(); err != nil {
-		return fmt.Errorf("commit baseline: %w\n%s", err, output)
-	}
-
-	// Restore main branch
-	cmd6 := exec.Command("git", "checkout", "-")
-	cmd6.Dir = wm.BaseRepo
-	_, _ = cmd6.CombinedOutput()
-
+	fmt.Printf("  evolve-baseline branch updated to %s\n", commitHash[:8])
 	return nil
 }
 
