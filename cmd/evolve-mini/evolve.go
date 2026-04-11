@@ -17,7 +17,7 @@ const (
 )
 
 func runEvolve(suiteDir string, maxGen int) error {
-	if maxGen <= 0 {
+	if maxGen < 0 {
 		maxGen = MaxGenerations
 	}
 
