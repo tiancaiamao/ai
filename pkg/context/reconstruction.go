@@ -129,9 +129,9 @@ func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEv
 // replacing the middle with a truncation marker.
 func TruncateWithHeadTail(text string) string {
 	const (
-		headKeep = 200
-		tailKeep = 200
-		minSize  = 800
+		headKeep = 400
+		tailKeep = 400
+		minSize  = 1200
 	)
 
 	if len(text) <= minSize {

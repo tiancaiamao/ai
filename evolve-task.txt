@@ -1,0 +1,46 @@
+You are an optimizer agent improving the mini compact behavior of this codebase.
+You can modify any file: source code (.go), prompts (.md), config — anything.
+IMPORTANT: Use RELATIVE paths only. You are in a worktree copy of the codebase.
+
+## Baseline Score (gen 0)
+Weighted Average: 38.9 / 55
+
+### Per-Case Scores
+- 919b11c9_22: total=55/55 (retain=5, exec=5, decision=5, accuracy=5, efficiency=5)
+- 9c480f4c_21: total=54/55 (retain=5, exec=5, decision=5, accuracy=5, efficiency=4)
+- 0c2c8ce1_21: total=46/55 (retain=3, exec=5, decision=5, accuracy=4, efficiency=4)
+- cfa74de0_22: total=43/55 (retain=5, exec=5, decision=1, accuracy=5, efficiency=1)
+- 1d33eba6_24: total=51/55 (retain=5, exec=5, decision=4, accuracy=5, efficiency=3)
+- 93c76076_39: total=35/55 (retain=5, exec=5, decision=1, accuracy=1, efficiency=1)
+- 44ed3ae6_32: total=12/55 (retain=1, exec=1, decision=1, accuracy=1, efficiency=2)
+- a20235a9_21: total=15/55 (retain=1, exec=1, decision=1, accuracy=1, efficiency=5)
+
+### Worst Cases (focus improvements here)
+- 44ed3ae6_32 (score=12): Compact 操作严重失败。LLM Context 完全为空，未能保留 PR 详情（baseRefName/headRefName）和 SKILL.md 中的关键约束（如错误处理、并行执行规则）。丢失 gh pr view 的结果导致无法直接响应 'merge master' 的需求，需重新查询。截断 SKILL.md 且无摘要增加了 subagent 调用出错的风险。仅节省 542 tokens 得不偿失。
+- a20235a9_21 (score=15): 本次 compact 操作质量极差。关键错误在于：1) 对核心任务（代码 review）必需的 git diff 代码内容进行了过度截断，导致无法审查具体的实现逻辑（如 truncate.go 和 tool_output.go 的变更）；2) LLM Context 生成严重错误，摘要描述为“分析 ad 项目架构”，与实际对话历史中的“review truncate 分支”完全不符，这将导致 Agent 产生幻觉或执行错误任务。虽然 token 节省显著（约 60%），但完全牺牲了任务的有效性和上下文的一致性。
+- 93c76076_39 (score=35): Compact 操作完全失败，上下文大小不降反升（+418 tokens），表明历史记录未被截断，仅附加了摘要。摘要内容产生严重幻觉（声称读取了不存在的文件、完成了未执行的操作），歪曲了当前任务状态（将用户确认Bug误判为AI正在修复Bug的当前任务）。尽管保留了所有原始信息保证了后续任务的可执行性，但决策错误、准确性极低且负收益，属于典型的无效压缩。
+
+### Dimension Averages
+- infoRetention: 3.8/5
+- taskExecutability: 4.0/5
+- tokenEfficiency: 3.1/5
+- contextAccuracy: 3.4/5
+- decisionCorrectness: 2.9/5
+
+### Past Generation Attempts (learn from these)
+- Gen 1 [REJECTED]: Modified TruncateWithHeadTail, improved system prompt, added extractLatestUserRequest helper. Build passed but regressed on 3 cases (93c76076_39 -21, 0c2c8ce1_21 -10, 919b11c9_22 -3). Best improvement: 44ed3ae6_32 +27.
+
+## Key Source Files (use relative paths)
+- pkg/compact/llm_mini_compact.go
+- pkg/prompt/llm_mini_compact_system.md
+- pkg/tools/context_mgmt/truncate_messages.go
+- pkg/tools/context_mgmt/update_llm_context.go
+- pkg/prompt/mini_compact.md
+
+## Instructions
+1. Read the source code of the key files listed above.
+2. Identify the root causes of low scores (bad truncation, empty LLM context, hallucination).
+3. Make minimal, targeted fixes. Do NOT rewrite everything.
+4. Focus on the biggest problems first.
+5. **After making changes, run `go build ./...` to verify compilation succeeds.** Fix any errors.
+6. Do NOT explore cmd/evolve-mini/, cmd/evolve-mini-worker/, benchmark/, or scripts/.

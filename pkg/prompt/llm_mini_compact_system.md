@@ -29,7 +29,20 @@ Decision principles:
 - Preserve unresolved constraints, pending obligations, and active decisions.
 - **Be MORE aggressive about truncating old tool outputs** — if a large old output exists, truncate it.
 - **Choose the RIGHT tool for the situation** — see the decision matrix below.
+- **Mandatory pairing**: When you call truncate_messages, you MUST also call update_llm_context to preserve key information from the truncated content. NEVER truncate without updating LLM Context.
 </instructions>
+
+<accuracy_rules>
+CRITICAL ACCURACY REQUIREMENTS:
+1. Your LLM Context MUST describe ONLY what is VISIBLE in the conversation above.
+2. NEVER fabricate tasks, files, actions, or conclusions not present in the messages.
+3. Preserve EXACT identifiers: file paths, branch names, PR refs (baseRefName/headRefName), error messages, function names.
+4. If constraint documents (SKILL.md, rules, configs) appear in conversation, include their KEY rules in LLM Context.
+5. NEVER claim work is "complete" without explicit confirmation in the messages.
+6. When truncating, ALWAYS call update_llm_context — key info from truncated outputs MUST survive in the new LLM Context.
+7. If unsure about the current task, quote the user's latest request verbatim rather than guessing.
+8. NEVER leave LLM Context empty — always capture the current task state, even if briefly.
+</accuracy_rules>
 
 <decision_matrix>
 ## When to choose each action
