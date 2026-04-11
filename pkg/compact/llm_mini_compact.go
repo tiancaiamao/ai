@@ -32,7 +32,12 @@ const (
 
 	// When estimated truncation savings is above this threshold, mini compact
 	// should prioritize truncate_messages before update_llm_context.
-	mgmtForceTruncateSavingsTokens = 5000
+	// Reduced from 5000 to 2500 to be more aggressive about truncation.
+	mgmtForceTruncateSavingsTokens = 2500
+
+	// If there are any messages with char count above this threshold,
+	// the compactor should consider truncating them even if total savings is low.
+	mgmtLargeMessageThreshold = 2000
 )
 
 // LLMMiniCompactorConfig holds configuration.
@@ -321,8 +326,12 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
 	truncatableCount := len(candidates)
 	estimatedSavingsTokens := 0
+	largeMessageCount := 0
 	for _, candidate := range candidates {
 		estimatedSavingsTokens += candidate.SavingsToken
+		if candidate.Chars > mgmtLargeMessageThreshold {
+			largeMessageCount++
+		}
 	}
 
 	// Build conversation as a single user message with annotations
@@ -398,6 +407,7 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
 Estimated savings if truncating selectable outputs: ~%d tokens
+Large outputs (>2000 chars): %d
 Non-truncatable old tool outputs (missing ID): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
@@ -409,8 +419,10 @@ Review the conversation above and decide the best action.
 
 Decision rules:
 1. If truncatable output count is 0, do NOT call truncate_messages.
-2. If estimated savings is >= %d tokens, you SHOULD call truncate_messages first, then optionally update_llm_context.
-3. If estimated savings is low, prioritize update_llm_context for better state continuity.
+2. If estimated savings is >= %d tokens, you MUST call truncate_messages first, then optionally update_llm_context.
+3. If large outputs (%d) exist, consider truncating them even if total savings is modest.
+4. ALWAYS prefer truncate over no_action when large old outputs are present.
+5. Pair truncate with update_llm_context to document what remains.
 
 Messages marked [PROTECTED] are in the protected region and cannot be truncated.
 Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
@@ -422,16 +434,19 @@ Available actions:
 - **no_action** - Context is healthy, no action needed
 
 Policy hint:
-- force_truncate_recommended=%t`,
+- force_truncate_recommended=%t
+- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
 		estimatedSavingsTokens,
+		largeMessageCount,
 		nonSelectableCount,
 		truncatedCount,
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		agentCtx.AgentState.TotalTurns,
 		mgmtForceTruncateSavingsTokens,
+		largeMessageCount,
 		recommendedTruncate,
 	)
 
