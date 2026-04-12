@@ -1,9 +1,9 @@
 ---
 name: workflow
 description: |
-  Core workflow execution system. Start workflows with /workflow start <template>,
-  execute with /workflow auto, manage templates with /workflow templates.
-  Structured development flows with spec/plan phases and ag-powered execution.
+  Multi-phase workflow system. Agent uses /workflow commands to execute structured
+  development flows (feature/bugfix/refactor/spike) with spec/plan phases.
+  State persisted to disk, phases executed via ag agents.
 ---
 
 # Workflow - Multi-Agent Orchestration
@@ -24,9 +24,8 @@ Workflow is **execution engine** that turns plans into shipped code. It combines
 /workflow start bugfix "fix login timeout"
     ↓
 Workflow Skill (Frontend)
-  - User-friendly commands
-  - Template selection
-  - Parameter parsing
+  - /workflow commands (agent interface)
+  - Template selection and loading
   - Phase prompt assembly
     ↓
 ag CLI (Backend)

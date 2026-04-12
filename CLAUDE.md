@@ -88,7 +88,7 @@ git commit -m "fix something"
 git push origin main
 
 # ✅ CORRECT
-git worktree add ../my-feature my-feature  # or git checkout -b feat/xxx
+git worktree add .worktrees/my-feature my-feature  # or git checkout -b feat/xxx
 git commit -m "fix something"
 git push origin my-feature
 gh pr create
