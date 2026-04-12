@@ -9,14 +9,14 @@
 - 识别工具选择错误
 - 发现流程设计缺陷
 - 找出反模式和可优化点
-- 分析上下文管理效率（触发频率、截断/压缩质量、记忆保留）
+- 分析上下文管理效率（compaction 质量、truncate 行为、记忆保留）
 
 **目标**：持续优化 ai 项目的代码质量
 
 ## 核心思路：Code Review 范式
 
 **不是**技术指标统计（重试率、token 消耗）
-**而是**设计洞察（为什么这里选错了工具？为什么这个 prompt 效果不好？上下文管理是否高效？）
+**而是**设计洞察（为什么这里选错了工具？为什么这个 prompt 效果不好？compaction 后 agent 是否丢失了关键上下文？）
 
 ### 分析视角
 
@@ -26,7 +26,7 @@
 4. **错误处理**：失败时的重试、fallback 策略
 5. **反模式**：重复失败、无效循环、过度调用
 6. **Subagent 协作**：delegation 是否合理，任务描述是否清晰
-7. **上下文管理**：触发时机、截断/压缩质量、记忆保留效果
+7. **上下文管理**：compaction 保留质量、truncate 行为、llm_context 更新效果
 
 ## 数据源
 
@@ -43,29 +43,40 @@
 
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/
-├── meta.json                    # 会话元数据 (id, name, title, createdAt, updatedAt)
-├── messages.jsonl               # Append-only journal（唯一数据源，5 种 entry type）
+├── meta.json                    # 会话元数据 (id, name, title, createdAt, updatedAt, messageCount)
+├── messages.jsonl               # Append-only journal（双 schema 共存，见 session-reader.md）
 ├── messages.jsonl.lock          # 文件锁
-├── checkpoint_index.json        # 所有 checkpoint 元信息索引
-├── current -> checkpoints/checkpoint_NNNNN/  # 当前 checkpoint 符号链接
-├── checkpoints/
-│   ├── checkpoint_00000/
-│   │   ├── llm_context.txt      # LLM 维护的结构化上下文（markdown）
-│   │   └── agent_state.json     # 系统维护的元数据
-│   ├── checkpoint_00001/
-│   └── ...
+├── status.json                  # 运行时状态 (session_id, pid, status, current_turn, last_tool)
 └── llm-context/
-    ├── overview.md              # 外部记忆文件
-    └── detail/                  # 详细内容目录
+    ├── overview.md              # 外部记忆文件（每次请求时加载到 prompt）
+    ├── summaries/               # compaction summary 文件 (compact-YYYYMMDD-HHMMSS.md)
+    └── detail/                  # 详细内容目录（旧 compaction summary、pre-compact 备份）
 ```
+
+**关于 checkpoint**：`pkg/context/checkpoint.go` 中有完整的 checkpoint 实现（`checkpoints/checkpoint_NNNNN/` + `checkpoint_index.json`），但大多数 session 在实际运行中**不产生** checkpoint 目录。不要假设 checkpoint 文件存在，使用前先检查。
 
 ### 辅助数据文件
 
 | 文件 | 用途 | 分析价值 |
 |------|------|----------|
-| `checkpoint_index.json` | 所有 checkpoint 索引 | 追踪 checkpoint 创建频率、上下文增长趋势 |
-| `agent_state.json` | 当前 agent 状态 | 查看触发追踪字段、token 使用量 |
-| `llm_context.txt` | LLM 记忆快照 | 评估 agent 的信息保留质量 |
+| `status.json` | 运行时状态 | 判断会话正常结束(`completed`)还是异常(`crashed`/`running`) |
+| `llm-context/overview.md` | 外部记忆 | 评估 agent 的信息保留质量 |
+| `llm-context/summaries/` | Compaction summary | 查看压缩时保留/丢弃了哪些信息 |
+| `meta.json` | 会话元数据 | 快速获取创建时间、消息计数 |
+
+### Entry Type 速查
+
+`messages.jsonl` 中存在双 schema（详见 `references/session-reader.md`）：
+
+| Entry Type | Schema | 来源包 | 说明 |
+|-----------|--------|--------|------|
+| `session` | SessionEntry | pkg/session | 头部标记，仅一次 |
+| `session_info` | SessionEntry | pkg/session | 会话名称/标题 |
+| `message` | SessionEntry | pkg/session | 用户/assistant/toolResult 消息 |
+| `compaction` | SessionEntry | pkg/session | **新**压缩事件（summaryFile/summary + firstKeptEntryId） |
+| `branch_summary` | SessionEntry | pkg/session | fork session 时的分支摘要 |
+| `truncate` | JournalEntry | pkg/context | 工具输出截断记录 |
+| `compact` | JournalEntry | pkg/context | **旧**压缩事件（inline summary + kept_message_count） |
 
 ## 工作流程
 
@@ -74,7 +85,7 @@
 用 python3 内联命令快速了解会话结构和统计：
 
 ```bash
-# 会话入口统计（entry type 分布）
+# 会话 entry type 分布（兼容双 schema）
 python3 -c "
 import json
 from collections import Counter
@@ -90,11 +101,17 @@ for t, c in types.most_common():
 # 查看会话元数据
 cat <path>/meta.json | python3 -m json.tool
 
-# 查看 checkpoint 索引（上下文管理历史）
-cat <path>/checkpoint_index.json | python3 -m json.tool
+# 查看运行时状态（是否正常结束）
+cat <path>/status.json | python3 -m json.tool
 
-# 当前 agent 状态（token 使用、触发追踪）
-cat <path>/checkpoints/$(readlink <path>/current | xargs basename)/agent_state.json | python3 -m json.tool
+# 查看外部记忆
+cat <path>/llm-context/overview.md
+
+# 列出 compaction summary 文件（如果有）
+ls -la <path>/llm-context/summaries/ 2>/dev/null || echo "No summaries dir"
+
+# 检查 checkpoint 是否存在（不保证）
+cat <path>/checkpoint_index.json 2>/dev/null | python3 -m json.tool || echo "No checkpoint index"
 ```
 
 ### 步骤 1：选择分析模式
@@ -108,7 +125,7 @@ cat <path>/checkpoints/$(readlink <path>/current | xargs basename)/agent_state.j
 | `flow` | 仅流程设计 | 优化执行效率 |
 | `prompt` | 仅 prompt 设计 | 调试理解问题 |
 | `subagents` | 仅 subagent | 优化 delegation 策略 |
-| `context-mgmt` | 上下文管理行为 | **新增**：分析 context 管理效率 |
+| `context-mgmt` | 上下文管理行为 | 分析 compaction/truncate/llm_context 效率 |
 
 ### 步骤 2：选择多个 session（批处理）
 
@@ -137,169 +154,164 @@ with open('<path>/messages.jsonl') as f:
     for line in f:
         entry = json.loads(line)
         if entry.get('type') != 'message': continue
-        msg = entry['message']
-        if msg['role'] != 'assistant': continue
+        msg = entry.get('message')
+        if msg is None: continue
+        if msg.get('role') != 'assistant': continue
         for block in msg.get('content', []):
             if block.get('type') == 'toolCall':
-                print(f'Turn: {msg.get(\"timestamp\",\"?\")} Tool: {block[\"name\"]} Args: {json.dumps(block.get(\"arguments\",{}), ensure_ascii=False)[:100]}')
+                print(f'{block[\"name\"]}: {json.dumps(block.get(\"arguments\",{}), ensure_ascii=False)[:120]}')
 "
 ```
 
 **关注点**：
-- Agent 选择了什么工具？
-- 是否选错了？（如应该用 read 却用了 bash cat）
-- 为什么选错？工具描述不够清楚？
-- 是否有更好的工具组合？
+- 是否选错了工具（如用 bash cat 代替 read）
+- 参数是否合理（如 grep 范围过大）
+- 调用频率是否异常（重复调用同一工具）
+- 工具链是否可以简化
 
 #### 模式 B: 流程设计分析 (`flow`)
 
 ```bash
-# 读取对话流
-tail -200 "<path>/messages.jsonl"
+# 提取任务流程（用户消息 + 工具调用序列）
+python3 -c "
+import json
+with open('<path>/messages.jsonl') as f:
+    for line in f:
+        entry = json.loads(line)
+        if entry.get('type') != 'message': continue
+        msg = entry.get('message')
+        if msg is None: continue
+        role = msg.get('role', '?')
+        if role == 'user':
+            for block in msg.get('content', []):
+                if block.get('type') == 'text':
+                    print(f'\n[USER] {block[\"text\"][:200]}')
+        elif role == 'assistant':
+            tools = [b for b in msg.get('content', []) if b.get('type') == 'toolCall']
+            if tools:
+                for t in tools:
+                    print(f'  -> {t[\"name\"]}')
+            else:
+                texts = [b for b in msg.get('content', []) if b.get('type') == 'text']
+                if texts:
+                    print(f'  [REPLY] {texts[0][\"text\"][:100]}')
+"
 ```
 
 **关注点**：
-- 任务分解是否合理？
-- 是否有冗余步骤？
-- 执行顺序是否最优？
-- 是否可以并行执行？
+- 任务分解是否合理
+- 执行顺序是否最优（是否有多余步骤）
+- 是否有无效循环（反复尝试同一失败操作）
+- 错误恢复路径是否合理
 
 #### 模式 C: Prompt 设计分析 (`prompt`)
 
 **关注点**：
-- Agent 是否正确理解了用户意图？
-- 如果误解：系统提示词/工具描述是否不够清晰？
-- 如果理解正确但执行错误：工具描述是否有歧义？
+- 系统提示词是否导致误解
+- 工具描述是否清晰（是否导致选错工具）
+- 上下文中是否有矛盾信息
+- 是否有信息遗漏导致错误决策
 
 #### 模式 D: Subagent 分析 (`subagents`)
 
 ```bash
-# 1. 从主 session 中找到 subagent 调用
-grep "subagent-" ~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
-
-# 2. 通过 tmux session 找到对应的 AI session
-tmux capture-pane -t subagent-<timestamp>-<random> -p -S - | grep "Session ID:"
-
-# 3. 读取 subagent 的 messages.jsonl
-cat ~/.ai/sessions/--<cwd>--/<subagent-session-id>/messages.jsonl
+# 提取 subagent 相关调用
+python3 -c "
+import json
+with open('<path>/messages.jsonl') as f:
+    for line in f:
+        entry = json.loads(line)
+        if entry.get('type') != 'message': continue
+        msg = entry.get('message')
+        if msg is None: continue
+        for block in msg.get('content', []):
+            if block.get('type') == 'toolCall' and block['name'] in ('subagent', 'spawn_subagent'):
+                args = block.get('arguments', {})
+                print(f'[SUBAGENT] task: {args.get(\"task\", args.get(\"prompt\", \"?\"))[:100]}')
+"
 ```
 
 **关注点**：
-- **任务描述清晰度**：父代理给子代理的指令是否明确？
-- **子代理理解**：子代理是否理解了任务？
-- **执行偏差**：子代理是否过度拆解/过度执行？
-- **结果完整性**：子代理返回的结果是否完整？
-- **协作效率**：父子代理间的交互是否合理？
+- 任务描述是否清晰（agent 是否理解了 delegation）
+- 子任务是否过度执行（是否做了不必要的工作）
+- 结果是否被正确利用（delegation 结果是否被整合）
+- 是否应该 delegation 但没有（大任务是否应该拆分）
 
-#### 模式 E: 上下文管理分析 (`context-mgmt`) — **新增**
+#### 模式 E: 上下文管理分析 (`context-mgmt`)
 
-**这是新架构的核心分析维度**。关注 agent 如何管理自身上下文。
+分析 context 管理效率，包括 compaction、truncate、llm_context 更新。
 
-##### E1: 触发分析
+**核心问题**：agent 在长会话中是否有效管理了上下文窗口？
 
 ```bash
-# 截断事件统计
+# 提取所有 compaction 事件（兼容新旧格式）
 python3 -c "
 import json
-truncates = []
+with open('<path>/messages.jsonl') as f:
+    for i, line in enumerate(f):
+        entry = json.loads(line)
+        t = entry.get('type')
+        if t == 'compact':
+            c = entry['compact']
+            print(f'[COMPACT] line={i} turn={c[\"turn\"]} kept={c[\"kept_message_count\"]} summary_len={len(c[\"summary\"])}')
+        elif t == 'compaction':
+            sf = entry.get('summaryFile', '')
+            sl = len(entry.get('summary', ''))
+            print(f'[COMPACTION] line={i} id={entry.get(\"id\")} file={sf[:50] if sf else \"(inline)\"} summary_len={sl} tokens_before={entry.get(\"tokensBefore\",0)}')
+"
+
+# 提取所有 truncate 事件
+python3 -c "
+import json
 with open('<path>/messages.jsonl') as f:
     for i, line in enumerate(f):
         entry = json.loads(line)
         if entry.get('type') == 'truncate':
-            truncates.append((i, entry['truncate']))
-for idx, t in truncates:
-    print(f'Line {idx}: turn={t[\"turn\"]} tool_call_id={t[\"tool_call_id\"][:20]}... trigger={t[\"trigger\"]}')
+            tr = entry['truncate']
+            print(f'[TRUNCATE] line={i} turn={tr[\"turn\"]} tool_call={tr[\"tool_call_id\"][:20]}...')
 "
 
-# 压缩事件
+# 查看 llm_context overview 的演变
+cat <path>/llm-context/overview.md
+
+# 读取 compaction summary 内容（从 summaryFile 引用）
 python3 -c "
-import json
-with open('<path>/messages.jsonl') as f:
-    for i, line in enumerate(f):
+import json, os
+session_dir = '<session-dir>'
+with open(os.path.join(session_dir, 'messages.jsonl')) as f:
+    for line in f:
         entry = json.loads(line)
-        if entry.get('type') == 'compact':
-            c = entry['compact']
-            print(f'Line {i}: turn={c[\"turn\"]} kept={c[\"kept_message_count\"]} summary_len={len(c[\"summary\"])}')
-            print(f'  Summary preview: {c[\"summary\"][:200]}...')
+        if entry.get('type') == 'compaction':
+            sf = entry.get('summaryFile', '')
+            if sf and not sf.startswith('/'):
+                sf = os.path.join(session_dir, sf)
+            if sf and os.path.exists(sf):
+                with open(sf) as fh:
+                    print(fh.read()[:800])
+            elif entry.get('summary'):
+                print(entry['summary'][:800])
+            break
 "
 ```
 
-**关注点**：
-- **触发频率**：多久触发一次 context management？是否过于频繁/稀少？
-- **触发原因**：token 压力（70%/50%/30%/20%）vs stale output（≥15）vs 周期性
-- **截断选择**：被截断的是哪些工具输出？截断是否合理？是否截掉了重要内容？
-- **压缩质量**：compact summary 是否准确？压缩后 agent 是否丢失了关键上下文？
+**分析维度**：
 
-##### E2: Checkpoint 分析
-
-```bash
-# checkpoint 演变历史
-python3 -c "
-import json
-with open('<path>/checkpoint_index.json') as f:
-    idx = json.load(f)
-print(f'Total checkpoints: {len(idx[\"checkpoints\"])}')
-for cp in idx['checkpoints']:
-    ctx_chars = cp.get('llm_context_chars', '?')
-    msg_count = cp.get('recent_messages_count', '?')
-    print(f'  Turn {cp[\"turn\"]}: context={ctx_chars} chars, messages={msg_count}, path={cp[\"path\"]}')
-"
-```
-
-**关注点**：
-- **上下文增长趋势**：`llm_context_chars` 是否持续增长？是否合理？
-- **消息数量波动**：压缩/截断后 `recent_messages_count` 是否明显减少？
-- **Checkpoint 间隔**：创建频率是否合理？
-
-##### E3: Agent 状态分析
-
-```bash
-# 当前 agent 状态
-cat <path>/checkpoints/$(readlink <path>/current | xargs basename)/agent_state.json | python3 -m json.tool
-```
-
-关键字段：
-- `TokensUsed` / `TokensLimit`：token 使用率
-- `LastTriggerTurn` / `TurnsSinceLastTrigger`：触发间隔
-- `ToolCallsSinceLastTrigger`：距上次触发的工具调用数
-- `LastLLMContextUpdate`：上次 LLM context 更新的 turn
-
-##### E4: 上下文管理工具调用分析
-
-```bash
-# 找到所有上下文管理工具调用（在 ModeContextMgmt 中执行）
-python3 -c "
-import json
-mgmt_tools = {'update_llm_context', 'truncate_messages', 'compact_messages', 'no_action'}
-with open('<path>/messages.jsonl') as f:
-    for i, line in enumerate(f):
-        entry = json.loads(line)
-        if entry.get('type') != 'message': continue
-        msg = entry['message']
-        for block in msg.get('content', []):
-            if block.get('type') == 'toolCall' and block['name'] in mgmt_tools:
-                print(f'Line {i}: {block[\"name\"]} args={json.dumps(block.get(\"arguments\",{}), ensure_ascii=False)[:200]}')
-"
-```
-
-**上下文管理工具分析标准**：
-
-| 工具 | 好的信号 | 坏的信号 |
+| 信号 | 好的信号 | 坏的信号 |
 |------|----------|----------|
-| `update_llm_context` | 保留了关键决策和上下文 | 遗漏了重要信息、格式混乱、内容过时 |
-| `truncate_messages` | 截断的是低价值/大体积输出 | 截断了有用内容、截断后未缓解 token 压力 |
-| `compact_messages` | Summary 准确且精炼 | Summary 遗漏关键信息、压缩后 agent 行为退化 |
-| `no_action` | 确实不需要操作 | 频繁 no_action 暗示触发阈值不合理 |
+| `compaction` | Summary 准确保留关键决策和上下文 | Summary 遗漏重要信息、压缩后 agent 行为退化 |
+| `truncate` | 截断的是低价值/大体积输出 | 截断了有用内容、频繁截断暗示工具输出控制不足 |
+| `llm_context` 更新 | 保留了关键决策和当前任务状态 | 内容过时、格式混乱、遗漏重要变更 |
+| `summaryFile` 引用 | 文件存在且内容完整 | 文件路径无效或内容为空 |
 
 #### 模式 F: Traces 性能分析（可选）
 
 当需要深入理解特定行为时，配合 trace 文件：
 
 ```bash
-# Context management 相关 trace events
+# Context management 相关 trace events（当前有效的事件名）
 python3 -c "
 import json
-target_events = ['context_trigger_checked', 'context_management_decision', 'context_snapshot_evaluated']
+target_events = ['context_update_reminder', 'context_decision_reminder', 'context_mgmt_messages_truncated', 'context_mgmt_llm_context_updated']
 with open('<trace-path>') as f:
     data = json.load(f)
 for e in data.get('traceEvents', []):
@@ -308,14 +320,17 @@ for e in data.get('traceEvents', []):
 "
 ```
 
-可用的 context management trace events：
-- `context_snapshot_evaluated` — Snapshot 评估
-- `context_trigger_checked` — 触发检查结果
-- `context_checkpoint_created` / `context_checkpoint_loaded` — Checkpoint 生命周期
-- `context_journal_entry_appended` — Journal 写入
-- `context_management` — Context management 操作 span
-- `context_management_decision` — 管理决策
-- `context_management_skipped` — 跳过管理
+**当前有效的 context management trace events**（定义在 `pkg/traceevent/config.go`）：
+- `context_update_reminder` — Context 更新提醒
+- `context_decision_reminder` — Context 决策提醒
+- `context_mgmt_messages_truncated` — 消息截断操作
+- `context_mgmt_llm_context_updated` — LLM context 文件更新
+
+其他常用 trace events：
+- `prompt` — Prompt 构建
+- `llm_call` — LLM API 调用
+- `tool_execute` — 工具执行
+- `mini_compact` / `mini_compact_check` — Mini compaction 相关
 
 ---
 
@@ -407,7 +422,7 @@ Agent: 调用 bash 工具，执行 `cat pkg/agent/loop.go`
 2. **选择错误**：选错工具、执行顺序不合理
 3. **反模式**：重复失败、无效循环、过度调用
 4. **Subagent 协作**：任务描述不清、过度执行、结果不完整
-5. **上下文管理效率**：触发是否合理、截断/压缩质量、记忆保留效果
+5. **上下文管理效率**：compaction 是否保留关键信息、truncate 是否合理、llm_context 更新质量
 6. **改进机会**：可以优化的流程、可以复用的模式
 
 ### ❌ 不应该关注的
@@ -428,11 +443,11 @@ Agent: 调用 bash 工具，执行 `cat pkg/agent/loop.go`
 - **Code Review 范式**：像 senior engineer review PR 一样思考
 - **目标明确**：持续优化 ai 项目的代码质量
 - **汇总报告**：分析完一批 session 后，必须生成汇总报告（跨 session 共性问题）
-- **上下文管理是新维度**：重点关注新架构下的 context management 行为，这是最大变化
+- **双 schema 兼容**：分析脚本必须同时处理 `compact`/`compaction` 和 `truncate` 格式
+- **不假设文件存在**：checkpoint_index.json、summaries/ 目录不保证存在
 
 ## 参考文档
 
-- **Session Reader**: `references/session-reader.md` — 会话格式和读取方法
-- **Architecture**: `references/architecture.md` — 新架构参考（trampoline、trigger、checkpoint）
+- **Session Reader**: `references/session-reader.md` — 会话格式详细说明（双 schema、字段定义、读取命令）
 - **Analyst**: `references/analyst.md` — 分析角色定义
 - **Subagent**: `/skills/subagent` — 子代理机制和最佳实践

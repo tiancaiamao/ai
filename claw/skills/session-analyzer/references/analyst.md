@@ -14,7 +14,7 @@ Think like you're reviewing a PR:
 2. **Correctness**: Did the agent choose the right tool? Why or why not?
 3. **Efficiency**: Is the execution flow optimal? Any redundant steps?
 4. **Error handling**: How does it handle failures? Is there a fallback strategy?
-5. **Context management**: Is the agent managing its memory effectively? (新增)
+5. **Context management**: Is the agent managing its memory effectively via compaction/truncate/llm_context?
 
 ## Analysis Mindset
 
@@ -22,14 +22,14 @@ Think like you're reviewing a PR:
 - **Why** did it choose this tool? (not just "how many times")
 - **What** caused the misunderstanding? (prompt issue? tool description?)
 - **How** can we improve the code? (specific file/line changes)
-- **Is** the context management effective? (trigger timing? truncation quality?) (新增)
+- **Is** the context management effective? (compaction quality? information loss after compress?)
 
 ### Focus on:
 - ✅ **Design problems**: Prompt unclear, tool description ambiguous
 - ✅ **Wrong choices**: Selected wrong tool, execution order suboptimal
 - ✅ **Anti-patterns**: Repeated failures, ineffective loops
 - ✅ **Improvement opportunities**: Optimizable flows, reusable patterns
-- ✅ **Context management issues**: Ineffective truncation, poor compaction, lost context (新增)
+- ✅ **Context management issues**: Poor compaction summary, lost context after compress, stale llm_context
 
 ### Do NOT focus on:
 - ❌ **Technical metrics**: Retry rate, token consumption (use scripts for this)
@@ -44,34 +44,40 @@ Every finding must include:
 3. **Root Cause**: Why this happened (design issue, not implementation)
 4. **Fix**: Specific code/config change (e.g., "Add to tools.md: ...")
 
-## Context Management Review (新增)
+## Context Management Review
 
 When analyzing context management behavior, evaluate across these dimensions:
 
-### Trigger Analysis
-- **Frequency**: Too frequent (wasting turns) or too rare (running out of context)?
-- **Urgency**: Are urgent triggers (70% token usage) happening? That's a red flag.
-- **Cause**: Token pressure vs stale output vs periodic check — which dominates?
-
-### Truncation Quality
-- **Target selection**: Are the right tool outputs being truncated? Low-value content?
-- **Effectiveness**: Does truncation actually reduce token pressure?
-- **Protected region**: Is the 30-message protection zone respected?
-
-### Compaction Quality
-- **Summary accuracy**: Does the compact summary capture key information?
-- **Post-compaction behavior**: Does the agent maintain coherence after compaction?
+### Compaction Analysis
+- **Entry type**: Is it `compaction` (new) or `compact` (legacy)?
+- **Summary quality**: Does the summary capture key decisions, current task, file state?
 - **Information loss**: Any critical context dropped that causes later mistakes?
+- **Post-compaction behavior**: Does the agent maintain coherence after compaction?
+- **tokensBefore**: How much context was lost? Is the compaction happening at a reasonable threshold?
 
-### LLM Context Updates
+### Truncation Analysis
+- **Target selection**: Are the right tool outputs being truncated? Large/low-value ones?
+- **Frequency**: Is truncation happening too often? That suggests upstream issues (tools producing too much output).
+- **Effectiveness**: Does truncation resolve token pressure, or is it just a band-aid?
+
+### LLM Context (overview.md) Quality
 - **Relevance**: Is the agent keeping the right information in llm_context?
 - **Freshness**: Is stale information being cleaned up?
 - **Structure**: Is the markdown well-organized or cluttered?
+- **Completeness**: Does it reflect the current state of work, or is it outdated?
 
 ### Overall Memory Management
-- **Growth trend**: Is context growing uncontrollably despite management?
-- **Management overhead**: What percentage of turns are spent on context management?
-- **Effectiveness score**: How well does management prevent context loss?
+- **Compaction frequency**: Too frequent (agent can't maintain long context) or appropriate?
+- **Memory coherence**: After compaction, does the agent still understand the task?
+- **Growth trend**: Is llm-context/overview.md growing unboundedly?
+
+### Reading Compaction Summaries
+
+When analyzing compaction, always read the actual summary content:
+
+1. For `compaction` entries: check `summaryFile` field first, fall back to `summary` field
+2. For `compact` entries: read the inline `compact.summary` field
+3. Compare summary content with the conversation that was compressed — what was kept? what was lost?
 
 ## Example Review
 
@@ -95,22 +101,29 @@ Fix: 在 tools.md 添加：
 
 ### ✅ Good Context Management Analysis
 ```
-Issue: Ineffective truncation pattern
+Issue: Compaction lost critical file state information
 
-Location: messages.jsonl:150-180 (Turn 7-8)
+Location: messages.jsonl:280 (compaction entry)
 
 Evidence:
-  Turn 7: context_management triggered (token usage 65%)
-  Action: truncate 5 tool outputs
-  Turn 8: token usage still 60% (only 5% reduction)
-  Turn 8: context_management triggered AGAIN
+  Compaction summary (tokensBefore=142018):
+    - Mentions "working on auth refactor"
+    - Lists 3 decisions made
+    - Missing: current file being edited (auth.go line 145),
+              last test failure message, pending TODO list
 
-Root Cause: Truncation targets were small tool outputs (grep results),
-            not the large ones (file reads). Agent should truncate
-            the largest outputs first.
+  After compaction, agent (Turn 12):
+    "让我先看看 auth.go 的当前状态..." (re-reading file it already knew)
+    Agent spent 3 turns re-discovering context that was lost.
 
-Fix: 在 truncate_messages 工具描述中添加排序建议：
-  "优先截断体积最大的工具输出，检查 toolResult 中的文本长度"
+Root Cause: Compaction summary focused on high-level decisions
+            but omitted operational state (current edit position,
+            last error message, pending items).
+
+Fix: 在 compaction prompt 中添加要求：
+  "Summary must include: (1) current file and line being edited,
+   (2) last error/test result, (3) pending action items,
+   (4) key decisions with rationale"
 ```
 
 ### ❌ Bad Analysis
