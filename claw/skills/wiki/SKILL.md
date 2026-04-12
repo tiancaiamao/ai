@@ -34,7 +34,7 @@ This is an Obsidian vault. The wiki lives at:
 │   ├── log.md             # Append-only activity log
 │   ├── summaries/         # One summary page per source
 │   ├── concepts/          # Entity / topic pages (evolving synthesis)
-│   └── entites/           # Entity pages (reserved)
+│   └── entities/          # Entity pages (reserved)
 ```
 
 If the user's project has a different vault path, adjust accordingly.

@@ -198,7 +198,6 @@ scan_sessions() {
     # 输出汇总
     echo "" >&2
     local total del empty_hash
-    read total del empty_hash < "$(cat $_COUNT_FILE > /dev/null; echo $_COUNT_FILE)"
     read total del empty_hash < "$_COUNT_FILE"
     log_info "Summary:"
     echo "  Total sessions:       $total"
