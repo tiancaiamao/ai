@@ -111,6 +111,10 @@ check_session() {
     elif [[ "$lines" -lt "$MIN_LINES" ]] && [[ "$size" -lt "$MIN_SIZE" ]]; then
         should_delete=true
         reason="short ($lines lines, $size bytes)"
+    elif ! grep -q '"role":"assistant"' "$msg_file" 2>/dev/null; then
+        # No assistant reply — user sent messages but never got a response
+        should_delete=true
+        reason="no assistant reply ($lines lines)"
     fi
 
     # 检查时间限制
@@ -158,7 +162,8 @@ scan_sessions() {
     trap cleanup_counters EXIT
 
     log_info "Scanning sessions in: $SESSIONS_BASE"
-    log_info "Thresholds: < $MIN_LINES lines AND < $MIN_SIZE bytes"
+    log_info "Short threshold: < $MIN_LINES lines AND < $MIN_SIZE bytes"
+    log_info "Also cleaning: sessions with no assistant reply"
     log_info "Clean empty session dirs: $CLEAN_EMPTY"
     log_info "Clean empty hash dirs: $CLEAN_EMPTY_HASH"
     if [[ -n "$DAYS_OLD" ]]; then
