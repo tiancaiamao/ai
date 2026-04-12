@@ -13,3 +13,7 @@ benchmark/tasks/*/*/setup/
 
 claw/skills/self-improving-agent/.learnings/
 claw/skills/.*
+
+# Symphony workspace files (never commit these)
+WORKPAD.md
+WORKFLOW.md
