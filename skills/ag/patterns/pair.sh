@@ -7,12 +7,10 @@
 # In real mode: prompt args are --system values.
 #
 # Environment:
-#   AG_BIN    — path to ag binary (default: ag)
 #   AG_MOCK   — set to "1" to use mock agents
 #
 set -euo pipefail
 
-AG_BIN="${AG_BIN:-ag}"
 WORKER_PROMPT="$1"
 JUDGE_PROMPT="$2"
 INPUT_FILE="$3"
@@ -42,23 +40,23 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   else
     SPAWN_ARGS+=(--system "$WORKER_PROMPT")
   fi
-  $AG_BIN spawn "${SPAWN_ARGS[@]}"
+  ag spawn "${SPAWN_ARGS[@]}"
 
   # --- Wait for worker ---
   echo "[pair] Waiting for worker ($WORKER_ID)..."
-  if ! $AG_BIN wait "$WORKER_ID" --timeout 60; then
+  if ! ag wait "$WORKER_ID" --timeout 60; then
     echo "[pair] Worker failed in round $round"
-    $AG_BIN rm "$WORKER_ID" 2>/dev/null || true
+    ag rm "$WORKER_ID" 2>/dev/null || true
     continue
   fi
 
   # --- Get worker output ---
   WORKER_OUTPUT=$(mktemp)
-  $AG_BIN output "$WORKER_ID" > "$WORKER_OUTPUT"
+  ag output "$WORKER_ID" > "$WORKER_OUTPUT"
   echo "[pair] Worker output: $(wc -l < "$WORKER_OUTPUT" | tr -d ' ') lines"
 
   # Clean up worker agent
-  $AG_BIN rm "$WORKER_ID" 2>/dev/null || true
+  ag rm "$WORKER_ID" 2>/dev/null || true
 
   # --- Spawn judge ---
   JUDGE_ARGS=(--id "$JUDGE_ID" --input "$WORKER_OUTPUT" --timeout 5m)
@@ -67,25 +65,25 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   else
     JUDGE_ARGS+=(--system "$JUDGE_PROMPT")
   fi
-  $AG_BIN spawn "${JUDGE_ARGS[@]}"
+  ag spawn "${JUDGE_ARGS[@]}"
 
   # --- Wait for judge ---
   echo "[pair] Waiting for judge ($JUDGE_ID)..."
-  if ! $AG_BIN wait "$JUDGE_ID" --timeout 30; then
+  if ! ag wait "$JUDGE_ID" --timeout 30; then
     echo "[pair] Judge failed in round $round"
-    $AG_BIN rm "$JUDGE_ID" 2>/dev/null || true
+    ag rm "$JUDGE_ID" 2>/dev/null || true
     rm -f "$WORKER_OUTPUT"
     continue
   fi
 
   # --- Get judge verdict ---
   JUDGE_OUTPUT=$(mktemp)
-  $AG_BIN output "$JUDGE_ID" > "$JUDGE_OUTPUT"
+  ag output "$JUDGE_ID" > "$JUDGE_OUTPUT"
   echo "[pair] Judge verdict:"
   cat "$JUDGE_OUTPUT"
 
   # Clean up judge agent
-  $AG_BIN rm "$JUDGE_ID" 2>/dev/null || true
+  ag rm "$JUDGE_ID" 2>/dev/null || true
 
   # --- Check verdict ---
   if grep -qi "APPROVED\|PASS\|ACCEPT" "$JUDGE_OUTPUT"; then

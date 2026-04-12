@@ -3,10 +3,14 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/genius/ag/internal/storage"
 	"github.com/spf13/cobra"
 )
+
+var rmForce bool
 
 var rmCmd = &cobra.Command{
 	Use:   "rm <agent-id>",
@@ -22,24 +26,28 @@ var rmCmd = &cobra.Command{
 
 		status := storage.ReadStatus(agentDir)
 		if status == "running" && !rmForce {
-			fmt.Fprintf(os.Stderr, "Agent %s is still running, kill it first\n", id)
+			fmt.Fprintf(os.Stderr, "Agent %s is still running, kill it first (or use -f)\n", id)
 			os.Exit(1)
+		}
+
+		// Clean up tmux session if it exists
+		tmuxFile := agentDir + "/tmux-session"
+		if data, err := os.ReadFile(tmuxFile); err == nil {
+			sessionName := strings.TrimSpace(string(data))
+			if strings.HasPrefix(sessionName, "mock-") {
+				// mock agents don't have tmux sessions
+			} else {
+				exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+			}
 		}
 
 		if err := os.RemoveAll(agentDir); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to remove: %v\n", err)
 			os.Exit(1)
 		}
-		if rmForce {
-			fmt.Printf("Agent %s removed (forced)\n", id)
-		} else {
-			fmt.Printf("Agent %s removed\n", id)
-		}
+		fmt.Printf("Agent %s removed\n", id)
 	},
 }
-
-// rmForce skips the running check
-var rmForce bool
 
 func init() {
 	rmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Force remove even if running")

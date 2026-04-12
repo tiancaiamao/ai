@@ -117,7 +117,11 @@ func Recv(source string, wait bool, timeoutSec int, all bool) ([]byte, error) {
 	// Channel
 	queueDir := storage.ChannelDir(source)
 	if !storage.Exists(queueDir) {
-		return nil, fmt.Errorf("no agent or channel found: %s", source)
+		if !wait {
+			return nil, fmt.Errorf("no agent or channel found: %s", source)
+		}
+		// Auto-create channel when waiting, so sender can create it later
+		os.MkdirAll(queueDir, 0755)
 	}
 	return recvFromQueue(queueDir, wait, timeoutSec, all)
 }

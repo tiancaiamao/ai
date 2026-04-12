@@ -4,12 +4,10 @@
 # Usage: pipeline.sh <input-file> <stage1-prompt> [stage2-prompt] ...
 #
 # Environment:
-#   AG_BIN    — path to ag binary (default: ag)
 #   AG_MOCK   — set to "1" for mock mode
 #
 set -euo pipefail
 
-AG_BIN="${AG_BIN:-ag}"
 MOCK="${AG_MOCK:-}"
 INPUT_FILE="$1"
 shift
@@ -43,19 +41,19 @@ for i in "${!STAGES[@]}"; do
   echo "[pipeline] === Stage $STAGE_NUM/$STAGE_COUNT ==="
 
   if [ -n "$MOCK" ]; then
-    $AG_BIN spawn --id "$STAGE_ID" --mock --mock-script "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 1m
+    ag spawn --id "$STAGE_ID" --mock --mock-script "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 1m
   else
-    $AG_BIN spawn --id "$STAGE_ID" --system "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 10m
+    ag spawn --id "$STAGE_ID" --system "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 10m
   fi
 
-  if ! $AG_BIN wait "$STAGE_ID" --timeout 60; then
+  if ! ag wait "$STAGE_ID" --timeout 60; then
     echo "[pipeline] ❌ Stage $STAGE_NUM failed"
     exit 1
   fi
 
   PREV_OUTPUT=$(mktemp)
   TEMP_FILES+=("$PREV_OUTPUT")
-  $AG_BIN output "$STAGE_ID" > "$PREV_OUTPUT"
+  ag output "$STAGE_ID" > "$PREV_OUTPUT"
 
   LINES=$(wc -l < "$PREV_OUTPUT" | tr -d ' ')
   echo "[pipeline] Stage $STAGE_NUM done ($LINES lines)"

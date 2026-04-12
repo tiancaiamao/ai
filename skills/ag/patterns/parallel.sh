@@ -4,12 +4,10 @@
 # Usage: parallel.sh <count> <system-prompt> <input-topic> [output-dir]
 #
 # Environment:
-#   AG_BIN  — path to ag binary (default: ag)
 #   AG_MOCK — set to "1" for mock mode
 #
 set -euo pipefail
 
-AG_BIN="${AG_BIN:-ag}"
 MOCK="${AG_MOCK:-}"
 COUNT="$1"
 SYSTEM_PROMPT="$2"
@@ -45,9 +43,9 @@ EOF
   TEMP_INPUTS+=("$AGENT_INPUT")
 
   if [ -n "$MOCK" ]; then
-    $AG_BIN spawn --id "$ID" --mock --mock-script "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 1m &
+    ag spawn --id "$ID" --mock --mock-script "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 1m &
   else
-    $AG_BIN spawn --id "$ID" --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 10m &
+    ag spawn --id "$ID" --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 10m &
   fi
   PIDS+=($!)
 done
@@ -67,8 +65,8 @@ echo "[parallel] All agents spawned. Waiting for completion..."
 FAILED=0
 for i in "${!AGENT_IDS[@]}"; do
   ID="${AGENT_IDS[$i]}"
-  if $AG_BIN wait "$ID" --timeout 60; then
-    $AG_BIN output "$ID" > "$OUTPUT_DIR/agent-$i.md"
+  if ag wait "$ID" --timeout 60; then
+    ag output "$ID" > "$OUTPUT_DIR/agent-$i.md"
     echo "[parallel] Agent $i done"
   else
     echo "[parallel] Agent $i failed"

@@ -16,11 +16,9 @@
 #   and merge results.
 #
 # Environment:
-#   AG_BIN — path to ag binary (default: ag)
 #
 set -euo pipefail
 
-AG_BIN="${AG_BIN:-ag}"
 MOCK="${AG_MOCK:-}"
 PLAN_FILE="$1"
 WORKER_COUNT="$2"
@@ -35,7 +33,7 @@ TASK_IDS=()
 while IFS= read -r line; do
   # Skip empty lines and comments
   [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-  TASK_ID=$($AG_BIN task create "$line")
+  TASK_ID=$(ag task create "$line")
   TASK_IDS+=("$TASK_ID")
 done < "$PLAN_FILE"
 
@@ -56,11 +54,11 @@ for i in $(seq 1 "$WORKER_COUNT"); do
     WORKER_ID="fanout-worker-$$-$i"
     while true; do
       # Try to claim a pending task
-      TASK_LINE=$($AG_BIN task list --status pending 2>/dev/null | tail -n +2 | head -1) || break
+      TASK_LINE=$(ag task list --status pending 2>/dev/null | tail -n +2 | head -1) || break
       [ -z "$TASK_LINE" ] && break
 
       TASK_ID=$(echo "$TASK_LINE" | awk '{print $1}')
-      if ! $AG_BIN task claim "$TASK_ID" --as "$WORKER_ID" 2>/dev/null; then
+      if ! ag task claim "$TASK_ID" --as "$WORKER_ID" 2>/dev/null; then
         # Race: another worker claimed it first, retry
         sleep 1
         continue
@@ -72,18 +70,18 @@ for i in $(seq 1 "$WORKER_COUNT"); do
       # Spawn agent for this task
       AGENT_ID="fanout-$$-task-$TASK_ID"
       if [ -n "$MOCK" ]; then
-        $AG_BIN spawn --id "$AGENT_ID" --mock --mock-script "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
+        ag spawn --id "$AGENT_ID" --mock --mock-script "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
       else
-        $AG_BIN spawn --id "$AGENT_ID" --system "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
+        ag spawn --id "$AGENT_ID" --system "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
       fi
 
-      if $AG_BIN wait "$AGENT_ID" --timeout 600; then
+      if ag wait "$AGENT_ID" --timeout 600; then
         OUTPUT=$(mktemp)
-        $AG_BIN output "$AGENT_ID" > "$OUTPUT"
-        $AG_BIN task done "$TASK_ID" --output "$OUTPUT"
+        ag output "$AGENT_ID" > "$OUTPUT"
+        ag task done "$TASK_ID" --output "$OUTPUT"
         rm -f "$OUTPUT"
       else
-        $AG_BIN task fail "$TASK_ID" --error "worker timed out"
+        ag task fail "$TASK_ID" --error "worker timed out"
       fi
     done
   ) &
@@ -96,8 +94,8 @@ for pid in "${WORKER_PIDS[@]}"; do
 done
 
 # --- Check results ---
-DONE_COUNT=$($AG_BIN task list --status done 2>/dev/null | wc -l | tr -d ' ')
-FAIL_COUNT=$($AG_BIN task list --status failed 2>/dev/null | wc -l | tr -d ' ')
+DONE_COUNT=$(ag task list --status done 2>/dev/null | wc -l | tr -d ' ')
+FAIL_COUNT=$(ag task list --status failed 2>/dev/null | wc -l | tr -d ' ')
 echo "[fan-out] Results: $DONE_COUNT done, $FAIL_COUNT failed"
 
 if [ "$DONE_COUNT" -eq 0 ]; then
@@ -111,7 +109,7 @@ RESULTS_FILE=$(mktemp)
 
 # Collect all task outputs
 for tid in "${TASK_IDS[@]}"; do
-  TASK_INFO=$($AG_BIN task show "$tid" 2>/dev/null)
+  TASK_INFO=$(ag task show "$tid" 2>/dev/null)
   STATUS=$(echo "$TASK_INFO" | grep "^status:" | awk '{print $2}')
   if [ "$STATUS" = "done" ]; then
     OUTPUT_PATH=$(echo "$TASK_INFO" | grep "^output:" | awk '{print $2}')
@@ -123,13 +121,13 @@ done
 
 echo "[fan-out] Merging results..."
 if [ -n "$MOCK" ]; then
-  $AG_BIN spawn --id "$MERGER_ID" --mock --mock-script "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
+  ag spawn --id "$MERGER_ID" --mock --mock-script "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
 else
-  $AG_BIN spawn --id "$MERGER_ID" --system "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
+  ag spawn --id "$MERGER_ID" --system "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
 fi
 
-if $AG_BIN wait "$MERGER_ID" --timeout 300; then
-  $AG_BIN output "$MERGER_ID"
+if ag wait "$MERGER_ID" --timeout 300; then
+  ag output "$MERGER_ID"
   echo ""
   echo "[fan-out] ✅ Complete"
 else

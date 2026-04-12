@@ -86,15 +86,22 @@ var spawnCmd = &cobra.Command{
 var waitTimeout int
 
 var waitCmd = &cobra.Command{
-	Use:   "wait <agent-id> [--timeout <seconds>]",
-	Short: "Wait for an agent to complete",
-	Args:  cobra.ExactArgs(1),
+	Use:   "wait <agent-id...> [--timeout <seconds>]",
+	Short: "Wait for one or more agents to complete",
+	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := agent.Wait(args[0], waitTimeout); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		failed := 0
+		for _, id := range args {
+			if err := agent.Wait(id, waitTimeout); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				failed++
+			} else {
+				fmt.Printf("Agent %s done\n", id)
+			}
+		}
+		if failed > 0 {
 			os.Exit(1)
 		}
-		fmt.Printf("Agent %s done\n", args[0])
 	},
 }
 
