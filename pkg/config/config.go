@@ -36,12 +36,6 @@ type Config struct {
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
 
-	// Task tracking (task_tracking)
-	TaskTracking bool `json:"taskTracking"`
-
-	// Context management (context_management)
-	ContextManagement bool `json:"contextManagement"`
-
 	// Workspace is the working directory path (the git repo path bound at startup)
 	Workspace string `json:"workspace,omitempty"`
 }
@@ -270,8 +264,6 @@ func DefaultConfig() *Config {
 		Concurrency:       DefaultConcurrencyConfig(),
 		ToolOutput:        DefaultToolOutputConfig(),
 		Log:               DefaultLogConfig(),
-		TaskTracking:      false, // Default disabled
-		ContextManagement: false, // Default disabled
 	}
 }
 
@@ -302,10 +294,6 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 			MaxChars: c.ToolOutput.MaxChars,
 		}
 	}
-
-	// Explicitly set these flags based on config (not just conditional set to true)
-	loopCfg.TaskTrackingEnabled = c.TaskTracking
-	loopCfg.ContextManagementEnabled = c.ContextManagement
 
 	// Apply options last (they can override config values)
 	for _, opt := range opts {

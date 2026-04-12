@@ -108,11 +108,6 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Create llm-context structure
-	if _, err := EnsureLLMContext(sessDir); err != nil {
-		return nil, fmt.Errorf("failed to create llm context: %w", err)
-	}
-
 	return sess, nil
 }
 
@@ -177,48 +172,8 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Copy llm-context from source session
-	sourceDir := source.GetDir()
-	srcWM := filepath.Join(sourceDir, LLMContextDir)
-	dstWM := filepath.Join(sessDir, LLMContextDir)
-	if _, err := os.Stat(srcWM); err == nil {
-		if err := copyDir(srcWM, dstWM); err != nil {
-			// Log but don't fail - llm context copy is not critical
-			fmt.Fprintf(os.Stderr, "warning: failed to copy llm context: %v\n", err)
-		}
-	} else {
-		// Create fresh llm-context if source doesn't have one
-		if _, err := EnsureLLMContext(sessDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to create llm context: %v\n", err)
-		}
-	}
 
 	return newSess, nil
-}
-
-// copyDir recursively copies a directory
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, info.Mode())
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(dstPath, data, info.Mode())
-	})
 }
 
 // GetSession retrieves a session by ID.

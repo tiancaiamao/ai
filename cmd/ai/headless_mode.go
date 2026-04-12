@@ -153,24 +153,19 @@ func registerHeadlessTools(
 	registry.Register(tools.NewGrepTool(ws))
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
-	// Note: task_tracking and context_management tools removed in backport
 }
 
-func headlessEffectiveConfig(cfg *config.Config, customSystemPrompt string, keepTools bool) *config.Config {
+func headlessEffectiveConfig(cfg *config.Config) *config.Config {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	effective := *cfg
-	if strings.TrimSpace(customSystemPrompt) != "" && !keepTools {
-		effective.TaskTracking = false
-		effective.ContextManagement = false
-	}
 	return &effective
 }
 
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, keepTools bool, cmPromptOverride string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, keepTools bool, _ string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
 	slog.Info("Starting headless mode", "prompts", len(prompts), "max_turns", maxTurns, "tools", allowedTools, "timeout", timeout, "has_custom_prompt", customSystemPrompt != "")
 
@@ -188,10 +183,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 	}
-	effectiveCfg := headlessEffectiveConfig(cfg, customSystemPrompt, keepTools)
-	if customSystemPrompt != "" && !keepTools && (cfg.TaskTracking || cfg.ContextManagement) {
-		slog.Info("Custom system prompt detected: disabling built-in task/context management features")
-	}
+	effectiveCfg := headlessEffectiveConfig(cfg)
 
 	// Convert config to llm.Model
 	model := effectiveCfg.GetLLMModel()
@@ -358,26 +350,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
-	// Set llm context for system prompt explanation (tells LLM about the mechanism)
-	// The actual content is injected dynamically in the agent loop
-	if sess != nil {
-		sessionDir := sess.GetDir()
-		if sessionDir != "" {
-			wm := agentctx.NewLLMContext(sessionDir)
-			promptBuilder.SetLLMContext(wm)
-		}
-	}
-
-	// Set task tracking and context management based on config
-	promptBuilder.SetTaskTrackingEnabled(effectiveCfg.TaskTracking)
-	promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
-
-	// Override context management section if provided
-	if cmPromptOverride != "" {
-		promptBuilder.SetContextManagementOverride(cmPromptOverride)
-		slog.Info("Using context management override", "length", len(cmPromptOverride))
-	}
-
 	// Use custom system prompt if provided, otherwise use default
 	var systemPrompt string
 	if customSystemPrompt != "" {
@@ -443,10 +415,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	loopCfg.GetWorkingDir = ws.GetCWD
 	loopCfg.GetStartupPath = ws.GetInitialCWD
 
-	// Set task tracking and context management based on config
-	loopCfg.TaskTrackingEnabled = effectiveCfg.TaskTracking
-	loopCfg.ContextManagementEnabled = effectiveCfg.ContextManagement
-
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
@@ -456,8 +424,6 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		ag.SetMaxTurns(maxTurns)
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
-
-	// LoopConfig already includes TaskTracking and ContextManagement settings
 
 	// Load previous messages into agent context
 	for _, msg := range sess.GetMessages() {

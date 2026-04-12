@@ -70,10 +70,6 @@ type LoopConfig struct {
 	MaxTurns int
 	// ContextWindow is the context window for the model (0=use default 128000).
 	ContextWindow int
-	// TaskTrackingEnabled enables task tracking reminders (task_tracking tool).
-	TaskTrackingEnabled bool
-	// ContextManagementEnabled enables context management reminders (context_management tool).
-	ContextManagementEnabled bool
 	// LLMTotalTimeout is the total timeout for an LLM request (default 10min).
 	LLMTotalTimeout time.Duration
 	// LLMFirstResponseTimeout is the timeout between streaming chunks (default 2min).
@@ -105,8 +101,6 @@ func DefaultLoopConfig() *LoopConfig {
 		ThinkingLevel:            "high",
 		MaxLLMRetries:            defaultLLMMaxRetries,
 		RetryBaseDelay:           defaultRetryBaseDelay,
-		TaskTrackingEnabled:      false,
-		ContextManagementEnabled: false,
 		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
 		ToolOutput:               DefaultToolOutputLimits(),
 		LLMTotalTimeout:          defaultLLMTotalTimeout,

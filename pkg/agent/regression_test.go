@@ -16,8 +16,6 @@ func TestRegression001_MaxConsecutiveToolCalls(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxConsecutiveToolCalls = 3 // Low limit for testing
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify that default config allows unlimited tool calls (0)
@@ -49,8 +47,6 @@ func TestRegression002_AutoCompactConfiguration(t *testing.T) {
 	cfg.Compactors = []agentctx.Compactor{
 		&testCompactor{shouldTrigger: true},
 	}
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	agentCtx := agentctx.NewAgentContext("Test agent")
@@ -78,8 +74,6 @@ func TestRegression003_ToolCallCutoffConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.ToolCallCutoff = 2 // Low limit for testing
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has ToolCallCutoff set to a positive value
@@ -108,8 +102,6 @@ func TestRegression004_MaxToolCallsPerName(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxToolCallsPerName = 5 // Low limit for testing
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config allows unlimited tool calls per name (0)
@@ -138,8 +130,6 @@ func TestRegression005_MaxTurnsConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 3
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config allows unlimited turns (0)
@@ -168,8 +158,6 @@ func TestRegression006_ContextWindowConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.ContextWindow = 1000 // Small limit for testing
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has ContextWindow set to 0 (use model default)
@@ -199,8 +187,6 @@ func TestRegression007_LLMRetryConfiguration(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxLLMRetries = 3
 	cfg.RetryBaseDelay = 100 // milliseconds
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has retries enabled
@@ -231,8 +217,6 @@ func TestRegression008_ToolOutputLimits(t *testing.T) {
 	cfg.ToolOutput = ToolOutputLimits{
 		MaxChars: 1000,
 	}
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has ToolOutput limits set
@@ -260,8 +244,6 @@ func TestRegression009_ExecutorPoolConfiguration(t *testing.T) {
 	// Fix: Added executor pool with concurrency and timeout controls
 
 	cfg := DefaultLoopConfig()
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has Executor set
@@ -288,8 +270,6 @@ func TestRegression010_EnableCheckpointConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.EnableCheckpoint = false
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 
 	// Verify default config has checkpoint enabled
 	defaultCfg := DefaultLoopConfig()
@@ -318,8 +298,6 @@ func TestRegression011_LLMTimeoutConfiguration(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.LLMTotalTimeout = 5 * 60 * 1000000000 // 5 minutes in nanoseconds
 	cfg.LLMFirstResponseTimeout = 1 * 60 * 1000000000 // 1 minute in nanoseconds
-	cfg.TaskTrackingEnabled = false
-	cfg.ContextManagementEnabled = false
 	cfg.EnableCheckpoint = false
 
 	// Verify default config has timeouts set
@@ -348,19 +326,12 @@ func TestRegression012_RuntimeMetaConfiguration(t *testing.T) {
 	// Fix: Runtime meta is controlled by loop logic
 
 	cfg := DefaultLoopConfig()
-	cfg.TaskTrackingEnabled = true
-	cfg.ContextManagementEnabled = true
 
 	// Verify config accepts these flags
 	agent := NewAgentFromConfig(llm.Model{}, "test-key", "Test agent", cfg)
 
 	// Verify config is embedded in agent
-	if !agent.TaskTrackingEnabled {
-		t.Error("agent.TaskTrackingEnabled should be true")
-	}
-	if !agent.ContextManagementEnabled {
-		t.Error("agent.ContextManagementEnabled should be true")
-	}
+	_ = agent
 }
 
 // testCompactor is a mock compactor for testing
