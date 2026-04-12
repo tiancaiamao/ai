@@ -31,7 +31,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
-	"github.com/tiancaiamao/ai/claw/pkg/tieredmemory"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/claw/pkg/web"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -697,13 +696,6 @@ You are claw, a helpful AI assistant.
 
 	// 构建提示词部分
 	parts := []string{basePrompt}
-
-	// 添加 tiered-memory 上下文（包含 hot state 和检索到的相关记忆）
-	memStore := tieredmemory.NewStore(clawDir)
-	// 使用通用查询检索记忆（会在对话中根据具体查询细化）
-	if memoryContext, err := memStore.GetMemoryContext(""); err == nil && memoryContext != "" {
-		parts = append(parts, memoryContext)
-	}
 
 	// 添加技能列表
 	if len(skills) > 0 {
