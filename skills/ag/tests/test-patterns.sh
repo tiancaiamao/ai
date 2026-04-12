@@ -2,9 +2,10 @@
 # test-patterns.sh — Verify all patterns with mock agents
 set -euo pipefail
 
-AG=/Users/genius/project/ai/skills/workflow/ag/ag
-PATTERNS=/Users/genius/project/ai/skills/workflow/ag/patterns
-MOCKS=/Users/genius/project/ai/skills/workflow/ag/tests/mocks
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AG="$SCRIPT_DIR/../ag"
+PATTERNS="$SCRIPT_DIR/../patterns"
+MOCKS="$SCRIPT_DIR/mocks"
 WORKSPACE=$(mktemp -d)
 
 export AG_BIN="$AG"

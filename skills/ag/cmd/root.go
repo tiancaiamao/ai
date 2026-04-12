@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -204,8 +203,14 @@ var sendCmd = &cobra.Command{
 		var isFile bool
 
 		if sendFile != "" {
-			data = []byte(sendFile)
-			isFile = true
+			// Read file contents here, not just the path
+			fileData, err := os.ReadFile(sendFile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+				os.Exit(1)
+			}
+			data = fileData
+			isFile = false // contents already read, no need for channel.Send to re-read
 		} else if len(args) > 1 {
 			data = []byte(args[1])
 		} else {
@@ -500,7 +505,11 @@ func init() {
 // ========== Helpers ==========
 
 func formatTime(unix int64) string {
-	return strconv.FormatInt(unix, 10)
+	if unix == 0 {
+		return "-"
+	}
+	t := time.Unix(unix, 0)
+	return t.Format("2006-01-02 15:04:05")
 }
 
 func formatDuration(seconds int64) string {

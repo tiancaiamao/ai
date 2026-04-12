@@ -35,6 +35,7 @@ func Send(target string, data []byte, isFile bool) error {
 	agentDir := storage.AgentDir(target)
 	if storage.Exists(agentDir) {
 		queueDir = filepath.Join(agentDir, "inbox")
+		os.MkdirAll(queueDir, 0755) // ensure inbox exists
 	} else {
 		// Treat as channel — auto-create if needed
 		queueDir = storage.ChannelDir(target)

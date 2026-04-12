@@ -74,18 +74,35 @@ func Create(description string, specFile string) (*Task, error) {
 }
 
 // Claim claims a pending task for an agent.
-// Cross-process safety is provided by O_EXCL on .claim-lock, not by the mutex.
-// The mutex only prevents races within a single process.
+// Cross-process safety: O_EXCL on .claim-lock is the primary guard.
+// We acquire the lock FIRST, then check status — this prevents TOCTOU races.
 func Claim(taskID, agentID string) (*Task, error) {
 	taskMu.Lock()
 	defer taskMu.Unlock()
 
+	taskDir := storage.TaskDir(taskID)
+	if !storage.Exists(taskDir) {
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+
+	// Acquire exclusive lock FIRST (atomic cross-process guard)
+	lockPath := filepath.Join(taskDir, ".claim-lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("task %s already claimed by another process", taskID)
+	}
+	defer f.Close()
+	f.WriteString(agentID)
+
+	// NOW check status (safe because we hold the lock)
 	task, err := loadTask(taskID)
 	if err != nil {
+		os.Remove(lockPath)
 		return nil, err
 	}
 
 	if task.Status != StatusPending {
+		os.Remove(lockPath)
 		return nil, fmt.Errorf("task %s is %s (not pending)", taskID, task.Status)
 	}
 
@@ -93,16 +110,7 @@ func Claim(taskID, agentID string) (*Task, error) {
 	task.Claimant = agentID
 	task.ClaimedAt = time.Now().Unix()
 
-	// Use exclusive create as a lock (in case of distributed access)
-	lockPath := filepath.Join(storage.TaskDir(taskID), ".claim-lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("task %s already claimed by another process", taskID)
-	}
-	f.WriteString(agentID)
-	f.Close()
-
-	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
+	if err := storage.AtomicWriteJSON(filepath.Join(taskDir, "task.json"), task); err != nil {
 		os.Remove(lockPath)
 		return nil, err
 	}

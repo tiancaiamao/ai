@@ -47,25 +47,36 @@ fi
 
 # --- Spawn worker pool ---
 WORKER_PIDS=()
-WORKER_IDS=()
+
+# Export task list for subshells
+export TASK_IDS_FILE=$(mktemp)
+printf '%s\n' "${TASK_IDS[@]}" > "$TASK_IDS_FILE"
 
 for i in $(seq 1 "$WORKER_COUNT"); do
   (
+    # Read task IDs in subshell
+    mapfile -t TASK_IDS < "$TASK_IDS_FILE"
+    
     WORKER_ID="fanout-worker-$$-$i"
     while true; do
-      # Try to claim a pending task
-      TASK_LINE=$(ag task list --status pending 2>/dev/null | tail -n +2 | head -1) || break
-      [ -z "$TASK_LINE" ] && break
+      # Find a pending task by checking known task IDs
+      TASK_ID=""
+      for tid in "${TASK_IDS[@]}"; do
+        if ag task show "$tid" 2>/dev/null | grep -q "^status: pending"; then
+          TASK_ID="$tid"
+          break
+        fi
+      done
+      [ -z "$TASK_ID" ] && break
 
-      TASK_ID=$(echo "$TASK_LINE" | awk '{print $1}')
       if ! ag task claim "$TASK_ID" --as "$WORKER_ID" 2>/dev/null; then
         # Race: another worker claimed it first, retry
         sleep 1
         continue
       fi
 
-      # Get task description
-      TASK_DESC=$(echo "$TASK_LINE" | awk '{$1=$2=$3=""; print substr($0,4)}')
+      # Get task description from task show
+      TASK_DESC=$(ag task show "$TASK_ID" | grep "^description:" | sed 's/^description: //')
 
       # Spawn agent for this task
       AGENT_ID="fanout-$$-task-$TASK_ID"
@@ -135,4 +146,4 @@ else
   exit 1
 fi
 
-rm -f "$RESULTS_FILE"
+rm -f "$RESULTS_FILE" "$TASK_IDS_FILE"

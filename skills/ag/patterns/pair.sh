@@ -97,6 +97,10 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   # --- Prepare feedback for next round ---
   FEEDBACK_FILE=$(mktemp)
   {
+    echo "# Original task (from round 1)"
+    echo ""
+    cat "$INPUT_FILE"
+    echo ""
     echo "# Previous attempt (round $round)"
     echo ""
     cat "$WORKER_OUTPUT"
@@ -106,7 +110,7 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     cat "$JUDGE_OUTPUT"
     echo ""
     echo "# Instructions"
-    echo "Address the judge's feedback above and produce an improved version."
+    echo "Address the judge's feedback above and produce an improved version of your previous attempt."
   } > "$FEEDBACK_FILE"
 
   rm -f "$WORKER_OUTPUT" "$JUDGE_OUTPUT"
