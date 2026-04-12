@@ -8,11 +8,17 @@ allowed-tools: [bash]
 
 # ag — Agent Orchestration
 
-## Quick Reference
+## Setup
 
 ```bash
-# Ensure ag binary is built
-cd skills/workflow/ag && go build -o /tmp/ag . && export AG_BIN=/tmp/ag
+export AG_BIN=~/.ai/skills/ag/ag
+```
+
+The binary is pre-built. Source code lives in the project repo at `skills/workflow/ag/`.
+If you need to rebuild:
+
+```bash
+cd <project-repo>/skills/workflow/ag && go build -o ~/.ai/skills/ag/ag .
 ```
 
 ## CLI Commands
@@ -21,73 +27,73 @@ cd skills/workflow/ag && go build -o /tmp/ag . && export AG_BIN=/tmp/ag
 
 ```bash
 # Spawn an agent (runs in tmux, returns immediately)
-ag spawn --id my-agent --system prompt.md --input task.md --timeout 10m
+$AG_BIN spawn --id my-agent --system prompt.md --input task.md --timeout 10m
 
 # Spawn with mock (for testing patterns, no LLM)
-ag spawn --id test-agent --mock --mock-script /path/to/mock.sh --input input.txt
+$AG_BIN spawn --id test-agent --mock --mock-script /path/to/mock.sh --input input.txt
 
 # Wait for agent to finish
-ag wait my-agent --timeout 600    # seconds
+$AG_BIN wait my-agent --timeout 600    # seconds
 
 # Get output (only when done)
-ag output my-agent > result.md
+$AG_BIN output my-agent > result.md
 
 # Check status
-ag status my-agent                 # spawning | running | done | failed | killed
-ag ls                              # list all agents
+$AG_BIN status my-agent                 # spawning | running | done | failed | killed
+$AG_BIN ls                              # list all agents
 
 # Cleanup
-ag rm my-agent                     # remove completed/failed agent state
-ag kill my-agent                   # terminate running agent
+$AG_BIN rm my-agent                     # remove completed/failed agent state
+$AG_BIN kill my-agent                   # terminate running agent
 ```
 
 ### Communication
 
 ```bash
 # Send message to an agent's inbox or a named channel
-ag send my-agent --file feedback.md
-echo "hello" | ag send my-agent
-ag send my-agent "inline message"
+$AG_BIN send my-agent --file feedback.md
+echo "hello" | $AG_BIN send my-agent
+$AG_BIN send my-agent "inline message"
 
 # Receive message (from channel or agent output)
-ag recv my-agent                   # non-blocking, fails if no messages
-ag recv my-agent --wait --timeout 60   # block until message arrives
-ag recv my-channel --all           # get all messages at once
+$AG_BIN recv my-agent                   # non-blocking, fails if no messages
+$AG_BIN recv my-agent --wait --timeout 60   # block until message arrives
+$AG_BIN recv my-channel --all           # get all messages at once
 
 # Channel management
-ag channel create review-queue
-ag channel ls
-ag channel rm review-queue
+$AG_BIN channel create review-queue
+$AG_BIN channel ls
+$AG_BIN channel rm review-queue
 ```
 
 ### Task Management
 
 ```bash
 # Create tasks
-ag task create "Implement OAuth2"
-ag task create "Write tests" --file spec.md
+$AG_BIN task create "Implement OAuth2"
+$AG_BIN task create "Write tests" --file spec.md
 
 # Claim and complete
-ag task claim t001 --as worker-1    # atomic, fails if already claimed
-ag task done t001 --output result.md
-ag task fail t002 --error "blocked"
+$AG_BIN task claim t001 --as worker-1    # atomic, fails if already claimed
+$AG_BIN task done t001 --output result.md
+$AG_BIN task fail t002 --error "blocked"
 
 # Inspect
-ag task list                       # all tasks
-ag task list --status pending      # filter by status
-ag task show t001                  # full details
+$AG_BIN task list                       # all tasks
+$AG_BIN task list --status pending      # filter by status
+$AG_BIN task show t001                  # full details
 ```
 
 ## Pattern Scripts
 
-Patterns are bash scripts in `skills/workflow/ag/patterns/`. They compose `ag` CLI commands into common multi-agent workflows.
+Patterns are bash scripts in `~/.ai/skills/ag/patterns/`. They compose `ag` CLI commands into common multi-agent workflows.
 
 ### pair.sh — Worker-Judge Loop
 
 One agent works, another reviews. Loop until approved.
 
 ```bash
-$AG_BIN patterns/pair.sh <worker-prompt> <judge-prompt> <input-file> [max-rounds]
+$AG_BIN ~/.ai/skills/ag/patterns/pair.sh <worker-prompt> <judge-prompt> <input-file> [max-rounds]
 ```
 
 **When to use:**
@@ -108,7 +114,7 @@ $AG_BIN patterns/pair.sh <worker-prompt> <judge-prompt> <input-file> [max-rounds
 **Example:**
 ```bash
 # Code review cycle
-$AG_BIN patterns/pair.sh \
+$AG_BIN ~/.ai/skills/ag/patterns/pair.sh \
   code-reviewer.md \      # reviews the code
   qa-reviewer.md \        # checks review quality
   changed-files.diff \    # input: the diff
@@ -120,7 +126,7 @@ $AG_BIN patterns/pair.sh \
 Spawn multiple agents, each gets a unique index, collect all results.
 
 ```bash
-$AG_BIN patterns/parallel.sh <count> <system-prompt> <input-topic> [output-dir]
+$AG_BIN ~/.ai/skills/ag/patterns/parallel.sh <count> <system-prompt> <input-topic> [output-dir]
 ```
 
 **When to use:**
@@ -137,7 +143,7 @@ $AG_BIN patterns/parallel.sh <count> <system-prompt> <input-topic> [output-dir]
 **Example:**
 ```bash
 # Explore 3 areas in parallel
-$AG_BIN patterns/parallel.sh \
+$AG_BIN ~/.ai/skills/ag/patterns/parallel.sh \
   3 \                     # 3 agents
   explorer.md \           # system prompt
   "analyze the auth module" \
@@ -150,7 +156,7 @@ $AG_BIN patterns/parallel.sh \
 Each stage's output becomes the next stage's input.
 
 ```bash
-$AG_BIN patterns/pipeline.sh <input-file> <stage1-prompt> <stage2-prompt> ...
+$AG_BIN ~/.ai/skills/ag/patterns/pipeline.sh <input-file> <stage1-prompt> <stage2-prompt> ...
 ```
 
 **When to use:**
@@ -160,7 +166,7 @@ $AG_BIN patterns/pipeline.sh <input-file> <stage1-prompt> <stage2-prompt> ...
 
 **Example:**
 ```bash
-$AG_BIN patterns/pipeline.sh \
+$AG_BIN ~/.ai/skills/ag/patterns/pipeline.sh \
   requirements.md \
   spec-writer.md \
   planner.md \
@@ -172,7 +178,7 @@ $AG_BIN patterns/pipeline.sh \
 Create tasks from a plan, workers claim and execute them in parallel, then merge.
 
 ```bash
-$AG_BIN patterns/fan-out.sh <plan-file> <worker-count> <worker-prompt> <merger-prompt>
+$AG_BIN ~/.ai/skills/ag/patterns/fan-out.sh <plan-file> <worker-count> <worker-prompt> <merger-prompt>
 ```
 
 **When to use:**
@@ -197,7 +203,7 @@ Add form validation
 Write unit tests for login
 EOF
 
-$AG_BIN patterns/fan-out.sh \
+$AG_BIN ~/.ai/skills/ag/patterns/fan-out.sh \
   plan.txt 3 worker.md merger.md
 ```
 
@@ -206,27 +212,26 @@ $AG_BIN patterns/fan-out.sh \
 Patterns can be nested or chained:
 
 ```bash
-# Feature workflow: parallel explore → pair spec → pair implement
 TMP=$(mktemp -d)
 
 # Step 1: Explore in parallel
-$AG_BIN patterns/parallel.sh 3 explorer.md "the feature" $TMP/explore
+$AG_BIN ~/.ai/skills/ag/patterns/parallel.sh 3 explorer.md "the feature" $TMP/explore
 
 # Step 2: Merge explores, then pair-write spec
 cat $TMP/explore/agent-*.md > $TMP/all-explores.md
-$AG_BIN patterns/pair.sh spec-writer.md spec-reviewer.md $TMP/all-explores.md 3 > $TMP/spec.md
+$AG_BIN ~/.ai/skills/ag/patterns/pair.sh spec-writer.md spec-reviewer.md $TMP/all-explores.md 3 > $TMP/spec.md
 
 # Step 3: Plan from spec
-$AG_BIN patterns/pipeline.sh $TMP/spec.md planner.md > $TMP/plan.txt
+$AG_BIN ~/.ai/skills/ag/patterns/pipeline.sh $TMP/spec.md planner.md > $TMP/plan.txt
 
 # Step 4: Fan-out implementation
-$AG_BIN patterns/fan-out.sh $TMP/plan.txt 4 implementer.md integrator.md
+$AG_BIN ~/.ai/skills/ag/patterns/fan-out.sh $TMP/plan.txt 4 implementer.md integrator.md
 ```
 
 ## Important Notes
 
-- **Always set AG_BIN** to the full path of the ag binary
-- **Always clean up** with `ag rm <id>` after getting output, or `.ag/` accumulates stale state
+- **Always set AG_BIN** — `export AG_BIN=~/.ai/skills/ag/ag`
+- **Always clean up** — `ag rm <id>` after getting output, or `.ag/` accumulates stale state
 - **Agent IDs must be unique** — pair.sh auto-generates unique IDs per round
 - **Mock mode** (`--mock`) for testing patterns without burning tokens
 - **Timeout defaults** — spawn: 10m, wait in patterns: 60s. Override with `--timeout`
