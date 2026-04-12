@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/version"
 )
 
 const CurrentSessionVersion = 1
@@ -35,6 +36,9 @@ type SessionHeader struct {
 	// Resume optimization fields
 	LastCompactionID string `json:"lastCompactionId,omitempty"` // Most recent compaction entry ID
 	ResumeOffset     int64  `json:"resumeOffset,omitempty"`     // File offset for fast resume
+
+	// Git commit hash of the ai binary that created this session
+	GitCommit string `json:"gitCommit,omitempty"`
 }
 
 type SessionEntry struct {
@@ -64,6 +68,7 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		Cwd:           cwd,
 		ParentSession: parentSession,
+		GitCommit:     version.GitCommit,
 	}
 }
 
