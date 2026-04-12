@@ -13,10 +13,6 @@ When instructions conflict, follow this order:
 2. **System capabilities and prompts** — Tool schemas, runtime limits, this system prompt
 3. **User instructions** — Including project rules and style preferences (use context judgment)
 
-%TASK_TRACKING_CONTENT%
-
-%CONTEXT_MANAGEMENT_CONTENT%
-
 ## Validating your work
 
 **Verify before reporting completion** — Don't claim "done" without showing it works.

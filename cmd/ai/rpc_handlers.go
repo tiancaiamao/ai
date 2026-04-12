@@ -211,7 +211,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		prompt.LLMMiniCompactSystemPrompt(),
 	)
 
-	// Note: task_tracking and context_management tools removed in backport
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -267,13 +266,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionDir := currentSess.GetDir()
 			if sessionDir != "" {
 				wm := agentctx.NewLLMContext(sessionDir)
-				promptBuilder.SetLLMContext(wm)
+				_ = wm // LLM context loaded by compact system
 			}
 		}
-
-		// Set task tracking and context management based on config
-		promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
-		promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
 
 		return promptBuilder.Build()
 	}

@@ -25,7 +25,7 @@ type JournalEntry struct {
 type TruncateEvent struct {
 	ToolCallID string `json:"tool_call_id"`
 	Turn       int    `json:"turn"`
-	Trigger    string `json:"trigger"` // "context_management" | "manual"
+	Trigger    string `json:"trigger"` // "auto" | "manual"
 	Timestamp  string `json:"timestamp"`
 }
 

@@ -620,16 +620,6 @@ func (a *Agent) SetContextWindow(contextWindow int) {
 	a.LoopConfig.ContextWindow = contextWindow
 }
 
-// SetTaskTrackingEnabled sets whether task tracking reminders are enabled.
-func (a *Agent) SetTaskTrackingEnabled(enabled bool) {
-	a.LoopConfig.TaskTrackingEnabled = enabled
-}
-
-// SetContextManagementEnabled sets whether context management reminders are enabled.
-func (a *Agent) SetContextManagementEnabled(enabled bool) {
-	a.LoopConfig.ContextManagementEnabled = enabled
-}
-
 // GetPendingFollowUps returns the number of queued follow-up messages.
 func (a *Agent) GetPendingFollowUps() int {
 	return len(a.followUpQueue)

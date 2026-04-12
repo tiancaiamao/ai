@@ -212,10 +212,6 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	promptBuilder := prompt.NewBuilderWithWorkspace(basePrompt, ws)
 	promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
 
-	// Set task tracking and context management based on config
-	promptBuilder.SetTaskTrackingEnabled(cfg.TaskTracking)
-	promptBuilder.SetContextManagementEnabled(false) // disabled: context management now handled by LLMMiniCompactor
-
 	systemPrompt := promptBuilder.Build()
 
 	// Helper function to create a new agent context

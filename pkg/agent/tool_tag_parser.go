@@ -22,7 +22,6 @@ var (
 	// Add new tools here to enable tag-based parsing.
 	supportedToolTags = []string{
 		"read_file", "read", "write", "edit", "bash", "grep",
-		"context_management", "task_tracking",
 	}
 
 	// toolTagRegex matches XML-style tool call tags for supported tools.
@@ -213,45 +212,6 @@ func parseToolTag(tagName, body string) (string, map[string]any, bool) {
 			args["filePattern"] = filePattern
 		}
 		return "grep", args, true
-	case "context_management":
-		// Parse context_management tool call parameters.
-		// Expected format: <decision>...</decision> <reasoning>...</reasoning>
-		decision := firstTagValue(body, "decision")
-		if decision == "" {
-			return "", nil, false
-		}
-		reasoning := firstTagValue(body, "reasoning", "reason")
-		if reasoning == "" {
-			return "", nil, false
-		}
-		args := map[string]any{
-			"decision":  decision,
-			"reasoning": reasoning,
-		}
-		// Optional parameters
-		if skipTurns := firstTagValue(body, "skip_turns", "skipTurns"); skipTurns != "" {
-			args["skip_turns"] = skipTurns
-		}
-		if truncateIDs := firstTagValue(body, "truncate_ids", "truncateIds"); truncateIDs != "" {
-			args["truncate_ids"] = truncateIDs
-		}
-		if compactConfidence := firstTagValue(body, "compact_confidence", "compactConfidence"); compactConfidence != "" {
-			args["compact_confidence"] = compactConfidence
-		}
-		return "context_management", args, true
-	case "task_tracking":
-		// Parse task_tracking tool call parameters.
-		// Expected format: <content>...</content>
-		content := firstTagValue(body, "content")
-		if content == "" {
-			return "", nil, false
-		}
-		args := map[string]any{"content": content}
-		// Optional parameters
-		if skip := firstTagValue(body, "skip"); skip != "" {
-			args["skip"] = skip
-		}
-		return "task_tracking", args, true
 	default:
 		return "", nil, false
 	}
@@ -457,17 +417,6 @@ func ValidateToolCallArgs(toolName string, args map[string]any) error {
 	case "grep":
 		if args["pattern"] == nil && args["query"] == nil {
 			return fmt.Errorf("grep tool requires 'pattern' parameter")
-		}
-	case "context_management":
-		if args["decision"] == nil {
-			return fmt.Errorf("context_management tool requires 'decision' parameter")
-		}
-		if args["reasoning"] == nil && args["reason"] == nil {
-			return fmt.Errorf("context_management tool requires 'reasoning' parameter")
-		}
-	case "task_tracking":
-		if args["content"] == nil {
-			return fmt.Errorf("task_tracking tool requires 'content' parameter")
 		}
 	}
 	return nil

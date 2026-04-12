@@ -61,8 +61,6 @@ func main() {
 	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
 	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited, headless mode only)")
 	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
-	keepToolsFlag := flag.Bool("keep-tools", false, "Keep task_tracking and context_management enabled even with custom system prompt (headless mode only)")
-	cmPromptFlag := flag.String("cm-prompt", "", "Override context management section of system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md). Headless mode only.")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
@@ -85,8 +83,7 @@ func main() {
 	case "headless":
 		prompts := flag.Args()
 		tools := parseToolsFlag(*toolsFlag)
-		cmPrompt := parseSystemPrompt(*cmPromptFlag) // reuse @file parsing
-		if err := runHeadless(*sessionPathFlag, *maxTurnsFlag, tools, *timeoutFlag, systemPrompt, *keepToolsFlag, cmPrompt, prompts, os.Stdout); err != nil {
+		if err := runHeadless(*sessionPathFlag, *maxTurnsFlag, tools, *timeoutFlag, systemPrompt, prompts, os.Stdout); err != nil {
 			slog.Error("headless error", "error", err)
 			os.Exit(1)
 		}

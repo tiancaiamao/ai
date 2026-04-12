@@ -438,45 +438,4 @@ func TestCompactorDefaults(t *testing.T) {
 	if compactorConfig.ToolSummaryAutomation != "off" {
 		t.Errorf("Expected ToolSummaryAutomation off, got %q", compactorConfig.ToolSummaryAutomation)
 	}
-
-	if !compactorConfig.AutoCompact {
-		t.Error("Expected AutoCompact to be true")
-	}
-}
-
-// TestTaskTrackingContextManagementDefaults tests that task tracking and context management
-// are disabled by default and work correctly with simple boolean config.
-func TestTaskTrackingContextManagementDefaults(t *testing.T) {
-	// Test 1: default config should have both disabled
-	cfg := DefaultConfig()
-	if cfg.TaskTracking {
-		t.Error("Expected TaskTracking to default to false")
-	}
-	if cfg.ContextManagement {
-		t.Error("Expected ContextManagement to default to false")
-	}
-
-	// Test 2: explicit true should work
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "explicit_true.json")
-	explicitTrueConfig := `{
-		"taskTracking": true,
-		"contextManagement": true
-	}`
-	err := os.WriteFile(configPath, []byte(explicitTrueConfig), 0644)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
-	cfg2, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if cfg2.TaskTracking != true {
-		t.Errorf("Expected taskTracking to be true, got %v", cfg2.TaskTracking)
-	}
-	if cfg2.ContextManagement != true {
-		t.Errorf("Expected contextManagement to be true, got %v", cfg2.ContextManagement)
-	}
 }

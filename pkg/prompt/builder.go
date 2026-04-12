@@ -20,9 +20,6 @@ var subagentBasePrompt string
 //go:embed "headless_base.md"
 var headlessBasePrompt string
 
-//go:embed "context_management.md"
-var contextManagementPrompt string
-
 //go:embed "compact_system.md"
 var compactSystemPrompt string
 
@@ -34,9 +31,6 @@ var compactUpdatePrompt string
 
 //go:embed "subagent.md"
 var DefaultSubagentPrompt string
-
-//go:embed "task_tracking.md"
-var taskTrackingPrompt string
 
 //go:embed "llm_mini_compact_system.md"
 var llmMiniCompactSystemPrompt string
@@ -86,13 +80,6 @@ type ToolInfo interface {
 	Description() string
 }
 
-// LLMContextInfo provides llm context content for prompt generation.
-type LLMContextInfo interface {
-	Load() (string, error)
-	GetPath() string
-	GetDetailDir() string
-}
-
 // Builder constructs system prompts with structured sections.
 type Builder struct {
 	// Working directory (can be static or dynamic via workspace)
@@ -117,42 +104,26 @@ type Builder struct {
 	// Skills (for Skills section)
 	skills []skill.Skill
 
-	// Resident prompt (for LLM Context section)
-	llmContext LLMContextInfo
-
-	// Context meta (for LLM Context section, set by agent loop)
+	// Context meta (for runtime_state telemetry, set by agent loop)
 	contextMeta string
 
 	// Token usage percent (for hint message generation)
 	tokensPercent float64
-
-	// Task tracking enabled (controls task tracking inclusion)
-	taskTrackingEnabled bool
-
-	// Context management enabled (controls context_management.md inclusion)
-	contextManagementEnabled bool
-
-	// Context management override (replaces embedded context_management.md)
-	contextManagementOverride string
 }
 
 // NewBuilder creates a new prompt builder.
 func NewBuilder(_, cwd string) *Builder {
 	return &Builder{
-		cwd:                      cwd,
-		minimal:                  false,
-		taskTrackingEnabled:      true,
-		contextManagementEnabled: true,
+		cwd:     cwd,
+		minimal: false,
 	}
 }
 
 // NewBuilderWithWorkspace creates a new prompt builder with dynamic workspace support.
 func NewBuilderWithWorkspace(_ string, ws *tools.Workspace) *Builder {
 	return &Builder{
-		workspace:                ws,
-		minimal:                  false,
-		taskTrackingEnabled:      true,
-		contextManagementEnabled: true,
+		workspace: ws,
+		minimal:   false,
 	}
 }
 
@@ -199,17 +170,14 @@ func convertTools(tools interface{}) []ToolInfo {
 		return nil
 	}
 	v := reflect.ValueOf(tools)
-	if v.Kind() == reflect.Slice {
-		result := make([]ToolInfo, v.Len())
-		for i := 0; i < v.Len(); i++ {
-			elem := v.Index(i).Interface()
-			if tool, ok := elem.(ToolInfo); ok {
-				result[i] = tool
-			}
-		}
-		return result
+	if v.Kind() != reflect.Slice {
+		return nil
 	}
-	return nil
+	result := make([]ToolInfo, v.Len())
+	for i := 0; i < v.Len(); i++ {
+		result[i] = v.Index(i).Interface().(ToolInfo)
+	}
+	return result
 }
 
 // SetSkills sets the available skills.
@@ -218,39 +186,15 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 	return b
 }
 
-// SetLLMContext sets the llm context for the prompt.
-func (b *Builder) SetLLMContext(wm LLMContextInfo) *Builder {
-	b.llmContext = wm
-	return b
-}
-
-// SetContextMeta sets the context metadata string.
+// SetContextMeta sets the runtime_state telemetry metadata.
 func (b *Builder) SetContextMeta(meta string) *Builder {
 	b.contextMeta = meta
 	return b
 }
 
-// SetTokensPercent sets the token usage percent.
-func (b *Builder) SetTokensPercent(percent float64) *Builder {
-	b.tokensPercent = percent
-	return b
-}
-
-// SetTaskTrackingEnabled sets whether task tracking is enabled.
-func (b *Builder) SetTaskTrackingEnabled(enabled bool) *Builder {
-	b.taskTrackingEnabled = enabled
-	return b
-}
-
-// SetContextManagementEnabled sets whether context management is enabled.
-func (b *Builder) SetContextManagementEnabled(enabled bool) *Builder {
-	b.contextManagementEnabled = enabled
-	return b
-}
-
-// SetContextManagementOverride replaces the embedded context_management.md content.
-func (b *Builder) SetContextManagementOverride(content string) *Builder {
-	b.contextManagementOverride = content
+// SetTokensPercent sets the current token usage percentage.
+func (b *Builder) SetTokensPercent(pct float64) *Builder {
+	b.tokensPercent = pct
 	return b
 }
 
@@ -276,31 +220,6 @@ For persistent workspace switching across subsequent tool calls, use change_work
 	}
 	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
 
-	// Replace task tracking (optional section)
-	taskTracking := ""
-	if b.taskTrackingEnabled {
-		taskTracking = b.buildTaskTrackingContent()
-	}
-	result = strings.ReplaceAll(result, "%TASK_TRACKING_CONTENT%", taskTracking)
-
-	// Replace context management (optional section)
-	contextManagement := ""
-	if b.contextManagementEnabled && b.llmContext != nil {
-		if b.contextManagementOverride != "" {
-			contextManagement = b.contextManagementOverride
-		} else {
-			contextManagement = contextManagementPrompt
-		}
-	}
-	result = strings.ReplaceAll(result, "%CONTEXT_MANAGEMENT_CONTENT%", contextManagement)
-
-	// Replace skills hint (optional, only shown if skills exist)
-	skillsHint := ""
-	if !b.minimal && len(b.skills) > 0 && len(b.tools) > 0 {
-		skillsHint = "\n\nIf you need additional capabilities, check the available Skills below."
-	}
-	result = strings.ReplaceAll(result, "%SKILLS_HINT%", skillsHint)
-
 	// Replace skills (optional section)
 	skills := ""
 	if !b.minimal && len(b.skills) > 0 {
@@ -321,55 +240,6 @@ For persistent workspace switching across subsequent tool calls, use change_work
 	result = b.cleanupEmptySections(result)
 
 	return result
-}
-
-func (b *Builder) buildTaskTrackingContent() string {
-	content := `## Task Tracking
-Track multi-step tasks using ` + "`task_tracking`" + `.
-
-**Update** (with markdown content) when:
-- Task status changes, decisions made, files changed
-- Progress milestone reached, blocker emerged/resolved
-
-**Skip** (with ` + "`skip=true, reasoning=\"...\"`" + `) when:
-- Simple questions, no progress, routine responses
-
-**Important:** Always call ` + "`task_tracking`" + ` — with content or ` + "`skip=true`" + `. This prevents reminder spam.
-
-### Update Example
-
-**Good:** Specific, actionable status
-
-` + "```markdown" + `
-## Current Task
-- Implementing feature X
-- Status: 60% complete
-- Done: Core logic, unit tests
-- Next: Integration tests
-` + "```" + `
-
-**Bad:** Too vague, no actionable info
-
-` + "```markdown" + `
-Working on it...
-` + "```" + `
-
-**When to skip (skip=true):**
-- Simple questions without task progress
-- Routine responses without state changes
-- Quick clarifications or confirmations`
-
-	if b.contextMeta != "" {
-		content += `
-
----
-
-<context_meta>
-` + b.contextMeta + `
-</context_meta>`
-	}
-
-	return content
 }
 
 // Bootstrap files to search for in workspace.
@@ -502,5 +372,3 @@ func NormalizeThinkingLevel(level string) string {
 func LLMMiniCompactSystemPrompt() string {
 	return llmMiniCompactSystemPrompt
 }
-
-
