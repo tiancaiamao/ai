@@ -1,23 +1,35 @@
 # Workflow Commands
 
-User-friendly frontend for ag-based workflow execution.
+Agent-driven workflow execution with state persistence.
 
 ## Architecture
 
 ```
-User Command
+/workflow start feature "X"
     ↓
-Workflow Skill (Frontend)
-  - Parse user input
-  - Friendly commands
-  - Template selection
-  - Phase prompt assembly
+workflow-ctl start → write STATE.json
     ↓
-ag CLI (Backend)
-  - Agent spawn/wait/output
-  - Task management
-  - State cleanup
+Agent reads STATE.json → current phase
+    ↓
+Agent reads templates/feature.md → phase instructions
+    ↓
+Agent executes phase autonomously
+    ↓
+Agent calls workflow-ctl advance → update STATE.json
+    ↓
+Next phase...
 ```
+
+**workflow-ctl Tool:**
+- **Location:** `skills/workflow/bin/workflow-ctl`
+- **Build:** `cd skills/workflow && go build -o bin/workflow-ctl workflow-ctl.go`
+- **Purpose:** Deterministic state updates, agent-driven execution
+
+**ag CLI:**
+- **Location:** `skills/ag/` (separate skill)
+- **Used for:** Agent spawn, task queue (for dynamic parallel tasks)
+
+> **Note:** Agent controls execution flow, workflow-ctl manages state persistence.
 
 ## Commands
 
@@ -30,30 +42,11 @@ Start a new workflow.
 /workflow start bugfix "Fix login timeout"
 /workflow start feature "Add user authentication"
 /workflow start hotfix "Emergency: prod crash"
-
-# Auto-detect template from description
-/workflow start "Fix broken API endpoint"  # → bugfix
-/workflow start "Research new framework"   # → spike
 ```
 
 **Implementation:**
 ```bash
-# 1. Ensure orchestrate binary exists
-ensure_orchestrate_binary
-
-# 2. Resolve template
-template="${1:-auto}"
-description="$2"
-
-if [ "$template" = "auto" ]; then
-  template=$(auto_detect "$description")
-fi
-
-# 3. Call orchestrate CLI
-~/.ai/skills/workflow/orchestrate/bin/orchestrate start \
-  --workflow "$template" \
-  --name "$description" \
-  --project "$(basename $PWD)"
+workflow-ctl start bugfix "Fix login timeout"
 ```
 
 ### `/workflow status`
@@ -61,226 +54,96 @@ fi
 Show current workflow state.
 
 ```bash
-# Ensure orchestrate binary exists
-ensure_orchestrate_binary
-
-# Show all workflows
-~/.ai/skills/workflow/orchestrate/bin/orchestrate status
-
-# Show specific workflow
-~/.ai/skills/workflow/orchestrate/bin/orchestrate status --project myproject
+workflow-ctl status
 ```
 
-### `/workflow stop`
+### `/workflow advance [--phase <name>]`
 
-Stop running workflow.
+Advance to next phase (used by agent).
 
 ```bash
-# Ensure orchestrate binary exists
-ensure_orchestrate_binary
+# Move to next phase (agent calls this after completing current phase)
+workflow-ctl advance
 
-~/.ai/skills/workflow/orchestrate/bin/orchestrate stop
+# Jump to specific phase (rare, for recovery)
+workflow-ctl advance --phase implement
 ```
 
-### `/workflow logs`
+### `/workflow pause` / `/workflow resume`
 
-Show workflow logs.
+Pause or resume workflow.
 
 ```bash
-# Ensure orchestrate binary exists
-ensure_orchestrate_binary
-
-# All logs
-~/.ai/skills/workflow/orchestrate/bin/orchestrate logs
-
-# Specific phase
-~/.ai/skills/workflow/orchestrate/bin/orchestrate logs --phase diagnose
+workflow-ctl pause
+workflow-ctl resume
 ```
 
-### `/workflow approve <task-id>`
+## Agent Usage
 
-Approve a pending review.
+Agent drives phase execution:
 
 ```bash
-~/.ai/skills/workflow/orchestrate/bin/orchestrate approve "$task-id"
+# 1. Start workflow
+workflow-ctl start feature "add auth"
+
+# 2. Agent reads STATE.json → current phase = spec
+# 3. Agent executes Spec phase (reads templates/feature.md)
+# 4. Agent calls:
+workflow-ctl advance
+
+# 5. Agent reads STATE.json → current phase = plan
+# 6. Agent executes Plan phase (creates PLAN.md)
+# 7. Agent calls:
+workflow-ctl advance
+
+# 8. Agent reads STATE.json → current phase = implement
+# 9. Agent generates tasks.md
+# 10. Agent creates tasks:
+ag task create "implement API"
+ag task create "write tests"
+# 11. Agent spawns workers (fan-out pattern)
+# 12. Agent calls:
+workflow-ctl advance
+
+# ... continue until done
 ```
 
-### `/workflow templates [info <name>]`
+## Dynamic Task Execution
 
-List or show template details.
+For phases with parallel subtasks, agent uses `ag task`:
 
 ```bash
-# List all templates
-~/.ai/skills/workflow/orchestrate/bin/orchestrate templates
+# Agent generates tasks.md
 
-# Show template info
-~/.ai/skills/workflow/orchestrate/bin/orchestrate templates info bugfix
+# Create tasks
+ag task create "task-1 description"
+ag task create "task-2 description"
+
+# Spawn worker pool (fan-out.sh)
+# Workers claim tasks: ag task claim <id>
+# Workers complete: ag task done <id> --output <file>
+
+# After all tasks done:
+workflow-ctl advance
 ```
 
-## Template Resolution
+## State Management
 
-### Aliases
-
-```bash
-resolve_by_name() {
-  local name="$1"
-  case "$name" in
-    bug|fix)      echo "bugfix" ;;
-    hot)          echo "hotfix" ;;
-    feat|feature) echo "feature" ;;
-    research)     echo "spike" ;;
-    *)            echo "$name" ;;
-  esac
-}
-```
-
-### Auto-detect
-
-```bash
-auto_detect() {
-  local desc="$1"
-  local lower=$(echo "$desc" | tr '[:upper:]' '[:lower:]')
-
-  if echo "$lower" | grep -qE 'bug|issue|error|wrong|broken|fix'; then
-    echo "bugfix"
-  elif echo "$lower" | grep -qE 'hot|emergency|prod|urgent'; then
-    echo "hotfix"
-  elif echo "$lower" | grep -qE 'security|vulnerability|exploit'; then
-    echo "security"
-  elif echo "$lower" | grep -qE 'research|explore|spike|investigate'; then
-    echo "spike"
-  elif echo "$lower" | grep -qE 'refactor|restructure|cleanup|technical.?debt'; then
-    echo "refactor"
-  else
-    echo "feature"
-  fi
-}
-```
-
-## Available Templates
-
-| Template | Description | Phases |
-|----------|-------------|--------|
-| `bugfix` | Fix bugs with root-cause analysis | reproduce, diagnose, fix, verify |
-| `hotfix` | Emergency production fix | reproduce, diagnose, fix, verify, ship |
-| `feature` | Build new features | design, implement, test, review |
-| `refactor` | Improve code structure | analyze, refactor, verify |
-| `spike` | Research and explore | research, document, present |
-
-## Workflow Execution Flow
+All state is managed by `workflow-ctl` in `.workflow/`:
 
 ```
-1. User: /workflow start bugfix "Fix login bug"
-   ↓
-2. Resolve template → "bugfix"
-   ↓
-3. Call: orchestrate start --workflow bugfix --name "Fix login bug"
-   ↓
-4. Orchestrate loads: templates/bugfix.yaml
-   ↓
-5. Creates tasks:
-   - reproduce (pending, no deps)
-   - diagnose (blocked by: reproduce)
-   - fix (blocked by: diagnose)
-   - verify (blocked by: fix)
-   ↓
-6. Runtime starts monitor loop
-   ↓
-7. reconcile() schedules workers
-   ↓
-8. Workers execute in tmux sessions
-   ↓
-9. Workflow completes when all tasks done
-```
-
-## State Storage
-
-All state is managed by orchestrate CLI:
-
-```
-.ai/team/
-├── config.json       # Team configuration
-├── state.json        # Current runtime state
-├── tasks/            # Individual task states
-├── workers/          # Worker execution directories
-├── logs/             # Execution logs
-└── reviews/          # Review requests
-```
-
-## Integration with Orchestrate
-
-### Workflow Skill (Frontend)
-
-**Responsibilities:**
-- User-friendly commands
-- Template selection and aliasing
-- Parameter parsing
-- Human-readable output
-
-### Orchestrate CLI (Backend)
-
-**Responsibilities:**
-- Task scheduling and dependency resolution
-- Worker pool management
-- State persistence
-- Tmux session management
-- Retry and recovery logic
-
-### API Contract
-
-```bash
-# Start workflow
-orchestrate start --workflow <template> --name <name>
-
-# Show status
-orchestrate status
-
-# Stop workflow
-orchestrate stop
-
-# Show logs
-orchestrate logs [--phase <phase>]
-
-# Approve review
-orchestrate approve <task-id>
-
-# List templates
-orchestrate templates [info <template>]
-```
-
-## Error Handling
-
-```bash
-# Ensure orchestrate binary exists before use
-ensure_orchestrate_binary() {
-  local script_dir="$HOME/.ai/skills/workflow/orchestrate"
-  local binary="$script_dir/bin/orchestrate"
-
-  if [ ! -f "$binary" ]; then
-    echo "🔨 Building orchestrate binary..."
-    cd "$script_dir"
-    go build -o bin/orchestrate ./cmd/main.go
-    echo "✅ Build complete"
-  fi
-}
-
-# Wrapper function
-run_orchestrate() {
-  # Ensure binary exists
-  ensure_orchestrate_binary
-
-  local output
-  output=$(~/.ai/skills/workflow/orchestrate/bin/orchestrate "$@" 2>&1)
-  local exit_code=$?
-
-  if [ $exit_code -ne 0 ]; then
-    echo "❌ Orchestrate error: $output"
-    return $exit_code
-  fi
-
-  echo "$output"
-  return 0
-}
+.workflow/
+├── STATE.json                 # Current workflow state
+└── artifacts/                 # Phase outputs
+    ├── features/
+    │   └── feature/
+    │       ├── SPEC.md
+    │       ├── PLAN.md
+    │       ├── tasks.md
+    │       └── implement-output.md
+    └── bugfixes/
+        └── bugfix/
+            └── triage-output.md
 ```
 
 ## Custom Templates
@@ -288,29 +151,52 @@ run_orchestrate() {
 To add custom templates:
 
 ```bash
-# 1. Create template file
-~/.ai/skills/workflow/orchestrate/templates/my-template.yaml
+# 1. Add to templates/registry.json
+{
+  "templates": {
+    "my-template": {
+      "name": "My Template",
+      "description": "Custom workflow",
+      "phases": ["step1", "step2", "step3"],
+      "category": "custom"
+    }
+  }
+}
 
-# 2. Use it
-/workflow start my-template "My custom workflow"
+# 2. Create template file
+~/.ai/skills/workflow/templates/my-template.md
+
+# 3. Use it
+workflow-ctl start my-template "My custom workflow"
 ```
 
-Template format:
-```yaml
-name: My Custom Workflow
-description: Custom workflow for my team
+Template file format:
+```markdown
+---
+id: my-template
+name: My Template
+phases: [step1, step2, step3]
+---
 
-phases:
-  - id: phase1
-    subject: "Phase One"
-    description: "Do phase one work"
-    blocked_by: []
+## Phase 1: step1
 
-  - id: phase2
-    subject: "Phase Two"
-    description: "Do phase two work"
-    blocked_by: [phase1]
+### Goals
+- [goal 1]
+- [goal 2]
 
-human_loop:
-  checkpoints: [phase2]
+### Actions
+1. [action 1]
+2. [action 2]
+
+### Output
+Create `step1-output.md` with findings.
+
+### Review Criteria
+- [ ] criterion 1
+- [ ] criterion 2
+
+---
+
+## Phase 2: step2
+...
 ```
