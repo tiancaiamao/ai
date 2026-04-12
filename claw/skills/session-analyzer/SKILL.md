@@ -299,7 +299,7 @@ with open('<path>/messages.jsonl') as f:
 # Context management 相关 trace events
 python3 -c "
 import json
-target_events = ['context_trigger_checked', 'context_management_decision', 'context_snapshot_evaluated']
+target_events = ['context_update_reminder', 'context_decision_reminder', 'context_mgmt_messages_truncated', 'context_mgmt_llm_context_updated']
 with open('<trace-path>') as f:
     data = json.load(f)
 for e in data.get('traceEvents', []):
@@ -308,14 +308,17 @@ for e in data.get('traceEvents', []):
 "
 ```
 
-可用的 context management trace events：
-- `context_snapshot_evaluated` — Snapshot 评估
-- `context_trigger_checked` — 触发检查结果
-- `context_checkpoint_created` / `context_checkpoint_loaded` — Checkpoint 生命周期
-- `context_journal_entry_appended` — Journal 写入
-- `context_management` — Context management 操作 span
-- `context_management_decision` — 管理决策
-- `context_management_skipped` — 跳过管理
+**当前有效的 context management trace events**（定义在 `pkg/traceevent/config.go`）：
+- `context_update_reminder` — Context 更新提醒
+- `context_decision_reminder` — Context 决策提醒
+- `context_mgmt_messages_truncated` — 消息截断操作
+- `context_mgmt_llm_context_updated` — LLM context 文件更新
+
+其他常用 trace events：
+- `prompt` — Prompt 构建
+- `llm_call` — LLM API 调用
+- `tool_execute` — 工具执行
+- `mini_compact` / `mini_compact_check` — Mini compaction 相关
 
 ---
 
