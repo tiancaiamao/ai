@@ -155,17 +155,9 @@ func registerHeadlessTools(
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 }
 
-func headlessEffectiveConfig(cfg *config.Config) *config.Config {
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-	effective := *cfg
-	return &effective
-}
-
 // runHeadless executes prompts in headless mode, outputting turn-by-turn human-readable format.
 // Each turn shows: thinking, tool calls (simplified), and assistant output.
-func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, keepTools bool, _ string, prompts []string, output io.Writer) error {
+func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeout time.Duration, customSystemPrompt string, prompts []string, output io.Writer) error {
 	startTime := time.Now()
 	slog.Info("Starting headless mode", "prompts", len(prompts), "max_turns", maxTurns, "tools", allowedTools, "timeout", timeout, "has_custom_prompt", customSystemPrompt != "")
 
@@ -183,10 +175,12 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if err != nil {
 		slog.Warn("Failed to load config", "path", configPath, "error", err)
 	}
-	effectiveCfg := headlessEffectiveConfig(cfg)
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 
 	// Convert config to llm.Model
-	model := effectiveCfg.GetLLMModel()
+	model := cfg.GetLLMModel()
 
 	// Resolve API key
 	apiKey, err := config.ResolveAPIKey(model.Provider)
@@ -295,7 +289,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	registry := tools.NewRegistry()
 
 	// Resolve context window and create compactor for automatic context compression
-	activeSpec, err := resolveActiveModelSpec(effectiveCfg)
+	activeSpec, err := resolveActiveModelSpec(cfg)
 	if err != nil {
 		slog.Warn("Failed to resolve model spec, using default context window", "error", err)
 	}
@@ -304,7 +298,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	if currentContextWindow <= 0 {
 		currentContextWindow = 128000 // default context window
 	}
-	compactorConfig := effectiveCfg.Compactor
+	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
 	}
@@ -325,7 +319,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		prompt.LLMMiniCompactSystemPrompt(),
 	)
 
-	registerHeadlessTools(registry, ws, compactor, effectiveCfg)
+	registerHeadlessTools(registry, ws, compactor, cfg)
 
 	// Load skills
 	homeDir, err := os.UserHomeDir()
@@ -403,7 +397,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Build LoopConfig from application config
-	loopCfg := effectiveCfg.ToLoopConfig(
+	loopCfg := cfg.ToLoopConfig(
 		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
@@ -431,7 +425,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	}
 
 	// Set up executor and tool output limits
-	concurrencyConfig := effectiveCfg.Concurrency
+	concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
@@ -442,7 +436,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	})
 	ag.SetExecutor(executor)
 
-	toolOutputConfig := effectiveCfg.ToolOutput
+	toolOutputConfig := cfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
