@@ -5,11 +5,11 @@
   "phases": [
     { "name": "spec", "index": 0, "status": "done" },
     { "name": "plan", "index": 1, "status": "done" },
-    { "name": "implement", "index": 2, "status": "active" },
-    { "name": "test", "index": 3, "status": "pending" },
-    { "name": "ship", "index": 4, "status": "pending" }
+    { "name": "implement", "index": 2, "status": "done" },
+    { "name": "test", "index": 3, "status": "done" },
+    { "name": "ship", "index": 4, "status": "active" }
   ],
-  "currentPhase": 2,
+  "currentPhase": 4,
   "startedAt": "2026-04-12T18:30:00Z",
   "artifactDir": ".workflow/features/260412-1-mini-compact-event-log"
 }
