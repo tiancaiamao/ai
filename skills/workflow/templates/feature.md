@@ -11,7 +11,8 @@ estimated_tasks: 4-8
 
 ## Overview
 
-Feature workflow guides you from idea to shipped code with proper checkpoints.
+Feature workflow uses ag agents to execute each phase. Each phase spawns
+specialized workers (agent) and optional reviewers (pair pattern).
 
 ## Phase 1: Spec
 
@@ -20,55 +21,53 @@ Feature workflow guides you from idea to shipped code with proper checkpoints.
 - Define success criteria
 - Identify constraints
 
-### Actions
+### Execution: Spawn Worker Agent
 
-1. Understand the ask
-   - What problem does this solve?
-   - Who is the user?
-   - What's the value?
+Use `ag spawn` to create a spec worker agent:
 
-2. Define scope
-   - What's in scope?
-   - What's explicitly out of scope?
+```bash
+ag spawn \
+  --id "feature-spec-worker" \
+  --system "You are writing a feature specification. Focus on clarity, user value, and testable requirements." \
+  --input <(echo "Feature: $FEATURE_DESC") \
+  --cwd "$PWD" \
+  --timeout 10m
+```
 
-3. Write SPEC.md
+Wait for completion:
+```bash
+ag wait "feature-spec-worker" --timeout 600
+```
+
+Capture output:
+```bash
+ag output "feature-spec-worker" > .workflow/artifacts/features/SPEC.md
+```
+
+Cleanup:
+```bash
+ag rm "feature-spec-worker"
+```
 
 ### Output
 
-Create `SPEC.md`:
+Create `SPEC.md` with content from worker agent output.
 
-```markdown
-# Feature: [Name]
+### Review: Use Pair Pattern
 
-## Summary
-[1-2 sentence description]
+After spec is complete, use pair.sh for worker-reviewer loop:
 
-## Motivation
-[Why are we doing this?]
-
-## User Stories
-- As a [user], I want [goal] so that [benefit]
-- ...
-
-## Requirements
-- [ ] [requirement 1]
-- [ ] [requirement 2]
-
-## Out of Scope
-- [ ] [explicitly not doing]
-
-## Success Criteria
-- [ ] [criterion 1]
-- [ ] [criterion 2]
-
-## Technical Notes
-[Any implementation considerations]
+```bash
+# Worker: improve spec
+# Reviewer: check spec quality
+./ag/patterns/pair.sh \
+  "You are reviewing a spec for clarity and completeness." \
+  "You are checking if the spec meets requirements." \
+  .workflow/artifacts/features/SPEC.md \
+  3  # max rounds
 ```
 
-### Review Criteria
-- [ ] Clear user value?
-- [ ] Scope well-defined?
-- [ ] Success criteria measurable?
+If reviewer outputs `APPROVED`, advance to next phase.
 
 ---
 
@@ -79,119 +78,169 @@ Create `SPEC.md`:
 - Estimate effort
 - Identify dependencies
 
-### Actions
+### Execution: Spawn Worker Agent
 
-1. Explore codebase
-   - Find relevant files
-   - Understand existing patterns
-   - Identify integration points
+```bash
+ag spawn \
+  --id "feature-plan-worker" \
+  --system "You are creating an implementation plan. Break down the feature into concrete tasks." \
+  --input <(cat .workflow/artifacts/features/SPEC.md) \
+  --cwd "$PWD" \
+  --timeout 15m
 
-2. Create plan.md
+ag wait "feature-plan-worker" --timeout 900
+ag output "feature-plan-worker" > .workflow/artifacts/features/PLAN.md
+ag rm "feature-plan-worker"
+```
 
 ### Output
 
-Create `PLAN.md`:
+`PLAN.md` should contain task list for dynamic execution.
 
-```markdown
-# Plan: [Feature Name]
+### Review: Use Pair Pattern
 
-## Tasks
-
-### TASK-1: [Task Name]
-**Files:** `src/xxx.go`
-**Description:** [What to do]
-**Effort:** [small/medium/large]
-
-### TASK-2: [Task Name]
-...
-
-## Implementation Order
-1. TASK-1
-2. TASK-2
-...
-
-## Risks
-- [risk 1] → [mitigation]
-
-## Testing Strategy
-[How to verify the feature works]
+```bash
+./ag/patterns/pair.sh \
+  "You are reviewing an implementation plan for feasibility and completeness." \
+  "You are checking if the plan addresses all spec requirements." \
+  .workflow/artifacts/features/PLAN.md \
+  3
 ```
-
-### Review Criteria
-- [ ] All requirements addressed?
-- [ ] Dependencies clear?
-- [ ] Effort reasonable?
 
 ---
 
 ## Phase 3: Implement
 
 ### Goals
-- Execute plan tasks
-- Follow existing patterns
-- Write clean, tested code
+- Execute tasks from PLAN.md
+- Use parallel workers for efficiency
 
-### Actions
+### Execution: Dynamic Task Queue
 
-1. Execute tasks in order
-2. Run tests after each task
-3. Update plan progress
+This phase uses `ag task` for parallel subtask execution.
+
+#### Step 1: Create Tasks from PLAN.md
+
+Read PLAN.md and create tasks:
+
+```bash
+# Example: Extract tasks and create them
+ag task create "Implement API endpoint: POST /api/users"
+ag task create "Write unit tests for user creation"
+ag task create "Update database schema"
+ag task create "Write API documentation"
+```
+
+#### Step 2: Spawn Worker Pool (Fan-Out Pattern)
+
+Use fan-out.sh to spawn workers that claim tasks:
+
+```bash
+# Fan-out spawns N workers, each claiming pending tasks
+# Each task gets its own agent (via spawn inside worker loop)
+
+WORKER_PROMPT="You are implementing a task. Follow the task description precisely."
+REVIEWER_PROMPT="You are reviewing code changes. Check for correctness, style, and edge cases."
+
+./ag/patterns/fan-out.sh \
+  .workflow/artifacts/features/PLAN.md \
+  3 \  # number of parallel workers
+  "$WORKER_PROMPT" \
+  "$REVIEWER_PROMPT"
+```
+
+**How fan-out works internally:**
+1. Reads tasks from PLAN.md (or pre-created via `ag task create`)
+2. Spawns N worker agents
+3. Each worker loops:
+   - `ag task claim <id>` — claim a pending task
+   - `ag spawn --id task-<id>` — spawn sub-agent to execute task
+   - `ag wait` — wait for sub-agent
+   - `ag task done <id> --output <file>` — mark task complete
+4. When all tasks done, a merger agent collects results
+
+#### Step 3: Or Use Pair Pattern for Sequential Tasks
+
+If tasks depend on each other (not parallelizable), use pair.sh:
+
+```bash
+for task_desc in "implement API" "write tests" "update docs"; do
+  echo "$task_desc" > task-input.md
+
+  # Worker: implement task
+  # Reviewer: review implementation
+  ./ag/patterns/pair.sh \
+    "You are implementing: $(cat task-input.md)" \
+    "You are reviewing the implementation." \
+    task-input.md \
+    3
+
+  # Check reviewer output for APPROVED
+  if grep -q "APPROVED" reviewer-output.md; then
+    # Task approved, move to next
+  else
+    # Fix and retry
+  fi
+done
+```
 
 ### Output
 
-- Modified files
-- Tests added
-- `PLAN.md` updated with progress
+All task outputs collected in `.workflow/artifacts/features/`.
 
-### Review Criteria
-- [ ] Code follows patterns?
-- [ ] Tests pass?
-- [ ] No obvious bugs?
+### Review
+
+After all tasks complete, spawn a final reviewer:
+
+```bash
+ag spawn \
+  --id "feature-implement-reviewer" \
+  --system "You are reviewing the complete feature implementation. Check against SPEC.md." \
+  --input <(cat .workflow/artifacts/features/SPEC.md .workflow/artifacts/features/PLAN.md) \
+  --cwd "$PWD" \
+  --timeout 10m
+
+ag wait "feature-implement-reviewer" --timeout 600
+ag output "feature-implement-reviewer" > .workflow/artifacts/features/implement-review.md
+ag rm "feature-implement-reviewer"
+```
 
 ---
 
 ## Phase 4: Test
 
 ### Goals
+- Run test suite
 - Verify all requirements met
-- Run full test suite
-- Manual testing if needed
 
-### Actions
+### Execution: Spawn Test Agent
 
-1. Run test suite
-2. Verify each requirement
-3. Check edge cases
-4. Performance testing if relevant
+```bash
+ag spawn \
+  --id "feature-test-worker" \
+  --system "You are running tests and verifying the feature. Execute go test ./... and report results." \
+  --input <(cat .workflow/artifacts/features/SPEC.md) \
+  --cwd "$PWD" \
+  --timeout 15m
+
+ag wait "feature-test-worker" --timeout 900
+ag output "feature-test-worker" > .workflow/artifacts/features/test-results.md
+ag rm "feature-test-worker"
+```
 
 ### Output
 
-Create `test-results.md`:
+Test results and coverage report.
 
-```markdown
-# Test Results
+### Review: Use Pair Pattern
 
-## Requirements Verification
-- [x] [requirement 1] → verified
-- [x] [requirement 2] → verified
-
-## Test Suite
+```bash
+./ag/patterns/pair.sh \
+  "You are reviewing test results. Check if all tests pass and coverage is adequate." \
+  "You are verifying the feature works correctly based on SPEC.md." \
+  .workflow/artifacts/features/test-results.md \
+  2
 ```
-[test output]
-```
-
-## Manual Tests
-- [ ] [manual test 1] → passed
-- [ ] [manual test 2] → passed
-
-## Notes
-[Any issues found]
-```
-
-### Review Criteria
-- [ ] All requirements tested?
-- [ ] No regressions?
-- [ ] Edge cases covered?
 
 ---
 
@@ -199,38 +248,64 @@ Create `test-results.md`:
 
 ### Goals
 - Clean commit history
-- PR with good description
-- Documentation updated
+- Create PR (if applicable)
+- Update documentation
 
-### Actions
+### Execution: Spawn Ship Agent
 
-1. Squash commits if messy
-2. Write good PR description
-3. Update relevant docs
-4. Link to any issues
+```bash
+ag spawn \
+  --id "feature-ship-worker" \
+  --system "You are preparing to ship the feature. Squash commits, write PR description, update docs." \
+  --input <(echo "Feature: $FEATURE_DESC") \
+  --cwd "$PWD" \
+  --timeout 10m
 
-### PR Template
-
-```markdown
-## Summary
-[Brief description of what this does]
-
-## Changes
-- [change 1]
-- [change 2]
-
-## Testing
-- [x] Tests pass
-- [x] Manual verification complete
-
-## Screenshots (if UI)
-[Before/After]
-
-## Related Issues
-Closes #123
+ag wait "feature-ship-worker" --timeout 600
+ag output "feature-ship-worker" > .workflow/artifacts/features/ship-summary.md
+ag rm "feature-ship-worker"
 ```
 
-### Review Criteria
-- [ ] PR description complete?
-- [ ] Tests documented?
-- [ ] Ready to merge?
+### Output
+
+PR description or commit summary.
+
+### Review
+
+Final review before merging:
+
+```bash
+./ag/patterns/pair.sh \
+  "You are reviewing the final shipping package. Check PR description and commit history." \
+  "You are verifying the feature is ready to merge." \
+  .workflow/artifacts/features/ship-summary.md \
+  2
+```
+
+---
+
+## Summary: ag Patterns Used
+
+| Pattern | Usage | Phase |
+|---------|--------|-------|
+| `ag spawn` | Spawn phase worker | All phases |
+| `ag wait` | Wait for agent completion | All phases |
+| `ag output` | Capture agent output | All phases |
+| `ag rm` | Cleanup agent | All phases |
+| `ag task create` | Create subtasks | Implement |
+| `ag task claim` | Worker claims task | Implement (fan-out) |
+| `ag task done` | Mark task complete | Implement (fan-out) |
+| `pair.sh` | Worker-reviewer loop | All phases (optional) |
+| `fan-out.sh` | Parallel task execution | Implement |
+
+## Key Principle
+
+**Main agent is coordinator.** It:
+1. Reads STATE.json → current phase
+2. Reads template phase instructions
+3. Spawns worker agents via `ag spawn`
+4. Spawns reviewer agents via pair.sh
+5. Spawns parallel workers via fan-out.sh + ag task
+6. Advances phase via `workflow-ctl advance`
+
+**Main agent does NOT** write code directly. It orchestrates sub-agents.
