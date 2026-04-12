@@ -1,28 +1,33 @@
 ---
 name: workflow
 description: |
-  Multi-phase workflow execution using ag agents. Start workflows with /workflow start <template>,
-  execute with /workflow auto. Each phase runs in an isolated ag agent, with optional review.
+  Core workflow execution system. Start workflows with /workflow start <template>,
+  execute with /workflow auto, manage templates with /workflow templates.
+  Structured development flows with spec/plan phases and ag-powered execution.
 ---
 
-# Workflow — Multi-Agent Phase Execution
+# Workflow - Multi-Agent Orchestration
 
 ## Core Philosophy
 
-> **State on disk, agents via ag, progress visible, commits after each phase.**
+> **State on disk, progress visible, commits after each phase.**
 
-Workflow orchestrates multi-phase development tasks by spawning isolated `ag` agents for each phase.
-Each agent gets the phase instructions + context from previous phases. An optional reviewer agent
-validates output before advancing.
+Workflow is **execution engine** that turns plans into shipped code. It combines:
+- **Workflow Templates**: Structured development flows (feature, bugfix, refactor, spike)
+- **Auto Mode**: State-machine execution with persistence
+- **Phase Review**: Human-in-the-loop checkpoints
+- **ag Backend**: Agent orchestration primitives for phase execution
 
 ## Architecture
 
 ```
-User Command
+/workflow start bugfix "fix login timeout"
     ↓
-workflow.sh (Frontend)
-  - Parse commands, manage state in .workflow/STATE.json
-  - Build prompts from templates + references
+Workflow Skill (Frontend)
+  - User-friendly commands
+  - Template selection
+  - Parameter parsing
+  - Phase prompt assembly
     ↓
 ag CLI (Backend)
   - spawn: create isolated agent per phase
@@ -31,145 +36,294 @@ ag CLI (Backend)
   - rm: cleanup agent state
 ```
 
-## Setup
+**ag CLI:**
+- **Location:** `skills/ag/` (separate skill with agent orchestration primitives)
+- **Binary:** `~/.ai/skills/ag/ag`
+- **Build:** `cd skills/ag && go build -o ag .`
+- **Auto-build:** Binary is built automatically if missing
 
-```bash
-# ag binary must be available
-export AG_BIN=~/.ai/skills/ag/ag   # or let workflow.sh auto-detect
-```
+> **Note:** ag provides agent/channel/task primitives. workflow uses these to execute phases.
 
 ## Commands
 
-### `/workflow start <template> [description]`
+| Command | Description |
+|---------|-------------|
+| `/workflow start [template] [description]` | Start a workflow |
+| `/workflow auto [--no-review] [--phase <name>]` | Execute current workflow automatically |
+| `/workflow status` | Show workflow state |
+| `/workflow templates` | List available templates |
+| `/workflow templates info <name>` | Show template details |
+| `/workflow pause` | Pause auto mode |
+| `/workflow resume` | Resume paused workflow |
+| `/workflow stop` | Stop and cleanup |
 
-Start a new workflow from a template.
-
-```bash
-workflow.sh start feature "add user authentication"
-workflow.sh start bugfix "login timeout after 30s"
-workflow.sh start refactor "extract validation logic"
-workflow.sh start spike "evaluate GraphQL vs REST"
-```
-
-### `/workflow auto [--no-review] [--phase <name>]`
-
-Execute phases automatically using ag agents.
-
-- Spawns a **worker agent** for each phase with phase-specific instructions
-- Optionally spawns a **reviewer agent** (pair pattern) to validate output
-- Advances to next phase on success, stops on failure
+## Quick Start
 
 ```bash
-workflow.sh auto                # Run all phases with review
-workflow.sh auto --no-review    # Skip reviewer
-workflow.sh auto --phase plan   # Run a specific phase only
+# Setup ag binary
+cd skills/ag && go build -o ag .
+
+# Start a bugfix workflow
+/workflow start bugfix "fix login timeout"
+
+# List all templates
+/workflow templates
+
+# Show template details
+/workflow templates info feature
+
+# Execute automatically
+/workflow auto
+
+# Check status
+/workflow status
 ```
-
-### `/workflow status`
-
-Show current workflow state with phase progress.
-
-### `/workflow next`
-
-Show instructions for the next phase.
-
-### `/workflow commit`
-
-Commit current phase changes with a conventional commit message.
-
-### `/workflow pause` / `/workflow resume`
-
-Pause or resume the workflow.
-
-### `/workflow stop`
-
-Stop and remove the workflow.
-
-### `/workflow templates [info <name>]`
-
-List or inspect available templates.
 
 ## Templates
 
-| Template | Phases | Use When |
-|----------|--------|----------|
-| feature | spec → plan → implement → test → ship | New feature development |
-| bugfix | triage → fix → verify → ship | Bug fixes with root-cause analysis |
-| refactor | assess → plan → execute → verify → ship | Code restructuring |
-| spike | research → document → present | Research & exploration |
-| hotfix | identify → fix → deploy | Emergency production fix |
-| security | scan → analyze → remediate → verify → document | Security audit |
+| Template | Complexity | Use Case |
+|----------|------------|----------|
+| `feature` | Medium | New feature development |
+| `bugfix` | Low | Bug fix with root-cause analysis |
+| `refactor` | Medium | Code restructuring |
+| `spike` | Low | Research/exploration |
+| `hotfix` | Minimal | Emergency production fix |
+| `security` | Medium | Security audit/fix |
 
-## How It Works
+## Feature Development: SPEC + PLAN
 
-### Phase Execution Flow
+For feature work, the workflow includes spec and plan phases:
 
+### Phase 1: SPEC (What)
+
+Create `SPEC.md` defining **what** we're building:
+
+```markdown
+# Feature: [Name]
+
+## Summary
+[1-2 sentence description]
+
+## Motivation
+[Why are we doing this?]
+
+## User Stories
+- As a [user], I want [goal] so that [benefit]
+
+## Requirements
+- [ ] [requirement 1]
+- [ ] [requirement 2]
+
+## Out of Scope
+- [ ] [explicitly not doing]
+
+## Success Criteria
+- [ ] [measurable criterion 1]
+- [ ] [measurable criterion 2]
 ```
-1. Read .workflow/STATE.json → current phase
-2. Build phase prompt from:
-   - references/phase-worker.md (base instructions)
-   - templates/<template>.md (phase-specific instructions)
-   - Previous phase outputs (context)
-3. ag spawn worker → ag wait → ag output
-4. If review enabled:
-   ag spawn reviewer → ag wait → check APPROVED/CHANGES_REQUESTED
-5. On success: save output, advance state
-6. On failure: stop, report, let user fix
-7. ag rm cleanup
+
+**Review criteria:**
+- [ ] Clear user value?
+- [ ] Scope bounded?
+- [ ] Testable requirements?
+
+### Phase 2: PLAN (How)
+
+Read SPEC.md, explore codebase, create `PLAN.md` defining **how**:
+
+```markdown
+# Plan: [Feature]
+
+## Technical Context
+[Existing patterns, relevant files]
+
+## Data Model
+[Any new types or changes]
+
+## API Design
+[If applicable]
+
+## Implementation Steps
+
+### STEP-1: [Name]
+**File:** `src/xxx.go`
+**What:** [Brief description]
+**Test:** [How to verify]
+
+### STEP-2: [Name]
+...
+
+## Risks
+- [risk] → [mitigation]
+
+## Verification
+[How to test the feature works]
 ```
 
-### Prompt Composition
+**Review criteria:**
+- [ ] All requirements addressed?
+- [ ] Dependencies clear?
+- [ ] Testable steps?
 
-Each phase worker receives:
-1. **Base instructions** from `references/phase-worker.md` — how to work, quality standards
-2. **Phase instructions** extracted from the template markdown — specific tasks and outputs
-3. **Context** — description, previous phase outputs
-4. **Working directory** — artifact directory for outputs
+---
 
-The reviewer agent receives `references/phase-reviewer.md` as its system prompt.
+### Quick Start: Feature Development
 
-## Creating Custom Templates
+```bash
+# Start feature workflow
+/workflow start feature "用户反馈功能"
 
-Add to `templates/registry.json`:
+# Phase 1: SPEC
+# Create SPEC.md in artifact directory
+
+# Phase 2: PLAN  
+# Create PLAN.md in artifact directory
+
+# Phase 3-5: Implement, Test, Ship
+/workflow auto  # 自动推进
+```
+
+### Template Aliases
+
+```bash
+/workflow start bug "login timeout"    # → bugfix
+/workflow start fix "typo"            # → bugfix
+/workflow start feature "oauth"       # → feature
+/workflow start research "api"        # → spike
+/workflow start hot "production"     # → hotfix
+```
+
+## Workflow State
+
+State is persisted to `.workflow/STATE.json`:
 
 ```json
 {
-  "templates": {
-    "my-template": {
-      "name": "My Template",
-      "description": "What it does",
-      "phases": ["step1", "step2", "step3"],
-      "category": "custom",
-      "complexity": "medium",
-      "aliases": ["alt-name"]
-    }
-  }
+  "template": "bugfix",
+  "templateName": "Bug Fix",
+  "description": "fix login timeout",
+  "phases": [
+    { "name": "triage", "index": 0, "status": "completed" },
+    { "name": "fix", "index": 1, "status": "active" },
+    { "name": "verify", "index": 2, "status": "pending" },
+    { "name": "ship", "index": 3, "status": "pending" }
+  ],
+  "currentPhase": 1,
+  "startedAt": "2025-03-27T10:00:00Z",
+  "artifactDir": ".workflow/bugfixes/250327-1-login-timeout"
 }
 ```
 
-Create `templates/my-template.md` with `## Phase N: <name>` sections.
+## Phase Execution
 
-## Files
+Each phase follows this pattern:
 
 ```
-workflow/
-├── SKILL.md              — This file
-├── commands.md           — Command reference
-├── bin/workflow.sh       — Main CLI (calls ag)
-├── templates/
-│   ├── registry.json     — Template definitions
-│   └── *.md              — Template phase instructions
-├── references/
-│   ├── phase-worker.md   — Worker agent system prompt
-│   └── phase-reviewer.md — Reviewer agent system prompt
-└── prompts/
-    └── workflow-start.md — Start prompt template
+1. Load phase instructions from template
+2. Build phase prompt (references/phase-worker.md + template phase section)
+3. Spawn ag agent with system prompt + context input
+4. Wait for phase completion
+5. Optionally spawn reviewer agent (pair.sh pattern)
+6. If approved: commit, advance to next phase
+7. If failed: stop, report to user for retry
+8. Cleanup agent state (ag rm)
+```
+
+## Integration with Other Skills
+
+| Skill | Integration Point |
+|-------|-------------------|
+| `subagent` | Used for parallel phase/task execution |
+| `tmux` | Background process management |
+| `review` | Phase review after completion |
+
+> **Note:** SPEC and PLAN phases are now built into the feature workflow template. No separate speckit step needed.
+
+## State Files
+
+| File | Purpose |
+|------|---------|
+| `.workflow/STATE.json` | Current workflow state |
+| `.workflow/DECISIONS.md` | Key decisions made |
+| `.workflow/notes/` | Phase notes and logs |
+| `.workflow/bugfixes/*/` | Bugfix artifacts |
+| `.workflow/features/*/` | Feature artifacts |
+
+## Artifact Directory
+
+Artifacts are stored in `.workflow/<category>/<date>-<num>-<slug>/`:
+
+```
+.workflow/
+├── bugfixes/
+│   └── 250327-1-login-timeout/
+│       ├── STATE.json
+│       ├── triage.md
+│       ├── fix-notes.md
+│       └── verify-results.md
+└── features/
+    └── 250326-1-user-auth/
+        ├── STATE.json
+        └── spec.md
+```
+
+## Error Handling
+
+| Error | Recovery |
+|-------|----------|
+| Phase fails | Retry up to 3 times, then abort |
+| User cancels | Save state, cleanup resources |
+| Context overflow | Compact, continue |
+| Subagent hangs | Timeout, kill, restart |
+
+## Best Practices
+
+1. **Start with templates** - Don't improvise workflows
+2. **Use `/workflow auto`** - For fully automated execution
+3. **Check `/workflow status`** - Before starting new work
+4. **Commit after each phase** - Clean git history
+5. **Keep artifacts** - For future reference
+
+## Example: Full Bugfix Flow
+
+```
+User: /workflow start bugfix "login timeout after 30s"
+
+Agent:
+1. Load bugfix.md template
+2. Create .workflow/bugfixes/250327-1-login-timeout/
+3. Write STATE.json
+4. Send workflow-start prompt with phases
+
+Phase: Triage
+→ Investigate issue, reproduce, identify root cause
+→ Output: triage.md with findings
+→ Review: approved
+→ Commit: "fix(bugfix): complete triage"
+
+Phase: Fix
+→ Implement fix based on triage findings
+→ Output: code changes
+→ Review: approved
+→ Commit: "fix(bugfix): implement fix"
+
+Phase: Verify
+→ Run tests, verify fix works
+→ Output: verify-results.md
+→ Review: approved
+→ Commit: "fix(bugfix): verify fix"
+
+Phase: Ship
+→ Create PR, notify user
+→ Commit: "fix(bugfix): complete"
+→ Output: PR link
+
+User: "Done! Bug is fixed."
 ```
 
 ## Anti-Patterns
 
-❌ **Don't start without template** — Use `workflow.sh start feature`
-❌ **Don't skip phases** — Each phase builds on the previous
-❌ **Don't ignore failures** — Fix issues before re-running auto
-❌ **Don't forget to commit** — `workflow.sh commit` after each phase
-❌ **Don't run without ag** — Ensure `ag` binary is built and accessible
+❌ **Don't start without template** - Use `/workflow start feature` not ad-hoc
+❌ **Don't skip phases** - Each phase has a purpose
+❌ **Don't ignore failures** - Retry or abort, don't push broken code
+❌ **Don't forget to commit** - Clean history helps future-you
