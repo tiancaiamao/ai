@@ -15,12 +15,17 @@ func init() {
 	if !ok {
 		return
 	}
+	var revision, modified string
 	for _, s := range info.Settings {
 		if s.Key == "vcs.revision" {
-			GitCommit = s.Value
+			revision = s.Value
 		}
-		if s.Key == "vcs.modified" && s.Value == "true" {
-			GitCommit += "-dirty"
+		if s.Key == "vcs.modified" {
+			modified = s.Value
 		}
+	}
+	GitCommit = revision
+	if modified == "true" {
+		GitCommit += "-dirty"
 	}
 }
