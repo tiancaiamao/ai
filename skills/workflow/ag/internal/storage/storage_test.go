@@ -67,18 +67,12 @@ func TestReadStatus(t *testing.T) {
 }
 
 func TestInit(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldBase := BaseDir
-	defer func() {
-		// Can't reassign const, so this test just verifies Init doesn't error
-	}()
-	_ = oldBase
-	_ = tmpDir
-	// Init() creates .ag/agents, .ag/channels, .ag/tasks
-	// Since BaseDir is a const, we just call it in a temp cwd
 	origDir, _ := os.Getwd()
 	os.Chdir(t.TempDir())
 	defer os.Chdir(origDir)
+
+	// Reset BaseDir to default in case another test changed it
+	BaseDir = ".ag"
 
 	if err := Init(); err != nil {
 		t.Fatalf("Init: %v", err)

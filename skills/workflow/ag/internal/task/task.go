@@ -36,46 +36,46 @@ type Task struct {
 }
 
 var (
-	taskMu     sync.Mutex
-	nextTaskID = 1
+	taskMu sync.Mutex
 )
 
 // Create creates a new task with pending status.
+// Uses O_EXCL directory creation as an atomic primitive to prevent ID collisions
+// across concurrent processes.
 func Create(description string, specFile string) (*Task, error) {
-	taskMu.Lock()
-	defer taskMu.Unlock()
-
 	// Initialize storage
 	_, _, tasksDir := storage.Paths()
 	os.MkdirAll(tasksDir, 0755)
 
-	// Find next available ID
-	for {
-		id := fmt.Sprintf("t%03d", nextTaskID)
+	// Find next available ID using O_EXCL for atomic creation
+	for i := 1; ; i++ {
+		id := fmt.Sprintf("t%03d", i)
 		taskDir := storage.TaskDir(id)
-		if !storage.Exists(taskDir) {
-			task := &Task{
-				ID:          id,
-				Status:      StatusPending,
-				Description: description,
-				SpecFile:    specFile,
-				CreatedAt:   time.Now().Unix(),
+		// O_EXCL ensures only one process successfully creates the directory
+		if err := os.Mkdir(taskDir, 0755); err != nil {
+			if os.IsExist(err) {
+				continue // already taken, try next
 			}
-			if err := os.MkdirAll(taskDir, 0755); err != nil {
-				return nil, err
-			}
-			if err := storage.AtomicWriteJSON(filepath.Join(taskDir, "task.json"), task); err != nil {
-				os.RemoveAll(taskDir)
-				return nil, err
-			}
-			nextTaskID++
-			return task, nil
+			return nil, err
 		}
-		nextTaskID++
+		task := &Task{
+			ID:          id,
+			Status:      StatusPending,
+			Description: description,
+			SpecFile:    specFile,
+			CreatedAt:   time.Now().Unix(),
+		}
+		if err := storage.AtomicWriteJSON(filepath.Join(taskDir, "task.json"), task); err != nil {
+			os.RemoveAll(taskDir)
+			return nil, err
+		}
+		return task, nil
 	}
 }
 
-// Claim atomically claims a pending task for an agent.
+// Claim claims a pending task for an agent.
+// Cross-process safety is provided by O_EXCL on .claim-lock, not by the mutex.
+// The mutex only prevents races within a single process.
 func Claim(taskID, agentID string) (*Task, error) {
 	taskMu.Lock()
 	defer taskMu.Unlock()

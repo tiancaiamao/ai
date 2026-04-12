@@ -163,13 +163,19 @@ func listMessages(queueDir string) ([]string, error) {
 func readAndRemove(queueDir string, msgs []string, all bool) ([]byte, error) {
 	if all {
 		var result []byte
-		for _, m := range msgs {
+		for i, m := range msgs {
 			data, err := os.ReadFile(filepath.Join(queueDir, m))
 			if err != nil {
 				continue
 			}
 			result = append(result, data...)
-			result = append(result, '\n')
+			// Add newline separator between messages, but not after the last one
+			// if it already ends with a newline
+			if i < len(msgs)-1 {
+				if len(data) > 0 && data[len(data)-1] != '\n' {
+					result = append(result, '\n')
+				}
+			}
 			os.Remove(filepath.Join(queueDir, m))
 		}
 		return result, nil

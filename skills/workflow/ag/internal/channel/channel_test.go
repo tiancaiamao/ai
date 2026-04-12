@@ -92,7 +92,7 @@ func TestRecvAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv all: %v", err)
 	}
-	expected := "a\nb\nc\n"
+	expected := "a\nb\nc"
 	if string(data) != expected {
 		t.Fatalf("expected %q, got %q", expected, string(data))
 	}

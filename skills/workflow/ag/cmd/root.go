@@ -30,7 +30,10 @@ func Execute() {
 func init() {
 	// Ensure .ag/ structure exists on every command
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		storage.Init()
+		if err := storage.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing storage: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	rootCmd.AddCommand(spawnCmd, waitCmd, killCmd, outputCmd, statusCmd, lsCmd, rmCmd)
@@ -42,12 +45,12 @@ func init() {
 // ========== Agent Commands ==========
 
 var (
-	spawnSystem    string
-	spawnInput     string
-	spawnMode      string
-	spawnCwd       string
-	spawnTimeout   string
-	spawnMock      bool
+	spawnSystem     string
+	spawnInput      string
+	spawnMode       string
+	spawnCwd        string
+	spawnTimeout    string
+	spawnMock       bool
 	spawnMockScript string
 )
 
@@ -329,10 +332,10 @@ var (
 )
 
 var taskListCmd = &cobra.Command{
-	Use:   "list [--status <status>]",
-	Short: "List tasks",
+	Use:     "list [--status <status>]",
+	Short:   "List tasks",
 	Aliases: []string{"ls"},
-	Args:  cobra.NoArgs,
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		tasks, err := task.List(taskListStatus)
 		if err != nil {

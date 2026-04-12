@@ -16,23 +16,18 @@ SYSTEM_PROMPT="$2"
 INPUT_TEXT="$3"
 OUTPUT_DIR="${4:-}"
 
+CLEANUP_OUTPUT=false
 if [ -z "$OUTPUT_DIR" ]; then
   OUTPUT_DIR=$(mktemp -d)
   CLEANUP_OUTPUT=true
-else
-  mkdir -p "$OUTPUT_DIR"
-  CLEANUP_OUTPUT=false
 fi
-
-MOCK_FLAG=""
-if [ -n "$MOCK" ]; then
-  MOCK_FLAG="--mock --mock-script"
-fi
+mkdir -p "$OUTPUT_DIR"
 
 echo "[parallel] Spawning $COUNT agents (mock=$MOCK)..."
 
 PIDS=()
 AGENT_IDS=()
+TEMP_INPUTS=()
 
 for i in $(seq 0 $((COUNT - 1))); do
   ID="parallel-$$-$i"
@@ -47,6 +42,7 @@ You are agent #$i working on this task in parallel with $((COUNT - 1)) other age
 Each agent may approach the task from a different angle or cover a different aspect.
 Focus on your unique perspective as agent #$i.
 EOF
+  TEMP_INPUTS+=("$AGENT_INPUT")
 
   if [ -n "$MOCK" ]; then
     $AG_BIN spawn --id "$ID" --mock --mock-script "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 1m &
@@ -54,11 +50,16 @@ EOF
     $AG_BIN spawn --id "$ID" --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 10m &
   fi
   PIDS+=($!)
-  rm -f "$AGENT_INPUT"
 done
 
+# Wait for all spawns to complete before cleaning up input files
 for pid in "${PIDS[@]}"; do
   wait "$pid" 2>/dev/null || true
+done
+
+# Now safe to remove temp input files
+for tmp in "${TEMP_INPUTS[@]}"; do
+  rm -f "$tmp"
 done
 
 echo "[parallel] All agents spawned. Waiting for completion..."
@@ -91,4 +92,8 @@ for i in $(seq 0 $((COUNT - 1))); do
   echo ""
 done
 
-echo "[parallel] ✅ Output directory: $OUTPUT_DIR"
+if [ "$CLEANUP_OUTPUT" = true ]; then
+  rm -rf "$OUTPUT_DIR"
+else
+  echo "[parallel] ✅ Output directory: $OUTPUT_DIR"
+fi

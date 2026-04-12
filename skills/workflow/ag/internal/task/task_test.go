@@ -10,9 +10,6 @@ func setupTest(t *testing.T) {
 	origDir, _ := os.Getwd()
 	os.Chdir(t.TempDir())
 	t.Cleanup(func() { os.Chdir(origDir) })
-
-	// Reset task counter
-	nextTaskID = 1
 }
 
 func TestCreate(t *testing.T) {

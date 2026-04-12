@@ -133,17 +133,22 @@ func spawnMock(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
 		script = "cat"
 	}
 
-	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf("%s '%s' > '%s' && touch '%s.done'", script, inputFile, outputFile, outputFile))
+	cmd := exec.Command(script, inputFile)
 	if cfg.Cwd != "" {
 		cmd.Dir = cfg.Cwd
 	}
 
-	out, err := cmd.CombinedOutput()
+	outFile, err := os.Create(outputFile)
+	if err != nil {
+		return nil, fmt.Errorf("create output file: %w", err)
+	}
+	cmd.Stdout = outFile
+
+	err = cmd.Run()
+	outFile.Close()
 	if err != nil {
 		storage.WriteStatus(agentDir, StatusFailed)
-		storage.WriteFile(filepath.Join(agentDir, "spawn-log"), out)
-		return nil, fmt.Errorf("mock spawn failed: %w\n%s", err, out)
+		return nil, fmt.Errorf("mock spawn failed: %w", err)
 	}
 
 	meta.TmuxName = "mock-" + cfg.ID
@@ -267,15 +272,13 @@ func waitViaTmux(agentDir string, meta *Meta, timeoutSec int) error {
 	cmd.Env = os.Environ()
 
 	out, err := cmd.CombinedOutput()
-	_ = out
-
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			storage.WriteStatus(agentDir, StatusFailed)
-			return fmt.Errorf("agent %s failed (exit %d)", meta.ID, exitErr.ExitCode())
+			return fmt.Errorf("agent %s failed (exit %d): %s", meta.ID, exitErr.ExitCode(), string(out))
 		}
 		storage.WriteStatus(agentDir, StatusFailed)
-		return fmt.Errorf("wait: %w", err)
+		return fmt.Errorf("wait: %w (output: %s)", err, string(out))
 	}
 
 	storage.WriteStatus(agentDir, StatusDone)
@@ -291,6 +294,11 @@ func Kill(id string) error {
 	agentDir := storage.AgentDir(id)
 	if !storage.Exists(agentDir) {
 		return fmt.Errorf("agent not found: %s", id)
+	}
+
+	status := storage.ReadStatus(agentDir)
+	if status != StatusRunning && status != StatusSpawning {
+		return fmt.Errorf("agent %s is %s (not running)", id, status)
 	}
 
 	meta := &Meta{}
@@ -345,11 +353,14 @@ func Status(id string) (string, *Meta, error) {
 
 // --- List ---
 
-func List() ([]struct {
+// AgentEntry represents a listed agent with its ID, status, and metadata.
+type AgentEntry struct {
 	ID     string
 	Status string
 	Meta   *Meta
-}, error) {
+}
+
+func List() ([]AgentEntry, error) {
 	agentsDir, _, _ := storage.Paths()
 	entries, err := os.ReadDir(agentsDir)
 	if err != nil {
@@ -359,11 +370,7 @@ func List() ([]struct {
 		return nil, err
 	}
 
-	result := make([]struct {
-		ID     string
-		Status string
-		Meta   *Meta
-	}, 0)
+	result := make([]AgentEntry, 0)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -374,11 +381,7 @@ func List() ([]struct {
 		status := storage.ReadStatus(agentDir)
 		meta := &Meta{}
 		_ = storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
-		result = append(result, struct {
-			ID     string
-			Status string
-			Meta   *Meta
-		}{id, status, meta})
+		result = append(result, AgentEntry{id, status, meta})
 	}
 
 	return result, nil

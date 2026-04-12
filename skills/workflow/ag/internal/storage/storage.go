@@ -9,7 +9,8 @@ import (
 )
 
 // BaseDir is the root directory for all ag state.
-const BaseDir = ".ag"
+// Can be overridden for testing.
+var BaseDir = ".ag"
 
 // Paths returns common directory paths.
 func Paths() (agentsDir, channelsDir, tasksDir string) {

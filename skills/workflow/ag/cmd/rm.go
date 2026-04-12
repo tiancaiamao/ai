@@ -21,7 +21,7 @@ var rmCmd = &cobra.Command{
 		}
 
 		status := storage.ReadStatus(agentDir)
-		if status == "running" {
+		if status == "running" && !rmForce {
 			fmt.Fprintf(os.Stderr, "Agent %s is still running, kill it first\n", id)
 			os.Exit(1)
 		}
@@ -30,7 +30,11 @@ var rmCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Failed to remove: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Agent %s removed\n", id)
+		if rmForce {
+			fmt.Printf("Agent %s removed (forced)\n", id)
+		} else {
+			fmt.Printf("Agent %s removed\n", id)
+		}
 	},
 }
 
@@ -39,19 +43,4 @@ var rmForce bool
 
 func init() {
 	rmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Force remove even if running")
-	rmCmd.PreRun = func(cmd *cobra.Command, args []string) {
-		if rmForce {
-			// Override the running check
-			rmCmd.Run = func(cmd *cobra.Command, args []string) {
-				id := args[0]
-				agentDir := storage.AgentDir(id)
-				if !storage.Exists(agentDir) {
-					fmt.Fprintf(os.Stderr, "Agent not found: %s\n", id)
-					os.Exit(1)
-				}
-				os.RemoveAll(agentDir)
-				fmt.Printf("Agent %s removed (forced)\n", id)
-			}
-		}
-	}
 }

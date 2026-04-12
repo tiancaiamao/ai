@@ -22,6 +22,15 @@ if [ "$STAGE_COUNT" -eq 0 ]; then
   exit 1
 fi
 
+# Track temp files for cleanup on failure
+TEMP_FILES=()
+cleanup_temps() {
+  for f in "${TEMP_FILES[@]}"; do
+    rm -f "$f"
+  done
+}
+trap cleanup_temps EXIT
+
 echo "[pipeline] Running $STAGE_COUNT stages (mock=$MOCK)"
 
 PREV_OUTPUT="$INPUT_FILE"
@@ -45,6 +54,7 @@ for i in "${!STAGES[@]}"; do
   fi
 
   PREV_OUTPUT=$(mktemp)
+  TEMP_FILES+=("$PREV_OUTPUT")
   $AG_BIN output "$STAGE_ID" > "$PREV_OUTPUT"
 
   LINES=$(wc -l < "$PREV_OUTPUT" | tr -d ' ')
@@ -53,4 +63,3 @@ done
 
 echo "[pipeline] ✅ Pipeline complete ($STAGE_COUNT stages)"
 cat "$PREV_OUTPUT"
-rm -f "$PREV_OUTPUT"

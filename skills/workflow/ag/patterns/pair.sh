@@ -19,16 +19,6 @@ INPUT_FILE="$3"
 MAX_ROUNDS="${4:-3}"
 MOCK="${AG_MOCK:-}"
 
-# Build spawn flags based on mock mode
-spawn_flags() {
-  local script="$1"
-  if [ -n "$MOCK" ]; then
-    echo "--mock --mock-script $script"
-  else
-    echo "--system $script"
-  fi
-}
-
 echo "[pair] Starting worker-judge loop (max $MAX_ROUNDS rounds, mock=${MOCK:-none})"
 
 FEEDBACK_FILE=""
@@ -41,12 +31,18 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   echo "[pair] === Round $round ==="
 
   # --- Spawn worker ---
-  WORKER_FLAGS=$(spawn_flags "$WORKER_PROMPT")
-  if [ "$round" -eq 1 ]; then
-    eval $AG_BIN spawn --id "\"$WORKER_ID\"" $WORKER_FLAGS --input "\"$INPUT_FILE\"" --timeout 10m
-  else
-    eval $AG_BIN spawn --id "\"$WORKER_ID\"" $WORKER_FLAGS --input "\"$FEEDBACK_FILE\"" --timeout 10m
+  CURRENT_INPUT="$INPUT_FILE"
+  if [ "$round" -gt 1 ]; then
+    CURRENT_INPUT="$FEEDBACK_FILE"
   fi
+
+  SPAWN_ARGS=(--id "$WORKER_ID" --input "$CURRENT_INPUT" --timeout 10m)
+  if [ -n "$MOCK" ]; then
+    SPAWN_ARGS+=(--mock --mock-script "$WORKER_PROMPT")
+  else
+    SPAWN_ARGS+=(--system "$WORKER_PROMPT")
+  fi
+  $AG_BIN spawn "${SPAWN_ARGS[@]}"
 
   # --- Wait for worker ---
   echo "[pair] Waiting for worker ($WORKER_ID)..."
@@ -65,8 +61,13 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   $AG_BIN rm "$WORKER_ID" 2>/dev/null || true
 
   # --- Spawn judge ---
-  JUDGE_FLAGS=$(spawn_flags "$JUDGE_PROMPT")
-  eval $AG_BIN spawn --id "\"$JUDGE_ID\"" $JUDGE_FLAGS --input "\"$WORKER_OUTPUT\"" --timeout 5m
+  JUDGE_ARGS=(--id "$JUDGE_ID" --input "$WORKER_OUTPUT" --timeout 5m)
+  if [ -n "$MOCK" ]; then
+    JUDGE_ARGS+=(--mock --mock-script "$JUDGE_PROMPT")
+  else
+    JUDGE_ARGS+=(--system "$JUDGE_PROMPT")
+  fi
+  $AG_BIN spawn "${JUDGE_ARGS[@]}"
 
   # --- Wait for judge ---
   echo "[pair] Waiting for judge ($JUDGE_ID)..."

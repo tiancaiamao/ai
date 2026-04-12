@@ -21,6 +21,7 @@
 set -euo pipefail
 
 AG_BIN="${AG_BIN:-ag}"
+MOCK="${AG_MOCK:-}"
 PLAN_FILE="$1"
 WORKER_COUNT="$2"
 WORKER_PROMPT="$3"
@@ -55,7 +56,7 @@ for i in $(seq 1 "$WORKER_COUNT"); do
     WORKER_ID="fanout-worker-$$-$i"
     while true; do
       # Try to claim a pending task
-      TASK_LINE=$($AG_BIN task list --status pending 2>/dev/null | head -1) || break
+      TASK_LINE=$($AG_BIN task list --status pending 2>/dev/null | tail -n +2 | head -1) || break
       [ -z "$TASK_LINE" ] && break
 
       TASK_ID=$(echo "$TASK_LINE" | awk '{print $1}')
@@ -70,7 +71,11 @@ for i in $(seq 1 "$WORKER_COUNT"); do
 
       # Spawn agent for this task
       AGENT_ID="fanout-$$-task-$TASK_ID"
-      $AG_BIN spawn --id "$AGENT_ID" --system "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
+      if [ -n "$MOCK" ]; then
+        $AG_BIN spawn --id "$AGENT_ID" --mock --mock-script "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
+      else
+        $AG_BIN spawn --id "$AGENT_ID" --system "$WORKER_PROMPT" --input <(echo "$TASK_DESC") --timeout 10m
+      fi
 
       if $AG_BIN wait "$AGENT_ID" --timeout 600; then
         OUTPUT=$(mktemp)
@@ -117,7 +122,11 @@ for tid in "${TASK_IDS[@]}"; do
 done
 
 echo "[fan-out] Merging results..."
-$AG_BIN spawn --id "$MERGER_ID" --system "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
+if [ -n "$MOCK" ]; then
+  $AG_BIN spawn --id "$MERGER_ID" --mock --mock-script "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
+else
+  $AG_BIN spawn --id "$MERGER_ID" --system "$MERGER_PROMPT" --input "$RESULTS_FILE" --timeout 5m
+fi
 
 if $AG_BIN wait "$MERGER_ID" --timeout 300; then
   $AG_BIN output "$MERGER_ID"
