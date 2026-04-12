@@ -39,6 +39,8 @@ type SessionHeader struct {
 
 	// Git commit hash of the ai binary that created this session
 	GitCommit string `json:"gitCommit,omitempty"`
+	// Git version/tag of the ai binary
+	GitVersion string `json:"gitVersion,omitempty"`
 }
 
 type SessionEntry struct {
@@ -69,6 +71,7 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 		Cwd:           cwd,
 		ParentSession: parentSession,
 		GitCommit:     version.GitCommit,
+		GitVersion:    version.GitVersion,
 	}
 }
 
