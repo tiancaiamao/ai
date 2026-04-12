@@ -277,6 +277,25 @@ func (s *Session) AppendSessionInfo(name, title string) (string, error) {
 	return entry.ID, s.persistEntry(entry)
 }
 
+// AppendCompactEvent appends a compact event to messages.jsonl.
+// The event records a compact operation (truncate, update_llm_context).
+// The in-memory snapshot must be updated separately by the caller.
+func (s *Session) AppendCompactEvent(detail *agentctx.CompactEventDetail) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry := &SessionEntry{
+		Type:         EntryTypeCompactEvent,
+		ID:           generateEntryID(s.byID),
+		ParentID:     s.leafID,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+		CompactEvent: detail,
+	}
+
+	s.addEntry(entry)
+	return s.persistEntry(entry)
+}
+
 // GetSessionName returns the latest session name if available.
 func (s *Session) GetSessionName() string {
 	s.mu.Lock()

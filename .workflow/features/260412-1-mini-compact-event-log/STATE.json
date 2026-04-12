@@ -1,0 +1,15 @@
+{
+  "template": "feature",
+  "templateName": "Feature Development",
+  "description": "mini compact event-log: compact 操作作为 event 追加到 messages.jsonl，内存 snapshot apply",
+  "phases": [
+    { "name": "spec", "index": 0, "status": "done" },
+    { "name": "plan", "index": 1, "status": "done" },
+    { "name": "implement", "index": 2, "status": "active" },
+    { "name": "test", "index": 3, "status": "pending" },
+    { "name": "ship", "index": 4, "status": "pending" }
+  ],
+  "currentPhase": 2,
+  "startedAt": "2026-04-12T18:30:00Z",
+  "artifactDir": ".workflow/features/260412-1-mini-compact-event-log"
+}

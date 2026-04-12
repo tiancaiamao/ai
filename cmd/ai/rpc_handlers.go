@@ -377,9 +377,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					}
 				}
 			}
-			// Set up persistence callback for compact operations
-			ctx.OnMessagesChanged = func() error {
-				return sess.SaveMessages(ctx.RecentMessages)
+			// Set up persistence callback for compact operations.
+			// Compact events are appended to messages.jsonl (immutable log).
+			// OnMessagesChanged (SaveMessages full rewrite) is removed.
+			ctx.OnCompactEvent = func(detail *agentctx.CompactEventDetail) error {
+				return sess.AppendCompactEvent(detail)
 			}
 		}
 		return ctx
@@ -1636,9 +1638,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					}
 				}
 				if event.Type == "agent_end" && sessionWriter != nil {
-					if err := sessionWriter.Replace(sess, event.Messages); err != nil {
-						slog.Info("Failed to replace session messages on agent_end:", "value", err)
-					}
+					// No longer Replace (full rewrite of messages.jsonl).
+					// Messages are appended one-by-one during the turn via sessionWriter.Append.
+					// Compact events are appended via AppendCompactEvent.
 				}
 
 				emitAt := time.Now()
@@ -1693,9 +1695,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 							}
 						}
 						if event.Type == "agent_end" && sessionWriter != nil {
-							if err := sessionWriter.Replace(sess, event.Messages); err != nil {
-								slog.Info("Failed to replace session messages on agent_end:", "value", err)
-							}
+							// No longer Replace (full rewrite of messages.jsonl).
+							// Messages are appended one-by-one during the turn via sessionWriter.Append.
+							// Compact events are appended via AppendCompactEvent.
 						}
 
 						emitAt := time.Now()

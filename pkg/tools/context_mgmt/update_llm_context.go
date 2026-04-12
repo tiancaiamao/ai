@@ -43,12 +43,24 @@ func (t *UpdateLLMContextTool) Parameters() map[string]any {
 }
 
 // Execute updates the LLM context.
+// It appends a compact event to messages.jsonl (immutable log),
+// then updates the in-memory LLMContext.
 func (t *UpdateLLMContextTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	llmContext, ok := params["llm_context"].(string)
 	if !ok || llmContext == "" {
 		return nil, fmt.Errorf("llm_context is required and must be non-empty")
 	}
 
+	// Append compact event to messages.jsonl (immutable, append-only)
+	if t.agentCtx.OnCompactEvent != nil {
+		if err := t.agentCtx.OnCompactEvent(&agentctx.CompactEventDetail{
+			Action: agentctx.CompactActionUpdateLLMContext,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to persist compact event: %w", err)
+		}
+	}
+
+	// Apply to in-memory snapshot
 	charsDelta := len(llmContext) - len(t.agentCtx.LLMContext)
 	t.agentCtx.LLMContext = llmContext
 	t.agentCtx.AgentState.LastLLMContextUpdate = t.agentCtx.AgentState.TotalTurns
