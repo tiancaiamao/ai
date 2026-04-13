@@ -15,7 +15,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 	"log/slog"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -1630,86 +1629,6 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
 
-func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
-	targetAbs := normalizePathForContains(overviewPath)
-	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.LLMContextDir, agentctx.OverviewFile)))
-	allowRelativeFallback := targetAbs == "" && targetRel != ""
-	if targetAbs == "" && !allowRelativeFallback {
-		return false
-	}
-
-	for _, msg := range messages {
-		if msg.Role != "toolResult" || msg.IsError {
-			continue
-		}
-		tool := strings.ToLower(strings.TrimSpace(msg.ToolName))
-		if tool != "write" && tool != "edit" {
-			continue
-		}
-		body := normalizePathForContains(msg.ExtractText())
-		if body == "" {
-			continue
-		}
-		if targetAbs != "" && strings.Contains(body, targetAbs) {
-			return true
-		}
-		if allowRelativeFallback && strings.Contains(body, targetRel) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeLLMContextContent(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.TrimSpace(content)
-	lines := strings.Split(content, "\n")
-	normalized := make([]string, 0, len(lines))
-	for _, line := range lines {
-		normalized = append(normalized, strings.TrimRight(line, " \t"))
-	}
-	return strings.Join(normalized, "\n")
-}
-
-func normalizePathForContains(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	value = filepath.Clean(value)
-	value = strings.ReplaceAll(value, "\\", "/")
-	return strings.ToLower(value)
-}
-
-// insertBeforeLastUserMessage inserts a message before the last user message in the slice.
-// If there are no user messages, it appends to the end.
-// This is used to place runtime_state close to the decision point for better LLM attention.
-func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
-	if len(messages) == 0 {
-		return []llm.LLMMessage{msg}
-	}
-
-	// Find the last user message index
-	lastUserIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
-
-	// If no user message found, append to end
-	if lastUserIdx == -1 {
-		return append(messages, msg)
-	}
-
-	// Insert before the last user message
-	result := make([]llm.LLMMessage, 0, len(messages)+1)
-	result = append(result, messages[:lastUserIdx]...)
-	result = append(result, msg)
-	result = append(result, messages[lastUserIdx:]...)
-	return result
-}
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
 	sections := make([]string, 0, 3)
@@ -1955,6 +1874,33 @@ func hasToolResultNamed(results []agentctx.AgentMessage, toolName string) bool {
 }
 
 // EstimateMessageTokens estimates token count for a message.
+func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the last user message index
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, append to end
+	if lastUserIdx == -1 {
+		return append(messages, msg)
+	}
+
+	// Insert before the last user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:lastUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[lastUserIdx:]...)
+	return result
+}
+
 // Deprecated: Use agentctx.EstimateMessageTokens instead.
 func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 	return agentctx.EstimateMessageTokens(msg)

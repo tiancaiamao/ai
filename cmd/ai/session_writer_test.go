@@ -8,7 +8,7 @@ import (
 )
 
 func TestSessionWriterReplaceOverridesPreviousAppends(t *testing.T) {
-	sess := session.NewSession(t.TempDir(), nil)
+	sess := session.NewSession(t.TempDir())
 	writer := newSessionWriter(16)
 	defer writer.Close()
 

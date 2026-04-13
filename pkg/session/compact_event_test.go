@@ -11,7 +11,7 @@ import (
 
 func TestAppendCompactEvent_AppendsNotOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	sess := NewSession(dir, nil)
+	sess := NewSession(dir)
 	
 
 	// Append 3 messages
@@ -67,7 +67,7 @@ func TestAppendCompactEvent_AppendsNotOverwrites(t *testing.T) {
 
 func TestAppendCompactEvent_DoesNotModifyExistingEntries(t *testing.T) {
 	dir := t.TempDir()
-	sess := NewSession(dir, nil)
+	sess := NewSession(dir)
 	
 
 	// Append a message
@@ -104,7 +104,7 @@ func TestAppendCompactEvent_DoesNotModifyExistingEntries(t *testing.T) {
 
 func TestGetMessages_AppliesCompactEvents(t *testing.T) {
 	dir := t.TempDir()
-	sess := NewSession(dir, nil)
+	sess := NewSession(dir)
 	
 
 	// Append a toolResult with long content

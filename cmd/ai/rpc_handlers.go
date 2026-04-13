@@ -180,15 +180,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registry.Register(editTool)
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
-	// Create memory manager and register llm_context_recall tool
-	var memoryMgr *agentctx.MemoryManager
-	memoryMgr, err = agentctx.NewMemoryManager(sess.GetDir())
-	if err != nil {
-		slog.Warn("Failed to create memory manager, llm_context_recall tool disabled", "error", err)
-	} else {
-		registry.Register(tools.NewLLMContextRecallTool(memoryMgr))
-	}
-
 	// Create compactors for automatic context compression
 	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
@@ -706,11 +697,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		if memoryMgr != nil {
-			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
-				slog.Warn("Failed to update memory manager session dir", "error", err)
-			}
-		}
 		setAgentContext(createBaseContext())
 
 		stateMu.Lock()
@@ -820,11 +806,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		// Clear agent context and load new messages
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		if memoryMgr != nil {
-			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
-				slog.Warn("Failed to update memory manager session dir", "error", err)
-			}
-		}
 		setAgentContext(createBaseContext())
 		// Restore last compaction summary if available
 		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
@@ -1575,11 +1556,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		sess = newSess
 		sessionComp.Update(sess, compactor)
-		if memoryMgr != nil {
-			if err := memoryMgr.SetSessionDir(sess.GetDir()); err != nil {
-				slog.Warn("Failed to update memory manager session dir", "error", err)
-			}
-		}
 		setAgentContext(createBaseContext())
 
 		stateMu.Lock()

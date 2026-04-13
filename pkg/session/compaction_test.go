@@ -10,7 +10,7 @@ import (
 )
 
 func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -61,7 +61,7 @@ func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
 }
 
 func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -86,7 +86,7 @@ func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
 }
 
 func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       5,
