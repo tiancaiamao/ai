@@ -36,7 +36,6 @@ type SessionHeader struct {
 
 	// Resume optimization fields
 	LastCompactionID string `json:"lastCompactionId,omitempty"` // Most recent compaction entry ID
-	ResumeOffset     int64  `json:"resumeOffset,omitempty"`     // File offset for fast resume
 
 	// Git commit hash of the ai binary that created this session
 	GitCommit string `json:"gitCommit,omitempty"`

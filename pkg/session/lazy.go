@@ -40,10 +40,8 @@ func FullLoadOptions() LoadOptions {
 }
 
 // LoadSessionLazy loads a session with lazy loading support.
-// It reads the session file efficiently by:
-// 1. Using ResumeOffset if available (fast path)
-// 2. Scanning from end to find compaction entry (fallback)
-// 3. Only loading recent messages + compaction summary
+// It reads the session file efficiently by scanning from end to find compaction entry.
+// Only loads recent messages + compaction summary.
 func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
@@ -93,19 +91,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 		persist:    true,
 	}
 
-	// Fast path: use ResumeOffset
-	if header.ResumeOffset > 0 {
-		_, err = f.Seek(header.ResumeOffset, io.SeekStart)
-		if err == nil {
-			if err := loadEntriesFromPosition(f, sess, opts); err == nil {
-				sess.flushed = true
-				return sess, nil
-			}
-		}
-		// If fast path fails, fall through to scanning
-	}
-
-	// Fallback: scan from end to find compaction entry
+	// Load from end to find compaction entry
 	if err := loadFromEnd(f, sess, opts); err != nil {
 		// If lazy loading fails, fall back to full load
 		return LoadSession(sessionDir)
@@ -142,37 +128,6 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 	}
 
 	return nil, errors.New("no valid session header found")
-}
-
-// loadEntriesFromPosition loads entries starting from a file position.
-func loadEntriesFromPosition(f *os.File, sess *Session, opts LoadOptions) error {
-	scanner := bufio.NewScanner(f)
-	messageCount := 0
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		entry, err := decodeSessionEntry(line)
-		if err != nil || entry == nil {
-			continue
-		}
-
-		// Add entry
-		sess.addEntry(entry)
-
-		// Count messages for max limit
-		if entry.Type == EntryTypeMessage {
-			messageCount++
-			if opts.MaxMessages > 0 && messageCount >= opts.MaxMessages {
-				break
-			}
-		}
-	}
-
-	return scanner.Err()
 }
 
 // loadFromEnd scans the file from the end to find the most recent compaction entry
