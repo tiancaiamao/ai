@@ -1,7 +1,6 @@
 ---
 name: symphony
-description: |
-  Interact with Symphony task orchestration system.
+description: Interact with Symphony task orchestration system.
   Create tasks, check status, manage workflow automation.
   Use for AI-driven bug fixes, features, and automation.
 ---

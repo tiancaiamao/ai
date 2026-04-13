@@ -1,9 +1,7 @@
 ---
 name: ag
-description: |
-  Agent orchestration CLI. Use `ag` to spawn, communicate, and coordinate AI agents.
+description: Agent orchestration CLI. Use `ag` to spawn, communicate, and coordinate AI agents.
   Combine primitives into patterns: pair (worker-judge), parallel, pipeline, fan-out.
-allowed-tools: [bash]
 ---
 
 # ag — Agent Orchestration

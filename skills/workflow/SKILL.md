@@ -1,9 +1,8 @@
 ---
 name: workflow
-description: |
-  Multi-phase workflow system. Agent uses /workflow commands to execute structured
+description: Multi-phase workflow system. Agent uses /workflow commands to execute structured
   development flows (feature/bugfix/refactor/spike) with spec/plan phases.
-  State persisted to disk, phases executed via ag agents.
+  State persisted to disk, phases executed via `ag` cli.
 ---
 
 # Workflow - Multi-Agent Orchestration
