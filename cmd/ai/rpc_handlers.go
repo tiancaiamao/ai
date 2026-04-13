@@ -670,6 +670,39 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil
 	})
 
+	// Helper function to update checkpoint manager for new session
+	updateCheckpointManager := func() error {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+
+		// Close old checkpoint manager if exists
+		if checkpointMgr != nil {
+			if err := checkpointMgr.Close(); err != nil {
+				slog.Warn("Failed to close old checkpoint manager", "error", err)
+			}
+		}
+
+		// Create new checkpoint manager for current session
+		if sess != nil {
+			sessionDir := sess.GetDir()
+			if sessionDir != "" {
+				mgr, err := agent.NewAgentContextCheckpointManager(sessionDir)
+				if err != nil {
+					slog.Warn("Failed to create checkpoint manager", "error", err)
+					checkpointMgr = nil
+				} else {
+					checkpointMgr = mgr
+					slog.Info("Updated checkpoint manager", "sessionDir", sessionDir)
+				}
+			} else {
+				slog.Warn("Session directory is empty, checkpoint manager not updated")
+				checkpointMgr = nil
+			}
+		}
+
+		return nil
+	}
+
 	server.SetNewSessionHandler(func(name, title string) (string, error) {
 		slog.Info("Received new_session", "name", name, "title", title)
 		if strings.TrimSpace(name) == "" {
@@ -698,6 +731,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sess = newSess
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
+
+		// Update checkpoint manager for new session
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for new session", "error", err)
+		}
 
 		stateMu.Lock()
 		sessionID = newSessionID
@@ -773,6 +811,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			// Restore last compaction summary if available
 			ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
+			// Update checkpoint manager for new session
+			if err := updateCheckpointManager(); err != nil {
+				slog.Warn("Failed to update checkpoint manager for new session", "error", err)
+			}
+
 			stateMu.Lock()
 			sessionID = newSessionID
 			sessionName = resolveSessionName(sessionMgr, newSessionID)
@@ -809,6 +852,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		setAgentContext(createBaseContext())
 		// Restore last compaction summary if available
 		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
+
+		// Update checkpoint manager for new session
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for new session", "error", err)
+		}
 
 		stateMu.Lock()
 		sessionID = newSessionID
@@ -1526,6 +1574,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		// Restore llm context from the latest compaction summary on this branch
 		restoreLLMContextFromCompaction(sess)
 
+		// Update checkpoint manager (session might have changed due to branch switch)
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for branch resume", "error", err)
+		}
+
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
@@ -1559,6 +1612,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sess = newSess
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
+
+		// Update checkpoint manager for new session
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for fork", "error", err)
+		}
 
 		stateMu.Lock()
 		sessionID = newSessionID
