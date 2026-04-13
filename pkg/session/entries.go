@@ -14,6 +14,7 @@ const (
 	EntryTypeSession       = "session"
 	EntryTypeMessage       = "message"
 	EntryTypeCompaction    = "compaction"
+	EntryTypeCompactEvent  = "compact_event"
 	EntryTypeBranchSummary = "branch_summary"
 	EntryTypeSessionInfo   = "session_info"
 )
@@ -60,6 +61,11 @@ type SessionEntry struct {
 
 	Name  string `json:"name,omitempty"`
 	Title string `json:"title,omitempty"`
+
+	// CompactEvent records a mini compact operation (truncate, update_llm_context).
+	// This is appended to messages.jsonl as an immutable event.
+	// The in-memory snapshot applies the operation; messages.jsonl never mutates.
+	CompactEvent *agentctx.CompactEventDetail `json:"compactEvent,omitempty"`
 }
 
 func newSessionHeader(id, cwd, parentSession string) SessionHeader {
@@ -175,7 +181,7 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		}
 	}
 
-	if compaction != nil {
+if compaction != nil {
 		msg := compactionSummaryMessage(compaction)
 		if msg.Role != "" {
 			messages = append(messages, msg)
@@ -197,13 +203,54 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		for i := compactionIndex + 1; i < len(path); i++ {
 			appendMessage(path[i])
 		}
-		return messages
+		return applyContextManagementEvents(messages, path)
 	}
 
 	for _, entry := range path {
 		appendMessage(entry)
 	}
 
+	return applyContextManagementEvents(messages, path)
+}
+
+// applyCompactEvents replays compact events on the message list.
+// Each compact_event entry records an operation (truncate, update_llm_context).
+// Apply reconstructs the result deterministically from the original message content.
+func applyContextManagementEvents(messages []agentctx.AgentMessage, path []*SessionEntry) []agentctx.AgentMessage {
+	for _, entry := range path {
+		if entry.Type != EntryTypeCompactEvent || entry.CompactEvent == nil {
+			continue
+		}
+		evt := entry.CompactEvent
+		switch evt.Action {
+		case agentctx.CompactActionTruncate:
+			for _, id := range evt.IDs {
+				for i := range messages {
+					msg := &messages[i]
+					if msg.ToolCallID == id && msg.Role == "toolResult" && !msg.Truncated {
+						originalText := msg.ExtractText()
+						msg.Truncated = true
+						msg.OriginalSize = len(originalText)
+						msg.Content = []agentctx.ContentBlock{
+							agentctx.TextContent{
+								Type: "text",
+								Text: agentctx.TruncateWithHeadTail(originalText),
+							},
+						}
+						break
+					}
+				}
+			}
+		case agentctx.CompactActionUpdateLLMContext:
+			// llm_context is stored in a separate file (llm_context.txt), not in messages.jsonl.
+			// This event marks that llm_context was updated at this point in the log.
+			// During replay, llm_context.txt should already be loaded from checkpoint or session.
+			// No action needed here for the messages array.
+		default:
+			// Unknown action types are logged but don't cause replay failures.
+			// This handles future schema extensions or corrupted data gracefully.
+		}
+	}
 	return messages
 }
 

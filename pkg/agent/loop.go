@@ -339,14 +339,9 @@ func runInnerLoop(
 				}))
 
 				// Note: Compactor now directly modifies agentCtx.RecentMessages
-				// We just need to update the summary and persist changes
+				// We just need to update the summary.
+				// Compact events are already appended via OnCompactEvent in the tools.
 				agentCtx.LastCompactionSummary = compacted.Summary
-				// Persist changes to session storage
-				if agentCtx.OnMessagesChanged != nil {
-					if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
-						slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
-					}
-				}
 				// Set flag to inject LLMContext for recovery on next request
 				agentCtx.PostCompactRecovery = true
 				after := len(agentCtx.RecentMessages)
@@ -416,12 +411,7 @@ func runInnerLoop(
 					if recoveryCompacted != nil {
 						// Compactor directly modified agentCtx.RecentMessages
 						agentCtx.LastCompactionSummary = recoveryCompacted.Summary
-						// Persist changes to session storage
-						if agentCtx.OnMessagesChanged != nil {
-							if persistErr := agentCtx.OnMessagesChanged(); persistErr != nil {
-								slog.Warn("[Agent] Failed to persist compacted messages", "error", persistErr)
-							}
-						}
+						// Compact events are already appended via OnCompactEvent in the tools.
 					}
 					// Set flag to inject LLMContext for recovery on next request
 					agentCtx.PostCompactRecovery = true

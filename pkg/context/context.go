@@ -31,6 +31,10 @@ type AgentContext struct {
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
 
+	// OnCompactEvent is called to append a compact event to messages.jsonl.
+	// The caller is responsible for then applying the event to RecentMessages in memory.
+	OnCompactEvent func(detail *CompactEventDetail) error `json:"-"`
+
 	// allowedTools restricts which tools can be executed.
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
@@ -38,6 +42,22 @@ type AgentContext struct {
 	// contextMgmtMu serializes mutations to shared turn state
 	// and assistant message tool-call arguments.
 	contextMgmtMu sync.Mutex `json:"-"`
+}
+
+// CompactAction defines the type of compact operation.
+type CompactAction string
+
+const (
+	CompactActionTruncate         CompactAction = "truncate"
+	CompactActionUpdateLLMContext CompactAction = "update_llm_context"
+)
+
+// CompactEventDetail records one compact operation.
+// Only the operation itself is recorded (action + target IDs).
+// Apply reconstructs the result deterministically from the original message content.
+type CompactEventDetail struct {
+	Action CompactAction `json:"action"`
+	IDs    []string      `json:"ids,omitempty"` // target tool_call_id list
 }
 
 // Tool represents a tool that can be called by the agent.

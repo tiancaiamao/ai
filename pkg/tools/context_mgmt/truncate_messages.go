@@ -45,6 +45,8 @@ func (t *TruncateMessagesTool) Parameters() map[string]any {
 }
 
 // Execute truncates the specified messages.
+// It appends a compact event to messages.jsonl (immutable log),
+// then applies the truncation to the in-memory RecentMessages snapshot.
 func (t *TruncateMessagesTool) Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error) {
 	idsRaw, ok := params["message_ids"].(string)
 	if !ok || idsRaw == "" {
@@ -58,6 +60,17 @@ func (t *TruncateMessagesTool) Execute(ctx context.Context, params map[string]an
 		return nil, fmt.Errorf("no valid tool call IDs provided")
 	}
 
+	// Append compact event to messages.jsonl (immutable, append-only)
+	if t.agentCtx.OnCompactEvent != nil {
+		if err := t.agentCtx.OnCompactEvent(&agentctx.CompactEventDetail{
+			Action: agentctx.CompactActionTruncate,
+			IDs:    validIDs,
+		}); err != nil {
+			return nil, fmt.Errorf("failed to persist compact event: %w", err)
+		}
+	}
+
+	// Apply to in-memory snapshot
 	count := t.applyTruncate(ctx, validIDs)
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_messages_truncated",
