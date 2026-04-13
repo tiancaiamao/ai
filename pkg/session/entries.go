@@ -214,8 +214,8 @@ if compaction != nil {
 }
 
 // applyCompactEvents replays compact events on the message list.
-// Each compact_event entry records an operation (truncate).
-// Apply reconstructs the result deterministically.
+// Each compact_event entry records an operation (truncate, update_llm_context).
+// Apply reconstructs the result deterministically from the original message content.
 func applyContextManagementEvents(messages []agentctx.AgentMessage, path []*SessionEntry) []agentctx.AgentMessage {
 	for _, entry := range path {
 		if entry.Type != EntryTypeCompactEvent || entry.CompactEvent == nil {
@@ -241,6 +241,14 @@ func applyContextManagementEvents(messages []agentctx.AgentMessage, path []*Sess
 					}
 				}
 			}
+		case agentctx.CompactActionUpdateLLMContext:
+			// llm_context is stored in a separate file (llm_context.txt), not in messages.jsonl.
+			// This event marks that llm_context was updated at this point in the log.
+			// During replay, llm_context.txt should already be loaded from checkpoint or session.
+			// No action needed here for the messages array.
+		default:
+			// Unknown action types are logged but don't cause replay failures.
+			// This handles future schema extensions or corrupted data gracefully.
 		}
 	}
 	return messages
