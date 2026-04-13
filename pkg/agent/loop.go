@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"strconv"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -1639,6 +1640,56 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
 
+func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
+	targetAbs := normalizePathForContains(overviewPath)
+	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.LLMContextDir, agentctx.OverviewFile)))
+	allowRelativeFallback := targetAbs == "" && targetRel != ""
+	if targetAbs == "" && !allowRelativeFallback {
+		return false
+	}
+
+	for _, msg := range messages {
+		if msg.Role != "toolResult" || msg.IsError {
+			continue
+		}
+		tool := strings.ToLower(strings.TrimSpace(msg.ToolName))
+		if tool != "write" && tool != "edit" {
+			continue
+		}
+		body := normalizePathForContains(msg.ExtractText())
+		if body == "" {
+			continue
+		}
+		if targetAbs != "" && strings.Contains(body, targetAbs) {
+			return true
+		}
+		if allowRelativeFallback && strings.Contains(body, targetRel) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeLLMContextContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.TrimSpace(content)
+	lines := strings.Split(content, "\n")
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		normalized = append(normalized, strings.TrimRight(line, " \t"))
+	}
+	return strings.Join(normalized, "\n")
+}
+
+func normalizePathForContains(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.Clean(value)
+	value = strings.ReplaceAll(value, "\\", "/")
+	return strings.ToLower(value)
+}
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
 	sections := make([]string, 0, 3)
