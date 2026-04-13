@@ -1,9 +1,9 @@
 ---
 name: workflow
 description: |
-  Core workflow execution system. Start workflows with /workflow start <template>,
-  execute with /workflow auto, manage templates with /workflow templates.
-  Integrates auto-execute and orchestrate patterns.
+  Multi-phase workflow system. Agent uses /workflow commands to execute structured
+  development flows (feature/bugfix/refactor/spike) with spec/plan phases.
+  State persisted to disk, phases executed via ag agents.
 ---
 
 # Workflow - Multi-Agent Orchestration
@@ -12,65 +12,93 @@ description: |
 
 > **State on disk, progress visible, commits after each phase.**
 
-Workflow is the **execution engine** that turns plans into shipped code. It combines:
+Workflow is **execution engine** that turns plans into shipped code. It combines:
 - **Workflow Templates**: Structured development flows (feature, bugfix, refactor, spike)
-- **Auto Mode**: State-machine execution with persistence
-- **Phase Review**: Human-in-the-loop checkpoints
+- **Agent-Driven Execution**: Agent autonomously progresses through phases
+- **State Management**: Deterministic state updates via `workflow-ctl` tool
+- **ag Backend**: Agent orchestration primitives for phase execution
 
 ## Architecture
 
 ```
-/workflow start bugfix "fix login timeout"
+/workflow start feature "X"
     ↓
-Workflow Skill (Frontend)
-  - User-friendly commands
-  - Template selection
-  - Parameter parsing
+workflow-ctl start → write STATE.json
     ↓
-~/.ai/skills/workflow/orchestrate/bin/orchestrate (Backend)
-  - Task scheduling
-  - State management
-  - Worker execution
+Agent reads STATE.json → current phase = spec
+    ↓
+Agent reads templates/feature.md → Phase 1 instructions
+    ↓
+Agent executes Phase 1: Spec
+    ↓
+Agent calls workflow-ctl advance → update STATE.json {currentPhase: plan}
+    ↓
+Agent reads Phase 2: Plan
+    ↓
+Agent executes Phase 2: Plan (generates tasks.md)
+    ↓
+Agent calls ag task create + fan-out.sh for parallel execution
+    ↓
+Agent calls workflow-ctl advance → update STATE.json
+    ↓
+...continue until all phases done
 ```
 
-**Orchestrate CLI:**
-- **Location:** `skills/workflow/orchestrate/` (internal backend component)
-- **Binary:** `~/.ai/skills/workflow/orchestrate/bin/orchestrate`
-- **Build:** `cd skills/workflow/orchestrate && go build -o bin/orchestrate ./cmd/main.go`
-- **Auto-build:** Binary is built automatically if missing (not in git)
+**workflow-ctl Tool:**
+- **Location:** `skills/workflow/bin/workflow-ctl`
+- **Build:** `cd skills/workflow && go build -o bin/workflow-ctl workflow-ctl.go`
+- **Commands:**
+  - `start <template> <description>` — Start new workflow
+  - `advance [--phase <name>]` — Advance to next phase (or jump to specific phase)
+  - `status` — Show current workflow state
+  - `pause` / `resume` — Pause/resume workflow
 
-> **Note:** The orchestrate binary is not tracked in git (`.gitignore`). It will be built automatically on first use.
+**ag CLI:**
+- **Location:** `skills/ag/` (separate skill)
+- **Used for:** Agent spawn, task queue (for dynamic parallel tasks)
+
+> **Note:** workflow-ctl provides **deterministic state updates**. Agent controls execution flow
+> but state is persisted by the tool, ensuring reliability and restart capability.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/workflow start [template] [description]` | Start a workflow |
-| `/workflow auto` | Execute current workflow automatically |
+| `/workflow start <template> [description]` | Start a new workflow |
 | `/workflow status` | Show workflow state |
-| `/workflow templates` | List available templates |
-| `/workflow templates info <name>` | Show template details |
-| `/workflow pause` | Pause auto mode |
-| `/workflow resume` | Resume paused workflow |
-| `/workflow stop` | Stop and cleanup |
+| `/workflow advance [--phase <name>]` | Advance to next phase (for agent use) |
+| `/workflow pause` / `/workflow resume` | Pause/resume workflow |
+
+**Agent Usage:**
+```bash
+# Agent-driven execution
+workflow-ctl start feature "add user auth"
+
+# Agent reads Phase 1: Spec from template, executes it
+workflow-ctl advance  # Move to next phase
+
+# Agent reads Phase 2: Plan, generates tasks.md
+ag task create "implement API"
+ag task create "write tests"
+# ... execute tasks via fan-out pattern
+workflow-ctl advance  # Move to next phase
+```
 
 ## Quick Start
 
 ```bash
-# Start a bugfix workflow
-/workflow start bugfix "fix login timeout"
+# Setup binaries
+cd skills/ag && go build -o ag .
+cd skills/workflow && go build -o bin/workflow-ctl workflow-ctl.go
 
-# List all templates
-/workflow templates
-
-# Show template details
-/workflow templates info feature
-
-# Execute automatically
-/workflow auto
+# Start a workflow
+workflow-ctl start feature "add user authentication"
 
 # Check status
-/workflow status
+workflow-ctl status
+
+# Agent-driven execution (agent calls this after each phase):
+workflow-ctl advance
 ```
 
 ## Templates
@@ -86,7 +114,7 @@ Workflow Skill (Frontend)
 
 ## Feature Development: SPEC + PLAN
 
-For feature work, the workflow includes spec and plan phases:
+For feature work, feature template includes **spec** and **plan** phases.
 
 ### Phase 1: SPEC (What)
 
@@ -112,8 +140,8 @@ Create `SPEC.md` defining **what** we're building:
 - [ ] [explicitly not doing]
 
 ## Success Criteria
-- [ ] [measurable criterion 1]
-- [ ] [measurable criterion 2]
+- [ ] [criterion 1]
+- [ ] [criterion 2]
 ```
 
 **Review criteria:**
@@ -151,7 +179,7 @@ Read SPEC.md, explore codebase, create `PLAN.md` defining **how**:
 - [risk] → [mitigation]
 
 ## Verification
-[How to test the feature works]
+[How to test] feature works]
 ```
 
 **Review criteria:**
@@ -161,30 +189,22 @@ Read SPEC.md, explore codebase, create `PLAN.md` defining **how**:
 
 ---
 
-### Quick Start: Feature Development
+### Dynamic Task Execution (e.g., Implement Phase)
+
+For phases that involve parallel subtasks, agent can leverage `ag task`:
 
 ```bash
-# Start feature workflow
-/workflow start feature "用户反馈功能"
+# Agent generates tasks.md with task list
+# Agent creates tasks:
+ag task create "implement API endpoint"
+ag task create "write unit tests"
+ag task create "update documentation"
 
-# Phase 1: SPEC
-# Create SPEC.md in artifact directory
+# Agent spawns workers that claim tasks (fan-out pattern)
+# Or uses ag/patterns/fan-out.sh for parallel execution
 
-# Phase 2: PLAN  
-# Create PLAN.md in artifact directory
-
-# Phase 3-5: Implement, Test, Ship
-/workflow auto  # 自动推进
-```
-
-### Template Aliases
-
-```bash
-/workflow start bug "login timeout"    # → bugfix
-/workflow start fix "typo"            # → bugfix
-/workflow start feature "oauth"       # → feature
-/workflow start research "api"        # → spike
-/workflow start hot "production"     # → hotfix
+# After all tasks done, agent calls:
+workflow-ctl advance
 ```
 
 ## Workflow State
@@ -203,118 +223,113 @@ State is persisted to `.workflow/STATE.json`:
     { "name": "ship", "index": 3, "status": "pending" }
   ],
   "currentPhase": 1,
-  "startedAt": "2025-03-27T10:00:00Z",
-  "artifactDir": ".workflow/bugfixes/250327-1-login-timeout"
+  "status": "in_progress",
+  "artifactDir": ".workflow/artifacts/bugfixes/bugfix"
 }
 ```
 
-## Phase Execution
+**Status values:**
+- `in_progress` — Workflow running
+- `paused` — Workflow paused
+- `completed` — All phases done
 
-Each phase follows this pattern:
+**Phase status values:**
+- `pending` — Not started
+- `active` — Currently executing
+- `completed` — Finished successfully
+- `failed` — Failed (can retry)
 
-```
-1. Load phase instructions from template
-2. Spawn subagent to execute phase
-3. Review phase output
-4. If approved: commit, advance to next phase
-5. If failed: retry (max 3) or abort
-```
+## Phase Execution Flow
 
-## Integration with Other Skills
+Agent-driven execution:
 
-| Skill | Integration Point |
-|-------|-------------------|
-| `subagent` | Used for parallel phase/task execution |
-| `tmux` | Background process management |
-| `review` | Phase review after completion |
+1. Agent reads `.workflow/STATE.json` → current phase
+2. Agent reads `templates/<template>.md` → phase instructions
+3. Agent executes the phase (autonomously decides how)
+4. Agent calls `workflow-ctl advance` to update state
+5. Repeat until all phases completed
 
-> **Note:** SPEC and PLAN phases are now built into the feature workflow template. No separate speckit step needed.
+**For phases with parallel tasks:**
+1. Agent generates task list
+2. Agent calls `ag task create` for each task
+3. Agent spawns workers via `fan-out.sh` pattern
+4. Workers claim and execute tasks via `ag task claim`
+5. Agent calls `workflow-ctl advance` after all tasks done
 
 ## State Files
 
 | File | Purpose |
 |------|---------|
-| `.workflow/STATE.json` | Current workflow state |
-| `.workflow/DECISIONS.md` | Key decisions made |
-| `.workflow/notes/` | Phase notes and logs |
-| `.workflow/bugfixes/*/` | Bugfix artifacts |
-| `.workflow/features/*/` | Feature artifacts |
+| `.workflow/STATE.json` | Current workflow state (managed by workflow-ctl) |
+| `.workflow/artifacts/` | Phase outputs (SPEC.md, PLAN.md, tasks.md, etc.) |
 
 ## Artifact Directory
 
-Artifacts are stored in `.workflow/<category>/<date>-<num>-<slug>/`:
+Artifacts are stored in `.workflow/artifacts/<category>/<template>/`:
 
 ```
 .workflow/
-├── bugfixes/
-│   └── 250327-1-login-timeout/
-│       ├── STATE.json
-│       ├── triage.md
-│       ├── fix-notes.md
-│       └── verify-results.md
-└── features/
-    └── 250326-1-user-auth/
-        ├── STATE.json
-        └── spec.md
+├── STATE.json
+└── artifacts/
+    └── features/
+        └── feature/
+            ├── SPEC.md
+            ├── PLAN.md
+            ├── tasks.md
+            └── implement-output.md
 ```
 
 ## Error Handling
 
 | Error | Recovery |
 |-------|----------|
-| Phase fails | Retry up to 3 times, then abort |
-| User cancels | Save state, cleanup resources |
-| Context overflow | Compact, continue |
-| Subagent hangs | Timeout, kill, restart |
+| Phase fails | Agent retries or fixes; state not advanced |
+| workflow-ctl fails | State file corruption; restore from backup |
+| ag task fails | Agent marks task failed; retry or skip |
 
 ## Best Practices
 
-1. **Start with templates** - Don't improvise workflows
-2. **Use `/workflow auto`** - For fully automated execution
-3. **Check `/workflow status`** - Before starting new work
-4. **Commit after each phase** - Clean git history
-5. **Keep artifacts** - For future reference
+1. **Agent autonomy** — Agent controls phase execution, not scripts
+2. **State via tool** — Always use `workflow-ctl advance` (don't manually edit STATE.json)
+3. **Parallel tasks** — Use `ag task` + `fan-out.sh` for concurrent work
+4. **Check status** — Use `workflow-ctl status` before new work
+5. **Commit after phases** — Keep clean git history
 
-## Example: Full Bugfix Flow
+## Example: Full Feature Flow
 
 ```
-User: /workflow start bugfix "login timeout after 30s"
-
-Agent:
-1. Load bugfix.md template
-2. Create .workflow/bugfixes/250327-1-login-timeout/
-3. Write STATE.json
-4. Send workflow-start prompt with phases
-
-Phase: Triage
-→ Investigate issue, reproduce, identify root cause
-→ Output: triage.md with findings
-→ Review: approved
-→ Commit: "fix(bugfix): complete triage"
-
-Phase: Fix
-→ Implement fix based on triage findings
-→ Output: code changes
-→ Review: approved
-→ Commit: "fix(bugfix): implement fix"
-
-Phase: Verify
-→ Run tests, verify fix works
-→ Output: verify-results.md
-→ Review: approved
-→ Commit: "fix(bugfix): verify fix"
-
-Phase: Ship
-→ Create PR, notify user
-→ Commit: "fix(bugfix): complete"
-→ Output: PR link
-
-User: "Done! Bug is fixed."
+/workflow start feature "add user auth"
+  ↓
+workflow-ctl writes STATE.json {currentPhase: spec}
+  ↓
+Agent reads STATE.json → Phase 1: Spec
+Agent executes Spec phase (creates SPEC.md)
+Agent calls workflow-ctl advance
+  ↓
+STATE.json {currentPhase: plan}
+  ↓
+Agent executes Plan phase (creates PLAN.md)
+Agent calls workflow-ctl advance
+  ↓
+STATE.json {currentPhase: implement}
+  ↓
+Agent generates tasks.md
+Agent creates tasks: ag task create "implement auth", "write tests"
+Agent spawns fan-out workers to execute tasks
+Agent calls workflow-ctl advance
+  ↓
+STATE.json {currentPhase: test}
+  ↓
+Agent executes tests
+Agent calls workflow-ctl advance
+  ↓
+STATE.json {status: completed}
 ```
 
 ## Anti-Patterns
 
-❌ **Don't start without template** - Use `/workflow start feature` not ad-hoc
-❌ **Don't skip phases** - Each phase has a purpose
-❌ **Don't ignore failures** - Retry or abort, don't push broken code
-❌ **Don't forget to commit** - Clean history helps future-you
+❌ **Don't start without template** — Use `/workflow start feature` not ad-hoc
+❌ **Don't manually edit STATE.json** — Always use `workflow-ctl advance`
+❌ **Don't skip phases** — Each phase has a purpose
+❌ **Don't ignore failures** — Fix issues before advancing
+❌ **Don't run without ag** — Ensure ag binary is built

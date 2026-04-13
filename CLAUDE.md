@@ -69,7 +69,30 @@ No `Makefile` is used in this repo.
 - Respect context cancellation through loop/tool execution paths.
 - Keep behavior compatible with session persistence format in `pkg/session/`.
 - Prefer minimal, targeted changes; avoid broad refactors unless requested.
-- Never push directly to `main`. Always push to a feature branch and open/update a PR for review.
+
+### ⛔ NEVER commit directly to `main`
+
+**This is a hard rule. No exceptions.**
+
+- **NEVER** commit directly on the `main` branch
+- **ALWAYS** create a feature branch from `main`
+- **ALWAYS** push the feature branch and open a PR for review
+- This applies to ALL changes — features, bugfixes, refactors, docs, even typos
+- Use git worktrees for isolated development when working on features
+- If you accidentally commit on `main`, revert the commit and redo on a branch
+
+```
+# ❌ WRONG
+git checkout main
+git commit -m "fix something"
+git push origin main
+
+# ✅ CORRECT
+git worktree add .worktrees/my-feature my-feature  # or git checkout -b feat/xxx
+git commit -m "fix something"
+git push origin my-feature
+gh pr create
+```
 
 ## Runtime/Storage Notes
 
