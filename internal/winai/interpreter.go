@@ -1831,6 +1831,26 @@ func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.Compaction
 		return
 	}
 
+	// For mini compaction, show truncation details
+	if info != nil && info.Type == "mini" {
+		msg := fmt.Sprintf("ai: %s done ", label)
+		if info.TruncatedCount > 0 {
+			msg += fmt.Sprintf("(%d messages truncated", info.TruncatedCount)
+			if info.TokensBefore > 0 && info.TokensAfter > 0 {
+				msg += fmt.Sprintf(", %d -> %d tokens", info.TokensBefore, info.TokensAfter)
+			}
+			msg += ")"
+			if info.LLMContextUpdated {
+				msg += " (LLM context updated)"
+			}
+		} else {
+			msg += "(no action needed)"
+		}
+		p.writeStatus(msg)
+		return
+	}
+
+	// For major compaction, show message count change
 	if info != nil && info.Before > 0 && info.After > 0 {
 		p.writeStatus(fmt.Sprintf("ai: %s done (%d -> %d messages)", label, info.Before, info.After))
 		return

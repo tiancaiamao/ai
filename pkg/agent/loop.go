@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"strconv"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -15,7 +16,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 	"log/slog"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -348,10 +348,15 @@ func runInnerLoop(
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
 				stream.Push(NewCompactionEndEvent(CompactionInfo{
-					Auto:    true,
-					Before:  before,
-					After:   after,
-					Trigger: "pre_llm_threshold",
+					Type:              compacted.Type,
+					Auto:              true,
+					Before:            before,
+					After:             after,
+					Trigger:           "pre_llm_threshold",
+					TokensBefore:      compacted.TokensBefore,
+					TokensAfter:       compacted.TokensAfter,
+					TruncatedCount:    compacted.TruncatedCount,
+					LLMContextUpdated: compacted.LLMContextUpdated,
 				}))
 
 				// Create checkpoint after compaction to preserve AgentState for resume
@@ -418,10 +423,15 @@ func runInnerLoop(
 					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
-						Auto:    true,
-						Before:  before,
-						After:   len(agentCtx.RecentMessages),
-						Trigger: "context_limit_recovery",
+						Type:              func() string { if recoveryCompacted != nil { return recoveryCompacted.Type }; return "" }(),
+						Auto:              true,
+						Before:            before,
+						After:             len(agentCtx.RecentMessages),
+						Trigger:           "context_limit_recovery",
+						TokensBefore:      func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensBefore }; return 0 }(),
+						TokensAfter:       func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensAfter }; return 0 }(),
+						TruncatedCount:    func() int { if recoveryCompacted != nil { return recoveryCompacted.TruncatedCount }; return 0 }(),
+						LLMContextUpdated: func() bool { if recoveryCompacted != nil { return recoveryCompacted.LLMContextUpdated }; return false }(),
 					}))
 
 					// Create checkpoint after compaction to preserve AgentState for resume
@@ -1681,36 +1691,6 @@ func normalizePathForContains(value string) string {
 	return strings.ToLower(value)
 }
 
-// insertBeforeLastUserMessage inserts a message before the last user message in the slice.
-// If there are no user messages, it appends to the end.
-// This is used to place runtime_state close to the decision point for better LLM attention.
-func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
-	if len(messages) == 0 {
-		return []llm.LLMMessage{msg}
-	}
-
-	// Find the last user message index
-	lastUserIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			lastUserIdx = i
-			break
-		}
-	}
-
-	// If no user message found, append to end
-	if lastUserIdx == -1 {
-		return append(messages, msg)
-	}
-
-	// Insert before the last user message
-	result := make([]llm.LLMMessage, 0, len(messages)+1)
-	result = append(result, messages[:lastUserIdx]...)
-	result = append(result, msg)
-	result = append(result, messages[lastUserIdx:]...)
-	return result
-}
-
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
 	sections := make([]string, 0, 3)
 	if strings.TrimSpace(llmContextContent) != "" {
@@ -1955,6 +1935,33 @@ func hasToolResultNamed(results []agentctx.AgentMessage, toolName string) bool {
 }
 
 // EstimateMessageTokens estimates token count for a message.
+func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the last user message index
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, append to end
+	if lastUserIdx == -1 {
+		return append(messages, msg)
+	}
+
+	// Insert before the last user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:lastUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[lastUserIdx:]...)
+	return result
+}
+
 // Deprecated: Use agentctx.EstimateMessageTokens instead.
 func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 	return agentctx.EstimateMessageTokens(msg)

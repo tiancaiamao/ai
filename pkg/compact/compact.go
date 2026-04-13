@@ -1038,6 +1038,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		Summary:      summary,
 		TokensBefore: tokensBefore,
 		TokensAfter:  tokensAfter,
+		Type:         "major",
 	}, nil
 }
 

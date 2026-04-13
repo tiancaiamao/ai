@@ -16,4 +16,9 @@ type CompactionResult struct {
 	Summary      string // The generated summary
 	TokensBefore int    // Token count before compaction
 	TokensAfter  int    // Token count after compaction
+
+	// Mini compaction specific fields
+	Type              string // "major" or "mini"
+	TruncatedCount    int    // Number of messages truncated (mini only)
+	LLMContextUpdated bool   // Whether LLM context was updated (mini only)
 }
