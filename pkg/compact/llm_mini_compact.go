@@ -208,8 +208,8 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 		return nil, fmt.Errorf("context management LLM call failed: %w", err)
 	}
 
-	// 5. Execute tool calls
-	c.executeToolCalls(parent, toolCalls, tools)
+	// 5. Execute tool calls and track results
+	truncatedCount, llmContextUpdated := c.executeToolCalls(parent, toolCalls, tools)
 
 	// 6. Reset trigger counters
 	agentCtx.AgentState.LastTriggerTurn = agentCtx.AgentState.TotalTurns
@@ -224,19 +224,26 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	span.AddField("tokens_saved", tokensBefore-tokensAfter)
 	span.AddField("messages_after", len(agentCtx.RecentMessages))
 	span.AddField("tool_calls", len(toolCalls))
+	span.AddField("truncated_count", truncatedCount)
+	span.AddField("llm_context_updated", llmContextUpdated)
 
 	slog.Info("[LLMMini] Compact complete",
 		"tokens_before", tokensBefore,
 		"tokens_after", tokensAfter,
 		"saved", tokensBefore-tokensAfter,
 		"tool_calls", len(toolCalls),
+		"truncated", truncatedCount,
+		"llm_context_updated", llmContextUpdated,
 		"duration", duration,
 	)
 
 	return &agentctx.CompactionResult{
-		Summary:      fmt.Sprintf("LLM mini compact: %d tool calls executed", len(toolCalls)),
-		TokensBefore: tokensBefore,
-		TokensAfter:  tokensAfter,
+		Summary:           fmt.Sprintf("LLM mini compact: %d tool calls executed", len(toolCalls)),
+		TokensBefore:      tokensBefore,
+		TokensAfter:       tokensAfter,
+		Type:              "mini",
+		TruncatedCount:    truncatedCount,
+		LLMContextUpdated: llmContextUpdated,
 	}, nil
 }
 
@@ -508,7 +515,8 @@ func (c *LLMMiniCompactor) extractToolCalls(ctx context.Context, stream *llm.Eve
 }
 
 // executeToolCalls runs each tool call and logs the result.
-func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) {
+// Returns the count of truncated messages and whether LLM context was updated.
+func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (truncatedCount int, llmContextUpdated bool) {
 	for _, tc := range toolCalls {
 		startTime := time.Now()
 		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
@@ -593,7 +601,19 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			traceevent.Field{Key: "duration_ms", Value: time.Since(startTime).Milliseconds()},
 			traceevent.Field{Key: "result", Value: resultText},
 		)
+
+		// Track truncations and LLM context updates
+		if tc.Function.Name == "truncate_messages" {
+			// Extract count from result text
+			var count int
+			if _, err := fmt.Sscanf(resultText, "Truncated %d messages.", &count); err == nil {
+				truncatedCount += count
+			}
+		} else if tc.Function.Name == "update_llm_context" {
+			llmContextUpdated = true
+		}
 	}
+	return truncatedCount, llmContextUpdated
 }
 
 // extractLatestUserRequest finds the most recent user message text from the
