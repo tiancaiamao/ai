@@ -4,7 +4,27 @@ description: Agent orchestration CLI. Use `ag` to spawn, communicate, and coordi
   Combine primitives into patterns: pair (worker-judge), parallel, pipeline, fan-out.
 ---
 
-# ag — Agent Orchestration
+# ag — Agent Orchestration CLI
+
+## Overview
+
+`ag` provides a unified interface for spawning, communicating, and coordinating AI agents. It wraps the low-level tmux + headless mode pattern into a clean CLI with additional infrastructure for multi-agent workflows.
+
+### History: From subagent to ag
+
+Previously, the `subagent` skill provided basic agent spawning via `start_subagent_tmux.sh`. However, it had limitations:
+- No unified interface for agent lifecycle
+- No built-in message passing
+- No task management
+- Hard to compose multiple agents
+
+The `ag` CLI was created to address these limitations, providing:
+- **Agent lifecycle**: spawn, wait, kill, rm, status
+- **Communication**: channels, send/recv messages
+- **Task management**: create, claim, done/fail tasks
+- **Pattern scripts**: reusable multi-agent workflows (pair, parallel, pipeline, fan-out)
+
+**The subagent skill is now deprecated.** Use `ag spawn` instead. The low-level `start_agent.sh` script is now part of `ag`'s internal implementation.
 
 ## Setup
 
@@ -12,11 +32,25 @@ description: Agent orchestration CLI. Use `ag` to spawn, communicate, and coordi
 export AG_BIN=~/.ai/skills/ag/ag
 ```
 
-The binary is pre-built. Source code lives in the project repo at `skills/workflow/ag/`.
-If you need to rebuild:
+The binary is pre-built at `~/.ai/skills/ag/ag`. Source code lives in the project repo at `skills/ag/`.
+
+To rebuild:
 
 ```bash
-cd <project-repo>/skills/workflow/ag && go build -o ~/.ai/skills/ag/ag .
+cd <project-repo>/skills/ag && go build -o ~/.ai/skills/ag/ag .
+cp ag ~/.local/bin/ag  # optional: add to PATH
+```
+
+### Internal Implementation
+
+Under the hood, `ag spawn` uses `internal/tmux/start_agent.sh`, which creates an isolated tmux session and runs `ai --mode headless`. This was previously the `subagent` skill, but is now an internal implementation detail.
+
+**Direct use of `start_agent.sh` is discouraged.** Use `ag spawn` for all agent spawning needs.
+
+If you need direct access to the low-level script (e.g., for debugging), it's at:
+
+```bash
+~/.ai/skills/ag/internal/tmux/start_agent.sh
 ```
 
 ## CLI Commands
@@ -234,3 +268,73 @@ $AG_BIN ~/.ai/skills/ag/patterns/fan-out.sh $TMP/plan.txt 4 implementer.md integ
 - **Mock mode** (`--mock`) for testing patterns without burning tokens
 - **Timeout defaults** — spawn: 10m, wait in patterns: 60s. Override with `--timeout`
 - **Working directory** — use `--cwd` to set the agent's working directory
+
+## Migration from subagent Skill
+
+If you have scripts or code that used the deprecated `subagent` skill, here's how to migrate:
+
+### Old Way (subagent)
+
+```bash
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/output.txt \
+  10m \
+  @planner.md \
+  "Task description")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" /tmp/output.txt 600
+OUTPUT=$(cat /tmp/output.txt)
+```
+
+### New Way (ag)
+
+```bash
+ag spawn --id planner --system @planner.md --input "Task description" --timeout 10m
+ag wait planner --timeout 600
+OUTPUT=$(ag output planner)
+ag rm planner
+```
+
+### Migration Benefits
+
+| Aspect | subagent | ag |
+|--------|-----------|-----|
+| **Agent lifecycle** | Manual (tmux commands) | Built-in (spawn, wait, kill, rm) |
+| **Status tracking** | None | `ag status`, `ag ls` |
+| **Message passing** | Manual file I/O | `ag send`, `ag recv`, channels |
+| **Task management** | None | `ag task create/claim/done` |
+| **Error handling** | Manual | Automatic with status codes |
+| **Cleanup** | Manual | `ag rm` handles everything |
+
+### Advanced Migration: Channels
+
+Old subagent patterns used files for inter-agent communication:
+
+```bash
+# Old way: use files
+~/bin/start_subagent_tmux.sh /tmp/agent1/input.txt 10m @agent1.md "work"
+~/bin/start_subagent_tmux.sh /tmp/agent2/input.txt 10m @agent2.md "review /tmp/agent1/output.txt"
+```
+
+New way: use channels
+
+```bash
+# New way: use channels
+ag channel create review-queue
+ag send worker-1 --file spec.md
+ag send worker-1 "do this work"
+
+# Worker receives messages
+ag recv worker-1 --wait --timeout 60
+```
+
+### When to Use Internal Scripts
+
+You might need `~/.ai/skills/ag/internal/tmux/start_agent.sh` directly if:
+
+- **Debugging tmux behavior**: Check if the session is created correctly
+- **Custom session management**: Need non-standard cleanup or monitoring
+- **Integration testing**: Testing ag's internal implementation
+
+**For all other cases, use `ag spawn`.**
