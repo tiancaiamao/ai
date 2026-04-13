@@ -3,8 +3,6 @@ package session
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"errors"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
@@ -65,7 +63,7 @@ func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
 	}
 
 	boundaryStart := prevCompactionIndex + 1
-	refs := buildMessageRefs(s.sessionDir, path[boundaryStart:])
+	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
 		return false
 	}
@@ -74,47 +72,11 @@ func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
 	return firstKeptIndex > 0
 }
 
-// readSummaryFromFile reads a compaction summary from a detail file
-func readSummaryFromFile(sessionDir, relativePath string) (string, error) {
-	content, err := os.ReadFile(relativePath)
-	if err != nil {
-		return "", err
-	}
-	
-	// Extract the actual summary content (after the metadata section)
-	// The metadata section is between <!-- and -->
-	contentStr := string(content)
-	if idx := strings.Index(contentStr, "-->"); idx != -1 {
-		// Find the end of the metadata comment and skip the newline
-		idx += 3
-		if idx < len(contentStr) && contentStr[idx] == '\n' {
-			idx++
-		}
-		// Trim leading/trailing whitespace
-		return strings.TrimSpace(contentStr[idx:]), nil
-	}
-	
-	// If no metadata found, return the whole content
-	return strings.TrimSpace(contentStr), nil
-}
-
-// GetSummaryFromEntry retrieves the summary content from an entry
-// either from the referenced file or from the inline Summary field
-func GetSummaryFromEntry(sessionDir string, entry *SessionEntry) string {
+// GetSummaryFromEntry retrieves the summary content from an entry.
+func GetSummaryFromEntry(_ string, entry *SessionEntry) string {
 	if entry == nil {
 		return ""
 	}
-	
-	// Try to read from file first (new format)
-	if entry.SummaryFile != nil {
-		summary, err := readSummaryFromFile(sessionDir, *entry.SummaryFile)
-		if err == nil && summary != "" {
-			return summary
-		}
-		// Fall through to inline summary if file read fails
-	}
-	
-	// Use inline summary (old format or fallback)
 	return entry.Summary
 }
 
@@ -136,17 +98,15 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	prevCompactionIndex := -1
-	previousSummary := ""
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i].Type == EntryTypeCompaction {
 			prevCompactionIndex = i
-			previousSummary = GetSummaryFromEntry(s.sessionDir, &path[i])
 			break
 		}
 	}
 
 	boundaryStart := prevCompactionIndex + 1
-	refs := buildMessageRefs(s.sessionDir, path[boundaryStart:])
+	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
 		return nil, ErrNothingToCompact
 	}
@@ -160,7 +120,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	messagesToSummarize := refsToMessages(refs[:firstKeptIndex])
-	summary, err := compactor.GenerateSummaryWithPrevious(messagesToSummarize, previousSummary)
+	summary, err := compactor.GenerateSummary(messagesToSummarize)
 	if err != nil {
 		return nil, err
 	}
@@ -198,9 +158,10 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}, nil
 }
 
-func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
+func buildMessageRefs(entries []SessionEntry) []messageRef {
 	refs := make([]messageRef, 0, len(entries))
-	for _, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		switch entry.Type {
 		case EntryTypeMessage:
 			if entry.Message == nil {
@@ -223,17 +184,17 @@ func buildMessageRefs(sessionDir string, entries []SessionEntry) []messageRef {
 				Cuttable: true,
 			})
 		case EntryTypeCompaction:
-			// Get summary content from inline or file reference
-			summary := GetSummaryFromEntry(sessionDir, &entry)
-			msg := compactionSummaryMessageWithContent(summary, entry.Timestamp)
-			if msg.Role == "" {
-				continue
+			// Use inline summary directly
+			if entry.Summary != "" {
+				msg := compactionSummaryMessage(entry)
+				if msg.Role != "" {
+					refs = append(refs, messageRef{
+						EntryID:  entry.ID,
+						Message:  msg,
+						Cuttable: true,
+					})
+				}
 			}
-			refs = append(refs, messageRef{
-				EntryID:  entry.ID,
-				Message:  msg,
-				Cuttable: true,
-			})
 		}
 	}
 	return refs

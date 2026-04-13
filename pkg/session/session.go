@@ -336,13 +336,6 @@ func (s *Session) GetLastCompactionSummary() string {
 	// Search backwards for the last compaction entry
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i].Type == EntryTypeCompaction {
-			// Try to read from file first (new format)
-			if path[i].SummaryFile != nil {
-				if summary, err := readSummaryFromFile(s.sessionDir, *path[i].SummaryFile); err == nil && summary != "" {
-					return summary
-				}
-			}
-			// Fall back to inline summary (old format)
 			return path[i].Summary
 		}
 	}

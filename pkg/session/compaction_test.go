@@ -119,7 +119,7 @@ func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
 		t.Fatal("expected session to be compactable with forward cuttable boundary")
 	}
 
-	refs := buildMessageRefs("", sess.GetBranch(""))
+	refs := buildMessageRefs(sess.GetBranch(""))
 	cutIdx := findFirstKeptIndex(refs, comp)
 	if cutIdx <= 0 {
 		t.Fatalf("expected forward cuttable boundary, got index=%d", cutIdx)
