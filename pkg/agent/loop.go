@@ -359,11 +359,17 @@ func runInnerLoop(
 				}))
 
 				// Create checkpoint after compaction to preserve AgentState for resume
+				// Only create checkpoint if LLM context was updated (meaningful state change)
 				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-					if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
-						slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+					if compacted.LLMContextUpdated {
+						llmContextContent := agentCtx.LLMContext
+						if _, err := checkpointMgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
+							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+						} else {
+							slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "pre_llm_threshold", "turn", turnCount)
+						}
 					} else {
-						slog.Info("[Loop] Checkpoint created after compaction", "trigger", "pre_llm_threshold", "turn", turnCount)
+						slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "pre_llm_threshold", "turn", turnCount)
 					}
 				}
 			}
@@ -434,11 +440,16 @@ func runInnerLoop(
 					}))
 
 					// Create checkpoint after compaction to preserve AgentState for resume
+					// Only create checkpoint if LLM context was updated (meaningful state change)
 					if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-						if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
-							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+						if recoveryCompacted != nil && recoveryCompacted.LLMContextUpdated {
+							if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+								slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+							} else {
+								slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "context_limit_recovery", "turn", turnCount)
+							}
 						} else {
-							slog.Info("[Loop] Checkpoint created after compaction", "trigger", "context_limit_recovery", "turn", turnCount)
+							slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "context_limit_recovery", "turn", turnCount)
 						}
 					}
 					continue
