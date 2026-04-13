@@ -203,20 +203,20 @@ if compaction != nil {
 		for i := compactionIndex + 1; i < len(path); i++ {
 			appendMessage(path[i])
 		}
-		return applyCompactEvents(messages, path)
+		return applyContextManagementEvents(messages, path)
 	}
 
 	for _, entry := range path {
 		appendMessage(entry)
 	}
 
-	return applyCompactEvents(messages, path)
+	return applyContextManagementEvents(messages, path)
 }
 
 // applyCompactEvents replays compact events on the message list.
 // Each compact_event entry records an operation (truncate).
 // Apply reconstructs the result deterministically.
-func applyCompactEvents(messages []agentctx.AgentMessage, path []*SessionEntry) []agentctx.AgentMessage {
+func applyContextManagementEvents(messages []agentctx.AgentMessage, path []*SessionEntry) []agentctx.AgentMessage {
 	for _, entry := range path {
 		if entry.Type != EntryTypeCompactEvent || entry.CompactEvent == nil {
 			continue
