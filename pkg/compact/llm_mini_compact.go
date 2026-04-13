@@ -634,6 +634,9 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			}
 		} else if tc.Function.Name == "update_llm_context" {
 			llmContextUpdated = true
+		} else if tc.Function.Name == "compact" {
+			// Compact tool updates AgentContext.RecentMessages, which affects LLM context
+			llmContextUpdated = true
 		}
 	}
 	return truncatedCount, llmContextUpdated
