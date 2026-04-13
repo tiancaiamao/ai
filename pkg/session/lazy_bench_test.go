@@ -35,7 +35,7 @@ func BenchmarkLoadSession_Full(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(sessionDir, nil)
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func BenchmarkLoadSession_Full_1000(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSession(sessionDir, nil)
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}

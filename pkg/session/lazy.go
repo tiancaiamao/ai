@@ -1,7 +1,6 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"bufio"
 	"encoding/json"
 	"errors"
@@ -20,8 +19,6 @@ type LoadOptions struct {
 	IncludeSummary bool
 	// Lazy enables lazy loading (only load recent entries + compaction summary)
 	Lazy bool
-	// LLMContext is the llm context instance for the session
-	LLMContext *agentctx.LLMContext
 }
 
 // DefaultLoadOptions returns the default load options for lazy loading.
@@ -43,16 +40,13 @@ func FullLoadOptions() LoadOptions {
 }
 
 // LoadSessionLazy loads a session with lazy loading support.
-// It reads the session file efficiently by:
-// 1. Using ResumeOffset if available (fast path)
-// 2. Scanning from end to find compaction entry (fallback)
-// 3. Only loading recent messages + compaction summary
+// It reads the session file efficiently by scanning from end to find compaction entry.
+// Only loads recent messages + compaction summary.
 func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
 			entries:    make([]*SessionEntry, 0),
 			byID:       make(map[string]*SessionEntry),
-			llmContext: opts.LLMContext,
 		}
 		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil
@@ -60,7 +54,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 
 	// Non-lazy mode: use original LoadSession
 	if !opts.Lazy {
-		return LoadSession(sessionDir, opts.LLMContext)
+		return LoadSession(sessionDir)
 	}
 
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
@@ -74,7 +68,6 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 				entries:    make([]*SessionEntry, 0),
 				byID:       make(map[string]*SessionEntry),
 				persist:    true,
-				llmContext: opts.LLMContext,
 			}
 			sess.header = newSessionHeader(id, cwd, "")
 			return sess, nil
@@ -87,7 +80,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	header, err := readHeaderFromFile(f)
 	if err != nil {
 		// Fallback to full load if header parsing fails
-		return LoadSession(sessionDir, opts.LLMContext)
+		return LoadSession(sessionDir)
 	}
 
 	sess := &Session{
@@ -96,25 +89,12 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 		byID:       make(map[string]*SessionEntry),
 		header:     *header,
 		persist:    true,
-		llmContext: opts.LLMContext,
 	}
 
-	// Fast path: use ResumeOffset
-	if header.ResumeOffset > 0 {
-		_, err = f.Seek(header.ResumeOffset, io.SeekStart)
-		if err == nil {
-			if err := loadEntriesFromPosition(f, sess, opts); err == nil {
-				sess.flushed = true
-				return sess, nil
-			}
-		}
-		// If fast path fails, fall through to scanning
-	}
-
-	// Fallback: scan from end to find compaction entry
+	// Load from end to find compaction entry
 	if err := loadFromEnd(f, sess, opts); err != nil {
 		// If lazy loading fails, fall back to full load
-		return LoadSession(sessionDir, opts.LLMContext)
+		return LoadSession(sessionDir)
 	}
 
 	sess.flushed = true
@@ -148,37 +128,6 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 	}
 
 	return nil, errors.New("no valid session header found")
-}
-
-// loadEntriesFromPosition loads entries starting from a file position.
-func loadEntriesFromPosition(f *os.File, sess *Session, opts LoadOptions) error {
-	scanner := bufio.NewScanner(f)
-	messageCount := 0
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		entry, err := decodeSessionEntry(line)
-		if err != nil || entry == nil {
-			continue
-		}
-
-		// Add entry
-		sess.addEntry(entry)
-
-		// Count messages for max limit
-		if entry.Type == EntryTypeMessage {
-			messageCount++
-			if opts.MaxMessages > 0 && messageCount >= opts.MaxMessages {
-				break
-			}
-		}
-	}
-
-	return scanner.Err()
 }
 
 // loadFromEnd scans the file from the end to find the most recent compaction entry

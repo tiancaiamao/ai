@@ -218,68 +218,14 @@ func TestLoadSessionLazyFullLoad(t *testing.T) {
 	assert.Equal(t, 100, msgCount)
 }
 
-func TestLoadSessionLazyWithResumeOffset(t *testing.T) {
-	tmpDir := t.TempDir()
-	sessionDir := filepath.Join(tmpDir, "session")
-	err := os.MkdirAll(sessionDir, 0755)
-	require.NoError(t, err)
-
-	// Create a session file
-	sess := &Session{
-		sessionDir: sessionDir,
-		entries:    make([]*SessionEntry, 0),
-		byID:       make(map[string]*SessionEntry),
-		persist:    true,
-	}
-	sess.header = newSessionHeader("test-session", "/test", "")
-
-	// Add messages
-	for i := 0; i < 30; i++ {
-		msg := agentctx.AgentMessage{
-			Role: "user",
-			Content: []agentctx.ContentBlock{
-				agentctx.TextContent{Type: "text", Text: "message"},
-			},
-		}
-		err := sess.AddMessages(msg)
-		require.NoError(t, err)
-	}
-
-	// Persist to file
-	filePath := filepath.Join(sessionDir, "messages.jsonl")
-	data := serializeSessionForTest(sess)
-	err = os.WriteFile(filePath, data, 0644)
-	require.NoError(t, err)
-
-	// Get file size
-	stat, _ := os.Stat(filePath)
-	fileSize := stat.Size()
-
-	// Update header with ResumeOffset (pointing to middle of file)
-	sess.header.ResumeOffset = fileSize / 2
-
-	// Re-write with updated header
-	data = serializeSessionForTest(sess)
-	err = os.WriteFile(filePath, data, 0644)
-	require.NoError(t, err)
-
-	// Test lazy loading - should use ResumeOffset
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
-	require.NoError(t, err)
-	require.NotNil(t, loaded)
-
-	// Should have loaded something (less than full)
-	msgCount := len(loaded.GetMessages())
-	assert.Less(t, msgCount, 30)
-}
-
-func TestLoadSessionLazyBackwardCompat(t *testing.T) {
+// TestLoadSessionLazyWithoutCompaction tests lazy loading when there's no compaction.
+func TestLoadSessionLazyWithoutCompaction(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "legacy-session")
 	err := os.MkdirAll(sessionDir, 0755)
 	require.NoError(t, err)
 
-	// Create a session file without ResumeOffset
+	// Create a session file
 	sess := &Session{
 		sessionDir: sessionDir,
 		entries:    make([]*SessionEntry, 0),
@@ -306,7 +252,7 @@ func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
-	// Test lazy loading - should work without ResumeOffset
+	// Test lazy loading - should work by scanning from end
 	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
@@ -314,7 +260,7 @@ func TestLoadSessionLazyBackwardCompat(t *testing.T) {
 }
 
 // TestLoadSessionLazyMessageChain tests that message chain is properly linked
-// when lazy loading truncates the history (fix for /resume history not loading)
+// when lazy loading loads all messages (no compaction case)
 func TestLoadSessionLazyMessageChain(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "session")
@@ -348,7 +294,8 @@ func TestLoadSessionLazyMessageChain(t *testing.T) {
 	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
-	// Test lazy loading with maxMessages = 10 to force truncation
+	// Test lazy loading with maxMessages = 10
+	// Since there's no compaction, this should return the last 10 messages
 	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
 		MaxMessages:    10,
 		IncludeSummary: false,
@@ -442,9 +389,6 @@ func serializeSessionForTest(s *Session) []byte {
 		"id":        s.header.ID,
 		"timestamp": s.header.Timestamp,
 		"cwd":       s.header.Cwd,
-	}
-	if s.header.ResumeOffset > 0 {
-		headerLine["resumeOffset"] = s.header.ResumeOffset
 	}
 	if s.header.LastCompactionID != "" {
 		headerLine["lastCompactionId"] = s.header.LastCompactionID

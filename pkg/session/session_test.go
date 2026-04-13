@@ -16,7 +16,7 @@ func TestSaveMessages(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_session")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir, nil)
+	sess := NewSession(sessionDir)
 
 	// Create test messages
 	messages := []agentctx.AgentMessage{
@@ -36,7 +36,7 @@ func TestSaveMessages(t *testing.T) {
 	}
 
 	// Load and verify
-	loadedSess, err := LoadSession(sessionDir, nil)
+	loadedSess, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load session: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestLoadEmptySession(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "non_existent")
 
-	sess, err := LoadSession(sessionDir, nil)
+	sess, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load non-existent session: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestAddMessages(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_add")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir, nil)
+	sess := NewSession(sessionDir)
 
 	// Add messages
 	messages := []agentctx.AgentMessage{
@@ -102,7 +102,7 @@ func TestClearSession(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_clear")
 	sessionPath := filepath.Join(sessionDir, "messages.jsonl")
 
-	sess := NewSession(sessionDir, nil)
+	sess := NewSession(sessionDir)
 
 	// Add some messages first
 	messages := []agentctx.AgentMessage{
@@ -132,7 +132,7 @@ func TestSaveMessagesOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "test_overwrite")
 
-	sess := NewSession(sessionDir, nil)
+	sess := NewSession(sessionDir)
 
 	// Save initial messages
 	initialMessages := []agentctx.AgentMessage{
@@ -172,7 +172,7 @@ func TestSessionPersistence(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "test_persist")
 
 	// Create and save session
-	sess1 := NewSession(sessionDir, nil)
+	sess1 := NewSession(sessionDir)
 	messages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("Message 1"),
 		agentctx.NewAssistantMessage(),
@@ -184,7 +184,7 @@ func TestSessionPersistence(t *testing.T) {
 	}
 
 	// Load session in a new instance
-	sess2, err := LoadSession(sessionDir, nil)
+	sess2, err := LoadSession(sessionDir)
 	if err != nil {
 		t.Fatalf("Failed to load: %v", err)
 	}

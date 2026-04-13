@@ -36,7 +36,6 @@ type SessionHeader struct {
 
 	// Resume optimization fields
 	LastCompactionID string `json:"lastCompactionId,omitempty"` // Most recent compaction entry ID
-	ResumeOffset     int64  `json:"resumeOffset,omitempty"`     // File offset for fast resume
 
 	// Git commit hash of the ai binary that created this session
 	GitCommit string `json:"gitCommit,omitempty"`
@@ -52,9 +51,8 @@ type SessionEntry struct {
 
 	Message *agentctx.AgentMessage `json:"message,omitempty"`
 
-	Summary          string  `json:"summary,omitempty"`
-	SummaryFile      *string `json:"summaryFile,omitempty"` // Reference to detail/ file for compacted summaries
-	FirstKeptEntryID string  `json:"firstKeptEntryId,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
 
 	FromID string `json:"fromId,omitempty"`
@@ -84,22 +82,11 @@ func newSessionHeader(id, cwd, parentSession string) SessionHeader {
 func compactionSummaryMessage(entry *SessionEntry) agentctx.AgentMessage {
 	var text string
 	if entry.Summary != "" {
-		// Inline summary (old format or when file read fails)
 		text = CompactionSummaryPrefix + entry.Summary + CompactionSummarySuffix
 	} else {
-		// No content
 		return agentctx.AgentMessage{}
 	}
 	return summaryMessage(text, entry.Timestamp)
-}
-
-// compactionSummaryMessageWithContent creates a summary message with the given content.
-// This is used when the summary content is read from a file reference.
-func compactionSummaryMessageWithContent(summary, timestamp string) agentctx.AgentMessage {
-	if summary == "" {
-		return agentctx.AgentMessage{}
-	}
-	return summaryMessage(CompactionSummaryPrefix+summary+CompactionSummarySuffix, timestamp)
 }
 
 func branchSummaryMessage(summary, timestamp string) agentctx.AgentMessage {

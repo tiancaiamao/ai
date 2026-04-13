@@ -10,7 +10,7 @@ import (
 )
 
 func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -61,7 +61,7 @@ func TestCanCompactTrueThenFalseAfterCompaction(t *testing.T) {
 }
 
 func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       2,
@@ -86,7 +86,7 @@ func TestCanCompactFalseWithoutCuttableBoundary(t *testing.T) {
 }
 
 func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
-	sess := NewSession("", nil)
+	sess := NewSession("")
 	comp := compact.NewCompactor(&compact.Config{
 		AutoCompact:      true,
 		KeepRecent:       5,
@@ -119,7 +119,7 @@ func TestCanCompactWithCuttableAheadOfBoundary(t *testing.T) {
 		t.Fatal("expected session to be compactable with forward cuttable boundary")
 	}
 
-	refs := buildMessageRefs("", sess.GetBranch(""))
+	refs := buildMessageRefs(sess.GetBranch(""))
 	cutIdx := findFirstKeptIndex(refs, comp)
 	if cutIdx <= 0 {
 		t.Fatalf("expected forward cuttable boundary, got index=%d", cutIdx)

@@ -87,7 +87,7 @@ func (sm *SessionManager) CreateSession(name, title string) (*Session, error) {
 	}
 
 	// Create session
-	sess := NewSession(sessDir, nil)
+	sess := NewSession(sessDir)
 
 	// Store session info inside the session file
 	if _, err := sess.AppendSessionInfo(name, title); err != nil {
@@ -129,7 +129,7 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 		return nil, fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	newSess := NewSession(sessDir, nil)
+	newSess := NewSession(sessDir)
 	newSess.header.ParentSession = source.GetPath()
 
 	branchEntries := []SessionEntry{}
@@ -183,7 +183,7 @@ func (sm *SessionManager) GetSession(id string) (*Session, error) {
 		return nil, fmt.Errorf("session id is required")
 	}
 	sessPath := sm.getSessionPath(id)
-	return LoadSession(sessPath, nil)
+	return LoadSession(sessPath)
 }
 
 // GetMeta retrieves session metadata by ID.
@@ -389,7 +389,7 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 	}
 
 	// Fallback: create from session file
-	sess, err := LoadSession(sessDir, nil)
+	sess, err := LoadSession(sessDir)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +444,7 @@ func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, 
 	// Best-effort load from new directory format if it exists.
 	var sess *Session
 	if dirInfo, dirErr := os.Stat(sm.getSessionPath(id)); dirErr == nil && dirInfo.IsDir() {
-		sess, _ = LoadSession(sm.getSessionPath(id), nil)
+		sess, _ = LoadSession(sm.getSessionPath(id))
 	}
 
 	messageCount := 0

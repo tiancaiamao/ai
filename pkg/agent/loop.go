@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"path/filepath"
 	"strconv"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -360,11 +359,17 @@ func runInnerLoop(
 				}))
 
 				// Create checkpoint after compaction to preserve AgentState for resume
+				// Only create checkpoint if LLM context was updated (meaningful state change)
 				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-					if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
-						slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+					if compacted.LLMContextUpdated {
+						llmContextContent := agentCtx.LLMContext
+						if _, err := checkpointMgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
+							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+						} else {
+							slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "pre_llm_threshold", "turn", turnCount)
+						}
 					} else {
-						slog.Info("[Loop] Checkpoint created after compaction", "trigger", "pre_llm_threshold", "turn", turnCount)
+						slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "pre_llm_threshold", "turn", turnCount)
 					}
 				}
 			}
@@ -435,11 +440,16 @@ func runInnerLoop(
 					}))
 
 					// Create checkpoint after compaction to preserve AgentState for resume
+					// Only create checkpoint if LLM context was updated (meaningful state change)
 					if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-						if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
-							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+						if recoveryCompacted != nil && recoveryCompacted.LLMContextUpdated {
+							if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+								slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+							} else {
+								slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "context_limit_recovery", "turn", turnCount)
+							}
 						} else {
-							slog.Info("[Loop] Checkpoint created after compaction", "trigger", "context_limit_recovery", "turn", turnCount)
+							slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "context_limit_recovery", "turn", turnCount)
 						}
 					}
 					continue
@@ -1638,57 +1648,6 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 		return nil, "no_messages"
 	}
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
-}
-
-func hasSuccessfulLLMContextWrite(messages []agentctx.AgentMessage, overviewPath string) bool {
-	targetAbs := normalizePathForContains(overviewPath)
-	targetRel := normalizePathForContains(filepath.ToSlash(filepath.Join(agentctx.LLMContextDir, agentctx.OverviewFile)))
-	allowRelativeFallback := targetAbs == "" && targetRel != ""
-	if targetAbs == "" && !allowRelativeFallback {
-		return false
-	}
-
-	for _, msg := range messages {
-		if msg.Role != "toolResult" || msg.IsError {
-			continue
-		}
-		tool := strings.ToLower(strings.TrimSpace(msg.ToolName))
-		if tool != "write" && tool != "edit" {
-			continue
-		}
-		body := normalizePathForContains(msg.ExtractText())
-		if body == "" {
-			continue
-		}
-		if targetAbs != "" && strings.Contains(body, targetAbs) {
-			return true
-		}
-		if allowRelativeFallback && strings.Contains(body, targetRel) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeLLMContextContent(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.TrimSpace(content)
-	lines := strings.Split(content, "\n")
-	normalized := make([]string, 0, len(lines))
-	for _, line := range lines {
-		normalized = append(normalized, strings.TrimRight(line, " \t"))
-	}
-	return strings.Join(normalized, "\n")
-}
-
-func normalizePathForContains(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	value = filepath.Clean(value)
-	value = strings.ReplaceAll(value, "\\", "/")
-	return strings.ToLower(value)
 }
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {

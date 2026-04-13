@@ -26,7 +26,6 @@ type Session struct {
 	leafID        *string
 	flushed       bool
 	persist       bool
-	llmContext *agentctx.LLMContext // LLMContext for saving compaction summaries
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -36,13 +35,12 @@ type ForkMessage struct {
 }
 
 // NewSession creates a new session with the given directory path.
-func NewSession(sessionDir string, llmContext *agentctx.LLMContext) *Session {
+func NewSession(sessionDir string) *Session {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
 		byID:          make(map[string]*SessionEntry),
 		persist:       sessionDir != "",
-		llmContext: llmContext,
 	}
 
 	id := sessionIDFromDirPath(sessionDir)
@@ -52,13 +50,12 @@ func NewSession(sessionDir string, llmContext *agentctx.LLMContext) *Session {
 }
 
 // LoadSession loads a session from the given directory path.
-func LoadSession(sessionDir string, llmContext *agentctx.LLMContext) (*Session, error) {
+func LoadSession(sessionDir string) (*Session, error) {
 	sess := &Session{
 		sessionDir:    sessionDir,
 		entries:       make([]*SessionEntry, 0),
 		byID:          make(map[string]*SessionEntry),
 		persist:       sessionDir != "",
-		llmContext: llmContext,
 	}
 
 	if sessionDir == "" {
@@ -139,6 +136,8 @@ func LoadSession(sessionDir string, llmContext *agentctx.LLMContext) (*Session, 
 		sess.addEntry(entry)
 		parentID = &entry.ID
 	}
+	// Rewrite file to migrate from legacy format to new format
+	// This is a one-time migration, not a regular rewrite
 	if err := sess.rewriteFile(); err != nil {
 		return nil, err
 	}
@@ -337,25 +336,11 @@ func (s *Session) GetLastCompactionSummary() string {
 	// Search backwards for the last compaction entry
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i].Type == EntryTypeCompaction {
-			// Try to read from file first (new format)
-			if path[i].SummaryFile != nil {
-				if summary, err := readSummaryFromFile(s.sessionDir, *path[i].SummaryFile); err == nil && summary != "" {
-					return summary
-				}
-			}
-			// Fall back to inline summary (old format)
 			return path[i].Summary
 		}
 	}
 
 	return ""
-}
-
-// SetLLMContext sets the llm context instance for the session.
-func (s *Session) SetLLMContext(wm *agentctx.LLMContext) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.llmContext = wm
 }
 
 // GetCompactionCount returns the number of compaction entries along the current branch.
@@ -397,13 +382,6 @@ func (s *Session) SaveMessages(messages []agentctx.AgentMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Auto-detect compaction: if new messages are fewer than current entries,
-	// backup the file before overwriting. This preserves pre-compact data for
-	// post-hoc analysis (e.g., evolve loop structural checks).
-	if len(messages) < len(s.entries) {
-		_ = s.backupPreCompact()
-	}
-
 	s.entries = make([]*SessionEntry, 0, len(messages))
 	s.byID = make(map[string]*SessionEntry)
 	s.leafID = nil
@@ -421,6 +399,9 @@ func (s *Session) SaveMessages(messages []agentctx.AgentMessage) error {
 		parentID = &entry.ID
 	}
 
+	// Rewrite file to persist the new message set
+	// Note: SaveMessages is primarily used in tests and session_writer.Replace
+	// It replaces all messages, so rewrite is needed here
 	return s.rewriteFile()
 }
 

@@ -605,7 +605,7 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 	}
 
 	if sess == nil {
-		sess = session.NewSession("", nil) // 无持久化
+		sess = session.NewSession("") // 无持久化
 	}
 
 	// 创建 agent context
@@ -1306,7 +1306,7 @@ func (a *AgentLoop) cmdClear(sess *Session) string {
 	msgCount := len(messages)
 
 	// 创建新的 session 来清空消息
-	sess.Session = session.NewSession(sess.Session.GetDir(), nil)
+	sess.Session = session.NewSession(sess.Session.GetDir())
 
 	// 同时重置 agent context
 	if sess.Agent != nil {

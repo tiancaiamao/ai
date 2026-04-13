@@ -3,6 +3,7 @@ package context
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -62,11 +63,14 @@ func (idx *CheckpointIndex) saveLocked(sessionDir string) error {
 		return fmt.Errorf("failed to write temporary index file: %w", err)
 	}
 
+	slog.Info("[saveLocked] Renaming checkpoint index", "from", tmpPath, "to", indexPath)
+
 	if err := os.Rename(tmpPath, indexPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename index file: %w", err)
 	}
 
+	slog.Info("[saveLocked] Checkpoint index saved", "count", len(idx.Checkpoints))
 	return nil
 }
 
@@ -88,6 +92,8 @@ func (idx *CheckpointIndex) AddAndSave(info CheckpointInfo, sessionDir string) e
 	idx.Checkpoints = append(idx.Checkpoints, info)
 	idx.LatestCheckpointTurn = info.Turn
 	idx.LatestCheckpointPath = info.Path
+
+	slog.Info("[AddAndSave] Adding checkpoint to index", "turn", info.Turn, "path", info.Path, "total", len(idx.Checkpoints))
 
 	return idx.saveLocked(sessionDir)
 }
