@@ -347,10 +347,15 @@ func runInnerLoop(
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
 				stream.Push(NewCompactionEndEvent(CompactionInfo{
-					Auto:    true,
-					Before:  before,
-					After:   after,
-					Trigger: "pre_llm_threshold",
+					Type:              compacted.Type,
+					Auto:              true,
+					Before:            before,
+					After:             after,
+					Trigger:           "pre_llm_threshold",
+					TokensBefore:      compacted.TokensBefore,
+					TokensAfter:       compacted.TokensAfter,
+					TruncatedCount:    compacted.TruncatedCount,
+					LLMContextUpdated: compacted.LLMContextUpdated,
 				}))
 
 				// Create checkpoint after compaction to preserve AgentState for resume
@@ -417,10 +422,15 @@ func runInnerLoop(
 					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
-						Auto:    true,
-						Before:  before,
-						After:   len(agentCtx.RecentMessages),
-						Trigger: "context_limit_recovery",
+						Type:              func() string { if recoveryCompacted != nil { return recoveryCompacted.Type }; return "" }(),
+						Auto:              true,
+						Before:            before,
+						After:             len(agentCtx.RecentMessages),
+						Trigger:           "context_limit_recovery",
+						TokensBefore:      func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensBefore }; return 0 }(),
+						TokensAfter:       func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensAfter }; return 0 }(),
+						TruncatedCount:    func() int { if recoveryCompacted != nil { return recoveryCompacted.TruncatedCount }; return 0 }(),
+						LLMContextUpdated: func() bool { if recoveryCompacted != nil { return recoveryCompacted.LLMContextUpdated }; return false }(),
 					}))
 
 					// Create checkpoint after compaction to preserve AgentState for resume
@@ -1628,7 +1638,6 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	}
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
-
 
 func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
 	sections := make([]string, 0, 3)

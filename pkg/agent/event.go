@@ -77,11 +77,18 @@ const (
 
 // CompactionInfo describes a compaction event.
 type CompactionInfo struct {
+	Type    string `json:"type,omitempty"`    // "major" or "mini"
 	Auto    bool   `json:"auto,omitempty"`
 	Before  int    `json:"before,omitempty"`
 	After   int    `json:"after,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
+
+	// Mini compaction specific fields
+	TokensBefore       int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
+	TokensAfter        int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)
+	TruncatedCount     int  `json:"truncated_count,omitempty"`     // Number of messages truncated (mini only)
+	LLMContextUpdated  bool `json:"llm_context_updated,omitempty"` // Whether LLM context was updated (mini only)
 }
 
 // LoopGuardInfo describes why tool-loop protection interrupted a turn.
