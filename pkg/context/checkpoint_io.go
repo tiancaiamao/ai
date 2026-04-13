@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -54,9 +55,10 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 		return nil, fmt.Errorf("failed to add and save checkpoint index: %w", err)
 	}
 
-	// Update current/ symlink
+// Update current/ symlink
 	if err := UpdateCurrentLink(sessionDir, info.Path); err != nil {
-		return nil, fmt.Errorf("failed to update current link: %w", err)
+		// Log but don't fail - checkpoint is already created
+		slog.Warn("Failed to update current link", "error", err, "path", info.Path)
 	}
 
 	return info, nil

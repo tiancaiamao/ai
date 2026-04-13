@@ -972,10 +972,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				// Create checkpoint after manual compaction to preserve AgentState for resume
 				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
 					agentCtx := ag.GetContext()
-					if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, agentCtx.AgentState.TotalTurns); err != nil {
-						slog.Warn("[Loop] Failed to create checkpoint after manual compact", "error", err)
+					slog.Info("[Loop] Creating checkpoint after manual compact", "trigger", "manual_command", "turn", agentCtx.AgentState.TotalTurns)
+					checkpointTurn, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, agentCtx.AgentState.TotalTurns)
+					if err != nil {
+						slog.Warn("[Loop] Failed to create checkpoint after manual compact", "error", err, "turn", agentCtx.AgentState.TotalTurns)
 					} else {
-						slog.Info("[Loop] Checkpoint created after manual compact", "trigger", "manual_command")
+						slog.Info("[Loop] Checkpoint created after manual compact", "trigger", "manual_command", "checkpoint_turn", checkpointTurn)
 					}
 				}
 				return nil

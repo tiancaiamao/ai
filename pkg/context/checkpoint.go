@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,6 +28,8 @@ type CheckpointInfo struct {
 // Uses a sequential counter instead of turn number to avoid overwriting
 // when multiple operations happen at the same turn.
 func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
+	slog.Info("[CreateCheckpointDir] Creating checkpoint", "turn", turn)
+
 	checkpointsDir := filepath.Join(sessionDir, "checkpoints")
 	if err := os.MkdirAll(checkpointsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create checkpoints directory: %w", err)
@@ -44,6 +47,7 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 	nextID := len(idx.Checkpoints)
 	checkpointName := fmt.Sprintf(CheckpointDirPattern, nextID)
 	checkpointPath := filepath.Join(checkpointsDir, checkpointName)
+	slog.Info("[CreateCheckpointDir] Creating checkpoint directory", "path", checkpointPath)
 
 	if err := os.MkdirAll(checkpointPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create checkpoint directory: %w", err)
@@ -56,6 +60,7 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
+	slog.Info("[CreateCheckpointDir] Checkpoint directory created", "path", checkpointPath, "turn", turn)
 	return info, nil
 }
 
