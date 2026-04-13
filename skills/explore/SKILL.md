@@ -65,42 +65,134 @@ Explore codebases, repositories, or topics and collect key information for later
 - [ ] [约束 3]: 例如 "新包应该可被多个项目复用"
 ```
 
-## Subagent 执行
+## 使用 ag 执行 Explore
 
-类似 review 技能，explore 可以通过 subagent 独立执行：
+**⚠️ 重要：使用 `ag` CLI 而不是 subagent**
 
-**⚠️ 重要：参考 `/skill:subagent` 技能的最佳实践**
+`subagent` skill 已经被废弃，统一使用 `ag` CLI。
 
-核心要点：
-- **必须**使用 persona：`--system-prompt @/path/to/explorer.md`
-- **必须**设置 timeout：`--timeout 10m`
-- **必须**使用 tmux_wait.sh 等待：`tmux_wait.sh "$SESSION_NAME" 600`
-- **长任务描述**写入文件，避免命令行过长
-- **必须**设置 bash timeout 参数（对于 >2min 的任务）
+### 基本用法
 
-**⚠️ Bash Timeout 设置**：
 ```bash
-# 短任务 (<2min): 默认 bash timeout 足够
-~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/explore-out.txt 5m \
-  @/path/to/explorer.md "Explore ..."
+export AG_BIN=~/.ai/skills/ag/ag
 
-# 长任务 (>2min): 必须设置 bash timeout 参数
-~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/explore-out.txt 10m \
-  @/path/to/explorer.md "Explore ..."
+# 短任务
+$AG_BIN spawn \
+  --id "explore-rpc" \
+  --system @/path/to/explorer.md \
+  --input "Explore RPC handling" \
+  --timeout 5m
+
+$AG_BIN wait "explore-rpc" --timeout 300
+OUTPUT=$($AG_BIN output "explore-rpc")
+$AG_BIN rm "explore-rpc"
 ```
 
-**⚠️ 输出目录**：使用绝对路径写入文件
+### 长任务
 
 ```bash
-# 单目标探索
-~/.ai/skills/subagent/bin/start_subagent_tmux.sh -w /tmp/explore-out.txt 10m \
-  @/path/to/explorer.md \
-  "Explore ~/project/pi-mono.
-Write findings to: /tmp/explorer/<target>.md"
+# 长任务 (>5min): 增加 timeout
+$AG_BIN spawn \
+  --id "explore-auth" \
+  --system @/path/to/explorer.md \
+  --input "Explore auth module in depth" \
+  --timeout 15m
+
+$AG_BIN wait "explore-auth" --timeout 900
+OUTPUT=$($AG_BIN output "explore-auth")
+$AG_BIN rm "explore-auth"
+```
+
+### 输出到文件
+
+让 explorer agent 写入文件，而不是 stdout：
+
+```bash
+# 在 input 中指定输出路径
+$AG_BIN spawn \
+  --id "explore-target" \
+  --system @/path/to/explorer.md \
+  --input "Explore ~/project/pi-mono. Write findings to: /tmp/explorer/target.md" \
+  --timeout 10m
+
+$AG_BIN wait "explore-target" --timeout 600
+$AG_BIN rm "explore-target"
 
 # 查看结果
-cat /tmp/explorer/*.md
+cat /tmp/explorer/target.md
 ```
+
+### 并行探索
+
+使用 `ag patterns/parallel.sh`：
+
+```bash
+# 并行探索两个目标
+$AG_BIN patterns/parallel.sh \
+  2 \                       # 2 个 agents
+  @/path/to/explorer.md \    # system prompt
+  "Explore auth module" \      # 主题
+  /tmp/explore-results        # 输出目录
+
+# 结果: /tmp/explore-results/agent-0.md, agent-1.md
+```
+
+### 管道化（探索 → 分析）
+
+使用 `ag patterns/pipeline.sh`：
+
+```bash
+# 先探索，再分析
+$AG_BIN patterns/pipeline.sh \
+  "Explore RPC handling. Output to: /tmp/rpc-findings.md" \
+  @/path/to/explorer.md \
+  @/path/to/analyzer.md
+```
+
+## ag vs subagent 对比
+
+| 功能 | subagent (旧) | ag (新) |
+|------|---------------|----------|
+| **启动** | `start_subagent_tmux.sh` | `ag spawn --id ...` |
+| **等待** | `tmux_wait.sh` | `ag wait ...` |
+| **获取输出** | `cat output.txt` | `ag output ...` |
+| **清理** | 手动删除 | `ag rm ...` |
+| **状态检查** | 手动 `tmux ls` | `ag status/ls` |
+| **并行执行** | 手动脚本 | `ag patterns/parallel.sh` |
+| **Worker-Judge 循环** | 手动循环 | `ag patterns/pair.sh` |
+
+## 迁移指南
+
+如果你有使用 `subagent` 的代码：
+
+**旧方式：**
+```bash
+SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
+  /tmp/explore-out.txt 10m \
+  @explorer.md \
+  "Explore code")
+
+SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
+~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" /tmp/explore-out.txt 600
+OUTPUT=$(cat /tmp/explore-out.txt)
+```
+
+**新方式：**
+```bash
+export AG_BIN=~/.ai/skills/ag/ag
+
+$AG_BIN spawn \
+  --id "explore-code" \
+  --system @explorer.md \
+  --input "Explore code" \
+  --timeout 10m
+
+$AG_BIN wait "explore-code" --timeout 600
+OUTPUT=$($AG_BIN output "explore-code")
+$AG_BIN rm "explore-code"
+```
+
+详细迁移指南请参考：`~/.ai/skills/MIGRATION-subagent-to-ag.md`
 
 ## 输出文件约定
 

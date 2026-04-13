@@ -174,7 +174,7 @@ Research and document:
 | Skill | When to Use |
 |-------|-------------|
 | `workflow` | For complex multi-step work WITHIN a task |
-| `subagent` | When task needs parallel execution |
+| `ag` | When task needs parallel execution or multi-agent orchestration |
 | `review` | To review task code before completion |
 | `tmux` | For long-running task execution |
 | `github` | To create/manage PRs from tasks |
