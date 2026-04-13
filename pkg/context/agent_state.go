@@ -20,6 +20,11 @@ type AgentState struct {
 	TurnsSinceLastTrigger     int // Turns elapsed since last trigger
 	ToolCallsSinceLastTrigger int // Tool calls elapsed since last trigger
 
+	// Context management statistics
+	TotalTruncations int // Total number of truncate_messages operations
+	TotalCompactions  int // Total number of full compact operations
+	LastCompactTurn   int // Last turn when full compact was executed
+
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
 
@@ -77,6 +82,9 @@ func (a *AgentState) Clone() *AgentState {
 		LastTriggerTurn:          a.LastTriggerTurn,
 		TurnsSinceLastTrigger:    a.TurnsSinceLastTrigger,
 		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
+		TotalTruncations:         a.TotalTruncations,
+		TotalCompactions:          a.TotalCompactions,
+		LastCompactTurn:          a.LastCompactTurn,
 		ActiveToolCalls:          activeToolCalls,
 		RuntimeMetaTurns:         a.RuntimeMetaTurns,
 		RuntimeMetaSnapshot:      a.RuntimeMetaSnapshot,

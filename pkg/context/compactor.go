@@ -16,6 +16,8 @@ type CompactionResult struct {
 	Summary      string // The generated summary
 	TokensBefore int    // Token count before compaction
 	TokensAfter  int    // Token count after compaction
+	MessagesBefore int   // Message count before compaction (for major compactions)
+	MessagesAfter  int   // Message count after compaction (for major compactions)
 
 	// Mini compaction specific fields
 	Type              string // "major" or "mini"

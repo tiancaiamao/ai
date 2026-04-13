@@ -71,7 +71,7 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 		agentctx.NewUserMessage("recent-5"),
 	}
 
-	compactor := NewLLMMiniCompactor(DefaultLLMMiniCompactorConfig(), llmModelStub(), "", 200000, "system")
+	compactor := NewLLMMiniCompactor(DefaultLLMMiniCompactorConfig(), llmModelStub(), "", 200000, "system", nil)
 	msgs := compactor.buildContextMgmtMessages(agentCtx)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 mini-compact messages, got %d", len(msgs))

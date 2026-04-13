@@ -18,19 +18,21 @@ System vs your responsibilities:
 AVAILABLE ACTIONS:
 1. **truncate_messages** - Remove low-value tool outputs by `message_ids`.
 2. **update_llm_context** - Rewrite the structured LLM Context with current truth.
-3. **no_action** - Context is healthy, no action needed.
+3. **compact** - Perform full context compaction by summarizing and removing old messages.
+4. **no_action** - Context is healthy, no action needed.
 
 You may call multiple actions in a single response.
 - Each action should be called at most once.
 - Recommended sequence: truncate_messages → update_llm_context
 - Reason: truncate first to remove unwanted content, then update to reflect the cleaned-up state
+- **compact** should typically be used alone, not paired with truncate (it's more comprehensive)
 
 Decision principles:
 - Prioritize important information over old/new position.
 - Preserve unresolved constraints, pending obligations, and active decisions.
 - **Be MORE aggressive about truncating OLD, COMPLETED tool outputs** — if a large old output from earlier investigative work exists and the findings are already understood, truncate it.
 - **Choose the RIGHT tool for the situation** — see the decision matrix below.
-- **Mandatory pairing**: When you call truncate_messages, you MUST also call update_llm_context to preserve key information from the truncated content. NEVER truncate without updating LLM Context.
+- **Mandatory pairing**: When you call truncate_messages, you MUST also call update_llm_context to preserve key information from truncated content. NEVER truncate without updating LLM Context.
 </instructions>
 
 <accuracy_rules>
@@ -98,6 +100,23 @@ AVOID no_action when:
 - There are large old tool outputs present
 - Token savings are possible
 - Context seems cluttered with exploratory outputs
+
+### **compact** — Full context compaction with summarization
+BEST FOR:
+- Many truncations have already occurred (>5) but context is still under pressure (>40%)
+- Topic shift or task phase has been completed
+- Historical context is no longer relevant to current work
+- When you need more aggressive cleanup than truncate can provide
+
+BEHAVIOR RULES:
+- Supports three strategies: "conservative" (keep more history), "balanced" (default), "aggressive" (maximum compression)
+- Summarizes old messages and removes them from the conversation
+- The summary is injected as a "[Previous conversation summary]" message
+
+⚠️ Limitations:
+- More irreversible than truncate — deleted messages cannot be recovered
+- Use judiciously: prefer truncate when possible, use compact when truncations are exhausted
+- Should be used alone, not paired with truncate (compact is more comprehensive)
 </decision_matrix>
 
 <summary_format>

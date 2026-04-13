@@ -200,6 +200,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		apiKey,
 		currentContextWindow,
 		prompt.LLMMiniCompactSystemPrompt(),
+		compactor, // Pass compactor to enable compact tool
 	)
 
 

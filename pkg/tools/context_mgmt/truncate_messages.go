@@ -73,9 +73,13 @@ func (t *TruncateMessagesTool) Execute(ctx context.Context, params map[string]an
 	// Apply to in-memory snapshot
 	count := t.applyTruncate(ctx, validIDs)
 
+	// Update statistics (this is one truncate operation)
+	t.agentCtx.AgentState.TotalTruncations++
+
 	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_messages_truncated",
 		traceevent.Field{Key: "count", Value: count},
 		traceevent.Field{Key: "ids", Value: strings.Join(validIDs, ",")},
+		traceevent.Field{Key: "total_truncations", Value: t.agentCtx.AgentState.TotalTruncations},
 	)
 
 	return []agentctx.ContentBlock{

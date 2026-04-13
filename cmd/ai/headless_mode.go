@@ -317,6 +317,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 		apiKey,
 		currentContextWindow,
 		prompt.LLMMiniCompactSystemPrompt(),
+		compactor, // Pass compactor to enable compact tool
 	)
 
 	registerHeadlessTools(registry, ws, compactor, cfg)

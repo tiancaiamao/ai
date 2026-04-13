@@ -70,7 +70,7 @@ func DefaultLLMMiniCompactorConfig() *LLMMiniCompactorConfig {
 
 // LLMMiniCompactor performs lightweight LLM-driven context management.
 // It is triggered periodically by the agent loop and makes an independent LLM
-// call with context-management-specific tools (truncate_messages, update_llm_context, no_action).
+// call with context-management-specific tools (truncate_messages, update_llm_context, compact, no_action).
 // The main LLM is never involved in context management decisions.
 type LLMMiniCompactor struct {
 	config        *LLMMiniCompactorConfig
@@ -78,6 +78,7 @@ type LLMMiniCompactor struct {
 	apiKey        string
 	contextWindow int
 	systemPrompt  string
+	compactor     *Compactor // Optional: full compactor for compact tool
 }
 
 // NewLLMMiniCompactor creates a new LLMMiniCompactor.
@@ -87,6 +88,7 @@ func NewLLMMiniCompactor(
 	apiKey string,
 	contextWindow int,
 	systemPrompt string,
+	compactor *Compactor,
 ) *LLMMiniCompactor {
 	if config == nil {
 		config = DefaultLLMMiniCompactorConfig()
@@ -97,7 +99,13 @@ func NewLLMMiniCompactor(
 		apiKey:        apiKey,
 		contextWindow: contextWindow,
 		systemPrompt:  systemPrompt,
+		compactor:     compactor,
 	}
+}
+
+// SetCompactor sets the full compactor for compact tool support.
+func (c *LLMMiniCompactor) SetCompactor(compactor *Compactor) {
+	c.compactor = compactor
 }
 
 // ShouldCompact checks if the compactor should run.
@@ -182,7 +190,14 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	messages := c.buildContextMgmtMessages(agentCtx)
 
 	// 2. Get context management tools
-	tools := context_mgmt.GetMiniCompactTools(agentCtx)
+	var tools []context_mgmt.Tool
+	if c.compactor != nil {
+		tools = context_mgmt.GetMiniCompactToolsWithCompactor(agentCtx, c.compactor)
+		// Add compact tool manually to avoid circular import
+		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
+	} else {
+		tools = context_mgmt.GetMiniCompactTools(agentCtx)
+	}
 
 	// 3. Call LLM
 	llmMessages := append([]llm.LLMMessage{{
@@ -423,6 +438,9 @@ Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
 Total turns: %d
+Total truncations so far: %d
+Total compactions so far: %d
+Last compact turn: %d
 Current LLM Context exists: %t
 </current_state>
 
@@ -450,11 +468,13 @@ Only tool outputs with an explicit "id=" field are selectable for truncate_messa
 Available actions:
 - **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed).
 - **update_llm_context** - Rewrite the LLM Context to reflect current state
+- **compact** - Perform full context compaction by summarizing and removing old messages. Use this when many truncations have occurred and context is still under pressure, or a topic shift/task phase has been completed.
 - **no_action** - Context is healthy, no action needed
 
 Policy hint:
 - force_truncate_recommended=%t
-- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.`,
+- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.
+- Consider using compact if total_compactions is 0 but total_truncations is high (>5) and tokens used is still above 40%%.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
 		estimatedSavingsTokens,
@@ -464,6 +484,9 @@ Policy hint:
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		agentCtx.AgentState.TotalTurns,
+		agentCtx.AgentState.TotalTruncations,
+		agentCtx.AgentState.TotalCompactions,
+		agentCtx.AgentState.LastCompactTurn,
 		agentCtx.LLMContext != "",
 		latestUserRequest,
 		mgmtForceTruncateSavingsTokens,

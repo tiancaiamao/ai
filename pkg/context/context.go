@@ -50,6 +50,7 @@ type CompactAction string
 const (
 	CompactActionTruncate         CompactAction = "truncate"
 	CompactActionUpdateLLMContext CompactAction = "update_llm_context"
+	CompactActionCompact          CompactAction = "compact"
 )
 
 // CompactEventDetail records one compact operation.
