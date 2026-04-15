@@ -84,7 +84,7 @@ type CompactionInfo struct {
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
 
-	// Mini compaction specific fields
+	// Context management specific fields
 	TokensBefore       int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
 	TokensAfter        int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)
 	TruncatedCount     int  `json:"truncated_count,omitempty"`     // Number of messages truncated (mini only)

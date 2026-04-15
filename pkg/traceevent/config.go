@@ -242,10 +242,10 @@ var eventNameToBit = map[string]int{
 	"truncate_compact_hint_start":         48,
 	"truncate_compact_hint_skip":          49,
 	"truncate_compact_hint_read_attempt":  50,
-	"mini_compact_check":                  53,
+	"context_mgmt_check":                  53,
 	"context_mgmt_messages_truncated":     54,
 	"context_mgmt_llm_context_updated":    55,
-	"mini_compact":                        56,
+	"context_mgmt":                        56,
 }
 
 var defaultEnabledEvents = []string{
@@ -287,8 +287,8 @@ var defaultEnabledEvents = []string{
 	"tool_output_truncated_via_hint",
 	"compact_skipped_via_hint_confidence",
 	"compact_performed_via_hint",
-	"mini_compact",
-	"mini_compact_check",
+	"context_mgmt",
+	"context_mgmt_check",
 	"context_mgmt_messages_truncated",
 	"context_mgmt_llm_context_updated",
 	// Default log events
@@ -335,8 +335,8 @@ var eventSelectorGroups = map[string][]string{
 		"message_end",
 		"message_update",
 		"compaction",
-		"mini_compact",
-		"mini_compact_check",
+		"context_mgmt",
+		"context_mgmt_check",
 		"context_mgmt_messages_truncated",
 		"context_mgmt_llm_context_updated",
 	},

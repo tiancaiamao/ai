@@ -194,12 +194,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	)
 
 	// LLM-driven mini compactor for lightweight context management
-	miniCompactor := compact.NewLLMMiniCompactor(
-		compact.DefaultLLMMiniCompactorConfig(),
+	ctxManager := compact.NewContextManager(
+		compact.DefaultContextManagerConfig(),
 		model,
 		apiKey,
 		currentContextWindow,
-		prompt.LLMMiniCompactSystemPrompt(),
+		prompt.ContextManagementSystemPrompt(),
 		compactor, // Pass compactor to enable compact tool
 	)
 
@@ -402,7 +402,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Build LoopConfig with all settings
 	loopCfg := cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
+		config.WithCompactors([]agent.Compactor{ctxManager, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),

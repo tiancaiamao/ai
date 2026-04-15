@@ -321,7 +321,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 				a.context.AddMessage(tr)
 			}
 			// Auto-compaction is owned by runInnerLoop pre-LLM checks.
-			// Keeping a second trigger here causes duplicate mini-compaction runs.
+			// Keeping a second trigger here causes duplicate context management runs.
 		}
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations

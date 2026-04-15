@@ -32,8 +32,8 @@ var compactUpdatePrompt string
 //go:embed "subagent.md"
 var DefaultSubagentPrompt string
 
-//go:embed "llm_mini_compact_system.md"
-var llmMiniCompactSystemPrompt string
+//go:embed "context_management.md"
+var contextManagementSystemPrompt string
 
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
@@ -368,7 +368,7 @@ func NormalizeThinkingLevel(level string) string {
 	}
 }
 
-// MiniCompactSystemPrompt returns system prompt for mini compact protocol.
-func LLMMiniCompactSystemPrompt() string {
-	return llmMiniCompactSystemPrompt
+// ContextManagementSystemPrompt returns system prompt for context management.
+func ContextManagementSystemPrompt() string {
+	return contextManagementSystemPrompt
 }

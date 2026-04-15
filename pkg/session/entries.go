@@ -60,7 +60,7 @@ type SessionEntry struct {
 	Name  string `json:"name,omitempty"`
 	Title string `json:"title,omitempty"`
 
-	// CompactEvent records a mini compact operation (truncate, update_llm_context).
+	// CompactEvent records a context management operation (truncate, update_llm_context).
 	// This is appended to messages.jsonl as an immutable event.
 	// The in-memory snapshot applies the operation; messages.jsonl never mutates.
 	CompactEvent *agentctx.CompactEventDetail `json:"compactEvent,omitempty"`

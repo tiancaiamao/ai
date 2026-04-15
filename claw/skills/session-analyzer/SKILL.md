@@ -318,7 +318,7 @@ for e in data.get('traceEvents', []):
 - `prompt` — Prompt 构建
 - `llm_call` — LLM API 调用
 - `tool_execute` — 工具执行
-- `mini_compact` / `mini_compact_check` — Mini compaction 相关
+- `context_mgmt` / `context_mgmt_check` — Context management related
 
 ---
 

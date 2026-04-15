@@ -19,7 +19,7 @@ type CompactionResult struct {
 	MessagesBefore int   // Message count before compaction (for major compactions)
 	MessagesAfter  int   // Message count after compaction (for major compactions)
 
-	// Mini compaction specific fields
+	// Context management specific fields
 	Type              string // "major" or "mini"
 	TruncatedCount    int    // Number of messages truncated (mini only)
 	LLMContextUpdated bool   // Whether LLM context was updated (mini only)
