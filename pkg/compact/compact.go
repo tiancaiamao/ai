@@ -75,6 +75,11 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 	}
 }
 
+// GetConfig returns the compactor configuration.
+func (c *Compactor) GetConfig() *Config {
+	return c.config
+}
+
 // ShouldCompact determines if context should be compressed.
 func (c *Compactor) ShouldCompactOld(messages []agentctx.AgentMessage) bool {
 	if !c.config.AutoCompact {
@@ -1022,6 +1027,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newRecentMessages = append(newRecentMessages, recentMessages...)
+	messagesBefore := len(ctx.RecentMessages)
 
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
@@ -1032,12 +1038,15 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()
-	slog.Info("[CompactAgent] Compressed context", "messages", len(newRecentMessages))
+	messagesAfter := len(newRecentMessages)
+	slog.Info("[CompactAgent] Compressed context", "messages", messagesAfter)
 
 	return &agentctx.CompactionResult{
 		Summary:      summary,
 		TokensBefore: tokensBefore,
 		TokensAfter:  tokensAfter,
+		MessagesBefore: messagesBefore,
+		MessagesAfter: messagesAfter,
 		Type:         "major",
 	}, nil
 }

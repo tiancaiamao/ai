@@ -187,6 +187,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 		apiKey,
 		currentContextWindow,
 		prompt.LLMMiniCompactSystemPrompt(),
+		compactor, // Pass compactor to enable compact tool
 	)
 
 	// Load skills

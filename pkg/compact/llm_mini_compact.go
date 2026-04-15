@@ -26,18 +26,20 @@ const (
 	MiniIntervalHigh   = 7  // At 60%: every 7 tool calls
 
 	// Tool output preview limits for context management messages
-	mgmtPreviewMax  = 1500
-	mgmtPreviewHead = 800
-	mgmtPreviewTail = 200
+	// These should match TruncateWithHeadTail constants to ensure
+	// the LLM sees an accurate preview of what truncation will preserve
+	mgmtPreviewMax  = 2500 // Increased to match TruncateWithHeadTail (1000+1000+500)
+	mgmtPreviewHead = 1000 // Must match TruncateWithHeadTail headKeep
+	mgmtPreviewTail = 1000 // Must match TruncateWithHeadTail tailKeep
 
 	// When estimated truncation savings is above this threshold, mini compact
 	// should prioritize truncate_messages before update_llm_context.
-	// Reduced from 5000 to 2500 to be more aggressive about truncation.
-	mgmtForceTruncateSavingsTokens = 2500
+	// Reduced from 5000 to 2000 to be more aggressive about truncation.
+	mgmtForceTruncateSavingsTokens = 2000
 
 	// If there are any messages with char count above this threshold,
 	// the compactor should consider truncating them even if total savings is low.
-	mgmtLargeMessageThreshold = 3000
+	mgmtLargeMessageThreshold = 2000 // Reduced from 3000 to be more aggressive
 )
 
 // LLMMiniCompactorConfig holds configuration.
@@ -70,7 +72,7 @@ func DefaultLLMMiniCompactorConfig() *LLMMiniCompactorConfig {
 
 // LLMMiniCompactor performs lightweight LLM-driven context management.
 // It is triggered periodically by the agent loop and makes an independent LLM
-// call with context-management-specific tools (truncate_messages, update_llm_context, no_action).
+// call with context-management-specific tools (truncate_messages, update_llm_context, compact, no_action).
 // The main LLM is never involved in context management decisions.
 type LLMMiniCompactor struct {
 	config        *LLMMiniCompactorConfig
@@ -78,6 +80,7 @@ type LLMMiniCompactor struct {
 	apiKey        string
 	contextWindow int
 	systemPrompt  string
+	compactor     *Compactor // Optional: full compactor for compact tool
 }
 
 // NewLLMMiniCompactor creates a new LLMMiniCompactor.
@@ -87,6 +90,7 @@ func NewLLMMiniCompactor(
 	apiKey string,
 	contextWindow int,
 	systemPrompt string,
+	compactor *Compactor,
 ) *LLMMiniCompactor {
 	if config == nil {
 		config = DefaultLLMMiniCompactorConfig()
@@ -97,7 +101,13 @@ func NewLLMMiniCompactor(
 		apiKey:        apiKey,
 		contextWindow: contextWindow,
 		systemPrompt:  systemPrompt,
+		compactor:     compactor,
 	}
+}
+
+// SetCompactor sets the full compactor for compact tool support.
+func (c *LLMMiniCompactor) SetCompactor(compactor *Compactor) {
+	c.compactor = compactor
 }
 
 // ShouldCompact checks if the compactor should run.
@@ -182,7 +192,14 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	messages := c.buildContextMgmtMessages(agentCtx)
 
 	// 2. Get context management tools
-	tools := context_mgmt.GetMiniCompactTools(agentCtx)
+	var tools []context_mgmt.Tool
+	if c.compactor != nil {
+		tools = context_mgmt.GetMiniCompactTools(agentCtx)
+		// Add compact tool manually to avoid circular import
+		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
+	} else {
+		tools = context_mgmt.GetMiniCompactTools(agentCtx)
+	}
 
 	// 3. Call LLM
 	llmMessages := append([]llm.LLMMessage{{
@@ -211,7 +228,28 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	// 5. Execute tool calls and track results
 	truncatedCount, llmContextUpdated := c.executeToolCalls(parent, toolCalls, tools)
 
-	// 6. Reset trigger counters
+	// 6. Validate that required tool pairings were followed
+	if truncatedCount > 0 && !llmContextUpdated {
+		slog.Warn("[LLMMini] TRUNCATE WITHOUT UPDATE: truncate_messages was called but update_llm_context was not - this breaks task continuity",
+			"truncated_count", truncatedCount,
+		)
+		// Add a trace event to highlight this failure
+		traceevent.Log(parent, traceevent.CategoryEvent, "mini_compact_validation_failed",
+			traceevent.Field{Key: "reason", Value: "truncate_without_update"},
+			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
+		)
+	} else if !llmContextUpdated && agentCtx.LLMContext == "" {
+		slog.Error("[LLMMini] EMPTY LLM CONTEXT: mini compact ran without updating LLM Context - agent cannot continue",
+			"tool_calls", len(toolCalls),
+		)
+		// Add a trace event to highlight this failure
+		traceevent.Log(parent, traceevent.CategoryEvent, "mini_compact_validation_failed",
+			traceevent.Field{Key: "reason", Value: "empty_llm_context"},
+			traceevent.Field{Key: "tool_calls", Value: len(toolCalls)},
+		)
+	}
+
+	// 7. Reset trigger counters
 	agentCtx.AgentState.LastTriggerTurn = agentCtx.AgentState.TotalTurns
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 	agentCtx.AgentState.UpdatedAt = time.Now()
@@ -297,6 +335,12 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 		}
 
 		text := msg.ExtractText()
+		// Skip very small outputs - not worth truncating
+		if len(text) < 500 {
+			nonSelectableCount++
+			continue
+		}
+
 		truncatedText := agentctx.TruncateWithHeadTail(text)
 		savedChars := len(text) - len(truncatedText)
 		if savedChars < 0 {
@@ -414,15 +458,20 @@ func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentCont
 	// State message as the final user message
 	tokenPercent := c.estimateTokenPercent(agentCtx)
 	recommendedTruncate := estimatedSavingsTokens >= mgmtForceTruncateSavingsTokens
+	llmContextEmpty := agentCtx.LLMContext == ""
+	
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
 Estimated savings if truncating selectable outputs: ~%d tokens
-Large outputs (>3000 chars): %d
-Non-truncatable old tool outputs (missing ID): %d
+Large outputs (>2000 chars): %d
+Non-truncatable old tool outputs (missing ID or too small): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
 Total turns: %d
+Total truncations so far: %d
+Total compactions so far: %d
+Last compact turn: %d
 Current LLM Context exists: %t
 </current_state>
 
@@ -438,10 +487,24 @@ Decision rules:
 3. If large outputs (%d) exist, consider truncating them even if total savings is modest.
 4. ALWAYS prefer truncate over no_action when large old outputs are present.
 5. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
-6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task.
-7. If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate.
+6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task. ALWAYS include the latest user request verbatim in your LLM Context.
+7. ⚠️ CRITICAL: If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate. The agent cannot continue without a valid LLM Context.
 8. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
 9. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
+10. Your top priority is TASK CONTINUITY — ensure the agent can understand what it's working on after your action.
+
+CRITICAL REMINDER: The update_llm_context call is NOT optional when:
+- You are truncating any messages (MUST pair with update_llm_context)
+- LLM Context is empty or missing (MUST call update_llm_context to initialize it)
+- Task state has changed (MUST call update_llm_context to keep it current)
+
+⚠️ IMMEDIATE ACTION REQUIRED:
+If "Current LLM Context exists: false" above, you MUST call update_llm_context NOW with a minimal LLM Context containing:
+- Current Task: [the latest user request from above]
+- Files Involved: [any files mentioned in recent messages]
+- Next Steps: [what the agent should work on next]
+
+Failure to initialize LLM Context when it's empty will cause task continuity failures.
 
 Messages marked [PROTECTED] are in the protected region and cannot be truncated.
 Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
@@ -450,11 +513,13 @@ Only tool outputs with an explicit "id=" field are selectable for truncate_messa
 Available actions:
 - **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed).
 - **update_llm_context** - Rewrite the LLM Context to reflect current state
-- **no_action** - Context is healthy, no action needed
+- **compact** - Perform full context compaction by summarizing and removing old messages. Use this when many truncations have occurred and context is still under pressure, or a topic shift/task phase has been completed.
+- **no_action** - Context is healthy, no action needed. DO NOT use no_action if LLM Context is empty.
 
 Policy hint:
 - force_truncate_recommended=%t
-- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.`,
+- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.
+- Consider using compact if total_compactions is 0 but total_truncations is high (>5) and tokens used is still above 40%%.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
 		estimatedSavingsTokens,
@@ -464,7 +529,10 @@ Policy hint:
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		agentCtx.AgentState.TotalTurns,
-		agentCtx.LLMContext != "",
+		agentCtx.AgentState.TotalTruncations,
+		agentCtx.AgentState.TotalCompactions,
+		agentCtx.AgentState.LastCompactTurn,
+		!llmContextEmpty,
 		latestUserRequest,
 		mgmtForceTruncateSavingsTokens,
 		largeMessageCount,
@@ -610,6 +678,9 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 				truncatedCount += count
 			}
 		} else if tc.Function.Name == "update_llm_context" {
+			llmContextUpdated = true
+		} else if tc.Function.Name == "compact" {
+			// Compact tool updates AgentContext.RecentMessages, which affects LLM context
 			llmContextUpdated = true
 		}
 	}
