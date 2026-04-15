@@ -485,7 +485,7 @@ func TestTruncateWithHeadTail_Short(t *testing.T) {
 }
 
 func TestTruncateWithHeadTail_Long(t *testing.T) {
-	longText := strings.Repeat("a", 2000)
+	longText := strings.Repeat("a", 5000)
 	result := TruncateWithHeadTail(longText)
 	assert.Contains(t, result, "chars truncated")
 	assert.True(t, len(result) < len(longText))

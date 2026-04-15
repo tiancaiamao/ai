@@ -127,10 +127,12 @@ func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEv
 
 // TruncateWithHeadTail preserves the first and last portion of text,
 // replacing the middle with a truncation marker.
+// For search results (grep, find, etc.), this preserves file paths,
+// function names, line numbers, and match patterns from both ends.
 func TruncateWithHeadTail(text string) string {
 	const (
-		headKeep      = 400
-		tailKeep      = 400
+		headKeep      = 1000 // Increased from 400 to preserve more context from grep/find results
+		tailKeep      = 1000 // Increased from 400 to capture more matches at the end
 		minSize       = 1200
 		smallThreshold = 500
 	)

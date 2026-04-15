@@ -23,4 +23,13 @@ type CompactionResult struct {
 	Type              string // "major" or "mini"
 	TruncatedCount    int    // Number of messages truncated (mini only)
 	LLMContextUpdated bool   // Whether LLM context was updated (mini only)
+	ExecutedTools     []ToolCallRecord // Tools actually executed during this compaction
+}
+
+// ToolCallRecord captures a single tool invocation during compaction.
+type ToolCallRecord struct {
+	Tool   string         `json:"tool"`
+	Args   map[string]any `json:"args"`
+	Result string         `json:"result"`
+	Error  string         `json:"error,omitempty"`
 }
