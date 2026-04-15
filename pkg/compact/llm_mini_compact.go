@@ -194,7 +194,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	// 2. Get context management tools
 	var tools []context_mgmt.Tool
 	if c.compactor != nil {
-		tools = context_mgmt.GetMiniCompactToolsWithCompactor(agentCtx, c.compactor)
+		tools = context_mgmt.GetMiniCompactTools(agentCtx)
 		// Add compact tool manually to avoid circular import
 		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
 	} else {

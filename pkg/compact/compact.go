@@ -1027,6 +1027,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	newRecentMessages = append(newRecentMessages, recentMessages...)
+	messagesBefore := len(ctx.RecentMessages)
 
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
@@ -1037,7 +1038,6 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()
-	messagesBefore := len(ctx.RecentMessages)
 	messagesAfter := len(newRecentMessages)
 	slog.Info("[CompactAgent] Compressed context", "messages", messagesAfter)
 

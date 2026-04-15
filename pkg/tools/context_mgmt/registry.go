@@ -15,24 +15,12 @@ type Tool interface {
 }
 
 // GetMiniCompactTools returns tools available for mini compact mode.
+// Note: compact tool is added separately by the caller (in pkg/compact)
+// to avoid circular imports.
 func GetMiniCompactTools(agentCtx *agentctx.AgentContext) []Tool {
 	return []Tool{
 		NewTruncateMessagesTool(agentCtx),
 		NewUpdateLLMContextTool(agentCtx),
 		NewNoActionTool(agentCtx),
 	}
-}
-
-// GetMiniCompactToolsWithCompactor returns tools for mini compact mode including compact tool.
-func GetMiniCompactToolsWithCompactor(agentCtx *agentctx.AgentContext, compactor interface{}) []Tool {
-	// Import compact package to get CompactTool
-	tools := []Tool{
-		NewTruncateMessagesTool(agentCtx),
-		NewUpdateLLMContextTool(agentCtx),
-		NewNoActionTool(agentCtx),
-	}
-	
-	// Add compact tool if compactor is provided
-	// This is done by the caller in compact package to avoid circular import
-	return tools
 }
