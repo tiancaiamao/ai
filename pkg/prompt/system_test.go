@@ -24,11 +24,8 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	if strings.TrimSpace(RPCBasePrompt()) == "" {
 		t.Fatal("RPCBasePrompt should not be empty")
 	}
-	if strings.TrimSpace(HeadlessBasePrompt(false)) == "" {
-		t.Fatal("HeadlessBasePrompt(false) should not be empty")
-	}
-	if strings.TrimSpace(HeadlessBasePrompt(true)) == "" {
-		t.Fatal("HeadlessBasePrompt(true) should not be empty")
+	if strings.TrimSpace(HeadlessBasePrompt()) == "" {
+		t.Fatal("HeadlessBasePrompt should not be empty")
 	}
 	if strings.TrimSpace(JSONModeBasePrompt()) == "" {
 		t.Fatal("JSONModeBasePrompt should not be empty")

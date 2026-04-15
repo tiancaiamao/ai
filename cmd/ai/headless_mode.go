@@ -338,7 +338,7 @@ func runHeadless(sessionPath string, maxTurns int, allowedTools []string, timeou
 	})
 
 	// Create agent with skills using structured prompt builder.
-	basePrompt := prompt.HeadlessBasePrompt(false)
+	basePrompt := prompt.HeadlessBasePrompt()
 
 	// Build the full system prompt
 	// Use workspace to get dynamic cwd for each prompt build
