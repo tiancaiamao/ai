@@ -224,17 +224,17 @@ Ready to implement auth feature
 
 **Pairs with:**
 - **finishing-a-development-branch** - REQUIRED for cleanup after work complete
-- **subagent** - Combine for persistent, observable task execution
+- **ag** - Combine for persistent, observable task execution
 
-## Subagent Worktrees
+## Agent Worktrees
 
-Combine git worktrees with subagents for persistent, observable task execution in isolated environments.
+Combine git worktrees with `ag` CLI for persistent, observable task execution in isolated environments.
 
 ### When to Use
 
 | Scenario | Approach | Why |
 |----------|----------|-----|
-| Long-running analysis | Worktree + subagent | Results persist in worktree after completion |
+| Long-running analysis | Worktree + ag spawn | Results persist in worktree after completion |
 | Parallel feature work | Multiple worktrees | Isolated branches, no conflicts |
 | Code review before merge | Worktree + Explorer profile | Read-only review in isolated environment |
 | Experimental changes | Worktree + Builder profile | Safely iterate without affecting main branch |
@@ -245,12 +245,17 @@ Combine git worktrees with subagents for persistent, observable task execution i
 # 1. Create worktree for the task
 git worktree add .worktrees/review-auth -b review/auth
 
-# 2. Use change_workspace tool to switch agent's workspace
-# (Note: for subagent mode, each subagent has its own workspace)
+# 2. Use ag spawn with --cwd to set workspace
+ag spawn \
+  --id "review-auth" \
+  --cwd "/path/to/project/.worktrees/review-auth" \
+  --system @/path/to/reviewer.md \
+  --input "Review auth changes for security issues" \
+  --timeout 15m
 
-# 3. Run subagent in the worktree
-ai --mode headless  --tools read,grep \
-  "Review auth changes for security issues"
+ag wait "review-auth" --timeout 900
+OUTPUT=$(ag output "review-auth")
+ag rm "review-auth"
 
 # 4. Results remain in worktree for inspection
 # Original worktree remains untouched
@@ -262,11 +267,16 @@ ai --mode headless  --tools read,grep \
 # Create a persistent review worktree
 git worktree add .worktrees/review-feature-x -b review/feature-x
 
-# Use change_workspace tool, then run reviewer subagent
-# (Note: the change_workspace would be done by the agent using the tool)
+# Run reviewer agent in worktree
+ag spawn \
+  --id "review-feature-x" \
+  --cwd "/path/to/project/.worktrees/review-feature-x" \
+  --system @/path/to/reviewer.md \
+  --input "Review changes against main: security, correctness, style" \
+  --timeout 15m
 
-ai --mode headless --tools read,grep --max-turns 10 \
-  "Review changes against main: security, correctness, style"
+ag wait "review-feature-x" --timeout 900
+ag rm "review-feature-x"
 
 # Worktree stays available for:
 # - Manual inspection of changes
@@ -281,30 +291,30 @@ ai --mode headless --tools read,grep --max-turns 10 \
 git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
 
-# Run builders in parallel (each uses change_workspace tool internally)
-ai --mode headless --tools read,write,edit,bash,change_workspace \
-  "Implement authentication in .worktrees/feature-auth" &
-
-ai --mode headless --tools read,write,edit,bash,change_workspace \
-  "Implement API endpoints in .worktrees/feature-api" &
-
-wait
+# Run builders in parallel using ag patterns/parallel.sh
+ag patterns/parallel.sh \
+  2 \
+  @/path/to/builder.md \
+  "Implement feature in current worktree" \
+  /tmp/parallel-results \
+  --cwd-auth="/path/to/project/.worktrees/feature-auth" \
+  --cwd-api="/path/to/project/.worktrees/feature-api"
 
 # Both worktrees have isolated changes
 # Merge independently when ready
 ```
 
-### Benefits Over Temporary Subagents
+### Benefits Over Temporary Agents
 
-| Temporary Subagent | Worktree Subagent |
-|-------------------|-------------------|
+| Temporary Agent | Worktree Agent |
+|----------------|----------------|
 | Results lost after completion | Results persist in worktree |
 | Hard to inspect intermediate state | Full git history available |
-| Difficult to debug failures | Can attach and investigate |
-| Single-shot execution | Can iterate and re-run |
+| Difficult to debug failures | Can check ag status and investigate |
+| Single-shot execution | Can spawn new agents and iterate |
 
 ### Cleanup
 
 After task completion, use the `finishing-a-development-branch` skill to clean up worktrees.
 
-**See also:** `subagent` skill for headless mode details and Agent Profiles
+**See also:** `ag` skill for agent orchestration details

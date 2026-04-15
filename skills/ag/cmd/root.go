@@ -78,7 +78,7 @@ var spawnCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Agent spawned: %s (session: %s)\n", meta.ID, meta.TmuxName)
+		fmt.Printf("Agent spawned: %s (pid: %d)\n", meta.ID, meta.Pid)
 	},
 }
 
@@ -143,11 +143,8 @@ var statusCmd = &cobra.Command{
 		}
 		fmt.Printf("Agent: %s\n", args[0])
 		fmt.Printf("Status: %s\n", status)
-		if meta.TmuxName != "" {
-			fmt.Printf("Tmux: %s\n", meta.TmuxName)
-		}
-		if meta.SessionID != "" {
-			fmt.Printf("Session: %s\n", meta.SessionID)
+		if meta.Pid > 0 {
+			fmt.Printf("PID: %d\n", meta.Pid)
 		}
 		if meta.StartedAt > 0 {
 			fmt.Printf("Started: %s\n", formatTime(meta.StartedAt))
@@ -155,6 +152,9 @@ var statusCmd = &cobra.Command{
 		if meta.FinishedAt > 0 {
 			fmt.Printf("Finished: %s\n", formatTime(meta.FinishedAt))
 			fmt.Printf("Duration: %s\n", formatDuration(meta.FinishedAt-meta.StartedAt))
+		}
+		if meta.ExitCode != 0 {
+			fmt.Printf("Exit code: %d\n", meta.ExitCode)
 		}
 	},
 }
@@ -174,14 +174,17 @@ var lsCmd = &cobra.Command{
 			return
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tTMUX\tUPTIME")
+		fmt.Fprintln(w, "ID\tSTATUS\tPID\tUPTIME")
 		for _, a := range agents {
-			tmux := a.Meta.TmuxName
+			pid := "-"
+			if a.Meta.Pid > 0 {
+				pid = fmt.Sprintf("%d", a.Meta.Pid)
+			}
 			uptime := "-"
 			if a.Status == "running" && a.Meta.StartedAt > 0 {
 				uptime = formatDuration(timeNow() - a.Meta.StartedAt)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Status, tmux, uptime)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Status, pid, uptime)
 		}
 		w.Flush()
 	},
