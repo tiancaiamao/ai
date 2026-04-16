@@ -549,14 +549,9 @@ func runInnerLoop(
 			agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
 		}
 
-		// Append messages to journal if checkpoint manager is available
-		if checkpointMgr != nil {
-			for _, result := range toolResults {
-				if err := checkpointMgr.AppendMessage(result); err != nil {
-					slog.Warn("[Loop] Failed to append tool result to journal", "error", err)
-				}
-			}
-		}
+		// Note: toolResult persistence is handled by the sessionWriter (via tool_execution_end
+		// events) in all modes (RPC, headless, json). We do NOT write toolResults to the journal
+		// here to avoid duplicating each message in messages.jsonl.
 
 		// Create checkpoint after update_llm_context tool execution
 		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() && hasToolResultNamed(toolResults, "update_llm_context") {
