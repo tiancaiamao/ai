@@ -1,10 +1,11 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "templates": {
     "feature": {
       "name": "Feature Development",
-      "description": "Develop a new feature from spec to ship",
-      "phases": ["spec", "plan", "implement", "test", "ship"],
+      "description": "Develop a new feature from brainstorm to ship",
+      "phases": ["brainstorm", "spec", "plan", "implement"],
+      "skills": ["brainstorm", "spec", "plan", "implement"],
       "category": "features",
       "complexity": "medium",
       "estimated_tasks": "4-8",
@@ -13,7 +14,8 @@
     "bugfix": {
       "name": "Bug Fix",
       "description": "Fix bugs with root-cause analysis",
-      "phases": ["triage", "fix", "verify", "ship"],
+      "phases": ["triage", "plan", "implement"],
+      "skills": ["explore", "plan", "implement"],
       "category": "bugfixes",
       "complexity": "low",
       "estimated_tasks": "2-4",
@@ -22,7 +24,8 @@
     "refactor": {
       "name": "Refactor",
       "description": "Restructure code without changing behavior",
-      "phases": ["assess", "plan", "execute", "verify", "ship"],
+      "phases": ["assess", "plan", "implement", "verify"],
+      "skills": ["explore", "plan", "implement", "explore"],
       "category": "refactors",
       "complexity": "medium",
       "estimated_tasks": "3-6",
@@ -31,7 +34,8 @@
     "spike": {
       "name": "Spike",
       "description": "Research and exploration",
-      "phases": ["research", "document", "present"],
+      "phases": ["brainstorm", "document"],
+      "skills": ["brainstorm", "spec"],
       "category": "spikes",
       "complexity": "low",
       "estimated_tasks": "1-2",
@@ -40,7 +44,8 @@
     "hotfix": {
       "name": "Hotfix",
       "description": "Emergency production fix with minimal ceremony",
-      "phases": ["identify", "fix", "deploy"],
+      "phases": ["implement"],
+      "skills": ["implement"],
       "category": "hotfixes",
       "complexity": "minimal",
       "estimated_tasks": "1-2",
@@ -49,7 +54,8 @@
     "security": {
       "name": "Security Audit",
       "description": "Security review and remediation",
-      "phases": ["scan", "analyze", "remediate", "verify", "document"],
+      "phases": ["assess", "plan", "implement", "verify"],
+      "skills": ["explore", "plan", "implement", "explore"],
       "category": "security",
       "complexity": "medium",
       "estimated_tasks": "3-5",

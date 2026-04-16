@@ -2,175 +2,46 @@
 id: hotfix
 name: Hotfix
 description: Emergency production fix with minimal ceremony
-phases: [identify, fix, deploy]
+phases: [implement]
 complexity: minimal
 estimated_tasks: 1-2
+skills:
+  implement: implement
 ---
 
 # Hotfix Workflow
 
 ## Overview
 
-Hotfix is for **emergency production issues**. Minimal ceremony, fast execution.
+Emergency fix. Minimal process — just fix it fast and ship.
+All other workflows have more process; hotfix deliberately has less.
 
-## Core Principle
+## Phase: Implement
 
-> **Fix fast, but don't break more. If unsure, rollback.**
+**Skill:** `implement` (simplified)
 
-## When to Use Hotfix
+1. Understand the emergency (from user)
+2. Find the root cause quickly
+3. Write a failing test that reproduces the issue
+4. Fix it
+5. Verify test passes
+6. Commit and push
 
-- Production is down or severely degraded
-- Security vulnerability exposed
-- Data integrity at risk
-- Customer-facing critical bug
+**Simplifications for hotfix:**
+- Skip two-stage review if user confirms urgency
+- Skip full test suite — only run tests related to the fix
+- Skip sub-agent delegation — implement directly for speed
+- Single commit, push immediately
 
-If it's not blocking production, use `bugfix` workflow instead.
+## Hotfix-Specific Rules
 
-## Phase 1: Identify
+- **Speed over process** — fix first, add process later
+- **Minimal scope** — fix only the immediate issue
+- **Test the fix** — even in emergencies, write a test
+- **Follow-up** — after hotfix, consider a bugfix workflow for proper cleanup
 
-### Goals
-- Confirm the issue
-- Understand impact
-- Plan minimal fix
+## Commit Convention
 
-### Actions
-
-1. Verify the issue
-   - Check monitoring/alerting
-   - Reproduce if possible
-   - Confirm severity
-
-2. Assess scope
-   - What's affected?
-   - How many users?
-   - Can we rollback?
-
-3. Plan minimal fix
-   - What's the smallest change that resolves it?
-   - Can we do a temporary fix?
-
-### Time Box
-
-**15 minutes maximum** for identify. If you can't identify the issue:
-1. Escalate immediately
-2. Consider rollback
-3. Get more eyes on it
-
-### Output
-
-```markdown
-# Hotfix: [Issue]
-
-## Issue
-[Brief description]
-
-## Impact
-- Severity: [P0/P1]
-- Users affected: [X]
-- Duration: [ongoing since X]
-
-## Root Cause (if known)
-[Quick assessment]
-
-## Fix Plan
-1. [step 1]
-2. [step 2]
 ```
-
----
-
-## Phase 2: Fix
-
-### Goals
-- Implement minimal fix
-- Test quickly
-- Prepare for deploy
-
-### Actions
-
-1. Make the fix
-   - Smallest change possible
-   - No new features
-   - No refactoring
-
-2. Quick test
-   - Does it fix the issue?
-   - Do basic tests pass?
-
-3. Prepare deploy package
-
-### Time Box
-
-**30 minutes maximum**. If fix isn't ready:
-- Consider rollback
-- Deploy partial fix
-- Escalate
-
-### Review Criteria
-- [ ] Fix addresses issue?
-- [ ] No obvious regressions?
-- [ ] Ready to deploy?
-
----
-
-## Phase 3: Deploy
-
-### Goals
-- Deploy fix to production
-- Verify resolution
-- Document post-mortem
-
-### Actions
-
-1. Deploy
-   - Follow deploy procedure
-   - Monitor during deploy
-   - Watch for new issues
-
-2. Verify
-   - Is issue resolved?
-   - Are new errors appearing?
-   - Monitoring healthy?
-
-3. Document
-   - Create post-mortem
-   - Schedule proper follow-up
-   - Clean up any temp code
-
-### Post-Mortem Template
-
-```markdown
-# Post-Mortem: [Incident]
-
-## Summary
-[Brief description of what happened and impact]
-
-## Timeline
-- HH:MM - Issue detected
-- HH:MM - Incident declared
-- HH:MM - Fix deployed
-- HH:MM - Resolved
-
-## Root Cause
-[What caused the issue]
-
-## Resolution
-[How we fixed it]
-
-## Action Items
-- [ ] [Action 1] - [Owner] - [Date]
-- [ ] [Action 2] - [Owner] - [Date]
-
-## Lessons Learned
-- [Lesson 1]
-- [Lesson 2]
-
-## Follow-up
-- Proper fix for [underlying issue]
-- Monitoring improvements
+fix(scope): resolve [issue] (hotfix)
 ```
-
-### Review Criteria
-- [ ] Issue resolved?
-- [ ] Post-mortem scheduled?
-- [ ] Action items assigned?

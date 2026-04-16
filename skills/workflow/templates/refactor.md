@@ -2,254 +2,84 @@
 id: refactor
 name: Refactor
 description: Restructure code without changing behavior
-phases: [assess, plan, execute, verify, ship]
+phases: [assess, plan, implement, verify]
 complexity: medium
 estimated_tasks: 3-6
+skills:
+  assess: explore
+  plan: plan
+  implement: implement
+  verify: explore
 ---
 
 # Refactor Workflow
 
 ## Overview
 
-Refactor workflow ensures safe code restructuring with behavioral preservation.
+Restructure code while preserving behavior. The key risk is accidental
+behavior change — tests are your safety net.
 
-## Core Principle
+## Phase Sequence
 
-> **Always refactor in small, verifiable steps. If tests break, you broke behavior.**
-
-## Phase 1: Assess
-
-### Goals
-- Understand what needs refactoring
-- Identify code smells
-- Measure current state
-
-### Actions
-
-1. Inventory problem areas
-   - Large functions (>50 lines)
-   - Deep nesting (>3 levels)
-   - Duplicated code
-   - Poor naming
-   - Tight coupling
-
-2. Measure
-   - Test coverage in target area
-   - Complexity metrics
-   - Dependencies
-
-3. Document findings
-
-### Output
-
-Create `assess.md`:
-
-```markdown
-# Refactor Assessment: [Target]
-
-## Code Smells Identified
-1. **[smell type]** in [file:line]
-   - Why it's a problem
-   - Suggested fix
-
-## Current Metrics
-- Functions: [count]
-- Test coverage: [%]
-- Cyclomatic complexity: [avg/max]
-
-## Risk Assessment
-- **High risk:** [areas with no tests]
-- **Medium risk:** [areas with some tests]
-- **Low risk:** [well-tested areas]
+```
+assess (explore) → plan → implement → verify (explore)
 ```
 
-### Review Criteria
-- [ ] Problem areas identified?
-- [ ] Test coverage assessed?
-- [ ] Risk level reasonable?
+### Phase 1: Assess
 
----
+**Skill:** `explore`
 
-## Phase 2: Plan
+Understand what exists:
+1. Map the current structure
+2. Identify what needs to change and why
+3. Identify what must NOT change (public API, behavior)
+4. Check existing test coverage — if low, add characterization tests first
 
-### Goals
-- Sequence refactoring steps
-- Define rollback points
-- Set success criteria
+**Output:** `.workflow/artifacts/refactors/[name]/assessment.md`
 
-### Actions
+**Gate:** Clear understanding of scope and constraints.
 
-1. Sequence changes
-   - Safe changes first (rename, extract)
-   - Risky changes last (behavioral)
-   - Independent changes can parallelize
+### Phase 2: Plan
 
-2. Define checkpoints
-   - After each step: tests pass
-   - Document working state
+**Skill:** `plan`
 
-### Output
+Plan the restructuring. Key rule: each task should be small enough that
+if something breaks, it's easy to identify which change caused it.
 
-Create `refactor-plan.md`:
+**Output:** PLAN.yml + PLAN.md
 
-```markdown
-# Refactor Plan: [Target]
+**Gate:** Plan approved.
 
-## Steps
+### Phase 3: Implement
 
-### Step 1: [Safe Change]
-**Type:** rename/extract/move
-**Risk:** low
-**Rollback:** git checkout
+**Skill:** `implement`
 
-### Step 2: [Medium Change]
-...
+Execute the refactoring. Run tests after EACH task — if tests break,
+the last change is the culprit.
 
-## Checkpoints
-1. After Step 1 → tests pass
-2. After Step 2 → tests pass
-3. After Step N → verify full suite
+**Output:** Git commits
 
-## Success Criteria
-- [ ] All tests pass
-- [ ] No behavioral change
-- [ ] Code is cleaner
-```
+### Phase 4: Verify
 
-### Review Criteria
-- [ ] Steps sequenced safely?
-- [ ] Rollback defined?
-- [ ] Testable checkpoints?
+**Skill:** `explore`
 
----
-
-## Phase 3: Execute
-
-### Goals
-- Execute steps in order
-- Run tests after each
-- Preserve behavior
-
-### Actions
-
-1. For each step:
-   - Make the change
-   - Run targeted tests
-   - If fail: rollback, reassess
-   
-2. Commit after each successful step
-
-### Techniques
-
-**Rename Variable/Function:**
-```bash
-# Safe: IDE refactor or manual
-# 1. Find all usages
-grep -rn "oldName"
-# 2. Replace all
-sed -i 's/oldName/newName/g' $(grep -rl oldName)
-# 3. Test
-go test ./...
-```
-
-**Extract Function:**
-```go
-// Before
-func process(data []byte) {
-    // 100 lines of logic
-}
-
-// After
-func process(data []byte) {
-    result := transform(data)
-    validate(result)
-    store(result)
-}
-```
-
-**Move to Package:**
-```bash
-# 1. Copy files to new location
-cp -r old/pkg new/pkg
-# 2. Update imports
-find . -name "*.go" -exec sed -i 's/old\/pkg/new\/pkg/g' {}
-# 3. Remove old
-rm -r old/pkg
-# 4. Test
-go test ./...
-```
-
-### Review Criteria
-- [ ] Tests pass after each step?
-- [ ] No behavior change?
-- [ ] Code is cleaner?
-
----
-
-## Phase 4: Verify
-
-### Goals
-- Full test suite passes
-- Performance not degraded
-- Code quality improved
-
-### Actions
-
+After all changes:
 1. Run full test suite
-2. Check metrics improved
-3. Manual code review
+2. Verify public API unchanged
+3. Check for accidental behavior changes
+4. Review final code structure matches intent
 
-### Output
+**Output:** verification-report.md
 
-Create `verify.md`:
+## Refactor-Specific Rules
 
-```markdown
-# Refactor Verification
+- **Preserve behavior** — refactoring must not change what the code does
+- **Small steps** — each commit should be independently revertable
+- **Tests green always** — if tests go red, stop and fix before continuing
+- **Characterization tests first** — if coverage is low, add tests BEFORE refactoring
 
-## Test Results
-```
-[full test output]
-```
-
-## Metrics Comparison
-
-| Metric | Before | After |
-|--------|--------|-------|
-| LOC | X | Y |
-| Complexity | X | Y |
-| Coverage | X% | Y% |
-
-## Notes
-[Any issues or observations]
-```
-
-### Review Criteria
-- [ ] All tests pass?
-- [ ] Metrics improved?
-- [ ] No regressions?
-
----
-
-## Phase 5: Ship
-
-### Goals
-- Clean commit history
-- Document what changed
-- Share learnings
-
-### Actions
-
-1. Squash if needed
-2. Write descriptive commit
-3. Update docs if needed
-
-### Commit Message
+## Commit Convention
 
 ```
-refactor: [what changed]
-
-- [specific change 1]
-- [specific change 2]
-
-Improves code quality without changing behavior.
+refactor(scope): [what changed and why]
 ```
