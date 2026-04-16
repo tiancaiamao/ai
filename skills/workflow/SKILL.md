@@ -1,21 +1,39 @@
 ---
 name: workflow
-description: Multi-phase workflow system. Agent uses /workflow commands to execute structured
-  development flows (feature/bugfix/refactor/spike) with spec/plan phases.
-  State persisted to disk, phases executed via `ag` cli.
+description: Orchestrate a full development flow by composing brainstorm → spec → plan → implement skills. State persisted to disk via workflow-ctl.
 ---
 
-# Workflow - Multi-Agent Orchestration
+# Workflow — Skill Orchestrator
 
-## Core Philosophy
+Workflow composes smaller skills into a complete development flow.
+It manages state transitions and coordinates skill handoffs.
 
-> **State on disk, progress visible, commits after each phase.**
+**Workflow does NOT implement logic itself.** It delegates to:
 
-Workflow is **execution engine** that turns plans into shipped code. It combines:
-- **Workflow Templates**: Structured development flows (feature, bugfix, refactor, spike)
-- **Agent-Driven Execution**: Agent autonomously progresses through phases
-- **State Management**: Deterministic state updates via `workflow-ctl` tool
-- **ag Backend**: Agent orchestration primitives for phase execution
+| Skill | Responsibility |
+|-------|---------------|
+| `brainstorm` | Explore requirements, produce validated design |
+| `spec` | Write structured SPEC.md |
+| `plan` | Break spec into PLAN.yml + PLAN.md |
+| `implement` | Execute plan with sub-agents + two-stage review |
+
+## Templates
+
+Templates define which skills to compose and in what order:
+
+| Template | Flow | Use Case |
+|----------|------|----------|
+| `feature` | brainstorm → spec → plan → implement | New feature |
+| `bugfix` | (explore) → plan → implement | Bug fix |
+| `spike` | brainstorm → (document) | Research/exploration |
+| `refactor` | brainstorm → plan → implement | Code restructuring |
+| `hotfix` | implement (fast path) | Emergency fix |
+
+Templates are thin: they only define the skill sequence and any
+template-specific rules (e.g., bugfix skips brainstorm and goes
+straight to exploration + plan).
+
+See `templates/` for per-template definitions.
 
 ## Architecture
 
@@ -24,247 +42,58 @@ Workflow is **execution engine** that turns plans into shipped code. It combines
     ↓
 workflow-ctl start → write STATE.json
     ↓
-Agent reads STATE.json → current phase = spec
+Agent reads STATE.json → current phase
     ↓
-Agent reads templates/feature.md → Phase 1 instructions
+Agent invokes the corresponding skill
     ↓
-Agent executes Phase 1: Spec
+Skill completes → workflow-ctl advance
     ↓
-Agent calls workflow-ctl advance → update STATE.json {currentPhase: plan}
+Next phase → next skill
     ↓
-Agent reads Phase 2: Plan
-    ↓
-Agent executes Phase 2: Plan (generates tasks.md)
-    ↓
-Agent calls ag task create + fan-out.sh for parallel execution
-    ↓
-Agent calls workflow-ctl advance → update STATE.json
-    ↓
-...continue until all phases done
+All phases done → workflow-ctl complete
 ```
-
-**workflow-ctl Tool:**
-- **Location:** `skills/workflow/bin/workflow-ctl`
-- **Build:** `cd skills/workflow && go build -o bin/workflow-ctl workflow-ctl.go`
-- **Commands:**
-  - `start <template> <description>` — Start new workflow
-  - `advance [--phase <name>]` — Advance to next phase (or jump to specific phase)
-  - `status` — Show current workflow state
-  - `pause` / `resume` — Pause/resume workflow
-
-**ag CLI:**
-- **Location:** `skills/ag/` (separate skill)
-- **Used for:** Agent spawn, task queue (for dynamic parallel tasks)
-
-> **Note:** workflow-ctl provides **deterministic state updates**. Agent controls execution flow
-> but state is persisted by the tool, ensuring reliability and restart capability.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/workflow start <template> [description]` | Start a new workflow |
-| `/workflow status` | Show workflow state |
-| `/workflow advance [--phase <name>]` | Advance to next phase (for agent use) |
-| `/workflow pause` / `/workflow resume` | Pause/resume workflow |
-
-**Agent Usage:**
 ```bash
-# Agent-driven execution
-workflow-ctl start feature "add user auth"
-
-# Agent reads Phase 1: Spec from template, executes it
-workflow-ctl advance  # Move to next phase
-
-# Agent reads Phase 2: Plan, generates tasks.md
-ag task create "implement API"
-ag task create "write tests"
-# ... execute tasks via fan-out pattern
-workflow-ctl advance  # Move to next phase
-```
-
-## Quick Start
-
-```bash
-# Setup binaries
-cd skills/ag && go build -o ag .
-cd skills/workflow && go build -o bin/workflow-ctl workflow-ctl.go
-
 # Start a workflow
-workflow-ctl start feature "add user authentication"
+workflow-ctl start <template> "[description]"
+
+# After each skill completes
+workflow-ctl advance
 
 # Check status
 workflow-ctl status
 
-# Agent-driven execution (agent calls this after each phase):
-workflow-ctl advance
+# Pause / resume
+workflow-ctl pause
+workflow-ctl resume
 ```
 
-## Templates
+## State
 
-| Template | Complexity | Use Case |
-|----------|------------|----------|
-| `feature` | Medium | New feature development |
-| `bugfix` | Low | Bug fix with root-cause analysis |
-| `refactor` | Medium | Code restructuring |
-| `spike` | Low | Research/exploration |
-| `hotfix` | Minimal | Emergency production fix |
-| `security` | Medium | Security audit/fix |
-
-## Feature Development: SPEC + PLAN
-
-For feature work, feature template includes **spec** and **plan** phases.
-
-### Phase 1: SPEC (What)
-
-Create `SPEC.md` defining **what** we're building:
-
-```markdown
-# Feature: [Name]
-
-## Summary
-[1-2 sentence description]
-
-## Motivation
-[Why are we doing this?]
-
-## User Stories
-- As a [user], I want [goal] so that [benefit]
-
-## Requirements
-- [ ] [requirement 1]
-- [ ] [requirement 2]
-
-## Out of Scope
-- [ ] [explicitly not doing]
-
-## Success Criteria
-- [ ] [criterion 1]
-- [ ] [criterion 2]
-```
-
-**Review criteria:**
-- [ ] Clear user value?
-- [ ] Scope bounded?
-- [ ] Testable requirements?
-
-### Phase 2: PLAN (How)
-
-Read SPEC.md, explore codebase, create `PLAN.md` defining **how**:
-
-```markdown
-# Plan: [Feature]
-
-## Technical Context
-[Existing patterns, relevant files]
-
-## Data Model
-[Any new types or changes]
-
-## API Design
-[If applicable]
-
-## Implementation Steps
-
-### STEP-1: [Name]
-**File:** `src/xxx.go`
-**What:** [Brief description]
-**Test:** [How to verify]
-
-### STEP-2: [Name]
-...
-
-## Risks
-- [risk] → [mitigation]
-
-## Verification
-[How to test] feature works]
-```
-
-**Review criteria:**
-- [ ] All requirements addressed?
-- [ ] Dependencies clear?
-- [ ] Testable steps?
-
----
-
-### Dynamic Task Execution (e.g., Implement Phase)
-
-For phases that involve parallel subtasks, agent can leverage `ag task`:
-
-```bash
-# Agent generates tasks.md with task list
-# Agent creates tasks:
-ag task create "implement API endpoint"
-ag task create "write unit tests"
-ag task create "update documentation"
-
-# Agent spawns workers that claim tasks (fan-out pattern)
-# Or uses ag/patterns/fan-out.sh for parallel execution
-
-# After all tasks done, agent calls:
-workflow-ctl advance
-```
-
-## Workflow State
-
-State is persisted to `.workflow/STATE.json`:
+Persisted to `.workflow/STATE.json`:
 
 ```json
 {
-  "template": "bugfix",
-  "templateName": "Bug Fix",
-  "description": "fix login timeout",
+  "template": "feature",
+  "description": "add user auth",
   "phases": [
-    { "name": "triage", "index": 0, "status": "completed" },
-    { "name": "fix", "index": 1, "status": "active" },
-    { "name": "verify", "index": 2, "status": "pending" },
-    { "name": "ship", "index": 3, "status": "pending" }
+    { "name": "brainstorm", "status": "completed" },
+    { "name": "spec", "status": "completed" },
+    { "name": "plan", "status": "active" },
+    { "name": "implement", "status": "pending" }
   ],
-  "currentPhase": 1,
+  "currentPhase": 2,
   "status": "in_progress",
-  "artifactDir": ".workflow/artifacts/bugfixes/bugfix"
+  "artifactDir": ".workflow/artifacts/features/feature"
 }
 ```
 
-**Status values:**
-- `in_progress` — Workflow running
-- `paused` — Workflow paused
-- `completed` — All phases done
-
-**Phase status values:**
-- `pending` — Not started
-- `active` — Currently executing
-- `completed` — Finished successfully
-- `failed` — Failed (can retry)
-
-## Phase Execution Flow
-
-Agent-driven execution:
-
-1. Agent reads `.workflow/STATE.json` → current phase
-2. Agent reads `templates/<template>.md` → phase instructions
-3. Agent executes the phase (autonomously decides how)
-4. Agent calls `workflow-ctl advance` to update state
-5. Repeat until all phases completed
-
-**For phases with parallel tasks:**
-1. Agent generates task list
-2. Agent calls `ag task create` for each task
-3. Agent spawns workers via `fan-out.sh` pattern
-4. Workers claim and execute tasks via `ag task claim`
-5. Agent calls `workflow-ctl advance` after all tasks done
-
-## State Files
-
-| File | Purpose |
-|------|---------|
-| `.workflow/STATE.json` | Current workflow state (managed by workflow-ctl) |
-| `.workflow/artifacts/` | Phase outputs (SPEC.md, PLAN.md, tasks.md, etc.) |
+**Workflow status:** `in_progress` | `paused` | `completed`
+**Phase status:** `pending` | `active` | `completed` | `failed`
 
 ## Artifact Directory
-
-Artifacts are stored in `.workflow/artifacts/<category>/<template>/`:
 
 ```
 .workflow/
@@ -272,63 +101,73 @@ Artifacts are stored in `.workflow/artifacts/<category>/<template>/`:
 └── artifacts/
     └── features/
         └── feature/
-            ├── SPEC.md
-            ├── PLAN.md
-            ├── tasks.md
-            └── implement-output.md
+            ├── design.md        ← brainstorm output
+            ├── SPEC.md          ← spec output
+            ├── PLAN.yml         ← plan output (structured)
+            ├── PLAN.md          ← plan output (rendered)
+            └── impl-report.md   ← implement output
 ```
 
-## Error Handling
+## How Each Phase Works
 
-| Error | Recovery |
-|-------|----------|
-| Phase fails | Agent retries or fixes; state not advanced |
-| workflow-ctl fails | State file corruption; restore from backup |
-| ag task fails | Agent marks task failed; retry or skip |
+### Phase: Brainstorm
 
-## Best Practices
+Agent invokes the `brainstorm` skill:
+- Conducts dependency inversion interview
+- Explores codebase if needed (via `explore` skill)
+- Produces validated design
 
-1. **Agent autonomy** — Agent controls phase execution, not scripts
-2. **State via tool** — Always use `workflow-ctl advance` (don't manually edit STATE.json)
-3. **Parallel tasks** — Use `ag task` + `fan-out.sh` for concurrent work
-4. **Check status** — Use `workflow-ctl status` before new work
-5. **Commit after phases** — Keep clean git history
+**Output:** `design.md` in artifact dir
 
-## Example: Full Feature Flow
+### Phase: Spec
 
-```
-/workflow start feature "add user auth"
-  ↓
-workflow-ctl writes STATE.json {currentPhase: spec}
-  ↓
-Agent reads STATE.json → Phase 1: Spec
-Agent executes Spec phase (creates SPEC.md)
-Agent calls workflow-ctl advance
-  ↓
-STATE.json {currentPhase: plan}
-  ↓
-Agent executes Plan phase (creates PLAN.md)
-Agent calls workflow-ctl advance
-  ↓
-STATE.json {currentPhase: implement}
-  ↓
-Agent generates tasks.md
-Agent creates tasks: ag task create "implement auth", "write tests"
-Agent spawns fan-out workers to execute tasks
-Agent calls workflow-ctl advance
-  ↓
-STATE.json {currentPhase: test}
-  ↓
-Agent executes tests
-Agent calls workflow-ctl advance
-  ↓
-STATE.json {status: completed}
-```
+Agent invokes the `spec` skill:
+- Reads brainstorm design
+- Writes structured SPEC.md with prioritized user stories
+- Gets user approval
+
+**Output:** `SPEC.md` in artifact dir
+
+### Phase: Plan
+
+Agent invokes the `plan` skill:
+- Reads SPEC.md (and CONTEXT.md if exists)
+- Uses planner persona + reviewer in worker-judge loop
+- Produces PLAN.yml + PLAN.md
+
+**Output:** `PLAN.yml` + `PLAN.md` in artifact dir
+
+### Phase: Implement
+
+Agent invokes the `implement` skill:
+- Spawns sub-agents per task
+- Two-stage review (spec compliance + code quality)
+- Commits after each group
+- Run tests after all groups complete
+
+**Output:** git commits + `impl-report.md`
+
+## Skipping Phases
+
+Some templates skip phases:
+
+- **bugfix** → skips brainstorm and spec; goes straight to explore → plan → implement
+- **hotfix** → skips everything; just implement
+- **spike** → brainstorm only, maybe document
+
+The template defines what to skip. The agent follows the template.
 
 ## Anti-Patterns
 
-❌ **Don't start without template** — Use `/workflow start feature` not ad-hoc
-❌ **Don't manually edit STATE.json** — Always use `workflow-ctl advance`
-❌ **Don't skip phases** — Each phase has a purpose
-❌ **Don't ignore failures** — Fix issues before advancing
-❌ **Don't run without ag** — Ensure ag binary is built
+❌ Don't start without template — always `/workflow start <template>`
+❌ Don't manually edit STATE.json — always use `workflow-ctl`
+❌ Don't skip skills — each has a purpose
+❌ Don't ignore failures — fix before advancing
+❌ Don't let workflow do the work — delegate to skills
+
+## Tooling
+
+- **workflow-ctl** (`bin/workflow-ctl`) — state management
+- **plan-lint** (in `plan` skill) — validate PLAN.yml
+- **plan-render** (in `plan` skill) — render PLAN.yml → PLAN.md
+- **pair.sh** (in `ag` skill) — worker-judge loop pattern
