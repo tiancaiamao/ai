@@ -14,10 +14,10 @@ type Tool interface {
 	Execute(ctx context.Context, params map[string]any) ([]agentctx.ContentBlock, error)
 }
 
-// GetMiniCompactTools returns tools available for mini compact mode.
+// GetContextManagementTools returns tools available for context management mode.
 // Note: compact tool is added separately by the caller (in pkg/compact)
 // to avoid circular imports.
-func GetMiniCompactTools(agentCtx *agentctx.AgentContext) []Tool {
+func GetContextManagementTools(agentCtx *agentctx.AgentContext) []Tool {
 	return []Tool{
 		NewTruncateMessagesTool(agentCtx),
 		NewUpdateLLMContextTool(agentCtx),

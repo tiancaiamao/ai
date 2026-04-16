@@ -15,15 +15,15 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-// Trigger thresholds for LLM mini compaction.
+// Trigger thresholds for context management.
 const (
-	MiniTokenLow    = 0.20 // 20%: start periodic checks
-	MiniTokenMedium = 0.33 // 30%: more aggressive checks
-	MiniTokenHigh   = 0.50 // 50%: frequent checks
+	MgmtTokenLow    = 0.20 // 20%: start periodic checks
+	MgmtTokenMedium = 0.33 // 30%: more aggressive checks
+	MgmtTokenHigh   = 0.50 // 50%: frequent checks
 
-	MiniIntervalLow    = 15 // At 20%: every 15 tool calls
-	MiniIntervalMedium = 10 // At 40%: every 10 tool calls
-	MiniIntervalHigh   = 7  // At 60%: every 7 tool calls
+	MgmtIntervalLow    = 15 // At 20%: every 15 tool calls
+	MgmtIntervalMedium = 10 // At 40%: every 10 tool calls
+	MgmtIntervalHigh   = 7  // At 60%: every 7 tool calls
 
 	// Tool output preview limits for context management messages
 	// These should match TruncateWithHeadTail constants to ensure
@@ -32,7 +32,7 @@ const (
 	mgmtPreviewHead = 1000 // Must match TruncateWithHeadTail headKeep
 	mgmtPreviewTail = 1000 // Must match TruncateWithHeadTail tailKeep
 
-	// When estimated truncation savings is above this threshold, mini compact
+	// When estimated truncation savings is above this threshold, context management
 	// should prioritize truncate_messages before update_llm_context.
 	// Reduced from 5000 to 2000 to be more aggressive about truncation.
 	mgmtForceTruncateSavingsTokens = 2000
@@ -42,8 +42,8 @@ const (
 	mgmtLargeMessageThreshold = 2000 // Reduced from 3000 to be more aggressive
 )
 
-// LLMMiniCompactorConfig holds configuration.
-type LLMMiniCompactorConfig struct {
+// ContextManagerConfig holds configuration.
+type ContextManagerConfig struct {
 	TokenLow    float64
 	TokenMedium float64
 	TokenHigh   float64
@@ -55,27 +55,27 @@ type LLMMiniCompactorConfig struct {
 	AutoCompact bool
 }
 
-// DefaultLLMMiniCompactorConfig returns defaults.
-func DefaultLLMMiniCompactorConfig() *LLMMiniCompactorConfig {
-	return &LLMMiniCompactorConfig{
-		TokenLow:    MiniTokenLow,
-		TokenMedium: MiniTokenMedium,
-		TokenHigh:   MiniTokenHigh,
+// DefaultContextManagerConfig returns defaults.
+func DefaultContextManagerConfig() *ContextManagerConfig {
+	return &ContextManagerConfig{
+		TokenLow:    MgmtTokenLow,
+		TokenMedium: MgmtTokenMedium,
+		TokenHigh:   MgmtTokenHigh,
 
-		IntervalLow:    MiniIntervalLow,
-		IntervalMedium: MiniIntervalMedium,
-		IntervalHigh:   MiniIntervalHigh,
+		IntervalLow:    MgmtIntervalLow,
+		IntervalMedium: MgmtIntervalMedium,
+		IntervalHigh:   MgmtIntervalHigh,
 
 		AutoCompact: true,
 	}
 }
 
-// LLMMiniCompactor performs lightweight LLM-driven context management.
+// ContextManager performs lightweight LLM-driven context management.
 // It is triggered periodically by the agent loop and makes an independent LLM
 // call with context-management-specific tools (truncate_messages, update_llm_context, compact, no_action).
 // The main LLM is never involved in context management decisions.
-type LLMMiniCompactor struct {
-	config        *LLMMiniCompactorConfig
+type ContextManager struct {
+	config        *ContextManagerConfig
 	model         llm.Model
 	apiKey        string
 	contextWindow int
@@ -83,19 +83,19 @@ type LLMMiniCompactor struct {
 	compactor     *Compactor // Optional: full compactor for compact tool
 }
 
-// NewLLMMiniCompactor creates a new LLMMiniCompactor.
-func NewLLMMiniCompactor(
-	config *LLMMiniCompactorConfig,
+// NewContextManager creates a new ContextManager.
+func NewContextManager(
+	config *ContextManagerConfig,
 	model llm.Model,
 	apiKey string,
 	contextWindow int,
 	systemPrompt string,
 	compactor *Compactor,
-) *LLMMiniCompactor {
+) *ContextManager {
 	if config == nil {
-		config = DefaultLLMMiniCompactorConfig()
+		config = DefaultContextManagerConfig()
 	}
-	return &LLMMiniCompactor{
+	return &ContextManager{
 		config:        config,
 		model:         model,
 		apiKey:        apiKey,
@@ -106,15 +106,15 @@ func NewLLMMiniCompactor(
 }
 
 // SetCompactor sets the full compactor for compact tool support.
-func (c *LLMMiniCompactor) SetCompactor(compactor *Compactor) {
+func (c *ContextManager) SetCompactor(compactor *Compactor) {
 	c.compactor = compactor
 }
 
 // ShouldCompact checks if the compactor should run.
 // It uses token percentage and tool-call interval to decide.
-func (c *LLMMiniCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
+func (c *ContextManager) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
-		traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_check",
 			traceevent.Field{Key: "decision", Value: false},
 			traceevent.Field{Key: "reason", Value: "auto_compact_disabled"},
 		)
@@ -123,7 +123,7 @@ func (c *LLMMiniCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx
 
 	tokenPercent := c.estimateTokenPercent(agentCtx)
 	if tokenPercent < c.config.TokenLow {
-		traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_check",
 			traceevent.Field{Key: "decision", Value: false},
 			traceevent.Field{Key: "reason", Value: "below_token_low"},
 			traceevent.Field{Key: "token_percent", Value: fmt.Sprintf("%.1f%%", tokenPercent*100)},
@@ -148,7 +148,7 @@ func (c *LLMMiniCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx
 	}
 
 	shouldCompact := toolCallsSince >= interval
-	traceevent.Log(ctx, traceevent.CategoryEvent, "mini_compact_check",
+	traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_check",
 		traceevent.Field{Key: "decision", Value: shouldCompact},
 		traceevent.Field{Key: "token_percent", Value: fmt.Sprintf("%.1f%%", tokenPercent*100)},
 		traceevent.Field{Key: "tier", Value: tier},
@@ -167,13 +167,13 @@ func (c *LLMMiniCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx
 // Compact runs the LLM-driven context management cycle.
 // Uses context.Background() internally. For context-aware cancellation,
 // use CompactWithCtx instead.
-func (c *LLMMiniCompactor) Compact(agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *ContextManager) Compact(agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return c.CompactWithCtx(context.Background(), agentCtx)
 }
 
 // CompactWithCtx runs the LLM-driven context management cycle with context support.
-func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	span := traceevent.StartSpan(parent, "mini_compact", traceevent.CategoryEvent,
+func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	span := traceevent.StartSpan(parent, "context_mgmt", traceevent.CategoryEvent,
 		traceevent.Field{Key: "messages_before", Value: len(agentCtx.RecentMessages)},
 		traceevent.Field{Key: "token_pct", Value: fmt.Sprintf("%.1f%%", c.estimateTokenPercent(agentCtx)*100)},
 		traceevent.Field{Key: "tool_calls_since", Value: agentCtx.AgentState.ToolCallsSinceLastTrigger},
@@ -183,7 +183,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	start := time.Now()
 	tokensBefore := agentCtx.EstimateTokens()
 
-	slog.Info("[LLMMini] Starting compact",
+	slog.Info("[CtxMgmt] Starting compact",
 		"messages", len(agentCtx.RecentMessages),
 		"token_pct", fmt.Sprintf("%.1f%%", c.estimateTokenPercent(agentCtx)*100),
 	)
@@ -194,11 +194,11 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	// 2. Get context management tools
 	var tools []context_mgmt.Tool
 	if c.compactor != nil {
-		tools = context_mgmt.GetMiniCompactTools(agentCtx)
+		tools = context_mgmt.GetContextManagementTools(agentCtx)
 		// Add compact tool manually to avoid circular import
 		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
 	} else {
-		tools = context_mgmt.GetMiniCompactTools(agentCtx)
+		tools = context_mgmt.GetContextManagementTools(agentCtx)
 	}
 
 	// 3. Call LLM
@@ -221,7 +221,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	// 4. Extract tool calls from stream
 	toolCalls, err := c.extractToolCalls(parent, stream)
 	if err != nil {
-		slog.Error("[LLMMini] LLM call failed", "error", err)
+		slog.Error("[CtxMgmt] LLM call failed", "error", err)
 		return nil, fmt.Errorf("context management LLM call failed: %w", err)
 	}
 
@@ -230,20 +230,20 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 
 	// 6. Validate that required tool pairings were followed
 	if truncatedCount > 0 && !llmContextUpdated {
-		slog.Warn("[LLMMini] TRUNCATE WITHOUT UPDATE: truncate_messages was called but update_llm_context was not - this breaks task continuity",
+		slog.Warn("[CtxMgmt] TRUNCATE WITHOUT UPDATE: truncate_messages was called but update_llm_context was not - this breaks task continuity",
 			"truncated_count", truncatedCount,
 		)
 		// Add a trace event to highlight this failure
-		traceevent.Log(parent, traceevent.CategoryEvent, "mini_compact_validation_failed",
+		traceevent.Log(parent, traceevent.CategoryEvent, "context_mgmt_validation_failed",
 			traceevent.Field{Key: "reason", Value: "truncate_without_update"},
 			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
 		)
 	} else if !llmContextUpdated && agentCtx.LLMContext == "" {
-		slog.Error("[LLMMini] EMPTY LLM CONTEXT: mini compact ran without updating LLM Context - agent cannot continue",
+		slog.Error("[CtxMgmt] EMPTY LLM CONTEXT: context management ran without updating LLM Context - agent cannot continue",
 			"tool_calls", len(toolCalls),
 		)
 		// Add a trace event to highlight this failure
-		traceevent.Log(parent, traceevent.CategoryEvent, "mini_compact_validation_failed",
+		traceevent.Log(parent, traceevent.CategoryEvent, "context_mgmt_validation_failed",
 			traceevent.Field{Key: "reason", Value: "empty_llm_context"},
 			traceevent.Field{Key: "tool_calls", Value: len(toolCalls)},
 		)
@@ -265,7 +265,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	span.AddField("truncated_count", truncatedCount)
 	span.AddField("llm_context_updated", llmContextUpdated)
 
-	slog.Info("[LLMMini] Compact complete",
+	slog.Info("[CtxMgmt] Compact complete",
 		"tokens_before", tokensBefore,
 		"tokens_after", tokensAfter,
 		"saved", tokensBefore-tokensAfter,
@@ -276,7 +276,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 	)
 
 	return &agentctx.CompactionResult{
-		Summary:           fmt.Sprintf("LLM mini compact: %d tool calls executed", len(toolCalls)),
+		Summary:           fmt.Sprintf("LLM context management: %d tool calls executed", len(toolCalls)),
 		TokensBefore:      tokensBefore,
 		TokensAfter:       tokensAfter,
 		Type:              "mini",
@@ -286,7 +286,7 @@ func (c *LLMMiniCompactor) CompactWithCtx(parent context.Context, agentCtx *agen
 }
 
 // CalculateDynamicThreshold returns the token threshold for compaction.
-func (c *LLMMiniCompactor) CalculateDynamicThreshold() int {
+func (c *ContextManager) CalculateDynamicThreshold() int {
 	if c.contextWindow <= 0 {
 		return 0
 	}
@@ -295,7 +295,7 @@ func (c *LLMMiniCompactor) CalculateDynamicThreshold() int {
 
 // --- Internal helpers ---
 
-func (c *LLMMiniCompactor) estimateTokenPercent(ctx *agentctx.AgentContext) float64 {
+func (c *ContextManager) estimateTokenPercent(ctx *agentctx.AgentContext) float64 {
 	if c.contextWindow <= 0 {
 		return 0
 	}
@@ -368,7 +368,7 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 // buildContextMgmtMessages builds the message sequence for context management.
 // Sends the FULL conversation with annotations so the LLM can judge
 // whether each tool output is still useful.
-func (c *LLMMiniCompactor) buildContextMgmtMessages(agentCtx *agentctx.AgentContext) []llm.LLMMessage {
+func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContext) []llm.LLMMessage {
 	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
 	if protectedStart < 0 {
 		protectedStart = 0
@@ -548,7 +548,7 @@ Policy hint:
 }
 
 // convertToolsToLLM converts context management tools to LLM format.
-func (c *LLMMiniCompactor) convertToolsToLLM(tools []context_mgmt.Tool) []llm.LLMTool {
+func (c *ContextManager) convertToolsToLLM(tools []context_mgmt.Tool) []llm.LLMTool {
 	result := make([]llm.LLMTool, len(tools))
 	for i, tool := range tools {
 		result[i] = llm.LLMTool{
@@ -564,7 +564,7 @@ func (c *LLMMiniCompactor) convertToolsToLLM(tools []context_mgmt.Tool) []llm.LL
 }
 
 // extractToolCalls reads tool calls from the LLM stream.
-func (c *LLMMiniCompactor) extractToolCalls(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) ([]llm.ToolCall, error) {
+func (c *ContextManager) extractToolCalls(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) ([]llm.ToolCall, error) {
 	var toolCalls []llm.ToolCall
 	for event := range stream.Iterator(ctx) {
 		if event.Done {
@@ -584,7 +584,7 @@ func (c *LLMMiniCompactor) extractToolCalls(ctx context.Context, stream *llm.Eve
 
 // executeToolCalls runs each tool call and logs the result.
 // Returns the count of truncated messages and whether LLM context was updated.
-func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (truncatedCount int, llmContextUpdated bool) {
+func (c *ContextManager) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (truncatedCount int, llmContextUpdated bool) {
 	for _, tc := range toolCalls {
 		startTime := time.Now()
 		toolSpan := traceevent.StartSpan(ctx, "tool_execution", traceevent.CategoryTool,
@@ -607,7 +607,7 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 			}
 		}
 		if target == nil {
-			slog.Warn("[LLMMini] Tool not found", "tool", tc.Function.Name)
+			slog.Warn("[CtxMgmt] Tool not found", "tool", tc.Function.Name)
 			toolSpan.AddField("error", true)
 			toolSpan.AddField("error_message", fmt.Sprintf("tool %q not found", tc.Function.Name))
 			toolSpan.End()
@@ -624,7 +624,7 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 		args := make(map[string]any)
 		if tc.Function.Arguments != "" {
 			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				slog.Warn("[LLMMini] Failed to parse args", "tool", tc.Function.Name, "error", err)
+				slog.Warn("[CtxMgmt] Failed to parse args", "tool", tc.Function.Name, "error", err)
 				toolSpan.AddField("error", true)
 				toolSpan.AddField("error_message", fmt.Sprintf("parse args: %v", err))
 				toolSpan.End()
@@ -641,7 +641,7 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 
 		content, err := target.Execute(ctx, args)
 		if err != nil {
-			slog.Error("[LLMMini] Tool execution failed", "tool", tc.Function.Name, "error", err)
+			slog.Error("[CtxMgmt] Tool execution failed", "tool", tc.Function.Name, "error", err)
 			toolSpan.AddField("error", true)
 			toolSpan.AddField("error_message", err.Error())
 			toolSpan.End()
@@ -661,7 +661,7 @@ func (c *LLMMiniCompactor) executeToolCalls(ctx context.Context, toolCalls []llm
 				resultText = text.Text
 			}
 		}
-		slog.Info("[LLMMini] Tool executed", "tool", tc.Function.Name, "result", resultText)
+		slog.Info("[CtxMgmt] Tool executed", "tool", tc.Function.Name, "result", resultText)
 		toolSpan.End()
 		traceevent.Log(ctx, traceevent.CategoryTool, "tool_end",
 			traceevent.Field{Key: "tool", Value: tc.Function.Name},

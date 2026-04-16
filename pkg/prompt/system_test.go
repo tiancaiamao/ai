@@ -21,28 +21,19 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	if strings.TrimSpace(CompactorBasePrompt()) == "" {
 		t.Fatal("CompactorBasePrompt should not be empty")
 	}
-	if strings.TrimSpace(RPCBasePrompt()) == "" {
-		t.Fatal("RPCBasePrompt should not be empty")
-	}
-	if strings.TrimSpace(HeadlessBasePrompt(false)) == "" {
-		t.Fatal("HeadlessBasePrompt(false) should not be empty")
-	}
-	if strings.TrimSpace(HeadlessBasePrompt(true)) == "" {
-		t.Fatal("HeadlessBasePrompt(true) should not be empty")
+	if strings.TrimSpace(HeadlessBasePrompt()) == "" {
+		t.Fatal("HeadlessBasePrompt should not be empty")
 	}
 	if strings.TrimSpace(JSONModeBasePrompt()) == "" {
 		t.Fatal("JSONModeBasePrompt should not be empty")
 	}
 }
 
-func TestRPCBasePromptNoForcedJSON(t *testing.T) {
-	p := RPCBasePrompt()
+func TestHeadlessBasePromptNoForcedJSON(t *testing.T) {
+	p := HeadlessBasePrompt()
 	if strings.Contains(strings.ToLower(p), "return an empty json with error field") {
-		t.Fatalf("RPC base prompt still forces legacy JSON fallback: %q", p)
+		t.Fatalf("base prompt still forces legacy JSON fallback: %q", p)
 	}
-	// The conditional JSON rule check is no longer relevant after prompt refactor
-	// The old prompt had specific JSON handling instructions, but the new
-	// structure uses headless_base.md which doesn't include those rules
 }
 
 func TestPromptABMetricsSmoke(t *testing.T) {
@@ -70,7 +61,7 @@ func TestPromptABMetricsSmoke(t *testing.T) {
 	}
 
 	oldPrompt := NewBuilder(legacyRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
-	newPrompt := NewBuilder(RPCBasePrompt(), "/workspace").SetTools(tools).SetSkills(skills).Build()
+	newPrompt := NewBuilder(HeadlessBasePrompt(), "/workspace").SetTools(tools).SetSkills(skills).Build()
 
 	oldChars := len(oldPrompt)
 	newChars := len(newPrompt)

@@ -75,10 +75,10 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 		agentctx.NewUserMessage("recent-5"),
 	}
 
-	compactor := NewLLMMiniCompactor(DefaultLLMMiniCompactorConfig(), llmModelStub(), "", 200000, "system", nil)
+	compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
 	msgs := compactor.buildContextMgmtMessages(agentCtx)
 	if len(msgs) != 2 {
-		t.Fatalf("expected 2 mini-compact messages, got %d", len(msgs))
+		t.Fatalf("expected 2 context management messages, got %d", len(msgs))
 	}
 
 	history := msgs[0].Content
@@ -98,7 +98,7 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 	}
 }
 
-func TestMiniCompactCompactToolUpdatesLLMContext(t *testing.T) {
+func TestContextManagerCompactToolUpdatesLLMContext(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("system")
 	agentCtx.RecentMessages = []agentctx.AgentMessage{
 		makeToolResult("call-a", 12000),
@@ -115,7 +115,7 @@ func TestMiniCompactCompactToolUpdatesLLMContext(t *testing.T) {
 		AutoCompact:  true,
 	}, llmModelStub(), "test-key", "test", 200000)
 
-	miniCompactor := NewLLMMiniCompactor(DefaultLLMMiniCompactorConfig(), llmModelStub(), "test-key", 200000, "system", compactor)
+	ctxManager := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "test-key", 200000, "system", compactor)
 
 	// Verify the fix: when compact tool is executed, llmContextUpdated should be true
 	// Test via the tool registration path
@@ -140,7 +140,7 @@ func TestMiniCompactCompactToolUpdatesLLMContext(t *testing.T) {
 	}
 
 	// Execute the tool calls via the test helper
-	truncatedCount, llmContextUpdated := miniCompactor.executeToolCallsForTest(toolCalls, tools)
+	truncatedCount, llmContextUpdated := ctxManager.executeToolCallsForTest(toolCalls, tools)
 
 	if llmContextUpdated != true {
 		t.Errorf("expected llmContextUpdated=true after compact tool execution, got false")
@@ -155,7 +155,7 @@ func TestMiniCompactCompactToolUpdatesLLMContext(t *testing.T) {
 	}
 }
 
-func TestMiniCompactAllToolsTrackLLMContextUpdates(t *testing.T) {
+func TestContextManagerAllToolsTrackLLMContextUpdates(t *testing.T) {
 	tests := []struct {
 		name              string
 		toolName          string
@@ -223,8 +223,8 @@ func TestMiniCompactAllToolsTrackLLMContextUpdates(t *testing.T) {
 				AutoCompact: true,
 			}, llmModelStub(), "test-key", "test", 200000)
 
-			miniCompactor := NewLLMMiniCompactor(
-				DefaultLLMMiniCompactorConfig(),
+			ctxManager := NewContextManager(
+				DefaultContextManagerConfig(),
 				llmModelStub(),
 				"test-key",
 				200000,
@@ -250,7 +250,7 @@ func TestMiniCompactAllToolsTrackLLMContextUpdates(t *testing.T) {
 				},
 			}
 
-			truncatedCount, llmContextUpdated := miniCompactor.executeToolCallsForTest(toolCalls, tools)
+			truncatedCount, llmContextUpdated := ctxManager.executeToolCallsForTest(toolCalls, tools)
 
 			if llmContextUpdated != tt.expectUpdated {
 				t.Errorf("expected llmContextUpdated=%v, got %v", tt.expectUpdated, llmContextUpdated)
@@ -271,6 +271,6 @@ func llmModelStub() llm.Model {
 }
 
 // executeToolCallsForTest is a test helper that exposes executeToolCalls for testing
-func (c *LLMMiniCompactor) executeToolCallsForTest(toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (int, bool) {
+func (c *ContextManager) executeToolCallsForTest(toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (int, bool) {
 	return c.executeToolCalls(context.Background(), toolCalls, tools)
 }

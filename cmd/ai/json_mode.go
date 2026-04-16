@@ -181,12 +181,12 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 	)
 
 	// LLM-driven mini compactor for lightweight context management
-	miniCompactor := compact.NewLLMMiniCompactor(
-		compact.DefaultLLMMiniCompactorConfig(),
+	ctxManager := compact.NewContextManager(
+		compact.DefaultContextManagerConfig(),
 		model,
 		apiKey,
 		currentContextWindow,
-		prompt.LLMMiniCompactSystemPrompt(),
+		prompt.ContextManagementSystemPrompt(),
 		compactor, // Pass compactor to enable compact tool
 	)
 
@@ -251,7 +251,7 @@ func runJSON(sessionPath string, debugAddr string, prompts []string, output io.W
 
 	// Build LoopConfig with all settings
 	loopCfg := cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{miniCompactor, sessionComp}),
+		config.WithCompactors([]agent.Compactor{ctxManager, sessionComp}),
 		config.WithContextWindow(currentContextWindow),
 		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),

@@ -1831,7 +1831,7 @@ func (p *AiInterpreter) handleCompactionEvent(start bool, info *agent.Compaction
 		return
 	}
 
-	// For mini compaction, show truncation details
+	// For context management, show truncation details
 	if info != nil && info.Type == "mini" {
 		msg := fmt.Sprintf("ai: %s done ", label)
 		if info.TruncatedCount > 0 {

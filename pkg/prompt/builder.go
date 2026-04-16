@@ -14,9 +14,6 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-//go:embed "subagent_base.md"
-var subagentBasePrompt string
-
 //go:embed "headless_base.md"
 var headlessBasePrompt string
 
@@ -29,11 +26,8 @@ var compactSummarizePrompt string
 //go:embed "compact_update.md"
 var compactUpdatePrompt string
 
-//go:embed "subagent.md"
-var DefaultSubagentPrompt string
-
-//go:embed "llm_mini_compact_system.md"
-var llmMiniCompactSystemPrompt string
+//go:embed "context_management.md"
+var contextManagementSystemPrompt string
 
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
@@ -41,22 +35,13 @@ func CompactorBasePrompt() string {
 }
 
 // HeadlessBasePrompt returns the base system prompt for headless mode.
-func HeadlessBasePrompt(isSubagent bool) string {
-	if isSubagent {
-		return subagentBasePrompt
-	}
-
-	return headlessBasePrompt
-}
-
-// RPCBasePrompt returns the base system prompt for RPC mode.
-func RPCBasePrompt() string {
+func HeadlessBasePrompt() string {
 	return headlessBasePrompt
 }
 
 // JSONModeBasePrompt returns the base system prompt for JSON mode.
 func JSONModeBasePrompt() string {
-	return HeadlessBasePrompt(false)
+	return headlessBasePrompt
 }
 
 // CompactSystemPrompt returns the system prompt for compaction.
@@ -91,9 +76,6 @@ type Builder struct {
 
 	// No workspace mode (excludes workspace section, for chat bots like claw)
 	noWorkspace bool
-
-	// Subagent mode (excludes task strategy section to prevent recursive subagent use)
-	isSubagent bool
 
 	// Workspace notes (optional reminders)
 	workspaceNotes string
@@ -144,12 +126,6 @@ func (b *Builder) SetMinimal(minimal bool) *Builder {
 // SetNoWorkspace enables/disables no-workspace mode.
 func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
 	b.noWorkspace = noWorkspace
-	return b
-}
-
-// SetSubagent enables/disables subagent mode.
-func (b *Builder) SetSubagent(isSubagent bool) *Builder {
-	b.isSubagent = isSubagent
 	return b
 }
 
@@ -368,7 +344,7 @@ func NormalizeThinkingLevel(level string) string {
 	}
 }
 
-// MiniCompactSystemPrompt returns system prompt for mini compact protocol.
-func LLMMiniCompactSystemPrompt() string {
-	return llmMiniCompactSystemPrompt
+// ContextManagementSystemPrompt returns system prompt for context management.
+func ContextManagementSystemPrompt() string {
+	return contextManagementSystemPrompt
 }

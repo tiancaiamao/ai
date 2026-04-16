@@ -220,9 +220,9 @@ func TestNoActionTool_Execute_DefaultReason(t *testing.T) {
 
 // --- Registry tests ---
 
-func TestGetMiniCompactTools(t *testing.T) {
+func TestGetContextManagementTools(t *testing.T) {
 	agentCtx := newTestAgentContext(nil)
-	tools := GetMiniCompactTools(agentCtx)
+	tools := GetContextManagementTools(agentCtx)
 	if len(tools) != 3 {
 		t.Errorf("expected 3 tools, got %d", len(tools))
 	}
