@@ -79,7 +79,7 @@ func inferToolFromArgs(args map[string]any) (string, map[string]any, bool) {
 	path := getStringArg(argSource, "path", "file")
 	content := getStringArg(argSource, "content", "text")
 	oldText := getStringArg(argSource, "oldText", "old_text", "old")
-	newText := getStringArg(argSource, "newText", "new_text", "new")
+	newText, newTextOk := getOptionalStringArg(argSource, "newText", "new_text", "new")
 
 	switch {
 	case command != "":
@@ -95,7 +95,7 @@ func inferToolFromArgs(args map[string]any) (string, map[string]any, bool) {
 		return "grep", inferred, true
 	case path != "" && content != "":
 		return "write", map[string]any{"path": path, "content": content}, true
-	case path != "" && oldText != "" && newText != "":
+	case path != "" && oldText != "" && newTextOk:
 		return "edit", map[string]any{"path": path, "oldText": oldText, "newText": newText}, true
 	case path != "":
 		return "read", map[string]any{"path": path}, true
@@ -157,8 +157,8 @@ func coerceToolArguments(toolName string, args map[string]any) (map[string]any, 
 	case "edit":
 		path := getStringArg(args, "path", "file")
 		oldText := getStringArg(args, "oldText", "old_text", "old")
-		newText := getStringArg(args, "newText", "new_text", "new")
-		if path == "" || oldText == "" || newText == "" {
+		newText, newTextOk := getOptionalStringArg(args, "newText", "new_text", "new")
+		if path == "" || oldText == "" || !newTextOk {
 			return nil, fmt.Errorf("missing path/oldText/newText")
 		}
 		return map[string]any{
@@ -193,6 +193,26 @@ func coerceToolArguments(toolName string, args map[string]any) (map[string]any, 
 	default:
 		return args, nil
 	}
+}
+
+// getOptionalStringArg returns (value, true) if any key exists (even if value is empty string),
+// or ("", false) if no key is present. Unlike getStringArg, it does NOT treat empty string as
+// missing, which is essential for edit's newText where "" means deletion.
+func getOptionalStringArg(args map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		v, ok := args[key]
+		if !ok {
+			continue
+		}
+		switch val := v.(type) {
+		case string:
+			return val, true
+		default:
+			coerced := fmt.Sprint(val)
+			return coerced, true
+		}
+	}
+	return "", false
 }
 
 func getStringArg(args map[string]any, keys ...string) string {
