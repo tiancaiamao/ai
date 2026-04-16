@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,13 +75,13 @@ func Spawn(cfg SpawnConfig) (*Meta, error) {
 	}
 
 	meta := &Meta{
-		ID:        cfg.ID,
-		System:    cfg.System,
-		Mode:      cfg.Mode,
-		Cwd:       cfg.Cwd,
-		Timeout:   cfg.Timeout,
-		StartedAt: time.Now().Unix(),
-		Mock:      cfg.Mock,
+		ID:         cfg.ID,
+		System:     cfg.System,
+		Mode:       cfg.Mode,
+		Cwd:        cfg.Cwd,
+		Timeout:    cfg.Timeout,
+		StartedAt:  time.Now().Unix(),
+		Mock:       cfg.Mock,
 		MockScript: cfg.MockScript,
 	}
 
@@ -116,7 +119,13 @@ func Spawn(cfg SpawnConfig) (*Meta, error) {
 	if cfg.Mock {
 		return spawnMock(cfg, agentDir, meta)
 	}
-	return spawnReal(cfg, agentDir, meta)
+
+	switch cfg.Mode {
+	case "rpc":
+		return spawnRPC(cfg, agentDir, meta)
+	default:
+		return spawnHeadless(cfg, agentDir, meta)
+	}
 }
 
 // spawnMock runs a mock script synchronously.
@@ -156,20 +165,421 @@ func spawnMock(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
 	return meta, nil
 }
 
-// spawnReal starts ai --mode headless as a direct child process.
-// No tmux, no shell wrappers — just exec.Command with process group isolation.
-// spawnReal starts ai --mode headless as a detached process.
-//
-// Since ag is a CLI (each command is a separate process), we can't rely on
-// goroutines surviving after spawn returns. Instead, we write a watcher shell
-// script that:
-//  1. Runs ai --mode headless (the actual agent)
-//  2. Captures output to agentDir/output
-//  3. Updates status + meta.json when it finishes
-//
-// The watcher runs in its own process group (Setpgid) and is released from
-// ag's process tree (Process.Release). It survives ag's exit.
-func spawnReal(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
+// --- RPC Mode ---
+
+// rpcConn holds the pipes for communicating with an RPC-mode agent.
+type rpcConn struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+}
+
+// spawnRPC starts ai --mode rpc as a detached process with named pipes for IPC.
+// The agent reads RPC commands from <agentDir>/rpc_stdin and writes events to <agentDir>/rpc_stdout.
+// A watcher process manages the lifecycle: sends the initial prompt, collects output, and updates status.
+func spawnRPC(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
+	aiBin, err := exec.LookPath("ai")
+	if err != nil {
+		return nil, fmt.Errorf("ai binary not found in PATH: %w", err)
+	}
+
+	cwd := cfg.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	// Resolve input text
+	inputText := cfg.Input
+	if strings.HasPrefix(cfg.Input, "@") {
+		path := strings.TrimPrefix(cfg.Input, "@")
+		if data, err := os.ReadFile(path); err == nil {
+			inputText = string(data)
+		}
+	}
+
+	// Build watcher script that:
+	// 1. Starts ai --mode rpc (reads from fifo, writes to fifo)
+	// 2. Feeds the initial prompt via RPC
+	// 3. Streams events to output file
+	// 4. Updates status on completion
+	outputPath := filepath.Join(agentDir, "output")
+	statusPath := filepath.Join(agentDir, "status")
+	metaPath := filepath.Join(agentDir, "meta.json")
+	eventsPath := filepath.Join(agentDir, "events.jsonl")
+
+	aiArgs := []string{aiBin, "--mode", "rpc", "--timeout", cfg.Timeout}
+	if cfg.System != "" {
+		systemPromptPath := resolveSystemPrompt(cfg.System, agentDir)
+		aiArgs = append(aiArgs, "--system-prompt", systemPromptPath)
+	}
+
+	watcherContent := buildRPCWatcherScript(watcherScriptConfig{
+		aiArgs:      aiArgs,
+		cwd:         cwd,
+		outputPath:  outputPath,
+		statusPath:  statusPath,
+		metaPath:    metaPath,
+		eventsPath:  eventsPath,
+		inputText:   inputText,
+		agentDir:    agentDir,
+		timeout:     cfg.Timeout,
+	})
+
+	watcherScript := filepath.Join(agentDir, "watcher.sh")
+	if err := os.WriteFile(watcherScript, []byte(watcherContent), 0755); err != nil {
+		return nil, fmt.Errorf("write watcher script: %w", err)
+	}
+
+	// Start watcher in background, detached from ag process
+	cmd := exec.Command(watcherScript)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start watcher: %w", err)
+	}
+
+	meta.Pid = cmd.Process.Pid
+	storage.AtomicWriteJSON(filepath.Join(agentDir, "meta.json"), meta)
+	storage.WriteStatus(agentDir, StatusRunning)
+
+	// Release the child — it survives ag's exit
+	cmd.Process.Release()
+
+	return meta, nil
+}
+
+type watcherScriptConfig struct {
+	aiArgs     []string
+	cwd        string
+	outputPath string
+	statusPath string
+	metaPath   string
+	eventsPath string
+	inputText  string
+	agentDir   string
+	timeout    string
+}
+
+// buildRPCWatcherScript creates a bash script that:
+// 1. Creates named pipes (FIFOs) for RPC communication
+// 2. Starts ai --mode rpc with stdin/stdout connected to the FIFOs
+// 3. Feeds the initial prompt via RPC JSON command
+// 4. Reads events from the agent and writes to events.jsonl + output
+// 5. Updates status when agent finishes
+func buildRPCWatcherScript(cfg watcherScriptConfig) string {
+	// Build the ai command with shell quoting
+	aiCmdShell := ""
+	for _, a := range cfg.aiArgs {
+		aiCmdShell += " " + shellQuote(a)
+	}
+
+	// Escape input text for JSON embedding
+	escapedInput := strings.ReplaceAll(cfg.inputText, `\`, `\\`)
+	escapedInput = strings.ReplaceAll(escapedInput, `"`, `\"`)
+	escapedInput = strings.ReplaceAll(escapedInput, "\n", `\n`)
+	escapedInput = strings.ReplaceAll(escapedInput, "\t", `\t`)
+	escapedInput = strings.ReplaceAll(escapedInput, "$", `\$`)
+
+	// We use a Python3 helper to do the RPC communication because bash alone
+	// can't reliably handle JSON over FIFOs with the ai process.
+	// The python script:
+	// 1. Starts ai --mode rpc as a subprocess
+	// 2. Sends the prompt command
+	// 3. Reads events until agent_end
+	// 4. Collects assistant text as output
+	// 5. Writes events to events.jsonl
+	pythonScript := filepath.Join(cfg.agentDir, "rpc_bridge.py")
+
+	pyContent := `#!/usr/bin/env python3
+"""RPC bridge: manages ai --mode rpc subprocess lifecycle."""
+import json, subprocess, sys, os, signal, time
+
+def main():
+    ai_args = json.loads(os.environ.get('AI_ARGS', '[]'))
+    input_text = os.environ.get('AI_INPUT', '')
+    output_path = os.environ.get('AI_OUTPUT', '/dev/null')
+    events_path = os.environ.get('AI_EVENTS', '/dev/null')
+    status_path = os.environ.get('AI_STATUS', '')
+    meta_path = os.environ.get('AI_META', '')
+    cwd = os.environ.get('AI_CWD', '.')
+    timeout_str = os.environ.get('AI_TIMEOUT', '10m')
+
+    # Parse timeout
+    timeout_secs = 600
+    if timeout_str.endswith('m'):
+        timeout_secs = int(timeout_str[:-1]) * 60
+    elif timeout_str.endswith('s'):
+        timeout_secs = int(timeout_str[:-1])
+    elif timeout_str.endswith('h'):
+        timeout_secs = int(timeout_str[:-1]) * 3600
+
+    # Start ai --mode rpc
+    proc = subprocess.Popen(
+        ai_args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        start_new_session=True,
+    )
+
+    cmd_id = 1
+
+    def send_cmd(cmd_type, data=None):
+        nonlocal cmd_id
+        cmd = {"id": str(cmd_id), "type": cmd_type}
+        if data:
+            cmd["data"] = data
+        cmd_id += 1
+        line = json.dumps(cmd) + "\n"
+        try:
+            proc.stdin.write(line.encode())
+            proc.stdin.flush()
+            return True
+        except (BrokenPipeError, OSError):
+            return False
+
+    def read_events(collector, stop_on_agent_end=True):
+        """Read events from ai's stdout until agent_end or EOF."""
+        assistant_parts = []
+        try:
+            for line in proc.stdout:
+                line = line.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type", "")
+
+                # Collect assistant text from message_update (streaming)
+                if event_type == "message_update":
+                    sub = event.get("assistantMessageEvent", {})
+                    if isinstance(sub, dict) and sub.get("type") == "text_delta":
+                        text = sub.get("delta", "")
+                        if text:
+                            assistant_parts.append(text)
+                # Collect full message from message_end
+                elif event_type == "message_end" and event.get("message"):
+                    msg = event["message"]
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        if isinstance(content, str) and content:
+                            collector["output"] = content
+                        elif isinstance(content, list):
+                            parts = []
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    parts.append(block.get("text", ""))
+                            collector["output"] = "".join(parts)
+
+                # Write event to events.jsonl
+                try:
+                    with open(events_path, "a") as f:
+                        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+                except OSError:
+                    pass
+
+                if event_type == "agent_end" and stop_on_agent_end:
+                    break
+        except Exception:
+            pass
+
+        # If no full message collected, use delta parts
+        if not collector.get("output") and assistant_parts:
+            collector["output"] = "".join(assistant_parts)
+
+    # Send initial prompt
+    prompt_data = {"message": input_text}
+    send_cmd("prompt", prompt_data)
+
+    # Read events with timeout
+    collector = {"output": ""}
+    start = time.time()
+
+    # Use a simple timeout loop
+    import threading
+    done = threading.Event()
+
+    def run_read():
+        read_events(collector, stop_on_agent_end=True)
+        done.set()
+
+    reader = threading.Thread(target=run_read, daemon=True)
+    reader.start()
+
+    if not done.wait(timeout=timeout_secs):
+        # Timeout: send abort, wait briefly, then kill
+        send_cmd("abort")
+        time.sleep(2)
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            time.sleep(0.5)
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+    # Wait for process to finish
+    # Close stdin to signal ai process to exit
+    try:
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+    exit_code = proc.returncode if proc.returncode is not None else -1
+
+    # Write output
+    output_text = collector.get("output", "")
+    try:
+        with open(output_path, "w") as f:
+            f.write(output_text)
+    except OSError:
+        pass
+
+    # Update status and meta
+    status = "done" if exit_code == 0 and output_text else "failed"
+    if not output_text and exit_code != 0:
+        status = "failed"
+    elif not output_text and exit_code == 0:
+        status = "done"
+    elif output_text:
+        # We got output, consider it done even if exit code is non-zero
+        # (ai process may have been killed during shutdown)
+        status = "done"
+
+    try:
+        with open(status_path, "w") as f:
+            f.write(status + "\n")
+    except OSError:
+        pass
+
+    if meta_path:
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+            meta["finishedAt"] = int(time.time())
+            meta["exitCode"] = exit_code
+            with open(meta_path, "w") as f:
+                json.dump(meta, f, indent=2)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    sys.exit(0 if status == "done" else 1)
+
+if __name__ == "__main__":
+    main()
+`
+
+	// Write the Python bridge script
+	// (We'll write it in spawnRPC, not in the bash script)
+
+	// Build the bash wrapper
+	script := "#!/bin/bash\n"
+	script += "set -o pipefail\n"
+	script += fmt.Sprintf("cd %s 2>/dev/null || true\n", shellQuote(cfg.cwd))
+	script += fmt.Sprintf("export AI_ARGS=%s\n", shellQuote(mustJSON(cfg.aiArgs)))
+	script += fmt.Sprintf("export AI_INPUT=%s\n", shellQuote(escapedInput))
+	script += fmt.Sprintf("export AI_OUTPUT=%s\n", shellQuote(cfg.outputPath))
+	script += fmt.Sprintf("export AI_EVENTS=%s\n", shellQuote(cfg.eventsPath))
+	script += fmt.Sprintf("export AI_STATUS=%s\n", shellQuote(cfg.statusPath))
+	script += fmt.Sprintf("export AI_META=%s\n", shellQuote(cfg.metaPath))
+	script += fmt.Sprintf("export AI_CWD=%s\n", shellQuote(cfg.cwd))
+	script += fmt.Sprintf("export AI_TIMEOUT=%s\n", shellQuote(cfg.timeout))
+	script += fmt.Sprintf("exec python3 %s\n", shellQuote(pythonScript))
+
+	// Write the Python script
+	os.WriteFile(pythonScript, []byte(pyContent), 0755)
+
+	return script
+}
+
+func mustJSON(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// ReadEvents reads new events from an RPC-mode agent's events.jsonl file.
+// Returns events from the given offset.
+func ReadEvents(id string, offset int) ([]json.RawMessage, error) {
+	agentDir := storage.AgentDir(id)
+	eventsPath := filepath.Join(agentDir, "events.jsonl")
+
+	f, err := os.Open(eventsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var events []json.RawMessage
+	scanner := bufio.NewScanner(f)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		if lineNum <= offset {
+			continue
+		}
+		line := scanner.Bytes()
+		if len(line) > 0 {
+			// Must copy: scanner.Bytes() reuses its internal buffer across Scan() calls.
+			// Without copying, all json.RawMessage entries would point to the same buffer
+			// and contain only the last line's content.
+			cp := make(json.RawMessage, len(line))
+			copy(cp, line)
+			events = append(events, cp)
+		}
+	}
+	return events, scanner.Err()
+}
+
+// SendRPC sends an RPC command to a running RPC-mode agent via its inbox.
+// The agent picks it up on the next event loop iteration.
+func SendRPC(id string, cmdType string, data map[string]interface{}) error {
+	agentDir := storage.AgentDir(id)
+	status := storage.ReadStatus(agentDir)
+	if status != StatusRunning {
+		return fmt.Errorf("agent %s is %s (not running)", id, status)
+	}
+
+	// For RPC mode, we send commands via the agent's inbox as a special .rpc file
+	// The watcher's python bridge will read and forward them
+	cmd := map[string]interface{}{
+		"id":   fmt.Sprintf("cmd-%d", time.Now().UnixNano()),
+		"type": cmdType,
+	}
+	if data != nil {
+		cmd["data"] = data
+	}
+
+	// Write to inbox with sequence number
+	inboxDir := filepath.Join(agentDir, "inbox")
+	entries, _ := os.ReadDir(inboxDir)
+	nextSeq := len(entries) + 1
+	cmdPath := filepath.Join(inboxDir, fmt.Sprintf("%03d.rpc", nextSeq))
+
+	cmdJSON, _ := json.Marshal(cmd)
+	return storage.WriteFile(cmdPath, cmdJSON)
+}
+
+// --- Headless Mode (original) ---
+
+// spawnHeadless starts ai --mode headless as a detached watcher process.
+func spawnHeadless(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
 	// Resolve system prompt
 	systemPromptArg := ""
 	if cfg.System != "" {
@@ -252,37 +662,8 @@ func spawnReal(cfg SpawnConfig, agentDir string, meta *Meta) (*Meta, error) {
 	return meta, nil
 }
 
-// shellQuote wraps a string in single quotes, escaping any embedded single quotes.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-func resolveSystemPrompt(system string, agentDir string) string {
-	if strings.HasPrefix(system, "@") {
-		filePath := strings.TrimPrefix(system, "@")
-		if storage.Exists(filePath) {
-			return system // already has @ prefix, file exists — pass through
-		}
-		// @ prefix but file doesn't exist — treat as inline content
-		system = system[1:]
-	}
+// --- Wait ---
 
-	// Inline content — write to file, return @path
-	tmpFile := filepath.Join(agentDir, "system-prompt.txt")
-	if err := os.WriteFile(tmpFile, []byte(system), 0644); err != nil {
-		return system // fallback: pass inline (will likely fail)
-	}
-	return "@" + tmpFile
-}
-
-// Wait blocks until the agent reaches a terminal state (done/failed/killed)
-// or times out.
-//
-// Detection strategy (no tmux dependency):
-//  1. Poll status file every 2s — the background goroutine in spawnReal
-//     writes the status when the process exits
-//  2. Cross-check: if status says "running" but the PID is gone (process
-//     died without our goroutine catching it), mark as failed
-//  3. Timeout safety net
 func Wait(id string, timeoutSec int) error {
 	agentDir := storage.AgentDir(id)
 	if !storage.Exists(agentDir) {
@@ -292,17 +673,17 @@ func Wait(id string, timeoutSec int) error {
 	meta := &Meta{}
 	storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
 
-	if meta.Mock {
-		return waitByPolling(agentDir, meta, timeoutSec)
-	}
-	return waitByPolling(agentDir, meta, timeoutSec)
-}
-
-func waitByPolling(agentDir string, meta *Meta, timeoutSec int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
-	checkInterval := 2 * time.Second
+	checkInterval := 500 * time.Millisecond
+
+	// Accelerate polling after 10s
+	if timeoutSec > 20 {
+		checkInterval = 2 * time.Second
+	}
 
 	for time.Now().Before(deadline) {
+		storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
+
 		status := storage.ReadStatus(agentDir)
 
 		switch status {
@@ -472,13 +853,29 @@ func List() ([]AgentEntry, error) {
 	return result, nil
 }
 
-// ringBuffer is a fixed-size ring buffer that keeps the last N bytes written.
-// Used to capture the tail of agent output for diagnostics.
+// --- Helpers ---
 
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
 
+func resolveSystemPrompt(system string, agentDir string) string {
+	if strings.HasPrefix(system, "@") {
+		filePath := strings.TrimPrefix(system, "@")
+		if storage.Exists(filePath) {
+			return system // already has @ prefix, file exists — pass through
+		}
+		// @ prefix but file doesn't exist — treat as inline content
+		system = system[1:]
+	}
 
-// Bytes returns the content of the ring buffer in order (oldest first).
-
+	// Inline content — write to file, return @path
+	tmpFile := filepath.Join(agentDir, "system-prompt.txt")
+	if err := os.WriteFile(tmpFile, []byte(system), 0644); err != nil {
+		return system // fallback: pass inline (will likely fail)
+	}
+	return "@" + tmpFile
+}
 
 func fileSize(path string) int64 {
 	info, err := os.Stat(path)

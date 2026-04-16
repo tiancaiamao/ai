@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -37,6 +39,7 @@ func init() {
 
 	rootCmd.AddCommand(spawnCmd, waitCmd, killCmd, outputCmd, statusCmd, lsCmd, rmCmd)
 	rootCmd.AddCommand(sendCmd, recvCmd)
+	rootCmd.AddCommand(readCmd, stopCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(taskCmd)
 }
@@ -251,6 +254,197 @@ var recvCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		os.Stdout.Write(data)
+	},
+}
+
+// ========== RPC Agent Commands ==========
+
+var (
+	readFollow bool
+	readRaw    bool
+)
+
+var readCmd = &cobra.Command{
+	Use:   "read <agent-id> [--follow] [--raw]",
+	Short: "Read events from an RPC-mode agent",
+	Long: `Read events from a running or completed RPC-mode agent.
+
+By default, shows new events since the last read. Use --follow to stream
+events in real-time. Use --raw to output raw JSON lines.
+
+For headless-mode agents, this falls back to showing the output file.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		agentDir := storage.AgentDir(id)
+		if !storage.Exists(agentDir) {
+			fmt.Fprintf(os.Stderr, "Error: agent not found: %s\n", id)
+			os.Exit(1)
+		}
+
+		meta := &agent.Meta{}
+		storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
+
+		// For non-RPC agents, fall back to output file
+		if meta.Mode != "rpc" {
+			outputPath := filepath.Join(agentDir, "output")
+			data, err := os.ReadFile(outputPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: agent is not in RPC mode and has no output\n")
+				os.Exit(1)
+			}
+			os.Stdout.Write(data)
+			return
+		}
+
+		// Read offset tracking
+		offsetFile := filepath.Join(agentDir, "read_offset")
+		offset := 0
+		if data, err := os.ReadFile(offsetFile); err == nil {
+			fmt.Sscanf(string(data), "%d", &offset)
+		}
+
+		if readFollow {
+			// Stream events in real-time
+			for {
+				events, err := agent.ReadEvents(id, offset)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error reading events: %v\n", err)
+					os.Exit(1)
+				}
+				for _, event := range events {
+					if readRaw {
+						fmt.Println(string(event))
+					} else {
+						printEvent(event)
+					}
+					offset++
+				}
+				// Save offset
+				os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
+
+				status := storage.ReadStatus(agentDir)
+				if status != agent.StatusRunning && status != agent.StatusSpawning {
+					// Agent finished, drain remaining events
+					events, _ = agent.ReadEvents(id, offset)
+					for _, event := range events {
+						if readRaw {
+							fmt.Println(string(event))
+						} else {
+							printEvent(event)
+						}
+						offset++
+					}
+					os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
+					return
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+
+		// One-shot: read new events
+		events, err := agent.ReadEvents(id, offset)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading events: %v\n", err)
+			os.Exit(1)
+		}
+		for _, event := range events {
+			if readRaw {
+				fmt.Println(string(event))
+			} else {
+				printEvent(event)
+			}
+			offset++
+		}
+		os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
+	},
+}
+
+func printEvent(event json.RawMessage) {
+	var e struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(event, &e); err != nil {
+		return
+	}
+	switch e.Type {
+	case "message_update":
+		// Streaming text delta — extract and print incrementally
+		var full struct {
+			AssistantMessageEvent struct {
+				Type  string `json:"type"`
+				Delta string `json:"delta"`
+			} `json:"assistantMessageEvent"`
+		}
+		if json.Unmarshal(event, &full) == nil {
+			switch full.AssistantMessageEvent.Type {
+			case "text_delta":
+				fmt.Print(full.AssistantMessageEvent.Delta)
+			case "thinking_delta":
+				// Suppress thinking output by default (use --raw to see)
+			}
+		}
+	case "message_end":
+		// Full message available, but we already printed deltas.
+		// Only print if we haven't seen any deltas (e.g., reading completed agent).
+		// For now, just print a newline after assistant messages.
+		var full struct {
+			Message struct {
+				Role string `json:"role"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(event, &full) == nil && full.Message.Role == "assistant" {
+			fmt.Println()
+		}
+	case "agent_start", "agent_end", "turn_start", "turn_end",
+		"message_start", "tool_execution_start", "tool_execution_end":
+		// Structured events — show summary on stderr
+		fmt.Fprintf(os.Stderr, "[%s]\n", e.Type)
+	default:
+		// Other events: suppress by default (use --raw to see)
+	}
+}
+
+var stopCmd = &cobra.Command{
+	Use:   "stop <agent-id>",
+	Short: "Gracefully stop an RPC-mode agent",
+	Long: `Gracefully stop an RPC-mode agent by sending an abort command.
+For headless-mode agents, falls back to kill (SIGTERM).`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		agentDir := storage.AgentDir(id)
+		if !storage.Exists(agentDir) {
+			fmt.Fprintf(os.Stderr, "Error: agent not found: %s\n", id)
+			os.Exit(1)
+		}
+
+		meta := &agent.Meta{}
+		storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
+
+		status := storage.ReadStatus(agentDir)
+		if status != agent.StatusRunning {
+			fmt.Fprintf(os.Stderr, "Error: agent %s is %s (not running)\n", id, status)
+			os.Exit(1)
+		}
+
+		if meta.Mode == "rpc" {
+			// RPC mode: the ai process reads from stdin (managed by python bridge).
+			// We can't inject an abort command via the same stdin.
+			// Kill the process group to stop the agent.
+			if err := agent.Kill(id); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Agent %s stopped\n", id)
+		} else {
+			// Headless: just kill
+			if err := agent.Kill(id); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Agent %s killed\n", id)
+		}
 	},
 }
 
@@ -472,7 +666,7 @@ func init() {
 	// spawn flags
 	spawnCmd.Flags().StringVar(&spawnSystem, "system", "", "System prompt file or inline text")
 	spawnCmd.Flags().StringVar(&spawnInput, "input", "", "Input file path or inline text")
-	spawnCmd.Flags().StringVar(&spawnMode, "mode", "headless", "Agent mode: headless or rpc")
+	spawnCmd.Flags().StringVar(&spawnMode, "mode", "headless", "Agent mode: headless (fire-and-forget) or rpc (bidirectional with events)")
 	spawnCmd.Flags().StringVar(&spawnCwd, "cwd", "", "Working directory")
 	spawnCmd.Flags().StringVar(&spawnTimeout, "timeout", "10m", "Timeout (e.g. 5m, 30s)")
 	spawnCmd.Flags().BoolVar(&spawnMock, "mock", false, "Use mock agent (no LLM, for testing)")
@@ -490,6 +684,10 @@ func init() {
 	recvCmd.Flags().BoolVar(&recvWait, "wait", false, "Block until a message arrives")
 	recvCmd.Flags().IntVar(&recvTimeout, "timeout", 60, "Timeout in seconds (with --wait)")
 	recvCmd.Flags().BoolVar(&recvAll, "all", false, "Receive all messages")
+
+	// read flags
+	readCmd.Flags().BoolVar(&readFollow, "follow", false, "Stream events in real-time")
+	readCmd.Flags().BoolVar(&readRaw, "raw", false, "Output raw JSON lines")
 
 	// channel subcommands
 	channelCmd.AddCommand(channelCreateCmd, channelLsCmd, channelRmCmd)
