@@ -12,7 +12,7 @@ implement without guessing.
 
 - After brainstorm produces an approved design
 - When user says "write a spec" or "specify this"
-- As Phase 1 of a feature workflow
+- As Phase 2 of a feature workflow
 
 ## Input
 

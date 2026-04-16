@@ -11,7 +11,7 @@ Transform a specification into a structured implementation plan.
 
 - After spec is approved (from the `spec` skill)
 - When user says "write a plan" or "plan this"
-- As Phase 2 of a feature workflow
+- As Phase 3 of a feature workflow
 
 ## Input
 

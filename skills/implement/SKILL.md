@@ -14,7 +14,7 @@ two-stage review after each.
 
 - After plan is approved (from the `plan` skill)
 - When user says "implement this plan" or "start coding"
-- As Phase 3 of a feature workflow
+- As Phase 4 of a feature workflow
 
 ## Input
 

@@ -24,10 +24,11 @@ Templates define which skills to compose and in what order:
 | Template | Flow | Use Case |
 |----------|------|----------|
 | `feature` | brainstorm → spec → plan → implement | New feature |
-| `bugfix` | (explore) → plan → implement | Bug fix |
+| `bugfix` | explore → plan → implement | Bug fix |
 | `spike` | brainstorm → (document) | Research/exploration |
-| `refactor` | brainstorm → plan → implement | Code restructuring |
+| `refactor` | explore → plan → implement → explore | Code restructuring |
 | `hotfix` | implement (fast path) | Emergency fix |
+| `security` | explore → plan → implement → explore | Security audit |
 
 Templates are thin: they only define the skill sequence and any
 template-specific rules (e.g., bugfix skips brainstorm and goes
