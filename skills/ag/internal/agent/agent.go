@@ -536,7 +536,12 @@ func ReadEvents(id string, offset int) ([]json.RawMessage, error) {
 		}
 		line := scanner.Bytes()
 		if len(line) > 0 {
-			events = append(events, json.RawMessage(line))
+			// Must copy: scanner.Bytes() reuses its internal buffer across Scan() calls.
+			// Without copying, all json.RawMessage entries would point to the same buffer
+			// and contain only the last line's content.
+			cp := make(json.RawMessage, len(line))
+			copy(cp, line)
+			events = append(events, cp)
 		}
 	}
 	return events, scanner.Err()
