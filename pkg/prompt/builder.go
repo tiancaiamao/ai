@@ -39,11 +39,6 @@ func HeadlessBasePrompt() string {
 	return headlessBasePrompt
 }
 
-// RPCBasePrompt returns the base system prompt for RPC mode.
-func RPCBasePrompt() string {
-	return headlessBasePrompt
-}
-
 // JSONModeBasePrompt returns the base system prompt for JSON mode.
 func JSONModeBasePrompt() string {
 	return headlessBasePrompt
