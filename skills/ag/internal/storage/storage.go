@@ -5,12 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
 // BaseDir is the root directory for all ag state.
 // Can be overridden for testing.
 var BaseDir = ".ag"
+
+// SetBaseDir overrides the runtime storage root used by agent/channel/task paths.
+// Empty values are ignored.
+func SetBaseDir(base string) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return
+	}
+	BaseDir = base
+}
 
 // Paths returns common directory paths.
 func Paths() (agentsDir, channelsDir, tasksDir string) {

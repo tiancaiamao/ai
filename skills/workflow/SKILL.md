@@ -1,174 +1,98 @@
 ---
 name: workflow
-description: Orchestrate a full development flow by composing brainstorm → spec → plan → implement skills. State persisted to disk via workflow-ctl.
+description: 对话式开发流程编排。通过自然语言驱动 brainstorm → spec → plan → implement，无需用户手工执行命令。
 ---
 
-# Workflow — Skill Orchestrator
+# Workflow — Conversation Interface
 
-Workflow composes smaller skills into a complete development flow.
-It manages state transitions and coordinates skill handoffs.
+Workflow 是一个**对话接口**，不是命令行教程。
 
-**Workflow does NOT implement logic itself.** It delegates to:
+用户只需要表达意图，agent 负责在后台协调 skills、状态文件和执行脚本。
 
-| Skill | Responsibility |
-|-------|---------------|
-| `brainstorm` | Explore requirements, produce validated design |
-| `spec` | Write structured SPEC.md |
-| `plan` | Break spec into PLAN.yml + PLAN.md |
-| `implement` | Execute plan with sub-agents + two-stage review |
+## User Contract (对用户)
+
+用户应通过自然语言触发流程，例如：
+
+- "开始一个 feature workflow：实现用户注册"
+- "继续下一个阶段"
+- "先给我看当前进度和阻塞点"
+- "进入 implement 阶段并用 team mode 执行"
+- "暂停 / 恢复这个 workflow"
+
+**不要要求用户手动执行 shell 命令。**
+
+## Agent Contract (对 agent)
+
+agent 必须：
+
+1. 负责 workflow 状态管理（开始、推进、暂停、恢复、完成）。
+2. 根据当前阶段自动调用对应 skill：
+   1. `brainstorm`
+   2. `spec`
+   3. `plan`
+   4. `implement`
+3. 在关键节点向用户汇报：
+   1. 当前阶段
+   2. 已完成产物
+   3. 下一步动作
+   4. 风险/阻塞
+4. 仅在必要时向用户提确认问题（例如范围变更、风险接受）。
 
 ## Templates
 
-Templates define which skills to compose and in what order:
-
 | Template | Flow | Use Case |
 |----------|------|----------|
-| `feature` | brainstorm → spec → plan → implement | New feature |
-| `bugfix` | explore → plan → implement | Bug fix |
-| `spike` | brainstorm → (document) | Research/exploration |
-| `refactor` | explore → plan → implement → explore | Code restructuring |
-| `hotfix` | implement (fast path) | Emergency fix |
-| `security` | explore → plan → implement → explore | Security audit |
+| `feature` | brainstorm → spec → plan → implement | 新功能开发（重点） |
+| `bugfix` | explore → plan → implement | 缺陷修复 |
+| `spike` | brainstorm → document | 调研验证 |
+| `refactor` | explore → plan → implement → verify | 重构 |
+| `hotfix` | implement | 紧急修复 |
+| `security` | explore → plan → implement → verify | 安全审计 |
 
-Templates are thin: they only define the skill sequence and any
-template-specific rules (e.g., bugfix skips brainstorm and goes
-straight to exploration + plan).
+## Phase Behavior
 
-See `templates/` for per-template definitions.
+### Brainstorm
+- 目标：收敛需求与边界，形成可被批准的设计。
+- 输出：`design.md`。
+- 交互：向用户确认设计方向后再进入下一阶段。
 
-## Architecture
+### Spec
+- 目标：把设计变成结构化规格（用户故事、验收标准）。
+- 输出：`SPEC.md`。
+- 交互：获取用户对规格的明确确认。
 
-```
-/workflow start feature "X"
-    ↓
-workflow-ctl start → write STATE.json
-    ↓
-Agent reads STATE.json → current phase
-    ↓
-Agent invokes the corresponding skill
-    ↓
-Skill completes → workflow-ctl advance
-    ↓
-Next phase → next skill
-    ↓
-All phases done → workflow-ctl complete
-```
+### Plan
+- 目标：把 SPEC 拆成可执行任务与依赖。
+- 输出：`PLAN.yml` + `PLAN.md`。
+- 交互：展示任务分组、依赖和风险，等待用户确认。
 
-## Commands
+### Implement
+- 默认使用 team mode（中大型任务）。
+- 输出：代码变更 + 测试结果 + `impl-report.md`。
+- 交互：定期汇报进度、失败重试结果、剩余任务。
 
-```bash
-# Start a workflow
-workflow-ctl start <template> "[description]"
+## Implement Team Mode (internal)
 
-# After each skill completes
-workflow-ctl advance
+implement 阶段内部可使用 `ag` 的 team/task 能力（`team init/use`、`task import-plan`、`task next`、依赖调度、收尾清理），但这些属于**实现细节**，不应要求用户手动操作。
 
-# Check status
-workflow-ctl status
+## Artifacts
 
-# Pause / resume
-workflow-ctl pause
-workflow-ctl resume
-```
-
-## State
-
-Persisted to `.workflow/STATE.json`:
-
-```json
-{
-  "template": "feature",
-  "description": "add user auth",
-  "phases": [
-    { "name": "brainstorm", "status": "completed" },
-    { "name": "spec", "status": "completed" },
-    { "name": "plan", "status": "active" },
-    { "name": "implement", "status": "pending" }
-  ],
-  "currentPhase": 2,
-  "status": "in_progress",
-  "artifactDir": ".workflow/artifacts/features/feature"
-}
-```
-
-**Workflow status:** `in_progress` | `paused` | `completed`
-**Phase status:** `pending` | `active` | `completed` | `failed`
-
-## Artifact Directory
-
-```
+```text
 .workflow/
 ├── STATE.json
 └── artifacts/
-    └── features/
-        └── feature/
-            ├── design.md        ← brainstorm output
-            ├── SPEC.md          ← spec output
-            ├── PLAN.yml         ← plan output (structured)
-            ├── PLAN.md          ← plan output (rendered)
-            └── impl-report.md   ← implement output
+    └── <template>/
+        └── <workflow-name>/
+            ├── design.md
+            ├── SPEC.md
+            ├── PLAN.yml
+            ├── PLAN.md
+            └── impl-report.md
 ```
 
-## How Each Phase Works
+## Conversation-First Rules
 
-### Phase: Brainstorm
-
-Agent invokes the `brainstorm` skill:
-- Conducts dependency inversion interview
-- Explores codebase if needed (via `explore` skill)
-- Produces validated design
-
-**Output:** `design.md` in artifact dir
-
-### Phase: Spec
-
-Agent invokes the `spec` skill:
-- Reads brainstorm design
-- Writes structured SPEC.md with prioritized user stories
-- Gets user approval
-
-**Output:** `SPEC.md` in artifact dir
-
-### Phase: Plan
-
-Agent invokes the `plan` skill:
-- Reads SPEC.md (and CONTEXT.md if exists)
-- Uses planner persona + reviewer in worker-judge loop
-- Produces PLAN.yml + PLAN.md
-
-**Output:** `PLAN.yml` + `PLAN.md` in artifact dir
-
-### Phase: Implement
-
-Agent invokes the `implement` skill:
-- Spawns sub-agents per task
-- Two-stage review (spec compliance + code quality)
-- Commits after each group
-- Run tests after all groups complete
-
-**Output:** git commits + `impl-report.md`
-
-## Skipping Phases
-
-Some templates skip phases:
-
-- **bugfix** → skips brainstorm and spec; goes straight to explore → plan → implement
-- **hotfix** → skips everything; just implement
-- **spike** → brainstorm only, maybe document
-
-The template defines what to skip. The agent follows the template.
-
-## Anti-Patterns
-
-❌ Don't start without template — always `/workflow start <template>`
-❌ Don't manually edit STATE.json — always use `workflow-ctl`
-❌ Don't skip skills — each has a purpose
-❌ Don't ignore failures — fix before advancing
-❌ Don't let workflow do the work — delegate to skills
-
-## Tooling
-
-- **workflow-ctl** (`bin/workflow-ctl`) — state management
-- **plan-lint** (in `plan` skill) — validate PLAN.yml
-- **plan-render** (in `plan` skill) — render PLAN.yml → PLAN.md
-- **pair.sh** (in `ag` skill) — worker-judge loop pattern
+1. 任何“开始/继续/暂停/恢复/状态查询”都应可通过自然语言完成。
+2. 不把 `workflow-ctl`、`ag`、shell 参数作为用户主交互方式。
+3. 当后台命令失败，向用户解释失败原因和下一步建议，而不是让用户自己跑命令。
+4. 只在用户明确要求底层命令时，才展示命令细节。

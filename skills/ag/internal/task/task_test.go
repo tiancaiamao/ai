@@ -173,3 +173,67 @@ func TestSequentialIDs(t *testing.T) {
 		t.Fatalf("expected sequential IDs, got %s %s %s", t1.ID, t2.ID, t3.ID)
 	}
 }
+
+func TestDependencyBlocksClaim(t *testing.T) {
+	setupTest(t)
+
+	Create("Base task", "")
+	Create("Dependent task", "")
+
+	if _, err := AddDependency("t002", "t001"); err != nil {
+		t.Fatalf("AddDependency: %v", err)
+	}
+
+	if _, err := Claim("t002", "worker-1"); err == nil {
+		t.Fatal("expected claim to fail when dependency is not done")
+	}
+
+	if _, err := Claim("t001", "worker-1"); err != nil {
+		t.Fatalf("claim t001: %v", err)
+	}
+	if _, err := Done("t001", "done.md"); err != nil {
+		t.Fatalf("done t001: %v", err)
+	}
+
+	if _, err := Claim("t002", "worker-2"); err != nil {
+		t.Fatalf("expected claim to succeed after dependency is done: %v", err)
+	}
+}
+
+func TestNextClaimsUnblockedTask(t *testing.T) {
+	setupTest(t)
+
+	Create("Task 1", "")
+	Create("Task 2", "")
+
+	if _, err := AddDependency("t002", "t001"); err != nil {
+		t.Fatalf("AddDependency: %v", err)
+	}
+
+	next, err := Next("worker-1")
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if next.ID != "t001" {
+		t.Fatalf("expected t001 first, got %s", next.ID)
+	}
+}
+
+func TestDependencyCycleRejected(t *testing.T) {
+	setupTest(t)
+
+	Create("Task 1", "")
+	Create("Task 2", "")
+	Create("Task 3", "")
+
+	if _, err := AddDependency("t002", "t001"); err != nil {
+		t.Fatalf("AddDependency t002->t001: %v", err)
+	}
+	if _, err := AddDependency("t003", "t002"); err != nil {
+		t.Fatalf("AddDependency t003->t002: %v", err)
+	}
+
+	if _, err := AddDependency("t001", "t003"); err == nil {
+		t.Fatal("expected cycle detection error")
+	}
+}
