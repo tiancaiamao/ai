@@ -18,6 +18,7 @@ Workflow requires these skills to be available:
 - `plan` — task breakdown with planner+reviewer loop
 - `implement` — subagent-driven implementation
 - `explore` — codebase exploration and analysis
+- `ag` — agent orchestration runtime (required by `scripts/implement-team.sh` for parallel task execution)
 
 ## User Contract (对用户)
 
@@ -109,6 +110,7 @@ workflow-ctl plan-render <plan.yml> [output.md]
       "status": "completed",
       "output": "design.md",
       "gateApproved": true,
+      "approvedAt": "2026-04-18T10:00:00Z",
       "notes": ""
     },
     {
@@ -134,8 +136,13 @@ workflow-ctl plan-render <plan.yml> [output.md]
   ],
   "currentPhase": 1,
   "status": "in_progress",
+  "startedAt": "2026-04-18T09:30:00Z",
+  "updatedAt": "2026-04-18T10:05:00Z",
   "artifactDir": ".workflow/artifacts/feature"
 }
+```
+
+Note: fields with `omitempty` (output, gateApproved, approvedAt, notes) are omitted when empty on pending phases.
 ```
 
 ## Templates

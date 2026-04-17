@@ -187,7 +187,8 @@ func runBack(cmd *cobra.Command, args []string) {
 	targetPhase.Status = "active"
 	targetPhase.GateApproved = false
 	targetPhase.ApprovedAt = ""
-	targetPhase.Notes = ""
+	// Preserve notes on the target phase — they provide context for re-doing the phase
+	// Notes from subsequent phases are already cleared above
 	state.CurrentPhase = target
 	state.Status = "in_progress"
 

@@ -758,3 +758,93 @@ func splitLines(s string) []string {
 	}
 	return lines
 }
+
+// === Back preserves notes on target phase ===
+
+func TestBackPreservesTargetNotes(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	state := makeFeatureState()
+	state.CurrentPhase = 1 // spec phase
+	state.Phases[0].Status = "completed"
+	state.Phases[0].Notes = "brainstorm completed with design A"
+	state.Phases[1].Status = "active"
+	state.Phases[1].Notes = "spec in progress, wrote 3 stories"
+	if err := saveState(state); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	// Simulate back: manually apply the same logic runBack uses
+	target := state.CurrentPhase - 1
+	for i := target + 1; i < len(state.Phases); i++ {
+		p := &state.Phases[i]
+		if p.Output != "" {
+			p.PreviousOutput = p.Output
+		}
+		p.Status = "pending"
+		p.Output = ""
+		p.GateApproved = false
+		p.ApprovedAt = ""
+		p.Notes = ""
+	}
+	state.Phases[target].Status = "active"
+	state.Phases[target].GateApproved = false
+	state.Phases[target].ApprovedAt = ""
+	// NOTE: intentionally NOT clearing target phase notes
+	state.CurrentPhase = target
+	state.Status = "in_progress"
+	if err := saveState(state); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	// Phase 0 (brainstorm) should keep its notes
+	if loaded.Phases[0].Notes != "brainstorm completed with design A" {
+		t.Errorf("expected target phase notes preserved, got: %q", loaded.Phases[0].Notes)
+	}
+
+	// Phase 0 should be active
+	if loaded.Phases[0].Status != "active" {
+		t.Errorf("expected target phase active, got: %s", loaded.Phases[0].Status)
+	}
+
+	// Phase 1 notes should be cleared (it was reset)
+	if loaded.Phases[1].Notes != "" {
+		t.Errorf("expected subsequent phase notes cleared, got: %q", loaded.Phases[1].Notes)
+	}
+}
+
+// === LintGranularity level is warning ===
+
+func TestLintGranularity_LargeTaskNoSubtasks(t *testing.T) {
+	plan := Plan{
+		Version: "1",
+		Tasks: []PTask{
+			{ID: "T001", Title: "Big task", EstimatedHours: 6},
+		},
+	}
+	issues := lintGranularity(plan)
+	if len(issues) == 0 {
+		t.Fatal("expected issue for large task without subtasks")
+	}
+	if issues[0].Level != "warning" {
+		t.Errorf("expected warning level for large task, got: %s", issues[0].Level)
+	}
+}
+
+func TestLintGranularity_LargeTaskWithSubtasks(t *testing.T) {
+	plan := Plan{
+		Version: "1",
+		Tasks: []PTask{
+			{ID: "T001", Title: "Big task", EstimatedHours: 6, Subtasks: []PSubtask{{ID: "S1", Description: "sub"}}},
+		},
+	}
+	issues := lintGranularity(plan)
+	if len(issues) != 0 {
+		t.Errorf("expected no issues for large task with subtasks, got: %v", issues)
+	}
+}

@@ -324,7 +324,7 @@ func lintGranularity(plan Plan) []LintIssue {
 	for _, t := range plan.Tasks {
 		if t.EstimatedHours > 4 && len(t.Subtasks) == 0 {
 			issues = append(issues, LintIssue{
-				"info", fmt.Sprintf("task %s (%s) is large (%dh) with no subtasks - consider breaking down", t.ID, t.Title, t.EstimatedHours),
+				"warning", fmt.Sprintf("task %s (%s) is large (%dh) with no subtasks — consider breaking down", t.ID, t.Title, t.EstimatedHours),
 			})
 		}
 	}
