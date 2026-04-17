@@ -1,214 +1,64 @@
 ---
 name: implement
-description: Execute an implementation plan using subagent-driven development. Fresh subagent per task, two-stage review (spec compliance + code quality), commit after each group.
+description: 对话式执行实现阶段。用户给出“开始/继续实现”意图，agent 在后台完成任务分发、实现、评审与收尾。
 ---
 
-# Implement
+# Implement — Conversation Interface
 
-Execute a PLAN.md by dispatching sub-agents for each task, with automatic
-two-stage review after each.
+Implement skill 面向用户的交互是自然语言，不是 shell 命令。
 
-**Core principle:** Fresh subagent per task + two-stage review = high quality.
+## User Contract (对用户)
 
-## When to Use
+用户可以这样说：
 
-- After plan is approved (from the `plan` skill)
-- When user says "implement this plan" or "start coding"
-- As Phase 4 of a feature workflow
+- "开始实现这个 plan"
+- "继续 implement 阶段"
+- "汇报剩余任务和阻塞依赖"
+- "先暂停，等我确认后再继续"
+- "把失败任务重试一轮"
 
-## Input
+用户不需要手工运行 `ag` 或脚本。
 
-- `PLAN.md` (required) — the implementation plan
-- `PLAN.yml` (required) — machine-parseable plan (for task extraction)
+## Agent Contract (对 agent)
 
-## The Process
+agent 必须在后台完成以下流程：
 
-### Step 1: Load Plan
+1. 读取 `PLAN.yml` / `PLAN.md`，检查可执行性。
+2. 选择执行模式：
+   1. 小任务可直接执行。
+   2. 中/大任务默认 team mode（依赖感知并行）。
+3. 对每个任务执行：
+   1. 实现
+   2. 规格符合性评审（spec compliance）
+   3. 代码质量评审（quality）
+4. 评审失败时进行受限重试（最多 N 轮）。
+5. 任务完成后更新状态并持续汇报总体进度。
+6. 全部完成后输出 `impl-report.md` 与测试结论。
 
-Read PLAN.md and PLAN.yml. Review critically:
-- Any concerns about the plan? Raise them before starting.
-- No concerns? Proceed to execution.
+## Team Mode (internal, hidden from user)
 
-### Step 2: Select Execution Strategy
+team mode 可使用 `ag team` + `ag task` 实现：
 
-Based on plan size:
+- plan 导入任务与依赖
+- worker 自动领取下一可执行任务
+- 依赖阻塞自动生效
+- 阶段结束后收尾/清理
 
-| Scope | Tasks | Strategy |
-|-------|-------|----------|
-| Small | 1-2 | Execute directly in this session |
-| Medium | 3-6 | Group by group, sub-agent per task |
-| Large | 7+ | Fan-out parallel within groups, sub-agent per task |
+这些属于内部实现细节，不应转嫁给用户手工执行。
 
-### Step 3: Execute Groups
+## Progress Reporting
 
-For each group in `group_order`:
+每轮关键动作后向用户汇报：
 
-#### 3a. Spawn Implementer(s)
+1. 已完成任务数 / 总任务数
+2. 当前活跃任务
+3. 阻塞任务与依赖原因
+4. 失败/重试情况
+5. 下一步计划
 
-For each task in the group:
+## Conversation-First Rules
 
-```bash
-AG_BIN=~/.ai/skills/ag/ag
-
-$AG_BIN spawn \
-  --id "impl-T001" \
-  --system "$(cat ~/.ai/skills/implement/prompts/implementer.md)" \
-  --input "TASK: [full task text from plan]
-
-CONTEXT: [where this fits, dependencies, architectural notes]
-
-SPEC.md location: [path]
-Working directory: [cwd]" \
-  --timeout 15m
-```
-
-**Parallelism:** Tasks with no dependencies and different target files → spawn
-all at once. Tasks that depend on each other or touch the same files → serial.
-
-#### 3b. Wait for Implementers
-
-```bash
-$AG_BIN wait "impl-T001" --timeout 900
-OUTPUT=$($AG_BIN output "impl-T001")
-```
-
-#### 3c. Stage 1 Review: Spec Compliance
-
-After implementer reports, dispatch spec reviewer:
-
-```bash
-$AG_BIN spawn \
-  --id "spec-review-T001" \
-  --system "$(cat ~/.ai/skills/implement/prompts/spec-reviewer.md)" \
-  --input "## What Was Requested
-[full task requirements]
-
-## What Implementer Claims
-[implementer report from output]
-
-Verify by reading the actual code at: [cwd]" \
-  --timeout 10m
-
-$AG_BIN wait "spec-review-T001" --timeout 600
-SPEC_VERDICT=$($AG_BIN output "spec-review-T001")
-```
-
-**If CHANGES_REQUESTED →** Feed feedback back to implementer (same sub-agent
-or new one), re-review. Max 2 rounds.
-
-**If APPROVED →** Proceed to Stage 2.
-
-#### 3d. Stage 2 Review: Code Quality
-
-Only after spec compliance passes:
-
-```bash
-$AG_BIN spawn \
-  --id "quality-review-T001" \
-  --system "$(cat ~/.ai/skills/implement/prompts/quality-reviewer.md)" \
-  --input "## What Was Implemented
-[task description + implementer report]
-
-Review the actual code at: [cwd]" \
-  --timeout 10m
-
-$AG_BIN wait "quality-review-T001" --timeout 600
-QUALITY_VERDICT=$($AG_BIN output "quality-review-T001")
-```
-
-**If CHANGES_REQUESTED with medium+ severity →** Fix and re-review. Max 2 rounds.
-**If APPROVED →** Proceed to commit.
-
-#### 3e. Commit the Group
-
-After both reviews pass:
-
-```bash
-git add -A
-git commit -m "[group commit message from PLAN.yml]"
-```
-
-### Step 4: Run Tests
-
-After all groups are implemented:
-
-```bash
-# Run full test suite
-go test ./... -v
-```
-
-If tests fail, enter fix loop:
-- Spawn fix agent with specific failure context
-- Re-run tests
-- Max 2 fix cycles; if still failing, report to user
-
-### Step 5: Report
-
-Summarize:
-- Groups completed
-- Tasks completed vs total
-- Test results
-- Any issues or concerns
-
-## Error Handling
-
-| Error | Recovery |
-|-------|----------|
-| Implementer times out | Retry once with increased timeout; report if still fails |
-| Spec review fails 2 rounds | Report to user with diagnosis; don't auto-proceed |
-| Quality review fails 2 rounds | Report to user; medium+ must be fixed, low can proceed |
-| Tests fail after 2 fix cycles | Report to user; don't silently proceed |
-| Sub-agent crashes | Retry once; report if persistent |
-
-**Never silently skip a failure.** Always report to the user.
-
-## Task Dispatch Template
-
-When spawning implementer, fill in the prompt template:
-
-```
-TASK: [paste FULL task text from PLAN — don't make sub-agent read file]
-
-CONTEXT:
-- This is task [T001] in group "[group-name]"
-- Dependencies: [list completed deps, or "none"]
-- Related files: [from task's "file" field]
-- Project: [brief description]
-- Working directory: [absolute path]
-
-SPEC.md: [path if needed for reference]
-```
-
-## Commit Conventions
-
-```
-feat(scope): add [feature]
-fix(scope): resolve [issue]
-refactor(scope): restructure [area]
-test(scope): add tests for [feature]
-docs: update [documentation]
-```
-
-## Anti-Patterns
-
-- ❌ Don't implement directly — delegate to sub-agents
-- ❌ Don't skip spec compliance review — "it looks fine" is not a review
-- ❌ Don't skip quality review — spec compliance ≠ code quality
-- ❌ Don't batch-review multiple tasks — review each task independently
-- ❌ Don't trust implementer reports — verify by reading code
-- ❌ Don't proceed on failure — report to user
-
-## Skill Composition
-
-```
-plan → implement (this skill) → [commit → PR]
-                                  or
-                     direct plan → implement → [commit → PR]
-```
-
-## Integration with Other Skills
-
-- **explore** — may be used before implementation if plan has gaps
-- **review** — used for PR-level review after all tasks complete
-- **test-driven-development** — implementer sub-agents should follow TDD
-- **finishing-a-development-branch** — after implementation is complete
+1. 不把 CLI 参数当作用户主接口。
+2. 不要求用户自己执行命令来推进任务。
+3. 出现失败时，agent 先自恢复（重试、降并行、回退），再向用户汇报决策。
+4. 仅当用户明确要求时，才展示底层命令与脚本细节。

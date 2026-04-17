@@ -1,7 +1,6 @@
 ---
 name: ag
-description: Agent orchestration CLI. Use `ag` to spawn, communicate, and coordinate AI agents.
-  Combine primitives into patterns: pair (worker-judge), parallel, pipeline, fan-out.
+description: Agent orchestration runtime for other skills. 用户通过对话触发，agent 在后台使用 ag 命令执行。
 ---
 
 # ag — Agent Orchestration CLI
@@ -9,6 +8,19 @@ description: Agent orchestration CLI. Use `ag` to spawn, communicate, and coordi
 ## Overview
 
 `ag` provides a unified interface for spawning, communicating, and coordinating AI agents. It wraps the low-level tmux + headless mode pattern into a clean CLI with additional infrastructure for multi-agent workflows.
+
+## Conversation-First Positioning
+
+`ag` 是**内部执行层**，不是用户主交互层。
+
+- 用户接口：自然语言（由 `workflow` / `implement` 等 skill 承接）
+- `ag` 接口：供 agent 在后台调用
+
+默认规则：
+
+1. 不要求用户手工输入 `ag` 命令来推进流程。
+2. agent 负责把用户意图翻译为 `ag` 操作。
+3. 仅在用户明确要求“显示底层命令”时，才暴露 CLI 细节。
 
 ### History: From subagent to ag
 
@@ -21,7 +33,8 @@ Previously, the `subagent` skill provided basic agent spawning via `start_subage
 The `ag` CLI was created to address these limitations, providing:
 - **Agent lifecycle**: spawn, wait, kill, rm, status
 - **Communication**: channels, send/recv messages
-- **Task management**: create, claim, done/fail tasks
+- **Task management**: create/import, dependencies, next-claim, done/fail
+- **Team runtime**: team-scoped state via `team init/use/done/cleanup`
 - **Pattern scripts**: reusable multi-agent workflows (pair, parallel, pipeline, fan-out)
 
 **The subagent skill is now deprecated.** Use `ag spawn` instead. The low-level `start_agent.sh` script is now part of `ag`'s internal implementation.
@@ -53,7 +66,7 @@ If you need direct access to the low-level script (e.g., for debugging), it's at
 ~/.ai/skills/ag/internal/tmux/start_agent.sh
 ```
 
-## CLI Commands
+## CLI Commands (Internal Reference)
 
 ### Agent Lifecycle
 
@@ -98,15 +111,41 @@ $AG_BIN channel ls
 $AG_BIN channel rm review-queue
 ```
 
+### Team Runtime
+
+```bash
+# Initialize and activate a team namespace
+$AG_BIN team init feat-auth --description "Auth feature implementation"
+
+# Show / switch active team
+$AG_BIN team current
+$AG_BIN team use feat-auth
+$AG_BIN team list
+
+# End / clean up a team
+$AG_BIN team done
+$AG_BIN team cleanup                # current team
+$AG_BIN team cleanup --team feat-auth --force
+```
+
+All `ag` state (`agents/channels/tasks`) is scoped to the current team when a team is selected.
+
 ### Task Management
 
 ```bash
 # Create tasks
 $AG_BIN task create "Implement OAuth2"
 $AG_BIN task create "Write tests" --file spec.md
+$AG_BIN task import-plan .workflow/artifacts/features/feature/PLAN.yml
+
+# Dependencies (DAG)
+$AG_BIN task dep add T002 T001      # T002 depends on T001
+$AG_BIN task dep ls T002
+$AG_BIN task dep rm T002 T001
 
 # Claim and complete
 $AG_BIN task claim t001 --as worker-1    # atomic, fails if already claimed
+$AG_BIN task next --as worker-2           # next pending, unblocked
 $AG_BIN task done t001 --output result.md
 $AG_BIN task fail t002 --error "blocked"
 
@@ -114,6 +153,24 @@ $AG_BIN task fail t002 --error "blocked"
 $AG_BIN task list                       # all tasks
 $AG_BIN task list --status pending      # filter by status
 $AG_BIN task show t001                  # full details
+```
+
+### Plan-Driven Team Execution (Recommended for workflow implement phase)
+
+```bash
+AG_BIN=~/.ai/skills/ag/ag
+ART=.workflow/artifacts/features/feature
+
+$AG_BIN team init feat-user-auth --description "feature implement"
+$AG_BIN task import-plan "$ART/PLAN.yml" --spec "$ART/SPEC.md"
+$AG_BIN task list
+
+# Worker loop (manual or scripted):
+# 1) claim next unblocked task
+# 2) run implementer/spec-review/quality-review agents
+# 3) mark done/fail
+TASK=$($AG_BIN task next --as worker-1 | cut -f1)
+echo "claimed $TASK"
 ```
 
 ## Pattern Scripts

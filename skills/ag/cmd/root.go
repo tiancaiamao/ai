@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/genius/ag/internal/channel"
 	"github.com/genius/ag/internal/storage"
 	"github.com/genius/ag/internal/task"
+	"github.com/genius/ag/internal/team"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var rootCmd = &cobra.Command{
@@ -29,8 +32,14 @@ func Execute() {
 }
 
 func init() {
-	// Ensure .ag/ structure exists on every command
+	// Ensure runtime storage exists for the currently selected team context.
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		baseDir, _, err := team.ResolveBaseDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving team context: %v\n", err)
+			os.Exit(1)
+		}
+		storage.SetBaseDir(baseDir)
 		if err := storage.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error initializing storage: %v\n", err)
 			os.Exit(1)
@@ -42,6 +51,7 @@ func init() {
 	rootCmd.AddCommand(readCmd, stopCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(taskCmd)
+	rootCmd.AddCommand(teamCmd)
 }
 
 // ========== Agent Commands ==========
@@ -504,6 +514,135 @@ var channelRmCmd = &cobra.Command{
 	},
 }
 
+// ========== Team Commands ==========
+
+var teamCmd = &cobra.Command{
+	Use:   "team",
+	Short: "Manage team runtime context",
+}
+
+var teamDescription string
+
+var teamInitCmd = &cobra.Command{
+	Use:   "init <team-id>",
+	Short: "Initialize a team workspace and make it current",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		meta, err := team.Init(args[0], teamDescription)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Team initialized: %s\n", meta.ID)
+	},
+}
+
+var teamUseCmd = &cobra.Command{
+	Use:   "use <team-id>",
+	Short: "Switch current team context",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := team.Use(args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Current team: %s\n", args[0])
+	},
+}
+
+var teamCurrentCmd = &cobra.Command{
+	Use:   "current",
+	Short: "Show the current team context",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		current, err := team.Current()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if current == "" {
+			fmt.Println("(none)")
+			return
+		}
+		fmt.Println(current)
+	},
+}
+
+var teamListCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List teams",
+	Args:    cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		teams, err := team.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(teams) == 0 {
+			fmt.Println("No teams")
+			return
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TEAM\tCURRENT\tSTATUS\tRUNNING\tTASKS\tPENDING")
+		for _, item := range teams {
+			current := "-"
+			if item.Current {
+				current = "*"
+			}
+			fmt.Fprintf(
+				w,
+				"%s\t%s\t%s\t%d\t%d\t%d\n",
+				item.ID,
+				current,
+				item.Status,
+				item.RunningAgents,
+				item.TasksTotal,
+				item.TasksPending,
+			)
+		}
+		w.Flush()
+	},
+}
+
+var teamDoneName string
+
+var teamDoneCmd = &cobra.Command{
+	Use:   "done",
+	Short: "Mark a team as done (defaults to current team)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		meta, err := team.Done(teamDoneName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Team marked done: %s\n", meta.ID)
+	},
+}
+
+var (
+	teamCleanupName  string
+	teamCleanupForce bool
+)
+
+var teamCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Delete a team workspace (defaults to current team)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := team.Cleanup(teamCleanupName, teamCleanupForce); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if teamCleanupName == "" {
+			fmt.Println("Current team cleaned up")
+		} else {
+			fmt.Printf("Team cleaned up: %s\n", teamCleanupName)
+		}
+	},
+}
+
 // ========== Task Commands ==========
 
 var taskCmd = &cobra.Command{
@@ -556,7 +695,7 @@ var taskListCmd = &cobra.Command{
 			return
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tDESCRIPTION")
+		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tBLOCKED_BY\tDESCRIPTION")
 		for _, t := range tasks {
 			desc := t.Description
 			if len(desc) > 60 {
@@ -566,7 +705,12 @@ var taskListCmd = &cobra.Command{
 			if t.Claimant != "" {
 				claimant = t.Claimant
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID, t.Status, claimant, desc)
+			blockedBy := "-"
+			unmet, err := task.UnmetDependencies(t.ID)
+			if err == nil && len(unmet) > 0 {
+				blockedBy = strings.Join(unmet, ",")
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, claimant, blockedBy, desc)
 		}
 		w.Flush()
 	},
@@ -592,6 +736,190 @@ var taskClaimCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Printf("Task %s claimed by %s\n", t.ID, t.Claimant)
+	},
+}
+
+var taskNextAs string
+
+var taskNextCmd = &cobra.Command{
+	Use:   "next [--as <agent-id>]",
+	Short: "Claim the next pending, unblocked task",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		agentID := taskNextAs
+		if agentID == "" {
+			agentID = os.Getenv("AG_AGENT_ID")
+		}
+		if agentID == "" {
+			agentID = "manual"
+		}
+		t, err := task.Next(agentID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s\t%s\n", t.ID, t.Description)
+	},
+}
+
+var taskDepCmd = &cobra.Command{
+	Use:   "dep",
+	Short: "Manage task dependencies",
+}
+
+var taskDepAddCmd = &cobra.Command{
+	Use:   "add <task-id> <dep-id>",
+	Short: "Add dependency: <task-id> depends on <dep-id>",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		t, err := task.AddDependency(args[0], args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(t.Dependencies) == 0 {
+			fmt.Printf("Task %s has no dependencies\n", t.ID)
+			return
+		}
+		fmt.Printf("Task %s dependencies: %s\n", t.ID, strings.Join(t.Dependencies, ", "))
+	},
+}
+
+var taskDepRmCmd = &cobra.Command{
+	Use:   "rm <task-id> <dep-id>",
+	Short: "Remove dependency from a task",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		t, err := task.RemoveDependency(args[0], args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(t.Dependencies) == 0 {
+			fmt.Printf("Task %s has no dependencies\n", t.ID)
+			return
+		}
+		fmt.Printf("Task %s dependencies: %s\n", t.ID, strings.Join(t.Dependencies, ", "))
+	},
+}
+
+var taskDepLsCmd = &cobra.Command{
+	Use:     "ls <task-id>",
+	Aliases: []string{"list"},
+	Short:   "List dependencies and their status for a task",
+	Args:    cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		deps, err := task.Dependencies(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(deps) == 0 {
+			fmt.Println("No dependencies")
+			return
+		}
+		unmet, _ := task.UnmetDependencies(args[0])
+		unmetSet := map[string]bool{}
+		for _, dep := range unmet {
+			unmetSet[dep] = true
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "DEP_ID\tSTATUS")
+		for _, depID := range deps {
+			status := "done"
+			if unmetSet[depID] {
+				status = "blocked"
+			}
+			fmt.Fprintf(w, "%s\t%s\n", depID, status)
+		}
+		w.Flush()
+	},
+}
+
+type planImportDoc struct {
+	Metadata struct {
+		SpecFile string `yaml:"spec_file"`
+	} `yaml:"metadata"`
+	Tasks []planImportTask `yaml:"tasks"`
+}
+
+type planImportTask struct {
+	ID           string   `yaml:"id"`
+	Title        string   `yaml:"title"`
+	Description  string   `yaml:"description"`
+	Dependencies []string `yaml:"dependencies"`
+}
+
+var taskImportSpec string
+
+var taskImportPlanCmd = &cobra.Command{
+	Use:   "import-plan <plan.yml>",
+	Short: "Import tasks and dependencies from PLAN.yml",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		planPath := args[0]
+		data, err := os.ReadFile(planPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading plan file: %v\n", err)
+			os.Exit(1)
+		}
+
+		var doc planImportDoc
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing plan yaml: %v\n", err)
+			os.Exit(1)
+		}
+		if len(doc.Tasks) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: no tasks found in plan")
+			os.Exit(1)
+		}
+
+		specFile := strings.TrimSpace(taskImportSpec)
+		if specFile == "" {
+			specFile = strings.TrimSpace(doc.Metadata.SpecFile)
+		}
+
+		created := 0
+		for _, pt := range doc.Tasks {
+			taskID := strings.TrimSpace(pt.ID)
+			if taskID == "" {
+				fmt.Fprintln(os.Stderr, "Error: plan task missing id")
+				os.Exit(1)
+			}
+			desc := strings.TrimSpace(pt.Title)
+			if strings.TrimSpace(pt.Description) != "" {
+				if desc != "" {
+					desc = desc + " - " + strings.TrimSpace(pt.Description)
+				} else {
+					desc = strings.TrimSpace(pt.Description)
+				}
+			}
+			if desc == "" {
+				desc = fmt.Sprintf("Task %s", taskID)
+			}
+
+			if _, err := task.CreateWithID(taskID, desc, specFile); err != nil {
+				fmt.Fprintf(os.Stderr, "Error importing task %s: %v\n", taskID, err)
+				os.Exit(1)
+			}
+			created++
+		}
+
+		for _, pt := range doc.Tasks {
+			taskID := strings.TrimSpace(pt.ID)
+			for _, depID := range pt.Dependencies {
+				depID = strings.TrimSpace(depID)
+				if depID == "" {
+					continue
+				}
+				if _, err := task.AddDependency(taskID, depID); err != nil {
+					fmt.Fprintf(os.Stderr, "Error adding dependency %s -> %s: %v\n", taskID, depID, err)
+					os.Exit(1)
+				}
+			}
+		}
+
+		fmt.Printf("Imported %d task(s) from %s\n", created, planPath)
 	},
 }
 
@@ -646,6 +974,12 @@ var taskShowCmd = &cobra.Command{
 		if t.SpecFile != "" {
 			fmt.Printf("spec: %s\n", t.SpecFile)
 		}
+		if len(t.Dependencies) > 0 {
+			fmt.Printf("dependencies: %s\n", strings.Join(t.Dependencies, ", "))
+			if unmet, err := task.UnmetDependencies(t.ID); err == nil && len(unmet) > 0 {
+				fmt.Printf("blocked_by: %s\n", strings.Join(unmet, ", "))
+			}
+		}
 		if t.OutputFile != "" {
 			fmt.Printf("output: %s\n", t.OutputFile)
 		}
@@ -692,15 +1026,29 @@ func init() {
 	// channel subcommands
 	channelCmd.AddCommand(channelCreateCmd, channelLsCmd, channelRmCmd)
 
+	// team flags
+	teamInitCmd.Flags().StringVar(&teamDescription, "description", "", "Team description")
+	teamDoneCmd.Flags().StringVar(&teamDoneName, "team", "", "Team ID (defaults to current)")
+	teamCleanupCmd.Flags().StringVar(&teamCleanupName, "team", "", "Team ID (defaults to current)")
+	teamCleanupCmd.Flags().BoolVar(&teamCleanupForce, "force", false, "Force cleanup even with running agents")
+
+	// team subcommands
+	teamCmd.AddCommand(teamInitCmd, teamUseCmd, teamCurrentCmd, teamListCmd, teamDoneCmd, teamCleanupCmd)
+
 	// task flags
 	taskCreateCmd.Flags().StringVar(&taskSpecFile, "file", "", "Spec file path")
+	taskImportPlanCmd.Flags().StringVar(&taskImportSpec, "spec", "", "Optional SPEC.md path override")
 	taskListCmd.Flags().StringVar(&taskListStatus, "status", "", "Filter by status (pending|claimed|done|failed)")
 	taskClaimCmd.Flags().StringVar(&taskClaimAs, "as", "", "Agent ID claiming the task")
+	taskNextCmd.Flags().StringVar(&taskNextAs, "as", "", "Agent ID claiming the task")
 	taskDoneCmd.Flags().StringVar(&taskDoneOutput, "output", "", "Output file path")
 	taskFailCmd.Flags().StringVar(&taskFailError, "error", "unknown error", "Error message")
 
+	// task dependency subcommands
+	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
+
 	// task subcommands
-	taskCmd.AddCommand(taskCreateCmd, taskListCmd, taskClaimCmd, taskDoneCmd, taskFailCmd, taskShowCmd)
+	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
 }
 
 // ========== Helpers ==========
