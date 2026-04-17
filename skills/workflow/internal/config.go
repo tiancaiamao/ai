@@ -11,8 +11,10 @@ import (
 
 // === Configuration ===
 
+// WorkflowDir is the directory for workflow state. Mutable for testing.
+var WorkflowDir = ".workflow"
+
 const (
-	WorkflowDir = ".workflow"
 	StateFile   = "STATE.json"
 	AuditFile   = "AUDIT.jsonl"
 	TemplateDir = "templates"
@@ -48,23 +50,111 @@ func resolveSkillsPath() string {
 
 // === State File I/O ===
 
+// legacyStateV1 represents the old format used before schema versioning.
+type legacyStateV1 struct {
+	ID              string   `json:"id"`
+	Template        string   `json:"template"`
+	Description     string   `json:"description"`
+	Status          string   `json:"status"`
+	CurrentPhase    string   `json:"current_phase"`  // was a string, not an index
+	StartedAt       string   `json:"started_at"`
+	Phases          []string `json:"phases"`          // was a string array
+	CompletedPhases []string `json:"completed_phases"`
+	ArtifactDir     string   `json:"artifact_dir"`
+}
+
 func loadState() (*State, error) {
 	statePath := filepath.Join(WorkflowDir, StateFile)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		return nil, fmt.Errorf("read state: %w (run 'workflow-ctl start' first)", err)
 	}
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
+
+	// Try v2 format first (has schemaVersion)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse state: %w", err)
 	}
-	return &state, nil
+
+	if _, hasVersion := raw["schemaVersion"]; hasVersion {
+		var state State
+		if err := json.Unmarshal(data, &state); err != nil {
+			return nil, fmt.Errorf("parse state: %w", err)
+		}
+		return &state, nil
+	}
+
+	// Legacy v1 format — attempt migration
+	return migrateV1State(data)
+}
+
+func migrateV1State(data []byte) (*State, error) {
+	var legacy legacyStateV1
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return nil, fmt.Errorf("parse state (unsupported format): %w", err)
+	}
+
+	// Build phases from the old string array
+	phases := make([]Phase, len(legacy.Phases))
+	completedSet := make(map[string]bool, len(legacy.CompletedPhases))
+	for _, p := range legacy.CompletedPhases {
+		completedSet[p] = true
+	}
+
+	currentIdx := 0
+	for i, name := range legacy.Phases {
+		p := Phase{Name: name, Skill: name}
+		if completedSet[name] {
+			p.Status = "completed"
+		} else {
+			p.Status = "pending"
+			if currentIdx == 0 {
+				currentIdx = i
+			}
+		}
+		phases[i] = p
+	}
+
+	// Activate the first non-completed phase (or last if all completed)
+	if currentIdx < len(phases) {
+		phases[currentIdx].Status = "active"
+	}
+
+	status := legacy.Status
+	if status == "" {
+		if len(legacy.CompletedPhases) == len(legacy.Phases) {
+			status = "completed"
+		} else {
+			status = "in_progress"
+		}
+	}
+
+	state := &State{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            legacy.ID,
+		Template:      legacy.Template,
+		TemplateName:  legacy.Template,
+		Description:   legacy.Description,
+		Phases:        phases,
+		CurrentPhase:  currentIdx,
+		Status:        status,
+		StartedAt:     legacy.StartedAt,
+		ArtifactDir:   legacy.ArtifactDir,
+	}
+
+	// Save migrated state immediately
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: migrated state but failed to save: %v\n", err)
+	}
+
+	return state, nil
 }
 
 func saveState(state *State) error {
 	if err := os.MkdirAll(WorkflowDir, 0755); err != nil {
 		return fmt.Errorf("create workflow dir: %w", err)
 	}
+	state.UpdatedAt = time.Now().Format(time.RFC3339)
 	statePath := filepath.Join(WorkflowDir, StateFile)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -92,12 +182,12 @@ func loadRegistry() (*Registry, error) {
 
 func appendAudit(event, phase, detail string) error {
 	if err := os.MkdirAll(WorkflowDir, 0755); err != nil {
-		return err
+		return fmt.Errorf("create workflow dir for audit: %w", err)
 	}
 	auditPath := filepath.Join(WorkflowDir, AuditFile)
 	f, err := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
 
@@ -109,10 +199,20 @@ func appendAudit(event, phase, detail string) error {
 	}
 	data, err := json.Marshal(evt)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal audit event: %w", err)
 	}
 	_, err = f.WriteString(string(data) + "\n")
-	return err
+	if err != nil {
+		return fmt.Errorf("write audit log: %w", err)
+	}
+	return nil
+}
+
+// audit is appendAudit with error logging to stderr on failure.
+func audit(event, phase, detail string) {
+	if err := appendAudit(event, phase, detail); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: audit log write failed: %v\n", err)
+	}
 }
 
 // === Template Resolution ===

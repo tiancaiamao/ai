@@ -42,15 +42,16 @@ func runStart(cmd *cobra.Command, args []string) {
 	}
 
 	state := &State{
-		ID:           fmt.Sprintf("wf-%s-%d", id, time.Now().Unix()),
-		Template:     id,
-		TemplateName: template.Name,
-		Description:  description,
-		Phases:       phases,
-		CurrentPhase: 0,
-		Status:       "in_progress",
-		StartedAt:    time.Now().Format(time.RFC3339),
-		ArtifactDir:  artifactDir,
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            fmt.Sprintf("wf-%s-%d", id, time.Now().Unix()),
+		Template:      id,
+		TemplateName:  template.Name,
+		Description:   description,
+		Phases:        phases,
+		CurrentPhase:  0,
+		Status:        "in_progress",
+		StartedAt:     time.Now().Format(time.RFC3339),
+		ArtifactDir:   artifactDir,
 	}
 
 	if err := saveState(state); err != nil {
@@ -58,7 +59,7 @@ func runStart(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	_ = appendAudit("start", "", fmt.Sprintf("template=%s description=%s", id, description))
+	audit("start", "", fmt.Sprintf("template=%s description=%s", id, description))
 
 	fmt.Printf("Started: %s\n", template.Name)
 	fmt.Printf("Phases:  %s\n", phaseFlow(phases))
@@ -113,20 +114,26 @@ func runAdvance(cmd *cobra.Command, args []string) {
 		cp.Output = outputFile
 	}
 
-	_ = appendAudit("advance", cp.Name, fmt.Sprintf("output=%s", outputFile))
+	audit("advance", cp.Name, fmt.Sprintf("output=%s", outputFile))
 
 	state.CurrentPhase++
 	if state.CurrentPhase >= len(state.Phases) {
 		state.Status = "completed"
-		_ = saveState(state)
-		_ = appendAudit("complete", "", "")
+		if err := saveState(state); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		audit("complete", "", "")
 		fmt.Println("All phases complete!")
 		return
 	}
 
 	next := &state.Phases[state.CurrentPhase]
 	next.Status = "active"
-	_ = saveState(state)
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Advanced to: %s (skill: %s)\n", next.Name, next.Skill)
 	if next.Gate {
@@ -184,8 +191,11 @@ func runBack(cmd *cobra.Command, args []string) {
 	state.CurrentPhase = target
 	state.Status = "in_progress"
 
-	_ = saveState(state)
-	_ = appendAudit("back", targetPhase.Name, fmt.Sprintf("steps=%d", steps))
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("back", targetPhase.Name, fmt.Sprintf("steps=%d", steps))
 
 	fmt.Printf("Rolled back to: %s (phase %d/%d)\n", targetPhase.Name, target+1, len(state.Phases))
 	fmt.Printf("Reset phases: %s\n", phaseNames(state.Phases[target+1:]))
@@ -215,8 +225,11 @@ func runApprove(cmd *cobra.Command, args []string) {
 
 	cp.GateApproved = true
 	cp.ApprovedAt = time.Now().Format(time.RFC3339)
-	_ = saveState(state)
-	_ = appendAudit("approve", cp.Name, "")
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("approve", cp.Name, "")
 
 	fmt.Printf("Approved: %s — ready to advance\n", cp.Name)
 }
@@ -252,8 +265,11 @@ func runReject(cmd *cobra.Command, args []string) {
 		}
 		cp.Notes += "[reject] " + feedback
 	}
-	_ = saveState(state)
-	_ = appendAudit("reject", cp.Name, feedback)
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("reject", cp.Name, feedback)
 
 	fmt.Printf("Rejected: %s — phase remains active for revision\n", cp.Name)
 	if feedback != "" {
@@ -287,24 +303,34 @@ func runSkip(cmd *cobra.Command, args []string) {
 	}
 
 	cp.Status = "skipped"
+	// Append skip reason to notes (don't overwrite existing notes)
 	if reason != "" {
-		cp.Notes = "[skip] " + reason
+		if cp.Notes != "" {
+			cp.Notes += "\n"
+		}
+		cp.Notes += "[skip] " + reason
 	}
 
-	_ = appendAudit("skip", cp.Name, reason)
+	audit("skip", cp.Name, reason)
 
 	state.CurrentPhase++
 	if state.CurrentPhase >= len(state.Phases) {
 		state.Status = "completed"
-		_ = saveState(state)
-		_ = appendAudit("complete", "", "")
+		if err := saveState(state); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		audit("complete", "", "")
 		fmt.Println("All phases complete!")
 		return
 	}
 
 	next := &state.Phases[state.CurrentPhase]
 	next.Status = "active"
-	_ = saveState(state)
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Skipped: %s — advanced to: %s (skill: %s)\n", cp.Name, next.Name, next.Skill)
 	if next.Gate {
@@ -336,7 +362,10 @@ func runNote(cmd *cobra.Command, args []string) {
 		cp.Notes += "\n"
 	}
 	cp.Notes += text
-	_ = saveState(state)
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Note added to phase '%s'\n", cp.Name)
 }
@@ -361,8 +390,11 @@ func runFail(cmd *cobra.Command, args []string) {
 	cp := currentPhase(state)
 	cp.Status = "failed"
 	state.Status = "failed"
-	_ = saveState(state)
-	_ = appendAudit("fail", cp.Name, reason)
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("fail", cp.Name, reason)
 
 	fmt.Printf("Phase '%s' marked as failed: %s\n", cp.Name, reason)
 	fmt.Println("Fix the issue and run 'workflow-ctl retry' to re-activate this phase.")
@@ -383,8 +415,11 @@ func runRetry(cmd *cobra.Command, args []string) {
 	cp := currentPhase(state)
 	cp.Status = "active"
 	state.Status = "in_progress"
-	_ = saveState(state)
-	_ = appendAudit("retry", cp.Name, "")
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("retry", cp.Name, "")
 
 	fmt.Printf("Retrying phase: %s\n", cp.Name)
 }
@@ -408,6 +443,9 @@ func runStatus(cmd *cobra.Command, args []string) {
 	fmt.Printf("Template:  %s\n", state.Template)
 	fmt.Printf("Status:    %s\n", state.Status)
 	fmt.Printf("Artifacts: %s\n", state.ArtifactDir)
+	if state.SchemaVersion > 0 {
+		fmt.Printf("Schema:    v%d\n", state.SchemaVersion)
+	}
 	fmt.Println()
 	fmt.Println("Phases:")
 
@@ -469,8 +507,11 @@ func runPause(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	state.Status = "paused"
-	_ = saveState(state)
-	_ = appendAudit("pause", currentPhase(state).Name, "")
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("pause", currentPhase(state).Name, "")
 	fmt.Printf("Paused at phase: %s\n", currentPhase(state).Name)
 }
 
@@ -485,8 +526,11 @@ func runResume(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	state.Status = "in_progress"
-	_ = saveState(state)
-	_ = appendAudit("resume", currentPhase(state).Name, "")
+	if err := saveState(state); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	audit("resume", currentPhase(state).Name, "")
 	fmt.Printf("Resumed at phase: %s\n", currentPhase(state).Name)
 }
 

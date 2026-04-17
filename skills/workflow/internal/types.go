@@ -2,28 +2,32 @@ package main
 
 // === State Types ===
 
+const CurrentSchemaVersion = 2
+
 type Phase struct {
-	Name          string `json:"name"`
-	Skill         string `json:"skill"`
-	Gate          bool   `json:"gate"`
-	Status        string `json:"status"` // pending, active, completed, failed, skipped
-	Output        string `json:"output,omitempty"`
+	Name           string `json:"name"`
+	Skill          string `json:"skill"`
+	Gate           bool   `json:"gate"`
+	Status         string `json:"status"` // pending, active, completed, failed, skipped
+	Output         string `json:"output,omitempty"`
 	PreviousOutput string `json:"previousOutput,omitempty"` // preserved across back
-	GateApproved  bool   `json:"gateApproved,omitempty"`
-	ApprovedAt    string `json:"approvedAt,omitempty"`
-	Notes         string `json:"notes,omitempty"`
+	GateApproved   bool   `json:"gateApproved,omitempty"`
+	ApprovedAt     string `json:"approvedAt,omitempty"`
+	Notes          string `json:"notes,omitempty"`
 }
 
 type State struct {
-	ID           string  `json:"id"`
-	Template     string  `json:"template"`
-	TemplateName string  `json:"templateName"`
-	Description  string  `json:"description"`
-	Phases       []Phase `json:"phases"`
-	CurrentPhase int     `json:"currentPhase"`
-	Status       string  `json:"status"` // in_progress, paused, completed, failed
-	StartedAt    string  `json:"startedAt"`
-	ArtifactDir  string  `json:"artifactDir"`
+	SchemaVersion int     `json:"schemaVersion"`
+	ID            string  `json:"id"`
+	Template      string  `json:"template"`
+	TemplateName  string  `json:"templateName"`
+	Description   string  `json:"description"`
+	Phases        []Phase `json:"phases"`
+	CurrentPhase  int     `json:"currentPhase"` // 0-based index into Phases
+	Status        string  `json:"status"`       // in_progress, paused, completed, failed
+	StartedAt     string  `json:"startedAt"`
+	UpdatedAt     string  `json:"updatedAt,omitempty"`
+	ArtifactDir   string  `json:"artifactDir"`
 }
 
 // === Template Registry Types ===

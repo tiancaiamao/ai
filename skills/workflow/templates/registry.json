@@ -71,7 +71,7 @@
       ],
       "category": "security",
       "complexity": "medium",
-      "aliases": ["security", "vulnerability", "audit"]
+      "aliases": ["vulnerability", "audit", "sec"]
     }
   }
 }

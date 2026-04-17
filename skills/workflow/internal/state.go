@@ -42,6 +42,15 @@ func validateWorkflowAction(state *State, action string) error {
 			return fmt.Errorf("workflow is in failed state. Run 'retry' first")
 		}
 	case "back":
+		if state.Status == "completed" {
+			return fmt.Errorf("workflow already completed. Start a new workflow instead")
+		}
+		if state.Status == "paused" {
+			return fmt.Errorf("workflow is paused. Run 'resume' first")
+		}
+		if state.Status == "failed" {
+			return fmt.Errorf("workflow is in failed state. Run 'retry' first, then 'back'")
+		}
 		if state.CurrentPhase == 0 {
 			return fmt.Errorf("already at first phase, cannot go back")
 		}

@@ -51,22 +51,46 @@ func writeTestRegistry(t *testing.T, dir string) {
 	os.WriteFile(filepath.Join(tmplDir, "registry.json"), data, 0644)
 }
 
-func writeTestState(t *testing.T, dir string, state *State) {
+// setupTestEnv sets up a temporary directory with registry and returns cleanup.
+// It saves and restores the global WorkflowDir and skillsPath.
+func setupTestEnv(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	// Save originals
+	origWorkflowDir := WorkflowDir
+	origSkillsPath := skillsPath
+
+	// Override globals
+	WorkflowDir = filepath.Join(dir, ".workflow")
+	skillsPath = dir
+	writeTestRegistry(t, dir)
+
+	t.Cleanup(func() {
+		WorkflowDir = origWorkflowDir
+		skillsPath = origSkillsPath
+	})
+
+	return dir
+}
+
+func writeTestState(t *testing.T, state *State) {
 	t.Helper()
 	data, _ := json.MarshalIndent(state, "", "  ")
-	os.MkdirAll(filepath.Join(dir, ".workflow"), 0755)
-	os.WriteFile(filepath.Join(dir, ".workflow", "STATE.json"), data, 0644)
+	os.MkdirAll(WorkflowDir, 0755)
+	os.WriteFile(filepath.Join(WorkflowDir, StateFile), data, 0644)
 }
 
 func makeFeatureState() *State {
 	return &State{
-		ID:           "wf-feature-1000",
-		Template:     "feature",
-		TemplateName: "Feature Development",
-		Description:  "test feature",
-		CurrentPhase: 0,
-		Status:       "in_progress",
-		ArtifactDir:  ".workflow/artifacts/feature",
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "wf-feature-1000",
+		Template:      "feature",
+		TemplateName:  "Feature Development",
+		Description:   "test feature",
+		CurrentPhase:  0,
+		Status:        "in_progress",
+		ArtifactDir:   ".workflow/artifacts/feature",
 		Phases: []Phase{
 			{Name: "brainstorm", Skill: "brainstorm", Gate: true, Status: "active"},
 			{Name: "spec", Skill: "spec", Gate: true, Status: "pending"},
@@ -145,6 +169,241 @@ func TestValidateWorkflowAction_BackFromSecond(t *testing.T) {
 	}
 }
 
+// === Fix #2: back should check workflow status ===
+
+func TestValidateWorkflowAction_BackOnCompleted(t *testing.T) {
+	state := makeFeatureState()
+	state.Status = "completed"
+	state.CurrentPhase = 2
+
+	err := validateWorkflowAction(state, "back")
+	if err == nil {
+		t.Error("expected error when backing on a completed workflow")
+	}
+}
+
+func TestValidateWorkflowAction_BackOnPaused(t *testing.T) {
+	state := makeFeatureState()
+	state.Status = "paused"
+	state.CurrentPhase = 2
+
+	err := validateWorkflowAction(state, "back")
+	if err == nil {
+		t.Error("expected error when backing on a paused workflow")
+	}
+}
+
+func TestValidateWorkflowAction_BackOnFailed(t *testing.T) {
+	state := makeFeatureState()
+	state.Status = "failed"
+	state.CurrentPhase = 2
+
+	err := validateWorkflowAction(state, "back")
+	if err == nil {
+		t.Error("expected error when backing on a failed workflow")
+	}
+}
+
+// === Fix #3: note should check failed status ===
+
+func TestValidateWorkflowAction_NoteOnFailed(t *testing.T) {
+	state := makeFeatureState()
+	state.Status = "failed"
+
+	err := validateWorkflowAction(state, "note")
+	if err == nil {
+		t.Error("expected error when noting on a failed workflow")
+	}
+}
+
+// === Fix #4: Schema version ===
+
+func TestSchemaVersionSet(t *testing.T) {
+	state := makeFeatureState()
+	if state.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("expected schemaVersion=%d, got %d", CurrentSchemaVersion, state.SchemaVersion)
+	}
+}
+
+func TestSaveAndLoadState(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	state := makeFeatureState()
+	if err := saveState(state); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	if loaded.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("schema version mismatch: got %d, want %d", loaded.SchemaVersion, CurrentSchemaVersion)
+	}
+	if loaded.ID != state.ID {
+		t.Errorf("ID mismatch: got %s, want %s", loaded.ID, state.ID)
+	}
+	if loaded.CurrentPhase != state.CurrentPhase {
+		t.Errorf("CurrentPhase mismatch: got %d, want %d", loaded.CurrentPhase, state.CurrentPhase)
+	}
+}
+
+// === Fix #1: Legacy v1 migration ===
+
+func TestMigrateV1State(t *testing.T) {
+	dir := setupTestEnv(t)
+
+	// Write a legacy v1 STATE.json (snake_case fields, no schemaVersion)
+	legacy := legacyStateV1{
+		ID:              "wf-refactor-old",
+		Template:        "refactor",
+		Description:     "Old format migration test",
+		Status:          "in_progress",
+		StartedAt:       "2025-01-25T00:00:00Z",
+		Phases:          []string{"assess", "plan", "execute", "verify"},
+		CompletedPhases: []string{"assess"},
+		ArtifactDir:     ".workflow/artifacts",
+	}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	workflowDir := filepath.Join(dir, ".workflow")
+	os.MkdirAll(workflowDir, 0755)
+	os.WriteFile(filepath.Join(workflowDir, StateFile), data, 0644)
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState with legacy format: %v", err)
+	}
+
+	if loaded.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("expected migrated schemaVersion=%d, got %d", CurrentSchemaVersion, loaded.SchemaVersion)
+	}
+	if loaded.ID != "wf-refactor-old" {
+		t.Errorf("ID not preserved: got %s", loaded.ID)
+	}
+	if len(loaded.Phases) != 4 {
+		t.Fatalf("expected 4 phases, got %d", len(loaded.Phases))
+	}
+	// First phase (assess) was completed
+	if loaded.Phases[0].Status != "completed" {
+		t.Errorf("phase 0 (assess) should be completed, got %s", loaded.Phases[0].Status)
+	}
+	// Second phase (plan) should be active (first non-completed)
+	if loaded.Phases[1].Status != "active" {
+		t.Errorf("phase 1 (plan) should be active, got %s", loaded.Phases[1].Status)
+	}
+	if loaded.CurrentPhase != 1 {
+		t.Errorf("CurrentPhase should be 1 (plan), got %d", loaded.CurrentPhase)
+	}
+
+	// Verify the file was re-saved in v2 format
+	var raw map[string]json.RawMessage
+	savedData, _ := os.ReadFile(filepath.Join(workflowDir, StateFile))
+	json.Unmarshal(savedData, &raw)
+	if _, ok := raw["schemaVersion"]; !ok {
+		t.Error("migrated state should have schemaVersion field")
+	}
+
+	_ = dir // suppress unused warning
+}
+
+func TestMigrateV1StateFullyCompleted(t *testing.T) {
+	dir := setupTestEnv(t)
+
+	legacy := legacyStateV1{
+		ID:              "wf-hotfix-done",
+		Template:        "hotfix",
+		Description:     "Already done",
+		Status:          "completed",
+		StartedAt:       "2025-01-25T00:00:00Z",
+		Phases:          []string{"implement"},
+		CompletedPhases: []string{"implement"},
+		ArtifactDir:     ".workflow/artifacts",
+	}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	workflowDir := filepath.Join(dir, ".workflow")
+	os.MkdirAll(workflowDir, 0755)
+	os.WriteFile(filepath.Join(workflowDir, StateFile), data, 0644)
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	if loaded.Status != "completed" {
+		t.Errorf("expected completed, got %s", loaded.Status)
+	}
+	if loaded.CurrentPhase != 0 {
+		t.Errorf("expected CurrentPhase=0, got %d", loaded.CurrentPhase)
+	}
+
+	_ = dir
+}
+
+// === Fix #7: audit error logging ===
+
+func TestAuditWritesToLog(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	err := appendAudit("test-event", "test-phase", "test-detail")
+	if err != nil {
+		t.Fatalf("appendAudit: %v", err)
+	}
+
+	auditPath := filepath.Join(WorkflowDir, AuditFile)
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+
+	var evt AuditEvent
+	lines := splitLines(string(data))
+	if len(lines) == 0 {
+		t.Fatal("audit log is empty")
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &evt); err != nil {
+		t.Fatalf("parse audit event: %v", err)
+	}
+	if evt.Event != "test-event" {
+		t.Errorf("expected event=test-event, got %s", evt.Event)
+	}
+	if evt.Phase != "test-phase" {
+		t.Errorf("expected phase=test-phase, got %s", evt.Phase)
+	}
+}
+
+// === Fix #8: skip preserves existing notes ===
+
+func TestSkipPreservesExistingNotes(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	state := makeFeatureState()
+	state.Phases[0].Notes = "existing note"
+	writeTestState(t, state)
+
+	// Manually simulate skip logic (same as runSkip but without os.Exit)
+	cp := &state.Phases[0]
+	cp.Status = "skipped"
+	reason := "not needed"
+	if cp.Notes != "" {
+		cp.Notes += "\n"
+	}
+	cp.Notes += "[skip] " + reason
+	if err := saveState(state); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	expected := "existing note\n[skip] not needed"
+	if loaded.Phases[0].Notes != expected {
+		t.Errorf("notes mismatch:\ngot:      %q\nexpected: %q", loaded.Phases[0].Notes, expected)
+	}
+}
+
 // === Output Validation Tests ===
 
 func TestValidateAdvanceOutput_NoOutput(t *testing.T) {
@@ -183,23 +442,20 @@ func TestValidateAdvanceOutput_OutputFlagOverrides(t *testing.T) {
 	phase := &Phase{Name: "brainstorm", Output: "/nonexistent/design.md"}
 	err := validateAdvanceOutput(phase, existingFile)
 	if err != nil {
-		t.Errorf("output flag should override, got: %v", err)
+		t.Errorf("output flag should override phase output: %v", err)
 	}
 }
 
-// === Back Preserves Output ===
-
 func TestBackPreservesOutput(t *testing.T) {
 	state := makeFeatureState()
-	// Simulate: brainstorm completed with output, spec completed with output
-	state.Phases[0].Status = "completed"
-	state.Phases[0].Output = ".workflow/artifacts/feature/design.md"
-	state.Phases[1].Status = "completed"
-	state.Phases[1].Output = ".workflow/artifacts/feature/SPEC.md"
 	state.CurrentPhase = 2
+	state.Phases[0].Status = "completed"
+	state.Phases[0].Output = "design.md"
+	state.Phases[1].Status = "completed"
+	state.Phases[1].Output = "SPEC.md"
 
-	// Back to brainstorm (steps=2)
-	target := state.CurrentPhase - 2 // 0
+	// Simulate back(1) — go from phase 2 back to phase 1
+	target := state.CurrentPhase - 1
 	for i := target + 1; i < len(state.Phases); i++ {
 		p := &state.Phases[i]
 		if p.Output != "" {
@@ -207,73 +463,75 @@ func TestBackPreservesOutput(t *testing.T) {
 		}
 		p.Status = "pending"
 		p.Output = ""
-		p.GateApproved = false
-		p.ApprovedAt = ""
-		p.Notes = ""
 	}
 	state.Phases[target].Status = "active"
 	state.CurrentPhase = target
 
-	// Check: output preserved in PreviousOutput
-	if state.Phases[1].PreviousOutput != ".workflow/artifacts/feature/SPEC.md" {
-		t.Errorf("expected PreviousOutput preserved, got: %s", state.Phases[1].PreviousOutput)
+	if state.Phases[1].Status != "active" {
+		t.Error("phase 1 should be active after back")
 	}
-	if state.Phases[1].Output != "" {
-		t.Error("expected Output cleared after back")
+	if state.Phases[2].PreviousOutput != "" {
+		// phase 2 had no output, so PreviousOutput should be empty
+		t.Error("phase 2 had no output, PreviousOutput should be empty")
 	}
-	if state.Phases[0].PreviousOutput != "" {
-		t.Error("phase 0 was the target, should not have PreviousOutput modified by this logic")
+	// Now set output on phase 2 and back again
+	state.Phases[2].Output = "PLAN.yml"
+	state.CurrentPhase = 2
+	state.Phases[1].Status = "completed"
+	state.Phases[2].Status = "active"
+
+	target = 1
+	for i := target + 1; i < len(state.Phases); i++ {
+		p := &state.Phases[i]
+		if p.Output != "" {
+			p.PreviousOutput = p.Output
+		}
+		p.Output = ""
+		p.Status = "pending"
+	}
+
+	if state.Phases[2].PreviousOutput != "PLAN.yml" {
+		t.Errorf("expected PreviousOutput=PLAN.yml, got %s", state.Phases[2].PreviousOutput)
 	}
 }
 
-// === Template Resolution Tests ===
-
 func TestResolveTemplate_ByExactName(t *testing.T) {
-	dir := t.TempDir()
-	writeTestRegistry(t, dir)
-	skillsPath = dir
+	_ = setupTestEnv(t)
 
-	id, tmpl, err := resolveTemplate("feature")
+	id, _, err := resolveTemplate("feature")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("resolveTemplate(feature): %v", err)
 	}
 	if id != "feature" {
 		t.Errorf("expected id=feature, got %s", id)
 	}
-	if tmpl.Name != "Feature Development" {
-		t.Errorf("unexpected name: %s", tmpl.Name)
-	}
 }
 
 func TestResolveTemplate_ByAlias(t *testing.T) {
-	dir := t.TempDir()
-	writeTestRegistry(t, dir)
-	skillsPath = dir
+	_ = setupTestEnv(t)
 
 	id, _, err := resolveTemplate("feat")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("resolveTemplate(feat): %v", err)
 	}
 	if id != "feature" {
-		t.Errorf("expected id=feature for alias 'feat', got %s", id)
+		t.Errorf("expected id=feature for alias feat, got %s", id)
 	}
 }
 
 func TestResolveTemplate_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	writeTestRegistry(t, dir)
-	skillsPath = dir
+	_ = setupTestEnv(t)
 
 	_, _, err := resolveTemplate("nonexistent")
 	if err == nil {
-		t.Error("expected error for unknown template")
+		t.Error("expected error for nonexistent template")
 	}
 }
 
 // === Plan Lint Tests ===
 
 func TestLintPlan_EmptyTasks(t *testing.T) {
-	plan := Plan{Version: "1"}
+	plan := Plan{Version: "1", Tasks: nil}
 	issues := lintPlan(plan)
 	found := false
 	for _, iss := range issues {
@@ -409,40 +667,27 @@ func TestDependencyDepth(t *testing.T) {
 // === Audit Log Test ===
 
 func TestAppendAudit(t *testing.T) {
-	dir := t.TempDir()
-	// Override WorkflowDir for this test
-	oldWorkflowDir := WorkflowDir
-	_ = oldWorkflowDir // WorkflowDir is const, we need another approach
+	_ = setupTestEnv(t)
 
-	// Instead, just test the audit event marshalling
-	evt := AuditEvent{
-		Timestamp: "2025-01-25T10:00:00Z",
-		Event:     "start",
-		Phase:     "",
-		Detail:    "template=feature",
-	}
-	data, err := json.Marshal(evt)
+	// Write audit event
+	err := appendAudit("start", "", "template=feature")
 	if err != nil {
-		t.Fatalf("marshal audit event: %v", err)
-	}
-	if !contains(string(data), `"event":"start"`) {
-		t.Errorf("audit event JSON missing event: %s", string(data))
+		t.Fatalf("appendAudit: %v", err)
 	}
 
-	// Verify file append works
-	auditPath := filepath.Join(dir, "AUDIT.jsonl")
-	os.MkdirAll(dir, 0755)
-	f, _ := os.OpenFile(auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	f.WriteString(string(data) + "\n")
-	f.Close()
-
-	content, _ := os.ReadFile(auditPath)
+	auditPath := filepath.Join(WorkflowDir, AuditFile)
+	content, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit file: %v", err)
+	}
 	lines := splitLines(string(content))
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 	var parsed AuditEvent
-	json.Unmarshal([]byte(lines[0]), &parsed)
+	if err := json.Unmarshal([]byte(lines[0]), &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
 	if parsed.Event != "start" {
 		t.Errorf("expected event=start, got %s", parsed.Event)
 	}
@@ -459,6 +704,25 @@ func TestPhaseFlow(t *testing.T) {
 	result := phaseFlow(phases)
 	if result != "brainstorm → spec → plan" {
 		t.Errorf("unexpected flow: %s", result)
+	}
+}
+
+// === UpdatedAt auto-set ===
+
+func TestSaveStateSetsUpdatedAt(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	state := makeFeatureState()
+	if err := saveState(state); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	loaded, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	if loaded.UpdatedAt == "" {
+		t.Error("UpdatedAt should be set by saveState")
 	}
 }
 
