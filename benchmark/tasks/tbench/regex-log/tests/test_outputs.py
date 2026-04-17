@@ -4,7 +4,7 @@
 import re
 from pathlib import Path
 import os
-WORK_DIR = Path(os.environ.get("WORK_DIR", Path(__file__).parent.parent))
+WORK_DIR = Path(os.environ.get("WORK_DIR", Path(__file__).parent.parent / "setup"))
 
 
 def test_regex_matches_dates():

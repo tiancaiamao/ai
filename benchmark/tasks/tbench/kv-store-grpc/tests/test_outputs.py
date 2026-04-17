@@ -8,10 +8,10 @@ import socket
 import sys
 from pathlib import Path
 import os
-WORK_DIR = Path(os.environ.get("WORK_DIR", Path(__file__).parent.parent))
+WORK_DIR = Path(os.environ.get("WORK_DIR", Path(__file__).parent.parent / "setup"))
 
 # Add the /app directory to Python path so we can import the generated protobuf modules
-sys.path.insert(0, "/app")
+sys.path.insert(0, str(WORK_DIR))
 
 
 def test_proto_file_creation():
