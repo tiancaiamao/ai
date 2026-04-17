@@ -9,6 +9,16 @@ Workflow 是一个**对话接口**，不是命令行教程。
 
 用户只需要表达意图，agent 负责在后台协调 skills、状态文件和执行脚本。
 
+## Dependencies
+
+Workflow requires these skills to be available:
+
+- `brainstorm` — dependency inversion interview
+- `spec` — structured specification writing
+- `plan` — task breakdown with planner+reviewer loop
+- `implement` — subagent-driven implementation
+- `explore` — codebase exploration and analysis
+
 ## User Contract (对用户)
 
 用户应通过自然语言触发流程，例如：
@@ -16,8 +26,8 @@ Workflow 是一个**对话接口**，不是命令行教程。
 - "开始一个 feature workflow：实现用户注册"
 - "继续下一个阶段"
 - "先给我看当前进度和阻塞点"
-- "进入 implement 阶段并用 team mode 执行"
 - "暂停 / 恢复这个 workflow"
+- "回到上一步重新想"
 
 **不要要求用户手动执行 shell 命令。**
 
@@ -25,74 +35,256 @@ Workflow 是一个**对话接口**，不是命令行教程。
 
 agent 必须：
 
-1. 负责 workflow 状态管理（开始、推进、暂停、恢复、完成）。
-2. 根据当前阶段自动调用对应 skill：
-   1. `brainstorm`
-   2. `spec`
-   3. `plan`
-   4. `implement`
-3. 在关键节点向用户汇报：
-   1. 当前阶段
-   2. 已完成产物
-   3. 下一步动作
-   4. 风险/阻塞
-4. 仅在必要时向用户提确认问题（例如范围变更、风险接受）。
+1. 负责 workflow 状态管理（开始、推进、回退、暂停、恢复、完成）。
+2. 根据当前阶段自动调用对应 skill。
+3. 在每个 gate 阶段完成后，向用户汇报产物并等待确认。
+4. 用户确认后先 `approve` 再 `advance`。
+5. 用户拒绝则 `reject`，附带反馈，留在当前阶段重新迭代。
+6. 遇到方向性错误时用 `back` 回退到之前阶段。
+7. 长时间阶段用 `note` 记录进度，便于跨 session 恢复。
+
+## CLI Tool
+
+`workflow-ctl` is the state management backend. The agent calls it, not the user.
+
+### Commands
+
+```bash
+# Start a new workflow
+workflow-ctl start <template> <description>
+
+# Show available templates
+workflow-ctl templates [name]
+
+# Show current state (human-readable or JSON)
+workflow-ctl status [--json]
+
+# Gate: approve current phase (required for gate phases before advance)
+workflow-ctl approve
+
+# Gate: reject current phase (stays active, feedback appended to notes)
+workflow-ctl reject [feedback text]
+
+# Skip current phase entirely and advance
+workflow-ctl skip [reason]
+
+# Advance to next phase (requires approve first for gate phases)
+# Validates output file exists unless --force
+workflow-ctl advance [--output <artifact-path>] [--force]
+
+# Roll back to previous phase (resets subsequent phases)
+workflow-ctl back [steps]   # default: 1
+
+# Append progress note to current phase
+workflow-ctl note <text>
+
+# Mark current phase as failed
+workflow-ctl fail [reason]
+
+# Retry the failed phase
+workflow-ctl retry
+
+# Pause / resume
+workflow-ctl pause
+workflow-ctl resume
+
+# Plan tools
+workflow-ctl plan-lint <plan.yml> [--json]
+workflow-ctl plan-render <plan.yml> [output.md]
+```
+
+### Status --json output
+
+```json
+{
+  "id": "wf-feature-1234567890",
+  "template": "feature",
+  "templateName": "Feature Development",
+  "description": "user registration",
+  "phases": [
+    {
+      "name": "brainstorm",
+      "skill": "brainstorm",
+      "gate": true,
+      "status": "completed",
+      "output": "design.md",
+      "gateApproved": true,
+      "notes": ""
+    },
+    {
+      "name": "spec",
+      "skill": "spec",
+      "gate": true,
+      "status": "active",
+      "gateApproved": false,
+      "notes": "started writing user stories"
+    },
+    {
+      "name": "plan",
+      "skill": "plan",
+      "gate": true,
+      "status": "pending"
+    },
+    {
+      "name": "implement",
+      "skill": "implement",
+      "gate": false,
+      "status": "pending"
+    }
+  ],
+  "currentPhase": 1,
+  "status": "in_progress",
+  "artifactDir": ".workflow/artifacts/feature"
+}
+```
 
 ## Templates
 
-| Template | Flow | Use Case |
-|----------|------|----------|
-| `feature` | brainstorm → spec → plan → implement | 新功能开发（重点） |
-| `bugfix` | explore → plan → implement | 缺陷修复 |
-| `spike` | brainstorm → document | 调研验证 |
-| `refactor` | explore → plan → implement → verify | 重构 |
-| `hotfix` | implement | 紧急修复 |
-| `security` | explore → plan → implement → verify | 安全审计 |
+| Template | Flow | Gates |
+|----------|------|-------|
+| `feature` | brainstorm → spec → plan → implement | brainstorm ✓, spec ✓, plan ✓, implement ✗ |
+| `bugfix` | triage → plan → implement | triage ✓, plan ✓, implement ✗ |
+| `refactor` | assess → plan → implement → verify | assess ✓, plan ✓, implement ✗, verify ✓ |
+| `spike` | brainstorm → document | brainstorm ✓, document ✓ |
+| `hotfix` | implement | (no gates) |
+| `security` | assess → plan → implement → verify | assess ✓, plan ✓, implement ✗, verify ✓ |
+
+Gate phases require `approve` before `advance`. Non-gate phases proceed directly.
 
 ## Phase Behavior
 
 ### Brainstorm
-- 目标：收敛需求与边界，形成可被批准的设计。
-- 输出：`design.md`。
-- 交互：向用户确认设计方向后再进入下一阶段。
+- Skill: `brainstorm`
+- Output: `design.md` in artifact dir
+- Gate: ✓ — present design, user approves or requests changes.
 
 ### Spec
-- 目标：把设计变成结构化规格（用户故事、验收标准）。
-- 输出：`SPEC.md`。
-- 交互：获取用户对规格的明确确认。
+- Skill: `spec`
+- Output: `SPEC.md` in artifact dir
+- Gate: ✓ — present spec, user approves.
 
 ### Plan
-- 目标：把 SPEC 拆成可执行任务与依赖。
-- 输出：`PLAN.yml` + `PLAN.md`。
-- 交互：展示任务分组、依赖和风险，等待用户确认。
+- Skill: `plan`
+- Output: `PLAN.yml` + `PLAN.md` in artifact dir
+- Gate: ✓ — present task breakdown, user approves.
+- Run `workflow-ctl plan-lint <PLAN.yml>` to validate before presenting.
 
 ### Implement
-- 默认使用 team mode（中大型任务）。
-- 输出：代码变更 + 测试结果 + `impl-report.md`。
-- 交互：定期汇报进度、失败重试结果、剩余任务。
+- Skill: `implement`
+- Output: code changes + tests + `impl-report.md`
+- Gate: ✗ — execute and report progress.
+- For medium/large scope, use `scripts/implement-team.sh` for parallel execution.
+- Use `workflow-ctl note` to track progress during long implementations.
 
-## Implement Team Mode (internal)
+## Agent Workflow Loop
 
-implement 阶段内部可使用 `ag` 的 team/task 能力（`team init/use`、`task import-plan`、`task next`、依赖调度、收尾清理），但这些属于**实现细节**，不应要求用户手动操作。
+```
+1. workflow-ctl start <template> "<description>"
+2. loop:
+   a. workflow-ctl status --json → get current phase, skill, gate, notes
+   b. If notes exist → agent knows where it left off (cross-session recovery)
+   c. Read the corresponding skill's SKILL.md
+   d. Execute the skill, produce output in artifact dir
+   e. If phase has gate:
+      - Present output to user
+      - If user approves: workflow-ctl approve && workflow-ctl advance --output <path>
+      - If user rejects: workflow-ctl reject "feedback" → iterate
+   f. If phase has no gate:
+      - Execute to completion, use note to track progress
+      - workflow-ctl advance --output <path>
+   g. If direction is wrong:
+      - workflow-ctl back [steps] → re-do from earlier phase
+   h. If workflow completed → report final results
+3. On error:
+   - workflow-ctl fail "reason"
+   - workflow-ctl retry (after fixing)
+```
+
+## Cross-Session Recovery
+
+When resuming a workflow in a new session:
+
+1. `workflow-ctl status --json` → get full state
+2. Check `notes` on the active phase — this tells you where you left off
+3. Check `output` on completed phases — read these for context
+4. Continue from where the notes indicate
+
+Agent should write notes at meaningful checkpoints during long phases:
+
+```bash
+workflow-ctl note "completed group 1/3, tests passing"
+workflow-ctl note "group 2/3 in progress, auth module done"
+```
+
+## Conversation Templates
+
+### Starting a workflow
+
+Present to the user:
+
+```
+## Workflow Started: {templateName}
+
+**Description:** {description}
+**Phases:** {phases}
+**Artifacts:** {artifactDir}
+
+Starting Phase 1: {name} (skill: {skill})
+```
+
+### Gate phase complete
+
+```
+## Phase Complete: {name}
+
+**Output:** {artifactPath}
+
+{summary}
+
+Please review. Say "approve" to continue, or provide feedback for revision.
+```
+
+### User approves → `workflow-ctl approve && workflow-ctl advance --output <path>`
+
+### User rejects → `workflow-ctl reject "user's feedback"` → iterate on the phase
+
+### Phase failed
+
+```
+## Phase Failed: {name}
+
+**Error:** {reason}
+
+Options:
+- "retry" — retry the current phase
+- "back" — go back to a previous phase
+- provide guidance — tell me what to do differently
+```
 
 ## Artifacts
 
-```text
+All artifacts go in the artifact directory (shown by `workflow-ctl status`):
+
+```
 .workflow/
 ├── STATE.json
+├── AUDIT.jsonl
 └── artifacts/
     └── <template>/
-        └── <workflow-name>/
-            ├── design.md
-            ├── SPEC.md
-            ├── PLAN.yml
-            ├── PLAN.md
-            └── impl-report.md
+        ├── design.md
+        ├── SPEC.md
+        ├── PLAN.yml
+        ├── PLAN.md
+        └── impl-report.md
 ```
 
 ## Conversation-First Rules
 
-1. 任何“开始/继续/暂停/恢复/状态查询”都应可通过自然语言完成。
-2. 不把 `workflow-ctl`、`ag`、shell 参数作为用户主交互方式。
-3. 当后台命令失败，向用户解释失败原因和下一步建议，而不是让用户自己跑命令。
-4. 只在用户明确要求底层命令时，才展示命令细节。
+1. 任何"开始/继续/暂停/恢复/状态查询/回退"都应可通过自然语言完成。
+2. `workflow-ctl` is an internal tool — the agent calls it, never the user.
+3. 当后台命令失败，向用户解释失败原因和下一步建议。
+4. Gate 阶段必须向用户展示产物并获取明确确认后才 `approve` + `advance`。
+5. 长时间阶段用 `note` 记录进度，便于恢复。
+6. `back` 是安全的——后续阶段会被重置为 pending，已有产物引用保留在 `previousOutput` 字段。
+7. `skip` 命令可以跳过不需要的阶段（如用户已有明确 spec），比连续 `advance` 更语义化。
+8. 所有状态变更都会记录到 `AUDIT.jsonl`（append-only），便于调试和审计。

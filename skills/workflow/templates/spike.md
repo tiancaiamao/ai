@@ -1,15 +1,3 @@
----
-id: spike
-name: Spike
-description: Research and exploration with time-boxing
-phases: [brainstorm, document]
-complexity: low
-estimated_tasks: 1-2
-skills:
-  brainstorm: brainstorm
-  document: spec
----
-
 # Spike Workflow
 
 ## Overview
@@ -37,7 +25,9 @@ Define research questions:
 
 Explore freely — read docs, search code, run experiments.
 
-**Output:** research notes
+**Gate:** Research questions defined and exploration done.
+
+**Output:** Research notes (use `workflow-ctl note` to track progress)
 
 ### Phase 2: Document
 
@@ -79,7 +69,9 @@ If the spike leads to a decision, create a `DECISION.md`:
 ## Consequences
 ```
 
-**Output:** `.workflow/artifacts/spikes/[name]/research.md`
+**Gate:** User accepts the documentation.
+
+**Output:** `research.md` in artifact directory
 
 ## Spike-Specific Rules
 

@@ -1,16 +1,3 @@
----
-id: bugfix
-name: Bug Fix
-description: Fix bugs with root-cause analysis
-phases: [triage, plan, implement]
-complexity: low
-estimated_tasks: 2-4
-skills:
-  triage: explore
-  plan: plan
-  implement: implement
----
-
 # Bug Fix Workflow
 
 ## Overview
@@ -34,24 +21,9 @@ Reproduce the bug and identify root cause:
 3. Trace the code path to root cause
 4. Document findings
 
-**Output:** `.workflow/artifacts/bugfixes/[name]/triage.md`
-
-```markdown
-# Bug Triage: [title]
-
-## Reproduction
-Steps: 1. 2. 3.
-Expected: [behavior]
-Actual: [behavior]
-
-## Root Cause
-[Why it happens, code path, line references]
-
-## Impact
-[Who is affected, how often, severity]
-```
-
 **Gate:** Root cause identified.
+
+**Output:** `triage.md` in artifact directory
 
 ### Phase 2: Plan
 
@@ -60,9 +32,9 @@ Actual: [behavior]
 Create a minimal plan to fix the root cause. This is usually 1-3 tasks.
 Keep the plan focused — fix the bug, don't refactor around it.
 
-**Output:** PLAN.yml + PLAN.md
-
 **Gate:** Plan approved.
+
+**Output:** `PLAN.yml` + `PLAN.md` in artifact directory
 
 ### Phase 3: Implement
 
@@ -76,7 +48,7 @@ After implementation:
 2. Run full test suite
 3. Commit
 
-**Output:** Git commit
+**Output:** Git commits
 
 ## Bugfix-Specific Rules
 

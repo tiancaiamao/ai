@@ -1,47 +1,48 @@
----
-id: hotfix
-name: Hotfix
-description: Emergency production fix with minimal ceremony
-phases: [implement]
-complexity: minimal
-estimated_tasks: 1-2
-skills:
-  implement: implement
----
-
 # Hotfix Workflow
 
 ## Overview
 
 Emergency fix. Minimal process — just fix it fast and ship.
-All other workflows have more process; hotfix deliberately has less.
+All other workflows are better suited for non-emergency work.
 
-## Phase: Implement
+**Core rule:** Ship the fix fast. Minimize process. Fix can be improved later.
 
-**Skill:** `implement` (simplified)
+## Phase Sequence
 
-1. Understand the emergency (from user)
-2. Find the root cause quickly
-3. Write a failing test that reproduces the issue
-4. Fix it
-5. Verify test passes
-6. Commit and push
+```
+implement (only)
+```
 
-**Simplifications for hotfix:**
-- Skip two-stage review if user confirms urgency
-- Skip full test suite — only run tests related to the fix
-- Skip sub-agent delegation — implement directly for speed
-- Single commit, push immediately
+### Phase 1: Implement
+
+**Skill:** `implement`
+
+1. Identify the fix (may be 1-line)
+2. Write a test if feasible
+3. Apply the fix
+4. Verify locally
+5. Commit and push
+
+No gate — just do it.
+
+**Output:** Git commit
 
 ## Hotfix-Specific Rules
 
-- **Speed over process** — fix first, add process later
-- **Minimal scope** — fix only the immediate issue
-- **Test the fix** — even in emergencies, write a test
-- **Follow-up** — after hotfix, consider a bugfix workflow for proper cleanup
+- **Speed over perfection** — get the fix out
+- **Minimal change** — don't improve surrounding code
+- **Follow up** — after the emergency, consider a bugfix workflow to improve the fix
+- **No refactoring** — not the time for it
 
 ## Commit Convention
 
 ```
-fix(scope): resolve [issue] (hotfix)
+fix(scope): hotfix [brief description]
 ```
+
+## After Hotfix
+
+Consider creating a bugfix or refactor workflow to:
+- Add proper tests
+- Clean up the emergency fix
+- Address root cause more thoroughly
