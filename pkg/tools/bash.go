@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -173,10 +174,16 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	// Start the command
 	startTime := time.Now()
 	if err := cmd.Start(); err != nil {
+		msg := fmt.Sprintf("Failed to start command: %v", err)
+		if cmd.Dir != "" {
+			if _, statErr := os.Stat(cmd.Dir); statErr != nil {
+				msg = fmt.Sprintf("Failed to start command: working directory %q does not exist (error: %v). Use change_workspace to switch to a valid directory.", cmd.Dir, err)
+			}
+		}
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",
-				Text: fmt.Sprintf("Failed to start command: %v", err),
+				Text: msg,
 			},
 		}, nil
 	}

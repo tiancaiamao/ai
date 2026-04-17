@@ -96,6 +96,17 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Check if the working directory was deleted (e.g., git worktree removed)
+		if cmd.Dir != "" {
+			if _, statErr := os.Stat(cmd.Dir); statErr != nil {
+				return []agentctx.ContentBlock{
+					agentctx.TextContent{
+						Type: "text",
+						Text: fmt.Sprintf("Failed to run grep: working directory %q does not exist. Use change_workspace to switch to a valid directory.", cmd.Dir),
+					},
+				}, nil
+			}
+		}
 		// Grep returns exit code 1 when no matches found, which is not an error
 		if len(output) == 0 {
 			return []agentctx.ContentBlock{
