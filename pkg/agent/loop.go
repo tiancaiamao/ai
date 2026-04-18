@@ -302,11 +302,31 @@ func runInnerLoop(
 
 		turnCount++
 
-		// Try each compactor in order (first trigger wins)
+		// Try each compactor in order (first trigger wins).
+		// Emit compaction_start BEFORE executing Compact() so the user sees
+		// immediate feedback instead of waiting for the full compaction to complete.
 		var compacted *agentctx.CompactionResult
 		var compactErr error
+		var compactionStarted bool
+		var before int
+		var compactionSpan *traceevent.Span
 		for _, c := range config.Compactors {
 			if c.ShouldCompact(ctx, agentCtx) {
+				if !compactionStarted {
+					before = len(agentCtx.RecentMessages)
+					compactionSpan = traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+						traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
+						traceevent.Field{Key: "auto", Value: true},
+						traceevent.Field{Key: "before_messages", Value: before},
+						traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
+					)
+					stream.Push(NewCompactionStartEvent(CompactionInfo{
+						Auto:    true,
+						Before:  before,
+						Trigger: "pre_llm_threshold",
+					}))
+					compactionStarted = true
+				}
 				slog.Info("[Loop] Pre-LLM compaction triggered", "compactor", fmt.Sprintf("%T", c))
 				compacted, compactErr = c.Compact(agentCtx)
 				if compactErr == nil {
@@ -318,25 +338,29 @@ func runInnerLoop(
 		}
 
 		// Process compaction result
-		if compacted != nil {
+		if compactionStarted {
 			if compactErr != nil {
-				// Compaction returned result but error is non-nil - skip this result
-				slog.Warn("[Loop] Skipping compaction result due to error", "error", compactErr)
-				compacted = nil
-			} else {
-				before := len(agentCtx.RecentMessages)
-				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-					traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
-					traceevent.Field{Key: "auto", Value: true},
-					traceevent.Field{Key: "before_messages", Value: before},
-					traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
-				)
-				stream.Push(NewCompactionStartEvent(CompactionInfo{
+				// Compaction triggered but all compactors failed
+				slog.Warn("[Loop] Compaction triggered but all compactors failed", "error", compactErr)
+				compactionSpan.AddField("error", true)
+				compactionSpan.AddField("error_message", compactErr.Error())
+				compactionSpan.End()
+				stream.Push(NewCompactionEndEvent(CompactionInfo{
+					Auto:    true,
+					Before:  before,
+					Error:   compactErr.Error(),
+					Trigger: "pre_llm_threshold",
+				}))
+			} else if compacted == nil {
+				// ShouldCompact returned true but Compact returned nil result without error
+				slog.Warn("[Loop] Compaction triggered but returned nil result")
+				compactionSpan.End()
+				stream.Push(NewCompactionEndEvent(CompactionInfo{
 					Auto:    true,
 					Before:  before,
 					Trigger: "pre_llm_threshold",
 				}))
-
+			} else {
 				// Note: Compactor now directly modifies agentCtx.RecentMessages
 				// We just need to update the summary.
 				// Compact events are already appended via OnCompactEvent in the tools.
