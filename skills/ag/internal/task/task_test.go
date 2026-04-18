@@ -2,6 +2,7 @@ package task
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -70,15 +71,15 @@ func TestDone(t *testing.T) {
 	Create("Task", "")
 	Claim("t001", "worker-1")
 
-	task, err := Done("t001", "output.md")
+	task, err := Done("t001", "fixed the bug in auth.go")
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 	if task.Status != StatusDone {
 		t.Fatalf("expected done, got %s", task.Status)
 	}
-	if task.OutputFile != "output.md" {
-		t.Fatalf("wrong output: %s", task.OutputFile)
+	if task.Summary != "fixed the bug in auth.go" {
+		t.Fatalf("wrong summary: %s", task.Summary)
 	}
 
 	// Can't claim a done task
@@ -94,7 +95,7 @@ func TestFail(t *testing.T) {
 	Create("Task", "")
 	Claim("t001", "worker-1")
 
-	task, err := Fail("t001", "out of memory")
+	task, err := Fail("t001", "out of memory", true)
 	if err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
@@ -191,7 +192,7 @@ func TestDependencyBlocksClaim(t *testing.T) {
 	if _, err := Claim("t001", "worker-1"); err != nil {
 		t.Fatalf("claim t001: %v", err)
 	}
-	if _, err := Done("t001", "done.md"); err != nil {
+	if _, err := Done("t001", "done"); err != nil {
 		t.Fatalf("done t001: %v", err)
 	}
 
@@ -235,5 +236,229 @@ func TestDependencyCycleRejected(t *testing.T) {
 
 	if _, err := AddDependency("t001", "t003"); err == nil {
 		t.Fatal("expected cycle detection error")
+	}
+}
+
+func TestDone_WithSummary(t *testing.T) {
+	setupTest(t)
+
+	Create("Task with summary", "")
+	Claim("t001", "worker-1")
+
+	task, err := Done("t001", "completed all changes to auth module")
+	if err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+	if task.Status != StatusDone {
+		t.Fatalf("expected done, got %s", task.Status)
+	}
+	if task.Summary != "completed all changes to auth module" {
+		t.Fatalf("wrong summary: %s", task.Summary)
+	}
+
+	// Verify Summary persists via Show
+	loaded, err := Show("t001")
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if loaded.Summary != "completed all changes to auth module" {
+		t.Fatalf("summary not persisted: %s", loaded.Summary)
+	}
+}
+
+func TestFail_WithRetryable(t *testing.T) {
+	setupTest(t)
+
+	Create("Flaky task", "")
+	Claim("t001", "worker-1")
+
+	task, err := Fail("t001", "connection timeout", true)
+	if err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	if task.Status != StatusFailed {
+		t.Fatalf("expected failed, got %s", task.Status)
+	}
+	if task.Error != "connection timeout" {
+		t.Fatalf("wrong error: %s", task.Error)
+	}
+	if task.Retryable != true {
+		t.Fatal("expected Retryable to be true")
+	}
+
+	// Verify Error and Retryable persist
+	loaded, err := Show("t001")
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if loaded.Error != "connection timeout" {
+		t.Fatalf("error not persisted: %s", loaded.Error)
+	}
+	if loaded.Retryable != true {
+		t.Fatal("retryable flag not persisted")
+	}
+}
+
+func TestLoad(t *testing.T) {
+	setupTest(t)
+
+	Create("Load test task", "spec.md")
+
+	task, err := Load("t001")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if task.ID != "t001" {
+		t.Fatalf("expected t001, got %s", task.ID)
+	}
+	if task.Description != "Load test task" {
+		t.Fatalf("wrong description: %s", task.Description)
+	}
+	if task.SpecFile != "spec.md" {
+		t.Fatalf("wrong specFile: %s", task.SpecFile)
+	}
+
+	// Non-existent task
+	_, err = Load("t999")
+	if err == nil {
+		t.Fatal("expected error for non-existent task")
+	}
+}
+
+func TestClaimNext(t *testing.T) {
+	setupTest(t)
+
+	Create("First task", "")
+	Create("Second task", "")
+
+	// Add dependency: t002 depends on t001
+	AddDependency("t002", "t001")
+
+	// ClaimNext should return t001 (first pending, unblocked)
+	id, err := ClaimNext("worker-1")
+	if err != nil {
+		t.Fatalf("ClaimNext: %v", err)
+	}
+	if id != "t001" {
+		t.Fatalf("expected t001, got %s", id)
+	}
+
+	// t002 is still blocked by t001 (which is claimed but not done)
+	_, err = ClaimNext("worker-2")
+	if err == nil {
+		t.Fatal("expected error, t002 should be blocked")
+	}
+
+	// Complete t001
+	Done("t001", "finished")
+
+	// Now t002 should be claimable
+	id, err = ClaimNext("worker-2")
+	if err != nil {
+		t.Fatalf("ClaimNext after unblock: %v", err)
+	}
+	if id != "t002" {
+		t.Fatalf("expected t002, got %s", id)
+	}
+}
+
+func TestImportPlan(t *testing.T) {
+	setupTest(t)
+
+	// Create a temporary PLAN.yml file
+	planContent := `version: "1.0"
+tasks:
+  - id: "T001"
+    title: "Setup database"
+    description: "Create schema and seed data"
+  - id: "T002"
+    title: "Build API"
+    description: "REST endpoints"
+    dependencies:
+      - "T001"
+  - id: "T003"
+    title: "Write tests"
+    dependencies:
+      - "T002"
+`
+	planFile := filepath.Join(t.TempDir(), "PLAN.yml")
+	os.WriteFile(planFile, []byte(planContent), 0644)
+
+	count, err := ImportPlan(planFile)
+	if err != nil {
+		t.Fatalf("ImportPlan: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 tasks, got %d", count)
+	}
+
+	// Verify T001
+	t1, err := Load("T001")
+	if err != nil {
+		t.Fatalf("Load T001: %v", err)
+	}
+	if t1.Description != "Setup database: Create schema and seed data" {
+		t.Fatalf("wrong T001 description: %s", t1.Description)
+	}
+
+	// Verify T002 has dependency on T001
+	t2, err := Load("T002")
+	if err != nil {
+		t.Fatalf("Load T002: %v", err)
+	}
+	if len(t2.Dependencies) != 1 || t2.Dependencies[0] != "T001" {
+		t.Fatalf("wrong T002 dependencies: %v", t2.Dependencies)
+	}
+
+	// Verify T003 has dependency on T002
+	t3, err := Load("T003")
+	if err != nil {
+		t.Fatalf("Load T003: %v", err)
+	}
+	if len(t3.Dependencies) != 1 || t3.Dependencies[0] != "T002" {
+		t.Fatalf("wrong T003 dependencies: %v", t3.Dependencies)
+	}
+
+	// Verify blocking: T002 is blocked since T001 is not done
+	unmet, err := UnmetDependencies("T002")
+	if err != nil {
+		t.Fatalf("UnmetDependencies T002: %v", err)
+	}
+	if len(unmet) != 1 || unmet[0] != "T001" {
+		t.Fatalf("expected T001 unmet, got %v", unmet)
+	}
+}
+
+// TestImportPlanForwardDependency verifies that tasks with forward references
+// (dependency on a task defined LATER in the YAML) still get their deps linked.
+func TestImportPlanForwardDependency(t *testing.T) {
+	setupTest(t)
+
+	planContent := `version: "1.0"
+tasks:
+  - id: "T002"
+    title: "Task Two"
+    dependencies:
+      - "T001"
+  - id: "T001"
+    title: "Task One"
+`
+	planFile := filepath.Join(t.TempDir(), "PLAN.yml")
+	os.WriteFile(planFile, []byte(planContent), 0644)
+
+	count, err := ImportPlan(planFile)
+	if err != nil {
+		t.Fatalf("ImportPlan: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 tasks, got %d", count)
+	}
+
+	t2, err := Load("T002")
+	if err != nil {
+		t.Fatalf("Load T002: %v", err)
+	}
+	if len(t2.Dependencies) != 1 || t2.Dependencies[0] != "T001" {
+		t.Fatalf("forward dependency missing: T002.Dependencies = %v", t2.Dependencies)
 	}
 }

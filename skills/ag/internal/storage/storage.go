@@ -89,25 +89,6 @@ func ReadJSON(path string, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// ReadStatus reads a status file (single line text).
-func ReadStatus(agentDir string) string {
-	data, err := os.ReadFile(filepath.Join(agentDir, "status"))
-	if err != nil {
-		return "unknown"
-	}
-	// Trim whitespace
-	s := string(data)
-	if len(s) > 0 && s[len(s)-1] == '\n' {
-		s = s[:len(s)-1]
-	}
-	return s
-}
-
-// WriteStatus writes a status file atomically.
-func WriteStatus(agentDir, status string) error {
-	return AtomicWrite(filepath.Join(agentDir, "status"), []byte(status))
-}
-
 // WriteFile writes data to a file, creating parent dirs.
 func WriteFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

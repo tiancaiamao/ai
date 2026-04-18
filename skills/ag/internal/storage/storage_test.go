@@ -51,21 +51,6 @@ func TestAtomicWriteJSON(t *testing.T) {
 	}
 }
 
-func TestReadStatus(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// No status file
-	if s := ReadStatus(tmpDir); s != "unknown" {
-		t.Fatalf("expected unknown, got %s", s)
-	}
-
-	// With status file
-	os.WriteFile(filepath.Join(tmpDir, "status"), []byte("running\n"), 0644)
-	if s := ReadStatus(tmpDir); s != "running" {
-		t.Fatalf("expected running, got %s", s)
-	}
-}
-
 func TestInit(t *testing.T) {
 	origDir, _ := os.Getwd()
 	os.Chdir(t.TempDir())

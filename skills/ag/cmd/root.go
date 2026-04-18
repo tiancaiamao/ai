@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -13,9 +11,7 @@ import (
 	"github.com/genius/ag/internal/channel"
 	"github.com/genius/ag/internal/storage"
 	"github.com/genius/ag/internal/task"
-	"github.com/genius/ag/internal/team"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var rootCmd = &cobra.Command{
@@ -32,429 +28,370 @@ func Execute() {
 }
 
 func init() {
-	// Ensure runtime storage exists for the currently selected team context.
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		baseDir, _, err := team.ResolveBaseDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving team context: %v\n", err)
-			os.Exit(1)
-		}
-		storage.SetBaseDir(baseDir)
 		if err := storage.Init(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error initializing storage: %v\n", err)
 			os.Exit(1)
 		}
 	}
-
-	rootCmd.AddCommand(spawnCmd, waitCmd, killCmd, outputCmd, statusCmd, lsCmd, rmCmd)
-	rootCmd.AddCommand(sendCmd, recvCmd)
-	rootCmd.AddCommand(readCmd, stopCmd)
-	rootCmd.AddCommand(channelCmd)
-	rootCmd.AddCommand(taskCmd)
-	rootCmd.AddCommand(teamCmd)
 }
 
 // ========== Agent Commands ==========
 
-var (
-	spawnSystem     string
-	spawnInput      string
-	spawnMode       string
-	spawnCwd        string
-	spawnTimeout    string
-	spawnMock       bool
-	spawnMockScript string
-)
+var agentCmd = &cobra.Command{
+	Use:   "agent",
+	Short: "Manage agents (spawn, status, steer, abort, kill, etc.)",
+}
 
-var spawnCmd = &cobra.Command{
-	Use:   "spawn --id <name> [--system <prompt>] [--input <file|text>] [--mode <headless|rpc>] [--timeout <duration>]",
+var agentSpawnCmd = &cobra.Command{
+	Use:   "spawn <id>",
 	Short: "Spawn a new agent",
-	Args:  cobra.NoArgs,
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		id, _ := cmd.Flags().GetString("id")
-		if id == "" {
-			fmt.Fprintln(os.Stderr, "Error: --id is required")
+		id := args[0]
+		system, _ := cmd.Flags().GetString("system")
+		input, _ := cmd.Flags().GetString("input")
+		cwd, _ := cmd.Flags().GetString("cwd")
+
+		if err := agent.ValidateID(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if agent.Exists(id) {
+			fmt.Fprintf(os.Stderr, "agent already exists: %s\n", id)
 			os.Exit(1)
 		}
 
-		meta, err := agent.Spawn(agent.SpawnConfig{
-			ID:         id,
-			System:     spawnSystem,
-			Input:      spawnInput,
-			Mode:       spawnMode,
-			Cwd:        spawnCwd,
-			Timeout:    spawnTimeout,
-			Mock:       spawnMock,
-			MockScript: spawnMockScript,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if err := Spawn(id, system, input, cwd); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Agent spawned: %s (pid: %d)\n", meta.ID, meta.Pid)
+		fmt.Println(id)
 	},
 }
 
-var waitTimeout int
-
-var waitCmd = &cobra.Command{
-	Use:   "wait <agent-id...> [--timeout <seconds>]",
-	Short: "Wait for one or more agents to complete",
-	Args:  cobra.MinimumNArgs(1),
+var agentStatusCmd = &cobra.Command{
+	Use:   "status <id>",
+	Short: "Show agent activity status",
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		failed := 0
-		for _, id := range args {
-			if err := agent.Wait(id, waitTimeout); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				failed++
-			} else {
-				fmt.Printf("Agent %s done\n", id)
+		id := args[0]
+		format, _ := cmd.Flags().GetString("format")
+
+		if err := agent.EnsureExists(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		activity, err := agent.ReadActivity(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no activity for agent %s\n", id)
+			os.Exit(1)
+		}
+
+		// Check stale: verify tmux session and PID
+		DetectStale(id, activity)
+
+		if format == "json" {
+			data, _ := json.MarshalIndent(activity, "", "  ")
+			fmt.Println(string(data))
+			return
+		}
+
+		fmt.Printf("Agent: %s\n", id)
+		fmt.Printf("Status: %s\n", activity.Status)
+		if activity.Pid > 0 {
+			fmt.Printf("PID: %d\n", activity.Pid)
+		}
+		if activity.StartedAt > 0 {
+			fmt.Printf("Started: %s\n", formatTime(activity.StartedAt))
+			if activity.Status == "running" {
+				fmt.Printf("Uptime: %s\n", formatDuration(timeNow()-activity.StartedAt))
 			}
 		}
-		if failed > 0 {
-			os.Exit(1)
+		if activity.FinishedAt > 0 {
+			fmt.Printf("Finished: %s\n", formatTime(activity.FinishedAt))
+			fmt.Printf("Duration: %s\n", formatDuration(activity.FinishedAt-activity.StartedAt))
+		}
+		fmt.Printf("Turns: %d\n", activity.Turns)
+		if activity.TokensTotal > 0 {
+			fmt.Printf("Tokens: in=%d out=%d total=%d\n", activity.TokensIn, activity.TokensOut, activity.TokensTotal)
+		}
+		if activity.LastTool != "" {
+			fmt.Printf("Last tool: %s\n", activity.LastTool)
+		}
+		if activity.LastText != "" {
+			text := activity.LastText
+			if len(text) > 200 {
+				text = text[:200] + "..."
+			}
+			fmt.Printf("Last text: %s\n", text)
+		}
+		if activity.Error != "" {
+			fmt.Printf("Error: %s\n", activity.Error)
 		}
 	},
 }
 
-var killCmd = &cobra.Command{
-	Use:   "kill <agent-id>",
-	Short: "Kill an agent",
-	Args:  cobra.ExactArgs(1),
+var agentSteerCmd = &cobra.Command{
+	Use:   "steer <id> <message>",
+	Short: "Send a steering message to a running agent",
+	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := agent.Kill(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Agent %s killed\n", args[0])
-	},
-}
-
-var outputCmd = &cobra.Command{
-	Use:   "output <agent-id>",
-	Short: "Get agent's final output",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		data, err := agent.Output(args[0])
+		resp, err := BridgeCommand(args[0], "steer", args[1])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		os.Stdout.Write(data)
+		if !resp.OK {
+			fmt.Fprintf(os.Stderr, "steer failed: %s\n", resp.Error)
+			os.Exit(1)
+		}
+		fmt.Println("ok")
 	},
 }
 
-var statusCmd = &cobra.Command{
-	Use:   "status <agent-id>",
-	Short: "Show agent status",
+var agentAbortCmd = &cobra.Command{
+	Use:   "abort <id>",
+	Short: "Abort the current task (agent stays alive for follow-up)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		status, meta, err := agent.Status(args[0])
+		resp, err := BridgeCommand(args[0], "abort", "")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Agent: %s\n", args[0])
-		fmt.Printf("Status: %s\n", status)
-		if meta.Pid > 0 {
-			fmt.Printf("PID: %d\n", meta.Pid)
+		if !resp.OK {
+			fmt.Fprintf(os.Stderr, "abort failed: %s\n", resp.Error)
+			os.Exit(1)
 		}
-		if meta.StartedAt > 0 {
-			fmt.Printf("Started: %s\n", formatTime(meta.StartedAt))
-		}
-		if meta.FinishedAt > 0 {
-			fmt.Printf("Finished: %s\n", formatTime(meta.FinishedAt))
-			fmt.Printf("Duration: %s\n", formatDuration(meta.FinishedAt-meta.StartedAt))
-		}
-		if meta.ExitCode != 0 {
-			fmt.Printf("Exit code: %d\n", meta.ExitCode)
-		}
+		fmt.Println("ok")
 	},
 }
 
-var lsCmd = &cobra.Command{
+var agentPromptCmd = &cobra.Command{
+	Use:   "prompt <id> <message>",
+	Short: "Send a follow-up prompt to an idle or running agent",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		resp, err := BridgeCommand(args[0], "prompt", args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if !resp.OK {
+			fmt.Fprintf(os.Stderr, "prompt failed: %s\n", resp.Error)
+			os.Exit(1)
+		}
+		fmt.Println("ok")
+	},
+}
+
+var agentKillCmd = &cobra.Command{
+	Use:   "kill <id>",
+	Short: "Kill agent (tmux session), preserves files for diagnostics",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		if err := agent.EnsureExists(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := Kill(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("killed")
+	},
+}
+
+var agentShutdownCmd = &cobra.Command{
+	Use:   "shutdown <id>",
+	Short: "Gracefully shut down agent via RPC",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		if err := agent.EnsureExists(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := Shutdown(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("shutdown")
+	},
+}
+
+var agentRmCmd = &cobra.Command{
+	Use:   "rm <id>",
+	Short: "Remove agent files (must be in terminal state, use --force to kill first)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		force, _ := cmd.Flags().GetBool("force")
+
+		if err := agent.EnsureExists(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		if force {
+			_ = Kill(id) // kill first, ignore errors (may already be dead)
+		}
+
+		if err := Rm(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("removed %s\n", id)
+	},
+}
+
+var agentOutputCmd = &cobra.Command{
+	Use:   "output <id>",
+	Short: "Show agent output (only when terminal)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		tailN, _ := cmd.Flags().GetInt("tail")
+		format, _ := cmd.Flags().GetString("format")
+
+		if err := agent.EnsureExists(id); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		output, err := Output(id, tailN)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		if format == "json" {
+			data, _ := json.MarshalIndent(map[string]string{"output": output}, "", "  ")
+			fmt.Println(string(data))
+			return
+		}
+
+		fmt.Print(output)
+	},
+}
+
+var agentWaitCmd = &cobra.Command{
+	Use:   "wait <id> [<id2>...]",
+	Short: "Wait for agents to reach terminal state",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		timeoutSec, _ := cmd.Flags().GetInt("timeout")
+		if err := Wait(cmd.Context(), args, timeoutSec); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("done")
+	},
+}
+
+var agentLsCmd = &cobra.Command{
 	Use:   "ls",
 	Short: "List all agents",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		agents, err := agent.List()
+		format, _ := cmd.Flags().GetString("format")
+		allAgents, err := agent.List()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(agents) == 0 {
-			fmt.Println("No agents")
+
+		if format == "json" {
+			data, _ := json.MarshalIndent(allAgents, "", "  ")
+			fmt.Println(string(data))
 			return
 		}
+
+		if len(allAgents) == 0 {
+			fmt.Println("No agents.")
+			return
+		}
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tPID\tUPTIME")
-		for _, a := range agents {
-			pid := "-"
-			if a.Meta.Pid > 0 {
-				pid = fmt.Sprintf("%d", a.Meta.Pid)
+		fmt.Fprintln(w, "ID\tSTATUS\tSTARTED")
+		for _, a := range allAgents {
+			started := "-"
+			if a.StartedAt > 0 {
+				started = formatTime(a.StartedAt)
 			}
-			uptime := "-"
-			if a.Status == "running" && a.Meta.StartedAt > 0 {
-				uptime = formatDuration(timeNow() - a.Meta.StartedAt)
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Status, pid, uptime)
+			fmt.Fprintf(w, "%s\t%s\t%s\n", a.ID, a.Status, started)
 		}
 		w.Flush()
 	},
 }
 
-// ========== Message Commands ==========
+// ========== Bridge Command (hidden, internal) ==========
 
-var (
-	sendFile string
-)
+var bridgeCmd = &cobra.Command{
+	Use:    "bridge <id>",
+	Short:  "Internal: run bridge process for an agent (inside tmux)",
+	Args:   cobra.ExactArgs(1),
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := RunBridge(args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "bridge error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+// ========== Send/Recv (data-plane, top-level) ==========
 
 var sendCmd = &cobra.Command{
-	Use:   "send <target> [--file <file> | <message>]",
-	Short: "Send a message to an agent or channel",
+	Use:   "send <target> [message]",
+	Short: "Send a message to a channel or agent",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		target := args[0]
+		filePath, _ := cmd.Flags().GetString("file")
+
 		var data []byte
 		var isFile bool
 
-		if sendFile != "" {
-			// Read file contents here, not just the path
-			fileData, err := os.ReadFile(sendFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-				os.Exit(1)
-			}
-			data = fileData
-			isFile = false // contents already read, no need for channel.Send to re-read
+		if filePath != "" {
+			data = []byte(filePath)
+			isFile = true
 		} else if len(args) > 1 {
 			data = []byte(args[1])
 		} else {
-			// Read from stdin
-			stat, _ := os.Stdin.Stat()
-			if (stat.Mode() & os.ModeCharDevice) != 0 {
-				fmt.Fprintln(os.Stderr, "Error: provide message via argument, --file, or stdin")
-				os.Exit(1)
-			}
 			data = readStdin()
 		}
 
-		if err := channel.Send(target, data, isFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if len(data) == 0 {
+			fmt.Fprintln(os.Stderr, "no message data provided")
 			os.Exit(1)
 		}
-		fmt.Printf("Message sent to %s\n", target)
+
+		if err := channel.Send(target, data, isFile); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	},
 }
 
-var (
-	recvWait    bool
-	recvTimeout int
-	recvAll     bool
-)
-
 var recvCmd = &cobra.Command{
-	Use:   "recv <source> [--wait] [--timeout <seconds>] [--all]",
-	Short: "Receive a message from an agent or channel",
+	Use:   "recv <source>",
+	Short: "Receive a message from a channel or agent",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		data, err := channel.Recv(args[0], recvWait, recvTimeout, recvAll)
+		wait, _ := cmd.Flags().GetBool("wait")
+		timeoutSec, _ := cmd.Flags().GetInt("timeout")
+		all, _ := cmd.Flags().GetBool("all")
+
+		data, err := channel.Recv(args[0], wait, timeoutSec, all)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Stdout.Write(data)
-	},
-}
-
-// ========== RPC Agent Commands ==========
-
-var (
-	readFollow bool
-	readRaw    bool
-)
-
-var readCmd = &cobra.Command{
-	Use:   "read <agent-id> [--follow] [--raw]",
-	Short: "Read events from an RPC-mode agent",
-	Long: `Read events from a running or completed RPC-mode agent.
-
-By default, shows new events since the last read. Use --follow to stream
-events in real-time. Use --raw to output raw JSON lines.
-
-For headless-mode agents, this falls back to showing the output file.`,
-	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
-		agentDir := storage.AgentDir(id)
-		if !storage.Exists(agentDir) {
-			fmt.Fprintf(os.Stderr, "Error: agent not found: %s\n", id)
-			os.Exit(1)
-		}
-
-		meta := &agent.Meta{}
-		storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
-
-		// For non-RPC agents, fall back to output file
-		if meta.Mode != "rpc" {
-			outputPath := filepath.Join(agentDir, "output")
-			data, err := os.ReadFile(outputPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: agent is not in RPC mode and has no output\n")
-				os.Exit(1)
-			}
-			os.Stdout.Write(data)
-			return
-		}
-
-		// Read offset tracking
-		offsetFile := filepath.Join(agentDir, "read_offset")
-		offset := 0
-		if data, err := os.ReadFile(offsetFile); err == nil {
-			fmt.Sscanf(string(data), "%d", &offset)
-		}
-
-		if readFollow {
-			// Stream events in real-time
-			for {
-				events, err := agent.ReadEvents(id, offset)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error reading events: %v\n", err)
-					os.Exit(1)
-				}
-				for _, event := range events {
-					if readRaw {
-						fmt.Println(string(event))
-					} else {
-						printEvent(event)
-					}
-					offset++
-				}
-				// Save offset
-				os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
-
-				status := storage.ReadStatus(agentDir)
-				if status != agent.StatusRunning && status != agent.StatusSpawning {
-					// Agent finished, drain remaining events
-					events, _ = agent.ReadEvents(id, offset)
-					for _, event := range events {
-						if readRaw {
-							fmt.Println(string(event))
-						} else {
-							printEvent(event)
-						}
-						offset++
-					}
-					os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
-					return
-				}
-				time.Sleep(500 * time.Millisecond)
-			}
-		}
-
-		// One-shot: read new events
-		events, err := agent.ReadEvents(id, offset)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading events: %v\n", err)
-			os.Exit(1)
-		}
-		for _, event := range events {
-			if readRaw {
-				fmt.Println(string(event))
-			} else {
-				printEvent(event)
-			}
-			offset++
-		}
-		os.WriteFile(offsetFile, []byte(fmt.Sprintf("%d", offset)), 0644)
-	},
-}
-
-func printEvent(event json.RawMessage) {
-	var e struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(event, &e); err != nil {
-		return
-	}
-	switch e.Type {
-	case "message_update":
-		// Streaming text delta — extract and print incrementally
-		var full struct {
-			AssistantMessageEvent struct {
-				Type  string `json:"type"`
-				Delta string `json:"delta"`
-			} `json:"assistantMessageEvent"`
-		}
-		if json.Unmarshal(event, &full) == nil {
-			switch full.AssistantMessageEvent.Type {
-			case "text_delta":
-				fmt.Print(full.AssistantMessageEvent.Delta)
-			case "thinking_delta":
-				// Suppress thinking output by default (use --raw to see)
-			}
-		}
-	case "message_end":
-		// Full message available, but we already printed deltas.
-		// Only print if we haven't seen any deltas (e.g., reading completed agent).
-		// For now, just print a newline after assistant messages.
-		var full struct {
-			Message struct {
-				Role string `json:"role"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(event, &full) == nil && full.Message.Role == "assistant" {
-			fmt.Println()
-		}
-	case "agent_start", "agent_end", "turn_start", "turn_end",
-		"message_start", "tool_execution_start", "tool_execution_end":
-		// Structured events — show summary on stderr
-		fmt.Fprintf(os.Stderr, "[%s]\n", e.Type)
-	default:
-		// Other events: suppress by default (use --raw to see)
-	}
-}
-
-var stopCmd = &cobra.Command{
-	Use:   "stop <agent-id>",
-	Short: "Gracefully stop an RPC-mode agent",
-	Long: `Gracefully stop an RPC-mode agent by sending an abort command.
-For headless-mode agents, falls back to kill (SIGTERM).`,
-	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
-		agentDir := storage.AgentDir(id)
-		if !storage.Exists(agentDir) {
-			fmt.Fprintf(os.Stderr, "Error: agent not found: %s\n", id)
-			os.Exit(1)
-		}
-
-		meta := &agent.Meta{}
-		storage.ReadJSON(filepath.Join(agentDir, "meta.json"), meta)
-
-		status := storage.ReadStatus(agentDir)
-		if status != agent.StatusRunning {
-			fmt.Fprintf(os.Stderr, "Error: agent %s is %s (not running)\n", id, status)
-			os.Exit(1)
-		}
-
-		if meta.Mode == "rpc" {
-			// RPC mode: the ai process reads from stdin (managed by python bridge).
-			// We can't inject an abort command via the same stdin.
-			// Kill the process group to stop the agent.
-			if err := agent.Kill(id); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Agent %s stopped\n", id)
-		} else {
-			// Headless: just kill
-			if err := agent.Kill(id); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Agent %s killed\n", id)
-		}
 	},
 }
 
@@ -462,34 +399,34 @@ For headless-mode agents, falls back to kill (SIGTERM).`,
 
 var channelCmd = &cobra.Command{
 	Use:   "channel",
-	Short: "Manage channels",
+	Short: "Manage message channels",
 }
 
 var channelCreateCmd = &cobra.Command{
 	Use:   "create <name>",
-	Short: "Create a channel",
+	Short: "Create a named channel",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := channel.Create(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Channel created: %s\n", args[0])
+		fmt.Printf("channel created: %s\n", args[0])
 	},
 }
 
 var channelLsCmd = &cobra.Command{
 	Use:   "ls",
-	Short: "List channels",
+	Short: "List all channels",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		channels, err := channel.List()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		if len(channels) == 0 {
-			fmt.Println("No channels")
+			fmt.Println("No channels.")
 			return
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -507,139 +444,10 @@ var channelRmCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := channel.Remove(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Channel removed: %s\n", args[0])
-	},
-}
-
-// ========== Team Commands ==========
-
-var teamCmd = &cobra.Command{
-	Use:   "team",
-	Short: "Manage team runtime context",
-}
-
-var teamDescription string
-
-var teamInitCmd = &cobra.Command{
-	Use:   "init <team-id>",
-	Short: "Initialize a team workspace and make it current",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		meta, err := team.Init(args[0], teamDescription)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Team initialized: %s\n", meta.ID)
-	},
-}
-
-var teamUseCmd = &cobra.Command{
-	Use:   "use <team-id>",
-	Short: "Switch current team context",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := team.Use(args[0]); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Current team: %s\n", args[0])
-	},
-}
-
-var teamCurrentCmd = &cobra.Command{
-	Use:   "current",
-	Short: "Show the current team context",
-	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		current, err := team.Current()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if current == "" {
-			fmt.Println("(none)")
-			return
-		}
-		fmt.Println(current)
-	},
-}
-
-var teamListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List teams",
-	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		teams, err := team.List()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if len(teams) == 0 {
-			fmt.Println("No teams")
-			return
-		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "TEAM\tCURRENT\tSTATUS\tRUNNING\tTASKS\tPENDING")
-		for _, item := range teams {
-			current := "-"
-			if item.Current {
-				current = "*"
-			}
-			fmt.Fprintf(
-				w,
-				"%s\t%s\t%s\t%d\t%d\t%d\n",
-				item.ID,
-				current,
-				item.Status,
-				item.RunningAgents,
-				item.TasksTotal,
-				item.TasksPending,
-			)
-		}
-		w.Flush()
-	},
-}
-
-var teamDoneName string
-
-var teamDoneCmd = &cobra.Command{
-	Use:   "done",
-	Short: "Mark a team as done (defaults to current team)",
-	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		meta, err := team.Done(teamDoneName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Team marked done: %s\n", meta.ID)
-	},
-}
-
-var (
-	teamCleanupName  string
-	teamCleanupForce bool
-)
-
-var teamCleanupCmd = &cobra.Command{
-	Use:   "cleanup",
-	Short: "Delete a team workspace (defaults to current team)",
-	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := team.Cleanup(teamCleanupName, teamCleanupForce); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if teamCleanupName == "" {
-			fmt.Println("Current team cleaned up")
-		} else {
-			fmt.Printf("Team cleaned up: %s\n", teamCleanupName)
-		}
+		fmt.Printf("channel removed: %s\n", args[0])
 	},
 }
 
@@ -650,115 +458,200 @@ var taskCmd = &cobra.Command{
 	Short: "Manage tasks",
 }
 
-var (
-	taskSpecFile string
-)
-
 var taskCreateCmd = &cobra.Command{
 	Use:   "create <description>",
 	Short: "Create a new task",
-	Args:  cobra.MinimumNArgs(1),
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		desc := args[0]
-		if len(args) > 1 {
-			// Join all args as description
-			for _, a := range args[1:] {
-				desc += " " + a
-			}
-		}
-		t, err := task.Create(desc, taskSpecFile)
+		specFile, _ := cmd.Flags().GetString("spec")
+		t, err := task.Create(args[0], specFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		fmt.Println(t.ID)
 	},
 }
 
-var (
-	taskListStatus string
-)
-
-var taskListCmd = &cobra.Command{
-	Use:     "list [--status <status>]",
-	Short:   "List tasks",
-	Aliases: []string{"ls"},
-	Args:    cobra.NoArgs,
+var taskImportPlanCmd = &cobra.Command{
+	Use:   "import-plan <file>",
+	Short: "Import tasks from a PLAN.yml file",
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		tasks, err := task.List(taskListStatus)
+		count, err := task.ImportPlan(args[0])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(tasks) == 0 {
-			fmt.Println("No tasks")
+		fmt.Printf("imported %d tasks\n", count)
+	},
+}
+
+var taskListCmd = &cobra.Command{
+	Use:     "ls",
+	Short:   "List tasks",
+	Aliases: []string{"list"},
+	Run: func(cmd *cobra.Command, args []string) {
+		statusFilter, _ := cmd.Flags().GetString("status")
+		format, _ := cmd.Flags().GetString("format")
+
+		tasks, err := task.List(statusFilter)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		if format == "json" {
+			data, _ := json.MarshalIndent(tasks, "", "  ")
+			fmt.Println(string(data))
 			return
 		}
+
+		if len(tasks) == 0 {
+			fmt.Println("No tasks.")
+			return
+		}
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tBLOCKED_BY\tDESCRIPTION")
+		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tDESCRIPTION")
 		for _, t := range tasks {
 			desc := t.Description
-			if len(desc) > 60 {
-				desc = desc[:57] + "..."
+			if len(desc) > 50 {
+				desc = desc[:50] + "..."
 			}
-			claimant := "-"
-			if t.Claimant != "" {
-				claimant = t.Claimant
-			}
-			blockedBy := "-"
-			unmet, err := task.UnmetDependencies(t.ID)
-			if err == nil && len(unmet) > 0 {
-				blockedBy = strings.Join(unmet, ",")
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, claimant, blockedBy, desc)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID, t.Status, t.Claimant, desc)
 		}
 		w.Flush()
 	},
 }
 
-var taskClaimAs string
-
 var taskClaimCmd = &cobra.Command{
-	Use:   "claim <task-id> [--as <agent-id>]",
-	Short: "Claim a pending task",
-	Args:  cobra.ExactArgs(1),
+	Use:   "claim <id> [claimant]",
+	Short: "Claim a task",
+	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		agentID := taskClaimAs
-		if agentID == "" {
-			agentID = os.Getenv("AG_AGENT_ID")
+		claimant := ""
+		if len(args) > 1 {
+			claimant = args[1]
 		}
-		if agentID == "" {
-			agentID = "manual"
-		}
-		t, err := task.Claim(args[0], agentID)
+		_, err := task.Claim(args[0], claimant)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("Task %s claimed by %s\n", t.ID, t.Claimant)
+		fmt.Println("claimed")
 	},
 }
 
-var taskNextAs string
-
 var taskNextCmd = &cobra.Command{
-	Use:   "next [--as <agent-id>]",
-	Short: "Claim the next pending, unblocked task",
-	Args:  cobra.NoArgs,
+	Use:   "next",
+	Short: "Claim the next available task (dependency-aware)",
 	Run: func(cmd *cobra.Command, args []string) {
-		agentID := taskNextAs
-		if agentID == "" {
-			agentID = os.Getenv("AG_AGENT_ID")
-		}
-		if agentID == "" {
-			agentID = "manual"
-		}
-		t, err := task.Next(agentID)
+		claimant, _ := cmd.Flags().GetString("claimant")
+		id, err := task.ClaimNext(claimant)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Printf("%s\t%s\n", t.ID, t.Description)
+		fmt.Println(id)
+	},
+}
+
+var taskDoneCmd = &cobra.Command{
+	Use:   "done <id>",
+	Short: "Mark a task as done",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		summary, _ := cmd.Flags().GetString("summary")
+		_, err := task.Done(args[0], summary)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("done")
+	},
+}
+
+var taskFailCmd = &cobra.Command{
+	Use:   "fail <id>",
+	Short: "Mark a task as failed",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		errMsg, _ := cmd.Flags().GetString("error")
+		retryable, _ := cmd.Flags().GetBool("retryable")
+		_, err := task.Fail(args[0], errMsg, retryable)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("failed")
+	},
+}
+
+var taskShowCmd = &cobra.Command{
+	Use:   "show <id>",
+	Short: "Show task details",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		format, _ := cmd.Flags().GetString("format")
+		t, err := task.Load(args[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		if format == "json" {
+			data, _ := json.MarshalIndent(t, "", "  ")
+			fmt.Println(string(data))
+			return
+		}
+
+		fmt.Printf("ID: %s\n", t.ID)
+		fmt.Printf("Status: %s\n", t.Status)
+		if t.Claimant != "" {
+			fmt.Printf("Claimant: %s\n", t.Claimant)
+		}
+		fmt.Printf("Description: %s\n", t.Description)
+		if t.SpecFile != "" {
+			fmt.Printf("Spec: %s\n", t.SpecFile)
+		}
+		if t.OutputFile != "" {
+			fmt.Printf("Output: %s\n", t.OutputFile)
+		}
+		if len(t.Dependencies) > 0 {
+			fmt.Printf("Dependencies: %v\n", t.Dependencies)
+		}
+		if t.Summary != "" {
+			fmt.Printf("Summary: %s\n", t.Summary)
+		}
+		if t.Error != "" {
+			fmt.Printf("Error: %s\n", t.Error)
+		}
+		if t.Retryable {
+			fmt.Printf("Retryable: true\n")
+		}
+		fmt.Printf("Created: %s\n", formatTime(t.CreatedAt))
+		if t.ClaimedAt > 0 {
+			fmt.Printf("Claimed: %s\n", formatTime(t.ClaimedAt))
+		}
+		if t.FinishedAt > 0 {
+			fmt.Printf("Finished: %s\n", formatTime(t.FinishedAt))
+			fmt.Printf("Duration: %s\n", formatDuration(t.FinishedAt-t.ClaimedAt))
+		}
+
+		// Aggregate turns/tokens from claimant agent's activity.json (FR-023)
+		if t.Claimant != "" {
+			claimantAct, actErr := agent.ReadActivity(t.Claimant)
+			if actErr == nil && claimantAct != nil {
+				if claimantAct.Turns > 0 {
+					fmt.Printf("Agent Turns: %d\n", claimantAct.Turns)
+				}
+				if claimantAct.TokensTotal > 0 {
+					fmt.Printf("Agent Tokens: in=%d out=%d total=%d\n",
+						claimantAct.TokensIn, claimantAct.TokensOut, claimantAct.TokensTotal)
+				}
+			}
+		}
 	},
 }
 
@@ -768,287 +661,51 @@ var taskDepCmd = &cobra.Command{
 }
 
 var taskDepAddCmd = &cobra.Command{
-	Use:   "add <task-id> <dep-id>",
-	Short: "Add dependency: <task-id> depends on <dep-id>",
+	Use:   "add <task-id> <depends-on-id>",
+	Short: "Add a dependency",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		t, err := task.AddDependency(args[0], args[1])
+		_, err := task.AddDependency(args[0], args[1])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(t.Dependencies) == 0 {
-			fmt.Printf("Task %s has no dependencies\n", t.ID)
-			return
-		}
-		fmt.Printf("Task %s dependencies: %s\n", t.ID, strings.Join(t.Dependencies, ", "))
+		fmt.Println("dependency added")
 	},
 }
 
 var taskDepRmCmd = &cobra.Command{
-	Use:   "rm <task-id> <dep-id>",
-	Short: "Remove dependency from a task",
+	Use:   "rm <task-id> <depends-on-id>",
+	Short: "Remove a dependency",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		t, err := task.RemoveDependency(args[0], args[1])
+		_, err := task.RemoveDependency(args[0], args[1])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if len(t.Dependencies) == 0 {
-			fmt.Printf("Task %s has no dependencies\n", t.ID)
-			return
-		}
-		fmt.Printf("Task %s dependencies: %s\n", t.ID, strings.Join(t.Dependencies, ", "))
+		fmt.Println("dependency removed")
 	},
 }
 
 var taskDepLsCmd = &cobra.Command{
-	Use:     "ls <task-id>",
-	Aliases: []string{"list"},
-	Short:   "List dependencies and their status for a task",
-	Args:    cobra.ExactArgs(1),
+	Use:   "ls <task-id>",
+	Short: "List task dependencies",
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		deps, err := task.Dependencies(args[0])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		if len(deps) == 0 {
-			fmt.Println("No dependencies")
+			fmt.Println("No dependencies.")
 			return
 		}
-		unmet, _ := task.UnmetDependencies(args[0])
-		unmetSet := map[string]bool{}
-		for _, dep := range unmet {
-			unmetSet[dep] = true
-		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "DEP_ID\tSTATUS")
-		for _, depID := range deps {
-			status := "done"
-			if unmetSet[depID] {
-				status = "blocked"
-			}
-			fmt.Fprintf(w, "%s\t%s\n", depID, status)
-		}
-		w.Flush()
-	},
-}
-
-type planImportDoc struct {
-	Metadata struct {
-		SpecFile string `yaml:"spec_file"`
-	} `yaml:"metadata"`
-	Tasks []planImportTask `yaml:"tasks"`
-}
-
-type planImportTask struct {
-	ID           string   `yaml:"id"`
-	Title        string   `yaml:"title"`
-	Description  string   `yaml:"description"`
-	Dependencies []string `yaml:"dependencies"`
-}
-
-var taskImportSpec string
-
-var taskImportPlanCmd = &cobra.Command{
-	Use:   "import-plan <plan.yml>",
-	Short: "Import tasks and dependencies from PLAN.yml",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		planPath := args[0]
-		data, err := os.ReadFile(planPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading plan file: %v\n", err)
-			os.Exit(1)
-		}
-
-		var doc planImportDoc
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing plan yaml: %v\n", err)
-			os.Exit(1)
-		}
-		if len(doc.Tasks) == 0 {
-			fmt.Fprintln(os.Stderr, "Error: no tasks found in plan")
-			os.Exit(1)
-		}
-
-		specFile := strings.TrimSpace(taskImportSpec)
-		if specFile == "" {
-			specFile = strings.TrimSpace(doc.Metadata.SpecFile)
-		}
-
-		created := 0
-		for _, pt := range doc.Tasks {
-			taskID := strings.TrimSpace(pt.ID)
-			if taskID == "" {
-				fmt.Fprintln(os.Stderr, "Error: plan task missing id")
-				os.Exit(1)
-			}
-			desc := strings.TrimSpace(pt.Title)
-			if strings.TrimSpace(pt.Description) != "" {
-				if desc != "" {
-					desc = desc + " - " + strings.TrimSpace(pt.Description)
-				} else {
-					desc = strings.TrimSpace(pt.Description)
-				}
-			}
-			if desc == "" {
-				desc = fmt.Sprintf("Task %s", taskID)
-			}
-
-			if _, err := task.CreateWithID(taskID, desc, specFile); err != nil {
-				fmt.Fprintf(os.Stderr, "Error importing task %s: %v\n", taskID, err)
-				os.Exit(1)
-			}
-			created++
-		}
-
-		for _, pt := range doc.Tasks {
-			taskID := strings.TrimSpace(pt.ID)
-			for _, depID := range pt.Dependencies {
-				depID = strings.TrimSpace(depID)
-				if depID == "" {
-					continue
-				}
-				if _, err := task.AddDependency(taskID, depID); err != nil {
-					fmt.Fprintf(os.Stderr, "Error adding dependency %s -> %s: %v\n", taskID, depID, err)
-					os.Exit(1)
-				}
-			}
-		}
-
-		fmt.Printf("Imported %d task(s) from %s\n", created, planPath)
-	},
-}
-
-var taskDoneOutput string
-
-var taskDoneCmd = &cobra.Command{
-	Use:   "done <task-id> [--output <file>]",
-	Short: "Mark a task as done",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		t, err := task.Done(args[0], taskDoneOutput)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Task %s done\n", t.ID)
-	},
-}
-
-var taskFailError string
-
-var taskFailCmd = &cobra.Command{
-	Use:   "fail <task-id> [--error <message>]",
-	Short: "Mark a task as failed",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		t, err := task.Fail(args[0], taskFailError)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Task %s failed: %s\n", t.ID, taskFailError)
-	},
-}
-
-var taskShowCmd = &cobra.Command{
-	Use:   "show <task-id>",
-	Short: "Show task details",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		t, err := task.Show(args[0])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("id: %s\n", t.ID)
-		fmt.Printf("status: %s\n", t.Status)
-		if t.Claimant != "" {
-			fmt.Printf("claimant: %s\n", t.Claimant)
-		}
-		fmt.Printf("description: %s\n", t.Description)
-		if t.SpecFile != "" {
-			fmt.Printf("spec: %s\n", t.SpecFile)
-		}
-		if len(t.Dependencies) > 0 {
-			fmt.Printf("dependencies: %s\n", strings.Join(t.Dependencies, ", "))
-			if unmet, err := task.UnmetDependencies(t.ID); err == nil && len(unmet) > 0 {
-				fmt.Printf("blocked_by: %s\n", strings.Join(unmet, ", "))
-			}
-		}
-		if t.OutputFile != "" {
-			fmt.Printf("output: %s\n", t.OutputFile)
-		}
-		if t.Error != "" {
-			fmt.Printf("error: %s\n", t.Error)
-		}
-		fmt.Printf("created: %s\n", formatTime(t.CreatedAt))
-		if t.ClaimedAt > 0 {
-			fmt.Printf("claimed: %s\n", formatTime(t.ClaimedAt))
-		}
-		if t.FinishedAt > 0 {
-			fmt.Printf("finished: %s\n", formatTime(t.FinishedAt))
+		for _, dep := range deps {
+			fmt.Println(dep)
 		}
 	},
-}
-
-func init() {
-	// spawn flags
-	spawnCmd.Flags().StringVar(&spawnSystem, "system", "", "System prompt file or inline text")
-	spawnCmd.Flags().StringVar(&spawnInput, "input", "", "Input file path or inline text")
-	spawnCmd.Flags().StringVar(&spawnMode, "mode", "headless", "Agent mode: headless (fire-and-forget) or rpc (bidirectional with events)")
-	spawnCmd.Flags().StringVar(&spawnCwd, "cwd", "", "Working directory")
-	spawnCmd.Flags().StringVar(&spawnTimeout, "timeout", "10m", "Timeout (e.g. 5m, 30s)")
-	spawnCmd.Flags().BoolVar(&spawnMock, "mock", false, "Use mock agent (no LLM, for testing)")
-	spawnCmd.Flags().StringVar(&spawnMockScript, "mock-script", "", "Mock script path (default: echo input back)")
-	spawnCmd.Flags().String("id", "", "Agent ID (required)")
-	_ = cobra.MarkFlagRequired(spawnCmd.Flags(), "id")
-
-	// wait flags
-	waitCmd.Flags().IntVar(&waitTimeout, "timeout", 600, "Timeout in seconds")
-
-	// send flags
-	sendCmd.Flags().StringVar(&sendFile, "file", "", "Send file contents")
-
-	// recv flags
-	recvCmd.Flags().BoolVar(&recvWait, "wait", false, "Block until a message arrives")
-	recvCmd.Flags().IntVar(&recvTimeout, "timeout", 60, "Timeout in seconds (with --wait)")
-	recvCmd.Flags().BoolVar(&recvAll, "all", false, "Receive all messages")
-
-	// read flags
-	readCmd.Flags().BoolVar(&readFollow, "follow", false, "Stream events in real-time")
-	readCmd.Flags().BoolVar(&readRaw, "raw", false, "Output raw JSON lines")
-
-	// channel subcommands
-	channelCmd.AddCommand(channelCreateCmd, channelLsCmd, channelRmCmd)
-
-	// team flags
-	teamInitCmd.Flags().StringVar(&teamDescription, "description", "", "Team description")
-	teamDoneCmd.Flags().StringVar(&teamDoneName, "team", "", "Team ID (defaults to current)")
-	teamCleanupCmd.Flags().StringVar(&teamCleanupName, "team", "", "Team ID (defaults to current)")
-	teamCleanupCmd.Flags().BoolVar(&teamCleanupForce, "force", false, "Force cleanup even with running agents")
-
-	// team subcommands
-	teamCmd.AddCommand(teamInitCmd, teamUseCmd, teamCurrentCmd, teamListCmd, teamDoneCmd, teamCleanupCmd)
-
-	// task flags
-	taskCreateCmd.Flags().StringVar(&taskSpecFile, "file", "", "Spec file path")
-	taskImportPlanCmd.Flags().StringVar(&taskImportSpec, "spec", "", "Optional SPEC.md path override")
-	taskListCmd.Flags().StringVar(&taskListStatus, "status", "", "Filter by status (pending|claimed|done|failed)")
-	taskClaimCmd.Flags().StringVar(&taskClaimAs, "as", "", "Agent ID claiming the task")
-	taskNextCmd.Flags().StringVar(&taskNextAs, "as", "", "Agent ID claiming the task")
-	taskDoneCmd.Flags().StringVar(&taskDoneOutput, "output", "", "Output file path")
-	taskFailCmd.Flags().StringVar(&taskFailError, "error", "unknown error", "Error message")
-
-	// task dependency subcommands
-	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-
-	// task subcommands
-	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
 }
 
 // ========== Helpers ==========
@@ -1062,6 +719,9 @@ func formatTime(unix int64) string {
 }
 
 func formatDuration(seconds int64) string {
+	if seconds < 0 {
+		return "-"
+	}
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}
@@ -1088,4 +748,52 @@ func readStdin() []byte {
 		}
 	}
 	return data
+}
+
+func init() {
+	// Agent flags
+	agentSpawnCmd.Flags().String("system", "", "System prompt (inline or @file)")
+	agentSpawnCmd.Flags().String("input", "", "Initial input message")
+	agentSpawnCmd.Flags().String("cwd", "", "Working directory for the agent")
+	agentOutputCmd.Flags().Int("tail", 0, "Show last N bytes of output")
+	agentRmCmd.Flags().Bool("force", false, "Kill agent before removing")
+	agentWaitCmd.Flags().Int("timeout", 300, "Timeout in seconds (0 = no timeout)")
+
+	// Status/ls format flag
+	for _, c := range []*cobra.Command{agentStatusCmd, agentLsCmd, agentOutputCmd} {
+		c.Flags().String("format", "", "Output format: json")
+	}
+
+	// Task flags
+	taskCreateCmd.Flags().String("spec", "", "Spec file path")
+	taskListCmd.Flags().String("status", "", "Filter by status")
+	taskListCmd.Flags().String("format", "", "Output format: json")
+	taskNextCmd.Flags().String("claimant", "", "Claimant identifier")
+	taskDoneCmd.Flags().String("summary", "", "Task summary")
+	taskFailCmd.Flags().String("error", "", "Error message")
+	taskFailCmd.Flags().Bool("retryable", false, "Mark as retryable")
+	taskShowCmd.Flags().String("format", "", "Output format: json")
+
+	// Send/recv flags
+	sendCmd.Flags().String("file", "", "Send file contents from path")
+	recvCmd.Flags().Bool("wait", false, "Wait for a message if none available")
+	recvCmd.Flags().Int("timeout", 60, "Timeout in seconds for --wait")
+	recvCmd.Flags().Bool("all", false, "Receive all pending messages")
+
+	// Agent subcommands
+	agentCmd.AddCommand(
+		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
+		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
+		agentOutputCmd, agentWaitCmd, agentLsCmd,
+	)
+
+	// Channel subcommands
+	channelCmd.AddCommand(channelCreateCmd, channelLsCmd, channelRmCmd)
+
+	// Task subcommands
+	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
+	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
+
+	// Root subcommands
+	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd)
 }
