@@ -103,10 +103,12 @@ func Recv(source string, wait bool, timeoutSec int, all bool) ([]byte, error) {
 	// Check if source is an agent
 	agentDir := storage.AgentDir(source)
 	if storage.Exists(agentDir) {
-		status := storage.ReadStatus(agentDir)
+		// Read status from activity.json
+		var act struct{ Status string `json:"status"` }
+		_ = storage.ReadJSON(filepath.Join(agentDir, "activity.json"), &act)
 
 		// For done agents, return output directly
-		if status == "done" {
+		if act.Status == "done" || act.Status == "failed" {
 			return os.ReadFile(filepath.Join(agentDir, "output"))
 		}
 

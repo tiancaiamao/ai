@@ -70,15 +70,15 @@ func TestDone(t *testing.T) {
 	Create("Task", "")
 	Claim("t001", "worker-1")
 
-	task, err := Done("t001", "output.md")
+	task, err := Done("t001", "fixed the bug in auth.go")
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 	if task.Status != StatusDone {
 		t.Fatalf("expected done, got %s", task.Status)
 	}
-	if task.OutputFile != "output.md" {
-		t.Fatalf("wrong output: %s", task.OutputFile)
+	if task.Summary != "fixed the bug in auth.go" {
+		t.Fatalf("wrong summary: %s", task.Summary)
 	}
 
 	// Can't claim a done task
@@ -94,7 +94,7 @@ func TestFail(t *testing.T) {
 	Create("Task", "")
 	Claim("t001", "worker-1")
 
-	task, err := Fail("t001", "out of memory")
+	task, err := Fail("t001", "out of memory", true)
 	if err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestDependencyBlocksClaim(t *testing.T) {
 	if _, err := Claim("t001", "worker-1"); err != nil {
 		t.Fatalf("claim t001: %v", err)
 	}
-	if _, err := Done("t001", "done.md"); err != nil {
+	if _, err := Done("t001", "done"); err != nil {
 		t.Fatalf("done t001: %v", err)
 	}
 

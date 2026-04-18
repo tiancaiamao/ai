@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/genius/ag/internal/storage"
+	"gopkg.in/yaml.v3"
 )
 
 // Status constants
@@ -35,6 +36,8 @@ type Task struct {
 	ClaimedAt    int64    `json:"claimedAt,omitempty"`
 	FinishedAt   int64    `json:"finishedAt,omitempty"`
 	Error        string   `json:"error,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
+	Retryable    bool     `json:"retryable,omitempty"`
 }
 
 var (
@@ -165,8 +168,8 @@ func Claim(taskID, agentID string) (*Task, error) {
 	return task, nil
 }
 
-// Done marks a task as completed.
-func Done(taskID string, outputFile string) (*Task, error) {
+// Done marks a task as completed with optional summary.
+func Done(taskID string, summary string) (*Task, error) {
 	task, err := loadTask(taskID)
 	if err != nil {
 		return nil, err
@@ -177,7 +180,7 @@ func Done(taskID string, outputFile string) (*Task, error) {
 	}
 
 	task.Status = StatusDone
-	task.OutputFile = outputFile
+	task.Summary = summary
 	task.FinishedAt = time.Now().Unix()
 
 	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
@@ -188,7 +191,8 @@ func Done(taskID string, outputFile string) (*Task, error) {
 }
 
 // Fail marks a task as failed.
-func Fail(taskID string, errMsg string) (*Task, error) {
+// Fail marks a task as failed with error message and retryable flag.
+func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
 	task, err := loadTask(taskID)
 	if err != nil {
 		return nil, err
@@ -200,6 +204,7 @@ func Fail(taskID string, errMsg string) (*Task, error) {
 
 	task.Status = StatusFailed
 	task.Error = errMsg
+	task.Retryable = retryable
 	task.FinishedAt = time.Now().Unix()
 
 	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
@@ -207,6 +212,69 @@ func Fail(taskID string, errMsg string) (*Task, error) {
 	}
 
 	return task, nil
+}
+
+// Load loads a task by ID (alias for reading task.json).
+func Load(taskID string) (*Task, error) {
+	return loadTask(taskID)
+}
+
+// ClaimNext claims the first pending and unblocked task for agentID.
+// Returns the claimed task ID on success.
+func ClaimNext(claimant string) (string, error) {
+	t, err := Next(claimant)
+	if err != nil {
+		return "", err
+	}
+	return t.ID, nil
+}
+
+// ImportPlan imports tasks from a PLAN.yml file.
+// Returns the number of tasks imported.
+func ImportPlan(filePath string) (int, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("read plan file: %w", err)
+	}
+
+	// Parse YAML plan
+	var plan struct {
+		Tasks []struct {
+			ID          string `yaml:"id"`
+			Title       string `yaml:"title"`
+			Description string `yaml:"description"`
+			Dependencies []string `yaml:"dependencies"`
+		} `yaml:"tasks"`
+	}
+	if err := yaml.Unmarshal(data, &plan); err != nil {
+		return 0, fmt.Errorf("parse plan: %w", err)
+	}
+
+	count := 0
+	for _, pt := range plan.Tasks {
+		desc := pt.Title
+		if pt.Description != "" {
+			desc = pt.Title + ": " + pt.Description
+		}
+
+		var t *Task
+		var err error
+		if pt.ID != "" {
+			t, err = CreateWithID(pt.ID, desc, "")
+		} else {
+			t, err = Create(desc, "")
+		}
+		if err != nil {
+			continue // skip duplicates
+		}
+
+		// Add dependencies
+		for _, dep := range pt.Dependencies {
+			AddDependency(t.ID, dep)
+		}
+		count++
+	}
+	return count, nil
 }
 
 // Show returns task details.
