@@ -136,7 +136,7 @@ All `ag` state (`agents/channels/tasks`) is scoped to the current team when a te
 # Create tasks
 $AG_BIN task create "Implement OAuth2"
 $AG_BIN task create "Write tests" --file spec.md
-$AG_BIN task import-plan .workflow/artifacts/features/feature/PLAN.yml
+$AG_BIN task import-plan .workflow/artifacts/feature/PLAN.yml
 
 # Dependencies (DAG)
 $AG_BIN task dep add T002 T001      # T002 depends on T001
@@ -159,7 +159,7 @@ $AG_BIN task show t001                  # full details
 
 ```bash
 AG_BIN=~/.ai/skills/ag/ag
-ART=.workflow/artifacts/features/feature
+ART=.workflow/artifacts/feature
 
 $AG_BIN team init feat-user-auth --description "feature implement"
 $AG_BIN task import-plan "$ART/PLAN.yml" --spec "$ART/SPEC.md"

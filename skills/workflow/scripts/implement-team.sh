@@ -56,8 +56,8 @@ Environment:
 
 Examples:
   implement-team.sh run \
-    --plan .workflow/artifacts/features/feature/PLAN.yml \
-    --spec .workflow/artifacts/features/feature/SPEC.md \
+    --plan .workflow/artifacts/feature/PLAN.yml \
+    --spec .workflow/artifacts/feature/SPEC.md \
     --team feat-user-auth \
     --workers 3
 

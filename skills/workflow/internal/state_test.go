@@ -818,6 +818,183 @@ func TestBackPreservesTargetNotes(t *testing.T) {
 	}
 }
 
+// === Issue #1: dependencyDepth must not stack overflow on cycles ===
+
+func TestDependencyDepth_Cycle(t *testing.T) {
+	plan := Plan{
+		Tasks: []PTask{
+			{ID: "A", Dependencies: []string{"B"}},
+			{ID: "B", Dependencies: []string{"A"}},
+		},
+	}
+	// Must not panic or stack overflow
+	depth := dependencyDepth(plan)
+	if depth < 1 {
+		t.Errorf("expected depth >= 1 even with cycles, got %d", depth)
+	}
+}
+
+func TestDependencyDepth_SelfLoop(t *testing.T) {
+	plan := Plan{
+		Tasks: []PTask{
+			{ID: "A", Dependencies: []string{"A"}},
+		},
+	}
+	depth := dependencyDepth(plan)
+	if depth < 1 {
+		t.Errorf("expected depth >= 1 even with self-loop, got %d", depth)
+	}
+}
+
+// === Issue #1: plan-lint should return errors, not crash, on cycles ===
+
+func TestLintPlan_CycleDoesNotCrash(t *testing.T) {
+	plan := Plan{
+		Version: "1",
+		Tasks: []PTask{
+			{ID: "A", Dependencies: []string{"B"}},
+			{ID: "B", Dependencies: []string{"A"}},
+		},
+	}
+	issues := lintPlan(plan)
+	hasCycleError := false
+	for _, iss := range issues {
+		if iss.Level == "error" && contains(iss.Message, "cycle") {
+			hasCycleError = true
+		}
+	}
+	if !hasCycleError {
+		t.Errorf("expected cycle error, got issues: %v", issues)
+	}
+	// assessStrategy should NOT be called on plans with errors — verified by runPlanLint logic
+}
+
+// === Issue #2: v1 migration edge case — no completed phases ===
+
+func TestMigrateV1State_NoCompletedPhases(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	legacy := legacyStateV1{
+		ID:              "wf-test-1",
+		Template:        "feature",
+		Description:     "test migration",
+		Status:          "in_progress",
+		CurrentPhase:    "brainstorm",
+		StartedAt:       "2025-01-01T00:00:00Z",
+		Phases:          []string{"brainstorm", "spec", "plan", "implement"},
+		CompletedPhases: []string{},
+		ArtifactDir:     ".workflow/artifacts/feature",
+	}
+	data, _ := json.Marshal(legacy)
+	os.MkdirAll(WorkflowDir, 0755)
+	os.WriteFile(filepath.Join(WorkflowDir, StateFile), data, 0644)
+
+	state, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	// Phase 0 (brainstorm) should be active, not any other phase
+	if state.Phases[0].Status != "active" {
+		t.Errorf("expected phase 0 active, got status=%s for phase 0", state.Phases[0].Status)
+	}
+	if state.CurrentPhase != 0 {
+		t.Errorf("expected CurrentPhase=0, got %d", state.CurrentPhase)
+	}
+	// Other phases should be pending
+	for i := 1; i < len(state.Phases); i++ {
+		if state.Phases[i].Status != "pending" {
+			t.Errorf("expected phase %d pending, got %s", i, state.Phases[i].Status)
+		}
+	}
+}
+
+// === Issue #2: v1 migration — all phases completed should not activate any phase ===
+
+func TestMigrateV1State_AllCompleted(t *testing.T) {
+	_ = setupTestEnv(t)
+
+	legacy := legacyStateV1{
+		ID:              "wf-test-2",
+		Template:        "feature",
+		Description:     "test migration",
+		Status:          "completed",
+		StartedAt:       "2025-01-01T00:00:00Z",
+		Phases:          []string{"brainstorm", "spec", "plan", "implement"},
+		CompletedPhases: []string{"brainstorm", "spec", "plan", "implement"},
+		ArtifactDir:     ".workflow/artifacts/feature",
+	}
+	data, _ := json.Marshal(legacy)
+	os.MkdirAll(WorkflowDir, 0755)
+	os.WriteFile(filepath.Join(WorkflowDir, StateFile), data, 0644)
+
+	state, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+
+	// No phase should be active
+	for i, p := range state.Phases {
+		if p.Status == "active" {
+			t.Errorf("expected no active phase when all completed, but phase %d (%s) is active", i, p.Name)
+		}
+	}
+	// Status should be completed
+	if state.Status != "completed" {
+		t.Errorf("expected status=completed, got %s", state.Status)
+	}
+}
+
+// === Issue #4: cross-group duplicate detection ===
+
+func TestLintGroups_TaskInMultipleGroups(t *testing.T) {
+	plan := Plan{
+		Version: "1",
+		Tasks: []PTask{
+			{ID: "T001", Title: "Task 1"},
+			{ID: "T002", Title: "Task 2"},
+		},
+		Groups: []PGroup{
+			{Name: "g1", Title: "Group 1", Tasks: []string{"T001", "T002"}, CommitMessage: "g1"},
+			{Name: "g2", Title: "Group 2", Tasks: []string{"T001"}, CommitMessage: "g2"},
+		},
+		GroupOrder: []string{"g1", "g2"},
+	}
+	issues := lintGroups(plan)
+	found := false
+	for _, iss := range issues {
+		if iss.Level == "warning" && contains(iss.Message, "T001") && contains(iss.Message, "2 groups") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning for T001 in 2 groups, got: %v", issues)
+	}
+}
+
+func TestLintGroups_TaskDuplicatedWithinGroup(t *testing.T) {
+	plan := Plan{
+		Version: "1",
+		Tasks: []PTask{
+			{ID: "T001", Title: "Task 1"},
+		},
+		Groups: []PGroup{
+			{Name: "g1", Title: "Group 1", Tasks: []string{"T001", "T001"}, CommitMessage: "g1"},
+		},
+		GroupOrder: []string{"g1"},
+	}
+	issues := lintGroups(plan)
+	found := false
+	for _, iss := range issues {
+		if iss.Level == "error" && contains(iss.Message, "duplicated within group") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected error for T001 duplicated within group, got: %v", issues)
+	}
+}
+
 // === LintGranularity level is warning ===
 
 func TestLintGranularity_LargeTaskNoSubtasks(t *testing.T) {

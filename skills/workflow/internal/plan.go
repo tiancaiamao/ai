@@ -42,9 +42,19 @@ func runPlanLint(cmd *cobra.Command, args []string) {
 
 	issues := lintPlan(plan)
 
-	strategy := assessStrategy(plan)
-	if strategy != "" {
-		issues = append(issues, LintIssue{Level: "info", Message: strategy})
+	// Only assess strategy if there are no errors (cycles can cause stack overflow in dependencyDepth)
+	hasError := false
+	for _, iss := range issues {
+		if iss.Level == "error" {
+			hasError = true
+			break
+		}
+	}
+	if !hasError {
+		strategy := assessStrategy(plan)
+		if strategy != "" {
+			issues = append(issues, LintIssue{Level: "info", Message: strategy})
+		}
 	}
 
 	if asJSON {
@@ -162,11 +172,18 @@ func dependencyDepth(plan Plan) int {
 	}
 
 	depth := make(map[string]int)
+	visiting := make(map[string]bool) // cycle guard
 	var getDepth func(string) int
 	getDepth = func(id string) int {
 		if d, ok := depth[id]; ok {
 			return d
 		}
+		if visiting[id] {
+			return 1 // break cycle
+		}
+		visiting[id] = true
+		defer func() { visiting[id] = false }()
+
 		t, exists := taskMap[id]
 		if !exists || len(t.Dependencies) == 0 {
 			depth[id] = 1
@@ -333,7 +350,7 @@ func lintGranularity(plan Plan) []LintIssue {
 
 func lintGroups(plan Plan) []LintIssue {
 	var issues []LintIssue
-	groupTasks := make(map[string]bool)
+	taskGroupCount := make(map[string]int) // taskID -> number of groups it appears in
 
 	for _, g := range plan.Groups {
 		if g.Name == "" {
@@ -346,12 +363,18 @@ func lintGroups(plan Plan) []LintIssue {
 		if len(g.Tasks) > 6 {
 			issues = append(issues, LintIssue{"info", fmt.Sprintf("group '%s' has %d tasks — consider splitting", g.Name, len(g.Tasks))})
 		}
+		seenInGroup := make(map[string]bool)
 		for _, tid := range g.Tasks {
-			key := g.Name + ":" + tid
-			if groupTasks[key] {
-				issues = append(issues, LintIssue{"warning", fmt.Sprintf("task %s appears in multiple groups", tid)})
+			if seenInGroup[tid] {
+				issues = append(issues, LintIssue{"error", fmt.Sprintf("task %s duplicated within group %s", tid, g.Name)})
 			}
-			groupTasks[key] = true
+			seenInGroup[tid] = true
+			taskGroupCount[tid]++
+		}
+	}
+	for tid, count := range taskGroupCount {
+		if count > 1 {
+			issues = append(issues, LintIssue{"warning", fmt.Sprintf("task %s appears in %d groups", tid, count)})
 		}
 	}
 

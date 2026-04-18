@@ -101,23 +101,30 @@ func migrateV1State(data []byte) (*State, error) {
 		completedSet[p] = true
 	}
 
-	currentIdx := 0
 	for i, name := range legacy.Phases {
 		p := Phase{Name: name, Skill: name}
 		if completedSet[name] {
 			p.Status = "completed"
 		} else {
 			p.Status = "pending"
-			if currentIdx == 0 {
-				currentIdx = i
-			}
 		}
 		phases[i] = p
 	}
 
-	// Activate the first non-completed phase (or last if all completed)
-	if currentIdx < len(phases) {
+	// Determine current phase index and activate it
+	currentIdx := -1
+	for i, name := range legacy.Phases {
+		if !completedSet[name] {
+			currentIdx = i
+			break
+		}
+	}
+
+	if currentIdx >= 0 {
 		phases[currentIdx].Status = "active"
+	} else {
+		// All phases completed — set currentIdx to last phase
+		currentIdx = len(phases) - 1
 	}
 
 	status := legacy.Status
