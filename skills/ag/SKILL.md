@@ -195,7 +195,7 @@ Stale detection: if tmux session is gone but activity shows "running", `ag agent
 5. repeat for next wave of unblocked tasks
 ```
 
-### workflow skill (pair programming)
+### workflow skill (worker-judge loop)
 
 ```
 1. ag agent spawn writer --system writer.md --input "write spec"
@@ -205,17 +205,6 @@ Stale detection: if tmux session is gone but activity shows "running", `ag agent
    ag agent steer reviewer "$(ag agent output writer)"
    ag agent wait reviewer --timeout 300
    ag agent steer writer "$(ag agent output reviewer)"
-```
-
-## Testing
-
-```bash
-go test ./... -v                    # All packages
-go test ./internal/bridge -v        # Bridge: ActivityWriter, EventReader, SocketServer
-go test ./internal/task -v          # Task: CRUD, DAG, ImportPlan
-go test ./internal/channel -v       # Channel: send/recv
-go test ./internal/storage -v       # Storage: atomic write
-go test ./cmd -v                    # CLI: Output --tail edge cases
 ```
 
 ## Reference
