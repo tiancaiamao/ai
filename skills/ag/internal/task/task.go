@@ -190,7 +190,6 @@ func Done(taskID string, summary string) (*Task, error) {
 	return task, nil
 }
 
-// Fail marks a task as failed.
 // Fail marks a task as failed with error message and retryable flag.
 func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
 	task, err := loadTask(taskID)

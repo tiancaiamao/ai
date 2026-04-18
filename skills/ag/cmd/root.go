@@ -638,6 +638,20 @@ var taskShowCmd = &cobra.Command{
 			fmt.Printf("Finished: %s\n", formatTime(t.FinishedAt))
 			fmt.Printf("Duration: %s\n", formatDuration(t.FinishedAt-t.ClaimedAt))
 		}
+
+		// Aggregate turns/tokens from claimant agent's activity.json (FR-023)
+		if t.Claimant != "" {
+			claimantAct, actErr := agent.ReadActivity(t.Claimant)
+			if actErr == nil && claimantAct != nil {
+				if claimantAct.Turns > 0 {
+					fmt.Printf("Agent Turns: %d\n", claimantAct.Turns)
+				}
+				if claimantAct.TokensTotal > 0 {
+					fmt.Printf("Agent Tokens: in=%d out=%d total=%d\n",
+						claimantAct.TokensIn, claimantAct.TokensOut, claimantAct.TokensTotal)
+				}
+			}
+		}
 	},
 }
 
