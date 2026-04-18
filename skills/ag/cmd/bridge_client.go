@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
@@ -211,14 +212,36 @@ func DetectStale(id string, act *agent.Activity) {
 		return
 	}
 
+	stale := false
+	reason := ""
+
+	// Check 1: tmux session exists
 	sessionName := "ag-" + id
 	tmuxAlive := exec.Command("tmux", "has-session", "-t", sessionName).Run() == nil
-
 	if !tmuxAlive {
-		// tmux session is gone but status says running — stale
+		stale = true
+		reason = "tmux session not found"
+	}
+
+	// Check 2: PID is still alive (if tmux is alive but process died)
+	if !stale && act.Pid > 0 {
+		proc, err := os.FindProcess(act.Pid)
+		if err != nil {
+			stale = true
+			reason = "process not found"
+		} else {
+			// Signal 0 checks if process exists without killing it
+			if err := proc.Signal(syscall.Signal(0)); err != nil {
+				stale = true
+				reason = "process no longer alive"
+			}
+		}
+	}
+
+	if stale {
 		act.Status = "failed"
 		if act.Error == "" {
-			act.Error = "bridge process exited unexpectedly"
+			act.Error = reason
 		}
 		now := time.Now().Unix()
 		if act.FinishedAt == 0 {

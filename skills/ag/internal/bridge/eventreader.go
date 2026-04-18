@@ -135,11 +135,13 @@ func (er *EventReader) handleTurnEnd(evt map[string]any) {
 
 	er.writer.UpdateActivity(func(a *AgentActivity) {
 		if data != nil {
-			if tokensBefore, ok := toInt64(data["tokensBefore"]); ok {
-				_ = tokensBefore // available for future use
-			}
-			if tokensAfter, ok := toInt64(data["tokensAfter"]); ok {
-				_ = tokensAfter // available for future use
+			before, hasBefore := toInt64(data["tokensBefore"])
+			after, hasAfter := toInt64(data["tokensAfter"])
+			if hasBefore && hasAfter && after >= before {
+				// Accumulate turn tokens into totals
+				a.TokensIn += before
+				a.TokensOut += after - before
+				a.TokensTotal = a.TokensIn + a.TokensOut
 			}
 		}
 	})

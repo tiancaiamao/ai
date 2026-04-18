@@ -1,11 +1,13 @@
 package bridge
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"time"
 )
 
 // CommandHandler processes a BridgeCommand and returns a BridgeResponse.
@@ -86,18 +88,37 @@ func (s *SocketServer) acceptLoop() {
 func (s *SocketServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 
-	// Read until newline.
-	var buf [4096]byte
-	n, err := conn.Read(buf[:])
-	if err != nil {
-		log.Printf("bridge: read from %s: %v", conn.RemoteAddr(), err)
-		return
+	// Set read deadline to prevent hanging on malformed clients.
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+
+	// Read until newline, max 1MB to prevent OOM.
+	var buf bytes.Buffer
+	recvBuf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(recvBuf)
+		if n > 0 {
+			buf.Write(recvBuf[:n])
+			if buf.Len() > 1<<20 {
+				log.Printf("bridge: command too large (>1MB), discarding")
+				s.writeResponse(conn, BridgeResponse{OK: false, Error: "command too large"})
+				return
+			}
+			if bytes.IndexByte(buf.Bytes(), '\n') >= 0 {
+				break
+			}
+		}
+		if err != nil {
+			log.Printf("bridge: read from %s: %v", conn.RemoteAddr(), err)
+			return
+		}
 	}
 
+	// Trim the trailing newline before unmarshaling.
+	data := bytes.TrimRight(buf.Bytes(), "\n")
+
 	var cmd BridgeCommand
-	if err := json.Unmarshal(buf[:n], &cmd); err != nil {
+	if err := json.Unmarshal(data, &cmd); err != nil {
 		log.Printf("bridge: unmarshal command: %v", err)
-		// Send an error response so the client isn't left hanging.
 		s.writeResponse(conn, BridgeResponse{
 			OK:    false,
 			Error: fmt.Sprintf("invalid command: %v", err),

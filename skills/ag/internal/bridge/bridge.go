@@ -99,7 +99,20 @@ func Run(id string) error {
 		return fmt.Errorf("start socket server: %w", err)
 	}
 
-	// 9. Send initial prompt to ai stdin
+	// 9. Send system prompt and initial prompt to ai stdin
+	if cfg.System != "" {
+		sysMsg := map[string]string{"type": "prompt"}
+		if strings.HasPrefix(cfg.System, "@") {
+			sysMsg["message"] = "Follow the instructions in " + cfg.System
+		} else {
+			sysMsg["message"] = "System: " + cfg.System
+		}
+		data, _ := json.Marshal(sysMsg)
+		if _, err := stdinPipe.Write(append(data, '\n')); err != nil {
+			log.Printf("bridge: failed to send system prompt: %v", err)
+		}
+	}
+
 	if cfg.Input != "" {
 		msg := map[string]string{"type": "prompt", "message": cfg.Input}
 		data, _ := json.Marshal(msg)
