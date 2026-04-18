@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -178,8 +179,12 @@ func Output(id string, tailN int) (string, error) {
 	}
 
 	text := string(data)
-	if tailN > 0 && len(text) > tailN {
-		text = text[len(text)-tailN:]
+	if tailN > 0 && len(text) > 0 {
+		lines := strings.Split(text, "\n")
+		if len(lines) > tailN {
+			lines = lines[len(lines)-tailN:]
+		}
+		text = strings.Join(lines, "\n")
 	}
 	return text, nil
 }

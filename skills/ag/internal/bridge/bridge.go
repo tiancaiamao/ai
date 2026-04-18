@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/storage"
 )
 
@@ -26,6 +27,11 @@ const (
 // Run starts the bridge process for an agent. This is the main entry point
 // called by 'ag bridge <id>' inside a tmux session.
 func Run(id string) error {
+	// 0. Validate agent ID (defense-in-depth)
+	if err := agent.ValidateID(id); err != nil {
+		return fmt.Errorf("invalid agent id: %w", err)
+	}
+
 	agentDir := storage.AgentDir(id)
 
 	// 1. Read spawn config from meta.json
@@ -40,18 +46,32 @@ func Run(id string) error {
 		return fmt.Errorf("create agent dir: %w", err)
 	}
 
-	// 3. Create ActivityWriter and initialize with status "running"
+	// 3. Redirect bridge's own stderr to bridge-stderr (FR-008)
+	bridgeStderrPath := filepath.Join(agentDir, "bridge-stderr")
+	bridgeStderr, err := os.OpenFile(bridgeStderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("create bridge-stderr: %w", err)
+	}
+	defer bridgeStderr.Close()
+	log.SetOutput(bridgeStderr)
+	// Also redirect os.Stderr for any unhandled panics
+	os.Stderr = bridgeStderr
+
+	// 4. Create ActivityWriter and initialize with status "running"
 	activity := NewActivityWriter(agentDir)
 	activity.UpdateActivity(func(a *AgentActivity) {
 		a.Status = StatusRunning
 		a.StartedAt = time.Now().Unix()
 	})
 
-	// 4. Remove stale bridge.sock, then create socket listener
+	// 5. Remove stale bridge.sock and create listener (FR-005: BEFORE starting ai)
 	sockPath := filepath.Join(agentDir, socketName)
 	_ = os.Remove(sockPath)
 
-	// 5. Start the ai process
+	// Create SocketServer — listener is bound now, but accept loop starts later
+	socketServer := NewSocketServer(sockPath, nil) // handler set after stdinPipe is ready
+
+	// 6. Start the ai process
 	cmd := exec.Command("ai", "--mode", "rpc")
 	if cfg.Cwd != "" {
 		cmd.Dir = cfg.Cwd
@@ -81,18 +101,16 @@ func Run(id string) error {
 		return fmt.Errorf("start ai: %w", err)
 	}
 
-	// 6. Write ai PID to activity writer
+	// 7. Write ai PID to activity writer
 	pgid := cmd.Process.Pid
 	activity.UpdateActivity(func(a *AgentActivity) {
 		a.Pid = pgid
 	})
 
-	// 7. Create SocketServer with command handler
-	socketServer := NewSocketServer(sockPath, func(bc BridgeCommand) BridgeResponse {
+	// 8. Set command handler now that stdinPipe is ready, and start accept loop
+	socketServer.SetHandler(func(bc BridgeCommand) BridgeResponse {
 		return handleCommand(bc, stdinPipe)
 	})
-
-	// 8. Start socket server
 	if err := socketServer.Start(); err != nil {
 		cmd.Process.Kill()
 		stderrFile.Close()

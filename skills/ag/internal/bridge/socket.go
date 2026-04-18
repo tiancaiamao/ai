@@ -30,6 +30,11 @@ func NewSocketServer(sockPath string, handler CommandHandler) *SocketServer {
 	}
 }
 
+// SetHandler sets the command handler. Can be called before Start().
+func (s *SocketServer) SetHandler(h CommandHandler) {
+	s.handler = h
+}
+
 // Start removes any stale socket file, creates the listener, and begins the
 // accept loop in a background goroutine.
 func (s *SocketServer) Start() error {
