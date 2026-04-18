@@ -151,5 +151,4 @@ go test ./internal/task -v          # Task package only
 ## See Also
 
 - [SKILL.md](SKILL.md) — Skill manifest and usage guide for the orchestrating agent
-- [docs/SPEC.md](docs/SPEC.md) — Full feature specification (12 user stories, 28 requirements)
-- [docs/PLAN.md](docs/PLAN.md) — Implementation plan (17 tasks, 6 groups)
+- [docs/design.md](docs/design.md) — Bridge-per-agent architecture design

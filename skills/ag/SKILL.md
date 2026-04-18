@@ -14,7 +14,6 @@ description: Agent orchestration runtime. Spawns AI agents in tmux with bridge-p
 - Structured status (turns, tokens, last tool, last text)
 - Task DAG with dependencies and auto-scheduling
 - Inter-agent async message channels
-- No backward compatibility with old `ag` — clean break
 
 ## Conversation-First Positioning
 
@@ -223,5 +222,3 @@ go test ./cmd -v                    # CLI: Output --tail edge cases
 
 - [README.md](README.md) — Project overview and build instructions
 - [docs/design.md](docs/design.md) — Bridge-per-agent architecture design
-- [docs/SPEC.md](docs/SPEC.md) — Feature specification (12 US, 28 FR)
-- [docs/PLAN.md](docs/PLAN.md) — Implementation plan (17 tasks, 6 groups)

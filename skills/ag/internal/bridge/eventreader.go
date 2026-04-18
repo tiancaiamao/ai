@@ -24,10 +24,11 @@ type EventReader struct {
 // outputDir is the agent directory where final output will be written.
 func NewEventReader(r io.Reader, writer *ActivityWriter, outputDir string) *EventReader {
 	s := bufio.NewScanner(r)
-	// Default bufio.Scanner max token size is 64KB. AI agents can produce
-	// very large message_update events (e.g. long code blocks), so we
-	// increase the buffer to 10MB.
-	s.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// bufio.Scanner defaults to 64KB max token, which is too small for
+	// large message_update events. We set the max to 10MB but the scanner
+	// starts with a small buffer and grows on demand — no upfront 10MB.
+	const maxTokenSize = 10 * 1024 * 1024
+	s.Buffer(make([]byte, 0, 4096), maxTokenSize)
 	return &EventReader{
 		scanner:   s,
 		writer:    writer,
