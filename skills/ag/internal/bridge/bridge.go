@@ -183,8 +183,12 @@ func Run(id string) error {
 
 	// Wait for event reader to finish (drain remaining)
 	select {
-	case <-errCh:
+	case readerErr := <-errCh:
+		if readerErr != nil {
+			log.Printf("bridge: event reader error: %v", readerErr)
+		}
 	case <-time.After(2 * time.Second):
+		log.Printf("bridge: event reader did not finish in time, proceeding with cleanup")
 	}
 
 	// 12. Cleanup on ai exit

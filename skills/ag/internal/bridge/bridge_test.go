@@ -574,3 +574,44 @@ func TestSocketServer_StaleSocket(t *testing.T) {
 	}
 	conn.Close()
 }
+
+// ---------------------------------------------------------------------------
+// EventReader extended tests
+// ---------------------------------------------------------------------------
+
+// TestEventReader_LargeToken verifies EventReader handles lines > 64KB
+// (default bufio.Scanner limit) without error.
+func TestEventReader_LargeToken(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	// Build a JSON line with ~100KB of text_delta content
+	// EventReader expects: {"type":"message_update","data":{"text_delta":"..."}}
+	largeText := strings.Repeat("A", 100*1024)
+	rpcLine := map[string]any{
+		"type": "message_update",
+		"data": map[string]any{
+			"text_delta": largeText,
+		},
+	}
+	lineData, err := json.Marshal(rpcLine)
+	if err != nil {
+		t.Fatalf("marshal rpc line: %v", err)
+	}
+	lineData = append(lineData, '\n')
+
+	// Feed it through EventReader
+	r := strings.NewReader(string(lineData))
+	er := NewEventReader(r, aw, dir)
+
+	if err := er.Run(); err != nil {
+		t.Fatalf("EventReader.Run() failed on large token: %v", err)
+	}
+
+	// Verify output accumulated correctly
+	output := er.Output()
+	if len(output) < 100*1024 {
+		t.Fatalf("expected at least 100KB of output, got %d bytes", len(output))
+	}
+}

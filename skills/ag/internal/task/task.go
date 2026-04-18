@@ -250,28 +250,43 @@ func ImportPlan(filePath string) (int, error) {
 	}
 
 	count := 0
+	var depErrors []string
+
+	// Phase 1: Create all tasks first (ensures forward dependencies resolve)
 	for _, pt := range plan.Tasks {
 		desc := pt.Title
 		if pt.Description != "" {
 			desc = pt.Title + ": " + pt.Description
 		}
 
-		var t *Task
-		var err error
 		if pt.ID != "" {
-			t, err = CreateWithID(pt.ID, desc, "")
+			_, err := CreateWithID(pt.ID, desc, "")
+			if err != nil {
+				continue // skip duplicates
+			}
 		} else {
-			t, err = Create(desc, "")
-		}
-		if err != nil {
-			continue // skip duplicates
-		}
-
-		// Add dependencies
-		for _, dep := range pt.Dependencies {
-			AddDependency(t.ID, dep)
+			_, err := Create(desc, "")
+			if err != nil {
+				continue
+			}
 		}
 		count++
+	}
+
+	// Phase 2: Add dependencies (all tasks now exist, forward refs resolve)
+	for _, pt := range plan.Tasks {
+		if pt.ID == "" {
+			continue
+		}
+		for _, dep := range pt.Dependencies {
+			if _, err := AddDependency(pt.ID, dep); err != nil {
+				depErrors = append(depErrors, fmt.Sprintf("%s -> %s: %v", pt.ID, dep, err))
+			}
+		}
+	}
+
+	if len(depErrors) > 0 {
+		return count, fmt.Errorf("dependency errors: %s", strings.Join(depErrors, "; "))
 	}
 	return count, nil
 }

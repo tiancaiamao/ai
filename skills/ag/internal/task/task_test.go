@@ -428,3 +428,37 @@ tasks:
 		t.Fatalf("expected T001 unmet, got %v", unmet)
 	}
 }
+
+// TestImportPlanForwardDependency verifies that tasks with forward references
+// (dependency on a task defined LATER in the YAML) still get their deps linked.
+func TestImportPlanForwardDependency(t *testing.T) {
+	setupTest(t)
+
+	planContent := `version: "1.0"
+tasks:
+  - id: "T002"
+    title: "Task Two"
+    dependencies:
+      - "T001"
+  - id: "T001"
+    title: "Task One"
+`
+	planFile := filepath.Join(t.TempDir(), "PLAN.yml")
+	os.WriteFile(planFile, []byte(planContent), 0644)
+
+	count, err := ImportPlan(planFile)
+	if err != nil {
+		t.Fatalf("ImportPlan: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 tasks, got %d", count)
+	}
+
+	t2, err := Load("T002")
+	if err != nil {
+		t.Fatalf("Load T002: %v", err)
+	}
+	if len(t2.Dependencies) != 1 || t2.Dependencies[0] != "T001" {
+		t.Fatalf("forward dependency missing: T002.Dependencies = %v", t2.Dependencies)
+	}
+}

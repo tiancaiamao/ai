@@ -180,6 +180,11 @@ func Output(id string, tailN int) (string, error) {
 
 	text := string(data)
 	if tailN > 0 && len(text) > 0 {
+		// Trim trailing newline to avoid Split producing an empty last element
+		text = strings.TrimRight(text, "\n")
+		if text == "" {
+			return "", nil
+		}
 		lines := strings.Split(text, "\n")
 		if len(lines) > tailN {
 			lines = lines[len(lines)-tailN:]

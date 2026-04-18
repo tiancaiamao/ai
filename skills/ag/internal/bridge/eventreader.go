@@ -23,8 +23,13 @@ type EventReader struct {
 // NewEventReader creates a new EventReader that reads from r and updates w.
 // outputDir is the agent directory where final output will be written.
 func NewEventReader(r io.Reader, writer *ActivityWriter, outputDir string) *EventReader {
+	s := bufio.NewScanner(r)
+	// Default bufio.Scanner max token size is 64KB. AI agents can produce
+	// very large message_update events (e.g. long code blocks), so we
+	// increase the buffer to 10MB.
+	s.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	return &EventReader{
-		scanner:   bufio.NewScanner(r),
+		scanner:   s,
 		writer:    writer,
 		outputDir: outputDir,
 	}
