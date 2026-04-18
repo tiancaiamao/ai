@@ -38,6 +38,15 @@ func Spawn(id, system, input, cwd string) error {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
 
+	// Write initial activity.json so status/ls work immediately
+	activity := map[string]any{
+		"status":    "starting",
+		"startedAt": cfg["startedAt"],
+	}
+	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity); err != nil {
+		return fmt.Errorf("write activity.json: %w", err)
+	}
+
 	// Launch bridge in tmux
 	sessionName := "ag-" + id
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName,

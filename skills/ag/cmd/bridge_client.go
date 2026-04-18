@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -153,7 +154,9 @@ func Rm(id string) error {
 }
 
 // Output returns the agent's accumulated output text.
-func Output(id string) (string, error) {
+// For terminal agents, returns full output. For running agents, returns error.
+// tailN > 0 limits output to the last tailN bytes.
+func Output(id string, tailN int) (string, error) {
 	agentDir := agent.AgentDir(id)
 
 	// Check if still running
@@ -173,15 +176,24 @@ func Output(id string) (string, error) {
 		}
 		return "", fmt.Errorf("read output: %w", err)
 	}
-	return string(data), nil
+
+	text := string(data)
+	if tailN > 0 && len(text) > tailN {
+		text = text[len(text)-tailN:]
+	}
+	return text, nil
 }
 
 // Wait blocks until all specified agents reach terminal state.
-func Wait(ids []string, timeoutSec int) error {
+// Respects context cancellation for clean SIGINT handling.
+func Wait(ctx context.Context, ids []string, timeoutSec int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	if timeoutSec == 0 {
 		deadline = time.Now().Add(365 * 24 * time.Hour) // effectively infinite
 	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		allDone := true
@@ -198,10 +210,15 @@ func Wait(ids []string, timeoutSec int) error {
 		if allDone {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout after %ds", timeoutSec)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timeout after %ds", timeoutSec)
+			}
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 

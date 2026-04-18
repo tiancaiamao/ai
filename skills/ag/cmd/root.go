@@ -262,7 +262,7 @@ var agentOutputCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		output, err := Output(id)
+		output, err := Output(id, tailN)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -274,9 +274,6 @@ var agentOutputCmd = &cobra.Command{
 			return
 		}
 
-		if tailN > 0 && len(output) > tailN {
-			output = output[len(output)-tailN:]
-		}
 		fmt.Print(output)
 	},
 }
@@ -287,7 +284,7 @@ var agentWaitCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
-		if err := Wait(args, timeoutSec); err != nil {
+		if err := Wait(cmd.Context(), args, timeoutSec); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
