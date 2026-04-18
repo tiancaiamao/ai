@@ -1370,12 +1370,25 @@ func (a *AgentLoop) listModels() string {
 			a.model.ID, a.model.Provider, modelsPath)
 	}
 
+	// Filter to only show models whose providers have API keys configured
+	filtered := make([]aiconfig.ModelSpec, 0, len(specs))
+	for _, spec := range specs {
+		if a.providerHasAPIKey(spec.Provider) {
+			filtered = append(filtered, spec)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nNo models with configured API keys found.\nCheck ~/.aiclaw/auth.json",
+			a.model.ID, a.model.Provider)
+	}
+
 	var b strings.Builder
 	b.WriteString("```\n")
-	b.WriteString(fmt.Sprintf("Available Models (%d):\n\n", len(specs)))
+	b.WriteString(fmt.Sprintf("Available Models (%d):\n\n", len(filtered)))
 
 	// Display with numeric indices for easy selection
-	for i, spec := range specs {
+	for i, spec := range filtered {
 		isCurrent := spec.ID == a.model.ID
 		prefix := "  "
 		if isCurrent {
@@ -1413,13 +1426,21 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 		return fmt.Errorf("failed to load models: %w (path: %s)", err, modelsPath)
 	}
 
+	// Filter to only models whose providers have API keys configured
+	filtered := make([]aiconfig.ModelSpec, 0, len(specs))
+	for _, spec := range specs {
+		if a.providerHasAPIKey(spec.Provider) {
+			filtered = append(filtered, spec)
+		}
+	}
+
 	// Try to parse as numeric index first
 	var targetSpec ModelSpec
 	if idx, parseErr := strconv.Atoi(modelID); parseErr == nil {
-		if idx < 0 || idx >= len(specs) {
+		if idx < 0 || idx >= len(filtered) {
 			return fmt.Errorf("model index out of range: %d\nUse /model to list available models", idx)
 		}
-		targetSpec = specs[idx]
+		targetSpec = filtered[idx]
 	} else {
 		// Handle provider/ID format (e.g., "minimax/MiniMax-M2.5")
 		// Extract just the ID part for matching
@@ -1428,7 +1449,7 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 			query = parts[1] // Use the ID part after the slash
 		}
 
-		targetSpec, err = modelselect.SelectByQuery(specs, query, func(spec ModelSpec) modelselect.Keys {
+		targetSpec, err = modelselect.SelectByQuery(filtered, query, func(spec ModelSpec) modelselect.Keys {
 			return modelselect.Keys{
 				Provider: spec.Provider,
 				ID:       spec.ID,
@@ -1494,6 +1515,13 @@ func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
 		"contextWindow", newModel.ContextWindow)
 
 	return nil
+}
+
+// providerHasAPIKey checks whether the given provider has a non-empty API key
+// configured in either environment variables or ~/.aiclaw/auth.json.
+func (a *AgentLoop) providerHasAPIKey(provider string) bool {
+	_, err := a.resolveAPIKey(provider)
+	return err == nil
 }
 
 // resolveAPIKey resolves API key from environment or auth.json
