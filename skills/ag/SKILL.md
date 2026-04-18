@@ -110,6 +110,9 @@ ag agent wait <id>... [--timeout 600]
 # Create task
 ag task create "Implement OAuth2" [--file spec.md]
 
+# Import from plan YAML
+ag task import-plan .workflow/artifacts/feature/PLAN.yml
+
 # Import from plan YAML (two-phase: create all, then link deps)
 ag task import-plan PLAN.yml [--spec spec.md]
 

@@ -1,17 +1,3 @@
----
-id: refactor
-name: Refactor
-description: Restructure code without changing behavior
-phases: [assess, plan, implement, verify]
-complexity: medium
-estimated_tasks: 3-6
-skills:
-  assess: explore
-  plan: plan
-  implement: implement
-  verify: explore
----
-
 # Refactor Workflow
 
 ## Overview
@@ -35,9 +21,9 @@ Understand what exists:
 3. Identify what must NOT change (public API, behavior)
 4. Check existing test coverage — if low, add characterization tests first
 
-**Output:** `.workflow/artifacts/refactors/[name]/assessment.md`
-
 **Gate:** Clear understanding of scope and constraints.
+
+**Output:** `assessment.md` in artifact directory
 
 ### Phase 2: Plan
 
@@ -46,9 +32,9 @@ Understand what exists:
 Plan the restructuring. Key rule: each task should be small enough that
 if something breaks, it's easy to identify which change caused it.
 
-**Output:** PLAN.yml + PLAN.md
-
 **Gate:** Plan approved.
+
+**Output:** `PLAN.yml` + `PLAN.md` in artifact directory
 
 ### Phase 3: Implement
 
@@ -69,7 +55,9 @@ After all changes:
 3. Check for accidental behavior changes
 4. Review final code structure matches intent
 
-**Output:** verification-report.md
+**Gate:** Verification passes.
+
+**Output:** `verification-report.md` in artifact directory
 
 ## Refactor-Specific Rules
 

@@ -1,65 +1,77 @@
 {
-  "version": "2.0",
+  "version": "3.0",
   "templates": {
     "feature": {
       "name": "Feature Development",
       "description": "Develop a new feature from brainstorm to ship",
-      "phases": ["brainstorm", "spec", "plan", "implement"],
-      "skills": ["brainstorm", "spec", "plan", "implement"],
+      "phases": [
+        { "name": "brainstorm", "skill": "brainstorm", "gate": true },
+        { "name": "spec", "skill": "spec", "gate": true },
+        { "name": "plan", "skill": "plan", "gate": true },
+        { "name": "implement", "skill": "implement", "gate": false }
+      ],
       "category": "features",
       "complexity": "medium",
-      "estimated_tasks": "4-8",
       "aliases": ["feat", "new", "add"]
     },
     "bugfix": {
       "name": "Bug Fix",
       "description": "Fix bugs with root-cause analysis",
-      "phases": ["triage", "plan", "implement"],
-      "skills": ["explore", "plan", "implement"],
+      "phases": [
+        { "name": "triage", "skill": "explore", "gate": true },
+        { "name": "plan", "skill": "plan", "gate": true },
+        { "name": "implement", "skill": "implement", "gate": false }
+      ],
       "category": "bugfixes",
       "complexity": "low",
-      "estimated_tasks": "2-4",
       "aliases": ["bug", "fix", "issue", "error"]
     },
     "refactor": {
       "name": "Refactor",
       "description": "Restructure code without changing behavior",
-      "phases": ["assess", "plan", "implement", "verify"],
-      "skills": ["explore", "plan", "implement", "explore"],
+      "phases": [
+        { "name": "assess", "skill": "explore", "gate": true },
+        { "name": "plan", "skill": "plan", "gate": true },
+        { "name": "implement", "skill": "implement", "gate": false },
+        { "name": "verify", "skill": "explore", "gate": true }
+      ],
       "category": "refactors",
       "complexity": "medium",
-      "estimated_tasks": "3-6",
       "aliases": ["restructure", "cleanup", "improve"]
     },
     "spike": {
       "name": "Spike",
-      "description": "Research and exploration",
-      "phases": ["brainstorm", "document"],
-      "skills": ["brainstorm", "spec"],
+      "description": "Time-boxed research and exploration",
+      "phases": [
+        { "name": "brainstorm", "skill": "brainstorm", "gate": true },
+        { "name": "document", "skill": "spec", "gate": true }
+      ],
       "category": "spikes",
       "complexity": "low",
-      "estimated_tasks": "1-2",
       "aliases": ["research", "explore", "investigate", "prototype"]
     },
     "hotfix": {
       "name": "Hotfix",
       "description": "Emergency production fix with minimal ceremony",
-      "phases": ["implement"],
-      "skills": ["implement"],
+      "phases": [
+        { "name": "implement", "skill": "implement", "gate": false }
+      ],
       "category": "hotfixes",
       "complexity": "minimal",
-      "estimated_tasks": "1-2",
       "aliases": ["hot", "emergency", "urgent", "prod"]
     },
     "security": {
       "name": "Security Audit",
       "description": "Security review and remediation",
-      "phases": ["assess", "plan", "implement", "verify"],
-      "skills": ["explore", "plan", "implement", "explore"],
+      "phases": [
+        { "name": "assess", "skill": "explore", "gate": true },
+        { "name": "plan", "skill": "plan", "gate": true },
+        { "name": "implement", "skill": "implement", "gate": false },
+        { "name": "verify", "skill": "explore", "gate": true }
+      ],
       "category": "security",
       "complexity": "medium",
-      "estimated_tasks": "3-5",
-      "aliases": ["security", "vulnerability", "audit"]
+      "aliases": ["vulnerability", "audit", "sec"]
     }
   }
 }

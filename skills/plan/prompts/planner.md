@@ -24,7 +24,7 @@ Transform a feature specification into a structured implementation plan that:
 
 ## How to Use Context
 
-If CONTEXT.md is provided (e.g., `.workflow/artifacts/features/CONTEXT.md`):
+If CONTEXT.md is provided (e.g., `.workflow/artifacts/CONTEXT.md`):
 1. Read it to understand codebase structure
 2. Use the information in your planning
 3. **Do NOT explore again** - CONTEXT.md already contains needed information
