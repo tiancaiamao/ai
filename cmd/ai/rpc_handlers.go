@@ -30,7 +30,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -248,6 +248,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
+		// Use custom system prompt if provided (e.g., via --system-prompt flag)
+		if customSystemPrompt != "" {
+			slog.Info("Using custom system prompt", "length", len(customSystemPrompt))
+			return customSystemPrompt
+		}
 		// Use workspace to get dynamic cwd for each prompt build
 		promptBuilder := prompt.NewBuilderWithWorkspace("", ws)
 		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)

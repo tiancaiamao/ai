@@ -70,7 +70,7 @@ func main() {
 
 	switch *mode {
 	case "rpc":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout); err != nil {
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
