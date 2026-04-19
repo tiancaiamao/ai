@@ -42,6 +42,7 @@ For detailed guidelines and templates, check available skills.
 
 - **bash**: Quick commands (<2 min). For long tasks, use `tmux` skill. No `&` for servers/long-running processes.
 - **Interactive commands**: Prefer non-interactive flags (e.g., `npm init -y`). Warn user if interaction is unavoidable.
+- **read**: Prefer `read` over `bash cat` for reading files. Use `offset` and `limit` to read specific line ranges instead of `bash sed -n`.
 - **Paths**: Prefer absolute paths for `read`/`write`.
 - **Parallelism**: Batch independent calls (e.g., multiple `grep` searches).
 - **Retry**: Don't repeat failing calls unchanged. Analyze error first.
