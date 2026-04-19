@@ -2,8 +2,8 @@ package bridge
 
 import (
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -72,7 +72,7 @@ func Run(id string) error {
 	socketServer := NewSocketServer(sockPath, nil) // handler set after stdinPipe is ready
 
 	// 6. Start the ai process
-		cmd := exec.Command("ai", "--mode", "rpc")
+	cmd := exec.Command("ai", "--mode", "rpc")
 	if cfg.Cwd != "" {
 		cmd.Dir = cfg.Cwd
 	}
@@ -128,7 +128,7 @@ func Run(id string) error {
 		return fmt.Errorf("start socket server: %w", err)
 	}
 
-			// 9. Send initial prompt to ai stdin
+	// 9. Send initial prompt to ai stdin
 	// System prompt is now passed via --system-prompt CLI flag (see step 6).
 	if cfg.Input != "" {
 		msg := map[string]string{"type": "prompt", "message": cfg.Input}
@@ -197,7 +197,7 @@ func Run(id string) error {
 	stderrFile.Close()
 	writeStderrTail(stderrPath, filepath.Join(agentDir, stderrTail))
 
-		// If ai exit code != 0 and status still "running", set to "failed".
+	// If ai exit code != 0 and status still "running", set to "failed".
 	// Do NOT overwrite StatusDone — the agent may have completed successfully
 	// but the ai process was killed (SIGTERM) after idling, giving non-zero exit.
 	exitCode := exitCodeFromErr(waitErr)

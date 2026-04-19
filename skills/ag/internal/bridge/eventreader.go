@@ -14,9 +14,9 @@ import (
 // EventReader reads newline-delimited JSON RPC responses from an io.Reader
 // (typically ai's stdout pipe) and feeds events to an ActivityWriter.
 type EventReader struct {
-	scanner  *bufio.Scanner
-	writer   *ActivityWriter
-	output   strings.Builder
+	scanner   *bufio.Scanner
+	writer    *ActivityWriter
+	output    strings.Builder
 	outputDir string
 }
 
