@@ -1,9 +1,9 @@
 package tools
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -384,5 +384,88 @@ func TestReadTool_FileNotFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestReadTool_InvalidOffsetAndLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("line1\nline2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		wantErr string
+	}{
+		{
+			name: "decimal offset should error",
+			args: map[string]any{
+				"path":   filePath,
+				"offset": float64(0.5),
+			},
+			wantErr: "offset must be a positive integer",
+		},
+		{
+			name: "zero limit should error",
+			args: map[string]any{
+				"path":  filePath,
+				"limit": float64(0),
+			},
+			wantErr: "limit must be a positive integer",
+		},
+		{
+			name: "non-numeric offset string should error",
+			args: map[string]any{
+				"path":   filePath,
+				"offset": "abc",
+			},
+			wantErr: "offset must be a positive integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Execute(context.Background(), tt.args)
+			if err == nil {
+				t.Fatalf("expected error: %s", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestReadTool_StringOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "line1\nline2\nline3\nline4\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": "2",
+		"limit":  "2",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, "line2") || !strings.Contains(text, "line3") {
+		t.Fatalf("expected lines 2 and 3, got: %s", text)
+	}
+	if strings.Contains(text, "line1") || strings.Contains(text, "line4") {
+		t.Fatalf("should not contain line1/line4, got: %s", text)
 	}
 }

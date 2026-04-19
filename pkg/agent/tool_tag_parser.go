@@ -1,8 +1,8 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -170,7 +170,14 @@ func parseToolTag(tagName, body string) (string, map[string]any, bool) {
 		if path == "" {
 			return "", nil, false
 		}
-		return "read", map[string]any{"path": path}, true
+		args := map[string]any{"path": path}
+		if offset := firstTagValue(body, "offset"); offset != "" {
+			args["offset"] = offset
+		}
+		if limit := firstTagValue(body, "limit"); limit != "" {
+			args["limit"] = limit
+		}
+		return "read", args, true
 	case "write":
 		path := firstTagValue(body, "path", "file")
 		content := firstTagValue(body, "content", "text")

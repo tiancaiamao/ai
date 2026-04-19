@@ -146,7 +146,14 @@ func coerceToolArguments(toolName string, args map[string]any) (map[string]any, 
 		if path == "" {
 			return nil, fmt.Errorf("missing path")
 		}
-		return map[string]any{"path": path}, nil
+		result := map[string]any{"path": path}
+		if offset, ok := args["offset"]; ok {
+			result["offset"] = offset
+		}
+		if limit, ok := args["limit"]; ok {
+			result["limit"] = limit
+		}
+		return result, nil
 	case "write":
 		path := getStringArg(args, "path", "file")
 		content := getStringArg(args, "content", "text")

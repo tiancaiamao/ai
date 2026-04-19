@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -93,18 +95,18 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("file %s appears to be binary", path)
 	}
 
-			content := string(data)
+	content := string(data)
 
 	// Parse offset and limit parameters early, before size check,
 	// so that large files can be read in sections.
-	offset := 1 // 1-indexed, default to first line
-	if v, ok := args["offset"].(float64); ok && v > 0 {
-		offset = int(v)
+	offset, err := parsePositiveIntArg(args, "offset", 1)
+	if err != nil {
+		return nil, err
 	}
 
-	limit := defaultReadLimit
-	if v, ok := args["limit"].(float64); ok && v > 0 {
-		limit = int(v)
+	limit, err := parsePositiveIntArg(args, "limit", defaultReadLimit)
+	if err != nil {
+		return nil, err
 	}
 
 	// Apply line range selection
@@ -167,6 +169,88 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			Text: output,
 		},
 	}, nil
+}
+
+func parsePositiveIntArg(args map[string]any, key string, defaultValue int) (int, error) {
+	raw, ok := args[key]
+	if !ok {
+		return defaultValue, nil
+	}
+
+	parseError := fmt.Errorf("%s must be a positive integer", key)
+	maxInt := int(^uint(0) >> 1)
+
+	switch v := raw.(type) {
+	case float64:
+		if v < 1 || v != math.Trunc(v) || v > float64(maxInt) {
+			return 0, parseError
+		}
+		return int(v), nil
+	case float32:
+		n := float64(v)
+		if n < 1 || n != math.Trunc(n) || n > float64(maxInt) {
+			return 0, parseError
+		}
+		return int(n), nil
+	case int:
+		if v < 1 {
+			return 0, parseError
+		}
+		return v, nil
+	case int8:
+		if v < 1 {
+			return 0, parseError
+		}
+		return int(v), nil
+	case int16:
+		if v < 1 {
+			return 0, parseError
+		}
+		return int(v), nil
+	case int32:
+		if v < 1 {
+			return 0, parseError
+		}
+		return int(v), nil
+	case int64:
+		if v < 1 || v > int64(maxInt) {
+			return 0, parseError
+		}
+		return int(v), nil
+	case uint:
+		if v < 1 || v > uint(maxInt) {
+			return 0, parseError
+		}
+		return int(v), nil
+	case uint8:
+		if v < 1 {
+			return 0, parseError
+		}
+		return int(v), nil
+	case uint16:
+		if v < 1 {
+			return 0, parseError
+		}
+		return int(v), nil
+	case uint32:
+		if v < 1 || v > uint32(maxInt) {
+			return 0, parseError
+		}
+		return int(v), nil
+	case uint64:
+		if v < 1 || v > uint64(maxInt) {
+			return 0, parseError
+		}
+		return int(v), nil
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 1 {
+			return 0, parseError
+		}
+		return n, nil
+	default:
+		return 0, parseError
+	}
 }
 
 // IsBinary checks if a file is binary by looking for NUL bytes.

@@ -237,3 +237,24 @@ func TestNormalizeToolCallUnwrapsPropertiesMapForWrite(t *testing.T) {
 		t.Fatalf("expected content=abc, got %v", args["content"])
 	}
 }
+
+func TestCoerceToolArgs_ReadPreservesOffsetLimit(t *testing.T) {
+	args, err := coerceToolArguments("read", map[string]any{
+		"path":   "/tmp/a.txt",
+		"offset": float64(10),
+		"limit":  float64(20),
+	})
+	if err != nil {
+		t.Fatalf("coerceToolArguments returned error: %v", err)
+	}
+
+	if args["path"] != "/tmp/a.txt" {
+		t.Fatalf("expected path=/tmp/a.txt, got %v", args["path"])
+	}
+	if args["offset"] != float64(10) {
+		t.Fatalf("expected offset=10, got %v", args["offset"])
+	}
+	if args["limit"] != float64(20) {
+		t.Fatalf("expected limit=20, got %v", args["limit"])
+	}
+}

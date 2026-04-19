@@ -324,6 +324,39 @@ func TestInjectToolCallsFromTaggedText_ToolCallTagWithInlineName(t *testing.T) {
 	}
 }
 
+func TestInjectToolCallsFromTaggedText_ReadTagWithOffsetLimit(t *testing.T) {
+	msg := agentctx.AgentMessage{
+		Role: "assistant",
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "<read><path>README.md</path><offset>3</offset><limit>5</limit></read>",
+			},
+		},
+	}
+
+	result, injected := injectToolCallsFromTaggedText(msg)
+	if !injected {
+		t.Fatal("expected read tag to be injected")
+	}
+	calls := result.ExtractToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one call, got %d", len(calls))
+	}
+	if calls[0].Name != "read" {
+		t.Fatalf("expected read call, got %q", calls[0].Name)
+	}
+	if got := calls[0].Arguments["path"]; got != "README.md" {
+		t.Fatalf("expected path arg, got %v", got)
+	}
+	if got := calls[0].Arguments["offset"]; got != "3" {
+		t.Fatalf("expected offset arg, got %v", got)
+	}
+	if got := calls[0].Arguments["limit"]; got != "5" {
+		t.Fatalf("expected limit arg, got %v", got)
+	}
+}
+
 // contains is a helper function for string searching in tests.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
@@ -339,5 +372,3 @@ func indexOf(s, substr string) int {
 	}
 	return -1
 }
-
-
