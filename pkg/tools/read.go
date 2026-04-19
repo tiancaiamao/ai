@@ -93,16 +93,10 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("file %s appears to be binary", path)
 	}
 
-	content := string(data)
+			content := string(data)
 
-	// Reject files that are too large entirely (hard limit: 50KB)
-	if len(content) > defaultReadMaxBytes {
-		lines := strings.Split(content, "\n")
-		return nil, fmt.Errorf("file %s is too large (%d bytes, %d lines). Use offset and limit to read specific sections, e.g. offset=1, limit=2000",
-			path, len(content), len(lines))
-	}
-
-	// Parse offset and limit parameters
+	// Parse offset and limit parameters early, before size check,
+	// so that large files can be read in sections.
 	offset := 1 // 1-indexed, default to first line
 	if v, ok := args["offset"].(float64); ok && v > 0 {
 		offset = int(v)
@@ -123,6 +117,11 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	// Validate offset
+	if totalLines == 0 {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: ""},
+		}, nil
+	}
 	if offset > totalLines {
 		return nil, fmt.Errorf("offset %d exceeds file length (%d lines)", offset, totalLines)
 	}
@@ -136,6 +135,13 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	selectedLines := lines[start:end]
 	output := strings.Join(selectedLines, "\n")
+
+	// Check size of selected content (not entire file).
+	// This allows reading sections of large files via offset/limit.
+	if len(output) > defaultReadMaxBytes {
+		return nil, fmt.Errorf("selected range is too large (%d lines, %d bytes). Use a smaller limit value, e.g. limit=%d",
+			len(selectedLines), len(output), defaultReadMaxBytes/80) // rough line-width estimate
+	}
 
 	// Add continuation hints when content is truncated
 	var header, footer string
