@@ -150,37 +150,78 @@ func TestReadTool_OffsetExceedsFileLength(t *testing.T) {
 	}
 }
 
-func TestReadTool_FileTooLarge(t *testing.T) {
+func TestReadTool_SelectedRangeTooLarge(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "large.txt")
 
-	// Create a file larger than 50KB
-	largeContent := make([]byte, 60*1024)
-	for i := range largeContent {
-		largeContent[i] = 'a'
+	// Create a file larger than 50KB with many lines
+	var content string
+	for len(content) < 60*1024 {
+		content += strings.Repeat("a", 100) + "\n"
 	}
-	// Add some newlines so it's valid text
-	largeContent[100] = '\n'
-	largeContent[200] = '\n'
-
-	if err := os.WriteFile(filePath, largeContent, 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	ws, _ := NewWorkspace(dir)
 	tool := NewReadTool(ws)
 
+	// Reading without offset/limit selects all lines, which exceeds 50KB
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"path": filePath,
 	})
 	if err == nil {
-		t.Fatal("expected error for large file")
+		t.Fatal("expected error for large selected range")
 	}
 	if !strings.Contains(err.Error(), "too large") {
 		t.Errorf("unexpected error message: %v", err)
 	}
-	if !strings.Contains(err.Error(), "offset") || !strings.Contains(err.Error(), "limit") {
-		t.Errorf("error should suggest using offset/limit, got: %v", err)
+	if !strings.Contains(err.Error(), "limit") {
+		t.Errorf("error should suggest using a smaller limit, got: %v", err)
+	}
+}
+
+func TestReadTool_LargeFileWithOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "large.txt")
+
+	// Create a file larger than 50KB with many lines
+	var content string
+	lineWidth := 100
+	for len(content) < 60*1024 {
+		content += strings.Repeat("a", lineWidth-1) + "\n"
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Reading with limit=5 should succeed even though file is > 50KB
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":  filePath,
+		"limit": float64(5),
+	})
+	if err != nil {
+		t.Fatalf("should be able to read section of large file with limit, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, strings.Repeat("a", lineWidth-1)) {
+		truncLen := len(text)
+		if truncLen > 100 {
+			truncLen = 100
+		}
+		t.Errorf("expected file content in output, got: %s (truncated)", text[:truncLen])
+	}
+	// Should have footer hint since we only read 5 lines
+	if !strings.Contains(text, "more lines below") {
+		truncLen := len(text)
+		if truncLen > 200 {
+			truncLen = 200
+		}
+		t.Errorf("expected footer hint for large file read with limit, got: %s (truncated)", text[:truncLen])
 	}
 }
 
