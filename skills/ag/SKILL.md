@@ -1,6 +1,6 @@
 ---
 name: ag
-description: Agent orchestration runtime. Spawns AI agents in tmux with bridge-per-agent architecture, supports mid-turn steering, structured status, task DAG scheduling, and inter-agent channels.
+description: Provide subagent and agent orchestration runtime. Spawns AI agents in tmux with bridge-per-agent architecture, supports mid-turn steering, structured status, task DAG scheduling, and inter-agent channels.
 ---
 
 # ag — Agent Orchestration CLI
@@ -184,6 +184,15 @@ spawning → running → done
 - `killed`: terminated by `ag agent kill`
 
 Stale detection: if tmux session is gone but activity shows "running", `ag agent status` auto-marks as "failed" with reason.
+
+## Concurrency Limit
+
+⚠️ **LLM 提供商限流**：主 agent + 子 agent 同时运行数**不得超过 3**（即最多 2 个子 agent）。并发稍高即触发 API rate limit，导致子 agent 卡住或失败。
+
+**规则**：
+- 同时存活的 agent（含主 agent 自身）≤ 3
+- 需要更多子 agent 时，必须等前一批完成（`ag agent rm`）后再 spawn 新的
+- 各 skill 文档中应遵守此限制，不可并行 spawn 超过 2 个子 agent
 
 ## How Skills Use ag
 

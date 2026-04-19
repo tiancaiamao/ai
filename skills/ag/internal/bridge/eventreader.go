@@ -118,46 +118,77 @@ func (er *EventReader) handleEvent(evt map[string]any) {
 }
 
 // handleAgentEnd processes an agent_end event, setting final status.
+// The actual ai RPC output does not include a "success" field.
+// It only includes "error" when something went wrong, so we treat
+// the absence of "error" as success.
 func (er *EventReader) handleAgentEnd(evt map[string]any) {
-	success, _ := evt["success"].(bool)
-
-	if success {
-		er.writer.UpdateStatus(StatusDone)
-	} else {
-		// Check for error field
-		errMsg, _ := evt["error"].(string)
-		if errMsg != "" {
-			er.writer.SetError(errMsg)
-		} else {
-			er.writer.UpdateStatus(StatusFailed)
-		}
+	// Check for explicit error field first
+	errMsg, _ := evt["error"].(string)
+	if errMsg != "" {
+		er.writer.SetError(errMsg)
+		return
 	}
+
+	// No error field means the agent completed successfully.
+	// The "success" bool field is not emitted by ai --mode rpc,
+	// but we check it for backward compatibility.
+	if success, ok := evt["success"].(bool); ok && !success {
+		er.writer.UpdateStatus(StatusFailed)
+		return
+	}
+
+	er.writer.UpdateStatus(StatusDone)
+
+	// Write output file immediately on agent_end so consumers can read it
+	// without waiting for the ai process to exit (it idles after task completion).
+	er.writeOutputFile()
 }
 
 // handleTurnEnd processes a turn_end event. May contain token count data.
-// Writes immediately.
+// Actual ai RPC output puts usage in message.usage, not data.tokensBefore/tokensAfter.
+// We support both formats.
 func (er *EventReader) handleTurnEnd(evt map[string]any) {
-	data, _ := evt["data"].(map[string]any)
-
 	er.writer.UpdateActivity(func(a *AgentActivity) {
+		// Format 1: data.tokensBefore / data.tokensAfter (legacy)
+		data, _ := evt["data"].(map[string]any)
 		if data != nil {
 			before, hasBefore := toInt64(data["tokensBefore"])
 			after, hasAfter := toInt64(data["tokensAfter"])
 			if hasBefore && hasAfter && after >= before {
-				// Accumulate turn tokens into totals
 				a.TokensIn += before
 				a.TokensOut += after - before
 				a.TokensTotal = a.TokensIn + a.TokensOut
+				return
+			}
+		}
+
+		// Format 2: message.usage.input / message.usage.output (actual ai RPC)
+		msg, _ := evt["message"].(map[string]any)
+		if msg != nil {
+			usage, _ := msg["usage"].(map[string]any)
+			if usage != nil {
+				input, hasInput := toInt64(usage["input"])
+				output, hasOutput := toInt64(usage["output"])
+				if hasInput && hasOutput {
+					a.TokensIn += input
+					a.TokensOut += output
+					a.TokensTotal = a.TokensIn + a.TokensOut
+				}
 			}
 		}
 	})
 }
 
 // handleToolExecutionStart processes a tool_execution_start event.
-// Sets LastTool from Data.tool and writes immediately.
+// Sets LastTool from evt["toolName"] (actual ai RPC) or data["tool"] (legacy).
 func (er *EventReader) handleToolExecutionStart(evt map[string]any) {
-	data, _ := evt["data"].(map[string]any)
-	toolName, _ := data["tool"].(string)
+	// Format 1: top-level toolName (actual ai RPC)
+	toolName, _ := evt["toolName"].(string)
+	if toolName == "" {
+		// Format 2: data.tool (legacy)
+		data, _ := evt["data"].(map[string]any)
+		toolName, _ = data["tool"].(string)
+	}
 
 	er.writer.UpdateActivity(func(a *AgentActivity) {
 		a.LastTool = toolName
@@ -165,11 +196,27 @@ func (er *EventReader) handleToolExecutionStart(evt map[string]any) {
 }
 
 // handleMessageUpdate processes a message_update event.
-// Appends text_delta to accumulated output and updates LastText.
-// Writes are rate-limited by ActivityWriter.
+// Appends text delta to accumulated output and updates LastText.
+// Actual ai RPC puts the delta in assistantMessageEvent.delta,
+// not in data.text_delta.
 func (er *EventReader) handleMessageUpdate(evt map[string]any) {
-	data, _ := evt["data"].(map[string]any)
-	textDelta, _ := data["text_delta"].(string)
+	var textDelta string
+
+	// Format 1: assistantMessageEvent.delta (actual ai RPC output)
+	if ame, ok := evt["assistantMessageEvent"].(map[string]any); ok {
+		// Only extract text deltas, not thinking/start/end events
+		ameType, _ := ame["type"].(string)
+		if ameType == "text_delta" || ameType == "text_start" {
+			textDelta, _ = ame["delta"].(string)
+		}
+	}
+
+	// Format 2: data.text_delta (legacy)
+	if textDelta == "" {
+		if data, ok := evt["data"].(map[string]any); ok {
+			textDelta, _ = data["text_delta"].(string)
+		}
+	}
 
 	if textDelta == "" {
 		return
