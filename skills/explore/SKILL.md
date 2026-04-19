@@ -1,289 +1,203 @@
 ---
 name: explore
 description: Explore codebases, repositories, or topics and collect key information for later phases. Use for code exploration, architecture analysis, and information gathering before implementation.
-allowed-tools: [bash, read, grep, write]
 ---
 
 # Explore Skill
 
-Explore codebases, repositories, or topics and collect key information for later phases. Similar to the `review` skill, this can run as an autonomous subagent.
+使用 `ag` CLI 派生 **独立子 agent** 探索代码库、仓库或主题，收集关键信息供后续阶段使用。
 
-## 设计理念
+## ⚠️ MANDATORY: 必须使用 ag 子 agent 执行
 
-**来源参考**：
-- pi-config 的 Scout agent：只读探索，专注信息收集
-- orchestrate 的 Researcher persona：调查和收集
-- review 技能的 subagent 模式：独立执行
+**当用户触发 explore 技能时，你（调度 agent）必须通过 `ag` 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
 
-**核心原则**：
-- 探索，但不修改
-- 收集关键信息，不深入细节
-- 输出到独立文件，供后续阶段使用
-- 可以并行探索多个目标
+原因：
+- 子 agent 在独立 tmux 会话中运行，不阻塞主对话
+- 可以并行派生多个子 agent 同时探索不同目标
+- explorer.md persona 指导子 agent 按标准格式输出
 
-## 使用方式
+## ⛔ CONCURRENCY LIMIT: 最多 2 个子 agent 同时运行
 
-```
-/skill:explore 探索 ~/project/pi-mono 的 subagent 实现
-/skill:explore 探索 https://github.com/user/repo 的架构设计
-/skill:explore 并行探索 repo1 和 repo2 的 auth 模块实现
-/skill:explore 探索当前项目的任务调度机制
-```
+**主 agent + 子 agent 同时运行总数不得超过 3**（即最多 2 个子 agent）。
 
-## 探索阶段 vs 后续阶段
+原因：LLM 提供商在并发稍高时即触发 rate limit，导致子 agent 卡住或失败。
 
-| 阶段 | 职责 | 输出 |
-|------|------|------|
-| **explore** | 收集信息，理解现状 | `explorer/*.md` |
-| **brainstorming** | 基于收集的信息决策 | `decisions.md` |
-| **/workflow start feature** | 制定计划 | artifact 目录中的 SPEC.md, PLAN.md |
-| **worker** | 执行实现 | 修改的代码 |
-| **review** | 验收代码 | `reviews/*.md` |
+**规则**：
+- 单次 spawn 上限：2 个子 agent
+- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → `wait` → `rm` → 再 spawn 下一批
+- 不可用循环一次性 spawn 超过 2 个 agent
 
-## ⚠️ Architecture Constraint Exploration
+**你的角色（调度 agent）**：解析用户意图 → 构造 input → 派生 ag agent → 等待 → 汇总结果
+**子 agent 角色（explorer）**：按 `explorer.md` persona 执行实际探索，写入文件
 
-**For tasks involving architecture changes, explore MUST include:**
+## 执行流程（强制）
 
-1. **Layer/Package boundaries**
-   - Where should the code live?
-   - What are the dependency directions?
-   - Which packages should stay pure?
-
-2. **Existing patterns**
-   - How does similar functionality exist elsewhere?
-   - What patterns should be followed?
-
-3. **Integration points**
-   - Who will use this code?
-   - How will they integrate?
-
-**Output section to add:**
-```markdown
-## 架构约束
-- [ ] [约束 1]: 例如 "agent core 不应该依赖 RPC"
-- [ ] [约束 2]: 例如 "命令处理应该在 agent 外部"
-- [ ] [约束 3]: 例如 "新包应该可被多个项目复用"
-```
-
-## 使用 ag 执行 Explore
-
-**⚠️ 重要：使用 `ag` CLI 而不是 subagent**
-
-`subagent` skill 已经被废弃，统一使用 `ag` CLI。
-
-### 基本用法
+### Step 1: 准备
 
 ```bash
-export AG_BIN=~/.ai/skills/ag/ag
+# 被探索项目的路径
+TARGET_PROJECT="/path/to/project"
 
-# 短任务
-$AG_BIN spawn \
-  --id "explore-rpc" \
-  --system @/path/to/explorer.md \
-  --input "Explore RPC handling" \
-  --timeout 5m
+# 确保 ag 已构建
+AG_BIN="$HOME/.ai/skills/ag/ag"
+if [ ! -x "$AG_BIN" ]; then
+  (cd "$HOME/.ai/skills/ag" && go build -o ag .)
+fi
 
-$AG_BIN wait "explore-rpc" --timeout 300
-OUTPUT=$($AG_BIN output "explore-rpc")
-$AG_BIN rm "explore-rpc"
+# 在目标项目中创建输出目录
+mkdir -p "$TARGET_PROJECT/explorer"
 ```
 
-### 长任务
+### Step 2: 派生子 agent
+
+⚠️ **重要**：`--cwd` 必须传被探索项目的路径，否则子 agent 会在当前 shell 的 CWD 下运行，导致探索错误的项目。
 
 ```bash
-# 长任务 (>5min): 增加 timeout
-$AG_BIN spawn \
-  --id "explore-auth" \
-  --system @/path/to/explorer.md \
-  --input "Explore auth module in depth" \
-  --timeout 15m
+# 单目标探索
+TARGET_PROJECT="/path/to/project"  # 被探索的项目路径
 
-$AG_BIN wait "explore-auth" --timeout 900
-OUTPUT=$($AG_BIN output "explore-auth")
-$AG_BIN rm "explore-auth"
+$AG_BIN agent spawn explore-<TARGET> \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "<探索指令>. Write findings to: $TARGET_PROJECT/explorer/<target>.md"
 ```
-
-### 输出到文件
-
-让 explorer agent 写入文件，而不是 stdout：
 
 ```bash
-# 在 input 中指定输出路径
-$AG_BIN spawn \
-  --id "explore-target" \
-  --system @/path/to/explorer.md \
-  --input "Explore ~/project/pi-mono. Write findings to: /tmp/explorer/target.md" \
-  --timeout 10m
+# 多目标并行探索（同时启动多个 agent）
+TARGET_PROJECT="/path/to/project"
 
-$AG_BIN wait "explore-target" --timeout 600
-$AG_BIN rm "explore-target"
+$AG_BIN agent spawn explore-auth \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md"
 
-# 查看结果
-cat /tmp/explorer/target.md
+$AG_BIN agent spawn explore-rpc \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md"
 ```
 
-### 并行探索
-
-使用 `ag patterns/parallel.sh`：
+### Step 3: 等待并收集
 
 ```bash
-# 并行探索两个目标
-$AG_BIN patterns/parallel.sh \
-  2 \                       # 2 个 agents
-  @/path/to/explorer.md \    # system prompt
-  "Explore auth module" \      # 主题
-  /tmp/explore-results        # 输出目录
+# 等待完成
+$AG_BIN agent wait explore-<TARGET> --timeout 600
 
-# 结果: /tmp/explore-results/agent-0.md, agent-1.md
+# 查看结果（输出已写入 $TARGET_PROJECT/explorer/<target>.md，由子 agent 直接写文件）
+$AG_BIN agent rm explore-<TARGET>
 ```
 
-### 管道化（探索 → 分析）
+### Step 4: 汇总
 
-使用 `ag patterns/pipeline.sh`：
+读取 `$TARGET_PROJECT/explorer/` 下的文件，向用户展示关键发现。
+
+## 输入构造指南
+
+给子 agent 的 `--input` 应包含：
+
+1. **探索目标**：要探索什么（代码库路径、模块名、主题）
+2. **关注点**：用户特别想了解的方面（可选）
+3. **输出路径**：`Write findings to: <绝对路径>`（必须使用目标项目下的绝对路径）
+
+⚠️ **输出路径必须使用目标项目的绝对路径**，不要依赖相对路径或 `$EXPLORER_DIR` 变量，因为子 agent 的 CWD 由 `--cwd` 控制。
+
+示例 input：
+```
+Explore the project at /Users/me/project/myapp. Focus on:
+- Overall architecture and module boundaries
+- How authentication is implemented
+- Database layer and ORM usage
+Write findings to: /Users/me/project/myapp/explorer/architecture.md
+```
+
+## 特殊场景
+
+### 架构约束探索
+
+当用户提到架构变更或重构时，input 中追加：
+
+```
+This is an architecture exploration. You MUST also include:
+- Layer/package boundaries and dependency directions
+- Existing patterns for similar functionality
+- Integration points: who uses this code and how
+Output an "Architecture Constraints" section with a checklist.
+```
+
+### 大型仓库
+
+对大型仓库，按模块拆分为多批探索（每批最多 2 个 agent）：
 
 ```bash
-# 先探索，再分析
-$AG_BIN patterns/pipeline.sh \
-  "Explore RPC handling. Output to: /tmp/rpc-findings.md" \
-  @/path/to/explorer.md \
-  @/path/to/analyzer.md
+TARGET_PROJECT="/path/to/large/repo"
+
+# === Batch 1: spawn up to 2 agents ===
+$AG_BIN agent spawn explore-auth \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md"
+
+$AG_BIN agent spawn explore-api \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md"
+
+# Wait and clean up batch 1
+$AG_BIN agent wait explore-auth explore-api --timeout 900
+$AG_BIN agent rm explore-auth explore-api
+
+# === Batch 2: spawn next 2 agents ===
+$AG_BIN agent spawn explore-storage \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md"
+
+$AG_BIN agent spawn explore-infra \
+  --cwd "$TARGET_PROJECT" \
+  --system @"$HOME/.ai/skills/explore/explorer.md" \
+  --input "Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md"
+
+# Wait and clean up batch 2
+$AG_BIN agent wait explore-storage explore-infra --timeout 900
+$AG_BIN agent rm explore-storage explore-infra
 ```
 
-## ag vs subagent 对比
+## 输出约定
 
-| 功能 | subagent (旧) | ag (新) |
-|------|---------------|----------|
-| **启动** | `start_subagent_tmux.sh` | `ag spawn --id ...` |
-| **等待** | `tmux_wait.sh` | `ag wait ...` |
-| **获取输出** | `cat output.txt` | `ag output ...` |
-| **清理** | 手动删除 | `ag rm ...` |
-| **状态检查** | 手动 `tmux ls` | `ag status/ls` |
-| **并行执行** | 手动脚本 | `ag patterns/parallel.sh` |
-| **Worker-Judge 循环** | 手动循环 | `ag patterns/pair.sh` |
+- 目录：`explorer/`（项目根目录下）或用户指定路径
+- 命名：`<target>.md`
+- 格式：由 `explorer.md` persona 定义的标准 Markdown 结构
 
-## 迁移指南
-
-如果你有使用 `subagent` 的代码：
-
-**旧方式：**
-```bash
-SESSION=$(~/.ai/skills/subagent/bin/start_subagent_tmux.sh \
-  /tmp/explore-out.txt 10m \
-  @explorer.md \
-  "Explore code")
-
-SESSION_NAME=$(echo "$SESSION" | cut -d: -f1)
-~/.ai/skills/tmux/bin/tmux_wait.sh "$SESSION_NAME" /tmp/explore-out.txt 600
-OUTPUT=$(cat /tmp/explore-out.txt)
-```
-
-**新方式：**
-```bash
-export AG_BIN=~/.ai/skills/ag/ag
-
-$AG_BIN spawn \
-  --id "explore-code" \
-  --system @explorer.md \
-  --input "Explore code" \
-  --timeout 10m
-
-$AG_BIN wait "explore-code" --timeout 600
-OUTPUT=$($AG_BIN output "explore-code")
-$AG_BIN rm "explore-code"
-```
-
-详细迁移指南请参考：`~/.ai/skills/MIGRATION-subagent-to-ag.md`
-
-## 输出文件约定
-
-- 目录：`explorer/` 或通过参数指定
-- 命名：`<目标名称>.md`
-- 格式：标准 Markdown
-- 包含：Overview、Tech Stack、Structure、Patterns、Findings、Gotchas
-
-## 示例
-
-### Example 1: 探索本地代码库
+## 错误处理
 
 ```bash
-# 用户输入
-/skill:explore 探索当前项目的 RPC 处理机制
+# 检查 agent 状态
+$AG_BIN agent status explore-<TARGET>
 
-# 执行
-1. 创建 explorer/ 目录
-2. 调用 subagent 探索 RPC 模块
-3. 输出到 explorer/rpc.md
+# 如果失败，查看错误
+$AG_BIN agent output explore-<TARGET>
 
-# 结果示例
-explorer/
-└── rpc.md  # RPC 处理机制分析
+# 清理 agent 元数据（也清理 tmux 会话）
+$AG_BIN agent rm explore-<TARGET>
+
+# 如果 agent rm 后 tmux 会话仍残留，手动清理
+tmux kill-session -t ag-explore-<TARGET> 2>/dev/null
 ```
 
-### Example 2: 并行探索多个 repo
-
-```bash
-# 用户输入
-/skill:explore 探索 auth0/go-auth0 和 golang/oauth2 的实现对比
-
-# 执行
-1. 创建 explorer/ 目录
-2. 并行启动两个 subagent
-   - subagent 1: 探索 auth0/go-auth0
-   - subagent 2: 探索 golang/oauth2
-3. 输出到 explorer/auth0.md 和 explorer/oauth2.md
-
-# 结果示例
-explorer/
-├── auth0.md   # auth0/go-auth0 分析
-└── oauth2.md  # golang/oauth2 分析
-```
-
-## 关键规则
-
-- **只读不修改**：探索阶段不修改任何代码
-- **专注关键信息**：不深入细节，收集高层理解
-- **独立输出文件**：每个目标一个文件，便于后续引用
-- **结构化格式**：使用标准格式，便于解析
-- **可并行执行**：多个独立目标可以并行探索
-
-## 后续使用
-
-探索结果可以供后续阶段使用：
-
-```markdown
-## Brainstorming 输入
-基于 explorer/ 目录中的探索结果，制定决策：
-- 选择哪种实现方案？
-- 借鉴哪些模式？
-- 避免哪些问题？
-
-## Speckit 输入
-基于 explorer/ 目录中的探索结果，制定计划：
-- 现有代码结构是什么？
-- 需要修改哪些文件？
-- 遵循哪些现有模式？
-```
-
-## 与其他技能的协作
+## 流程定位
 
 ```
 用户需求
     ↓
 ┌─────────────────────┐
-│  /skill:explore      │  ← 收集信息
+│  explore 技能        │  ← 你在这里：用 ag 派生子 agent
 └──────────┬──────────┘
            ↓
 explorer/*.md
            ↓
 ┌─────────────────────┐
-│  /skill:brainstorming │  ← 决策路线
+│  brainstorm 技能     │  ← 基于探索结果决策
 └──────────┬──────────┘
            ↓
-decisions.md
-           ↓
-┌─────────────────────┐
-│  /workflow start feature │  ← 制定计划
-└──────────┬──────────┘
-           ↓
-spec.md, plan.md, tasks.md
+decisions.md → spec.md → plan.md → implement
 ```

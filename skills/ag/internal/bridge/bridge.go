@@ -2,8 +2,8 @@ package bridge
 
 import (
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -77,6 +77,17 @@ func Run(id string) error {
 		cmd.Dir = cfg.Cwd
 	}
 
+	// Pass system prompt via CLI flag if configured
+	if cfg.System != "" {
+		sysFlag := cfg.System
+		if strings.HasPrefix(cfg.System, "@") {
+			// @file reference: resolve to temp file with actual content,
+			// so ai can read it via --system-prompt @<path>
+			sysFlag = cfg.System // keep @ prefix, ai's parseSystemPrompt handles it
+		}
+		cmd.Args = append(cmd.Args, "--system-prompt", sysFlag)
+	}
+
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("stdin pipe: %w", err)
@@ -117,20 +128,8 @@ func Run(id string) error {
 		return fmt.Errorf("start socket server: %w", err)
 	}
 
-	// 9. Send system prompt and initial prompt to ai stdin
-	if cfg.System != "" {
-		sysMsg := map[string]string{"type": "prompt"}
-		if strings.HasPrefix(cfg.System, "@") {
-			sysMsg["message"] = "Follow the instructions in " + cfg.System
-		} else {
-			sysMsg["message"] = "System: " + cfg.System
-		}
-		data, _ := json.Marshal(sysMsg)
-		if _, err := stdinPipe.Write(append(data, '\n')); err != nil {
-			log.Printf("bridge: failed to send system prompt: %v", err)
-		}
-	}
-
+	// 9. Send initial prompt to ai stdin
+	// System prompt is now passed via --system-prompt CLI flag (see step 6).
 	if cfg.Input != "" {
 		msg := map[string]string{"type": "prompt", "message": cfg.Input}
 		data, _ := json.Marshal(msg)
@@ -198,7 +197,9 @@ func Run(id string) error {
 	stderrFile.Close()
 	writeStderrTail(stderrPath, filepath.Join(agentDir, stderrTail))
 
-	// If ai exit code != 0 and status still "running", set to "failed"
+	// If ai exit code != 0 and status still "running", set to "failed".
+	// Do NOT overwrite StatusDone — the agent may have completed successfully
+	// but the ai process was killed (SIGTERM) after idling, giving non-zero exit.
 	exitCode := exitCodeFromErr(waitErr)
 	if exitCode != 0 {
 		activity.UpdateActivity(func(a *AgentActivity) {
@@ -208,6 +209,17 @@ func Run(id string) error {
 				if waitErr != nil && a.Error == "" {
 					a.Error = waitErr.Error()
 				}
+			}
+			// Ensure FinishedAt is set even for successful agents
+			if a.FinishedAt == 0 {
+				a.FinishedAt = time.Now().Unix()
+			}
+		})
+	} else {
+		// Clean exit: ensure FinishedAt is set
+		activity.UpdateActivity(func(a *AgentActivity) {
+			if a.FinishedAt == 0 {
+				a.FinishedAt = time.Now().Unix()
 			}
 		})
 	}
