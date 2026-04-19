@@ -170,13 +170,34 @@ $AG_BIN agent rm explore-storage explore-infra
 
 ## 错误处理
 
+### ⚠️ MANDATORY: 子 agent 失败时，停止并报告给用户
+
+当子 agent 失败（status 为 `failed`、`error` 或超时）时，**禁止自行诊断或重试**。立即向用户报告失败信息，让用户决定下一步。
+
+**报告内容**：
+
 ```bash
-# 检查 agent 状态
+# 查看失败状态
 $AG_BIN agent status explore-<TARGET>
 
-# 如果失败，查看错误
+# 查看已产生的输出（可能包含线索）
 $AG_BIN agent output explore-<TARGET>
+```
 
+将 status 和 output 的内容**原样展示给用户**，不要自己判断原因或尝试修复。
+
+**禁止的操作**：
+- ❌ 自行 `rm` + 重新 `spawn`（盲目重试）
+- ❌ 自行分析错误原因并尝试修正参数
+- ❌ 修改 `--input` 或 `--system` 参数后重试
+
+**唯一允许的操作**：
+- ✅ 报告失败信息给用户
+- ✅ 在用户明确指示后才执行后续操作
+
+### 清理
+
+```bash
 # 清理 agent 元数据（也清理 tmux 会话）
 $AG_BIN agent rm explore-<TARGET>
 
