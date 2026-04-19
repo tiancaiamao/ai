@@ -587,7 +587,6 @@ func TestEventReader_LargeToken(t *testing.T) {
 	aw.UpdateStatus(StatusRunning)
 
 	// Build a JSON line with ~100KB of text_delta content
-	// EventReader expects: {"type":"message_update","data":{"text_delta":"..."}}
 	largeText := strings.Repeat("A", 100*1024)
 	rpcLine := map[string]any{
 		"type": "message_update",
@@ -613,5 +612,189 @@ func TestEventReader_LargeToken(t *testing.T) {
 	output := er.Output()
 	if len(output) < 100*1024 {
 		t.Fatalf("expected at least 100KB of output, got %d bytes", len(output))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Actual ai RPC format tests — the real event format emitted by ai --mode rpc
+// ---------------------------------------------------------------------------
+
+// TestEventReader_AiRpc_AgentEnd_NoSuccessField: agent_end without "success"
+// should be treated as success (no error = done).
+func TestEventReader_AiRpc_AgentEnd_NoSuccessField(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	// Actual ai RPC output: {"type":"agent_end","messages":[...]}
+	// No "success" field at all.
+	input := `{"type":"agent_end","messages":[{"role":"user","content":"hi"}]}` + "\n"
+
+	r := strings.NewReader(input)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	path := filepath.Join(dir, activityFileName)
+	var act AgentActivity
+	if err := storage.ReadJSON(path, &act); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if act.Status != StatusDone {
+		t.Fatalf("expected status done (no error = success), got %s", act.Status)
+	}
+}
+
+// TestEventReader_AiRpc_AgentEnd_WithError: agent_end with error field
+// should be treated as failed.
+func TestEventReader_AiRpc_AgentEnd_WithError(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	input := `{"type":"agent_end","error":"API rate limit exceeded"}` + "\n"
+
+	r := strings.NewReader(input)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	path := filepath.Join(dir, activityFileName)
+	var act AgentActivity
+	if err := storage.ReadJSON(path, &act); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if act.Status != StatusFailed {
+		t.Fatalf("expected status failed, got %s", act.Status)
+	}
+	if act.Error != "API rate limit exceeded" {
+		t.Fatalf("expected error message, got %q", act.Error)
+	}
+}
+
+// TestEventReader_AiRpc_MessageUpdate_AssistantMessageEvent: actual format
+// uses assistantMessageEvent.delta, not data.text_delta.
+func TestEventReader_AiRpc_MessageUpdate_AssistantMessageEvent(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	lines := strings.Join([]string{
+		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello "}}`,
+		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"World!"}}`,
+	}, "\n") + "\n"
+
+	r := strings.NewReader(lines)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	output := er.Output()
+	if output != "Hello World!" {
+		t.Fatalf("expected 'Hello World!', got %q", output)
+	}
+}
+
+// TestEventReader_AiRpc_TurnEnd_UsageInMessage: actual format puts usage
+// in message.usage.input/output, not data.tokensBefore/tokensAfter.
+func TestEventReader_AiRpc_TurnEnd_UsageInMessage(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	// Simulate actual ai RPC turn_end event
+	input := `{"type":"turn_end","message":{"role":"assistant","usage":{"input":3839,"output":42,"totalTokens":3881}}}` + "\n"
+
+	r := strings.NewReader(input)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	path := filepath.Join(dir, activityFileName)
+	var act AgentActivity
+	if err := storage.ReadJSON(path, &act); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if act.TokensIn != 3839 {
+		t.Fatalf("expected TokensIn=3839, got %d", act.TokensIn)
+	}
+	if act.TokensOut != 42 {
+		t.Fatalf("expected TokensOut=42, got %d", act.TokensOut)
+	}
+	if act.TokensTotal != 3881 {
+		t.Fatalf("expected TokensTotal=3881, got %d", act.TokensTotal)
+	}
+}
+
+// TestEventReader_AiRpc_ToolExecution_TopLevelToolName: actual format puts
+// toolName at top level, not inside data.tool.
+func TestEventReader_AiRpc_ToolExecution_TopLevelToolName(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	input := `{"type":"tool_execution_start","toolName":"bash","toolCallId":"call_123","args":{"command":"ls"}}` + "\n"
+
+	r := strings.NewReader(input)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	path := filepath.Join(dir, activityFileName)
+	var act AgentActivity
+	if err := storage.ReadJSON(path, &act); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if act.LastTool != "bash" {
+		t.Fatalf("expected LastTool='bash', got %q", act.LastTool)
+	}
+}
+
+// TestEventReader_AiRpc_FullWorkflow: simulate a complete agent interaction
+// using actual ai RPC event format and verify status=done, output, tokens.
+func TestEventReader_AiRpc_FullWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	aw.UpdateStatus(StatusRunning)
+
+	events := []string{
+		`{"type":"agent_start"}`,
+		`{"type":"turn_start"}`,
+		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello"}}`,
+		`{"type":"turn_end","message":{"role":"assistant","usage":{"input":100,"output":5,"totalTokens":105}}}`,
+		`{"type":"agent_end","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"Hello"}]}`,
+	}
+	input := strings.Join(events, "\n") + "\n"
+
+	r := strings.NewReader(input)
+	er := NewEventReader(r, aw, dir)
+	if err := er.Run(); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	// Check output
+	if er.Output() != "Hello" {
+		t.Fatalf("expected output 'Hello', got %q", er.Output())
+	}
+
+	// Check activity
+	path := filepath.Join(dir, activityFileName)
+	var act AgentActivity
+	if err := storage.ReadJSON(path, &act); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if act.Status != StatusDone {
+		t.Fatalf("expected status done, got %s", act.Status)
+	}
+	if act.Turns != 1 {
+		t.Fatalf("expected 1 turn, got %d", act.Turns)
+	}
+	if act.TokensIn != 100 || act.TokensOut != 5 {
+		t.Fatalf("expected tokens 100/5, got %d/%d", act.TokensIn, act.TokensOut)
 	}
 }
