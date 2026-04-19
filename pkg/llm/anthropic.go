@@ -308,9 +308,25 @@ func StreamAnthropic(
 		}
 
 		if err := scanner.Err(); err != nil {
-			stream.Push(LLMErrorEvent{Error: err})
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("LLM stream read error: %w", err)})
 			return
 		}
+
+		// Clean EOF but no SSE data chunks were received — the server closed
+		// the connection prematurely without sending any response data.
+		if chunkIndex == 0 {
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("LLM stream ended without any data chunks (server closed connection prematurely)")})
+			return
+		}
+
+		// Clean EOF with some chunks but no DoneEvent was ever pushed.
+		// Synthesize a done event so the stream doesn't end silently.
+		finalMsg := partial.ToLLMMessage()
+		stream.Push(LLMDoneEvent{
+			Message:    &finalMsg,
+			Usage:      lastUsage,
+			StopReason: "stop",
+		})
 	}()
 
 	return stream

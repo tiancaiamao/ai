@@ -1183,6 +1183,12 @@ func streamAssistantResponse(
 		}
 	}
 
+	// If the iterator exited without sending DoneEvent or ErrorEvent, the
+	// stream was truncated. Return an error so the retry logic can kick in.
+	if partialMessage != nil && partialMessage.StopReason == "" {
+		return nil, fmt.Errorf("LLM stream ended without completion (no DoneEvent received)")
+	}
+
 	return partialMessage, nil
 }
 

@@ -102,6 +102,112 @@ func TestStreamLLMHandlesLargeSSELine(t *testing.T) {
 	}
 }
 
+func TestStreamLLMErrorOnEmptySSEStream(t *testing.T) {
+	// Server returns HTTP 200 with empty body (no SSE data chunks at all).
+	// This simulates the LLM server closing the connection prematurely.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Write nothing — just close the connection.
+	}))
+	defer server.Close()
+
+	model := Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+	llmCtx := LLMContext{
+		Messages: []LLMMessage{
+			{Role: "user", Content: "ping"},
+		},
+	}
+
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
+
+	var sawError bool
+	var sawDone bool
+	for item := range stream.Iterator(context.Background()) {
+		switch event := item.Value.(type) {
+		case LLMErrorEvent:
+			sawError = true
+			if event.Error == nil {
+				t.Fatal("expected non-nil error in LLMErrorEvent")
+			}
+			errMsg := event.Error.Error()
+			if !strings.Contains(errMsg, "without any data chunks") {
+				t.Fatalf("expected error about no data chunks, got: %s", errMsg)
+			}
+		case LLMDoneEvent:
+			sawDone = true
+		default:
+			// LLMStartEvent is expected
+		}
+	}
+
+	if !sawError {
+		t.Fatal("expected LLMErrorEvent when stream has zero data chunks")
+	}
+	if sawDone {
+		t.Fatal("should not see LLMDoneEvent when stream has zero data chunks")
+	}
+}
+
+func TestStreamLLMSyntheticDoneOnTruncatedStream(t *testing.T) {
+	// Server sends some content chunks but closes without finish_reason or [DONE].
+	// The client should synthesize a DoneEvent with the accumulated content.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hello world\"}}]}\n\n")
+		// No finish_reason, no [DONE] — stream just ends.
+	}))
+	defer server.Close()
+
+	model := Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+	llmCtx := LLMContext{
+		Messages: []LLMMessage{
+			{Role: "user", Content: "ping"},
+		},
+	}
+
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
+
+	var sawDone bool
+	var sawError bool
+	for item := range stream.Iterator(context.Background()) {
+		switch event := item.Value.(type) {
+		case LLMDoneEvent:
+			sawDone = true
+			if event.StopReason != "stop" {
+				t.Fatalf("expected synthetic stop reason, got %q", event.StopReason)
+			}
+			if event.Message == nil {
+				t.Fatal("expected done event to include message")
+			}
+			if got := event.Message.Content; got != "hello world" {
+				t.Fatalf("unexpected message content: %q", got)
+			}
+		case LLMErrorEvent:
+			sawError = true
+			t.Fatalf("unexpected error event: %v", event.Error)
+		default:
+			// LLMStartEvent, LLMTextDeltaEvent are expected
+		}
+	}
+
+	if !sawDone {
+		t.Fatal("expected LLMDoneEvent when stream has data chunks but no finish_reason")
+	}
+	if sawError {
+		t.Fatal("should not see LLMErrorEvent when stream has data chunks")
+	}
+}
+
 func TestParseRetryAfterHeader(t *testing.T) {
 	if got := parseRetryAfterHeader("5"); got != 5*time.Second {
 		t.Fatalf("expected 5s from integer header, got %v", got)

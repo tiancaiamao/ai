@@ -95,13 +95,14 @@ func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) 
 // Any other value indicates an error or abnormal termination that should be reported to the user.
 func isSuccessfulStopReason(stopReason string) bool {
 	switch stopReason {
-	case "stop", "tool_calls", "toolUse", "length", "":
+	case "stop", "tool_calls", "toolUse", "length":
 		// "stop" - normal completion
 		// "tool_calls"/"toolUse" - LLM wants to use tools
 		// "length" - hit max token limit (still completed normally)
-		// "" - empty stopReason (treat as success for compatibility)
 		return true
 	default:
+		// Empty string or any other value is not a successful stop reason.
+		// An empty stopReason means the LLM response was truncated or incomplete.
 		return false
 	}
 }
