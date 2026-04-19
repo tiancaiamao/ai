@@ -1,0 +1,471 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestReadTool_BasicFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "line1\nline2\nline3\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(result))
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	// 3 lines joined with \n (no trailing newline in output)
+	expected := "line1\nline2\nline3"
+	if text != expected {
+		t.Errorf("expected %q, got %q", expected, text)
+	}
+}
+
+func TestReadTool_OffsetAndLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	// Create a 10-line file
+	var content string
+	for i := 1; i <= 10; i++ {
+		content += fmt.Sprintf("line%d\n", i)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Read lines 3-5 (offset=3, limit=3)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": float64(3),
+		"limit":  float64(3),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+
+	// Should contain lines 3-5
+	if !strings.Contains(text, "line3") || !strings.Contains(text, "line4") || !strings.Contains(text, "line5") {
+		t.Errorf("expected lines 3-5 in output, got: %s", text)
+	}
+	// Should NOT contain lines 1-2 or 6-10
+	if strings.Contains(text, "line1") || strings.Contains(text, "line2") {
+		t.Errorf("should not contain lines 1-2, got: %s", text)
+	}
+	if strings.Contains(text, "line6") {
+		t.Errorf("should not contain lines 6+, got: %s", text)
+	}
+	// 10 lines total, we read lines 3-5 (3 lines), remaining: 5 lines (6,7,8,9,10)
+	if !strings.Contains(text, "5 more lines below") {
+		t.Errorf("expected footer hint '5 more lines below', got: %s", text)
+	}
+	// Should have header hint
+	if !strings.Contains(text, "2 lines above omitted") {
+		t.Errorf("expected header hint '2 lines above omitted', got: %s", text)
+	}
+}
+
+func TestReadTool_OffsetOnly(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	var content string
+	for i := 1; i <= 100; i++ {
+		content += fmt.Sprintf("line%d\n", i)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Read from line 90 (offset=90, default limit=2000)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": float64(90),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+
+	// Should contain lines 90-100
+	if !strings.Contains(text, "line90") || !strings.Contains(text, "line100") {
+		t.Errorf("expected lines 90-100, got: %s", text)
+	}
+	// Should have header hint
+	if !strings.Contains(text, "89 lines above omitted") {
+		t.Errorf("expected header hint about 89 lines omitted, got: %s", text)
+	}
+	// Should NOT have footer hint (we read to end)
+	if strings.Contains(text, "more lines below") {
+		t.Errorf("should not have footer hint, got: %s", text)
+	}
+}
+
+func TestReadTool_OffsetExceedsFileLength(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "line1\nline2\nline3\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": float64(100),
+	})
+	if err == nil {
+		t.Fatal("expected error for offset exceeding file length")
+	}
+	if !strings.Contains(err.Error(), "offset 100 exceeds file length") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestReadTool_SelectedRangeTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "large.txt")
+
+	// Create a file larger than 50KB with many lines
+	var content string
+	for len(content) < 60*1024 {
+		content += strings.Repeat("a", 100) + "\n"
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Reading without offset/limit selects all lines, which exceeds 50KB
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err == nil {
+		t.Fatal("expected error for large selected range")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+	if !strings.Contains(err.Error(), "limit") {
+		t.Errorf("error should suggest using a smaller limit, got: %v", err)
+	}
+}
+
+func TestReadTool_LargeFileWithOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "large.txt")
+
+	// Create a file larger than 50KB with many lines
+	var content string
+	lineWidth := 100
+	for len(content) < 60*1024 {
+		content += strings.Repeat("a", lineWidth-1) + "\n"
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Reading with limit=5 should succeed even though file is > 50KB
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":  filePath,
+		"limit": float64(5),
+	})
+	if err != nil {
+		t.Fatalf("should be able to read section of large file with limit, got error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, strings.Repeat("a", lineWidth-1)) {
+		truncLen := len(text)
+		if truncLen > 100 {
+			truncLen = 100
+		}
+		t.Errorf("expected file content in output, got: %s (truncated)", text[:truncLen])
+	}
+	// Should have footer hint since we only read 5 lines
+	if !strings.Contains(text, "more lines below") {
+		truncLen := len(text)
+		if truncLen > 200 {
+			truncLen = 200
+		}
+		t.Errorf("expected footer hint for large file read with limit, got: %s (truncated)", text[:truncLen])
+	}
+}
+
+func TestReadTool_LimitTruncation(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	var content string
+	for i := 1; i <= 100; i++ {
+		content += fmt.Sprintf("line%d\n", i)
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Read first 5 lines with limit=5
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":  filePath,
+		"limit": float64(5),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+
+	// Should contain lines 1-5
+	if !strings.Contains(text, "line1") || !strings.Contains(text, "line5") {
+		t.Errorf("expected lines 1-5, got: %s", text)
+	}
+	// 100 lines total, read 5, remaining: 95 lines
+	if !strings.Contains(text, "95 more lines below") {
+		t.Errorf("expected '95 more lines below', got: %s", text)
+	}
+	if !strings.Contains(text, "offset=6") {
+		t.Errorf("expected hint 'offset=6', got: %s", text)
+	}
+	// Should NOT have header hint (started from line 1)
+	if strings.Contains(text, "lines above omitted") {
+		t.Errorf("should not have header hint when starting from line 1, got: %s", text)
+	}
+}
+
+func TestReadTool_BinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.bin")
+	binaryContent := []byte{0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE}
+	if err := os.WriteFile(filePath, binaryContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err == nil {
+		t.Fatal("expected error for binary file")
+	}
+	if !strings.Contains(err.Error(), "binary") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestReadTool_NoOffsetLimit(t *testing.T) {
+	// Default behavior: read entire file (no offset, no limit)
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "hello\nworld\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	// No header or footer hints for small files
+	if strings.Contains(text, "omitted") || strings.Contains(text, "more lines") {
+		t.Errorf("small file should not have truncation hints, got: %s", text)
+	}
+}
+
+func TestReadTool_HashlineWithOffset(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+	tool.SetHashLines(true)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": float64(3),
+		"limit":  float64(2),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+
+	// Hashline mode should use FormatHashLines with correct startLine
+	// Lines should be numbered starting from 3
+	if !strings.Contains(text, "3:") || !strings.Contains(text, "4:") {
+		t.Errorf("hashline output should contain line numbers 3 and 4, got: %s", text)
+	}
+	// Should NOT contain lines 1-2 or 5 in hashline format
+	if strings.Contains(text, "1:") || strings.Contains(text, "2:") || strings.Contains(text, "5:") {
+		t.Errorf("hashline output should not contain lines 1,2,5, got: %s", text)
+	}
+}
+
+func TestReadTool_TildeExpansion(t *testing.T) {
+	// Test that ~/path is expanded to home directory
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "hello\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	// Test with non-tilde path (just verify it works with absolute paths)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path": filePath,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	if text != "hello" {
+		t.Errorf("expected 'hello', got %q", text)
+	}
+}
+
+func TestReadTool_FileNotFound(t *testing.T) {
+	ws, _ := NewWorkspace(t.TempDir())
+	tool := NewReadTool(ws)
+
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"path": "/nonexistent/file.txt",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestReadTool_InvalidOffsetAndLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("line1\nline2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		wantErr string
+	}{
+		{
+			name: "decimal offset should error",
+			args: map[string]any{
+				"path":   filePath,
+				"offset": float64(0.5),
+			},
+			wantErr: "offset must be a positive integer",
+		},
+		{
+			name: "zero limit should error",
+			args: map[string]any{
+				"path":  filePath,
+				"limit": float64(0),
+			},
+			wantErr: "limit must be a positive integer",
+		},
+		{
+			name: "non-numeric offset string should error",
+			args: map[string]any{
+				"path":   filePath,
+				"offset": "abc",
+			},
+			wantErr: "offset must be a positive integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Execute(context.Background(), tt.args)
+			if err == nil {
+				t.Fatalf("expected error: %s", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestReadTool_StringOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	content := "line1\nline2\nline3\nline4\n"
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, _ := NewWorkspace(dir)
+	tool := NewReadTool(ws)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"path":   filePath,
+		"offset": "2",
+		"limit":  "2",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := result[0].(agentctx.TextContent).Text
+	if !strings.Contains(text, "line2") || !strings.Contains(text, "line3") {
+		t.Fatalf("expected lines 2 and 3, got: %s", text)
+	}
+	if strings.Contains(text, "line1") || strings.Contains(text, "line4") {
+		t.Fatalf("should not contain line1/line4, got: %s", text)
+	}
+}
