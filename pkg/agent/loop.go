@@ -29,6 +29,7 @@ const (
 	defaultLoopMaxConsecutiveToolCalls = 6
 	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
+	defaultEmptyResponseMaxRetries    = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 	defaultLLMTotalTimeout             = 10 * time.Minute // Total timeout for LLM request
 	defaultLLMFirstResponseTimeout     = 2 * time.Minute  // Timeout between streaming chunks (2min)
@@ -263,6 +264,7 @@ func runInnerLoop(
 	compactionRecoveries := 0
 	loopGuard := newToolLoopGuard(config)
 	malformedToolCallRecoveries := 0
+	emptyResponseRetries := 0
 
 	// Turn counter for MaxTurns limit
 	turnCount := 0
@@ -592,6 +594,27 @@ func runInnerLoop(
 			if maybeRecoverMalformedToolCall(ctx, agentCtx, &newMessages, stream, msg, &malformedToolCallRecoveries) {
 				continue
 			}
+
+			// Check for empty response: stop_reason=stop but no actionable content
+			// (no text, no tool calls — only thinking content). This can happen with
+			// models like glm-5.1 that sometimes return only thinking and stop.
+			if msg.StopReason == "stop" && isEmptyActionableResponse(msg) && emptyResponseRetries < defaultEmptyResponseMaxRetries {
+				emptyResponseRetries++
+				slog.Warn("[Loop] LLM returned stop_reason=stop with empty actionable output (no text, no tool calls); retrying",
+					"stopReason", msg.StopReason,
+					"turn", turnCount,
+					"retry_attempt", emptyResponseRetries,
+					"max_retries", defaultEmptyResponseMaxRetries,
+				)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "empty_response_detected",
+					traceevent.Field{Key: "stopReason", Value: msg.StopReason},
+					traceevent.Field{Key: "turn", Value: turnCount},
+					traceevent.Field{Key: "retry_attempt", Value: emptyResponseRetries},
+					traceevent.Field{Key: "max_retries", Value: defaultEmptyResponseMaxRetries},
+				)
+				continue
+			}
+
 			break
 		}
 	}
@@ -1954,4 +1977,27 @@ func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 // randFloat64 returns a random float64 in [0, 1)
 func randFloat64() float64 {
 	return rand.Float64()
+}
+
+// isEmptyActionableResponse returns true if the message contains no actionable
+// content (no non-empty text blocks and no tool calls). Thinking-only content
+// is NOT considered actionable.
+func isEmptyActionableResponse(msg *agentctx.AgentMessage) bool {
+	if msg == nil {
+		return true
+	}
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case agentctx.TextContent:
+			// Non-empty text is actionable
+			if strings.TrimSpace(b.Text) != "" {
+				return false
+			}
+		case agentctx.ToolCallContent:
+			// Tool calls are actionable
+			return false
+		}
+	}
+	// Only thinking content (or empty content) — not actionable
+	return true
 }
