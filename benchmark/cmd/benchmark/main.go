@@ -198,14 +198,16 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	// Use ai --mode rpc piped through ag conv for full event output.
 	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
 	// execution events to evaluate must_use_capabilities and success_criteria.
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
-				fmt.Sprintf("echo %q | %q --mode rpc | %q conv",
-			rpcPrompt, r.BinaryPath, "ag"))
-	cmd.Env = nonInteractiveCommandEnv()
 
-	// TODO(max-turns): ai --mode rpc does not currently support --max-turns.
-	// When RPC gains this parameter, pass r.MaxTurns here.
-	// For now, only timeout limits execution duration.
+	// Build RPC command with optional --max-turns
+	rpcCmd := fmt.Sprintf("%q --mode rpc", r.BinaryPath)
+	if r.MaxTurns > 0 {
+		rpcCmd += fmt.Sprintf(" --max-turns %d", r.MaxTurns)
+	}
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+		fmt.Sprintf("echo %q | %s | %q conv",
+			rpcPrompt, rpcCmd, "ag"))
+	cmd.Env = nonInteractiveCommandEnv()
 
 	// Set working directory to task dir
 	cmd.Dir = taskDir
