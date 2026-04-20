@@ -1,7 +1,0 @@
-{
-  "cwd": "",
-  "id": "reviewer-v3",
-  "input": "Review the diff at /tmp/pr164-v3.diff. Focus ONLY on real bugs — not style, naming, or documentation. Check: (1) PID reuse safety in Kill(), (2) data loss in benchmark pipeline, (3) concurrency safety of stream.log per-agent paths, (4) any logic errors in event parsing. Write final JSON to /tmp/review-164-v3.json when done. Be concise — do not re-read files you've already analyzed.",
-  "startedAt": 1776697646,
-  "system": "@/Users/genius/.ai/skills/review/reviewer.md"
-}
