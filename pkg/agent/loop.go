@@ -606,12 +606,6 @@ func runInnerLoop(
 					"retry_attempt", emptyResponseRetries,
 					"max_retries", defaultEmptyResponseMaxRetries,
 				)
-				traceevent.Log(ctx, traceevent.CategoryEvent, "empty_response_detected",
-					traceevent.Field{Key: "stopReason", Value: msg.StopReason},
-					traceevent.Field{Key: "turn", Value: turnCount},
-					traceevent.Field{Key: "retry_attempt", Value: emptyResponseRetries},
-					traceevent.Field{Key: "max_retries", Value: defaultEmptyResponseMaxRetries},
-				)
 				continue
 			}
 

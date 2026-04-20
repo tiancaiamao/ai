@@ -246,7 +246,6 @@ var eventNameToBit = map[string]int{
 	"context_mgmt_messages_truncated":     54,
 	"context_mgmt_llm_context_updated":    55,
 	"context_mgmt":                        56,
-	"empty_response_detected":             57,
 }
 
 var defaultEnabledEvents = []string{
@@ -292,7 +291,6 @@ var defaultEnabledEvents = []string{
 	"context_mgmt_check",
 	"context_mgmt_messages_truncated",
 	"context_mgmt_llm_context_updated",
-	"empty_response_detected",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -341,7 +339,6 @@ var eventSelectorGroups = map[string][]string{
 		"context_mgmt_check",
 		"context_mgmt_messages_truncated",
 		"context_mgmt_llm_context_updated",
-		"empty_response_detected",
 	},
 	"log": {
 		"log:info",
