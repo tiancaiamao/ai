@@ -94,7 +94,7 @@ func (er *EventReader) handleEvent(evt map[string]any) {
 	case "tool_execution_start":
 		er.handleToolExecutionStart(evt)
 
-		case "tool_execution_end":
+	case "tool_execution_end":
 		// No action needed
 
 	case "message_update":
