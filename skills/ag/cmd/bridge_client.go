@@ -90,16 +90,40 @@ done:
 }
 
 // Kill terminates the bridge process and updates activity.json to killed.
+// Only sends signal if agent is still in running state to avoid PID reuse.
 func Kill(id string) error {
 	agentDir := agent.AgentDir(id)
 	actPath := filepath.Join(agentDir, "activity.json")
 
-	// Try to kill via PID from activity.json
+	// Only kill if agent is still running (prevent PID reuse mis-kill)
 	if storage.Exists(actPath) {
 		var act agent.Activity
-		if err := storage.ReadJSON(actPath, &act); err == nil && act.Pid > 0 {
-			// Kill the process group (negative PID)
-			_ = syscall.Kill(-act.Pid, syscall.SIGTERM)
+		if err := storage.ReadJSON(actPath, &act); err == nil {
+			if agent.IsTerminal(act.Status) {
+				// Already terminal — just ensure status is "killed" if needed
+				if act.Status != "killed" {
+					act.Status = "killed"
+					now := time.Now().Unix()
+					if act.FinishedAt == 0 {
+						act.FinishedAt = now
+					}
+					_ = storage.AtomicWriteJSON(actPath, act)
+				}
+				return nil
+			}
+
+			// Verify PID is still alive before sending signal
+			if act.Pid > 0 {
+				proc, err := os.FindProcess(act.Pid)
+				if err == nil {
+					// Signal 0 checks existence without killing
+					if sigErr := proc.Signal(syscall.Signal(0)); sigErr == nil {
+						// Process exists and is alive — safe to kill
+						_ = syscall.Kill(-act.Pid, syscall.SIGTERM)
+					}
+					// If signal 0 fails, process is already dead — skip kill
+				}
+			}
 		}
 	}
 

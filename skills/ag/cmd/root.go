@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -127,8 +128,15 @@ var agentStatusCmd = &cobra.Command{
 			}
 			fmt.Printf("Last text: %s\n", text)
 		}
-		if activity.Error != "" {
+				if activity.Error != "" {
 			fmt.Printf("Error: %s\n", activity.Error)
+		}
+
+		// Show stream.log path and size for observability
+		agentDir := agent.AgentDir(id)
+		streamPath := filepath.Join(agentDir, "stream.log")
+		if info, err := os.Stat(streamPath); err == nil {
+			fmt.Printf("Stream: %s (%s)\n", streamPath, humanBytes(info.Size()))
 		}
 	},
 }
@@ -733,6 +741,19 @@ func formatDuration(seconds int64) string {
 
 func timeNow() int64 {
 	return time.Now().Unix()
+}
+
+func humanBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func readStdin() []byte {
