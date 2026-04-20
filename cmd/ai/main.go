@@ -57,7 +57,7 @@ func parseSystemPrompt(systemPromptFlag string) string {
 func main() {
 	mode := flag.String("mode", "", "Run mode (rpc|win|json|headless). Default: win")
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json/headless mode)")
-	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, headless mode only)")
+		maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, rpc and headless mode)")
 	toolsFlag := flag.String("tools", "", "Comma-separated list of allowed tools (headless mode only)")
 	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited, headless mode only)")
 	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
@@ -69,8 +69,8 @@ func main() {
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
-	case "rpc":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt); err != nil {
+		case "rpc":
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}

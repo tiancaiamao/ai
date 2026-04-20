@@ -30,7 +30,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -421,11 +421,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.APIKey = apiKey
 	loopCfg.GetWorkingDir = ws.GetCWD
 	loopCfg.GetStartupPath = ws.GetInitialCWD
-	loopCfg.GetSessionDir = func() string {
+		loopCfg.GetSessionDir = func() string {
 		if sess != nil {
 			return sess.GetDir()
 		}
 		return ""
+	}
+
+	// Set max turns limit if specified
+	if maxTurns > 0 {
+		loopCfg.MaxTurns = maxTurns
+		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
 
 	// Create agent with LoopConfig
