@@ -1,0 +1,347 @@
+Now let me look at the bridge and StreamWriter code more closely:Now let me look at the bridge.go to understand the process management changes:Now let me look at the `Output()` function more carefully and see how `tailBytes` changed from line-based to byte-based:
+
+The key change in `Output()` is:
+- **Before**: `tailN` was number of lines (used `strings.Split` by `\n`, then took last `tailN` lines)
+- **After**: `tailBytes` takes last `tailN` **lines** (still lines — same logic, just factored out)
+
+Wait, let me re-read `tailBytes`:
+
+```go
+func tailBytes(data []byte, tailN int) string {
+	text := string(data)
+	if tailN <= 0 || len(text) == 0 {
+		return text
+	}
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > tailN {
+		lines = lines[len(lines)-tailN:]
+	}
+	return strings.Join(lines, "\n")
+}
+```
+
+That's actually identical logic — still line-based. Good.
+
+Now let me look at the benchmark pipeline change more carefully:
+
+In `benchmark/cmd/benchmark/main.go`, the old code ran the AI binary directly in headless mode. The new code pipes through a shell command:
+
+```go
+cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+    fmt.Sprintf("echo %q | %s --mode rpc | %s conv",
+        rpcPrompt, r.BinaryPath, "ag"))
+```
+
+This is the critical benchmark pipeline change. The key concern here is:
+1. `fmt.Sprintf` with `%q` for `rpcPrompt` — this should be safe for shell injection since `%q` quotes the string
+2. But wait — `r.BinaryPath` is NOT quoted! If `r.BinaryPath` contains spaces or shell metacharacters, this would break. Let me check...
+
+Actually, looking more carefully: `fmt.Sprintf("echo %q | %s --mode rpc | %s conv", rpcPrompt, r.BinaryPath, "ag")` — `r.BinaryPath` is inserted via `%s` without quoting. If BinaryPath has spaces, this breaks. But that might be pre-existing... Actually no, this is new code that uses `/bin/sh -c` with `fmt.Sprintf`. The old code used `exec.CommandContext(ctx, r.BinaryPath, ...)` which was safe. The new code is vulnerable to BinaryPath with spaces.
+
+However, this is a pretty edge-case concern. Let me focus on the 4 areas the user asked about.
+
+**1. PID reuse safety in Kill():**
+
+The new Kill() function:
+1. Reads activity.json to check if status is already terminal
+2. If not terminal, does `os.FindProcess(act.Pid)` then `Signal(0)` to check liveness
+3. If alive, sends `syscall.Kill(-act.Pid, syscall.SIGTERM)` (process group kill)
+4. Then reads activity.json again and updates status
+
+The PID reuse concern: Between the `Signal(0)` check and the `Kill(-act.Pid, SIGTERM)`, the PID could die and get reused. However, this is a standard TOCTOU race that exists in all PID-based process management. The mitigation (checking Signal(0) first) is the standard approach. The diff is actually *improving* PID reuse safety compared to the old code which just killed the tmux session without any PID check.
+
+But wait — there's a real bug: `syscall.Kill(-act.Pid, syscall.SIGTERM)` kills the **process group** (negative PID). But `os.FindProcess(act.Pid)` and `proc.Signal(syscall.Signal(0))` only check if that specific PID is alive. The process could be alive but it might not be the bridge process anymore (PID reuse). The old code used tmux session kill which had its own semantics. The new code is doing the right thing — checking Signal(0) first and only killing if alive. The TOCTOU window is tiny and acceptable.
+
+**2. Data loss in benchmark pipeline:**
+
+The benchmark pipeline change: `echo %q | %s --mode rpc | %s conv` — the `conv` command is `ag conv` which by default passes all events. The comment says "Do NOT use --only text here" which is correct.
+
+But the output goes to `ag conv` which outputs to stdout. The caller (`Run` method) reads `cmd.CombinedOutput()` or similar. Let me check...
+
+Looking at the diff, the `Run` method signature returns `(string, error)`. The old code had:
+```go
+cmd := exec.CommandContext(ctx, r.BinaryPath, ...)
+```
+And the new code has the shell command. But I don't see how the output is captured. Let me check if there's more context...
+
+Actually, I need to see the rest of the Run method. The diff only shows the command construction change. The output capture logic must be further down and unchanged. The `cmd.CombinedOutput()` or `cmd.Output()` call should still work with `/bin/sh -c`.
+
+But there's a subtle issue: the old headless mode wrote the output directly to stdout, and the benchmark runner captured that output. The new RPC+conv pipeline streams events through `ag conv`, which formats them. But the **content** of the output is now filtered through `ag conv` — and `ag conv` by default includes ALL events (text, tools, meta). The old headless mode also included all this info. So this should be fine.
+
+Wait — actually let me look at the `maxTurns` concern. The TODO says:
+```
+// TODO(max-turns): ai --mode rpc does not currently support --max-turns.
+// When RPC gains this parameter, pass r.MaxTurns here.
+// For now, only timeout limits execution duration.
+```
+
+This means `MaxTurns` is silently ignored! If a benchmark specifies `MaxTurns`, it will be silently dropped. This could lead to runaway agent execution. However, the timeout is still active. This is a documented regression but might be intentional/acceptable.
+
+**3. Concurrency safety of stream.log per-agent paths:**
+
+The `StreamWriter` has a `sync.Mutex` and all public methods acquire it. The `appendLine` method acquires the lock, modifies `buf` and `lastText`, then releases. The `Flush` method acquires the lock. The `RunFlusher` runs in a separate goroutine but calls `Flush` which acquires the lock. This looks correct.
+
+The `LastText()` method does NOT acquire the mutex:
+```go
+func (sw *StreamWriter) LastText() string {
+    return string(sw.lastText)
+}
+```
+
+And it's called from `handleMessageUpdate`:
+```go
+er.writer.UpdateActivity(func(a *AgentActivity) {
+    if er.streamWriter != nil {
+        a.LastText = er.streamWriter.LastText()
+    }
+})
+```
+
+`LastText()` reads `sw.lastText` without holding `sw.mu`. Meanwhile, `appendLine` writes to `sw.lastText` while holding `sw.mu`. This is a **data race** — concurrent read of `sw.lastText` (in `LastText()`) and write (in `appendLine()`) without synchronization.
+
+Actually wait — let me think about the call flow. The EventReader reads events in a single goroutine (the `Run()` loop). The `handleMessageUpdate` is called from within that loop. The `appendLine` is also called from within that loop (via `sw.streamWriter.AppendText(textDelta)` in the same function). So in the normal flow, `appendLine` and `LastText()` are called sequentially from the same goroutine.
+
+But the `RunFlusher` goroutine calls `Flush()` which calls `flushLocked()` which reads `sw.buf`. The main goroutine in `appendLine` writes to `sw.buf`. Both paths hold `sw.mu`, so `buf` is protected.
+
+However, `LastText()` reads `sw.lastText` without `sw.mu`. If `appendLine` is writing to `sw.lastText` (under `sw.mu`) at the same time `LastText()` reads it... but they're in the same goroutine for the EventReader calls. Let me check if `LastText()` could be called from another goroutine...
+
+Looking at the code, `LastText()` is only called from `handleMessageUpdate` which is called from the EventReader goroutine. The only other goroutine touching StreamWriter is the flusher, which only touches `sw.buf` (under lock). `sw.lastText` is only modified in `appendLine` (under lock) and read in `LastText()` (no lock). But both are called from the same goroutine. So there's no actual data race in practice. However, it's still technically a race if someone later calls `LastText()` from another goroutine. It's a minor encapsulation issue, not a bug today.
+
+Actually wait — there IS a subtle issue. The `Output()` method on EventReader:
+```go
+func (er *EventReader) Output() string {
+    if er.streamWriter != nil {
+        return er.streamWriter.LastText()
+    }
+    return ""
+}
+```
+
+This is called from `bridge.go` after the event reader goroutine finishes:
+```go
+outputText := eventReader.Output()
+```
+
+But by this time, the event reader goroutine has finished and the flusher has been stopped, so there's no concurrent access. OK, no race here.
+
+**4. Logic errors in event parsing:**
+
+The `conv.ParseEvent` function handles various event types. Let me check for issues:
+
+- `message_update`: Handles both `assistantMessageEvent` and `data.text_delta` formats. Looks correct.
+- `tool_execution_start`: Handles both `toolName` (top-level) and `data.tool` formats. Looks correct.
+- `agent_end`: Checks for `error` field first, then `success` field. Correct — same logic as old code.
+- `turn_end`, `tool_execution_end`: Return nil (silent). Correct.
+- `turn_start`: Returns meta event. Correct.
+
+One potential issue: `ExtractTextDelta` checks `data.text_delta` but doesn't check `data.type`. The old code for the data format just extracted `text_delta` directly. Let me check...
+
+```go
+func ExtractTextDelta(evt map[string]any) string {
+    if ame, ok := evt["assistantMessageEvent"].(map[string]any); ok {
+        ameType, _ := ame["type"].(string)
+        if ameType == "text_delta" || ameType == "text_start" {
+            delta, _ := ame["delta"].(string)
+            return delta
+        }
+    }
+    if data, ok := evt["data"].(map[string]any); ok {
+        delta, _ := data["text_delta"].(string)
+        return delta
+    }
+    return ""
+}
+```
+
+The `assistantMessageEvent` path checks `type` before extracting delta — correct. The `data` path just extracts `text_delta` without checking type — this matches the old behavior. Looks fine.
+
+Now, let me look at a key issue — the benchmark pipeline uses `ag conv` (without `--only`) which should output all events. But the `conv` command's `RunE` function calls `conv.ParseEvent` which returns `nil` for `turn_end` and `tool_execution_end`. These events are silently dropped. The old headless mode also didn't output these specifically. So this should be fine.
+
+Let me now look at the critical `r.BinaryPath` shell injection issue more carefully:
+
+```go
+cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+    fmt.Sprintf("echo %q | %s --mode rpc | %s conv",
+        rpcPrompt, r.BinaryPath, "ag"))
+```
+
+`r.BinaryPath` is inserted via `%s` into a shell command string. If `BinaryPath` = `/path/with spaces/ai`, the shell command becomes:
+```
+echo '...' | /path/with spaces/ai --mode rpc | ag conv
+```
+
+The shell would interpret this as trying to run `/path/with` with `spaces/ai` as an argument. This would fail. This is a real bug — the BinaryPath should be quoted with `%q` too.
+
+Let me also check the `channel.go` change to see if there's a data loss issue there:
+
+The `channel.go` diff only changes a comment from "headless" to generic. No logic change.
+
+Let me verify the `Output()` backward compatibility: In `bridge.go`, after the event reader finishes:
+```go
+// Write output file as a copy of stream.log for backward compatibility
+streamLogPath := streamWriter.Path()
+if content, err := os.ReadFile(streamLogPath); err == nil && len(content) > 0 {
+    outputPath := filepath.Join(agentDir, "output")
+    _ = os.WriteFile(outputPath, content, 0644)
+}
+```
+
+This copies `stream.log` to `output`. But `stream.log` now contains formatted output with timestamps, tool markers (🔧), and meta lines. The old `output` file contained just the raw text output. Any code that reads the `output` file expecting plain text will now get formatted content with timestamps and tool markers. This could break `analyzeAgentOutput()` in the benchmark runner or any other consumer.
+
+Wait, but the old code was using headless mode which also had formatted output (turn headers, tool call lists, etc.). Let me re-check...
+
+The old `writeOutputFile()` wrote `er.output.String()` which was accumulated from `er.output.WriteString(textDelta)`. So the old `output` file contained only raw text deltas. The new code copies the entire `stream.log` which includes tool calls with timestamps and meta events. This IS a semantic change in the `output` file content.
+
+However, looking at the benchmark pipeline, the new code uses `ag conv` (without `--only`) which outputs ALL formatted events to stdout. The `Run` method captures that as the output. And `analyzeAgentOutput()` parses that output. So the benchmark path doesn't use the `output` file at all — it uses the command's stdout.
+
+But other consumers (like `ag agent output <id>`) do read the `output` file (or `stream.log`). The `Output()` function in `bridge_client.go` reads from `stream.log` for running agents and from `output` for terminal agents. Since `output` is now a copy of `stream.log`, both paths return the same formatted content. This is consistent.
+
+The real question is: do any consumers expect the `output` file to contain only raw text? Looking at `channel.go`'s `Recv` function — it reads the output file but the diff doesn't change that logic. If downstream code parses the output file expecting plain text, this change would break it. But I can't verify that without looking at more code outside the diff.
+
+Let me focus on the clear bugs I've found:
+
+1. **`r.BinaryPath` not shell-quoted** in the benchmark command construction — this will break if the path contains spaces or special characters.
+
+2. **`stream.log` content semantic change**: The `output` file now contains formatted stream.log content (with timestamps, tool markers, meta lines) instead of raw text deltas. Any consumer expecting plain text from the `output` file will get garbage. But I need to verify this is actually a new issue...
+
+Actually, looking more carefully at the `handleMessageUpdate` change:
+
+Old code:
+```go
+func (er *EventReader) handleMessageUpdate(evt map[string]any) {
+    // ... extract textDelta ...
+    er.output.WriteString(textDelta)  // accumulate raw text
+    // ...
+}
+```
+
+New code:
+```go
+func (er *EventReader) handleMessageUpdate(evt map[string]any) {
+    textDelta := conv.ExtractTextDelta(evt)
+    if textDelta == "" {
+        return
+    }
+    if er.streamWriter != nil {
+        er.streamWriter.AppendText(textDelta)  // write to stream.log
+    }
+    // ...
+}
+```
+
+The `StreamWriter.AppendText` calls `appendLine(conv.KindText, delta, delta)`, which for `KindText` sets:
+```go
+case conv.KindText:
+    line = display // text deltas are written as-is, no prefix
+```
+
+So text deltas are written as-is to `stream.log`. Tool calls and meta events get timestamps. The `output` file is a copy of `stream.log`, so it contains both raw text and formatted events.
+
+For the `analyzeAgentOutput()` in the benchmark, the output comes from the command's stdout (`ag conv`), not from the `output` file. And `ag conv` outputs all events formatted. The old headless mode output was also formatted with turn headers, tool calls, etc. So the benchmark analysis should still work.
+
+The concern is the `output` file backward compat. Let me check `channel.go`'s `Recv`:
+
+Looking at the diff, `channel.go` only changes a comment. The actual `Recv` logic reads the output file. If it was expecting raw text and now gets formatted stream.log content, that's a semantic change. But this is more of a compatibility concern than a bug per se.
+
+Let me finalize my findings:
+
+**Finding 1: Shell injection / path breakage for BinaryPath in benchmark command**
+
+In `benchmark/cmd/benchmark/main.go`, the new code uses:
+```go
+fmt.Sprintf("echo %q | %s --mode rpc | %s conv", rpcPrompt, r.BinaryPath, "ag")
+```
+
+`r.BinaryPath` is interpolated via `%s` into a shell command string. If `BinaryPath` contains spaces or shell metacharacters, the command will fail or behave incorrectly. It should be quoted with `%q`.
+
+**Finding 2: Potential issue — let me re-examine the Kill() PID reuse**
+
+Actually, let me re-read Kill():
+
+```go
+func Kill(id string) error {
+    agentDir := agent.AgentDir(id)
+    actPath := filepath.Join(agentDir, "activity.json")
+
+    if storage.Exists(actPath) {
+        var act agent.Activity
+        if err := storage.ReadJSON(actPath, &act); err == nil {
+            if agent.IsTerminal(act.Status) {
+                // Already terminal — update if needed
+                if act.Status != "killed" {
+                    act.Status = "killed"
+                    // ...
+                }
+                return nil
+            }
+
+            // Verify PID is still alive
+            if act.Pid > 0 {
+                proc, err := os.FindProcess(act.Pid)
+                if err == nil {
+                    if sigErr := proc.Signal(syscall.Signal(0)); sigErr == nil {
+                        _ = syscall.Kill(-act.Pid, syscall.SIGTERM)
+                    }
+                }
+            }
+        }
+    }
+
+    // Update activity.json to killed (SECOND read of same file!)
+    if storage.Exists(actPath) {
+        var act agent.Activity
+        if err := storage.ReadJSON(actPath, &act); err == nil {
+            // ...
+        }
+    }
+}
+```
+
+The function reads `activity.json` twice. Between the two reads, the status could change. But since Kill() is the only function that should be changing status at this point, and the second read just updates to "killed", this is fine — it's idempotent.
+
+The PID reuse issue: Signal(0) followed by Kill is a TOCTOU, but the window is microseconds and the risk is minimal. This is standard practice.
+
+Actually, I realize there's a more significant issue: `syscall.Kill(-act.Pid, syscall.SIGTERM)` sends SIGTERM to the process **group** (negative PID). But what if the bridge process is NOT a process group leader? If the bridge inherited the process group from its parent, `-act.Pid` would fail with ESRCH. Let me think... The bridge is started by `exec.Command`, which by default sets `Setpgid` if `SysProcAttr` is set. But I don't see `Setpgid` in the diff. Without `Setpgid`, the child process inherits the parent's process group, and `kill -pid` would kill the parent's process group.
+
+Actually, let me check the bridge start code. I need to look at where the bridge is spawned.
+
+Let me search for where the bridge process is started:Good — `Setpgid: true` is set when spawning the bridge. So `syscall.Kill(-act.Pid, syscall.SIGTERM)` will correctly kill the process group.
+
+Now let me check the key issue: the PID is recorded before the process is started, or after?I need to see where the PID is recorded. Let me check:The PID recording is not in the diff — it must be in the bridge's `Run` function. Let me check:Those are in the deleted headless_mode.go. The PID must be recorded elsewhere in the bridge code. Since the bridge's `Run` function is not fully shown, and the Activity struct has a `Pid` field, the bridge must record its own PID somewhere. This is existing code, not changed in the diff.
+
+Now let me finalize. The key bugs I've found:
+
+1. **BinaryPath shell injection** in benchmark pipeline — `r.BinaryPath` is not shell-quoted
+2. The `Output()` backward compat issue (stream.log vs raw text in `output` file) — this is a semantic change but may be intentional
+
+Let me re-examine finding 1 more carefully. The code is:
+
+```go
+cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+    fmt.Sprintf("echo %q | %s --mode rpc | %s conv",
+        rpcPrompt, r.BinaryPath, "ag"))
+```
+
+If `BinaryPath` = `/usr/local/bin/ai`, the shell command is:
+```
+echo '...' | /usr/local/bin/ai --mode rpc | ag conv
+```
+
+This works fine. But if `BinaryPath` = `/path/to/my ai`, it becomes:
+```
+echo '...' | /path/to/my ai --mode rpc | ag conv
+```
+
+Shell would try to run `/path/to/my` with `ai` as first arg. This is a real bug.
+
+Also, `"ag"` is hardcoded — but what if `ag` isn't on PATH? The old code only needed `r.BinaryPath`. The new code also needs `ag` on PATH. This could fail in environments where `ag` is not installed or not on PATH. But this might be intentional since the benchmark runner is part of the ag project.
+
+Let me write my findings:Review complete. JSON written to `/tmp/review-164-v3.json` with three findings:
+
+1. **[P1] BinaryPath not shell-quoted** — will break when path contains spaces/metacharacters
+2. **[P2] output file semantic change** — raw text deltas replaced with formatted stream.log content, silently breaking backward compatibility
+3. **[P2] MaxTurns silently dropped** — benchmark turn limits no longer enforced, only timeout remains

@@ -231,8 +231,11 @@ func Run(id string) error {
 		})
 	}
 
-		// Write output file as a copy of stream.log for backward compatibility
+			// Write output file as a copy of stream.log for backward compatibility
 	// with code that reads the "output" file directly.
+	// NOTE: The output file now contains formatted stream.log content
+	// (timestamps, tool markers, etc.), not raw text deltas.
+	// Use "ag conv --only text <output>" for plain text extraction.
 	streamLogPath := streamWriter.Path()
 	if content, err := os.ReadFile(streamLogPath); err == nil && len(content) > 0 {
 		outputPath := filepath.Join(agentDir, "output")

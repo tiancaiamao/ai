@@ -199,7 +199,7 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
 	// execution events to evaluate must_use_capabilities and success_criteria.
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
-		fmt.Sprintf("echo %q | %s --mode rpc | %s conv",
+				fmt.Sprintf("echo %q | %q --mode rpc | %q conv",
 			rpcPrompt, r.BinaryPath, "ag"))
 	cmd.Env = nonInteractiveCommandEnv()
 
