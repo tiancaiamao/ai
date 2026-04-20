@@ -42,6 +42,7 @@ func parseSystemPrompt(systemPromptFlag string) string {
 func main() {
 	mode := flag.String("mode", "", "Run mode (rpc|win|json). Default: win")
 	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json mode)")
+	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, rpc mode)")
 	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	windowName := flag.String("name", "", "window name (default +ai)")
@@ -51,8 +52,8 @@ func main() {
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
-	case "rpc":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt); err != nil {
+		case "rpc":
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
