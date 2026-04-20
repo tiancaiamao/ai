@@ -64,7 +64,7 @@ export AG_BIN=~/.ai/skills/ag/ag
 
 ```bash
 # Spawn agent (blocks until bridge.sock ready, max 10s)
-ag agent spawn <id> --input "task description" [--system prompt.md] [--cwd /path] [--timeout 10m]
+ag agent spawn <id> --input "task description" [--system @prompt.md] [--cwd /path]
 
 # Structured status from activity.json
 ag agent status <id>
@@ -97,6 +97,15 @@ ag agent output <id> [--tail 50]
 # Block until agent reaches terminal state
 ag agent wait <id>... [--timeout 600]
 ```
+
+### --system Flag
+
+`--system` is **optional**. Behavior:
+
+- **Omitted**: agent uses `ai`'s default coding agent system prompt — includes tool usage guidance, verification requirements, skills auto-discovery, project context (AGENTS.md), and workspace awareness. **This is the recommended default for most tasks.**
+- **Provided**: replaces the entire system prompt. Use `@file.md` to load from file. Only use when the task needs a specialized persona (e.g., reviewer, planner) that differs significantly from a coding agent.
+
+Common mistake: passing a hand-written `--system` that is *worse* than the default. When in doubt, omit it.
 
 ### Agent ID Rules
 
