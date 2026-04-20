@@ -608,6 +608,13 @@ func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
 		sess = session.NewSession("") // 无持久化
 	}
 
+	// Set session ID on trace handler so trace files are named correctly
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			fh.SetSessionID(sess.GetID())
+		}
+	}
+
 	// 创建 agent context
 	agentCtx := agentctx.NewAgentContext(a.systemPrompt)
 
