@@ -169,7 +169,7 @@ type AgentRunner interface {
 	Name() string
 }
 
-// AIAgentRunner runs the ai agent in headless mode
+// AIAgentRunner runs the ai agent via rpc mode with ag conv for output
 type AIAgentRunner struct {
 	BinaryPath string
 	MaxTurns   int
@@ -192,12 +192,13 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		ctx = context.Background()
 	}
 
-	cmd := exec.CommandContext(ctx, r.BinaryPath,
-		"--mode", "headless",
-		"--max-turns", fmt.Sprintf("%d", r.MaxTurns),
-		"--timeout", r.Timeout.String(),
-		prompt,
-	)
+	// Build the RPC prompt as JSON
+	rpcPrompt := fmt.Sprintf(`{"type":"prompt","message":%q}`, prompt)
+
+	// Use ai --mode rpc piped through ag conv for text output
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+		fmt.Sprintf("echo %q | %s --mode rpc | %s conv --only text",
+			rpcPrompt, r.BinaryPath, "ag"))
 	cmd.Env = nonInteractiveCommandEnv()
 
 	// Set working directory to task dir

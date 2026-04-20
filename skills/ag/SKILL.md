@@ -1,19 +1,21 @@
 ---
 name: ag
-description: Provide subagent and agent orchestration runtime. Spawns AI agents in tmux with bridge-per-agent architecture, supports mid-turn steering, structured status, task DAG scheduling, and inter-agent channels.
+description: Provide subagent and agent orchestration runtime. Spawns AI agents as detached processes with bridge-per-agent architecture, supports mid-turn steering, structured status, real-time observability via stream.log, task DAG scheduling, and inter-agent channels.
 ---
 
 # ag — Agent Orchestration CLI
 
 ## Overview
 
-`ag` orchestrates AI agents using a **bridge-per-agent** architecture. Each agent runs in its own tmux session with a Go bridge process that manages `ai --mode rpc` and exposes a Unix socket for real-time control.
+`ag` orchestrates AI agents using a **bridge-per-agent** architecture. Each agent runs as a detached background process with a Go bridge that manages `ai --mode rpc` and exposes a Unix socket for real-time control.
 
 **Key capabilities:**
 - Spawn agents with immediate control (steer, abort, prompt)
+- Real-time observability via stream.log (tail -f for humans, cursor for LLMs)
 - Structured status (turns, tokens, last tool, last text)
 - Task DAG with dependencies and auto-scheduling
 - Inter-agent async message channels
+- Event conversion via `ag conv` (replaces `ai --mode headless`)
 
 ## Conversation-First Positioning
 
@@ -32,10 +34,11 @@ description: Provide subagent and agent orchestration runtime. Spawns AI agents 
 ```
 ag agent spawn worker-1 --input "fix bugs"
   │
-  └── tmux new-session -d -s ag-worker-1 -- "ag bridge worker-1"
+  └── ag bridge worker-1 (detached process, Setpgid)
       │
       └── [bridge process]
           ├── ai --mode rpc (stdin/stdout pipes)
+          ├── StreamWriter → stream.log (O_APPEND, real-time readable)
           ├── EventReader → activity.json (atomic rename, rate-limited)
           └── Unix socket → bridge.sock (one-request-per-connection)
 
@@ -43,18 +46,16 @@ ag agent steer worker-1 "use lib X instead"
   └── dial bridge.sock → {"type":"steer","message":"..."} → {"ok":true}
 ```
 
-**No central daemon.** Each agent is independent. Bridge crash = one agent down, not all.
+**No central daemon. No tmux dependency.** Each agent is independent. Bridge crash = one agent down, not all.
 
 ## Setup
 
 ```bash
 # Build and install
 cd skills/ag && go build -o ~/.ai/skills/ag/ag .
-export AG_BIN=~/.ai/skills/ag/ag
 
 # Prerequisites
-# - tmux in PATH
-# - ai binary in PATH
+# - ai binary in PATH (the agent runtime)
 # - Go 1.24+ (for building)
 ```
 
@@ -72,6 +73,12 @@ ag agent status <id>
 
 # List all agents
 ag agent ls
+
+# Tail agent output stream
+ag agent tail <id>                # Last 50 lines
+ag agent tail <id> -f             # Follow (like tail -f, exits when agent done)
+ag agent tail <id> --lines 200    # More context
+ag agent tail <id> --since 4096   # LLM: incremental read with byte cursor
 
 # Mid-turn steering (agent is running, inject new direction)
 ag agent steer <id> "don't use external libraries"
@@ -91,17 +98,27 @@ ag agent shutdown <id>
 # Delete agent directory (only in terminal state: done/failed/killed)
 ag agent rm <id>
 
-# Get accumulated text output (only in terminal state)
+# Get accumulated text output (works for running and terminal agents)
 ag agent output <id> [--tail 50]
 
 # Block until agent reaches terminal state
 ag agent wait <id>... [--timeout 600]
 ```
 
+### Event Conversion
+
+```bash
+# Convert ai --mode rpc JSON events to readable text
+ai --mode rpc | ag conv              # All output
+ai --mode rpc | ag conv --only text  # Assistant text only
+ai --mode rpc | ag conv --only tools # Tool calls only
+```
+
+This replaces the removed `ai --mode headless`.
+
 ### Agent ID Rules
 
 - Pattern: `^[a-zA-Z0-9_-]{1,64}$`
-- tmux session: `ag-<id>`
 - Storage: `.ag/agents/<id>/`
 
 ### Task Management
@@ -158,11 +175,12 @@ All state under `.ag/` in the working directory (CWD-scoped):
 ├── agents/<id>/
 │   ├── meta.json          # Spawn config
 │   ├── activity.json      # Real-time activity (atomic rename)
+│   ├── stream.log         # Real-time append-only output (text + tools + meta)
 │   ├── bridge.sock        # Unix socket (running only)
 │   ├── bridge-stderr      # Bridge process stderr
 │   ├── stderr             # ai process stderr
 │   ├── stderr.tail        # Last 4KB of stderr (on crash)
-│   └── output             # Accumulated text (on exit)
+│   └── output             # Final output (copy of stream.log on exit)
 ├── channels/<name>/
 │   └── messages/
 └── tasks/<id>/
@@ -177,13 +195,13 @@ spawning → running → done
                   → killed
 ```
 
-- `spawning`: tmux session created, bridge starting
+- `spawning`: process started, bridge initializing
 - `running`: ai process active, EventReader tracking events
 - `done`: ai exited cleanly (exit code 0)
 - `failed`: ai exited with error or crashed
 - `killed`: terminated by `ag agent kill`
 
-Stale detection: if tmux session is gone but activity shows "running", `ag agent status` auto-marks as "failed" with reason.
+Stale detection: if process PID is no longer alive but activity shows "running", `ag agent status` auto-marks as "failed" with reason.
 
 ## Concurrency Limit
 

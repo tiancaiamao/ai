@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"os/exec"
+		"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -90,15 +89,21 @@ done:
 	return &resp, nil
 }
 
-// Kill kills the tmux session and updates activity.json to killed.
+// Kill terminates the bridge process and updates activity.json to killed.
 func Kill(id string) error {
-	sessionName := "ag-" + id
-	cmd := exec.Command("tmux", "kill-session", "-t", sessionName)
-	_ = cmd.Run() // ignore error if session doesn't exist
-
-	// Update activity.json to killed
 	agentDir := agent.AgentDir(id)
 	actPath := filepath.Join(agentDir, "activity.json")
+
+	// Try to kill via PID from activity.json
+	if storage.Exists(actPath) {
+		var act agent.Activity
+		if err := storage.ReadJSON(actPath, &act); err == nil && act.Pid > 0 {
+			// Kill the process group (negative PID)
+			_ = syscall.Kill(-act.Pid, syscall.SIGTERM)
+		}
+	}
+
+	// Update activity.json to killed
 	if storage.Exists(actPath) {
 		var act agent.Activity
 		if err := storage.ReadJSON(actPath, &act); err == nil {
@@ -155,47 +160,64 @@ func Rm(id string) error {
 }
 
 // Output returns the agent's accumulated output text.
-// For terminal agents, returns full output. For running agents, returns error.
+// Works for both running and terminal agents (reads from stream.log).
 // tailN > 0 limits output to the last tailN bytes.
 func Output(id string, tailN int) (string, error) {
 	agentDir := agent.AgentDir(id)
 
-	// Check if still running
+	// For terminal agents, prefer the "output" file (backward compat)
 	act, err := agent.ReadActivity(id)
 	if err != nil {
 		return "", fmt.Errorf("no activity for agent %s", id)
 	}
-	if !agent.IsTerminal(act.Status) {
-		return "", fmt.Errorf("agent %s is still %s (wait for completion first)", id, act.Status)
+
+	if agent.IsTerminal(act.Status) {
+		outputPath := filepath.Join(agentDir, "output")
+		data, err := os.ReadFile(outputPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Fall through to stream.log
+			} else {
+				return "", fmt.Errorf("read output: %w", err)
+			}
+		} else {
+			return tailBytes(data, tailN), nil
+		}
 	}
 
-	outputPath := filepath.Join(agentDir, "output")
-	data, err := os.ReadFile(outputPath)
+	// Read from stream.log (works for running and terminal agents)
+	streamPath := filepath.Join(agentDir, "stream.log")
+	data, err := os.ReadFile(streamPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil // no output is valid
+			return "", nil // no output yet is valid
 		}
-		return "", fmt.Errorf("read output: %w", err)
+		return "", fmt.Errorf("read stream.log: %w", err)
 	}
 
-	text := string(data)
-	if tailN > 0 && len(text) > 0 {
-		// Trim trailing newline to avoid Split producing an empty last element
-		text = strings.TrimRight(text, "\n")
-		if text == "" {
-			return "", nil
-		}
-		lines := strings.Split(text, "\n")
-		if len(lines) > tailN {
-			lines = lines[len(lines)-tailN:]
-		}
-		text = strings.Join(lines, "\n")
-	}
-	return text, nil
+		return tailBytes(data, tailN), nil
 }
 
 // Wait blocks until all specified agents reach terminal state.
 // Respects context cancellation for clean SIGINT handling.
+
+// tailBytes returns the last tailN lines of data as a string.
+// If tailN <= 0, returns the full data.
+func tailBytes(data []byte, tailN int) string {
+	text := string(data)
+	if tailN <= 0 || len(text) == 0 {
+		return text
+	}
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > tailN {
+		lines = lines[len(lines)-tailN:]
+	}
+	return strings.Join(lines, "\n")
+}
 func Wait(ctx context.Context, ids []string, timeoutSec int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	if timeoutSec == 0 {
@@ -232,7 +254,7 @@ func Wait(ctx context.Context, ids []string, timeoutSec int) error {
 	}
 }
 
-// DetectStale checks if a running agent's tmux session and PID are still alive.
+// DetectStale checks if a running agent's process is still alive.
 // Updates activity.json to "failed" if stale.
 func DetectStale(id string, act *agent.Activity) {
 	if act.Status != "running" {
@@ -242,16 +264,8 @@ func DetectStale(id string, act *agent.Activity) {
 	stale := false
 	reason := ""
 
-	// Check 1: tmux session exists
-	sessionName := "ag-" + id
-	tmuxAlive := exec.Command("tmux", "has-session", "-t", sessionName).Run() == nil
-	if !tmuxAlive {
-		stale = true
-		reason = "tmux session not found"
-	}
-
-	// Check 2: PID is still alive (if tmux is alive but process died)
-	if !stale && act.Pid > 0 {
+	// Check PID is still alive
+	if act.Pid > 0 {
 		proc, err := os.FindProcess(act.Pid)
 		if err != nil {
 			stale = true
@@ -262,6 +276,14 @@ func DetectStale(id string, act *agent.Activity) {
 				stale = true
 				reason = "process no longer alive"
 			}
+		}
+	} else {
+		// No PID recorded — check if bridge.sock still exists
+		agentDir := agent.AgentDir(id)
+		sockPath := filepath.Join(agentDir, "bridge.sock")
+		if !storage.Exists(sockPath) {
+			stale = true
+			reason = "no PID and no bridge socket"
 		}
 	}
 

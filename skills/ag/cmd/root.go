@@ -780,11 +780,11 @@ func init() {
 	recvCmd.Flags().Int("timeout", 60, "Timeout in seconds for --wait")
 	recvCmd.Flags().Bool("all", false, "Receive all pending messages")
 
-	// Agent subcommands
+		// Agent subcommands
 	agentCmd.AddCommand(
 		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
 		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
-		agentOutputCmd, agentWaitCmd, agentLsCmd,
+		agentOutputCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
 	)
 
 	// Channel subcommands
@@ -794,6 +794,6 @@ func init() {
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
 	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
 
-	// Root subcommands
-	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd)
+		// Root subcommands
+	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
 }

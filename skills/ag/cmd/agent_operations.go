@@ -5,13 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/storage"
 )
 
-// Spawn creates an agent directory, writes config, and launches the bridge in tmux.
+// Spawn creates an agent directory, writes config, and launches the bridge
+// as a detached background process (no tmux dependency).
 func Spawn(id, system, input, cwd string) error {
 	agentDir := agent.AgentDir(id)
 	if err := os.MkdirAll(agentDir, 0755); err != nil {
@@ -19,11 +21,14 @@ func Spawn(id, system, input, cwd string) error {
 	}
 
 	// Validate prerequisites
-	if _, err := exec.LookPath("tmux"); err != nil {
-		return fmt.Errorf("tmux is required but not found in PATH")
-	}
 	if _, err := exec.LookPath("ai"); err != nil {
 		return fmt.Errorf("ai binary is required but not found in PATH")
+	}
+
+	// Find ag binary path for spawning bridge
+	agBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve ag binary: %w", err)
 	}
 
 	// Write spawn config (meta.json)
@@ -47,13 +52,19 @@ func Spawn(id, system, input, cwd string) error {
 		return fmt.Errorf("write activity.json: %w", err)
 	}
 
-	// Launch bridge in tmux
-	sessionName := "ag-" + id
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName,
-		"ag", "bridge", id)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tmux new-session failed: %w\n%s", err, out)
+	// Launch bridge as detached background process
+	cmd := exec.Command(agBin, "bridge", id)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start bridge process: %w", err)
 	}
+
+	// Detach immediately — bridge becomes orphan, reparented to init/launchd
+	// We do NOT wait for it.
 
 	// Poll for bridge.sock ready (max 10s)
 	sockPath := filepath.Join(agentDir, "bridge.sock")
@@ -65,15 +76,17 @@ func Spawn(id, system, input, cwd string) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Socket not ready — check if tmux session still exists
-	if err := exec.Command("tmux", "has-session", "-t", sessionName).Run(); err != nil {
-		// Session died — check stderr
-		stderrData, _ := os.ReadFile(filepath.Join(agentDir, "bridge-stderr"))
-		if len(stderrData) > 0 {
-			return fmt.Errorf("bridge exited prematurely:\n%s", string(stderrData))
+	// Socket not ready — check if process is still alive
+	if cmd.Process != nil {
+		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			// Process died — check stderr
+			stderrData, _ := os.ReadFile(filepath.Join(agentDir, "bridge-stderr"))
+			if len(stderrData) > 0 {
+				return fmt.Errorf("bridge exited prematurely:\n%s", string(stderrData))
+			}
+			return fmt.Errorf("bridge exited prematurely (no stderr)")
 		}
-		return fmt.Errorf("bridge exited prematurely (no stderr)")
 	}
 
-	return fmt.Errorf("bridge.sock not created within 10s (session is running)")
+	return fmt.Errorf("bridge.sock not created within 10s (process is running)")
 }
