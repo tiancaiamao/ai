@@ -157,6 +157,93 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	}
 }
 
+func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) {
+	// Simulate a brand new session: LLMContext is empty (no compact has occurred yet).
+	// runtime_state telemetry must still be injected so the agent knows its working directory.
+	var observedMessages []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("failed to decode request JSON: %v", err)
+		}
+		observedMessages = req.Messages
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":2,\"total_tokens\":14}}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("static system prompt")
+	// LLMContext is "" — new session, no compact yet
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey:         "test-key",
+		ThinkingLevel:  "high",
+		ContextWindow:  128000,
+		GetWorkingDir:  func() string { return "/tmp/new-session-workdir" },
+		GetStartupPath: func() string { return "/tmp/startup-root" },
+	}
+
+	stream := newTestAgentEventStream()
+	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+	if got := strings.TrimSpace(msg.ExtractText()); got != "ok" {
+		t.Fatalf("expected assistant text 'ok', got %q", got)
+	}
+
+	// runtime_state MUST be injected even with empty LLMContext
+	foundRuntimeState := false
+	for _, m := range observedMessages {
+		if m.Role != "user" {
+			continue
+		}
+		var content string
+		if err := json.Unmarshal(m.Content, &content); err != nil {
+			continue
+		}
+		if strings.Contains(content, "<agent:runtime_state") {
+			foundRuntimeState = true
+			if !strings.Contains(content, `current_workdir: "/tmp/new-session-workdir"`) {
+				t.Fatalf("expected runtime_state to include current_workdir, got: %q", content)
+			}
+			if !strings.Contains(content, `startup_path: "/tmp/startup-root"`) {
+				t.Fatalf("expected runtime_state to include startup_path, got: %q", content)
+			}
+			// LLMContext is empty, so <llm_context> should NOT be present
+			if strings.Contains(content, "<llm_context>") {
+				t.Fatal("expected no <llm_context> in new session (no compact recovery)")
+			}
+			break
+		}
+	}
+	if !foundRuntimeState {
+		t.Fatal("expected runtime_state to be injected in new session (LLMContext empty)")
+	}
+}
+
 func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
 	// sessionDir := t.TempDir()
 	// Use string LLMContext instead of file manager

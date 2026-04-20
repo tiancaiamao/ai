@@ -37,14 +37,8 @@ func FormatForPrompt(skills []Skill) string {
 
 	lines := []string{
 		"## Skills",
-		"The following skills provide specialized instructions for additional capabilities.",
-		"Skills may provide:",
-		"  - New tools or utilities",
-		"  - Domain-specific knowledge",
-		"  - Workflow patterns",
-		"",
-		"Use the read tool to load a skill's file when the task matches its description.",
-		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"Skills are specialized instructions. Before starting any non-trivial task, scan the list below. If any skill's description matches your task, read the FULL skill file BEFORE acting — not after, not when stuck.",
+		"Reading a skill costs ~1-2 minutes. Ignoring it and going in the wrong direction costs 30+ minutes. This applies ESPECIALLY under time pressure.",
 		"",
 	}
 
@@ -52,6 +46,10 @@ func FormatForPrompt(skills []Skill) string {
 		description := trimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
 		lines = append(lines, fmt.Sprintf("- **%s**: %s (%s)", skill.Name, description, skill.FilePath))
 	}
+
+	lines = append(lines, "",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+	)
 
 	if omitted > 0 {
 		lines = append(lines, fmt.Sprintf("*Note: %d additional skills omitted for brevity.*", omitted))

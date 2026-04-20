@@ -836,91 +836,80 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Build runtime appendix (llm context + context meta) as a user message
+		// Build runtime appendix (llm context + context meta) as a user message
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
-	// NOTE: LLMContext (string) is NOT injected by default. It's only injected:
-	// 1. After compact (PostCompactRecovery = true) for recovery
-	// 2. The LLM should use task_tracking tool to record state, which stays in tool output
-	if agentCtx.LLMContext != "" {
-		// Determine if we should inject LLM context content
-		// Only inject after compact for recovery
-		var content string
-		postCompactRecovery := agentCtx.PostCompactRecovery
-		if postCompactRecovery {
-			// Use the LLMContext string directly
-			content = agentCtx.LLMContext
-			// Reset the flag after injection
-			agentCtx.PostCompactRecovery = false
-		}
+	// LLMContext content is only injected after compact (PostCompactRecovery = true) for recovery.
+	// runtime_state telemetry is ALWAYS injected from turn 1 so path info is available immediately.
 
-		// Refresh meta from approximate current context state.
-		const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
-		tokensMax := defaultContextWindow
-		if config.ContextWindow > 0 {
-			tokensMax = config.ContextWindow
-		}
-		tokensUsedApprox := EstimateConversationTokens(agentCtx.RecentMessages)
-
-		// Update AgentState with token usage info
-		agentCtx.AgentState.TokensUsed = tokensUsedApprox
-		agentCtx.AgentState.TokensLimit = tokensMax
-		agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
-
-		// Update CWD in AgentState so checkpoints preserve it for session restore
-		if config.GetWorkingDir != nil {
-			agentCtx.AgentState.CurrentWorkingDir = config.GetWorkingDir()
-		}
-		if config.GetStartupPath != nil {
-			agentCtx.AgentState.WorkspaceRoot = config.GetStartupPath()
-		}
-
-		currentWorkdir := agentCtx.AgentState.CurrentWorkingDir
-		startupPath := ""
-		if config.GetStartupPath != nil {
-			startupPath = config.GetStartupPath()
-		}
-
-		// Build meta for runtime snapshot from AgentState
-		metaTokensUsed := agentCtx.AgentState.TokensUsed
-		if metaTokensUsed == 0 {
-			metaTokensUsed = tokensUsedApprox
-		}
-		metaTokensMax := agentCtx.AgentState.TokensLimit
-		if metaTokensMax == 0 {
-			metaTokensMax = tokensMax
-		}
-		metaTokensPercent := float64(0)
-		if metaTokensMax > 0 {
-			metaTokensPercent = float64(metaTokensUsed) / float64(metaTokensMax) * 100
-		}
-
-		meta := agentctx.ContextMeta{
-			TokensUsed:        metaTokensUsed,
-			TokensMax:         metaTokensMax,
-			TokensPercent:     metaTokensPercent,
-			MessagesInHistory: len(agentCtx.RecentMessages),
-			LLMContextSize:    len(agentCtx.LLMContext),
-		}
-
-		runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
-		runtimeAppendix := buildRuntimeUserAppendix(content, runtimeMetaSnapshot)
-
-		// Always insert runtime_state when available so path telemetry is present from turn one.
-		if runtimeAppendix != "" {
-			runtimeMsg := llm.LLMMessage{
-				Role:    "user",
-				Content: runtimeAppendix,
-			}
-			// Insert runtime_state before the last user message for better attention
-			llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
-		}
-
+	// Block A: LLMContext content injection — only after compact recovery.
+	var llmContextContent string
+	if agentCtx.LLMContext != "" && agentCtx.PostCompactRecovery {
+		llmContextContent = agentCtx.LLMContext
+		agentCtx.PostCompactRecovery = false
 	}
 
-	// Note: staleCount is collected for telemetry but no longer set on a file manager
-	// The LLMContext is now a string, not a file manager with SetStaleToolCount method
+	// Block B: runtime_state telemetry — always, from turn 1.
+	const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+	tokensMax := defaultContextWindow
+	if config.ContextWindow > 0 {
+		tokensMax = config.ContextWindow
+	}
+	tokensUsedApprox := EstimateConversationTokens(agentCtx.RecentMessages)
+
+	// Update AgentState with token usage info
+	agentCtx.AgentState.TokensUsed = tokensUsedApprox
+	agentCtx.AgentState.TokensLimit = tokensMax
+	agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
+
+	// Update CWD in AgentState so checkpoints preserve it for session restore
+	if config.GetWorkingDir != nil {
+		agentCtx.AgentState.CurrentWorkingDir = config.GetWorkingDir()
+	}
+	if config.GetStartupPath != nil {
+		agentCtx.AgentState.WorkspaceRoot = config.GetStartupPath()
+	}
+
+	currentWorkdir := agentCtx.AgentState.CurrentWorkingDir
+	startupPath := ""
+	if config.GetStartupPath != nil {
+		startupPath = config.GetStartupPath()
+	}
+
+	// Build meta for runtime snapshot from AgentState
+	metaTokensUsed := agentCtx.AgentState.TokensUsed
+	if metaTokensUsed == 0 {
+		metaTokensUsed = tokensUsedApprox
+	}
+	metaTokensMax := agentCtx.AgentState.TokensLimit
+	if metaTokensMax == 0 {
+		metaTokensMax = tokensMax
+	}
+	metaTokensPercent := float64(0)
+	if metaTokensMax > 0 {
+		metaTokensPercent = float64(metaTokensUsed) / float64(metaTokensMax) * 100
+	}
+
+	meta := agentctx.ContextMeta{
+		TokensUsed:        metaTokensUsed,
+		TokensMax:         metaTokensMax,
+		TokensPercent:     metaTokensPercent,
+		MessagesInHistory: len(agentCtx.RecentMessages),
+		LLMContextSize:    len(agentCtx.LLMContext),
+	}
+
+	runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
+	runtimeAppendix := buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
+
+	// Insert runtime_state before the last user message for better attention.
+	if runtimeAppendix != "" {
+		runtimeMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: runtimeAppendix,
+		}
+		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
+	}
 
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
