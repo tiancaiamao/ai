@@ -44,6 +44,35 @@ func TestIsContextLengthExceeded(t *testing.T) {
 	}
 }
 
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"nil error", nil, false},
+		{"500 server error", &APIError{StatusCode: 500, Message: "internal"}, true},
+		{"502 bad gateway", &APIError{StatusCode: 502, Message: "bad gateway"}, true},
+		{"503 service unavailable", &APIError{StatusCode: 503, Message: "unavailable"}, true},
+		{"504 gateway timeout", &APIError{StatusCode: 504, Message: "timeout"}, true},
+		{"429 rate limit via APIError", &APIError{StatusCode: 429, Message: "rate limited"}, true},
+		{"429 via RateLimitError", &RateLimitError{StatusCode: 429, Message: "rate limited"}, true},
+		{"400 bad request", &APIError{StatusCode: 400, Message: "bad request"}, false},
+		{"401 unauthorized", &APIError{StatusCode: 401, Message: "unauthorized"}, false},
+		{"403 forbidden", &APIError{StatusCode: 403, Message: "forbidden"}, false},
+		{"404 not found", &APIError{StatusCode: 404, Message: "not found"}, false},
+		{"generic error", errors.New("something else"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsRetryableError(tt.err)
+			if got != tt.retryable {
+				t.Errorf("IsRetryableError(%v) = %v, want %v", tt.err, got, tt.retryable)
+			}
+		})
+	}
+}
+
 func TestClassifyAPIErrorRateLimit(t *testing.T) {
 	err := ClassifyAPIErrorWithRetryAfter(429, `{"error":{"message":"Rate limit reached"}}`, 3*time.Second)
 
