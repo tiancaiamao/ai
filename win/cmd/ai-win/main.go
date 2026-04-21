@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -62,23 +61,24 @@ func run(windowName *string, sessionPath *string, debugAddr *string) error {
 	defer client.Close()
 	client.SetLogger(log)
 
-	// Build args for the ai subprocess.
+		// Build args for the ai subprocess.
 	args := []string{"--mode", "rpc"}
 	if *sessionPath != "" {
 		args = append(args, "--session", *sessionPath)
 	}
 	if *debugAddr != "" {
 		args = append(args, "--http", *debugAddr)
+	} else {
+		// Prevent AiInterpreter.Start() from auto-appending "-http :6060".
+		// Old in-process mode only enabled debug server when explicitly requested.
+		args = append(args, "--http", "")
 	}
 
-	// Create interpreter that spawns "ai --mode rpc" as subprocess.
+		// Create interpreter that spawns "ai --mode rpc" as subprocess.
+	// Note: do NOT call interpreter.Start() here — repl.Handler.Start() will do that.
 	interpreter := winai.NewAiInterpreter("ai", args)
 	interpreter.SetAdClient(client)
 	defer interpreter.Stop()
-
-	if err := interpreter.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to start ai subprocess: %w", err)
-	}
 
 	name := *windowName
 	if name == "" {
