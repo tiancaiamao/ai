@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -82,24 +83,73 @@ func Spawn(id, system, input, cwd, backendName string) error {
 
 	// Poll for bridge.sock ready (max 10s)
 	sockPath := filepath.Join(agentDir, "bridge.sock")
+	bridgeStderrPath := filepath.Join(agentDir, "bridge-stderr")
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if storage.Exists(sockPath) {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+
+		// Fast-exit backends may complete before we observe bridge.sock.
+		if act, err := agent.ReadActivity(id); err == nil && agent.IsTerminal(act.Status) {
+			if act.Status == "failed" {
+				msg := strings.TrimSpace(act.Error)
+				if msg == "" {
+					if data, readErr := os.ReadFile(bridgeStderrPath); readErr == nil {
+						msg = strings.TrimSpace(string(data))
+					}
+				}
+				if msg != "" {
+					return fmt.Errorf("bridge exited prematurely: %s", msg)
+				}
+				return fmt.Errorf("bridge exited prematurely")
+			}
+			return nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// Socket not ready — check if process is still alive
 	if cmd.Process != nil {
 		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			// Process died naturally after quick completion.
+			if act, readErr := agent.ReadActivity(id); readErr == nil {
+				if act.Status == "done" || act.Status == "killed" {
+					return nil
+				}
+				if act.Status == "failed" {
+					msg := strings.TrimSpace(act.Error)
+					if msg == "" {
+						if data, err := os.ReadFile(bridgeStderrPath); err == nil {
+							msg = strings.TrimSpace(string(data))
+						}
+					}
+					if msg != "" {
+						return fmt.Errorf("bridge exited prematurely: %s", msg)
+					}
+					return fmt.Errorf("bridge exited prematurely")
+				}
+			}
+
 			// Process died — check stderr
-			stderrData, _ := os.ReadFile(filepath.Join(agentDir, "bridge-stderr"))
+			stderrData, _ := os.ReadFile(bridgeStderrPath)
 			if len(stderrData) > 0 {
 				return fmt.Errorf("bridge exited prematurely:\n%s", string(stderrData))
 			}
 			return fmt.Errorf("bridge exited prematurely (no stderr)")
 		}
+	}
+
+	if act, err := agent.ReadActivity(id); err == nil && agent.IsTerminal(act.Status) {
+		if act.Status == "failed" {
+			msg := strings.TrimSpace(act.Error)
+			if msg != "" {
+				return fmt.Errorf("bridge exited prematurely: %s", msg)
+			}
+			return fmt.Errorf("bridge exited prematurely")
+		}
+		return nil
 	}
 
 	return fmt.Errorf("bridge.sock not created within 10s (process is running)")

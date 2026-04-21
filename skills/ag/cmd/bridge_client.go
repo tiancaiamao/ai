@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-		"os"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -145,9 +145,13 @@ func Kill(id string) error {
 // Shutdown sends a shutdown command via the bridge socket, then waits.
 func Shutdown(id string) error {
 	// Try graceful shutdown via socket
-	_, err := BridgeCommand(id, "shutdown", "")
+	resp, err := BridgeCommand(id, "shutdown", "")
 	if err != nil {
 		// Socket not available, fall back to kill
+		return Kill(id)
+	}
+	if !resp.OK {
+		// Backend does not support graceful shutdown; fall back immediately.
 		return Kill(id)
 	}
 
@@ -219,7 +223,7 @@ func Output(id string, tailN int) (string, error) {
 		return "", fmt.Errorf("read stream.log: %w", err)
 	}
 
-		return tailBytes(data, tailN), nil
+	return tailBytes(data, tailN), nil
 }
 
 // Wait blocks until all specified agents reach terminal state.

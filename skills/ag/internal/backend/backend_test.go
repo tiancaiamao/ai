@@ -92,6 +92,19 @@ func TestLoadOrDefaultMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadOrDefaultInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backends.yaml")
+	if err := os.WriteFile(path, []byte("backends: ["), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadOrDefault(path)
+	if err == nil {
+		t.Fatal("expected parse error for invalid backends.yaml")
+	}
+}
+
 func TestDefaultBackends(t *testing.T) {
 	cfg := DefaultBackends()
 	if len(cfg.Backends) != 1 {

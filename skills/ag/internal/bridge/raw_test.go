@@ -3,6 +3,7 @@ package bridge
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,41 @@ func TestRunRawReader_Empty(t *testing.T) {
 	}
 }
 
+func TestRunRawReader_RealTimeFlush(t *testing.T) {
+	dir := t.TempDir()
+	aw := NewActivityWriter(dir)
+	sw, err := NewStreamWriter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sw.Close()
+
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- runRawReader(pr, aw, sw)
+	}()
+
+	if _, err := pw.Write([]byte("live line\n")); err != nil {
+		t.Fatalf("write pipe: %v", err)
+	}
+
+	time.Sleep(700 * time.Millisecond) // wait for periodic flusher
+
+	data, err := os.ReadFile(filepath.Join(dir, "stream.log"))
+	if err != nil {
+		t.Fatalf("read stream.log: %v", err)
+	}
+	if !strings.Contains(string(data), "live line") {
+		t.Fatalf("expected real-time flushed content, got %q", string(data))
+	}
+
+	_ = pw.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("runRawReader: %v", err)
+	}
+}
+
 func TestTruncateStr(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -88,8 +124,8 @@ func TestTruncateStr(t *testing.T) {
 
 func TestHandleCommand_RawBackendUnsupported(t *testing.T) {
 	be := &backend.BackendConfig{
-		Name:    "codex",
-		Command: "codex",
+		Name:     "codex",
+		Command:  "codex",
 		Protocol: backend.ProtocolRaw,
 		Supports: backend.Supports{Steer: false, Abort: false, Prompt: false},
 	}
@@ -117,8 +153,8 @@ func TestHandleCommand_RawBackendUnsupported(t *testing.T) {
 
 func TestHandleCommand_JsonRpcBackend(t *testing.T) {
 	be := &backend.BackendConfig{
-		Name:    "ai",
-		Command: "ai",
+		Name:     "ai",
+		Command:  "ai",
 		Protocol: backend.ProtocolJSONRPC,
 		Supports: backend.Supports{Steer: true, Abort: true, Prompt: true},
 	}
@@ -130,9 +166,59 @@ func TestHandleCommand_JsonRpcBackend(t *testing.T) {
 		t.Errorf("steer should succeed: %s", resp.Error)
 	}
 
-		// Check the JSON written to stdin
+	// Check the JSON written to stdin
 	line := buf.String()
 	if !strings.Contains(line, `"type":"steer"`) {
 		t.Errorf("expected steer JSON in stdin, got: %s", line)
 	}
+}
+
+func TestFinalizeActivityOnProcessExit(t *testing.T) {
+	t.Run("running to done on clean exit", func(t *testing.T) {
+		dir := t.TempDir()
+		aw := NewActivityWriter(dir)
+		aw.UpdateStatus(StatusRunning)
+
+		finalizeActivityOnProcessExit(aw, 0, nil)
+		aw.Close()
+
+		data, err := os.ReadFile(filepath.Join(dir, "activity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var act AgentActivity
+		if err := json.Unmarshal(data, &act); err != nil {
+			t.Fatal(err)
+		}
+		if act.Status != StatusDone {
+			t.Fatalf("status=%s, want done", act.Status)
+		}
+		if act.FinishedAt == 0 {
+			t.Fatal("expected finishedAt to be set")
+		}
+	})
+
+	t.Run("running to failed on non-zero exit", func(t *testing.T) {
+		dir := t.TempDir()
+		aw := NewActivityWriter(dir)
+		aw.UpdateStatus(StatusRunning)
+
+		finalizeActivityOnProcessExit(aw, 1, io.EOF)
+		aw.Close()
+
+		data, err := os.ReadFile(filepath.Join(dir, "activity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var act AgentActivity
+		if err := json.Unmarshal(data, &act); err != nil {
+			t.Fatal(err)
+		}
+		if act.Status != StatusFailed {
+			t.Fatalf("status=%s, want failed", act.Status)
+		}
+		if act.Error == "" {
+			t.Fatal("expected error to be set")
+		}
+	})
 }

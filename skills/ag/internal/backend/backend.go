@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ type Supports struct {
 
 // BackendConfig defines a single agent backend.
 type BackendConfig struct {
-	Name     string   `yaml:"-"`        // populated from map key
+	Name     string   `yaml:"-"` // populated from map key
 	Command  string   `yaml:"command"`
 	Args     []string `yaml:"args"`
 	Protocol Protocol `yaml:"protocol"`
@@ -101,11 +102,19 @@ func Load(path string) (*BackendsConfig, error) {
 	return &cfg, nil
 }
 
-// LoadOrDefault attempts to load from path; falls back to default on any error.
+// LoadOrDefault attempts to load from path; falls back to default only when
+// config file is missing or no path is provided.
 func LoadOrDefault(path string) (*BackendsConfig, error) {
+	if path == "" {
+		return DefaultBackends(), nil
+	}
+
 	cfg, err := Load(path)
 	if err != nil {
-		return DefaultBackends(), nil
+		if errors.Is(err, os.ErrNotExist) {
+			return DefaultBackends(), nil
+		}
+		return nil, err
 	}
 	return cfg, nil
 }

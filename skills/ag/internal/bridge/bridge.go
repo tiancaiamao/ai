@@ -231,28 +231,7 @@ func Run(id string) error {
 	stderrFile.Close()
 	writeStderrTail(stderrPath, filepath.Join(agentDir, stderrTail))
 
-	// If agent exit code != 0 and status still "running", set to "failed".
-	exitCode := exitCodeFromErr(waitErr)
-	if exitCode != 0 {
-		activity.UpdateActivity(func(a *AgentActivity) {
-			if a.Status == StatusRunning {
-				a.Status = StatusFailed
-				a.FinishedAt = time.Now().Unix()
-				if waitErr != nil && a.Error == "" {
-					a.Error = waitErr.Error()
-				}
-			}
-			if a.FinishedAt == 0 {
-				a.FinishedAt = time.Now().Unix()
-			}
-		})
-	} else {
-		activity.UpdateActivity(func(a *AgentActivity) {
-			if a.FinishedAt == 0 {
-				a.FinishedAt = time.Now().Unix()
-			}
-		})
-	}
+	finalizeActivityOnProcessExit(activity, exitCodeFromErr(waitErr), waitErr)
 
 	// Write output file as a copy of stream.log for backward compatibility
 	streamLogPath := streamWriter.Path()
@@ -269,6 +248,12 @@ func Run(id string) error {
 // runRawReader reads lines from stdout and writes them to the stream log.
 // For raw protocol backends, we simply capture all output as text.
 func runRawReader(stdout io.Reader, activity *ActivityWriter, sw *StreamWriter) error {
+	var stopFlusher func()
+	if sw != nil {
+		stopFlusher = sw.RunFlusher()
+		defer stopFlusher()
+	}
+
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	turns := 0
@@ -278,7 +263,9 @@ func runRawReader(stdout io.Reader, activity *ActivityWriter, sw *StreamWriter) 
 		turns++
 
 		// Write to stream.log
-		sw.AppendText(line)
+		if sw != nil {
+			sw.AppendText(line)
+		}
 
 		// Update activity with incremental counts
 		activity.UpdateActivity(func(a *AgentActivity) {
@@ -292,6 +279,29 @@ func runRawReader(stdout io.Reader, activity *ActivityWriter, sw *StreamWriter) 
 		return fmt.Errorf("read stdout: %w", err)
 	}
 	return nil
+}
+
+// finalizeActivityOnProcessExit updates activity.json based on the final process
+// exit result without overriding an already terminal status.
+func finalizeActivityOnProcessExit(activity *ActivityWriter, exitCode int, waitErr error) {
+	now := time.Now().Unix()
+	activity.UpdateActivity(func(a *AgentActivity) {
+		if exitCode != 0 {
+			if a.Status == StatusRunning {
+				a.Status = StatusFailed
+				if waitErr != nil && a.Error == "" {
+					a.Error = waitErr.Error()
+				}
+			}
+		} else if a.Status == StatusRunning {
+			// Raw backends may never emit an explicit "agent_end" event.
+			a.Status = StatusDone
+		}
+
+		if a.FinishedAt == 0 {
+			a.FinishedAt = now
+		}
+	})
 }
 
 // truncateStr returns s truncated to maxLen runes with "..." suffix.
