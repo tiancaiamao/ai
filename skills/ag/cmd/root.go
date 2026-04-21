@@ -44,7 +44,7 @@ var agentCmd = &cobra.Command{
 	Short: "Manage agents (spawn, status, steer, abort, kill, etc.)",
 }
 
-var agentSpawnCmd = &cobra.Command{
+	var agentSpawnCmd = &cobra.Command{
 	Use:   "spawn <id>",
 	Short: "Spawn a new agent",
 	Args:  cobra.ExactArgs(1),
@@ -53,6 +53,7 @@ var agentSpawnCmd = &cobra.Command{
 		system, _ := cmd.Flags().GetString("system")
 		input, _ := cmd.Flags().GetString("input")
 		cwd, _ := cmd.Flags().GetString("cwd")
+		backend, _ := cmd.Flags().GetString("backend")
 
 		if err := agent.ValidateID(id); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -63,7 +64,7 @@ var agentSpawnCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if err := Spawn(id, system, input, cwd); err != nil {
+		if err := Spawn(id, system, input, cwd, backend); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -773,9 +774,10 @@ func readStdin() []byte {
 
 func init() {
 	// Agent flags
-	agentSpawnCmd.Flags().String("system", "", "System prompt (inline or @file)")
+		agentSpawnCmd.Flags().String("system", "", "System prompt (inline or @file)")
 	agentSpawnCmd.Flags().String("input", "", "Initial input message")
 	agentSpawnCmd.Flags().String("cwd", "", "Working directory for the agent")
+	agentSpawnCmd.Flags().String("backend", "ai", "Backend name (from backends.yaml)")
 	agentOutputCmd.Flags().Int("tail", 0, "Show last N bytes of output")
 	agentRmCmd.Flags().Bool("force", false, "Kill agent before removing")
 	agentWaitCmd.Flags().Int("timeout", 300, "Timeout in seconds (0 = no timeout)")

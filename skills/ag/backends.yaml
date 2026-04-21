@@ -1,0 +1,27 @@
+backends:
+  ai:
+    command: ai
+    args: ["--mode", "rpc"]
+    protocol: json-rpc
+    supports:
+      steer: true
+      abort: true
+      prompt: true
+
+  claude:
+    command: claude
+    args: ["--output-format", "stream-json", "--input-format", "stream-json"]
+    protocol: raw
+    supports:
+      steer: false
+      abort: false
+      prompt: false
+
+  codex:
+    command: codex
+    args: ["--quiet", "--full-auto"]
+    protocol: raw
+    supports:
+      steer: false
+      abort: false
+      prompt: false

@@ -33,6 +33,9 @@ type AgentActivity struct {
 	LastTool string `json:"lastTool,omitempty"`
 	LastText string `json:"lastText,omitempty"`
 
+	// Backend name (e.g., "ai", "codex", "claude")
+	Backend string `json:"backend,omitempty"`
+
 	// Error message (only set on failed status)
 	Error string `json:"error,omitempty"`
 }
@@ -56,6 +59,7 @@ type SpawnConfig struct {
 	System    string `json:"system,omitempty"`
 	Input     string `json:"input,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
+	Backend   string `json:"backend,omitempty"`
 	StartedAt int64  `json:"startedAt"`
 }
 

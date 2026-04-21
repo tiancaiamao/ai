@@ -113,6 +113,7 @@ type Activity struct {
 	LastTool    string `json:"lastTool,omitempty"`
 	LastText    string `json:"lastText,omitempty"`
 	Error       string `json:"error,omitempty"`
+	Backend     string `json:"backend,omitempty"`
 }
 
 // IsTerminal returns true if the agent status is terminal (won't change).
