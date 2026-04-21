@@ -47,9 +47,10 @@ func EnsureExists(id string) error {
 
 // AgentEntry is used by List to return agent summary info.
 type AgentEntry struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	StartedAt int64 `json:"startedAt,omitempty"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	Backend   string `json:"backend,omitempty"`
+	StartedAt int64  `json:"startedAt,omitempty"`
 }
 
 // List returns all agents with their current status.
@@ -76,9 +77,10 @@ func List() ([]AgentEntry, error) {
 			result = append(result, AgentEntry{ID: id, Status: "unknown"})
 			continue
 		}
-		result = append(result, AgentEntry{
+				result = append(result, AgentEntry{
 			ID:        id,
 			Status:    string(activity.Status),
+			Backend:   activity.Backend,
 			StartedAt: activity.StartedAt,
 		})
 	}
@@ -113,6 +115,7 @@ type Activity struct {
 	LastTool    string `json:"lastTool,omitempty"`
 	LastText    string `json:"lastText,omitempty"`
 	Error       string `json:"error,omitempty"`
+	Backend     string `json:"backend,omitempty"`
 }
 
 // IsTerminal returns true if the agent status is terminal (won't change).

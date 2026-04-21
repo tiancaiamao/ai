@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/storage"
@@ -59,5 +62,77 @@ func TestOutput_TailTrailingNewline(t *testing.T) {
 	}
 	if result != "line1\nline2\n" {
 		t.Fatalf("expected full output, got %q", result)
+	}
+}
+
+func TestShutdown_FallbackToKillWhenBridgeRejectsShutdown(t *testing.T) {
+	origDir, _ := os.Getwd()
+	os.Chdir(t.TempDir())
+	defer os.Chdir(origDir)
+	storage.SetBaseDir(".ag")
+	if err := storage.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	id := "test-shutdown-fallback"
+	agentDir := storage.AgentDir(id)
+	if err := os.MkdirAll(agentDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	act := map[string]any{
+		"status":    "running",
+		"startedAt": time.Now().Unix(),
+		"pid":       0, // avoid sending signals in test
+	}
+	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), act); err != nil {
+		t.Fatalf("write activity: %v", err)
+	}
+
+	sockPath := filepath.Join(agentDir, "bridge.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 4096)
+		_, _ = conn.Read(buf) // request payload is not validated in this test
+
+		resp, _ := json.Marshal(map[string]any{
+			"ok":    false,
+			"error": "backend does not support shutdown",
+		})
+		_, _ = conn.Write(append(resp, '\n'))
+	}()
+
+	start := time.Now()
+	if err := Shutdown(id); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("shutdown fallback was too slow: %v", elapsed)
+	}
+
+	<-done
+
+	var got agent.Activity
+	if err := storage.ReadJSON(filepath.Join(agentDir, "activity.json"), &got); err != nil {
+		t.Fatalf("read activity: %v", err)
+	}
+	if got.Status != "killed" {
+		t.Fatalf("status=%q, want killed", got.Status)
+	}
+	if got.FinishedAt == 0 {
+		t.Fatal("expected finishedAt to be set")
 	}
 }
