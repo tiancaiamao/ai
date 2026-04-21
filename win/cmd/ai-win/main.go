@@ -1,8 +1,13 @@
+// ai-win — ad editor integration for ai agent.
+//
+// Spawns "ai --mode rpc" as a subprocess and bridges it to the ad editor
+// via the ad client and REPL framework.
 package main
 
 import (
+	"flag"
 	"fmt"
-	"io"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -10,12 +15,26 @@ import (
 
 	"github.com/sminez/ad/win/pkg/ad"
 	"github.com/sminez/ad/win/pkg/repl"
-	"github.com/tiancaiamao/ai/internal/winai"
 	"github.com/tiancaiamao/ai/pkg/config"
+	"github.com/tiancaiamao/ai/win/internal/winai"
 )
 
-func runWinAI(windowName string, sessionPath string, debugAddr string) error {
-	// Initialize logger early so all slog calls become trace events.
+const sendPrefix = ";; "
+
+func main() {
+	sessionPath := flag.String("session", "", "Session file path")
+	debugAddr := flag.String("http", "", "Enable HTTP debug server (e.g., ':6060')")
+	windowName := flag.String("name", "", "Window name (default +ai)")
+	flag.Parse()
+
+	if err := run(windowName, sessionPath, debugAddr); err != nil {
+		slog.Error("ai-win error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(windowName *string, sessionPath *string, debugAddr *string) error {
+	// Load ai config for logger setup.
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
 		return fmt.Errorf("failed to get config path: %w", err)
@@ -23,47 +42,41 @@ func runWinAI(windowName string, sessionPath string, debugAddr string) error {
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		// Continue with defaults if config loading fails
 		cfg, _ = config.LoadConfig(configPath)
 	}
-	// Initialize logger from config
+
 	log, err := cfg.Log.CreateLogger()
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
-
-	// Set the default slog logger to use our configured logger.
-	// This ensures all slog.Info/Error/etc calls are bridged into trace events.
 	slog.SetDefault(log)
 
 	aiLogPath := config.ResolveLogPath(cfg.Log)
 
-	rpcInReader, rpcInWriter := io.Pipe()
-	rpcOutReader, rpcOutWriter := io.Pipe()
-	rpcErrReader, rpcErrWriter := io.Pipe()
-	_ = rpcErrWriter.Close()
-
-	go func() {
-		defer rpcOutWriter.Close()
-								if err := runRPC(sessionPath, debugAddr, rpcInReader, rpcOutWriter, "", 0, 0); err != nil {
-			slog.Error("rpc error", "error", err)
-		}
-	}()
-
+	// Connect to ad editor.
 	client, err := ad.NewClient()
 	if err != nil {
 		return fmt.Errorf("unable to connect to ad: %w", err)
 	}
 	defer client.Close()
-
-	// Pass the configured logger to the ad client
 	client.SetLogger(log)
 
-	interpreter := winai.NewAiInterpreterWithIO(rpcInWriter, rpcOutReader, rpcErrReader)
+			// Build args for the ai subprocess.
+	args := []string{"--mode", "rpc"}
+	if *sessionPath != "" {
+		args = append(args, "--session", *sessionPath)
+	}
+	if *debugAddr != "" {
+		args = append(args, "--http", *debugAddr)
+	}
+
+		// Create interpreter that spawns "ai --mode rpc" as subprocess.
+	// Note: do NOT call interpreter.Start() here — repl.Handler.Start() will do that.
+	interpreter := winai.NewAiInterpreter("ai", args)
 	interpreter.SetAdClient(client)
 	defer interpreter.Stop()
 
-	name := windowName
+	name := *windowName
 	if name == "" {
 		name = "+ai"
 	}

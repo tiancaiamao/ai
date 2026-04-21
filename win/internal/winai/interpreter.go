@@ -247,10 +247,7 @@ func (p *AiInterpreter) Start(ctx context.Context) error {
 		return nil
 	}
 
-	args := append([]string{}, p.cmdArgs...)
-	if !hasFlag(args, "-http") && !hasFlag(args, "--http") {
-		args = append(args, "-http", ":6060")
-	}
+		args := append([]string{}, p.cmdArgs...)
 
 	cmd := exec.Command(p.cmdPath, args...)
 

@@ -12,10 +12,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/session"
 )
 
-const (
-	sendPrefix = ";; "
-)
-
 type sessionCompactor struct {
 	mu        sync.Mutex
 	session   *session.Session

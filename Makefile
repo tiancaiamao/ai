@@ -1,11 +1,17 @@
-.PHONY: build test clean vet coverage
+.PHONY: build install test clean vet coverage
 
 # Default target
 all: build
 
-# Build the project
+# Build the project (compile check only)
 build:
 	go build ./...
+
+# Install all binaries to GOBIN (default: ~/go/bin)
+install:
+	go install ./cmd/ai
+	cd win && go install ./cmd/ai-win
+	cd claw && go install ./cmd/aiclaw
 
 # Run tests with coverage
 test:

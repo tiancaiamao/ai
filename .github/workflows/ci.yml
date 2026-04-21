@@ -40,6 +40,36 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+  win-build:
+    name: Build and Test (win)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        working-directory: win
+        run: go mod tidy
+
+      - name: Build
+        working-directory: win
+        run: go build ./cmd/ai-win
+
+      - name: Run vet
+        working-directory: win
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: win
+        run: go test ./... -count=1
+
   claw-build:
     name: Build and Test (claw)
     runs-on: ubuntu-latest
