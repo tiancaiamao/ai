@@ -90,17 +90,18 @@ done:
 }
 
 // Kill terminates the bridge process and updates activity.json to killed.
-// Only sends signal if agent is still in running state to avoid PID reuse.
+// Safety: checks status, verifies PID via bridge.sock existence, then kills.
 func Kill(id string) error {
 	agentDir := agent.AgentDir(id)
 	actPath := filepath.Join(agentDir, "activity.json")
+	sockPath := filepath.Join(agentDir, "bridge.sock")
 
 	// Only kill if agent is still running (prevent PID reuse mis-kill)
 	if storage.Exists(actPath) {
 		var act agent.Activity
 		if err := storage.ReadJSON(actPath, &act); err == nil {
 			if agent.IsTerminal(act.Status) {
-				// Already terminal — just ensure status is "killed" if needed
+				// Already terminal — just update status if needed
 				if act.Status != "killed" {
 					act.Status = "killed"
 					now := time.Now().Unix()
@@ -112,16 +113,15 @@ func Kill(id string) error {
 				return nil
 			}
 
-			// Verify PID is still alive before sending signal
+			// Agent claims to be running. Verify before killing:
+			// 1. PID must respond to signal(0) (process exists)
+			// 2. bridge.sock must still exist (our bridge creates it, removes on exit)
+			// This combination makes PID-reuse mis-kill extremely unlikely.
 			if act.Pid > 0 {
-				proc, err := os.FindProcess(act.Pid)
-				if err == nil {
-					// Signal 0 checks existence without killing
-					if sigErr := proc.Signal(syscall.Signal(0)); sigErr == nil {
-						// Process exists and is alive — safe to kill
-						_ = syscall.Kill(-act.Pid, syscall.SIGTERM)
-					}
-					// If signal 0 fails, process is already dead — skip kill
+				proc, _ := os.FindProcess(act.Pid)
+				if sigErr := proc.Signal(syscall.Signal(0)); sigErr == nil && storage.Exists(sockPath) {
+					// PID alive AND socket exists — very likely our bridge
+					_ = syscall.Kill(-act.Pid, syscall.SIGTERM)
 				}
 			}
 		}
