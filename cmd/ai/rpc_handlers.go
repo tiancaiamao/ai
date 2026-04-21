@@ -30,7 +30,7 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration) error {
 	// Load configuration
 	configPath, err := config.GetDefaultConfigPath()
 	if err != nil {
@@ -435,8 +435,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create agent with LoopConfig
-	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+		ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
+
+	// Start timeout watchdog if timeout is set
+	if timeout > 0 {
+		go func() {
+			<-time.After(timeout)
+			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
+			ag.Abort()
+		}()
+	}
 
 	// Initialize checkpoint manager for persistent state
 	var checkpointMgr *agent.AgentContextCheckpointManager
