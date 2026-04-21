@@ -28,6 +28,88 @@ cd claw && go build -o bin/aiclaw ./cmd/aiclaw
 - **定时任务**: Cron 表达式和固定间隔调度
 - **技能系统**: 27+ 内置技能（tiered-memory 等）
 - **会话隔离**: 按 Channel:ChatID 隔离
+- **Web 前端**: 可对接 PicoClaw 的 Web UI 进行聊天和管理
+
+## Web 前端对接
+
+aiclaw 内置了 Web 服务器（`pkg/web/server.go`），实现了与 PicoClaw Web 前端兼容的 API，
+可以直接对接 [PicoClaw](https://github.com/sipeed/picoclaw) 的 Web 前端界面。
+
+### 前置条件
+
+需要 PicoClaw 项目在本地可用（例如 `~/project/picoclaw/`）。
+
+### 启动方式
+
+**1. 启动 aiclaw 后端**
+
+确保配置中启用了 Pico Channel（`channels.pico.enabled: true`），aiclaw 会自动在 `localhost:18800` 启动 Web 服务器：
+
+```bash
+cd claw
+go build -o bin/aiclaw ./cmd/aiclaw
+./bin/aiclaw
+```
+
+启动后会看到：
+```
+╔═══════════════════════════════════════════════════════════════╗
+║  🌐 Claw Web Server                                         ║
+╠═══════════════════════════════════════════════════════════════╣
+║  Web UI: http://localhost:18800                              ║
+╚═══════════════════════════════════════════════════════════════╝
+```
+
+**2. 启动 PicoClaw 前端 dev server**
+
+PicoClaw 前端的 Vite 配置已默认将 API 请求代理到 `localhost:18800`，无需额外配置：
+
+```bash
+cd ~/project/picoclaw/web/frontend
+pnpm install   # 首次需要安装依赖
+pnpm dev
+```
+
+然后在浏览器打开 `http://localhost:5173` 即可使用 PicoClaw 的 Web UI 与 aiclaw 交互。
+
+### 配置示例
+
+在 `~/.aiclaw/config.json` 中启用 Web 服务：
+
+```json
+{
+  "model": {
+    "id": "your-model-id",
+    "provider": "your-provider",
+    "baseUrl": ""
+  },
+  "channels": {
+    "pico": {
+      "enabled": true
+    }
+  }
+}
+```
+
+### 兼容的 API
+
+aiclaw 的 Web 服务器实现了以下与 PicoClaw 前端兼容的 API：
+
+| 路径 | 说明 |
+|------|------|
+| `/pico/ws` | WebSocket 聊天接口（支持 `message.send` / `ping` 协议） |
+| `GET/POST /api/pico/token` | 获取/重新生成 Pico Channel 认证 token |
+| `GET /api/sessions` | 列出会话 |
+| `GET /api/sessions/{id}` | 获取会话详情 |
+| `DELETE /api/sessions/{id}` | 删除会话 |
+| `GET /api/status` | 服务器状态 |
+| `GET/POST/PUT/DELETE /api/models` | 模型管理 |
+| `GET/PUT/PATCH /api/config` | 配置读写 |
+| `GET/PUT /api/channels` | 通道配置 |
+| `GET /api/gateway/status` | 网关状态（始终返回 `running`） |
+
+> **注意**：PicoClaw 前端的部分功能（如 skills、tools、oauth 管理）尚未在 aiclaw 中实现，
+> 访问这些 API 会返回 404。聊天和模型/配置管理等核心功能可正常使用。
 
 ## 架构
 
@@ -54,12 +136,30 @@ cd claw && go build -o bin/aiclaw ./cmd/aiclaw
 │  │  - 调用 ai 的 agent 内核处理                             ││
 │  └─────────────────────────────────────────────────────────┘│
 │  ┌─────────────────────────────────────────────────────────┐│
+│  │  pkg/web (Web Server)                                    ││
+│  │  - 兼容 PicoClaw 前端的 REST API + WebSocket            ││
+│  │  - 默认监听 localhost:18800                              ││
+│  │  - 可独立对接 PicoClaw Web 前端                          ││
+│  └─────────────────────────────────────────────────────────┘│
+│  ┌─────────────────────────────────────────────────────────┐│
 │  │  cmd/aiclaw                                              ││
 │  │  - 加载配置                                              ││
 │  │  - 创建 channels + bus                                   ││
-│  │  - 运行 AgentLoop                                        ││
+│  │  - 运行 AgentLoop + Web Server                           ││
 │  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────┘
+
+                    ┌──────────────────────┐
+                    │  PicoClaw Web 前端    │
+                    │  (Vite + React)       │
+                    │  localhost:5173       │
+                    └──────────┬───────────┘
+                               │ API proxy → localhost:18800
+                               ▼
+                    ┌──────────────────────┐
+                    │  aiclaw Web Server    │
+                    │  localhost:18800      │
+                    └──────────────────────┘
 ```
 
 ## 依赖隔离

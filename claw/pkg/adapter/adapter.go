@@ -1936,3 +1936,30 @@ func (a *AgentLoop) ReloadSkills() (int, []string, error) {
 func (a *AgentLoop) GetSkills() []skill.Skill {
 	return a.skills
 }
+
+// RefreshAPIKey re-reads the API key from auth.json for the current model's provider
+// and updates the cached apiKey. This allows runtime key updates without restart.
+// It also updates all existing sessions' agents so they use the new key immediately.
+func (a *AgentLoop) RefreshAPIKey() error {
+	provider := a.model.Provider
+	if provider == "" {
+		provider = "zai" // default fallback
+	}
+	apiKey, err := a.resolveAPIKey(provider)
+	if err != nil {
+		return fmt.Errorf("failed to resolve API key for provider %s: %w", provider, err)
+	}
+	a.apiKey = apiKey
+
+	// Update all existing sessions' agents with the new key
+	a.sessionsMu.RLock()
+	for _, sess := range a.sessions {
+		if sess.Agent != nil {
+			sess.Agent.SetAPIKey(apiKey)
+		}
+	}
+	a.sessionsMu.RUnlock()
+
+	slog.Info("[AgentLoop] API key refreshed", "provider", provider)
+	return nil
+}

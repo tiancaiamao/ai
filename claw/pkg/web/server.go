@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -581,30 +584,15 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Read current model from config and find its model_name
+		// Read default model name from agents.defaults.model_name (picoclaw format)
 	currentModelName := ""
 	if configData, err := os.ReadFile(s.configPath); err == nil {
 		var config map[string]any
 		if json.Unmarshal(configData, &config) == nil {
-			// Get current model ID
-			currentModelID := ""
-			if model, ok := config["model"].(map[string]any); ok {
-				if id, ok := model["id"].(string); ok {
-					currentModelID = id
-				}
-			}
-
-			// Find matching model in model_list to get the correct model_name
-			if models, ok := config["model_list"].([]any); ok {
-				for _, m := range models {
-					if modelMap, ok := m.(map[string]any); ok {
-						if modelID, ok := modelMap["model"].(string); ok && modelID == currentModelID {
-							// Found match, use model_name
-							if name, ok := modelMap["model_name"].(string); ok {
-								currentModelName = name
-							}
-							break
-						}
+			if agents, ok := config["agents"].(map[string]any); ok {
+				if defaults, ok := agents["defaults"].(map[string]any); ok {
+					if mn, ok := defaults["model_name"].(string); ok {
+						currentModelName = mn
 					}
 				}
 			}
@@ -693,40 +681,56 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current model ID
-	currentModelID := ""
-	if model, ok := config["model"].(map[string]any); ok {
-		if id, ok := model["id"].(string); ok {
-			currentModelID = id
+		// Get default model name from agents.defaults.model_name (picoclaw format)
+	defaultModelName := ""
+	if agents, ok := config["agents"].(map[string]any); ok {
+		if defaults, ok := agents["defaults"].(map[string]any); ok {
+			if mn, ok := defaults["model_name"].(string); ok {
+				defaultModelName = mn
+			}
 		}
 	}
 
 	// Try to use model_list from config first (for picoclaw frontend compatibility)
+		// Load auth.json for masked API key display
+	authKeys := s.loadAuthKeys()
+
 	modelList := []map[string]any{}
-	defaultModelName := ""
 	hasModelList := false
 
 	if models, ok := config["model_list"].([]any); ok && len(models) > 0 {
 		hasModelList = true
 		for i, m := range models {
 			if modelMap, ok := m.(map[string]any); ok {
-				modelID, _ := modelMap["model"].(string)
 				modelName, _ := modelMap["model_name"].(string)
+
+				// Derive provider for API key lookup
+				provider, _ := modelMap["provider"].(string)
+				if provider == "" {
+					provider = deriveProvider(modelMap)
+				}
 
 				modelInfo := map[string]any{
 					"index":       i,
 					"model_name":  modelMap["model_name"],
 					"model":       modelMap["model"],
 					"api_base":    modelMap["api_base"],
+					"provider":    provider,
 					"configured":  true,
 					"is_default":  false,
 					"is_virtual":  false,
 				}
 
-				// Check if this is the current model
-				if modelID == currentModelID || strings.HasSuffix(modelID, currentModelID) || strings.HasSuffix(currentModelID, modelID) {
+				// Add masked API key if available
+				if key, ok := authKeys[provider]; ok && key != "" {
+					modelInfo["api_key"] = maskAPIKey(key)
+				} else {
+					modelInfo["api_key"] = ""
+				}
+
+				// Check if this is the default model by model_name
+				if modelName == defaultModelName {
 					modelInfo["is_default"] = true
-					defaultModelName = modelName
 				}
 
 				modelList = append(modelList, modelInfo)
@@ -752,15 +756,22 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 						"model_name":  displayName,
 						"model":       spec.ID,
 						"api_base":    spec.BaseURL,
+						"provider":    spec.Provider,
 						"configured":  true,
 						"is_default":  false,
 						"is_virtual":  false,
 					}
 
-					// Check if this is the current model
-					if spec.ID == currentModelID || strings.HasSuffix(spec.ID, currentModelID) || strings.HasSuffix(currentModelID, spec.ID) {
+					// Add masked API key if available
+					if key, ok := authKeys[spec.Provider]; ok && key != "" {
+						modelInfo["api_key"] = maskAPIKey(key)
+					} else {
+						modelInfo["api_key"] = ""
+					}
+
+					// Check if this is the default model by model_name
+					if displayName == defaultModelName {
 						modelInfo["is_default"] = true
-						defaultModelName = spec.ID
 					}
 
 					modelList = append(modelList, modelInfo)
@@ -825,19 +836,109 @@ func (s *Server) handleAddModel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdateModel updates a model (not supported for claw).
+// handleUpdateModel updates a model entry in model_list and saves api_key to auth.json.
+// PUT /api/models/{index}
 func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Extract model index from path
-	// URL format: /api/models/{index}
-	_ = r.URL.Path[len("/api/models/"):]
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "error",
-		"message": "Model editing through UI not supported. Configure model in ~/.aiclaw/config.json",
-	})
+	// Extract index from path: /api/models/{index}
+	pathIndex := strings.TrimPrefix(r.URL.Path, "/api/models/")
+	idx, err := strconv.Atoi(pathIndex)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": "Invalid model index"})
+		return
+	}
+
+	// Parse request body
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": "Failed to read request body"})
+		return
+	}
+	defer r.Body.Close()
+
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Invalid JSON: %v", err)})
+		return
+	}
+
+	// Read current config
+	configData, err := os.ReadFile(s.configPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Failed to read config: %v", err)})
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(configData, &config); err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Failed to parse config: %v", err)})
+		return
+	}
+
+	// Get model_list
+	modelList, ok := config["model_list"].([]any)
+	if !ok || idx < 0 || idx >= len(modelList) {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Model index %d out of range", idx)})
+		return
+	}
+
+	modelEntry, ok := modelList[idx].(map[string]any)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": "Invalid model entry"})
+		return
+	}
+
+	// Extract api_key from request
+	newAPIKey, _ := req["api_key"].(string)
+
+	// Update model fields in config.json (except api_key, which goes to auth.json)
+	updatableFields := []string{"model_name", "model", "api_base", "proxy", "auth_method",
+		"connect_mode", "workspace", "rpm", "max_tokens_field", "request_timeout",
+		"thinking_level", "extra_body", "provider"}
+	for _, field := range updatableFields {
+		if val, exists := req[field]; exists {
+			modelEntry[field] = val
+		}
+	}
+
+	// Save api_key to auth.json if provided
+	if newAPIKey != "" {
+		provider, _ := modelEntry["provider"].(string)
+		if provider == "" {
+			provider = s.deriveProviderFromModel(modelEntry)
+		}
+		if provider != "" {
+			if err := s.saveAPIKeyToAuth(provider, newAPIKey); err != nil {
+				slog.Warn("Failed to save API key to auth.json", "provider", provider, "error", err)
+			} else {
+				slog.Info("API key saved to auth.json", "provider", provider, "model_index", idx)
+				// Refresh AgentLoop's cached API key so next message uses the new key
+				if err := s.agentLoop.RefreshAPIKey(); err != nil {
+					slog.Warn("Failed to refresh agent API key", "error", err)
+				}
+			}
+		}
+	}
+
+	// Save updated config
+	updatedData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Failed to marshal config: %v", err)})
+		return
+	}
+	if err := os.WriteFile(s.configPath, updatedData, 0644); err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "message": fmt.Sprintf("Failed to save config: %v", err)})
+		return
+	}
+
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 }
 
 // handleDeleteModel deletes a model (not supported for claw).
@@ -1843,8 +1944,163 @@ func main() {
 	public := flag.Bool("public", false, "Listen on all interfaces")
 	flag.Parse()
 
-	if err := RunAsStandalone(*port, *public); err != nil {
+		if err := RunAsStandalone(*port, *public); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// deriveProviderFromModel tries to infer the provider name from the model entry.
+// It uses the "model" field format (e.g., "anthropic/claude-sonnet-4.6" -> "anthropic")
+// or the api_base URL as fallback.
+func (s *Server) deriveProviderFromModel(entry map[string]any) string {
+	// If model field has provider/ prefix (e.g., "anthropic/claude-sonnet-4.6")
+	if modelID, ok := entry["model"].(string); ok {
+		if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
+			return parts[0]
+		}
+	}
+
+	// Fallback: derive from api_base
+	if apiBase, ok := entry["api_base"].(string); ok && apiBase != "" {
+		u, err := url.Parse(apiBase)
+		if err == nil {
+			host := u.Hostname()
+			// Map known hosts to provider names
+			hostToProvider := map[string]string{
+				"api.openai.com":              "openai",
+				"api.anthropic.com":           "anthropic",
+				"api.deepseek.com":            "deepseek",
+				"api.moonshot.cn":             "moonshot",
+				"dashscope.aliyuncs.com":      "qwen",
+				"generativelanguage.googleapis.com": "google",
+				"api.minimaxi.com":            "minimax",
+				"openrouter.ai":               "openrouter",
+				"api.cerebras.ai":             "cerebras",
+				"ark.cn-beijing.volces.com":   "volcengine",
+				"api.shengsuanyun.com":        "shengsuanyun",
+				"api.z.ai":                    "zai",
+				"api.zhipuai.com":             "zhipu",
+			}
+			for hostPattern, provider := range hostToProvider {
+				if strings.Contains(host, hostPattern) {
+					return provider
+				}
+			}
+			// Generic: use first part of hostname
+			parts := strings.Split(host, ".")
+			if len(parts) > 0 {
+				return parts[0]
+			}
+		}
+	}
+
+	return ""
+}
+
+// saveAPIKeyToAuth saves an API key for a provider to ~/.aiclaw/auth.json.
+func (s *Server) saveAPIKeyToAuth(provider, apiKey string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home dir: %w", err)
+	}
+
+	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
+
+	// Read existing auth.json or start fresh
+	auth := make(map[string]map[string]string)
+	if data, err := os.ReadFile(authPath); err == nil {
+		json.Unmarshal(data, &auth)
+	}
+	if auth[provider] == nil {
+		auth[provider] = make(map[string]string)
+	}
+	auth[provider]["apiKey"] = apiKey
+
+	data, err := json.MarshalIndent(auth, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal auth.json: %w", err)
+	}
+		return os.WriteFile(authPath, data, 0644)
+}
+
+// loadAuthKeys reads auth.json and returns a map of provider -> apiKey.
+func (s *Server) loadAuthKeys() map[string]string {
+	keys := make(map[string]string)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return keys
+	}
+	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return keys
+	}
+	var auth map[string]map[string]string
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return keys
+	}
+	for provider, fields := range auth {
+		for _, keyField := range []string{"apiKey", "api_key", "key", "token"} {
+			if key, ok := fields[keyField]; ok && key != "" {
+				keys[provider] = key
+				break
+			}
+		}
+	}
+	return keys
+}
+
+// deriveProvider tries to infer the provider name from a model entry map.
+func deriveProvider(entry map[string]any) string {
+	if modelID, ok := entry["model"].(string); ok {
+		if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
+			return parts[0]
+		}
+	}
+	if apiBase, ok := entry["api_base"].(string); ok && apiBase != "" {
+		u, err := url.Parse(apiBase)
+		if err == nil {
+			host := u.Hostname()
+			hostToProvider := map[string]string{
+				"api.openai.com":                         "openai",
+				"api.anthropic.com":                      "anthropic",
+				"api.deepseek.com":                       "deepseek",
+				"api.moonshot.cn":                        "moonshot",
+				"dashscope.aliyuncs.com":                 "qwen",
+				"generativelanguage.googleapis.com":       "google",
+				"api.minimaxi.com":                       "minimax",
+				"openrouter.ai":                          "openrouter",
+				"api.cerebras.ai":                        "cerebras",
+				"ark.cn-beijing.volces.com":              "volcengine",
+				"api.shengsuanyun.com":                   "shengsuanyun",
+				"api.z.ai":                               "zai",
+				"api.zhipuai.com":                        "zhipu",
+			}
+			for hostPattern, provider := range hostToProvider {
+				if strings.Contains(host, hostPattern) {
+					return provider
+				}
+			}
+			parts := strings.Split(host, ".")
+			if len(parts) > 0 {
+				return parts[0]
+			}
+		}
+	}
+	return ""
+}
+
+// maskAPIKey returns a masked version of an API key for safe display.
+func maskAPIKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 8 {
+		return "****"
+	}
+	if len(key) <= 12 {
+		return key[:3] + "****" + key[len(key)-2:]
+	}
+	return key[:3] + "****" + key[len(key)-4:]
 }
