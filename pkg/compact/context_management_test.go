@@ -3,8 +3,13 @@ package compact
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -273,4 +278,193 @@ func llmModelStub() llm.Model {
 // executeToolCallsForTest is a test helper that exposes executeToolCalls for testing
 func (c *ContextManager) executeToolCallsForTest(toolCalls []llm.ToolCall, tools []context_mgmt.Tool) (int, bool) {
 	return c.executeToolCalls(context.Background(), toolCalls, tools)
+}
+
+// sseResponse builds a Server-Sent Events response that returns an
+// LLM "no_action" tool call, which is the simplest valid context-mgmt response.
+func sseNoActionResponse() string {
+	// Simulate an OpenAI-compatible streaming response that calls no_action.
+	chunks := []string{
+		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_noaction","type":"function","function":{"name":"no_action","arguments":""}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	}
+	return strings.Join(chunks, "\n\n") + "\n\n"
+}
+
+func TestCompactWithCtx_RetriesOn500ThenSucceeds(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			// First attempt: return 500
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `{"error":{"message":"Operation failed"}}`)
+			return
+		}
+		// Second attempt: return success with no_action tool call
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseNoActionResponse())
+	}))
+	defer server.Close()
+
+	model := llm.Model{
+		ID:            "test-model",
+		ContextWindow: 200000,
+		BaseURL:       server.URL,
+		API:           "openai",
+	}
+
+	agentCtx := agentctx.NewAgentContext("system")
+	for i := 0; i < 10; i++ {
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	}
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 20
+
+	ctxManager := NewContextManager(DefaultContextManagerConfig(), model, "test-key", 200000, "system", nil)
+
+	// Use short max retries and backoff via a child context with timeout
+	result, err := ctxManager.CompactWithCtx(context.Background(), agentCtx)
+
+	if err != nil {
+		t.Fatalf("expected success after retry, got error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Fatalf("expected 2 attempts (1 fail + 1 success), got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestCompactWithCtx_AllRetriesExhausted(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":{"message":"Operation failed"}}`)
+	}))
+	defer server.Close()
+
+	model := llm.Model{
+		ID:            "test-model",
+		ContextWindow: 200000,
+		BaseURL:       server.URL,
+		API:           "openai",
+	}
+
+	agentCtx := agentctx.NewAgentContext("system")
+	for i := 0; i < 10; i++ {
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	}
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 20
+
+	ctxManager := NewContextManager(DefaultContextManagerConfig(), model, "test-key", 200000, "system", nil)
+
+	result, err := ctxManager.CompactWithCtx(context.Background(), agentCtx)
+
+	if err == nil {
+		t.Fatal("expected error when all retries exhausted, got nil")
+	}
+	if result != nil {
+		t.Fatal("expected nil result on failure")
+	}
+	if !strings.Contains(err.Error(), "context management LLM call failed") {
+		t.Fatalf("error should wrap with context management prefix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("error should mention 500 status, got: %v", err)
+	}
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Fatalf("expected 3 attempts (all failed), got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestCompactWithCtx_NonRetryableErrorNotRetried(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		// 401 Unauthorized — non-retryable
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"error":{"message":"Invalid API key"}}`)
+	}))
+	defer server.Close()
+
+	model := llm.Model{
+		ID:            "test-model",
+		ContextWindow: 200000,
+		BaseURL:       server.URL,
+		API:           "openai",
+	}
+
+	agentCtx := agentctx.NewAgentContext("system")
+	for i := 0; i < 10; i++ {
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	}
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 20
+
+	ctxManager := NewContextManager(DefaultContextManagerConfig(), model, "test-key", 200000, "system", nil)
+
+	result, err := ctxManager.CompactWithCtx(context.Background(), agentCtx)
+
+	if err == nil {
+		t.Fatal("expected error for 401, got nil")
+	}
+	if result != nil {
+		t.Fatal("expected nil result on failure")
+	}
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Fatalf("expected 1 attempt (non-retryable), got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestCompactWithCtx_ContextCancellationStopsRetry(t *testing.T) {
+	var attempts int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":{"message":"Operation failed"}}`)
+	}))
+	defer server.Close()
+
+	model := llm.Model{
+		ID:            "test-model",
+		ContextWindow: 200000,
+		BaseURL:       server.URL,
+		API:           "openai",
+	}
+
+	agentCtx := agentctx.NewAgentContext("system")
+	for i := 0; i < 10; i++ {
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	}
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 20
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after first attempt completes (the backoff sleep will detect cancellation)
+	go func() {
+		time.Sleep(1 * time.Second)
+		cancel()
+	}()
+
+	ctxManager := NewContextManager(DefaultContextManagerConfig(), model, "test-key", 200000, "system", nil)
+
+	result, err := ctxManager.CompactWithCtx(ctx, agentCtx)
+
+	if err == nil {
+		t.Fatal("expected error due to context cancellation, got nil")
+	}
+	if result != nil {
+		t.Fatal("expected nil result on cancellation")
+	}
+	// Should have made at most 2 attempts (first fail, then cancelled during backoff)
+	n := atomic.LoadInt32(&attempts)
+	if n > 2 {
+		t.Fatalf("expected at most 2 attempts before cancellation, got %d", n)
+	}
 }

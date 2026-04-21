@@ -131,6 +131,28 @@ func IsRateLimit(err error) bool {
 	return looksLikeRateLimit(err.Error())
 }
 
+// IsRetryableError reports whether an error represents a transient failure
+// that is worth retrying (HTTP 429, 500, 502, 503, 504).
+func IsRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Rate-limit errors are always retryable.
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return true
+	}
+	// Generic API errors: retry on server errors and 429.
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 429, 500, 502, 503, 504:
+			return true
+		}
+	}
+	return false
+}
+
 // RetryAfter returns provider suggested retry delay for rate-limit errors.
 func RetryAfter(err error) time.Duration {
 	if err == nil {

@@ -201,28 +201,67 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 		tools = context_mgmt.GetContextManagementTools(agentCtx)
 	}
 
-	// 3. Call LLM
+	// 3. Call LLM with retry for transient errors
 	llmMessages := append([]llm.LLMMessage{{
 		Role:    "system",
 		Content: c.systemPrompt,
 	}}, messages...)
 
-	stream := llm.StreamLLM(
-		parent,
-		c.model,
-		llm.LLMContext{
-			Messages: llmMessages,
-			Tools:    c.convertToolsToLLM(tools),
-		},
-		c.apiKey,
-		2*time.Minute,
-	)
+	const maxRetries = 3
+	var toolCalls []llm.ToolCall
+	var lastErr error
 
-	// 4. Extract tool calls from stream
-	toolCalls, err := c.extractToolCalls(parent, stream)
-	if err != nil {
-		slog.Error("[CtxMgmt] LLM call failed", "error", err)
-		return nil, fmt.Errorf("context management LLM call failed: %w", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Respect context cancellation between retries.
+		if err := parent.Err(); err != nil {
+			slog.Error("[CtxMgmt] Context cancelled before LLM attempt", "attempt", attempt, "error", err)
+			return nil, fmt.Errorf("context management LLM call failed: %w", err)
+		}
+
+		stream := llm.StreamLLM(
+			parent,
+			c.model,
+			llm.LLMContext{
+				Messages: llmMessages,
+				Tools:    c.convertToolsToLLM(tools),
+			},
+			c.apiKey,
+			2*time.Minute,
+		)
+
+		// 4. Extract tool calls from stream
+		var err error
+		toolCalls, err = c.extractToolCalls(parent, stream)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+
+		lastErr = err
+		if !llm.IsRetryableError(err) {
+			slog.Error("[CtxMgmt] LLM call failed (non-retryable)", "attempt", attempt, "error", err)
+			return nil, fmt.Errorf("context management LLM call failed: %w", err)
+		}
+
+		if attempt < maxRetries {
+			backoff := time.Duration(attempt) * 2 * time.Second
+			slog.Warn("[CtxMgmt] LLM call failed (retryable), retrying",
+				"attempt", attempt,
+				"max_retries", maxRetries,
+				"backoff", backoff,
+				"error", err,
+			)
+			select {
+			case <-parent.Done():
+				return nil, fmt.Errorf("context management LLM call failed: %w", parent.Err())
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	if lastErr != nil {
+		slog.Error("[CtxMgmt] LLM call failed after all retries", "attempts", maxRetries, "error", lastErr)
+		return nil, fmt.Errorf("context management LLM call failed: %w", lastErr)
 	}
 
 	// 5. Execute tool calls and track results
