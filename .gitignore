@@ -17,3 +17,4 @@ claw/skills/.*
 # Symphony workspace files (never commit these)
 WORKPAD.md
 WORKFLOW.md
+.ag/

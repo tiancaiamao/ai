@@ -40,7 +40,7 @@ jobs:
           path: coverage.out
           retention-days: 7
 
-    win-build:
+  win-build:
     name: Build and Test (win)
     runs-on: ubuntu-latest
 
