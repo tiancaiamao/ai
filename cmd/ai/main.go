@@ -40,38 +40,26 @@ func parseSystemPrompt(systemPromptFlag string) string {
 }
 
 func main() {
-	mode := flag.String("mode", "", "Run mode (rpc|win|json). Default: win")
-	sessionPathFlag := flag.String("session", "", "Session file path (rpc/win/json mode)")
-	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited, rpc mode)")
-	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited, rpc mode)")
+	mode := flag.String("mode", "rpc", "Run mode (rpc). Default: rpc")
+	sessionPathFlag := flag.String("session", "", "Session file path")
+	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
+	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 
 	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
-	windowName := flag.String("name", "", "window name (default +ai)")
 	flag.Parse()
 
 	// Parse system-prompt flag: if starts with '@', read file content
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
-		case "rpc":
-						if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag); err != nil {
+	case "rpc", "":
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
-	case "json":
-		prompts := flag.Args()
-		if err := runJSON(*sessionPathFlag, *debugAddr, prompts, os.Stdout); err != nil {
-			slog.Error("json error", "error", err)
-			os.Exit(1)
-		}
-	case "win", "":
-		if err := runWinAI(*windowName, *sessionPathFlag, *debugAddr); err != nil {
-			slog.Error("win-ai error", "error", err)
-			os.Exit(1)
-		}
 	default:
-		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc|win|json")
+		slog.Error("invalid mode", "mode", *mode, "valid_modes", "rpc")
 		os.Exit(1)
 	}
 }
