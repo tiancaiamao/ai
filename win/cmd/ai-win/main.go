@@ -61,17 +61,13 @@ func run(windowName *string, sessionPath *string, debugAddr *string) error {
 	defer client.Close()
 	client.SetLogger(log)
 
-		// Build args for the ai subprocess.
+			// Build args for the ai subprocess.
 	args := []string{"--mode", "rpc"}
 	if *sessionPath != "" {
 		args = append(args, "--session", *sessionPath)
 	}
 	if *debugAddr != "" {
 		args = append(args, "--http", *debugAddr)
-	} else {
-		// Prevent AiInterpreter.Start() from auto-appending "-http :6060".
-		// Old in-process mode only enabled debug server when explicitly requested.
-		args = append(args, "--http", "")
 	}
 
 		// Create interpreter that spawns "ai --mode rpc" as subprocess.
