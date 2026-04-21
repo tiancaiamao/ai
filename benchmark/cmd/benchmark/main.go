@@ -200,10 +200,13 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
 	// execution events to evaluate must_use_capabilities and success_criteria.
 
-	// Build RPC command with optional --max-turns
+		// Build RPC command with optional --max-turns and --timeout
 	rpcCmd := fmt.Sprintf("%q --mode rpc", r.BinaryPath)
 	if r.MaxTurns > 0 {
 		rpcCmd += fmt.Sprintf(" --max-turns %d", r.MaxTurns)
+	}
+	if r.Timeout > 0 {
+		rpcCmd += fmt.Sprintf(" --timeout %s", r.Timeout.String())
 	}
 		cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
 		fmt.Sprintf("echo %q | %s | %q conv",
