@@ -1,21 +1,70 @@
 ---
 name: ag
-description: Provide subagent and agent orchestration runtime. Spawns AI agents as detached processes with bridge-per-agent architecture, supports mid-turn steering, structured status, real-time observability via stream.log, task DAG scheduling, and inter-agent channels.
+description: Provide subagent and agent orchestration runtime. Spawns AI agents as detached processes with bridge-per-agent architecture, supports mid-turn steering, structured status, real-time observability via stream.log, task DAG scheduling, and inter-agent channels. Backend-agnostic: supports any CLI-based agent via pluggable backends (json-rpc and raw protocols).
 ---
 
 # ag — Agent Orchestration CLI
 
 ## Overview
 
-`ag` orchestrates AI agents using a **bridge-per-agent** architecture. Each agent runs as a detached background process with a Go bridge that manages `ai --mode rpc` and exposes a Unix socket for real-time control.
+`ag` orchestrates AI agents using a **bridge-per-agent** architecture. Each agent runs as a detached background process with a Go bridge that manages the agent subprocess and exposes a Unix socket for real-time control.
 
 **Key capabilities:**
-- Spawn agents with immediate control (steer, abort, prompt)
+- Spawn agents with immediate control (steer, abort, prompt) — backend-dependent
 - Real-time observability via stream.log (tail -f for humans, cursor for LLMs)
 - Structured status (turns, tokens, last tool, last text)
 - Task DAG with dependencies and auto-scheduling
 - Inter-agent async message channels
+- Multi-backend support: any CLI-based agent (ai, codex, claude, etc.)
 - Event conversion via `ag conv` (replaces `ai --mode headless`)
+
+## Backend Support
+
+`ag` supports multiple agent backends via a pluggable configuration system. Each backend defines:
+- **Command + args** to spawn the agent process
+- **Protocol**: `json-rpc` (structured event stream) or `raw` (line-by-line stdout capture)
+- **Capabilities**: which control-plane operations are supported (steer, abort, prompt)
+
+### Default Backend: `ai`
+
+The default backend uses `ai --mode rpc` with full JSON-RPC event parsing. This provides:
+- Token counting (in/out/total)
+- Tool call tracking
+- Mid-turn steering, abort, and follow-up prompts
+- Full structured activity.json
+
+### Backends Configuration
+
+Backends are defined in `backends.yaml` (co-located with the ag skill):
+
+```yaml
+backends:
+  ai:
+    command: ai
+    args: ["--mode", "rpc"]
+    protocol: json-rpc
+    supports:
+      steer: true
+      abort: true
+      prompt: true
+  codex:
+    command: codex
+    args: ["--quiet", "--full-auto"]
+    protocol: raw
+    supports:
+      steer: false
+      abort: false
+      prompt: false
+```
+
+If no `backends.yaml` is found, `ag` defaults to the `ai` backend.
+
+### Protocol Types
+
+| Protocol | Event Parsing | Token Counting | Steering | Use Case |
+|----------|--------------|----------------|----------|----------|
+| `json-rpc` | Full (EventReader) | ✅ | ✅ | ai backend |
+| `raw` | Line-by-line stdout | ❌ | ❌ | Simple CLI agents |
 
 ## Conversation-First Positioning
 
@@ -32,18 +81,19 @@ description: Provide subagent and agent orchestration runtime. Spawns AI agents 
 ## Architecture
 
 ```
-ag agent spawn worker-1 --input "fix bugs"
+ag agent spawn worker-1 --input "fix bugs" [--backend codex]
   │
   └── ag bridge worker-1 (detached process, Setpgid)
       │
       └── [bridge process]
-          ├── ai --mode rpc (stdin/stdout pipes)
+          ├── <backend command> <args> (stdin/stdout pipes)
           ├── StreamWriter → stream.log (O_APPEND, real-time readable)
-          ├── EventReader → activity.json (atomic rename, rate-limited)
+          ├── EventReader (json-rpc) or RawReader (raw) → activity.json
           └── Unix socket → bridge.sock (one-request-per-connection)
 
 ag agent steer worker-1 "use lib X instead"
   └── dial bridge.sock → {"type":"steer","message":"..."} → {"ok":true}
+  └── (for raw backends: error "backend does not support steer")
 ```
 
 **No central daemon. No tmux dependency.** Each agent is independent. Bridge crash = one agent down, not all.
@@ -55,8 +105,9 @@ ag agent steer worker-1 "use lib X instead"
 cd skills/ag && go build -o ~/.ai/skills/ag/ag .
 
 # Prerequisites
-# - ai binary in PATH (the agent runtime)
+# - At least one agent binary in PATH (e.g., ai, codex)
 # - Go 1.24+ (for building)
+# - backends.yaml (optional, defaults to ai-only)
 ```
 
 ## CLI Reference
@@ -65,7 +116,10 @@ cd skills/ag && go build -o ~/.ai/skills/ag/ag .
 
 ```bash
 # Spawn agent (blocks until bridge.sock ready, max 10s)
-ag agent spawn <id> --input "task description" [--system @prompt.md] [--cwd /path]
+ag agent spawn <id> --input "task description" [--system @prompt.md] [--cwd /path] [--backend ai]
+
+# Backend selection: use a non-default backend
+ag agent spawn worker-1 --backend codex --input "fix bugs in auth"
 
 # Structured status from activity.json
 ag agent status <id>
