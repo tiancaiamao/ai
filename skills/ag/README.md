@@ -4,28 +4,36 @@
 
 ## Architecture
 
-Each agent runs in its own tmux session with a dedicated bridge process (`ag bridge <id>`) that manages the `ai --mode rpc` subprocess. The bridge exposes a Unix socket for external control.
+Each agent runs as a detached background process with a dedicated bridge process (`ag bridge <id>`) that manages the `ai --mode rpc` subprocess. The bridge exposes a Unix socket for external control.
 
 ```
 ag agent spawn worker-1 --input "fix bugs"
   │
-  └── tmux new-session -d -s ag-worker-1 -- "ag bridge worker-1"
+  └── ag bridge worker-1 (detached process, Setpgid)
       │
-      └── [bridge process inside tmux]
+      └── [bridge process]
           ├── exec.Command("ai", "--mode", "rpc")
           │   ├── stdin pipe  → prompt/steer/abort
-          │   └── stdout pipe → event stream → activity.json
-          ├── EventReader goroutine → writes activity.json
+          │   └── stdout pipe → event stream → stream.log + activity.json
+          ├── StreamWriter → stream.log (real-time, human/LLM readable)
+          ├── EventReader goroutine → updates activity.json
           └── Unix socket listener → bridge.sock
 
 ag agent steer worker-1 "don't use lib X"
   └── dial bridge.sock → send {"type":"steer","message":"..."} → close
 ```
 
+### Observability
+
+- **stream.log** — Real-time append-only log of agent activity (text + tool calls + meta events)
+- **activity.json** — Structured status (turns, tokens, last tool, last text)
+- **`ag agent tail`** — Tail command for humans (`-f`) and LLMs (`--since <cursor>`)
+
 ### Key Design Decisions
 
-- **Bridge-per-agent in tmux** — No single point of failure, no daemon lifecycle management
+- **Bridge-per-agent as detached process** — No single point of failure, no tmux dependency
 - **Unix socket control plane** — One request per connection (HTTP-style)
+- **stream.log for output** — No unbounded memory growth, crash-safe, tail -f friendly
 - **activity.json with atomic rename** — Single source of truth for agent state
 - **CWD-scoped storage** — All state lives in `.ag/` under the working directory
 
@@ -42,9 +50,10 @@ go build -o ag .
 ### Agent Lifecycle
 
 ```bash
-ag agent spawn <id> --input "task description"   # Spawn agent in tmux
+ag agent spawn <id> --input "task description"   # Spawn agent as detached process
 ag agent status <id>                              # Structured status from activity.json
 ag agent ls                                       # List all agents
+ag agent tail <id> [-f] [--lines N] [--since C]  # View agent output stream
 ag agent steer <id> "message"                     # Mid-turn steering
 ag agent abort <id>                               # Cancel current task
 ag agent prompt <id> "new task"                   # Reuse session with new prompt
@@ -53,6 +62,15 @@ ag agent shutdown <id>                            # Graceful shutdown via RPC
 ag agent rm <id>                                  # Delete agent directory
 ag agent output <id> [--tail N]                   # Get accumulated text output
 ag agent wait <id>... [--timeout 600]             # Block until terminal state
+```
+
+### Event Conversion
+
+```bash
+ag conv                              # Convert ai --mode rpc JSON events to readable text
+ai --mode rpc | ag conv              # Pipe through for live output
+ai --mode rpc | ag conv --only text  # Only assistant text
+ai --mode rpc | ag conv --only tools # Only tool calls
 ```
 
 ### Task Management
@@ -86,18 +104,23 @@ ag/
 ├── main.go                          # Entry point
 ├── cmd/
 │   ├── root.go                      # Cobra command tree
-│   ├── agent_operations.go          # Spawn logic (tmux + socket polling)
-│   ├── bridge_client.go             # Socket client (steer/kill/shutdown/rm/output/wait)
-│   └── bridge_cmd.go                # Hidden "ag bridge <id>" subcommand
+│   ├── agent_operations.go          # Spawn logic (process + socket polling)
+│   ├── bridge_client.go             # Socket client (steer/kill/shutdown/rm/output/wait/tail)
+│   ├── bridge_cmd.go                # Hidden "ag bridge <id>" subcommand
+│   ├── conv.go                      # ag conv — JSON event to readable text converter
+│   └── tail.go                      # ag agent tail — agent output viewer
 ├── internal/
 │   ├── agent/
 │   │   └── agent.go                 # Agent ID validation, List, ReadActivity
 │   ├── bridge/
 │   │   ├── types.go                 # AgentActivity, BridgeCommand, SpawnConfig
 │   │   ├── activity.go              # ActivityWriter with rate limiting + atomic rename
-│   │   ├── eventreader.go           # Parse ai RPC stdout → ActivityWriter
+│   │   ├── eventreader.go           # Parse ai RPC stdout → StreamWriter + ActivityWriter
+│   │   ├── streamwriter.go          # StreamWriter — O_APPEND to stream.log
 │   │   ├── socket.go                # Unix domain socket server
 │   │   └── bridge.go                # Bridge lifecycle (Run function)
+│   ├── conv/
+│   │   └── parser.go                # Stateless event parsing (shared by conv + bridge)
 │   ├── channel/
 │   │   └── channel.go               # Async message channels
 │   ├── storage/
@@ -106,7 +129,6 @@ ag/
 │       └── task.go                  # Task CRUD, dependencies, DAG scheduling
 ├── docs/
 │   ├── design.md                    # Architecture design document
-│   ├── SPEC.md                      # Feature specification
 │   └── PLAN.md                      # Implementation plan
 └── README.md
 ```
@@ -121,11 +143,12 @@ All state lives under `.ag/` in the working directory:
 │   └── <id>/
 │       ├── meta.json               # Spawn config (system prompt, cwd, timeout)
 │       ├── activity.json           # Real-time activity (status, turns, tokens, last text)
+│       ├── stream.log              # Real-time append-only output (text + tools + meta)
 │       ├── bridge.sock             # Unix socket (only while running)
 │       ├── bridge-stderr           # Bridge process stderr
 │       ├── stderr                  # ai process stderr
 │       ├── stderr.tail             # Last 4KB of stderr (on crash)
-│       └── output                  # Accumulated text output (on exit)
+│       └── output                  # Final output (copy of stream.log on exit)
 ├── channels/
 │   └── <name>/
 │       └── messages/
@@ -139,12 +162,12 @@ All state lives under `.ag/` in the working directory:
 ```bash
 go test ./... -v                    # All tests
 go test ./internal/bridge -v        # Bridge package only
+go test ./internal/conv -v          # Event parser only
 go test ./internal/task -v          # Task package only
 ```
 
 ## Prerequisites
 
-- **tmux** must be installed and in PATH
 - **ai** binary must be in PATH (the agent runtime)
 - Go 1.24+
 

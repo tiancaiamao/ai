@@ -220,10 +220,23 @@ func TestActivityWriter_Resume(t *testing.T) {
 // EventReader tests
 // ---------------------------------------------------------------------------
 
-// helper: create an EventReader reading from a string
-func newTestEventReader(input string, dir string) *EventReader {
+// helper: create an EventReader reading from a string with a StreamWriter
+func newTestEventReaderFromInput(input string, dir string) (*EventReader, *StreamWriter) {
 	aw := NewActivityWriter(dir)
-	return NewEventReader(strings.NewReader(input), aw, dir)
+	sw, err := NewStreamWriter(dir)
+	if err != nil {
+		panic(fmt.Sprintf("NewStreamWriter failed in test: %v", err))
+	}
+	return NewEventReader(strings.NewReader(input), aw, sw, dir), sw
+}
+
+// helper: create an EventReader with explicit reader and ActivityWriter
+func newTestEventReaderWithAW(r *strings.Reader, aw *ActivityWriter, dir string) (*EventReader, *StreamWriter) {
+	sw, err := NewStreamWriter(dir)
+	if err != nil {
+		panic(fmt.Sprintf("NewStreamWriter failed in test: %v", err))
+	}
+	return NewEventReader(r, aw, sw, dir), sw
 }
 
 func readActivity(t *testing.T, dir string) AgentActivity {
@@ -239,7 +252,8 @@ func readActivity(t *testing.T, dir string) AgentActivity {
 // TestEventReader_AgentStart: Parses agent_start event → status running
 func TestEventReader_AgentStart(t *testing.T) {
 	dir := t.TempDir()
-	er := newTestEventReader(`{"type":"agent_start"}`, dir)
+	er, sw := newTestEventReaderFromInput(`{"type":"agent_start"}`, dir)
+	defer sw.Close()
 
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -259,7 +273,8 @@ func TestEventReader_TurnEvents(t *testing.T) {
 {"type":"turn_start"}
 {"type":"turn_end","data":{"tokensBefore":100,"tokensAfter":200}}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -284,7 +299,8 @@ func TestEventReader_ToolEvents(t *testing.T) {
 	dir := t.TempDir()
 	input := `{"type":"tool_execution_start","data":{"tool":"Bash"}}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -301,7 +317,8 @@ func TestEventReader_MessageUpdate(t *testing.T) {
 	input := `{"type":"message_update","data":{"text_delta":"Hello "}}
 {"type":"message_update","data":{"text_delta":"World"}}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -317,7 +334,8 @@ func TestEventReader_ErrorEvent(t *testing.T) {
 	dir := t.TempDir()
 	input := `{"type":"error","error":"out of memory"}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -339,7 +357,8 @@ func TestEventReader_MalformedJSON(t *testing.T) {
 {broken json
 {"type":"tool_execution_start","data":{"tool":"Read"}}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -356,7 +375,8 @@ func TestEventReader_MalformedJSON(t *testing.T) {
 // TestEventReader_EOF: Clean EOF returns nil error
 func TestEventReader_EOF(t *testing.T) {
 	dir := t.TempDir()
-	er := newTestEventReader("", dir)
+	er, sw := newTestEventReaderFromInput("", dir)
+	defer sw.Close()
 
 	if err := er.Run(); err != nil {
 		t.Fatalf("expected nil error on clean EOF, got: %v", err)
@@ -369,24 +389,26 @@ func TestEventReader_Output(t *testing.T) {
 	input := `{"type":"message_update","data":{"text_delta":"line1"}}
 {"type":"message_update","data":{"text_delta":"line2"}}`
 
-	er := newTestEventReader(input, dir)
+	er, sw := newTestEventReaderFromInput(input, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	got := er.Output()
+		got := er.Output()
 	if got != "line1line2" {
 		t.Fatalf("expected output 'line1line2', got %q", got)
 	}
 
-	// Also check the output file was written
-	outputPath := filepath.Join(dir, "output")
-	data, err := os.ReadFile(outputPath)
+	// Check stream.log was written
+	streamPath := filepath.Join(dir, "stream.log")
+	data, err := os.ReadFile(streamPath)
 	if err != nil {
-		t.Fatalf("failed to read output file: %v", err)
+		t.Fatalf("failed to read stream.log: %v", err)
 	}
-	if string(data) != "line1line2" {
-		t.Fatalf("expected output file content 'line1line2', got %q", string(data))
+	streamContent := string(data)
+	if !strings.Contains(streamContent, "line1") || !strings.Contains(streamContent, "line2") {
+		t.Fatalf("expected stream.log to contain text, got %q", streamContent)
 	}
 }
 
@@ -600,24 +622,34 @@ func TestEventReader_LargeToken(t *testing.T) {
 	}
 	lineData = append(lineData, '\n')
 
-	// Feed it through EventReader
+		// Feed it through EventReader
 	r := strings.NewReader(string(lineData))
-	er := NewEventReader(r, aw, dir)
+	sw, err := NewStreamWriter(dir)
+	if err != nil {
+		t.Fatalf("NewStreamWriter: %v", err)
+	}
+	defer sw.Close()
+	er := NewEventReader(r, aw, sw, dir)
 
-	if err := er.Run(); err != nil {
+		if err := er.Run(); err != nil {
 		t.Fatalf("EventReader.Run() failed on large token: %v", err)
 	}
 
-	// Verify output accumulated correctly
-	output := er.Output()
-	if len(output) < 100*1024 {
-		t.Fatalf("expected at least 100KB of output, got %d bytes", len(output))
+	// Verify stream.log contains the full output (no truncation)
+	streamPath := filepath.Join(dir, "stream.log")
+	data, err := os.ReadFile(streamPath)
+	if err != nil {
+		t.Fatalf("failed to read stream.log: %v", err)
+	}
+	if len(data) < 100*1024 {
+		t.Fatalf("expected at least 100KB in stream.log, got %d bytes", len(data))
 	}
 }
 
 // ---------------------------------------------------------------------------
 // Actual ai RPC format tests — the real event format emitted by ai --mode rpc
 // ---------------------------------------------------------------------------
+
 
 // TestEventReader_AiRpc_AgentEnd_NoSuccessField: agent_end without "success"
 // should be treated as success (no error = done).
@@ -626,12 +658,11 @@ func TestEventReader_AiRpc_AgentEnd_NoSuccessField(t *testing.T) {
 	aw := NewActivityWriter(dir)
 	aw.UpdateStatus(StatusRunning)
 
-	// Actual ai RPC output: {"type":"agent_end","messages":[...]}
-	// No "success" field at all.
 	input := `{"type":"agent_end","messages":[{"role":"user","content":"hi"}]}` + "\n"
 
 	r := strings.NewReader(input)
-	er := NewEventReader(r, aw, dir)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
@@ -655,8 +686,9 @@ func TestEventReader_AiRpc_AgentEnd_WithError(t *testing.T) {
 
 	input := `{"type":"agent_end","error":"API rate limit exceeded"}` + "\n"
 
-	r := strings.NewReader(input)
-	er := NewEventReader(r, aw, dir)
+		r := strings.NewReader(input)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
@@ -686,8 +718,9 @@ func TestEventReader_AiRpc_MessageUpdate_AssistantMessageEvent(t *testing.T) {
 		`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"World!"}}`,
 	}, "\n") + "\n"
 
-	r := strings.NewReader(lines)
-	er := NewEventReader(r, aw, dir)
+		r := strings.NewReader(lines)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
@@ -708,8 +741,9 @@ func TestEventReader_AiRpc_TurnEnd_UsageInMessage(t *testing.T) {
 	// Simulate actual ai RPC turn_end event
 	input := `{"type":"turn_end","message":{"role":"assistant","usage":{"input":3839,"output":42,"totalTokens":3881}}}` + "\n"
 
-	r := strings.NewReader(input)
-	er := NewEventReader(r, aw, dir)
+		r := strings.NewReader(input)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
@@ -739,8 +773,9 @@ func TestEventReader_AiRpc_ToolExecution_TopLevelToolName(t *testing.T) {
 
 	input := `{"type":"tool_execution_start","toolName":"bash","toolCallId":"call_123","args":{"command":"ls"}}` + "\n"
 
-	r := strings.NewReader(input)
-	er := NewEventReader(r, aw, dir)
+		r := strings.NewReader(input)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
@@ -771,8 +806,9 @@ func TestEventReader_AiRpc_FullWorkflow(t *testing.T) {
 	}
 	input := strings.Join(events, "\n") + "\n"
 
-	r := strings.NewReader(input)
-	er := NewEventReader(r, aw, dir)
+		r := strings.NewReader(input)
+	er, sw := newTestEventReaderWithAW(r, aw, dir)
+	defer sw.Close()
 	if err := er.Run(); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}

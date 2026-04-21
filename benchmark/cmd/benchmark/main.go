@@ -169,9 +169,10 @@ type AgentRunner interface {
 	Name() string
 }
 
-// AIAgentRunner runs the ai agent in headless mode
+// AIAgentRunner runs the ai agent via rpc mode with ag conv for output
 type AIAgentRunner struct {
 	BinaryPath string
+	AgBinary   string
 	MaxTurns   int
 	Timeout    time.Duration
 }
@@ -192,12 +193,24 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		ctx = context.Background()
 	}
 
-	cmd := exec.CommandContext(ctx, r.BinaryPath,
-		"--mode", "headless",
-		"--max-turns", fmt.Sprintf("%d", r.MaxTurns),
-		"--timeout", r.Timeout.String(),
-		prompt,
-	)
+	// Build the RPC prompt as JSON
+	rpcPrompt := fmt.Sprintf(`{"type":"prompt","message":%q}`, prompt)
+
+	// Use ai --mode rpc piped through ag conv for full event output.
+	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
+	// execution events to evaluate must_use_capabilities and success_criteria.
+
+		// Build RPC command with optional --max-turns and --timeout
+	rpcCmd := fmt.Sprintf("%q --mode rpc", r.BinaryPath)
+	if r.MaxTurns > 0 {
+		rpcCmd += fmt.Sprintf(" --max-turns %d", r.MaxTurns)
+	}
+	if r.Timeout > 0 {
+		rpcCmd += fmt.Sprintf(" --timeout %s", r.Timeout.String())
+	}
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+		fmt.Sprintf("echo %q | %s | %q conv",
+			rpcPrompt, rpcCmd, r.AgBinary))
 	cmd.Env = nonInteractiveCommandEnv()
 
 	// Set working directory to task dir
@@ -790,6 +803,21 @@ func eventHasReadSignal(event toolEvent) bool {
 }
 
 func parseToolLine(line string) (string, string, bool) {
+	// Format 1: ag conv output — "🔧 toolName key=val key2=val2"
+	if strings.Contains(line, "🔧") {
+		rest := strings.TrimSpace(strings.SplitN(line, "🔧", 2)[1])
+		parts := strings.SplitN(rest, " ", 2)
+		tool := parts[0]
+		payload := ""
+		if len(parts) > 1 {
+			payload = parts[1]
+		}
+		if tool != "" {
+			return tool, payload, true
+		}
+	}
+
+	// Format 2: legacy "• tool: payload"
 	bulletPos := strings.Index(line, "•")
 	if bulletPos == -1 {
 		return "", "", false
@@ -1536,9 +1564,10 @@ func isFlagExplicitlySet(name string) bool {
 func main() {
 	// Parse flags
 	var (
-		tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
+				tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
 		resultsDir        = flag.String("results", "results", "Results directory")
-		agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path")
+		agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path (ai)")
+		agBinary          = flag.String("ag", "ag", "ag CLI binary path (for ag conv)")
 		maxTurns          = flag.Int("max-turns", 50, "Maximum agent turns")
 		timeout           = flag.Duration("timeout", 10*time.Minute, "Per-task timeout")
 		manifestPath      = flag.String("manifest", "", "Task manifest path (JSON)")
@@ -1565,9 +1594,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error resolving results dir: %v\n", err)
 		os.Exit(1)
 	}
-	absAgentBinary, err := filepath.Abs(*agentBinary)
+		absAgentBinary, err := filepath.Abs(*agentBinary)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving agent binary: %v\n", err)
+		os.Exit(1)
+	}
+	absAgBinary, err := filepath.Abs(*agBinary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving ag binary: %v\n", err)
 		os.Exit(1)
 	}
 	absManifestPath := ""
@@ -1580,8 +1614,9 @@ func main() {
 	}
 
 	// Create agent runner
-	agent := &AIAgentRunner{
+		agent := &AIAgentRunner{
 		BinaryPath: absAgentBinary,
+		AgBinary:   absAgBinary,
 		MaxTurns:   *maxTurns,
 		Timeout:    *timeout,
 	}

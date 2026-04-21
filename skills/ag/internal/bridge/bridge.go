@@ -57,12 +57,19 @@ func Run(id string) error {
 	// Also redirect os.Stderr for any unhandled panics
 	os.Stderr = bridgeStderr
 
-	// 4. Create ActivityWriter and initialize with status "running"
+		// 4. Create ActivityWriter and initialize with status "running"
 	activity := NewActivityWriter(agentDir)
 	activity.UpdateActivity(func(a *AgentActivity) {
 		a.Status = StatusRunning
 		a.StartedAt = time.Now().Unix()
 	})
+
+	// 4b. Create StreamWriter for real-time stream.log output
+	streamWriter, err := NewStreamWriter(agentDir)
+	if err != nil {
+		return fmt.Errorf("create stream writer: %w", err)
+	}
+	defer streamWriter.Close()
 
 	// 5. Remove stale bridge.sock and create listener (FR-005: BEFORE starting ai)
 	sockPath := filepath.Join(agentDir, socketName)
@@ -138,8 +145,8 @@ func Run(id string) error {
 		}
 	}
 
-	// 10. Start EventReader goroutine reading from ai stdout
-	eventReader := NewEventReader(stdoutPipe, activity, agentDir)
+		// 10. Start EventReader goroutine reading from ai stdout
+	eventReader := NewEventReader(stdoutPipe, activity, streamWriter, agentDir)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- eventReader.Run()
@@ -224,11 +231,15 @@ func Run(id string) error {
 		})
 	}
 
-	// Write output file from EventReader accumulated output
-	outputText := eventReader.Output()
-	if outputText != "" {
+			// Write output file as a copy of stream.log for backward compatibility
+	// with code that reads the "output" file directly.
+	// NOTE: The output file now contains formatted stream.log content
+	// (timestamps, tool markers, etc.), not raw text deltas.
+	// Use "ag conv --only text <output>" for plain text extraction.
+	streamLogPath := streamWriter.Path()
+	if content, err := os.ReadFile(streamLogPath); err == nil && len(content) > 0 {
 		outputPath := filepath.Join(agentDir, "output")
-		_ = os.WriteFile(outputPath, []byte(outputText), 0644)
+		_ = os.WriteFile(outputPath, content, 0644)
 	}
 
 	activity.Close()

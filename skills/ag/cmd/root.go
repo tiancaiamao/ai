@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -127,8 +128,15 @@ var agentStatusCmd = &cobra.Command{
 			}
 			fmt.Printf("Last text: %s\n", text)
 		}
-		if activity.Error != "" {
+				if activity.Error != "" {
 			fmt.Printf("Error: %s\n", activity.Error)
+		}
+
+		// Show stream.log path and size for observability
+		agentDir := agent.AgentDir(id)
+		streamPath := filepath.Join(agentDir, "stream.log")
+		if info, err := os.Stat(streamPath); err == nil {
+			fmt.Printf("Stream: %s (%s)\n", streamPath, humanBytes(info.Size()))
 		}
 	},
 }
@@ -735,6 +743,19 @@ func timeNow() int64 {
 	return time.Now().Unix()
 }
 
+func humanBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 func readStdin() []byte {
 	data := make([]byte, 0, 4096)
 	buf := make([]byte, 4096)
@@ -780,11 +801,11 @@ func init() {
 	recvCmd.Flags().Int("timeout", 60, "Timeout in seconds for --wait")
 	recvCmd.Flags().Bool("all", false, "Receive all pending messages")
 
-	// Agent subcommands
+		// Agent subcommands
 	agentCmd.AddCommand(
 		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
 		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
-		agentOutputCmd, agentWaitCmd, agentLsCmd,
+		agentOutputCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
 	)
 
 	// Channel subcommands
@@ -794,6 +815,6 @@ func init() {
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
 	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
 
-	// Root subcommands
-	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd)
+		// Root subcommands
+	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
 }

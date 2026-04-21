@@ -97,7 +97,7 @@ func Send(target string, data []byte, isFile bool) error {
 }
 
 // Recv reads and removes the first (oldest) message from a channel or agent output.
-// For headless agents that are done, it reads the output file.
+// For agents that are done, it reads the output file.
 // For channels, it reads the oldest .msg file (sorted by name).
 func Recv(source string, wait bool, timeoutSec int, all bool) ([]byte, error) {
 	// Check if source is an agent
