@@ -100,8 +100,11 @@ var agentStatusCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("Agent: %s\n", id)
+				fmt.Printf("Agent: %s\n", id)
 		fmt.Printf("Status: %s\n", activity.Status)
+		if activity.Backend != "" {
+			fmt.Printf("Backend: %s\n", activity.Backend)
+		}
 		if activity.Pid > 0 {
 			fmt.Printf("PID: %d\n", activity.Pid)
 		}
@@ -277,8 +280,22 @@ var agentOutputCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if format == "json" {
-			data, _ := json.MarshalIndent(map[string]string{"output": output}, "", "  ")
+				if format == "json" {
+			// Structured output with metadata
+			act, _ := agent.ReadActivity(id)
+			result := map[string]any{
+				"output": output,
+			}
+			if act != nil {
+				result["status"] = act.Status
+				result["backend"] = act.Backend
+				result["duration"] = formatDuration(act.FinishedAt - act.StartedAt)
+				result["turns"] = act.Turns
+				if act.TokensTotal > 0 {
+					result["tokensTotal"] = act.TokensTotal
+				}
+			}
+			data, _ := json.MarshalIndent(result, "", "  ")
 			fmt.Println(string(data))
 			return
 		}
@@ -324,14 +341,18 @@ var agentLsCmd = &cobra.Command{
 			return
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tSTARTED")
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ID\tSTATUS\tBACKEND\tSTARTED")
 		for _, a := range allAgents {
 			started := "-"
 			if a.StartedAt > 0 {
 				started = formatTime(a.StartedAt)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", a.ID, a.Status, started)
+			be := a.Backend
+			if be == "" {
+				be = "ai"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Status, be, started)
 		}
 		w.Flush()
 	},
