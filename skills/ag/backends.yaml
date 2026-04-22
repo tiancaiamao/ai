@@ -19,7 +19,7 @@ backends:
 
   codex:
     command: codex
-    args: ["--quiet", "--full-auto"]
+    args: ["exec", "--full-auto", "--json", "--skip-git-repo-check"]
     protocol: raw
     supports:
       steer: false

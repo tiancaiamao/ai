@@ -13,6 +13,22 @@ Git worktrees create isolated workspaces sharing the same repository, allowing w
 
 **Announce at start:** "I'm using the using-git-worktrees skill to set up an isolated workspace."
 
+---
+
+## ⛔ MANDATORY — Worktree Creation Checklist
+
+**创建 worktree 后、开始任何工作之前，必须完成以下全部项目：**
+
+- [ ] **目录选择** — 按优先级：existing `.worktrees/` > CLAUDE.md > ask user
+- [ ] **验证 gitignore** — `git check-ignore` 确认目录被忽略（project-local 时）
+- [ ] **创建 worktree** — `git worktree add <path> -b <branch>`
+- [ ] **切换工作区** — 使用 `change_workspace` 工具，不是 `cd`
+- [ ] **安装依赖** — `go mod download` / `npm install` 等
+- [ ] **验证基线** — `go test ./...` 或等效命令，确保测试全部通过
+- [ ] **报告位置** — 向用户报告路径、测试结果、准备就绪
+
+**只有全部通过才开始 feature 工作。** 基线测试失败时必须报告并询问是否继续。
+
 ## Directory Selection Process
 
 Follow this priority order:

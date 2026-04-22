@@ -33,6 +33,18 @@ The default backend uses `ai --mode rpc` with full JSON-RPC event parsing. This 
 - Mid-turn steering, abort, and follow-up prompts
 - Full structured activity.json
 
+### Codex Backend
+
+The codex backend uses `codex exec --full-auto --json --skip-git-repo-check` with the `raw` protocol. Key considerations:
+
+| 要点 | 说明 |
+|------|------|
+| **代理** | ⛔ 必须在 spawn 的 shell 中 `export HTTP_PROXY=http://127.0.0.1:8119` 和 `HTTPS_PROXY`。`exec.Command` 继承父进程环境变量，所以 export 就够了 |
+| **backends.yaml** | 必须在 CWD。`FindBackendsFile` 在当前目录查找，找不到则报 `unknown backend "codex"` |
+| **raw protocol** | 不支持 steer/abort/prompt，只能等 codex 自行完成。用 `ag wait --timeout` 控制超时 |
+| **--skip-git-repo-check** | codex 默认要求在 git repo 中运行，非 git 目录（如 /tmp）需要此 flag |
+| **调试** | 看不到活动时检查 `.ag/agents/<id>/stderr`，常见原因是代理未设置导致连接超时 |
+
 ### Backends Configuration
 
 Backends are defined in `backends.yaml` (co-located with the ag skill):
@@ -49,7 +61,7 @@ backends:
       prompt: true
   codex:
     command: codex
-    args: ["--quiet", "--full-auto"]
+    args: ["exec", "--full-auto", "--json", "--skip-git-repo-check"]
     protocol: raw
     supports:
       steer: false

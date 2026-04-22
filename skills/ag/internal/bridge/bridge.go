@@ -159,11 +159,14 @@ func Run(id string) error {
 			if _, err := stdinPipe.Write(append(data, '\n')); err != nil {
 				log.Printf("bridge: failed to send initial prompt: %v", err)
 			}
-		} else {
+				} else {
 			// Raw protocol: write input as plain text followed by newline
 			if _, err := fmt.Fprintln(stdinPipe, cfg.Input); err != nil {
 				log.Printf("bridge: failed to send initial input: %v", err)
 			}
+			// Raw backends (e.g., codex exec) read stdin until EOF before processing.
+			// Since raw protocol has no follow-up commands, close stdin to signal EOF.
+			stdinPipe.Close()
 		}
 	}
 
