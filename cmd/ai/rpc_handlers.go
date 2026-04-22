@@ -869,7 +869,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Unlock()
 
 		slog.Info("Created new session", "name", name, "id", newSessionID)
-		return newSessionID, nil
+		return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 	})
 
 	server.RegisterSlash("list_sessions", func(args string) (any, error) {
@@ -890,11 +890,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sess.CurrentWorkdir = currentWorkdir
 			result[i] = sess
 		}
-		return result, nil
+		return map[string]any{"sessions": result}, nil
 	})
 
-	server.RegisterSlash("switch_session", func(args string) (any, error) {
+		server.RegisterSlash("switch_session", func(args string) (any, error) {
+		var jsonData struct {
+			ID          string `json:"id"`
+			SessionPath string `json:"sessionPath"`
+		}
 		id := strings.TrimSpace(args)
+		if parseJSONArgs(args, &jsonData) {
+			id = jsonData.ID
+			if jsonData.SessionPath != "" {
+				id = jsonData.SessionPath
+			}
+		}
 		slog.Info("Received switch_session: id=", "id", id)
 		if id == "" {
 			return nil, fmt.Errorf("session id is required")
@@ -955,8 +965,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				}
 			}
 
-			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-			return nil, nil
+						slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+			return map[string]any{"switched": true, "cancelled": false}, nil
 		}
 
 		if err := sessionMgr.SetCurrent(id); err != nil {
@@ -997,14 +1007,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
-		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-		return nil, nil
+						slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+		return map[string]any{"switched": true, "cancelled": false}, nil
 	})
 
 	server.RegisterSlash("delete_session", func(args string) (any, error) {
+		var jsonData struct {
+			ID string `json:"id"`
+		}
 		id := strings.TrimSpace(args)
-		slog.Info("Received delete_session: id=", "id", id)
-		return nil, sessionMgr.DeleteSession(id)
+		if parseJSONArgs(args, &jsonData) && jsonData.ID != "" {
+			id = jsonData.ID
+		}
+						slog.Info("Received delete_session: id=", "id", id)
+		if err := sessionMgr.DeleteSession(id); err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": true}, nil
 	})
 
 		server.RegisterSlash("set_session_name", func(args string) (any, error) {
@@ -1085,7 +1104,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		for i, msg := range messages {
 			result[i] = msg
 		}
-		return result, nil
+		return map[string]any{"messages": result}, nil
 	})
 
 	server.RegisterSlash("compact", func(args string) (any, error) {
@@ -1189,7 +1208,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		for _, spec := range specs {
 			models = append(models, modelInfoFromSpec(spec))
 		}
-		return models, nil
+		return map[string]any{"models": models}, nil
 	})
 
 		server.RegisterSlash("set_model", func(args string) (any, error) {
@@ -1350,7 +1369,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	server.RegisterSlash("get_commands", func(args string) (any, error) {
 		slog.Info("Received get_commands")
-		return skillCommands, nil
+		return map[string]any{"commands": skillCommands}, nil
 	})
 
 	server.RegisterSlash("get_session_stats", func(args string) (any, error) {
@@ -1507,7 +1526,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil, nil
+		return map[string]any{"cutoff": cutoff}, nil
 	})
 
 	validToolSummaryStrategies := map[string]bool{
@@ -1521,21 +1540,33 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"always":   true,
 	}
 
-	server.RegisterSlash("set_tool_summary_strategy", func(args string) (any, error) {
+		server.RegisterSlash("set_tool_summary_strategy", func(args string) (any, error) {
+		var jsonData struct {
+			Strategy string `json:"strategy"`
+		}
 		strategy := strings.ToLower(strings.TrimSpace(args))
+		if parseJSONArgs(args, &jsonData) {
+			strategy = strings.ToLower(jsonData.Strategy)
+		}
 		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
 		if !validToolSummaryStrategies[strategy] {
 			return nil, fmt.Errorf("invalid tool summary strategy")
 		}
-		compactorConfig.ToolSummaryStrategy = strategy
+				compactorConfig.ToolSummaryStrategy = strategy
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil, nil
+		return map[string]any{"strategy": strategy}, nil
 	})
 
-	server.RegisterSlash("set_tool_summary_automation", func(args string) (any, error) {
+		server.RegisterSlash("set_tool_summary_automation", func(args string) (any, error) {
+		var jsonData struct {
+			Mode string `json:"mode"`
+		}
 		mode := strings.ToLower(strings.TrimSpace(args))
+		if parseJSONArgs(args, &jsonData) {
+			mode = strings.ToLower(jsonData.Mode)
+		}
 		slog.Info("Received set_tool_summary_automation", "mode", mode)
 		if !validToolSummaryAutomations[mode] {
 			return nil, fmt.Errorf("invalid tool summary automation mode")
@@ -1544,7 +1575,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil, nil
+		return map[string]any{"mode": mode}, nil
 	})
 
 		server.RegisterSlash("set_trace_events", func(args string) (any, error) {
@@ -1560,7 +1591,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		if len(events) == 0 {
 			// Empty args means reset to default set.
-			return traceevent.ResetToDefaultEvents(), nil
+			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
 		}
 
 		normalized := make([]string, 0, len(events))
@@ -1572,10 +1603,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			normalized = append(normalized, e)
 		}
 		if len(normalized) == 0 {
-			return traceevent.ResetToDefaultEvents(), nil
+			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
 		}
 
-		applyExpanded := func(expanded []string, replace bool) []string {
+			applyExpanded := func(expanded []string, replace bool) []string {
 			if replace {
 				traceevent.DisableAllEvents()
 			}
@@ -1588,15 +1619,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		op := normalized[0]
 		switch op {
 		case "on":
-			return traceevent.ResetToDefaultEvents(), nil
+			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
 		case "all":
 			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
-			return applyExpanded(expanded, true), nil
+			return map[string]any{"events": applyExpanded(expanded, true)}, nil
 		case "default":
-			return traceevent.ResetToDefaultEvents(), nil
+			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
 		case "off", "none":
 			traceevent.DisableAllEvents()
-			return []string{}, nil
+			return map[string]any{"events": []string{}}, nil
 		case "enable":
 			if len(normalized) == 1 {
 				return nil, fmt.Errorf("trace-events enable requires at least one selector")
@@ -1605,7 +1636,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if len(unknown) > 0 {
 				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
 			}
-			return applyExpanded(expanded, false), nil
+			return map[string]any{"events": applyExpanded(expanded, false)}, nil
 		case "disable":
 			if len(normalized) == 1 {
 				return nil, fmt.Errorf("trace-events disable requires at least one selector")
@@ -1617,19 +1648,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			for _, eventName := range expanded {
 				traceevent.DisableEvent(eventName)
 			}
-			return traceevent.GetEnabledEvents(), nil
+			return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 		default:
 			expanded, unknown := traceevent.ExpandEventSelectors(normalized)
 			if len(unknown) > 0 {
 				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
 			}
-			return applyExpanded(expanded, true), nil
+			return map[string]any{"events": applyExpanded(expanded, true)}, nil
 		}
 	})
 
 	server.RegisterSlash("get_trace_events", func(args string) (any, error) {
 		slog.Info("Received get_trace_events")
-		return traceevent.GetEnabledEvents(), nil
+		return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 	})
 
 	server.RegisterSlash("get_workflow_status", func(args string) (any, error) {
@@ -1655,8 +1686,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"one-at-a-time": true,
 	}
 
-	server.RegisterSlash("set_steering_mode", func(args string) (any, error) {
+		server.RegisterSlash("set_steering_mode", func(args string) (any, error) {
+		var jsonData struct {
+			Mode string `json:"mode"`
+		}
 		mode := strings.ToLower(strings.TrimSpace(args))
+		if parseJSONArgs(args, &jsonData) {
+			mode = strings.ToLower(jsonData.Mode)
+		}
 		slog.Info("Received set_steering_mode", "mode", mode)
 		if !validSteeringModes[mode] {
 			return nil, fmt.Errorf("invalid steering mode")
@@ -1667,8 +1704,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-	server.RegisterSlash("set_follow_up_mode", func(args string) (any, error) {
+		server.RegisterSlash("set_follow_up_mode", func(args string) (any, error) {
+		var jsonData struct {
+			Mode string `json:"mode"`
+		}
 		mode := strings.ToLower(strings.TrimSpace(args))
+		if parseJSONArgs(args, &jsonData) {
+			mode = strings.ToLower(jsonData.Mode)
+		}
 		slog.Info("Received set_follow_up_mode", "mode", mode)
 		if !validFollowUpModes[mode] {
 			return nil, fmt.Errorf("invalid follow-up mode")
@@ -1704,7 +1747,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentThinkingLevel = level
 		stateMu.Unlock()
 		ag.SetThinkingLevel(level)
-		return level, nil
+		return map[string]any{"level": level}, nil
 	})
 
 	server.RegisterSlash("cycle_thinking_level", func(args string) (any, error) {
@@ -1724,7 +1767,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentThinkingLevel = next
 		stateMu.Unlock()
 		ag.SetThinkingLevel(next)
-		return next, nil
+				return map[string]any{"level": next}, nil
 	})
 
 	server.RegisterSlash("get_last_assistant_text", func(args string) (any, error) {
@@ -1732,7 +1775,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		messages := ag.GetMessages()
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role == "assistant" {
-				return messages[i].ExtractText(), nil
+				return map[string]any{"text": messages[i].ExtractText()}, nil
 			}
 		}
 		return "", nil
@@ -1748,18 +1791,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				Text:    msg.Text,
 			})
 		}
-		return result, nil
+		return map[string]any{"messages": result}, nil
 	})
 
 	server.RegisterSlash("get_tree", func(args string) (any, error) {
 		slog.Info("Received get_tree")
 		entries := sess.GetEntries()
 		tree := buildTreeEntries(entries, sess.GetLeafID())
-		return tree, nil
+		return map[string]any{"entries": tree}, nil
 	})
 
-	server.RegisterSlash("resume_on_branch", func(args string) (any, error) {
+		server.RegisterSlash("resume_on_branch", func(args string) (any, error) {
+		var jsonData struct {
+			EntryID string `json:"entryId"`
+		}
 		entryID := strings.TrimSpace(args)
+		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
+			entryID = jsonData.EntryID
+		}
 		slog.Info("Received resume_on_branch", "entryId", entryID)
 		stateMu.Lock()
 		streaming := isStreaming
@@ -1793,12 +1842,18 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
-
+		return map[string]any{"switched": true}, nil
 		return nil, nil
 	})
 
-	server.RegisterSlash("fork", func(args string) (any, error) {
+		server.RegisterSlash("fork", func(args string) (any, error) {
+		var jsonData struct {
+			EntryID string `json:"entryId"`
+		}
 		entryID := strings.TrimSpace(args)
+		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
+			entryID = jsonData.EntryID
+		}
 		slog.Info("Received fork: entryId=", "value", entryID)
 		entry, ok := sess.GetEntry(entryID)
 		if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
