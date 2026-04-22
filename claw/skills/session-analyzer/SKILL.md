@@ -44,7 +44,7 @@
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/
 ├── meta.json                    # 会话元数据 (id, name, title, createdAt, updatedAt)
-├── messages.jsonl               # Append-only journal（唯一数据源，5 种 entry type）
+├── messages.jsonl               # Append-only journal（唯一数据源，3 种 entry type）
 ├── messages.jsonl.lock          # 文件锁
 ├── checkpoint_index.json        # 所有 checkpoint 元信息索引
 ├── current -> checkpoints/checkpoint_NNNNN/  # 当前 checkpoint 符号链接
@@ -54,9 +54,6 @@
 │   │   └── agent_state.json     # 系统维护的元数据
 │   ├── checkpoint_00001/
 │   └── ...
-└── llm-context/
-    ├── overview.md              # 外部记忆文件
-    └── detail/                  # 详细内容目录
 ```
 
 ### 辅助数据文件
@@ -299,7 +296,7 @@ with open('<path>/messages.jsonl') as f:
 # Context management 相关 trace events
 python3 -c "
 import json
-target_events = ['context_update_reminder', 'context_decision_reminder', 'context_mgmt_messages_truncated', 'context_mgmt_llm_context_updated']
+target_events = ['context_mgmt', 'context_mgmt_check', 'context_mgmt_messages_truncated', 'context_mgmt_llm_context_updated']
 with open('<trace-path>') as f:
     data = json.load(f)
 for e in data.get('traceEvents', []):
@@ -309,16 +306,20 @@ for e in data.get('traceEvents', []):
 ```
 
 **当前有效的 context management trace events**（定义在 `pkg/traceevent/config.go`）：
-- `context_update_reminder` — Context 更新提醒
-- `context_decision_reminder` — Context 决策提醒
-- `context_mgmt_messages_truncated` — 消息截断操作
-- `context_mgmt_llm_context_updated` — LLM context 文件更新
+- `context_mgmt` — Context management 顶层事件
+- `context_mgmt_check` — Context 检查（含 decision、tier、token_percent、reason）
+- `context_mgmt_messages_truncated` — 消息截断操作（含 count、被截断的 id 列表）
+- `context_mgmt_llm_context_updated` — LLM context 文件更新（含 chars、turn）
 
 其他常用 trace events：
 - `prompt` — Prompt 构建
-- `llm_call` — LLM API 调用
-- `tool_execute` — 工具执行
-- `context_mgmt` / `context_mgmt_check` — Context management related
+- `llm_call` — LLM API 调用（含 model、input_tokens、output_tokens、duration_ms）
+- `tool_execution` / `tool_start` / `tool_end` — 工具执行生命周期
+- `tool_output_truncated` — 工具输出被截断
+- `tool_summary` / `tool_summary_batch` — 工具输出摘要
+- `tool_call_normalized` — 工具调用归一化
+- `llm_retry_scheduled` / `llm_retry_exhausted` — LLM 重试事件
+- `compaction` — 压缩事件
 
 ---
 
@@ -436,6 +437,4 @@ Agent: 调用 bash 工具，执行 `cat pkg/agent/loop.go`
 ## 参考文档
 
 - **Session Reader**: `references/session-reader.md` — 会话格式和读取方法
-- **Architecture**: `references/architecture.md` — 新架构参考（trampoline、trigger、checkpoint）
 - **Analyst**: `references/analyst.md` — 分析角色定义
-- **Subagent**: `/skills/subagent` — 子代理机制和最佳实践
