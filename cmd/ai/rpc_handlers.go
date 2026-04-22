@@ -1839,11 +1839,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			slog.Warn("Failed to update checkpoint manager for branch resume", "error", err)
 		}
 
-		if err := sessionMgr.SaveCurrent(); err != nil {
+				if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		return map[string]any{"switched": true}, nil
-		return nil, nil
 	})
 
 		server.RegisterSlash("fork", func(args string) (any, error) {
