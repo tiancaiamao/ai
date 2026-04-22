@@ -11,7 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+		"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -568,129 +570,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}
 
-	// Set up handlers
-	server.SetPromptHandler(func(req rpc.PromptRequest) error {
-		slog.Info("Received prompt:", "value", req.Message)
-		message := strings.TrimSpace(req.Message)
-		if message == "" {
-			return fmt.Errorf("empty prompt message")
-		}
-		if len(req.Images) > 0 {
-			return fmt.Errorf("images are not supported in this RPC implementation")
-		}
 
-		// Expand /skill:name commands
-		expandedMessage := expandSkillCommands(message)
-		if skill.IsSkillCommand(message) {
-			slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
-		}
-
-		stateMu.Lock()
-		streaming := isStreaming
-		mode := steeringMode
-		followMode := followUpMode
-		pending := pendingSteer
-		stateMu.Unlock()
-
-		if streaming {
-			behavior := strings.TrimSpace(req.StreamingBehavior)
-			if behavior == "" {
-				return fmt.Errorf("agent is streaming; specify streamingBehavior")
-			}
-			switch behavior {
-			case "steer":
-				if mode == "one-at-a-time" && pending {
-					return fmt.Errorf("steer already pending")
-				}
-				stateMu.Lock()
-				pendingSteer = true
-				stateMu.Unlock()
-				ag.Steer(expandedMessage)
-				return nil
-			case "followUp", "follow_up":
-				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
-					return fmt.Errorf("follow-up queue already has a pending message")
-				}
-				return ag.FollowUp(expandedMessage)
-			default:
-				return fmt.Errorf("invalid streamingBehavior: %s", behavior)
-			}
-		}
-
-		compactBeforeRequest("pre_request_prompt")
-		return ag.Prompt(expandedMessage)
-	})
-
-	server.SetSteerHandler(func(message string) error {
-		slog.Info("Received steer:", "value", message)
-
-		// Handle steer command
-		if strings.TrimSpace(message) == "" {
-			return fmt.Errorf("empty steer message")
-		}
-
-		// Expand /skill:name commands
-		expandedMessage := expandSkillCommands(message)
-		if skill.IsSkillCommand(message) {
-			slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
-		}
-
-		stateMu.Lock()
-		mode := steeringMode
-		pending := pendingSteer
-		streaming := isStreaming
-		stateMu.Unlock()
-		if mode == "one-at-a-time" && pending {
-			return fmt.Errorf("steer already pending")
-		}
-		if !streaming {
-			compactBeforeRequest("pre_request_steer")
-		}
-		stateMu.Lock()
-		pendingSteer = true
-		stateMu.Unlock()
-		ag.Steer(expandedMessage)
-		return nil
-	})
-
-	server.SetFollowUpHandler(func(message string) error {
-		slog.Info("Received follow_up:", "value", message)
-		if strings.TrimSpace(message) == "" {
-			return fmt.Errorf("empty follow-up message")
-		}
-
-		// Expand /skill:name commands
-		expandedMessage := expandSkillCommands(message)
-		if skill.IsSkillCommand(message) {
-			slog.Info("Expanded skill command in follow_up", "original", message, "skill", skill.ExtractSkillName(message))
-		}
-
-		stateMu.Lock()
-		mode := followUpMode
-		stateMu.Unlock()
-		if mode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
-			return fmt.Errorf("follow-up queue already has a pending message")
-		}
-		return ag.FollowUp(expandedMessage)
-	})
-
-	server.SetAbortHandler(func() error {
-		slog.Info("Received abort")
-		ag.Abort()
-		return nil
-	})
-
-	server.SetClearSessionHandler(func() error {
-		slog.Info("Received clear_session")
-		if err := sess.Clear(); err != nil {
-			return err
-		}
-		// Clear agent context
-		setAgentContext(createBaseContext())
-		slog.Info("Session cleared")
-		return nil
-	})
-
+	
+	
+	
 	// Helper function to update checkpoint manager for new session
 	updateCheckpointManager := func() error {
 		stateMu.Lock()
@@ -724,7 +607,190 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil
 	}
 
-	server.SetNewSessionHandler(func(name, title string) (string, error) {
+	// === Protocol command handlers ===
+
+	server.Register(rpc.CommandPrompt, func(cmd rpc.RPCCommand) (any, error) {
+		// Parse prompt data
+		var data struct {
+			Message           string            `json:"message"`
+			StreamingBehavior string            `json:"streamingBehavior"`
+			Images            []json.RawMessage `json:"images"`
+		}
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return nil, fmt.Errorf("invalid data: %w", err)
+			}
+		}
+		message := cmd.Message
+		if message == "" {
+			message = data.Message
+		}
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return nil, fmt.Errorf("empty prompt message")
+		}
+		if len(data.Images) > 0 {
+			return nil, fmt.Errorf("images are not supported in this RPC implementation")
+		}
+
+		// Intercept slash commands — execute synchronously without agent
+		if message[0] == '/' {
+						cmdName, args, err := command.ParseSlashCommand(message)
+			if err != nil {
+				return nil, fmt.Errorf("invalid slash command: %w", err)
+			}
+			handler, ok := server.GetSlashHandler(cmdName)
+			if !ok {
+				return nil, fmt.Errorf("unknown command: /%s", cmdName)
+			}
+			return handler(args)
+		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
+		}
+
+		stateMu.Lock()
+		streaming := isStreaming
+		mode := steeringMode
+		followMode := followUpMode
+		pending := pendingSteer
+		stateMu.Unlock()
+
+		if streaming {
+			behavior := strings.TrimSpace(data.StreamingBehavior)
+			if behavior == "" {
+				return nil, fmt.Errorf("agent is streaming; specify streamingBehavior")
+			}
+			switch behavior {
+			case "steer":
+				if mode == "one-at-a-time" && pending {
+					return nil, fmt.Errorf("steer already pending")
+				}
+				stateMu.Lock()
+				pendingSteer = true
+				stateMu.Unlock()
+				ag.Steer(expandedMessage)
+				return nil, nil
+			case "followUp", "follow_up":
+				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
+					return nil, fmt.Errorf("follow-up queue already has a pending message")
+				}
+				return nil, ag.FollowUp(expandedMessage)
+			default:
+				return nil, fmt.Errorf("invalid streamingBehavior: %s", behavior)
+			}
+		}
+
+		compactBeforeRequest("pre_request_prompt")
+		return nil, ag.Prompt(expandedMessage)
+	})
+
+	server.Register(rpc.CommandSteer, func(cmd rpc.RPCCommand) (any, error) {
+		message := cmd.Message
+		if message == "" && len(cmd.Data) > 0 {
+			var data struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return nil, fmt.Errorf("invalid data: %w", err)
+			}
+			message = data.Message
+		}
+
+		slog.Info("Received steer:", "value", message)
+
+		if strings.TrimSpace(message) == "" {
+			return nil, fmt.Errorf("empty steer message")
+		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
+		}
+
+		stateMu.Lock()
+		mode := steeringMode
+		pending := pendingSteer
+		streaming := isStreaming
+		stateMu.Unlock()
+		if mode == "one-at-a-time" && pending {
+			return nil, fmt.Errorf("steer already pending")
+		}
+		if !streaming {
+			compactBeforeRequest("pre_request_steer")
+		}
+		stateMu.Lock()
+		pendingSteer = true
+		stateMu.Unlock()
+		ag.Steer(expandedMessage)
+		return nil, nil
+	})
+
+	server.Register(rpc.CommandFollowUp, func(cmd rpc.RPCCommand) (any, error) {
+		message := cmd.Message
+		if message == "" && len(cmd.Data) > 0 {
+			var data struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				return nil, fmt.Errorf("invalid data: %w", err)
+			}
+			message = data.Message
+		}
+
+		slog.Info("Received follow_up:", "value", message)
+		if strings.TrimSpace(message) == "" {
+			return nil, fmt.Errorf("empty follow-up message")
+		}
+
+		// Expand /skill:name commands
+		expandedMessage := expandSkillCommands(message)
+		if skill.IsSkillCommand(message) {
+			slog.Info("Expanded skill command in follow_up", "original", message, "skill", skill.ExtractSkillName(message))
+		}
+
+		stateMu.Lock()
+		mode := followUpMode
+		stateMu.Unlock()
+		if mode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
+			return nil, fmt.Errorf("follow-up queue already has a pending message")
+		}
+		return nil, ag.FollowUp(expandedMessage)
+	})
+
+	server.Register(rpc.CommandAbort, func(cmd rpc.RPCCommand) (any, error) {
+		slog.Info("Received abort")
+		ag.Abort()
+		return nil, nil
+	})
+
+	// === Slash command handlers ===
+	// All commands below are registered as slash commands.
+	// They are invoked via the prompt channel: {"type": "prompt", "message": "/command args"}
+	// and intercepted by the prompt handler before entering the agent loop.
+
+	server.RegisterSlash("clear_session", func(args string) (any, error) {
+		slog.Info("Received clear_session")
+		if err := sess.Clear(); err != nil {
+			return nil, err
+		}
+		// Clear agent context
+		setAgentContext(createBaseContext())
+		slog.Info("Session cleared")
+		return nil, nil
+	})
+
+	server.RegisterSlash("new_session", func(args string) (any, error) {
+		parts := strings.SplitN(args, " ", 2)
+		name := strings.TrimSpace(parts[0])
+		title := ""
+		if len(parts) > 1 {
+			title = strings.TrimSpace(parts[1])
+		}
 		slog.Info("Received new_session", "name", name, "title", title)
 		if strings.TrimSpace(name) == "" {
 			name = time.Now().Format("20060102-150405")
@@ -734,14 +800,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		newSess, err := sessionMgr.CreateSession(name, title)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
 		newSessionID := newSess.GetID()
 
 		// Update session manager's current ID
 		if err := sessionMgr.SetCurrent(newSessionID); err != nil {
-			return "", err
+			return nil, err
 		}
 
 		// Update current session metadata
@@ -767,7 +833,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return newSessionID, nil
 	})
 
-	server.SetListSessionsHandler(func() ([]any, error) {
+	server.RegisterSlash("list_sessions", func(args string) (any, error) {
 		slog.Info("Received list_sessions")
 		sessions, err := sessionMgr.ListSessions()
 		if err != nil {
@@ -788,17 +854,18 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return result, nil
 	})
 
-	server.SetSwitchSessionHandler(func(id string) error {
+	server.RegisterSlash("switch_session", func(args string) (any, error) {
+		id := strings.TrimSpace(args)
 		slog.Info("Received switch_session: id=", "id", id)
 		if id == "" {
-			return fmt.Errorf("session id is required")
+			return nil, fmt.Errorf("session id is required")
 		}
 
 		// Treat absolute or relative path as session file
 		if strings.Contains(id, string(os.PathSeparator)) || strings.HasSuffix(id, ".jsonl") {
 			sessionPath, err := normalizeSessionPath(id)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			// LoadSessionLazy expects session directory, not file path
 			// Extract directory if sessionPath points to messages.jsonl
@@ -806,7 +873,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if strings.HasSuffix(sessionPath, ".jsonl") {
 				info, err := os.Stat(sessionPath)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				if !info.IsDir() {
 					sessionDir = filepath.Dir(sessionPath)
@@ -815,7 +882,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			opts := session.DefaultLoadOptions()
 			newSess, err := session.LoadSessionLazy(sessionDir, opts)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			newSessionID := newSess.GetID()
 			sessionsDir = sessionDir
@@ -850,17 +917,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 
 			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-			return nil
+			return nil, nil
 		}
 
 		if err := sessionMgr.SetCurrent(id); err != nil {
-			return err
+			return nil, err
 		}
 
 		// Load the new session
 		newSess, err := sessionMgr.GetSession(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		newSessionID := newSess.GetID()
 		if err := sessionMgr.SaveCurrent(); err != nil {
@@ -892,36 +959,37 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-		return nil
+		return nil, nil
 	})
 
-	server.SetDeleteSessionHandler(func(id string) error {
+	server.RegisterSlash("delete_session", func(args string) (any, error) {
+		id := strings.TrimSpace(args)
 		slog.Info("Received delete_session: id=", "id", id)
-		return sessionMgr.DeleteSession(id)
+		return nil, sessionMgr.DeleteSession(id)
 	})
 
-	server.SetSetSessionNameHandler(func(name string) error {
+	server.RegisterSlash("set_session_name", func(args string) (any, error) {
+		name := strings.TrimSpace(args)
 		slog.Info("Received set_session_name", "name", name)
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			return fmt.Errorf("session name cannot be empty")
+		if name == "" {
+			return nil, fmt.Errorf("session name cannot be empty")
 		}
-		if _, err := sess.AppendSessionInfo(trimmed, ""); err != nil {
-			return err
+		if _, err := sess.AppendSessionInfo(name, ""); err != nil {
+			return nil, err
 		}
-		if err := sessionMgr.UpdateSessionName(sessionID, trimmed, ""); err != nil {
+		if err := sessionMgr.UpdateSessionName(sessionID, name, ""); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		stateMu.Lock()
-		sessionName = trimmed
+		sessionName = name
 		stateMu.Unlock()
-		return nil
+		return nil, nil
 	})
 
-	server.SetGetStateHandler(func() (*rpc.SessionState, error) {
+	server.RegisterSlash("get_state", func(args string) (any, error) {
 		slog.Info("Received get_state")
 		compactionState := buildCompactionState(compactorConfig, compactor)
 		stateMu.Lock()
@@ -965,7 +1033,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.SetGetMessagesHandler(func() ([]any, error) {
+	server.RegisterSlash("get_messages", func(args string) (any, error) {
 		slog.Info("Received get_messages")
 		messages := ag.GetMessages()
 		result := make([]any, len(messages))
@@ -975,7 +1043,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return result, nil
 	})
 
-	server.SetCompactHandler(func() (*rpc.CompactResult, error) {
+	server.RegisterSlash("compact", func(args string) (any, error) {
 		slog.Info("Received compact")
 		beforeCount := len(ag.GetMessages())
 
@@ -1059,7 +1127,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return response, nil
 	})
 
-	server.SetGetAvailableModelsHandler(func() ([]rpc.ModelInfo, error) {
+	server.RegisterSlash("get_available_models", func(args string) (any, error) {
 		slog.Info("Received get_available_models")
 		specs, modelsPath, err := loadModelSpecs(cfg)
 		if err != nil {
@@ -1079,7 +1147,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return models, nil
 	})
 
-	server.SetSetModelHandler(func(provider, modelID string) (*rpc.ModelInfo, error) {
+	server.RegisterSlash("set_model", func(args string) (any, error) {
+		parts := strings.SplitN(args, " ", 2)
+		provider := strings.TrimSpace(parts[0])
+		modelID := ""
+		if len(parts) > 1 {
+			modelID = strings.TrimSpace(parts[1])
+		}
 		slog.Info("Received set_model", "provider", provider, "modelId", modelID)
 		if strings.TrimSpace(provider) == "" || strings.TrimSpace(modelID) == "" {
 			return nil, fmt.Errorf("provider and modelId are required")
@@ -1145,7 +1219,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return &info, nil
 	})
 
-	server.SetCycleModelHandler(func() (*rpc.CycleModelResult, error) {
+	server.RegisterSlash("cycle_model", func(args string) (any, error) {
 		slog.Info("Received cycle_model")
 		specs, modelsPath, err := loadModelSpecs(cfg)
 		if err != nil {
@@ -1220,12 +1294,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	skillCommands := buildSkillCommands(skillResult.Skills)
-	server.SetGetCommandsHandler(func() ([]rpc.SlashCommand, error) {
+
+	server.RegisterSlash("get_commands", func(args string) (any, error) {
 		slog.Info("Received get_commands")
 		return skillCommands, nil
 	})
 
-	server.SetGetSessionStatsHandler(func() (*rpc.SessionStats, error) {
+	server.RegisterSlash("get_session_stats", func(args string) (any, error) {
 		slog.Info("Received get_session_stats")
 		messages := ag.GetMessages()
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
@@ -1291,53 +1366,60 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.SetBashHandler(func(command string) (*rpc.BashResult, error) {
+	server.RegisterSlash("bash", func(args string) (any, error) {
 		slog.Info("Received bash")
-		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
+		return bashRunner.Run(ws.GetCWD(), args, bashTimeout)
 	})
 
-	server.SetAbortBashHandler(func() error {
+	server.RegisterSlash("abort_bash", func(args string) (any, error) {
 		slog.Info("Received abort_bash")
-		return bashRunner.Abort()
+		return nil, bashRunner.Abort()
 	})
 
-	server.SetSetAutoRetryHandler(func(enabled bool) error {
+	server.RegisterSlash("set_auto_retry", func(args string) (any, error) {
+		enabled := strings.TrimSpace(strings.ToLower(args))
 		slog.Info("Received set_auto_retry", "enabled", enabled)
-		ag.SetAutoRetry(enabled)
-		return nil
+		ag.SetAutoRetry(enabled == "true" || enabled == "1")
+		return nil, nil
 	})
 
-	server.SetAbortRetryHandler(func() error {
+	server.RegisterSlash("abort_retry", func(args string) (any, error) {
 		slog.Info("Received abort_retry")
 		ag.Abort()
-		return nil
+		return nil, nil
 	})
 
-	server.SetExportHTMLHandler(func(outputPath string) (string, error) {
-		slog.Info("Received export_html", "outputPath", outputPath)
+	server.RegisterSlash("export_html", func(args string) (any, error) {
+		slog.Info("Received export_html", "outputPath", args)
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-	server.SetSetAutoCompactionHandler(func(enabled bool) error {
+	server.RegisterSlash("set_auto_compaction", func(args string) (any, error) {
+		enabled := strings.TrimSpace(strings.ToLower(args))
 		slog.Info("Received set_auto_compaction: enabled=", "value", enabled)
-		compactorConfig.AutoCompact = enabled
+		val := enabled == "true" || enabled == "1"
+		compactorConfig.AutoCompact = val
 		stateMu.Lock()
-		autoCompactionEnabled = enabled
+		autoCompactionEnabled = val
 		stateMu.Unlock()
-		return nil
+		return nil, nil
 	})
 
-	server.SetSetToolCallCutoffHandler(func(cutoff int) error {
+	server.RegisterSlash("set_tool_call_cutoff", func(args string) (any, error) {
+		cutoff, err := strconv.Atoi(strings.TrimSpace(args))
+		if err != nil {
+			return nil, fmt.Errorf("invalid cutoff value: %w", err)
+		}
 		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
 		if cutoff < 0 {
-			return fmt.Errorf("cutoff must be >= 0")
+			return nil, fmt.Errorf("cutoff must be >= 0")
 		}
 		compactorConfig.ToolCallCutoff = cutoff
 		ag.SetToolCallCutoff(cutoff)
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil
+		return nil, nil
 	})
 
 	validToolSummaryStrategies := map[string]bool{
@@ -1351,37 +1433,39 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"always":   true,
 	}
 
-	server.SetSetToolSummaryStrategyHandler(func(strategy string) error {
-		strategy = strings.ToLower(strings.TrimSpace(strategy))
+	server.RegisterSlash("set_tool_summary_strategy", func(args string) (any, error) {
+		strategy := strings.ToLower(strings.TrimSpace(args))
 		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
 		if !validToolSummaryStrategies[strategy] {
-			return fmt.Errorf("invalid tool summary strategy")
+			return nil, fmt.Errorf("invalid tool summary strategy")
 		}
 		compactorConfig.ToolSummaryStrategy = strategy
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil
+		return nil, nil
 	})
 
-	server.SetSetToolSummaryAutomationHandler(func(mode string) error {
-		mode = strings.ToLower(strings.TrimSpace(mode))
+	server.RegisterSlash("set_tool_summary_automation", func(args string) (any, error) {
+		mode := strings.ToLower(strings.TrimSpace(args))
 		slog.Info("Received set_tool_summary_automation", "mode", mode)
 		if !validToolSummaryAutomations[mode] {
-			return fmt.Errorf("invalid tool summary automation mode")
+			return nil, fmt.Errorf("invalid tool summary automation mode")
 		}
 		compactorConfig.ToolSummaryAutomation = mode
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
-		return nil
+		return nil, nil
 	})
 
-	server.SetSetTraceEventsHandler(func(events []string) ([]string, error) {
+	server.RegisterSlash("set_trace_events", func(args string) (any, error) {
+		// Parse args as space-separated event specifiers
+		events := strings.Fields(args)
 		slog.Info("Received set_trace_events", "events", events)
 
 		if len(events) == 0 {
-			// Empty array means reset to default set.
+			// Empty args means reset to default set.
 			return traceevent.ResetToDefaultEvents(), nil
 		}
 
@@ -1410,10 +1494,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		op := normalized[0]
 		switch op {
 		case "on":
-			// "on" enables the default working set (not all events, to avoid high-frequency noise)
 			return traceevent.ResetToDefaultEvents(), nil
 		case "all":
-			// "all" enables ALL known events, including high-frequency ones
 			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
 			return applyExpanded(expanded, true), nil
 		case "default":
@@ -1443,7 +1525,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 			return traceevent.GetEnabledEvents(), nil
 		default:
-			// Backward-compatible absolute set.
 			expanded, unknown := traceevent.ExpandEventSelectors(normalized)
 			if len(unknown) > 0 {
 				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
@@ -1452,47 +1533,54 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-	server.SetGetTraceEventsHandler(func() ([]string, error) {
+	server.RegisterSlash("get_trace_events", func(args string) (any, error) {
 		slog.Info("Received get_trace_events")
 		return traceevent.GetEnabledEvents(), nil
 	})
 
-	server.SetGetWorkflowStatusHandler(func() (*rpc.WorkflowState, error) {
+	server.RegisterSlash("get_workflow_status", func(args string) (any, error) {
 		slog.Info("Received get_workflow_status")
-		return getWorkflowStatus(cwd)
+				status, err := getWorkflowStatus(ws.GetCWD())
+		if err != nil {
+			return nil, err
+		}
+		if status == nil {
+			return nil, nil
+		}
+		return status, nil
 	})
 
 	validSteeringModes := map[string]bool{
-		"all":           true,
+		"immediate":    true,
 		"one-at-a-time": true,
 	}
 	validFollowUpModes := map[string]bool{
-		"all":           true,
+		"immediate":    true,
 		"one-at-a-time": true,
 	}
 
-	server.SetSetSteeringModeHandler(func(mode string) error {
+	server.RegisterSlash("set_steering_mode", func(args string) (any, error) {
+		mode := strings.ToLower(strings.TrimSpace(args))
 		slog.Info("Received set_steering_mode", "mode", mode)
-		mode = strings.ToLower(strings.TrimSpace(mode))
 		if !validSteeringModes[mode] {
-			return fmt.Errorf("invalid steering mode")
+			return nil, fmt.Errorf("invalid steering mode")
 		}
 		stateMu.Lock()
 		steeringMode = mode
 		stateMu.Unlock()
-		return nil
+		return nil, nil
 	})
 
-	server.SetSetFollowUpModeHandler(func(mode string) error {
+	server.RegisterSlash("set_follow_up_mode", func(args string) (any, error) {
+		mode := strings.ToLower(strings.TrimSpace(args))
 		slog.Info("Received set_follow_up_mode", "mode", mode)
-		mode = strings.ToLower(strings.TrimSpace(mode))
 		if !validFollowUpModes[mode] {
-			return fmt.Errorf("invalid follow-up mode")
+			return nil, fmt.Errorf("invalid follow-up mode")
 		}
 		stateMu.Lock()
 		followUpMode = mode
 		stateMu.Unlock()
-		return nil
+		return nil, nil
 	})
 
 	validThinkingLevels := map[string]bool{
@@ -1505,10 +1593,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 
-	server.SetSetThinkingLevelHandler(func(level string) (string, error) {
-		level = strings.ToLower(strings.TrimSpace(level))
+	server.RegisterSlash("set_thinking_level", func(args string) (any, error) {
+		level := strings.ToLower(strings.TrimSpace(args))
 		if !validThinkingLevels[level] {
-			return "", fmt.Errorf("invalid thinking level")
+			return nil, fmt.Errorf("invalid thinking level")
 		}
 		stateMu.Lock()
 		currentThinkingLevel = level
@@ -1517,7 +1605,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return level, nil
 	})
 
-	server.SetCycleThinkingLevelHandler(func() (string, error) {
+	server.RegisterSlash("cycle_thinking_level", func(args string) (any, error) {
 		stateMu.Lock()
 		current := currentThinkingLevel
 		stateMu.Unlock()
@@ -1537,7 +1625,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return next, nil
 	})
 
-	server.SetGetLastAssistantTextHandler(func() (string, error) {
+	server.RegisterSlash("get_last_assistant_text", func(args string) (any, error) {
 		slog.Info("Received get_last_assistant_text")
 		messages := ag.GetMessages()
 		for i := len(messages) - 1; i >= 0; i-- {
@@ -1548,7 +1636,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return "", nil
 	})
 
-	server.SetGetForkMessagesHandler(func() ([]rpc.ForkMessage, error) {
+	server.RegisterSlash("get_fork_messages", func(args string) (any, error) {
 		slog.Info("Received get_fork_messages")
 		forkMessages := sess.GetUserMessagesForForking()
 		result := make([]rpc.ForkMessage, 0, len(forkMessages))
@@ -1561,32 +1649,32 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return result, nil
 	})
 
-	server.SetGetTreeHandler(func() ([]rpc.TreeEntry, error) {
+	server.RegisterSlash("get_tree", func(args string) (any, error) {
 		slog.Info("Received get_tree")
 		entries := sess.GetEntries()
 		tree := buildTreeEntries(entries, sess.GetLeafID())
 		return tree, nil
 	})
 
-	server.SetResumeOnBranchHandler(func(entryID string) error {
+	server.RegisterSlash("resume_on_branch", func(args string) (any, error) {
+		entryID := strings.TrimSpace(args)
 		slog.Info("Received resume_on_branch", "entryId", entryID)
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
 		if streaming {
-			return fmt.Errorf("agent is busy")
+			return nil, fmt.Errorf("agent is busy")
 		}
 
-		entryID = strings.TrimSpace(entryID)
 		if entryID == "" {
-			return fmt.Errorf("entryId is required")
+			return nil, fmt.Errorf("entryId is required")
 		}
 
 		if entryID == "root" {
 			sess.ResetLeaf()
 		} else {
 			if err := sess.Branch(entryID); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -1604,10 +1692,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 
-		return nil
+		return nil, nil
 	})
 
-	server.SetForkHandler(func(entryID string) (*rpc.ForkResult, error) {
+	server.RegisterSlash("fork", func(args string) (any, error) {
+		entryID := strings.TrimSpace(args)
 		slog.Info("Received fork: entryId=", "value", entryID)
 		entry, ok := sess.GetEntry(entryID)
 		if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
@@ -1647,7 +1736,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Forked to new session", "name", name, "id", newSessionID)
 		return &rpc.ForkResult{Cancelled: false, Text: text}, nil
 	})
-
 	// Start event emitter
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
