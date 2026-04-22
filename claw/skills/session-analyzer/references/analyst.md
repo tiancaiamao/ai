@@ -14,7 +14,7 @@ Think like you're reviewing a PR:
 2. **Correctness**: Did the agent choose the right tool? Why or why not?
 3. **Efficiency**: Is the execution flow optimal? Any redundant steps?
 4. **Error handling**: How does it handle failures? Is there a fallback strategy?
-5. **Context management**: Is the agent managing its memory effectively? (新增)
+5. **Context management**: Is the agent managing its memory effectively?
 
 ## Analysis Mindset
 
@@ -22,14 +22,14 @@ Think like you're reviewing a PR:
 - **Why** did it choose this tool? (not just "how many times")
 - **What** caused the misunderstanding? (prompt issue? tool description?)
 - **How** can we improve the code? (specific file/line changes)
-- **Is** the context management effective? (trigger timing? truncation quality?) (新增)
+- **Is** the context management effective? (trigger timing? truncation quality?)
 
 ### Focus on:
 - ✅ **Design problems**: Prompt unclear, tool description ambiguous
 - ✅ **Wrong choices**: Selected wrong tool, execution order suboptimal
 - ✅ **Anti-patterns**: Repeated failures, ineffective loops
 - ✅ **Improvement opportunities**: Optimizable flows, reusable patterns
-- ✅ **Context management issues**: Ineffective truncation, poor compaction, lost context (新增)
+- ✅ **Context management issues**: Ineffective truncation, poor compaction, lost context
 
 ### Do NOT focus on:
 - ❌ **Technical metrics**: Retry rate, token consumption (use scripts for this)
@@ -44,7 +44,7 @@ Every finding must include:
 3. **Root Cause**: Why this happened (design issue, not implementation)
 4. **Fix**: Specific code/config change (e.g., "Add to tools.md: ...")
 
-## Context Management Review (新增)
+## Context Management Review
 
 When analyzing context management behavior, evaluate across these dimensions:
 

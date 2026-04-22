@@ -2,7 +2,7 @@
 
 ## Journal 文件：messages.jsonl
 
-Append-only journal，每行一个 JSON entry。共 5 种 entry type：
+Append-only journal，每行一个 JSON entry。共 3 种 entry type：
 
 ### 1. `session` — 头部标记
 
@@ -35,7 +35,7 @@ Append-only journal，每行一个 JSON entry。共 5 种 entry type：
 
 ### 3. `message` — 标准消息
 
-**最重要的 entry type**，占 ~70% 的行数。
+**最重要的 entry type**，占绝大多数行数。
 
 ```json
 {
@@ -79,47 +79,11 @@ Append-only journal，每行一个 JSON entry。共 5 种 entry type：
 - `toolResult` 消息的 content 通常是 `[{"type": "text", "text": "..."}]`
 - `agent_visible` / `user_visible` 控制可见性
 
-### 4. `truncate` — 截断事件
-
-由 `truncate_messages` 工具产生，记录某个工具输出被截断。
-
-```json
-{
-  "type": "truncate",
-  "truncate": {
-    "tool_call_id": "call_d8c59e3849fb45649a4ea4b1",
-    "turn": 3,
-    "trigger": "context_management",
-    "timestamp": "2026-04-03T11:26:54+08:00"
-  }
-}
-```
-
-**分析价值**：
-- `tool_call_id` 可回溯到被截断的具体工具调用
-- `turn` 标识截断发生的轮次
-- 高频截断可能意味着工具输出过大或触发阈值过于敏感
-
-### 5. `compact` — 压缩事件
-
-由 `compact_messages` 工具产生，包含完整的压缩摘要。
-
-```json
-{
-  "type": "compact",
-  "compact": {
-    "summary": "## Current Task\n...\n## Files Involved\n...\n## Key Decisions\n...",
-    "kept_message_count": 8,
-    "turn": 6,
-    "timestamp": "2026-04-03T11:35:59+08:00"
-  }
-}
-```
-
-**分析价值**：
-- `summary` 是 agent 保留的完整上下文摘要，可评估信息保留质量
-- `kept_message_count` 显示压缩后保留的消息数
-- 压缩前后对比：compact 后 agent 是否丢失了关键信息？
+**注意**：截断和压缩事件不再作为独立 entry type 出现，而是通过 trace events 追踪：
+- `context_mgmt_messages_truncated` — 消息截断（含 count、id 列表）
+- `context_mgmt_llm_context_updated` — LLM context 更新
+- `tool_output_truncated` — 工具输出截断
+- `compaction` — 压缩操作
 
 ## 辅助文件
 
@@ -167,17 +131,24 @@ Append-only journal，每行一个 JSON entry。共 5 种 entry type：
 
 ```json
 {
-  "WorkspaceRoot": "~/.ai/sessions/--...--/<session-id>",
-  "TotalTurns": 8,
-  "TokensUsed": 38136,
+  "WorkspaceRoot": "/Users/genius/project/ai",
+  "CurrentWorkingDir": "/Users/genius/project/ai",
+  "TotalTurns": 19,
+  "TokensUsed": 48391,
   "TokensLimit": 200000,
-  "LastLLMContextUpdate": 8,
-  "LastCheckpoint": 6,
-  "LastTriggerTurn": 7,
-  "TurnsSinceLastTrigger": 1,
-  "ToolCallsSinceLastTrigger": 30,
+  "LastLLMContextUpdate": 175,
+  "LastCheckpoint": 0,
+  "LastTriggerTurn": 175,
+  "TurnsSinceLastTrigger": 0,
+  "ToolCallsSinceLastTrigger": 0,
+  "TotalTruncations": 4,
+  "TotalCompactions": 1,
+  "LastCompactTurn": 114,
   "ActiveToolCalls": [],
-  "SessionID": "sess_...",
+  "RuntimeMetaTurns": 5,
+  "RuntimeMetaSnapshot": "<agent:runtime_state .../>",
+  "RuntimeMetaBand": "20-40",
+  "SessionID": "",
   "CreatedAt": "2026-04-03T11:23:18+08:00",
   "UpdatedAt": "2026-04-03T11:35:59+08:00"
 }
@@ -187,6 +158,9 @@ Append-only journal，每行一个 JSON entry。共 5 种 entry type：
 - `LastTriggerTurn`：上次触发 context management 的 turn
 - `TurnsSinceLastTrigger`：距上次触发的 turn 数
 - `ToolCallsSinceLastTrigger`：距上次触发的工具调用数
+- `TotalTruncations`：总截断次数
+- `TotalCompactions`：总压缩次数
+- `RuntimeMetaBand`：当前 token 使用区间（如 "20-40" 表示 20%-40%）
 
 ### llm_context.txt（在每个 checkpoint 内）
 
@@ -246,20 +220,33 @@ with open('<path>/messages.jsonl') as f:
 "
 ```
 
-### 提取截断和压缩事件
+### 提取工具结果大小分布
 
 ```bash
 python3 -c "
 import json
+from collections import Counter
+sizes = []
 with open('<path>/messages.jsonl') as f:
-    for i, line in enumerate(f):
+    for line in f:
         entry = json.loads(line)
-        if entry.get('type') == 'truncate':
-            t = entry['truncate']
-            print(f'[TRUNCATE] line={i} turn={t[\"turn\"]} tool={t[\"tool_call_id\"][:20]}...')
-        elif entry.get('type') == 'compact':
-            c = entry['compact']
-            print(f'[COMPACT] line={i} turn={c[\"turn\"]} kept={c[\"kept_message_count\"]} summary_len={len(c[\"summary\"])}')
+        if entry.get('type') != 'message': continue
+        msg = entry['message']
+        if msg.get('role') != 'toolResult': continue
+        for block in msg.get('content', []):
+            if block.get('type') == 'text':
+                sizes.append(len(block.get('text', '')))
+
+buckets = Counter()
+for s in sizes:
+    if s == 0: buckets['0'] += 1
+    elif s < 1000: buckets['<1K'] += 1
+    elif s < 5000: buckets['1-5K'] += 1
+    elif s < 9990: buckets['5-10K'] += 1
+    else: buckets['~10K (truncated?)'] += 1
+
+for b, c in sorted(buckets.items()):
+    print(f'{b}: {c}')
 "
 ```
 
@@ -272,4 +259,4 @@ with open('<path>/messages.jsonl') as f:
 3. **结果** — 是否成功？最终状态？
 4. **问题** — 错误、重试、变通、浪费
 5. **成本** — 总花费和 token 使用
-6. **上下文管理** — 触发次数、截断/压缩效果、记忆质量（新增）
+6. **上下文管理** — 触发次数、截断/压缩效果、记忆质量
