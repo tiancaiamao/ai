@@ -81,9 +81,14 @@ func StreamAnthropic(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 
-// Execute request
-	client := &http.Client{
-			Timeout: 2 * time.Minute, // Timeout for waiting for response headers + body
+		// Execute request — derive total timeout from context deadline so the HTTP client enforces
+		// a hard ceiling even when SetReadDeadline is refreshed per-chunk.
+		client := &http.Client{}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 {
+				client.Timeout = remaining
+			}
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -116,8 +121,13 @@ func StreamAnthropic(
 			SetReadDeadline(time.Time) error
 		}
 		if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-			// Each scan should complete within chunkIntervalTimeout
-			dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+			// Each scan should complete within chunkIntervalTimeout, but never
+			// extend beyond the context deadline.
+			nextDeadline := time.Now().Add(chunkIntervalTimeout)
+			if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+				nextDeadline = ctxDeadline
+			}
+			dl.SetReadDeadline(nextDeadline)
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
@@ -126,9 +136,13 @@ func StreamAnthropic(
 		lastUsage := Usage{}
 
 		for scanner.Scan() {
-			// Update read deadline for each chunk
+			// Update read deadline for each chunk, capped by context deadline.
 			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-				dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+				nextDeadline := time.Now().Add(chunkIntervalTimeout)
+				if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+					nextDeadline = ctxDeadline
+				}
+				dl.SetReadDeadline(nextDeadline)
 			}
 
 			// Check parent context cancellation

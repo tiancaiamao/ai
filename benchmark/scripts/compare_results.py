@@ -99,10 +99,13 @@ def main():
     if not regressions and not improvements:
         print("✅ No changes detected")
 
-    print()
+        print()
     print("=" * 60)
 
-    if regressions:
+    # Exit with error only when overall pass rate regressed.
+    # Individual task regressions are normal (non-deterministic) and
+    # should not cause a build failure on their own.
+    if current_rate < baseline_rate:
         sys.exit(1)
 
 

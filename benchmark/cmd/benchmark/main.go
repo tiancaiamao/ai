@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+		"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -193,40 +194,78 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		ctx = context.Background()
 	}
 
-	// Build the RPC prompt as JSON
+			// Build the RPC prompt as JSON
 	rpcPrompt := fmt.Sprintf(`{"type":"prompt","message":%q}`, prompt)
 
 	// Use ai --mode rpc piped through ag conv for full event output.
 	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
 	// execution events to evaluate must_use_capabilities and success_criteria.
 
-		// Build RPC command with optional --max-turns and --timeout
-	rpcCmd := fmt.Sprintf("%q --mode rpc", r.BinaryPath)
+	// Build RPC command with optional --max-turns and --timeout
+	aiArgs := []string{r.BinaryPath, "--mode", "rpc"}
 	if r.MaxTurns > 0 {
-		rpcCmd += fmt.Sprintf(" --max-turns %d", r.MaxTurns)
+		aiArgs = append(aiArgs, "--max-turns", fmt.Sprintf("%d", r.MaxTurns))
 	}
 	if r.Timeout > 0 {
-		rpcCmd += fmt.Sprintf(" --timeout %s", r.Timeout.String())
+		aiArgs = append(aiArgs, "--timeout", r.Timeout.String())
 	}
-		cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
-		fmt.Sprintf("echo %q | %s | %q conv",
-			rpcPrompt, rpcCmd, r.AgBinary))
-	cmd.Env = nonInteractiveCommandEnv()
+	agArgs := []string{r.AgBinary, "conv"}
+
+	// Build a three-process pipeline: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
+	// We use direct exec.Command pipe instead of sh -c to avoid shell interpreting
+	// backticks and other special characters in the JSON payload.
+	aiCmd := exec.CommandContext(ctx, aiArgs[0], aiArgs[1:]...)
+	agCmd := exec.CommandContext(ctx, agArgs[0], agArgs[1:]...)
+
+		// Wire: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
+	var stdout, stderr bytes.Buffer
+	aiCmd.Stdin = bytes.NewBufferString(rpcPrompt)
+	agCmd.Stdout = &stdout
+	agCmd.Stderr = &stderr
+
+	// Pipe ai stdout -> ag stdin
+	aiAgPipe, aiAgWriter := io.Pipe()
+	aiCmd.Stdout = aiAgWriter
+	agCmd.Stdin = aiAgPipe
 
 	// Set working directory to task dir
-	cmd.Dir = taskDir
+	aiCmd.Dir = taskDir
+	agCmd.Dir = taskDir
+	aiCmd.Env = nonInteractiveCommandEnv()
+	agCmd.Env = nonInteractiveCommandEnv()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Start all processes
+	if err := aiCmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start ai: %w", err)
+	}
+	if err := agCmd.Start(); err != nil {
+		aiCmd.Process.Kill()
+		return "", fmt.Errorf("failed to start ag: %w", err)
+	}
 
-	err := cmd.Run()
+		// Wait for ai to finish, then close pipe writer
+	aiDone := make(chan error, 1)
+	go func() {
+		aiDone <- aiCmd.Wait()
+		aiAgWriter.Close()
+	}()
+
+	// Wait for ag to finish
+	agErr := agCmd.Wait()
+	aiErr := <-aiDone
+
 	output := stdout.String()
 	if stderr.Len() > 0 {
 		output += "\n[stderr]\n" + stderr.String()
 	}
 
-	return output, err
+	if aiErr != nil {
+		return output, aiErr
+	}
+	if agErr != nil {
+		return output, agErr
+	}
+	return output, nil
 }
 
 // Benchmark is the main benchmark runner
@@ -428,7 +467,9 @@ func (b *Benchmark) RunTask(task Task) Result {
 	return result
 }
 
-// resetTask resets the task setup directory from init (if exists)
+// resetTask resets the task setup directory from init (if exists).
+// For tasks with init/, it copies init/ to setup/ (replacing any existing content).
+// For tasks without init/, it removes any existing setup/ and creates a fresh empty one.
 func (b *Benchmark) resetTask(task Task) error {
 	initDir := filepath.Join(task.Dir, "init")
 	setupDir := filepath.Join(task.Dir, "setup")
@@ -459,7 +500,10 @@ func (b *Benchmark) resetTask(task Task) error {
 		})
 	}
 
-	// No init directory - ensure setup directory exists for agent to work in
+	// No init directory - remove any leftover setup/ content (e.g., from a
+	// previous benchmark run) and create a fresh empty directory for the
+	// agent to work in.
+	os.RemoveAll(setupDir)
 	return os.MkdirAll(setupDir, 0755)
 }
 

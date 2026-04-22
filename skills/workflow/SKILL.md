@@ -60,8 +60,8 @@ workflow-ctl templates [name]
 # Show current state (human-readable or JSON)
 workflow-ctl status [--json]
 
-# Gate: approve current phase (required for gate phases before advance)
-workflow-ctl approve
+# Gate: approve current phase (requires --user-message with user's confirmation words)
+workflow-ctl approve --user-message "用户说了什么"
 
 # Gate: reject current phase (stays active, feedback appended to notes)
 workflow-ctl reject [feedback text]
@@ -145,6 +145,35 @@ workflow-ctl plan-render <plan.yml> [output.md]
 Note: fields with `omitempty` (output, gateApproved, approvedAt, notes) are omitted when empty on pending phases.
 ```
 
+## ⚠️ Gate Phase Hard Rule (MANDATORY)
+
+Gate phases (brainstorm, spec, plan) enforce approval with **two mechanical guards**:
+
+1. **`--user-message` required**: `workflow-ctl approve` rejects calls without `--user-message`.
+   This prevents self-approval. Pass the user's actual words:
+   ```bash
+   workflow-ctl approve --user-message "用户确认了设计方案"
+   ```
+
+2. **Required artifacts checked**: Each gate phase declares required files (e.g., `PLAN.yml`).
+   `approve` fails if any are missing. Produce them before approving.
+
+Flow:
+```
+agent produces artifacts → agent presents output to user → user confirms →
+  workflow-ctl approve --user-message "用户说了什么" → workflow-ctl advance --output <path>
+```
+
+**Agent self-approval = critical violation.** Always show output to user first.
+
+## Gate Phase Required Artifacts
+
+| Phase | Required Artifacts |
+|-------|-------------------|
+| brainstorm | `design.md` |
+| spec | `SPEC.md` |
+| plan | `PLAN.yml` + `PLAN.md` |
+
 ## Templates
 
 | Template | Flow | Gates |
@@ -194,7 +223,7 @@ Gate phases require `approve` before `advance`. Non-gate phases proceed directly
    d. Execute the skill, produce output in artifact dir
    e. If phase has gate:
       - Present output to user
-      - If user approves: workflow-ctl approve && workflow-ctl advance --output <path>
+            - If user approves: workflow-ctl approve --user-message "用户原话" && workflow-ctl advance --output <path>
       - If user rejects: workflow-ctl reject "feedback" → iterate
    f. If phase has no gate:
       - Execute to completion, use note to track progress
@@ -251,7 +280,7 @@ Starting Phase 1: {name} (skill: {skill})
 Please review. Say "approve" to continue, or provide feedback for revision.
 ```
 
-### User approves → `workflow-ctl approve && workflow-ctl advance --output <path>`
+### User approves → `workflow-ctl approve --user-message "用户原话" && workflow-ctl advance --output <path>`
 
 ### User rejects → `workflow-ctl reject "user's feedback"` → iterate on the phase
 

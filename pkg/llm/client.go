@@ -103,8 +103,16 @@ func StreamLLM(
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 
-		// Execute request
+		// Execute request — derive total timeout from context deadline so the
+		// HTTP client enforces a hard ceiling even when SetReadDeadline is
+		// refreshed per-chunk (which can otherwise bypass the context deadline).
 		client := &http.Client{}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 {
+				client.Timeout = remaining
+			}
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			// Provide helpful error message for DNS/connection issues
@@ -138,8 +146,13 @@ func StreamLLM(
 			SetReadDeadline(time.Time) error
 		}
 		if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-			// Each scan should complete within chunkIntervalTimeout
-			dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+			// Each scan should complete within chunkIntervalTimeout, but never
+			// extend beyond the context deadline (which acts as the hard total limit).
+			nextDeadline := time.Now().Add(chunkIntervalTimeout)
+			if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+				nextDeadline = ctxDeadline
+			}
+			dl.SetReadDeadline(nextDeadline)
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
@@ -148,9 +161,13 @@ func StreamLLM(
 		lastUsage := Usage{}
 
 		for scanner.Scan() {
-			// Update read deadline for each chunk
+			// Update read deadline for each chunk, capped by context deadline.
 			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-				dl.SetReadDeadline(time.Now().Add(chunkIntervalTimeout))
+				nextDeadline := time.Now().Add(chunkIntervalTimeout)
+				if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+					nextDeadline = ctxDeadline
+				}
+				dl.SetReadDeadline(nextDeadline)
 			}
 
 			// Check parent context cancellation

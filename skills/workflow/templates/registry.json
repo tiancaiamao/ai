@@ -1,13 +1,13 @@
 {
   "version": "3.0",
   "templates": {
-    "feature": {
+        "feature": {
       "name": "Feature Development",
       "description": "Develop a new feature from brainstorm to ship",
       "phases": [
-        { "name": "brainstorm", "skill": "brainstorm", "gate": true },
-        { "name": "spec", "skill": "spec", "gate": true },
-        { "name": "plan", "skill": "plan", "gate": true },
+        { "name": "brainstorm", "skill": "brainstorm", "gate": true, "required_artifacts": [".workflow/artifacts/feature/design.md"] },
+        { "name": "spec", "skill": "spec", "gate": true, "required_artifacts": [".workflow/artifacts/feature/SPEC.md"] },
+        { "name": "plan", "skill": "plan", "gate": true, "required_artifacts": [".workflow/artifacts/feature/PLAN.yml", ".workflow/artifacts/feature/PLAN.md"] },
         { "name": "implement", "skill": "implement", "gate": false }
       ],
       "category": "features",

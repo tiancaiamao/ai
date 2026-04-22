@@ -82,19 +82,19 @@ bench: bench-run
 bench-run: bench-build
 	@if [ -n "$(TASK)" ]; then \
 		echo "Running task: $(TASK)"; \
-		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
+				../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
 	else \
-		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
 	fi
 
 # Verify all selected tasks fail before agent modifications
 bench-precheck: bench-build
 	@echo "Precheck manifest: $(PRECHECK_MANIFEST)"
-	../../bin/benchmark --precheck-only $(PRECHECK_MANIFEST_FLAG)
+	../../bin/benchmark --precheck-only --ag $(or $(AG),/Users/genius/go/bin/ag) $(PRECHECK_MANIFEST_FLAG)
 
 # Resume from previous progress
 bench-resume: bench-build
-	../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
 
 # List available benchmark tasks
 bench-list: bench-build
@@ -104,7 +104,7 @@ bench-list: bench-build
 bench-task: bench-build
 	@echo "Usage: make bench-task TASK=tbench/chess-best-move"
 	@echo "Or use: make bench-run TASK=tbench/chess-best-move"
-	../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),../../bin/ai) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG)
+		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),../../bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG)
 
 # Import Terminal Bench 2.0 tasks
 bench-import:

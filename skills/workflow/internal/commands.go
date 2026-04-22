@@ -27,17 +27,20 @@ func runStart(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	phases := make([]Phase, len(template.Phases))
+		phases := make([]Phase, len(template.Phases))
 	for i, tp := range template.Phases {
 		status := "pending"
 		if i == 0 {
 			status = "active"
 		}
+		artifacts := make([]string, len(tp.RequiredArtifacts))
+		copy(artifacts, tp.RequiredArtifacts)
 		phases[i] = Phase{
-			Name:   tp.Name,
-			Skill:  tp.Skill,
-			Gate:   tp.Gate,
-			Status: status,
+			Name:              tp.Name,
+			Skill:             tp.Skill,
+			Gate:              tp.Gate,
+			Status:            status,
+			RequiredArtifacts: artifacts,
 		}
 	}
 
@@ -175,18 +178,20 @@ func runBack(cmd *cobra.Command, args []string) {
 		if p.Output != "" {
 			p.PreviousOutput = p.Output
 		}
-		p.Status = "pending"
+				p.Status = "pending"
 		p.Output = ""
 		p.GateApproved = false
 		p.ApprovedAt = ""
+		p.ApproveMessage = ""
 		p.Notes = ""
 	}
 
 	// Activate target phase
 	targetPhase := &state.Phases[target]
 	targetPhase.Status = "active"
-	targetPhase.GateApproved = false
+		targetPhase.GateApproved = false
 	targetPhase.ApprovedAt = ""
+	targetPhase.ApproveMessage = ""
 	// Preserve notes on the target phase — they provide context for re-doing the phase
 	// Notes from subsequent phases are already cleared above
 	state.CurrentPhase = target
@@ -203,6 +208,8 @@ func runBack(cmd *cobra.Command, args []string) {
 }
 
 func runApprove(cmd *cobra.Command, args []string) {
+	userMessage, _ := cmd.Flags().GetString("user-message")
+
 	state, err := loadState()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -224,13 +231,39 @@ func runApprove(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Require --user-message (prevents agent from self-approving)
+	if userMessage == "" {
+		fmt.Fprintf(os.Stderr, "Error: --user-message is required for gate approval.\n")
+		fmt.Fprintf(os.Stderr, "Provide the user's confirmation message (e.g., what the user said to approve).\n")
+		os.Exit(1)
+	}
+
+	// Check required artifacts exist
+	if len(cp.RequiredArtifacts) > 0 {
+		missing := []string{}
+		for _, artifact := range cp.RequiredArtifacts {
+			if _, err := os.Stat(artifact); err != nil {
+				missing = append(missing, artifact)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Fprintf(os.Stderr, "Error: required artifacts missing for phase '%s':\n", cp.Name)
+			for _, m := range missing {
+				fmt.Fprintf(os.Stderr, "  - %s\n", m)
+			}
+			fmt.Fprintf(os.Stderr, "Produce these artifacts before approving.\n")
+			os.Exit(1)
+		}
+	}
+
 	cp.GateApproved = true
 	cp.ApprovedAt = time.Now().Format(time.RFC3339)
+	cp.ApproveMessage = userMessage
 	if err := saveState(state); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	audit("approve", cp.Name, "")
+	audit("approve", cp.Name, userMessage)
 
 	fmt.Printf("Approved: %s — ready to advance\n", cp.Name)
 }
@@ -480,8 +513,15 @@ func runStatus(cmd *cobra.Command, args []string) {
 		if phase.PreviousOutput != "" {
 			fmt.Printf("      prev:   %s\n", phase.PreviousOutput)
 		}
-		if phase.ApprovedAt != "" {
+				if phase.ApprovedAt != "" {
 			fmt.Printf("      approved at: %s\n", phase.ApprovedAt)
+		}
+		if phase.ApproveMessage != "" {
+			msg := phase.ApproveMessage
+			if len(msg) > 80 {
+				msg = msg[:77] + "..."
+			}
+			fmt.Printf("      approve msg: %s\n", msg)
 		}
 		if phase.Notes != "" {
 			lines := strings.Split(phase.Notes, "\n")

@@ -5,15 +5,17 @@ package main
 const CurrentSchemaVersion = 2
 
 type Phase struct {
-	Name           string `json:"name"`
-	Skill          string `json:"skill"`
-	Gate           bool   `json:"gate"`
-	Status         string `json:"status"` // pending, active, completed, failed, skipped
-	Output         string `json:"output,omitempty"`
-	PreviousOutput string `json:"previousOutput,omitempty"` // preserved across back
-	GateApproved   bool   `json:"gateApproved,omitempty"`
-	ApprovedAt     string `json:"approvedAt,omitempty"`
-	Notes          string `json:"notes,omitempty"`
+	Name               string   `json:"name"`
+	Skill              string   `json:"skill"`
+	Gate               bool     `json:"gate"`
+	Status             string   `json:"status"` // pending, active, completed, failed, skipped
+	Output             string   `json:"output,omitempty"`
+	PreviousOutput     string   `json:"previousOutput,omitempty"` // preserved across back
+	GateApproved       bool     `json:"gateApproved,omitempty"`
+	ApprovedAt         string   `json:"approvedAt,omitempty"`
+	ApproveMessage     string   `json:"approveMessage,omitempty"`
+	Notes              string   `json:"notes,omitempty"`
+	RequiredArtifacts  []string `json:"requiredArtifacts,omitempty"`
 }
 
 type State struct {
@@ -33,9 +35,10 @@ type State struct {
 // === Template Registry Types ===
 
 type TemplatePhase struct {
-	Name  string `json:"name"`
-	Skill string `json:"skill"`
-	Gate  bool   `json:"gate"`
+	Name              string   `json:"name"`
+	Skill             string   `json:"skill"`
+	Gate              bool     `json:"gate"`
+	RequiredArtifacts []string `json:"required_artifacts,omitempty"`
 }
 
 type Template struct {

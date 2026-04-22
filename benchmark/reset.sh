@@ -49,25 +49,37 @@ reset_task() {
     local init_dir="$task_dir/init"
     local setup_dir="$task_dir/setup"
 
-    if [ ! -d "$setup_dir" ]; then
-        return 0
-    fi
-
     # Check if init_dir exists BEFORE git clean (which would remove untracked init/)
     local has_init=0
     if [ -d "$init_dir" ]; then
         has_init=1
     fi
 
-    # Restore tracked files and remove untracked files ONLY for setup/ directory.
-    # We intentionally do NOT clean the entire task directory to preserve init/.
-    if is_git_repo; then
-        git -C "$BENCHMARK_DIR" restore --worktree --staged -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
-        if [ "$HARD_MODE" -eq 1 ]; then
-            git -C "$BENCHMARK_DIR" clean -fffd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
-        else
-            git -C "$BENCHMARK_DIR" clean -fd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+    # Check if setup/ is tracked by git
+    local setup_tracked=0
+    if is_git_repo && git -C "$BENCHMARK_DIR" ls-files --error-unmatch "tasks/$task_id/setup" >/dev/null 2>&1; then
+        setup_tracked=1
+    fi
+
+    if [ "$setup_tracked" -eq 1 ]; then
+        # setup/ has tracked files — restore and clean
+        if is_git_repo; then
+            git -C "$BENCHMARK_DIR" restore --worktree --staged -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+            if [ "$HARD_MODE" -eq 1 ]; then
+                git -C "$BENCHMARK_DIR" clean -fffd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+            else
+                git -C "$BENCHMARK_DIR" clean -fd -- "tasks/$task_id/setup" >/dev/null 2>&1 || true
+            fi
         fi
+    elif [ -d "$setup_dir" ]; then
+        # setup/ exists but is entirely untracked (e.g., tbench/pypi-server)
+        # Remove it — the benchmark runner will re-create it as needed
+        rm -rf "$setup_dir"
+        echo "✓ Reset $task_id (removed untracked setup/)"
+        return 0
+    else
+        # No setup/ directory exists — nothing to do
+        return 0
     fi
 
     # Clean Python cache artifacts

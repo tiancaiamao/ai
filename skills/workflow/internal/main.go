@@ -34,11 +34,12 @@ func main() {
 		Run:   runBack,
 	}
 
-	approveCmd := &cobra.Command{
-		Use:   "approve",
+		approveCmd := &cobra.Command{
+		Use:   "approve --user-message <message>",
 		Short: "Approve the current gate",
 		Run:   runApprove,
 	}
+	approveCmd.Flags().String("user-message", "", "User's confirmation message (required, prevents self-approval)")
 
 	rejectCmd := &cobra.Command{
 		Use:   "reject [feedback]",
