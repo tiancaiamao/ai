@@ -633,9 +633,34 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, fmt.Errorf("images are not supported in this RPC implementation")
 		}
 
-		// Intercept slash commands — execute synchronously without agent
+				// Expand /skill:name commands BEFORE generic slash dispatch.
+		// Skill commands like /skill:name are not registered as slash handlers;
+		// they are expanded into full prompts and processed normally.
+		if skill.IsSkillCommand(message) {
+			expandedMessage := expandSkillCommands(message)
+			slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
+
+			stateMu.Lock()
+			streaming := isStreaming
+			stateMu.Unlock()
+
+			if streaming {
+				// During streaming, treat expanded skill prompt as a steer
+				stateMu.Lock()
+				pendingSteer = true
+				stateMu.Unlock()
+				ag.Steer(expandedMessage)
+				return nil, nil
+			}
+
+			compactBeforeRequest("pre_request_prompt")
+			return nil, ag.Prompt(expandedMessage)
+		}
+
+		// Intercept slash commands — execute synchronously without agent.
+		// Only non-skill slash commands (e.g. /get_state, /compact) reach here.
 		if message[0] == '/' {
-						cmdName, args, err := command.ParseSlashCommand(message)
+			cmdName, args, err := command.ParseSlashCommand(message)
 			if err != nil {
 				return nil, fmt.Errorf("invalid slash command: %w", err)
 			}
@@ -646,13 +671,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return handler(args)
 		}
 
-		// Expand /skill:name commands
-		expandedMessage := expandSkillCommands(message)
-		if skill.IsSkillCommand(message) {
-			slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
-		}
-
-		stateMu.Lock()
+				stateMu.Lock()
 		streaming := isStreaming
 		mode := steeringMode
 		followMode := followUpMode
@@ -672,20 +691,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				stateMu.Lock()
 				pendingSteer = true
 				stateMu.Unlock()
-				ag.Steer(expandedMessage)
+				ag.Steer(message)
 				return nil, nil
 			case "followUp", "follow_up":
 				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
 					return nil, fmt.Errorf("follow-up queue already has a pending message")
 				}
-				return nil, ag.FollowUp(expandedMessage)
+				return nil, ag.FollowUp(message)
 			default:
 				return nil, fmt.Errorf("invalid streamingBehavior: %s", behavior)
 			}
 		}
 
 		compactBeforeRequest("pre_request_prompt")
-		return nil, ag.Prompt(expandedMessage)
+		return nil, ag.Prompt(message)
 	})
 
 	server.Register(rpc.CommandSteer, func(cmd rpc.RPCCommand) (any, error) {
@@ -770,8 +789,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// === Slash command handlers ===
 	// All commands below are registered as slash commands.
-	// They are invoked via the prompt channel: {"type": "prompt", "message": "/command args"}
+		// They are invoked via the prompt channel: {"type": "prompt", "message": "/command args"}
 	// and intercepted by the prompt handler before entering the agent loop.
+	// For backward compatibility, they also handle direct JSON-RPC calls where
+	// args is raw JSON from cmd.Data (e.g. {"provider":"xxx","modelId":"yyy"}).
+
+	// parseJSONArgs attempts to unmarshal args as JSON into target.
+	// Returns true if args looks like JSON and was successfully parsed.
+	parseJSONArgs := func(args string, target any) bool {
+		args = strings.TrimSpace(args)
+		if len(args) > 0 && args[0] == '{' {
+			return json.Unmarshal([]byte(args), target) == nil
+		}
+		return false
+	}
 
 	server.RegisterSlash("clear_session", func(args string) (any, error) {
 		slog.Info("Received clear_session")
@@ -784,12 +815,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-	server.RegisterSlash("new_session", func(args string) (any, error) {
-		parts := strings.SplitN(args, " ", 2)
-		name := strings.TrimSpace(parts[0])
-		title := ""
-		if len(parts) > 1 {
-			title = strings.TrimSpace(parts[1])
+		server.RegisterSlash("new_session", func(args string) (any, error) {
+		var name, title string
+		var jsonData struct {
+			Name  string `json:"name"`
+			Title string `json:"title"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			name, title = jsonData.Name, jsonData.Title
+		} else {
+			parts := strings.SplitN(args, " ", 2)
+			name = strings.TrimSpace(parts[0])
+			if len(parts) > 1 {
+				title = strings.TrimSpace(parts[1])
+			}
 		}
 		slog.Info("Received new_session", "name", name, "title", title)
 		if strings.TrimSpace(name) == "" {
@@ -968,8 +1007,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, sessionMgr.DeleteSession(id)
 	})
 
-	server.RegisterSlash("set_session_name", func(args string) (any, error) {
+		server.RegisterSlash("set_session_name", func(args string) (any, error) {
 		name := strings.TrimSpace(args)
+		var jsonData struct {
+			Name string `json:"name"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			name = jsonData.Name
+		}
 		slog.Info("Received set_session_name", "name", name)
 		if name == "" {
 			return nil, fmt.Errorf("session name cannot be empty")
@@ -1147,12 +1192,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return models, nil
 	})
 
-	server.RegisterSlash("set_model", func(args string) (any, error) {
-		parts := strings.SplitN(args, " ", 2)
-		provider := strings.TrimSpace(parts[0])
-		modelID := ""
-		if len(parts) > 1 {
-			modelID = strings.TrimSpace(parts[1])
+		server.RegisterSlash("set_model", func(args string) (any, error) {
+		var provider, modelID string
+		var jsonData struct {
+			Provider string `json:"provider"`
+			ModelID  string `json:"modelId"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			provider, modelID = jsonData.Provider, jsonData.ModelID
+		} else {
+			parts := strings.SplitN(args, " ", 2)
+			provider = strings.TrimSpace(parts[0])
+			if len(parts) > 1 {
+				modelID = strings.TrimSpace(parts[1])
+			}
 		}
 		slog.Info("Received set_model", "provider", provider, "modelId", modelID)
 		if strings.TrimSpace(provider) == "" || strings.TrimSpace(modelID) == "" {
@@ -1366,9 +1419,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.RegisterSlash("bash", func(args string) (any, error) {
+		server.RegisterSlash("bash", func(args string) (any, error) {
+		command := args
+		var jsonData struct {
+			Command string `json:"command"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			command = jsonData.Command
+		}
 		slog.Info("Received bash")
-		return bashRunner.Run(ws.GetCWD(), args, bashTimeout)
+		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
 	})
 
 	server.RegisterSlash("abort_bash", func(args string) (any, error) {
@@ -1376,8 +1436,16 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, bashRunner.Abort()
 	})
 
-	server.RegisterSlash("set_auto_retry", func(args string) (any, error) {
+		server.RegisterSlash("set_auto_retry", func(args string) (any, error) {
 		enabled := strings.TrimSpace(strings.ToLower(args))
+		var jsonData struct {
+			Enabled bool `json:"enabled"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			ag.SetAutoRetry(jsonData.Enabled)
+			slog.Info("Received set_auto_retry", "enabled", jsonData.Enabled)
+			return nil, nil
+		}
 		slog.Info("Received set_auto_retry", "enabled", enabled)
 		ag.SetAutoRetry(enabled == "true" || enabled == "1")
 		return nil, nil
@@ -1394,21 +1462,41 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-	server.RegisterSlash("set_auto_compaction", func(args string) (any, error) {
+		server.RegisterSlash("set_auto_compaction", func(args string) (any, error) {
 		enabled := strings.TrimSpace(strings.ToLower(args))
-		slog.Info("Received set_auto_compaction: enabled=", "value", enabled)
+		var jsonData struct {
+			Enabled bool `json:"enabled"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			compactorConfig.AutoCompact = jsonData.Enabled
+			stateMu.Lock()
+			autoCompactionEnabled = jsonData.Enabled
+			stateMu.Unlock()
+			slog.Info("Received set_auto_compaction: enabled=", "value", jsonData.Enabled)
+			return nil, nil
+		}
 		val := enabled == "true" || enabled == "1"
 		compactorConfig.AutoCompact = val
 		stateMu.Lock()
 		autoCompactionEnabled = val
 		stateMu.Unlock()
+		slog.Info("Received set_auto_compaction: enabled=", "value", val)
 		return nil, nil
 	})
 
-	server.RegisterSlash("set_tool_call_cutoff", func(args string) (any, error) {
-		cutoff, err := strconv.Atoi(strings.TrimSpace(args))
-		if err != nil {
-			return nil, fmt.Errorf("invalid cutoff value: %w", err)
+		server.RegisterSlash("set_tool_call_cutoff", func(args string) (any, error) {
+		var cutoff int
+		var jsonData struct {
+			Cutoff int `json:"cutoff"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			cutoff = jsonData.Cutoff
+		} else {
+			var err error
+			cutoff, err = strconv.Atoi(strings.TrimSpace(args))
+			if err != nil {
+				return nil, fmt.Errorf("invalid cutoff value: %w", err)
+			}
 		}
 		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
 		if cutoff < 0 {
@@ -1459,9 +1547,15 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-	server.RegisterSlash("set_trace_events", func(args string) (any, error) {
-		// Parse args as space-separated event specifiers
+		server.RegisterSlash("set_trace_events", func(args string) (any, error) {
+		// Parse args — support both space-separated text and JSON {"events": [...]}
 		events := strings.Fields(args)
+		var jsonData struct {
+			Events []string `json:"events"`
+		}
+		if parseJSONArgs(args, &jsonData) && len(jsonData.Events) > 0 {
+			events = jsonData.Events
+		}
 		slog.Info("Received set_trace_events", "events", events)
 
 		if len(events) == 0 {
@@ -1550,12 +1644,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return status, nil
 	})
 
-	validSteeringModes := map[string]bool{
-		"immediate":    true,
+		validSteeringModes := map[string]bool{
+		"all":           true,
+		"immediate":     true,
 		"one-at-a-time": true,
 	}
 	validFollowUpModes := map[string]bool{
-		"immediate":    true,
+		"all":           true,
+		"immediate":     true,
 		"one-at-a-time": true,
 	}
 
@@ -1593,8 +1689,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 
-	server.RegisterSlash("set_thinking_level", func(args string) (any, error) {
+		server.RegisterSlash("set_thinking_level", func(args string) (any, error) {
 		level := strings.ToLower(strings.TrimSpace(args))
+		var jsonData struct {
+			Level string `json:"level"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			level = strings.ToLower(strings.TrimSpace(jsonData.Level))
+		}
 		if !validThinkingLevels[level] {
 			return nil, fmt.Errorf("invalid thinking level")
 		}

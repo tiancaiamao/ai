@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 
 	"log/slog"
@@ -154,8 +153,9 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 }
 
 // extractSlashArgs converts an RPCCommand's data to a text args string
-// suitable for slash command handlers. It handles both structured JSON data
-// (from direct RPC calls) and simple message fields.
+// suitable for slash command handlers. It passes the raw JSON data as-is
+// so that individual handlers can parse structured fields properly.
+// Handlers that receive structured JSON data should json.Unmarshal the args string.
 func (s *Server) extractSlashArgs(cmd RPCCommand) string {
 	if cmd.Message != "" {
 		return cmd.Message
@@ -163,21 +163,8 @@ func (s *Server) extractSlashArgs(cmd RPCCommand) string {
 	if len(cmd.Data) == 0 {
 		return ""
 	}
-	// Try to extract values from JSON data
-	var data map[string]any
-	if err := json.Unmarshal(cmd.Data, &data); err != nil {
-		return string(cmd.Data)
-	}
-	var parts []string
-	for _, v := range data {
-		if str, ok := v.(string); ok && str != "" {
-			parts = append(parts, str)
-		} else if _, ok := v.([]any); !ok {
-			// Skip arrays (handled specially by individual handlers)
-			parts = append(parts, fmt.Sprintf("%v", v))
-		}
-	}
-	return strings.Join(parts, " ")
+	// Pass raw JSON data as string — handlers know their own schema
+	return string(cmd.Data)
 }
 
 // successResponse creates a successful response.
