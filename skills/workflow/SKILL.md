@@ -18,7 +18,7 @@ Workflow requires these skills to be available:
 - `plan` — task breakdown with planner+reviewer loop
 - `implement` — subagent-driven implementation
 - `explore` — codebase exploration and analysis
-- `ag` — agent orchestration runtime (required by `scripts/implement-team.sh` for parallel task execution)
+- `ag` — agent orchestration runtime (required by `implement` skill for parallel task execution)
 
 ## User Contract (对用户)
 
@@ -209,7 +209,7 @@ Gate phases require `approve` before `advance`. Non-gate phases proceed directly
 - Skill: `implement`
 - Output: code changes + tests + `impl-report.md`
 - Gate: ✗ — execute and report progress.
-- For medium/large scope, use `scripts/implement-team.sh` for parallel execution.
+- For medium/large scope, use `implement` skill's team mode for parallel execution.
 - Use `workflow-ctl note` to track progress during long implementations.
 
 ## Agent Workflow Loop
@@ -219,11 +219,15 @@ Gate phases require `approve` before `advance`. Non-gate phases proceed directly
 2. loop:
    a. workflow-ctl status --json → get current phase, skill, gate, notes
    b. If notes exist → agent knows where it left off (cross-session recovery)
-   c. ⛔ READ the corresponding skill's full SKILL.md (MANDATORY — do not rely on memory)
+      c. ⛔ READ the corresponding skill's full SKILL.md (MANDATORY — do not rely on memory)
    d. Execute the skill, produce output in artifact dir
+      - For implement phase specifically: follow the implement/SKILL.md flow
+        (Pre-Flight → select execution mode → implement tasks → Per-Task Ritual)
+      - ≥3 tasks = MUST use subagent mode (ag task + ag agent)
+      - <3 tasks = direct execution is OK
    e. If phase has gate:
       - Present output to user
-      - If user approves: workflow-ctl approve --user-message "用户原话" && workflow-ctl advance --output <path>
+            - If user approves: workflow-ctl approve --user-message "用户原话" && workflow-ctl advance --output <path>
       - If user rejects: workflow-ctl reject "feedback" → iterate
    f. If phase has no gate:
       - Execute to completion, use note to track progress
@@ -235,45 +239,6 @@ Gate phases require `approve` before `advance`. Non-gate phases proceed directly
    - workflow-ctl fail "reason"
    - workflow-ctl retry (after fixing)
 ```
-
-## ⛔ MANDATORY — Phase Entry Rules
-
-**每次进入一个新 phase 时，必须执行以下步骤：**
-
-- [ ] **重读技能文件** — 读取对应 skill 的完整 `SKILL.md`，不能凭记忆
-- [ ] **检查前置产物** — 确认上一阶段的 output 文件存在且可读
-- [ ] **确认理解** — 对用户简述即将做什么（一句话即可）
-
-**这适用于所有 phase，包括 implement 和 verify（无 gate 的阶段更容易跳过这一步）。**
-
-## ⛔ MANDATORY — Progress Tracking in Non-Gate Phases
-
-implement 和 verify 等非 gate 阶段没有 approve 检查点，但**进度追踪不可省略**：
-
-- 每完成一个有意义的工作单元（如一个 task、一组改动），必须调 `workflow-ctl note`
-- note 内容应包含：任务编号/名称、完成状态、测试结果
-- 向用户汇报当前进度（不要一口气做完才汇报）
-
-```bash
-# 正确 ✅
-workflow-ctl note "Task 1/6 done: pkg/command/registry.go created, tests passing"
-# 向用户: ✅ 1/6 done — registry.go. Next: server.go rewrite
-
-# 错误 ❌ — 连续做完 6 个任务，最后一次 commit
-```
-
-## ⛔ MANDATORY — Self-Check Assertions
-
-**在 workflow 执行过程中的任何时刻，如果以下任一条件为真，必须立即停下：**
-
-| 断言 | 触发条件 | 修正动作 |
-|------|----------|----------|
-| 未读技能文件 | 进入新 phase 但没读对应 SKILL.md | 停下，读取完整 SKILL.md，再继续 |
-| 进度未记录 | 非 gate 阶段完成了一个 task 但没调 `workflow-ctl note` | 补上 note |
-| 跳过 gate | gate 阶段未经用户确认就 advance | 回退，向用户展示产物并等待确认 |
-| 自审自批 | `approve` 的 `--user-message` 不是用户原话 | 使用用户实际说的话 |
-
-**这些是对 agent 的硬约束，不是建议。**
 
 ## Cross-Session Recovery
 
@@ -363,3 +328,42 @@ All artifacts go in the artifact directory (shown by `workflow-ctl status`):
 6. `back` 是安全的——后续阶段会被重置为 pending，已有产物引用保留在 `previousOutput` 字段。
 7. `skip` 命令可以跳过不需要的阶段（如用户已有明确 spec），比连续 `advance` 更语义化。
 8. 所有状态变更都会记录到 `AUDIT.jsonl`（append-only），便于调试和审计。
+
+## ⛔ MANDATORY — Phase Entry Rules
+
+**每次进入一个新 phase 时，必须执行以下步骤：**
+
+- [ ] **重读技能文件** — 读取对应 skill 的完整 `SKILL.md`，不能凭记忆
+- [ ] **检查前置产物** — 确认上一阶段的 output 文件存在且可读
+- [ ] **确认理解** — 对用户简述即将做什么（一句话即可）
+
+**这适用于所有 phase，包括 implement 和 verify（无 gate 的阶段更容易跳过这一步）。**
+
+## ⛔ MANDATORY — Progress Tracking in Non-Gate Phases
+
+implement 和 verify 等非 gate 阶段没有 approve 检查点，但**进度追踪不可省略**：
+
+- 每完成一个有意义的工作单元（如一个 task、一组改动），必须调 `workflow-ctl note`
+- note 内容应包含：任务编号/名称、完成状态、测试结果
+- 向用户汇报当前进度（不要一口气做完才汇报）
+
+```bash
+# 正确 ✅
+workflow-ctl note "Task 1/6 done: pkg/command/registry.go created, tests passing"
+# 向用户: ✅ 1/6 done — registry.go. Next: server.go rewrite
+
+# 错误 ❌ — 连续做完 6 个任务，最后一次 commit
+```
+
+## ⛔ MANDATORY — Self-Check Assertions
+
+**在 workflow 执行过程中的任何时刻，如果以下任一条件为真，必须立即停下：**
+
+| 断言 | 触发条件 | 修正动作 |
+|------|----------|----------|
+| 未读技能文件 | 进入新 phase 但没读对应 SKILL.md | 停下，读取完整 SKILL.md，再继续 |
+| 进度未记录 | 非 gate 阶段完成了一个 task 但没调 `workflow-ctl note` | 补上 note |
+| 跳过 gate | gate 阶段未经用户确认就 advance | 回退，向用户展示产物并等待确认 |
+| 自审自批 | `approve` 的 `--user-message` 不是用户原话 | 使用用户实际说的话 |
+
+**这些是对 agent 的硬约束，不是建议。**

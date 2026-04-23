@@ -148,13 +148,11 @@ func assessStrategy(plan Plan) string {
 	var sb strings.Builder
 	sb.WriteString("Strategy: ")
 
-	switch {
+		switch {
 	case totalTasks <= 2:
-		sb.WriteString(fmt.Sprintf("small scope (%d tasks, %dh) — agent executes directly, single commit", totalTasks, totalHours))
-	case totalTasks <= 6:
-		sb.WriteString(fmt.Sprintf("medium scope (%d tasks, %dh) — sub-agents per group, serial or light parallel", totalTasks, totalHours))
+		sb.WriteString(fmt.Sprintf("small scope (%d tasks, %dh) — agent executes directly", totalTasks, totalHours))
 	default:
-		sb.WriteString(fmt.Sprintf("large scope (%d tasks, %dh) — full fan-out with parallel workers (implement-team.sh --workers 3+)", totalTasks, totalHours))
+		sb.WriteString(fmt.Sprintf("medium/large scope (%d tasks, %dh) — must use subagent mode (ag agent spawn workers)", totalTasks, totalHours))
 	}
 
 	maxDepth := dependencyDepth(plan)
