@@ -27,48 +27,16 @@ type RPCResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// Command type constants
+// Protocol command type constants.
+// Only protocol-level commands remain in the RPC layer.
+// All other commands (state queries, settings, actions, session management)
+// are handled as slash commands via the prompt channel.
 const (
-	CommandPrompt                   = "prompt"
-	CommandSteer                    = "steer"
-	CommandFollowUp                 = "follow_up"
-	CommandAbort                    = "abort"
-	CommandNewSession               = "new_session"
-	CommandClearSession             = "clear_session"
-	CommandListSessions             = "list_sessions"
-	CommandSwitchSession            = "switch_session"
-	CommandDeleteSession            = "delete_session"
-	CommandGetState                 = "get_state"
-	CommandGetMessages              = "get_messages"
-	CommandCompact                  = "compact"
-	CommandGetAvailableModels       = "get_available_models"
-	CommandSetModel                 = "set_model"
-	CommandCycleModel               = "cycle_model"
-	CommandGetCommands              = "get_commands"
-	CommandGetSessionStats          = "get_session_stats"
-	CommandSetAutoCompaction        = "set_auto_compaction"
-	CommandSetToolCallCutoff        = "set_tool_call_cutoff"
-	CommandSetToolSummaryStrategy   = "set_tool_summary_strategy"
-	CommandSetToolSummaryAutomation = "set_tool_summary_automation"
-	CommandSetThinkingLevel         = "set_thinking_level"
-	CommandCycleThinkingLevel       = "cycle_thinking_level"
-	CommandGetLastAssistantText     = "get_last_assistant_text"
-	CommandGetForkMessages          = "get_fork_messages"
-	CommandFork                     = "fork"
-	CommandGetTree                  = "get_tree"
-	CommandResumeOnBranch           = "resume_on_branch"
-	CommandSetSteeringMode          = "set_steering_mode"
-	CommandSetFollowUpMode          = "set_follow_up_mode"
-	CommandSetSessionName           = "set_session_name"
-	CommandSetAutoRetry             = "set_auto_retry"
-	CommandAbortRetry               = "abort_retry"
-	CommandBash                     = "bash"
-	CommandAbortBash                = "abort_bash"
-	CommandExportHTML               = "export_html"
-	CommandSetTraceEvents           = "set_trace_events"
-	CommandGetTraceEvents           = "get_trace_events"
-	CommandPing                     = "ping"
-	CommandGetWorkflowStatus       = "get_workflow_status"
+	CommandPrompt   = "prompt"
+	CommandSteer    = "steer"
+	CommandFollowUp = "follow_up"
+	CommandAbort    = "abort"
+	CommandPing     = "ping"
 )
 
 // SessionState represents the current session state.
