@@ -10,7 +10,7 @@ User (natural language) → Agent → workflow-ctl (state + audit) + skills (exe
 
 - **workflow-ctl** — Go CLI for state management with transition guards and audit logging
 - **skills** — brainstorm, spec, plan, implement, explore — called by the agent per phase
-- **implement-team.sh** — Bash script for parallel subagent execution during implement phase
+- **implement skill** — Team mode for parallel subagent execution during implement phase (3+ tasks)
 
 ## Commands
 
