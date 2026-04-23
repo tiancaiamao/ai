@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,9 +219,9 @@ func TestErrorResponse(t *testing.T) {
 func TestConcurrentCommands(t *testing.T) {
 	server := NewServer()
 
-	promptCount := 0
+	var promptCount atomic.Int32
 	server.Register(CommandPrompt, func(cmd RPCCommand) (any, error) {
-		promptCount++
+		promptCount.Add(1)
 		time.Sleep(10 * time.Millisecond) // Simulate work
 		return nil, nil
 	})
@@ -244,8 +245,8 @@ func TestConcurrentCommands(t *testing.T) {
 		}
 	}
 
-	if promptCount != 10 {
-		t.Errorf("Expected 10 prompts, got %d", promptCount)
+	if promptCount.Load() != 10 {
+		t.Errorf("Expected 10 prompts, got %d", promptCount.Load())
 	}
 }
 
