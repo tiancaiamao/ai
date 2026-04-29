@@ -1,4 +1,4 @@
-// Package conv provides stateless conversion of ai --mode rpc JSON events
+// Package conv provides stateless conversion of ai rpc JSON events
 // into human-readable text. It is used by both the ag conv command
 // (stdin-to-stdout piping) and the bridge's StreamWriter.
 package conv
@@ -28,7 +28,7 @@ type FormattedEvent struct {
 	Detail  string // tool detail (KindTool only)
 }
 
-// ParseEvent parses a single JSON event from ai --mode rpc stdout
+// ParseEvent parses a single JSON event from ai rpc stdout
 // and returns a FormattedEvent. Returns nil for events that should
 // be skipped (unknown types, empty deltas, etc.).
 func ParseEvent(line string) *FormattedEvent {

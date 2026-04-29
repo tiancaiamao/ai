@@ -12,13 +12,13 @@ import (
 
 var convCmd = &cobra.Command{
 	Use:   "conv",
-	Short: "Convert ai --mode rpc JSON events to human-readable text",
-	Long: `Reads newline-delimited JSON events from stdin and writes
+		Short: "Convert ai rpc JSON events to human-readable text",
+		Long: `Reads newline-delimited JSON events from stdin and writes
 human-readable output to stdout. Designed for piping:
 
-  ai --mode rpc | ag conv
+  ai rpc | ag conv
   cat stream.log | ag conv --only tools
-  ai --mode rpc | tee raw.log | ag conv`,
+  ai rpc | tee raw.log | ag conv`,
 	RunE: runConv,
 }
 

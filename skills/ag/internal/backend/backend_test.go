@@ -10,7 +10,7 @@ const testBackendsYAML = `
 backends:
   ai:
     command: ai
-    args: ["--mode", "rpc"]
+        args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true
@@ -178,7 +178,7 @@ func TestLoadAiOnly(t *testing.T) {
 backends:
   ai:
     command: ai
-    args: ["--mode", "rpc"]
+        args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true

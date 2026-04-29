@@ -4,7 +4,7 @@
 
 ## Architecture
 
-Each agent runs as a detached background process with a dedicated bridge process (`ag bridge <id>`) that manages the `ai --mode rpc` subprocess. The bridge exposes a Unix socket for external control.
+Each agent runs as a detached background process with a dedicated bridge process (`ag bridge <id>`) that manages the `ai rpc` subprocess. The bridge exposes a Unix socket for external control.
 
 ```
 ag agent spawn worker-1 --input "fix bugs"
@@ -12,7 +12,7 @@ ag agent spawn worker-1 --input "fix bugs"
   └── ag bridge worker-1 (detached process, Setpgid)
       │
       └── [bridge process]
-          ├── exec.Command("ai", "--mode", "rpc")
+                    ├── exec.Command("ai", "rpc")
           │   ├── stdin pipe  → prompt/steer/abort
           │   └── stdout pipe → event stream → stream.log + activity.json
           ├── StreamWriter → stream.log (real-time, human/LLM readable)
@@ -67,10 +67,10 @@ ag agent wait <id>... [--timeout 600]             # Block until terminal state
 ### Event Conversion
 
 ```bash
-ag conv                              # Convert ai --mode rpc JSON events to readable text
-ai --mode rpc | ag conv              # Pipe through for live output
-ai --mode rpc | ag conv --only text  # Only assistant text
-ai --mode rpc | ag conv --only tools # Only tool calls
+ag conv                              # Convert ai rpc JSON events to readable text
+ai rpc | ag conv                      # Pipe through for live output
+ai rpc | ag conv --only text           # Only assistant text
+ai rpc | ag conv --only tools          # Only tool calls
 ```
 
 ### Task Management

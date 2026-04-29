@@ -56,9 +56,16 @@ func spawnWithRawBackend(id, input, cwd, backendName string) error {
 		cmd.Dir = cwd
 	}
 	cmd.Stdin = strings.NewReader(input)
-	output, runErr := cmd.CombinedOutput()
+		output, runErr := cmd.CombinedOutput()
 
-	_ = os.WriteFile(filepath.Join(agentDir, "stream.log"), output, 0644)
+	// 使用格式化写入器写入 stream.log
+	if err := WriteFormattedOutput(agentDir, output, backendName); err != nil {
+		fmt.Printf("Warning: failed to write formatted stream.log: %v\n", err)
+		// 降级为原始写入方式
+		_ = os.WriteFile(filepath.Join(agentDir, "stream.log"), output, 0644)
+	}
+
+	// 仍然保存原始输出到 output 文件
 	_ = os.WriteFile(filepath.Join(agentDir, "output"), output, 0644)
 
 	act.FinishedAt = time.Now().Unix()
