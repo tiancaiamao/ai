@@ -369,7 +369,7 @@ func TestSubcommandHelp(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-	subcommands := []string{"rpc", "run", "ls", "watch", "send"}
+		subcommands := []string{"rpc", "run", "ls", "watch", "send", "kill"}
 	for _, sub := range subcommands {
 		t.Run(sub, func(t *testing.T) {
 			cmd := exec.Command(bin, sub, "--help")

@@ -66,11 +66,13 @@ func main() {
 		lsSubcommand()
 	case "watch":
 		watchSubcommand()
-	case "send":
+		case "send":
 		sendSubcommand()
+	case "kill":
+		killSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", subcmd)
-				fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send\n")
+				fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
 		os.Exit(1)
 	}
 }
@@ -123,6 +125,7 @@ Subcommands:
   ls              List running and recent runs
   watch           Attach to a running serve instance (TUI)
   send            Send a message to a running serve instance
+  kill            Stop a running agent instance
 
 Flags for 'run':
   --session <path>         Session file path
@@ -151,6 +154,10 @@ Flags for 'watch':
 Flags for 'send':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
 
+Flags for 'kill':
+  --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
+  --force                  Send SIGKILL instead of graceful abort
+
 Examples:
   ai run                          Start agent with interactive TUI
   ai run --input "fix the bug"    Start with an initial prompt
@@ -158,8 +165,11 @@ Examples:
   ai serve --input "fix the bug"  Start daemon with an initial prompt
   ai ls                           List running agents
   ai send "hello"                 Send message to agent in current directory
-  ai send "/session"              Send slash command
+    ai send "/session"              Send slash command
   ai watch                        Attach to agent's TUI
+  ai kill                         Stop agent in current directory
+  ai kill --id abc123             Stop specific run by ID
+  ai kill --force                 Force kill (SIGKILL)
 `)
 }
 
