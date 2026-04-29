@@ -507,7 +507,45 @@ func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, 
 	// - Last prompt tokens (includes system prompt + tools + full conversation history)
 	// Note: Last prompt tokens already includes system prompt and tools, so we DON'T
 	// add them again here. The GetSessionStatsHandler will add estimates instead.
-	tokens.Total = tokens.Output + lastPromptTokens
+		tokens.Total = tokens.Output + lastPromptTokens
 
 	return userCount, assistantCount, toolCalls, toolResults, tokens, cost
+}
+
+func formatIntOrUnknown(value int) string {
+	if value <= 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(value)
+}
+
+func formatLimit(value int) string {
+	if value <= 0 {
+		return "disabled"
+	}
+	return strconv.Itoa(value)
+}
+
+func formatTokenLimit(state *rpc.CompactionState) string {
+	if state == nil || state.TokenLimit <= 0 {
+		return "unknown"
+	}
+	source := formatTokenLimitSource(state.TokenLimitSource)
+	if source == "" {
+		return strconv.Itoa(state.TokenLimit)
+	}
+	return fmt.Sprintf("%d (%s)", state.TokenLimit, source)
+}
+
+func formatTokenLimitSource(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "context_window":
+		return "context-window"
+	case "max_tokens":
+		return "max-tokens"
+	case "none":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
 }
