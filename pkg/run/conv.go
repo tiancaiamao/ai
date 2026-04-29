@@ -476,6 +476,11 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderMessages(dataJSON)
 	}
 
+		// /sessions → {sessions: [...]}
+	if _, hasSessions := dataRaw["sessions"]; hasSessions {
+		return renderSessions(dataJSON)
+	}
+
 	// /model, /cycle_model → {model: {...}, thinkingLevel: ...}
 	if _, hasModel := dataRaw["model"]; hasModel {
 		return renderModel(dataJSON)
@@ -513,6 +518,45 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		text = text[:500] + "..."
 	}
 	return &FormattedEvent{Kind: KindMeta, Text: text}
+}
+
+// renderSessions renders /sessions output, matching ai-win's handleListSessions.
+func renderSessions(dataJSON []byte) *FormattedEvent {
+	var payload struct {
+		Sessions []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			Title        string `json:"title"`
+			UpdatedAt    string `json:"updatedAt"`
+			MessageCount int    `json:"messageCount"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(dataJSON, &payload); err != nil {
+		return fallbackJSON(dataJSON)
+	}
+
+	if len(payload.Sessions) == 0 {
+		return &FormattedEvent{Kind: KindMeta, Text: "No sessions found"}
+	}
+
+	var b strings.Builder
+	b.WriteString("─────────────────────\n")
+	b.WriteString("Available Sessions\n")
+	b.WriteString("─────────────────────\n\n")
+
+	for i, sess := range payload.Sessions {
+		name := sess.Name
+		if name == "" {
+			name = sess.ID
+		}
+		b.WriteString(fmt.Sprintf("%d: %s (id: %s)\n", i, name, sess.ID))
+		b.WriteString(fmt.Sprintf("    updated: %s  messages: %d\n", truncate(sess.UpdatedAt, 16), sess.MessageCount))
+	}
+
+	b.WriteString("\n─────────────────────\n")
+	b.WriteString("Usage:\n  - /resume <index|id|path>\n")
+
+	return &FormattedEvent{Kind: KindResponse, Text: b.String()}
 }
 
 // renderSkills renders /skills output, matching ai-win handleCommands.

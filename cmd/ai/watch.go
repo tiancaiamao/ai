@@ -124,31 +124,115 @@ type watchModel struct {
 	sentBuf     *sentenceBuffer
 	sinceFlag   int64  // --since offset for machine-readable mode
 	machineMode bool   // if true, print raw events + cursor and exit
+
+	// Streaming state: tracks current role prefix for inline content.
+	// Matches ai-win's writeStream behavior: role prefix printed once
+	// when role changes, then text appended inline until role changes again.
+	currentRole    string // "", "assistant", "thinking", "tool", "ai"
+	inlineActive   bool   // true when we're in the middle of an inline stream
+	showPrefixes   bool   // whether to show "role: " prefixes (default true)
+	showThinking   bool   // whether to show thinking content
+	showTools      bool   // whether to show tool content
 }
 
 func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool) watchModel {
 	m := watchModel{
-		eventsPath:  eventsPath,
-		runID:       runID,
-		mode:        "replay",
-		statusLine:  fmt.Sprintf("ai watch | run %s | replaying...", runID),
-		content:     &strings.Builder{},
-		sinceFlag:   sinceOffset,
-		machineMode: machineMode,
+		eventsPath:    eventsPath,
+		runID:         runID,
+		mode:          "replay",
+		statusLine:    fmt.Sprintf("ai watch | run %s | replaying...", runID),
+		content:       &strings.Builder{},
+		sinceFlag:     sinceOffset,
+		machineMode:   machineMode,
+		showPrefixes:  true,
+		showThinking:  true,
+		showTools:     true,
 	}
 	m.sentBuf = newSentenceBuffer(func(text string) {
-		m.appendContent(text)
+		m.appendInline(text)
 	})
 	return m
 }
 
 func (m *watchModel) appendContent(text string) {
+	m.endInline()
 	m.content.WriteString(text)
 	m.content.WriteString("\n")
 	m.lines++
 	if m.ready {
 		m.viewport.SetContent(m.content.String())
 		m.viewport.GotoBottom()
+	}
+}
+
+// appendInline appends text to the current line without a newline.
+// Used for streaming deltas (thinking, text) that build up a single line.
+func (m *watchModel) appendInline(text string) {
+	m.content.WriteString(text)
+	if m.ready {
+		m.viewport.SetContent(m.content.String())
+		m.viewport.GotoBottom()
+	}
+}
+
+// ensureRole transitions the streaming role, matching ai-win's writeStream.
+// If the role changes, it ends the current inline stream, prints a newline,
+// and starts a new line with the role prefix (if showPrefixes is on).
+// Returns false if this role's content should be suppressed.
+func (m *watchModel) ensureRole(role string) bool {
+	// Check visibility
+	switch role {
+	case "thinking":
+		if !m.showThinking {
+			return false
+		}
+	case "tool":
+		if !m.showTools {
+			return false
+		}
+	}
+
+	if m.currentRole == role && m.inlineActive {
+		return true // same role, continue inline
+	}
+
+	// Role changed — flush any buffered text, end previous inline
+	m.sentBuf.flush()
+	m.endInline()
+
+	if m.showPrefixes && role != "" {
+		var styled string
+		switch role {
+		case "assistant":
+			styled = role + ": "
+		case "thinking":
+			styled = thinkingStyle.Render(role) + ": "
+		case "tool":
+			styled = toolStyle.Render(role) + ": "
+		case "ai":
+			styled = aiStyle.Render(role) + ": "
+		default:
+			styled = role + ": "
+		}
+		m.content.WriteString(styled)
+	}
+
+	m.currentRole = role
+	m.inlineActive = true
+	return true
+}
+
+// endInline finishes the current inline stream (if any) with a newline.
+func (m *watchModel) endInline() {
+	if m.inlineActive {
+		m.content.WriteString("\n")
+		m.lines++
+		m.inlineActive = false
+		m.currentRole = ""
+		if m.ready {
+			m.viewport.SetContent(m.content.String())
+			m.viewport.GotoBottom()
+		}
 	}
 }
 
@@ -190,17 +274,13 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sentBuf.flush()
 		return m, waitForFile(m.eventsPath, m.offset)
 
-	case replayBatch:
+		case replayBatch:
 		// Batch of events from replay phase — render all at full speed.
 		m.offset = msg.offset
 		for _, line := range msg.lines {
-			formatted := run.ParseEvent(line)
-			if formatted == nil {
-				continue
-			}
-			rendered := renderEvent(formatted)
-			m.appendContent(rendered)
+			m.processEvent(run.ParseEvent(line))
 		}
+		m.endInline()
 		m.updateStatus()
 		return m, m.nextCmd()
 
@@ -211,16 +291,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.nextCmd()
 		}
 
-		rendered := renderEvent(formatted)
-
-		// In replay mode: render immediately at full speed (no buffering).
-		// In live mode: use sentence-buffered typewriter for KindText.
-		if m.mode == "live" && formatted.Kind == run.KindText {
-			m.sentBuf.write(rendered)
-		} else {
-			m.appendContent(rendered)
-		}
-
+		m.processEvent(formatted)
 		m.updateStatus()
 		return m, m.nextCmd()
 
@@ -463,9 +534,71 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		return &alive[0], nil
 }
 
+// processEvent handles a single parsed event with role-aware streaming,
+// matching ai-win's writeStream/writePrefixedLine/writeStatus behavior.
+func (m *watchModel) processEvent(f *run.FormattedEvent) {
+	if f == nil {
+		return
+	}
+
+	switch f.Kind {
+	case run.KindText:
+		// Assistant text delta — stream inline with role prefix
+		if m.ensureRole("assistant") {
+			text := f.Text
+			if m.mode == "live" {
+				m.sentBuf.write(text)
+			} else {
+				m.appendInline(text)
+			}
+		}
+
+	case run.KindThinking:
+		// Thinking delta — stream inline with role prefix
+		if m.ensureRole("thinking") {
+			text := f.Text
+			if m.mode == "live" {
+				m.sentBuf.write(thinkingStyle.Render(text))
+			} else {
+				m.appendInline(thinkingStyle.Render(text))
+			}
+		}
+
+	case run.KindTool:
+		// Tool events — one line per event, prefixed
+		m.endInline()
+		m.appendContent(toolStyle.Render(f.Text))
+
+	case run.KindResponse:
+		// Slash command response — one line
+		m.endInline()
+		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
+			m.appendContent(errStyle.Render(f.Text))
+		} else {
+			m.appendContent(metaStyle.Render(f.Text))
+		}
+
+	case run.KindMeta:
+		// System messages (ai: agent started, compaction, etc.)
+		m.endInline()
+		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
+			m.appendContent(errStyle.Render(f.Text))
+		} else {
+			m.appendContent(aiStyle.Render(f.Text))
+		}
+
+	case run.KindSessionSwitch:
+		m.endInline()
+		m.appendContent(sessStyle.Render(f.Text))
+
+	default:
+		m.endInline()
+		m.appendContent(f.Text)
+	}
+}
+
 // renderEvent converts a FormattedEvent to a styled string for display.
-// It matches ai-win's rendering behavior: role prefixes, ai: system messages,
-// colored thinking/tool/meta output.
+// Legacy function used for non-streaming contexts.
 func renderEvent(f *run.FormattedEvent) string {
 	switch f.Kind {
 	case run.KindText:

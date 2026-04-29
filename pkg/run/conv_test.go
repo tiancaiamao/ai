@@ -381,6 +381,39 @@ func TestParseEvent_ToolExecutionStart_MultipleArgs(t *testing.T) {
 	}
 }
 
+// --- Sessions response ---
+
+func TestParseEvent_Response_Sessions(t *testing.T) {
+	raw := `{"type":"response","success":true,"data":{"sessions":[{"id":"abc123","name":"my session","updatedAt":"2025-01-15T10:30:00Z","messageCount":5}]}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Kind != KindResponse {
+		t.Fatalf("expected KindResponse, got %s", evt.Kind)
+	}
+	if !strings.Contains(evt.Text, "Available Sessions") {
+		t.Fatalf("expected formatted sessions output, got %q", evt.Text)
+	}
+	if !strings.Contains(evt.Text, "my session") {
+		t.Fatalf("expected session name in output, got %q", evt.Text)
+	}
+	if !strings.Contains(evt.Text, "/resume") {
+		t.Fatalf("expected /resume usage hint, got %q", evt.Text)
+	}
+}
+
+func TestParseEvent_Response_SessionsEmpty(t *testing.T) {
+	raw := `{"type":"response","success":true,"data":{"sessions":[]}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Text != "No sessions found" {
+		t.Fatalf("expected 'No sessions found', got %q", evt.Text)
+	}
+}
+
 // --- Leading/trailing whitespace on input line ---
 
 func TestParseEvent_WhitespaceAroundJSON(t *testing.T) {
