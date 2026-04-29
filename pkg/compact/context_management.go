@@ -21,7 +21,7 @@ const (
 	MgmtTokenMedium = 0.33 // 30%: more aggressive checks
 	MgmtTokenHigh   = 0.50 // 50%: frequent checks
 
-	MgmtIntervalLow    = 15 // At 20%: every 15 tool calls
+			MgmtIntervalLow    = 15 // At 20%: every 15 tool calls
 	MgmtIntervalMedium = 10 // At 40%: every 10 tool calls
 	MgmtIntervalHigh   = 7  // At 60%: every 7 tool calls
 
