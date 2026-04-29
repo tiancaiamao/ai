@@ -1,26 +1,28 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
-func serveSubcommand(binPath string) {
-		fs := flag.NewFlagSet("serve", flag.ExitOnError)
+func runSubcommand(binPath string) {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
@@ -44,13 +46,9 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-	// Print run ID to stderr so callers can capture it.
-	fmt.Fprintln(os.Stderr, id)
-
 	// Build RPC flags to forward.
 	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
-		// On Linux, prefer /proc/self/exe for reliable re-exec.
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
 	}
@@ -58,13 +56,22 @@ func serveSubcommand(binPath string) {
 	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
-	cmd.Stderr = os.Stderr
 
-	// Set up stdin pipe so we can inject steer commands from the socket.
+	// Redirect subprocess stderr to log file (not terminal — TUI owns the terminal).
+	logPath := filepath.Join(runDir, "rpc.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		slog.Error("failed to create log file", "path", logPath, "error", err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+	cmd.Stderr = logFile
+
+	// Stdin pipe for sending commands.
 	stdinReader, stdinWriter := io.Pipe()
 	cmd.Stdin = stdinReader
 
-	// Set up stdout tee: write to both os.Stdout and events.jsonl.
+	// Stdout goes ONLY to events.jsonl — watch TUI reads from there.
 	eventsPath := run.EventsPath(baseDir, id)
 	eventsFile, err := os.Create(eventsPath)
 	if err != nil {
@@ -72,9 +79,7 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 	defer eventsFile.Close()
-
-	multiWriter := io.MultiWriter(os.Stdout, eventsFile)
-	cmd.Stdout = multiWriter
+	cmd.Stdout = eventsFile
 
 	// Start the subprocess.
 	if err := cmd.Start(); err != nil {
@@ -96,12 +101,10 @@ func serveSubcommand(binPath string) {
 		slog.Error("failed to save run meta", "error", err)
 	}
 
-	// Start socket server for external commands (steer/abort/get_state).
+	// Start socket server for external commands.
 	sockPath := run.SocketPath(baseDir, id)
 	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
-			if err := socketServer.Start(); err != nil {
-		// Socket is the control plane — without it, send/watch cannot work.
-		// Kill the subprocess, mark run as failed, and exit.
+	if err := socketServer.Start(); err != nil {
 		slog.Error("failed to start socket server", "error", err)
 		cmd.Process.Kill()
 		meta.Status = run.StatusFailed
@@ -114,16 +117,6 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-	// Set up signal handling.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Goroutine to copy os.Stdin to stdinWriter, so interactive input works.
-	go func() {
-		io.Copy(stdinWriter, os.Stdin)
-		stdinWriter.Close()
-	}()
-
 	// Send initial input if provided.
 	if *inputFlag != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", *inputFlag); err != nil {
@@ -131,52 +124,161 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	// Wait for subprocess to exit or signal.
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
+	// Launch watch TUI in foreground.
+	// The TUI reads events.jsonl and renders to the terminal.
+	// User input is forwarded to the subprocess via the socket.
+	m := newRunModel(eventsPath, id, sockPath, cmd.Process, stdinWriter, meta, metaPath)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		slog.Error("TUI error", "error", err)
+	}
+
+	// TUI exited — clean up subprocess.
+	cmd.Process.Signal(syscall.SIGINT)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			<-done
+		}
+	}
+	stdinWriter.Close()
+	eventsFile.Close()
+
+	// Update final status.
+	meta.Status = run.StatusDone
+	meta.FinishedAt = time.Now().Unix()
+	run.SaveRunMeta(meta, metaPath)
+}
+
+// serveSubcommand starts the agent as a daemon process.
+// It runs in the foreground but keeps I/O silent (redirected to files).
+// The socket server runs in-process, enabling ai send/watch control.
+// Use "ai serve &" or "nohup ai serve &" for background operation.
+func serveSubcommand(binPath string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
+	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
+	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
+	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
+	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
+	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	fs.Parse(os.Args[1:])
+
+	// Generate run ID and create directory.
+	id := run.GenerateID()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to get home directory: %v\n", err)
+		os.Exit(1)
+	}
+	baseDir := filepath.Join(homeDir, ".ai")
+	runDir := run.RunDir(baseDir, id)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create run directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Build RPC flags to forward.
+	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+
+	if runtime.GOOS == "linux" {
+		binPath = "/proc/self/exe"
+	}
+
+	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
+	cwd, _ := os.Getwd()
+	cmd.Dir = cwd
+
+	// Detach from terminal: new process group so signals don't propagate.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Redirect stderr to log file.
+	logPath := filepath.Join(runDir, "rpc.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+	cmd.Stderr = logFile
+
+	// Stdin pipe for sending commands.
+	stdinReader, stdinWriter := io.Pipe()
+	cmd.Stdin = stdinReader
+
+	// Stdout goes ONLY to events.jsonl.
+	eventsPath := run.EventsPath(baseDir, id)
+	eventsFile, err := os.Create(eventsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create events file: %v\n", err)
+		os.Exit(1)
+	}
+	defer eventsFile.Close()
+	cmd.Stdout = eventsFile
+
+	// Start the subprocess.
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start rpc subprocess: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write initial run.json.
+	meta := &run.RunMeta{
+		ID:        id,
+		PID:       cmd.Process.Pid,
+		CWD:       cwd,
+		Status:    run.StatusRunning,
+		StartedAt: time.Now().Unix(),
+		Name:      *nameFlag,
+	}
+	metaPath := run.RunMetaPath(baseDir, id)
+	if err := run.SaveRunMeta(meta, metaPath); err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to save run meta: %v\n", err)
+	}
+
+	// Start socket server for external commands.
+	sockPath := run.SocketPath(baseDir, id)
+	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
+	if err := socketServer.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to start socket server: %v\n", err)
+		cmd.Process.Kill()
+		meta.Status = run.StatusFailed
+		meta.FinishedAt = time.Now().Unix()
+		run.SaveRunMeta(meta, metaPath)
+		os.Exit(1)
+	}
+	defer func() {
+		socketServer.Stop()
+		os.Remove(sockPath)
 	}()
 
-	var waitErr error
-	select {
-	case waitErr = <-waitCh:
-		// Subprocess exited on its own.
-		case <-ctx.Done():
-		// Signal received: forward SIGINT to subprocess (same as Ctrl+C).
-		slog.Info("signal received, forwarding to subprocess")
-		_ = cmd.Process.Signal(syscall.SIGINT)
-		// Close stdin to unblock any reads in the subprocess.
-		stdinWriter.Close()
-		// Give it a grace period.
-		select {
-		case waitErr = <-waitCh:
-			// Clean exit.
-		case <-time.After(5 * time.Second):
-			slog.Warn("subprocess did not exit in time, sending SIGTERM")
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			select {
-			case waitErr = <-waitCh:
-			case <-time.After(3 * time.Second):
-				slog.Warn("subprocess still running, killing")
-				_ = cmd.Process.Kill()
-				waitErr = <-waitCh
-			}
+	// Send initial input if provided.
+	if *inputFlag != "" {
+		if err := sendRPCCommand(stdinWriter, "prompt", *inputFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
 		}
 	}
 
-	// Close stdinWriter if not already closed.
-	stdinWriter.Close()
+	// Print run ID to stdout — caller can capture this.
+	fmt.Println(id)
+
+	// Wait for subprocess to exit.
+	waitErr := cmd.Wait()
 
 	// Determine final status.
 	status := run.StatusFailed
 	if waitErr == nil {
 		status = run.StatusDone
 	} else {
-		exitErr := &exec.ExitError{}
-		if err, ok := waitErr.(*exec.ExitError); ok {
-			exitErr = err
-			// Check if the process was killed by a signal.
-			// On Go, ExitError.ProcessState can be checked via Sys().
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			if state, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok {
 				if state.Signaled() {
 					status = run.StatusKilled
@@ -185,20 +287,9 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	// Update run.json with final status.
 	meta.Status = status
 	meta.FinishedAt = time.Now().Unix()
-	if err := run.SaveRunMeta(meta, metaPath); err != nil {
-		slog.Error("failed to update run meta on exit", "error", err)
-	}
-
-	slog.Info("run finished", "id", id, "status", status)
-
-	if status == run.StatusDone {
-		os.Exit(0)
-	} else {
-		os.Exit(1)
-	}
+	run.SaveRunMeta(meta, metaPath)
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
@@ -274,4 +365,140 @@ func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdi
 			return run.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
 		}
 	}
+}
+
+// --- runModel: watchModel + user input ---
+
+// runModel extends the watch TUI with user input support.
+// It embeds watchModel for event rendering and adds a text input
+// for sending messages to the running agent via socket.
+type runModel struct {
+	watchModel
+	sockPath  string
+	proc      *os.Process
+	stdinPipe *io.PipeWriter
+	meta      *run.RunMeta
+	metaPath  string
+	inputMode bool // true when user is typing a message
+	inputBuf  strings.Builder
+}
+
+func newRunModel(
+	eventsPath, runID, sockPath string,
+	proc *os.Process,
+	stdinPipe *io.PipeWriter,
+	meta *run.RunMeta,
+	metaPath string,
+) runModel {
+	w := newWatchModel(eventsPath, runID, 0, false)
+	return runModel{
+		watchModel: w,
+		sockPath:   sockPath,
+		proc:       proc,
+		stdinPipe:  stdinPipe,
+		meta:       meta,
+		metaPath:   metaPath,
+	}
+}
+
+func (m runModel) Init() tea.Cmd {
+	return m.watchModel.Init()
+}
+
+func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Handle input mode: user is typing a message.
+		if m.inputMode {
+			switch msg.Type {
+			case tea.KeyEnter:
+				// Send the message.
+				text := m.inputBuf.String()
+				m.inputBuf.Reset()
+				m.inputMode = false
+				if text != "" {
+					if err := m.sendMessage(text); err != nil {
+						m.appendContent(errStyle.Render("ai: send failed: " + err.Error()))
+					}
+				}
+				return m, nil
+			case tea.KeyEsc:
+				// Cancel input.
+				m.inputBuf.Reset()
+				m.inputMode = false
+				return m, nil
+			case tea.KeyBackspace:
+				// Remove last rune from input buffer.
+				runes := []rune(m.inputBuf.String())
+				if len(runes) > 0 {
+					m.inputBuf.Reset()
+					m.inputBuf.WriteString(string(runes[:len(runes)-1]))
+				}
+				return m, nil
+			default:
+				// Append typed character to input buffer.
+				m.inputBuf.WriteString(msg.String())
+				return m, nil
+			}
+		}
+
+		// Normal mode: handle navigation and commands.
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "i", ":":
+			// Enter input mode.
+			m.inputMode = true
+			return m, nil
+		}
+	}
+
+	// Delegate to watchModel for event processing.
+	w, cmd := m.watchModel.Update(msg)
+	m.watchModel = w.(watchModel)
+	return m, cmd
+}
+
+func (m runModel) View() string {
+	// Build status bar.
+	status := fmt.Sprintf(" ai run | run %s | %s", m.runID, m.mode)
+	if m.inputMode {
+		input := m.inputBuf.String()
+		if input == "" {
+			status += " | : " // show prompt cursor
+		} else {
+			status += " | " + input
+		}
+		status = statusBar.Render(status)
+	} else {
+		status += " | press i to input, q to quit"
+		status = statusBar.Render(status)
+	}
+
+	if !m.ready {
+		return "\n  Starting...\n"
+	}
+
+	return m.viewport.View() + "\n" + status
+}
+
+// sendMessage sends a user message to the agent via socket.
+func (m *runModel) sendMessage(text string) error {
+	conn, err := net.DialTimeout("unix", m.sockPath, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to socket: %w", err)
+	}
+	defer conn.Close()
+
+	cmd := run.Command{Type: "prompt", Message: text}
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return fmt.Errorf("marshal command: %w", err)
+	}
+	data = append(data, '\n')
+
+	if _, err := conn.Write(data); err != nil {
+		return fmt.Errorf("write command: %w", err)
+	}
+		return nil
 }

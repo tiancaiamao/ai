@@ -55,10 +55,12 @@ func main() {
 	// Shift os.Args so flag.Parse in subcommands works correctly.
 	os.Args = os.Args[1:]
 
-	switch subcmd {
+		switch subcmd {
 	case "rpc":
 		rpcSubcommand()
-		case "run", "serve":
+	case "run":
+		runSubcommand(binPath)
+	case "serve":
 		serveSubcommand(binPath)
 	case "ls":
 		lsSubcommand()
@@ -115,13 +117,21 @@ Usage:
   ai <subcommand> [flags]
 
 Subcommands:
-  serve          Start a daemon (AI agent process)
-  rpc            Start in raw RPC mode (stdin/stdout JSON-RPC)
-  ls             List running and recent runs
-  watch          Attach to a running serve instance (TUI)
-  send           Send a message to a running serve instance
+  run             Start agent with interactive TUI (serve + watch)
+  serve           Start agent as background daemon
+  rpc             Start in raw RPC mode (stdin/stdout JSON-RPC)
+  ls              List running and recent runs
+  watch           Attach to a running serve instance (TUI)
+  send            Send a message to a running serve instance
 
-Flags for 'serve' and 'rpc':
+Flags for 'run':
+  --session <path>         Session file path
+  --system-prompt <text>   Custom system prompt (@file to load from file)
+  --max-turns <n>          Maximum conversation turns (0 = unlimited)
+  --timeout <duration>     Total execution timeout (0 = unlimited)
+  --input <text>           Initial prompt to send after startup
+
+Flags for 'serve':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
@@ -142,8 +152,10 @@ Flags for 'send':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
 
 Examples:
-  ai serve                        Start a new agent in current directory
-  ai serve --input "fix the bug"  Start with an initial prompt
+  ai run                          Start agent with interactive TUI
+  ai run --input "fix the bug"    Start with an initial prompt
+  ai serve                        Start agent as background daemon
+  ai serve --input "fix the bug"  Start daemon with an initial prompt
   ai ls                           List running agents
   ai send "hello"                 Send message to agent in current directory
   ai send "/session"              Send slash command
