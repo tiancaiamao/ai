@@ -55,8 +55,8 @@ func spawnWithRawBackend(id, input, cwd, backendName string) error {
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.Stdin = strings.NewReader(input)
-		output, runErr := cmd.CombinedOutput()
+		cmd.Stdin = strings.NewReader(input)
+	output, runErr := cmd.CombinedOutput()
 
 	// 使用格式化写入器写入 stream.log
 	if err := WriteFormattedOutput(agentDir, output, backendName); err != nil {

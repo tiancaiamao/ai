@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -15,7 +14,6 @@ import (
 type FormattedStreamWriter struct {
 	file    *os.File
 	writer  *bufio.Writer
-	decoder *json.Decoder
 	textBuf strings.Builder
 }
 
@@ -35,16 +33,13 @@ func NewFormattedStreamWriter(filePath string) (*FormattedStreamWriter, error) {
 // WriteJSONEvents 写入 JSON 事件流（用于 ai rpc 输出）
 func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	
-	// 创建 JSON 解码器
-	w.decoder = json.NewDecoder(strings.NewReader(string(output)))
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		
+
 		// 尝试解析为 JSON 事件
 		formatted := conv.ParseEvent(line)
 		if formatted != nil {
@@ -55,19 +50,19 @@ func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 			w.writeRawText(line)
 		}
 	}
-	
+
 	return w.writer.Flush()
 }
 
 // WriteTextStream 写入文本流（用于非 JSON 格式的输出）
 func (w *FormattedStreamWriter) WriteTextStream(output []byte) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		w.writeRawText(line)
 	}
-	
+
 	return w.writer.Flush()
 }
 
@@ -96,10 +91,10 @@ func (w *FormattedStreamWriter) writeRawText(text string) {
 func (w *FormattedStreamWriter) writeSmartText(text string) {
 	// 累积到缓冲区
 	w.textBuf.WriteString(text)
-	
+
 	// 检查是否有完整的语义单元
 	bufferStr := w.textBuf.String()
-	
+
 	// 检查句子结束
 	if strings.ContainsAny(text, "。！？.!?") {
 		// 写入并清空缓冲区
@@ -107,13 +102,14 @@ func (w *FormattedStreamWriter) writeSmartText(text string) {
 		w.textBuf.Reset()
 		return
 	}
-	
+
 	// 检查是否是特殊行（标题、列表、代码块等）
-	if strings.HasPrefix(strings.TrimSpace(text), "#") ||
-	   strings.HasPrefix(strings.TrimSpace(text), "-") ||
-	   strings.HasPrefix(strings.TrimSpace(text), "*") ||
-	   strings.HasPrefix(strings.TrimSpace(text), "```") ||
-	   strings.HasPrefix(strings.TrimSpace(text), "|") {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, "-") ||
+		strings.HasPrefix(trimmed, "*") ||
+		strings.HasPrefix(trimmed, "```") ||
+		strings.HasPrefix(trimmed, "|") {
 		// 换行后写入
 		if w.textBuf.Len() > len(text) {
 			// 说明缓冲区之前有内容，先写入之前的
@@ -124,7 +120,7 @@ func (w *FormattedStreamWriter) writeSmartText(text string) {
 		w.textBuf.Reset()
 		return
 	}
-	
+
 	// 如果缓冲区太大，强制写入
 	if w.textBuf.Len() > 200 {
 		fmt.Fprintf(w.writer, "%s", bufferStr)
@@ -139,7 +135,7 @@ func (w *FormattedStreamWriter) Flush() error {
 		fmt.Fprintf(w.writer, "%s", w.textBuf.String())
 		w.textBuf.Reset()
 	}
-	
+
 	return w.writer.Flush()
 }
 
@@ -152,21 +148,20 @@ func (w *FormattedStreamWriter) Close() error {
 }
 
 // WriteFormattedOutput 统一的格式化写入接口
-func WriteFormattedOutput(agentDir, output []byte, backendName string) error {
+func WriteFormattedOutput(agentDir string, output []byte, backendName string) error {
 	streamPath := agentDir + "/stream.log"
-	
+
 	writer, err := NewFormattedStreamWriter(streamPath)
 	if err != nil {
 		return err
 	}
 	defer writer.Close()
-	
+
 	// 根据 backend 类型选择不同的处理方式
 	if backendName == "ai" {
 		// ai backend 使用 JSON 事件流
 		return writer.WriteJSONEvents(output)
-	} else {
-		// 其他 backend 使用文本流
-		return writer.WriteTextStream(output)
 	}
+	// 其他 backend 使用文本流
+	return writer.WriteTextStream(output)
 }

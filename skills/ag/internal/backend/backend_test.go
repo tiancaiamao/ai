@@ -10,7 +10,7 @@ const testBackendsYAML = `
 backends:
   ai:
     command: ai
-        args: ["rpc"]
+    args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true
@@ -174,11 +174,11 @@ backends:
 func TestLoadAiOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "backends.yaml")
-	content := `
+		content := `
 backends:
   ai:
     command: ai
-        args: ["rpc"]
+    args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true
