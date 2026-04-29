@@ -883,12 +883,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
 		currentWorkdir := ws.GetCWD() // This is the current working directory
 
-		result := make([]any, len(sessions))
+				result := make([]any, len(sessions))
+		// Reverse the order so newest (index 0) appears at the bottom
 		for i, sess := range sessions {
-			// Add workspace info to each session
+			// Calculate reversed index: 0->len-1, 1->len-2, etc.
+			reversedIdx := len(sessions) - 1 - i
 			sess.Workspace = startupPath
 			sess.CurrentWorkdir = currentWorkdir
-			result[i] = sess
+			result[reversedIdx] = sess
 		}
 		return map[string]any{"sessions": result}, nil
 	})
