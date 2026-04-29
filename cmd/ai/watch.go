@@ -19,11 +19,13 @@ import (
 // --- Styles ---
 
 var (
-	metaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
-	toolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
-	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	sessStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Underline(true)
-	statusBar = lipgloss.NewStyle().
+	metaStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
+	toolStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	sessStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Underline(true)
+	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Italic(true)
+	aiStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
+	statusBar     = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
 			Background(lipgloss.Color("57")).
 			Padding(0, 1)
@@ -182,7 +184,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Finished replaying history, switch to live mode.
 		m.offset = msg.offset
 		m.caughtUp = true
-		m.mode = "live"
+				m.mode = "live"
 		m.updateStatus()
 		// Flush any remaining buffered text.
 		m.sentBuf.flush()
@@ -196,21 +198,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if formatted == nil {
 				continue
 			}
-			var rendered string
-			switch formatted.Kind {
-			case run.KindText:
-				rendered = formatted.Text
-			case run.KindTool:
-				rendered = toolStyle.Render(formatted.Text)
-			case run.KindMeta:
-				if strings.Contains(formatted.Text, "failed") || strings.Contains(formatted.Text, "error") {
-					rendered = errStyle.Render(formatted.Text)
-				} else {
-					rendered = metaStyle.Render(formatted.Text)
-				}
-			case run.KindSessionSwitch:
-				rendered = sessStyle.Render(formatted.Text)
-			}
+			rendered := renderEvent(formatted)
 			m.appendContent(rendered)
 		}
 		m.updateStatus()
@@ -223,21 +211,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.nextCmd()
 		}
 
-		var rendered string
-		switch formatted.Kind {
-		case run.KindText:
-			rendered = formatted.Text
-		case run.KindTool:
-			rendered = toolStyle.Render(formatted.Text)
-		case run.KindMeta:
-			if strings.Contains(formatted.Text, "failed") || strings.Contains(formatted.Text, "error") {
-				rendered = errStyle.Render(formatted.Text)
-			} else {
-				rendered = metaStyle.Render(formatted.Text)
-			}
-		case run.KindSessionSwitch:
-			rendered = sessStyle.Render(formatted.Text)
-		}
+		rendered := renderEvent(formatted)
 
 		// In replay mode: render immediately at full speed (no buffering).
 		// In live mode: use sentence-buffered typewriter for KindText.
@@ -486,5 +460,44 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		}
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
-	return &alive[0], nil
+		return &alive[0], nil
+}
+
+// renderEvent converts a FormattedEvent to a styled string for display.
+// It matches ai-win's rendering behavior: role prefixes, ai: system messages,
+// colored thinking/tool/meta output.
+func renderEvent(f *run.FormattedEvent) string {
+	switch f.Kind {
+	case run.KindText:
+		// Assistant text: no prefix, plain output (streamed via sentBuf)
+		return f.Text
+
+	case run.KindThinking:
+		// Thinking: styled, with "thinking: " prefix when role is set
+		return thinkingStyle.Render(f.Text)
+
+	case run.KindTool:
+		// Tool execution: styled
+		return toolStyle.Render(f.Text)
+
+	case run.KindResponse:
+		// Slash command response: style errors differently
+		if strings.Contains(f.Text, "ai:") && (strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error")) {
+			return errStyle.Render(f.Text)
+		}
+		return metaStyle.Render(f.Text)
+
+	case run.KindMeta:
+		// System messages (ai: agent started, ai: compaction done, etc.)
+		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
+			return errStyle.Render(f.Text)
+		}
+		return aiStyle.Render(f.Text)
+
+	case run.KindSessionSwitch:
+		return sessStyle.Render(f.Text)
+
+	default:
+		return f.Text
+	}
 }

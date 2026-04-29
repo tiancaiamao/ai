@@ -14,14 +14,17 @@ type EventKind string
 
 const (
 	KindText          EventKind = "text"
+	KindThinking      EventKind = "thinking"
 	KindTool          EventKind = "tool"
 	KindMeta          EventKind = "meta"
 	KindSessionSwitch EventKind = "session_switch"
+	KindResponse      EventKind = "response" // slash command response
 )
 
 // FormattedEvent is the result of parsing a raw JSON event line.
 type FormattedEvent struct {
 	Kind   EventKind
+	Role   string // role prefix: "assistant", "thinking", "tool", "ai" for system messages
 	Text   string // human-readable line (already formatted)
 	Raw    string // original raw delta text (for stream.log append)
 	Tool   string // tool name (KindTool only)
@@ -47,28 +50,40 @@ func ParseEvent(line string) *FormattedEvent {
 	switch eventType {
 	case "message_update":
 		return parseMessageUpdate(evt)
+	case "thinking_delta":
+		return parseThinkingDelta(evt)
+	case "text_delta":
+		return parseTextDelta(evt)
 	case "tool_execution_start":
 		return parseToolExecutionStart(evt)
+	case "tool_execution_end":
+		return parseToolExecutionEnd(evt)
 	case "agent_start":
-		return &FormattedEvent{Kind: KindMeta, Text: "--- agent started ---"}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: agent started"}
 	case "agent_end":
 		return parseAgentEnd(evt)
 	case "turn_start":
-		return &FormattedEvent{Kind: KindMeta, Text: "--- turn ---"}
+		return nil // silent, like ai-win
 	case "turn_end":
 		return nil // silent
-	case "tool_execution_end":
-		return nil // silent
+	case "compaction_start":
+		return parseCompactionStart(evt)
+	case "compaction_end":
+		return parseCompactionEnd(evt)
 	case "error":
 		errMsg, _ := evt["error"].(string)
 		if errMsg == "" {
 			errMsg = "unknown error"
 		}
-		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("❌ error: %s", errMsg)}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: error: " + errMsg}
 	case "response":
 		return parseResponseEvent(evt)
 	case "session_switch":
 		return parseSessionSwitch(evt)
+	case "loop_guard_triggered":
+		return parseLoopGuard(evt)
+	case "tool_call_recovery":
+		return parseToolCallRecovery(evt)
 	default:
 		return nil
 	}
@@ -114,12 +129,74 @@ func ExtractToolName(evt map[string]any) string {
 }
 
 func parseMessageUpdate(evt map[string]any) *FormattedEvent {
-	delta := ExtractTextDelta(evt)
+	// Format 1: assistantMessageEvent (actual ai RPC output)
+	if ame, ok := evt["assistantMessageEvent"].(map[string]any); ok {
+		ameType, _ := ame["type"].(string)
+		delta, _ := ame["delta"].(string)
+		switch ameType {
+		case "text_delta":
+			if delta == "" {
+				return nil
+			}
+			return &FormattedEvent{
+				Kind: KindText,
+				Role: "assistant",
+				Text: delta,
+				Raw:  delta,
+			}
+		case "thinking_delta":
+			if delta == "" {
+				return nil
+			}
+			return &FormattedEvent{
+				Kind: KindThinking,
+				Role: "thinking",
+				Text: delta,
+				Raw:  delta,
+			}
+		}
+	}
+
+	// Format 2: data.text_delta (legacy)
+	if data, ok := evt["data"].(map[string]any); ok {
+		delta, _ := data["text_delta"].(string)
+		if delta == "" {
+			return nil
+		}
+		return &FormattedEvent{
+			Kind: KindText,
+			Role: "assistant",
+			Text: delta,
+			Raw:  delta,
+		}
+	}
+
+	return nil
+}
+
+// parseThinkingDelta handles standalone thinking_delta events.
+func parseThinkingDelta(evt map[string]any) *FormattedEvent {
+	delta, _ := evt["delta"].(string)
+	if delta == "" {
+		return nil
+	}
+	return &FormattedEvent{
+		Kind: KindThinking,
+		Role: "thinking",
+		Text: delta,
+		Raw:  delta,
+	}
+}
+
+// parseTextDelta handles standalone text_delta events.
+func parseTextDelta(evt map[string]any) *FormattedEvent {
+	delta, _ := evt["delta"].(string)
 	if delta == "" {
 		return nil
 	}
 	return &FormattedEvent{
 		Kind: KindText,
+		Role: "assistant",
 		Text: delta,
 		Raw:  delta,
 	}
@@ -133,45 +210,164 @@ func parseToolExecutionStart(evt map[string]any) *FormattedEvent {
 
 	detail := formatToolDetail(evt, toolName)
 
+	label := "tool"
+	if toolName != "" {
+		label = fmt.Sprintf("tool %s", toolName)
+	}
+
+	text := fmt.Sprintf("tool: %s start", label)
+	if detail != "" {
+		text = fmt.Sprintf("tool: %s start (%s)", label, strings.TrimSpace(detail))
+	}
+
 	return &FormattedEvent{
 		Kind:   KindTool,
-		Text:   fmt.Sprintf("🔧 %s%s", toolName, detail),
+		Role:   "tool",
+		Text:   text,
 		Raw:    "",
 		Tool:   toolName,
 		Detail: detail,
 	}
 }
 
+// parseToolExecutionEnd handles tool_execution_end events, matching ai-win handleToolEnd.
+func parseToolExecutionEnd(evt map[string]any) *FormattedEvent {
+	toolName := ExtractToolName(evt)
+
+	label := "tool"
+	if toolName != "" {
+		label = fmt.Sprintf("tool %s", toolName)
+	}
+
+	isError, _ := evt["isError"].(bool)
+	if isError {
+		result, _ := evt["result"].(string)
+		if result == "" {
+			result = "error"
+		}
+		return &FormattedEvent{
+			Kind: KindTool,
+			Role: "tool",
+			Text: fmt.Sprintf("tool: %s error: %s", label, truncate(result, 200)),
+		}
+	}
+
+	return &FormattedEvent{
+		Kind: KindTool,
+		Role: "tool",
+		Text: fmt.Sprintf("tool: %s done", label),
+	}
+}
+
 func parseAgentEnd(evt map[string]any) *FormattedEvent {
 	errMsg, _ := evt["error"].(string)
 	if errMsg != "" {
-		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("--- agent failed: %s ---", errMsg)}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: agent failed: " + errMsg}
 	}
 	if success, ok := evt["success"].(bool); ok && !success {
-		return &FormattedEvent{Kind: KindMeta, Text: "--- agent failed ---"}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: agent failed"}
 	}
-	return &FormattedEvent{Kind: KindMeta, Text: "--- agent done ---"}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: agent done"}
 }
 
 func parseSessionSwitch(evt map[string]any) *FormattedEvent {
 	sessionID, _ := evt["session"].(string)
 	sessionName, _ := evt["sessionName"].(string)
 
+	text := ""
 	if sessionName != "" {
-		return &FormattedEvent{
-			Kind: KindSessionSwitch,
-			Text: fmt.Sprintf("--- session: %s (%s) ---", sessionName, sessionID),
-			Raw:  "",
-		}
+		text = fmt.Sprintf("--- session: %s (%s) ---", sessionName, sessionID)
+	} else if sessionID != "" {
+		text = fmt.Sprintf("--- session: %s ---", sessionID)
 	}
-	if sessionID != "" {
-		return &FormattedEvent{
-			Kind: KindSessionSwitch,
-			Text: fmt.Sprintf("--- session: %s ---", sessionID),
-			Raw:  "",
-		}
+	if text == "" {
+		return nil
 	}
-	return nil
+	return &FormattedEvent{Kind: KindSessionSwitch, Role: "ai", Text: text}
+}
+
+// parseCompactionStart handles compaction_start events, matching ai-win handleCompactionEvent.
+func parseCompactionStart(evt map[string]any) *FormattedEvent {
+	info, _ := evt["info"].(map[string]any)
+	label := "compaction"
+	if auto, _ := info["auto"].(bool); auto {
+		label = "auto-compaction"
+	}
+
+	before := intFromMap(info, "before")
+	if before > 0 {
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s started (%d messages)", label, before)}
+	}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s started", label)}
+}
+
+// parseCompactionEnd handles compaction_end events, matching ai-win handleCompactionEvent.
+func parseCompactionEnd(evt map[string]any) *FormattedEvent {
+	info, _ := evt["info"].(map[string]any)
+	label := "compaction"
+	if auto, _ := info["auto"].(bool); auto {
+		label = "auto-compaction"
+	}
+
+	// Check for error
+	if errStr, _ := info["error"].(string); errStr != "" {
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s failed: %s", label, errStr)}
+	}
+
+	// Mini compaction (context management)
+	compType, _ := info["type"].(string)
+	if compType == "mini" {
+		truncated := intFromMap(info, "truncatedCount")
+		tokensBefore := intFromMap(info, "tokensBefore")
+		tokensAfter := intFromMap(info, "tokensAfter")
+		llmUpdated, _ := info["llmContextUpdated"].(bool)
+
+		msg := fmt.Sprintf("ai: %s done ", label)
+		if truncated > 0 {
+			msg += fmt.Sprintf("(%d messages truncated", truncated)
+			if tokensBefore > 0 && tokensAfter > 0 {
+				msg += fmt.Sprintf(", %d -> %d tokens", tokensBefore, tokensAfter)
+			}
+			msg += ")"
+			if llmUpdated {
+				msg += " (LLM context updated)"
+			}
+		} else {
+			msg += "(no action needed)"
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: msg}
+	}
+
+	// Major compaction
+	before := intFromMap(info, "before")
+	after := intFromMap(info, "after")
+	if before > 0 && after > 0 {
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s done (%d -> %d messages)", label, before, after)}
+	}
+
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s done", label)}
+}
+
+// parseLoopGuard handles loop_guard_triggered events.
+func parseLoopGuard(evt map[string]any) *FormattedEvent {
+	reason, _ := evt["reason"].(string)
+	if reason == "" {
+		reason = "unknown"
+	}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: loop guard triggered: " + reason}
+}
+
+// parseToolCallRecovery handles tool_call_recovery events.
+func parseToolCallRecovery(evt map[string]any) *FormattedEvent {
+	reason := "malformed tool-call markup"
+	if r, _ := evt["reason"].(string); r != "" {
+		reason = r
+	}
+	attempt := intFromMap(evt, "attempt")
+	if attempt > 0 {
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: recovered malformed tool call (attempt %d): %s", attempt, truncate(reason, 220))}
+	}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncate(reason, 220)}
 }
 
 // formatToolDetail tries to extract a short summary of tool arguments.
@@ -198,7 +394,33 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 	if len(parts) > 0 {
 		return " " + strings.Join(parts, " ")
 	}
-	return ""
+		return ""
+}
+
+// intFromMap safely extracts an int from a map[string]any.
+func intFromMap(m map[string]any, key string) int {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	}
+	return 0
+}
+
+// truncate shortens text to maxLen with ellipsis.
+func truncate(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
 }
 
 // parseResponseEvent handles RPC response events from slash commands.
@@ -212,7 +434,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		if errMsg == "" {
 			errMsg = "command failed"
 		}
-		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("❌ %s", errMsg)}
+		return &FormattedEvent{Kind: KindResponse, Role: "ai", Text: "ai: " + errMsg}
 	}
 
 	dataRaw, _ := evt["data"].(map[string]any)

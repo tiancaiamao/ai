@@ -208,15 +208,15 @@ func TestEventParsingPipeline(t *testing.T) {
 	}
 
 	// Verify parsed kinds.
-		expectedKinds := []run.EventKind{
-		run.KindMeta,          // agent_start
-		run.KindMeta,          // turn_start -> returns "--- turn ---"
+	expectedKinds := []run.EventKind{
+		run.KindMeta,          // agent_start -> "ai: agent started"
+		"nil",                 // turn_start -> silent (matching ai-win)
 		run.KindText,          // text_delta
 		run.KindText,          // text_delta
 		run.KindTool,          // tool_execution_start
-		"nil",                 // tool_execution_end -> skipped
+		run.KindTool,          // tool_execution_end -> "tool: tool bash done"
 		run.KindSessionSwitch, // session_switch
-		run.KindMeta,          // agent_end
+		run.KindMeta,          // agent_end -> "ai: agent done"
 	}
 
 	for i, expected := range expectedKinds {

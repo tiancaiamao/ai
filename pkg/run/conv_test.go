@@ -66,11 +66,9 @@ func TestParseEvent_MessageUpdate_AssistantMessageEvent(t *testing.T) {
 
 func TestParseEvent_MessageUpdate_TextStart(t *testing.T) {
 	evt := ParseEvent(`{"type":"message_update","assistantMessageEvent":{"type":"text_start","delta":"starting"}}`)
-	if evt == nil {
-		t.Fatal("expected non-nil event")
-	}
-	if evt.Text != "starting" {
-		t.Fatalf("expected 'starting', got %q", evt.Text)
+	// text_start is not a recognized sub-type (only text_delta/thinking_delta handled)
+	if evt != nil {
+		t.Fatalf("expected nil for unrecognized message type 'text_start', got %+v", evt)
 	}
 }
 
@@ -104,8 +102,8 @@ func TestParseEvent_ToolExecutionStart(t *testing.T) {
 	if !strings.Contains(evt.Detail, "path=main.go") {
 		t.Fatalf("expected detail to contain 'path=main.go', got %q", evt.Detail)
 	}
-	if !strings.Contains(evt.Text, "🔧 read") {
-		t.Fatalf("expected text to contain '🔧 read', got %q", evt.Text)
+		if !strings.Contains(evt.Text, "tool read") {
+		t.Fatalf("expected text to contain 'tool read', got %q", evt.Text)
 	}
 }
 
@@ -152,7 +150,7 @@ func TestParseEvent_AgentStart(t *testing.T) {
 	if evt.Kind != KindMeta {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
-	if evt.Text != "--- agent started ---" {
+		if evt.Text != "ai: agent started" {
 		t.Fatalf("unexpected text: %s", evt.Text)
 	}
 }
@@ -171,8 +169,8 @@ func TestParseEvent_Response_Error(t *testing.T) {
 	if evt == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if evt.Kind != KindMeta {
-		t.Fatalf("expected KindMeta, got %s", evt.Kind)
+	if evt.Kind != KindResponse {
+		t.Fatalf("expected KindResponse, got %s", evt.Kind)
 	}
 	if !strings.Contains(evt.Text, "session id is required") {
 		t.Fatalf("expected error message in text, got: %s", evt.Text)
@@ -201,7 +199,7 @@ func TestParseEvent_AgentEnd_Success(t *testing.T) {
 	if evt.Kind != KindMeta {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
-	if evt.Text != "--- agent done ---" {
+	if evt.Text != "ai: agent done" {
 		t.Fatalf("unexpected text: %q", evt.Text)
 	}
 }
@@ -211,7 +209,7 @@ func TestParseEvent_AgentEnd_Failed(t *testing.T) {
 	if evt == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if evt.Text != "--- agent failed ---" {
+	if evt.Text != "ai: agent failed" {
 		t.Fatalf("unexpected text: %q", evt.Text)
 	}
 }
@@ -221,21 +219,16 @@ func TestParseEvent_AgentEnd_WithErrMsg(t *testing.T) {
 	if evt == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if !strings.Contains(evt.Text, "agent failed: API rate limit exceeded") {
+	if !strings.Contains(evt.Text, "ai: agent failed: API rate limit exceeded") {
 		t.Fatalf("unexpected text: %q", evt.Text)
 	}
 }
 
 func TestParseEvent_TurnStart(t *testing.T) {
 	evt := ParseEvent(`{"type":"turn_start"}`)
-	if evt == nil {
-		t.Fatal("expected non-nil event")
-	}
-	if evt.Kind != KindMeta {
-		t.Fatalf("expected KindMeta, got %s", evt.Kind)
-	}
-	if evt.Text != "--- turn ---" {
-		t.Fatalf("unexpected text: %q", evt.Text)
+	// turn_start is silent in ai-win mode
+	if evt != nil {
+		t.Fatalf("expected nil for turn_start (silent), got %+v", evt)
 	}
 }
 
@@ -250,8 +243,14 @@ func TestParseEvent_TurnEnd_Silent(t *testing.T) {
 
 func TestParseEvent_ToolExecutionEnd_Silent(t *testing.T) {
 	evt := ParseEvent(`{"type":"tool_execution_end"}`)
-	if evt != nil {
-		t.Fatalf("expected nil for tool_execution_end, got %+v", evt)
+	if evt == nil {
+		t.Fatal("expected non-nil event for tool_execution_end")
+	}
+	if evt.Kind != KindTool {
+		t.Fatalf("expected KindTool, got %s", evt.Kind)
+	}
+	if !strings.Contains(evt.Text, "done") {
+		t.Fatalf("expected 'done' in text, got: %q", evt.Text)
 	}
 }
 
