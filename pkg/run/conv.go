@@ -148,8 +148,8 @@ func parseMessageUpdate(evt map[string]any) *FormattedEvent {
 				Text: delta,
 				Raw:  delta,
 			}
-		case "thinking_delta":
-			if delta == "" {
+				case "thinking_delta":
+			if strings.TrimSpace(delta) == "" {
 				return nil
 			}
 			return &FormattedEvent{
@@ -227,7 +227,7 @@ func parseMessageEnd(evt map[string]any) *FormattedEvent {
 
 func parseThinkingDelta(evt map[string]any) *FormattedEvent {
 	delta, _ := evt["delta"].(string)
-	if delta == "" {
+	if strings.TrimSpace(delta) == "" {
 		return nil
 	}
 	return &FormattedEvent{

@@ -468,3 +468,90 @@ func TestParseEvent_WhitespaceAroundJSON(t *testing.T) {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
 }
+
+// --- Tests for thinking content filtering ---
+
+func TestParseEvent_ThinkingDelta_EmptyString(t *testing.T) {
+	evt := ParseEvent(`{"type":"thinking_delta","delta":""}`)
+	if evt != nil {
+		t.Fatalf("expected nil for empty thinking delta, got %+v", evt)
+	}
+}
+
+func TestParseEvent_ThinkingDelta_WhitespaceOnly(t *testing.T) {
+	testCases := []struct {
+		name  string
+		delta string
+	}{
+		{"spaces only", "   "},
+		{"tabs only", "\t\t"},
+		{"newlines only", "\n\n"},
+		{"mixed whitespace", "  \t\n  \t\n "},
+		{"empty string with newline", "\n"},
+		{"space tab mix", " \t \t "},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			json := `{"type":"thinking_delta","delta":"` + tc.delta + `"}`
+			evt := ParseEvent(json)
+			if evt != nil {
+				t.Fatalf("expected nil for whitespace-only thinking delta %q, got %+v", tc.delta, evt)
+			}
+		})
+	}
+}
+
+func TestParseEvent_ThinkingDelta_ValidContent(t *testing.T) {
+	testCases := []struct {
+		name      string
+		json      string
+		expectStr string
+	}{
+		{"simple text", `{"type":"thinking_delta","delta":"I need to think"}`, "I need to think"},
+		{"text with leading space", `{"type":"thinking_delta","delta":"  Hello"}`, "  Hello"},
+		{"text with trailing space", `{"type":"thinking_delta","delta":"Hello  "}`, "Hello  "},
+		{"text with internal whitespace", `{"type":"thinking_delta","delta":"Hello world"}`, "Hello world"},
+		{"text with newlines", `{"type":"thinking_delta","delta":"First\nSecond"}`, "First\nSecond"},
+		{"text with mixed whitespace", `{"type":"thinking_delta","delta":"  Hello  world\n  "}`, "  Hello  world\n  "},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			evt := ParseEvent(tc.json)
+			if evt == nil {
+				t.Fatalf("expected non-nil event for json %s", tc.json)
+			}
+			if evt.Kind != KindThinking {
+				t.Fatalf("expected KindThinking, got %s", evt.Kind)
+			}
+			if evt.Text != tc.expectStr {
+				t.Fatalf("expected text %q, got %q", tc.expectStr, evt.Text)
+			}
+			if evt.Raw != tc.expectStr {
+				t.Fatalf("expected raw %q, got %q", tc.expectStr, evt.Raw)
+			}
+		})
+	}
+}
+
+func TestParseEvent_MessageUpdate_ThinkingDelta(t *testing.T) {
+	// Test the thinking_delta in message_update format (assistantMessageEvent)
+	json := `{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"   "}}`
+	evt := ParseEvent(json)
+	if evt != nil {
+		t.Fatalf("expected nil for whitespace-only thinking_delta in message_update, got %+v", evt)
+	}
+
+	json = `{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Valid thinking"}}`
+	evt = ParseEvent(json)
+	if evt == nil {
+		t.Fatal("expected non-nil event for valid thinking_delta in message_update")
+	}
+	if evt.Kind != KindThinking {
+		t.Fatalf("expected KindThinking, got %s", evt.Kind)
+	}
+	if evt.Text != "Valid thinking" {
+		t.Fatalf("expected text 'Valid thinking', got %q", evt.Text)
+	}
+}
