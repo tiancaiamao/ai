@@ -583,18 +583,22 @@ func renderModel(dataJSON []byte) *FormattedEvent {
 // renderSettings renders /show settings output, matching ai-win showSettings.
 func renderSettings(dataJSON []byte) *FormattedEvent {
 	var payload struct {
-		Type string            `json:"type"`
-		Data map[string]any    `json:"data"`
+		Type string         `json:"type"`
+		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(dataJSON, &payload); err != nil || payload.Type != "settings" {
 		return fallbackJSON(dataJSON)
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Settings:\n")
+	sb.WriteString("Display Settings:\n")
 	keys := []string{
 		"model",
+		"show-thinking",
+		"tools",
+		"prefix",
 		"thinking-level",
+		"busy-mode",
 		"auto-compaction",
 		"compaction-context-window",
 		"compaction-reserve-tokens",
@@ -603,7 +607,6 @@ func renderSettings(dataJSON []byte) *FormattedEvent {
 		"compaction-max-tokens",
 		"compaction-keep-recent",
 		"compaction-keep-recent-tokens",
-		"context-window",
 	}
 	for _, k := range keys {
 		v, ok := payload.Data[k]

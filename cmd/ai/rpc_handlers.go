@@ -489,7 +489,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	autoCompactionEnabled := compactorConfig.AutoCompact
 	steeringMode := "all"
 	followUpMode := "one-at-a-time"
-	pendingSteer := false
+		pendingSteer := false
+	showThinking := true
+	showTools := true
+	showPrefix := true
+	busyMode := "steer"
 	ag.SetThinkingLevel(currentThinkingLevel)
 
 	// Helper function to expand /skill:name commands
@@ -1990,6 +1994,74 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			"stats":  statsResult,
 			"models": modelsResult,
 		}, nil
+		})
+
+	// Display settings: /toggle thinking|prefix, /set tools|busy-mode
+	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix)", func(args string) (any, error) {
+		kind := strings.TrimSpace(args)
+		switch kind {
+		case "thinking":
+			showThinking = !showThinking
+			return map[string]any{"setting": "thinking", "value": showThinking}, nil
+		case "prefix":
+			showPrefix = !showPrefix
+			return map[string]any{"setting": "prefix", "value": showPrefix}, nil
+		default:
+			return nil, fmt.Errorf("usage: /toggle <thinking|prefix>")
+		}
+	})
+
+	server.RegisterSlash("set_thinking_display", "Toggle thinking display on/off", func(args string) (any, error) {
+		switch strings.TrimSpace(args) {
+		case "on":
+			showThinking = true
+		case "off":
+			showThinking = false
+		case "toggle", "":
+			showThinking = !showThinking
+		default:
+			return nil, fmt.Errorf("usage: /set_thinking_display <on|off|toggle>")
+		}
+		return map[string]any{"setting": "thinking", "value": showThinking}, nil
+	})
+
+	server.RegisterSlash("set_tools_display", "Toggle tools display on/off", func(args string) (any, error) {
+		switch strings.TrimSpace(args) {
+		case "on":
+			showTools = true
+		case "off":
+			showTools = false
+		case "toggle", "":
+			showTools = !showTools
+		default:
+			return nil, fmt.Errorf("usage: /set_tools_display <on|off|toggle>")
+		}
+		return map[string]any{"setting": "tools", "value": showTools}, nil
+	})
+
+	server.RegisterSlash("set_prefix_display", "Toggle prefix display on/off", func(args string) (any, error) {
+		switch strings.TrimSpace(args) {
+		case "on":
+			showPrefix = true
+		case "off":
+			showPrefix = false
+		case "toggle", "":
+			showPrefix = !showPrefix
+		default:
+			return nil, fmt.Errorf("usage: /set_prefix_display <on|off|toggle>")
+		}
+		return map[string]any{"setting": "prefix", "value": showPrefix}, nil
+	})
+
+	server.RegisterSlash("set_busy_mode", "Set behavior when agent is busy (steer, follow-up, reject)", func(args string) (any, error) {
+		mode := strings.TrimSpace(args)
+		switch mode {
+		case "steer", "follow-up", "reject":
+			busyMode = mode
+			return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
+		default:
+			return nil, fmt.Errorf("usage: /set_busy_mode <steer|follow-up|reject>")
+		}
 	})
 
 		server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
@@ -2020,25 +2092,41 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
 			}
 
-						autoCompStr := "off"
+			autoCompStr := "off"
 			if autoCompactionEnabled {
 				autoCompStr = "on"
+			}
+
+			showThinkingStr := "off"
+			if showThinking {
+				showThinkingStr = "on"
+			}
+			showToolsStr := "off"
+			if showTools {
+				showToolsStr = "on"
+			}
+			showPrefixStr := "off"
+			if showPrefix {
+				showPrefixStr = "on"
 			}
 
 			return map[string]any{
 				"type": "settings",
 				"data": map[string]any{
-					"model":                        model,
-					"thinking-level":               currentThinkingLevel,
-					"auto-compaction":              autoCompStr,
-					"compaction-context-window":    compactionContext,
-					"compaction-reserve-tokens":    compactionReserve,
-					"compaction-token-limit":       compactionLimit,
-					"compaction-max-messages":      compactionMaxMessages,
-					"compaction-max-tokens":        compactionMaxTokens,
-					"compaction-keep-recent":       compactionKeepRecent,
-					"compaction-keep-recent-tokens": compactionKeepRecentTokens,
-					"context-window":               formatIntOrUnknown(int(currentModelInfo.ContextWindow)),
+					"model":                          model,
+					"show-thinking":                  showThinkingStr,
+					"tools":                          showToolsStr,
+					"prefix":                         showPrefixStr,
+					"thinking-level":                 currentThinkingLevel,
+					"busy-mode":                      busyMode,
+					"auto-compaction":                autoCompStr,
+					"compaction-context-window":      compactionContext,
+					"compaction-reserve-tokens":      compactionReserve,
+					"compaction-token-limit":         compactionLimit,
+					"compaction-max-messages":        compactionMaxMessages,
+					"compaction-max-tokens":          compactionMaxTokens,
+					"compaction-keep-recent":         compactionKeepRecent,
+					"compaction-keep-recent-tokens":  compactionKeepRecentTokens,
 				},
 			}, nil
 		case "pipeline":
