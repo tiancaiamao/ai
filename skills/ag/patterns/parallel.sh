@@ -5,9 +5,11 @@
 #
 # Environment:
 #   AG_MOCK — set to "1" for mock mode
+#   AG_BINARY — path to ag binary (defaults to "ag")
 #
 set -euo pipefail
 
+AG_BINARY="${AG_BINARY:-${AG_BIN:-ag}}"
 MOCK="${AG_MOCK:-}"
 COUNT="$1"
 SYSTEM_PROMPT="$2"
@@ -42,10 +44,10 @@ Focus on your unique perspective as agent #$i.
 EOF
   TEMP_INPUTS+=("$AGENT_INPUT")
 
-  if [ -n "$MOCK" ]; then
-    ag spawn --id "$ID" --mock --mock-script "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 1m &
+                    if [ -n "$MOCK" ]; then
+    $AG_BINARY agent spawn "$ID" --backend bash --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" &
   else
-    ag spawn --id "$ID" --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" --timeout 10m &
+    $AG_BINARY agent spawn "$ID" --system "$SYSTEM_PROMPT" --input "$AGENT_INPUT" &
   fi
   PIDS+=($!)
 done
@@ -65,8 +67,8 @@ echo "[parallel] All agents spawned. Waiting for completion..."
 FAILED=0
 for i in "${!AGENT_IDS[@]}"; do
   ID="${AGENT_IDS[$i]}"
-  if ag wait "$ID" --timeout 60; then
-    ag output "$ID" > "$OUTPUT_DIR/agent-$i.md"
+  if $AG_BINARY agent wait "$ID" --timeout 10; then
+    $AG_BINARY agent output "$ID" > "$OUTPUT_DIR/agent-$i.md"
     echo "[parallel] Agent $i done"
   else
     echo "[parallel] Agent $i failed"

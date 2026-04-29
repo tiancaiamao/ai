@@ -41,10 +41,63 @@ func init() {
 func runAgentTail(cmd *cobra.Command, args []string) error {
 	id := args[0]
 
-	if err := agent.EnsureExists(id); err != nil {
-		return err
+	if useAIAdapterForCommand(id) {
+		return tailFromAI(id, tailSince)
 	}
 
+	return tailFromBridge(id, tailSince)
+}
+
+// tailFromAI reads incremental output from ai events.
+func tailFromAI(id string, since int64) error {
+	runID, err := aiAdapter.getRunIDForAgent(id)
+	if err != nil {
+		return fmt.Errorf("get run ID for agent %s: %w", id, err)
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home dir: %w", err)
+	}
+
+	eventsFile := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
+	f, err := os.Open(eventsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("---cursor:0")
+			return nil
+		}
+		return fmt.Errorf("open events.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("read events.jsonl: %w", err)
+	}
+
+	content, newCursor, err := parseEventsTail(data, since)
+	if err != nil {
+		return fmt.Errorf("parse events tail: %w", err)
+	}
+
+	if content != "" {
+		fmt.Print(content)
+		if !strings.HasSuffix(content, "\n") {
+			fmt.Println()
+		}
+	}
+
+	fi, _ := f.Stat()
+	if newCursor == 0 {
+		newCursor = fi.Size()
+	}
+	fmt.Printf("---cursor:%d\n", newCursor)
+	return nil
+}
+
+// tailFromBridge reads incremental output from legacy stream.log.
+func tailFromBridge(id string, since int64) error {
 	agentDir := agent.AgentDir(id)
 	streamPath := filepath.Join(agentDir, "stream.log")
 
@@ -58,9 +111,8 @@ func runAgentTail(cmd *cobra.Command, args []string) error {
 	}
 	defer f.Close()
 
-	// Seek to cursor position
-	if tailSince > 0 {
-		if _, err := f.Seek(tailSince, io.SeekStart); err != nil {
+	if since > 0 {
+		if _, err := f.Seek(since, io.SeekStart); err != nil {
 			return fmt.Errorf("seek: %w", err)
 		}
 	}
@@ -78,9 +130,34 @@ func runAgentTail(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get current file size as new cursor
 	fi, _ := f.Stat()
 	newCursor := fi.Size()
 	fmt.Printf("---cursor:%d\n", newCursor)
 	return nil
+}
+
+// parseEventsTail parses assistant text from events.jsonl data.
+func parseEventsTail(data []byte, since int64) (content string, newCursor int64, err error) {
+	if since < 0 {
+		since = 0
+	}
+
+	if int(since) >= len(data) {
+		return "", int64(len(data)), nil
+	}
+
+	chunk := data[since:]
+	if since > 0 {
+		if idx := strings.IndexByte(string(chunk), '\n'); idx >= 0 {
+			chunk = chunk[idx+1:]
+		} else {
+			return "", int64(len(data)), nil
+		}
+	}
+
+	messages, parseErr := parseAssistantMessages(chunk)
+	if parseErr != nil {
+		return "", 0, parseErr
+	}
+	return strings.Join(messages, "\n\n"), int64(len(data)), nil
 }

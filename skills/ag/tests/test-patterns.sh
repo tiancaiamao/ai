@@ -17,6 +17,9 @@ rm -f /tmp/ag-test-judge-multi-round
 cd "$WORKSPACE"
 echo "Workspace: $WORKSPACE"
 
+# Copy backends.yaml to workspace
+cp "$SCRIPT_DIR/../backends.yaml" "$WORKSPACE/backends.yaml"
+
 # ============================================================
 echo ""
 echo "===== TEST 1: pair.sh — immediate approval ====="
@@ -106,12 +109,12 @@ RESULT=$($PATTERNS/pipeline.sh \
 echo "Pipeline result:"
 echo "$RESULT"
 
-# Verify: should have 3 "Processed by" markers (3 stages)
-COUNT=$(echo "$RESULT" | grep -c "Processed by" || true)
+# Verify: should have 3 "WORKED:" markers (pipeline stages)
+COUNT=$(echo "$RESULT" | grep -c "WORKED:" || true)
 if [ "$COUNT" -eq 3 ]; then
   echo "✅ TEST 4 PASSED: 3 stages ran in sequence"
 else
-  echo "❌ TEST 4 FAILED: expected 3 'Processed by' markers, got $COUNT"
+  echo "❌ TEST 4 FAILED: expected 3 'WORKED:' markers, got $COUNT"
   exit 1
 fi
 
@@ -134,10 +137,10 @@ $AG task create "Task B"
 $AG task create "Task C"
 
 # Claim t001 by worker-1
-$AG task claim t001 --as worker-1
+$AG task claim t001 worker-1
 # Try to claim t001 again by worker-2 (should fail)
 set +e
-$AG task claim t001 --as worker-2 2>/dev/null
+$AG task claim t001 worker-2 2>/dev/null
 CLAIM_EXIT=$?
 set -e
 
@@ -149,7 +152,7 @@ else
 fi
 
 # Verify t001 is claimed by worker-1
-OWNER=$($AG task show t001 | grep "^claimant:" | awk '{print $2}')
+OWNER=$($AG task show t001 | grep "^Claimant:" | awk '{print $2}')
 if [ "$OWNER" = "worker-1" ]; then
   echo "✅ TEST 5 DETAIL: correct owner"
 else

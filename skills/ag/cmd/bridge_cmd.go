@@ -1,21 +1,9 @@
 package cmd
 
-import (
-	"github.com/genius/ag/internal/bridge"
-)
+import "fmt"
 
-// RunBridge runs the bridge process for an agent. This is called by
-// 'ag bridge <id>' inside a tmux session. It:
-//  1. Reads meta.json for spawn config
-//  2. Starts ai --mode rpc with piped stdin/stdout
-//  3. Writes initial prompt
-//  4. Starts event reader goroutine (ai stdout → activity.json)
-//  5. Starts socket server goroutine (Unix socket → ai stdin)
-//  6. Waits for ai to exit
-//  7. Writes final output and updates activity.json
+// RunBridge is kept only for backward CLI compatibility.
+// The bridge runtime has been removed in favor of ai serve/send/watch.
 func RunBridge(id string) error {
-	return bridge.Run(id)
+	return fmt.Errorf("legacy bridge mode has been removed; use 'ag agent spawn' with backend=ai")
 }
-
-// Placeholder until bridge.Run is fully implemented.
-var _ = bridge.Run

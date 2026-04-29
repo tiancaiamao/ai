@@ -8,6 +8,24 @@ backends:
       abort: true
       prompt: true
 
+  bash:
+    command: bash
+    args: ["-c", "INPUT_FILE=$(cat); if [ -f \"$INPUT_FILE\" ]; then cat \"$INPUT_FILE\"; else echo \"input: $INPUT_FILE\"; fi && echo 'WORKED: mock output' && exit 0"]
+    protocol: raw
+    supports:
+      steer: false
+      abort: false
+      prompt: false
+
+  judge:
+    command: bash
+    args: ["-c", "echo 'APPROVED: the work looks good' && exit 0"]
+    protocol: raw
+    supports:
+      steer: false
+      abort: false
+      prompt: false
+
   claude:
     command: claude
     args: ["--output-format", "stream-json", "--input-format", "stream-json"]
