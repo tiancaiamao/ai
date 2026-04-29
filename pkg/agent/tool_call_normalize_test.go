@@ -258,3 +258,85 @@ func TestCoerceToolArgs_ReadPreservesOffsetLimit(t *testing.T) {
 		t.Fatalf("expected limit=20, got %v", args["limit"])
 	}
 }
+
+func TestNormalizeToolCallName_CleansHTMLTagsAndControlChars(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "<tool>read</tool>",
+			expected: "read",
+		},
+		{
+			input:    "bash\nwith\tnewlines",
+			expected: "bash with newlines",
+		},
+		{
+			input:    "<function>write</function> with spaces",
+			expected: "write with spaces",
+		},
+		{
+			input:    "  <bash>bash</bash>\t\r\n  ",
+			expected: "bash",
+		},
+		{
+			input:    "READ_FILE",
+			expected: "read", // READ_FILE gets lowercased and then aliased to read
+		},
+		{
+			input:    "normal",
+			expected: "normal",
+		},
+				{
+			input:    "<script>alert('xss')</script>grep",
+			expected: "alert('xss')grep", // <script> contains non-word chars, not cleaned by current regex
+		},
+		{
+			input:    "shell<script></script>",
+			expected: "bash", // shell gets aliased to bash
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeToolCallName(tt.input)
+			if got != tt.expected {
+				t.Fatalf("normalizeToolCallName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeToolCallName_AliasesWorkAfterCleaning(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "<read_file>read_file</read_file>",
+			expected: "read",
+		},
+		{
+			input:    "WRITE_FILE<with>tags</with>",
+			expected: "write_filetags", // HTML cleanup leaves "write_file" + "tags" -> "write_filetags", no match
+		},
+		{
+			input:    "bash_command\nwith\tspaces",
+			expected: "bash_command with spaces", // Cleanup preserves "bash_command" which doesn't match "bash_command" alias exactly
+		},
+		{
+			input:    "search\nand\nsearch",
+			expected: "search and search", // "search" is an alias but "search and search" is not
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeToolCallName(tt.input)
+			if got != tt.expected {
+				t.Fatalf("normalizeToolCallName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}

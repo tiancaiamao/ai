@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -29,7 +30,18 @@ func normalizeToolCall(tc agentctx.ToolCallContent) agentctx.ToolCallContent {
 }
 
 func normalizeToolCallName(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	// First, clean up problematic characters and HTML tags
+	htmlTagRegex := regexp.MustCompile(`(?i)</?\w+[^>]*>`)
+	name = htmlTagRegex.ReplaceAllString(name, "")
+	
+	// Remove any remaining newlines, tabs, and other control characters
+	name = strings.TrimSpace(name)
+	name = regexp.MustCompile(`[\n\r\t]+`).ReplaceAllString(name, " ")
+	name = strings.TrimSpace(name)
+	
+	// Now apply the original normalization logic
+	cleanName := strings.ToLower(name)
+	switch cleanName {
 	case "read_file", "readfile":
 		return "read"
 	case "write_file", "writefile":
@@ -41,7 +53,7 @@ func normalizeToolCallName(name string) string {
 	case "search", "ripgrep":
 		return "grep"
 	default:
-		return strings.ToLower(strings.TrimSpace(name))
+		return cleanName
 	}
 }
 
