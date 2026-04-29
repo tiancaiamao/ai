@@ -1,7 +1,7 @@
 backends:
   ai:
     command: ai
-    args: ["--mode", "rpc"]
+        args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true

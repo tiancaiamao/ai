@@ -27,7 +27,7 @@ description: Provide subagent and agent orchestration runtime. Spawns AI agents 
 
 ### Default Backend: `ai`
 
-The default backend uses `ai --mode rpc` with full JSON-RPC event parsing. This provides:
+The default backend uses `ai rpc` with full JSON-RPC event parsing. This provides:
 - Token counting (in/out/total)
 - Tool call tracking
 - Mid-turn steering, abort, and follow-up prompts
@@ -53,7 +53,7 @@ Backends are defined in `backends.yaml` (co-located with the ag skill):
 backends:
   ai:
     command: ai
-    args: ["--mode", "rpc"]
+        args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true
@@ -174,10 +174,10 @@ ag agent wait <id>... [--timeout 600]
 ### Event Conversion
 
 ```bash
-# Convert ai --mode rpc JSON events to readable text
-ai --mode rpc | ag conv              # All output
-ai --mode rpc | ag conv --only text  # Assistant text only
-ai --mode rpc | ag conv --only tools # Tool calls only
+# Convert ai rpc JSON events to readable text
+ai rpc | ag conv                      # All output
+ai rpc | ag conv --only text           # Assistant text only
+ai rpc | ag conv --only tools          # Tool calls only
 ```
 
 This replaces the removed `ai --mode headless`.

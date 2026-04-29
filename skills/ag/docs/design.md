@@ -12,7 +12,7 @@ All three depend on one prerequisite: **ag needs bidirectional communication wit
 
 ## Key Insight from pi-agent-teams
 
-`ai --mode rpc` already provides full bidirectional JSON-RPC:
+`ai rpc` already provides full bidirectional JSON-RPC:
 - `prompt` / `steer` / `follow_up` / `abort` commands
 - Event stream: `agent_start/end`, `turn_start/end`, `tool_execution_start/end`, `message_update` (text_delta)
 - `get_state` / `get_session_stats`
@@ -24,12 +24,12 @@ The problem isn't that `ai` lacks capability — it's that `ag` doesn't use it. 
 **`ag` is a CLI tool, not a long-running process.** Unlike pi-agent-teams where the leader is a VSCode extension that lives for the entire session, `ag` commands are invoked by the leader agent and exit immediately. This means:
 
 - `ag agent spawn` spawns an agent and returns — the CLI process exits
-- The agent (`ai --mode rpc`) needs something to hold its stdin/stdout pipes after `ag` exits
+- The agent (`ai rpc`) needs something to hold its stdin/stdout pipes after `ag` exits
 - Without a pipe holder, there's no way to send steer/abort/prompt later
 
 ### Why Not Direct Process Holding (pi-agent-teams style)?
 
-pi-agent-teams uses `child_process.spawn("pi", ["--mode", "rpc"])` directly because the leader extension is long-lived — it holds the pipes for the entire session. This doesn't work for `ag` because `ag` exits after each command.
+pi-agent-teams uses `child_process.spawn("pi", ["rpc"])` directly because the leader extension is long-lived — it holds the pipes for the entire session. This doesn't work for `ag` because `ag` exits after each command.
 
 ### Why Not a Central Daemon?
 
@@ -37,7 +37,7 @@ A single daemon process holding all agent pipes introduces a single point of fai
 
 ## Architecture: Bridge-per-Agent in Tmux
 
-Each agent gets its own bridge process running inside a tmux session. The bridge holds the `ai --mode rpc` stdin/stdout pipes and exposes a Unix socket for external control.
+Each agent gets its own bridge process running inside a tmux session. The bridge holds the `ai rpc` stdin/stdout pipes and exposes a Unix socket for external control.
 
 ```
 ag agent spawn worker-1 --input "fix bugs"
@@ -45,7 +45,7 @@ ag agent spawn worker-1 --input "fix bugs"
   └── tmux new-session -d -s ag-worker-1 -- "ag bridge worker-1"
       │
       └── [ag bridge process, running inside tmux]
-          ├── exec.Command("ai", "--mode", "rpc")
+                    ├── exec.Command("ai", "rpc")
           │   ├── cmd.StdinPipe()  → send prompt/steer/abort
           │   └── cmd.StdoutPipe() → read event stream → activity.json
           ├── Send initial prompt
@@ -93,7 +93,7 @@ ag agent kill worker-1
 
 1. Creates `bridge.sock` listener **before** starting `ai` (ensures socket exists when spawn returns)
 2. Reads `.ag/agents/<id>/meta.json` for spawn config (system prompt, timeout, cwd)
-3. Starts `ai --mode rpc` as a child process with piped stdin/stdout
+3. Starts `ai rpc` as a child process with piped stdin/stdout
 4. Redirects own stderr to `.ag/agents/<id>/bridge-stderr`
 5. Sends the initial prompt via stdin pipe
 6. Starts event reader goroutine that writes `activity.json` on significant events
@@ -114,8 +114,8 @@ func runBridge(agentID string) error {
     // 2. Load spawn config
     meta := loadMeta(agentDir)
     
-    // 3. Start ai --mode rpc
-    cmd := exec.Command("ai", "--mode", "rpc", "--timeout", meta.Timeout, ...)
+        // 3. Start ai rpc
+    cmd := exec.Command("ai", "rpc", "--timeout", meta.Timeout, ...)
     stdin, _ := cmd.StdinPipe()
     stdout, _ := cmd.StdoutPipe()
     stderrFile, _ := os.Create(filepath.Join(agentDir, "stderr"))
@@ -178,7 +178,7 @@ func handleBridgeConn(conn net.Conn, stdin io.WriteCloser, agentDir string) {
 
 ### Bridge Socket Protocol
 
-**Framing**: Newline-delimited JSON. One JSON object per line. Matches `ai --mode rpc`'s own protocol.
+**Framing**: Newline-delimited JSON. One JSON object per line. Matches `ai rpc`'s own protocol.
 
 **Connection model**: One connection = one request + one response. HTTP-style. Client connects, sends request, reads response, closes. This avoids connection state management and supports concurrent CLI invocations naturally.
 
@@ -291,7 +291,7 @@ The bridge accumulates all `text_delta` events into an internal buffer. When `ai
 
 ### Error Handling
 
-When `ai --mode rpc` crashes or exits normally:
+When `ai rpc` crashes or exits normally:
 
 ```go
 // Event reader goroutine detects stdout EOF
@@ -330,9 +330,9 @@ When bridge itself crashes (tmux session dies):
 
 ### Improvement 0: Spawn defaults to RPC mode via bridge
 
-Delete headless mode. Delete the Python bridge script (`rpc_bridge.py`). Delete the bash watcher script.
+Delete headless mode. Delete the Python bridge script. Delete the bash watcher script.
 
-`ag agent spawn` starts a tmux session running `ag bridge <id>`, which starts `ai --mode rpc` and holds pipes. CLI blocks until bridge.sock is ready, then returns.
+`ag agent spawn` starts a tmux session running `ag bridge <id>`, which starts `ai rpc` and holds pipes. CLI blocks until bridge.sock is ready, then returns.
 
 ### Improvement 1: Runtime intervention — steer / abort / prompt / kill / shutdown
 
@@ -470,7 +470,7 @@ Agent IDs must satisfy:
 | Old Command | Replacement | Reason |
 |-------------|-------------|--------|
 | `ag spawn --mode headless` | Deleted | RPC mode is the only mode |
-| `ag spawn --mode rpc` (python bridge) | `ag agent spawn` → `ag bridge` in tmux | Replaced by Go bridge |
+| `ag spawn` (python bridge) | `ag agent spawn` → `ag bridge` in tmux | Replaced by Go bridge |
 | `ag read` | `ag agent status` | Structured status replaces raw text |
 | `ag stop` | `ag agent abort` / `ag agent kill` | Progressive fault tolerance |
 | `ag team *` | Deleted | CWD provides natural isolation |
@@ -549,7 +549,7 @@ Two layers:
 6. **Channel is data-plane only** — `ag send` targets channels only. Direct agent messaging uses `ag agent prompt`.
 7. **Event stream persisted to disk** — `activity.json` updated by bridge with atomic rename writes and rate limiting. Commands work without bridge (read from disk) or with bridge (real-time via socket).
 8. **`--format json` everywhere** — LLM agents are the primary consumer, structured output is table stakes.
-9. **Stderr captured** — `ai --mode rpc` stderr → `<agentDir>/stderr`. Bridge stderr → `<agentDir>/bridge-stderr`. Last 4KB of ai stderr kept on crash in `stderr.tail`.
+9. **Stderr captured** — `ai rpc` stderr → `<agentDir>/stderr`. Bridge stderr → `<agentDir>/bridge-stderr`. Last 4KB of ai stderr kept on crash in `stderr.tail`.
 10. **tmux session naming** — `ag-<agent-id>` for discoverability. `tmux ls | grep ag-` shows all managed agents.
 11. **Agent ID validation** — `^[a-zA-Z0-9_-]+$`, max 64 chars. Must be valid in tmux session names and filesystem paths.
 12. **No separate status file** — Status lives only in `activity.json`. Eliminates sync complexity.
@@ -580,7 +580,7 @@ When bridge is running but `ai` process died:
 ## Prerequisites
 
 - **tmux** must be installed. `ag agent spawn` validates this upfront and produces a clear error if missing.
-- **ai** binary must be in PATH. The bridge starts `ai --mode rpc` directly.
+- **ai** binary must be in PATH. The bridge starts `ai rpc` directly.
 
 ## Migration Note
 
