@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -65,7 +66,12 @@ func (sm *SessionManager) ListSessions() ([]SessionMeta, error) {
 			continue
 		}
 		sessions = append(sessions, *meta)
-	}
+		}
+	
+	// Sort sessions by UpdatedAt time (newest first)
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
 
 	return sessions, nil
 }

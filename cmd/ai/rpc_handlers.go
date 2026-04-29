@@ -488,8 +488,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	currentThinkingLevel := "high"
 	autoCompactionEnabled := compactorConfig.AutoCompact
 	steeringMode := "all"
-	followUpMode := "one-at-a-time"
-		pendingSteer := false
+		followUpMode := "one-at-a-time"
+	pendingSteer := false
+	var followUpQueue []string
 	showThinking := true
 	showTools := true
 	showPrefix := true
@@ -883,12 +884,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
 		currentWorkdir := ws.GetCWD() // This is the current working directory
 
-		result := make([]any, len(sessions))
+				result := make([]any, len(sessions))
+		// Reverse the order so newest (index 0) appears at the bottom
 		for i, sess := range sessions {
-			// Add workspace info to each session
+			// Calculate reversed index: 0->len-1, 1->len-2, etc.
+			reversedIdx := len(sessions) - 1 - i
 			sess.Workspace = startupPath
 			sess.CurrentWorkdir = currentWorkdir
-			result[i] = sess
+			result[reversedIdx] = sess
 		}
 		return map[string]any{"sessions": result}, nil
 	})
@@ -2134,6 +2137,85 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		default:
 			return nil, fmt.Errorf("usage: /show settings|pipeline")
 		}
+		})
+
+	// /quit — quit the application
+	server.RegisterSlash("quit", "Exit the application", func(args string) (any, error) {
+		slog.Info("Received quit command, exiting application")
+		os.Exit(0)
+		return nil, nil // unreachable, but Go requires return
+	})
+
+	// /abort — abort the current agent execution
+	server.RegisterSlash("abort", "Abort the current agent execution", func(args string) (any, error) {
+		slog.Info("Received abort command")
+		stateMu.Lock()
+		streaming := isStreaming
+		stateMu.Unlock()
+		
+		if !streaming {
+			return nil, fmt.Errorf("agent is not streaming")
+		}
+		
+		ag.Abort()
+		return map[string]any{"status": "aborting"}, nil
+	})
+
+	// /follow-up — add a follow-up message (same as /follow_up)
+	server.RegisterSlash("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
+		message := strings.TrimSpace(args)
+		if message == "" {
+			return nil, fmt.Errorf("usage: /follow-up <message>")
+		}
+		
+		slog.Info("Received follow-up command")
+		stateMu.Lock()
+		streaming := isStreaming
+		stateMu.Unlock()
+		
+		if !streaming {
+			return nil, fmt.Errorf("agent is not busy")
+		}
+		
+		// Check if follow-up mode allows this
+		if followUpMode != "one-at-a-time" && followUpMode != "queue" {
+			return nil, fmt.Errorf("follow-up mode is '%s', not enabled", followUpMode)
+		}
+		
+		// Check if there's already a pending follow-up
+		if len(followUpQueue) > 0 && followUpMode == "one-at-a-time" {
+			return nil, fmt.Errorf("follow-up queue already has a pending message")
+		}
+		
+		expandedMessage := expandSkillCommands(message)
+		followUpQueue = append(followUpQueue, expandedMessage)
+		return map[string]any{"status": "queued", "message": expandedMessage}, nil
+	})
+
+		// /steer — alias for steering when agent is busy
+	server.RegisterSlash("steer", "Steer the current agent execution", func(args string) (any, error) {
+		message := strings.TrimSpace(args)
+		if message == "" {
+			return nil, fmt.Errorf("usage: /steer <message>")
+		}
+		
+		slog.Info("Received steer command")
+		stateMu.Lock()
+		streaming := isStreaming
+		busyBehavior := busyMode
+		stateMu.Unlock()
+		
+		if !streaming {
+			return nil, fmt.Errorf("agent is not streaming")
+		}
+		
+		if busyBehavior == "reject" {
+			return nil, fmt.Errorf("agent is busy and busy mode is set to reject")
+		}
+		
+		expandedMessage := expandSkillCommands(message)
+		ag.Steer(expandedMessage)
+		return map[string]any{"status": "steering", "message": expandedMessage}, nil
 	})
 
 	// Start event emitter
