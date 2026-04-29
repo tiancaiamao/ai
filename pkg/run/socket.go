@@ -53,11 +53,18 @@ func (s *SocketServer) Start() error {
 		}
 	}
 
-	l, err := net.Listen("unix", s.sockPath)
+		l, err := net.Listen("unix", s.sockPath)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.sockPath, err)
 	}
 	s.listener = l
+
+	// Restrict socket to owner only — prevents other local users from
+	// sending commands (abort, steer, etc.) to the control plane.
+	if err := os.Chmod(s.sockPath, 0600); err != nil {
+		s.listener.Close()
+		return fmt.Errorf("chmod socket %s: %w", s.sockPath, err)
+	}
 
 	go s.acceptLoop()
 	return nil

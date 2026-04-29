@@ -99,8 +99,15 @@ func serveSubcommand(binPath string) {
 	// Start socket server for external commands (steer/abort/get_state).
 	sockPath := run.SocketPath(baseDir, id)
 	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
-	if err := socketServer.Start(); err != nil {
+			if err := socketServer.Start(); err != nil {
+		// Socket is the control plane — without it, send/watch cannot work.
+		// Kill the subprocess, mark run as failed, and exit.
 		slog.Error("failed to start socket server", "error", err)
+		cmd.Process.Kill()
+		meta.Status = run.StatusFailed
+		meta.FinishedAt = time.Now().Unix()
+		run.SaveRunMeta(meta, metaPath)
+		os.Exit(1)
 	}
 	defer func() {
 		socketServer.Stop()
