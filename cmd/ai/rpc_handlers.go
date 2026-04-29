@@ -1985,11 +1985,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		statsResult, _ := statsH("")
 		modelsResult, _ := modelsH("")
 
-		return map[string]any{
+				return map[string]any{
 			"state":  stateResult,
 			"stats":  statsResult,
 			"models": modelsResult,
 		}, nil
+	})
+
+	server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+		subCmd := strings.TrimSpace(args)
+		switch subCmd {
+		case "settings", "":
+			stateH, _ := server.GetSlashHandler("get_state")
+			return stateH("")
+		case "pipeline":
+			return map[string]any{"message": "pipeline info not yet available"}, nil
+		default:
+			return nil, fmt.Errorf("usage: /show settings|pipeline")
+		}
 	})
 
 	// Start event emitter
