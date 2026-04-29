@@ -64,7 +64,7 @@ func DefaultBackends() *BackendsConfig {
 			"ai": {
 				Name:     "ai",
 				Command:  "ai",
-								Args:     []string{"rpc"},
+				Args:     []string{"rpc"},
 				Protocol: ProtocolJSONRPC,
 				Supports: Supports{Steer: true, Abort: true, Prompt: true},
 			},

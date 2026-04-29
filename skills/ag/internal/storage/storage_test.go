@@ -40,7 +40,9 @@ func TestAtomicWriteJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.json")
 
-	type Foo struct{ A string `json:"a"` }
+	type Foo struct {
+		A string `json:"a"`
+	}
 	if err := AtomicWriteJSON(path, Foo{A: "bar"}); err != nil {
 		t.Fatalf("AtomicWriteJSON: %v", err)
 	}

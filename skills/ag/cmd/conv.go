@@ -12,8 +12,8 @@ import (
 
 var convCmd = &cobra.Command{
 	Use:   "conv",
-		Short: "Convert ai rpc JSON events to human-readable text",
-		Long: `Reads newline-delimited JSON events from stdin and writes
+	Short: "Convert ai rpc JSON events to human-readable text",
+	Long: `Reads newline-delimited JSON events from stdin and writes
 human-readable output to stdout. Designed for piping:
 
   ai rpc | ag conv

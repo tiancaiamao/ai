@@ -239,9 +239,9 @@ func ImportPlan(filePath string) (int, error) {
 	// Parse YAML plan
 	var plan struct {
 		Tasks []struct {
-			ID          string `yaml:"id"`
-			Title       string `yaml:"title"`
-			Description string `yaml:"description"`
+			ID           string   `yaml:"id"`
+			Title        string   `yaml:"title"`
+			Description  string   `yaml:"description"`
 			Dependencies []string `yaml:"dependencies"`
 		} `yaml:"tasks"`
 	}
