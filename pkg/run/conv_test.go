@@ -411,6 +411,49 @@ func TestParseEvent_Response_SessionsEmpty(t *testing.T) {
 	}
 	if evt.Text != "No sessions found" {
 		t.Fatalf("expected 'No sessions found', got %q", evt.Text)
+		}
+}
+
+// --- message_start / message_end (user messages) ---
+
+func TestParseEvent_MessageStart_Silent(t *testing.T) {
+	raw := `{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`
+	evt := ParseEvent(raw)
+	if evt != nil {
+		t.Fatalf("expected nil for message_start, got %+v", evt)
+	}
+}
+
+func TestParseEvent_MessageEnd_UserMessage(t *testing.T) {
+	raw := `{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"你好"}],"metadata":{"kind":"user"}}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Kind != KindText {
+		t.Fatalf("expected KindText, got %s", evt.Kind)
+	}
+	if evt.Role != "user" {
+		t.Fatalf("expected role=user, got %s", evt.Role)
+	}
+	if evt.Text != "你好" {
+		t.Fatalf("expected '你好', got %q", evt.Text)
+	}
+}
+
+func TestParseEvent_MessageEnd_AssistantSilent(t *testing.T) {
+	raw := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`
+	evt := ParseEvent(raw)
+	if evt != nil {
+		t.Fatalf("expected nil for assistant message_end, got %+v", evt)
+	}
+}
+
+func TestParseEvent_MessageEnd_UserEmptyContent(t *testing.T) {
+	raw := `{"type":"message_end","message":{"role":"user","content":[]}}`
+	evt := ParseEvent(raw)
+	if evt != nil {
+		t.Fatalf("expected nil for empty user message, got %+v", evt)
 	}
 }
 

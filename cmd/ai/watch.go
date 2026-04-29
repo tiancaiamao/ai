@@ -542,9 +542,13 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 	}
 
 	switch f.Kind {
-	case run.KindText:
-		// Assistant text delta — stream inline with role prefix
-		if m.ensureRole("assistant") {
+		case run.KindText:
+		// Text content (assistant or user) — stream inline with role prefix
+		role := f.Role
+		if role == "" {
+			role = "assistant"
+		}
+		if m.ensureRole(role) {
 			text := f.Text
 			if m.mode == "live" {
 				m.sentBuf.write(text)

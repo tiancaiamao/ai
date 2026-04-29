@@ -48,6 +48,10 @@ func ParseEvent(line string) *FormattedEvent {
 	eventType, _ := evt["type"].(string)
 
 	switch eventType {
+		case "message_start":
+		return parseMessageStart(evt)
+	case "message_end":
+		return parseMessageEnd(evt)
 	case "message_update":
 		return parseMessageUpdate(evt)
 	case "thinking_delta":
@@ -175,6 +179,52 @@ func parseMessageUpdate(evt map[string]any) *FormattedEvent {
 }
 
 // parseThinkingDelta handles standalone thinking_delta events.
+// parseMessageStart handles message_start events.
+// User messages are displayed on message_end, not here.
+// Assistant/thinking messages will be streamed via message_update/text_delta/thinking_delta.
+func parseMessageStart(evt map[string]any) *FormattedEvent {
+	return nil // silent — ai-win resets stream state here
+}
+
+// parseMessageEnd handles message_end events.
+// For user messages (no prior streaming), render the full content with "user:" prefix.
+// For assistant messages (already streamed via deltas), this is silent.
+func parseMessageEnd(evt map[string]any) *FormattedEvent {
+	msg, _ := evt["message"].(map[string]any)
+	if msg == nil {
+		return nil
+	}
+
+	role, _ := msg["role"].(string)
+
+	// Only render user messages — assistant/thinking/tool already streamed via deltas
+	if role != "user" {
+		return nil
+	}
+
+	// Extract text content
+	content, _ := msg["content"].([]any)
+	var text string
+	for _, item := range content {
+		block, _ := item.(map[string]any)
+		blockType, _ := block["type"].(string)
+		if blockType == "text" {
+			t, _ := block["text"].(string)
+			text += t
+		}
+	}
+
+	if text == "" {
+		return nil
+	}
+
+	return &FormattedEvent{
+		Kind: KindText,
+		Role: "user",
+		Text: text,
+	}
+}
+
 func parseThinkingDelta(evt map[string]any) *FormattedEvent {
 	delta, _ := evt["delta"].(string)
 	if delta == "" {
