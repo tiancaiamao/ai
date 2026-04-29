@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -65,7 +66,9 @@ func trySocketAbort(sockPath string) bool {
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return false
+	}
 
 	cmd := run.Command{Type: "abort"}
 	data, err := json.Marshal(cmd)
@@ -78,15 +81,15 @@ func trySocketAbort(sockPath string) bool {
 		return false
 	}
 
-	// Read response.
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
+	// Read one line-delimited response.
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadBytes('\n')
 	if err != nil {
 		return false
 	}
 
 	var resp run.Response
-	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+	if err := json.Unmarshal(line, &resp); err != nil {
 		return false
 	}
 
@@ -115,8 +118,11 @@ func killRun(meta *run.RunMeta, baseDir string) {
 		fmt.Fprintf(os.Stderr, "warn: failed to update run.json: %v\n", err)
 	}
 
-	// Also kill the process group to clean up any child processes.
-	syscall.Kill(-meta.PID, syscall.SIGKILL)
+	// Also kill the process group to clean up child processes, but only
+	// when this PID is actually the process-group leader.
+	if pgid, err := syscall.Getpgid(meta.PID); err == nil && pgid == meta.PID {
+		_ = syscall.Kill(-meta.PID, syscall.SIGKILL)
+	}
 
 	fmt.Printf("run %s killed (pid %d)\n", meta.ID, meta.PID)
 }
