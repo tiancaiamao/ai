@@ -1,0 +1,173 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"github.com/tiancaiamao/ai/pkg/run"
+)
+
+func lsSubcommand() {
+	fs := flag.NewFlagSet("ls", flag.ExitOnError)
+	allFlag := fs.Bool("all", false, "show all runs, not just running ones")
+	jsonFlag := fs.Bool("json", false, "output as JSON array")
+	_ = fs.Parse(os.Args[1:])
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get home directory: %v\n", err)
+		os.Exit(1)
+	}
+	runsDir := filepath.Join(home, ".ai", "runs")
+
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No runs directory yet — output nothing.
+			if *jsonFlag {
+				fmt.Println("[]")
+			}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "failed to read runs directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	var runs []run.RunMeta
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		metaPath := filepath.Join(runsDir, e.Name(), "run.json")
+		meta, err := run.LoadRunMeta(metaPath)
+		if err != nil {
+			continue
+		}
+
+		// For non --all mode, check if the run is actually alive.
+		if !*allFlag {
+			if !run.IsRunning(meta) {
+				continue
+			}
+		}
+
+		runs = append(runs, *meta)
+	}
+
+	// Sort by StartedAt descending (newest first).
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].StartedAt > runs[j].StartedAt
+	})
+
+	if *jsonFlag {
+		emitJSON(runs)
+	} else {
+		emitTable(runs)
+	}
+}
+
+// lsRunEntry is the JSON output structure with an added Age field.
+type lsRunEntry struct {
+	run.RunMeta
+	Age string `json:"age"`
+}
+
+func emitJSON(runs []run.RunMeta) {
+	entries := make([]lsRunEntry, len(runs))
+	for i, r := range runs {
+		entries[i] = lsRunEntry{
+			RunMeta: r,
+			Age:     formatAge(r.StartedAt),
+		}
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to marshal JSON: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
+
+func emitTable(runs []run.RunMeta) {
+	if len(runs) == 0 {
+		return
+	}
+
+	// Header
+	fmt.Printf("%-6s  %-10s  %-30s  %s\n", "ID", "STATUS", "CWD", "AGE")
+
+	for _, r := range runs {
+		id := r.ID
+		if len(id) > 6 {
+			id = id[:6]
+		}
+
+		status := r.Status
+		// Re-check actual liveness for display accuracy.
+		if r.Status == run.StatusRunning && !run.IsRunning(&r) {
+			status = "dead"
+		}
+		coloredStatus := colorizeStatus(status)
+
+		cwd := truncateStr(r.CWD, 30)
+		age := formatAge(r.StartedAt)
+
+		fmt.Printf("%-6s  %-10s  %-30s  %s\n", id, coloredStatus, cwd, age)
+	}
+}
+
+// colorizeStatus wraps the status string with ANSI color codes.
+func colorizeStatus(status string) string {
+	switch status {
+	case run.StatusRunning:
+		return "\x1b[32m" + status + "\x1b[0m" // green
+	case run.StatusDone:
+		return "\x1b[90m" + status + "\x1b[0m" // gray
+	case run.StatusFailed:
+		return "\x1b[31m" + status + "\x1b[0m" // red
+	case run.StatusKilled:
+		return "\x1b[33m" + status + "\x1b[0m" // yellow
+	default:
+		return status
+	}
+}
+
+// truncateStr truncates s to maxLen characters, appending "…" if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 1 {
+		return "…"
+	}
+	// Truncate from the beginning (keep suffix), showing "…" prefix
+	return "…" + s[len(s)-maxLen+1:]
+}
+
+// formatAge converts a unix timestamp to a human-readable age string.
+func formatAge(startedAt int64) string {
+	dur := time.Since(time.Unix(startedAt, 0))
+	seconds := int64(dur.Seconds())
+
+	if seconds < 0 {
+		seconds = 0
+	}
+
+	switch {
+	case seconds < 5:
+		return "just now"
+	case seconds < 60:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm", seconds/60)
+	case seconds < 86400:
+		return fmt.Sprintf("%dh", seconds/3600)
+	default:
+		return fmt.Sprintf("%dd", seconds/86400)
+	}
+}

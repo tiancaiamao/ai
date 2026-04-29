@@ -657,14 +657,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, ag.Prompt(expandedMessage)
 		}
 
-		// Intercept slash commands — execute synchronously without agent.
+				// Intercept slash commands — execute synchronously without agent.
 		// Only non-skill slash commands (e.g. /get_state, /compact) reach here.
 		if message[0] == '/' {
 			cmdName, args, err := command.ParseSlashCommand(message)
 			if err != nil {
 				return nil, fmt.Errorf("invalid slash command: %w", err)
 			}
-			handler, ok := server.GetSlashHandler(cmdName)
+					handler, ok := server.GetSlashHandler(cmdName)
 			if !ok {
 				return nil, fmt.Errorf("unknown command: /%s", cmdName)
 			}
@@ -868,7 +868,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = name
 		stateMu.Unlock()
 
-		slog.Info("Created new session", "name", name, "id", newSessionID)
+				slog.Info("Created new session", "name", name, "id", newSessionID)
+		server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": name})
 		return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 	})
 
@@ -965,7 +966,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				}
 			}
 
-						slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+											slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+			server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
 			return map[string]any{"switched": true, "cancelled": false}, nil
 		}
 
@@ -1007,7 +1009,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
-						slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+											slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+		server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
 		return map[string]any{"switched": true, "cancelled": false}, nil
 	})
 
@@ -2256,5 +2259,5 @@ func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
 		state.InProgressTask = inProgressTask
 	}
 
-	return state, nil
+			return state, nil
 }
