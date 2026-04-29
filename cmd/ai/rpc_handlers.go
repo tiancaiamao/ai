@@ -913,6 +913,25 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, fmt.Errorf("session id is required")
 		}
 
+		// Resolve numeric index to session ID
+		if idx, err := strconv.Atoi(id); err == nil {
+			sessions, listErr := sessionMgr.ListSessions()
+			if listErr != nil {
+				return nil, fmt.Errorf("failed to list sessions: %w", listErr)
+			}
+			// Reverse to match display order (index 0 = oldest, as shown in renderSessions)
+			// ListSessions returns newest-first; renderSessions shows index 0 = oldest
+			reversed := make([]session.SessionMeta, len(sessions))
+			for i, s := range sessions {
+				reversed[len(sessions)-1-i] = s
+			}
+			if idx < 0 || idx >= len(reversed) {
+				return nil, fmt.Errorf("invalid session index %d (valid range: 0-%d)", idx, len(reversed)-1)
+			}
+			id = reversed[idx].ID
+			slog.Info("Resolved session index to ID", "index", idx, "id", id)
+		}
+
 		// Treat absolute or relative path as session file
 		if strings.Contains(id, string(os.PathSeparator)) || strings.HasSuffix(id, ".jsonl") {
 			sessionPath, err := normalizeSessionPath(id)
