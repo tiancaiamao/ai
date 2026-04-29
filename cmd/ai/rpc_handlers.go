@@ -1921,8 +1921,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// /skills → get_commands (skills list from agent)
 	registerAlias("skills", "List available skills", "get_commands")
 
-	// /session → list_sessions
-	registerAlias("session", "List all sessions", "list_sessions")
+					// /session → get_state
+	registerAlias("session", "Get the current agent state (model, session, streaming status)", "get_state")
 
 	// /new → new_session
 	registerAlias("new", "Create a new session", "new_session")
