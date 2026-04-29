@@ -41,7 +41,7 @@ func (t *ReadTool) Name() string {
 
 // Description returns the tool description.
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges."
+	return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges. For large or unfamiliar files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.
@@ -145,15 +145,21 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			len(selectedLines), len(output), defaultReadMaxBytes/80) // rough line-width estimate
 	}
 
-	// Add continuation hints when content is truncated
+		// Add continuation hints when content is truncated
 	var header, footer string
 	if offset > 1 {
 		header = fmt.Sprintf("[%d lines above omitted. Use offset=1, limit=%d to read from start.]\n\n",
 			offset-1, offset-1)
 	}
 	if end < totalLines {
-		footer = fmt.Sprintf("\n\n[%d more lines below. Use offset=%d to continue reading.]",
-			totalLines-end, end+1)
+		remaining := totalLines - end
+		footer = fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
+			remaining, end+1)
+		// If the remaining content is very large, give a stronger hint.
+		if remaining > 500 {
+			footer = fmt.Sprintf("\n\n[%d more lines below. Consider using grep to locate specific content, or offset=%d to continue reading.]",
+				remaining, end+1)
+		}
 	}
 
 	output = header + output + footer
