@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-		"regexp"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -204,7 +204,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		prompt.ContextManagementSystemPrompt(),
 		compactor, // Pass compactor to enable compact tool
 	)
-
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -423,7 +422,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.APIKey = apiKey
 	loopCfg.GetWorkingDir = ws.GetCWD
 	loopCfg.GetStartupPath = ws.GetInitialCWD
-		loopCfg.GetSessionDir = func() string {
+	loopCfg.GetSessionDir = func() string {
 		if sess != nil {
 			return sess.GetDir()
 		}
@@ -437,7 +436,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Create agent with LoopConfig
-		ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 
 	// Start timeout watchdog if timeout is set
@@ -570,10 +569,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}
 
-
-	
-	
-	
 	// Helper function to update checkpoint manager for new session
 	updateCheckpointManager := func() error {
 		stateMu.Lock()
@@ -633,7 +628,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, fmt.Errorf("images are not supported in this RPC implementation")
 		}
 
-				// Expand /skill:name commands BEFORE generic slash dispatch.
+		// Expand /skill:name commands BEFORE generic slash dispatch.
 		// Skill commands like /skill:name are not registered as slash handlers;
 		// they are expanded into full prompts and processed normally.
 		if skill.IsSkillCommand(message) {
@@ -657,21 +652,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, ag.Prompt(expandedMessage)
 		}
 
-				// Intercept slash commands — execute synchronously without agent.
+		// Intercept slash commands — execute synchronously without agent.
 		// Only non-skill slash commands (e.g. /get_state, /compact) reach here.
 		if message[0] == '/' {
 			cmdName, args, err := command.ParseSlashCommand(message)
 			if err != nil {
 				return nil, fmt.Errorf("invalid slash command: %w", err)
 			}
-					handler, ok := server.GetSlashHandler(cmdName)
+			handler, ok := server.GetSlashHandler(cmdName)
 			if !ok {
 				return nil, fmt.Errorf("unknown command: /%s", cmdName)
 			}
 			return handler(args)
 		}
 
-				stateMu.Lock()
+		stateMu.Lock()
 		streaming := isStreaming
 		mode := steeringMode
 		followMode := followUpMode
@@ -789,7 +784,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// === Slash command handlers ===
 	// All commands below are registered as slash commands.
-		// They are invoked via the prompt channel: {"type": "prompt", "message": "/command args"}
+	// They are invoked via the prompt channel: {"type": "prompt", "message": "/command args"}
 	// and intercepted by the prompt handler before entering the agent loop.
 	// For backward compatibility, they also handle direct JSON-RPC calls where
 	// args is raw JSON from cmd.Data (e.g. {"provider":"xxx","modelId":"yyy"}).
@@ -804,7 +799,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return false
 	}
 
-	server.RegisterSlash("clear_session", func(args string) (any, error) {
+	server.RegisterSlash("clear_session", "Clear all messages in the current session", func(args string) (any, error) {
 		slog.Info("Received clear_session")
 		if err := sess.Clear(); err != nil {
 			return nil, err
@@ -815,7 +810,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-		server.RegisterSlash("new_session", func(args string) (any, error) {
+	server.RegisterSlash("new_session", "Create a new session and switch to it", func(args string) (any, error) {
 		var name, title string
 		var jsonData struct {
 			Name  string `json:"name"`
@@ -868,12 +863,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = name
 		stateMu.Unlock()
 
-				slog.Info("Created new session", "name", name, "id", newSessionID)
+		slog.Info("Created new session", "name", name, "id", newSessionID)
 		server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": name})
 		return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 	})
 
-	server.RegisterSlash("list_sessions", func(args string) (any, error) {
+	server.RegisterSlash("list_sessions", "List all sessions with their metadata", func(args string) (any, error) {
 		slog.Info("Received list_sessions")
 		sessions, err := sessionMgr.ListSessions()
 		if err != nil {
@@ -894,7 +889,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"sessions": result}, nil
 	})
 
-		server.RegisterSlash("switch_session", func(args string) (any, error) {
+	server.RegisterSlash("switch_session", "Switch to a session by name or ID", func(args string) (any, error) {
 		var jsonData struct {
 			ID          string `json:"id"`
 			SessionPath string `json:"sessionPath"`
@@ -966,7 +961,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				}
 			}
 
-											slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 			server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
 			return map[string]any{"switched": true, "cancelled": false}, nil
 		}
@@ -1009,12 +1004,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
-											slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
+		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
 		server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
 		return map[string]any{"switched": true, "cancelled": false}, nil
 	})
 
-	server.RegisterSlash("delete_session", func(args string) (any, error) {
+	server.RegisterSlash("delete_session", "Delete a session by ID", func(args string) (any, error) {
 		var jsonData struct {
 			ID string `json:"id"`
 		}
@@ -1022,14 +1017,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if parseJSONArgs(args, &jsonData) && jsonData.ID != "" {
 			id = jsonData.ID
 		}
-						slog.Info("Received delete_session: id=", "id", id)
+		slog.Info("Received delete_session: id=", "id", id)
 		if err := sessionMgr.DeleteSession(id); err != nil {
 			return nil, err
 		}
 		return map[string]any{"deleted": true}, nil
 	})
 
-		server.RegisterSlash("set_session_name", func(args string) (any, error) {
+	server.RegisterSlash("set_session_name", "Set a human-readable name for the current session", func(args string) (any, error) {
 		name := strings.TrimSpace(args)
 		var jsonData struct {
 			Name string `json:"name"`
@@ -1056,7 +1051,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-	server.RegisterSlash("get_state", func(args string) (any, error) {
+	server.RegisterSlash("get_state", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
 		slog.Info("Received get_state")
 		compactionState := buildCompactionState(compactorConfig, compactor)
 		stateMu.Lock()
@@ -1100,7 +1095,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.RegisterSlash("get_messages", func(args string) (any, error) {
+	server.RegisterSlash("get_messages", "Get all messages in the current session", func(args string) (any, error) {
 		slog.Info("Received get_messages")
 		messages := ag.GetMessages()
 		result := make([]any, len(messages))
@@ -1110,7 +1105,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"messages": result}, nil
 	})
 
-	server.RegisterSlash("compact", func(args string) (any, error) {
+	server.RegisterSlash("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
 		slog.Info("Received compact")
 		beforeCount := len(ag.GetMessages())
 
@@ -1194,7 +1189,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return response, nil
 	})
 
-	server.RegisterSlash("get_available_models", func(args string) (any, error) {
+	server.RegisterSlash("get_available_models", "List all available models", func(args string) (any, error) {
 		slog.Info("Received get_available_models")
 		specs, modelsPath, err := loadModelSpecs(cfg)
 		if err != nil {
@@ -1214,7 +1209,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"models": models}, nil
 	})
 
-		server.RegisterSlash("set_model", func(args string) (any, error) {
+	server.RegisterSlash("set_model", "Set the active model by ID", func(args string) (any, error) {
 		var provider, modelID string
 		var jsonData struct {
 			Provider string `json:"provider"`
@@ -1294,7 +1289,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return &info, nil
 	})
 
-	server.RegisterSlash("cycle_model", func(args string) (any, error) {
+	server.RegisterSlash("cycle_model", "Cycle to the next available model", func(args string) (any, error) {
 		slog.Info("Received cycle_model")
 		specs, modelsPath, err := loadModelSpecs(cfg)
 		if err != nil {
@@ -1370,12 +1365,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	skillCommands := buildSkillCommands(skillResult.Skills)
 
-	server.RegisterSlash("get_commands", func(args string) (any, error) {
+	server.RegisterSlash("get_commands", "List available slash commands and skills", func(args string) (any, error) {
 		slog.Info("Received get_commands")
 		return map[string]any{"commands": skillCommands}, nil
 	})
 
-	server.RegisterSlash("get_session_stats", func(args string) (any, error) {
+	server.RegisterSlash("get_session_stats", "Get session statistics (token counts, message count)", func(args string) (any, error) {
 		slog.Info("Received get_session_stats")
 		messages := ag.GetMessages()
 		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
@@ -1441,7 +1436,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-		server.RegisterSlash("bash", func(args string) (any, error) {
+	server.RegisterSlash("bash", "Execute a bash command", func(args string) (any, error) {
 		command := args
 		var jsonData struct {
 			Command string `json:"command"`
@@ -1453,12 +1448,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
 	})
 
-	server.RegisterSlash("abort_bash", func(args string) (any, error) {
+	server.RegisterSlash("abort_bash", "Abort the currently running bash command", func(args string) (any, error) {
 		slog.Info("Received abort_bash")
 		return nil, bashRunner.Abort()
 	})
 
-		server.RegisterSlash("set_auto_retry", func(args string) (any, error) {
+	server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", func(args string) (any, error) {
 		enabled := strings.TrimSpace(strings.ToLower(args))
 		var jsonData struct {
 			Enabled bool `json:"enabled"`
@@ -1473,18 +1468,18 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-	server.RegisterSlash("abort_retry", func(args string) (any, error) {
+	server.RegisterSlash("abort_retry", "Abort the current automatic retry", func(args string) (any, error) {
 		slog.Info("Received abort_retry")
 		ag.Abort()
 		return nil, nil
 	})
 
-	server.RegisterSlash("export_html", func(args string) (any, error) {
+	server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {
 		slog.Info("Received export_html", "outputPath", args)
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-		server.RegisterSlash("set_auto_compaction", func(args string) (any, error) {
+	server.RegisterSlash("set_auto_compaction", "Configure automatic context compaction settings", func(args string) (any, error) {
 		enabled := strings.TrimSpace(strings.ToLower(args))
 		var jsonData struct {
 			Enabled bool `json:"enabled"`
@@ -1506,7 +1501,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-		server.RegisterSlash("set_tool_call_cutoff", func(args string) (any, error) {
+	server.RegisterSlash("set_tool_call_cutoff", "Set the maximum number of tool calls per turn", func(args string) (any, error) {
 		var cutoff int
 		var jsonData struct {
 			Cutoff int `json:"cutoff"`
@@ -1543,7 +1538,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"always":   true,
 	}
 
-		server.RegisterSlash("set_tool_summary_strategy", func(args string) (any, error) {
+	server.RegisterSlash("set_tool_summary_strategy", "Set how tool outputs are summarized", func(args string) (any, error) {
 		var jsonData struct {
 			Strategy string `json:"strategy"`
 		}
@@ -1555,14 +1550,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if !validToolSummaryStrategies[strategy] {
 			return nil, fmt.Errorf("invalid tool summary strategy")
 		}
-				compactorConfig.ToolSummaryStrategy = strategy
+		compactorConfig.ToolSummaryStrategy = strategy
 		if err := config.SaveConfig(cfg, configPath); err != nil {
 			slog.Info("Failed to save config:", "value", err)
 		}
 		return map[string]any{"strategy": strategy}, nil
 	})
 
-		server.RegisterSlash("set_tool_summary_automation", func(args string) (any, error) {
+	server.RegisterSlash("set_tool_summary_automation", "Configure automatic tool output summarization", func(args string) (any, error) {
 		var jsonData struct {
 			Mode string `json:"mode"`
 		}
@@ -1581,7 +1576,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"mode": mode}, nil
 	})
 
-		server.RegisterSlash("set_trace_events", func(args string) (any, error) {
+	server.RegisterSlash("set_trace_events", "Enable/disable trace event categories", func(args string) (any, error) {
 		// Parse args — support both space-separated text and JSON {"events": [...]}
 		events := strings.Fields(args)
 		var jsonData struct {
@@ -1609,7 +1604,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
 		}
 
-			applyExpanded := func(expanded []string, replace bool) []string {
+		applyExpanded := func(expanded []string, replace bool) []string {
 			if replace {
 				traceevent.DisableAllEvents()
 			}
@@ -1661,14 +1656,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-	server.RegisterSlash("get_trace_events", func(args string) (any, error) {
+	server.RegisterSlash("get_trace_events", "Get current trace event configuration", func(args string) (any, error) {
 		slog.Info("Received get_trace_events")
 		return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 	})
 
-	server.RegisterSlash("get_workflow_status", func(args string) (any, error) {
+	server.RegisterSlash("get_workflow_status", "Get workflow task status", func(args string) (any, error) {
 		slog.Info("Received get_workflow_status")
-				status, err := getWorkflowStatus(ws.GetCWD())
+		status, err := getWorkflowStatus(ws.GetCWD())
 		if err != nil {
 			return nil, err
 		}
@@ -1678,7 +1673,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return status, nil
 	})
 
-		validSteeringModes := map[string]bool{
+	validSteeringModes := map[string]bool{
 		"all":           true,
 		"immediate":     true,
 		"one-at-a-time": true,
@@ -1689,7 +1684,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"one-at-a-time": true,
 	}
 
-		server.RegisterSlash("set_steering_mode", func(args string) (any, error) {
+	server.RegisterSlash("set_steering_mode", "Set how steering messages are queued", func(args string) (any, error) {
 		var jsonData struct {
 			Mode string `json:"mode"`
 		}
@@ -1707,7 +1702,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, nil
 	})
 
-		server.RegisterSlash("set_follow_up_mode", func(args string) (any, error) {
+	server.RegisterSlash("set_follow_up_mode", "Set how follow-up messages are delivered", func(args string) (any, error) {
 		var jsonData struct {
 			Mode string `json:"mode"`
 		}
@@ -1735,7 +1730,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 
-		server.RegisterSlash("set_thinking_level", func(args string) (any, error) {
+	server.RegisterSlash("set_thinking_level", "Set the thinking/reasoning level (off/low/medium/high)", func(args string) (any, error) {
 		level := strings.ToLower(strings.TrimSpace(args))
 		var jsonData struct {
 			Level string `json:"level"`
@@ -1753,7 +1748,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"level": level}, nil
 	})
 
-	server.RegisterSlash("cycle_thinking_level", func(args string) (any, error) {
+	server.RegisterSlash("cycle_thinking_level", "Cycle to the next thinking level", func(args string) (any, error) {
 		stateMu.Lock()
 		current := currentThinkingLevel
 		stateMu.Unlock()
@@ -1770,10 +1765,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentThinkingLevel = next
 		stateMu.Unlock()
 		ag.SetThinkingLevel(next)
-				return map[string]any{"level": next}, nil
+		return map[string]any{"level": next}, nil
 	})
 
-	server.RegisterSlash("get_last_assistant_text", func(args string) (any, error) {
+	server.RegisterSlash("get_last_assistant_text", "Get the last assistant text response", func(args string) (any, error) {
 		slog.Info("Received get_last_assistant_text")
 		messages := ag.GetMessages()
 		for i := len(messages) - 1; i >= 0; i-- {
@@ -1784,7 +1779,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return "", nil
 	})
 
-	server.RegisterSlash("get_fork_messages", func(args string) (any, error) {
+	server.RegisterSlash("get_fork_messages", "Get messages for a fork point", func(args string) (any, error) {
 		slog.Info("Received get_fork_messages")
 		forkMessages := sess.GetUserMessagesForForking()
 		result := make([]rpc.ForkMessage, 0, len(forkMessages))
@@ -1797,14 +1792,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"messages": result}, nil
 	})
 
-	server.RegisterSlash("get_tree", func(args string) (any, error) {
+	server.RegisterSlash("get_tree", "Get the conversation tree structure", func(args string) (any, error) {
 		slog.Info("Received get_tree")
 		entries := sess.GetEntries()
 		tree := buildTreeEntries(entries, sess.GetLeafID())
 		return map[string]any{"entries": tree}, nil
 	})
 
-		server.RegisterSlash("resume_on_branch", func(args string) (any, error) {
+	server.RegisterSlash("resume_on_branch", "Resume generation on a specific branch", func(args string) (any, error) {
 		var jsonData struct {
 			EntryID string `json:"entryId"`
 		}
@@ -1842,13 +1837,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			slog.Warn("Failed to update checkpoint manager for branch resume", "error", err)
 		}
 
-				if err := sessionMgr.SaveCurrent(); err != nil {
+		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
 		return map[string]any{"switched": true}, nil
 	})
 
-		server.RegisterSlash("fork", func(args string) (any, error) {
+	server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
 		var jsonData struct {
 			EntryID string `json:"entryId"`
 		}
@@ -1895,6 +1890,108 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		slog.Info("Forked to new session", "name", name, "id", newSessionID)
 		return &rpc.ForkResult{Cancelled: false, Text: text}, nil
 	})
+
+	// --- Slash command aliases (user-facing short names) ---
+	// These map the short command names users type (e.g. /help, /session)
+	// to the canonical RPC handlers registered above.
+
+	// Simple aliases: forward to an existing handler.
+	registerAlias := func(alias, desc, canonical string) {
+		server.RegisterSlash(alias, desc, func(args string) (any, error) {
+			h, ok := server.GetSlashHandler(canonical)
+			if !ok {
+				return nil, fmt.Errorf("unknown command: /%s", canonical)
+			}
+			return h(args)
+		})
+	}
+
+	// /help — list all registered slash commands
+	server.RegisterSlash("help", "Show available slash commands", func(args string) (any, error) {
+		commands := server.ListSlashCommands()
+		return map[string]any{
+			"commands": commands,
+		}, nil
+	})
+
+	// /skills → get_commands (skills list from agent)
+	registerAlias("skills", "List available skills", "get_commands")
+
+	// /session → list_sessions
+	registerAlias("session", "List all sessions", "list_sessions")
+
+	// /new → new_session
+	registerAlias("new", "Create a new session", "new_session")
+
+	// /messages → get_messages
+	registerAlias("messages", "Get session messages", "get_messages")
+
+	// /tree → get_tree
+	registerAlias("tree", "Show conversation tree", "get_tree")
+
+	// /thinking → set_thinking_level
+	registerAlias("thinking", "Set thinking level (off/low/medium/high)", "set_thinking_level")
+
+	// /trace-events → set_trace_events
+	registerAlias("trace-events", "Configure trace events", "set_trace_events")
+
+	// /model-select → same logic as /model
+	registerAlias("model-select", "Select a model", "model")
+
+	// /model — no args: cycle model; with args: set model
+	server.RegisterSlash("model", "Set or cycle the active model", func(args string) (any, error) {
+		arg := strings.TrimSpace(args)
+		if arg == "" {
+			h, ok := server.GetSlashHandler("cycle_model")
+			if !ok {
+				return nil, fmt.Errorf("unknown command: cycle_model")
+			}
+			return h("")
+		}
+		h, ok := server.GetSlashHandler("set_model")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: set_model")
+		}
+		return h(arg)
+	})
+
+	// /resume — no args: list sessions; with args: switch to session
+	server.RegisterSlash("resume", "List sessions or resume a session by ID/name", func(args string) (any, error) {
+		arg := strings.TrimSpace(args)
+		if arg == "" {
+			h, ok := server.GetSlashHandler("list_sessions")
+			if !ok {
+				return nil, fmt.Errorf("unknown command: list_sessions")
+			}
+			return h("")
+		}
+		h, ok := server.GetSlashHandler("switch_session")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: switch_session")
+		}
+		return h(arg)
+	})
+
+	// /context — composite: returns state + session stats + available models
+	server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
+		stateH, _ := server.GetSlashHandler("get_state")
+		statsH, _ := server.GetSlashHandler("get_session_stats")
+		modelsH, _ := server.GetSlashHandler("get_available_models")
+
+		stateResult, err := stateH("")
+		if err != nil {
+			return nil, err
+		}
+		statsResult, _ := statsH("")
+		modelsResult, _ := modelsH("")
+
+		return map[string]any{
+			"state":  stateResult,
+			"stats":  statsResult,
+			"models": modelsResult,
+		}, nil
+	})
+
 	// Start event emitter
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
@@ -2259,5 +2356,5 @@ func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
 		state.InProgressTask = inProgressTask
 	}
 
-			return state, nil
+	return state, nil
 }

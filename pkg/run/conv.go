@@ -56,7 +56,7 @@ func ParseEvent(line string) *FormattedEvent {
 		return nil // silent
 	case "tool_execution_end":
 		return nil // silent
-		case "error":
+	case "error":
 		errMsg, _ := evt["error"].(string)
 		if errMsg == "" {
 			errMsg = "unknown error"
@@ -192,7 +192,7 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 			parts = append(parts, fmt.Sprintf("%s=%v", key, v))
 		}
 	}
-		if len(parts) > 0 {
+	if len(parts) > 0 {
 		return " " + strings.Join(parts, " ")
 	}
 	return ""
@@ -201,14 +201,13 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 // parseResponseEvent handles RPC response events from slash commands.
 func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	success, _ := evt["success"].(bool)
-	cmdName, _ := evt["command"].(string)
 
 	if !success {
 		errMsg, _ := evt["error"].(string)
 		if errMsg == "" {
 			errMsg = "command failed"
 		}
-		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("❌ /%s: %s", cmdName, errMsg)}
+		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("❌ %s", errMsg)}
 	}
 
 	// Try to format the response data for common commands.
