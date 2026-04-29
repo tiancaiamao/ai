@@ -174,7 +174,7 @@ backends:
 func TestLoadAiOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "backends.yaml")
-		content := `
+	content := `
 backends:
   ai:
     command: ai

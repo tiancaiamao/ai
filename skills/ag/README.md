@@ -11,8 +11,8 @@ ag agent spawn worker-1 --input "fix bugs"
   │
   └── ag bridge worker-1 (detached process, Setpgid)
       │
-      └── [bridge process]
-                    ├── exec.Command("ai", "rpc")
+            └── [bridge process]
+          ├── exec.Command("ai", "rpc")
           │   ├── stdin pipe  → prompt/steer/abort
           │   └── stdout pipe → event stream → stream.log + activity.json
           ├── StreamWriter → stream.log (real-time, human/LLM readable)

@@ -53,7 +53,7 @@ Backends are defined in `backends.yaml` (co-located with the ag skill):
 backends:
   ai:
     command: ai
-        args: ["rpc"]
+    args: ["rpc"]
     protocol: json-rpc
     supports:
       steer: true

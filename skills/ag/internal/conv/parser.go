@@ -21,11 +21,11 @@ const (
 
 // FormattedEvent is the result of parsing a raw JSON event.
 type FormattedEvent struct {
-	Kind    EventKind
-	Text    string // human-readable line (already formatted)
-	Raw     string // original raw delta text (for stream.log append)
-	Tool    string // tool name (KindTool only)
-	Detail  string // tool detail (KindTool only)
+	Kind   EventKind
+	Text   string // human-readable line (already formatted)
+	Raw    string // original raw delta text (for stream.log append)
+	Tool   string // tool name (KindTool only)
+	Detail string // tool detail (KindTool only)
 }
 
 // ParseEvent parses a single JSON event from ai rpc stdout

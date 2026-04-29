@@ -77,7 +77,7 @@ func List() ([]AgentEntry, error) {
 			result = append(result, AgentEntry{ID: id, Status: "unknown"})
 			continue
 		}
-				result = append(result, AgentEntry{
+		result = append(result, AgentEntry{
 			ID:        id,
 			Status:    string(activity.Status),
 			Backend:   activity.Backend,

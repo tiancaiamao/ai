@@ -61,7 +61,7 @@ func (bc *BackendsConfig) Names() []string {
 func DefaultBackends() *BackendsConfig {
 	return &BackendsConfig{
 		Backends: map[string]*BackendConfig{
-						"ai": {
+			"ai": {
 				Name:     "ai",
 				Command:  "ai",
 				Args:     []string{"rpc"},
