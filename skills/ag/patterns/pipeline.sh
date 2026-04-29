@@ -5,9 +5,11 @@
 #
 # Environment:
 #   AG_MOCK   — set to "1" for mock mode
+#   AG_BINARY — path to ag binary (defaults to "ag")
 #
 set -euo pipefail
 
+AG_BINARY="${AG_BINARY:-${AG_BIN:-ag}}"
 MOCK="${AG_MOCK:-}"
 INPUT_FILE="$1"
 shift
@@ -40,20 +42,20 @@ for i in "${!STAGES[@]}"; do
 
   echo "[pipeline] === Stage $STAGE_NUM/$STAGE_COUNT ==="
 
-  if [ -n "$MOCK" ]; then
-    ag spawn --id "$STAGE_ID" --mock --mock-script "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 1m
+                    if [ -n "$MOCK" ]; then
+    $AG_BINARY agent spawn "$STAGE_ID" --backend bash --system "$STAGE_PROMPT" --input "$PREV_OUTPUT"
   else
-    ag spawn --id "$STAGE_ID" --system "$STAGE_PROMPT" --input "$PREV_OUTPUT" --timeout 10m
+    $AG_BINARY agent spawn "$STAGE_ID" --system "$STAGE_PROMPT" --input "$PREV_OUTPUT"
   fi
 
-  if ! ag wait "$STAGE_ID" --timeout 60; then
+      if ! $AG_BINARY agent wait "$STAGE_ID" --timeout 10; then
     echo "[pipeline] ❌ Stage $STAGE_NUM failed"
     exit 1
   fi
 
   PREV_OUTPUT=$(mktemp)
   TEMP_FILES+=("$PREV_OUTPUT")
-  ag output "$STAGE_ID" > "$PREV_OUTPUT"
+  $AG_BINARY agent output "$STAGE_ID" > "$PREV_OUTPUT"
 
   LINES=$(wc -l < "$PREV_OUTPUT" | tr -d ' ')
   echo "[pipeline] Stage $STAGE_NUM done ($LINES lines)"

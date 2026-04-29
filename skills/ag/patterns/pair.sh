@@ -8,8 +8,11 @@
 #
 # Environment:
 #   AG_MOCK   — set to "1" to use mock agents
+#   AG_BINARY — path to ag binary (defaults to "ag")
 #
 set -euo pipefail
+
+AG_BINARY="${AG_BINARY:-${AG_BIN:-ag}}"
 
 WORKER_PROMPT="$1"
 JUDGE_PROMPT="$2"
@@ -28,62 +31,68 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
 
   echo "[pair] === Round $round ==="
 
-  # --- Spawn worker ---
+    # --- Spawn worker ---
   CURRENT_INPUT="$INPUT_FILE"
   if [ "$round" -gt 1 ]; then
+    if [ -z "$FEEDBACK_FILE" ]; then
+      echo "[pair] Error: no feedback available for round $round"
+      break
+    fi
     CURRENT_INPUT="$FEEDBACK_FILE"
   fi
 
-  SPAWN_ARGS=(--id "$WORKER_ID" --input "$CURRENT_INPUT" --timeout 10m)
+                SPAWN_ARGS=("$WORKER_ID" --input "$CURRENT_INPUT")
   if [ -n "$MOCK" ]; then
-    SPAWN_ARGS+=(--mock --mock-script "$WORKER_PROMPT")
+    # In mock mode, use bash backend
+    SPAWN_ARGS+=(--backend bash)
   else
     SPAWN_ARGS+=(--system "$WORKER_PROMPT")
-  fi
-  ag spawn "${SPAWN_ARGS[@]}"
+    fi
+  $AG_BINARY agent spawn "${SPAWN_ARGS[@]}"
 
-  # --- Wait for worker ---
+    # --- Wait for worker ---
   echo "[pair] Waiting for worker ($WORKER_ID)..."
-  if ! ag wait "$WORKER_ID" --timeout 60; then
+  if ! $AG_BINARY agent wait "$WORKER_ID" --timeout 10; then
     echo "[pair] Worker failed in round $round"
-    ag rm "$WORKER_ID" 2>/dev/null || true
+    $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
     continue
   fi
 
   # --- Get worker output ---
-  WORKER_OUTPUT=$(mktemp)
-  ag output "$WORKER_ID" > "$WORKER_OUTPUT"
+    WORKER_OUTPUT=$(mktemp)
+  $AG_BINARY agent output "$WORKER_ID" > "$WORKER_OUTPUT"
   echo "[pair] Worker output: $(wc -l < "$WORKER_OUTPUT" | tr -d ' ') lines"
 
-  # Clean up worker agent
-  ag rm "$WORKER_ID" 2>/dev/null || true
+    # Clean up worker agent
+  $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
 
-  # --- Spawn judge ---
-  JUDGE_ARGS=(--id "$JUDGE_ID" --input "$WORKER_OUTPUT" --timeout 5m)
+                                # --- Spawn judge ---
+  JUDGE_ARGS=("$JUDGE_ID" --input "$WORKER_OUTPUT")
   if [ -n "$MOCK" ]; then
-    JUDGE_ARGS+=(--mock --mock-script "$JUDGE_PROMPT")
+    # In mock mode, use judge backend
+    JUDGE_ARGS+=(--backend judge)
   else
     JUDGE_ARGS+=(--system "$JUDGE_PROMPT")
   fi
-  ag spawn "${JUDGE_ARGS[@]}"
+  $AG_BINARY agent spawn "${JUDGE_ARGS[@]}"
 
-  # --- Wait for judge ---
+                # --- Wait for judge ---
   echo "[pair] Waiting for judge ($JUDGE_ID)..."
-  if ! ag wait "$JUDGE_ID" --timeout 30; then
+  if ! $AG_BINARY agent wait "$JUDGE_ID" --timeout 5; then
     echo "[pair] Judge failed in round $round"
-    ag rm "$JUDGE_ID" 2>/dev/null || true
+    $AG_BINARY agent rm "$JUDGE_ID" 2>/dev/null || true
     rm -f "$WORKER_OUTPUT"
     continue
   fi
 
   # --- Get judge verdict ---
   JUDGE_OUTPUT=$(mktemp)
-  ag output "$JUDGE_ID" > "$JUDGE_OUTPUT"
+  $AG_BINARY agent output "$JUDGE_ID" > "$JUDGE_OUTPUT"
   echo "[pair] Judge verdict:"
   cat "$JUDGE_OUTPUT"
 
   # Clean up judge agent
-  ag rm "$JUDGE_ID" 2>/dev/null || true
+  $AG_BINARY agent rm "$JUDGE_ID" 2>/dev/null || true
 
   # --- Check verdict ---
   if grep -qi "APPROVED\|PASS\|ACCEPT" "$JUDGE_OUTPUT"; then

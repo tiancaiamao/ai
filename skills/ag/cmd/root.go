@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"text/tabwriter"
-	"time"
 
 	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/channel"
@@ -44,7 +42,7 @@ var agentCmd = &cobra.Command{
 	Short: "Manage agents (spawn, status, steer, abort, kill, etc.)",
 }
 
-	var agentSpawnCmd = &cobra.Command{
+var agentSpawnCmd = &cobra.Command{
 	Use:   "spawn <id>",
 	Short: "Spawn a new agent",
 	Args:  cobra.ExactArgs(1),
@@ -80,71 +78,21 @@ var agentStatusCmd = &cobra.Command{
 		id := args[0]
 		format, _ := cmd.Flags().GetString("format")
 
-		if err := agent.EnsureExists(id); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-
-		activity, err := agent.ReadActivity(id)
+		// 使用新的 GetAgentStatus 函数
+		activity, err := GetAgentStatus(id)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "no activity for agent %s\n", id)
+			fmt.Fprintf(os.Stderr, "no activity for agent %s: %v\n", id, err)
 			os.Exit(1)
 		}
 
-		// Check stale: verify tmux session and PID
-		DetectStale(id, activity)
-
-		if format == "json" {
-			data, _ := json.MarshalIndent(activity, "", "  ")
-			fmt.Println(string(data))
-			return
+		// Check stale: verify tmux session and PID (仅对传统 bridge)
+		if activity.Backend != "ai" {
+			DetectStale(id, activity)
 		}
 
-				fmt.Printf("Agent: %s\n", id)
-		fmt.Printf("Status: %s\n", activity.Status)
-		if activity.Backend != "" {
-			fmt.Printf("Backend: %s\n", activity.Backend)
-		}
-		if activity.Pid > 0 {
-			fmt.Printf("PID: %d\n", activity.Pid)
-		}
-		if activity.StartedAt > 0 {
-			fmt.Printf("Started: %s\n", formatTime(activity.StartedAt))
-			if activity.Status == "running" {
-				fmt.Printf("Uptime: %s\n", formatDuration(timeNow()-activity.StartedAt))
-			}
-		}
-		if activity.FinishedAt > 0 {
-			fmt.Printf("Finished: %s\n", formatTime(activity.FinishedAt))
-			fmt.Printf("Duration: %s\n", formatDuration(activity.FinishedAt-activity.StartedAt))
-		}
-		fmt.Printf("Turns: %d\n", activity.Turns)
-		if activity.TokensTotal > 0 {
-			fmt.Printf("Tokens: in=%d out=%d total=%d\n", activity.TokensIn, activity.TokensOut, activity.TokensTotal)
-		}
-		if activity.LastTool != "" {
-			fmt.Printf("Last tool: %s\n", activity.LastTool)
-		}
-		if activity.LastText != "" {
-			text := activity.LastText
-			if len(text) > 200 {
-				text = text[:200] + "..."
-			}
-			fmt.Printf("Last text: %s\n", text)
-		}
-				if activity.Error != "" {
-			fmt.Printf("Error: %s\n", activity.Error)
-		}
-
-		// Show stream.log path and size for observability
-		agentDir := agent.AgentDir(id)
-		streamPath := filepath.Join(agentDir, "stream.log")
-		if info, err := os.Stat(streamPath); err == nil {
-			fmt.Printf("Stream: %s (%s)\n", streamPath, humanBytes(info.Size()))
-		}
+		FormatAgentStatus(activity, format, id)
 	},
 }
-
 var agentSteerCmd = &cobra.Command{
 	Use:   "steer <id> <message>",
 	Short: "Send a steering message to a running agent",
@@ -280,7 +228,7 @@ var agentOutputCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-				if format == "json" {
+		if format == "json" {
 			// Structured output with metadata
 			act, _ := agent.ReadActivity(id)
 			result := map[string]any{
@@ -301,6 +249,40 @@ var agentOutputCmd = &cobra.Command{
 		}
 
 		fmt.Print(output)
+	},
+}
+
+var agentConversationCmd = &cobra.Command{
+	Use:   "conversation <id>",
+	Short: "Show agent conversation in a cleaner format",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		id := args[0]
+		format, _ := cmd.Flags().GetString("format")
+
+		// 获取对话
+		conversation, err := GetConversation(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 根据格式输出
+		switch format {
+		case "json":
+			data, _ := json.MarshalIndent(conversation, "", "  ")
+			fmt.Println(string(data))
+		case "markdown":
+			fmt.Println(conversation.FormatAsMarkdown())
+		case "text":
+			fmt.Println(conversation.FormatAsText())
+		case "last-assistant":
+			fmt.Println(conversation.GetLastAssistantResponse())
+		case "last-user":
+			fmt.Println(conversation.GetLastUserMessage())
+		default:
+			fmt.Println(conversation.FormatAsText())
+		}
 	},
 }
 
@@ -341,7 +323,7 @@ var agentLsCmd = &cobra.Command{
 			return
 		}
 
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "ID\tSTATUS\tBACKEND\tSTARTED")
 		for _, a := range allAgents {
 			started := "-"
@@ -740,44 +722,6 @@ var taskDepLsCmd = &cobra.Command{
 
 // ========== Helpers ==========
 
-func formatTime(unix int64) string {
-	if unix == 0 {
-		return "-"
-	}
-	t := time.Unix(unix, 0)
-	return t.Format("2006-01-02 15:04:05")
-}
-
-func formatDuration(seconds int64) string {
-	if seconds < 0 {
-		return "-"
-	}
-	if seconds < 60 {
-		return fmt.Sprintf("%ds", seconds)
-	}
-	if seconds < 3600 {
-		return fmt.Sprintf("%dm%ds", seconds/60, seconds%60)
-	}
-	return fmt.Sprintf("%dh%dm", seconds/3600, (seconds%3600)/60)
-}
-
-func timeNow() int64 {
-	return time.Now().Unix()
-}
-
-func humanBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
-}
-
 func readStdin() []byte {
 	data := make([]byte, 0, 4096)
 	buf := make([]byte, 4096)
@@ -795,7 +739,7 @@ func readStdin() []byte {
 
 func init() {
 	// Agent flags
-		agentSpawnCmd.Flags().String("system", "", "System prompt (inline or @file)")
+	agentSpawnCmd.Flags().String("system", "", "System prompt (inline or @file)")
 	agentSpawnCmd.Flags().String("input", "", "Initial input message")
 	agentSpawnCmd.Flags().String("cwd", "", "Working directory for the agent")
 	agentSpawnCmd.Flags().String("backend", "ai", "Backend name (from backends.yaml)")
@@ -804,7 +748,7 @@ func init() {
 	agentWaitCmd.Flags().Int("timeout", 300, "Timeout in seconds (0 = no timeout)")
 
 	// Status/ls format flag
-	for _, c := range []*cobra.Command{agentStatusCmd, agentLsCmd, agentOutputCmd} {
+	for _, c := range []*cobra.Command{agentStatusCmd, agentLsCmd, agentOutputCmd, agentConversationCmd} {
 		c.Flags().String("format", "", "Output format: json")
 	}
 
@@ -824,11 +768,11 @@ func init() {
 	recvCmd.Flags().Int("timeout", 60, "Timeout in seconds for --wait")
 	recvCmd.Flags().Bool("all", false, "Receive all pending messages")
 
-		// Agent subcommands
+	// Agent subcommands
 	agentCmd.AddCommand(
 		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
 		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
-		agentOutputCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
+		agentOutputCmd, agentConversationCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
 	)
 
 	// Channel subcommands
@@ -838,6 +782,6 @@ func init() {
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
 	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
 
-		// Root subcommands
+	// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
 }
