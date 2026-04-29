@@ -1992,12 +1992,55 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+		server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
 		subCmd := strings.TrimSpace(args)
 		switch subCmd {
 		case "settings", "":
-			stateH, _ := server.GetSlashHandler("get_state")
-			return stateH("")
+			compaction := buildCompactionState(compactorConfig, compactor)
+
+			model := currentModelInfo.ID
+			if currentModelInfo.Provider != "" {
+				model = currentModelInfo.Provider + "/" + currentModelInfo.ID
+			}
+
+			compactionContext := "unknown"
+			compactionReserve := "unknown"
+			compactionLimit := "unknown"
+			compactionMaxMessages := "disabled"
+			compactionMaxTokens := "disabled"
+			compactionKeepRecent := "unknown"
+			compactionKeepRecentTokens := "unknown"
+			if compaction != nil {
+				compactionContext = formatIntOrUnknown(compaction.ContextWindow)
+				compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
+				compactionLimit = formatTokenLimit(compaction)
+				compactionMaxMessages = formatLimit(compaction.MaxMessages)
+				compactionMaxTokens = formatLimit(compaction.MaxTokens)
+				compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
+				compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
+			}
+
+						autoCompStr := "off"
+			if autoCompactionEnabled {
+				autoCompStr = "on"
+			}
+
+			return map[string]any{
+				"type": "settings",
+				"data": map[string]any{
+					"model":                        model,
+					"thinking-level":               currentThinkingLevel,
+					"auto-compaction":              autoCompStr,
+					"compaction-context-window":    compactionContext,
+					"compaction-reserve-tokens":    compactionReserve,
+					"compaction-token-limit":       compactionLimit,
+					"compaction-max-messages":      compactionMaxMessages,
+					"compaction-max-tokens":        compactionMaxTokens,
+					"compaction-keep-recent":       compactionKeepRecent,
+					"compaction-keep-recent-tokens": compactionKeepRecentTokens,
+					"context-window":               formatIntOrUnknown(int(currentModelInfo.ContextWindow)),
+				},
+			}, nil
 		case "pipeline":
 			return map[string]any{"message": "pipeline info not yet available"}, nil
 		default:

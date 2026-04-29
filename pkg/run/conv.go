@@ -226,8 +226,13 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("%v", dataRaw)}
 	}
 
-	// Detect response type and render accordingly.
+		// Detect response type and render accordingly.
 	// Order matters: most specific detections first.
+
+	// /show settings → {type: "settings", data: {...}}
+	if typ, _ := dataRaw["type"].(string); typ == "settings" {
+		return renderSettings(dataJSON)
+	}
 
 	// /skills, /get_commands → {commands: [{name, source, description, ...}]}
 	if _, hasCommands := dataRaw["commands"]; hasCommands {
@@ -573,6 +578,42 @@ func renderModel(dataJSON []byte) *FormattedEvent {
 	provider := result.Model.Provider
 	id := result.Model.ID
 	return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Model: %s/%s (%s)", provider, name, id)}
+}
+
+// renderSettings renders /show settings output, matching ai-win showSettings.
+func renderSettings(dataJSON []byte) *FormattedEvent {
+	var payload struct {
+		Type string            `json:"type"`
+		Data map[string]any    `json:"data"`
+	}
+	if err := json.Unmarshal(dataJSON, &payload); err != nil || payload.Type != "settings" {
+		return fallbackJSON(dataJSON)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Settings:\n")
+	keys := []string{
+		"model",
+		"thinking-level",
+		"auto-compaction",
+		"compaction-context-window",
+		"compaction-reserve-tokens",
+		"compaction-token-limit",
+		"compaction-max-messages",
+		"compaction-max-tokens",
+		"compaction-keep-recent",
+		"compaction-keep-recent-tokens",
+		"context-window",
+	}
+	for _, k := range keys {
+		v, ok := payload.Data[k]
+		if !ok {
+			v = "unknown"
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
+	}
+
+	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(sb.String(), "\n")}
 }
 
 // renderSessionStats renders /session stats output.
