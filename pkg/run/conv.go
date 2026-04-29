@@ -199,6 +199,7 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 }
 
 // parseResponseEvent handles RPC response events from slash commands.
+// It renders human-readable output for the watch display.
 func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	success, _ := evt["success"].(bool)
 
@@ -210,14 +211,12 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("❌ %s", errMsg)}
 	}
 
-	// Try to format the response data for common commands.
 	data, _ := evt["data"].(map[string]any)
 	if data == nil {
-		// Simple success with no data.
 		return nil
 	}
 
-	// /get_commands → data.commands
+	// /help, /get_commands → data.commands
 	if commands, ok := data["commands"].([]any); ok {
 		var lines []string
 		lines = append(lines, "Available commands:")
@@ -226,7 +225,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 				name, _ := cm["name"].(string)
 				desc, _ := cm["description"].(string)
 				if desc != "" {
-					lines = append(lines, fmt.Sprintf("  /%-20s %s", name, desc))
+					lines = append(lines, fmt.Sprintf("  /%-22s %s", name, desc))
 				} else {
 					lines = append(lines, fmt.Sprintf("  /%s", name))
 				}
@@ -235,8 +234,68 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: strings.Join(lines, "\n")}
 	}
 
-	// /get_state → data fields
-	if _, hasState := data["status"]; hasState {
+	// /session, /resume, /list_sessions → data.sessions
+	if sessions, ok := data["sessions"].([]any); ok {
+		var lines []string
+		for _, s := range sessions {
+			if sm, ok := s.(map[string]any); ok {
+				id, _ := sm["id"].(string)
+				name, _ := sm["name"].(string)
+				title, _ := sm["title"].(string)
+				shortID := id
+				if len(shortID) > 6 {
+					shortID = shortID[:6]
+				}
+				lines = append(lines, fmt.Sprintf("  %-12s %-20s %s", shortID, name, title))
+			}
+		}
+		return &FormattedEvent{Kind: KindMeta, Text: strings.Join(lines, "\n")}
+	}
+
+	// /model, /cycle_model → data.model
+	if model, ok := data["model"].(map[string]any); ok {
+		id, _ := model["id"].(string)
+		name, _ := model["name"].(string)
+		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Model: %s (%s)", name, id)}
+	}
+
+	// /context → composite result with state + models
+	if _, hasState := data["state"]; hasState {
+		var lines []string
+		if state, ok := data["state"].(map[string]any); ok {
+			status, _ := state["status"].(string)
+			modelName, _ := state["modelName"].(string)
+			lines = append(lines, fmt.Sprintf("Status: %s  Model: %s", status, modelName))
+		}
+		if models, ok := data["models"].(map[string]any); ok {
+			if mlist, ok := models["models"].([]any); ok {
+				lines = append(lines, fmt.Sprintf("\nAvailable models (%d):", len(mlist)))
+				for _, m := range mlist {
+					if mm, ok := m.(map[string]any); ok {
+						id, _ := mm["id"].(string)
+						name, _ := mm["name"].(string)
+						lines = append(lines, fmt.Sprintf("  %-30s %s", id, name))
+					}
+				}
+			}
+		}
+		if len(lines) > 0 {
+			return &FormattedEvent{Kind: KindMeta, Text: strings.Join(lines, "\n")}
+		}
+	}
+
+	// /thinking, /set_thinking_level → data.level
+	if level, ok := data["level"].(string); ok {
+		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Thinking level: %s", level)}
+	}
+
+	// /compact, /clear_session → data.message
+	if msg, ok := data["message"].(string); ok {
+		return &FormattedEvent{Kind: KindMeta, Text: msg}
+	}
+
+	// /get_state → data.status
+	if _, hasStatus := data["status"]; hasStatus {
 		jsonBytes, _ := json.MarshalIndent(data, "", "  ")
 		return &FormattedEvent{Kind: KindMeta, Text: string(jsonBytes)}
 	}
