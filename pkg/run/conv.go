@@ -531,6 +531,11 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderSessions(dataJSON)
 	}
 
+	// /model (list), /get_available_models → {models: [...]}
+	if _, hasModels := dataRaw["models"]; hasModels {
+		return renderModelList(dataJSON)
+	}
+
 	// /model, /cycle_model → {model: {...}, thinkingLevel: ...}
 	if _, hasModel := dataRaw["model"]; hasModel {
 		return renderModel(dataJSON)
@@ -894,6 +899,62 @@ func renderModel(dataJSON []byte) *FormattedEvent {
 	provider := result.Model.Provider
 	id := result.Model.ID
 	return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Model: %s/%s (%s)", provider, name, id)}
+}
+
+// renderModelList renders /model (no args) and /get_available_models output.
+func renderModelList(dataJSON []byte) *FormattedEvent {
+	var payload struct {
+		Models       []rpc.ModelInfo `json:"models"`
+		CurrentIndex *int            `json:"currentIndex,omitempty"`
+		Current      *struct {
+			Provider string `json:"provider"`
+			ID       string `json:"id"`
+		} `json:"current,omitempty"`
+	}
+	if err := json.Unmarshal(dataJSON, &payload); err != nil {
+		return fallbackJSON(dataJSON)
+	}
+	if len(payload.Models) == 0 {
+		return &FormattedEvent{Kind: KindMeta, Text: "no models available"}
+	}
+
+	currentIndex := -1
+	if payload.CurrentIndex != nil {
+		currentIndex = *payload.CurrentIndex
+	} else if payload.Current != nil {
+		for i, m := range payload.Models {
+			if m.Provider == payload.Current.Provider && m.ID == payload.Current.ID {
+				currentIndex = i
+				break
+			}
+		}
+	}
+
+	maxID := 0
+	for _, m := range payload.Models {
+		id := fmt.Sprintf("%s/%s", m.Provider, m.ID)
+		if len(id) > maxID {
+			maxID = len(id)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("Available Models\n")
+	for i, m := range payload.Models {
+		ref := fmt.Sprintf("%s/%s", m.Provider, m.ID)
+		name := m.Name
+		if name == "" {
+			name = m.ID
+		}
+		current := ""
+		if i == currentIndex {
+			current = " [current]"
+		}
+		b.WriteString(fmt.Sprintf("%d: %-*s - %s%s\n", i, maxID, ref, name, current))
+	}
+	b.WriteString("Usage: /model <index>\n")
+
+	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
 }
 
 // renderSettings renders /show settings output, matching ai-win showSettings.

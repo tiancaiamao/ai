@@ -1945,16 +1945,63 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// /model-select → same logic as /model
 	registerAlias("model-select", "Select a model", "model")
 
-	// /model — no args: cycle model; with args: set model
-	server.RegisterSlash("model", "Set or cycle the active model", func(args string) (any, error) {
+	// /model — no args: list models and mark current; with args: select model by index or id
+	server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
 		arg := strings.TrimSpace(args)
 		if arg == "" {
-			h, ok := server.GetSlashHandler("cycle_model")
-			if !ok {
-				return nil, fmt.Errorf("unknown command: cycle_model")
+			specs, modelsPath, err := loadModelSpecs(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
 			}
-			return h("")
+			specs = filterModelSpecsWithKeys(specs)
+			if len(specs) == 0 {
+				authPath, _ := config.GetDefaultAuthPath()
+				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+			}
+
+			models := make([]rpc.ModelInfo, 0, len(specs))
+			currentIndex := -1
+			for i, spec := range specs {
+				models = append(models, modelInfoFromSpec(spec))
+				if spec.Provider == model.Provider && spec.ID == model.ID {
+					currentIndex = i
+				}
+			}
+
+			return map[string]any{
+				"models":       models,
+				"currentIndex": currentIndex,
+				"current": map[string]any{
+					"provider": model.Provider,
+					"id":       model.ID,
+				},
+			}, nil
 		}
+
+		if idx, err := strconv.Atoi(arg); err == nil {
+			specs, modelsPath, err := loadModelSpecs(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+			}
+			specs = filterModelSpecsWithKeys(specs)
+			if len(specs) == 0 {
+				authPath, _ := config.GetDefaultAuthPath()
+				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+			}
+			if idx < 0 || idx >= len(specs) {
+				return nil, fmt.Errorf("model index out of range")
+			}
+			arg = fmt.Sprintf("%s %s", specs[idx].Provider, specs[idx].ID)
+		} else if strings.Contains(arg, "/") {
+			parts := strings.SplitN(arg, "/", 2)
+			provider := strings.TrimSpace(parts[0])
+			modelID := strings.TrimSpace(parts[1])
+			if provider == "" || modelID == "" {
+				return nil, fmt.Errorf("invalid model selector: %s", arg)
+			}
+			arg = fmt.Sprintf("%s %s", provider, modelID)
+		}
+
 		h, ok := server.GetSlashHandler("set_model")
 		if !ok {
 			return nil, fmt.Errorf("unknown command: set_model")

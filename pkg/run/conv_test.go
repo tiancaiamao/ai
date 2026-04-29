@@ -191,6 +191,26 @@ func TestParseEvent_Response_Commands(t *testing.T) {
 	}
 }
 
+func TestParseEvent_Response_ModelList(t *testing.T) {
+	input := `{"type":"response","command":"prompt","success":true,"data":{"models":[{"provider":"zai","id":"glm-4.5","name":"GLM 4.5"},{"provider":"openai","id":"gpt-4.1","name":"GPT-4.1"}],"currentIndex":1}}`
+	evt := ParseEvent(input)
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Kind != KindMeta {
+		t.Fatalf("expected KindMeta, got %s", evt.Kind)
+	}
+	if !strings.Contains(evt.Text, "Available Models") {
+		t.Fatalf("expected model list header, got: %s", evt.Text)
+	}
+	if !strings.Contains(evt.Text, "1: openai/gpt-4.1 - GPT-4.1 [current]") {
+		t.Fatalf("expected current marker on selected model, got: %s", evt.Text)
+	}
+	if !strings.Contains(evt.Text, "Usage: /model <index>") {
+		t.Fatalf("expected usage hint, got: %s", evt.Text)
+	}
+}
+
 func TestParseEvent_AgentEnd_Success(t *testing.T) {
 	evt := ParseEvent(`{"type":"agent_end","messages":[]}`)
 	if evt == nil {
@@ -468,7 +488,6 @@ func TestParseEvent_WhitespaceAroundJSON(t *testing.T) {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
 }
-
 // --- Tests for thinking content filtering ---
 
 func TestParseEvent_ThinkingDelta_EmptyString(t *testing.T) {
