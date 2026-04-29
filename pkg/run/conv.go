@@ -252,20 +252,61 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: strings.Join(lines, "\n")}
 	}
 
-	// /model, /cycle_model → data.model
-	if model, ok := data["model"].(map[string]any); ok {
-		id, _ := model["id"].(string)
-		name, _ := model["name"].(string)
-		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Model: %s (%s)", name, id)}
+	// /model, /cycle_model, /set_model → data.model (only if no thinkingLevel, which indicates get_state)
+	if _, hasTL := data["thinkingLevel"]; !hasTL {
+		if model, ok := data["model"].(map[string]any); ok {
+			id, _ := model["id"].(string)
+			name, _ := model["name"].(string)
+			return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("Model: %s (%s)", name, id)}
+		}
+	}
+
+	// /get_state → data with thinkingLevel + sessionId
+	if _, hasTL := data["thinkingLevel"]; hasTL {
+		var lines []string
+		if m, ok := data["model"].(map[string]any); ok {
+			name, _ := m["name"].(string)
+			id, _ := m["id"].(string)
+			lines = append(lines, fmt.Sprintf("Model: %s (%s)", name, id))
+		}
+		if tl, ok := data["thinkingLevel"].(string); ok {
+			lines = append(lines, fmt.Sprintf("Thinking: %s", tl))
+		}
+		if sn, ok := data["sessionName"].(string); ok {
+			lines = append(lines, fmt.Sprintf("Session: %s", sn))
+		}
+		if streaming, ok := data["isStreaming"].(bool); ok && streaming {
+			lines = append(lines, "Status: streaming")
+		}
+		if msgCount, ok := data["messageCount"].(float64); ok {
+			lines = append(lines, fmt.Sprintf("Messages: %.0f", msgCount))
+		}
+		if len(lines) > 0 {
+			return &FormattedEvent{Kind: KindMeta, Text: strings.Join(lines, "\n")}
+		}
 	}
 
 	// /context → composite result with state + models
 	if _, hasState := data["state"]; hasState {
 		var lines []string
 		if state, ok := data["state"].(map[string]any); ok {
-			status, _ := state["status"].(string)
-			modelName, _ := state["modelName"].(string)
-			lines = append(lines, fmt.Sprintf("Status: %s  Model: %s", status, modelName))
+			if m, ok := state["model"].(map[string]any); ok {
+				modelName, _ := m["name"].(string)
+				modelID, _ := m["id"].(string)
+				lines = append(lines, fmt.Sprintf("Model: %s (%s)", modelName, modelID))
+			}
+			if tl, ok := state["thinkingLevel"].(string); ok {
+				lines = append(lines, fmt.Sprintf("Thinking: %s", tl))
+			}
+			if sn, ok := state["sessionName"].(string); ok {
+				lines = append(lines, fmt.Sprintf("Session: %s", sn))
+			}
+			if streaming, ok := state["isStreaming"].(bool); ok && streaming {
+				lines = append(lines, "Status: streaming")
+			}
+			if msgCount, ok := state["messageCount"].(float64); ok {
+				lines = append(lines, fmt.Sprintf("Messages: %.0f", msgCount))
+			}
 		}
 		if models, ok := data["models"].(map[string]any); ok {
 			if mlist, ok := models["models"].([]any); ok {
@@ -294,8 +335,8 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: msg}
 	}
 
-	// /get_state → data.status
-	if _, hasStatus := data["status"]; hasStatus {
+	// /get_tree, /get_messages → data.entries or data with known structure
+	if _, hasEntries := data["entries"]; hasEntries {
 		jsonBytes, _ := json.MarshalIndent(data, "", "  ")
 		return &FormattedEvent{Kind: KindMeta, Text: string(jsonBytes)}
 	}
