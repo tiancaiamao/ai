@@ -378,9 +378,9 @@ type runModel struct {
 	proc      *os.Process
 	stdinPipe *io.PipeWriter
 	meta      *run.RunMeta
-	metaPath  string
-	inputMode bool // true when user is typing a message
-	inputBuf  strings.Builder
+		metaPath  string
+	inputMode bool          // true when user is typing a message
+	inputBuf  *strings.Builder
 }
 
 func newRunModel(
@@ -390,7 +390,7 @@ func newRunModel(
 	meta *run.RunMeta,
 	metaPath string,
 ) runModel {
-	w := newWatchModel(eventsPath, runID, 0, false)
+		w := newWatchModel(eventsPath, runID, 0, false)
 	return runModel{
 		watchModel: w,
 		sockPath:   sockPath,
@@ -398,6 +398,7 @@ func newRunModel(
 		stdinPipe:  stdinPipe,
 		meta:       meta,
 		metaPath:   metaPath,
+		inputBuf:   &strings.Builder{},
 	}
 }
 
