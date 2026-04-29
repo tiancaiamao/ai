@@ -445,6 +445,9 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		if err != nil {
 			return nil, fmt.Errorf("prefix lookup for %q: %w", idFlag, err)
 		}
+				if len(results) == 0 {
+			return nil, fmt.Errorf("no running run found matching %q", idFlag)
+		}
 		if len(results) == 1 {
 			m := results[0]
 			if !run.IsRunning(&m) {
