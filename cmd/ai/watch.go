@@ -280,6 +280,11 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "right", "l":
 			m.viewport.ScrollRight(scrollStep)
+		case "ctrl+f":
+			m.viewport.PageDown()
+			return m, nil
+		case "ctrl+b":
+			m.viewport.PageUp()
 			return m, nil
 		}
 
