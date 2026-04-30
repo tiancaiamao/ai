@@ -451,6 +451,12 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Enter input mode.
 			m.inputMode = true
 			return m, nil
+		case "left", "h":
+			m.viewport.ScrollLeft(scrollStep)
+			return m, nil
+		case "right", "l":
+			m.viewport.ScrollRight(scrollStep)
+			return m, nil
 		}
 	}
 
