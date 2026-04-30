@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	ansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/tiancaiamao/ai/pkg/run"
 )
@@ -154,25 +155,53 @@ func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool
 	return m
 }
 
+// scrollStep is the number of columns to scroll horizontally.
+const scrollStep = 6
+
+// wrapContent wraps the raw content string to the given width,
+// preserving ANSI escape codes. Each line is wrapped independently.
+func wrapContent(raw string, width int) string {
+	if width <= 0 {
+		return raw
+	}
+	lines := strings.Split(raw, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if line == "" {
+			continue
+		}
+		b.WriteString(ansi.Wrap(line, width, ""))
+	}
+	return b.String()
+}
+
+// syncContent applies word-wrapping to the raw content and pushes it
+// to the viewport, then scrolls to the bottom.
+func (m *watchModel) syncContent() {
+	if !m.ready {
+		return
+	}
+	wrapped := wrapContent(m.content.String(), m.width)
+	m.viewport.SetContent(wrapped)
+	m.viewport.GotoBottom()
+}
+
 func (m *watchModel) appendContent(text string) {
 	m.endInline()
 	m.content.WriteString(text)
 	m.content.WriteString("\n")
 	m.lines++
-	if m.ready {
-		m.viewport.SetContent(m.content.String())
-		m.viewport.GotoBottom()
-	}
+	m.syncContent()
 }
 
 // appendInline appends text to the current line without a newline.
 // Used for streaming deltas (thinking, text) that build up a single line.
 func (m *watchModel) appendInline(text string) {
 	m.content.WriteString(text)
-	if m.ready {
-		m.viewport.SetContent(m.content.String())
-		m.viewport.GotoBottom()
-	}
+	m.syncContent()
 }
 
 // ensureRole transitions the streaming role, matching ai-win's writeStream.
@@ -229,10 +258,7 @@ func (m *watchModel) endInline() {
 		m.lines++
 		m.inlineActive = false
 		m.currentRole = ""
-		if m.ready {
-			m.viewport.SetContent(m.content.String())
-			m.viewport.GotoBottom()
-		}
+		m.syncContent()
 	}
 }
 
@@ -249,6 +275,11 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "left", "h":
+			m.viewport.ScrollLeft(scrollStep)
+			return m, nil
+		case "right", "l":
+			m.viewport.ScrollRight(scrollStep)
 		case "ctrl+f":
 			m.viewport.PageDown()
 			return m, nil
@@ -263,12 +294,13 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		headerHeight := 1 // status bar
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, msg.Height-headerHeight)
-			m.viewport.SetContent(m.content.String())
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = msg.Height - headerHeight
 		}
+		// Re-wrap content to the new width.
+		m.syncContent()
 
 		case replayDone:
 		// Finished replaying history, switch to live mode.
