@@ -249,6 +249,12 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "ctrl+f":
+			m.viewport.PageDown()
+			return m, nil
+		case "ctrl+b":
+			m.viewport.PageUp()
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
