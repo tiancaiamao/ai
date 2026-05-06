@@ -82,7 +82,7 @@ If no `backends.yaml` is found, `ag` defaults to the `ai` backend.
 
 `ag` 是**内部执行层**，不是用户主交互层。
 
-- 用户接口：自然语言（由 `workflow` / `implement` 等 skill 承接）
+- 用户接口：自然语言（由 `brainstorm` / `plan` / `implement` 等 skill 承接）
 - `ag` 接口：供 agent 在后台调用
 
 默认规则：
@@ -203,10 +203,10 @@ Common mistake: passing a hand-written `--system` that is *worse* than the defau
 ag task create "Implement OAuth2" [--file spec.md]
 
 # Import from plan YAML
-ag task import-plan .workflow/artifacts/feature/PLAN.yml
+ag task import-plan tasks.yml
 
 # Import from plan YAML (two-phase: create all, then link deps)
-ag task import-plan PLAN.yml [--spec spec.md]
+ag task import-plan PLAN.yml [--design design.md]
 
 # List / filter
 ag task list [--status pending|claimed|done|failed]
@@ -301,11 +301,11 @@ Stale detection: if process PID is no longer alive but activity shows "running",
 6. repeat for next wave of unblocked tasks
 ```
 
-### workflow skill (worker-judge loop)
+### implement skill (worker-judge loop)
 
 ```
-1. ag agent spawn writer --system writer.md --input "write spec"
-2. ag agent spawn reviewer --system reviewer.md --input "review spec"
+1. ag agent spawn writer --system implementer.md --input "implement task"
+2. ag agent spawn reviewer --system reviewer.md --input "review code"
 3. loop:
    ag agent wait writer --timeout 300
    ag agent steer reviewer "$(ag agent output writer)"
