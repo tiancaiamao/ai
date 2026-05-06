@@ -134,6 +134,10 @@ func runSubcommand(binPath string) {
 	}
 
 	// TUI exited — clean up subprocess.
+	// Close stdin pipe first so the internal goroutine in cmd.Wait() can exit.
+	// Without this, cmd.Wait() blocks forever on the pipe reader goroutine.
+	stdinWriter.Close()
+
 	cmd.Process.Signal(syscall.SIGINT)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -148,7 +152,6 @@ func runSubcommand(binPath string) {
 			<-done
 		}
 	}
-	stdinWriter.Close()
 	eventsFile.Close()
 
 	// Update final status.
