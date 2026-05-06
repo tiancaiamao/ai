@@ -19,7 +19,7 @@ backends:
 
   codex:
     command: codex
-    args: ["exec", "--full-auto", "--json", "--skip-git-repo-check"]
+    args: ["exec", "--sandbox", "workspace-write", "--json", "--skip-git-repo-check"]
     protocol: raw
     supports:
       steer: false

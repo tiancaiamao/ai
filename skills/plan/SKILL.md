@@ -1,47 +1,39 @@
 ---
 name: plan
-description: 读 design.md，产出 tasks.yml（含 plan-lint 验证）。用 worker-judge loop 保证质量。
+description: 读取 design.md，产出 tasks.yml（含 plan-lint 验证）。任务拆解按 2-4 小时粒度，支持依赖关系和分组。
 ---
 
 # Plan
 
-读 `design.md`，产出 `tasks.yml` — 一个结构化的任务拆解，可以被 implement skill 消费。
+读取 `design.md`，产出 `tasks.yml`。
 
 ## When to Use
 
-- design.md 已通过 gate（`wf approve`）
-- 用户说 "拆解任务" / "plan this" / "写 plan"
-- 作为 brainstorm 之后的下一步
+- `design.md` 已完成并经用户确认
+- 用户说 "拆解任务" / "写 plan"
+- 作为 design → implement 的中间环节
 
 ## Input
 
-- `design.md`（必需 — 来自 brainstorm skill）
-- `.wf/state.json` 中 design phase 应该是 completed
+- `design.md`（required）
+- `CONTEXT.md`（可选，来自 explore 阶段）
 
 ## The Planning Process
 
-### Step 1: Read Design
+### Step 1: Read Inputs
 
-```bash
-# 确认 design phase 已完成
-wf status --json
-```
-
-读 `design.md`，理解方案。重点关注：
-- "怎么做" 部分 — 接口定义、调用链、文件列表
-- "现状" 部分 — 涉及哪些文件和数据结构
-- "边界条件" — 容易遗漏的 corner cases
+读 `design.md`。如果 `CONTEXT.md` 存在，也读取。不要重新 explore。
 
 ### Step 2: Generate tasks.yml
 
-使用 planner persona（`prompts/planner.md`）产出结构化计划。
+使用 planner persona 产出任务拆解。
 
-**tasks.yml structure:**
+**tasks.yml 结构:**
 
 ```yaml
 version: "1"
 metadata:
-  spec_file: "design.md"
+  spec_file: "design.md"  # 注意：字段名是 spec_file，值写 design.md
   created_at: "2026-05-06"
 
 tasks:
@@ -57,30 +49,29 @@ tasks:
 groups:
   - name: group-name
     title: "Group Title"
-    description: "What this group achieves"
-    tasks: ["T001", "T002"]
+    tasks: [T001, T002]
     commit_message: "feat(scope): description"
 
-group_order: ["group-name"]
-
+group_order: [group-name]
 risks:
   - area: "Area"
     risk: "What could go wrong"
     mitigation: "How to prevent it"
 ```
 
-### Step 3: Validate
+注意：`metadata.spec_file` 是 plan-lint 要求的字段名（历史遗留），值填写实际的 design.md 路径。
+
+### Step 3: Validate with plan-lint
 
 ```bash
-# plan-lint 校验格式、依赖、循环
 ~/.ai/skills/plan/bin/plan-lint tasks.yml
 ```
 
-lint 失败则修复 YAML 再跑，直到通过。
+如果 lint 失败，修复 YAML 并重跑直到 clean。
 
 ### Step 4: Review via Worker-Judge Loop
 
-使用 planner + reviewer persona（最多 3 轮）：
+使用 `pair.sh`（最多 3 轮）：
 
 ```bash
 ~/.ai/skills/ag/patterns/pair.sh \
@@ -91,20 +82,20 @@ lint 失败则修复 YAML 再跑，直到通过。
 ```
 
 Reviewer 检查：
-- design.md 中所有方案点是否被 task 覆盖
-- 依赖关系是否正确（无循环、无缺失 ID）
-- group 顺序是否尊重依赖
-- 是否有测试 task
+- design.md 的 5 个内容维度都被任务覆盖
+- 依赖正确（无循环、无缺失 ID）
+- group 顺序尊重依赖
+- 包含测试任务
 
-### Step 5: Render (optional)
+### Step 5: Render (可选)
 
 ```bash
 ~/.ai/skills/plan/bin/plan-render tasks.yml > PLAN.md
 ```
 
-### Step 6: Present & Gate
+### Step 6: Gate
 
-1. 向用户展示任务摘要（按 group）
+1. 向用户展示 tasks.yml 摘要
 2. 运行 `wf approve --message "<用户原话>"`
 3. 运行 `wf advance --output tasks.yml`
 4. 提示用户下一步：implement skill
@@ -113,14 +104,13 @@ Reviewer 检查：
 
 | Size | Hours | Action |
 |------|-------|--------|
-| Too big | > 6h | Break down |
-| Just right | 2-4h | Keep |
-| Too small | < 1h | Combine |
+| Too big | > 6h | Break down further |
+| Just right | 2-4h | Keep as is |
+| Too small | < 1h | Combine with related work |
 
 ## Grouping Principles
 
-按 **业务价值 / 用户故事** 分组，不是按技术层。
-每个 group 应产出可工作的增量。
+按 **user story / 业务价值** 分组，不是按技术层。每个 group 应产生可工作的增量。
 
 ❌ Bad: "models group" → "services group" → "API group"
 ✅ Good: "registration flow" → "email verification" → "activation"
@@ -129,22 +119,36 @@ Reviewer 检查：
 
 | Scope | Tasks | Strategy |
 |-------|-------|----------|
-| Small | 1-2 | implement 直接执行 |
-| Medium | 3-6 | group by story, serial or light parallel |
-| Large | 7+ | full fan-out with parallel workers per group |
+| Small | 1-2 | Agent executes directly |
+| Medium | 3-6 | Group by story, serial or light parallel |
+| Large | 7+ | Full fan-out with parallel workers per group |
+
+## Output
+
+- `tasks.yml` — 机器可读的任务列表
+- `PLAN.md` — 人类可读的渲染版本（可选）
+
+## Skill Composition
+
+```
+design → plan (this skill) → implement
+    or
+direct design → plan → implement
+```
 
 ## Tools
 
-- `~/.ai/skills/plan/bin/plan-lint <tasks.yml>` — 校验 YAML 格式、依赖、循环
-- `~/.ai/skills/plan/bin/plan-render <tasks.yml>` — 渲染为 markdown
-- `prompts/planner.md` — planner persona
-- `prompts/reviewer.md` — plan reviewer persona
+- `~/.ai/skills/plan/bin/plan-lint <tasks.yml>` — 验证 tasks.yml
+- `~/.ai/skills/plan/bin/plan-render <tasks.yml>` — 渲染 tasks.yml → PLAN.md
+- `~/.ai/skills/plan/prompts/planner.md` — planner persona
+- `~/.ai/skills/plan/prompts/reviewer.md` — plan reviewer persona
 
 ## ⛔ MANDATORY — Self-Check
 
 | 断言 | 触发条件 | 修正 |
 |------|----------|------|
-| design 未完成 | wf status 显示 design phase 不是 completed | 先完成 design + gate |
-| lint 失败 | plan-lint 返回非 0 | 修复 YAML 直到通过 |
-| 未 approve 就 advance | wf advance 返回错误 | 先展示给用户 + approve |
-| 缺少依赖关系 | tasks 之间有隐式依赖但没声明 | 补全 dependencies |
+| 未读设计 | 未读 design.md 就开始拆解 | 先读 design.md |
+| lint 未通过 | plan-lint 报错 | 修复后再继续 |
+| 未 approve 就 advance | `wf advance` 返回错误 | 先 `wf approve --message "用户原话"` |
+| self-approve | `--message` 不是用户说的话 | 等用户确认 |
+| 未展示产出就问确认 | tasks.yml 存在但未向用户展示 | 先展示摘要 |

@@ -368,7 +368,7 @@ func runBack(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Reset phases after target
+		// Reset phases after target
 	for i := target + 1; i < len(s.Phases); i++ {
 		s.Phases[i].Status = "pending"
 		s.Phases[i].Output = ""
@@ -377,6 +377,10 @@ func runBack(cmd *cobra.Command, args []string) {
 		s.Phases[i].ApproveMessage = ""
 	}
 
+	// Clear approval on target phase to force re-approval after rollback
+	s.Phases[target].GateApproved = false
+	s.Phases[target].ApprovedAt = ""
+	s.Phases[target].ApproveMessage = ""
 	s.Phases[target].Status = "active"
 	s.CurrentPhase = target
 	s.Status = "in_progress"

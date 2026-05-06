@@ -167,22 +167,29 @@ group 完成 = 所有 tasks 实现完毕 + review loop PASS + 已 commit
 
 ### 执行流程
 
+**方式 1（推荐）：让 reviewer 自己获取代码**
+
 ```
 ┌─ 所有 tasks 实现完毕
 │
 ▼
 ┌─ Worker-Judge Review Loop (最多 3 轮) ──────────┐
 │                                                   │
-│  1. 生成 diff: git diff (相对于上一个 group commit) │
+│  1. 确定基准: 上一个 group 的 commit hash      │
+│     （第一个 group 则为空树）                            │
 │  2. ag agent spawn reviewer                       │
 │     --system @/Users/genius/.ai/skills/review/reviewer.md │
-│     --input "Review diff: $DIFF_FILE"             │
+│     --input "Review code changes for group <name>.    │
+│              Compare current working tree with base     │
+│              commit: <COMMIT_HASH> (or empty for    │
+│              first group). Write result to             │
+│              /tmp/review-group-<name>.json"          │
 │  3. ag agent wait reviewer --timeout 300          │
 │  4. 读取 reviewer 输出                            │
 │                                                   │
 │  ┌─ 有 P0/P1 findings?                           │
 │  │  YES → 修复所有 P0/P1 问题                     │
-│  │        → 回到循环顶部，重新生成 diff + review   │
+│  │        → 回到循环顶部，重新 spawn reviewer      │
 │  │  NO  → PASS，退出循环 ✅                       │
 │  └──────────────────────────────────────────────┘
 │                                                   │
@@ -198,6 +205,20 @@ group 完成 = 所有 tasks 实现完毕 + review loop PASS + 已 commit
   ▼
   继续下一个 group
 ```
+
+**方式 2（备选）：显式传递 diff 文件**
+
+```
+1. 生成 diff: git diff <COMMIT_HASH> > /tmp/diff-group-<name>.diff
+2. ag agent spawn reviewer \
+     --system @/Users/genius/.ai/skills/review/reviewer.md \
+     --input "Review diff at /tmp/diff-group-<name>.diff. \
+              Write result to /tmp/review-group-<name>.json"
+3. ag agent wait reviewer --timeout 300
+4. 读取 reviewer 输出，后续同上
+```
+
+推荐使用方式 1 — reviewer 有 `read`、`bash` 工具，可以自己决定看哪些文件、看多少内容。
 
 ### 具体命令
 
