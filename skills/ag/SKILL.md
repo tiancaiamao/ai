@@ -212,8 +212,8 @@ ag task import-plan PLAN.yml [--spec spec.md]
 ag task list [--status pending|claimed|done|failed]
 
 # Claim / auto-claim next unblocked
-ag task claim <id> --as worker-1
-ag task next --as worker-1
+ag task claim <id> --claimant worker-1
+ag task next --claimant worker-1
 
 # Complete with structured result
 ag task done <id> --summary "completed successfully"
@@ -293,11 +293,12 @@ Stale detection: if process PID is no longer alive but activity shows "running",
 
 ```
 1. ag task import-plan PLAN.yml
-2. for each worker:
-     ag agent spawn worker-N --input "$(ag task next --as worker-N)"
-3. ag agent wait worker-1 worker-2 ...
-4. ag task done T001 --summary "$(ag agent output worker-1)"
-5. repeat for next wave of unblocked tasks
+2. Get next task: ID=$(ag task next --claimant worker-N)
+   Get description: ag task show $ID
+3. ag agent spawn worker-N --input "Task $ID: <title>\n<description>"
+4. ag agent wait worker-1 worker-2 ...
+5. ag task done T001 --summary "$(ag agent output worker-1)"
+6. repeat for next wave of unblocked tasks
 ```
 
 ### workflow skill (worker-judge loop)
