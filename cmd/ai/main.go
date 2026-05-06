@@ -44,9 +44,15 @@ func main() {
 	// Save original binary path before we mutate os.Args.
 	binPath := os.Args[0]
 
-	// If no arguments at all, or first arg looks like a flag, fall back to
-	// deprecated --mode based dispatch for backward compatibility.
-	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
+	// If no arguments at all, print help text.
+	if len(os.Args) < 2 {
+		printUsage()
+		return
+	}
+
+	// If first arg looks like a flag, fall back to deprecated --mode
+	// based dispatch for backward compatibility.
+	if strings.HasPrefix(os.Args[1], "-") {
 		deprecatedModeDispatch()
 		return
 	}
