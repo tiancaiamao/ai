@@ -1,6 +1,6 @@
 module github.com/tiancaiamao/ai/win
 
-go 1.24.0
+go 1.24.2
 
 require (
 	github.com/sminez/ad/win v0.0.0-20260211034838-14a2a7a40d33
