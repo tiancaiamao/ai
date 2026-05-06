@@ -114,6 +114,10 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		if contextLines > 0 {
 			cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 		}
+		// Pass -m to rg so it stops early instead of producing unlimited output.
+		// Post-processing limitMatches() is still applied as a safety net.
+		cmdArgs = append(cmdArgs, "-m", strconv.Itoa(limit))
+
 		if filePattern, ok := args["filePattern"].(string); ok && filePattern != "" {
 			cmdArgs = append(cmdArgs, "--glob", filePattern)
 		}
@@ -133,6 +137,9 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		if contextLines > 0 {
 			cmdArgs = append(cmdArgs, "-C", strconv.Itoa(contextLines))
 		}
+		// grep doesn't have -m with context lines (it counts context too),
+		// so we rely on post-processing limitMatches() for the fallback path.
+
 		if filePattern, ok := args["filePattern"].(string); ok && filePattern != "" {
 			cmdArgs = append(cmdArgs, "--include", filePattern)
 		}
@@ -227,42 +234,55 @@ func limitMatches(output string, maxMatches int) string {
 // In rg/grep output with context:
 //   - match lines:    "filepath:123:content"
 //   - context lines:  "filepath-123-content"
+//
+// Strategy: find the rightmost occurrence of :\d+: or -\d+- in the line.
+// The line number field is always the last such pattern before the content,
+// so the rightmost match determines the line type. This correctly handles
+// filenames containing dash-number patterns like "report-2024-01.txt".
 func isContextLine(line string) bool {
-	// Empty lines are context
+	// Empty lines and group separators are context
 	if line == "" || line == "--" {
 		return true
 	}
-	// Context lines use '-' between line number and content
-	// Match lines use ':' between line number and content
-	// We need to find the second delimiter to distinguish
-	// Format: path<sep>lineNum<sep>content
-	// For context: path-line_num-content
-	// For match:   path:line_num:content
 
-	// Find the last occurrence of ": " or "- " that looks like a line-number separator
-	// Simple heuristic: if the line contains "-<digits>-" it's likely a context line
-	// More robust: check if after splitting on the separator, we get a valid line number
+	// Track the rightmost position of each separator type
+	lastMatchPos := -1   // position of :\d+: pattern
+	lastContextPos := -1 // position of -\d+- pattern
 
-	// Try to find a "-" separator pattern that looks like context
-	// Context line format: path-digit(s)-content (where digit part is a number)
 	for i := 0; i < len(line); i++ {
-		if line[i] == '-' {
-			// Check if what follows looks like a number
-			j := i + 1
-			if j < len(line) && line[j] >= '0' && line[j] <= '9' {
-				// Scan the number
-				k := j
-				for k < len(line) && line[k] >= '0' && line[k] <= '9' {
-					k++
-				}
-				// After the number, check for '-' (context) or ':' (match)
-				if k < len(line) && line[k] == '-' {
-					return true
-				}
-				return false
+		ch := line[i]
+		if ch != ':' && ch != '-' {
+			continue
+		}
+		// Check if followed by digits then same separator
+		j := i + 1
+		if j >= len(line) || line[j] < '0' || line[j] > '9' {
+			continue
+		}
+		// Scan the number
+		k := j
+		for k < len(line) && line[k] >= '0' && line[k] <= '9' {
+			k++
+		}
+		// After the number, the separator must match the one we started with
+		if k < len(line) && line[k] == ch {
+			if ch == ':' {
+				lastMatchPos = i
+			} else {
+				lastContextPos = i
 			}
 		}
 	}
+
+	// The rightmost separator pattern determines the type.
+	// If a match separator (:) appears after any context separator, it's a match.
+	if lastMatchPos >= 0 && lastMatchPos > lastContextPos {
+		return false
+	}
+	if lastContextPos >= 0 {
+		return true
+	}
+	// No recognized pattern — treat as match line (not context)
 	return false
 }
 

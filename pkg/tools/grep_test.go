@@ -225,6 +225,37 @@ func TestGrepTool_PathExpansion(t *testing.T) {
 	}
 }
 
+func TestIsContextLine(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		// Empty and separator lines
+		{"", true},
+		{"--", true},
+		// Match lines (colon separators)
+		{"file.txt:10:content here", false},
+		{"path/to/file.go:42:func main()", false},
+		// Context lines (dash separators)
+		{"file.txt-10-context here", true},
+		{"path/to/file.go-42-func main()", true},
+		// Edge case: filename with dash-number pattern should NOT be misidentified
+		// as a context line when it's actually a match line
+		{"report-2024-01.txt:5:some content", false},
+		{"data-123-v2.go:7:package main", false},
+		// Edge case: context line with dash in filename
+		{"report-2024-01.txt-5-context here", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			got := isContextLine(tt.line)
+			if got != tt.want {
+				t.Errorf("isContextLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGrepTool_AllParametersCombined(t *testing.T) {
 	tool, _ := setupGrepTest(t)
 
