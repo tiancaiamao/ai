@@ -73,8 +73,7 @@ tools: [bash]
 ### Review PR (codex backend)
 
 ```bash
-export HTTP_PROXY=http://127.0.0.1:8119
-export HTTPS_PROXY=http://127.0.0.1:8119
+# Proxy env is handled automatically by ag for codex backend
 cp /Users/genius/.ai/skills/ag/backends.yaml /tmp/
 cd /tmp
 
@@ -147,7 +146,6 @@ ag agent rm reviewer-$PR_NUM
 | 无变更 | 输出 "No changes to review" |
 | Agent 超时 | 增加 `ag agent wait --timeout` 或简化 review 范围 |
 | JSON 解析失败 | 尝试修复 JSON 或要求 agent 重试 |
-| Codex 连接超时 | ⛔ 检查 `HTTP_PROXY` / `HTTPS_PROXY` 是否已 export |
 | `unknown backend "codex"` | `backends.yaml` 不在 CWD。`cp ~/.ai/skills/ag/backends.yaml ./` |
 | `ag ls` 显示 backend 为 `ai` | 回到 spawn 时的 CWD 查看 |
 | Codex agent 无活动 | 检查 `stderr`：`cat .ag/agents/<id>/stderr`，常见原因是代理未设置 |

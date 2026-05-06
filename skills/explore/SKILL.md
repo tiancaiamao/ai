@@ -12,7 +12,8 @@ description: Explore codebases, repositories, or topics and collect key informat
 **当用户触发 explore 技能时，你（调度 agent）必须通过 `ag` 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
 
 原因：
-- 子 agent 在独立 tmux 会话中运行，不阻塞主对话
+- 子 agent 作为独立的后台进程运行，不阻塞主对话
+- `ag agent spawn` 使用 detached process 架构，每个 agent 独立运行
 - 可以并行派生多个子 agent 同时探索不同目标
 - explorer.md persona 指导子 agent 按标准格式输出
 
@@ -50,7 +51,12 @@ mkdir -p "$TARGET_PROJECT/explorer"
 
 ### Step 2: 派生子 agent
 
-⚠️ **重要**：`--cwd` 必须传被探索项目的路径，否则子 agent 会在当前 shell 的 CWD 下运行，导致探索错误的项目。
+⚠️ **重要 - 直接调用 ag，不要用 tmux 包装**：
+- `ag agent spawn` 本身会在后台创建 detached process，不需要额外的 tmux 层
+- ❌ 错误：`tmux new-session -d "ag agent spawn ..."`
+- ✅ 正确：直接在 bash 中执行 `ag agent spawn ...`
+
+⚠️ **`--cwd` 必须传被探索项目的路径**，否则子 agent 会在当前 shell 的 CWD 下运行，导致探索错误的项目。
 
 ```bash
 # 单目标探索
@@ -80,10 +86,15 @@ $AG_BIN agent spawn explore-rpc \
 ### Step 3: 等待并收集
 
 ```bash
-# 等待完成
+# 等待 agent 完成（不是等待 tmux session）
+# --timeout 单位是秒，探索任务建议 600-900 秒
 $AG_BIN agent wait explore-<TARGET> --timeout 600
 
 # 查看结果（输出已写入 $TARGET_PROJECT/explorer/<target>.md，由子 agent 直接写文件）
+# 如果需要查看 agent 的完整输出：
+# $AG_BIN agent output explore-<TARGET>
+
+# 清理 agent（agent 必须先达到 terminal 状态：done/failed/killed）
 $AG_BIN agent rm explore-<TARGET>
 ```
 
@@ -198,12 +209,14 @@ $AG_BIN agent output explore-<TARGET>
 ### 清理
 
 ```bash
-# 清理 agent 元数据（也清理 tmux 会话）
+# 清理 agent 元数据（ag agent 会自动清理自己的后台进程）
 $AG_BIN agent rm explore-<TARGET>
-
-# 如果 agent rm 后 tmux 会话仍残留，手动清理
-tmux kill-session -t ag-explore-<TARGET> 2>/dev/null
 ```
+
+⚠️ **不需要手动清理 tmux session**：
+- `ag agent spawn` 使用 detached process，不创建 tmux session
+- `ag agent rm` 会清理 agent 相关的所有进程和文件
+- 如果需要强制清理仍在运行的 agent：`$AG_BIN agent rm --force explore-<TARGET>`
 
 ## 流程定位
 
