@@ -58,7 +58,6 @@ This means:
 │  │  LLMContext: string          — task state (LLM-managed)  │ │
 │  │  RecentMessages: []AgentMessage                          │ │
 │  │  AgentState: *AgentState     — system metadata           │ │
-│  │  PostCompactRecovery: bool   — signal for next turn      │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                           │                                   │
 │                           ▼                                   │
@@ -127,7 +126,7 @@ type AgentContext struct {
     AgentState     *AgentState    // System-maintained metadata
 
     LastCompactionSummary string
-    PostCompactRecovery   bool       // Inject LLMContext after compact
+    LLMContext       string      // Structured context content (injected when non-empty)
 
     OnCompactEvent func(*CompactEventDetail) error
 }
@@ -255,7 +254,7 @@ The heavy action. Delegates to the full `compact.Compactor` which:
 3. Replaces `RecentMessages` with: summary message + kept recent messages
 4. Preserves `LLMContext` — never overwritten (it is managed by the LLM via `update_llm_context`)
 
-After compact, `PostCompactRecovery=true` is set, causing the next turn to inject `LLMContext` content into the LLM messages so the agent recovers task continuity.
+After compact, `LLMContext` is injected into the next LLM call so the agent recovers task continuity.
 
 ### 6.4 no_action (`pkg/tools/context_mgmt/no_action.go`)
 
@@ -392,7 +391,7 @@ threshold = contextWindow - systemPromptTokens - 3000(tool defs) - ReserveTokens
 
 4. **Append-only journal, periodic snapshots** — `messages.jsonl` is append-only. Checkpoints provide efficient recovery points. Reconstruction replays journal entries after checkpoint.
 
-5. **Post-compact recovery** — After compaction, `PostCompactRecovery=true` causes the next LLM call to inject `LLMContext` content so the agent recovers task continuity immediately.
+5. **LLM Context injection** — `LLMContext` content is always injected into LLM requests when non-empty, so the agent maintains task continuity after compaction or context updates.
 
 6. **Protected recent messages** — The last 5 messages are never truncated, ensuring the agent always has its most recent context.
 

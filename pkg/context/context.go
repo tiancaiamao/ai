@@ -23,10 +23,6 @@ type AgentContext struct {
 	// Compaction state
 	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
 
-	// PostCompactRecovery indicates that overview.md should be injected for recovery after compact.
-	// Set after compact completes, reset after injection.
-	PostCompactRecovery bool `json:"-"`
-
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`

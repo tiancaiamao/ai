@@ -281,8 +281,6 @@ Test task for post-compact recovery`
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
 	agentCtx.LLMContext = llmContextContent
-	// Simulate post-compact recovery state
-	agentCtx.PostCompactRecovery = true
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("continue"))
 
 	config := &LoopConfig{
@@ -323,12 +321,7 @@ Test task for post-compact recovery`
 	}
 
 	if !foundLLMContext {
-		t.Fatalf("expected llm_context to be injected after compact (PostCompactRecovery=true)")
-	}
-
-	// Verify flag was reset
-	if agentCtx.PostCompactRecovery {
-		t.Fatalf("expected PostCompactRecovery to be reset to false after injection")
+		t.Fatalf("expected llm_context to be injected whenever LLMContext is non-empty")
 	}
 }
 
