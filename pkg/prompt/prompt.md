@@ -51,8 +51,7 @@ For detailed guidelines and templates, check available skills.
 
 **For investigation/debugging tasks:**
 - Use `grep` first to locate relevant code (search for error messages, function names, patterns)
-- Only read files after grep identifies relevant locations
-- Avoid reading entire codebases blindly — target your investigation
+- grep tool supports context lines, ignore case, and literal mode — prefer it over `bash grep`
 
 **For implementation tasks:**
 - Read relevant files to understand context
