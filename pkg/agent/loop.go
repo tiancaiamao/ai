@@ -504,7 +504,7 @@ func runInnerLoop(
 		// Update AgentState with token usage after successful LLM response
 		if msg.Usage != nil && msg.Usage.TotalTokens > 0 {
 			// Use context window from config if available, otherwise use a default
-			const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+			const defaultContextWindow = 200000
 			tokensMax := defaultContextWindow
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
@@ -846,7 +846,7 @@ func streamAssistantResponse(
 	}
 
 	// Block B: runtime_state telemetry — always, from turn 1.
-	const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+	const defaultContextWindow = 200000
 	tokensMax := defaultContextWindow
 	if config.ContextWindow > 0 {
 		tokensMax = config.ContextWindow
