@@ -2,16 +2,18 @@
 
 ## Overview
 
-This document outlines the testing strategy for the `ai` project, covering unit tests, integration tests, regression tests, and E2E (end-to-end) tests.
+This document outlines the testing strategy for the `ai` project, covering unit tests, integration tests, regression tests, and E2E benchmark tests.
 
 ## Test Pyramid
 
 ```
-        E2E Tests (74 benchmark tasks)
+        E2E Benchmark Tests (benchmark/)
               ↓
       Integration Tests
               ↓
         Unit Tests
+              ↓
+    Regression Tests (guardrails)
 ```
 
 ## Layer 1: Unit Tests (Fast, Focused)
@@ -20,35 +22,49 @@ This document outlines the testing strategy for the `ai` project, covering unit 
 
 Test individual functions and methods in isolation.
 
-### Target Coverage
+### Key Test Files
 
-- **pkg/agent**: 71.2% → 80%
-- **pkg/prompt**: 77.5% → 80%
-- **pkg/skill**: 74.6% → 80%
-- **pkg/tools**: 35.4% → 60%
-- **pkg/rpc**: 24.8% → 50%
-- **pkg/context**: 37.0% → 60%
-- **pkg/llm**: 38.1% → 60%
-
-### Examples
-
-- `pkg/agent/agent_test.go`: Agent lifecycle
-- `pkg/agent/loop_test.go`: Loop behavior
-- `pkg/context/compactor_test.go`: Compaction logic
-- `pkg/tools/bash_test.go`: Bash tool timeout
-- `pkg/tools/executor_test.go`: Tool execution
-
-### When to Write
-
-- Implementing new business logic
-- Fixing bugs (test first)
-- Refactoring code
-- Adding new guardrails
+| Package | Test File | Focus |
+|---------|-----------|-------|
+| `pkg/agent` | `agent_test.go` | Agent lifecycle, config |
+| `pkg/agent` | `loop_test.go` | Loop behavior, telemetry |
+| `pkg/agent` | `executor_test.go` | Tool execution pool |
+| `pkg/agent` | `tool_output_test.go` | Output normalization |
+| `pkg/agent` | `tool_guard_test.go` | Guard rail enforcement |
+| `pkg/agent` | `tool_call_normalize_test.go` | Tool call parsing |
+| `pkg/agent` | `result_test.go` | Result processing |
+| `pkg/agent` | `error_stack_test.go` | Error chain tracking |
+| `pkg/agent` | `checkpoint_manager_test.go` | Checkpoint management |
+| `pkg/compact` | `compact_test.go` | Compaction logic |
+| `pkg/compact` | `context_management_test.go` | LLM-driven context management |
+| `pkg/compact` | `compact_tool_pairing_test.go` | Compact tool integration |
+| `pkg/config` | `config_test.go` | Configuration loading |
+| `pkg/config` | `auth_test.go` | API key resolution |
+| `pkg/config` | `models_test.go` | Model spec handling |
+| `pkg/context` | `checkpoint_test.go` | Checkpoint save/load |
+| `pkg/llm` | `client_test.go` | LLM client |
+| `pkg/llm` | `errors_test.go` | Error classification |
+| `pkg/prompt` | `builder_test.go` | Prompt construction |
+| `pkg/rpc` | `server_test.go` | RPC server |
+| `pkg/session` | `session_test.go` | Session CRUD |
+| `pkg/session` | `lazy_test.go` | Lazy loading |
+| `pkg/session` | `compaction_test.go` | Session compaction |
+| `pkg/skill` | `skill_test.go` | Skill loading |
+| `pkg/skill` | `integration_test.go` | Skill discovery |
+| `pkg/tools` | `bash_timeout_test.go` | Bash timeout handling |
+| `pkg/tools` | `bash_sleep_test.go` | Sleep detection |
+| `pkg/tools` | `grep_test.go` | Grep tool |
+| `pkg/tools` | `read_test.go` | Read tool |
+| `pkg/tools` | `hashline_test.go` | Hashline mode |
+| `pkg/traceevent` | `trace_test.go` | Trace recording |
+| `pkg/traceevent` | `slog_bridge_test.go` | Log bridge |
+| `pkg/traceevent` | `config_selectors_test.go` | Event configuration |
+| `pkg/truncate` | `truncate_test.go` | Output truncation |
 
 ### Running Unit Tests
 
 ```bash
-# Run all unit tests
+# Run all tests
 go test ./...
 
 # Run specific package
@@ -56,41 +72,45 @@ go test ./pkg/agent -v
 
 # Run with coverage
 go test -coverprofile=coverage.out ./...
-
-# Generate HTML coverage report
 go tool cover -html=coverage.out -o coverage.html
 
-# Check coverage for specific package
-go test -cover ./pkg/agent
+# Run a single test
+go test -run TestRegression001 ./pkg/agent -v
 ```
 
-## Layer 2: Integration Tests (Medium, Realistic)
+## Layer 2: Integration Tests
 
 ### Purpose
 
-Test component interactions.
+Test component interactions within the agent system.
 
-### Target Coverage
+### Key Test Files
 
-- Agent + Tools integration
-- RPC handlers + Agent
-- Workflow + Orchestrate
-- Task scheduling and dependencies
-- Human-in-the-loop checkpoints
-
-### Examples
-
-- `pkg/agent/agent_integration_test.go`: Agent with tools
-- `skills/workflow/orchestrate/integration_test.go`: Workflow execution
-- RPC handler integration tests
-- Session persistence tests
-
-### When to Write
-
-- Adding new integration points
-- Changing component interfaces
-- Testing error paths
-- Validating cross-component behavior
+| Test File | Focus |
+|-----------|-------|
+| `pkg/agent/agent_integration_test.go` | Agent + tools + session |
+| `pkg/agent/agent_stress_test.go` | Concurrent agent operations |
+| `pkg/agent/loop_stream_integration_test.go` | Streaming + loop interaction |
+| `pkg/agent/loop_recovery_test.go` | Error recovery flows |
+| `pkg/agent/loop_empty_response_test.go` | Empty response handling |
+| `pkg/agent/loop_tool_parallel_test.go` | Parallel tool execution |
+| `pkg/agent/conversion_visibility_test.go` | Message visibility filtering |
+| `pkg/agent/llm_context_test.go` | LLM context lifecycle |
+| `pkg/agent/runtime_meta_test.go` | Runtime telemetry |
+| `pkg/agent/metrics_trace_test.go` | Metrics via trace events |
+| `pkg/session/compact_event_test.go` | Session compaction events |
+| `pkg/skill/integration_test.go` | Skill loading integration |
+| `cmd/ai/integration_test.go` | Full CLI integration |
+| `cmd/ai/session_writer_test.go` | Session writer compaction |
+| `cmd/ai/traceevent_handler_test.go` | Trace event handling |
+| `cmd/ai/kill_test.go` | Agent lifecycle (kill) |
+| `cmd/ai/ls_test.go` | Run listing |
+| `cmd/ai/watch_test.go` | Watch TUI |
+| `pkg/run/conv_test.go` | Run metadata conversion |
+| `pkg/run/socket_test.go` | Socket server |
+| `pkg/run/meta_test.go` | Run metadata |
+| `skills/ag/cmd/backend_integration_test.go` | ag backend integration |
+| `skills/ag/internal/*/...` | ag internal package tests |
 
 ### Running Integration Tests
 
@@ -98,54 +118,39 @@ Test component interactions.
 # Run integration tests
 go test -v ./pkg/agent -run Integration
 
-# Run workflow integration tests
-go test -v ./skills/workflow/orchestrate
+# Run stress tests
+go test -v ./pkg/agent -run Stress
+
+# Run full agent tests (includes LLM calls, may be slow)
+go test -v ./pkg/agent -run Agent
 ```
 
-## Layer 3: Regression Tests (Critical, Must Pass)
+## Layer 3: Regression Tests (Guardrails)
 
 ### Purpose
 
-Prevent regression of historical bugs.
+Prevent regression of critical safety and behavior properties.
 
-### Target
+### Test File
 
-**100% pass rate** - All regression tests must pass.
+`pkg/agent/regression_test.go`
 
-### Test Categories
+### Regression Test Suite
 
-#### 1. Guardrail Configuration Tests (`pkg/agent/regression_test.go`)
-
-Ensure all guardrails are properly configured and enforced:
-
-- `TestRegression001_MaxConsecutiveToolCalls`: Prevent infinite tool call loops
-- `TestRegression002_AutoCompactConfiguration`: Context overflow recovery
-- `TestRegression003_ToolCallCutoffConfiguration`: Stale tool output truncation
-- `TestRegression004_MaxToolCallsPerName`: Prevent tool abuse
-- `TestRegression005_MaxTurnsConfiguration`: Prevent runaway conversations
-- `TestRegression006_ContextWindowConfiguration`: Enforce context limits
-- `TestRegression007_LLMRetryConfiguration`: Retry on rate limit errors
-- `TestRegression008_ToolOutputLimits`: Large output truncation
-- `TestRegression009_ExecutorPoolConfiguration`: Tool execution limits
-- `TestRegression010_EnableCheckpointConfiguration`: Checkpoint control
-- `TestRegression011_LLMTimeoutConfiguration`: LLM call timeouts
-- `TestRegression012_RuntimeMetaConfiguration`: Runtime meta updates
-
-#### 2. Behavior Regression Tests
-
-Test that specific behaviors don't regress:
-
-- Tool execution with timeout
-- Context compaction triggers
-- State persistence
-- Error recovery
-- Graceful degradation
-
-### When to Write
-
-- **Immediately after fixing a bug**: Add test to prevent regression
-- Before refactoring guardrails
-- When adding new safety features
+| Test | What It Guards |
+|------|---------------|
+| `TestRegression001_MaxConsecutiveToolCalls` | Prevent infinite tool call loops |
+| `TestRegression002_AutoCompactConfiguration` | Context overflow recovery |
+| `TestRegression003_ToolCallCutoffConfiguration` | Stale tool output truncation |
+| `TestRegression004_MaxToolCallsPerName` | Prevent tool abuse |
+| `TestRegression005_MaxTurnsConfiguration` | Prevent runaway conversations |
+| `TestRegression006_ContextWindowConfiguration` | Enforce context limits |
+| `TestRegression007_LLMRetryConfiguration` | Retry on rate limit errors |
+| `TestRegression008_ToolOutputLimits` | Large output truncation |
+| `TestRegression009_ExecutorPoolConfiguration` | Tool execution concurrency |
+| `TestRegression010_EnableCheckpointConfiguration` | Checkpoint control |
+| `TestRegression011_LLMTimeoutConfiguration` | LLM call timeouts |
+| `TestRegression012_RuntimeMetaConfiguration` | Runtime meta updates |
 
 ### Running Regression Tests
 
@@ -155,323 +160,85 @@ go test -v -run TestRegression ./...
 
 # Run specific regression test
 go test -v -run TestRegression001 ./pkg/agent
-
-# In CI: All regression tests must pass
 ```
 
-## Layer 4: E2E Tests (Slow, Realistic)
+**Rule:** All regression tests must pass before merging. 100% pass rate required.
+
+## Layer 4: E2E Benchmark Tests
 
 ### Purpose
 
-Test complete workflows and agent behaviors.
+Test complete agent behaviors with real LLM interactions.
 
 ### Test Suite
 
-74 benchmark tasks under `benchmark/tasks/`:
+Located under `benchmark/`:
 
-| Category | Tasks | Focus |
-|----------|-------|-------|
-| Agent Behavior | agent_001-010 | Exploration, debugging, memory |
-| Context Management | agent_004, 010, 011 | Overflow, compaction |
-| Tool Usage | agent_006 | Tool traps, misuse |
-| Performance | agent_008 | Budget management |
-| Code Generation | 001-013 | Various scenarios |
+| Category | Focus |
+|----------|-------|
+| Agent Behavior | Exploration, debugging, memory |
+| Context Management | Overflow, compaction |
+| Tool Usage | Tool traps, misuse |
+| Performance | Budget management |
+| Code Generation | Various scenarios |
 
-### Test Organization
-
-#### Agent Behavior Tests (agent_001-010)
-
-- `agent_001_forced_exploration`: Force agent to use grep efficiently
-- `agent_002_debugging_session`: Debug complex issues
-- `agent_003_...`: (various behavior tests)
-- `agent_010_compact_tool_call_mismatch`: Context compaction edge cases
-
-#### Context Management Tests
-
-- `agent_004_*`: Context overflow handling
-- `agent_010_*`: Compaction strategies
-- `agent_011_*`: Context window enforcement
-
-#### Tool Usage Tests
-
-- `agent_006_*`: Tool traps and misuse patterns
-- Tool execution with edge cases
-
-#### Performance Tests
-
-- `agent_008_*`: Budget and resource management
-- Token estimation accuracy
-- Cost enforcement
-
-### Running E2E Tests
+### Running Benchmark Tests
 
 ```bash
-# Run all E2E tests
-go test ./benchmark/...
-
-# Run fast subset (< 10 min)
-go test -fast ./benchmark/...
-
-# Run specific test
-go test -v ./benchmark/tasks/agent_001_forced_exploration
-
-# Run with manifest (subset of tasks)
-go test -manifest=fast-manifest.json ./benchmark/...
-```
-
-## Test Metrics
-
-### Coverage Targets
-
-| Package | Current | Target | Priority |
-|---------|---------|--------|----------|
-| pkg/agent | 71.2% | 80% | High |
-| pkg/prompt | 77.5% | 80% | Medium |
-| pkg/skill | 74.6% | 80% | Medium |
-| pkg/tools | 35.4% | 60% | High |
-| pkg/rpc | 24.8% | 50% | High |
-| pkg/context | 37.0% | 60% | High |
-| pkg/llm | 38.1% | 60% | Medium |
-
-### Pass Rate Targets
-
-- **Regression tests**: 100% (must pass)
-- **Unit tests**: >95%
-- **Integration tests**: >90%
-- **E2E tests (fast subset)**: >90%
-
-## Continuous Integration
-
-### Test Pipeline
-
-```yaml
-# CI Pipeline (example)
-
-stages:
-  - unit_tests:
-      - go test -cover ./...
-      - go tool cover -func=coverage.out
-      - Verify coverage >= targets
-
-  - regression_tests:
-      - go test -run TestRegression ./...
-      - Verify 100% pass rate
-
-  - integration_tests:
-      - go test ./pkg/agent -run Integration
-      - go test ./skills/workflow/orchestrate
-
-  - e2e_tests:
-      - go test -fast ./benchmark/...
-      - go test -manifest=fast-manifest.json ./benchmark/...
-```
-
-### Pre-Commit Checks
-
-```bash
-#!/bin/bash
-# scripts/pre-commit.sh
-
-# Run unit tests for changed packages
-go test ./$(changed_packages) -cover
-
-# Run regression tests (must pass)
-go test -run TestRegression ./...
-
-# Quick smoke test
-go test -run TestSmoke ./...
-```
-
-## Test Tools
-
-### Go Test Flags
-
-```bash
--v              # Verbose output
--cover          # Enable coverage
--coverprofile=  # Write coverage profile
--race           # Race detection
--parallel=      # Parallel execution
--count=1        # Run tests once (disable caching)
--timeout=       # Test timeout
--short          # Skip long tests
-```
-
-### Coverage Tools
-
-```bash
-# Generate coverage
-go test -coverprofile=coverage.out ./...
-
-# View coverage
-go tool cover -html=coverage.out -o coverage.html
-open coverage.html
-
-# Check coverage percentage
-go tool cover -func=coverage.out | grep total
-
-# Check specific package
-go tool cover -func=coverage.out | grep pkg/agent
-```
-
-### Benchmark Tests
-
-```bash
-# Run benchmarks
-go test -bench=. -benchmem ./...
-
-# Compare benchmarks
-go test -bench=. -benchmem ./... > old.txt
-# Make changes
-go test -bench=. -benchmem ./... > new.txt
-benchcmp old.txt new.txt
+# Run benchmark suite (requires API key, slow)
+cd benchmark && ./run.sh
 ```
 
 ## Test Best Practices
 
-### Unit Tests
+### When to Write Tests
 
-✅ **Do:**
-- Test single behavior per test
-- Use descriptive test names
-- Test happy paths and error paths
-- Use table-driven tests for multiple cases
-- Mock external dependencies
-- Test edge cases
+- **Unit test**: New business logic, bug fixes (test first), refactoring
+- **Integration test**: New integration points, interface changes, error paths
+- **Regression test**: Immediately after fixing a bug — prevent recurrence
+- **E2E test**: Complete workflow validation
 
-❌ **Don't:**
-- Test multiple behaviors in one test
-- Depend on external services
-- Test implementation details (test behavior instead)
-- Skip error cases
-- Use timeouts as primary test mechanism
+### Naming Conventions
 
-### Integration Tests
+- Unit tests: `Test<Component>_<Behavior>` (e.g., `TestAgent_Prompt`)
+- Regression tests: `TestRegression<NNN>_<Description>`
+- Integration tests: `Test<Feature>Integration` or file suffix `_integration_test.go`
 
-✅ **Do:**
-- Test component interactions
-- Use realistic data
-- Test error paths
-- Clean up after tests
-- Use test fixtures
-
-❌ **Don't:**
-- Test implementation details of internal components
-- Depend on external LLM (use mocks)
-- Skip cleanup
-- Test too many components at once
-
-### Regression Tests
-
-✅ **Do:**
-- Add test immediately after fixing bug
-- Test the specific bug scenario
-- Make test deterministic
-- Add comments explaining the bug
-- Run before merging any PR
-
-❌ **Don't:**
-- Skip regression tests
-- Remove tests when refactoring (update instead)
-- Make tests flaky (avoid timeouts, race conditions)
-
-### E2E Tests
-
-✅ **Do:**
-- Test complete workflows
-- Use representative scenarios
-- Document test purpose
-- Organize by category
-- Use timeouts appropriately
-
-❌ **Don't:**
-- Run too many tests in CI (use manifests)
-- Make tests too slow (target <10min for fast subset)
-- Skip tests silently
-
-## Test Maintenance
-
-### Adding Tests
-
-1. Write test first (TDD)
-2. Watch it fail
-3. Implement minimal code to pass
-4. Refactor
-5. Run full test suite
-
-### Updating Tests
-
-1. When behavior changes intentionally:
-   - Update test to match new behavior
-   - Document why behavior changed
-
-2. When fixing bugs:
-   - Add regression test
-   - Fix code to pass test
-   - Run full test suite
-
-### Removing Tests
-
-- Only remove tests when:
-  - Feature is being removed
-  - Test is redundant (document reason)
-  - Test is incorrect (replace with correct test)
-
-## Test Documentation
-
-### Test Comments
+### Test Patterns
 
 ```go
-// TestRegression001_MaxConsecutiveToolCalls tests that MaxConsecutiveToolCalls prevents infinite loops
-//
-// Bug: Agent gets stuck in tool call loop without progress
-// Fix: Added MaxConsecutiveToolCalls limit in LoopConfig
-func TestRegression001_MaxConsecutiveToolCalls(t *testing.T) {
-    // ...
+// Table-driven tests
+func TestToolNormalization(t *testing.T) {
+    tests := []struct{
+        name string
+        input string
+        want string
+    }{
+        {"basic", "hello", "hello"},
+        {"truncated", longString, truncatedResult},
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got := normalize(tt.input)
+            assert.Equal(t, tt.want, got)
+        })
+    }
 }
 ```
 
-### Test Files
+## CI Pipeline
 
-- Organize tests alongside code (e.g., `agent_test.go`)
-- Use `*_test.go` suffix
-- Keep tests readable and maintainable
+### Stages
 
-## Troubleshooting
+1. **Unit tests**: `go test -cover ./...`
+2. **Regression tests**: `go test -run TestRegression ./...`
+3. **Integration tests**: `go test -v ./pkg/agent -run Integration`
+4. **E2E tests**: `cd benchmark && ./run.sh` (scheduled, not per-PR)
 
-### Flaky Tests
+### Pre-Commit
 
-Symptoms: Test passes sometimes, fails others.
-
-Solutions:
-- Remove randomness or use seeded random
-- Remove dependencies on timing
-- Use synchronization primitives
-- Add proper cleanup
-
-### Slow Tests
-
-Symptoms: Tests take too long to run.
-
-Solutions:
-- Use mocks instead of real LLM
-- Reduce test data size
-- Parallelize independent tests
-- Run only affected tests in CI
-
-### Coverage Not Improving
-
-Symptoms: Adding tests doesn't increase coverage.
-
-Solutions:
-- Check if tests are actually running
-- Verify tests are testing new code paths
-- Use `-coverprofile` to see what's not covered
-- Focus on untested critical paths
-
-## References
-
-- Go testing: https://golang.org/pkg/testing/
-- Table-driven tests: https://dave.cheney.net/2019/05/07/prefer-table-driven-tests
-- Test coverage: https://blog.golang.org/cover
-- Regression testing: https://en.wikipedia.org/wiki/Regression_testing
+```bash
+# Quick validation
+go test ./pkg/agent -run TestRegression -count=1
+go test ./... -short -count=1
+```
