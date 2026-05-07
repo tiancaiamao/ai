@@ -54,7 +54,7 @@ func StartRPC(sessionKey, sessionsDir, systemPromptFile string) (*RPCConn, error
 	sessionPath := sessionsDir + "/" + sessionKey
 	systemPromptArg := "@" + systemPromptFile
 
-	cmd := exec.Command("ai", "--mode", "rpc",
+		cmd := exec.Command("ai", "rpc",
 		"--session", sessionPath,
 		"--system-prompt", systemPromptArg,
 	)
@@ -437,7 +437,18 @@ func (m *ConnManager) CloseAll() error {
 		slog.Info("conn_manager: closed connection", "sessionKey", key)
 		delete(m.conns, key)
 	}
-	return firstErr
+		return firstErr
+}
+
+// ListConnections returns all active session keys.
+func (m *ConnManager) ListConnections() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	keys := make([]string, 0, len(m.conns))
+	for key := range m.conns {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // getOrCreateConn returns an existing connection or creates a new one.

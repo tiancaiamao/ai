@@ -1,11 +1,12 @@
-// Package adapter provides an AgentLoop implementation that uses ai agent core.
-// It consumes messages from picoclaw's MessageBus and processes them with ai's agent.
+// Package adapter provides an AgentLoop implementation that delegates message
+// processing to ai subprocesses via stdin/stdout JSON-RPC.
+// It consumes messages from picoclaw's MessageBus and routes them through
+// ConnManager to per-session ai subprocesses.
 package adapter
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,29 +24,17 @@ import (
 
 	"github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/tiancaiamao/ai/claw/pkg/cron"
-	"github.com/tiancaiamao/ai/claw/pkg/voice"
-	"github.com/tiancaiamao/ai/pkg/agent"
+			"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/pkg/command"
-	"github.com/tiancaiamao/ai/pkg/compact"
-	aiconfig "github.com/tiancaiamao/ai/pkg/config"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/modelselect"
-	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // CommandHandler is the function signature for handling control commands.
-// args: the remaining arguments after the command name
-// sess: the current session (may be nil for commands that don't need session)
+// args: the remaining arguments after the command name.
 // Returns the response text and an optional error.
-type CommandHandler func(args string, sess *Session) (string, error)
+type CommandHandler func(args string) (string, error)
 
 // CommandRegistry stores registered control commands with descriptions.
-// It wraps pkg/command.Registry for unified registration while supporting
-// the claw-specific session parameter.
 type CommandRegistry struct {
 	commands map[string]CommandHandler
 	info     map[string]string // name -> description
@@ -102,23 +90,18 @@ func (r *CommandRegistry) ListInfo() []command.CommandInfo {
 	return result
 }
 
-// AgentLoop implements the message processing loop using ai agent core.
+// AgentLoop implements the message processing loop using ai subprocess RPC.
 // It is compatible with picoclaw's MessageBus interface.
 type AgentLoop struct {
-	bus        *bus.MessageBus
-	sessions   map[string]*Session // 按 sessionKey 隔离的会话
-	sessionsMu sync.RWMutex
-	running    atomic.Bool
+	bus     *bus.MessageBus
+	running atomic.Bool
 
-	// 配置
-	appConfig    *aiconfig.Config // Application config for LoopConfig
-	model        llm.Model
-	apiKey       string
-	systemPrompt string
-	tools        []agentctx.Tool
-	sessionsDir  string // session storage directory
-	clawDir      string // claw config directory (~/.aiclaw)
-	compactor    *compact.Compactor
+	// RPC connection manager — one ai subprocess per sessionKey
+	connManager *ConnManager
+
+	// Configuration
+	sessionsDir string // session storage directory (passed to ConnManager)
+	clawDir     string // claw config directory (~/.aiclaw)
 
 	// Voice transcription support
 	transcriber voice.Transcriber
@@ -128,148 +111,42 @@ type AgentLoop struct {
 	feishuAppID     string
 	feishuAppSecret string
 
-	// Cron service
-	cronService *cron.CronService
-
 	// Skills
 	skills []skill.Skill
 
-	// Thinking level (off, minimal, low, medium, high, xhigh)
-	thinkingLevel   string
-	thinkingLevelMu sync.RWMutex
-
-	// Command registry
+	// Command registry — only claw-local commands
 	commands *CommandRegistry
 
 	// Statistics
 	messageCount atomic.Int64
-	totalTokens  atomic.Int64
 	startTime    time.Time
 }
 
-// Session represents an isolated conversation session
-type Session struct {
-	Key       string
-	Agent     *agent.Agent
-	Session   *session.Session
-	Compactor *clawCompactor
-}
-
-// clawCompactor 实现 agent.Compactor 接口
-type clawCompactor struct {
-	mu        sync.Mutex
-	sess      *session.Session
-	compactor *compact.Compactor
-}
-
-func (c *clawCompactor) Update(sess *session.Session, comp *compact.Compactor) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sess = sess
-	c.compactor = comp
-}
-
-func (c *clawCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
-	c.mu.Lock()
-	sess := c.sess
-	comp := c.compactor
-	c.mu.Unlock()
-
-	if comp == nil || sess == nil {
-		return false
-	}
-	if !comp.ShouldCompact(ctx, agentCtx) {
-		return false
-	}
-	return sess.CanCompact(comp)
-}
-
-func (c *clawCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	c.mu.Lock()
-	sess := c.sess
-	comp := c.compactor
-	c.mu.Unlock()
-
-	if sess == nil || comp == nil {
-		return &agentctx.CompactionResult{}, nil
-	}
-
-	sessionResult, err := sess.Compact(comp)
-	if err != nil {
-		if session.IsNonActionableCompactionError(err) {
-			return &agentctx.CompactionResult{}, nil
-		}
-		return nil, err
-	}
-
-	// Update ctx.RecentMessages with compacted messages
-	ctx.RecentMessages = sess.GetMessages()
-
-	return &agentctx.CompactionResult{
-		Summary:      sessionResult.Summary,
-		TokensBefore: sessionResult.TokensBefore,
-		TokensAfter:  sessionResult.TokensAfter,
-	}, nil
-}
-
-func (c *clawCompactor) CalculateDynamicThreshold() int {
-	c.mu.Lock()
-	comp := c.compactor
-	c.mu.Unlock()
-
-	if comp == nil {
-		return 0
-	}
-	return comp.CalculateDynamicThreshold()
-}
-
-func (c *clawCompactor) EstimateContextTokens(ctx *agentctx.AgentContext) int {
-	c.mu.Lock()
-	comp := c.compactor
-	c.mu.Unlock()
-
-	if comp == nil {
-		return 0
-	}
-	return comp.EstimateContextTokensOld(ctx.RecentMessages)
-}
-
-// Config 是 AgentLoop 的配置
+// AppConfig holds the configuration for creating an AgentLoop.
+// After the RPC refactor, claw no longer manages models, sessions,
+// or compaction — those are delegated to ai subprocesses.
 type AppConfig struct {
-	Model        string          // 模型 ID，如 "claude-3-5-sonnet-20241022"
-	Provider     string          // 提供商，如 "anthropic"
-	APIKey       string          // API 密钥
-	APIURL       string          // API URL (可选)
-	API          string          // API 类型，如 "anthropic-messages"
-	SystemPrompt string          // 系统提示词
-	Tools        []agentctx.Tool // 工具列表
-	ClawDir      string          // claw 配置目录 (~/.aiclaw)
+	SystemPrompt string // basic identity prompt passed to ai subprocess
 
-	// 语音支持
-	Transcriber voice.Transcriber // 语音转录器（可选）
+	// Paths
+	ClawDir string // claw config directory (~/.aiclaw)
 
-	// 飞书配置（用于下载语音文件）
+	// Voice support
+	Transcriber voice.Transcriber
+
+	// Feishu configuration (for downloading voice files)
 	FeishuAppID     string
 	FeishuAppSecret string
 
-	// Cron 服务（可选）
-	CronService *cron.CronService
-
-	// Skills (可选)
+	// Skills (optional)
 	Skills []skill.Skill
 }
 
-// NewAgentLoop 创建一个新的 AgentLoop
+// NewAgentLoop creates a new AgentLoop backed by ConnManager.
 func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
-	model := resolveModel(cfg)
+	slog.Info("[AgentLoop] Initializing with RPC mode")
 
-	slog.Info("[AgentLoop] Model resolved",
-		"id", model.ID,
-		"provider", model.Provider,
-		"baseUrl", model.BaseURL,
-		"contextWindow", model.ContextWindow)
-
-	// 创建 sessions 目录
+	// Create sessions directory
 	sessionsDir := ""
 	if cfg.ClawDir != "" {
 		sessionsDir = filepath.Join(cfg.ClawDir, "sessions")
@@ -278,111 +155,40 @@ func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
 		}
 	}
 
-	// 创建 compactor
-	compactorCfg := compact.DefaultConfig()
-	compactor := compact.NewCompactor(
-		compactorCfg,
-		model,
-		cfg.APIKey,
-		cfg.SystemPrompt,
-		model.ContextWindow,
-	)
+	// Create ConnManager — the core of the RPC architecture
+	connManager := NewConnManager(sessionsDir, cfg.SystemPrompt)
 
-	// 创建飞书客户端（用于下载语音文件）
+	// Create Feishu client (for voice file download)
 	var feishuClient *lark.Client
 	if cfg.FeishuAppID != "" && cfg.FeishuAppSecret != "" {
 		feishuClient = lark.NewClient(cfg.FeishuAppID, cfg.FeishuAppSecret)
 		slog.Info("[AgentLoop] Feishu client created for voice download")
 	}
 
-	// 创建命令注册表
+	// Create command registry
 	commands := NewCommandRegistry()
 
 	loop := &AgentLoop{
 		bus:             msgBus,
-		sessions:        make(map[string]*Session),
-		model:           model,
-		apiKey:          cfg.APIKey,
-		systemPrompt:    cfg.SystemPrompt,
-		tools:           cfg.Tools,
+		connManager:     connManager,
 		sessionsDir:     sessionsDir,
 		clawDir:         cfg.ClawDir,
-		compactor:       compactor,
 		transcriber:     cfg.Transcriber,
 		feishuClient:    feishuClient,
 		feishuAppID:     cfg.FeishuAppID,
 		feishuAppSecret: cfg.FeishuAppSecret,
-		cronService:     cfg.CronService,
 		skills:          cfg.Skills,
-		thinkingLevel:   "off", // Default to off
 		commands:        commands,
 		startTime:       time.Now(),
 	}
 
-	// 注册基础命令
+	// Register claw-local commands
 	loop.registerBuiltinCommands()
 
 	return loop
 }
 
-// ModelSpec aliases shared model specification to avoid duplicate schema definitions.
-type ModelSpec = aiconfig.ModelSpec
-
-// resolveModel 从 claw 配置目录加载模型配置
-func resolveModel(cfg *AppConfig) llm.Model {
-	model := llm.Model{
-		ID:       cfg.Model,
-		Provider: cfg.Provider,
-		BaseURL:  cfg.APIURL,
-		API:      cfg.API,
-	}
-
-	// 尝试从 ~/.aiclaw/models.json 加载完整模型配置（包括 API 类型）
-	if cfg.ClawDir != "" {
-		modelsPath := filepath.Join(cfg.ClawDir, "models.json")
-		specs, err := aiconfig.LoadModelSpecs(modelsPath)
-		if err == nil {
-			// 查找匹配的模型
-			for _, spec := range specs {
-				if spec.ID == cfg.Model {
-					// 只在 config.json 中的值为空时，才使用 models.json 的值
-					// 这样可以保留用户在 config.json 中的自定义配置
-					if model.Provider == "" && spec.Provider != "" {
-						model.Provider = spec.Provider
-					}
-					if model.BaseURL == "" && spec.BaseURL != "" {
-						model.BaseURL = spec.BaseURL
-					}
-					// API 类型始终使用 models.json 中的值（如果存在）
-					// 因为 config.json 不会包含这个字段
-					if spec.API != "" {
-						model.API = spec.API
-					}
-					model.ContextWindow = spec.ContextWindow
-					model.MaxTokens = spec.MaxTokens
-					slog.Info("[AgentLoop] Loaded model config from models.json",
-						"id", spec.ID,
-						"provider", spec.Provider,
-						"baseUrl", spec.BaseURL,
-						"api", model.API)
-					return model
-				}
-			}
-		} else {
-			slog.Warn("[AgentLoop] Failed to load models.json", "error", err, "path", modelsPath)
-		}
-	}
-
-	// 如果没有找到 models.json 或模型不在其中，使用现有配置
-	slog.Info("[AgentLoop] Using config from config.json",
-		"id", model.ID,
-		"provider", model.Provider,
-		"baseUrl", model.BaseURL,
-		"api", model.API)
-	return model
-}
-
-// Run 启动消息处理循环
+// Run starts the message processing loop.
 func (a *AgentLoop) Run(ctx context.Context) error {
 	slog.Info("[AgentLoop] Starting")
 	a.running.Store(true)
@@ -417,14 +223,14 @@ func (a *AgentLoop) Run(ctx context.Context) error {
 	return nil
 }
 
-// Stop 停止消息处理循环
+// Stop stops the message processing loop.
 func (a *AgentLoop) Stop() {
 	a.running.Store(false)
 }
 
-// processMessage 处理单条消息
+// processMessage handles a single inbound message.
+// Flow: voice transcription → command check → connManager.Prompt → response
 func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
-	// 生成 session key
 	sessionKey := msg.SessionKey
 	if sessionKey == "" {
 		sessionKey = msg.Channel + ":" + msg.ChatID
@@ -437,11 +243,11 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		"content_preview", truncate(msg.Content, 80),
 		"media_count", len(msg.Media))
 
-	// 处理媒体文件（语音/音频）
+	// Handle media files (voice/audio)
 	content := msg.Content
 	hasVoiceMedia := false
 
-	// 1. 处理 msg.Media 中的音频文件
+	// 1. Process audio from msg.Media
 	if len(msg.Media) > 0 {
 		for _, mediaPath := range msg.Media {
 			if voice.IsAudioFile(mediaPath) {
@@ -463,7 +269,7 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		}
 	}
 
-	// 2. 处理飞书语音消息（msg.Content 是 JSON 元数据）
+	// 2. Handle Feishu voice messages (content is JSON metadata)
 	if msg.Channel == "feishu" && content != "" {
 		if transcribed, err := a.handleFeishuVoice(ctx, content, msg.MessageID, msg.ChatID, msg.Metadata); err != nil {
 			slog.Warn("[AgentLoop] Failed to handle feishu voice", "error", err)
@@ -473,293 +279,79 @@ func (a *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) 
 		}
 	}
 
-	// 如果只有语音消息但无法转录，跳过处理
+	// Skip if voice-only message with no transcription
 	if content == "" && hasVoiceMedia {
 		slog.Info("[AgentLoop] Skipping voice message (no transcriber available)")
 		return "", nil
 	}
 
-	// 获取或创建会话
-	sess, err := a.getOrCreateSession(sessionKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to get/create session: %w", err)
-	}
-
-	// 检查是否是控制指令（/ 前缀）
+	// Check for claw-local commands (/ prefix)
 	if strings.HasPrefix(content, "/") {
 		cmd := strings.TrimSpace(strings.TrimPrefix(content, "/"))
-		response, err := a.handleControlCommand(ctx, cmd, sessionKey, sess)
+		response, err := a.handleControlCommand(ctx, cmd, sessionKey)
 		if err != nil {
 			return fmt.Sprintf("Command error: %v", err), nil
 		}
 		return response, nil
 	}
 
-	// 保存用户消息到 session
-	userMsg := agentctx.NewUserMessage(content)
-	sess.Session.AppendMessage(userMsg)
-
-	// 发送消息给 agent
-	// 如果 agent 正在处理，使用 FollowUp 而不是等待超时
-	if err := sess.Agent.Prompt(content); err != nil {
-		if errors.Is(err, agent.ErrAgentBusy) {
-			// Agent busy, use FollowUp instead
-			slog.Info("[AgentLoop] Agent busy, using follow-up", "session_key", sessionKey)
-			if followErr := sess.Agent.FollowUp(content); followErr != nil {
-				return "", fmt.Errorf("agent busy and follow-up queue full: %w", followErr)
-			}
-			return fmt.Sprintf("(Agent is processing, your message has been queued: %s)", truncate(content, 50)), nil
-		}
-		return "", fmt.Errorf("agent prompt failed: %w", err)
-	}
-
-	// 收集响应
-	var response strings.Builder
-	var assistantMsg *agentctx.AgentMessage
-	var agentErrors []string
-
-	for event := range sess.Agent.Events() {
-		switch event.Type {
-		case agent.EventTurnEnd:
-			if event.Message != nil {
-				text := event.Message.ExtractText()
-				// Clean MiniMax reasoning content if present
-				text = cleanMiniMaxReasoningFromText(text)
-				response.WriteString(text)
-				assistantMsg = event.Message
-			}
-		case agent.EventAgentEnd:
-			break
-		case agent.EventError:
-			if event.Error != "" {
-				slog.Error("[AgentLoop] Agent error", "error", event.Error)
-				agentErrors = append(agentErrors, event.Error)
-			}
-		}
-		if event.Type == agent.EventAgentEnd {
-			break
-		}
-	}
-
-	// 如果有错误且没有正常响应，返回错误信息
-	result := response.String()
-	if result == "" && len(agentErrors) > 0 {
-		// 返回最后一个错误（通常是最相关的）
-		lastError := agentErrors[len(agentErrors)-1]
-		return fmt.Sprintf("Error: %s", lastError), nil
-	}
-	// 如果有响应但也有错误，在响应后附加错误信息
-	if result != "" && len(agentErrors) > 0 {
-		// 将错误附加到响应后面
-		result += fmt.Sprintf("\n\n[Errors occurred: %d]", len(agentErrors))
-		for _, e := range agentErrors {
-			result += fmt.Sprintf("\n- %s", truncate(e, 100))
-		}
-	}
-
-	// 保存助手消息到 session
-	if assistantMsg != nil {
-		sess.Session.AppendMessage(*assistantMsg)
-	}
-
-	slog.Info("[AgentLoop] Response", "session_key", sessionKey, "length", len(result), "errors", len(agentErrors))
-	return result, nil
-}
-
-// getOrCreateSession 获取或创建会话
-func (a *AgentLoop) getOrCreateSession(sessionKey string) (*Session, error) {
-	a.sessionsMu.RLock()
-	sess, exists := a.sessions[sessionKey]
-	a.sessionsMu.RUnlock()
-
-	if exists {
-		return sess, nil
-	}
-
-	a.sessionsMu.Lock()
-	defer a.sessionsMu.Unlock()
-
-	// 再次检查
-	if sess, exists := a.sessions[sessionKey]; exists {
-		return sess, nil
-	}
-
-	// 创建新会话
-	sess, err := a.createSession(sessionKey)
+	// Delegate to ai subprocess via ConnManager
+	response, err := a.connManager.Prompt(ctx, sessionKey, content)
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("rpc prompt failed: %w", err)
 	}
 
-	a.sessions[sessionKey] = sess
-	return sess, nil
+	slog.Info("[AgentLoop] Response", "session_key", sessionKey, "length", len(response))
+	return response, nil
 }
 
-// createSession 创建新会话
-func (a *AgentLoop) createSession(sessionKey string) (*Session, error) {
-	// 创建 session 目录
-	var sess *session.Session
-
-	if a.sessionsDir != "" {
-		// 使用安全的目录名（替换特殊字符）
-		safeKey := strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-				return r
-			}
-			return '_'
-		}, sessionKey)
-
-		sessionDir := filepath.Join(a.sessionsDir, safeKey)
-		if err := os.MkdirAll(sessionDir, 0755); err != nil {
-			slog.Warn("[AgentLoop] Failed to create session dir", "error", err, "path", sessionDir)
-		} else {
-			// 尝试加载现有 session
-			var err error
-			sess, err = session.LoadSessionLazy(sessionDir, session.DefaultLoadOptions())
-			if err != nil {
-				slog.Warn("[AgentLoop] Failed to load session, creating new", "error", err)
-				sess = nil
-			} else {
-				slog.Info("[AgentLoop] Loaded existing session", "path", sessionDir, "messages", len(sess.GetMessages()))
-			}
-		}
+// ProcessDirect processes a direct message (e.g., cron trigger) without going through the bus.
+func (a *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey string) (string, error) {
+	msg := bus.InboundMessage{
+		Channel:    "cron",
+		ChatID:     "cron",
+		SessionKey: sessionKey,
+		Content:    content,
+		SenderID:   "cron",
 	}
-
-	if sess == nil {
-		sess = session.NewSession("") // 无持久化
-	}
-
-	// Set session ID on trace handler so trace files are named correctly
-	if handler := traceevent.GetHandler(); handler != nil {
-		if fh, ok := handler.(*traceevent.FileHandler); ok {
-			fh.SetSessionID(sess.GetID())
-		}
-	}
-
-	// 创建 agent context
-	agentCtx := agentctx.NewAgentContext(a.systemPrompt)
-
-	// 从 session 恢复消息
-	existingMessages := sess.GetMessages()
-	if len(existingMessages) > 0 {
-		agentCtx.RecentMessages = existingMessages
-		slog.Info("[AgentLoop] Restored messages from session", "count", len(existingMessages))
-	}
-
-	// 恢复最后的 compaction summary
-	agentCtx.LastCompactionSummary = sess.GetLastCompactionSummary()
-
-	// 创建并设置 compactor
-	clawComp := &clawCompactor{
-		sess:      sess,
-		compactor: a.compactor,
-	}
-
-	// 从 AgentLoop 的配置构建 LoopConfig
-	loopCfg := a.loopConfig(clawComp)
-
-	// 创建 agent
-	ag := agent.NewAgentFromConfigWithContext(a.model, a.apiKey, agentCtx, loopCfg)
-
-	// 注册工具
-	for _, tool := range a.tools {
-		ag.AddTool(tool)
-	}
-
-	return &Session{
-		Key:       sessionKey,
-		Agent:     ag,
-		Session:   sess,
-		Compactor: clawComp,
-	}, nil
+	return a.processMessage(ctx, msg)
 }
 
-// loopConfig builds LoopConfig from AgentLoop's configuration.
-func (a *AgentLoop) loopConfig(compactor agent.Compactor) *agent.LoopConfig {
-	// Start with config defaults (if available)
-	var cfg *agent.LoopConfig
-	if a.appConfig != nil {
-		cfg = a.appConfig.ToLoopConfig(
-			aiconfig.WithCompactor(compactor),
-			aiconfig.WithContextWindow(a.model.ContextWindow),
-		)
-	}
-	// Fallback if appConfig is nil or ToLoopConfig returned nil
-	if cfg == nil {
-		cfg = agent.DefaultLoopConfig()
-		cfg.Compactors = []agentctx.Compactor{compactor}
-		cfg.ContextWindow = a.model.ContextWindow
-	}
-
-	// Override with runtime thinking level
-	a.thinkingLevelMu.RLock()
-	cfg.ThinkingLevel = a.thinkingLevel
-	a.thinkingLevelMu.RUnlock()
-
-	return cfg
-}
-
-// GetSession 获取会话
-func (a *AgentLoop) GetSession(sessionKey string) (*Session, bool) {
-	a.sessionsMu.RLock()
-	defer a.sessionsMu.RUnlock()
-	sess, ok := a.sessions[sessionKey]
-	return sess, ok
-}
-
-// ListSessions 列出所有会话 key
+// ListSessions returns all active session keys (from ConnManager's connection pool).
 func (a *AgentLoop) ListSessions() []string {
-	a.sessionsMu.RLock()
-	defer a.sessionsMu.RUnlock()
-
-	keys := make([]string, 0, len(a.sessions))
-	for k := range a.sessions {
-		keys = append(keys, k)
-	}
-	return keys
+	return a.connManager.ListConnections()
 }
 
-// CloseSession 关闭会话
-func (a *AgentLoop) CloseSession(sessionKey string) {
-	a.sessionsMu.Lock()
-	defer a.sessionsMu.Unlock()
-
-	if sess, ok := a.sessions[sessionKey]; ok {
-		sess.Agent.Shutdown()
-		delete(a.sessions, sessionKey)
-	}
-}
-
-// Close 关闭所有会话
+// Close shuts down all ai subprocess connections.
 func (a *AgentLoop) Close() {
 	a.Stop()
-
-	a.sessionsMu.Lock()
-	defer a.sessionsMu.Unlock()
-
-	for _, sess := range a.sessions {
-		sess.Agent.Shutdown()
+	if err := a.connManager.CloseAll(); err != nil {
+		slog.Warn("[AgentLoop] Error closing connections", "error", err)
 	}
-	a.sessions = make(map[string]*Session)
+}
+
+// SwitchModel is a stub — model switching is handled by the ai subprocess via /model command.
+func (a *AgentLoop) SwitchModel(modelID string, _ interface{}) error {
+	return fmt.Errorf("model switching is handled by ai subprocess; use /model command instead")
+}
+
+// RefreshAPIKey is a stub — API key management is handled by ai subprocess.
+func (a *AgentLoop) RefreshAPIKey() error {
+	return fmt.Errorf("API key management is handled by ai subprocess")
 }
 
 // RegisterCommand registers a custom control command.
-// name: the command name (without the "/" prefix)
-// handler: the function to handle the command
 func (a *AgentLoop) RegisterCommand(name string, handler CommandHandler) {
 	a.commands.Register(name, "Custom command: "+name, handler)
 }
 
-// registerBuiltinCommands registers the built-in control commands.
+// registerBuiltinCommands registers the claw-local commands only.
+// Commands not listed here are forwarded to the ai subprocess as regular messages.
 func (a *AgentLoop) registerBuiltinCommands() {
-	a.commands.Register("help", "Show this help message", func(args string, sess *Session) (string, error) {
+	a.commands.Register("help", "Show available commands", func(args string) (string, error) {
 		return a.cmdHelp(), nil
 	})
-	// /commands - list available skills
-	a.commands.Register("commands", "List available skills (alias: /skills)", func(args string, sess *Session) (string, error) {
-		return a.cmdCommands(), nil
-	})
-	// /skills - list skills or reload
-	a.commands.Register("skills", "List available skills (alias: /commands)", func(args string, sess *Session) (string, error) {
+	a.commands.Register("skills", "List available skills or reload", func(args string) (string, error) {
 		if args == "reload" {
 			count, warnings, err := a.ReloadSkills()
 			if err != nil {
@@ -773,54 +365,114 @@ func (a *AgentLoop) registerBuiltinCommands() {
 		}
 		return a.cmdCommands(), nil
 	})
-	a.commands.Register("session", "Show current session info", func(args string, sess *Session) (string, error) {
-		return a.cmdSession(sess), nil
-	})
-	a.commands.Register("history", "Show message history (alias: /messages)", func(args string, sess *Session) (string, error) {
-		return a.cmdHistory(sess), nil
-	})
-	a.commands.Register("messages", "Show message history (alias: /history)", func(args string, sess *Session) (string, error) {
-		return a.cmdHistory(sess), nil
-	})
-	a.commands.Register("clear", "Clear current session messages", func(args string, sess *Session) (string, error) {
-		return a.cmdClear(sess), nil
-	})
-	a.commands.Register("model", "List or switch AI models", func(args string, sess *Session) (string, error) {
-		return a.cmdModel(args, sess)
-	})
-	a.commands.Register("traceevent", "Manage trace events for debugging", func(args string, sess *Session) (string, error) {
-		return a.cmdTraceevent(args), nil
-	})
-	// show commands - show settings and usage
-	a.commands.Register("show", "Show settings or usage", func(args string, sess *Session) (string, error) {
-		return a.cmdShow(args, sess), nil
-	})
-	// thinking command - toggle thinking mode
-	a.commands.Register("thinking", "Toggle or set thinking level", func(args string, sess *Session) (string, error) {
-		return a.cmdThinking(args, sess), nil
+	a.commands.Register("commands", "List available skills (alias: /skills)", func(args string) (string, error) {
+		return a.cmdCommands(), nil
 	})
 }
 
-// Helper
+// handleControlCommand processes claw-local commands.
+// Commands not in the registry are forwarded to the ai subprocess.
+func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKey string) (string, error) {
+	fields := strings.Fields(cmdLine)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+	cmd := fields[0]
+	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmd))
+
+	// Check claw-local command registry
+	handler, ok := a.commands.Get(cmd)
+	if ok {
+		return handler(args)
 	}
-	if maxLen > 3 {
-		return s[:maxLen-3] + "..."
+
+	// Not a claw-local command — forward to ai subprocess as-is
+	forwardMsg := "/" + cmdLine
+	response, err := a.connManager.Prompt(ctx, sessionKey, forwardMsg)
+	if err != nil {
+		return "", fmt.Errorf("failed to forward command to ai: %w", err)
 	}
-	return s[:maxLen]
+	return response, nil
 }
 
-// FeishuVoicePayload 飞书语音消息的 JSON 结构
+// cmdHelp shows claw-local commands + note about ai commands.
+func (a *AgentLoop) cmdHelp() string {
+	infos := a.commands.ListInfo()
+
+	var b strings.Builder
+	b.WriteString("```\n")
+	b.WriteString("Claw Local Commands:\n\n")
+	for _, info := range infos {
+		if info.Description != "" {
+			b.WriteString(fmt.Sprintf("  /%-15s %s\n", info.Name, info.Description))
+		} else {
+			b.WriteString(fmt.Sprintf("  /%s\n", info.Name))
+		}
+	}
+	b.WriteString("\nOther commands (e.g., /model, /clear, /history) are\n")
+	b.WriteString("forwarded to the ai agent subprocess.\n")
+	b.WriteString("```")
+	return b.String()
+}
+
+// cmdCommands lists available skills.
+func (a *AgentLoop) cmdCommands() string {
+	if len(a.skills) == 0 {
+		return "No skills available"
+	}
+
+	var b strings.Builder
+	b.WriteString("```\n")
+	b.WriteString(fmt.Sprintf("Available Skills (%d):\n\n", len(a.skills)))
+
+	for i, s := range a.skills {
+		b.WriteString(fmt.Sprintf("[%d] /%s\n", i, s.Name))
+		if s.Description != "" {
+			b.WriteString(fmt.Sprintf("    %s\n", s.Description))
+		}
+	}
+
+	b.WriteString("```")
+	return b.String()
+}
+
+// ReloadSkills reloads skills from the skills directory.
+func (a *AgentLoop) ReloadSkills() (int, []string, error) {
+	if a.clawDir == "" {
+		return 0, nil, fmt.Errorf("claw directory not configured")
+	}
+
+	skillLoader := skill.NewLoader(a.clawDir)
+	result := skillLoader.Load(nil)
+
+	var warnings []string
+	for _, diag := range result.Diagnostics {
+		warnings = append(warnings, fmt.Sprintf("%s: %s", diag.Path, diag.Message))
+	}
+
+	a.skills = result.Skills
+	slog.Info("[AgentLoop] Skills reloaded", "count", len(result.Skills))
+	return len(result.Skills), warnings, nil
+}
+
+// GetSkills returns the currently loaded skills.
+func (a *AgentLoop) GetSkills() []skill.Skill {
+	return a.skills
+}
+
+// ---------------------------------------------------------------------------
+// Feishu voice handling (unchanged — claw layer responsibility)
+// ---------------------------------------------------------------------------
+
+// FeishuVoicePayload represents the JSON structure of a Feishu voice message.
 type FeishuVoicePayload struct {
 	FileKey  string `json:"file_key"`
 	Duration int    `json:"duration"`
 }
 
-// handleFeishuVoice 处理飞书语音消息
-// 返回转录后的文本，如果不是语音消息则返回空字符串
+// handleFeishuVoice processes Feishu voice messages.
+// Returns transcribed text, or empty string if not a voice message.
 func (a *AgentLoop) handleFeishuVoice(
 	ctx context.Context,
 	content string,
@@ -828,27 +480,22 @@ func (a *AgentLoop) handleFeishuVoice(
 	chatID string,
 	metadata map[string]string,
 ) (string, error) {
-	// 检查是否是飞书语音消息格式
 	var voicePayload FeishuVoicePayload
 	if err := json.Unmarshal([]byte(content), &voicePayload); err != nil {
-		return "", nil // 不是 JSON，不是语音消息
+		return "", nil
 	}
 
-	// 检查是否是语音消息
 	if voicePayload.FileKey == "" {
-		return "", nil // 没有 file_key，不是语音消息
+		return "", nil
 	}
 
 	slog.Info("[AgentLoop] Detected feishu voice message", "file_key", voicePayload.FileKey, "duration", voicePayload.Duration)
 
-	// 检查是否有转录器
 	if a.transcriber == nil || !a.transcriber.IsAvailable() {
 		slog.Warn("[AgentLoop] No transcriber available for feishu voice")
 		return "", nil
 	}
 
-	// 获取 message_id（飞书语音下载需要）
-	// In picoclaw v0.2.0+, message ID is carried on bus.InboundMessage.MessageID.
 	messageID := strings.TrimSpace(inboundMessageID)
 	if metadata != nil {
 		if messageID == "" {
@@ -864,8 +511,6 @@ func (a *AgentLoop) handleFeishuVoice(
 			"chat_id", chatID,
 			"metadata", metadata)
 
-		// Fallback: query recent chat messages and match by file_key.
-		// This handles cases where upstream metadata omits message_id.
 		if chatID != "" {
 			foundID, err := a.findFeishuAudioMessageID(ctx, chatID, voicePayload.FileKey)
 			if err != nil {
@@ -883,21 +528,17 @@ func (a *AgentLoop) handleFeishuVoice(
 		}
 	}
 
-	// 下载飞书音频文件
 	audioPath, err := a.downloadFeishuAudio(ctx, voicePayload.FileKey, messageID)
 	if err != nil {
-		// 如果下载失败，返回提示信息而不是错误
 		slog.Warn("[AgentLoop] Failed to download feishu audio", "error", err, "message_id", messageID)
 		return "[Voice message - download failed. Note: Feishu voice requires message_id in metadata.]", nil
 	}
-	defer os.Remove(audioPath) // 清理临时文件
+	defer os.Remove(audioPath)
 
 	slog.Info("[AgentLoop] Downloaded feishu audio", "path", audioPath)
 
-	// 转录
 	result, err := a.transcriber.Transcribe(ctx, audioPath)
 	if err != nil {
-		// Zhipu may reject OGG/Opus with code 1214. Try local ffmpeg conversion fallback.
 		if isUnsupportedAudioFormatError(err) {
 			convertedPath, convErr := transcodeAudioToMP3(ctx, audioPath)
 			if convErr == nil {
@@ -910,7 +551,6 @@ func (a *AgentLoop) handleFeishuVoice(
 			}
 		}
 		if err != nil {
-			// Degrade gracefully: do not pass raw JSON payload to the LLM.
 			return "[Voice message - transcription failed: unsupported audio format for current ASR provider]", nil
 		}
 	}
@@ -919,7 +559,7 @@ func (a *AgentLoop) handleFeishuVoice(
 	return "[voice transcription: " + result.Text + "]", nil
 }
 
-// downloadFeishuAudio 下载飞书音频文件
+// downloadFeishuAudio downloads a Feishu audio file to a temporary path.
 func (a *AgentLoop) downloadFeishuAudio(ctx context.Context, fileKey string, messageID string) (string, error) {
 	if a.feishuAppID == "" || a.feishuAppSecret == "" {
 		return "", fmt.Errorf("feishu app_id or app_secret not configured")
@@ -928,97 +568,69 @@ func (a *AgentLoop) downloadFeishuAudio(ctx context.Context, fileKey string, mes
 		return "", fmt.Errorf("missing message_id for feishu audio download")
 	}
 
-	// 创建临时文件
 	tmpDir := os.TempDir()
 	tmpFile := filepath.Join(tmpDir, "feishu_voice_"+fileKey+".ogg")
 
-	// 使用 HTTP API 下载飞书文件
-	// 1. 先获取 tenant_access_token
 	token, err := a.getFeishuAccessToken(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get feishu access token: %w", err)
 	}
 
-	// 2. 下载消息资源文件（语音属于消息资源）
-	// https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-resources/get
-	downloadURL := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/messages/%s/resources/%s?type=file", messageID, fileKey)
-	var req *http.Request
+	downloadURL := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/messages/%s/resources/%s?type=file",
+		url.PathEscape(messageID), url.PathEscape(fileKey))
 
-	req, err = http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create download request: %w", err)
+		return "", fmt.Errorf("create download request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	slog.Info("[AgentLoop] Downloading feishu audio", "url", downloadURL, "has_message_id", messageID != "")
-
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to download feishu file: %w", err)
+		return "", fmt.Errorf("download audio: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("feishu API error: status %d, body: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("download audio failed: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// 3. 写入临时文件
-	out, err := os.Create(tmpFile)
+	f, err := os.Create(tmpFile)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return "", fmt.Errorf("create temp file: %w", err)
 	}
-	defer out.Close()
+	defer f.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if _, err := io.Copy(f, resp.Body); err != nil {
 		os.Remove(tmpFile)
-		return "", fmt.Errorf("failed to write temp file: %w", err)
+		return "", fmt.Errorf("write audio file: %w", err)
 	}
 
 	return tmpFile, nil
 }
 
-type feishuMessageListResponse struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Data struct {
-		Items []struct {
-			MessageID   string `json:"message_id"`
-			MessageType string `json:"message_type"`
-			Content     string `json:"content"`
-		} `json:"items"`
-	} `json:"data"`
-}
-
-// findFeishuAudioMessageID tries to resolve open_message_id by matching file_key
-// from recent chat messages.
+// findFeishuAudioMessageID queries Feishu API to find the message ID for a voice file.
 func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKey string) (string, error) {
-	if chatID == "" || fileKey == "" {
-		return "", nil
-	}
-
 	token, err := a.getFeishuAccessToken(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get feishu access token: %w", err)
+		return "", err
 	}
 
-	q := url.Values{}
-	q.Set("container_id_type", "chat")
-	q.Set("container_id", chatID)
-	q.Set("sort_type", "ByCreateTimeDesc")
-	q.Set("page_size", "20")
+	listURL := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id=%s&page_size=20",
+		url.PathEscape(chatID))
 
-	listURL := "https://open.feishu.cn/open-apis/im/v1/messages?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", listURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create list messages request: %w", err)
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to list feishu messages: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -1039,10 +651,7 @@ func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKe
 	}
 
 	for _, item := range listResp.Data.Items {
-		if item.MessageID == "" {
-			continue
-		}
-		if item.MessageType != "audio" {
+		if item.MessageID == "" || item.MessageType != "audio" {
 			continue
 		}
 		if strings.Contains(item.Content, fileKey) {
@@ -1053,6 +662,85 @@ func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKe
 	return "", nil
 }
 
+// feishuTokenResponse represents the Feishu token API response.
+type feishuTokenResponse struct {
+	Code              int    `json:"code"`
+	Msg               string `json:"msg"`
+	TenantAccessToken string `json:"tenant_access_token"`
+	Expire            int    `json:"expire"`
+}
+
+// feishuTokenCache caches Feishu tenant access tokens.
+type feishuTokenCache struct {
+	token      string
+	expireTime time.Time
+	mu         sync.Mutex
+}
+
+var globalFeishuTokenCache feishuTokenCache
+
+// getFeishuAccessToken retrieves a Feishu tenant access token (with caching).
+func (a *AgentLoop) getFeishuAccessToken(ctx context.Context) (string, error) {
+	globalFeishuTokenCache.mu.Lock()
+	defer globalFeishuTokenCache.mu.Unlock()
+
+	if globalFeishuTokenCache.token != "" && time.Now().Before(globalFeishuTokenCache.expireTime) {
+		return globalFeishuTokenCache.token, nil
+	}
+
+	apiURL := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+	payload := map[string]string{
+		"app_id":     a.feishuAppID,
+		"app_secret": a.feishuAppSecret,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var tokenResp feishuTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", err
+	}
+
+	if tokenResp.Code != 0 {
+		return "", fmt.Errorf("feishu auth error: code=%d msg=%s", tokenResp.Code, tokenResp.Msg)
+	}
+
+	globalFeishuTokenCache.token = tokenResp.TenantAccessToken
+	globalFeishuTokenCache.expireTime = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
+
+	return tokenResp.TenantAccessToken, nil
+}
+
+// feishuMessageListResponse represents the Feishu message list API response.
+type feishuMessageListResponse struct {
+	Code int `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Items []struct {
+			MessageID   string `json:"message_id"`
+			MessageType string `json:"msg_type"`
+			Content     string `json:"body.content"`
+		} `json:"items"`
+	} `json:"data"`
+}
+
 func isUnsupportedAudioFormatError(err error) bool {
 	if err == nil {
 		return false
@@ -1060,7 +748,7 @@ func isUnsupportedAudioFormatError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "\"code\":\"1214\"") ||
 		strings.Contains(msg, "不支持当前文件格式") ||
-		strings.Contains(msg, "unsupported") && strings.Contains(msg, "format")
+		(strings.Contains(msg, "unsupported") && strings.Contains(msg, "format"))
 }
 
 func transcodeAudioToMP3(ctx context.Context, inputPath string) (string, error) {
@@ -1090,878 +778,14 @@ func transcodeAudioToMP3(ctx context.Context, inputPath string) (string, error) 
 	return outPath, nil
 }
 
-// feishuTokenResponse 飞书 token 响应
-type feishuTokenResponse struct {
-	Code              int    `json:"code"`
-	Msg               string `json:"msg"`
-	TenantAccessToken string `json:"tenant_access_token"`
-	Expire            int    `json:"expire"`
+// truncate truncates a string to maxLen characters.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen > 3 {
+		return s[:maxLen-3] + "..."
+	}
+	return s[:maxLen]
 }
 
-// feishuTokenCache 缓存飞书 token
-type feishuTokenCache struct {
-	token      string
-	expireTime time.Time
-	mu         sync.Mutex
-}
-
-var globalFeishuTokenCache feishuTokenCache
-
-// getFeishuAccessToken 获取飞书 tenant_access_token
-func (a *AgentLoop) getFeishuAccessToken(ctx context.Context) (string, error) {
-	globalFeishuTokenCache.mu.Lock()
-	defer globalFeishuTokenCache.mu.Unlock()
-
-	// 检查缓存是否有效
-	if globalFeishuTokenCache.token != "" && time.Now().Before(globalFeishuTokenCache.expireTime) {
-		return globalFeishuTokenCache.token, nil
-	}
-
-	// 获取新 token
-	url := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-	payload := map[string]string{
-		"app_id":     a.feishuAppID,
-		"app_secret": a.feishuAppSecret,
-	}
-	payloadBytes, _ := json.Marshal(payload)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(payloadBytes)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var tokenResp feishuTokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return "", err
-	}
-
-	if tokenResp.Code != 0 {
-		return "", fmt.Errorf("feishu auth error: code=%d msg=%s", tokenResp.Code, tokenResp.Msg)
-	}
-
-	// 缓存 token（提前 5 分钟过期）
-	globalFeishuTokenCache.token = tokenResp.TenantAccessToken
-	globalFeishuTokenCache.expireTime = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
-
-	return tokenResp.TenantAccessToken, nil
-}
-
-// ProcessDirect 处理直接调用的消息（如 cron 触发）
-func (a *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey string) (string, error) {
-	msg := bus.InboundMessage{
-		Channel:    "cron",
-		ChatID:     "cron",
-		SessionKey: sessionKey,
-		Content:    content,
-		SenderID:   "cron",
-	}
-	return a.processMessage(ctx, msg)
-}
-
-// handleControlCommand 处理控制指令
-func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKey string, sess *Session) (string, error) {
-	fields := strings.Fields(cmdLine)
-	if len(fields) == 0 {
-		return "", fmt.Errorf("empty command")
-	}
-
-	cmd := fields[0]
-	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, cmd))
-
-	// 从命令注册表中查找处理器
-	handler, ok := a.commands.Get(cmd)
-	if ok {
-		return handler(args, sess)
-	}
-
-	// 命令未找到
-	return fmt.Sprintf("Unknown command: %s\nUse /help for available commands", cmd), nil
-}
-
-// cmdHelp 显示帮助信息
-func (a *AgentLoop) cmdHelp() string {
-	infos := a.commands.ListInfo()
-
-	var b strings.Builder
-	b.WriteString("```\n")
-	b.WriteString("Control Commands:\n\n")
-	for _, info := range infos {
-		if info.Description != "" {
-			b.WriteString(fmt.Sprintf("  /%-15s %s\n", info.Name, info.Description))
-		} else {
-			b.WriteString(fmt.Sprintf("  /%s\n", info.Name))
-		}
-	}
-	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.\n")
-	b.WriteString("```")
-	return b.String()
-}
-
-// cmdCommands lists available skills
-func (a *AgentLoop) cmdCommands() string {
-	if len(a.skills) == 0 {
-		return "No skills available"
-	}
-
-	var b strings.Builder
-	b.WriteString("```\n")
-	b.WriteString(fmt.Sprintf("Available Skills (%d):\n\n", len(a.skills)))
-
-	for i, s := range a.skills {
-		b.WriteString(fmt.Sprintf("[%d] /%s\n", i, s.Name))
-		if s.Description != "" {
-			b.WriteString(fmt.Sprintf("    %s\n", s.Description))
-		}
-	}
-
-	b.WriteString("```")
-
-	return b.String()
-}
-
-// cmdSession 显示当前会话信息
-func (a *AgentLoop) cmdSession(sess *Session) string {
-	if sess == nil {
-		return "No active session"
-	}
-
-	messages := sess.Session.GetMessages()
-	var userMsgs, asstMsgs, toolMsgs int
-	for _, m := range messages {
-		switch m.Role {
-		case "user":
-			userMsgs++
-		case "assistant":
-			asstMsgs++
-		case "tool":
-			toolMsgs++
-		}
-	}
-
-	return fmt.Sprintf(`Session Info:
-  Key: %s
-  Messages: %d total (user: %d, assistant: %d, tool: %d)
-  Model: %s
-  Provider: %s`,
-		sess.Key,
-		len(messages),
-		userMsgs,
-		asstMsgs,
-		toolMsgs,
-		a.model.ID,
-		a.model.Provider,
-	)
-}
-
-// cmdHistory 显示消息历史
-func (a *AgentLoop) cmdHistory(sess *Session) string {
-	if sess == nil {
-		return "No active session"
-	}
-
-	messages := sess.Session.GetMessages()
-	if len(messages) == 0 {
-		return "No messages in session"
-	}
-
-	var b strings.Builder
-	b.WriteString("```\n")
-	b.WriteString(fmt.Sprintf("Message History (%d messages):\n\n", len(messages)))
-
-	// 显示最近 20 条消息
-	start := 0
-	if len(messages) > 20 {
-		start = len(messages) - 20
-		b.WriteString(fmt.Sprintf("(Showing last %d messages)\n\n", 20))
-	}
-
-	for i := start; i < len(messages); i++ {
-		m := messages[i]
-		role := m.Role
-		text := m.ExtractText()
-		if text == "" {
-			text = fmt.Sprintf("[%d content blocks]", len(m.Content))
-		}
-		preview := truncate(text, 100)
-		b.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, role, preview))
-	}
-
-	b.WriteString("```")
-
-	return b.String()
-}
-
-// cmdClear 清空当前会话消息
-func (a *AgentLoop) cmdClear(sess *Session) string {
-	if sess == nil {
-		return "No active session"
-	}
-
-	// 获取当前消息数量
-	messages := sess.Session.GetMessages()
-	msgCount := len(messages)
-
-	// 创建新的 session 来清空消息
-	sess.Session = session.NewSession(sess.Session.GetDir())
-
-	// 同时重置 agent context
-	if sess.Agent != nil {
-		agentCtx := agentctx.NewAgentContext(a.systemPrompt)
-		sess.Agent = agent.NewAgentWithContext(a.model, a.apiKey, agentCtx)
-		sess.Agent.SetCompactor(sess.Compactor)
-		sess.Agent.SetContextWindow(a.model.ContextWindow)
-		for _, tool := range a.tools {
-			sess.Agent.AddTool(tool)
-		}
-
-		// 设置思考级别
-		a.thinkingLevelMu.RLock()
-		thinkingLevel := a.thinkingLevel
-		a.thinkingLevelMu.RUnlock()
-		sess.Agent.SetThinkingLevel(thinkingLevel)
-	}
-
-	return fmt.Sprintf("Cleared %d messages from session", msgCount)
-}
-
-// cmdModel lists available models or switches to a specific model
-// Usage:
-//
-//	/model          - list all available models
-//	/model <id>     - switch to the specified model
-func (a *AgentLoop) cmdModel(args string, sess *Session) (string, error) {
-	args = strings.TrimSpace(args)
-
-	// If no args, list available models
-	if args == "" {
-		return a.listModels(), nil
-	}
-
-	// Otherwise, try to switch to the specified model
-	err := a.SwitchModel(args, sess)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Model switched to: %s (provider: %s)", a.model.ID, a.model.Provider), nil
-}
-
-// listModels lists all available models from ~/.aiclaw/models.json
-func (a *AgentLoop) listModels() string {
-	// Try to load models from ~/.aiclaw/models.json
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nCannot load models list: failed to get home directory",
-			a.model.ID, a.model.Provider)
-	}
-
-	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
-	specs, err := aiconfig.LoadModelSpecs(modelsPath)
-	if err != nil {
-		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nCannot load models list: %v\n\nExpected file: %s",
-			a.model.ID, a.model.Provider, err, modelsPath)
-	}
-
-	if len(specs) == 0 {
-		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nNo models found in %s",
-			a.model.ID, a.model.Provider, modelsPath)
-	}
-
-	// Filter to only show models whose providers have API keys configured
-	filtered := make([]aiconfig.ModelSpec, 0, len(specs))
-	for _, spec := range specs {
-		if a.providerHasAPIKey(spec.Provider) {
-			filtered = append(filtered, spec)
-		}
-	}
-
-	if len(filtered) == 0 {
-		return fmt.Sprintf("Model Info (current):\n  ID: %s\n  Provider: %s\n\nNo models with configured API keys found.\nCheck ~/.aiclaw/auth.json",
-			a.model.ID, a.model.Provider)
-	}
-
-	var b strings.Builder
-	b.WriteString("```\n")
-	b.WriteString(fmt.Sprintf("Available Models (%d):\n\n", len(filtered)))
-
-	// Display with numeric indices for easy selection
-	for i, spec := range filtered {
-		isCurrent := spec.ID == a.model.ID
-		prefix := "  "
-		if isCurrent {
-			prefix = "* "
-		}
-		displayName := spec.ID
-		if spec.Name != "" && spec.Name != spec.ID {
-			displayName = fmt.Sprintf("%s (%s)", spec.Name, spec.ID)
-		}
-		b.WriteString(fmt.Sprintf("%s[%d] %s\n", prefix, i, displayName))
-		if isCurrent {
-			b.WriteString("       <- current\n")
-		}
-	}
-
-	b.WriteString("\nUsage: /model <number> to switch (e.g., /model 0)\n")
-	b.WriteString("```")
-
-	return b.String()
-}
-
-// SwitchModel switches to the specified model
-func (a *AgentLoop) SwitchModel(modelID string, sess *Session) error {
-	modelID = strings.TrimSpace(modelID)
-
-	// Load available models
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
-	specs, err := aiconfig.LoadModelSpecs(modelsPath)
-	if err != nil {
-		return fmt.Errorf("failed to load models: %w (path: %s)", err, modelsPath)
-	}
-
-	// Filter to only models whose providers have API keys configured
-	filtered := make([]aiconfig.ModelSpec, 0, len(specs))
-	for _, spec := range specs {
-		if a.providerHasAPIKey(spec.Provider) {
-			filtered = append(filtered, spec)
-		}
-	}
-
-	// Try to parse as numeric index first
-	var targetSpec ModelSpec
-	if idx, parseErr := strconv.Atoi(modelID); parseErr == nil {
-		if idx < 0 || idx >= len(filtered) {
-			return fmt.Errorf("model index out of range: %d\nUse /model to list available models", idx)
-		}
-		targetSpec = filtered[idx]
-	} else {
-		// Handle provider/ID format (e.g., "minimax/MiniMax-M2.5")
-		// Extract just the ID part for matching
-		query := modelID
-		if parts := strings.SplitN(modelID, "/", 2); len(parts) == 2 {
-			query = parts[1] // Use the ID part after the slash
-		}
-
-		targetSpec, err = modelselect.SelectByQuery(filtered, query, func(spec ModelSpec) modelselect.Keys {
-			return modelselect.Keys{
-				Provider: spec.Provider,
-				ID:       spec.ID,
-				Name:     spec.Name,
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("%w\nUse /model to list available models", err)
-		}
-	}
-
-	// Resolve API key for the provider
-	apiKey, err := a.resolveAPIKey(targetSpec.Provider)
-	if err != nil {
-		return fmt.Errorf("failed to resolve API key for %s: %w", targetSpec.Provider, err)
-	}
-
-	// Create new model
-	newModel := llm.Model{
-		ID:            targetSpec.ID,
-		Provider:      targetSpec.Provider,
-		BaseURL:       targetSpec.BaseURL,
-		API:           targetSpec.API,
-		ContextWindow: targetSpec.ContextWindow,
-		MaxTokens:     targetSpec.MaxTokens,
-	}
-
-	// Update the agent loop's model
-	a.model = newModel
-	a.apiKey = apiKey
-
-	// Create new compactor with the new model
-	compactorCfg := compact.DefaultConfig()
-	newCompactor := compact.NewCompactor(
-		compactorCfg,
-		newModel,
-		apiKey,
-		a.systemPrompt,
-		newModel.ContextWindow,
-	)
-	a.compactor = newCompactor
-
-	// Update all existing sessions with the new model
-	a.sessionsMu.Lock()
-	for _, s := range a.sessions {
-		s.Agent.SetModel(newModel)
-		s.Agent.SetAPIKey(apiKey)
-		s.Agent.SetCompactor(&clawCompactor{sess: s.Session, compactor: newCompactor})
-		s.Agent.SetContextWindow(newModel.ContextWindow)
-		s.Compactor.Update(s.Session, newCompactor)
-	}
-	a.sessionsMu.Unlock()
-
-	// Update config file
-	if err := a.saveModelConfig(newModel); err != nil {
-		slog.Warn("[AgentLoop] Failed to save model config", "error", err)
-	}
-
-	slog.Info("[AgentLoop] Model switched",
-		"id", newModel.ID,
-		"provider", newModel.Provider,
-		"baseUrl", newModel.BaseURL,
-		"contextWindow", newModel.ContextWindow)
-
-	return nil
-}
-
-// providerHasAPIKey checks whether the given provider has a non-empty API key
-// configured in either environment variables or ~/.aiclaw/auth.json.
-func (a *AgentLoop) providerHasAPIKey(provider string) bool {
-	_, err := a.resolveAPIKey(provider)
-	return err == nil
-}
-
-// resolveAPIKey resolves API key from environment or auth.json
-func (a *AgentLoop) resolveAPIKey(provider string) (string, error) {
-	// Try environment variable first
-	envVar := strings.ToUpper(provider) + "_API_KEY"
-	if key := os.Getenv(envVar); key != "" {
-		return key, nil
-	}
-
-	// Try auth.json
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
-	data, err := os.ReadFile(authPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read auth.json (set %s env var): %w", envVar, err)
-	}
-
-	var auth map[string]map[string]string
-	if err := json.Unmarshal(data, &auth); err != nil {
-		return "", fmt.Errorf("failed to parse auth.json: %w", err)
-	}
-
-	if providerAuth, ok := auth[provider]; ok {
-		for _, keyField := range []string{"apiKey", "api_key", "key", "token"} {
-			if key, ok := providerAuth[keyField]; ok && key != "" {
-				return key, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("API key not found for provider %s in auth.json (set %s env var)", provider, envVar)
-}
-
-// saveModelConfig saves the current model config to ~/.aiclaw/config.json
-func (a *AgentLoop) saveModelConfig(model llm.Model) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	configPath := filepath.Join(homeDir, ".aiclaw", "config.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return err
-	}
-
-	// Parse existing config to preserve other fields
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return err
-	}
-
-	// Update model section
-	if cfg == nil {
-		cfg = make(map[string]any)
-	}
-	modelCfg := map[string]any{
-		"id":            model.ID,
-		"provider":      model.Provider,
-		"baseUrl":       model.BaseURL,
-		"api":           model.API,
-		"contextWindow": model.ContextWindow,
-		"maxTokens":     model.MaxTokens,
-	}
-	cfg["model"] = modelCfg
-
-	// Preserve voice and channels if they exist
-	if _, ok := cfg["voice"]; !ok && data != nil {
-		var voiceCfg map[string]any
-		var originalCfg map[string]any
-		if err := json.Unmarshal(data, &originalCfg); err == nil {
-			if v, ok := originalCfg["voice"]; ok {
-				cfg["voice"] = v
-			}
-		}
-		_ = voiceCfg
-	}
-
-	newData, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(configPath, newData, 0644)
-}
-
-// cmdTraceevent manages trace event settings
-// Usage:
-//
-//	/traceevent              - list enabled events
-//	/traceevent default      - reset to default set
-//	/traceevent on           - enable default working set of events
-//	/traceevent all          - enable ALL events (including high-frequency)
-//	/traceevent off          - disable all events
-//	/traceevent <events>     - set specific events (e.g., llm, tool, event)
-//	/traceevent enable <events>   - enable additional events
-//	/traceevent disable <events>  - disable specific events
-func (a *AgentLoop) cmdTraceevent(args string) string {
-	args = strings.TrimSpace(args)
-
-	// Ensure trace handler is initialized when traceevent commands are used
-	ensureTraceHandler()
-
-	if args == "" {
-		// List enabled events
-		events := traceevent.GetEnabledEvents()
-		if len(events) == 0 {
-			return "Trace events: disabled (use /traceevent on to enable default events, or /traceevent all for all events)"
-		}
-		return fmt.Sprintf("Trace events (%d): %s", len(events), strings.Join(events, ", "))
-	}
-
-	fields := strings.Fields(args)
-	op := fields[0]
-
-	switch op {
-	case "default":
-		events := traceevent.ResetToDefaultEvents()
-		return fmt.Sprintf("Reset to default events (%d): %s", len(events), strings.Join(events, ", "))
-
-	case "on":
-		// "on" enables the default working set (not all events, to avoid high-frequency noise)
-		events := traceevent.ResetToDefaultEvents()
-		return fmt.Sprintf("Enabled default events (%d)", len(events))
-
-	case "all":
-		// "all" enables ALL known events, including high-frequency ones
-		traceevent.DisableAllEvents()
-		expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
-		for _, eventName := range expanded {
-			traceevent.EnableEvent(eventName)
-		}
-		events := traceevent.GetEnabledEvents()
-		return fmt.Sprintf("Enabled all events (%d)", len(events))
-
-	case "off", "none":
-		traceevent.DisableAllEvents()
-		return "All trace events disabled"
-
-	case "enable":
-		if len(fields) < 2 {
-			return "Usage: /traceevent enable <events>\nExample: /traceevent enable llm tool"
-		}
-		selectors := fields[1:]
-		expanded, unknown := traceevent.ExpandEventSelectors(selectors)
-		if len(unknown) > 0 {
-			return fmt.Sprintf("Unknown trace events: %s\nAvailable selectors: all, llm, tool, event, log", strings.Join(unknown, ", "))
-		}
-		for _, eventName := range expanded {
-			traceevent.EnableEvent(eventName)
-		}
-		events := traceevent.GetEnabledEvents()
-		return fmt.Sprintf("Enabled events (%d): %s", len(events), strings.Join(events, ", "))
-
-	case "disable":
-		if len(fields) < 2 {
-			return "Usage: /traceevent disable <events>\nExample: /traceevent disable tool"
-		}
-		selectors := fields[1:]
-		expanded, unknown := traceevent.ExpandEventSelectors(selectors)
-		if len(unknown) > 0 {
-			return fmt.Sprintf("Unknown trace events: %s", strings.Join(unknown, ", "))
-		}
-		for _, eventName := range expanded {
-			traceevent.DisableEvent(eventName)
-		}
-		events := traceevent.GetEnabledEvents()
-		if len(events) == 0 {
-			return "Disabled all events"
-		}
-		return fmt.Sprintf("Remaining events (%d): %s", len(events), strings.Join(events, ", "))
-
-	default:
-		// Treat as list of events to set (replace current set)
-		traceevent.DisableAllEvents()
-		expanded, unknown := traceevent.ExpandEventSelectors(fields)
-		if len(unknown) > 0 {
-			return fmt.Sprintf("Unknown trace events: %s\nAvailable selectors: all, llm, tool, event, log", strings.Join(unknown, ", "))
-		}
-		for _, eventName := range expanded {
-			traceevent.EnableEvent(eventName)
-		}
-		events := traceevent.GetEnabledEvents()
-		return fmt.Sprintf("Set events (%d): %s", len(events), strings.Join(events, ", "))
-	}
-}
-
-// cmdShow displays settings or usage statistics
-// Usage:
-//
-//	/show              - show settings (default)
-//	/show settings     - show current settings
-func (a *AgentLoop) cmdShow(args string, sess *Session) string {
-	args = strings.TrimSpace(args)
-
-	if args == "" || args == "settings" {
-		return a.cmdShowSettings(sess)
-	}
-
-	return fmt.Sprintf("Unknown show command: %s\nUsage: /show [settings]", args)
-}
-
-// cmdShowSettings shows current configuration settings
-func (a *AgentLoop) cmdShowSettings(sess *Session) string {
-	var sb strings.Builder
-
-	sb.WriteString("```\n")
-	sb.WriteString("Current Settings:\n")
-
-	// Model info
-	sb.WriteString(fmt.Sprintf("  Model: %s (provider: %s)\n", a.model.ID, a.model.Provider))
-	if a.model.BaseURL != "" {
-		sb.WriteString(fmt.Sprintf("  Base URL: %s\n", a.model.BaseURL))
-	}
-
-	// Thinking level
-	a.thinkingLevelMu.RLock()
-	thinkingLevel := a.thinkingLevel
-	a.thinkingLevelMu.RUnlock()
-	sb.WriteString(fmt.Sprintf("  Thinking Level: %s\n", thinkingLevel))
-
-	// Session info
-	if sess != nil {
-		sb.WriteString(fmt.Sprintf("  Session: %s\n", sess.Key))
-		if sess.Session != nil {
-			msgCount := len(sess.Session.GetMessages())
-			sb.WriteString(fmt.Sprintf("  Session Messages: %d\n", msgCount))
-		}
-	}
-
-	// Skills
-	if len(a.skills) > 0 {
-		sb.WriteString(fmt.Sprintf("  Skills: %d loaded\n", len(a.skills)))
-	}
-
-	// Voice
-	if a.transcriber != nil {
-		sb.WriteString("  Voice: enabled\n")
-	} else {
-		sb.WriteString("  Voice: disabled\n")
-	}
-
-	// Cron
-	if a.cronService != nil {
-		sb.WriteString("  Cron: enabled\n")
-	}
-
-	sb.WriteString("```")
-
-	return sb.String()
-}
-
-// ensureTraceHandler ensures that a trace handler is initialized if not already set.
-// This allows trace events to be captured even when -trace flag was not used at startup.
-func ensureTraceHandler() {
-	if traceevent.GetHandler() != nil {
-		return
-	}
-
-	// Initialize trace handler on demand
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		slog.Warn("Failed to get home directory for trace handler", "error", err)
-		return
-	}
-
-	tracesDir := filepath.Join(homeDir, ".aiclaw", "traces")
-	handler, err := traceevent.NewFileHandler(tracesDir)
-	if err != nil {
-		slog.Warn("Failed to create trace handler", "dir", tracesDir, "error", err)
-		return
-	}
-
-	traceevent.SetHandler(handler)
-	slog.Info("Trace handler initialized on demand", "dir", tracesDir)
-}
-
-// cmdThinking toggles or sets the thinking level
-// Usage:
-//
-//	/thinking              - toggle to next level
-//	/thinking <level>      - set specific level (off, minimal, low, medium, high, xhigh)
-func (a *AgentLoop) cmdThinking(args string, sess *Session) string {
-	levels := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
-	levelMap := make(map[string]string)
-	for _, level := range levels {
-		levelMap[level] = level
-	}
-
-	args = strings.TrimSpace(args)
-
-	var newLevel string
-
-	if args == "" {
-		// Toggle to next level
-		a.thinkingLevelMu.RLock()
-		currentLevel := a.thinkingLevel
-		a.thinkingLevelMu.RUnlock()
-
-		// Find current level index
-		currentIndex := 0
-		for i, level := range levels {
-			if level == currentLevel {
-				currentIndex = i
-				break
-			}
-		}
-
-		// Move to next level (wrap around)
-		nextIndex := (currentIndex + 1) % len(levels)
-		newLevel = levels[nextIndex]
-	} else {
-		// Set specific level
-		if _, ok := levelMap[args]; !ok {
-			return fmt.Sprintf("Invalid thinking level: %s\nValid levels: %s", args, strings.Join(levels, ", "))
-		}
-		newLevel = args
-	}
-
-	// Update thinking level
-	a.thinkingLevelMu.Lock()
-	a.thinkingLevel = newLevel
-	a.thinkingLevelMu.Unlock()
-
-	// Update all existing sessions with new thinking level
-	a.sessionsMu.RLock()
-	for _, sess := range a.sessions {
-		if sess.Agent != nil {
-			sess.Agent.SetThinkingLevel(newLevel)
-		}
-	}
-	a.sessionsMu.RUnlock()
-
-	return fmt.Sprintf("Thinking level: %s", newLevel)
-}
-
-// cleanMiniMaxReasoningFromText removes MiniMax's reasoning prefix from text.
-// MiniMax reasoning models prefix their output with internal reasoning like:
-// "用户问\"XXX\"，这是简单问题...\n\n\n实际回答"
-// This function extracts only the actual answer part.
-func cleanMiniMaxReasoningFromText(content string) string {
-	// MiniMax reasoning typically ends with "\n\n\n" followed by the actual answer
-	if idx := strings.Index(content, "\n\n\n"); idx != -1 && idx < len(content)-10 {
-		before := content[:idx]
-		after := strings.TrimSpace(content[idx+3:])
-
-		// If the part before contains reasoning patterns, extract the after part
-		if looksLikeMiniMaxReasoning(before) {
-			return after
-		}
-	}
-
-	// Also try "\n\n" pattern
-	if idx := strings.Index(content, "\n\n"); idx != -1 && idx < len(content)-10 {
-		before := content[:idx]
-		after := strings.TrimSpace(content[idx+2:])
-
-		if looksLikeMiniMaxReasoning(before) {
-			return after
-		}
-	}
-
-	return content
-}
-
-// looksLikeMiniMaxReasoning checks if text looks like MiniMax's internal reasoning
-func looksLikeMiniMaxReasoning(text string) bool {
-	patterns := []string{"用户问", "用户用", "这是", "应该", "需要", "根据提示", "根据系统", "分析"}
-	for _, p := range patterns {
-		if strings.Contains(text, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// ReloadSkills reloads skills from the skills directory.
-// This allows hot-reloading of skills without restarting the agent.
-func (a *AgentLoop) ReloadSkills() (int, []string, error) {
-	if a.clawDir == "" {
-		return 0, nil, fmt.Errorf("claw directory not configured")
-	}
-
-	skillLoader := skill.NewLoader(a.clawDir)
-	result := skillLoader.Load(nil)
-
-	var warnings []string
-	for _, diag := range result.Diagnostics {
-		warnings = append(warnings, fmt.Sprintf("%s: %s", diag.Path, diag.Message))
-	}
-
-	a.skills = result.Skills
-	a.systemPrompt = "" // Will be rebuilt on next turn
-
-	slog.Info("[AgentLoop] Skills reloaded", "count", len(result.Skills))
-	return len(result.Skills), warnings, nil
-}
-
-// GetSkills returns the currently loaded skills.
-func (a *AgentLoop) GetSkills() []skill.Skill {
-	return a.skills
-}
-
-// RefreshAPIKey re-reads the API key from auth.json for the current model's provider
-// and updates the cached apiKey. This allows runtime key updates without restart.
-// It also updates all existing sessions' agents so they use the new key immediately.
-func (a *AgentLoop) RefreshAPIKey() error {
-	provider := a.model.Provider
-	if provider == "" {
-		provider = "zai" // default fallback
-	}
-	apiKey, err := a.resolveAPIKey(provider)
-	if err != nil {
-		return fmt.Errorf("failed to resolve API key for provider %s: %w", provider, err)
-	}
-	a.apiKey = apiKey
-
-	// Update all existing sessions' agents with the new key
-	a.sessionsMu.RLock()
-	for _, sess := range a.sessions {
-		if sess.Agent != nil {
-			sess.Agent.SetAPIKey(apiKey)
-		}
-	}
-	a.sessionsMu.RUnlock()
-
-	slog.Info("[AgentLoop] API key refreshed", "provider", provider)
-	return nil
-}

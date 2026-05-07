@@ -1,0 +1,171 @@
+version: "1"
+metadata:
+  spec_file: "docs/design/claw-rpc-refactor.md"
+  created_at: "2025-07-11"
+
+tasks:
+  - id: T001
+    title: "Implement RPCConn — single subprocess connection manager"
+    description: |
+      Create claw/pkg/adapter/rpc_client.go with RPCConn struct.
+      Manages a single ai --mode rpc subprocess: start, stdin write, stdout scan, request-response matching, event channel.
+      StartRPC(sessionKey, sessionsDir, systemPromptFile) launches ai subprocess with --session and --system-prompt flags.
+      Close() sends quit and kills process.
+      Prompt(ctx, message) sends prompt command, collects turn_end text until agent_end, returns concatenated response.
+    priority: high
+    estimated_hours: 4
+    dependencies: []
+    file: "claw/pkg/adapter/rpc_client.go"
+    done: false
+
+  - id: T002
+    title: "Implement ConnManager — multi-connection pool"
+    description: |
+      Add ConnManager to rpc_client.go (same file).
+      Manages map[sessionKey]*RPCConn with lazy creation.
+      Prompt(ctx, sessionKey, message) delegates to getOrCreateConn, handles restart-on-failure with single retry.
+      CloseAll() shuts down all connections.
+    priority: high
+    estimated_hours: 2
+    dependencies: [T001]
+    file: "claw/pkg/adapter/rpc_client.go"
+    done: false
+
+  - id: T003
+    title: "Write unit tests for RPCConn protocol parsing"
+    description: |
+      Create claw/pkg/adapter/rpc_client_test.go.
+      Test RPCConn with mock stdin/stdout pipes:
+      - Test StartRPC constructs correct command args
+      - Test sendRequest writes valid JSON to stdin
+      - Test readLoop dispatches response by ID and events by type
+      - Test Prompt collects turn_end text and returns on agent_end
+      - Test error detection (stdout EOF) triggers reconnect
+    priority: high
+    estimated_hours: 3
+    dependencies: [T001]
+    file: "claw/pkg/adapter/rpc_client_test.go"
+    done: false
+
+  - id: T004
+    title: "Rewrite AgentLoop.processMessage to use ConnManager"
+    description: |
+      Replace agent.Agent call chain in processMessage with connManager.Prompt().
+      Remove getOrCreateSession, createSession, loopConfig methods.
+      AgentLoop holds *ConnManager instead of map[string]*Session.
+      Voice transcription remains in claw layer, passes text to connManager.Prompt().
+      Event collection moves into RPCConn (buffer to agent_end).
+    priority: high
+    estimated_hours: 4
+    dependencies: [T002]
+    file: "claw/pkg/adapter/adapter.go"
+    done: false
+
+  - id: T005
+    title: "Remove claw-side agent/session/compact code"
+    description: |
+      Delete from adapter.go:
+      - clawCompactor struct and methods (ShouldCompact, Compact, CalculateDynamicThreshold, EstimateContextTokens)
+      - resolveModel function and models.json loading
+      - createSession, getOrCreateSession
+      - Session struct (replaced by conn-per-sessionKey)
+      - All cmd* methods that duplicate ai slash commands (cmdHelp, cmdModel, cmdSession, cmdHistory, cmdClear, cmdTraceevent, cmdShow, cmdThinking, SwitchModel, listModels, saveModelConfig, etc.)
+      - loopConfig
+      - ReloadSkills, GetSkills, RefreshAPIKey
+    priority: high
+    estimated_hours: 3
+    dependencies: [T004]
+    file: "claw/pkg/adapter/adapter.go"
+    done: false
+
+  - id: T006
+    title: "Implement slash command routing in claw"
+    description: |
+      Claw registers only local commands: /cron, /skills reload, /help.
+      processMessage checks whitelist first, then forwards everything else as connManager.Prompt(sessionKey, message).
+      /help in claw outputs text format listing local commands + note that other commands go to ai.
+      Update registerBuiltinCommands to only register local set.
+    priority: medium
+    estimated_hours: 2
+    dependencies: [T004]
+    file: "claw/pkg/adapter/adapter.go"
+    done: false
+
+  - id: T007
+    title: "Update main.go for new AgentLoop wiring"
+    description: |
+      Update claw/cmd/aiclaw/main.go:
+      - Replace agent/session creation with ConnManager initialization
+      - Simplify buildSystemPrompt to identity-only (no skills list embedding)
+      - Skills registration moves to binary layer as tool registration (future), remove from system prompt
+      - Cron handler uses connManager.Prompt instead of agentLoop.ProcessDirect
+      - Remove model/config loading that's now handled by ai
+    priority: high
+    estimated_hours: 3
+    dependencies: [T004, T005]
+    file: "claw/cmd/aiclaw/main.go"
+    done: false
+
+  - id: T008
+    title: "Clean up imports and dependencies"
+    description: |
+      After all adapter changes:
+      - Remove agent, session, compact, agentctx imports from adapter.go
+      - Remove modelselect, llm config imports
+      - Clean go.mod if possible (remove unused direct deps)
+      - Verify claw compiles and basic tests pass
+    priority: medium
+    estimated_hours: 2
+    dependencies: [T005, T007]
+    file: "claw/go.mod"
+    done: false
+
+  - id: T009
+    title: "Integration test — end-to-end claw → ai subprocess"
+    description: |
+      Manual integration verification:
+      - Start claw, send message to a session, verify response comes back
+      - Test /cron trigger sends message through ai subprocess
+      - Kill ai subprocess, verify retry on next message
+      - Verify session persistence (restart ai subprocess, check history)
+      - Verify voice transcription still works (transcribe in claw, text to ai)
+    priority: high
+    estimated_hours: 2
+    dependencies: [T006, T007, T008]
+    file: "claw/pkg/adapter/rpc_client_test.go"
+    done: false
+
+groups:
+  - name: rpc-infra
+    title: "RPC Client Infrastructure"
+    description: "Build the RPCConn and ConnManager that manage ai subprocess connections"
+    tasks: [T001, T002, T003]
+    commit_message: "feat(claw): add RPC client for ai subprocess communication"
+
+  - name: adapter-rewrite
+    title: "Replace AgentLoop Core with RPC Client"
+    description: "Rewrite processMessage, remove duplicate agent/session/compact code, implement command routing"
+    tasks: [T004, T005, T006, T007]
+    commit_message: "feat(claw): replace agent loop with RPC client, remove duplicate code"
+
+  - name: cleanup-verify
+    title: "Cleanup and Integration Verification"
+    description: "Clean imports/dependencies, verify end-to-end functionality"
+    tasks: [T008, T009]
+    commit_message: "chore(claw): clean up imports and verify integration"
+
+group_order: [rpc-infra, adapter-rewrite, cleanup-verify]
+
+risks:
+  - area: "Protocol mismatch"
+    risk: "ai RPC protocol may have edge cases not covered by mock tests"
+    mitigation: "Integration test T009 verifies real subprocess communication"
+  - area: "Session state loss"
+    risk: "Switching from in-memory Session to subprocess-based may lose state during migration"
+    mitigation: "ai handles session persistence to disk; restart recovers from disk"
+  - area: "Breaking claw functionality"
+    risk: "Large adapter.go rewrite may break existing claw features"
+    mitigation: "Incremental groups; rpc-infra tested independently before adapter-rewrite"
+  - area: "Subprocess startup latency"
+    risk: "First message to each session has ~100-200ms subprocess startup overhead"
+    mitigation: "Accepted per design decision Q2; lazy start + never close"
