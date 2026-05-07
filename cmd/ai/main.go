@@ -61,7 +61,7 @@ func main() {
 	// Shift os.Args so flag.Parse in subcommands works correctly.
 	os.Args = os.Args[1:]
 
-		switch subcmd {
+	switch subcmd {
 	case "rpc":
 		rpcSubcommand()
 	case "run":
@@ -72,13 +72,13 @@ func main() {
 		lsSubcommand()
 	case "watch":
 		watchSubcommand()
-		case "send":
+	case "send":
 		sendSubcommand()
 	case "kill":
 		killSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", subcmd)
-				fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
+		fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
 		os.Exit(1)
 	}
 }
@@ -196,6 +196,3 @@ func rpcSubcommand() {
 		os.Exit(1)
 	}
 }
-
-
-

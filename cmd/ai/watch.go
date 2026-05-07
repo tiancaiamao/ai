@@ -123,31 +123,31 @@ type watchModel struct {
 	runID       string
 	statusLine  string
 	sentBuf     *sentenceBuffer
-	sinceFlag   int64  // --since offset for machine-readable mode
-	machineMode bool   // if true, print raw events + cursor and exit
+	sinceFlag   int64 // --since offset for machine-readable mode
+	machineMode bool  // if true, print raw events + cursor and exit
 
 	// Streaming state: tracks current role prefix for inline content.
 	// Matches ai-win's writeStream behavior: role prefix printed once
 	// when role changes, then text appended inline until role changes again.
-	currentRole    string // "", "assistant", "thinking", "tool", "ai"
-	inlineActive   bool   // true when we're in the middle of an inline stream
-	showPrefixes   bool   // whether to show "role: " prefixes (default true)
-	showThinking   bool   // whether to show thinking content
-	showTools      bool   // whether to show tool content
+	currentRole  string // "", "assistant", "thinking", "tool", "ai"
+	inlineActive bool   // true when we're in the middle of an inline stream
+	showPrefixes bool   // whether to show "role: " prefixes (default true)
+	showThinking bool   // whether to show thinking content
+	showTools    bool   // whether to show tool content
 }
 
 func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool) watchModel {
 	m := watchModel{
-		eventsPath:    eventsPath,
-		runID:         runID,
-		mode:          "replay",
-		statusLine:    fmt.Sprintf("ai watch | run %s | replaying...", runID),
-		content:       &strings.Builder{},
-		sinceFlag:     sinceOffset,
-		machineMode:   machineMode,
-		showPrefixes:  true,
-		showThinking:  true,
-		showTools:     true,
+		eventsPath:   eventsPath,
+		runID:        runID,
+		mode:         "replay",
+		statusLine:   fmt.Sprintf("ai watch | run %s | replaying...", runID),
+		content:      &strings.Builder{},
+		sinceFlag:    sinceOffset,
+		machineMode:  machineMode,
+		showPrefixes: true,
+		showThinking: true,
+		showTools:    true,
 	}
 	m.sentBuf = newSentenceBuffer(func(text string) {
 		m.appendInline(text)
@@ -302,17 +302,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-wrap content to the new width.
 		m.syncContent()
 
-		case replayDone:
+	case replayDone:
 		// Finished replaying history, switch to live mode.
 		m.offset = msg.offset
 		m.caughtUp = true
-				m.mode = "live"
+		m.mode = "live"
 		m.updateStatus()
 		// Flush any remaining buffered text.
 		m.sentBuf.flush()
 		return m, waitForFile(m.eventsPath, m.offset)
 
-		case replayBatch:
+	case replayBatch:
 		// Batch of events from replay phase — render all at full speed.
 		m.offset = msg.offset
 		for _, line := range msg.lines {
@@ -444,7 +444,7 @@ func waitForFile(path string, offset int64) tea.Cmd {
 
 func watchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
-		idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
+	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
 	fs.Parse(os.Args[1:])
 
@@ -528,7 +528,7 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		if err != nil {
 			return nil, fmt.Errorf("prefix lookup for %q: %w", idFlag, err)
 		}
-				if len(results) == 0 {
+		if len(results) == 0 {
 			return nil, fmt.Errorf("no running run found matching %q", idFlag)
 		}
 		if len(results) == 1 {
@@ -569,7 +569,7 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		}
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
-		return &alive[0], nil
+	return &alive[0], nil
 }
 
 // processEvent handles a single parsed event with role-aware streaming,
@@ -580,7 +580,7 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 	}
 
 	switch f.Kind {
-		case run.KindText:
+	case run.KindText:
 		// Text content (assistant or user) — stream inline with role prefix
 		role := f.Role
 		if role == "" {

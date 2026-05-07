@@ -131,7 +131,7 @@ func TestSocketCommunication(t *testing.T) {
 		t.Fatalf("Read response: %v", err)
 	}
 
-		var resp run.Response
+	var resp run.Response
 	raw := strings.TrimRight(string(buf[:n]), "\n")
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v (raw: %q)", err, raw)
@@ -250,7 +250,7 @@ func TestAutoSelectionByCwd(t *testing.T) {
 	_ = run2
 	_ = run3
 
-		// Find runs for /project/alpha.
+	// Find runs for /project/alpha.
 	// run3 has dead PID 99999, so IsRunning filters it out.
 	// Only run1 (alive PID) should be returned.
 	results, err := run.FindRunningByCwd(tmpDir, "/project/alpha")
@@ -362,14 +362,14 @@ func TestSubcommandHelp(t *testing.T) {
 		t.Skip("skipping on non-unix")
 	}
 
-		// Build the binary.
+	// Build the binary.
 	bin := filepath.Join(t.TempDir(), "ai-test")
 	cmd := exec.Command("go", "build", "-o", bin, "github.com/tiancaiamao/ai/cmd/ai")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-		subcommands := []string{"rpc", "run", "ls", "watch", "send", "kill"}
+	subcommands := []string{"rpc", "run", "ls", "watch", "send", "kill"}
 	for _, sub := range subcommands {
 		t.Run(sub, func(t *testing.T) {
 			cmd := exec.Command(bin, sub, "--help")
@@ -396,7 +396,7 @@ func TestBackwardCompatModeFlag(t *testing.T) {
 		t.Skip("skipping on non-unix")
 	}
 
-		bin := filepath.Join(t.TempDir(), "ai-test")
+	bin := filepath.Join(t.TempDir(), "ai-test")
 	cmd := exec.Command("go", "build", "-o", bin, "github.com/tiancaiamao/ai/cmd/ai")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
