@@ -21,6 +21,9 @@ backends:
     command: codex
     args: ["exec", "--sandbox", "workspace-write", "--json", "--skip-git-repo-check"]
     protocol: raw
+    env:
+      - "HTTP_PROXY=http://127.0.0.1:8119"
+      - "HTTPS_PROXY=http://127.0.0.1:8119"
     supports:
       steer: false
       abort: false
