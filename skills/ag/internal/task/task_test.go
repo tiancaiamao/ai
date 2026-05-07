@@ -13,6 +13,19 @@ func setupTest(t *testing.T) {
 	t.Cleanup(func() { os.Chdir(origDir) })
 }
 
+// claimAndRun moves a task from pending → claimed → running (ready for done/fail).
+func claimAndRun(t *testing.T, id, claimant string) {
+	t.Helper()
+	_, err := Claim(id, claimant)
+	if err != nil {
+		t.Fatalf("Claim %s: %v", id, err)
+	}
+	_, err = Transition(id, StatusRunning)
+	if err != nil {
+		t.Fatalf("Transition %s to running: %v", id, err)
+	}
+}
+
 func TestCreate(t *testing.T) {
 	setupTest(t)
 
@@ -69,7 +82,7 @@ func TestDone(t *testing.T) {
 	setupTest(t)
 
 	Create("Task", "")
-	Claim("t001", "worker-1")
+	claimAndRun(t, "t001", "worker-1")
 
 	task, err := Done("t001", "fixed the bug in auth.go")
 	if err != nil {
@@ -93,7 +106,7 @@ func TestFail(t *testing.T) {
 	setupTest(t)
 
 	Create("Task", "")
-	Claim("t001", "worker-1")
+	claimAndRun(t, "t001", "worker-1")
 
 	task, err := Fail("t001", "out of memory", true)
 	if err != nil {
@@ -189,9 +202,7 @@ func TestDependencyBlocksClaim(t *testing.T) {
 		t.Fatal("expected claim to fail when dependency is not done")
 	}
 
-	if _, err := Claim("t001", "worker-1"); err != nil {
-		t.Fatalf("claim t001: %v", err)
-	}
+	claimAndRun(t, "t001", "worker-1")
 	if _, err := Done("t001", "done"); err != nil {
 		t.Fatalf("done t001: %v", err)
 	}
@@ -243,7 +254,7 @@ func TestDone_WithSummary(t *testing.T) {
 	setupTest(t)
 
 	Create("Task with summary", "")
-	Claim("t001", "worker-1")
+	claimAndRun(t, "t001", "worker-1")
 
 	task, err := Done("t001", "completed all changes to auth module")
 	if err != nil {
@@ -270,7 +281,7 @@ func TestFail_WithRetryable(t *testing.T) {
 	setupTest(t)
 
 	Create("Flaky task", "")
-	Claim("t001", "worker-1")
+	claimAndRun(t, "t001", "worker-1")
 
 	task, err := Fail("t001", "connection timeout", true)
 	if err != nil {
@@ -349,7 +360,8 @@ func TestClaimNext(t *testing.T) {
 		t.Fatal("expected error, t002 should be blocked")
 	}
 
-	// Complete t001
+		// Complete t001: must go through running → done
+	Transition("t001", StatusRunning)
 	Done("t001", "finished")
 
 	// Now t002 should be claimable
@@ -392,13 +404,16 @@ tasks:
 		t.Fatalf("expected 3 tasks, got %d", count)
 	}
 
-	// Verify T001
+		// Verify T001 — description is the YAML description field (not title prefix)
 	t1, err := Load("T001")
 	if err != nil {
 		t.Fatalf("Load T001: %v", err)
 	}
-	if t1.Description != "Setup database: Create schema and seed data" {
+	if t1.Description != "Create schema and seed data" {
 		t.Fatalf("wrong T001 description: %s", t1.Description)
+	}
+	if t1.Title != "Setup database" {
+		t.Fatalf("wrong T001 title: %s", t1.Title)
 	}
 
 	// Verify T002 has dependency on T001
@@ -454,11 +469,303 @@ tasks:
 		t.Fatalf("expected 2 tasks, got %d", count)
 	}
 
-	t2, err := Load("T002")
+		t2, err := Load("T002")
 	if err != nil {
 		t.Fatalf("Load T002: %v", err)
 	}
 	if len(t2.Dependencies) != 1 || t2.Dependencies[0] != "T001" {
 		t.Fatalf("forward dependency missing: T002.Dependencies = %v", t2.Dependencies)
+	}
+}
+
+func TestStateMachine_InvalidTransitions(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+
+	// pending → done is invalid (must go through claimed → running)
+	_, err := Transition("t001", StatusDone)
+	if err == nil {
+		t.Fatal("expected error: pending → done is invalid")
+	}
+
+	// pending → running is invalid (must go through claimed first)
+	_, err = Transition("t001", StatusRunning)
+	if err == nil {
+		t.Fatal("expected error: pending → running is invalid")
+	}
+
+	// pending → claimed is valid
+	_, err = Transition("t001", StatusClaimed)
+	if err != nil {
+		t.Fatalf("pending → claimed should succeed: %v", err)
+	}
+
+	// claimed → done is invalid (must go through running)
+	_, err = Transition("t001", StatusDone)
+	if err == nil {
+		t.Fatal("expected error: claimed → done is invalid")
+	}
+
+	// claimed → running is valid
+	_, err = Transition("t001", StatusRunning)
+	if err != nil {
+		t.Fatalf("claimed → running should succeed: %v", err)
+	}
+
+	// running → done is valid
+	_, err = Transition("t001", StatusDone)
+	if err != nil {
+		t.Fatalf("running → done should succeed: %v", err)
+	}
+
+	// done → anything is invalid (terminal state)
+	_, err = Transition("t001", StatusRunning)
+	if err == nil {
+		t.Fatal("expected error: done is terminal")
+	}
+}
+
+func TestStateMachine_ReviewCycle(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+
+	// running → review
+	_, err := Transition("t001", StatusReview)
+	if err != nil {
+		t.Fatalf("running → review: %v", err)
+	}
+
+	// review → revision
+	_, err = Transition("t001", StatusRevision)
+	if err != nil {
+		t.Fatalf("review → revision: %v", err)
+	}
+
+	// revision → review (second round)
+	_, err = Transition("t001", StatusReview)
+	if err != nil {
+		t.Fatalf("revision → review: %v", err)
+	}
+
+	// review → done
+	_, err = Transition("t001", StatusDone)
+	if err != nil {
+		t.Fatalf("review → done: %v", err)
+	}
+}
+
+func TestRetry(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+
+	// Fail the task
+	_, err := Fail("t001", "error", true)
+	if err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	// Retry back to pending
+	task, err := Retry("t001", 3)
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	if task.Status != StatusPending {
+		t.Fatalf("expected pending after retry, got %s", task.Status)
+	}
+	if task.RetryCount != 1 {
+		t.Fatalf("expected retry count 1, got %d", task.RetryCount)
+	}
+	if task.Claimant != "" {
+		t.Fatalf("claimant should be cleared on retry, got %s", task.Claimant)
+	}
+
+	// Can retry again
+	claimAndRun(t, "t001", "worker-2")
+	Fail("t001", "error again", true)
+	task, err = Retry("t001", 3)
+	if err != nil {
+		t.Fatalf("Retry 2: %v", err)
+	}
+	if task.RetryCount != 2 {
+		t.Fatalf("expected retry count 2, got %d", task.RetryCount)
+	}
+
+	// Retry on non-failed task should fail
+	Create("Another", "")
+	_, err = Retry("t002", 3)
+	if err == nil {
+		t.Fatal("expected error: can't retry non-failed task")
+	}
+}
+
+func TestRetry_MaxExceeded(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+	Fail("t001", "error", true)
+	Retry("t001", 2)
+
+	claimAndRun(t, "t001", "worker-2")
+	Fail("t001", "error", true)
+	Retry("t001", 2)
+
+	claimAndRun(t, "t001", "worker-3")
+	Fail("t001", "error", true)
+
+	// Third retry should fail (max 2)
+	_, err := Retry("t001", 2)
+	if err == nil {
+		t.Fatal("expected error: max retries exceeded")
+	}
+}
+
+func TestGroups(t *testing.T) {
+	setupTest(t)
+
+	planContent := `version: "1"
+tasks:
+  - id: "T001"
+    title: "Task 1"
+    group: "backend"
+  - id: "T002"
+    title: "Task 2"
+    group: "backend"
+  - id: "T003"
+    title: "Task 3"
+    group: "frontend"
+  - id: "T004"
+    title: "No group"
+`
+	planFile := filepath.Join(t.TempDir(), "plan.yml")
+	os.WriteFile(planFile, []byte(planContent), 0644)
+
+	ImportPlan(planFile)
+
+	groups, err := Groups()
+	if err != nil {
+		t.Fatalf("Groups: %v", err)
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %d: %v", len(groups), groups)
+	}
+
+	// GroupTasks for backend
+	bt, err := GroupTasks("backend")
+	if err != nil {
+		t.Fatalf("GroupTasks: %v", err)
+	}
+	if len(bt) != 2 {
+		t.Fatalf("expected 2 backend tasks, got %d", len(bt))
+	}
+
+	// GroupTasks for default (no group specified)
+	dt, err := GroupTasks("default")
+	if err != nil {
+		t.Fatalf("GroupTasks default: %v", err)
+	}
+	if len(dt) != 1 {
+		t.Fatalf("expected 1 default task, got %d", len(dt))
+	}
+}
+
+func TestAllDone(t *testing.T) {
+	setupTest(t)
+
+	Create("Task 1", "")
+	Create("Task 2", "")
+
+	done, err := AllDone()
+	if err != nil {
+		t.Fatalf("AllDone: %v", err)
+	}
+	if done {
+		t.Fatal("should not be all done")
+	}
+
+	claimAndRun(t, "t001", "w1")
+	Done("t001", "ok")
+
+	done, _ = AllDone()
+	if done {
+		t.Fatal("t002 still pending, should not be all done")
+	}
+
+	claimAndRun(t, "t002", "w2")
+	Done("t002", "ok")
+
+	done, _ = AllDone()
+	if !done {
+		t.Fatal("all tasks done, should be true")
+	}
+}
+
+func TestIsTerminal(t *testing.T) {
+	if !IsTerminal(StatusDone) {
+		t.Fatal("done should be terminal")
+	}
+	if IsTerminal(StatusFailed) {
+		t.Fatal("failed should not be terminal (can retry to pending)")
+	}
+	if IsTerminal(StatusPending) {
+		t.Fatal("pending should not be terminal")
+	}
+	if IsTerminal(StatusRunning) {
+		t.Fatal("running should not be terminal")
+	}
+	if IsTerminal(StatusReview) {
+		t.Fatal("review should not be terminal")
+	}
+}
+
+func TestImportPlanWithGroups(t *testing.T) {
+	setupTest(t)
+
+	planContent := `version: "1"
+tasks:
+  - id: "T001"
+    title: "Backend task"
+    description: |
+      ## Goal
+      Build the API
+      ## Files
+      - api/handler.go
+      ## Done when
+      - Tests pass
+    group: "backend"
+  - id: "T002"
+    title: "Frontend task"
+    description: "Build the UI"
+    group: "frontend"
+    dependencies:
+      - "T001"
+`
+	planFile := filepath.Join(t.TempDir(), "plan.yml")
+	os.WriteFile(planFile, []byte(planContent), 0644)
+
+	count, err := ImportPlan(planFile)
+	if err != nil {
+		t.Fatalf("ImportPlan: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2, got %d", count)
+	}
+
+	t1, _ := Load("T001")
+	if t1.Group != "backend" {
+		t.Fatalf("expected backend group, got %s", t1.Group)
+	}
+	if t1.Title != "Backend task" {
+		t.Fatalf("wrong title: %s", t1.Title)
+	}
+
+	t2, _ := Load("T002")
+	if t2.Group != "frontend" {
+		t.Fatalf("expected frontend group, got %s", t2.Group)
 	}
 }
