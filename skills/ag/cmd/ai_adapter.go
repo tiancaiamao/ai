@@ -1,8 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
-	"fmt"
+		"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +46,7 @@ func (a *AIAdapter) SpawnWithAIServe(id, system, input, cwd string) error {
 		return fmt.Errorf("write activity.json: %w", err)
 	}
 
-	// 构建 ai serve 命令，在后台运行
+		// 构建 ai serve 命令，在后台运行
 	cmd := exec.Command("ai", "serve")
 
 	// 添加参数
@@ -62,24 +63,49 @@ func (a *AIAdapter) SpawnWithAIServe(id, system, input, cwd string) error {
 	// 设置 agent 名称以便识别
 	cmd.Args = append(cmd.Args, "--name", "ag-agent-"+id)
 
-	// 使用 CombinedOutput 来捕获所有输出，包括 stderr
-	output, err := cmd.CombinedOutput()
+	// 将 stdout pipe 用于读取 run ID，stderr 丢弃到 os.DevNull
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("ai serve failed: %w, output: %s", err, string(output))
+		return fmt.Errorf("create stdout pipe: %w", err)
+	}
+	cmd.Stderr = nil // discard stderr
+
+			if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ai serve failed: %w", err)
 	}
 
-	// 提取 run ID
-	runID := strings.TrimSpace(string(output))
+		// 读取 run ID（ai serve 输出 run ID 后继续运行）
+		// 用 ReadString 只读第一行就返回，不让 ai serve 的后续输出阻塞
+	reader := bufio.NewReader(stdout)
+	firstLine, _ := reader.ReadString('\n')
+	stdout.Close() // Close pipe so ai serve won't block if it writes >64KB to stdout
+	var runID string
+	if firstLine != "" {
+		runID = strings.TrimSpace(firstLine)
+	}
 	if runID == "" {
-		// 如果没有输出，尝试使用 ai ls 来获取最新的 run
+		// ai serve 没返回 run ID，尝试 ai ls
 		fmt.Println("ai serve returned no run ID, trying ai ls...")
 		runID, err = a.getLatestRunID()
 		if err != nil {
 			return fmt.Errorf("ai serve returned no run ID and ai ls failed: %w", err)
 		}
 		fmt.Printf("Found run ID from ai ls: %s\n", runID)
-	} else {
-		fmt.Printf("Received run ID from ai serve: %s\n", runID)
+	}
+
+		// 保存 PID（Release 后 Pid 字段会被清零）
+	pid := cmd.Process.Pid
+
+	// 让 ai serve 进程脱离父进程，不阻塞 spawn
+	if err := cmd.Process.Release(); err != nil {
+		// 非致命错误，进程已经启动
+		fmt.Fprintf(os.Stderr, "warning: could not release ai serve process: %v\n", err)
+	}
+
+	// 保存 PID 到 activity
+	activity["pid"] = pid
+	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to update activity.json with PID: %v\n", err)
 	}
 
 	// 保存映射关系
@@ -87,6 +113,7 @@ func (a *AIAdapter) SpawnWithAIServe(id, system, input, cwd string) error {
 		return fmt.Errorf("save mapping: %w", err)
 	}
 
+		fmt.Printf("Agent %s started (run ID: %s, PID: %d)\n", id, runID, pid)
 	return nil
 }
 
