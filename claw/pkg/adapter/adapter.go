@@ -30,6 +30,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	aiconfig "github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+			"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/modelselect"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -44,8 +45,11 @@ import (
 type CommandHandler func(args string, sess *Session) (string, error)
 
 // CommandRegistry stores registered control commands.
+// It wraps pkg/command.Registry for unified registration while supporting
+// the claw-specific session parameter.
 type CommandRegistry struct {
 	commands map[string]CommandHandler
+	info     map[string]string // name -> description
 	mu       sync.RWMutex
 }
 
@@ -53,14 +57,16 @@ type CommandRegistry struct {
 func NewCommandRegistry() *CommandRegistry {
 	return &CommandRegistry{
 		commands: make(map[string]CommandHandler),
+		info:     make(map[string]string),
 	}
 }
 
-// Register registers a command handler.
-func (r *CommandRegistry) Register(name string, handler CommandHandler) {
+// Register registers a command handler with a description.
+func (r *CommandRegistry) Register(name, description string, handler CommandHandler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.commands[name] = handler
+	r.info[name] = description
 }
 
 // Get retrieves a command handler by name.
@@ -80,6 +86,20 @@ func (r *CommandRegistry) List() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// ListInfo returns all registered commands with descriptions (sorted by name).
+func (r *CommandRegistry) ListInfo() []command.CommandInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]command.CommandInfo, 0, len(r.commands))
+	for name, desc := range r.info {
+		result = append(result, command.CommandInfo{Name: name, Description: desc})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
 }
 
 // AgentLoop implements the message processing loop using ai agent core.
@@ -726,20 +746,20 @@ func (a *AgentLoop) Close() {
 // name: the command name (without the "/" prefix)
 // handler: the function to handle the command
 func (a *AgentLoop) RegisterCommand(name string, handler CommandHandler) {
-	a.commands.Register(name, handler)
+		a.commands.Register(name, "Custom command: "+name, handler)
 }
 
 // registerBuiltinCommands registers the built-in control commands.
 func (a *AgentLoop) registerBuiltinCommands() {
-	a.commands.Register("help", func(args string, sess *Session) (string, error) {
+	a.commands.Register("help", "Show this help message", func(args string, sess *Session) (string, error) {
 		return a.cmdHelp(), nil
 	})
 	// /commands - list available skills
-	a.commands.Register("commands", func(args string, sess *Session) (string, error) {
+	a.commands.Register("commands", "List available skills (alias: /skills)", func(args string, sess *Session) (string, error) {
 		return a.cmdCommands(), nil
 	})
 	// /skills - list skills or reload
-	a.commands.Register("skills", func(args string, sess *Session) (string, error) {
+	a.commands.Register("skills", "List available skills (alias: /commands)", func(args string, sess *Session) (string, error) {
 		if args == "reload" {
 			count, warnings, err := a.ReloadSkills()
 			if err != nil {
@@ -753,30 +773,30 @@ func (a *AgentLoop) registerBuiltinCommands() {
 		}
 		return a.cmdCommands(), nil
 	})
-	a.commands.Register("session", func(args string, sess *Session) (string, error) {
+	a.commands.Register("session", "Show current session info", func(args string, sess *Session) (string, error) {
 		return a.cmdSession(sess), nil
 	})
-	a.commands.Register("history", func(args string, sess *Session) (string, error) {
+	a.commands.Register("history", "Show message history (alias: /messages)", func(args string, sess *Session) (string, error) {
 		return a.cmdHistory(sess), nil
 	})
-	a.commands.Register("messages", func(args string, sess *Session) (string, error) {
+	a.commands.Register("messages", "Show message history (alias: /history)", func(args string, sess *Session) (string, error) {
 		return a.cmdHistory(sess), nil
 	})
-	a.commands.Register("clear", func(args string, sess *Session) (string, error) {
+	a.commands.Register("clear", "Clear current session messages", func(args string, sess *Session) (string, error) {
 		return a.cmdClear(sess), nil
 	})
-	a.commands.Register("model", func(args string, sess *Session) (string, error) {
+	a.commands.Register("model", "List or switch AI models", func(args string, sess *Session) (string, error) {
 		return a.cmdModel(args, sess)
 	})
-	a.commands.Register("traceevent", func(args string, sess *Session) (string, error) {
+	a.commands.Register("traceevent", "Manage trace events for debugging", func(args string, sess *Session) (string, error) {
 		return a.cmdTraceevent(args), nil
 	})
 	// show commands - show settings and usage
-	a.commands.Register("show", func(args string, sess *Session) (string, error) {
+	a.commands.Register("show", "Show settings or usage", func(args string, sess *Session) (string, error) {
 		return a.cmdShow(args, sess), nil
 	})
 	// thinking command - toggle thinking mode
-	a.commands.Register("thinking", func(args string, sess *Session) (string, error) {
+	a.commands.Register("thinking", "Toggle or set thinking level", func(args string, sess *Session) (string, error) {
 		return a.cmdThinking(args, sess), nil
 	})
 }
@@ -1173,34 +1193,16 @@ func (a *AgentLoop) handleControlCommand(ctx context.Context, cmdLine, sessionKe
 
 // cmdHelp 显示帮助信息
 func (a *AgentLoop) cmdHelp() string {
-	// Define command descriptions
-	descriptions := map[string]string{
-		"help":       "Show this help message",
-		"commands":   "List available skills (alias: /skills)",
-		"skills":     "List available skills (alias: /commands)",
-		"session":    "Show current session info",
-		"history":    "Show message history (alias: /messages)",
-		"messages":   "Show message history (alias: /history)",
-		"clear":      "Clear current session messages",
-		"model":      "List or switch AI models",
-		"traceevent": "Manage trace events for debugging",
-		"cron":       "Manage cron jobs",
-		"show":       "Show settings or usage (usage: /show [settings|usage])",
-		"thinking":   "Toggle or set thinking level (usage: /thinking [off|minimal|low|medium|high|xhigh])",
-	}
-
-	commands := a.commands.List()
-	sort.Strings(commands)
+	infos := a.commands.ListInfo()
 
 	var b strings.Builder
 	b.WriteString("```\n")
 	b.WriteString("Control Commands:\n\n")
-	for _, cmd := range commands {
-		desc := descriptions[cmd]
-		if desc != "" {
-			b.WriteString(fmt.Sprintf("  /%-15s %s\n", cmd, desc))
+	for _, info := range infos {
+		if info.Description != "" {
+			b.WriteString(fmt.Sprintf("  /%-15s %s\n", info.Name, info.Description))
 		} else {
-			b.WriteString(fmt.Sprintf("  /%s\n", cmd))
+			b.WriteString(fmt.Sprintf("  /%s\n", info.Name))
 		}
 	}
 	b.WriteString("\nNormal messages (without / prefix) will be sent to the agent.\n")
