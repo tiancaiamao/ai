@@ -31,6 +31,7 @@ type BackendConfig struct {
 	Args     []string `yaml:"args"`
 	Protocol Protocol `yaml:"protocol"`
 	Supports Supports `yaml:"supports"`
+	Env      []string `yaml:"env,omitempty"`
 }
 
 // BackendsConfig is the top-level structure for backends.yaml.

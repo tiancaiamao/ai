@@ -27,7 +27,7 @@ const (
 	defaultRetryBaseDelay              = 1 * time.Second
 	defaultRateLimitBaseDelay          = 3 * time.Second // Longer base delay for rate limit
 	defaultLoopMaxConsecutiveToolCalls = 6
-	defaultLoopMaxToolCallsPerName     = 60
+		defaultLoopMaxToolCallsPerName     = 15
 	defaultMalformedToolCallRecoveries = 2
 	defaultEmptyResponseMaxRetries    = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6

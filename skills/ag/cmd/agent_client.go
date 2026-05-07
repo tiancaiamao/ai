@@ -118,7 +118,9 @@ func Kill(id string) error {
 func killAIAgent(id string) error {
 	meta, err := aiAdapter.GetStatus(id)
 	if err == nil && meta.PID > 0 {
-		_ = syscall.Kill(meta.PID, syscall.SIGTERM)
+		// Kill the entire process group so child processes (e.g. ai serve,
+		// codex exec) are also terminated, not just the direct child.
+		_ = syscall.Kill(-meta.PID, syscall.SIGTERM)
 	}
 	return writeAIKilledActivity(id)
 }
@@ -209,6 +211,12 @@ func Rm(id string) error {
 			}
 		}
 	}
+
+	// Clean up claim lock on the task with the same ID, so another agent
+	// can re-claim it. Only remove the lock file, not the task directory.
+	lockPath := filepath.Join(storage.BaseDir, "tasks", id, ".claim-lock")
+	_ = os.Remove(lockPath)
+
 	return os.RemoveAll(agentDir)
 }
 
