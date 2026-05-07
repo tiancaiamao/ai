@@ -127,8 +127,7 @@ type watchModel struct {
 	machineMode bool   // if true, print raw events + cursor and exit
 
 	// Streaming state: tracks current role prefix for inline content.
-	// Matches ai-win's writeStream behavior: role prefix printed once
-	// when role changes, then text appended inline until role changes again.
+	// Role prefix printed once when role changes, then text appended inline
 	currentRole    string // "", "assistant", "thinking", "tool", "ai"
 	inlineActive   bool   // true when we're in the middle of an inline stream
 	showPrefixes   bool   // whether to show "role: " prefixes (default true)
@@ -204,7 +203,7 @@ func (m *watchModel) appendInline(text string) {
 	m.syncContent()
 }
 
-// ensureRole transitions the streaming role, matching ai-win's writeStream.
+// ensureRole transitions the streaming role.
 // If the role changes, it ends the current inline stream, prints a newline,
 // and starts a new line with the role prefix (if showPrefixes is on).
 // Returns false if this role's content should be suppressed.
@@ -572,8 +571,7 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		return &alive[0], nil
 }
 
-// processEvent handles a single parsed event with role-aware streaming,
-// matching ai-win's writeStream/writePrefixedLine/writeStatus behavior.
+// processEvent handles a single parsed event with role-aware streaming.
 func (m *watchModel) processEvent(f *run.FormattedEvent) {
 	if f == nil {
 		return

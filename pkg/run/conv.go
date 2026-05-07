@@ -67,7 +67,7 @@ func ParseEvent(line string) *FormattedEvent {
 	case "agent_end":
 		return parseAgentEnd(evt)
 	case "turn_start":
-		return nil // silent, like ai-win
+		return nil // silent
 	case "turn_end":
 		return nil // silent
 	case "compaction_start":
@@ -183,7 +183,7 @@ func parseMessageUpdate(evt map[string]any) *FormattedEvent {
 // User messages are displayed on message_end, not here.
 // Assistant/thinking messages will be streamed via message_update/text_delta/thinking_delta.
 func parseMessageStart(evt map[string]any) *FormattedEvent {
-	return nil // silent — ai-win resets stream state here
+	return nil // silent — reset stream state
 }
 
 // parseMessageEnd handles message_end events.
@@ -280,7 +280,7 @@ func parseToolExecutionStart(evt map[string]any) *FormattedEvent {
 	}
 }
 
-// parseToolExecutionEnd handles tool_execution_end events, matching ai-win handleToolEnd.
+// parseToolExecutionEnd handles tool_execution_end events.
 func parseToolExecutionEnd(evt map[string]any) *FormattedEvent {
 	toolName := ExtractToolName(evt)
 
@@ -336,7 +336,7 @@ func parseSessionSwitch(evt map[string]any) *FormattedEvent {
 	return &FormattedEvent{Kind: KindSessionSwitch, Role: "ai", Text: text}
 }
 
-// parseCompactionStart handles compaction_start events, matching ai-win handleCompactionEvent.
+// parseCompactionStart handles compaction_start events.
 func parseCompactionStart(evt map[string]any) *FormattedEvent {
 	info, _ := evt["info"].(map[string]any)
 	label := "compaction"
@@ -351,7 +351,7 @@ func parseCompactionStart(evt map[string]any) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s started", label)}
 }
 
-// parseCompactionEnd handles compaction_end events, matching ai-win handleCompactionEvent.
+// parseCompactionEnd handles compaction_end events.
 func parseCompactionEnd(evt map[string]any) *FormattedEvent {
 	info, _ := evt["info"].(map[string]any)
 	label := "compaction"
@@ -474,7 +474,7 @@ func truncate(text string, maxLen int) string {
 }
 
 // parseResponseEvent handles RPC response events from slash commands.
-// It replicates the rendering logic from ai-win's interpreter.go
+// It renders command output for the watch TUI
 // so that `ai watch` displays the same human-readable output.
 func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	success, _ := evt["success"].(bool)
@@ -492,7 +492,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return nil
 	}
 
-	// Re-serialize to use typed deserialization, matching ai-win behavior.
+	// Re-serialize to use typed deserialization.
 	dataJSON, err := json.Marshal(dataRaw)
 	if err != nil {
 		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("%v", dataRaw)}
@@ -575,7 +575,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: text}
 }
 
-// renderSessions renders /sessions output, matching ai-win's handleListSessions.
+// renderSessions renders /sessions output.
 func renderSessions(dataJSON []byte) *FormattedEvent {
 	var payload struct {
 		Sessions []struct {
@@ -614,7 +614,7 @@ func renderSessions(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindResponse, Text: b.String()}
 }
 
-// renderSkills renders /skills output, matching ai-win handleCommands.
+// renderSkills renders /skills output.
 func renderSkills(dataJSON []byte) *FormattedEvent {
 	var payload struct {
 		Commands []rpc.SlashCommand `json:"commands"`
@@ -652,7 +652,7 @@ func renderSkills(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
 }
 
-// renderContext renders /context output, matching ai-win showContext.
+// renderContext renders /context output.
 func renderContext(dataJSON []byte) *FormattedEvent {
 	var payload struct {
 		State  *rpc.SessionState `json:"state"`
@@ -743,7 +743,7 @@ func renderContext(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: b.String()}
 }
 
-// renderSessionState renders /session output, matching ai-win showState.
+// renderSessionState renders /session output.
 func renderSessionState(dataJSON []byte) *FormattedEvent {
 	var state rpc.SessionState
 	if err := json.Unmarshal(dataJSON, &state); err != nil {
@@ -826,7 +826,7 @@ func renderSessionState(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: text}
 }
 
-// renderMessages renders /messages output, matching ai-win handleMessages.
+// renderMessages renders /messages output.
 func renderMessages(dataJSON []byte) *FormattedEvent {
 	var payload struct {
 		Messages []struct {
@@ -957,7 +957,7 @@ func renderModelList(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
 }
 
-// renderSettings renders /show settings output, matching ai-win showSettings.
+// renderSettings renders /show settings output.
 func renderSettings(dataJSON []byte) *FormattedEvent {
 	var payload struct {
 		Type string         `json:"type"`
@@ -1100,7 +1100,7 @@ func renderTree(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
 }
 
-// --- helper functions (matching ai-win style) ---
+// --- helper functions ---
 
 func onOff(b bool) string {
 	if b {
