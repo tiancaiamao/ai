@@ -209,7 +209,7 @@ func TestTraceEventOnHandler(t *testing.T) {
 	t.Run("on_vs_all_different", func(t *testing.T) {
 		traceevent.DisableAllEvents()
 		onResult, _ := handler([]string{"on"})
-		
+
 		traceevent.DisableAllEvents()
 		allResult, _ := handler([]string{"all"})
 

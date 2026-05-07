@@ -9,9 +9,9 @@ func TestFormatAge(t *testing.T) {
 	now := time.Now().Unix()
 
 	tests := []struct {
-		name     string
+		name      string
 		startedAt int64
-		want     string
+		want      string
 	}{
 		{"just now", now, "just now"},
 		{"1 second ago", now - 1, "just now"},
@@ -48,7 +48,7 @@ func TestTruncateStr(t *testing.T) {
 		maxLen int
 		want   string
 	}{
-				{"short", 30, "short"},
+		{"short", 30, "short"},
 		{"exactly30chars__________________xx", 34, "exactly30chars__________________xx"},
 		{"this is a very long path that exceeds 30 chars", 30, "…ng path that exceeds 30 chars"},
 		{"ab", 1, "…"},

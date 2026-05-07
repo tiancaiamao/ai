@@ -12,10 +12,7 @@ import (
 // TestExecutorPoolConcurrency tests the executor pool concurrency control.
 func TestExecutorPoolConcurrency(t *testing.T) {
 	t.Run("concurrent_tool_execution", func(t *testing.T) {
-		pool := NewExecutorPool(map[string]int{
-			"maxConcurrentTools": 3,
-			"queueTimeout":       10,
-		})
+		pool := NewToolExecutor(3, 10)
 
 		// Create 5 slow tools
 		tools := []*MockTool{}
@@ -56,10 +53,7 @@ func TestExecutorPoolConcurrency(t *testing.T) {
 	})
 
 	t.Run("queue_timeout", func(t *testing.T) {
-		pool := NewExecutorPool(map[string]int{
-			"maxConcurrentTools": 1, // Only 1 concurrent
-			"queueTimeout":       1, // 1 second queue timeout
-		})
+		pool := NewToolExecutor(1, 1)
 
 		// Create a slow tool
 		tool := &MockTool{

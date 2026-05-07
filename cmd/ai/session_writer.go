@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"sync"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/compact"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
 

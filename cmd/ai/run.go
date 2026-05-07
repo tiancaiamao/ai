@@ -340,16 +340,16 @@ func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdi
 		mu.Lock()
 		defer mu.Unlock()
 
-	switch cmd.Type {
-	case "steer", "prompt":
-		if cmd.Message == "" {
-			return run.Response{OK: false, Error: "command requires a message"}
-		}
-		// Forward as "prompt" so RPC handles slash commands correctly.
-		if err := sendRPCCommand(stdinWriter, "prompt", cmd.Message); err != nil {
-			return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
-		}
-		return run.Response{OK: true}
+		switch cmd.Type {
+		case "steer", "prompt":
+			if cmd.Message == "" {
+				return run.Response{OK: false, Error: "command requires a message"}
+			}
+			// Forward as "prompt" so RPC handles slash commands correctly.
+			if err := sendRPCCommand(stdinWriter, "prompt", cmd.Message); err != nil {
+				return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
+			}
+			return run.Response{OK: true}
 
 		case "abort":
 			if err := proc.Signal(syscall.SIGTERM); err != nil {
@@ -381,8 +381,8 @@ type runModel struct {
 	proc      *os.Process
 	stdinPipe *io.PipeWriter
 	meta      *run.RunMeta
-		metaPath  string
-	inputMode bool          // true when user is typing a message
+	metaPath  string
+	inputMode bool // true when user is typing a message
 	inputBuf  *strings.Builder
 }
 
@@ -393,7 +393,7 @@ func newRunModel(
 	meta *run.RunMeta,
 	metaPath string,
 ) runModel {
-		w := newWatchModel(eventsPath, runID, 0, false)
+	w := newWatchModel(eventsPath, runID, 0, false)
 	return runModel{
 		watchModel: w,
 		sockPath:   sockPath,
@@ -510,5 +510,5 @@ func (m *runModel) sendMessage(text string) error {
 	if _, err := conn.Write(data); err != nil {
 		return fmt.Errorf("write command: %w", err)
 	}
-		return nil
+	return nil
 }

@@ -1,26 +1,33 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+
 	"log/slog"
 )
 
-// ToolExecutor manages concurrent tool execution with limits.
+// ToolExecutor is the interface for executing tools with concurrency control.
+// All callers should depend on this interface, not the concrete type.
+type ToolExecutor interface {
+	Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error)
+}
+
+// concurrentToolExecutor manages concurrent tool execution with limits.
 // Tools are responsible for their own timeout handling.
-type ToolExecutor struct {
+type concurrentToolExecutor struct {
 	semaphore    chan struct{}
 	queueTimeout time.Duration
 }
 
-// NewToolExecutor creates a new tool executor.
+// NewToolExecutor creates a new tool executor and returns it as the ToolExecutor interface.
 // maxConcurrent: maximum number of tools running concurrently
 // queueTimeoutSec: how long to wait for a slot when all slots are busy (0 = wait indefinitely)
-func NewToolExecutor(maxConcurrent int, queueTimeoutSec int) *ToolExecutor {
-	return &ToolExecutor{
+func NewToolExecutor(maxConcurrent int, queueTimeoutSec int) ToolExecutor {
+	return &concurrentToolExecutor{
 		semaphore:    make(chan struct{}, maxConcurrent),
 		queueTimeout: time.Duration(queueTimeoutSec) * time.Second,
 	}
@@ -28,7 +35,7 @@ func NewToolExecutor(maxConcurrent int, queueTimeoutSec int) *ToolExecutor {
 
 // Execute runs a tool with concurrency control.
 // The tool is responsible for its own timeout handling.
-func (e *ToolExecutor) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
+func (e *concurrentToolExecutor) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
 	// Try to acquire semaphore (slot for execution)
 	select {
 	case e.semaphore <- struct{}{}:
@@ -52,37 +59,6 @@ func (e *ToolExecutor) Execute(ctx context.Context, tool agentctx.Tool, args map
 }
 
 // DefaultExecutor creates an executor with default settings.
-func DefaultExecutor() *ToolExecutor {
+func DefaultExecutor() ToolExecutor {
 	return NewToolExecutor(10, 60) // 10 concurrent, 60s queue timeout
-}
-
-// ExecutorPool manages concurrent tool execution.
-// Simplified version - all tools share the same executor.
-type ExecutorPool struct {
-	executor *ToolExecutor
-}
-
-// NewExecutorPool creates a new executor pool.
-// config keys:
-//   - "maxConcurrentTools": maximum concurrent tool executions
-//   - "queueTimeout": how long to wait for a slot when all slots are busy
-func NewExecutorPool(config map[string]int) *ExecutorPool {
-	maxConcurrent := 10
-	queueTimeout := 60
-
-	if v, ok := config["maxConcurrentTools"]; ok {
-		maxConcurrent = v
-	}
-	if v, ok := config["queueTimeout"]; ok {
-		queueTimeout = v
-	}
-
-	return &ExecutorPool{
-		executor: NewToolExecutor(maxConcurrent, queueTimeout),
-	}
-}
-
-// Execute runs a tool with concurrency control.
-func (p *ExecutorPool) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
-	return p.executor.Execute(ctx, tool, args)
 }

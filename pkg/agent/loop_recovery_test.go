@@ -541,16 +541,12 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	executor := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 1,
-		"toolTimeout":        5,
-		"queueTimeout":       10,
-	})
+	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:  executor,
-		MaxTurns:  3, // Limit to 3 turns
+		Executor:   executor,
+		MaxTurns:   3, // Limit to 3 turns
 	}
 
 	stream := newTestAgentEventStream()
@@ -598,16 +594,12 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	executor := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 1,
-		"toolTimeout":        5,
-		"queueTimeout":       10,
-	})
+	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:  executor,
-		MaxTurns:  0, // Unlimited
+		Executor:   executor,
+		MaxTurns:   0, // Unlimited
 	}
 
 	stream := newTestAgentEventStream()

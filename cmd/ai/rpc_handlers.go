@@ -390,15 +390,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		writer:    sessionWriter,
 	}
 
-	concurrencyConfig := cfg.Concurrency
+		concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-	executor := agent.NewExecutorPool(map[string]int{
-		"maxConcurrentTools": concurrencyConfig.MaxConcurrentTools,
-		"toolTimeout":        concurrencyConfig.ToolTimeout,
-		"queueTimeout":       concurrencyConfig.QueueTimeout,
-	})
+	executor := agent.NewToolExecutor(
+		concurrencyConfig.MaxConcurrentTools,
+		concurrencyConfig.QueueTimeout,
+	)
 
 	toolOutputConfig := cfg.ToolOutput
 	if toolOutputConfig == nil {

@@ -26,7 +26,7 @@ type AgentEvent struct {
 	ToolCallID string                 `json:"toolCallId,omitempty"`
 	ToolName   string                 `json:"toolName,omitempty"`
 	Args       map[string]interface{} `json:"args,omitempty"`
-	Result     *agentctx.AgentMessage          `json:"result,omitempty"`
+	Result     *agentctx.AgentMessage `json:"result,omitempty"`
 	IsError    bool                   `json:"isError,omitempty"`
 
 	// message_update
@@ -72,12 +72,12 @@ const (
 	EventLoopGuardTriggered = "loop_guard_triggered"
 	EventToolCallRecovery   = "tool_call_recovery"
 	EventError              = "error"
-	EventLLMRetry          = "llm_retry"
+	EventLLMRetry           = "llm_retry"
 )
 
 // CompactionInfo describes a compaction event.
 type CompactionInfo struct {
-	Type    string `json:"type,omitempty"`    // "major" or "mini"
+	Type    string `json:"type,omitempty"` // "major" or "mini"
 	Auto    bool   `json:"auto,omitempty"`
 	Before  int    `json:"before,omitempty"`
 	After   int    `json:"after,omitempty"`
@@ -85,10 +85,10 @@ type CompactionInfo struct {
 	Trigger string `json:"trigger,omitempty"`
 
 	// Context management specific fields
-	TokensBefore       int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
-	TokensAfter        int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)
-	TruncatedCount     int  `json:"truncated_count,omitempty"`     // Number of messages truncated (mini only)
-	LLMContextUpdated  bool `json:"llm_context_updated,omitempty"` // Whether LLM context was updated (mini only)
+	TokensBefore      int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
+	TokensAfter       int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)
+	TruncatedCount    int  `json:"truncated_count,omitempty"`     // Number of messages truncated (mini only)
+	LLMContextUpdated bool `json:"llm_context_updated,omitempty"` // Whether LLM context was updated (mini only)
 }
 
 // LoopGuardInfo describes why tool-loop protection interrupted a turn.
@@ -247,9 +247,9 @@ func NewToolCallRecoveryEvent(info ToolCallRecoveryInfo) AgentEvent {
 // NewLLMRetryEvent creates an llm_retry event.
 func NewLLMRetryEvent(info LLMRetryInfo) AgentEvent {
 	return AgentEvent{
-		Type:       EventLLMRetry,
-		EventAt:    time.Now().UnixNano(),
-		Error:      info.Error,
-		LLMRetry:   &info,
+		Type:     EventLLMRetry,
+		EventAt:  time.Now().UnixNano(),
+		Error:    info.Error,
+		LLMRetry: &info,
 	}
 }

@@ -296,7 +296,7 @@ func TestRegression011_LLMTimeoutConfiguration(t *testing.T) {
 	// Fix: Added LLM timeout configuration
 
 	cfg := DefaultLoopConfig()
-	cfg.LLMTotalTimeout = 5 * 60 * 1000000000 // 5 minutes in nanoseconds
+	cfg.LLMTotalTimeout = 5 * 60 * 1000000000         // 5 minutes in nanoseconds
 	cfg.LLMFirstResponseTimeout = 1 * 60 * 1000000000 // 1 minute in nanoseconds
 	cfg.EnableCheckpoint = false
 
@@ -337,7 +337,7 @@ func TestRegression012_RuntimeMetaConfiguration(t *testing.T) {
 // testCompactor is a mock compactor for testing
 type testCompactor struct {
 	shouldTrigger bool
-	called         bool
+	called        bool
 }
 
 func (c *testCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {

@@ -11,7 +11,7 @@ import (
 // AgentContextCheckpointManager manages checkpoint integration with AgentContext.
 type AgentContextCheckpointManager struct {
 	sessionDir   string
-	journal       *agentctx.Journal
+	journal      *agentctx.Journal
 	lastTurn     int
 	messageIndex int
 	enabled      bool
@@ -35,7 +35,7 @@ func NewAgentContextCheckpointManager(sessionDir string) (*AgentContextCheckpoin
 
 	return &AgentContextCheckpointManager{
 		sessionDir: sessionDir,
-		journal:   journal,
+		journal:    journal,
 		lastTurn:   0,
 		enabled:    true,
 	}, nil

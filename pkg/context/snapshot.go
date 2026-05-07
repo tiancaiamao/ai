@@ -53,7 +53,7 @@ func (s *ContextSnapshot) Clone() *ContextSnapshot {
 		}
 	}
 
-		return &ContextSnapshot{
+	return &ContextSnapshot{
 		LLMContext:     s.LLMContext,
 		RecentMessages: messages,
 		AgentState:     s.AgentState.Clone(),

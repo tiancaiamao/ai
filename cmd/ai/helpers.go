@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -21,6 +22,16 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
+
+// parseJSONArgs attempts to unmarshal args as JSON into target.
+// Returns true if args looks like JSON and was successfully parsed.
+func parseJSONArgs(args string, target any) bool {
+	args = strings.TrimSpace(args)
+	if len(args) > 0 && args[0] == '{' {
+		return json.Unmarshal([]byte(args), target) == nil
+	}
+	return false
+}
 
 func normalizeSessionPath(sessionPath string) (string, error) {
 	if sessionPath == "" {
@@ -507,7 +518,7 @@ func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, 
 	// - Last prompt tokens (includes system prompt + tools + full conversation history)
 	// Note: Last prompt tokens already includes system prompt and tools, so we DON'T
 	// add them again here. The GetSessionStatsHandler will add estimates instead.
-		tokens.Total = tokens.Output + lastPromptTokens
+	tokens.Total = tokens.Output + lastPromptTokens
 
 	return userCount, assistantCount, toolCalls, toolResults, tokens, cost
 }

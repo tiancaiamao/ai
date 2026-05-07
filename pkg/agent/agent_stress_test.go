@@ -18,10 +18,7 @@ func TestStressConcurrentRequests(t *testing.T) {
 	t.Log("Starting concurrent request stress test...")
 
 	// Create executor pool
-	pool := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 10,
-		"queueTimeout":       30,
-	})
+	pool := NewToolExecutor(10, 30)
 
 	ctx := context.Background()
 
@@ -112,10 +109,7 @@ func TestStressLongRunningCommands(t *testing.T) {
 
 	t.Log("Starting long-running command stress test...")
 
-	pool := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 3,
-		"queueTimeout":       60,
-	})
+	pool := NewToolExecutor(3, 60)
 
 	ctx := context.Background()
 
@@ -191,10 +185,7 @@ func TestStressRetryUnderLoad(t *testing.T) {
 
 	t.Log("Starting error handling under load stress test...")
 
-	pool := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 5,
-		"queueTimeout":       30,
-	})
+	pool := NewToolExecutor(5, 30)
 
 	ctx := context.Background()
 
@@ -303,10 +294,7 @@ func TestStressQueueFull(t *testing.T) {
 
 	t.Log("Starting queue full stress test...")
 
-	pool := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 2,
-		"queueTimeout":       1, // Short queue timeout (1 second)
-	})
+	pool := NewToolExecutor(2, 1)
 
 	ctx := context.Background()
 
