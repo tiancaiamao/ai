@@ -14,13 +14,13 @@ import (
 
 // SchedulerConfig holds configuration for the scheduler loop.
 type SchedulerConfig struct {
-	MaxConcurrent int
-	MaxRetries    int
-	Timeout       time.Duration
-	PollInterval  time.Duration
-	DesignFile    string
-	WorkDir       string
-	SkipReview    bool
+	MaxConcurrent   int
+	MaxRetries      int
+	Timeout         time.Duration
+	PollInterval    time.Duration
+	DesignFile      string
+	WorkDir         string
+	SkipReview      bool
 	MaxReviewRounds int
 }
 
@@ -269,8 +269,19 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
 		} else {
 			// Read output for summary
 			summary := readSummary(outputFile)
-			Done(taskID, summary)
-			fmt.Printf("  ✅ Done %s: %s\n", taskID, truncate(summary, 80))
+			if cfg.SkipReview {
+				Done(taskID, summary)
+				fmt.Printf("  ✅ Done %s: %s\n", taskID, truncate(summary, 80))
+			} else {
+				// Transition to review instead of done — reviewer will finalize
+				Transition(taskID, StatusReview)
+				// Store summary in task output for reviewer to use
+				outPath := filepath.Join(storage.TaskDir(taskID), "output")
+				if summary != "" {
+					os.WriteFile(outPath, []byte(summary), 0644)
+				}
+				fmt.Printf("  📋 Done %s → review: %s\n", taskID, truncate(summary, 80))
+			}
 		}
 	case <-time.After(cfg.Timeout):
 		cmd.Process.Kill()
@@ -322,7 +333,7 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 	return progress, nil
 }
 
-// checkGroupReview checks if any group has all tasks done and needs review.
+// checkGroupReview checks if any group has all tasks in review and needs reviewer.
 func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 	groups, err := Groups()
 	if err != nil {
@@ -336,35 +347,22 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 			continue
 		}
 
-		// Check if all tasks in group are done
-		allDone := true
-		hasReview := false
+		// Check if all tasks in group are in review state
+		allReview := true
 		for _, t := range tasks {
-			if t.Status == StatusReview || t.Status == StatusRevision {
-				hasReview = true
-				break
-			}
-			if t.Status != StatusDone {
-				allDone = false
+			if t.Status != StatusReview {
+				allReview = false
 				break
 			}
 		}
 
-		if hasReview {
-			continue // Already in review
-		}
-
-		if !allDone {
+		if !allReview {
 			continue
 		}
 
-		// All done — spawn reviewer
+		// All in review — spawn reviewer (after transitions are committed)
 		fmt.Printf("  🔍 Reviewing group %s\n", group)
 		go spawnReviewer(group, tasks, cfg)
-		// Mark all as review
-		for _, t := range tasks {
-			Transition(t.ID, StatusReview)
-		}
 		progress = true
 	}
 	return progress, nil
@@ -379,11 +377,10 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	promptFile := filepath.Join(storage.TaskDir(tasks[0].ID), "review-prompt.txt")
 	os.WriteFile(promptFile, []byte(prompt), 0644)
 
-		agentID := fmt.Sprintf("reviewer-%s", group)
-	_ = agentID
+	agentID := fmt.Sprintf("reviewer-%s", group)
 	args := []string{"serve"}
 	args = append(args, "--input", promptFile)
-	args = append(args, "--name", "ag-reviewer-"+group)
+	args = append(args, "--name", agentID)
 	if cfg.WorkDir != "" {
 		args = append(args, "--cwd", cfg.WorkDir)
 	}
