@@ -24,113 +24,70 @@ description: 读取 design.md，产出 tasks.yml（含 plan-lint 验证），导
 
 读 `design.md`。如果 `CONTEXT.md` 存在，也读取。不要重新 explore。
 
-### Step 2: Generate tasks.yml
+确认 design.md 存在且内容合理（有现状、动机、决策、做法等维度）。如果 design.md 不存在或明显不完整，停下来向用户汇报。
 
-产出任务拆解。遵循下面的格式和粒度规则。
+### Step 2: Worker-Judge Loop (Planner + Reviewer)
 
-**⚠️ 关键：每个 task 的 `description` 必须是自包含的微 spec。** 一个没有读过 design.md 的 subagent 拿到这个 description 就能动手实现。
+plan 的核心是 **worker-judge loop**：
+- **Worker**（planner）：读 design.md，产出 tasks.yml
+- **Judge**（reviewer）：读 tasks.yml + design.md（仅作覆盖率参考），验证自包含性
 
-**tasks.yml 结构:**
+使用 `ag` 的 pair.sh pattern，最多 3 轮。每轮：
+1. planner 根据 design.md（+ 上轮 judge 反馈）生成 tasks.yml
+2. plan-lint 验证 YAML 结构
+3. reviewer 验证 task description 自包含性
+4. 通过则退出循环，否则把 judge 反馈喂给 planner 重来
 
-```yaml
-version: "1"
-metadata:
-  spec_file: "design.md"
-  created_at: "2025-07-11"
+```bash
+# 准备 input 文件
+DESIGN_MD="$(pwd)/design.md"
+TASKS_YML="$(pwd)/tasks.yml"
+CONTEXT_MD="$(pwd)/CONTEXT.md"
 
-tasks:
-  - id: T001
-    title: "Task title"
-    description: |
-      ## Goal
-      One sentence: what this task achieves.
+cat > /tmp/plan-input.md << EOF
+Read the design document at ${DESIGN_MD} and produce a tasks.yml plan.
+Write the output to ${TASKS_YML}.
+EOF
 
-      ## Key changes
-      - Specific change 1 (e.g., "Add flock() call in Load()")
-      - Specific change 2
+if [ -f "${CONTEXT_MD}" ]; then
+  echo "Also read ${CONTEXT_MD} for codebase context." >> /tmp/plan-input.md
+fi
 
-      ## Files
-      - MODIFY: path/to/file.go
-      - CREATE: path/to/new_file.go
-
-      ## Design decision
-      Why this approach over alternatives. Reference design.md if needed.
-
-      ## Edge cases
-      - Edge case 1 and how to handle it
-      - Edge case 2 and how to handle it
-
-      ## Done when
-      - [ ] Testable criterion 1
-      - [ ] Testable criterion 2
-      - [ ] go build ./... passes
-    group: group-name
-    dependencies: []
-
-groups:
-  - name: group-name
-    title: "Group Title"
-    description: "What this group delivers as a working increment"
-    tasks: [T001, T002]
-    commit_message: "feat(scope): description"
-
-group_order: [group-name]
-risks:
-  - area: "Area"
-    risk: "What could go wrong"
-    mitigation: "How to prevent it"
+# 使用 pair.sh 运行 worker-judge loop
+~/.ai/skills/ag/patterns/pair.sh \
+  /Users/genius/.ai/skills/plan/prompts/planner.md \
+  /Users/genius/.ai/skills/plan/prompts/reviewer.md \
+  /tmp/plan-input.md \
+  3
 ```
 
-**description 必填段落：**
+**pair.sh 执行流程：**
 
-| 段落 | 用途 | 最低要求 |
-|------|------|----------|
-| `## Goal` | subagent 知道任务目标 | 一句话 |
-| `## Key changes` | subagent 知道具体改什么 | ≥1 条 |
-| `## Files` | subagent 不需要自己找文件 | ≥1 个文件 |
-| `## Done when` | subagent 知道什么时候算完 | ≥1 条可验证标准 |
+```
+Round 1:
+  planner → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
+                                                  ↓ REJECTED
+Round 2:
+  planner (带上 reviewer 反馈) → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
+                                                                          ↓ REJECTED
+Round 3 (final):
+  planner (带上 reviewer 反馈) → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
+                                                                          ↓ REJECTED
+                                                                ❌ 报告给用户
+```
 
-**description 可选但推荐段落：**
+**处理 loop 结果：**
+- `exit 0`（APPROVED）→ tasks.yml 已就绪，继续 Step 3
+- `exit 1`（max rounds reached）→ 停下来向用户汇报，展示 reviewer 的 findings，让用户决定是否手动修复
+- pair.sh 执行失败 → **停下来向用户汇报**，不要跳过
 
-| 段落 | 什么时候需要 |
-|------|-------------|
-| `## Design decision` | 有多种实现方式时 |
-| `## Edge cases` | 有明显边界条件时 |
-
-### Step 3: Validate with plan-lint
+**关于 plan-lint**：pair.sh 的 pair pattern 不内置 lint 步骤。如果 reviewer 通过但 plan-lint 失败，手动修 lint 后重跑：
 
 ```bash
 ~/.ai/skills/plan/bin/plan-lint tasks.yml
 ```
 
-如果 lint 失败，修复 YAML 并重跑直到 clean。
-
-### Step 4: Subagent Review
-
-plan-lint 验证了结构合法性。但 **结构正确 ≠ 上下文充分**。
-这一步用独立的 subagent（没有 design.md 上下文）来验证每个 task description 是否真的自包含。
-
-```bash
-# Resolve absolute paths for the review input
-TASKS_YML="$(pwd)/tasks.yml"
-DESIGN_MD="$(pwd)/design.md"
-OUTPUT_FILE="/tmp/plan-review-result.json"
-
-ag agent spawn plan-reviewer \
-  --system @/Users/genius/.ai/skills/plan/prompts/reviewer.md \
-  --input "Review the plan at ${TASKS_YML}. Reference design doc at ${DESIGN_MD} for coverage check only. Write JSON result to ${OUTPUT_FILE}."
-
-ag agent wait plan-reviewer --timeout 300
-cat "${OUTPUT_FILE}"
-ag agent rm plan-reviewer
-```
-
-**处理 review 结果：**
-- `"pass": true` → 继续 Step 5
-- `"pass": false` → 根据 findings 修复 tasks.yml，重跑 plan-lint + 本步骤
-- Reviewer agent 失败 → **停下来向用户汇报**，不要跳过 review
-
-### Step 5: Import & Gate
+### Step 3: Import & Gate
 
 1. **向用户展示摘要** — tasks 数量、group 列表、依赖链
 2. 等待用户确认
@@ -165,6 +122,11 @@ ag task import-plan tasks.yml
 
 ```
 brainstorm → design.md → plan (this skill) → ag task queue → implement
+                               │
+                               └─ Step 2: worker-judge loop (pair.sh)
+                                    ├─ Worker: planner.md → reads design.md, writes tasks.yml
+                                    └─ Judge: reviewer.md → validates self-containedness
+                                         ↻ up to 3 rounds
 ```
 
 ## Tools
@@ -178,8 +140,7 @@ brainstorm → design.md → plan (this skill) → ag task queue → implement
 | 断言 | 触发条件 | 修正 |
 |------|----------|------|
 | 未读设计 | 未读 design.md 就开始拆解 | 先读 design.md |
-| description 不自包含 | 缺少 Goal/Key changes/Files/Done when 任一段 | 补充完整 |
+| worker-judge loop 失败 | pair.sh exit 1 或执行异常 | 停下来向用户汇报 |
 | lint 未通过 | plan-lint 报错 | 修复后再继续 |
-| 跳过 subagent review | 没有 spawn reviewer agent 就展示 | 先做 Step 4 |
 | 未展示产出就问确认 | tasks.yml 存在但未向用户展示 | 先展示摘要 |
 | 未导入就结束 | plan 完成但没有 import-plan | 先导入 ag task |
