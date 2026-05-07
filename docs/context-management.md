@@ -59,6 +59,14 @@ This means:
 │  │  RecentMessages: []AgentMessage                          │ │
 │  │  AgentState: *AgentState     — system metadata           │ │
 │  └─────────────────────────────────────────────────────────┘ │
+│                           │                                   │
+│                           ▼                                   │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │          Persistence Layer                                │ │
+│  │                                                          │ │
+│  │  Journal (messages.jsonl) — append-only event log         │ │
+│  │  Checkpoints — periodic snapshots (checkpoint + symlink)  │ │
+│  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
