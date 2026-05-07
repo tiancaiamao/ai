@@ -566,13 +566,34 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderTree(dataJSON)
 	}
 
-	// Fallback: pretty-print JSON.
+		// Fallback: pretty-print JSON.
 	pretty, _ := json.MarshalIndent(dataRaw, "", "  ")
 	text := string(pretty)
 	if len(text) > 500 {
 		text = text[:500] + "..."
 	}
 	return &FormattedEvent{Kind: KindMeta, Text: text}
+}
+
+// FormatResponseData formats a slash command response's data field into
+// a human-readable string. It reuses the same rendering logic as the
+// interactive TUI. Used by external clients (e.g. claw) that receive
+// response data via RPC and need to display it to users.
+func FormatResponseData(data any) string {
+	if data == nil {
+		return ""
+	}
+	// Construct a fake response event to reuse parseResponseEvent.
+	fakeEvent := map[string]any{
+		"type":    "response",
+		"success": true,
+		"data":    data,
+	}
+	result := parseResponseEvent(fakeEvent)
+	if result == nil {
+		return ""
+	}
+	return result.Text
 }
 
 // renderSessions renders /sessions output.

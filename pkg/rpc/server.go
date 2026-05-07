@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"sync"
 
+	"github.com/tiancaiamao/ai/pkg/command"
 	"log/slog"
 )
 
@@ -21,42 +21,36 @@ type Handler func(cmd RPCCommand) (any, error)
 // SlashHandler is the function signature for slash commands invoked via the prompt channel.
 // It receives the text arguments after the command name and returns an arbitrary result
 // or an error.
-type SlashHandler func(args string) (any, error)
+// Deprecated: Use command.Handler directly. This alias is kept for backward compatibility.
+type SlashHandler = command.Handler
 
 // SlashCommandInfo describes a registered slash command.
-type SlashCommandInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
+// Deprecated: Use command.CommandInfo directly.
+type SlashCommandInfo = command.CommandInfo
 
 // Server handles RPC communication via stdin/stdout.
 // Protocol commands (prompt, steer, follow_up, abort, ping) use Register.
 // Slash commands use RegisterSlash — they can be invoked both via prompt
 // interception ("/command args") and directly via JSON-RPC command type.
 type Server struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	writer        sync.Mutex
-	output        *bufio.Writer
-	handlers      map[string]Handler
-	slashCommands map[string]slashEntry
-}
-
-type slashEntry struct {
-	info    SlashCommandInfo
-	handler SlashHandler
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	writer   sync.Mutex
+	output   *bufio.Writer
+	handlers map[string]Handler
+	commands *command.Registry
 }
 
 // NewServer creates a new RPC server with ping pre-registered.
 func NewServer() *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
-		ctx:           ctx,
-		cancel:        cancel,
-		handlers:      make(map[string]Handler),
-		slashCommands: make(map[string]slashEntry),
+		ctx:      ctx,
+		cancel:   cancel,
+		handlers: make(map[string]Handler),
+		commands: command.New(),
 	}
 	s.Register(CommandPing, func(cmd RPCCommand) (any, error) {
 		return map[string]any{"ok": true}, nil
@@ -75,37 +69,22 @@ func (s *Server) Register(cmdType string, handler Handler) {
 // via prompt interception ("/command args") and directly as JSON-RPC command types.
 // The handler receives the text arguments after the command name.
 func (s *Server) RegisterSlash(name, description string, handler SlashHandler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.slashCommands[name] = slashEntry{
-		info:    SlashCommandInfo{Name: name, Description: description},
-		handler: handler,
-	}
+	s.commands.Register(name, description, handler)
 }
 
 // GetSlashHandler returns the slash command handler for the given name, if any.
 func (s *Server) GetSlashHandler(name string) (SlashHandler, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.slashCommands[name]
-	if !ok {
-		return nil, false
-	}
-	return e.handler, true
+	return s.commands.Get(name)
 }
 
 // ListSlashCommands returns all registered slash commands sorted by name.
 func (s *Server) ListSlashCommands() []SlashCommandInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result := make([]SlashCommandInfo, 0, len(s.slashCommands))
-	for _, e := range s.slashCommands {
-		result = append(result, e.info)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-	return result
+	return s.commands.ListCommands()
+}
+
+// Commands returns the underlying command.Registry for direct access.
+func (s *Server) Commands() *command.Registry {
+	return s.commands
 }
 
 // HasHandler reports whether a handler is registered for the given command type.
