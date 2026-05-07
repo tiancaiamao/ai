@@ -105,62 +105,32 @@ risks:
 
 如果 lint 失败，修复 YAML 并重跑直到 clean。
 
-### Step 4: Peer Review
+### Step 4: Subagent Review
 
-plan-lint 通过后，spawn reviewer agent 做第二双眼睛检查。
-
-**Review 聚焦点：task context 是否足够。** 这是 subagent 能否独立执行的关键。
+plan-lint 验证了结构合法性。但 **结构正确 ≠ 上下文充分**。
+这一步用独立的 subagent（没有 design.md 上下文）来验证每个 task description 是否真的自包含。
 
 ```bash
-# 准备 review 输入
-cat > /tmp/plan-review-input.md << 'EOF'
-Review this tasks.yml for two things:
-
-1. **Task self-containedness**: Can a subagent who has NOT read design.md implement each task using ONLY the description field?
-   - Does each task have Goal, Key changes, Files, Done when?
-   - Are file paths concrete (not "the relevant file")?
-   - Are Done-when criteria testable?
-
-2. **Task boundary correctness**:
-   - Can each task be completed without breaking compilation?
-   - Are hidden dependencies declared?
-   - Do groups produce compilable, runnable increments?
-
-Read the tasks.yml at: <path>
-Read the design doc at: <path> (for context only)
-
-Write findings to /tmp/plan-review-result.json:
-{"findings": [{"id": "T004", "issue": "...", "suggestion": "..."}], "pass": true/false}
-EOF
+# Resolve absolute paths for the review input
+TASKS_YML="$(pwd)/tasks.yml"
+DESIGN_MD="$(pwd)/design.md"
+OUTPUT_FILE="/tmp/plan-review-result.json"
 
 ag agent spawn plan-reviewer \
-  --input @/tmp/plan-review-input.md \
-  --timeout 300
+  --system @/Users/genius/.ai/skills/plan/prompts/reviewer.md \
+  --input "Review the plan at ${TASKS_YML}. Reference design doc at ${DESIGN_MD} for coverage check only. Write JSON result to ${OUTPUT_FILE}."
 
 ag agent wait plan-reviewer --timeout 300
-cat /tmp/plan-review-result.json
+cat "${OUTPUT_FILE}"
 ag agent rm plan-reviewer
 ```
 
 **处理 review 结果：**
 - `"pass": true` → 继续 Step 5
-- `"pass": false` → 根据 findings 修复 tasks.yml，重跑 plan-lint + review
+- `"pass": false` → 根据 findings 修复 tasks.yml，重跑 plan-lint + 本步骤
 - Reviewer agent 失败 → **停下来向用户汇报**，不要跳过 review
 
-### Step 5: Self-Review Checklist
-
-| 检查项 | 通过条件 |
-|--------|----------|
-| description 自包含 | 每个 task 的 description 包含 Goal/Key changes/Files/Done when 四段 |
-| design 维度覆盖 | 现状、动机、决策、做法、边界 — 每个维度至少有一个 task |
-| 依赖无环 | plan-lint 已验证；人工确认无缺失 ID |
-| 粒度合适 | 所有 task 在 2-4h 范围（<1h 合并，>6h 拆分） |
-| group 顺序 | 尊重依赖关系，前面的 group 不依赖后面的 |
-| 可交付增量 | 每个 group 完成后代码可编译可运行 |
-
-全部通过 → 继续。有遗漏 → 修复 tasks.yml 后重跑 plan-lint。
-
-### Step 6: Import & Gate
+### Step 5: Import & Gate
 
 1. **向用户展示摘要** — tasks 数量、group 列表、依赖链
 2. 等待用户确认
@@ -172,8 +142,6 @@ ag task import-plan tasks.yml
 
 4. 确认导入成功：`ag task ls`
 5. 提示用户下一步：implement skill
-
-## Task Granularity Rules
 
 | Size | Hours | Action |
 |------|-------|--------|
@@ -212,7 +180,6 @@ brainstorm → design.md → plan (this skill) → ag task queue → implement
 | 未读设计 | 未读 design.md 就开始拆解 | 先读 design.md |
 | description 不自包含 | 缺少 Goal/Key changes/Files/Done when 任一段 | 补充完整 |
 | lint 未通过 | plan-lint 报错 | 修复后再继续 |
-| 跳过 peer review | 没有 spawn reviewer agent 就展示 | 先做 Step 4 |
+| 跳过 subagent review | 没有 spawn reviewer agent 就展示 | 先做 Step 4 |
 | 未展示产出就问确认 | tasks.yml 存在但未向用户展示 | 先展示摘要 |
-| 跳过 self-review | 没走 checklist 就展示 | 先走 checklist |
 | 未导入就结束 | plan 完成但没有 import-plan | 先导入 ag task |
