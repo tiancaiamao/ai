@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/tiancaiamao/ai/pkg/run"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -30,8 +32,9 @@ type RPCConn struct {
 	done    chan struct{} // closed when the reader goroutine exits
 	alive   atomic.Bool
 
-	mu      sync.Mutex // protects stdin writes
-	pending map[string]chan *rpcResponseOrEvent
+	mu       sync.Mutex // protects stdin writes
+	promptMu sync.Mutex // serializes Prompt calls to prevent event mixing
+	pending  map[string]chan *rpcResponseOrEvent
 
 	// eventsCh receives non-response lines (events) from the subprocess.
 	// Prompt callers consume these to collect turn_end text.
@@ -202,7 +205,13 @@ func (c *RPCConn) sendCommand(cmd any) error {
 // Prompt sends a prompt command to the subprocess and waits for the agent to
 // finish processing. It buffers text from turn_end events and returns the
 // concatenated result once agent_end is received.
+//
+// Prompt calls are serialized per-connection via promptMu to prevent event
+// mixing when multiple callers send prompts concurrently on the same RPCConn.
 func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
+	c.promptMu.Lock()
+	defer c.promptMu.Unlock()
+
 	if !c.alive.Load() {
 		return "", fmt.Errorf("rpc_client: subprocess is not alive")
 	}
@@ -233,8 +242,8 @@ func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
 				// Slash commands (e.g. /model, /clear) return their result directly
 		// in the response data without triggering the agent loop.
 		// No turn_end/agent_end events will follow.
-		if msg.resp.Data != nil {
-			return responseToString(msg.resp.Data), nil
+				if msg.resp.Data != nil {
+			return run.FormatResponseData(msg.resp.Data), nil
 		}
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -407,9 +416,15 @@ func (m *ConnManager) Prompt(ctx context.Context, sessionKey, message string) (s
 		return "", fmt.Errorf("conn_manager: failed to get connection for %q: %w", sessionKey, err)
 	}
 
-	result, err := conn.Prompt(ctx, message)
+		result, err := conn.Prompt(ctx, message)
 	if err == nil {
 		return result, nil
+	}
+
+	// Do not retry on context cancellation/timeout — the prompt may already
+	// be executing remotely and retrying would duplicate side effects.
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("conn_manager: prompt failed for %q: %w", sessionKey, err)
 	}
 
 	// First attempt failed — restart and retry once.
@@ -532,20 +547,3 @@ func (m *ConnManager) restartConn(sessionKey string) {
 	slog.Info("conn_manager: removed connection for restart", "sessionKey", sessionKey)
 }
 
-// responseToString converts RPC response data to a human-readable string.
-// Slash commands may return strings, maps, or other types.
-func responseToString(data any) string {
-	switch v := data.(type) {
-	case string:
-		return v
-	case nil:
-		return ""
-	default:
-		// For structured data (maps, slices), pretty-print as JSON
-		b, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return fmt.Sprintf("%v", v)
-		}
-		return string(b)
-	}
-}

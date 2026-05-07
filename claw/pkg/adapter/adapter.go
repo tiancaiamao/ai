@@ -654,7 +654,7 @@ func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKe
 		if item.MessageID == "" || item.MessageType != "audio" {
 			continue
 		}
-		if strings.Contains(item.Content, fileKey) {
+				if strings.Contains(item.Body.Content, fileKey) {
 			return item.MessageID, nil
 		}
 	}
@@ -736,7 +736,9 @@ type feishuMessageListResponse struct {
 		Items []struct {
 			MessageID   string `json:"message_id"`
 			MessageType string `json:"msg_type"`
-			Content     string `json:"body.content"`
+			Body        struct {
+				Content string `json:"content"`
+			} `json:"body"`
 		} `json:"items"`
 	} `json:"data"`
 }
