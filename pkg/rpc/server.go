@@ -5,23 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+			"io"
 	"os"
-	"sort"
 	"sync"
 
 	"log/slog"
+
+	"github.com/tiancaiamao/ai/pkg/command"
 )
 
 // Handler is the function signature for handling RPC protocol commands.
 // It receives the raw RPCCommand and returns an arbitrary result (nil for no data)
 // or an error. Parameter parsing is the handler's responsibility.
 type Handler func(cmd RPCCommand) (any, error)
-
-// SlashHandler is the function signature for slash commands invoked via the prompt channel.
-// It receives the text arguments after the command name and returns an arbitrary result
-// or an error.
-type SlashHandler func(args string) (any, error)
 
 // SlashCommandInfo describes a registered slash command.
 type SlashCommandInfo struct {
@@ -34,29 +30,24 @@ type SlashCommandInfo struct {
 // Slash commands use RegisterSlash — they can be invoked both via prompt
 // interception ("/command args") and directly via JSON-RPC command type.
 type Server struct {
-	mu            sync.Mutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	writer        sync.Mutex
-	output        *bufio.Writer
-	handlers      map[string]Handler
-	slashCommands map[string]slashEntry
-}
-
-type slashEntry struct {
-	info    SlashCommandInfo
-	handler SlashHandler
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	writer   sync.Mutex
+	output   *bufio.Writer
+	handlers map[string]Handler
+	commands *command.Registry
 }
 
 // NewServer creates a new RPC server with ping pre-registered.
 func NewServer() *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
-		ctx:           ctx,
-		cancel:        cancel,
-		handlers:      make(map[string]Handler),
-		slashCommands: make(map[string]slashEntry),
+		ctx:      ctx,
+		cancel:   cancel,
+		handlers: make(map[string]Handler),
+		commands: command.New(),
 	}
 	s.Register(CommandPing, func(cmd RPCCommand) (any, error) {
 		return map[string]any{"ok": true}, nil
@@ -74,38 +65,28 @@ func (s *Server) Register(cmdType string, handler Handler) {
 // RegisterSlash registers a slash command handler. Slash commands can be invoked
 // via prompt interception ("/command args") and directly as JSON-RPC command types.
 // The handler receives the text arguments after the command name.
-func (s *Server) RegisterSlash(name, description string, handler SlashHandler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.slashCommands[name] = slashEntry{
-		info:    SlashCommandInfo{Name: name, Description: description},
-		handler: handler,
-	}
+func (s *Server) RegisterSlash(name, description string, handler command.Handler) {
+	s.commands.Register(name, description, handler)
 }
 
 // GetSlashHandler returns the slash command handler for the given name, if any.
-func (s *Server) GetSlashHandler(name string) (SlashHandler, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.slashCommands[name]
-	if !ok {
-		return nil, false
-	}
-	return e.handler, true
+func (s *Server) GetSlashHandler(name string) (command.Handler, bool) {
+	return s.commands.Get(name)
 }
 
 // ListSlashCommands returns all registered slash commands sorted by name.
 func (s *Server) ListSlashCommands() []SlashCommandInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result := make([]SlashCommandInfo, 0, len(s.slashCommands))
-	for _, e := range s.slashCommands {
-		result = append(result, e.info)
+	cmds := s.commands.ListCommands()
+	result := make([]SlashCommandInfo, len(cmds))
+	for i, c := range cmds {
+		result[i] = SlashCommandInfo{Name: c.Name, Description: c.Description}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
 	return result
+}
+
+// Commands returns the underlying command registry for direct access.
+func (s *Server) Commands() *command.Registry {
+	return s.commands
 }
 
 // HasHandler reports whether a handler is registered for the given command type.
@@ -200,22 +181,22 @@ func (s *Server) extractSlashArgs(cmd RPCCommand) string {
 }
 
 // successResponse creates a successful response.
-func (s *Server) successResponse(id, command string, data any) RPCResponse {
+func (s *Server) successResponse(id, commandType string, data any) RPCResponse {
 	return RPCResponse{
 		ID:      id,
 		Type:    "response",
-		Command: command,
+		Command: commandType,
 		Success: true,
 		Data:    data,
 	}
 }
 
 // errorResponse creates an error response.
-func (s *Server) errorResponse(id, command, errMsg string) RPCResponse {
+func (s *Server) errorResponse(id, commandType, errMsg string) RPCResponse {
 	return RPCResponse{
 		ID:      id,
 		Type:    "response",
-		Command: command,
+		Command: commandType,
 		Success: false,
 		Error:   errMsg,
 	}

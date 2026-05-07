@@ -473,11 +473,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		ag.SetContext(ctx)
 	}
 
-	bashRunner := newBashRunner()
-	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
-	if bashTimeout <= 0 {
-		bashTimeout = 30 * time.Second
-	}
+		_ = concurrencyConfig
 
 	// Create RPC server
 	server := rpc.NewServer()
@@ -680,8 +676,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		if streaming {
 			behavior := strings.TrimSpace(data.StreamingBehavior)
+			// Default behavior when agent is busy: steer
 			if behavior == "" {
-				return nil, fmt.Errorf("agent is streaming; specify streamingBehavior")
+				behavior = "steer"
 			}
 			switch behavior {
 			case "steer":
@@ -691,15 +688,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				stateMu.Lock()
 				pendingSteer = true
 				stateMu.Unlock()
-				ag.Steer(message)
+				expandedMessage := expandSkillCommands(message)
+				ag.Steer(expandedMessage)
 				return nil, nil
 			case "followUp", "follow_up":
 				if followMode == "one-at-a-time" && ag.GetPendingFollowUps() > 0 {
 					return nil, fmt.Errorf("follow-up queue already has a pending message")
 				}
-				return nil, ag.FollowUp(message)
+				expandedMessage := expandSkillCommands(message)
+				return nil, ag.FollowUp(expandedMessage)
 			default:
-				return nil, fmt.Errorf("invalid streamingBehavior: %s", behavior)
+				return nil, fmt.Errorf("invalid streamingBehavior: %s (valid: steer, followUp)", behavior)
 			}
 		}
 
@@ -804,18 +803,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return false
 	}
 
-	server.RegisterSlash("clear_session", "Clear all messages in the current session", func(args string) (any, error) {
-		slog.Info("Received clear_session")
-		if err := sess.Clear(); err != nil {
-			return nil, err
-		}
-		// Clear agent context
-		setAgentContext(createBaseContext())
-		slog.Info("Session cleared")
-		return nil, nil
+
+	// ============================================================
+	// Slash command registration
+	// ============================================================
+
+	// --- /help ---
+	server.RegisterSlash("help", "Show available slash commands", func(args string) (any, error) {
+		commands := server.ListSlashCommands()
+		return map[string]any{
+			"commands": commands,
+		}, nil
 	})
 
-	server.RegisterSlash("new_session", "Create a new session and switch to it", func(args string) (any, error) {
+	// --- /new (create new session) ---
+	server.RegisterSlash("new", "Create a new session and switch to it", func(args string) (any, error) {
 		var name, title string
 		var jsonData struct {
 			Name  string `json:"name"`
@@ -844,12 +846,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 		newSessionID := newSess.GetID()
 
-		// Update session manager's current ID
 		if err := sessionMgr.SetCurrent(newSessionID); err != nil {
 			return nil, err
 		}
 
-		// Update current session metadata
 		if err := sessionMgr.SaveCurrent(); err != nil {
 			slog.Info("Failed to update session metadata:", "value", err)
 		}
@@ -858,7 +858,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
 
-		// Update checkpoint manager for new session
 		if err := updateCheckpointManager(); err != nil {
 			slog.Warn("Failed to update checkpoint manager for new session", "error", err)
 		}
@@ -873,36 +872,37 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 	})
 
-	server.RegisterSlash("list_sessions", "List all sessions with their metadata", func(args string) (any, error) {
-		slog.Info("Received list_sessions")
-		sessions, err := sessionMgr.ListSessions()
-		if err != nil {
-			return nil, err
+	// --- /resume (list sessions or switch to session) ---
+	server.RegisterSlash("resume", "List sessions or resume a session by ID/name/index", func(args string) (any, error) {
+		arg := strings.TrimSpace(args)
+		if arg == "" {
+			// List sessions
+			slog.Info("Received list_sessions")
+			sessions, err := sessionMgr.ListSessions()
+			if err != nil {
+				return nil, err
+			}
+
+			startupPath := cfg.Workspace
+			currentWorkdir := ws.GetCWD()
+
+			result := make([]any, len(sessions))
+			for i, sess := range sessions {
+				reversedIdx := len(sessions) - 1 - i
+				sess.Workspace = startupPath
+				sess.CurrentWorkdir = currentWorkdir
+				result[reversedIdx] = sess
+			}
+			return map[string]any{"sessions": result}, nil
 		}
 
-		// Get workspace and current directory info
-		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
-		currentWorkdir := ws.GetCWD() // This is the current working directory
-
-				result := make([]any, len(sessions))
-		// Reverse the order so newest (index 0) appears at the bottom
-		for i, sess := range sessions {
-			// Calculate reversed index: 0->len-1, 1->len-2, etc.
-			reversedIdx := len(sessions) - 1 - i
-			sess.Workspace = startupPath
-			sess.CurrentWorkdir = currentWorkdir
-			result[reversedIdx] = sess
-		}
-		return map[string]any{"sessions": result}, nil
-	})
-
-	server.RegisterSlash("switch_session", "Switch to a session by name or ID", func(args string) (any, error) {
+		// Switch to session
 		var jsonData struct {
 			ID          string `json:"id"`
 			SessionPath string `json:"sessionPath"`
 		}
-		id := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) {
+		id := arg
+		if parseJSONArgs(arg, &jsonData) {
 			id = jsonData.ID
 			if jsonData.SessionPath != "" {
 				id = jsonData.SessionPath
@@ -919,8 +919,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if listErr != nil {
 				return nil, fmt.Errorf("failed to list sessions: %w", listErr)
 			}
-			// Reverse to match display order (index 0 = oldest, as shown in renderSessions)
-			// ListSessions returns newest-first; renderSessions shows index 0 = oldest
 			reversed := make([]session.SessionMeta, len(sessions))
 			for i, s := range sessions {
 				reversed[len(sessions)-1-i] = s
@@ -938,8 +936,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			if err != nil {
 				return nil, err
 			}
-			// LoadSessionLazy expects session directory, not file path
-			// Extract directory if sessionPath points to messages.jsonl
 			sessionDir := sessionPath
 			if strings.HasSuffix(sessionPath, ".jsonl") {
 				info, err := os.Stat(sessionPath)
@@ -963,14 +959,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				slog.Info("Failed to update session metadata:", "value", err)
 			}
 
-			// Clear agent context and load new messages
 			sess = newSess
 			sessionComp.Update(sess, compactor)
 			setAgentContext(createBaseContext())
-			// Restore last compaction summary if available
 			ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
-			// Update checkpoint manager for new session
 			if err := updateCheckpointManager(); err != nil {
 				slog.Warn("Failed to update checkpoint manager for new session", "error", err)
 			}
@@ -980,7 +973,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			sessionName = resolveSessionName(sessionMgr, newSessionID)
 			stateMu.Unlock()
 
-			// Update trace handler session ID
 			if handler := traceevent.GetHandler(); handler != nil {
 				if fh, ok := handler.(*traceevent.FileHandler); ok {
 					fh.SetSessionID(newSessionID)
@@ -997,23 +989,47 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 
 		// Load the new session
-		newSess, err := sessionMgr.GetSession(id)
-		if err != nil {
-			return nil, err
+		var newSess *session.Session
+		if strings.Contains(id, "-") && len(id) > 20 {
+			// Looks like a UUID-based session ID
+			sessionDir := filepath.Join(sessionsDir, id)
+			if info, statErr := os.Stat(sessionDir); statErr == nil && info.IsDir() {
+				opts := session.DefaultLoadOptions()
+				newSess, err = session.LoadSessionLazy(sessionDir, opts)
+				if err != nil {
+					slog.Warn("Failed to load session by ID", "id", id, "error", err)
+					newSess = nil
+				}
+			}
 		}
-		newSessionID := newSess.GetID()
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
+		if newSess == nil {
+			// Try to find by name
+			sessions, listErr := sessionMgr.ListSessions()
+			if listErr != nil {
+				return nil, fmt.Errorf("failed to list sessions: %w", listErr)
+			}
+			for _, s := range sessions {
+				if s.Name == id || s.ID == id {
+					sessionDir := filepath.Join(sessionsDir, s.ID)
+					opts := session.DefaultLoadOptions()
+					newSess, err = session.LoadSessionLazy(sessionDir, opts)
+					if err != nil {
+						return nil, fmt.Errorf("failed to load session %s: %w", s.ID, err)
+					}
+					break
+				}
+			}
+		}
+		if newSess == nil {
+			return nil, fmt.Errorf("session not found: %s", id)
 		}
 
-		// Clear agent context and load new messages
+		newSessionID := newSess.GetID()
 		sess = newSess
 		sessionComp.Update(sess, compactor)
 		setAgentContext(createBaseContext())
-		// Restore last compaction summary if available
 		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
 
-		// Update checkpoint manager for new session
 		if err := updateCheckpointManager(); err != nil {
 			slog.Warn("Failed to update checkpoint manager for new session", "error", err)
 		}
@@ -1023,7 +1039,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		sessionName = resolveSessionName(sessionMgr, newSessionID)
 		stateMu.Unlock()
 
-		// Update trace handler session ID
 		if handler := traceevent.GetHandler(); handler != nil {
 			if fh, ok := handler.(*traceevent.FileHandler); ok {
 				fh.SetSessionID(newSessionID)
@@ -1035,222 +1050,123 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"switched": true, "cancelled": false}, nil
 	})
 
-	server.RegisterSlash("delete_session", "Delete a session by ID", func(args string) (any, error) {
-		var jsonData struct {
-			ID string `json:"id"`
-		}
-		id := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) && jsonData.ID != "" {
-			id = jsonData.ID
-		}
-		slog.Info("Received delete_session: id=", "id", id)
-		if err := sessionMgr.DeleteSession(id); err != nil {
-			return nil, err
-		}
-		return map[string]any{"deleted": true}, nil
-	})
-
-	server.RegisterSlash("set_session_name", "Set a human-readable name for the current session", func(args string) (any, error) {
-		name := strings.TrimSpace(args)
-		var jsonData struct {
-			Name string `json:"name"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			name = jsonData.Name
-		}
-		slog.Info("Received set_session_name", "name", name)
-		if name == "" {
-			return nil, fmt.Errorf("session name cannot be empty")
-		}
-		if _, err := sess.AppendSessionInfo(name, ""); err != nil {
-			return nil, err
-		}
-		if err := sessionMgr.UpdateSessionName(sessionID, name, ""); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
+	// --- /session (show current state) ---
+	server.RegisterSlash("session", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
 		stateMu.Lock()
-		sessionName = name
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	server.RegisterSlash("get_state", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
-		slog.Info("Received get_state")
-		compactionState := buildCompactionState(compactorConfig, compactor)
-		stateMu.Lock()
-		currentSessionID := sessionID
-		currentSessionName := sessionName
 		streaming := isStreaming
 		compacting := isCompacting
-		thinkingLevel := currentThinkingLevel
-		autoCompact := autoCompactionEnabled
-		currentSteeringMode := steeringMode
-		currentFollowUpMode := followUpMode
-		modelInfo := currentModelInfo
+		pending := pendingSteer
+		sID := sessionID
+		sName := sessionName
 		stateMu.Unlock()
 
-		// Get current trace file path from FileHandler
-		aiLogPath := traceOutputPath
-		if handler := traceevent.GetHandler(); handler != nil {
-			if fh, ok := handler.(*traceevent.FileHandler); ok {
-				aiLogPath = fh.TraceFilePath("")
-			}
+		modelInfo := map[string]any{
+			"provider": model.Provider,
+			"id":       model.ID,
 		}
 
-		return &rpc.SessionState{
-			Model:                 &modelInfo,
-			ThinkingLevel:         thinkingLevel,
-			IsStreaming:           streaming,
-			IsCompacting:          compacting,
-			SteeringMode:          currentSteeringMode,
-			FollowUpMode:          currentFollowUpMode,
-			SessionFile:           sess.GetPath(),
-			SessionID:             currentSessionID,
-			SessionName:           currentSessionName,
-			AIPid:                 os.Getpid(),
-			AILogPath:             aiLogPath,
-			AIWorkingDir:          ws.GetCWD(),
-			AIStartupPath:         ws.GetGitRoot(),
-			AutoCompactionEnabled: autoCompact,
-			MessageCount:          len(ag.GetMessages()),
-			PendingMessageCount:   ag.GetPendingFollowUps(),
-			Compaction:            compactionState,
+		msgCount := 0
+		if sess != nil {
+			msgCount = len(sess.GetMessages())
+		}
+
+		return map[string]any{
+			"model":       modelInfo,
+			"streaming":   streaming,
+			"compacting":  compacting,
+			"pendingSteer": pending,
+			"sessionId":   sID,
+			"sessionName": sName,
+			"messageCount": msgCount,
 		}, nil
 	})
 
-	server.RegisterSlash("get_messages", "Get all messages in the current session", func(args string) (any, error) {
-		slog.Info("Received get_messages")
+	// --- /messages ---
+	server.RegisterSlash("messages", "Get session messages", func(args string) (any, error) {
 		messages := ag.GetMessages()
-		result := make([]any, len(messages))
-		for i, msg := range messages {
-			result[i] = msg
-		}
-		return map[string]any{"messages": result}, nil
+		return map[string]any{"messages": messages}, nil
 	})
 
+	// --- /compact ---
 	server.RegisterSlash("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
-		slog.Info("Received compact")
-		beforeCount := len(ag.GetMessages())
+		slog.Info("Received compact command")
+		return nil, fmt.Errorf("compact is not yet implemented as a slash command")
+	})
 
-		// Estimate current context usage
-		estimatedTokens := compactor.EstimateContextTokensOld(ag.GetMessages())
-		keepTokens := compactor.KeepRecentTokens()
-
-		// Check if compaction is possible before starting
-		if !sess.CanCompact(compactor) {
-			if estimatedTokens < keepTokens {
-				return nil, fmt.Errorf("all %d messages (%d tokens) fit within keep-recent budget (%d tokens); no compaction needed",
-					beforeCount, estimatedTokens, keepTokens)
+	// --- /model (list or set) ---
+	server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
+		arg := strings.TrimSpace(args)
+		if arg == "" {
+			specs, modelsPath, err := loadModelSpecs(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
 			}
-			return nil, fmt.Errorf("no messages available for compaction (all within retention window)")
-		}
+			specs = filterModelSpecsWithKeys(specs)
+			if len(specs) == 0 {
+				authPath, _ := config.GetDefaultAuthPath()
+				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+			}
 
-		compactionInfo := agent.CompactionInfo{
-			Auto:    false,
-			Before:  beforeCount,
-			Trigger: "manual_command",
-		}
-		stateMu.Lock()
-		isCompacting = true
-		stateMu.Unlock()
-		server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
-		defer func() {
-			stateMu.Lock()
-			isCompacting = false
-			stateMu.Unlock()
-			server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
-		}()
-
-		var response *rpc.CompactResult
-		err := runDetachedTraceSpan(
-			"compaction",
-			traceevent.CategoryEvent,
-			[]traceevent.Field{{Key: "source", Value: "manual"}},
-			func(_ context.Context, span *traceevent.Span) error {
-				span.AddField("before_messages", beforeCount)
-
-				result, err := sess.Compact(compactor)
-				if err != nil {
-					slog.Info("Compact failed:", "value", err)
-					return err
+			models := make([]rpc.ModelInfo, 0, len(specs))
+			currentIndex := -1
+			for i, spec := range specs {
+				models = append(models, modelInfoFromSpec(spec))
+				if spec.Provider == model.Provider && spec.ID == model.ID {
+					currentIndex = i
 				}
+			}
 
-				// Replace messages with compacted version
-				ag.GetContext().RecentMessages = sess.GetMessages()
-
-				afterCount := len(ag.GetMessages())
-				span.AddField("after_messages", afterCount)
-				span.AddField("tokens_before", result.TokensBefore)
-				span.AddField("tokens_after", result.TokensAfter)
-				compactionInfo.After = afterCount
-
-				slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
-				response = &rpc.CompactResult{
-					FirstKeptEntryID: result.FirstKeptEntryID,
-					TokensBefore:     result.TokensBefore,
-					TokensAfter:      result.TokensAfter,
-				}
-
-				// Create checkpoint after manual compaction to preserve AgentState for resume
-				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-					agentCtx := ag.GetContext()
-					slog.Info("[Loop] Creating checkpoint after manual compact", "trigger", "manual_command", "turn", agentCtx.AgentState.TotalTurns)
-					checkpointTurn, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, agentCtx.AgentState.TotalTurns)
-					if err != nil {
-						slog.Warn("[Loop] Failed to create checkpoint after manual compact", "error", err, "turn", agentCtx.AgentState.TotalTurns)
-					} else {
-						slog.Info("[Loop] Checkpoint created after manual compact", "trigger", "manual_command", "checkpoint_turn", checkpointTurn)
-					}
-				}
-				return nil
-			},
-		)
-		if err != nil {
-			compactionInfo.Error = err.Error()
-			return nil, err
-		}
-		return response, nil
-	})
-
-	server.RegisterSlash("get_available_models", "List all available models", func(args string) (any, error) {
-		slog.Info("Received get_available_models")
-		specs, modelsPath, err := loadModelSpecs(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+			return map[string]any{
+				"models":       models,
+				"currentIndex": currentIndex,
+				"current": map[string]any{
+					"provider": model.Provider,
+					"id":       model.ID,
+				},
+			}, nil
 		}
 
-		specs = filterModelSpecsWithKeys(specs)
-		if len(specs) == 0 {
-			authPath, _ := config.GetDefaultAuthPath()
-			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+		// Set model by index, provider/id, or provider id
+		if idx, err := strconv.Atoi(arg); err == nil {
+			specs, modelsPath, err := loadModelSpecs(cfg)
+			if err != nil {
+				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+			}
+			specs = filterModelSpecsWithKeys(specs)
+			if len(specs) == 0 {
+				authPath, _ := config.GetDefaultAuthPath()
+				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
+			}
+			if idx < 0 || idx >= len(specs) {
+				return nil, fmt.Errorf("model index out of range")
+			}
+			arg = fmt.Sprintf("%s %s", specs[idx].Provider, specs[idx].ID)
+		} else if strings.Contains(arg, "/") {
+			parts := strings.SplitN(arg, "/", 2)
+			provider := strings.TrimSpace(parts[0])
+			modelID := strings.TrimSpace(parts[1])
+			if provider == "" || modelID == "" {
+				return nil, fmt.Errorf("invalid model selector: %s", arg)
+			}
+			arg = fmt.Sprintf("%s %s", provider, modelID)
 		}
 
-		models := make([]rpc.ModelInfo, 0, len(specs))
-		for _, spec := range specs {
-			models = append(models, modelInfoFromSpec(spec))
-		}
-		return map[string]any{"models": models}, nil
-	})
-
-	server.RegisterSlash("set_model", "Set the active model by ID", func(args string) (any, error) {
+		// Delegate to set_model logic (same as /set model)
 		var provider, modelID string
 		var jsonData struct {
 			Provider string `json:"provider"`
 			ModelID  string `json:"modelId"`
 		}
-		if parseJSONArgs(args, &jsonData) {
+		if parseJSONArgs(arg, &jsonData) {
 			provider, modelID = jsonData.Provider, jsonData.ModelID
 		} else {
-			parts := strings.SplitN(args, " ", 2)
+			parts := strings.SplitN(arg, " ", 2)
 			provider = strings.TrimSpace(parts[0])
 			if len(parts) > 1 {
 				modelID = strings.TrimSpace(parts[1])
 			}
 		}
-		slog.Info("Received set_model", "provider", provider, "modelId", modelID)
+		slog.Info("Setting model", "provider", provider, "modelId", modelID)
 		if strings.TrimSpace(provider) == "" || strings.TrimSpace(modelID) == "" {
 			return nil, fmt.Errorf("provider and modelId are required")
 		}
@@ -1297,7 +1213,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		ag.SetModel(model)
 		ag.SetAPIKey(apiKey)
 
-		// Recreate compactor with new model
 		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, spec.ContextWindow)
 		sessionComp.Update(sess, compactor)
 		ag.SetCompactor(sessionComp)
@@ -1312,310 +1227,265 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		currentModelInfo = info
 		currentContextWindow = spec.ContextWindow
 		stateMu.Unlock()
-		return &info, nil
+
+		slog.Info("Model switched", "provider", provider, "id", modelID)
+		server.EmitEvent(map[string]any{"type": "model_change", "provider": provider, "modelId": modelID})
+		return map[string]any{"provider": provider, "modelId": modelID}, nil
 	})
 
-	server.RegisterSlash("cycle_model", "Cycle to the next available model", func(args string) (any, error) {
-		slog.Info("Received cycle_model")
-		specs, modelsPath, err := loadModelSpecs(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
+	// --- /model-select (alias to model) ---
+	server.RegisterSlash("model-select", "Select a model", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("model")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: model")
 		}
-		filtered := filterModelSpecsWithKeys(specs)
-		if len(filtered) == 0 {
-			authPath, _ := config.GetDefaultAuthPath()
-			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
-		}
-		if len(filtered) == 1 {
-			return nil, nil
-		}
+		return h(args)
+	})
 
-		index := -1
-		for i, spec := range filtered {
-			if spec.Provider == model.Provider && spec.ID == model.ID {
-				index = i
-				break
-			}
+	// --- /skills ---
+	server.RegisterSlash("skills", "List available skills", func(args string) (any, error) {
+		var skills []map[string]string
+		for _, s := range skillResult.Skills {
+			skills = append(skills, map[string]string{
+				"name":        s.Name,
+				"description": s.Description,
+			})
 		}
-		next := filtered[0]
-		if index >= 0 {
-			next = filtered[(index+1)%len(filtered)]
-		}
+		return map[string]any{"skills": skills}, nil
+	})
 
-		newAPIKey, err := config.ResolveAPIKey(next.Provider)
+	// --- /context (composite state + stats + models) ---
+	server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
+		stateH, _ := server.GetSlashHandler("session")
+
+		stateResult, err := stateH("")
 		if err != nil {
 			return nil, err
 		}
 
-		model = llm.Model{
-			ID:            next.ID,
-			Provider:      next.Provider,
-			BaseURL:       next.BaseURL,
-			API:           next.API,
-			ContextWindow: next.ContextWindow,
-			MaxTokens:     next.MaxTokens,
-		}
-		apiKey = newAPIKey
-
-		cfg.Model.ID = next.ID
-		cfg.Model.Provider = next.Provider
-		cfg.Model.BaseURL = next.BaseURL
-		cfg.Model.API = next.API
-		cfg.Model.MaxTokens = next.MaxTokens
-
-		ag.SetModel(model)
-		ag.SetAPIKey(apiKey)
-
-		// Recreate compactor with new model
-		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, next.ContextWindow)
-		sessionComp.Update(sess, compactor)
-		ag.SetCompactor(sessionComp)
-		ag.SetContextWindow(next.ContextWindow)
-
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
+		specs, modelsPath, err := loadModelSpecs(cfg)
+		var modelsResult any
+		if err == nil {
+			specs = filterModelSpecsWithKeys(specs)
+			models := make([]rpc.ModelInfo, 0, len(specs))
+			currentIndex := -1
+			for i, spec := range specs {
+				models = append(models, modelInfoFromSpec(spec))
+				if spec.Provider == model.Provider && spec.ID == model.ID {
+					currentIndex = i
+				}
+			}
+			modelsResult = map[string]any{"models": models, "currentIndex": currentIndex}
+		} else {
+			modelsResult = map[string]any{"error": fmt.Sprintf("load models from %s: %v", modelsPath, err)}
 		}
 
-		info := modelInfoFromSpec(next)
-		stateMu.Lock()
-		currentModelInfo = info
-		currentContextWindow = next.ContextWindow
-		stateMu.Unlock()
-
-		return &rpc.CycleModelResult{
-			Model:         info,
-			ThinkingLevel: currentThinkingLevel,
-			IsScoped:      false,
+		return map[string]any{
+			"state":  stateResult,
+			"models": modelsResult,
 		}, nil
 	})
 
-	skillCommands := buildSkillCommands(skillResult.Skills)
-
-	server.RegisterSlash("get_commands", "List available slash commands and skills", func(args string) (any, error) {
-		slog.Info("Received get_commands")
-		return map[string]any{"commands": skillCommands}, nil
+	// --- /toggle ---
+	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix, tools)", func(args string) (any, error) {
+		kind := strings.TrimSpace(args)
+		switch kind {
+		case "thinking":
+			showThinking = !showThinking
+			return map[string]any{"setting": "thinking", "value": showThinking}, nil
+		case "prefix":
+			showPrefix = !showPrefix
+			return map[string]any{"setting": "prefix", "value": showPrefix}, nil
+		case "tools":
+			showTools = !showTools
+			return map[string]any{"setting": "tools", "value": showTools}, nil
+		default:
+			return nil, fmt.Errorf("usage: /toggle <thinking|prefix|tools>")
+		}
 	})
 
-	server.RegisterSlash("get_session_stats", "Get session statistics (token counts, message count)", func(args string) (any, error) {
-		slog.Info("Received get_session_stats")
-		messages := ag.GetMessages()
-		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
+	// --- /show ---
+	server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+		subCmd := strings.TrimSpace(args)
+		switch subCmd {
+		case "settings", "":
+			compaction := buildCompactionState(compactorConfig, compactor)
 
-		// Estimate system prompt and tools tokens for display purposes only
-		// Uses the unified token estimation from AgentContext for consistency
-		// with runtime compaction decisions.
-		agentCtx := ag.GetContext()
+			model := currentModelInfo.ID
+			if currentModelInfo.Provider != "" {
+				model = currentModelInfo.Provider + "/" + currentModelInfo.ID
+			}
 
-		// Build fresh system prompt for estimation
-		currentSystemPrompt := buildSystemPrompt(sess)
+			compactionContext := "unknown"
+			compactionReserve := "unknown"
+			compactionLimit := "unknown"
+			compactionMaxMessages := "disabled"
+			compactionMaxTokens := "disabled"
+			compactionKeepRecent := "unknown"
+			compactionKeepRecentTokens := "unknown"
+			if compaction != nil {
+				compactionContext = formatIntOrUnknown(compaction.ContextWindow)
+				compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
+				compactionLimit = formatTokenLimit(compaction)
+				compactionMaxMessages = formatLimit(compaction.MaxMessages)
+				compactionMaxTokens = formatLimit(compaction.MaxTokens)
+				compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
+				compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
+			}
 
-		// Estimate tokens from string lengths
-		tokens.SystemPromptTokens = len(currentSystemPrompt) / 4
+			autoCompStr := "off"
+			if autoCompactionEnabled {
+				autoCompStr = "on"
+			}
 
-		// Use unified tools token estimation
-		tokens.SystemToolsTokens = agentCtx.EstimateToolsTokens()
+			showThinkingStr := "off"
+			if showThinking {
+				showThinkingStr = "on"
+			}
+			showToolsStr := "off"
+			if showTools {
+				showToolsStr = "on"
+			}
+			showPrefixStr := "off"
+			if showPrefix {
+				showPrefixStr = "on"
+			}
 
-		// Calculate active window tokens (current conversation) for percentage display
-		// This aligns with runtime_state and represents what's actually sent to LLM
-		activeWindowTokens := agent.EstimateConversationTokens(messages)
-		tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
+			return map[string]any{
+				"type": "settings",
+				"data": map[string]any{
+					"model":                         model,
+					"show-thinking":                 showThinkingStr,
+					"tools":                         showToolsStr,
+					"prefix":                        showPrefixStr,
+					"thinking-level":                currentThinkingLevel,
+					"busy-mode":                     busyMode,
+					"auto-compaction":               autoCompStr,
+					"compaction-context-window":     compactionContext,
+					"compaction-reserve-tokens":     compactionReserve,
+					"compaction-token-limit":        compactionLimit,
+					"compaction-max-messages":       compactionMaxMessages,
+					"compaction-max-tokens":         compactionMaxTokens,
+					"compaction-keep-recent":        compactionKeepRecent,
+					"compaction-keep-recent-tokens": compactionKeepRecentTokens,
+				},
+			}, nil
+		case "pipeline":
+			return map[string]any{"message": "pipeline info not yet available"}, nil
+		default:
+			return nil, fmt.Errorf("usage: /show settings|pipeline")
+		}
+	})
 
-		// Note: tokens.Total is cumulative across the entire session for cost tracking
-		// tokens.ActiveWindowTokens is the current active turn + system prompt + tools
-
+	// --- /rewind (was resume_on_branch) ---
+	server.RegisterSlash("rewind", "Resume generation on a specific branch", func(args string) (any, error) {
+		var jsonData struct {
+			EntryID string `json:"entryId"`
+		}
+		entryID := strings.TrimSpace(args)
+		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
+			entryID = jsonData.EntryID
+		}
+		slog.Info("Received rewind", "entryId", entryID)
 		stateMu.Lock()
-		currentSessionID := sessionID
+		streaming := isStreaming
 		stateMu.Unlock()
-		var tokenRate *rpc.TokenRateStats
-		if metrics := ag.GetMetrics(); metrics != nil {
-			llmMetrics := metrics.GetLLMMetrics()
-			tokenRate = &rpc.TokenRateStats{
-				ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
-				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
-				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
-				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
-				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
-				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
-				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
-				LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
-				RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
-				RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
-				RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
-				RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
+		if streaming {
+			return nil, fmt.Errorf("agent is busy")
+		}
+
+		if entryID == "" {
+			return nil, fmt.Errorf("usage: /rewind <entryId>")
+		}
+
+		if entryID == "root" {
+			sess.ResetLeaf()
+		} else {
+			if err := sess.Branch(entryID); err != nil {
+				return nil, err
 			}
 		}
-		return &rpc.SessionStats{
-			SessionFile:       sess.GetPath(),
-			SessionID:         currentSessionID,
-			UserMessages:      userCount,
-			AssistantMessages: assistantCount,
-			ToolCalls:         toolCalls,
-			ToolResults:       toolResults,
-			TotalMessages:     len(messages),
-			CompactionCount:   sess.GetCompactionCount(),
-			Tokens:            tokens,
-			TokenRate:         tokenRate,
-			Cost:              cost,
-			Workspace:         ws.GetGitRoot(),
-			CurrentWorkdir:    ws.GetCWD(),
-		}, nil
+
+		setAgentContext(createBaseContext())
+		restoreLLMContextFromCompaction(sess)
+
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for branch resume", "error", err)
+		}
+
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+		return map[string]any{"switched": true}, nil
 	})
 
-	server.RegisterSlash("bash", "Execute a bash command", func(args string) (any, error) {
-		command := args
+	// --- /fork ---
+	server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
 		var jsonData struct {
-			Command string `json:"command"`
+			EntryID string `json:"entryId"`
 		}
-		if parseJSONArgs(args, &jsonData) {
-			command = jsonData.Command
+		entryID := strings.TrimSpace(args)
+		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
+			entryID = jsonData.EntryID
 		}
-		slog.Info("Received bash")
-		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
+		slog.Info("Received fork: entryId=", "value", entryID)
+		entry, ok := sess.GetEntry(entryID)
+		if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
+			return nil, fmt.Errorf("invalid entryId: %s", entryID)
+		}
+
+		text := entry.Message.ExtractText()
+		name := fmt.Sprintf("fork-%s", time.Now().Format("20060102-150405"))
+		title := "Forked Session"
+		newSess, err := sessionMgr.ForkSessionFrom(sess, entry.ParentID, name, title)
+		if err != nil {
+			return nil, err
+		}
+
+		newSessionID := newSess.GetID()
+		if err := sessionMgr.SetCurrent(newSessionID); err != nil {
+			return nil, err
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+
+		sess = newSess
+		sessionComp.Update(sess, compactor)
+		setAgentContext(createBaseContext())
+
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for fork", "error", err)
+		}
+
+		stateMu.Lock()
+		sessionID = newSessionID
+		sessionName = name
+		stateMu.Unlock()
+
+		slog.Info("Forked to new session", "name", name, "id", newSessionID)
+		return &rpc.ForkResult{Cancelled: false, Text: text}, nil
 	})
 
-	server.RegisterSlash("abort_bash", "Abort the currently running bash command", func(args string) (any, error) {
-		slog.Info("Received abort_bash")
-		return nil, bashRunner.Abort()
-	})
-
-	server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			ag.SetAutoRetry(jsonData.Enabled)
-			slog.Info("Received set_auto_retry", "enabled", jsonData.Enabled)
-			return nil, nil
-		}
-		slog.Info("Received set_auto_retry", "enabled", enabled)
-		ag.SetAutoRetry(enabled == "true" || enabled == "1")
-		return nil, nil
-	})
-
-	server.RegisterSlash("abort_retry", "Abort the current automatic retry", func(args string) (any, error) {
-		slog.Info("Received abort_retry")
-		ag.Abort()
-		return nil, nil
-	})
-
+	// --- /export_html ---
 	server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {
 		slog.Info("Received export_html", "outputPath", args)
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-	server.RegisterSlash("set_auto_compaction", "Configure automatic context compaction settings", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			compactorConfig.AutoCompact = jsonData.Enabled
-			stateMu.Lock()
-			autoCompactionEnabled = jsonData.Enabled
-			stateMu.Unlock()
-			slog.Info("Received set_auto_compaction: enabled=", "value", jsonData.Enabled)
-			return nil, nil
-		}
-		val := enabled == "true" || enabled == "1"
-		compactorConfig.AutoCompact = val
-		stateMu.Lock()
-		autoCompactionEnabled = val
-		stateMu.Unlock()
-		slog.Info("Received set_auto_compaction: enabled=", "value", val)
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_tool_call_cutoff", "Set the maximum number of tool calls per turn", func(args string) (any, error) {
-		var cutoff int
-		var jsonData struct {
-			Cutoff int `json:"cutoff"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			cutoff = jsonData.Cutoff
-		} else {
-			var err error
-			cutoff, err = strconv.Atoi(strings.TrimSpace(args))
-			if err != nil {
-				return nil, fmt.Errorf("invalid cutoff value: %w", err)
-			}
-		}
-		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
-		if cutoff < 0 {
-			return nil, fmt.Errorf("cutoff must be >= 0")
-		}
-		compactorConfig.ToolCallCutoff = cutoff
-		ag.SetToolCallCutoff(cutoff)
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"cutoff": cutoff}, nil
-	})
-
-	validToolSummaryStrategies := map[string]bool{
-		"llm":       true,
-		"heuristic": true,
-		"off":       true,
-	}
-	validToolSummaryAutomations := map[string]bool{
-		"off":      true,
-		"fallback": true,
-		"always":   true,
-	}
-
-	server.RegisterSlash("set_tool_summary_strategy", "Set how tool outputs are summarized", func(args string) (any, error) {
-		var jsonData struct {
-			Strategy string `json:"strategy"`
-		}
-		strategy := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			strategy = strings.ToLower(jsonData.Strategy)
-		}
-		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
-		if !validToolSummaryStrategies[strategy] {
-			return nil, fmt.Errorf("invalid tool summary strategy")
-		}
-		compactorConfig.ToolSummaryStrategy = strategy
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"strategy": strategy}, nil
-	})
-
-	server.RegisterSlash("set_tool_summary_automation", "Configure automatic tool output summarization", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_tool_summary_automation", "mode", mode)
-		if !validToolSummaryAutomations[mode] {
-			return nil, fmt.Errorf("invalid tool summary automation mode")
-		}
-		compactorConfig.ToolSummaryAutomation = mode
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"mode": mode}, nil
-	})
-
-	server.RegisterSlash("set_trace_events", "Enable/disable trace event categories", func(args string) (any, error) {
-		// Parse args — support both space-separated text and JSON {"events": [...]}
-		events := strings.Fields(args)
+	// --- /trace-events ---
+	server.RegisterSlash("trace-events", "Configure trace events", func(args string) (any, error) {
+		events := strings.Fields(strings.TrimSpace(args))
 		var jsonData struct {
 			Events []string `json:"events"`
 		}
-		if parseJSONArgs(args, &jsonData) && len(jsonData.Events) > 0 {
+		if parseJSONArgs(strings.TrimSpace(args), &jsonData) && len(jsonData.Events) > 0 {
 			events = jsonData.Events
 		}
-		slog.Info("Received set_trace_events", "events", events)
+		slog.Info("Received trace-events", "events", events)
 
 		if len(events) == 0 {
-			// Empty args means reset to default set.
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 		}
 
 		normalized := make([]string, 0, len(events))
@@ -1627,7 +1497,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			normalized = append(normalized, e)
 		}
 		if len(normalized) == 0 {
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 		}
 
 		applyExpanded := func(expanded []string, replace bool) []string {
@@ -1682,606 +1552,280 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-	server.RegisterSlash("get_trace_events", "Get current trace event configuration", func(args string) (any, error) {
-		slog.Info("Received get_trace_events")
-		return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
-	})
-
-	server.RegisterSlash("get_workflow_status", "Get workflow task status", func(args string) (any, error) {
-		slog.Info("Received get_workflow_status")
-		status, err := getWorkflowStatus(ws.GetCWD())
-		if err != nil {
-			return nil, err
-		}
-		if status == nil {
-			return nil, nil
-		}
-		return status, nil
-	})
-
-	validSteeringModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-	validFollowUpModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-
-	server.RegisterSlash("set_steering_mode", "Set how steering messages are queued", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_steering_mode", "mode", mode)
-		if !validSteeringModes[mode] {
-			return nil, fmt.Errorf("invalid steering mode")
-		}
-		stateMu.Lock()
-		steeringMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_follow_up_mode", "Set how follow-up messages are delivered", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_follow_up_mode", "mode", mode)
-		if !validFollowUpModes[mode] {
-			return nil, fmt.Errorf("invalid follow-up mode")
-		}
-		stateMu.Lock()
-		followUpMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	validThinkingLevels := map[string]bool{
-		"off":     true,
-		"minimal": true,
-		"low":     true,
-		"medium":  true,
-		"high":    true,
-		"xhigh":   true,
-	}
-	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
-
-	server.RegisterSlash("set_thinking_level", "Set the thinking/reasoning level (off/low/medium/high)", func(args string) (any, error) {
-		level := strings.ToLower(strings.TrimSpace(args))
-		var jsonData struct {
-			Level string `json:"level"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			level = strings.ToLower(strings.TrimSpace(jsonData.Level))
-		}
-		if !validThinkingLevels[level] {
-			return nil, fmt.Errorf("invalid thinking level")
-		}
-		stateMu.Lock()
-		currentThinkingLevel = level
-		stateMu.Unlock()
-		ag.SetThinkingLevel(level)
-		return map[string]any{"level": level}, nil
-	})
-
-	server.RegisterSlash("cycle_thinking_level", "Cycle to the next thinking level", func(args string) (any, error) {
-		stateMu.Lock()
-		current := currentThinkingLevel
-		stateMu.Unlock()
-
-		next := "medium"
-		for i, level := range thinkingCycle {
-			if level == current {
-				next = thinkingCycle[(i+1)%len(thinkingCycle)]
-				break
-			}
-		}
-
-		stateMu.Lock()
-		currentThinkingLevel = next
-		stateMu.Unlock()
-		ag.SetThinkingLevel(next)
-		return map[string]any{"level": next}, nil
-	})
-
-	server.RegisterSlash("get_last_assistant_text", "Get the last assistant text response", func(args string) (any, error) {
-		slog.Info("Received get_last_assistant_text")
-		messages := ag.GetMessages()
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "assistant" {
-				return map[string]any{"text": messages[i].ExtractText()}, nil
-			}
-		}
-		return "", nil
-	})
-
-	server.RegisterSlash("get_fork_messages", "Get messages for a fork point", func(args string) (any, error) {
-		slog.Info("Received get_fork_messages")
-		forkMessages := sess.GetUserMessagesForForking()
-		result := make([]rpc.ForkMessage, 0, len(forkMessages))
-		for _, msg := range forkMessages {
-			result = append(result, rpc.ForkMessage{
-				EntryID: msg.EntryID,
-				Text:    msg.Text,
-			})
-		}
-		return map[string]any{"messages": result}, nil
-	})
-
-	server.RegisterSlash("get_tree", "Get the conversation tree structure", func(args string) (any, error) {
-		slog.Info("Received get_tree")
-		entries := sess.GetEntries()
-		tree := buildTreeEntries(entries, sess.GetLeafID())
-		return map[string]any{"entries": tree}, nil
-	})
-
-	server.RegisterSlash("resume_on_branch", "Resume generation on a specific branch", func(args string) (any, error) {
-		var jsonData struct {
-			EntryID string `json:"entryId"`
-		}
-		entryID := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
-			entryID = jsonData.EntryID
-		}
-		slog.Info("Received resume_on_branch", "entryId", entryID)
-		stateMu.Lock()
-		streaming := isStreaming
-		stateMu.Unlock()
-		if streaming {
-			return nil, fmt.Errorf("agent is busy")
-		}
-
-		if entryID == "" {
-			return nil, fmt.Errorf("entryId is required")
-		}
-
-		if entryID == "root" {
-			sess.ResetLeaf()
-		} else {
-			if err := sess.Branch(entryID); err != nil {
-				return nil, err
-			}
-		}
-
-		setAgentContext(createBaseContext())
-
-		// Restore llm context from the latest compaction summary on this branch
-		restoreLLMContextFromCompaction(sess)
-
-		// Update checkpoint manager (session might have changed due to branch switch)
-		if err := updateCheckpointManager(); err != nil {
-			slog.Warn("Failed to update checkpoint manager for branch resume", "error", err)
-		}
-
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		return map[string]any{"switched": true}, nil
-	})
-
-	server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
-		var jsonData struct {
-			EntryID string `json:"entryId"`
-		}
-		entryID := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
-			entryID = jsonData.EntryID
-		}
-		slog.Info("Received fork: entryId=", "value", entryID)
-		entry, ok := sess.GetEntry(entryID)
-		if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
-			return nil, fmt.Errorf("invalid entryId: %s", entryID)
-		}
-
-		text := entry.Message.ExtractText()
-		name := fmt.Sprintf("fork-%s", time.Now().Format("20060102-150405"))
-		title := "Forked Session"
-		newSess, err := sessionMgr.ForkSessionFrom(sess, entry.ParentID, name, title)
-		if err != nil {
-			return nil, err
-		}
-
-		newSessionID := newSess.GetID()
-		if err := sessionMgr.SetCurrent(newSessionID); err != nil {
-			return nil, err
-		}
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-
-		sess = newSess
-		sessionComp.Update(sess, compactor)
-		setAgentContext(createBaseContext())
-
-		// Update checkpoint manager for new session
-		if err := updateCheckpointManager(); err != nil {
-			slog.Warn("Failed to update checkpoint manager for fork", "error", err)
-		}
-
-		stateMu.Lock()
-		sessionID = newSessionID
-		sessionName = name
-		stateMu.Unlock()
-
-		slog.Info("Forked to new session", "name", name, "id", newSessionID)
-		return &rpc.ForkResult{Cancelled: false, Text: text}, nil
-	})
-
-	// --- Slash command aliases (user-facing short names) ---
-	// These map the short command names users type (e.g. /help, /session)
-	// to the canonical RPC handlers registered above.
-
-	// Simple aliases: forward to an existing handler.
-	registerAlias := func(alias, desc, canonical string) {
-		server.RegisterSlash(alias, desc, func(args string) (any, error) {
-			h, ok := server.GetSlashHandler(canonical)
-			if !ok {
-				return nil, fmt.Errorf("unknown command: /%s", canonical)
-			}
-			return h(args)
-		})
-	}
-
-	// /help — list all registered slash commands
-	server.RegisterSlash("help", "Show available slash commands", func(args string) (any, error) {
-		commands := server.ListSlashCommands()
-		return map[string]any{
-			"commands": commands,
-		}, nil
-	})
-
-	// /skills → get_commands (skills list from agent)
-	registerAlias("skills", "List available skills", "get_commands")
-
-					// /session → get_state
-	registerAlias("session", "Get the current agent state (model, session, streaming status)", "get_state")
-
-	// /new → new_session
-	registerAlias("new", "Create a new session", "new_session")
-
-	// /messages → get_messages
-	registerAlias("messages", "Get session messages", "get_messages")
-
-	// /tree → get_tree
-	registerAlias("tree", "Show conversation tree", "get_tree")
-
-	// /thinking → set_thinking_level
-	registerAlias("thinking", "Set thinking level (off/low/medium/high)", "set_thinking_level")
-
-	// /trace-events → set_trace_events
-	registerAlias("trace-events", "Configure trace events", "set_trace_events")
-
-	// /model-select → same logic as /model
-	registerAlias("model-select", "Select a model", "model")
-
-	// /model — no args: list models and mark current; with args: select model by index or id
-	server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
-		arg := strings.TrimSpace(args)
-		if arg == "" {
-			specs, modelsPath, err := loadModelSpecs(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
-			}
-			specs = filterModelSpecsWithKeys(specs)
-			if len(specs) == 0 {
-				authPath, _ := config.GetDefaultAuthPath()
-				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
-			}
-
-			models := make([]rpc.ModelInfo, 0, len(specs))
-			currentIndex := -1
-			for i, spec := range specs {
-				models = append(models, modelInfoFromSpec(spec))
-				if spec.Provider == model.Provider && spec.ID == model.ID {
-					currentIndex = i
-				}
-			}
-
-			return map[string]any{
-				"models":       models,
-				"currentIndex": currentIndex,
-				"current": map[string]any{
-					"provider": model.Provider,
-					"id":       model.ID,
-				},
-			}, nil
-		}
-
-		if idx, err := strconv.Atoi(arg); err == nil {
-			specs, modelsPath, err := loadModelSpecs(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
-			}
-			specs = filterModelSpecsWithKeys(specs)
-			if len(specs) == 0 {
-				authPath, _ := config.GetDefaultAuthPath()
-				return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
-			}
-			if idx < 0 || idx >= len(specs) {
-				return nil, fmt.Errorf("model index out of range")
-			}
-			arg = fmt.Sprintf("%s %s", specs[idx].Provider, specs[idx].ID)
-		} else if strings.Contains(arg, "/") {
-			parts := strings.SplitN(arg, "/", 2)
-			provider := strings.TrimSpace(parts[0])
-			modelID := strings.TrimSpace(parts[1])
-			if provider == "" || modelID == "" {
-				return nil, fmt.Errorf("invalid model selector: %s", arg)
-			}
-			arg = fmt.Sprintf("%s %s", provider, modelID)
-		}
-
-		h, ok := server.GetSlashHandler("set_model")
-		if !ok {
-			return nil, fmt.Errorf("unknown command: set_model")
-		}
-		return h(arg)
-	})
-
-	// /resume — no args: list sessions; with args: switch to session
-	server.RegisterSlash("resume", "List sessions or resume a session by ID/name", func(args string) (any, error) {
-		arg := strings.TrimSpace(args)
-		if arg == "" {
-			h, ok := server.GetSlashHandler("list_sessions")
-			if !ok {
-				return nil, fmt.Errorf("unknown command: list_sessions")
-			}
-			return h("")
-		}
-		h, ok := server.GetSlashHandler("switch_session")
-		if !ok {
-			return nil, fmt.Errorf("unknown command: switch_session")
-		}
-		return h(arg)
-	})
-
-	// /context — composite: returns state + session stats + available models
-	server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
-		stateH, _ := server.GetSlashHandler("get_state")
-		statsH, _ := server.GetSlashHandler("get_session_stats")
-		modelsH, _ := server.GetSlashHandler("get_available_models")
-
-		stateResult, err := stateH("")
-		if err != nil {
-			return nil, err
-		}
-		statsResult, _ := statsH("")
-		modelsResult, _ := modelsH("")
-
-				return map[string]any{
-			"state":  stateResult,
-			"stats":  statsResult,
-			"models": modelsResult,
-		}, nil
-		})
-
-	// Display settings: /toggle thinking|prefix, /set tools|busy-mode
-	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix)", func(args string) (any, error) {
-		kind := strings.TrimSpace(args)
-		switch kind {
-		case "thinking":
-			showThinking = !showThinking
-			return map[string]any{"setting": "thinking", "value": showThinking}, nil
-		case "prefix":
-			showPrefix = !showPrefix
-			return map[string]any{"setting": "prefix", "value": showPrefix}, nil
-		default:
-			return nil, fmt.Errorf("usage: /toggle <thinking|prefix>")
-		}
-	})
-
-	server.RegisterSlash("set_thinking_display", "Toggle thinking display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showThinking = true
-		case "off":
-			showThinking = false
-		case "toggle", "":
-			showThinking = !showThinking
-		default:
-			return nil, fmt.Errorf("usage: /set_thinking_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "thinking", "value": showThinking}, nil
-	})
-
-	server.RegisterSlash("set_tools_display", "Toggle tools display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showTools = true
-		case "off":
-			showTools = false
-		case "toggle", "":
-			showTools = !showTools
-		default:
-			return nil, fmt.Errorf("usage: /set_tools_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "tools", "value": showTools}, nil
-	})
-
-	server.RegisterSlash("set_prefix_display", "Toggle prefix display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showPrefix = true
-		case "off":
-			showPrefix = false
-		case "toggle", "":
-			showPrefix = !showPrefix
-		default:
-			return nil, fmt.Errorf("usage: /set_prefix_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "prefix", "value": showPrefix}, nil
-	})
-
-	server.RegisterSlash("set_busy_mode", "Set behavior when agent is busy (steer, follow-up, reject)", func(args string) (any, error) {
-		mode := strings.TrimSpace(args)
-		switch mode {
-		case "steer", "follow-up", "reject":
-			busyMode = mode
-			return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
-		default:
-			return nil, fmt.Errorf("usage: /set_busy_mode <steer|follow-up|reject>")
-		}
-	})
-
-		server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
-		subCmd := strings.TrimSpace(args)
-		switch subCmd {
-		case "settings", "":
-			compaction := buildCompactionState(compactorConfig, compactor)
-
-			model := currentModelInfo.ID
-			if currentModelInfo.Provider != "" {
-				model = currentModelInfo.Provider + "/" + currentModelInfo.ID
-			}
-
-			compactionContext := "unknown"
-			compactionReserve := "unknown"
-			compactionLimit := "unknown"
-			compactionMaxMessages := "disabled"
-			compactionMaxTokens := "disabled"
-			compactionKeepRecent := "unknown"
-			compactionKeepRecentTokens := "unknown"
-			if compaction != nil {
-				compactionContext = formatIntOrUnknown(compaction.ContextWindow)
-				compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
-				compactionLimit = formatTokenLimit(compaction)
-				compactionMaxMessages = formatLimit(compaction.MaxMessages)
-				compactionMaxTokens = formatLimit(compaction.MaxTokens)
-				compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
-				compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
-			}
-
-			autoCompStr := "off"
-			if autoCompactionEnabled {
-				autoCompStr = "on"
-			}
-
-			showThinkingStr := "off"
-			if showThinking {
-				showThinkingStr = "on"
-			}
-			showToolsStr := "off"
-			if showTools {
-				showToolsStr = "on"
-			}
-			showPrefixStr := "off"
-			if showPrefix {
-				showPrefixStr = "on"
-			}
-
-			return map[string]any{
-				"type": "settings",
-				"data": map[string]any{
-					"model":                          model,
-					"show-thinking":                  showThinkingStr,
-					"tools":                          showToolsStr,
-					"prefix":                         showPrefixStr,
-					"thinking-level":                 currentThinkingLevel,
-					"busy-mode":                      busyMode,
-					"auto-compaction":                autoCompStr,
-					"compaction-context-window":      compactionContext,
-					"compaction-reserve-tokens":      compactionReserve,
-					"compaction-token-limit":         compactionLimit,
-					"compaction-max-messages":        compactionMaxMessages,
-					"compaction-max-tokens":          compactionMaxTokens,
-					"compaction-keep-recent":         compactionKeepRecent,
-					"compaction-keep-recent-tokens":  compactionKeepRecentTokens,
-				},
-			}, nil
-		case "pipeline":
-			return map[string]any{"message": "pipeline info not yet available"}, nil
-		default:
-			return nil, fmt.Errorf("usage: /show settings|pipeline")
-		}
-		})
-
-	// /quit — quit the application
+	// --- /quit ---
 	server.RegisterSlash("quit", "Exit the application", func(args string) (any, error) {
 		slog.Info("Received quit command, exiting application")
 		os.Exit(0)
-		return nil, nil // unreachable, but Go requires return
+		return nil, nil
 	})
 
-	// /abort — abort the current agent execution
+	// --- /abort ---
 	server.RegisterSlash("abort", "Abort the current agent execution", func(args string) (any, error) {
 		slog.Info("Received abort command")
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not streaming")
 		}
-		
+
 		ag.Abort()
 		return map[string]any{"status": "aborting"}, nil
 	})
 
-	// /follow-up — add a follow-up message (same as /follow_up)
+	// --- /follow-up ---
 	server.RegisterSlash("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
 		message := strings.TrimSpace(args)
 		if message == "" {
 			return nil, fmt.Errorf("usage: /follow-up <message>")
 		}
-		
+
 		slog.Info("Received follow-up command")
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not busy")
 		}
-		
-		// Check if follow-up mode allows this
+
 		if followUpMode != "one-at-a-time" && followUpMode != "queue" {
 			return nil, fmt.Errorf("follow-up mode is '%s', not enabled", followUpMode)
 		}
-		
-		// Check if there's already a pending follow-up
+
 		if len(followUpQueue) > 0 && followUpMode == "one-at-a-time" {
 			return nil, fmt.Errorf("follow-up queue already has a pending message")
 		}
-		
+
 		expandedMessage := expandSkillCommands(message)
 		followUpQueue = append(followUpQueue, expandedMessage)
 		return map[string]any{"status": "queued", "message": expandedMessage}, nil
 	})
 
-		// /steer — alias for steering when agent is busy
-	server.RegisterSlash("steer", "Steer the current agent execution", func(args string) (any, error) {
-		message := strings.TrimSpace(args)
-		if message == "" {
-			return nil, fmt.Errorf("usage: /steer <message>")
+	// ============================================================
+	// /set subcommand dispatch
+	// ============================================================
+	server.RegisterSlash("set", "Set configuration options", func(args string) (any, error) {
+		return server.Commands().DispatchSet(args)
+	})
+
+	// --- /set sub-handlers ---
+	server.Commands().RegisterSetSub("busy-mode", "Set behavior when agent is busy (steer, follow-up, reject)", func(args string) (any, error) {
+		val := strings.TrimSpace(strings.ToLower(args))
+		switch val {
+		case "steer", "follow-up", "reject":
+			stateMu.Lock()
+			busyMode = val
+			stateMu.Unlock()
+			slog.Info("Busy mode set", "mode", val)
+			return map[string]any{"busy-mode": val}, nil
+		default:
+			return nil, fmt.Errorf("usage: /set busy-mode <steer|follow-up|reject>")
 		}
-		
-		slog.Info("Received steer command")
+	})
+
+	server.Commands().RegisterSetSub("thinking-level", "Set the thinking/reasoning level (off/low/medium/high)", func(args string) (any, error) {
+		level := strings.TrimSpace(strings.ToLower(args))
+		validLevels := map[string]bool{"off": true, "low": true, "medium": true, "high": true}
+		if !validLevels[level] {
+			return nil, fmt.Errorf("invalid thinking level: %s (valid: off, low, medium, high)", level)
+		}
 		stateMu.Lock()
-		streaming := isStreaming
-		busyBehavior := busyMode
+		currentThinkingLevel = level
 		stateMu.Unlock()
-		
-		if !streaming {
-			return nil, fmt.Errorf("agent is not streaming")
+		ag.SetThinkingLevel(level)
+		slog.Info("Thinking level set", "level", level)
+		return map[string]any{"thinking-level": level}, nil
+	})
+
+	server.Commands().RegisterSetSub("auto-compaction", "Configure automatic context compaction (on/off)", func(args string) (any, error) {
+		enabled := strings.TrimSpace(strings.ToLower(args))
+		var jsonData struct {
+			Enabled bool `json:"enabled"`
 		}
-		
-		if busyBehavior == "reject" {
-			return nil, fmt.Errorf("agent is busy and busy mode is set to reject")
+		if parseJSONArgs(args, &jsonData) {
+			compactorConfig.AutoCompact = jsonData.Enabled
+			stateMu.Lock()
+			autoCompactionEnabled = jsonData.Enabled
+			stateMu.Unlock()
+			slog.Info("Set auto-compaction", "enabled", jsonData.Enabled)
+			return nil, nil
 		}
-		
-		expandedMessage := expandSkillCommands(message)
-		ag.Steer(expandedMessage)
-		return map[string]any{"status": "steering", "message": expandedMessage}, nil
+		val := enabled == "true" || enabled == "1" || enabled == "on"
+		compactorConfig.AutoCompact = val
+		stateMu.Lock()
+		autoCompactionEnabled = val
+		stateMu.Unlock()
+		slog.Info("Set auto-compaction", "enabled", val)
+		return nil, nil
+	})
+
+	server.Commands().RegisterSetSub("auto-retry", "Configure automatic retry on LLM errors (true/false)", func(args string) (any, error) {
+		enabled := strings.TrimSpace(strings.ToLower(args))
+		var jsonData struct {
+			Enabled bool `json:"enabled"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			ag.SetAutoRetry(jsonData.Enabled)
+			slog.Info("Set auto-retry", "enabled", jsonData.Enabled)
+			return nil, nil
+		}
+		ag.SetAutoRetry(enabled == "true" || enabled == "1")
+		return nil, nil
+	})
+
+	server.Commands().RegisterSetSub("session-name", "Set a human-readable name for the current session", func(args string) (any, error) {
+		name := strings.TrimSpace(args)
+		if name == "" {
+			return nil, fmt.Errorf("usage: /set session-name <name>")
+		}
+		stateMu.Lock()
+		sessionName = name
+		stateMu.Unlock()
+		if sessionMgr != nil {
+						if err := sessionMgr.UpdateSessionName(sessionID, name, ""); err != nil {
+				slog.Warn("Failed to rename session", "error", err)
+			}
+		}
+		slog.Info("Session renamed", "name", name)
+		return map[string]any{"sessionName": name}, nil
+	})
+
+	server.Commands().RegisterSetSub("tool-call-cutoff", "Set the maximum number of tool calls per turn", func(args string) (any, error) {
+		var cutoff int
+		var jsonData struct {
+			Cutoff int `json:"cutoff"`
+		}
+		if parseJSONArgs(args, &jsonData) {
+			cutoff = jsonData.Cutoff
+		} else {
+			var err error
+			cutoff, err = strconv.Atoi(strings.TrimSpace(args))
+			if err != nil {
+				return nil, fmt.Errorf("invalid cutoff value: %s", args)
+			}
+		}
+		if cutoff < 0 {
+			return nil, fmt.Errorf("cutoff must be >= 0")
+		}
+		compactorConfig.ToolCallCutoff = cutoff
+		slog.Info("Tool call cutoff set", "cutoff", cutoff)
+		return map[string]any{"tool-call-cutoff": cutoff}, nil
+	})
+
+	server.Commands().RegisterSetSub("tool-summary-strategy", "Set how tool outputs are summarized", func(args string) (any, error) {
+		strategy := strings.TrimSpace(strings.ToLower(args))
+		switch strategy {
+		case "off", "normal", "verbose":
+			compactorConfig.ToolSummaryStrategy = strategy
+			slog.Info("Tool summary strategy set", "strategy", strategy)
+			return map[string]any{"tool-summary-strategy": strategy}, nil
+		default:
+			return nil, fmt.Errorf("invalid strategy: %s (valid: off, normal, verbose)", strategy)
+		}
+	})
+
+	server.Commands().RegisterSetSub("tool-summary-automation", "Configure automatic tool output summarization", func(args string) (any, error) {
+		val := strings.TrimSpace(strings.ToLower(args))
+		switch val {
+		case "on", "off", "smart":
+			compactorConfig.ToolSummaryAutomation = val
+			slog.Info("Tool summary automation set", "value", val)
+			return map[string]any{"tool-summary-automation": val}, nil
+		default:
+			return nil, fmt.Errorf("invalid value: %s (valid: on, off, smart)", val)
+		}
+	})
+
+	server.Commands().RegisterSetSub("steering-mode", "Set how steering messages are queued (all, latest)", func(args string) (any, error) {
+		mode := strings.TrimSpace(strings.ToLower(args))
+		switch mode {
+		case "all", "latest":
+			stateMu.Lock()
+			steeringMode = mode
+			stateMu.Unlock()
+			slog.Info("Steering mode set", "mode", mode)
+			return map[string]any{"steering-mode": mode}, nil
+		default:
+			return nil, fmt.Errorf("invalid mode: %s (valid: all, latest)", mode)
+		}
+	})
+
+	server.Commands().RegisterSetSub("follow-up-mode", "Set how follow-up messages are delivered (one-at-a-time, queue)", func(args string) (any, error) {
+		mode := strings.TrimSpace(strings.ToLower(args))
+		switch mode {
+		case "one-at-a-time", "queue":
+			stateMu.Lock()
+			followUpMode = mode
+			stateMu.Unlock()
+			slog.Info("Follow-up mode set", "mode", mode)
+			return map[string]any{"follow-up-mode": mode}, nil
+		default:
+			return nil, fmt.Errorf("invalid mode: %s (valid: one-at-a-time, queue)", mode)
+		}
+	})
+
+	server.Commands().RegisterSetSub("thinking", "Toggle thinking display (on/off/toggle)", func(args string) (any, error) {
+		val := strings.TrimSpace(strings.ToLower(args))
+		switch val {
+		case "on", "true":
+			showThinking = true
+		case "off", "false":
+			showThinking = false
+		case "toggle", "":
+			showThinking = !showThinking
+		default:
+			return nil, fmt.Errorf("usage: /set thinking <on|off|toggle>")
+		}
+		return map[string]any{"thinking": showThinking}, nil
+	})
+
+	server.Commands().RegisterSetSub("tools", "Toggle tools display (on/off/toggle)", func(args string) (any, error) {
+		val := strings.TrimSpace(strings.ToLower(args))
+		switch val {
+		case "on", "true":
+			showTools = true
+		case "off", "false":
+			showTools = false
+		case "toggle", "":
+			showTools = !showTools
+		default:
+			return nil, fmt.Errorf("usage: /set tools <on|off|toggle>")
+		}
+		return map[string]any{"tools": showTools}, nil
+	})
+
+	server.Commands().RegisterSetSub("prefix", "Toggle prefix display (on/off/toggle)", func(args string) (any, error) {
+		val := strings.TrimSpace(strings.ToLower(args))
+		switch val {
+		case "on", "true":
+			showPrefix = true
+		case "off", "false":
+			showPrefix = false
+		case "toggle", "":
+			showPrefix = !showPrefix
+		default:
+			return nil, fmt.Errorf("usage: /set prefix <on|off|toggle>")
+		}
+		return map[string]any{"prefix": showPrefix}, nil
+	})
+
+	server.Commands().RegisterSetSub("trace-events", "Enable/disable trace event categories", func(args string) (any, error) {
+		// Delegate to /trace-events handler
+		h, ok := server.GetSlashHandler("trace-events")
+		if !ok {
+			return nil, fmt.Errorf("trace-events command not available")
+		}
+		return h(args)
+	})
+
+	server.Commands().RegisterSetSub("model", "Set the active model by ID", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("model")
+		if !ok {
+			return nil, fmt.Errorf("model command not available")
+		}
+		return h(args)
 	})
 
 	// Start event emitter
