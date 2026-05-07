@@ -246,7 +246,7 @@ func TestParseEvent_AgentEnd_WithErrMsg(t *testing.T) {
 
 func TestParseEvent_TurnStart(t *testing.T) {
 	evt := ParseEvent(`{"type":"turn_start"}`)
-	// turn_start is silent in ai-win mode
+	// turn_start is silent
 	if evt != nil {
 		t.Fatalf("expected nil for turn_start (silent), got %+v", evt)
 	}
