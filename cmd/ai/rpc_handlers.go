@@ -9,7 +9,6 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -473,12 +472,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		ag.SetContext(ctx)
 	}
 
-	bashRunner := newBashRunner()
-	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
-	if bashTimeout <= 0 {
-		bashTimeout = 30 * time.Second
-	}
-
 	// Create RPC server
 	server := rpc.NewServer()
 	server.SetOutput(output)
@@ -681,7 +674,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if streaming {
 			behavior := strings.TrimSpace(data.StreamingBehavior)
 			if behavior == "" {
-				return nil, fmt.Errorf("agent is streaming; specify streamingBehavior")
+				behavior = "steer" // default: steer when streaming
 			}
 			switch behavior {
 			case "steer":
@@ -698,6 +691,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					return nil, fmt.Errorf("follow-up queue already has a pending message")
 				}
 				return nil, ag.FollowUp(message)
+			case "reject":
+				return nil, fmt.Errorf("agent is streaming; rejected by busy-mode policy")
 			default:
 				return nil, fmt.Errorf("invalid streamingBehavior: %s", behavior)
 			}
@@ -804,18 +799,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return false
 	}
 
-	server.RegisterSlash("clear_session", "Clear all messages in the current session", func(args string) (any, error) {
-		slog.Info("Received clear_session")
-		if err := sess.Clear(); err != nil {
-			return nil, err
-		}
-		// Clear agent context
-		setAgentContext(createBaseContext())
-		slog.Info("Session cleared")
-		return nil, nil
-	})
+	// clear_session removed: never used per spec
 
-	server.RegisterSlash("new_session", "Create a new session and switch to it", func(args string) (any, error) {
+	server.RegisterSlash("new", "Create a new session and switch to it", func(args string) (any, error) {
 		var name, title string
 		var jsonData struct {
 			Name  string `json:"name"`
@@ -873,211 +859,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 	})
 
-	server.RegisterSlash("list_sessions", "List all sessions with their metadata", func(args string) (any, error) {
-		slog.Info("Received list_sessions")
-		sessions, err := sessionMgr.ListSessions()
-		if err != nil {
-			return nil, err
-		}
+	// list_sessions removed: /resume (no args) lists sessions
+	// switch_session removed: /resume handles session switching
+	// delete_session removed: use scripts/clean-sessions.sh per spec
+	// set_session_name removed: now routed through /set session-name
 
-		// Get workspace and current directory info
-		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
-		currentWorkdir := ws.GetCWD() // This is the current working directory
-
-				result := make([]any, len(sessions))
-		// Reverse the order so newest (index 0) appears at the bottom
-		for i, sess := range sessions {
-			// Calculate reversed index: 0->len-1, 1->len-2, etc.
-			reversedIdx := len(sessions) - 1 - i
-			sess.Workspace = startupPath
-			sess.CurrentWorkdir = currentWorkdir
-			result[reversedIdx] = sess
-		}
-		return map[string]any{"sessions": result}, nil
-	})
-
-	server.RegisterSlash("switch_session", "Switch to a session by name or ID", func(args string) (any, error) {
-		var jsonData struct {
-			ID          string `json:"id"`
-			SessionPath string `json:"sessionPath"`
-		}
-		id := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) {
-			id = jsonData.ID
-			if jsonData.SessionPath != "" {
-				id = jsonData.SessionPath
-			}
-		}
-		slog.Info("Received switch_session: id=", "id", id)
-		if id == "" {
-			return nil, fmt.Errorf("session id is required")
-		}
-
-		// Resolve numeric index to session ID
-		if idx, err := strconv.Atoi(id); err == nil {
-			sessions, listErr := sessionMgr.ListSessions()
-			if listErr != nil {
-				return nil, fmt.Errorf("failed to list sessions: %w", listErr)
-			}
-			// Reverse to match display order (index 0 = oldest, as shown in renderSessions)
-			// ListSessions returns newest-first; renderSessions shows index 0 = oldest
-			reversed := make([]session.SessionMeta, len(sessions))
-			for i, s := range sessions {
-				reversed[len(sessions)-1-i] = s
-			}
-			if idx < 0 || idx >= len(reversed) {
-				return nil, fmt.Errorf("invalid session index %d (valid range: 0-%d)", idx, len(reversed)-1)
-			}
-			id = reversed[idx].ID
-			slog.Info("Resolved session index to ID", "index", idx, "id", id)
-		}
-
-		// Treat absolute or relative path as session file
-		if strings.Contains(id, string(os.PathSeparator)) || strings.HasSuffix(id, ".jsonl") {
-			sessionPath, err := normalizeSessionPath(id)
-			if err != nil {
-				return nil, err
-			}
-			// LoadSessionLazy expects session directory, not file path
-			// Extract directory if sessionPath points to messages.jsonl
-			sessionDir := sessionPath
-			if strings.HasSuffix(sessionPath, ".jsonl") {
-				info, err := os.Stat(sessionPath)
-				if err != nil {
-					return nil, err
-				}
-				if !info.IsDir() {
-					sessionDir = filepath.Dir(sessionPath)
-				}
-			}
-			opts := session.DefaultLoadOptions()
-			newSess, err := session.LoadSessionLazy(sessionDir, opts)
-			if err != nil {
-				return nil, err
-			}
-			newSessionID := newSess.GetID()
-			sessionsDir = sessionDir
-			sessionMgr = session.NewSessionManager(sessionsDir)
-			_ = sessionMgr.SetCurrent(newSessionID)
-			if err := sessionMgr.SaveCurrent(); err != nil {
-				slog.Info("Failed to update session metadata:", "value", err)
-			}
-
-			// Clear agent context and load new messages
-			sess = newSess
-			sessionComp.Update(sess, compactor)
-			setAgentContext(createBaseContext())
-			// Restore last compaction summary if available
-			ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
-
-			// Update checkpoint manager for new session
-			if err := updateCheckpointManager(); err != nil {
-				slog.Warn("Failed to update checkpoint manager for new session", "error", err)
-			}
-
-			stateMu.Lock()
-			sessionID = newSessionID
-			sessionName = resolveSessionName(sessionMgr, newSessionID)
-			stateMu.Unlock()
-
-			// Update trace handler session ID
-			if handler := traceevent.GetHandler(); handler != nil {
-				if fh, ok := handler.(*traceevent.FileHandler); ok {
-					fh.SetSessionID(newSessionID)
-				}
-			}
-
-			slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-			server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
-			return map[string]any{"switched": true, "cancelled": false}, nil
-		}
-
-		if err := sessionMgr.SetCurrent(id); err != nil {
-			return nil, err
-		}
-
-		// Load the new session
-		newSess, err := sessionMgr.GetSession(id)
-		if err != nil {
-			return nil, err
-		}
-		newSessionID := newSess.GetID()
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-
-		// Clear agent context and load new messages
-		sess = newSess
-		sessionComp.Update(sess, compactor)
-		setAgentContext(createBaseContext())
-		// Restore last compaction summary if available
-		ag.GetContext().LastCompactionSummary = newSess.GetLastCompactionSummary()
-
-		// Update checkpoint manager for new session
-		if err := updateCheckpointManager(); err != nil {
-			slog.Warn("Failed to update checkpoint manager for new session", "error", err)
-		}
-
-		stateMu.Lock()
-		sessionID = newSessionID
-		sessionName = resolveSessionName(sessionMgr, newSessionID)
-		stateMu.Unlock()
-
-		// Update trace handler session ID
-		if handler := traceevent.GetHandler(); handler != nil {
-			if fh, ok := handler.(*traceevent.FileHandler); ok {
-				fh.SetSessionID(newSessionID)
-			}
-		}
-
-		slog.Info("Switched to session", "id", newSessionID, "count", len(newSess.GetMessages()))
-		server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": resolveSessionName(sessionMgr, newSessionID)})
-		return map[string]any{"switched": true, "cancelled": false}, nil
-	})
-
-	server.RegisterSlash("delete_session", "Delete a session by ID", func(args string) (any, error) {
-		var jsonData struct {
-			ID string `json:"id"`
-		}
-		id := strings.TrimSpace(args)
-		if parseJSONArgs(args, &jsonData) && jsonData.ID != "" {
-			id = jsonData.ID
-		}
-		slog.Info("Received delete_session: id=", "id", id)
-		if err := sessionMgr.DeleteSession(id); err != nil {
-			return nil, err
-		}
-		return map[string]any{"deleted": true}, nil
-	})
-
-	server.RegisterSlash("set_session_name", "Set a human-readable name for the current session", func(args string) (any, error) {
-		name := strings.TrimSpace(args)
-		var jsonData struct {
-			Name string `json:"name"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			name = jsonData.Name
-		}
-		slog.Info("Received set_session_name", "name", name)
-		if name == "" {
-			return nil, fmt.Errorf("session name cannot be empty")
-		}
-		if _, err := sess.AppendSessionInfo(name, ""); err != nil {
-			return nil, err
-		}
-		if err := sessionMgr.UpdateSessionName(sessionID, name, ""); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		stateMu.Lock()
-		sessionName = name
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	server.RegisterSlash("get_state", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
+	server.RegisterSlash("session", "Get the current agent state (model, session, streaming status)", func(args string) (any, error) {
 		slog.Info("Received get_state")
 		compactionState := buildCompactionState(compactorConfig, compactor)
 		stateMu.Lock()
@@ -1121,7 +908,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.RegisterSlash("get_messages", "Get all messages in the current session", func(args string) (any, error) {
+	server.RegisterSlash("messages", "Get all messages in the current session", func(args string) (any, error) {
 		slog.Info("Received get_messages")
 		messages := ag.GetMessages()
 		result := make([]any, len(messages))
@@ -1215,25 +1002,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return response, nil
 	})
 
-	server.RegisterSlash("get_available_models", "List all available models", func(args string) (any, error) {
-		slog.Info("Received get_available_models")
-		specs, modelsPath, err := loadModelSpecs(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
-		}
-
-		specs = filterModelSpecsWithKeys(specs)
-		if len(specs) == 0 {
-			authPath, _ := config.GetDefaultAuthPath()
-			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
-		}
-
-		models := make([]rpc.ModelInfo, 0, len(specs))
-		for _, spec := range specs {
-			models = append(models, modelInfoFromSpec(spec))
-		}
-		return map[string]any{"models": models}, nil
-	})
+	// get_available_models removed: /model already lists available models
 
 	server.RegisterSlash("set_model", "Set the active model by ID", func(args string) (any, error) {
 		var provider, modelID string
@@ -1315,244 +1084,24 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return &info, nil
 	})
 
-	server.RegisterSlash("cycle_model", "Cycle to the next available model", func(args string) (any, error) {
-		slog.Info("Received cycle_model")
-		specs, modelsPath, err := loadModelSpecs(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("load models from %s: %w", modelsPath, err)
-		}
-		filtered := filterModelSpecsWithKeys(specs)
-		if len(filtered) == 0 {
-			authPath, _ := config.GetDefaultAuthPath()
-			return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
-		}
-		if len(filtered) == 1 {
-			return nil, nil
-		}
-
-		index := -1
-		for i, spec := range filtered {
-			if spec.Provider == model.Provider && spec.ID == model.ID {
-				index = i
-				break
-			}
-		}
-		next := filtered[0]
-		if index >= 0 {
-			next = filtered[(index+1)%len(filtered)]
-		}
-
-		newAPIKey, err := config.ResolveAPIKey(next.Provider)
-		if err != nil {
-			return nil, err
-		}
-
-		model = llm.Model{
-			ID:            next.ID,
-			Provider:      next.Provider,
-			BaseURL:       next.BaseURL,
-			API:           next.API,
-			ContextWindow: next.ContextWindow,
-			MaxTokens:     next.MaxTokens,
-		}
-		apiKey = newAPIKey
-
-		cfg.Model.ID = next.ID
-		cfg.Model.Provider = next.Provider
-		cfg.Model.BaseURL = next.BaseURL
-		cfg.Model.API = next.API
-		cfg.Model.MaxTokens = next.MaxTokens
-
-		ag.SetModel(model)
-		ag.SetAPIKey(apiKey)
-
-		// Recreate compactor with new model
-		compactor = compact.NewCompactor(compactorConfig, model, apiKey, systemPrompt, next.ContextWindow)
-		sessionComp.Update(sess, compactor)
-		ag.SetCompactor(sessionComp)
-		ag.SetContextWindow(next.ContextWindow)
-
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-
-		info := modelInfoFromSpec(next)
-		stateMu.Lock()
-		currentModelInfo = info
-		currentContextWindow = next.ContextWindow
-		stateMu.Unlock()
-
-		return &rpc.CycleModelResult{
-			Model:         info,
-			ThinkingLevel: currentThinkingLevel,
-			IsScoped:      false,
-		}, nil
-	})
+	// cycle_model removed: use /model to set model directly
 
 	skillCommands := buildSkillCommands(skillResult.Skills)
 
-	server.RegisterSlash("get_commands", "List available slash commands and skills", func(args string) (any, error) {
-		slog.Info("Received get_commands")
-		return map[string]any{"commands": skillCommands}, nil
-	})
+	// get_commands removed: /skills replaces it (skillCommands kept for /skills handler)
 
-	server.RegisterSlash("get_session_stats", "Get session statistics (token counts, message count)", func(args string) (any, error) {
-		slog.Info("Received get_session_stats")
-		messages := ag.GetMessages()
-		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
+	// get_session_stats removed: /session covers it
 
-		// Estimate system prompt and tools tokens for display purposes only
-		// Uses the unified token estimation from AgentContext for consistency
-		// with runtime compaction decisions.
-		agentCtx := ag.GetContext()
-
-		// Build fresh system prompt for estimation
-		currentSystemPrompt := buildSystemPrompt(sess)
-
-		// Estimate tokens from string lengths
-		tokens.SystemPromptTokens = len(currentSystemPrompt) / 4
-
-		// Use unified tools token estimation
-		tokens.SystemToolsTokens = agentCtx.EstimateToolsTokens()
-
-		// Calculate active window tokens (current conversation) for percentage display
-		// This aligns with runtime_state and represents what's actually sent to LLM
-		activeWindowTokens := agent.EstimateConversationTokens(messages)
-		tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
-
-		// Note: tokens.Total is cumulative across the entire session for cost tracking
-		// tokens.ActiveWindowTokens is the current active turn + system prompt + tools
-
-		stateMu.Lock()
-		currentSessionID := sessionID
-		stateMu.Unlock()
-		var tokenRate *rpc.TokenRateStats
-		if metrics := ag.GetMetrics(); metrics != nil {
-			llmMetrics := metrics.GetLLMMetrics()
-			tokenRate = &rpc.TokenRateStats{
-				ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
-				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
-				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
-				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
-				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
-				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
-				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
-				LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
-				RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
-				RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
-				RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
-				RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
-			}
-		}
-		return &rpc.SessionStats{
-			SessionFile:       sess.GetPath(),
-			SessionID:         currentSessionID,
-			UserMessages:      userCount,
-			AssistantMessages: assistantCount,
-			ToolCalls:         toolCalls,
-			ToolResults:       toolResults,
-			TotalMessages:     len(messages),
-			CompactionCount:   sess.GetCompactionCount(),
-			Tokens:            tokens,
-			TokenRate:         tokenRate,
-			Cost:              cost,
-			Workspace:         ws.GetGitRoot(),
-			CurrentWorkdir:    ws.GetCWD(),
-		}, nil
-	})
-
-	server.RegisterSlash("bash", "Execute a bash command", func(args string) (any, error) {
-		command := args
-		var jsonData struct {
-			Command string `json:"command"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			command = jsonData.Command
-		}
-		slog.Info("Received bash")
-		return bashRunner.Run(ws.GetCWD(), command, bashTimeout)
-	})
-
-	server.RegisterSlash("abort_bash", "Abort the currently running bash command", func(args string) (any, error) {
-		slog.Info("Received abort_bash")
-		return nil, bashRunner.Abort()
-	})
-
-	server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			ag.SetAutoRetry(jsonData.Enabled)
-			slog.Info("Received set_auto_retry", "enabled", jsonData.Enabled)
-			return nil, nil
-		}
-		slog.Info("Received set_auto_retry", "enabled", enabled)
-		ag.SetAutoRetry(enabled == "true" || enabled == "1")
-		return nil, nil
-	})
-
-	server.RegisterSlash("abort_retry", "Abort the current automatic retry", func(args string) (any, error) {
-		slog.Info("Received abort_retry")
-		ag.Abort()
-		return nil, nil
-	})
+	// bash removed: agent should not run raw bash via slash command
+	// abort_bash removed: /abort is sufficient
+	// abort_retry removed: /abort is sufficient
 
 	server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {
 		slog.Info("Received export_html", "outputPath", args)
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-	server.RegisterSlash("set_auto_compaction", "Configure automatic context compaction settings", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			compactorConfig.AutoCompact = jsonData.Enabled
-			stateMu.Lock()
-			autoCompactionEnabled = jsonData.Enabled
-			stateMu.Unlock()
-			slog.Info("Received set_auto_compaction: enabled=", "value", jsonData.Enabled)
-			return nil, nil
-		}
-		val := enabled == "true" || enabled == "1"
-		compactorConfig.AutoCompact = val
-		stateMu.Lock()
-		autoCompactionEnabled = val
-		stateMu.Unlock()
-		slog.Info("Received set_auto_compaction: enabled=", "value", val)
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_tool_call_cutoff", "Set the maximum number of tool calls per turn", func(args string) (any, error) {
-		var cutoff int
-		var jsonData struct {
-			Cutoff int `json:"cutoff"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			cutoff = jsonData.Cutoff
-		} else {
-			var err error
-			cutoff, err = strconv.Atoi(strings.TrimSpace(args))
-			if err != nil {
-				return nil, fmt.Errorf("invalid cutoff value: %w", err)
-			}
-		}
-		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
-		if cutoff < 0 {
-			return nil, fmt.Errorf("cutoff must be >= 0")
-		}
-		compactorConfig.ToolCallCutoff = cutoff
-		ag.SetToolCallCutoff(cutoff)
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"cutoff": cutoff}, nil
-	})
-
+	// Validation maps for /set subcommands.
 	validToolSummaryStrategies := map[string]bool{
 		"llm":       true,
 		"heuristic": true,
@@ -1563,128 +1112,359 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"fallback": true,
 		"always":   true,
 	}
+	validSteeringModes := map[string]bool{
+		"all":           true,
+		"immediate":     true,
+		"one-at-a-time": true,
+	}
+	validFollowUpModes := map[string]bool{
+		"all":           true,
+		"immediate":     true,
+		"one-at-a-time": true,
+	}
+	validThinkingLevels := map[string]bool{
+		"off":     true,
+		"minimal": true,
+		"low":     true,
+		"medium":  true,
+		"high":    true,
+		"xhigh":   true,
+	}
 
-	server.RegisterSlash("set_tool_summary_strategy", "Set how tool outputs are summarized", func(args string) (any, error) {
-		var jsonData struct {
-			Strategy string `json:"strategy"`
-		}
-		strategy := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			strategy = strings.ToLower(jsonData.Strategy)
-		}
-		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
-		if !validToolSummaryStrategies[strategy] {
-			return nil, fmt.Errorf("invalid tool summary strategy")
-		}
-		compactorConfig.ToolSummaryStrategy = strategy
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"strategy": strategy}, nil
-	})
-
-	server.RegisterSlash("set_tool_summary_automation", "Configure automatic tool output summarization", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_tool_summary_automation", "mode", mode)
-		if !validToolSummaryAutomations[mode] {
-			return nil, fmt.Errorf("invalid tool summary automation mode")
-		}
-		compactorConfig.ToolSummaryAutomation = mode
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"mode": mode}, nil
-	})
-
-	server.RegisterSlash("set_trace_events", "Enable/disable trace event categories", func(args string) (any, error) {
-		// Parse args — support both space-separated text and JSON {"events": [...]}
-		events := strings.Fields(args)
-		var jsonData struct {
-			Events []string `json:"events"`
-		}
-		if parseJSONArgs(args, &jsonData) && len(jsonData.Events) > 0 {
-			events = jsonData.Events
-		}
-		slog.Info("Received set_trace_events", "events", events)
-
-		if len(events) == 0 {
-			// Empty args means reset to default set.
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+	// /set — unified settings dispatcher.
+	// Routes subcommands to the appropriate handler logic.
+	// Usage: /set <key> [value]
+	// No args or "help" shows available settings.
+	server.RegisterSlash("set", "Configure agent settings", func(args string) (any, error) {
+		parts := strings.Fields(args)
+		if len(parts) == 0 || parts[0] == "help" {
+			return map[string]any{
+				"usage": "/set <key> [value]",
+				"settings": []string{
+					"auto-retry <on|off>",
+					"auto-compaction <on|off>",
+					"busy-mode <steer|follow-up|reject>",
+					"follow-up-mode <all|immediate|one-at-a-time>",
+					"prefix-display <on|off|toggle>",
+					"session-name <name>",
+					"steering-mode <all|immediate|one-at-a-time>",
+					"thinking-display <on|off|toggle>",
+					"thinking-level <off|minimal|low|medium|high|xhigh>",
+					"tool-call-cutoff <n>",
+					"tool-summary-automation <off|fallback|always>",
+					"tool-summary-strategy <llm|heuristic|off>",
+					"tools-display <on|off|toggle>",
+					"trace-events [on|off|all|enable <selectors>|disable <selectors>]",
+				},
+			}, nil
 		}
 
-		normalized := make([]string, 0, len(events))
-		for _, e := range events {
-			e = strings.ToLower(strings.TrimSpace(e))
-			if e == "" {
-				continue
+		key := parts[0]
+		value := ""
+		if len(parts) > 1 {
+			value = strings.TrimSpace(strings.TrimPrefix(args, key))
+		}
+
+		switch key {
+		case "auto-retry":
+			enabled := strings.TrimSpace(strings.ToLower(value))
+			var jsonData struct {
+				Enabled bool `json:"enabled"`
 			}
-			normalized = append(normalized, e)
-		}
-		if len(normalized) == 0 {
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		}
+			if parseJSONArgs(value, &jsonData) {
+				ag.SetAutoRetry(jsonData.Enabled)
+				slog.Info("set auto-retry", "enabled", jsonData.Enabled)
+				return map[string]any{"setting": "auto-retry", "value": jsonData.Enabled}, nil
+			}
+			val := enabled == "true" || enabled == "1"
+			ag.SetAutoRetry(val)
+			slog.Info("set auto-retry", "enabled", val)
+			return map[string]any{"setting": "auto-retry", "value": val}, nil
 
-		applyExpanded := func(expanded []string, replace bool) []string {
-			if replace {
+		case "auto-compaction":
+			enabled := strings.TrimSpace(strings.ToLower(value))
+			var jsonData struct {
+				Enabled bool `json:"enabled"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				compactorConfig.AutoCompact = jsonData.Enabled
+				stateMu.Lock()
+				autoCompactionEnabled = jsonData.Enabled
+				stateMu.Unlock()
+				slog.Info("set auto-compaction", "enabled", jsonData.Enabled)
+				return map[string]any{"setting": "auto-compaction", "value": jsonData.Enabled}, nil
+			}
+			val := enabled == "true" || enabled == "1"
+			compactorConfig.AutoCompact = val
+			stateMu.Lock()
+			autoCompactionEnabled = val
+			stateMu.Unlock()
+			slog.Info("set auto-compaction", "enabled", val)
+			return map[string]any{"setting": "auto-compaction", "value": val}, nil
+
+		case "busy-mode":
+			mode := strings.TrimSpace(value)
+			switch mode {
+			case "steer", "follow-up", "reject":
+				busyMode = mode
+				return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
+			default:
+				return nil, fmt.Errorf("usage: /set busy-mode <steer|follow-up|reject>")
+			}
+
+		case "follow-up-mode":
+			mode := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validFollowUpModes[mode] {
+				return nil, fmt.Errorf("invalid follow-up mode; valid: all, immediate, one-at-a-time")
+			}
+			stateMu.Lock()
+			followUpMode = mode
+			stateMu.Unlock()
+			return map[string]any{"setting": "follow-up-mode", "value": mode}, nil
+
+		case "prefix-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showPrefix = true
+			case "off":
+				showPrefix = false
+			case "toggle", "":
+				showPrefix = !showPrefix
+			default:
+				return nil, fmt.Errorf("usage: /set prefix-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "prefix-display", "value": showPrefix}, nil
+
+		case "steering-mode":
+			mode := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validSteeringModes[mode] {
+				return nil, fmt.Errorf("invalid steering mode; valid: all, immediate, one-at-a-time")
+			}
+			stateMu.Lock()
+			steeringMode = mode
+			stateMu.Unlock()
+			return map[string]any{"setting": "steering-mode", "value": mode}, nil
+
+		case "thinking-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showThinking = true
+			case "off":
+				showThinking = false
+			case "toggle", "":
+				showThinking = !showThinking
+			default:
+				return nil, fmt.Errorf("usage: /set thinking-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "thinking-display", "value": showThinking}, nil
+
+		case "thinking-level":
+			level := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Level string `json:"level"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				level = strings.ToLower(strings.TrimSpace(jsonData.Level))
+			}
+			if !validThinkingLevels[level] {
+				return nil, fmt.Errorf("invalid thinking level; valid: off, minimal, low, medium, high, xhigh")
+			}
+			stateMu.Lock()
+			currentThinkingLevel = level
+			stateMu.Unlock()
+			ag.SetThinkingLevel(level)
+			return map[string]any{"setting": "thinking-level", "value": level}, nil
+
+		case "tool-call-cutoff":
+			var cutoff int
+			var jsonData struct {
+				Cutoff int `json:"cutoff"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				cutoff = jsonData.Cutoff
+			} else {
+				var err error
+				cutoff, err = strconv.Atoi(strings.TrimSpace(value))
+				if err != nil {
+					return nil, fmt.Errorf("invalid cutoff value: %w", err)
+				}
+			}
+			if cutoff < 0 {
+				return nil, fmt.Errorf("cutoff must be >= 0")
+			}
+			compactorConfig.ToolCallCutoff = cutoff
+			ag.SetToolCallCutoff(cutoff)
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-call-cutoff", "value": cutoff}, nil
+
+		case "tool-summary-automation":
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			mode := strings.ToLower(strings.TrimSpace(value))
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validToolSummaryAutomations[mode] {
+				return nil, fmt.Errorf("invalid tool summary automation mode; valid: off, fallback, always")
+			}
+			compactorConfig.ToolSummaryAutomation = mode
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-summary-automation", "value": mode}, nil
+
+		case "tool-summary-strategy":
+			var jsonData struct {
+				Strategy string `json:"strategy"`
+			}
+			strategy := strings.ToLower(strings.TrimSpace(value))
+			if parseJSONArgs(value, &jsonData) {
+				strategy = strings.ToLower(jsonData.Strategy)
+			}
+			if !validToolSummaryStrategies[strategy] {
+				return nil, fmt.Errorf("invalid tool summary strategy; valid: llm, heuristic, off")
+			}
+			compactorConfig.ToolSummaryStrategy = strategy
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-summary-strategy", "value": strategy}, nil
+
+		case "tools-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showTools = true
+			case "off":
+				showTools = false
+			case "toggle", "":
+				showTools = !showTools
+			default:
+				return nil, fmt.Errorf("usage: /set tools-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "tools-display", "value": showTools}, nil
+
+		case "session-name":
+			name := strings.TrimSpace(value)
+			var jsonData struct {
+				Name string `json:"name"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				name = jsonData.Name
+			}
+			slog.Info("set session-name", "name", name)
+			if name == "" {
+				return nil, fmt.Errorf("session name cannot be empty")
+			}
+			if _, err := sess.AppendSessionInfo(name, ""); err != nil {
+				return nil, err
+			}
+			if err := sessionMgr.UpdateSessionName(sessionID, name, ""); err != nil {
+				slog.Info("Failed to update session metadata:", "value", err)
+			}
+			if err := sessionMgr.SaveCurrent(); err != nil {
+				slog.Info("Failed to update session metadata:", "value", err)
+			}
+			stateMu.Lock()
+			sessionName = name
+			stateMu.Unlock()
+			return map[string]any{"setting": "session-name", "value": name}, nil
+
+		case "trace-events":
+			// No args = show current config.
+			if strings.TrimSpace(value) == "" {
+				return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
+			}
+
+			events := strings.Fields(value)
+			var jsonData struct {
+				Events []string `json:"events"`
+			}
+			if parseJSONArgs(value, &jsonData) && len(jsonData.Events) > 0 {
+				events = jsonData.Events
+			}
+			slog.Info("set trace-events", "events", events)
+
+			normalized := make([]string, 0, len(events))
+			for _, e := range events {
+				e = strings.ToLower(strings.TrimSpace(e))
+				if e == "" {
+					continue
+				}
+				normalized = append(normalized, e)
+			}
+			if len(normalized) == 0 {
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			}
+
+			applyExpanded := func(expanded []string, replace bool) []string {
+				if replace {
+					traceevent.DisableAllEvents()
+				}
+				for _, eventName := range expanded {
+					traceevent.EnableEvent(eventName)
+				}
+				return traceevent.GetEnabledEvents()
+			}
+
+			op := normalized[0]
+			switch op {
+			case "on":
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			case "all":
+				expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
+				return map[string]any{"events": applyExpanded(expanded, true)}, nil
+			case "default":
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			case "off", "none":
 				traceevent.DisableAllEvents()
+				return map[string]any{"events": []string{}}, nil
+			case "enable":
+				if len(normalized) == 1 {
+					return nil, fmt.Errorf("trace-events enable requires at least one selector")
+				}
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				return map[string]any{"events": applyExpanded(expanded, false)}, nil
+			case "disable":
+				if len(normalized) == 1 {
+					return nil, fmt.Errorf("trace-events disable requires at least one selector")
+				}
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				for _, eventName := range expanded {
+					traceevent.DisableEvent(eventName)
+				}
+				return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
+			default:
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized)
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				return map[string]any{"events": applyExpanded(expanded, true)}, nil
 			}
-			for _, eventName := range expanded {
-				traceevent.EnableEvent(eventName)
-			}
-			return traceevent.GetEnabledEvents()
-		}
 
-		op := normalized[0]
-		switch op {
-		case "on":
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		case "all":
-			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
-			return map[string]any{"events": applyExpanded(expanded, true)}, nil
-		case "default":
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		case "off", "none":
-			traceevent.DisableAllEvents()
-			return map[string]any{"events": []string{}}, nil
-		case "enable":
-			if len(normalized) == 1 {
-				return nil, fmt.Errorf("trace-events enable requires at least one selector")
-			}
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			return map[string]any{"events": applyExpanded(expanded, false)}, nil
-		case "disable":
-			if len(normalized) == 1 {
-				return nil, fmt.Errorf("trace-events disable requires at least one selector")
-			}
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			for _, eventName := range expanded {
-				traceevent.DisableEvent(eventName)
-			}
-			return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 		default:
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized)
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			return map[string]any{"events": applyExpanded(expanded, true)}, nil
+			return nil, fmt.Errorf("unknown setting: %s (use /set help for available settings)", key)
 		}
-	})
-
-	server.RegisterSlash("get_trace_events", "Get current trace event configuration", func(args string) (any, error) {
-		slog.Info("Received get_trace_events")
-		return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 	})
 
 	server.RegisterSlash("get_workflow_status", "Get workflow task status", func(args string) (any, error) {
@@ -1699,100 +1479,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return status, nil
 	})
 
-	validSteeringModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-	validFollowUpModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-
-	server.RegisterSlash("set_steering_mode", "Set how steering messages are queued", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_steering_mode", "mode", mode)
-		if !validSteeringModes[mode] {
-			return nil, fmt.Errorf("invalid steering mode")
-		}
-		stateMu.Lock()
-		steeringMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_follow_up_mode", "Set how follow-up messages are delivered", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_follow_up_mode", "mode", mode)
-		if !validFollowUpModes[mode] {
-			return nil, fmt.Errorf("invalid follow-up mode")
-		}
-		stateMu.Lock()
-		followUpMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	validThinkingLevels := map[string]bool{
-		"off":     true,
-		"minimal": true,
-		"low":     true,
-		"medium":  true,
-		"high":    true,
-		"xhigh":   true,
-	}
-	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
-
-	server.RegisterSlash("set_thinking_level", "Set the thinking/reasoning level (off/low/medium/high)", func(args string) (any, error) {
-		level := strings.ToLower(strings.TrimSpace(args))
-		var jsonData struct {
-			Level string `json:"level"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			level = strings.ToLower(strings.TrimSpace(jsonData.Level))
-		}
-		if !validThinkingLevels[level] {
-			return nil, fmt.Errorf("invalid thinking level")
-		}
-		stateMu.Lock()
-		currentThinkingLevel = level
-		stateMu.Unlock()
-		ag.SetThinkingLevel(level)
-		return map[string]any{"level": level}, nil
-	})
-
-	server.RegisterSlash("cycle_thinking_level", "Cycle to the next thinking level", func(args string) (any, error) {
-		stateMu.Lock()
-		current := currentThinkingLevel
-		stateMu.Unlock()
-
-		next := "medium"
-		for i, level := range thinkingCycle {
-			if level == current {
-				next = thinkingCycle[(i+1)%len(thinkingCycle)]
-				break
-			}
-		}
-
-		stateMu.Lock()
-		currentThinkingLevel = next
-		stateMu.Unlock()
-		ag.SetThinkingLevel(next)
-		return map[string]any{"level": next}, nil
-	})
+	// cycle_thinking_level removed: use /set thinking-level instead
 
 	server.RegisterSlash("get_last_assistant_text", "Get the last assistant text response", func(args string) (any, error) {
 		slog.Info("Received get_last_assistant_text")
@@ -1818,6 +1505,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"messages": result}, nil
 	})
 
+	// get_tree kept for win client compatibility (tree display still works in win)
 	server.RegisterSlash("get_tree", "Get the conversation tree structure", func(args string) (any, error) {
 		slog.Info("Received get_tree")
 		entries := sess.GetEntries()
@@ -1825,7 +1513,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"entries": tree}, nil
 	})
 
-	server.RegisterSlash("resume_on_branch", "Resume generation on a specific branch", func(args string) (any, error) {
+	server.RegisterSlash("rewind", "Resume generation on a specific branch", func(args string) (any, error) {
 		var jsonData struct {
 			EntryID string `json:"entryId"`
 		}
@@ -1833,7 +1521,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 			entryID = jsonData.EntryID
 		}
-		slog.Info("Received resume_on_branch", "entryId", entryID)
+		slog.Info("Received rewind", "entryId", entryID)
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
@@ -1940,29 +1628,64 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	// /skills → get_commands (skills list from agent)
-	registerAlias("skills", "List available skills", "get_commands")
+	// /skills — now the primary command (get_commands removed)
+	server.RegisterSlash("skills", "List available skills", func(args string) (any, error) {
+		slog.Info("Received skills")
+		return map[string]any{"commands": skillCommands}, nil
+	})
 
-					// /session → get_state
-	registerAlias("session", "Get the current agent state (model, session, streaming status)", "get_state")
+	// /session — now the primary command (get_state removed)
+	// /new — now the primary command (new_session removed)
+	// /messages — now the primary command (get_messages removed)
+	// /tree — removed (broken, will be reimplemented later)
 
-	// /new → new_session
-	registerAlias("new", "Create a new session", "new_session")
+	// /thinking → shortcut for /set thinking-level
+	server.RegisterSlash("thinking", "Set thinking level (off/low/medium/high)", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("set")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: set")
+		}
+		return h("thinking-level " + args)
+	})
 
-	// /messages → get_messages
-	registerAlias("messages", "Get session messages", "get_messages")
-
-	// /tree → get_tree
-	registerAlias("tree", "Show conversation tree", "get_tree")
-
-	// /thinking → set_thinking_level
-	registerAlias("thinking", "Set thinking level (off/low/medium/high)", "set_thinking_level")
-
-	// /trace-events → set_trace_events
-	registerAlias("trace-events", "Configure trace events", "set_trace_events")
+	// /trace-events → shortcut for /set trace-events
+	server.RegisterSlash("trace-events", "Configure trace events", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("set")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: set")
+		}
+		return h("trace-events " + args)
+	})
 
 	// /model-select → same logic as /model
 	registerAlias("model-select", "Select a model", "model")
+
+	// Backward-compatible aliases for win client (internal RPC names).
+	// These old names are still sent by the win client and must be kept as aliases.
+	registerAlias("get_available_models", "List all available models (internal)", "model")
+	registerAlias("get_messages", "Get session messages (internal)", "messages")
+	registerAlias("get_state", "Get agent state (internal)", "session")
+	registerAlias("get_commands", "List commands (internal)", "skills")
+	registerAlias("get_session_stats", "Get session stats (internal)", "session")
+	registerAlias("new_session", "Create new session (internal)", "new")
+	registerAlias("list_sessions", "List sessions (internal)", "resume")
+	registerAlias("switch_session", "Switch session (internal)", "resume")
+
+	// For set_* commands, the win client sends args like {"enabled":true} but /set expects "subcommand value".
+	// We need custom forwarders that prepend the subcommand prefix.
+	forwardToSet := func(subcmd string) func(string) (any, error) {
+		return func(args string) (any, error) {
+			h, ok := server.GetSlashHandler("set")
+			if !ok {
+				return nil, fmt.Errorf("unknown command: set")
+			}
+			return h(subcmd + " " + args)
+		}
+	}
+	server.RegisterSlash("set_auto_compaction", "Set auto-compaction (internal)", forwardToSet("auto-compaction"))
+	server.RegisterSlash("set_thinking_level", "Set thinking level (internal)", forwardToSet("thinking-level"))
+	server.RegisterSlash("set_trace_events", "Set trace events (internal)", forwardToSet("trace-events"))
+	server.RegisterSlash("get_trace_events", "Get trace events (internal)", forwardToSet("trace-events"))
 
 	// /model — no args: list models and mark current; with args: select model by index or id
 	server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
@@ -2066,7 +1789,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		})
 
 	// Display settings: /toggle thinking|prefix, /set tools|busy-mode
-	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix)", func(args string) (any, error) {
+	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix, tools)", func(args string) (any, error) {
 		kind := strings.TrimSpace(args)
 		switch kind {
 		case "thinking":
@@ -2075,61 +1798,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		case "prefix":
 			showPrefix = !showPrefix
 			return map[string]any{"setting": "prefix", "value": showPrefix}, nil
-		default:
-			return nil, fmt.Errorf("usage: /toggle <thinking|prefix>")
-		}
-	})
-
-	server.RegisterSlash("set_thinking_display", "Toggle thinking display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showThinking = true
-		case "off":
-			showThinking = false
-		case "toggle", "":
-			showThinking = !showThinking
-		default:
-			return nil, fmt.Errorf("usage: /set_thinking_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "thinking", "value": showThinking}, nil
-	})
-
-	server.RegisterSlash("set_tools_display", "Toggle tools display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showTools = true
-		case "off":
-			showTools = false
-		case "toggle", "":
+		case "tools":
 			showTools = !showTools
+			return map[string]any{"setting": "tools", "value": showTools}, nil
 		default:
-			return nil, fmt.Errorf("usage: /set_tools_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "tools", "value": showTools}, nil
-	})
-
-	server.RegisterSlash("set_prefix_display", "Toggle prefix display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showPrefix = true
-		case "off":
-			showPrefix = false
-		case "toggle", "":
-			showPrefix = !showPrefix
-		default:
-			return nil, fmt.Errorf("usage: /set_prefix_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "prefix", "value": showPrefix}, nil
-	})
-
-	server.RegisterSlash("set_busy_mode", "Set behavior when agent is busy (steer, follow-up, reject)", func(args string) (any, error) {
-		mode := strings.TrimSpace(args)
-		switch mode {
-		case "steer", "follow-up", "reject":
-			busyMode = mode
-			return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
-		default:
-			return nil, fmt.Errorf("usage: /set_busy_mode <steer|follow-up|reject>")
+			return nil, fmt.Errorf("usage: /toggle <thinking|prefix|tools>")
 		}
 	})
 
@@ -2259,30 +1932,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 		// /steer — alias for steering when agent is busy
-	server.RegisterSlash("steer", "Steer the current agent execution", func(args string) (any, error) {
-		message := strings.TrimSpace(args)
-		if message == "" {
-			return nil, fmt.Errorf("usage: /steer <message>")
-		}
-		
-		slog.Info("Received steer command")
-		stateMu.Lock()
-		streaming := isStreaming
-		busyBehavior := busyMode
-		stateMu.Unlock()
-		
-		if !streaming {
-			return nil, fmt.Errorf("agent is not streaming")
-		}
-		
-		if busyBehavior == "reject" {
-			return nil, fmt.Errorf("agent is busy and busy mode is set to reject")
-		}
-		
-		expandedMessage := expandSkillCommands(message)
-		ag.Steer(expandedMessage)
-		return map[string]any{"status": "steering", "message": expandedMessage}, nil
-	})
+	// steer removed: now default behavior when agent is streaming (busy-mode default is steer)
 
 	// Start event emitter
 	eventEmitterDone := make(chan struct{})
@@ -2471,88 +2121,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	slog.Info("Agent completed, exiting...")
 	return runErr
-}
-
-type bashRunner struct {
-	mu      sync.Mutex
-	running bool
-	cancel  context.CancelFunc
-}
-
-func newBashRunner() *bashRunner {
-	return &bashRunner{}
-}
-
-func (b *bashRunner) Run(cwd, command string, timeout time.Duration) (*rpc.BashResult, error) {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil, fmt.Errorf("command is required")
-	}
-
-	b.mu.Lock()
-	if b.running {
-		b.mu.Unlock()
-		return nil, fmt.Errorf("bash already running")
-	}
-
-	ctx := context.Background()
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-	} else {
-		ctx, cancel = context.WithCancel(ctx)
-	}
-	b.running = true
-	b.cancel = cancel
-	b.mu.Unlock()
-
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	cmd.Dir = cwd
-	output, err := cmd.CombinedOutput()
-	ctxErr := ctx.Err()
-
-	b.mu.Lock()
-	b.running = false
-	b.cancel = nil
-	b.mu.Unlock()
-	cancel()
-
-	result := &rpc.BashResult{
-		Output: string(output),
-	}
-	if ctxErr == context.DeadlineExceeded {
-		result.ExitCode = -1
-		result.Error = "command timed out"
-		return result, nil
-	}
-	if ctxErr == context.Canceled {
-		result.ExitCode = -1
-		result.Error = "command cancelled"
-		return result, nil
-	}
-	if err != nil {
-		result.Error = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.ExitCode = -1
-		}
-		return result, nil
-	}
-	result.ExitCode = 0
-	return result, nil
-}
-
-func (b *bashRunner) Abort() error {
-	b.mu.Lock()
-	cancel := b.cancel
-	running := b.running
-	b.mu.Unlock()
-	if !running || cancel == nil {
-		return fmt.Errorf("no bash command running")
-	}
-	cancel()
-	return nil
 }
 
 // getWorkflowStatus reads .workflow/state.json and tasks.md to return workflow state.
