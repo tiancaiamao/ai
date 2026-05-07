@@ -1,26 +1,30 @@
 #!/bin/bash
 # pair.sh — Worker-Judge loop
 #
-# Usage: pair.sh <worker-prompt> <judge-prompt> <input-file> [max-rounds]
+# Usage: pair.sh <worker-system-prompt-file> <judge-system-prompt-file> <input-file> [max-rounds]
 #
-# In mock mode (AG_MOCK=1): prompt args are treated as mock-script paths.
-# In real mode: prompt args are --system values.
+# Worker and judge prompt args are file paths. Their contents are read and
+# passed as --system to ag agent spawn.
 #
 # Environment:
-#   AG_MOCK   — set to "1" to use mock agents
 #   AG_BINARY — path to ag binary (defaults to "ag")
 #
 set -euo pipefail
 
 AG_BINARY="${AG_BINARY:-${AG_BIN:-ag}}"
 
-WORKER_PROMPT="$1"
-JUDGE_PROMPT="$2"
+WORKER_PROMPT_FILE="$1"
+JUDGE_PROMPT_FILE="$2"
 INPUT_FILE="$3"
 MAX_ROUNDS="${4:-3}"
-MOCK="${AG_MOCK:-}"
 
-echo "[pair] Starting worker-judge loop (max $MAX_ROUNDS rounds, mock=${MOCK:-none})"
+# Read prompt file contents up front
+WORKER_PROMPT=$(cat "$WORKER_PROMPT_FILE")
+JUDGE_PROMPT=$(cat "$JUDGE_PROMPT_FILE")
+
+echo "[pair] Starting worker-judge loop (max $MAX_ROUNDS rounds)"
+echo "[pair] Worker prompt: $WORKER_PROMPT_FILE ($(wc -l < "$WORKER_PROMPT_FILE" | tr -d ' ') lines)"
+echo "[pair] Judge prompt:  $JUDGE_PROMPT_FILE ($(wc -l < "$JUDGE_PROMPT_FILE" | tr -d ' ') lines)"
 
 FEEDBACK_FILE=""
 
@@ -31,54 +35,42 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
 
   echo "[pair] === Round $round ==="
 
-    # --- Spawn worker ---
-  CURRENT_INPUT="$INPUT_FILE"
-  if [ "$round" -gt 1 ]; then
-    if [ -z "$FEEDBACK_FILE" ]; then
-      echo "[pair] Error: no feedback available for round $round"
-      break
-    fi
-    CURRENT_INPUT="$FEEDBACK_FILE"
+  # --- Spawn worker ---
+  if [ "$round" -gt 1 ] && [ -n "$FEEDBACK_FILE" ]; then
+    CURRENT_INPUT=$(cat "$FEEDBACK_FILE")
+  else
+    CURRENT_INPUT=$(cat "$INPUT_FILE")
   fi
 
-                SPAWN_ARGS=("$WORKER_ID" --input "$CURRENT_INPUT")
-  if [ -n "$MOCK" ]; then
-    # In mock mode, use bash backend
-    SPAWN_ARGS+=(--backend bash)
-  else
-    SPAWN_ARGS+=(--system "$WORKER_PROMPT")
-    fi
-  $AG_BINARY agent spawn "${SPAWN_ARGS[@]}"
+  $AG_BINARY agent spawn "$WORKER_ID" \
+    --system "$WORKER_PROMPT" \
+    --input "$CURRENT_INPUT"
 
-    # --- Wait for worker ---
+  # --- Wait for worker ---
   echo "[pair] Waiting for worker ($WORKER_ID)..."
-  if ! $AG_BINARY agent wait "$WORKER_ID" --timeout 10; then
+  if ! $AG_BINARY agent wait "$WORKER_ID" --timeout 120; then
     echo "[pair] Worker failed in round $round"
     $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
     continue
   fi
 
   # --- Get worker output ---
-    WORKER_OUTPUT=$(mktemp)
+  WORKER_OUTPUT=$(mktemp)
   $AG_BINARY agent output "$WORKER_ID" > "$WORKER_OUTPUT"
   echo "[pair] Worker output: $(wc -l < "$WORKER_OUTPUT" | tr -d ' ') lines"
 
-    # Clean up worker agent
+  # Clean up worker agent
   $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
 
-                                # --- Spawn judge ---
-  JUDGE_ARGS=("$JUDGE_ID" --input "$WORKER_OUTPUT")
-  if [ -n "$MOCK" ]; then
-    # In mock mode, use judge backend
-    JUDGE_ARGS+=(--backend judge)
-  else
-    JUDGE_ARGS+=(--system "$JUDGE_PROMPT")
-  fi
-  $AG_BINARY agent spawn "${JUDGE_ARGS[@]}"
+  # --- Spawn judge ---
+  JUDGE_INPUT=$(cat "$WORKER_OUTPUT")
+  $AG_BINARY agent spawn "$JUDGE_ID" \
+    --system "$JUDGE_PROMPT" \
+    --input "$JUDGE_INPUT"
 
-                # --- Wait for judge ---
+  # --- Wait for judge ---
   echo "[pair] Waiting for judge ($JUDGE_ID)..."
-  if ! $AG_BINARY agent wait "$JUDGE_ID" --timeout 5; then
+  if ! $AG_BINARY agent wait "$JUDGE_ID" --timeout 60; then
     echo "[pair] Judge failed in round $round"
     $AG_BINARY agent rm "$JUDGE_ID" 2>/dev/null || true
     rm -f "$WORKER_OUTPUT"
