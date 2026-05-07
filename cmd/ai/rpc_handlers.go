@@ -681,7 +681,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if streaming {
 			behavior := strings.TrimSpace(data.StreamingBehavior)
 			if behavior == "" {
-				return nil, fmt.Errorf("agent is streaming; specify streamingBehavior")
+				behavior = "steer" // default: steer when streaming
 			}
 			switch behavior {
 			case "steer":
@@ -698,6 +698,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 					return nil, fmt.Errorf("follow-up queue already has a pending message")
 				}
 				return nil, ag.FollowUp(message)
+			case "reject":
+				return nil, fmt.Errorf("agent is streaming; rejected by busy-mode policy")
 			default:
 				return nil, fmt.Errorf("invalid streamingBehavior: %s", behavior)
 			}
@@ -1479,21 +1481,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return nil, bashRunner.Abort()
 	})
 
-	server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			ag.SetAutoRetry(jsonData.Enabled)
-			slog.Info("Received set_auto_retry", "enabled", jsonData.Enabled)
-			return nil, nil
-		}
-		slog.Info("Received set_auto_retry", "enabled", enabled)
-		ag.SetAutoRetry(enabled == "true" || enabled == "1")
-		return nil, nil
-	})
-
 	server.RegisterSlash("abort_retry", "Abort the current automatic retry", func(args string) (any, error) {
 		slog.Info("Received abort_retry")
 		ag.Abort()
@@ -1505,54 +1492,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return "", fmt.Errorf("export_html is not supported")
 	})
 
-	server.RegisterSlash("set_auto_compaction", "Configure automatic context compaction settings", func(args string) (any, error) {
-		enabled := strings.TrimSpace(strings.ToLower(args))
-		var jsonData struct {
-			Enabled bool `json:"enabled"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			compactorConfig.AutoCompact = jsonData.Enabled
-			stateMu.Lock()
-			autoCompactionEnabled = jsonData.Enabled
-			stateMu.Unlock()
-			slog.Info("Received set_auto_compaction: enabled=", "value", jsonData.Enabled)
-			return nil, nil
-		}
-		val := enabled == "true" || enabled == "1"
-		compactorConfig.AutoCompact = val
-		stateMu.Lock()
-		autoCompactionEnabled = val
-		stateMu.Unlock()
-		slog.Info("Received set_auto_compaction: enabled=", "value", val)
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_tool_call_cutoff", "Set the maximum number of tool calls per turn", func(args string) (any, error) {
-		var cutoff int
-		var jsonData struct {
-			Cutoff int `json:"cutoff"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			cutoff = jsonData.Cutoff
-		} else {
-			var err error
-			cutoff, err = strconv.Atoi(strings.TrimSpace(args))
-			if err != nil {
-				return nil, fmt.Errorf("invalid cutoff value: %w", err)
-			}
-		}
-		slog.Info("Received set_tool_call_cutoff", "cutoff", cutoff)
-		if cutoff < 0 {
-			return nil, fmt.Errorf("cutoff must be >= 0")
-		}
-		compactorConfig.ToolCallCutoff = cutoff
-		ag.SetToolCallCutoff(cutoff)
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"cutoff": cutoff}, nil
-	})
-
+	// Validation maps for /set subcommands.
 	validToolSummaryStrategies := map[string]bool{
 		"llm":       true,
 		"heuristic": true,
@@ -1563,128 +1503,333 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		"fallback": true,
 		"always":   true,
 	}
+	validSteeringModes := map[string]bool{
+		"all":           true,
+		"immediate":     true,
+		"one-at-a-time": true,
+	}
+	validFollowUpModes := map[string]bool{
+		"all":           true,
+		"immediate":     true,
+		"one-at-a-time": true,
+	}
+	validThinkingLevels := map[string]bool{
+		"off":     true,
+		"minimal": true,
+		"low":     true,
+		"medium":  true,
+		"high":    true,
+		"xhigh":   true,
+	}
+	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
 
-	server.RegisterSlash("set_tool_summary_strategy", "Set how tool outputs are summarized", func(args string) (any, error) {
-		var jsonData struct {
-			Strategy string `json:"strategy"`
-		}
-		strategy := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			strategy = strings.ToLower(jsonData.Strategy)
-		}
-		slog.Info("Received set_tool_summary_strategy", "strategy", strategy)
-		if !validToolSummaryStrategies[strategy] {
-			return nil, fmt.Errorf("invalid tool summary strategy")
-		}
-		compactorConfig.ToolSummaryStrategy = strategy
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"strategy": strategy}, nil
-	})
-
-	server.RegisterSlash("set_tool_summary_automation", "Configure automatic tool output summarization", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_tool_summary_automation", "mode", mode)
-		if !validToolSummaryAutomations[mode] {
-			return nil, fmt.Errorf("invalid tool summary automation mode")
-		}
-		compactorConfig.ToolSummaryAutomation = mode
-		if err := config.SaveConfig(cfg, configPath); err != nil {
-			slog.Info("Failed to save config:", "value", err)
-		}
-		return map[string]any{"mode": mode}, nil
-	})
-
-	server.RegisterSlash("set_trace_events", "Enable/disable trace event categories", func(args string) (any, error) {
-		// Parse args — support both space-separated text and JSON {"events": [...]}
-		events := strings.Fields(args)
-		var jsonData struct {
-			Events []string `json:"events"`
-		}
-		if parseJSONArgs(args, &jsonData) && len(jsonData.Events) > 0 {
-			events = jsonData.Events
-		}
-		slog.Info("Received set_trace_events", "events", events)
-
-		if len(events) == 0 {
-			// Empty args means reset to default set.
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+	// /set — unified settings dispatcher.
+	// Routes subcommands to the appropriate handler logic.
+	// Usage: /set <key> [value]
+	// No args or "help" shows available settings.
+	server.RegisterSlash("set", "Configure agent settings", func(args string) (any, error) {
+		parts := strings.Fields(args)
+		if len(parts) == 0 || parts[0] == "help" {
+			return map[string]any{
+				"usage": "/set <key> [value]",
+				"settings": []string{
+					"auto-retry <on|off>",
+					"auto-compaction <on|off>",
+					"busy-mode <steer|follow-up|reject>",
+					"follow-up-mode <all|immediate|one-at-a-time>",
+					"prefix-display <on|off|toggle>",
+					"steering-mode <all|immediate|one-at-a-time>",
+					"thinking-display <on|off|toggle>",
+					"thinking-level <off|minimal|low|medium|high|xhigh>",
+					"tool-call-cutoff <n>",
+					"tool-summary-automation <off|fallback|always>",
+					"tool-summary-strategy <llm|heuristic|off>",
+					"tools-display <on|off|toggle>",
+					"trace-events [on|off|all|enable <selectors>|disable <selectors>]",
+				},
+			}, nil
 		}
 
-		normalized := make([]string, 0, len(events))
-		for _, e := range events {
-			e = strings.ToLower(strings.TrimSpace(e))
-			if e == "" {
-				continue
+		key := parts[0]
+		value := ""
+		if len(parts) > 1 {
+			value = strings.TrimSpace(strings.TrimPrefix(args, key))
+		}
+
+		switch key {
+		case "auto-retry":
+			enabled := strings.TrimSpace(strings.ToLower(value))
+			var jsonData struct {
+				Enabled bool `json:"enabled"`
 			}
-			normalized = append(normalized, e)
-		}
-		if len(normalized) == 0 {
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		}
+			if parseJSONArgs(value, &jsonData) {
+				ag.SetAutoRetry(jsonData.Enabled)
+				slog.Info("set auto-retry", "enabled", jsonData.Enabled)
+				return map[string]any{"setting": "auto-retry", "value": jsonData.Enabled}, nil
+			}
+			val := enabled == "true" || enabled == "1"
+			ag.SetAutoRetry(val)
+			slog.Info("set auto-retry", "enabled", val)
+			return map[string]any{"setting": "auto-retry", "value": val}, nil
 
-		applyExpanded := func(expanded []string, replace bool) []string {
-			if replace {
+		case "auto-compaction":
+			enabled := strings.TrimSpace(strings.ToLower(value))
+			var jsonData struct {
+				Enabled bool `json:"enabled"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				compactorConfig.AutoCompact = jsonData.Enabled
+				stateMu.Lock()
+				autoCompactionEnabled = jsonData.Enabled
+				stateMu.Unlock()
+				slog.Info("set auto-compaction", "enabled", jsonData.Enabled)
+				return map[string]any{"setting": "auto-compaction", "value": jsonData.Enabled}, nil
+			}
+			val := enabled == "true" || enabled == "1"
+			compactorConfig.AutoCompact = val
+			stateMu.Lock()
+			autoCompactionEnabled = val
+			stateMu.Unlock()
+			slog.Info("set auto-compaction", "enabled", val)
+			return map[string]any{"setting": "auto-compaction", "value": val}, nil
+
+		case "busy-mode":
+			mode := strings.TrimSpace(value)
+			switch mode {
+			case "steer", "follow-up", "reject":
+				busyMode = mode
+				return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
+			default:
+				return nil, fmt.Errorf("usage: /set busy-mode <steer|follow-up|reject>")
+			}
+
+		case "follow-up-mode":
+			mode := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validFollowUpModes[mode] {
+				return nil, fmt.Errorf("invalid follow-up mode; valid: all, immediate, one-at-a-time")
+			}
+			stateMu.Lock()
+			followUpMode = mode
+			stateMu.Unlock()
+			return map[string]any{"setting": "follow-up-mode", "value": mode}, nil
+
+		case "prefix-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showPrefix = true
+			case "off":
+				showPrefix = false
+			case "toggle", "":
+				showPrefix = !showPrefix
+			default:
+				return nil, fmt.Errorf("usage: /set prefix-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "prefix-display", "value": showPrefix}, nil
+
+		case "steering-mode":
+			mode := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validSteeringModes[mode] {
+				return nil, fmt.Errorf("invalid steering mode; valid: all, immediate, one-at-a-time")
+			}
+			stateMu.Lock()
+			steeringMode = mode
+			stateMu.Unlock()
+			return map[string]any{"setting": "steering-mode", "value": mode}, nil
+
+		case "thinking-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showThinking = true
+			case "off":
+				showThinking = false
+			case "toggle", "":
+				showThinking = !showThinking
+			default:
+				return nil, fmt.Errorf("usage: /set thinking-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "thinking-display", "value": showThinking}, nil
+
+		case "thinking-level":
+			level := strings.ToLower(strings.TrimSpace(value))
+			var jsonData struct {
+				Level string `json:"level"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				level = strings.ToLower(strings.TrimSpace(jsonData.Level))
+			}
+			if !validThinkingLevels[level] {
+				return nil, fmt.Errorf("invalid thinking level; valid: off, minimal, low, medium, high, xhigh")
+			}
+			stateMu.Lock()
+			currentThinkingLevel = level
+			stateMu.Unlock()
+			ag.SetThinkingLevel(level)
+			return map[string]any{"setting": "thinking-level", "value": level}, nil
+
+		case "tool-call-cutoff":
+			var cutoff int
+			var jsonData struct {
+				Cutoff int `json:"cutoff"`
+			}
+			if parseJSONArgs(value, &jsonData) {
+				cutoff = jsonData.Cutoff
+			} else {
+				var err error
+				cutoff, err = strconv.Atoi(strings.TrimSpace(value))
+				if err != nil {
+					return nil, fmt.Errorf("invalid cutoff value: %w", err)
+				}
+			}
+			if cutoff < 0 {
+				return nil, fmt.Errorf("cutoff must be >= 0")
+			}
+			compactorConfig.ToolCallCutoff = cutoff
+			ag.SetToolCallCutoff(cutoff)
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-call-cutoff", "value": cutoff}, nil
+
+		case "tool-summary-automation":
+			var jsonData struct {
+				Mode string `json:"mode"`
+			}
+			mode := strings.ToLower(strings.TrimSpace(value))
+			if parseJSONArgs(value, &jsonData) {
+				mode = strings.ToLower(jsonData.Mode)
+			}
+			if !validToolSummaryAutomations[mode] {
+				return nil, fmt.Errorf("invalid tool summary automation mode; valid: off, fallback, always")
+			}
+			compactorConfig.ToolSummaryAutomation = mode
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-summary-automation", "value": mode}, nil
+
+		case "tool-summary-strategy":
+			var jsonData struct {
+				Strategy string `json:"strategy"`
+			}
+			strategy := strings.ToLower(strings.TrimSpace(value))
+			if parseJSONArgs(value, &jsonData) {
+				strategy = strings.ToLower(jsonData.Strategy)
+			}
+			if !validToolSummaryStrategies[strategy] {
+				return nil, fmt.Errorf("invalid tool summary strategy; valid: llm, heuristic, off")
+			}
+			compactorConfig.ToolSummaryStrategy = strategy
+			if err := config.SaveConfig(cfg, configPath); err != nil {
+				slog.Info("Failed to save config:", "value", err)
+			}
+			return map[string]any{"setting": "tool-summary-strategy", "value": strategy}, nil
+
+		case "tools-display":
+			switch strings.TrimSpace(value) {
+			case "on":
+				showTools = true
+			case "off":
+				showTools = false
+			case "toggle", "":
+				showTools = !showTools
+			default:
+				return nil, fmt.Errorf("usage: /set tools-display <on|off|toggle>")
+			}
+			return map[string]any{"setting": "tools-display", "value": showTools}, nil
+
+		case "trace-events":
+			// No args = show current config.
+			if strings.TrimSpace(value) == "" {
+				return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
+			}
+
+			events := strings.Fields(value)
+			var jsonData struct {
+				Events []string `json:"events"`
+			}
+			if parseJSONArgs(value, &jsonData) && len(jsonData.Events) > 0 {
+				events = jsonData.Events
+			}
+			slog.Info("set trace-events", "events", events)
+
+			normalized := make([]string, 0, len(events))
+			for _, e := range events {
+				e = strings.ToLower(strings.TrimSpace(e))
+				if e == "" {
+					continue
+				}
+				normalized = append(normalized, e)
+			}
+			if len(normalized) == 0 {
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			}
+
+			applyExpanded := func(expanded []string, replace bool) []string {
+				if replace {
+					traceevent.DisableAllEvents()
+				}
+				for _, eventName := range expanded {
+					traceevent.EnableEvent(eventName)
+				}
+				return traceevent.GetEnabledEvents()
+			}
+
+			op := normalized[0]
+			switch op {
+			case "on":
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			case "all":
+				expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
+				return map[string]any{"events": applyExpanded(expanded, true)}, nil
+			case "default":
+				return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
+			case "off", "none":
 				traceevent.DisableAllEvents()
+				return map[string]any{"events": []string{}}, nil
+			case "enable":
+				if len(normalized) == 1 {
+					return nil, fmt.Errorf("trace-events enable requires at least one selector")
+				}
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				return map[string]any{"events": applyExpanded(expanded, false)}, nil
+			case "disable":
+				if len(normalized) == 1 {
+					return nil, fmt.Errorf("trace-events disable requires at least one selector")
+				}
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				for _, eventName := range expanded {
+					traceevent.DisableEvent(eventName)
+				}
+				return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
+			default:
+				expanded, unknown := traceevent.ExpandEventSelectors(normalized)
+				if len(unknown) > 0 {
+					return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
+				}
+				return map[string]any{"events": applyExpanded(expanded, true)}, nil
 			}
-			for _, eventName := range expanded {
-				traceevent.EnableEvent(eventName)
-			}
-			return traceevent.GetEnabledEvents()
-		}
 
-		op := normalized[0]
-		switch op {
-		case "on":
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		case "all":
-			expanded, _ := traceevent.ExpandEventSelectors([]string{"all"})
-			return map[string]any{"events": applyExpanded(expanded, true)}, nil
-		case "default":
-			return map[string]any{"events": traceevent.ResetToDefaultEvents()}, nil
-		case "off", "none":
-			traceevent.DisableAllEvents()
-			return map[string]any{"events": []string{}}, nil
-		case "enable":
-			if len(normalized) == 1 {
-				return nil, fmt.Errorf("trace-events enable requires at least one selector")
-			}
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			return map[string]any{"events": applyExpanded(expanded, false)}, nil
-		case "disable":
-			if len(normalized) == 1 {
-				return nil, fmt.Errorf("trace-events disable requires at least one selector")
-			}
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized[1:])
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			for _, eventName := range expanded {
-				traceevent.DisableEvent(eventName)
-			}
-			return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 		default:
-			expanded, unknown := traceevent.ExpandEventSelectors(normalized)
-			if len(unknown) > 0 {
-				return nil, fmt.Errorf("unknown trace events/selectors: %s", strings.Join(unknown, ", "))
-			}
-			return map[string]any{"events": applyExpanded(expanded, true)}, nil
+			return nil, fmt.Errorf("unknown setting: %s (use /set help for available settings)", key)
 		}
-	})
-
-	server.RegisterSlash("get_trace_events", "Get current trace event configuration", func(args string) (any, error) {
-		slog.Info("Received get_trace_events")
-		return map[string]any{"events": traceevent.GetEnabledEvents()}, nil
 	})
 
 	server.RegisterSlash("get_workflow_status", "Get workflow task status", func(args string) (any, error) {
@@ -1697,81 +1842,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, nil
 		}
 		return status, nil
-	})
-
-	validSteeringModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-	validFollowUpModes := map[string]bool{
-		"all":           true,
-		"immediate":     true,
-		"one-at-a-time": true,
-	}
-
-	server.RegisterSlash("set_steering_mode", "Set how steering messages are queued", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_steering_mode", "mode", mode)
-		if !validSteeringModes[mode] {
-			return nil, fmt.Errorf("invalid steering mode")
-		}
-		stateMu.Lock()
-		steeringMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	server.RegisterSlash("set_follow_up_mode", "Set how follow-up messages are delivered", func(args string) (any, error) {
-		var jsonData struct {
-			Mode string `json:"mode"`
-		}
-		mode := strings.ToLower(strings.TrimSpace(args))
-		if parseJSONArgs(args, &jsonData) {
-			mode = strings.ToLower(jsonData.Mode)
-		}
-		slog.Info("Received set_follow_up_mode", "mode", mode)
-		if !validFollowUpModes[mode] {
-			return nil, fmt.Errorf("invalid follow-up mode")
-		}
-		stateMu.Lock()
-		followUpMode = mode
-		stateMu.Unlock()
-		return nil, nil
-	})
-
-	validThinkingLevels := map[string]bool{
-		"off":     true,
-		"minimal": true,
-		"low":     true,
-		"medium":  true,
-		"high":    true,
-		"xhigh":   true,
-	}
-	thinkingCycle := []string{"off", "minimal", "low", "medium", "high", "xhigh"}
-
-	server.RegisterSlash("set_thinking_level", "Set the thinking/reasoning level (off/low/medium/high)", func(args string) (any, error) {
-		level := strings.ToLower(strings.TrimSpace(args))
-		var jsonData struct {
-			Level string `json:"level"`
-		}
-		if parseJSONArgs(args, &jsonData) {
-			level = strings.ToLower(strings.TrimSpace(jsonData.Level))
-		}
-		if !validThinkingLevels[level] {
-			return nil, fmt.Errorf("invalid thinking level")
-		}
-		stateMu.Lock()
-		currentThinkingLevel = level
-		stateMu.Unlock()
-		ag.SetThinkingLevel(level)
-		return map[string]any{"level": level}, nil
 	})
 
 	server.RegisterSlash("cycle_thinking_level", "Cycle to the next thinking level", func(args string) (any, error) {
@@ -1825,7 +1895,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return map[string]any{"entries": tree}, nil
 	})
 
-	server.RegisterSlash("resume_on_branch", "Resume generation on a specific branch", func(args string) (any, error) {
+	server.RegisterSlash("rewind", "Resume generation on a specific branch", func(args string) (any, error) {
 		var jsonData struct {
 			EntryID string `json:"entryId"`
 		}
@@ -1833,7 +1903,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 			entryID = jsonData.EntryID
 		}
-		slog.Info("Received resume_on_branch", "entryId", entryID)
+		slog.Info("Received rewind", "entryId", entryID)
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
@@ -1955,11 +2025,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// /tree → get_tree
 	registerAlias("tree", "Show conversation tree", "get_tree")
 
-	// /thinking → set_thinking_level
-	registerAlias("thinking", "Set thinking level (off/low/medium/high)", "set_thinking_level")
+	// /thinking → shortcut for /set thinking-level
+	server.RegisterSlash("thinking", "Set thinking level (off/low/medium/high)", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("set")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: set")
+		}
+		return h("thinking-level " + args)
+	})
 
-	// /trace-events → set_trace_events
-	registerAlias("trace-events", "Configure trace events", "set_trace_events")
+	// /trace-events → shortcut for /set trace-events
+	server.RegisterSlash("trace-events", "Configure trace events", func(args string) (any, error) {
+		h, ok := server.GetSlashHandler("set")
+		if !ok {
+			return nil, fmt.Errorf("unknown command: set")
+		}
+		return h("trace-events " + args)
+	})
 
 	// /model-select → same logic as /model
 	registerAlias("model-select", "Select a model", "model")
@@ -2077,59 +2159,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return map[string]any{"setting": "prefix", "value": showPrefix}, nil
 		default:
 			return nil, fmt.Errorf("usage: /toggle <thinking|prefix>")
-		}
-	})
-
-	server.RegisterSlash("set_thinking_display", "Toggle thinking display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showThinking = true
-		case "off":
-			showThinking = false
-		case "toggle", "":
-			showThinking = !showThinking
-		default:
-			return nil, fmt.Errorf("usage: /set_thinking_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "thinking", "value": showThinking}, nil
-	})
-
-	server.RegisterSlash("set_tools_display", "Toggle tools display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showTools = true
-		case "off":
-			showTools = false
-		case "toggle", "":
-			showTools = !showTools
-		default:
-			return nil, fmt.Errorf("usage: /set_tools_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "tools", "value": showTools}, nil
-	})
-
-	server.RegisterSlash("set_prefix_display", "Toggle prefix display on/off", func(args string) (any, error) {
-		switch strings.TrimSpace(args) {
-		case "on":
-			showPrefix = true
-		case "off":
-			showPrefix = false
-		case "toggle", "":
-			showPrefix = !showPrefix
-		default:
-			return nil, fmt.Errorf("usage: /set_prefix_display <on|off|toggle>")
-		}
-		return map[string]any{"setting": "prefix", "value": showPrefix}, nil
-	})
-
-	server.RegisterSlash("set_busy_mode", "Set behavior when agent is busy (steer, follow-up, reject)", func(args string) (any, error) {
-		mode := strings.TrimSpace(args)
-		switch mode {
-		case "steer", "follow-up", "reject":
-			busyMode = mode
-			return map[string]any{"setting": "busy-mode", "value": busyMode}, nil
-		default:
-			return nil, fmt.Errorf("usage: /set_busy_mode <steer|follow-up|reject>")
 		}
 	})
 
