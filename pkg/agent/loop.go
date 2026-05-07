@@ -367,8 +367,6 @@ func runInnerLoop(
 				// We just need to update the summary.
 				// Compact events are already appended via OnCompactEvent in the tools.
 				agentCtx.LastCompactionSummary = compacted.Summary
-				// Set flag to inject LLMContext for recovery on next request
-				agentCtx.PostCompactRecovery = true
 				after := len(agentCtx.RecentMessages)
 				compactionSpan.AddField("after_messages", after)
 				compactionSpan.End()
@@ -449,8 +447,6 @@ func runInnerLoop(
 						agentCtx.LastCompactionSummary = recoveryCompacted.Summary
 						// Compact events are already appended via OnCompactEvent in the tools.
 					}
-					// Set flag to inject LLMContext for recovery on next request
-					agentCtx.PostCompactRecovery = true
 					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
@@ -840,14 +836,13 @@ func streamAssistantResponse(
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
-	// LLMContext content is only injected after compact (PostCompactRecovery = true) for recovery.
+	// LLMContext content is always injected when non-empty.
 	// runtime_state telemetry is ALWAYS injected from turn 1 so path info is available immediately.
 
-	// Block A: LLMContext content injection — only after compact recovery.
+	// Block A: LLMContext content injection — whenever non-empty.
 	var llmContextContent string
-	if agentCtx.LLMContext != "" && agentCtx.PostCompactRecovery {
+	if agentCtx.LLMContext != "" {
 		llmContextContent = agentCtx.LLMContext
-		agentCtx.PostCompactRecovery = false
 	}
 
 	// Block B: runtime_state telemetry — always, from turn 1.
