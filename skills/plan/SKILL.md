@@ -28,62 +28,69 @@ description: 读取 design.md，产出 tasks.yml（含 plan-lint 验证），导
 
 ### Step 2: Worker-Judge Loop (Planner + Reviewer)
 
-plan 的核心是 **worker-judge loop**：
-- **Worker**（planner）：读 design.md，产出 tasks.yml
-- **Judge**（reviewer）：读 tasks.yml + design.md（仅作覆盖率参考），验证自包含性
+plan 的核心是 **worker-judge loop**（ag patterns 中的 pair pattern）：
+- **Worker**（planner subagent）：读 design.md，产出 tasks.yml
+- **Judge**（reviewer subagent）：读 tasks.yml，验证自包含性
 
-使用 `ag` 的 pair.sh pattern，最多 3 轮。每轮：
-1. planner 根据 design.md（+ 上轮 judge 反馈）生成 tasks.yml
-2. plan-lint 验证 YAML 结构
-3. reviewer 验证 task description 自包含性
-4. 通过则退出循环，否则把 judge 反馈喂给 planner 重来
+最多 3 轮。每轮：planner 生成 → reviewer 审查 → APPROVED 则退出，否则把 feedback 喂给 planner 重来。
 
 ```bash
-# 准备 input 文件
 DESIGN_MD="$(pwd)/design.md"
 TASKS_YML="$(pwd)/tasks.yml"
-CONTEXT_MD="$(pwd)/CONTEXT.md"
+REVIEW_JSON="/tmp/plan-review-result.json"
 
-cat > /tmp/plan-input.md << EOF
-Read the design document at ${DESIGN_MD} and produce a tasks.yml plan.
-Write the output to ${TASKS_YML}.
-EOF
+for ROUND in 1 2 3; do
+  echo "=== Plan worker-judge round $ROUND ==="
 
-if [ -f "${CONTEXT_MD}" ]; then
-  echo "Also read ${CONTEXT_MD} for codebase context." >> /tmp/plan-input.md
-fi
+  # --- Spawn planner (worker) ---
+  PLANNER_INPUT="Read the design document at ${DESIGN_MD} and produce a tasks.yml plan."
+  if [ "$ROUND" -gt 1 ] && [ -f "$REVIEW_JSON" ]; then
+    PLANNER_INPUT="${PLANNER_INPUT} Address these review findings: $(cat $REVIEW_JSON)"
+  fi
+  PLANNER_INPUT="${PLANNER_INPUT} Write the output to ${TASKS_YML}."
 
-# 使用 pair.sh 运行 worker-judge loop
-~/.ai/skills/ag/patterns/pair.sh \
-  /Users/genius/.ai/skills/plan/prompts/planner.md \
-  /Users/genius/.ai/skills/plan/prompts/reviewer.md \
-  /tmp/plan-input.md \
-  3
-```
+  ag agent spawn "plan-w-${ROUND}" \
+    --system @/Users/genius/.ai/skills/plan/prompts/planner.md \
+    --input "${PLANNER_INPUT}"
 
-**pair.sh 执行流程：**
+  ag agent wait "plan-w-${ROUND}" --timeout 300
+  ag agent rm "plan-w-${ROUND}"
 
-```
-Round 1:
-  planner → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
-                                                  ↓ REJECTED
-Round 2:
-  planner (带上 reviewer 反馈) → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
-                                                                          ↓ REJECTED
-Round 3 (final):
-  planner (带上 reviewer 反馈) → tasks.yml → plan-lint → reviewer → APPROVED? ──→ ✅ 退出
-                                                                          ↓ REJECTED
-                                                                ❌ 报告给用户
+  if [ ! -f "${TASKS_YML}" ]; then
+    echo "❌ Planner did not produce tasks.yml in round $ROUND"
+    continue
+  fi
+
+  # --- Spawn reviewer (judge) ---
+  ag agent spawn "plan-j-${ROUND}" \
+    --system @/Users/genius/.ai/skills/plan/prompts/reviewer.md \
+    --input "Review the plan at ${TASKS_YML}. Reference design doc at ${DESIGN_MD} for coverage check only. Write JSON result to ${REVIEW_JSON}."
+
+  ag agent wait "plan-j-${ROUND}" --timeout 300
+  ag agent rm "plan-j-${ROUND}"
+
+  # --- Check verdict ---
+  if grep -q '"APPROVED"' "$REVIEW_JSON" 2>/dev/null; then
+    echo "✅ Plan approved in round $ROUND"
+    break
+  fi
+
+  echo "❌ Round $ROUND not approved"
+  if [ "$ROUND" -eq 3 ]; then
+    echo "Max rounds reached. Review findings:"
+    cat "$REVIEW_JSON"
+    echo "停下来向用户汇报 reviewer findings。"
+  fi
+done
 ```
 
 **处理 loop 结果：**
-- `exit 0`（APPROVED）→ tasks.yml 已就绪，继续 Step 3
-- `exit 1`（max rounds reached）→ 停下来向用户汇报，展示 reviewer 的 findings，让用户决定是否手动修复
-- pair.sh 执行失败 → **停下来向用户汇报**，不要跳过
-
-**关于 plan-lint**：pair.sh 的 pair pattern 不内置 lint 步骤。如果 reviewer 通过但 plan-lint 失败，手动修 lint 后重跑：
+- APPROVED → tasks.yml 已就绪，跑 plan-lint 后继续 Step 3
+- 3 轮都未通过 → **停下来向用户汇报**，展示 reviewer findings，让用户决定
+- Subagent 执行失败 → **停下来向用户汇报**，不要跳过
 
 ```bash
+# Lint 是最后的安全网
 ~/.ai/skills/plan/bin/plan-lint tasks.yml
 ```
 
