@@ -46,9 +46,7 @@ func (c *RPCCore) RegisterSlashCommands() {
 	})
 
 	c.Server.RegisterSlash("get_session_stats", "Get session statistics (token counts, message count)", c.handleGetSessionStats)
-	c.Server.RegisterSlash("bash", "Execute a bash command", c.handleBash)
-	c.Server.RegisterSlash("abort_bash", "Abort the currently running bash command", c.handleAbortBash)
-	c.Server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", c.handleSetAutoRetry)
+		c.Server.RegisterSlash("set_auto_retry", "Configure automatic retry on LLM errors", c.handleSetAutoRetry)
 	c.Server.RegisterSlash("abort_retry", "Abort the current automatic retry", c.handleAbortRetry)
 	c.Server.RegisterSlash("export_html", "Export the current session as HTML", c.handleExportHTML)
 	c.Server.RegisterSlash("set_auto_compaction", "Configure automatic context compaction settings", c.handleSetAutoCompaction)
@@ -533,23 +531,6 @@ func (c *RPCCore) handleGetSessionStats(args string) (any, error) {
 		Workspace:         c.Ws.GetGitRoot(),
 		CurrentWorkdir:    c.Ws.GetCWD(),
 	}, nil
-}
-
-func (c *RPCCore) handleBash(args string) (any, error) {
-	command := args
-	var jsonData struct {
-		Command string `json:"command"`
-	}
-	if parseJSONArgs(args, &jsonData) {
-		command = jsonData.Command
-	}
-	slog.Info("Received bash")
-	return c.BashRunner.Run(c.Ws.GetCWD(), command, c.BashTimeout)
-}
-
-func (c *RPCCore) handleAbortBash(args string) (any, error) {
-	slog.Info("Received abort_bash")
-	return nil, c.BashRunner.Abort()
 }
 
 func (c *RPCCore) handleSetAutoRetry(args string) (any, error) {

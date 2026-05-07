@@ -72,12 +72,10 @@ type RPCCore struct {
 	CheckpointMgr *agent.AgentContextCheckpointManager
 	SessionWriter *sessionWriter
 	SessionComp   *sessionCompactor
-	SystemPrompt  string
+		SystemPrompt  string
 
 	// RPC server
-	Server      *rpc.Server
-	BashRunner  *bashRunner
-	BashTimeout time.Duration
+	Server *rpc.Server
 
 	// Shared mutable state (protected by StateMu)
 	StateMu               sync.Mutex
@@ -405,17 +403,9 @@ func NewRPCCore(cfg rpcCoreConfig) (*RPCCore, error) {
 		}
 	}
 
-	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
+		slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
-
-	// Bash runner
-	c.BashRunner = newBashRunner()
-	bashTimeout := time.Duration(concurrencyConfig.ToolTimeout) * time.Second
-	if bashTimeout <= 0 {
-		bashTimeout = 30 * time.Second
-	}
-	c.BashTimeout = bashTimeout
 
 	// Create RPC server
 	server := rpc.NewServer()

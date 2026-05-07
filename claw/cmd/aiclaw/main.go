@@ -29,13 +29,11 @@ import (
 	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"    // 注册微信通道工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/tiancaiamao/ai/claw/pkg/adapter"
+		"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/claw/pkg/web"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/skill"
-	"github.com/tiancaiamao/ai/pkg/tools"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -176,15 +174,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 创建 AgentLoop
-	// 从 ~/.aiclaw/auth.json 读取 API Key
-	apiKey, err := resolveAPIKey(clawDir, cfg.Model.Provider)
-	if err != nil {
-		slog.Warn("Failed to resolve API key", "error", err)
-		// 继续执行，可能从环境变量读取
-	}
-
-	// 创建语音转录器（如果启用）
+		// Create AgentLoop
 	var transcriber voice.Transcriber
 	if cfg.Voice.Enabled {
 		// 确定语音服务提供商
@@ -245,51 +235,32 @@ func main() {
 		slog.Info("Loaded skills", "count", len(skillResult.Skills))
 	}
 
-	// Create tool registry and register tools
-	// For claw (chat bot), we create a workspace with clawDir as working directory since it's not tied to a specific project
-	workspace := tools.MustNewWorkspace(clawDir)
-	toolRegistry := tools.NewRegistry()
-	toolRegistry.Register(tools.NewReadTool(workspace))
-	toolRegistry.Register(tools.NewBashTool(workspace))
-	toolRegistry.Register(tools.NewWriteTool(workspace))
-	toolRegistry.Register(tools.NewGrepTool(workspace))
-	toolRegistry.Register(tools.NewEditTool(workspace))
-
-	slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
+		slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
 
 	agentConfig := &adapter.AppConfig{
-		Model:           cfg.Model.ID,
-		Provider:        cfg.Model.Provider,
-		APIURL:          cfg.Model.BaseURL,
-		API:             cfg.Model.API,
-		APIKey:          apiKey,
 		SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills),
-		Tools:           toolRegistry.All(),
-		ClawDir:         clawDir, // 传递 claw 配置目录
+		ClawDir:         clawDir,
 		Transcriber:     transcriber,
 		FeishuAppID:     picoCfg.Channels.Feishu.AppID,
 		FeishuAppSecret: picoCfg.Channels.Feishu.AppSecret(),
 		Skills:          skillResult.Skills,
 	}
 
-	slog.Info("Registered tools", "count", len(agentConfig.Tools))
-
-	// 创建 CronService（需要在 AgentLoop 之前创建）
-	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
-	cronService := cron.NewCronService(cronStorePath, func(job *cron.CronJob) (string, error) {
-		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
-		// ProcessDirect 将在 AgentLoop 创建后调用
-		return "", nil
-	})
-	agentConfig.CronService = cronService
-
+			// Create AgentLoop
 	agentLoop := adapter.NewAgentLoop(agentConfig, msgBus)
 
-	// 设置上下文
+	// Setup context and signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 处理信号
+	// Create CronService (after ctx so handler can use it)
+	cronStorePath := filepath.Join(clawDir, "cron", "jobs.json")
+	cronService := cron.NewCronService(cronStorePath, func(job *cron.CronJob) (string, error) {
+		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
+		return agentLoop.ProcessDirect(ctx, job.Payload.Message, "cron:"+job.ID)
+	})
+
+	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -307,15 +278,9 @@ func main() {
 	}
 
 	// 注册 cron 命令
-	registerCronCommands(agentLoop, cronService)
+		registerCronCommands(agentLoop, cronService)
 
-	// 更新 CronService 的 job handler
-	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-		slog.Info("[cron] Executing job", "name", job.Name, "id", job.ID)
-		return agentLoop.ProcessDirect(ctx, job.Payload.Message, "cron:"+job.ID)
-	})
-
-	// 启动 cron 服务
+	// Start cron service
 	if err := cronService.Start(); err != nil {
 		slog.Error("Failed to start cron service", "error", err)
 	} else {
@@ -728,7 +693,7 @@ func buildSkillsSummary(skills []skill.Skill) string {
 // registerCronCommands registers cron control commands.
 func registerCronCommands(agentLoop *adapter.AgentLoop, cronService *cron.CronService) {
 	// /cron - shows cron usage
-	agentLoop.RegisterCommand("cron", func(args string, sess *adapter.Session) (string, error) {
+		agentLoop.RegisterCommand("cron", func(args string) (string, error) {
 		if cronService == nil {
 			return "Cron service is not configured", nil
 		}
@@ -928,29 +893,4 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
-// EchoTool 是一个简单的示例工具
-type EchoTool struct{}
 
-func (t *EchoTool) Name() string        { return "echo" }
-func (t *EchoTool) Description() string { return "Echo back the input message" }
-func (t *EchoTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"message": map[string]any{
-				"type":        "string",
-				"description": "Message to echo back",
-			},
-		},
-		"required": []string{"message"},
-	}
-}
-func (t *EchoTool) Execute(ctx context.Context, args map[string]any) ([]agentctx.ContentBlock, error) {
-	msg, ok := args["message"].(string)
-	if !ok {
-		return nil, fmt.Errorf("message argument must be a string")
-	}
-	return []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: fmt.Sprintf("Echo: %s", msg)},
-	}, nil
-}

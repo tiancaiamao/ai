@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"text/tabwriter"
+	"time"
 
 	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/channel"
@@ -24,6 +27,76 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+var taskRunCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run scheduler to execute tasks automatically",
+	Run: func(cmd *cobra.Command, args []string) {
+		maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
+		maxRetries, _ := cmd.Flags().GetInt("max-retries")
+		timeoutSec, _ := cmd.Flags().GetInt("timeout")
+		pollMs, _ := cmd.Flags().GetInt("poll")
+		design, _ := cmd.Flags().GetString("design")
+		skipReview, _ := cmd.Flags().GetBool("skip-review")
+
+		cfg := task.DefaultSchedulerConfig()
+		cfg.MaxConcurrent = maxConcurrent
+		cfg.MaxRetries = maxRetries
+		cfg.Timeout = time.Duration(timeoutSec) * time.Second
+		cfg.PollInterval = time.Duration(pollMs) * time.Millisecond
+		cfg.DesignFile = design
+		cfg.SkipReview = skipReview
+
+		cwd, _ := os.Getwd()
+		cfg.WorkDir = cwd
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+				// Handle Ctrl+C gracefully
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt)
+		go func() {
+			<-sigChan
+			fmt.Println("\nStopping scheduler...")
+			cancel()
+		}()
+
+		if err := task.RunScheduler(ctx, cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	},
+}
+
+var taskTransitionCmd = &cobra.Command{
+	Use:   "transition <id> <state>",
+	Short: "Transition task to a new state (state machine validated)",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		t, err := task.Transition(args[0], args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s → %s\n", t.ID, t.Status)
+	},
+}
+
+var taskRetryCmd = &cobra.Command{
+	Use:   "retry <id>",
+	Short: "Retry a failed task",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		maxRetries, _ := cmd.Flags().GetInt("max-retries")
+		t, err := task.Retry(args[0], maxRetries)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("retried %s (attempt %d)\n", t.ID, t.RetryCount)
+	},
 }
 
 func init() {
@@ -758,7 +831,7 @@ func init() {
 	}
 	agentConversationCmd.Flags().Int("nth", 0, "For last-assistant: get Nth-from-last assistant message (2=second to last)")
 
-	// Task flags
+		// Task flags
 	taskCreateCmd.Flags().String("spec", "", "Spec file path")
 	taskListCmd.Flags().String("status", "", "Filter by status")
 	taskListCmd.Flags().String("format", "", "Output format: json")
@@ -767,6 +840,15 @@ func init() {
 	taskFailCmd.Flags().String("error", "", "Error message")
 	taskFailCmd.Flags().Bool("retryable", false, "Mark as retryable")
 	taskShowCmd.Flags().String("format", "", "Output format: json")
+
+	// Task run flags
+	taskRunCmd.Flags().Int("max-concurrent", 2, "Max concurrent workers")
+	taskRunCmd.Flags().Int("max-retries", 3, "Max retries per failed task")
+	taskRunCmd.Flags().Int("timeout", 600, "Timeout per task in seconds")
+	taskRunCmd.Flags().Int("poll", 5000, "Poll interval in milliseconds")
+	taskRunCmd.Flags().String("design", "", "Path to design.md for worker context")
+	taskRunCmd.Flags().Bool("skip-review", false, "Skip review phase")
+	taskRetryCmd.Flags().Int("max-retries", 3, "Max retries allowed")
 
 	// Send/recv flags
 	sendCmd.Flags().String("file", "", "Send file contents from path")
@@ -784,9 +866,9 @@ func init() {
 	// Channel subcommands
 	channelCmd.AddCommand(channelCreateCmd, channelLsCmd, channelRmCmd)
 
-	// Task subcommands
+		// Task subcommands
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd)
+	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd)
 
 	// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)

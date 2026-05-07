@@ -17,27 +17,65 @@ import (
 
 // Status constants
 const (
-	StatusPending = "pending"
-	StatusClaimed = "claimed"
-	StatusDone    = "done"
-	StatusFailed  = "failed"
+	StatusPending   = "pending"
+	StatusClaimed   = "claimed"
+	StatusRunning   = "running"
+	StatusReview    = "review"
+	StatusRevision  = "revision"
+	StatusDone      = "done"
+	StatusFailed    = "failed"
 )
+
+// validTransitions defines allowed state transitions.
+// Any transition not in this map is rejected.
+var validTransitions = map[string][]string{
+	StatusPending:  {StatusClaimed},
+	StatusClaimed:  {StatusRunning, StatusFailed},
+	StatusRunning:  {StatusDone, StatusFailed, StatusReview},
+	StatusReview:   {StatusDone, StatusRevision, StatusFailed},
+	StatusRevision: {StatusReview, StatusFailed},
+	StatusDone:     {}, // Terminal
+	StatusFailed:   {StatusPending}, // Retry
+}
+
+// CanTransition checks if a state transition is valid.
+func CanTransition(from, to string) bool {
+	allowed, exists := validTransitions[from]
+	if !exists {
+		return false
+	}
+	for _, s := range allowed {
+		if s == to {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTerminal returns true if the state is terminal (no further transitions).
+func IsTerminal(state string) bool {
+	allowed, exists := validTransitions[state]
+	return exists && len(allowed) == 0
+}
 
 // Task represents a work unit.
 type Task struct {
 	ID           string   `json:"id"`
+	Title        string   `json:"title,omitempty"`
 	Status       string   `json:"status"`
 	Claimant     string   `json:"claimant,omitempty"`
 	Description  string   `json:"description"`
 	SpecFile     string   `json:"specFile,omitempty"`
 	OutputFile   string   `json:"outputFile,omitempty"`
 	Dependencies []string `json:"dependencies,omitempty"`
+	Group        string   `json:"group,omitempty"`
 	CreatedAt    int64    `json:"createdAt"`
 	ClaimedAt    int64    `json:"claimedAt,omitempty"`
 	FinishedAt   int64    `json:"finishedAt,omitempty"`
 	Error        string   `json:"error,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	Retryable    bool     `json:"retryable,omitempty"`
+	RetryCount   int      `json:"retryCount,omitempty"`
 }
 
 var (
@@ -169,14 +207,39 @@ func Claim(taskID, agentID string) (*Task, error) {
 }
 
 // Done marks a task as completed with optional summary.
-func Done(taskID string, summary string) (*Task, error) {
+// Transition changes task state after validating the transition is allowed.
+// Returns error if the transition is invalid.
+func Transition(taskID, to string) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
 	task, err := loadTask(taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	if task.Status != StatusClaimed {
-		return nil, fmt.Errorf("task %s is %s (not claimed)", taskID, task.Status)
+	if !CanTransition(task.Status, to) {
+		return nil, fmt.Errorf("invalid transition: %s → %s for task %s", task.Status, to, taskID)
+	}
+
+	task.Status = to
+	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+func Done(taskID string, summary string) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !CanTransition(task.Status, StatusDone) {
+		return nil, fmt.Errorf("task %s is %s (cannot transition to done)", taskID, task.Status)
 	}
 
 	task.Status = StatusDone
@@ -192,13 +255,16 @@ func Done(taskID string, summary string) (*Task, error) {
 
 // Fail marks a task as failed with error message and retryable flag.
 func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
 	task, err := loadTask(taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	if task.Status != StatusClaimed {
-		return nil, fmt.Errorf("task %s is %s (not claimed)", taskID, task.Status)
+	if !CanTransition(task.Status, StatusFailed) {
+		return nil, fmt.Errorf("task %s is %s (cannot transition to failed)", taskID, task.Status)
 	}
 
 	task.Status = StatusFailed
@@ -211,6 +277,97 @@ func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
 	}
 
 	return task, nil
+}
+
+// Retry resets a failed task back to pending for re-execution.
+// Increments RetryCount. Returns error if task is not failed or max retries exceeded.
+func Retry(taskID string, maxRetries int) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	if task.Status != StatusFailed {
+		return nil, fmt.Errorf("task %s is %s (not failed, cannot retry)", taskID, task.Status)
+	}
+
+	if task.RetryCount >= maxRetries {
+		return nil, fmt.Errorf("task %s exceeded max retries (%d)", taskID, maxRetries)
+	}
+
+	task.Status = StatusPending
+	task.Claimant = ""
+	task.ClaimedAt = 0
+	task.FinishedAt = 0
+	task.Error = ""
+	task.RetryCount++
+	task.Retryable = false
+
+	// Remove claim lock so Claim can succeed
+	os.Remove(filepath.Join(storage.TaskDir(taskID), ".claim-lock"))
+
+	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// Groups returns all unique group names across all tasks.
+// Tasks without a group are assigned to the "default" group.
+func Groups() ([]string, error) {
+	tasks, err := List("")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var groups []string
+	for _, t := range tasks {
+		g := t.Group
+		if g == "" {
+			g = "default"
+		}
+		if !seen[g] {
+			seen[g] = true
+			groups = append(groups, g)
+		}
+	}
+	return groups, nil
+}
+
+// GroupTasks returns all tasks in a given group.
+func GroupTasks(group string) ([]*Task, error) {
+	tasks, err := List("")
+	if err != nil {
+		return nil, err
+	}
+	var result []*Task
+	for _, t := range tasks {
+		g := t.Group
+		if g == "" {
+			g = "default"
+		}
+		if g == group {
+			result = append(result, t)
+		}
+	}
+	return result, nil
+}
+
+// AllDone returns true if all tasks are in a terminal state (done or failed).
+func AllDone() (bool, error) {
+	tasks, err := List("")
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tasks {
+		if !IsTerminal(t.Status) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // Load loads a task by ID (alias for reading task.json).
@@ -243,6 +400,7 @@ func ImportPlan(filePath string) (int, error) {
 			Title        string   `yaml:"title"`
 			Description  string   `yaml:"description"`
 			Dependencies []string `yaml:"dependencies"`
+			Group        string   `yaml:"group"`
 		} `yaml:"tasks"`
 	}
 	if err := yaml.Unmarshal(data, &plan); err != nil {
@@ -256,20 +414,30 @@ func ImportPlan(filePath string) (int, error) {
 	for _, pt := range plan.Tasks {
 		desc := pt.Title
 		if pt.Description != "" {
-			desc = pt.Title + ": " + pt.Description
+			desc = pt.Description
 		}
 
+		var t *Task
 		if pt.ID != "" {
-			_, err := CreateWithID(pt.ID, desc, "")
+			t, err = CreateWithID(pt.ID, desc, "")
 			if err != nil {
 				continue // skip duplicates
 			}
 		} else {
-			_, err := Create(desc, "")
+			t, err = Create(desc, "")
 			if err != nil {
 				continue
 			}
 		}
+		// Set title and group
+		t.Title = pt.Title
+		t.Group = pt.Group
+		if t.Group == "" {
+			t.Group = "default"
+		}
+		taskMu.Lock()
+		storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(t.ID), "task.json"), t)
+		taskMu.Unlock()
 		count++
 	}
 

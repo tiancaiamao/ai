@@ -82,7 +82,7 @@ If no `backends.yaml` is found, `ag` defaults to the `ai` backend.
 
 `ag` 是**内部执行层**，不是用户主交互层。
 
-- 用户接口：自然语言（由 `brainstorm` / `plan` / `implement` 等 skill 承接）
+- 用户接口：自然语言（由上层 skill 承接）
 - `ag` 接口：供 agent 在后台调用
 
 默认规则：
@@ -287,12 +287,14 @@ Stale detection: if process PID is no longer alive but activity shows "running",
 - 需要更多子 agent 时，必须等前一批完成（`ag agent rm`）后再 spawn 新的
 - 各 skill 文档中应遵守此限制，不可并行 spawn 超过 2 个子 agent
 
-## How Skills Use ag
+## Patterns
 
-### implement skill (task fan-out)
+### Task Fan-Out
+
+并行执行多个独立任务，每个任务一个 agent。
 
 ```
-1. ag task import-plan PLAN.yml
+1. ag task import-plan tasks.yml
 2. Get next task: ID=$(ag task next --claimant worker-N)
    Get description: ag task show $ID
 3. ag agent spawn worker-N --input "Task $ID: <title>\n<description>"
@@ -301,16 +303,27 @@ Stale detection: if process PID is no longer alive but activity shows "running",
 6. repeat for next wave of unblocked tasks
 ```
 
-### implement skill (worker-judge loop)
+### Worker-Judge Loop
+
+一个 agent 产出，另一个 agent 审查，循环直到通过。
 
 ```
-1. ag agent spawn writer --system implementer.md --input "implement task"
-2. ag agent spawn reviewer --system reviewer.md --input "review code"
-3. loop:
-   ag agent wait writer --timeout 300
-   ag agent steer reviewer "$(ag agent output writer)"
-   ag agent wait reviewer --timeout 300
-   ag agent steer writer "$(ag agent output reviewer)"
+1. ag agent spawn worker --system worker-prompt --input "task description"
+2. ag agent wait worker --timeout 300
+3. ag agent output worker > /tmp/worker-output.txt
+4. ag agent rm worker
+5. ag agent spawn judge --system judge-prompt --input "$(cat /tmp/worker-output.txt)"
+6. ag agent wait judge --timeout 60
+7. ag agent output judge > /tmp/judge-output.txt
+8. ag agent rm judge
+9. if APPROVED → done
+   else → feed judge feedback back to worker, repeat from step 1
+```
+
+封装在 `patterns/pair.sh` 中：
+
+```bash
+pair.sh <worker-system-prompt-file> <judge-system-prompt-file> <input-file> [max-rounds]
 ```
 
 ## Reference

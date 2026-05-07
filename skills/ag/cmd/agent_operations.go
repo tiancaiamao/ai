@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
@@ -47,16 +48,14 @@ func spawnWithRawBackend(id, system, input, cwd, backendName string) error {
 		cmd.Dir = cwd
 	}
 
-			// For codex backend, propagate full environment including any proxy settings.
-	// Codex needs proxy to reach chatgpt.com in restricted networks.
-	if backendName == "codex" {
+				// Propagate full environment and apply per-backend env overrides.
+	// os.Environ() preserves existing vars; appended vars override earlier ones
+	// (Go's os.Getenv returns the last match), so backends.yaml values take
+	// precedence if a user has conflicting env vars set.
+	if len(be.Env) > 0 {
 		cmd.Env = os.Environ()
-		// Default to local proxy if user hasn't set one.
-		if os.Getenv("HTTP_PROXY") == "" && os.Getenv("http_proxy") == "" {
-			cmd.Env = append(cmd.Env, "HTTP_PROXY=http://127.0.0.1:8119")
-		}
-		if os.Getenv("HTTPS_PROXY") == "" && os.Getenv("https_proxy") == "" {
-			cmd.Env = append(cmd.Env, "HTTPS_PROXY=http://127.0.0.1:8119")
+		for _, envVar := range be.Env {
+			cmd.Env = append(cmd.Env, envVar)
 		}
 	}
 
@@ -71,7 +70,9 @@ func spawnWithRawBackend(id, system, input, cwd, backendName string) error {
 		cmd.Args = append(cmd.Args, prompt)
 	}
 
-				// Create output file for direct write by the process.
+					cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Create output file for direct write by the process.
 	// Use os.File directly (not io.Writer) so exec.Cmd uses OS-level dup2
 	// instead of goroutines — this survives Process.Release().
 	outputPath := filepath.Join(agentDir, "output")
