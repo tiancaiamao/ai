@@ -221,7 +221,7 @@ func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
 		return "", err
 	}
 
-	// Wait for the initial response (acknowledgement).
+		// Wait for the initial response (acknowledgement).
 	select {
 	case msg := <-ch:
 		if msg.resp == nil {
@@ -229,6 +229,12 @@ func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
 		}
 		if !msg.resp.Success {
 			return "", fmt.Errorf("rpc_client: prompt rejected: %s", msg.resp.Error)
+		}
+				// Slash commands (e.g. /model, /clear) return their result directly
+		// in the response data without triggering the agent loop.
+		// No turn_end/agent_end events will follow.
+		if msg.resp.Data != nil {
+			return responseToString(msg.resp.Data), nil
 		}
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -522,6 +528,24 @@ func (m *ConnManager) restartConn(sessionKey string) {
 		slog.Warn("conn_manager: error closing connection during restart",
 			"sessionKey", sessionKey, "err", err)
 	}
-	delete(m.conns, sessionKey)
+		delete(m.conns, sessionKey)
 	slog.Info("conn_manager: removed connection for restart", "sessionKey", sessionKey)
+}
+
+// responseToString converts RPC response data to a human-readable string.
+// Slash commands may return strings, maps, or other types.
+func responseToString(data any) string {
+	switch v := data.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		// For structured data (maps, slices), pretty-print as JSON
+		b, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(b)
+	}
 }
