@@ -541,11 +541,7 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	executor := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 1,
-		"toolTimeout":        5,
-		"queueTimeout":       10,
-	})
+	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},
@@ -598,11 +594,7 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	}
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	executor := NewExecutorPool(map[string]int{
-		"maxConcurrentTools": 1,
-		"toolTimeout":        5,
-		"queueTimeout":       10,
-	})
+	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},

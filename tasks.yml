@@ -1,0 +1,431 @@
+version: "1"
+metadata:
+  spec_file: "design.md"
+  created_at: "2025-05-08"
+
+tasks:
+  # === Phase 1: ToolExecutor Interface ===
+  - id: T001
+    title: "Define ToolExecutor interface and refactor executor.go"
+    description: |
+      Rewrite pkg/agent/executor.go — DECISION: delete ExecutorPool, keep single concrete type + interface.
+
+      1. Define ToolExecutor interface:
+         type ToolExecutor interface {
+             Execute(ctx context.Context, tool agentctx.Tool, args map[string]any) ([]agentctx.ContentBlock, error)
+         }
+
+      2. Rename current ToolExecutor struct to concurrentToolExecutor (unexported).
+
+      3. Delete ExecutorPool entirely — it adds zero behavioral difference from concurrentToolExecutor.
+         All callers will use the interface directly.
+
+      4. NewToolExecutor returns ToolExecutor interface (not concrete type).
+         Delete NewExecutorPool — callers construct via NewToolExecutor.
+
+      Constants that move WITH this file (all retry-related):
+      - (none — retry constants are LLM-layer, stay in loop.go until T004)
+    priority: high
+    estimated_hours: 2
+    dependencies: []
+    file: "pkg/agent/executor.go"
+    done: false
+
+  - id: T002
+    title: "Update all callers to use ToolExecutor interface"
+    description: |
+      Update ALL files referencing *ExecutorPool or *ToolExecutor concrete types:
+
+      - pkg/agent/loop.go: LoopConfig.Executor field type from *ExecutorPool to ToolExecutor.
+        Update DefaultLoopConfig and executeToolCalls call sites.
+
+      - pkg/agent/agent.go (MISSED in original plan — blocking):
+        Lines 129, 549, 554: SetExecutor/GetExecutor signatures and default executor construction
+        in NewAgentFromConfigWithContext. Change to accept/return ToolExecutor interface.
+
+      - cmd/ai/rpc_handlers.go: Any direct construction of ExecutorPool → use NewToolExecutor.
+
+      Run go build ./... to verify.
+    priority: high
+    estimated_hours: 2
+    dependencies: [T001]
+    file: "pkg/agent/loop.go"
+    done: false
+
+  - id: T003
+    title: "Fix executor-related tests after interface refactor"
+    description: |
+      Update tests referencing *ExecutorPool or *ToolExecutor concrete types.
+      Known affected files (11+ test functions):
+      - pkg/agent/executor_test.go: TestExecutorPool, NewExecutorPool construction
+      - pkg/agent/agent_integration_test.go: Executor references
+      - pkg/agent/loop_recovery_test.go: LoopConfig.Executor setup
+      - pkg/agent/agent_stress_test.go: Executor construction
+      - pkg/agent/regression_test.go: Executor references
+
+      Strategy: construct test executors via NewToolExecutor() which returns the interface.
+      If a test needs the concrete type, use type assertion.
+      Run: go test ./pkg/agent/... ./cmd/ai/... -v
+    priority: high
+    estimated_hours: 2
+    dependencies: [T002]
+    file: "pkg/agent/executor_test.go"
+    done: false
+
+  # === Phase 2: loop.go Split ===
+  - id: T004
+    title: "Extract LLM retry logic into llm_retry.go"
+    description: |
+      Create pkg/agent/llm_retry.go containing:
+
+      Functions:
+      - streamAssistantResponseWithRetry
+      - shouldRetryLLMError
+      - jitterDelay
+      - classifyLLMError
+      - llmErrorMeta type
+      - llmAttemptFromContext
+      - llmAttemptKey (var) and llmAttemptKeyType (type) — set by retry, read by loop
+
+      Constants that MOVE to this file (LLM retry-related only):
+      - defaultLLMMaxRetries
+      - defaultRateLimitMaxRetries
+      - defaultRetryBaseDelay
+      - defaultRateLimitBaseDelay
+
+      Constants that STAY in loop.go (loop orchestration):
+      - defaultLoopMaxConsecutiveToolCalls
+      - defaultLoopMaxToolCallsPerName
+      - defaultMalformedToolCallRecoveries
+      - defaultEmptyResponseMaxRetries
+      - defaultRuntimeMetaHeartbeatTurns
+      - defaultLLMTotalTimeout
+      - defaultLLMFirstResponseTimeout
+
+      All functions stay in package agent. Delete them from loop.go.
+      Run go build ./... to verify compilation.
+    priority: high
+    estimated_hours: 2
+    dependencies: [T003]
+    file: "pkg/agent/llm_retry.go"
+    done: false
+
+  - id: T005
+    title: "Extract tool execution logic into tool_exec.go"
+    description: |
+      Create pkg/agent/tool_exec.go containing:
+      - executeToolCalls (NOTE: update signature to use ToolExecutor interface from T001,
+        not *ExecutorPool)
+      - buildInvalidToolArgsMessage
+      - isLikelyTruncatedToolArguments
+      - buildTruncatedToolArgsMessage
+      - hasToolResultNamed
+
+      All functions stay in package agent. Delete them from loop.go.
+      Run go build ./... to verify.
+    priority: high
+    estimated_hours: 2
+    dependencies: [T003]
+    file: "pkg/agent/tool_exec.go"
+    done: false
+
+  - id: T006
+    title: "Extract runtime telemetry functions into runtime_meta.go"
+    description: |
+      Create/extend pkg/agent/runtime_meta.go with ONLY pure telemetry functions:
+
+      - runtimeTokenBand, runtimeMessageBucket, runtimeSizeBucket
+      - runtimeCountBucket, runtimeToolOutputSizeBucket
+      - runtimeYAMLString, collectRuntimeToolPressure
+      - yesNo, normalizeApprox
+      - extractRecentMessages, extractActiveTurnMessages
+      - EstimateConversationTokens
+
+      DO NOT include selectMessagesForLLM or insertBeforeLastUserMessage — those are
+      tightly coupled to streamAssistantResponse and go to llm_stream.go (T007).
+      DO NOT include buildRuntime* functions — those also go to llm_stream.go (T007).
+
+      Delete all moved functions from loop.go. Run go build ./... to verify.
+    priority: medium
+    estimated_hours: 2
+    dependencies: [T003]
+    file: "pkg/agent/runtime_meta.go"
+    done: false
+
+  - id: T007
+    title: "Extract LLM streaming logic into llm_stream.go"
+    description: |
+      Create pkg/agent/llm_stream.go containing:
+      - streamAssistantResponse (the ~390 line function)
+      - selectMessagesForLLM (called within streamAssistantResponse)
+      - insertBeforeLastUserMessage (called within streamAssistantResponse)
+      - buildRuntimeUserAppendix, buildRuntimeSystemAppendix
+      - updateRuntimeMetaSnapshot
+
+      These functions are tightly coupled: streamAssistantResponse calls the others directly.
+      Keeping them together in llm_stream.go avoids cross-file coupling.
+
+      After this + T004 + T005 + T006, loop.go should only contain:
+      LoopConfig, DefaultLoopConfig, RunLoop, runInnerLoop,
+      getEffectiveModel, getEffectiveAPIKey, EstimateMessageTokens,
+      isEmptyActionableResponse, hashAny, randFloat64,
+      defaultLLMTotalTimeout, defaultLLMFirstResponseTimeout, and
+      loop orchestration constants.
+
+      Run go build ./... to verify.
+    priority: high
+    estimated_hours: 3
+    dependencies: [T004]
+    file: "pkg/agent/llm_stream.go"
+    done: false
+
+  - id: T008
+    title: "Verify loop.go split: run full test suite"
+    description: |
+      After all extractions (T004-T007), verify:
+      - loop.go is under 700 lines (was 1981)
+      - All files compile: go build ./...
+      - All tests pass: go test ./... -v
+      - No behavioral regression in agent loop tests
+      If tests fail, fix import issues or missed references.
+    priority: high
+    estimated_hours: 1
+    dependencies: [T004, T005, T006, T007]
+    file: "pkg/agent/loop.go"
+    done: false
+
+  # === Phase 3: Token Estimation ===
+  - id: T009
+    title: "Extract token estimation into pkg/context/token_estimation.go"
+    description: |
+      Create pkg/context/token_estimation.go with package-level functions:
+      - EstimateTokens(systemPrompt string, tools []Tool, messages []AgentMessage) int
+      - EstimateToolsTokens(tools []Tool) int
+      - EstimateMessageTokens(msg AgentMessage) int
+      - EstimateTokenPercent(used, total int) int
+      - estimateMessageChars(msg AgentMessage) int
+
+      NOTE: AgentContext.EstimateTokens() calls EstimateToolsTokens() internally.
+      The thin wrapper pattern preserves this chain:
+        func (c *AgentContext) EstimateTokens() int {
+            return EstimateTokens(c.SystemPrompt, c.Tools, c.RecentMessages)
+        }
+      This works because the package-level function is in the same package.
+
+      Delete original method bodies from context.go, replace with thin wrappers.
+    priority: medium
+    estimated_hours: 2
+    dependencies: [T008]
+    file: "pkg/context/token_estimation.go"
+    done: false
+
+  - id: T010
+    title: "Update callers and resolve duplicate EstimateMessageTokens"
+    description: |
+      NOTE: EstimateMessageTokens exists in TWO places:
+      1. pkg/context/context.go — the canonical location (will become wrapper in T009)
+      2. pkg/agent/loop.go line 1951 — a deprecated wrapper calling agentctx.EstimateMessageTokens
+
+      In this task:
+      - Keep the pkg/context/token_estimation.go function as canonical.
+      - Delete the deprecated wrapper in loop.go (or redirect to canonical if still needed).
+      - Verify callers: pkg/agent/loop.go, pkg/compact/compact.go, cmd/ai/rpc_handlers.go.
+      - Thin wrappers on AgentContext preserve method signatures — most callers need no change.
+
+      Run go test ./pkg/context/... ./pkg/agent/... ./pkg/compact/... -v
+    priority: medium
+    estimated_hours: 1
+    dependencies: [T009]
+    file: "pkg/context/context.go"
+    done: false
+
+  # === Phase 4: Compaction Controller ===
+  - id: T011
+    title: "Create CompactionController in pkg/agent/compaction_controller.go"
+    description: |
+      Create CompactionController struct encapsulating compaction decision logic.
+      Required dependencies (inject via constructor):
+      - compactor *compact.Compactor
+      - agent *Agent
+      - session (accessed at call time, not stored)
+      - emitEvent func(AgentEvent) — for reporting compaction events to frontend
+      - setState func(isCompacting bool) — for updating rpc_handlers streaming state
+      - trace span factory (use traceevent.StartSpan)
+
+      Methods:
+      - NewCompactionController(deps CompactionDeps) *CompactionController
+      - MaybeCompact(trigger string) error — encapsulates when + how to trigger
+      - RestoreContext(sess *session.Session) error — restores from compaction summary
+
+      The controller should NOT own stateMu or streaming state — those stay in RPCCore
+      and are accessed via the setState callback. Keep the controller as a logic capsule,
+      not a state owner.
+    priority: medium
+    estimated_hours: 3
+    dependencies: [T003]
+    file: "pkg/agent/compaction_controller.go"
+    done: false
+
+  - id: T012
+    title: "Wire CompactionController into rpc_handlers.go"
+    description: |
+      Replace the compactBeforeRequest closure and restoreLLMContextFromCompaction closure
+      in rpc_handlers.go with CompactionController method calls.
+      Construct CompactionController in runRPC setup phase, passing callbacks for
+      emitEvent and setState.
+      Verify: go test ./cmd/ai/... -v
+    priority: medium
+    estimated_hours: 2
+    dependencies: [T011]
+    file: "cmd/ai/rpc_handlers.go"
+    done: false
+
+  # === Phase 5: RPCCore ===
+  - id: T013
+    title: "Define RPCCore struct and extract constructor + Run method"
+    description: |
+      Create cmd/ai/rpc_core.go with:
+      - rpcCoreConfig struct capturing all runRPC parameters
+      - RPCCore struct with fields for shared state
+
+      Field checklist (enumerate ALL local vars that become struct fields):
+      - agent, sess, sessionMgr, registry, server, compactionCtrl, ws
+      - stateMu sync.Mutex, isCompacting bool, isStreaming bool
+      - wg sync.WaitGroup, cancelFunc context.CancelFunc
+      - input io.Reader, output io.Writer
+      - customSystemPrompt string, maxTurns int, timeout time.Duration
+      - debugAddr string, sessionPath string
+      - currentModel llm.Model, apiKey string, currentContextWindow int
+      - checkpointMgr *agent.AgentContextCheckpointManager
+
+      Methods:
+      - NewRPCCore(cfg rpcCoreConfig) *RPCCore
+      - Run() error — the main event loop
+
+      Also include createBaseContext() as a method — it's RPC initialization logic,
+      not session lifecycle (it calls buildSystemPrompt, loads checkpoints, configures agent).
+    priority: high
+    estimated_hours: 4
+    dependencies: [T012]
+    file: "cmd/ai/rpc_core.go"
+    done: false
+
+  - id: T014
+    title: "Extract RPC prompt/steer/abort handlers into rpc_prompt.go"
+    description: |
+      Create cmd/ai/rpc_prompt.go with methods on RPCCore:
+      - handlePrompt(cmd rpc.RPCCommand) error
+      - handleSteer(cmd rpc.RPCCommand) error
+      - handleAbort(cmd rpc.RPCCommand) error
+      - handleFollowUp(cmd rpc.RPCCommand) error
+
+      ⚠️ CRITICAL: Audit each closure for loop-variable capture before converting.
+      Closures capture by reference; struct fields are accessed via pointer.
+      In practice equivalent, BUT: if any closure captures a loop variable
+      (e.g., in event forwarding goroutines), converting to a struct field
+      that gets overwritten each iteration would be a bug.
+
+      After extraction: run go vet ./cmd/ai/... and go test -race ./cmd/ai/...
+    priority: high
+    estimated_hours: 4
+    dependencies: [T013]
+    file: "cmd/ai/rpc_prompt.go"
+    done: false
+
+  - id: T015
+    title: "Extract session lifecycle into rpc_session.go"
+    description: |
+      Create cmd/ai/rpc_session.go with methods on RPCCore:
+      - createSession() error
+      - restoreSession(id string) error
+      - forkSession(forkPoint string) error
+      - resumeBranch(branchID string) error
+      - updateCheckpointManager() error
+
+      NOTE: createBaseContext stays in rpc_core.go (T013) — it's initialization logic,
+      not session lifecycle. This file handles only session CRUD operations.
+    priority: medium
+    estimated_hours: 3
+    dependencies: [T013]
+    file: "cmd/ai/rpc_session.go"
+    done: false
+
+  - id: T016
+    title: "Extract slash commands into rpc_commands.go"
+    description: |
+      Create cmd/ai/rpc_commands.go with methods on RPCCore:
+      - handleSlashCommand(input string) error
+      - Individual command handler methods (compact, skills, model, etc.)
+
+      Slash commands may reference prompt handlers and session methods.
+      Dependencies T014 and T015 ensure those methods exist on RPCCore first.
+    priority: medium
+    estimated_hours: 3
+    dependencies: [T014, T015]
+    file: "cmd/ai/rpc_commands.go"
+    done: false
+
+  - id: T017
+    title: "Slim down rpc_handlers.go to entry point only"
+    description: |
+      After all extractions (T013-T016), rpc_handlers.go should only contain:
+      - runRPC() function that calls NewRPCCore + core.Run()
+      - bashRunner type + Run/Abort methods (or move to rpc_bash.go)
+      - getWorkflowStatus helper
+
+      Target: under 200 lines (relaxed from 100 — bashRunner alone is ~70 lines).
+      Final verification: go test ./... -v
+    priority: high
+    estimated_hours: 2
+    dependencies: [T014, T015, T016]
+    file: "cmd/ai/rpc_handlers.go"
+    done: false
+
+groups:
+  - name: executor-interface
+    title: "ToolExecutor Interface (Phase 1)"
+    tasks: [T001, T002, T003]
+    commit_message: "refactor(agent): replace ExecutorPool fake seam with ToolExecutor interface"
+
+  - name: loop-split
+    title: "loop.go Concern Split (Phase 2)"
+    tasks: [T004, T005, T006, T007, T008]
+    commit_message: "refactor(agent): split loop.go by concern layer into separate files"
+
+  - name: token-estimation
+    title: "Token Estimation Extraction (Phase 3)"
+    tasks: [T009, T010]
+    commit_message: "refactor(context): extract token estimation into standalone functions"
+
+  - name: compaction-controller
+    title: "Compaction Controller (Phase 4)"
+    tasks: [T011, T012]
+    commit_message: "refactor(agent): encapsulate compaction logic in CompactionController"
+
+  - name: rpc-core
+    title: "RPCCore Struct Extraction (Phase 5)"
+    tasks: [T013, T014, T015, T016, T017]
+    commit_message: "refactor(rpc): extract runRPC god function into RPCCore struct with methods"
+
+group_order: [executor-interface, loop-split, token-estimation, compaction-controller, rpc-core]
+
+risks:
+  - area: "Compilation"
+    risk: "Function moves between files may miss references or cause import cycles"
+    mitigation: "Each task runs go build ./... immediately after move; all functions stay in same package"
+
+  - area: "Test regression"
+    risk: "Existing integration tests may break due to type changes (ExecutorPool → ToolExecutor)"
+    mitigation: "T003 specifically addresses test fixes; full suite run at T008 gate"
+
+  - area: "Behavior regression"
+    risk: "Subtle behavior change during RPCCore extraction (closure capture vs struct field access)"
+    mitigation: "T14 adds go vet + race detector; audit loop-variable capture before converting closures"
+
+  - area: "Scope creep"
+    risk: "RPCCore extraction (Phase 5) may reveal additional coupling not visible in design"
+    mitigation: "Can stop after any phase; each group is independently valuable and committable"
+
+  - area: "Constant fragmentation"
+    risk: "Splitting the const block in loop.go may scatter related constants across files"
+    mitigation: "T004 explicitly lists which constants move and which stay; design doc documents the split"

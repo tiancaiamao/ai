@@ -126,7 +126,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 
 	// Ensure Executor is set in config
 	if cfg.Executor == nil {
-		cfg.Executor = NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60})
+				cfg.Executor = NewToolExecutor(10, 60)
 	}
 
 	// Ensure ToolOutput is set in config
@@ -545,13 +545,13 @@ func (a *Agent) SetCompactor(compactor Compactor) {
 	}
 }
 
-// SetExecutor sets the tool executor pool for concurrency control.
-func (a *Agent) SetExecutor(executor *ExecutorPool) {
+// SetExecutor sets the tool executor for concurrency control.
+func (a *Agent) SetExecutor(executor ToolExecutor) {
 	a.LoopConfig.Executor = executor
 }
 
 // GetExecutor returns the current tool executor.
-func (a *Agent) GetExecutor() *ExecutorPool {
+func (a *Agent) GetExecutor() ToolExecutor {
 	return a.LoopConfig.Executor
 }
 

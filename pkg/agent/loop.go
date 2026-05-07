@@ -50,7 +50,7 @@ type LoopConfig struct {
 	GetStartupPath func() string
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
-	Executor    *ExecutorPool // agentctx.Tool executor with concurrency control
+		Executor    ToolExecutor  // agentctx.Tool executor with concurrency control
 	Metrics     *Metrics      // Metrics collector
 	ToolOutput  ToolOutputLimits
 	Compactors   []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
@@ -101,7 +101,7 @@ func DefaultLoopConfig() *LoopConfig {
 		ThinkingLevel:            "high",
 		MaxLLMRetries:            defaultLLMMaxRetries,
 		RetryBaseDelay:           defaultRetryBaseDelay,
-		Executor:                 NewExecutorPool(map[string]int{"maxConcurrentTools": 10, "queueTimeout": 60}),
+				Executor:                 NewToolExecutor(10, 60),
 		ToolOutput:               DefaultToolOutputLimits(),
 		LLMTotalTimeout:          defaultLLMTotalTimeout,
 		LLMFirstResponseTimeout:  defaultLLMFirstResponseTimeout,
@@ -1221,7 +1221,7 @@ func executeToolCalls(
 	allowedTools map[string]bool,
 	assistantMsg *agentctx.AgentMessage,
 	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
-	executor *ExecutorPool,
+		executor ToolExecutor,
 	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
 ) []agentctx.AgentMessage {
