@@ -3,12 +3,13 @@ package cmd
 import (
 	"bufio"
 	"encoding/json"
-		"fmt"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/storage"
@@ -63,12 +64,15 @@ func (a *AIAdapter) SpawnWithAIServe(id, system, input, cwd string) error {
 	// 设置 agent 名称以便识别
 	cmd.Args = append(cmd.Args, "--name", "ag-agent-"+id)
 
-	// 将 stdout pipe 用于读取 run ID，stderr 丢弃到 os.DevNull
+		// 将 stdout pipe 用于读取 run ID，stderr 丢弃到 os.DevNull
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("create stdout pipe: %w", err)
 	}
 	cmd.Stderr = nil // discard stderr
+
+	// Create process group so child processes can be killed together.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 			if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ai serve failed: %w", err)

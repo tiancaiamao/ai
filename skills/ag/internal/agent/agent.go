@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/storage"
@@ -77,6 +78,20 @@ func List() ([]AgentEntry, error) {
 			result = append(result, AgentEntry{ID: id, Status: "unknown"})
 			continue
 		}
+
+		// Lazy status reconciliation: if activity.json says "running" but the
+		// process is dead, update the status so callers see the real state.
+		if activity.Status == "running" && activity.Pid > 0 {
+			if !isProcessAlive(activity.Pid) {
+				activity.Status = "done"
+				if activity.FinishedAt == 0 {
+					activity.FinishedAt = time.Now().Unix()
+				}
+				actPath := filepath.Join(AgentDir(id), "activity.json")
+				_ = storage.AtomicWriteJSON(actPath, activity)
+			}
+		}
+
 		result = append(result, AgentEntry{
 			ID:        id,
 			Status:    string(activity.Status),
@@ -85,6 +100,15 @@ func List() ([]AgentEntry, error) {
 		})
 	}
 	return result, nil
+}
+
+// isProcessAlive checks if a process with the given PID is still running.
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 // ReadActivity reads activity.json for an agent.
