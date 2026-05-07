@@ -59,299 +59,195 @@ This means:
 │  │  RecentMessages: []AgentMessage                          │ │
 │  │  AgentState: *AgentState     — system metadata           │ │
 │  └─────────────────────────────────────────────────────────┘ │
-│                           │                                   │
-│                           ▼                                   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │          Persistence Layer                                │ │
-│  │                                                          │ │
-│  │  Journal (messages.jsonl) — append-only event log         │ │
-│  │  Checkpoints — periodic snapshots (checkpoint + symlink)  │ │
-│  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 3. The ContextManager: LLM as Decision-Maker
+## 3. Compaction Triggers
 
-`pkg/compact/context_management.go`
+### 3.1 Pre-LLM Threshold Check
 
-### 3.1 Trigger Logic (System Decides *When*)
+Before every LLM call, the agent loop checks:
 
-The system uses token percentage + tool-call interval to decide when to run a context management cycle:
-
-| Token Usage  | Check Interval (tool calls) |
-|--------------|-----------------------------|
-| < 20%        | No checks                   |
-| 20%–33%      | Every 15 tool calls         |
-| 33%–50%      | Every 10 tool calls         |
-| 50%+         | Every 7 tool calls          |
-
-### 3.2 Decision Cycle (LLM Decides *What*)
-
-When triggered, `ContextManager.CompactWithCtx()`:
-
-1. **Builds an annotated conversation** — the full `RecentMessages` with truncation status, tool output previews, and the current LLM Context.
-2. **Creates context management tools** — the LLM can choose from:
-   - `truncate_messages` — replace specific old tool outputs with head/tail summary
-   - `update_llm_context` — update the structured task state string
-   - `compact` — full compaction via the heavyweight Compactor (summarize + trim messages)
-   - `no_action` — context is healthy, do nothing
-3. **Makes an independent LLM call** — with a dedicated system prompt (`pkg/prompt/context_management.md`), the conversation context, and the management tools.
-4. **Executes the LLM's tool calls** — applies truncate/update/compact operations to `AgentContext`.
-
-The main agent LLM is **never** involved in context management decisions. This separation ensures the management LLM focuses solely on context quality.
-
-### 3.3 Why Tool-Based, Not Rule-Based
-
-| Scenario | Rule-Based | LLM-Driven (our approach) |
-|----------|-----------|--------------------------|
-| Old grep output from a resolved bug | Truncate by age → might lose it | LLM reads it → "resolved, safe to truncate" |
-| Critical error from 10 turns ago | Truncate by size → might remove it | LLM reads it → "still relevant, keep it" |
-| Task phase completed | Cannot detect | LLM detects phase shift → compact |
-| Context is healthy | Still runs checks | LLM returns `no_action` |
-
-## 4. Core Data Structures
-
-### 4.1 AgentContext (`pkg/context/context.go`)
-
-The central in-memory state:
-
-```go
-type AgentContext struct {
-    SystemPrompt   string
-    Tools          []Tool
-    Skills         []skill.Skill
-
-    LLMContext     string         // Structured task state maintained by LLM
-    RecentMessages []AgentMessage // Conversation history
-    AgentState     *AgentState    // System-maintained metadata
-
-    LastCompactionSummary string
-    LLMContext       string      // Structured context content (injected when non-empty)
-
-    OnCompactEvent func(*CompactEventDetail) error
-}
+```
+estimatedTokens > dynamicThreshold
 ```
 
-Note: `AgentContext` contains the same fields as `ContextSnapshot` but does **not** embed it. They serve different purposes:
-- `AgentContext` is the mutable, live state with callbacks and tool management
-- `ContextSnapshot` is an immutable, serializable point-in-time capture for checkpoint persistence
-
-### 4.2 AgentState (`pkg/context/agent_state.go`)
-
-System-maintained tracking metadata (LLM never writes this directly):
-
-```go
-type AgentState struct {
-    WorkspaceRoot     string
-    CurrentWorkingDir string
-    TotalTurns        int
-    TokensUsed        int
-    TokensLimit       int
-
-    // Context management tracking
-    LastLLMContextUpdate      int  // Turn when LLMContext was last updated
-    LastTriggerTurn           int  // Turn when context management last ran
-    TurnsSinceLastTrigger     int  // Turns since last trigger
-    ToolCallsSinceLastTrigger int  // Tool calls since last trigger
-    TotalTruncations          int
-    TotalCompactions           int
-    LastCompactTurn            int
-
-    // Runtime telemetry cache
-    RuntimeMetaSnapshot string
-    RuntimeMetaBand     string
-    RuntimeMetaTurns    int
-}
-```
-
-### 4.3 AgentMessage (`pkg/context/message.go`)
-
-```go
-type AgentMessage struct {
-    Role       string         // "user", "assistant", "toolResult"
-    Content    []ContentBlock // TextContent, ImageContent, ToolCallContent, ThinkingContent
-    Metadata   *MessageMetadata
-    Truncated  bool           // Set by truncate_messages tool
-    ToolCallID string         // For toolResult ↔ toolCall pairing
-    // ...
-}
-```
-
-Message visibility is controlled by `MessageMetadata`:
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `AgentVisible` | true (nil = true) | If false, excluded from `ConvertMessagesToLLM` and token estimation |
-| `UserVisible` | true (nil = true) | If false, excluded from UI display |
-| `Kind` | "" | Semantic type: "tool_result", "tool_result_archived", etc. |
-
-## 5. Compaction Triggers
-
-### 5.1 Pre-LLM Threshold Compaction
-
-Before each LLM call, the loop iterates through the Compactor chain:
-
-```go
-for _, c := range config.Compactors {
-    if c.ShouldCompact(ctx, agentCtx) {
-        compacted, compactErr = c.Compact(agentCtx)
-        if compactErr == nil {
-            break // First successful compaction wins
-        }
-    }
-}
-```
-
-The chain has two entries (in `cmd/ai/rpc_handlers.go`):
-
-1. **ContextManager** — lightweight LLM-driven (see §3)
-2. **sessionCompactor** — heavyweight; wraps `compact.Compactor` for full summarization and persists via `Session.Compact()`
-
-### 5.2 Context-Limit Recovery
-
-After an `IsContextLengthExceeded` API error, the loop attempts compaction once (`maxCompactionRecoveries = 1`), then retries the LLM call.
-
-### 5.3 The Compactor Interface
-
-```go
-type Compactor interface {
-    ShouldCompact(ctx context.Context, agentCtx *AgentContext) bool
-    Compact(ctx *AgentContext) (*CompactionResult, error)
-    CalculateDynamicThreshold() int
-}
-```
-
-## 6. Compaction Strategies in Detail
-
-### 6.1 truncate_messages (`pkg/tools/context_mgmt/truncate_messages.go`)
-
-The lightest action. The LLM selects specific tool result messages by ID, and the tool:
-
-1. Validates IDs exist and are not in the protected zone (last `RecentMessagesKeep=5` messages)
-2. Marks each message `Truncated=true`
-3. Replaces content with `TruncateWithHeadTail()` output: first 1000 chars + last 1000 chars with a truncation marker
-
-This is the primary tool for reclaiming tokens — most tool outputs are large and become irrelevant after a few turns.
-
-### 6.2 update_llm_context (`pkg/tools/context_mgmt/update_llm_context.go`)
-
-Updates the in-memory `AgentContext.LLMContext` string. This is the LLM's mechanism for maintaining a structured summary of:
-
-- Current task and progress
-- Key files and code elements
-- Errors encountered
-- Decisions made
-- Next steps
-
-After compaction, `LLMContext` is the **only** source of task continuity — the old messages are gone. This makes updating LLM Context before or during compaction critical.
-
-### 6.3 compact (`pkg/compact/compact_tool.go`)
-
-The heavy action. Delegates to the full `compact.Compactor` which:
-
-1. Finds the cut point using `KeepRecentTokens` (default 20,000) from the tail
-2. Summarizes removed messages via a separate LLM call (prompts: `compact_system.md`, `compact_summarize.md`)
-3. Replaces `RecentMessages` with: summary message + kept recent messages
-4. Preserves `LLMContext` — never overwritten (it is managed by the LLM via `update_llm_context`)
-
-After compact, `LLMContext` is injected into the next LLM call so the agent recovers task continuity.
-
-### 6.4 no_action (`pkg/tools/context_mgmt/no_action.go`)
-
-The LLM explicitly declines action. This is a valid outcome — the LLM judges the context is healthy and no management is needed.
-
-## 7. Persistence and Recovery
-
-### 7.1 Journal (`messages.jsonl`)
-
-Append-only event log. Entry types:
-
-| Type | Purpose |
-|------|---------|
-| `message` | Normal conversation message |
-| `truncate` | Records which tool output was truncated (ID + turn) |
-| `compact`  | Records summary + how many messages were kept |
-
-Truncate and compact entries enable **reconstruction**: when replaying journal entries, truncate events are re-applied to messages and compact events reset the message list.
-
-### 7.2 Checkpoints
-
-Periodic snapshots stored under `sessionDir/checkpoints/` with a `current` symlink to the latest. Managed by `AgentContextCheckpointManager` (`pkg/agent/checkpoint_manager.go`).
-
-**When created**: After compaction when `LLMContextUpdated == true` (meaningful state change). Skipped when only truncation occurred (resume can replay from last checkpoint).
-
-**What's stored**: Full `ContextSnapshot` — `LLMContext`, `RecentMessages`, `AgentState`.
-
-### 7.3 Reconstruction (`pkg/context/reconstruction.go`)
-
-On resume, `ReconstructSnapshotWithCheckpoint`:
-
-1. Load latest checkpoint
-2. Replay journal entries after checkpoint's `MessageIndex`
-3. Apply truncate events to replayed messages
-4. Apply compact events (reset messages, set summary as LLMContext)
-5. Recalculate runtime counters from replayed messages
-
-## 8. Runtime Telemetry
-
-### 8.1 runtime_state Snapshot
-
-Injected as a user message in every LLM call (from turn 1). Contains:
-
-- Token usage band and percentage
-- Message count bucket
-- LLM context size bucket
-- Workspace paths
-- Stale/large tool output counts
-- Compaction decision signals
-
-**Known issue with injection position**: Currently inserted before the last user message via `insertBeforeLastUserMessage`. In single-turn long-task scenarios, this position shifts on every turn, breaking the LLM provider's KV cache mechanism. In multi-turn conversations the position is fine — the earlier messages stay stable.
-
-### 8.2 Telemetry Refresh Policy
-
-`RuntimeMetaSnapshot` is cached and refreshed when:
-
-- First time (empty cache)
-- Token usage band changes
-- Every `defaultRuntimeMetaHeartbeatTurns = 6` turns
-
-Values are bucketized for privacy and to reduce cache invalidation:
-- `tokens_band`: 0-20, 20-40, 40-60, 60-80, 80-100
-- `messages_in_history_bucket`: 0-20, 20-50, 50-100, 100+
-- `llm_context_size_bucket`: 0-1KB, 1-4KB, 4-16KB, 16KB+
-
-## 9. Tool Output Processing
-
-### 9.1 Normalization (`pkg/agent/tool_output.go`)
-
-Every tool output is normalized before being added to `RecentMessages`:
-
-- **Text output**: Truncated to 10,000 chars (head+tail preservation) if it exceeds the limit
-- **Error patterns**: Detected and preserved with higher priority
-- **Images**: Preserved completely
-
-### 9.2 Stale Output Detection
-
-For runtime telemetry (not for automatic action), stale tool outputs are counted:
-- Tool results within the last 10 messages are "fresh"
-- Beyond that: "stale" and reported as truncation candidates to the context management LLM
-
-## 10. Token Estimation
-
-`AgentContext.EstimateTokens()` uses:
-
-1. Last assistant usage totals (from API response) if available
-2. Plus heuristic estimation for trailing messages since last usage report
-
-Per-message heuristic: `ceil(len(text) / 4)`, images ~1200 tokens each.
-
-The `Compactor.CalculateDynamicThreshold()` computes:
+Where `dynamicThreshold` is calculated by `Compactor.CalculateDynamicThreshold()`:
 
 ```
 threshold = contextWindow - systemPromptTokens - 3000(tool defs) - ReserveTokens(16384)
 ```
 
-## 11. Key File Index
+If exceeded, compactors are tried in priority order (array order in `LoopConfig.Compactors`). The first compactor whose `ShouldCompact()` returns true is used.
+
+### 3.2 Context-Limit Recovery
+
+If the LLM API returns a context-length-exceeded error:
+
+1. Compact the context using the heavyweight compactor
+2. Retry the LLM call
+3. Maximum one recovery attempt per session to prevent infinite loops
+
+This is the safety net for cases where the threshold check underestimated token usage.
+
+## 4. Compactor Implementations
+
+### 4.1 ContextManager (Lightweight, LLM-Driven)
+
+**File:** `pkg/compact/context_management.go`
+
+This is the primary compaction strategy. It makes a **separate LLM call** with:
+- The current conversation as context (with stale annotations)
+- Context management tools: `truncate_messages`, `update_llm_context`, `compact`, `no_action`
+- A specialized system prompt (`pkg/prompt/context_management.md`)
+
+The LLM decides what action to take. Common outcomes:
+- **Truncate**: Remove stale tool outputs from early in the conversation
+- **Update LLM Context**: Update the task state summary for continuity
+- **Compact**: Trigger full summarization (falls through to heavyweight compactor)
+- **No Action**: Context is healthy, do nothing
+
+### 4.2 Compact (Heavyweight Summarization)
+
+**File:** `pkg/compact/compact.go`
+
+Full conversation summarization via LLM:
+1. Sends the entire conversation to a summarization LLM
+2. Generates a summary of the conversation so far
+3. Replaces old messages with the summary
+4. Preserves recent messages (configurable `keepRecent`)
+
+### 4.3 Session Compaction Bridge
+
+**File:** `cmd/ai/session_writer.go`
+
+Wraps the heavyweight compactor with session-aware persistence:
+- Records compaction as a journal entry
+- Manages the compaction cut-point in the session file
+- Ensures session file consistency after compaction
+
+## 5. Context Management Tools
+
+These tools are provided to the context management LLM:
+
+### 5.1 `truncate_messages`
+
+**File:** `pkg/tools/context_mgmt/truncate_messages.go`
+
+Removes specific messages from the conversation. The LLM specifies which message IDs to truncate based on its analysis of staleness.
+
+### 5.2 `update_llm_context`
+
+**File:** `pkg/tools/context_mgmt/update_llm_context.go`
+
+Updates the `LLMContext` string — the structured task state that persists across compactions. This is the primary mechanism for task continuity.
+
+### 5.3 `no_action`
+
+**File:** `pkg/tools/context_mgmt/no_action.go`
+
+Signals that no context management is needed. The LLM uses this when the context is healthy.
+
+### 5.4 `compact`
+
+**File:** `pkg/compact/compact_tool.go`
+
+Triggers full heavyweight compaction. Used when the LLM determines that truncation alone is insufficient.
+
+## 6. LLM Context (Task State)
+
+`AgentContext.LLMContext` is a string maintained by the context management LLM. It serves as the **source of truth for task continuity** after compaction.
+
+### 6.1 How It Works
+
+1. Before compaction, the context management LLM reads the full conversation
+2. It uses `update_llm_context` to write a structured summary of current task state
+3. After compaction, `LLMContext` is injected into every future LLM request
+4. The agent continues with full awareness of what happened before compaction
+
+### 6.2 Injection Point
+
+`LLMContext` content is injected into the system prompt via `insertBeforeLastUserMessage`. This ensures:
+- The LLM always sees current task state
+- KV cache efficiency for earlier messages is preserved in multi-turn conversations
+
+### 6.3 Runtime Telemetry
+
+The agent loop injects runtime state as informational telemetry into the system prompt:
+
+```yaml
+context_meta:
+  tokens_band: 20-40
+  action_hint: light_compression
+  tokens_used_approx: 40000
+  tokens_max: 200000
+```
+
+This keeps the agent informed about context pressure without compelling it to act directly (the context management LLM handles that).
+
+## 7. Session Persistence & Recovery
+
+### 7.1 Journal Format
+
+Session entries in `messages.jsonl`:
+
+| Type | Description |
+|------|-------------|
+| `session` | Header with session ID and metadata |
+| `message` | User/assistant/tool message |
+| `truncate` | Record of truncated messages |
+| `compact` | Compaction cut-point marker |
+
+### 7.2 Checkpoint System
+
+**File:** `pkg/context/checkpoint.go`
+
+Periodic snapshots for fast recovery:
+- Checkpoint: Full state serialized to `checkpoint.jsonl`
+- Checkpoint index: Maps entry IDs to checkpoint positions
+- Recovery: Load checkpoint → replay journal entries after checkpoint
+
+### 7.3 Reconstruction
+
+**File:** `pkg/context/reconstruction.go`
+
+Rebuilds in-memory state from checkpoint + journal:
+1. Load checkpoint file
+2. Find all journal entries after the checkpoint
+3. Replay entries to rebuild `AgentContext`
+4. Track reconstruction counters for diagnostics
+
+## 8. Tool Output Processing
+
+### 8.1 Normalization
+
+**File:** `pkg/agent/tool_output.go`
+
+Every tool output is normalized before being added to context:
+- **Text output**: Truncated to 10,000 chars (head+tail preservation) if it exceeds the limit
+- **Error patterns**: Detected and preserved with higher priority
+- **Images**: Preserved completely
+
+### 8.2 Stale Output Detection
+
+For runtime telemetry (not automatic action), stale tool outputs are counted:
+- Tool results within the last 10 messages are "fresh"
+- Beyond that: "stale" and reported as truncation candidates
+
+### 8.3 Tool Call Cutoff
+
+When the number of visible tool results exceeds `ToolCallCutoff` (default: 10), the oldest tool outputs are summarized. This prevents context bloat from accumulated tool results.
+
+## 9. Token Estimation
+
+**File:** `pkg/context/context.go`
+
+`AgentContext.EstimateTokens()` uses:
+1. Last assistant usage totals (from API response) if available
+2. Plus heuristic estimation for trailing messages since last usage report
+3. Per-message heuristic: `ceil(len(text) / 4)`, images ~1200 tokens each
+
+## 10. Key File Index
 
 | File | Responsibility |
 |------|---------------|
@@ -361,7 +257,10 @@ threshold = contextWindow - systemPromptTokens - 3000(tool defs) - ReserveTokens
 | `pkg/context/snapshot.go` | ContextSnapshot for checkpoint persistence |
 | `pkg/context/compactor.go` | Compactor interface, CompactionResult |
 | `pkg/context/journal.go` | JournalEntry types (message/truncate/compact) |
+| `pkg/context/journal_io.go` | Journal I/O operations |
 | `pkg/context/checkpoint.go` | Checkpoint save/load, symlink management |
+| `pkg/context/checkpoint_index.go` | Checkpoint index for fast lookup |
+| `pkg/context/checkpoint_io.go` | Checkpoint I/O operations |
 | `pkg/context/reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
 | `pkg/compact/compact.go` | Heavyweight Compactor (LLM summarization) |
 | `pkg/compact/compact_tool.go` | Compact tool (exposed to context management LLM) |
@@ -369,21 +268,28 @@ threshold = contextWindow - systemPromptTokens - 3000(tool defs) - ReserveTokens
 | `pkg/tools/context_mgmt/truncate_messages.go` | Truncate tool implementation |
 | `pkg/tools/context_mgmt/update_llm_context.go` | LLM Context update tool |
 | `pkg/tools/context_mgmt/no_action.go` | No-action tool |
-| `pkg/tools/context_mgmt/registry.go` | Tool registry |
+| `pkg/tools/context_mgmt/registry.go` | Context management tool registry |
 | `pkg/agent/loop.go` | Agent loop, compaction triggers, telemetry injection |
+| `pkg/agent/agent.go` | Agent lifecycle, auto-compact, config management |
 | `pkg/agent/conversion.go` | Message visibility filtering, LLM message conversion |
 | `pkg/agent/tool_output.go` | Tool output normalization |
+| `pkg/agent/tool_call_normalize.go` | Tool call normalization |
 | `pkg/agent/checkpoint_manager.go` | Checkpoint lifecycle management |
+| `pkg/agent/metrics.go` | Metrics collection (token rates, turn tracking) |
+| `pkg/agent/executor.go` | Tool execution with concurrency control |
 | `pkg/session/compaction.go` | Session-level compaction cut-point logic |
+| `pkg/session/session.go` | Session persistence (JSONL, fork support) |
+| `pkg/session/lazy.go` | Lazy session loading |
 | `cmd/ai/session_writer.go` | sessionCompactor: session-aware compaction wrapper |
+| `pkg/prompt/builder.go` | System prompt construction |
 | `pkg/prompt/context_management.md` | System prompt for context management LLM |
 | `pkg/prompt/compact_system.md` | Summarization assistant system prompt |
 | `pkg/prompt/compact_summarize.md` | Summarization template |
 | `pkg/prompt/compact_update.md` | Incremental summary update template |
 
-## 12. Design Principles
+## 11. Design Principles
 
-1. **LLM decides strategy, system decides timing** — The system controls *when* to trigger context management (token thresholds, intervals). The LLM controls *what* to do (truncate, update context, compact, or skip).
+1. **LLM decides strategy, system decides timing** — The system controls *when* to trigger context management (token thresholds, intervals). The LLM controls *what to do* (truncate, update context, compact, or skip).
 
 2. **LLM Context is the task state source of truth** — After compaction, `LLMContext` (maintained by the LLM via `update_llm_context`) is the only source of task continuity. Old messages are gone.
 
@@ -393,6 +299,6 @@ threshold = contextWindow - systemPromptTokens - 3000(tool defs) - ReserveTokens
 
 5. **LLM Context injection** — `LLMContext` content is always injected into LLM requests when non-empty, so the agent maintains task continuity after compaction or context updates.
 
-6. **Protected recent messages** — The last 5 messages are never truncated, ensuring the agent always has its most recent context.
+6. **Protected recent messages** — The last few messages are never truncated, ensuring the agent always has its most recent context.
 
 7. **Telemetry, not directives** — Runtime state is injected as informational telemetry (not commands), keeping the main agent informed about context pressure without compelling it to act directly.
