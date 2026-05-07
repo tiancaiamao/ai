@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -378,8 +379,8 @@ func scanStreamLog(id, needle string, offset int64) (bool, int64, error) {
 		return false, newOffset, err
 	}
 
-	data := make([]byte, newOffset-offset)
-	if _, err := f.Read(data); err != nil {
+		data := make([]byte, newOffset-offset)
+	if _, err := io.ReadFull(f, data); err != nil {
 		return false, newOffset, err
 	}
 
