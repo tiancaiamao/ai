@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -373,7 +374,6 @@ type ConnManager struct {
 	mu          sync.RWMutex
 	sessionsDir string
 	sysprompt   string // system prompt content (written to temp file per conn)
-	aiBinary    string // path to ai binary, defaults to "ai"
 }
 
 // NewConnManager creates a new connection manager.
@@ -382,8 +382,7 @@ func NewConnManager(sessionsDir, sysprompt string) *ConnManager {
 		conns:       make(map[string]*RPCConn),
 		sessionsDir: sessionsDir,
 		sysprompt:   sysprompt,
-		aiBinary:    "ai",
-	}
+			}
 }
 
 // safeSessionKey replaces characters that are unsafe for filesystem paths.
@@ -477,6 +476,13 @@ func (m *ConnManager) getOrCreateConn(sessionKey string) (*RPCConn, error) {
 	sessionDir := m.sessionsDir + "/" + safeKey
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return nil, fmt.Errorf("conn_manager: create session dir %q: %w", sessionDir, err)
+	}
+
+		// Clean up stale system prompt temp files from previous connections.
+	if oldFiles, _ := filepath.Glob(filepath.Join(sessionDir, "sysprompt-*.txt")); len(oldFiles) > 0 {
+		for _, f := range oldFiles {
+			os.Remove(f)
+		}
 	}
 
 	// Write system prompt to a temp file in the session directory.
