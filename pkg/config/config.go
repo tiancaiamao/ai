@@ -260,10 +260,10 @@ func DefaultConfig() *Config {
 			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
 			API:      "openai-completions",
 		},
-		Compactor:         compact.DefaultConfig(),
-		Concurrency:       DefaultConcurrencyConfig(),
-		ToolOutput:        DefaultToolOutputConfig(),
-		Log:               DefaultLogConfig(),
+		Compactor:   compact.DefaultConfig(),
+		Concurrency: DefaultConcurrencyConfig(),
+		ToolOutput:  DefaultToolOutputConfig(),
+		Log:         DefaultLogConfig(),
 	}
 }
 
@@ -283,7 +283,7 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 
 	// Override with config file values if present
 	if c.Concurrency != nil {
-				loopCfg.Executor = agent.NewToolExecutor(
+		loopCfg.Executor = agent.NewToolExecutor(
 			c.Concurrency.MaxConcurrentTools,
 			c.Concurrency.QueueTimeout,
 		)

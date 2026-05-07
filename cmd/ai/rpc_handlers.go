@@ -395,7 +395,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-		executor := agent.NewToolExecutor(
+	executor := agent.NewToolExecutor(
 		concurrencyConfig.MaxConcurrentTools,
 		concurrencyConfig.QueueTimeout,
 	)
@@ -487,7 +487,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	currentThinkingLevel := "high"
 	autoCompactionEnabled := compactorConfig.AutoCompact
 	steeringMode := "all"
-		followUpMode := "one-at-a-time"
+	followUpMode := "one-at-a-time"
 	pendingSteer := false
 	var followUpQueue []string
 	showThinking := true
@@ -883,7 +883,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		startupPath := cfg.Workspace  // This is the initial working directory (git root or cwd at startup)
 		currentWorkdir := ws.GetCWD() // This is the current working directory
 
-				result := make([]any, len(sessions))
+		result := make([]any, len(sessions))
 		// Reverse the order so newest (index 0) appears at the bottom
 		for i, sess := range sessions {
 			// Calculate reversed index: 0->len-1, 1->len-2, etc.
@@ -1942,7 +1942,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// /skills → get_commands (skills list from agent)
 	registerAlias("skills", "List available skills", "get_commands")
 
-					// /session → get_state
+	// /session → get_state
 	registerAlias("session", "Get the current agent state (model, session, streaming status)", "get_state")
 
 	// /new → new_session
@@ -2057,12 +2057,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		statsResult, _ := statsH("")
 		modelsResult, _ := modelsH("")
 
-				return map[string]any{
+		return map[string]any{
 			"state":  stateResult,
 			"stats":  statsResult,
 			"models": modelsResult,
 		}, nil
-		})
+	})
 
 	// Display settings: /toggle thinking|prefix, /set tools|busy-mode
 	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix)", func(args string) (any, error) {
@@ -2132,7 +2132,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-		server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+	server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
 		subCmd := strings.TrimSpace(args)
 		switch subCmd {
 		case "settings", "":
@@ -2181,20 +2181,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return map[string]any{
 				"type": "settings",
 				"data": map[string]any{
-					"model":                          model,
-					"show-thinking":                  showThinkingStr,
-					"tools":                          showToolsStr,
-					"prefix":                         showPrefixStr,
-					"thinking-level":                 currentThinkingLevel,
-					"busy-mode":                      busyMode,
-					"auto-compaction":                autoCompStr,
-					"compaction-context-window":      compactionContext,
-					"compaction-reserve-tokens":      compactionReserve,
-					"compaction-token-limit":         compactionLimit,
-					"compaction-max-messages":        compactionMaxMessages,
-					"compaction-max-tokens":          compactionMaxTokens,
-					"compaction-keep-recent":         compactionKeepRecent,
-					"compaction-keep-recent-tokens":  compactionKeepRecentTokens,
+					"model":                         model,
+					"show-thinking":                 showThinkingStr,
+					"tools":                         showToolsStr,
+					"prefix":                        showPrefixStr,
+					"thinking-level":                currentThinkingLevel,
+					"busy-mode":                     busyMode,
+					"auto-compaction":               autoCompStr,
+					"compaction-context-window":     compactionContext,
+					"compaction-reserve-tokens":     compactionReserve,
+					"compaction-token-limit":        compactionLimit,
+					"compaction-max-messages":       compactionMaxMessages,
+					"compaction-max-tokens":         compactionMaxTokens,
+					"compaction-keep-recent":        compactionKeepRecent,
+					"compaction-keep-recent-tokens": compactionKeepRecentTokens,
 				},
 			}, nil
 		case "pipeline":
@@ -2202,7 +2202,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		default:
 			return nil, fmt.Errorf("usage: /show settings|pipeline")
 		}
-		})
+	})
 
 	// /quit — quit the application
 	server.RegisterSlash("quit", "Exit the application", func(args string) (any, error) {
@@ -2217,11 +2217,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not streaming")
 		}
-		
+
 		ag.Abort()
 		return map[string]any{"status": "aborting"}, nil
 	})
@@ -2232,52 +2232,52 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if message == "" {
 			return nil, fmt.Errorf("usage: /follow-up <message>")
 		}
-		
+
 		slog.Info("Received follow-up command")
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not busy")
 		}
-		
+
 		// Check if follow-up mode allows this
 		if followUpMode != "one-at-a-time" && followUpMode != "queue" {
 			return nil, fmt.Errorf("follow-up mode is '%s', not enabled", followUpMode)
 		}
-		
+
 		// Check if there's already a pending follow-up
 		if len(followUpQueue) > 0 && followUpMode == "one-at-a-time" {
 			return nil, fmt.Errorf("follow-up queue already has a pending message")
 		}
-		
+
 		expandedMessage := expandSkillCommands(message)
 		followUpQueue = append(followUpQueue, expandedMessage)
 		return map[string]any{"status": "queued", "message": expandedMessage}, nil
 	})
 
-		// /steer — alias for steering when agent is busy
+	// /steer — alias for steering when agent is busy
 	server.RegisterSlash("steer", "Steer the current agent execution", func(args string) (any, error) {
 		message := strings.TrimSpace(args)
 		if message == "" {
 			return nil, fmt.Errorf("usage: /steer <message>")
 		}
-		
+
 		slog.Info("Received steer command")
 		stateMu.Lock()
 		streaming := isStreaming
 		busyBehavior := busyMode
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not streaming")
 		}
-		
+
 		if busyBehavior == "reject" {
 			return nil, fmt.Errorf("agent is busy and busy mode is set to reject")
 		}
-		
+
 		expandedMessage := expandSkillCommands(message)
 		ag.Steer(expandedMessage)
 		return map[string]any{"status": "steering", "message": expandedMessage}, nil

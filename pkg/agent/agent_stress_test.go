@@ -294,7 +294,7 @@ func TestStressQueueFull(t *testing.T) {
 
 	t.Log("Starting queue full stress test...")
 
-		pool := NewToolExecutor(2, 1)
+	pool := NewToolExecutor(2, 1)
 
 	ctx := context.Background()
 

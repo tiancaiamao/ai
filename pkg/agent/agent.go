@@ -126,7 +126,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 
 	// Ensure Executor is set in config
 	if cfg.Executor == nil {
-				cfg.Executor = NewToolExecutor(10, 60)
+		cfg.Executor = NewToolExecutor(10, 60)
 	}
 
 	// Ensure ToolOutput is set in config

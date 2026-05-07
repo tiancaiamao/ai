@@ -29,7 +29,7 @@ const (
 	defaultLoopMaxConsecutiveToolCalls = 6
 	defaultLoopMaxToolCallsPerName     = 60
 	defaultMalformedToolCallRecoveries = 2
-	defaultEmptyResponseMaxRetries    = 2
+	defaultEmptyResponseMaxRetries     = 2
 	defaultRuntimeMetaHeartbeatTurns   = 6
 	defaultLLMTotalTimeout             = 10 * time.Minute // Total timeout for LLM request
 	defaultLLMFirstResponseTimeout     = 2 * time.Minute  // Timeout between streaming chunks (2min)
@@ -50,10 +50,10 @@ type LoopConfig struct {
 	GetStartupPath func() string
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
-		Executor    ToolExecutor  // agentctx.Tool executor with concurrency control
-	Metrics     *Metrics      // Metrics collector
-	ToolOutput  ToolOutputLimits
-	Compactors   []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
+	Executor      ToolExecutor // agentctx.Tool executor with concurrency control
+	Metrics       *Metrics     // Metrics collector
+	ToolOutput    ToolOutputLimits
+	Compactors    []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
 	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
@@ -97,15 +97,15 @@ func getEffectiveAPIKey(config *LoopConfig) string {
 // DefaultLoopConfig returns a default LoopConfig with sensible values.
 func DefaultLoopConfig() *LoopConfig {
 	return &LoopConfig{
-		ToolCallCutoff:           10,
-		ThinkingLevel:            "high",
-		MaxLLMRetries:            defaultLLMMaxRetries,
-		RetryBaseDelay:           defaultRetryBaseDelay,
-				Executor:                 NewToolExecutor(10, 60),
-		ToolOutput:               DefaultToolOutputLimits(),
-		LLMTotalTimeout:          defaultLLMTotalTimeout,
-		LLMFirstResponseTimeout:  defaultLLMFirstResponseTimeout,
-		EnableCheckpoint:         true,
+		ToolCallCutoff:          10,
+		ThinkingLevel:           "high",
+		MaxLLMRetries:           defaultLLMMaxRetries,
+		RetryBaseDelay:          defaultRetryBaseDelay,
+		Executor:                NewToolExecutor(10, 60),
+		ToolOutput:              DefaultToolOutputLimits(),
+		LLMTotalTimeout:         defaultLLMTotalTimeout,
+		LLMFirstResponseTimeout: defaultLLMFirstResponseTimeout,
+		EnableCheckpoint:        true,
 	}
 }
 
@@ -228,11 +228,11 @@ func RunLoop(
 
 		newMessages := append([]agentctx.AgentMessage{}, prompts...)
 		currentCtx := &agentctx.AgentContext{
-			SystemPrompt:    agentCtx.SystemPrompt,
-			RecentMessages:  append(agentCtx.RecentMessages, prompts...),
-			Tools:           agentCtx.Tools,
-			LLMContext:      agentCtx.LLMContext,
-			AgentState:      agentCtx.AgentState,
+			SystemPrompt:   agentCtx.SystemPrompt,
+			RecentMessages: append(agentCtx.RecentMessages, prompts...),
+			Tools:          agentCtx.Tools,
+			LLMContext:     agentCtx.LLMContext,
+			AgentState:     agentCtx.AgentState,
 		}
 
 		stream.Push(NewAgentStartEvent())
@@ -450,15 +450,40 @@ func runInnerLoop(
 					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
 					compactionSpan.End()
 					stream.Push(NewCompactionEndEvent(CompactionInfo{
-						Type:              func() string { if recoveryCompacted != nil { return recoveryCompacted.Type }; return "" }(),
-						Auto:              true,
-						Before:            before,
-						After:             len(agentCtx.RecentMessages),
-						Trigger:           "context_limit_recovery",
-						TokensBefore:      func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensBefore }; return 0 }(),
-						TokensAfter:       func() int { if recoveryCompacted != nil { return recoveryCompacted.TokensAfter }; return 0 }(),
-						TruncatedCount:    func() int { if recoveryCompacted != nil { return recoveryCompacted.TruncatedCount }; return 0 }(),
-						LLMContextUpdated: func() bool { if recoveryCompacted != nil { return recoveryCompacted.LLMContextUpdated }; return false }(),
+						Type: func() string {
+							if recoveryCompacted != nil {
+								return recoveryCompacted.Type
+							}
+							return ""
+						}(),
+						Auto:    true,
+						Before:  before,
+						After:   len(agentCtx.RecentMessages),
+						Trigger: "context_limit_recovery",
+						TokensBefore: func() int {
+							if recoveryCompacted != nil {
+								return recoveryCompacted.TokensBefore
+							}
+							return 0
+						}(),
+						TokensAfter: func() int {
+							if recoveryCompacted != nil {
+								return recoveryCompacted.TokensAfter
+							}
+							return 0
+						}(),
+						TruncatedCount: func() int {
+							if recoveryCompacted != nil {
+								return recoveryCompacted.TruncatedCount
+							}
+							return 0
+						}(),
+						LLMContextUpdated: func() bool {
+							if recoveryCompacted != nil {
+								return recoveryCompacted.LLMContextUpdated
+							}
+							return false
+						}(),
 					}))
 
 					// Create checkpoint after compaction to preserve AgentState for resume
@@ -832,7 +857,7 @@ func streamAssistantResponse(
 		}
 	}
 
-		// Build runtime appendix (llm context + context meta) as a user message
+	// Build runtime appendix (llm context + context meta) as a user message
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
@@ -1221,7 +1246,7 @@ func executeToolCalls(
 	allowedTools map[string]bool,
 	assistantMsg *agentctx.AgentMessage,
 	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
-		executor ToolExecutor,
+	executor ToolExecutor,
 	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
 ) []agentctx.AgentMessage {
