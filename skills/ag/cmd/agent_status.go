@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
@@ -22,7 +25,26 @@ func GetAgentStatus(agentID string) (*agent.Activity, error) {
 		return getAgentStatusWithAI(agentID)
 	}
 
-	return agent.ReadActivity(agentID)
+	activity, err := agent.ReadActivity(agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	// For raw backends (codex, etc.), check process liveness and output.
+	if activity.Pid > 0 && activity.Status == "running" {
+		alive := isProcessAlive(activity.Pid)
+		if !alive {
+			// Process exited. Scan output for terminal events.
+			agentDir := agent.AgentDir(agentID)
+			status := detectRawBackendStatus(agentDir)
+			activity.Status = status
+			if activity.FinishedAt == 0 {
+				activity.FinishedAt = time.Now().Unix()
+			}
+		}
+	}
+
+	return activity, nil
 }
 
 // getAgentStatusWithAI reads status from ai run metadata.
@@ -32,7 +54,7 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 		return nil, err
 	}
 
-	activity := &agent.Activity{
+		activity := &agent.Activity{
 		Status:    convertAIStatus(runMeta.Status),
 		Pid:       runMeta.PID,
 		StartedAt: runMeta.StartedAt,
@@ -41,6 +63,17 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 
 	if runMeta.FinishedAt > 0 {
 		activity.FinishedAt = runMeta.FinishedAt
+	}
+
+	// ai serve detached via Process.Release may not update run.json on exit.
+	// If run.json says running but PID is dead, mark as done.
+	if activity.Status == "running" && activity.Pid > 0 {
+		if !isProcessAlive(activity.Pid) {
+			activity.Status = "done"
+			if activity.FinishedAt == 0 {
+				activity.FinishedAt = time.Now().Unix()
+			}
+		}
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -53,14 +86,38 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 		return activity, nil
 	}
 
-	baseDir := filepath.Join(homeDir, ".ai", "runs")
+		baseDir := filepath.Join(homeDir, ".ai", "runs")
 	eventsFile := filepath.Join(baseDir, runID, "events.jsonl")
 
-	if data, err := os.ReadFile(eventsFile); err == nil {
-		activity = enrichActivityFromEvents(activity, data)
+	// Read only the tail of events.jsonl — the file can be gigabytes.
+	// Use bytes.Contains to detect agent_end without parsing JSON,
+	// which also handles partial reads from large single-line events.
+	if tailData, err := readFileTail(eventsFile, 256*1024); err == nil {
+		activity = enrichActivityFromEvents(activity, tailData)
 	}
 
-	return activity, nil
+		return activity, nil
+}
+
+// detectRawBackendStatus scans the output file for terminal events to determine
+// the final status of a raw backend (e.g. codex) agent.
+func detectRawBackendStatus(agentDir string) string {
+	outputPath := filepath.Join(agentDir, "output")
+	data, err := readFileTail(outputPath, 64*1024)
+	if err != nil {
+		return "done" // No output, assume completed
+	}
+
+	// Codex emits {"type":"turn.failed",...} on failure.
+	if bytes.Contains(data, []byte(`"turn.failed"`)) {
+		return "failed"
+	}
+	// Codex emits {"type":"turn.completed",...} on success.
+	if bytes.Contains(data, []byte(`"turn.completed"`)) {
+		return "done"
+	}
+	// Fallback: if process exited with output, assume done.
+	return "done"
 }
 
 // convertAIStatus maps ai run status to ag status.
@@ -83,6 +140,12 @@ func convertAIStatus(aiStatus string) string {
 func enrichActivityFromEvents(activity *agent.Activity, eventsData []byte) *agent.Activity {
 	if activity.Status == "" {
 		activity.Status = "running"
+	}
+
+	// Scan for agent_end event — if present, the agent has finished.
+	// Use string search for robustness with partial reads / large single-line events.
+	if bytes.Contains(eventsData, []byte(`"type":"agent_end"`)) {
+		activity.Status = "done"
 	}
 
 	return activity
@@ -125,11 +188,18 @@ func FormatAgentStatus(activity *agent.Activity, format string, agentID string) 
 		fmt.Printf("Error: %s\n", activity.Error)
 	}
 
-	if activity.Backend == "ai" {
+		if activity.Backend == "ai" {
 		homeDir, _ := os.UserHomeDir()
 		aiDir := filepath.Join(homeDir, ".ai", "runs")
 		if _, err := os.Stat(aiDir); err == nil {
 			fmt.Printf("AI runs directory: %s\n", aiDir)
+		}
+
+		// Show run ID for ai watch convenience
+		runID, err := aiAdapter.getRunIDForAgent(agentID)
+		if err == nil && runID != "" {
+			fmt.Printf("Run ID: %s\n", runID)
+			fmt.Printf("Watch: ai watch %s\n", runID)
 		}
 	}
 }
@@ -140,9 +210,46 @@ func formatTime(unix int64) string {
 }
 
 func formatDuration(seconds int64) string {
-	return time.Duration(seconds).String()
+	return (time.Duration(seconds) * time.Second).String()
 }
 
 func timeNow() int64 {
 	return time.Now().Unix()
+}
+
+// isProcessAlive checks if a process with the given PID is still running.
+func isProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 does not kill the process, just checks existence.
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// readFileTail reads up to maxBytes from the end of a file.
+// Efficient for large files — seeks to offset rather than reading entire file.
+func readFileTail(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	size := fi.Size()
+	if size <= maxBytes {
+		return os.ReadFile(path)
+	}
+
+	// Seek to (size - maxBytes) to read the tail.
+	if _, err := f.Seek(size-maxBytes, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	return io.ReadAll(f)
 }

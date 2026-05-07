@@ -30,7 +30,7 @@ func NewFormattedStreamWriter(filePath string) (*FormattedStreamWriter, error) {
 	}, nil
 }
 
-// WriteJSONEvents 写入 JSON 事件流（用于 ai rpc 输出）
+// WriteJSONEvents 写入 JSON 事件流（用于 ai serve 输出）
 func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 

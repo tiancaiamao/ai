@@ -259,6 +259,7 @@ var agentConversationCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
 		format, _ := cmd.Flags().GetString("format")
+		nth, _ := cmd.Flags().GetInt("nth")
 
 		// 获取对话
 		conversation, err := GetConversation(id)
@@ -277,7 +278,11 @@ var agentConversationCmd = &cobra.Command{
 		case "text":
 			fmt.Println(conversation.FormatAsText())
 		case "last-assistant":
-			fmt.Println(conversation.GetLastAssistantResponse())
+			if nth > 0 {
+				fmt.Println(conversation.GetNthLastAssistantResponse(nth))
+			} else {
+				fmt.Println(conversation.GetLastAssistantResponse())
+			}
 		case "last-user":
 			fmt.Println(conversation.GetLastUserMessage())
 		default:
@@ -747,10 +752,11 @@ func init() {
 	agentRmCmd.Flags().Bool("force", false, "Kill agent before removing")
 	agentWaitCmd.Flags().Int("timeout", 300, "Timeout in seconds (0 = no timeout)")
 
-	// Status/ls format flag
+		// Status/ls format flag
 	for _, c := range []*cobra.Command{agentStatusCmd, agentLsCmd, agentOutputCmd, agentConversationCmd} {
 		c.Flags().String("format", "", "Output format: json")
 	}
+	agentConversationCmd.Flags().Int("nth", 0, "For last-assistant: get Nth-from-last assistant message (2=second to last)")
 
 	// Task flags
 	taskCreateCmd.Flags().String("spec", "", "Spec file path")
@@ -769,9 +775,9 @@ func init() {
 	recvCmd.Flags().Bool("all", false, "Receive all pending messages")
 
 	// Agent subcommands
-	agentCmd.AddCommand(
+		agentCmd.AddCommand(
 		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
-		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
+				agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
 		agentOutputCmd, agentConversationCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
 	)
 

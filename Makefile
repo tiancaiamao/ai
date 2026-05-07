@@ -15,6 +15,10 @@ install:
 
 # Run tests with coverage
 test:
+	go test -short ./... -timeout 30s
+
+# Run tests with race detector and coverage (may fail with "text file busy" on CI)
+test-ci:
 	go test -short ./... -race -coverprofile=coverage.out -covermode=atomic -timeout 30s
 
 # Run vet

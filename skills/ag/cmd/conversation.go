@@ -64,7 +64,7 @@ func parseConversation(data []byte) (*Conversation, error) {
 			continue // 跳过无效的 JSON 行
 		}
 
-		// 处理消息相关的事件
+				// 处理消息相关的事件
 		if eventType, ok := event["type"].(string); ok {
 			switch eventType {
 			case "message_start", "message_update":
@@ -92,7 +92,8 @@ func parseConversation(data []byte) (*Conversation, error) {
 							currentTurn = 0
 						}
 
-						// 提取内容
+						// Extract content - each message_update contains accumulated text,
+						// so we overwrite (not append) to avoid duplication from streaming deltas.
 						if content, ok := msg["content"].([]interface{}); ok {
 							for _, item := range content {
 								if contentItem, ok := item.(map[string]interface{}); ok {
@@ -100,6 +101,7 @@ func parseConversation(data []byte) (*Conversation, error) {
 									switch itemType {
 									case "text":
 										if text, ok := contentItem["text"].(string); ok {
+											currentMessage.Reset()
 											currentMessage.WriteString(text)
 										}
 									case "thinking":
@@ -189,9 +191,18 @@ func (c *Conversation) FormatAsMarkdown() string {
 
 // GetLastAssistantResponse 获取助手的最后回复
 func (c *Conversation) GetLastAssistantResponse() string {
+	return c.GetNthLastAssistantResponse(1)
+}
+
+// GetNthLastAssistantResponse 获取助手倒数第N条回复 (1=最后一条)
+func (c *Conversation) GetNthLastAssistantResponse(n int) string {
+	count := 0
 	for i := len(c.Messages) - 1; i >= 0; i-- {
 		if c.Messages[i].Role == "assistant" {
-			return c.Messages[i].Content
+			count++
+			if count == n {
+				return c.Messages[i].Content
+			}
 		}
 	}
 	return ""
