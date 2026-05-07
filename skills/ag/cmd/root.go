@@ -777,9 +777,8 @@ func init() {
 	// Agent subcommands
 		agentCmd.AddCommand(
 		agentSpawnCmd, agentStatusCmd, agentSteerCmd, agentAbortCmd,
-		agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
+				agentPromptCmd, agentKillCmd, agentShutdownCmd, agentRmCmd,
 		agentOutputCmd, agentConversationCmd, agentWaitCmd, agentLsCmd, agentTailCmd,
-		agentPollCmd,
 	)
 
 	// Channel subcommands

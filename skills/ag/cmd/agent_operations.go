@@ -1,14 +1,11 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
@@ -68,91 +65,46 @@ func spawnWithRawBackend(id, system, input, cwd, backendName string) error {
 		cmd.Args = append(cmd.Args, prompt)
 	}
 
-		// Capture stdout and stderr together (equivalent to CombinedOutput).
-	var outputBuf bytes.Buffer
-	var outputMu sync.Mutex
-	combinedWriter := io.MultiWriter(&outputBuf)
-	safeWriter := syncWriter{w: combinedWriter, mu: &outputMu}
-	// Pipe both stdout and stderr into the combined buffer via goroutines.
-	stdoutPipe, _ := cmd.StdoutPipe()
-	stderrPipe, _ := cmd.StderrPipe()
-	stdoutDone := pipeToWriter(stdoutPipe, safeWriter)
-	stderrDone := pipeToWriter(stderrPipe, safeWriter)
+				// Create output file for direct write by the process.
+	// Use os.File directly (not io.Writer) so exec.Cmd uses OS-level dup2
+	// instead of goroutines — this survives Process.Release().
+	outputPath := filepath.Join(agentDir, "output")
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("create output file: %w", err)
+	}
+
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
 
 	// Only set stdin for backends that need it (not codex)
 	if backendName != "codex" {
 		cmd.Stdin = strings.NewReader(input)
 	}
 
-	if err := cmd.Start(); err != nil {
+		if err := cmd.Start(); err != nil {
+		outputFile.Close()
 		return fmt.Errorf("start backend %q: %w", backendName, err)
 	}
 
-	// Record PID immediately after process starts so DetectStale can check
-	// liveness even if the parent `ag spawn` process is killed.
+	// Record PID before releasing the process.
+	pid := cmd.Process.Pid
 	act := agent.Activity{
 		Status:    "running",
 		Backend:   backendName,
 		StartedAt: time.Now().Unix(),
-		Pid:       cmd.Process.Pid,
+		Pid:       pid,
 	}
 	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), act); err != nil {
 		return fmt.Errorf("write activity.json: %w", err)
 	}
 
-	// Wait for pipes to finish, then wait for the process.
-	<-stdoutDone
-	<-stderrDone
-	runErr := cmd.Wait()
-
-	output := outputBuf.Bytes()
-
-	// 使用格式化写入器写入 stream.log
-	if err := WriteFormattedOutput(agentDir, output, backendName); err != nil {
-		fmt.Printf("Warning: failed to write formatted stream.log: %v\n", err)
-		// 降级为原始写入方式
-		_ = os.WriteFile(filepath.Join(agentDir, "stream.log"), output, 0644)
+	// Release the process so it survives after ag exits.
+	// Status detection relies on isProcessAlive + scanning output for terminal events.
+	if err := cmd.Process.Release(); err != nil {
+		fmt.Printf("Warning: failed to release process: %v\n", err)
 	}
 
-	// 仍然保存原始输出到 output 文件
-	_ = os.WriteFile(filepath.Join(agentDir, "output"), output, 0644)
-
-	act.FinishedAt = time.Now().Unix()
-	if runErr != nil {
-		act.Status = "failed"
-		act.Error = runErr.Error()
-	} else {
-		act.Status = "done"
-	}
-	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), act); err != nil {
-		return fmt.Errorf("write final activity.json: %w", err)
-	}
-
-	if runErr != nil {
-		return fmt.Errorf("backend %q failed: %w", backendName, runErr)
-	}
 	return nil
 }
 
-// pipeToWriter drains reader into writer in a goroutine, returning a channel
-// that is closed when the reader reaches EOF.
-func pipeToWriter(r io.Reader, w io.Writer) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-		io.Copy(w, r)
-	}()
-	return ch
-}
-
-// syncWriter wraps an io.Writer with a mutex for concurrent access safety.
-type syncWriter struct {
-	w  io.Writer
-	mu *sync.Mutex
-}
-
-func (sw syncWriter) Write(p []byte) (int, error) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	return sw.w.Write(p)
-}

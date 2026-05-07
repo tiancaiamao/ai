@@ -25,7 +25,26 @@ func GetAgentStatus(agentID string) (*agent.Activity, error) {
 		return getAgentStatusWithAI(agentID)
 	}
 
-	return agent.ReadActivity(agentID)
+	activity, err := agent.ReadActivity(agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	// For raw backends (codex, etc.), check process liveness and output.
+	if activity.Pid > 0 && activity.Status == "running" {
+		alive := isProcessAlive(activity.Pid)
+		if !alive {
+			// Process exited. Scan output for terminal events.
+			agentDir := agent.AgentDir(agentID)
+			status := detectRawBackendStatus(agentDir)
+			activity.Status = status
+			if activity.FinishedAt == 0 {
+				activity.FinishedAt = time.Now().Unix()
+			}
+		}
+	}
+
+	return activity, nil
 }
 
 // getAgentStatusWithAI reads status from ai run metadata.
@@ -77,7 +96,28 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 		activity = enrichActivityFromEvents(activity, tailData)
 	}
 
-	return activity, nil
+		return activity, nil
+}
+
+// detectRawBackendStatus scans the output file for terminal events to determine
+// the final status of a raw backend (e.g. codex) agent.
+func detectRawBackendStatus(agentDir string) string {
+	outputPath := filepath.Join(agentDir, "output")
+	data, err := readFileTail(outputPath, 64*1024)
+	if err != nil {
+		return "done" // No output, assume completed
+	}
+
+	// Codex emits {"type":"turn.failed",...} on failure.
+	if bytes.Contains(data, []byte(`"turn.failed"`)) {
+		return "failed"
+	}
+	// Codex emits {"type":"turn.completed",...} on success.
+	if bytes.Contains(data, []byte(`"turn.completed"`)) {
+		return "done"
+	}
+	// Fallback: if process exited with output, assume done.
+	return "done"
 }
 
 // convertAIStatus maps ai run status to ag status.
