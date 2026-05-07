@@ -40,7 +40,7 @@ func TestReconstructSnapshotWithCheckpoint_RecalculatesCounters(t *testing.T) {
 	snapshot.RecentMessages = []AgentMessage{msg1, msg2, msg3}
 	snapshot.AgentState = NewAgentState("test-session", "/tmp")
 	snapshot.AgentState.TotalTurns = 1
-	snapshot.AgentState.ToolCallsSinceLastTrigger = 0  // Reset after compact
+	snapshot.AgentState.ToolCallsSinceLastTrigger = 0 // Reset after compact
 	snapshot.AgentState.TurnsSinceLastTrigger = 0     // Reset after compact
 	snapshot.AgentState.LastTriggerTurn = 1
 	snapshot.AgentState.LastLLMContextUpdate = 1

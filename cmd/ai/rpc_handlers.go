@@ -273,32 +273,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	systemPrompt := buildSystemPrompt(sess)
 
 	// Helper function to create a new agent context
-	// restoreLLMContextFromCompaction restores the llm context overview.md
-	// from the latest compaction summary on the current session branch.
-	restoreLLMContextFromCompaction := func(sess *session.Session) {
-		// Get the latest compaction summary
-		summary := sess.GetLastCompactionSummary()
-		if summary == "" {
-			// No compaction summary found, nothing to restore
-			slog.Info("[resume-on-branch] No compaction summary found, skipping llm context restore")
-			return
-		}
-
-		// Get llm context and write the summary
-		sessionDir := sess.GetDir()
-		if sessionDir == "" {
-			slog.Warn("[resume-on-branch] No session directory, cannot restore llm context")
-			return
-		}
-
-		wm := agentctx.NewLLMContext(sessionDir)
-		if err := wm.WriteContent(summary); err != nil {
-			slog.Warn("[resume-on-branch] Failed to restore llm context", "error", err)
-		} else {
-			slog.Info("[resume-on-branch] Restored llm context from compaction summary", "summary_len", len(summary))
-		}
-	}
-
 	createBaseContext := func() *agentctx.AgentContext {
 		// Rebuild system prompt from the current session so llm-context paths
 		// stay in sync after /resume, /new, /fork, and branch resume operations.
@@ -496,81 +470,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	busyMode := "steer"
 	ag.SetThinkingLevel(currentThinkingLevel)
 
+	// Wire CompactionController to encapsulate compaction decision logic.
+	compactionCtrl := agent.NewCompactionController(agent.CompactionDeps{
+		Compactor: compactor,
+		Agent:     ag,
+		EmitEvent: func(ev agent.AgentEvent) { server.EmitEvent(ev) },
+		SetState: func(compacting bool) {
+			stateMu.Lock()
+			isCompacting = compacting
+			stateMu.Unlock()
+		},
+	})
+
 	// Helper function to expand /skill:name commands
 	expandSkillCommands := func(text string) string {
 		return skill.ExpandCommand(text, skillResult.Skills)
-	}
-
-	// Trigger automatic compaction right before a new request is executed
-	// (prompt/idle-steer), instead of during resume operations.
-	compactBeforeRequest := func(trigger string) {
-		if compactor == nil || sess == nil {
-			return
-		}
-
-		messages := ag.GetMessages()
-		if !compactor.ShouldCompactOld(messages) {
-			return
-		}
-		if !sess.CanCompact(compactor) {
-			slog.Info("Pre-request compaction skipped: session not compactable",
-				"trigger", trigger,
-				"messages", len(messages),
-				"estimatedTokens", compactor.EstimateContextTokensOld(messages))
-			return
-		}
-
-		beforeCount := len(messages)
-		compactionInfo := agent.CompactionInfo{
-			Auto:    true,
-			Before:  beforeCount,
-			Trigger: trigger,
-		}
-
-		stateMu.Lock()
-		isCompacting = true
-		stateMu.Unlock()
-		server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
-
-		err := runDetachedTraceSpan(
-			"compaction",
-			traceevent.CategoryEvent,
-			[]traceevent.Field{
-				{Key: "source", Value: "pre_request"},
-				{Key: "auto", Value: true},
-				{Key: "trigger", Value: trigger},
-				{Key: "before_messages", Value: beforeCount},
-			},
-			func(_ context.Context, span *traceevent.Span) error {
-				result, err := sess.Compact(compactor)
-				if err != nil {
-					return err
-				}
-
-				ag.GetContext().RecentMessages = sess.GetMessages()
-				afterCount := len(ag.GetMessages())
-				compactionInfo.After = afterCount
-
-				span.AddField("after_messages", afterCount)
-				span.AddField("tokens_before", result.TokensBefore)
-				span.AddField("tokens_after", result.TokensAfter)
-				return nil
-			},
-		)
-
-		stateMu.Lock()
-		isCompacting = false
-		stateMu.Unlock()
-
-		if err != nil {
-			compactionInfo.Error = err.Error()
-			if session.IsNonActionableCompactionError(err) {
-				slog.Info("Pre-request compaction skipped", "trigger", trigger, "reason", err)
-			} else {
-				slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
-			}
-		}
-		server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}
 
 	// Helper function to update checkpoint manager for new session
@@ -652,7 +566,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 				return nil, nil
 			}
 
-			compactBeforeRequest("pre_request_prompt")
+			compactionCtrl.MaybeCompact("pre_request_prompt", sess)
 			return nil, ag.Prompt(expandedMessage)
 		}
 
@@ -702,7 +616,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			}
 		}
 
-		compactBeforeRequest("pre_request_prompt")
+		compactionCtrl.MaybeCompact("pre_request_prompt", sess)
 		return nil, ag.Prompt(message)
 	})
 
@@ -739,7 +653,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return nil, fmt.Errorf("steer already pending")
 		}
 		if !streaming {
-			compactBeforeRequest("pre_request_steer")
+			compactionCtrl.MaybeCompact("pre_request_steer", sess)
 		}
 		stateMu.Lock()
 		pendingSteer = true
@@ -1855,7 +1769,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		setAgentContext(createBaseContext())
 
 		// Restore llm context from the latest compaction summary on this branch
-		restoreLLMContextFromCompaction(sess)
+		compactionCtrl.RestoreContext(sess)
 
 		// Update checkpoint manager (session might have changed due to branch switch)
 		if err := updateCheckpointManager(); err != nil {

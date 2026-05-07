@@ -54,10 +54,10 @@ func CreateCheckpointDir(sessionDir string, turn int) (*CheckpointInfo, error) {
 	}
 
 	info := &CheckpointInfo{
-		Turn:        turn,
+		Turn:         turn,
 		MessageIndex: 0,
-		Path:        filepath.Join("checkpoints", checkpointName),
-		CreatedAt:   time.Now().Format(time.RFC3339),
+		Path:         filepath.Join("checkpoints", checkpointName),
+		CreatedAt:    time.Now().Format(time.RFC3339),
 	}
 
 	slog.Info("[CreateCheckpointDir] Checkpoint directory created", "path", checkpointPath, "turn", turn)

@@ -11,10 +11,10 @@ import (
 
 // CheckpointIndex maintains the list of all checkpoints.
 type CheckpointIndex struct {
-	LatestCheckpointTurn int             `json:"latest_checkpoint_turn"`
-	LatestCheckpointPath string          `json:"latest_checkpoint_path"`
+	LatestCheckpointTurn int              `json:"latest_checkpoint_turn"`
+	LatestCheckpointPath string           `json:"latest_checkpoint_path"`
 	Checkpoints          []CheckpointInfo `json:"checkpoints"`
-	mu                   sync.RWMutex    `json:"-"`
+	mu                   sync.RWMutex     `json:"-"`
 }
 
 // LoadCheckpointIndex loads the checkpoint index from disk.
@@ -25,7 +25,7 @@ func LoadCheckpointIndex(sessionDir string) (*CheckpointIndex, error) {
 		return &CheckpointIndex{
 			LatestCheckpointTurn: 0,
 			LatestCheckpointPath: "",
-			Checkpoints:         []CheckpointInfo{},
+			Checkpoints:          []CheckpointInfo{},
 		}, nil
 	}
 

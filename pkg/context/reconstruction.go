@@ -9,6 +9,7 @@ import (
 // It loads the checkpoint (which includes LLMContext, AgentState, RecentMessages), then:
 //   - If checkpoint has RecentMessages: replay journal entries AFTER checkpoint.MessageIndex
 //   - If checkpoint has no RecentMessages: replay ALL journal entries from the beginning
+//
 // After replaying messages, it recalculates runtime counters (tool calls, turns) from the replayed messages
 // to ensure accurate state after resume operations.
 func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *CheckpointInfo, journalEntries []JournalEntry) (*ContextSnapshot, error) {
@@ -131,9 +132,9 @@ func ApplyTruncateToSnapshot(snapshot *ContextSnapshot, truncateEvent TruncateEv
 // function names, line numbers, and match patterns from both ends.
 func TruncateWithHeadTail(text string) string {
 	const (
-		headKeep      = 1000 // Increased from 400 to preserve more context from grep/find results
-		tailKeep      = 1000 // Increased from 400 to capture more matches at the end
-		minSize       = 1200
+		headKeep       = 1000 // Increased from 400 to preserve more context from grep/find results
+		tailKeep       = 1000 // Increased from 400 to capture more matches at the end
+		minSize        = 1200
 		smallThreshold = 500
 	)
 

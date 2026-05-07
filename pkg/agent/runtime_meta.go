@@ -34,7 +34,7 @@ func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []
 	start := len(visible)
 
 	for i := len(visible) - 1; i >= 0; i-- {
-		msgTokens := EstimateMessageTokens(visible[i])
+		msgTokens := agentctx.EstimateMessageTokens(visible[i])
 		if used+msgTokens > tokenBudget && start != len(visible) {
 			break
 		}

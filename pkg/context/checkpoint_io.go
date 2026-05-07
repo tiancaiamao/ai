@@ -55,7 +55,7 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 		return nil, fmt.Errorf("failed to add and save checkpoint index: %w", err)
 	}
 
-// Update current/ symlink
+	// Update current/ symlink
 	if err := UpdateCurrentLink(sessionDir, info.Path); err != nil {
 		// Log but don't fail - checkpoint is already created
 		slog.Warn("Failed to update current link", "error", err, "path", info.Path)
@@ -95,11 +95,11 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 	}
 
 	return &ContextSnapshot{
-			LLMContext:     string(llmContextData),
-			RecentMessages: recentMessages,
-			AgentState:     &agentState,
-		}, nil
-	}
+		LLMContext:     string(llmContextData),
+		RecentMessages: recentMessages,
+		AgentState:     &agentState,
+	}, nil
+}
 
 // LoadCheckpointLLMContext loads only the LLM context from a checkpoint.
 func LoadCheckpointLLMContext(checkpointPath string) (string, error) {

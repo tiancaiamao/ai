@@ -265,4 +265,3 @@ func (wm *LLMContext) SaveCompactionSummary(summary string) (string, error) {
 
 	return summaryPath, nil
 }
-

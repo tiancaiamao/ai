@@ -537,11 +537,6 @@ func hashAny(value any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Deprecated: Use agentctx.EstimateMessageTokens instead.
-func EstimateMessageTokens(msg agentctx.AgentMessage) int {
-	return agentctx.EstimateMessageTokens(msg)
-}
-
 // randFloat64 returns a random float64 in [0, 1)
 func randFloat64() float64 {
 	return rand.Float64()
