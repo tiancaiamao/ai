@@ -545,8 +545,8 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:  executor,
-		MaxTurns:  3, // Limit to 3 turns
+		Executor:   executor,
+		MaxTurns:   3, // Limit to 3 turns
 	}
 
 	stream := newTestAgentEventStream()
@@ -598,8 +598,8 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 
 	config := &LoopConfig{
 		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:  executor,
-		MaxTurns:  0, // Unlimited
+		Executor:   executor,
+		MaxTurns:   0, // Unlimited
 	}
 
 	stream := newTestAgentEventStream()

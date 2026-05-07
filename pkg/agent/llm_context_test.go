@@ -24,7 +24,6 @@ func TestLLMContext_Load(t *testing.T) {
 	}
 }
 
-
 func TestLLMContext_PathMethods(t *testing.T) {
 	sessionDir := t.TempDir()
 	wm := agentctx.NewLLMContext(sessionDir)

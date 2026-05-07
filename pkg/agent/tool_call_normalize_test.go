@@ -288,7 +288,7 @@ func TestNormalizeToolCallName_CleansHTMLTagsAndControlChars(t *testing.T) {
 			input:    "normal",
 			expected: "normal",
 		},
-				{
+		{
 			input:    "<script>alert('xss')</script>grep",
 			expected: "alert('xss')grep", // <script> contains non-word chars, not cleaned by current regex
 		},

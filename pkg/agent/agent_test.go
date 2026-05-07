@@ -1,9 +1,9 @@
 package agent
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 	"time"
 
@@ -245,7 +245,7 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 	}
 
 	ag.SetContext(&agentctx.AgentContext{
-		SystemPrompt:    "test",
+		SystemPrompt: "test",
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("before-compact"),
 		},

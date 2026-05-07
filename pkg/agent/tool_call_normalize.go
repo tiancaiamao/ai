@@ -33,12 +33,12 @@ func normalizeToolCallName(name string) string {
 	// First, clean up problematic characters and HTML tags
 	htmlTagRegex := regexp.MustCompile(`(?i)</?\w+[^>]*>`)
 	name = htmlTagRegex.ReplaceAllString(name, "")
-	
+
 	// Remove any remaining newlines, tabs, and other control characters
 	name = strings.TrimSpace(name)
 	name = regexp.MustCompile(`[\n\r\t]+`).ReplaceAllString(name, " ")
 	name = strings.TrimSpace(name)
-	
+
 	// Now apply the original normalization logic
 	cleanName := strings.ToLower(name)
 	switch cleanName {

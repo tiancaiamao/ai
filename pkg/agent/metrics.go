@@ -21,12 +21,12 @@ type Metrics struct {
 	flushInterval time.Duration
 
 	// Cached aggregations (updated on demand)
-	cachedToolStats     map[string]*toolStatsCache
-	cachedLLMStats      *llmStatsCache
-	cachedPromptStats   *promptStatsCache
-	cachedMessageStats  *messageStatsCache
-	cachedContextStats  *contextStatsCache
-	cacheValid          bool
+	cachedToolStats    map[string]*toolStatsCache
+	cachedLLMStats     *llmStatsCache
+	cachedPromptStats  *promptStatsCache
+	cachedMessageStats *messageStatsCache
+	cachedContextStats *contextStatsCache
+	cacheValid         bool
 
 	// Incremental aggregation state
 	lastAggregatedCount int       // Number of events aggregated last time
@@ -179,7 +179,7 @@ func (m *Metrics) refreshAggregations() {
 		!m.lastAggregatedTime.IsZero() &&
 		newestEventTime.After(m.lastAggregatedTime)
 
-// Detect buffer reset/overwrite and fall back to full re-aggregation.
+		// Detect buffer reset/overwrite and fall back to full re-aggregation.
 	needsFullAggregation := m.bufferResetDetected ||
 		currentCount < m.lastAggregatedCount ||
 		newestWentBackward ||
@@ -925,10 +925,10 @@ type ContextMetricsSnapshot struct {
 }
 
 type FullMetricsSnapshot struct {
-	SessionUptime   time.Duration         `json:"sessionUptime"`
-	ToolMetrics     []ToolMetricsSnapshot `json:"toolMetrics"`
-	LLMMetrics      LLMMetricsSnapshot    `json:"llmMetrics"`
-	MessageCounts   MessageCountsSnapshot `json:"messageCounts"`
-	PromptMetrics   PromptMetricsSnapshot `json:"promptMetrics"`
-	ContextMetrics  ContextMetricsSnapshot `json:"contextMetrics"`
+	SessionUptime  time.Duration          `json:"sessionUptime"`
+	ToolMetrics    []ToolMetricsSnapshot  `json:"toolMetrics"`
+	LLMMetrics     LLMMetricsSnapshot     `json:"llmMetrics"`
+	MessageCounts  MessageCountsSnapshot  `json:"messageCounts"`
+	PromptMetrics  PromptMetricsSnapshot  `json:"promptMetrics"`
+	ContextMetrics ContextMetricsSnapshot `json:"contextMetrics"`
 }

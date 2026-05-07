@@ -400,4 +400,3 @@ func TestFindLatestToolCallID(t *testing.T) {
 		t.Fatalf("expected empty string for nonexistent tool, got %s", id)
 	}
 }
-
