@@ -516,6 +516,14 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderContext(dataJSON)
 	}
 
+	// /new → {sessionId, cancelled} — skip; session_switch event already handles display
+	// Must check both fields to avoid suppressing /fork which also has {cancelled} but no {sessionId}.
+	if _, hasCancelled := dataRaw["cancelled"]; hasCancelled {
+		if _, hasSessionID := dataRaw["sessionId"]; hasSessionID {
+			return nil
+		}
+	}
+
 	// /session → SessionState (has sessionId + model + thinkingLevel)
 	if _, hasSessionID := dataRaw["sessionId"]; hasSessionID {
 		return renderSessionState(dataJSON)
