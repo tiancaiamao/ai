@@ -305,20 +305,41 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			continue
 		}
 
-		var act struct {
-			Pid   int    `json:"pid"`
-			RunID string `json:"runID"`
+				var act struct {
+			Pid       int    `json:"pid"`
+			RunID     string `json:"runID"`
+			StartedAt int64  `json:"startedAt"`
 		}
 		if err := storage.ReadJSON(actPath, &act); err != nil {
 			continue
 		}
 
-		completed := false
+		// Check for scheduler timeout — if the worker has been running too long,
+		// treat it as failed to prevent hung runs from occupying slots forever.
+		if act.StartedAt > 0 && cfg.Timeout > 0 {
+			elapsed := time.Since(time.Unix(act.StartedAt, 0))
+			if elapsed > cfg.Timeout {
+				Fail(t.ID, fmt.Sprintf("task timed out after %v", elapsed.Round(time.Minute)), true)
+				fmt.Printf("  ⏰ Detected timeout %s (ran for %v)\n", t.ID, elapsed.Round(time.Minute))
+				progress = true
+				continue
+			}
+		}
+
+				completed := false
 		summary := ""
 
 		if act.RunID != "" {
-			// ai-serve worker: check run.json for completion
+			// ai-serve worker: check events.jsonl for completion
 			completed, summary = checkAIServeRun(act.RunID, t.ID)
+			// Fall back to PID liveness if events are unavailable
+			if !completed && act.Pid > 0 && !agent.IsProcessAlive(act.Pid) {
+				// Process died but events never showed agent_end — treat as failure
+				Fail(t.ID, "ai-serve process died without completing", true)
+				fmt.Printf("  ❌ Detected failure %s (ai-serve process died)\n", t.ID)
+				progress = true
+				continue
+			}
 		} else if act.Pid > 0 {
 			// Legacy worker: check if process is alive
 			if !agent.IsProcessAlive(act.Pid) {
@@ -381,7 +402,7 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 		return true
 	}
 
-	conv.StreamEventsFromString(string(data), lastNHook, doneHook)
+		conv.StreamEventsFromString(string(data), lastNHook, doneHook) //nolint:errcheck // best-effort event scanning
 
 	if !agentDone {
 		return false, "" // still running

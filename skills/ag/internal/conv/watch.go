@@ -23,9 +23,13 @@ func WatchFile(filePath string, pollInterval time.Duration, stopCh <-chan struct
 		default:
 		}
 
-		f, err := os.Open(filePath)
+				f, err := os.Open(filePath)
 		if err != nil {
-			// File doesn't exist yet, wait and retry
+			// If we've read before, the file was deleted — stop watching.
+			// Otherwise, the file hasn't been created yet — wait and retry.
+			if offset > 0 {
+				return nil
+			}
 			time.Sleep(pollInterval)
 			continue
 		}
@@ -80,7 +84,7 @@ func WatchUntilDone(filePath string, pollInterval time.Duration, stopCh <-chan s
 	}
 
 	agentDone := false
-	StreamEventsFromString(string(data), func(evt *FormattedEvent) bool {
+			_, _ = StreamEventsFromString(string(data), func(evt *FormattedEvent) bool {
 		if IsAgentDone(evt) {
 			agentDone = true
 			return false

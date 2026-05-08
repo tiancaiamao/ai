@@ -27,7 +27,7 @@ func TestStreamEvents(t *testing.T) {
 		return true
 	}
 
-	count := StreamEvents(strings.NewReader(input), classifyHook)
+		count, _ := StreamEvents(strings.NewReader(input), classifyHook)
 
 	if count != 4 {
 		t.Fatalf("expected 4 events, got %d", count)
@@ -63,7 +63,7 @@ func TestStreamEvents_EarlyStop(t *testing.T) {
 		return true
 	}
 
-	count := StreamEvents(strings.NewReader(input), textHook, stopHook)
+	count, _ := StreamEvents(strings.NewReader(input), textHook, stopHook)
 
 	if count != 3 {
 		t.Fatalf("expected 3 events before stop, got %d", count)
@@ -78,7 +78,7 @@ func TestStreamEventsFromString(t *testing.T) {
 	input := `{"type":"agent_start"}
 {"type":"agent_end","messages":[]}
 `
-	count := StreamEventsFromString(input, func(evt *FormattedEvent) bool {
+	count, _ := StreamEventsFromString(input, func(evt *FormattedEvent) bool {
 		return true
 	})
 	if count != 2 {
@@ -130,7 +130,7 @@ func TestCollectLastN(t *testing.T) {
 
 	hook, result := CollectLastN(2, KindTool)
 
-	StreamEventsFromString(input, hook)
+		_, _ = StreamEventsFromString(input, hook)
 
 	if len(*result) != 2 {
 		t.Fatalf("expected 2 lines, got %d: %v", len(*result), *result)

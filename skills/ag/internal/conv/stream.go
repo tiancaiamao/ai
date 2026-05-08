@@ -12,8 +12,9 @@ type HookFunc func(evt *FormattedEvent) bool
 
 // StreamEvents reads newline-delimited JSON events from reader and calls
 // hooks for each parsed event. It stops when the reader reaches EOF or a
-// hook returns false. Returns the number of events processed.
-func StreamEvents(reader io.Reader, hooks ...HookFunc) int {
+// hook returns false. Returns the number of events processed and any scanner
+// error encountered.
+func StreamEvents(reader io.Reader, hooks ...HookFunc) (int, error) {
 	scanner := bufio.NewScanner(reader)
 	const maxTokenSize = 10 * 1024 * 1024
 	scanner.Buffer(make([]byte, 0, 4096), maxTokenSize)
@@ -28,15 +29,15 @@ func StreamEvents(reader io.Reader, hooks ...HookFunc) int {
 		count++
 		for _, hook := range hooks {
 			if !hook(evt) {
-				return count
+				return count, nil
 			}
 		}
 	}
-	return count
+	return count, scanner.Err()
 }
 
 // StreamEventsFromString parses events from a raw string (e.g. full file content).
-func StreamEventsFromString(data string, hooks ...HookFunc) int {
+func StreamEventsFromString(data string, hooks ...HookFunc) (int, error) {
 	return StreamEvents(strings.NewReader(data), hooks...)
 }
 

@@ -51,8 +51,8 @@ func runConvStdin() error {
 		return true
 	}
 
-	conv.StreamEvents(os.Stdin, printHook)
-	return nil
+		_, err := conv.StreamEvents(os.Stdin, printHook)
+	return err
 }
 
 func runConvWatch() error {
