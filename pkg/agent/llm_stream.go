@@ -161,10 +161,17 @@ func streamAssistantResponse(
 
 	var partialMessage *agentctx.AgentMessage
 	var textBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	toolCalls := map[int]*toolCallState{}
 
-	buildContent := func(text string, calls map[int]*toolCallState) []agentctx.ContentBlock {
-		content := make([]agentctx.ContentBlock, 0, 1+len(calls))
+	buildContent := func(text string, thinking string, calls map[int]*toolCallState) []agentctx.ContentBlock {
+		content := make([]agentctx.ContentBlock, 0, 2+len(calls))
+		if thinking != "" {
+			content = append(content, agentctx.ThinkingContent{
+				Type:     "thinking",
+				Thinking: thinking,
+			})
+		}
 		if text != "" {
 			content = append(content, agentctx.TextContent{
 				Type: "text",
@@ -212,6 +219,7 @@ func streamAssistantResponse(
 			partialMessage = new(agentctx.AgentMessage)
 			*partialMessage = agentctx.NewAssistantMessage()
 			textBuilder.Reset()
+			thinkingBuilder.Reset()
 			toolCalls = map[int]*toolCallState{}
 			stream.Push(NewMessageStartEvent(*partialMessage))
 			stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
@@ -230,7 +238,7 @@ func streamAssistantResponse(
 					traceevent.Field{Key: "delta", Value: e.Delta},
 				)
 				textBuilder.WriteString(e.Delta)
-				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
+				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "text_delta",
 					ContentIndex: e.Index,
@@ -251,12 +259,10 @@ func streamAssistantResponse(
 					traceevent.Field{Key: "content_index", Value: e.Index},
 					traceevent.Field{Key: "delta", Value: e.Delta},
 				)
-				// Add thinking content to the message
-				thinkingContent := agentctx.ThinkingContent{
-					Type:     "thinking",
-					Thinking: e.Delta,
-				}
-				partialMessage.Content = append(partialMessage.Content, thinkingContent)
+				// Accumulate thinking content via builder (same pattern as text_delta)
+				// to avoid O(N^2) space from appending a new ThinkingContent per delta.
+				thinkingBuilder.WriteString(e.Delta)
+				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "thinking_delta",
 					ContentIndex: e.Index,
@@ -296,7 +302,7 @@ func streamAssistantResponse(
 					call.arguments += e.ToolCall.Function.Arguments
 				}
 
-				partialMessage.Content = buildContent(textBuilder.String(), toolCalls)
+				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "toolcall_delta",
 					ContentIndex: e.Index,
@@ -425,7 +431,7 @@ func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) str
 	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
 		sections = append(sections, runtimeMetaSnapshot)
 	}
-		if len(sections) == 0 {
+	if len(sections) == 0 {
 		return ""
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.

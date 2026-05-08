@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/tiancaiamao/ai/pkg/run"
 )
 
 func TestWrapContent_PlainTextShortLine(t *testing.T) {
@@ -101,6 +103,27 @@ func TestWrapContent_PreservesTrailingNewlines(t *testing.T) {
 	// The trailing newline produces an empty string after split, which is skipped.
 	if !strings.HasPrefix(got, "line1\nline2") {
 		t.Errorf("expected preserved content, got %q", got)
+	}
+}
+
+func TestProcessEvent_LiveThinkingDelta_RendersImmediately(t *testing.T) {
+	m := newWatchModel("", "test", 0, false)
+	m.mode = "live"
+
+	// A short delta without sentence boundary should still be visible immediately.
+	m.processEvent(&run.FormattedEvent{
+		Kind: run.KindThinking,
+		Role: "thinking",
+		Text: "abc",
+		Raw:  "abc",
+	})
+
+	out := m.content.String()
+	if !strings.Contains(out, "thinking: ") {
+		t.Fatalf("expected thinking prefix, got %q", out)
+	}
+	if !strings.Contains(out, "abc") {
+		t.Fatalf("expected delta content rendered immediately, got %q", out)
 	}
 }
 
