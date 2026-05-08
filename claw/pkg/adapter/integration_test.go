@@ -29,7 +29,7 @@ func TestIntegrationConnManagerPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cm := NewConnManager(sessionsDir, "You are a helpful test assistant. Reply with exactly: PONG")
+	cm := NewConnManager(sessionsDir, "You are a helpful test assistant. Reply with exactly: PONG", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -73,7 +73,7 @@ func TestIntegrationConnManagerMultipleSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cm := NewConnManager(sessionsDir, "You are a helpful test assistant. Reply briefly.")
+	cm := NewConnManager(sessionsDir, "You are a helpful test assistant. Reply briefly.", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
