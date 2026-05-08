@@ -61,9 +61,12 @@ type VoiceConfig struct {
 
 // Config 是 aiclaw 的统一配置
 type Config struct {
-	Model    ModelConfig                   `json:"model"`
-	Voice    VoiceConfig                   `json:"voice,omitempty"`
-	Channels picoclawconfig.ChannelsConfig `json:"channels,omitempty"`
+	Model      ModelConfig                   `json:"model"`
+	Voice      VoiceConfig                   `json:"voice,omitempty"`
+	WebPort    int                           `json:"web_port,omitempty"`    // default: 18800
+	WebHost    string                        `json:"web_host,omitempty"`    // default: "127.0.0.1", use "0.0.0.0" for all interfaces
+	WebEnabled *bool                         `json:"web_enabled,omitempty"` // nil or true = enabled, explicit false = disabled
+	Channels   picoclawconfig.ChannelsConfig `json:"channels,omitempty"`
 }
 
 func main() {
@@ -288,12 +291,22 @@ func main() {
 	}
 	defer cronService.Stop()
 
-	// 启动 Web 服务器（可选）
+							// 启动 Web 服务器（可选）
 	var webSrv *web.Server
-	if cfg.Channels.Pico.Enabled {
+	// WebEnabled: nil (not configured) or true → enabled, explicit false → disabled.
+	webDisabled := cfg.WebEnabled != nil && !*cfg.WebEnabled
+	if cfg.Channels.Pico.Enabled && !webDisabled {
+		webPort := cfg.WebPort
+		if webPort == 0 {
+			webPort = 18800
+		}
+		webHost := cfg.WebHost
+		if webHost == "" {
+			webHost = "127.0.0.1"
+		}
 		webCfg := &web.Config{
-			Port:    18800,
-			Public:  false,
+			Port:    webPort,
+			Host:    webHost,
 			Enabled: true,
 		}
 		webSrv = web.NewServer(webCfg, agentLoop, msgBus, configPath, securityPath, clawDir)

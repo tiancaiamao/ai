@@ -86,7 +86,8 @@ type Server struct {
 // Config is the configuration for the web server.
 type Config struct {
 	Port    int    // Port to listen on (default: 18800)
-	Public  bool   // Listen on all interfaces instead of localhost only
+	Host    string // Host to bind (default: "127.0.0.1", use "0.0.0.0" for all interfaces)
+	Public  bool   // Deprecated: use Host instead
 	Enabled bool   // Whether the web server is enabled
 }
 
@@ -94,7 +95,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Port:    18800,
-		Public:  false,
+		Host:    "127.0.0.1",
 		Enabled: true,
 	}
 }
@@ -105,13 +106,16 @@ func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus
 		cfg = DefaultConfig()
 	}
 
-	// Determine listen address
-	var addr string
-	if cfg.Public {
-		addr = fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-	} else {
-		addr = fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+			// Determine listen address: Host takes precedence over deprecated Public flag
+	host := cfg.Host
+	if host == "" {
+		if cfg.Public {
+			host = "0.0.0.0"
+		} else {
+			host = "127.0.0.1"
+		}
 	}
+	addr := fmt.Sprintf("%s:%d", host, cfg.Port)
 
 	return &Server{
 		addr:         addr,
@@ -146,9 +150,10 @@ func (s *Server) Start() (string, error) {
 	go func() {
 		fmt.Printf("\n")
 		fmt.Printf("╔═══════════════════════════════════════════════════════════════╗\n")
-		fmt.Printf("║  🌐 Claw Web Server                                         ║\n")
+				fmt.Printf("║  🌐 Claw Web Server                                         ║\n")
 		fmt.Printf("╠═══════════════════════════════════════════════════════════════╣\n")
-		fmt.Printf("║  Web UI: http://localhost:%d                              ║\n", 18800)
+		displayHost := s.addr
+		fmt.Printf("║  Web UI: http://%-43s║\n", displayHost)
 		fmt.Printf("║                                                           ║\n")
 		fmt.Printf("║  Press Ctrl+C to stop the server                          ║\n")
 		fmt.Printf("╚═══════════════════════════════════════════════════════════════╝\n")
@@ -973,9 +978,13 @@ func formatJSON(v any) string {
 
 // RunAsStandalone runs the web server in standalone mode (for testing).
 func RunAsStandalone(port int, public bool) error {
+	host := ""
+	if public {
+		host = "0.0.0.0"
+	}
 	cfg := &Config{
-		Port:   port,
-		Public: public,
+		Port:    port,
+		Host:    host,
 		Enabled: true,
 	}
 
