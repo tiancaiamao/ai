@@ -21,19 +21,6 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	if strings.TrimSpace(CompactorBasePrompt()) == "" {
 		t.Fatal("CompactorBasePrompt should not be empty")
 	}
-	if strings.TrimSpace(HeadlessBasePrompt()) == "" {
-		t.Fatal("HeadlessBasePrompt should not be empty")
-	}
-	if strings.TrimSpace(JSONModeBasePrompt()) == "" {
-		t.Fatal("JSONModeBasePrompt should not be empty")
-	}
-}
-
-func TestHeadlessBasePromptNoForcedJSON(t *testing.T) {
-	p := HeadlessBasePrompt()
-	if strings.Contains(strings.ToLower(p), "return an empty json with error field") {
-		t.Fatalf("base prompt still forces legacy JSON fallback: %q", p)
-	}
 }
 
 func TestPromptABMetricsSmoke(t *testing.T) {
@@ -41,6 +28,12 @@ func TestPromptABMetricsSmoke(t *testing.T) {
 - If you cannot answer the request, return an empty JSON with error field.
 - Do not hallucinate or add unnecessary commentary.
 - Respect facts and be critical in your thinking. Don't simply agree with everything the user says.`)
+
+	newRPCBasePrompt := strings.TrimSpace(`You are a helpful AI coding assistant.
+- Be accurate and concise. Avoid unnecessary commentary.
+- Respect facts and critically evaluate user assumptions; do not blindly agree.
+- Do not hallucinate tools, file contents, command outputs, or capabilities.
+- Use tools for file/system operations; never pretend a tool was executed.`)
 
 	tools := []ToolInfo{
 		abTool{name: "read", desc: "Read files"},
@@ -61,7 +54,7 @@ func TestPromptABMetricsSmoke(t *testing.T) {
 	}
 
 	oldPrompt := NewBuilder(legacyRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
-	newPrompt := NewBuilder(HeadlessBasePrompt(), "/workspace").SetTools(tools).SetSkills(skills).Build()
+	newPrompt := NewBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).Build()
 
 	oldChars := len(oldPrompt)
 	newChars := len(newPrompt)

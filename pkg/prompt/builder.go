@@ -14,8 +14,7 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-//go:embed "headless_base.md"
-var headlessBasePrompt string
+
 
 //go:embed "compact_system.md"
 var compactSystemPrompt string
@@ -34,15 +33,7 @@ func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }
 
-// HeadlessBasePrompt returns the base system prompt for headless mode.
-func HeadlessBasePrompt() string {
-	return headlessBasePrompt
-}
 
-// JSONModeBasePrompt returns the base system prompt for JSON mode.
-func JSONModeBasePrompt() string {
-	return headlessBasePrompt
-}
 
 // CompactSystemPrompt returns the system prompt for compaction.
 func CompactSystemPrompt() string {
@@ -186,13 +177,8 @@ func (b *Builder) Build() string {
 			workspaceNotes = "\n" + b.workspaceNotes
 		}
 		workspaceSection = fmt.Sprintf(`## Workspace
-Workspace location is runtime-managed and may change during execution (for example, when switching git worktrees).
-Do not assume a fixed directory in the system prompt.
-Use runtime_state fields for path truth:
-- current_workdir
-- startup_path
-For command-local directory changes, use bash with "cd <dir> && <command>".
-For persistent workspace switching across subsequent tool calls, use change_workspace when available.%s`, workspaceNotes)
+Use current_workdir from runtime_state, not a hardcoded path.
+Use change_workspace for persistent directory switches; "cd <dir> && <command>" for one-off commands.%s`, workspaceNotes)
 	}
 	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
 
@@ -213,27 +199,21 @@ For persistent workspace switching across subsequent tool calls, use change_work
 	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
 
 	// Remove empty sections (optional sections that were not enabled)
-	result = b.cleanupEmptySections(result)
+		result = b.cleanupEmptySections(result)
 
 	return result
 }
 
 // Bootstrap files to search for in workspace.
 var bootstrapFiles = []string{
-	"AGENTS.md",   // Agent identity and behavior
-	"CLAUDE.md",   // Project guidelines (fallback when AGENTS.md is absent)
 	"TOOLS.md",    // Tool usage instructions
 	"IDENTITY.md", // User/owner identity
 }
 
 func (b *Builder) buildProjectContext() string {
 	contexts := []string{}
-	hasAgents := b.loadBootstrapFile("AGENTS.md") != ""
 
 	for _, filename := range bootstrapFiles {
-		if filename == "CLAUDE.md" && hasAgents {
-			continue
-		}
 		content := b.loadBootstrapFile(filename)
 		if content != "" {
 			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
