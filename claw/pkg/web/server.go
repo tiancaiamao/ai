@@ -447,6 +447,11 @@ func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
 
 				fmt.Printf("[Web Server] Sending response: %d chars\n", len(response))
 
+				// Convert single newlines to double newlines for Markdown rendering.
+				// Slash command responses use plain text with \n, but PicoClaw's
+				// ReactMarkdown requires \n\n for paragraph breaks.
+				response = singleNewlineToDouble(response)
+
 				// Send response as message.create (Pico protocol format)
 				if err := conn.WriteJSON(map[string]any{
 					"type":    "message.create",
@@ -2089,6 +2094,24 @@ func deriveProvider(entry map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// singleNewlineToDouble converts single \n to \n\n for Markdown rendering.
+// It preserves existing \n\n sequences unchanged by using a placeholder approach.
+// This is needed because PicoClaw frontend renders content via ReactMarkdown,
+// which requires \n\n for paragraph breaks (single \n is ignored in Markdown).
+func singleNewlineToDouble(s string) string {
+	if s == "" {
+		return s
+	}
+	// Replace existing \n\n with a placeholder to preserve them
+	const placeholder = "\x00PARA\x00"
+	s = strings.ReplaceAll(s, "\n\n", placeholder)
+	// Now all remaining \n are single newlines — convert them to \n\n
+	s = strings.ReplaceAll(s, "\n", "\n\n")
+	// Restore the original \n\n sequences
+	s = strings.ReplaceAll(s, placeholder, "\n\n")
+	return s
 }
 
 // maskAPIKey returns a masked version of an API key for safe display.
