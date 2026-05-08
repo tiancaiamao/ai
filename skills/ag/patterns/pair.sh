@@ -18,9 +18,8 @@ JUDGE_PROMPT_FILE="$2"
 INPUT_FILE="$3"
 MAX_ROUNDS="${4:-3}"
 
-# Read prompt file contents up front
-WORKER_PROMPT=$(cat "$WORKER_PROMPT_FILE")
-JUDGE_PROMPT=$(cat "$JUDGE_PROMPT_FILE")
+# --system @file reads the file content directly.
+# Prompt file args are paths prefixed with @.
 
 echo "[pair] Starting worker-judge loop (max $MAX_ROUNDS rounds)"
 echo "[pair] Worker prompt: $WORKER_PROMPT_FILE ($(wc -l < "$WORKER_PROMPT_FILE" | tr -d ' ') lines)"
@@ -42,8 +41,8 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     CURRENT_INPUT=$(cat "$INPUT_FILE")
   fi
 
-  $AG_BINARY agent spawn "$WORKER_ID" \
-    --system "$WORKER_PROMPT" \
+    $AG_BINARY agent spawn "$WORKER_ID" \
+    --system "@$WORKER_PROMPT_FILE" \
     --input "$CURRENT_INPUT"
 
   # --- Wait for worker ---
@@ -64,8 +63,8 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
 
   # --- Spawn judge ---
   JUDGE_INPUT=$(cat "$WORKER_OUTPUT")
-  $AG_BINARY agent spawn "$JUDGE_ID" \
-    --system "$JUDGE_PROMPT" \
+    $AG_BINARY agent spawn "$JUDGE_ID" \
+    --system "@$JUDGE_PROMPT_FILE" \
     --input "$JUDGE_INPUT"
 
   # --- Wait for judge ---
