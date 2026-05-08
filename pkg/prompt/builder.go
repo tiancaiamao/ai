@@ -208,6 +208,7 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 var bootstrapFiles = []string{
 	"TOOLS.md",    // Tool usage instructions
 	"IDENTITY.md", // User/owner identity
+	"AGENTS.md",   // Project-level agent instructions
 }
 
 func (b *Builder) buildProjectContext() string {

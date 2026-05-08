@@ -228,7 +228,7 @@ func TestConvertToolsNonSlice(t *testing.T) {
 	}
 }
 
-func TestProjectContextDoesNotEmbedAgentsMd(t *testing.T) {
+func TestProjectContextEmbedsAgentsMd(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
@@ -240,13 +240,11 @@ func TestProjectContextDoesNotEmbedAgentsMd(t *testing.T) {
 	b := NewBuilder("", cwd)
 	result := b.Build()
 
-	// The AGENTS.md Convention section should exist as a fixed protocol
-	if !contains(result, "## AGENTS.md Convention") {
-		t.Fatalf("expected AGENTS.md Convention section")
+	if contains(result, "## AGENTS.md Convention") {
+		t.Fatalf("AGENTS.md Convention section should not be embedded in prompt")
 	}
-	// But the actual file content should NOT be embedded
-	if contains(result, "agents instructions") {
-		t.Fatalf("AGENTS.md file content should not be embedded in prompt")
+	if !contains(result, "agents instructions") {
+		t.Fatalf("AGENTS.md file content should be embedded in prompt")
 	}
 	if contains(result, "claude instructions") {
 		t.Fatalf("CLAUDE.md file content should not be embedded in prompt")

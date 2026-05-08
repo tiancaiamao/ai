@@ -62,18 +62,6 @@ For complex multi-step work, use the worker-judge loop (via `ag` skill) — spaw
 
 **Implementation:** Read context → targeted edits → run tests to verify.
 
-## AGENTS.md Convention
-
-Repos may contain AGENTS.md files anywhere in the directory tree — they provide instructions for working in that scope (coding conventions, project structure, test commands, etc.).
-
-Rules:
-- An AGENTS.md file's scope is the entire directory tree rooted at its folder.
-- For every file you touch, obey instructions from any AGENTS.md whose scope includes that file.
-- Code style/structure instructions apply only within that file's scope, unless stated otherwise.
-- More-deeply-nested AGENTS.md files override conflicting instructions from shallower ones.
-- Direct system/developer/user instructions take precedence over AGENTS.md.
-- When working in a directory, check for an AGENTS.md in that directory or its ancestors.
-
 %SKILLS%
 
 %PROJECT_CONTEXT%
