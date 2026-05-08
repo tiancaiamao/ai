@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -119,12 +120,22 @@ var agentSpawnCmd = &cobra.Command{
 	Use:   "spawn <id>",
 	Short: "Spawn a new agent",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+		Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
 		system, _ := cmd.Flags().GetString("system")
 		input, _ := cmd.Flags().GetString("input")
 		cwd, _ := cmd.Flags().GetString("cwd")
 		backend, _ := cmd.Flags().GetString("backend")
+
+		// Resolve @file prefix for --system flag.
+		if strings.HasPrefix(system, "@") {
+			data, err := os.ReadFile(system[1:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read system prompt file: %v\n", err)
+				os.Exit(1)
+			}
+			system = string(data)
+		}
 
 		if err := agent.ValidateID(id); err != nil {
 			fmt.Fprintln(os.Stderr, err)
