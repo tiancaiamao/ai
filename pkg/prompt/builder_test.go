@@ -103,12 +103,12 @@ func TestBuilderMinimalMode(t *testing.T) {
 
 	// In minimal mode, skills should be excluded
 	if contains(result, "## Skills") {
-		t.Error("Skills section should not appear in minimal mode")
+				t.Error("Skills section should not appear in minimal mode")
 	}
 
 	// But tools and workspace should still be there
-	if !contains(result, "## Tooling") {
-		t.Error("Tooling section missing in minimal mode")
+	if !contains(result, "## Tools") {
+		t.Error("Tools section missing in minimal mode")
 	}
 
 	if !contains(result, "## Workspace") {
@@ -228,7 +228,7 @@ func TestConvertToolsNonSlice(t *testing.T) {
 	}
 }
 
-func TestProjectContextPrefersAgentsOverClaude(t *testing.T) {
+func TestProjectContextEmbedsAgentsMd(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
@@ -240,25 +240,14 @@ func TestProjectContextPrefersAgentsOverClaude(t *testing.T) {
 	b := NewBuilder("", cwd)
 	result := b.Build()
 
-	if !contains(result, "### AGENTS.md") {
-		t.Fatalf("expected AGENTS.md in project context")
+	if contains(result, "## AGENTS.md Convention") {
+		t.Fatalf("AGENTS.md Convention section should not be embedded in prompt")
 	}
-	if contains(result, "### CLAUDE.md") {
-		t.Fatalf("expected CLAUDE.md to be skipped when AGENTS.md exists")
+	if !contains(result, "agents instructions") {
+		t.Fatalf("AGENTS.md file content should be embedded in prompt")
 	}
-}
-
-func TestProjectContextUsesClaudeWhenAgentsMissing(t *testing.T) {
-	cwd := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
-		t.Fatalf("write CLAUDE.md: %v", err)
-	}
-
-	b := NewBuilder("", cwd)
-	result := b.Build()
-
-	if !contains(result, "### CLAUDE.md") {
-		t.Fatalf("expected CLAUDE.md in project context when AGENTS.md is missing")
+	if contains(result, "claude instructions") {
+		t.Fatalf("CLAUDE.md file content should not be embedded in prompt")
 	}
 }
 

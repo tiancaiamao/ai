@@ -425,11 +425,10 @@ func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) str
 	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
 		sections = append(sections, runtimeMetaSnapshot)
 	}
-	if len(sections) == 0 {
+		if len(sections) == 0 {
 		return ""
 	}
 	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
-Follow the Turn Protocol defined in the system prompt.
 Path authority: use LLM Context Path/Detail dir from system prompt; ignore cwd-relative examples.`)
 	return strings.Join(sections, "\n\n")
 }
