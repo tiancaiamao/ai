@@ -3,7 +3,6 @@ package prompt
 import (
 	_ "embed"
 	"fmt"
-	"os"
 	"reflect"
 	"strings"
 
@@ -203,66 +202,12 @@ For persistent workspace switching across subsequent tool calls, use change_work
 			skills = skillsText
 		}
 	}
-	result = strings.ReplaceAll(result, "%SKILLS%", skills)
-
-	// Replace project context (optional section)
-	projectContext := ""
-	if !b.minimal && !b.noWorkspace {
-		projectContext = b.buildProjectContext()
-	}
-	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
+		result = strings.ReplaceAll(result, "%SKILLS%", skills)
 
 	// Remove empty sections (optional sections that were not enabled)
 	result = b.cleanupEmptySections(result)
 
 	return result
-}
-
-// Bootstrap files to search for in workspace.
-var bootstrapFiles = []string{
-	"AGENTS.md",   // Agent identity and behavior
-	"CLAUDE.md",   // Project guidelines (fallback when AGENTS.md is absent)
-	"TOOLS.md",    // Tool usage instructions
-	"IDENTITY.md", // User/owner identity
-}
-
-func (b *Builder) buildProjectContext() string {
-	contexts := []string{}
-	hasAgents := b.loadBootstrapFile("AGENTS.md") != ""
-
-	for _, filename := range bootstrapFiles {
-		if filename == "CLAUDE.md" && hasAgents {
-			continue
-		}
-		content := b.loadBootstrapFile(filename)
-		if content != "" {
-			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
-		}
-	}
-
-	if len(contexts) == 0 {
-		return ""
-	}
-
-	return "## Project Context\n" + joinLines(contexts)
-}
-
-func (b *Builder) loadBootstrapFile(filename string) string {
-	cwd := b.GetCWD()
-
-	// Try project-local first: .ai/<filename>
-	projectPath := fmt.Sprintf("%s/.ai/%s", cwd, filename)
-	if content, err := os.ReadFile(projectPath); err == nil {
-		return string(content)
-	}
-
-	// Try workspace root: <cwd>/<filename>
-	rootPath := fmt.Sprintf("%s/%s", cwd, filename)
-	if content, err := os.ReadFile(rootPath); err == nil {
-		return string(content)
-	}
-
-	return ""
 }
 
 func (b *Builder) cleanupEmptySections(prompt string) string {

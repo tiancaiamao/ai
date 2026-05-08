@@ -59,5 +59,3 @@ For detailed guidelines and templates, check available skills.
 - Run tests to verify changes
 
 %SKILLS%
-
-%PROJECT_CONTEXT%
