@@ -1,14 +1,18 @@
 package task
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/genius/ag/internal/conv"
 	"github.com/genius/ag/internal/storage"
 )
 
@@ -191,9 +195,8 @@ func spawnWorkers(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 			continue
 		}
 
-		// Spawn worker agent
+				// Spawn worker agent
 		go spawnWorker(t.ID, claimed.Claimant, cfg)
-		fmt.Printf("  🚀 Started %s: %s\n", t.ID, t.Title)
 		slots--
 		progress = true
 	}
@@ -210,87 +213,81 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
 
 	prompt := BuildWorkerPrompt(t, cfg.DesignFile)
 
-	// Write prompt to temp file to avoid shell escaping issues
-	promptFile := filepath.Join(storage.TaskDir(taskID), "prompt.txt")
-	os.WriteFile(promptFile, []byte(prompt), 0644)
-
-	// Build ai serve command
-	args := []string{"serve"}
-	args = append(args, "--input", promptFile)
-	args = append(args, "--name", "ag-worker-"+taskID)
-	if cfg.WorkDir != "" {
-		args = append(args, "--cwd", cfg.WorkDir)
-	}
-
-	cmd := exec.Command("ai", args...)
+	// Spawn agent using "ai serve" — same pattern as aiAdapter.SpawnWithAIServe.
+	// Key: --input receives the prompt TEXT, not a file path.
+	// We read stdout to get the run ID, then Release the process.
+	cmd := exec.Command("ai", "serve")
+	cmd.Args = append(cmd.Args, "--input", prompt)
+	cmd.Args = append(cmd.Args, "--name", "ag-worker-"+taskID)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Capture output
+	// Capture run ID from stdout (ai serve prints run ID as first line)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		Fail(taskID, fmt.Sprintf("create stdout pipe: %v", err), true)
+		return
+	}
+
+	// Redirect stderr to output file for debugging
 	outputFile := filepath.Join(storage.TaskDir(taskID), "output")
 	outFile, err := os.Create(outputFile)
 	if err != nil {
 		Fail(taskID, fmt.Sprintf("create output file: %v", err), true)
 		return
 	}
-	cmd.Stdout = outFile
 	cmd.Stderr = outFile
 
-	if err := cmd.Start(); err != nil {
+		if err := cmd.Start(); err != nil {
 		outFile.Close()
 		Fail(taskID, fmt.Sprintf("start agent: %v", err), true)
 		return
 	}
 
-	// Write agent PID
+	fmt.Fprintf(os.Stderr, "  [debug] spawnWorker %s: pid=%d, waiting for run ID...\n", taskID, cmd.Process.Pid)
+
+	// Read run ID from stdout
+	reader := bufio.NewReader(stdout)
+	firstLine, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [debug] spawnWorker %s: readString error: %v\n", taskID, err)
+	}
+	stdout.Close()
+	runID := strings.TrimSpace(firstLine)
+	fmt.Fprintf(os.Stderr, "  [debug] spawnWorker %s: runID=%q\n", taskID, runID)
+
+	// Save PID before Release
+	pid := cmd.Process.Pid
+
+	// Release process so it runs independently
+	if err := cmd.Process.Release(); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not release worker process: %v\n", err)
+	}
+
+	// Write agent activity with PID and run ID
 	agentDir := storage.AgentDir(agentID)
 	os.MkdirAll(agentDir, 0755)
 	activity := map[string]interface{}{
 		"status":    "running",
 		"backend":   "ai",
 		"startedAt": time.Now().Unix(),
-		"pid":       cmd.Process.Pid,
+		"pid":       pid,
+		"runID":     runID,
 	}
 	storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity)
 
-	// Wait with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-		outFile.Close()
-	}()
+	// Write run ID to output file for traceability
+	outFile.WriteString(fmt.Sprintf("\nRun ID: %s\n", runID))
+	outFile.Close()
 
-	select {
-	case err := <-done:
-		if err != nil {
-			Fail(taskID, fmt.Sprintf("agent exited with error: %v", err), true)
-			fmt.Printf("  ❌ Failed %s: %v\n", taskID, err)
-		} else {
-			// Read output for summary
-			summary := readSummary(outputFile)
-			if cfg.SkipReview {
-				Done(taskID, summary)
-				fmt.Printf("  ✅ Done %s: %s\n", taskID, truncate(summary, 80))
-			} else {
-				// Transition to review instead of done — reviewer will finalize
-				Transition(taskID, StatusReview)
-				// Store summary in task output for reviewer to use
-				outPath := filepath.Join(storage.TaskDir(taskID), "output")
-				if summary != "" {
-					os.WriteFile(outPath, []byte(summary), 0644)
-				}
-				fmt.Printf("  📋 Done %s → review: %s\n", taskID, truncate(summary, 80))
-			}
-		}
-	case <-time.After(cfg.Timeout):
-		cmd.Process.Kill()
-		Fail(taskID, "agent timed out", true)
-		fmt.Printf("  ⏰ Timed out %s\n", taskID)
-	}
+	fmt.Printf("  🚀 Started %s: %s (run %s)\n", taskID, t.Title, runID)
 }
 
 // checkRunning checks if any running tasks have completed (stale detection).
+// For ai-serve workers, checks the run.json status via runID.
+// For legacy workers, checks if PID is still alive.
 func checkRunning(cfg SchedulerConfig) (bool, error) {
 	running, err := List(StatusRunning)
 	if err != nil {
@@ -298,7 +295,6 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 	}
 	progress := false
 	for _, t := range running {
-		// Check if agent process is still alive
 		if t.Claimant == "" {
 			continue
 		}
@@ -309,28 +305,103 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 		}
 
 		var act struct {
-			Pid int `json:"pid"`
+			Pid   int    `json:"pid"`
+			RunID string `json:"runID"`
 		}
-		if err := storage.ReadJSON(actPath, &act); err != nil || act.Pid <= 0 {
+		if err := storage.ReadJSON(actPath, &act); err != nil {
 			continue
 		}
 
-		// Check if process is alive
-		if !isProcessAlive(act.Pid) {
-			// Process is dead — check output for completion
-			outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
-			if storage.Exists(outputFile) {
-				summary := readSummary(outputFile)
+		completed := false
+		summary := ""
+
+		if act.RunID != "" {
+			// ai-serve worker: check run.json for completion
+			completed, summary = checkAIServeRun(act.RunID, t.ID)
+		} else if act.Pid > 0 {
+			// Legacy worker: check if process is alive
+			if !isProcessAlive(act.Pid) {
+				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
+				if storage.Exists(outputFile) {
+					summary = readSummary(outputFile)
+					completed = true
+				} else {
+					Fail(t.ID, "agent process died without output", true)
+					fmt.Printf("  ❌ Detected failure %s (process died)\n", t.ID)
+					progress = true
+					continue
+				}
+			}
+		}
+
+		if completed {
+			if cfg.SkipReview {
 				Done(t.ID, summary)
-				fmt.Printf("  ✅ Detected completion %s (process exited)\n", t.ID)
+				fmt.Printf("  ✅ Detected completion %s (run done)\n", t.ID)
 			} else {
-				Fail(t.ID, "agent process died without output", true)
-				fmt.Printf("  ❌ Detected failure %s (process died)\n", t.ID)
+				Transition(t.ID, StatusReview)
+				outPath := filepath.Join(storage.TaskDir(t.ID), "output")
+				if summary != "" {
+					os.WriteFile(outPath, []byte(summary), 0644)
+				}
+				fmt.Printf("  📋 Detected completion %s → review\n", t.ID)
 			}
 			progress = true
 		}
 	}
 	return progress, nil
+}
+
+// checkAIServeRun checks if an ai-serve run has completed by reading its events.jsonl.
+// It does NOT rely on run.json status because ai serve blocks on cmd.Wait() and
+// only updates run.json after the RPC subprocess exits — which may never happen
+// when stdin is not closed.
+// Returns (completed, summary).
+func checkAIServeRun(runID, taskID string) (bool, string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false, ""
+	}
+
+	eventsPath := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return false, "" // events file not found yet, still starting
+	}
+
+	// Use conv streaming API to scan for agent_end and collect summary.
+	lastNHook, result := conv.CollectLastN(20, conv.KindTool, conv.KindMeta)
+
+	agentDone := false
+	doneHook := func(evt *conv.FormattedEvent) bool {
+		if conv.IsAgentDone(evt) {
+			agentDone = true
+			return false // stop scanning
+		}
+		return true
+	}
+
+	conv.StreamEventsFromString(string(data), lastNHook, doneHook)
+
+	if !agentDone {
+		return false, "" // still running
+	}
+
+	summary := strings.Join(*result, "\n")
+
+	// Kill the RPC subprocess so ai serve can exit and clean up
+	runMetaPath := filepath.Join(homeDir, ".ai", "runs", runID, "run.json")
+	metaData, _ := os.ReadFile(runMetaPath)
+	var meta struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(metaData, &meta); err == nil && meta.PID > 0 {
+		if proc, err := os.FindProcess(meta.PID); err == nil {
+			proc.Signal(syscall.SIGTERM)
+		}
+	}
+
+	return true, summary
 }
 
 // checkGroupReview checks if any group has all tasks in review and needs reviewer.
@@ -374,28 +445,32 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	diff := getDiff(cfg.WorkDir)
 
 	prompt := BuildReviewerPrompt(tasks, diff)
-	promptFile := filepath.Join(storage.TaskDir(tasks[0].ID), "review-prompt.txt")
-	os.WriteFile(promptFile, []byte(prompt), 0644)
-
 	agentID := fmt.Sprintf("reviewer-%s", group)
-	args := []string{"serve"}
-	args = append(args, "--input", promptFile)
-	args = append(args, "--name", agentID)
-	if cfg.WorkDir != "" {
-		args = append(args, "--cwd", cfg.WorkDir)
-	}
 
-	cmd := exec.Command("ai", args...)
+	// Spawn reviewer using "ai serve" — same pattern as spawnWorker.
+	cmd := exec.Command("ai", "serve")
+	cmd.Args = append(cmd.Args, "--input", prompt)
+	cmd.Args = append(cmd.Args, "--name", agentID)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	// Capture run ID from stdout
+		stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		for _, t := range tasks {
+			Fail(t.ID, fmt.Sprintf("reviewer stdout pipe: %v", err), true)
+		}
+		return
+	}
+
+	// Redirect stderr to review output file for debugging
 	outputFile := filepath.Join(storage.TaskDir(tasks[0].ID), "review-output")
 	outFile, _ := os.Create(outputFile)
-	cmd.Stdout = outFile
 	cmd.Stderr = outFile
 
-	if err := cmd.Start(); err != nil {
+		if err := cmd.Start(); err != nil {
 		outFile.Close()
 		for _, t := range tasks {
 			Fail(t.ID, fmt.Sprintf("start reviewer: %v", err), true)
@@ -403,21 +478,31 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		return
 	}
 
-	err := cmd.Wait()
+	// Read run ID from stdout
+	reader := bufio.NewReader(stdout)
+	firstLine, _ := reader.ReadString('\n')
+	stdout.Close()
+	runID := strings.TrimSpace(firstLine)
+
+	// Wait for ai serve to complete (it exits when the RPC subprocess finishes)
+	waitErr := cmd.Wait()
 	outFile.Close()
 
-	if err != nil {
+	if waitErr != nil {
 		// Reviewer failed — pass anyway to not block
-		fmt.Printf("  ⚠️ Reviewer failed for group %s, auto-passing\n", group)
+		fmt.Printf("  ⚠️ Reviewer failed for group %s (run %s), auto-passing: %v\n", group, runID, waitErr)
 		for _, t := range tasks {
 			Done(t.ID, "auto-passed: reviewer failed")
 		}
 		return
 	}
 
-	// Check review output for pass/revision
-	output := readFile(outputFile)
-	if strings.Contains(output, "REVIEW_PASS") {
+	// Read events.jsonl for REVIEW_PASS
+	homeDir, _ := os.UserHomeDir()
+	eventsPath := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
+	eventsData := readFile(eventsPath)
+
+	if strings.Contains(eventsData, "REVIEW_PASS") {
 		fmt.Printf("  ✅ Review passed for group %s\n", group)
 		for _, t := range tasks {
 			Done(t.ID, t.Summary)
