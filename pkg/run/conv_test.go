@@ -423,6 +423,46 @@ func TestParseEvent_Response_Sessions(t *testing.T) {
 	}
 }
 
+func TestParseEvent_Response_Sessions_DisplayOrder(t *testing.T) {
+	// Sessions arrive sorted by UpdatedAt ascending (oldest first) from ListSessions.
+	// renderSessions must preserve this order so that display index matches /resume index.
+	raw := `{"type":"response","success":true,"data":{"sessions":[` +
+		`{"id":"oldest","name":"oldest session","updatedAt":"2025-01-10T10:00:00Z","messageCount":1},` +
+		`{"id":"middle","name":"middle session","updatedAt":"2025-01-15T10:00:00Z","messageCount":3},` +
+		`{"id":"newest","name":"newest session","updatedAt":"2025-01-20T10:00:00Z","messageCount":5}` +
+		`]}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+
+	// Verify sessions appear in data order: oldest at top (index 0), newest at bottom
+	lines := strings.Split(evt.Text, "\n")
+	var indices []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "0:") || strings.HasPrefix(line, "1:") || strings.HasPrefix(line, "2:") {
+			indices = append(indices, line)
+		}
+	}
+
+	if len(indices) != 3 {
+		t.Fatalf("expected 3 indexed session lines, got %d: %v", len(indices), indices)
+	}
+
+	// Index 0 should be "oldest session" — matches data source order
+	if !strings.Contains(indices[0], "oldest session") {
+		t.Fatalf("expected index 0 to be 'oldest session', got %q", indices[0])
+	}
+	// Index 1 should be "middle session"
+	if !strings.Contains(indices[1], "middle session") {
+		t.Fatalf("expected index 1 to be 'middle session', got %q", indices[1])
+	}
+	// Index 2 should be "newest session"
+	if !strings.Contains(indices[2], "newest session") {
+		t.Fatalf("expected index 2 to be 'newest session', got %q", indices[2])
+	}
+}
+
 func TestParseEvent_Response_SessionsEmpty(t *testing.T) {
 	raw := `{"type":"response","success":true,"data":{"sessions":[]}}`
 	evt := ParseEvent(raw)

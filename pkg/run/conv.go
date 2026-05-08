@@ -628,6 +628,9 @@ func renderSessions(dataJSON []byte) *FormattedEvent {
 	b.WriteString("Available Sessions\n")
 	b.WriteString("─────────────────────\n\n")
 
+	// Data source (ListSessions) sorts by UpdatedAt ascending (oldest first),
+	// so oldest appears at top (index 0), newest at bottom — display matches /resume index.
+
 	for i, sess := range payload.Sessions {
 		name := sess.Name
 		if name == "" {

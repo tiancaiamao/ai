@@ -68,9 +68,10 @@ func (sm *SessionManager) ListSessions() ([]SessionMeta, error) {
 		sessions = append(sessions, *meta)
 		}
 	
-	// Sort sessions by UpdatedAt time (newest first)
+	// Sort sessions by UpdatedAt time (oldest first)
+	// so that display index 0 = oldest (top), newest at bottom.
 	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+		return sessions[i].UpdatedAt.Before(sessions[j].UpdatedAt)
 	})
 
 	return sessions, nil
