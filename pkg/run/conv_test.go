@@ -554,6 +554,36 @@ func TestParseEvent_ThinkingDelta_ValidContent(t *testing.T) {
 	}
 }
 
+func TestParseEvent_Response_NewSession_SkipsSessionState(t *testing.T) {
+	// /new returns {sessionId, cancelled} — should be skipped (session_switch event handles display)
+	input := `{"type":"response","command":"new","success":true,"data":{"sessionId":"abc-123","cancelled":false}}`
+	evt := ParseEvent(input)
+	if evt != nil {
+		t.Fatalf("expected nil for /new response (should be skipped), got %+v", evt)
+	}
+}
+
+func TestParseEvent_Response_NewSession_Cancelled(t *testing.T) {
+	// /new with cancelled=true should also be skipped
+	input := `{"type":"response","command":"new","success":true,"data":{"sessionId":"abc-123","cancelled":true}}`
+	evt := ParseEvent(input)
+	if evt != nil {
+		t.Fatalf("expected nil for cancelled /new response, got %+v", evt)
+	}
+}
+
+func TestParseEvent_Response_ForkNotSuppressed(t *testing.T) {
+	// /fork returns {cancelled, text} but no sessionId — must not be suppressed
+	input := `{"type":"response","command":"fork","success":true,"data":{"cancelled":false,"text":"forked content here"}}`
+	evt := ParseEvent(input)
+	if evt == nil {
+		t.Fatal("expected non-nil event for /fork response, should not be suppressed")
+	}
+	if !strings.Contains(evt.Text, "forked content here") {
+		t.Fatalf("expected fork text content, got: %s", evt.Text)
+	}
+}
+
 func TestParseEvent_MessageUpdate_ThinkingDelta(t *testing.T) {
 	// Test the thinking_delta in message_update format (assistantMessageEvent)
 	json := `{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"   "}}`
