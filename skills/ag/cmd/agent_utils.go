@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/agent"
@@ -25,16 +23,10 @@ func DetectStale(id string, act *agent.Activity) {
 	reason := ""
 
 	// Check process liveness via signal 0.
-	if act.Pid > 0 {
-		proc, err := os.FindProcess(act.Pid)
-		if err != nil {
+		if act.Pid > 0 {
+		if !agent.IsProcessAlive(act.Pid) {
 			stale = true
-			reason = "process not found"
-		} else {
-			if err := proc.Signal(syscall.Signal(0)); err != nil {
-				stale = true
-				reason = "process no longer alive"
-			}
+			reason = "process no longer alive"
 		}
 	} else {
 		agentDir := agent.AgentDir(id)

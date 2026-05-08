@@ -3,8 +3,7 @@ package task
 import (
 	"bufio"
 	"context"
-	"encoding/json"
-	"fmt"
+			"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/genius/ag/internal/agent"
 	"github.com/genius/ag/internal/conv"
+	"github.com/genius/ag/internal/run"
 	"github.com/genius/ag/internal/storage"
 )
 
@@ -320,7 +321,7 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			completed, summary = checkAIServeRun(act.RunID, t.ID)
 		} else if act.Pid > 0 {
 			// Legacy worker: check if process is alive
-			if !isProcessAlive(act.Pid) {
+			if !agent.IsProcessAlive(act.Pid) {
 				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
 				if storage.Exists(outputFile) {
 					summary = readSummary(outputFile)
@@ -358,12 +359,11 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 // when stdin is not closed.
 // Returns (completed, summary).
 func checkAIServeRun(runID, taskID string) (bool, string) {
-	homeDir, err := os.UserHomeDir()
+	eventsPath, err := run.EventsPath(runID)
 	if err != nil {
 		return false, ""
 	}
 
-	eventsPath := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
 	data, err := os.ReadFile(eventsPath)
 	if err != nil {
 		return false, "" // events file not found yet, still starting
@@ -390,12 +390,8 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 	summary := strings.Join(*result, "\n")
 
 	// Kill the RPC subprocess so ai serve can exit and clean up
-	runMetaPath := filepath.Join(homeDir, ".ai", "runs", runID, "run.json")
-	metaData, _ := os.ReadFile(runMetaPath)
-	var meta struct {
-		PID int `json:"pid"`
-	}
-	if err := json.Unmarshal(metaData, &meta); err == nil && meta.PID > 0 {
+	meta, err := run.ReadMeta(runID)
+	if err == nil && meta.PID > 0 {
 		if proc, err := os.FindProcess(meta.PID); err == nil {
 			proc.Signal(syscall.SIGTERM)
 		}
@@ -497,9 +493,8 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		return
 	}
 
-	// Read events.jsonl for REVIEW_PASS
-	homeDir, _ := os.UserHomeDir()
-	eventsPath := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
+		// Read events.jsonl for REVIEW_PASS
+	eventsPath, _ := run.EventsPath(runID)
 	eventsData := readFile(eventsPath)
 
 	if strings.Contains(eventsData, "REVIEW_PASS") {
@@ -518,15 +513,8 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 
 // Helper functions
 
-func isProcessAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check liveness.
-	err = proc.Signal(nil)
-	return err == nil
-}
+
+
 
 func getDiff(workDir string) string {
 	cmd := exec.Command("git", "diff")

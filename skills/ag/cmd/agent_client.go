@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genius/ag/internal/agent"
+			"github.com/genius/ag/internal/agent"
+	"github.com/genius/ag/internal/conv"
+	"github.com/genius/ag/internal/run"
 	"github.com/genius/ag/internal/storage"
 )
 
@@ -267,12 +269,11 @@ func outputFromAI(id string, tailN int) (string, error) {
 		return "", fmt.Errorf("get run ID for agent %s: %w", id, err)
 	}
 
-	homeDir, err := os.UserHomeDir()
+		eventsPath, err := run.EventsPath(runID)
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", fmt.Errorf("get events path: %w", err)
 	}
-	eventsFile := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
-	data, err := os.ReadFile(eventsFile)
+	data, err := os.ReadFile(eventsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -280,10 +281,7 @@ func outputFromAI(id string, tailN int) (string, error) {
 		return "", fmt.Errorf("read events.jsonl: %w", err)
 	}
 
-	messages, err := parseAssistantMessages(data)
-	if err != nil {
-		return "", err
-	}
+		messages := conv.BuildAssistantTexts(data)
 	result := strings.Join(messages, "\n\n")
 
 	if tailN > 0 {
@@ -296,101 +294,8 @@ func outputFromAI(id string, tailN int) (string, error) {
 	return result, nil
 }
 
-func parseAssistantMessages(data []byte) ([]string, error) {
-	lines := strings.Split(string(data), "\n")
-	messages := make([]string, 0, 8)
-	var streaming strings.Builder
 
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
 
-		var event map[string]any
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-
-		etype, _ := event["type"].(string)
-		switch etype {
-		case "message_update":
-			assistantEvent, _ := event["assistantMessageEvent"].(map[string]any)
-			if assistantEvent != nil {
-				evType, _ := assistantEvent["type"].(string)
-				if evType == "text_delta" {
-					delta, _ := assistantEvent["delta"].(string)
-					streaming.WriteString(delta)
-				}
-			}
-		case "agent_end":
-			agentEndMessages := extractAssistantTextsFromAgentEnd(event)
-			if len(agentEndMessages) > 0 {
-				messages = append(messages, agentEndMessages...)
-				streaming.Reset()
-			}
-		case "turn_end":
-			if streaming.Len() > 0 {
-				messages = append(messages, strings.TrimSpace(streaming.String()))
-				streaming.Reset()
-			}
-		}
-	}
-
-	if streaming.Len() > 0 {
-		messages = append(messages, strings.TrimSpace(streaming.String()))
-	}
-
-	filtered := messages[:0]
-	for _, m := range messages {
-		if m = strings.TrimSpace(m); m != "" {
-			filtered = append(filtered, m)
-		}
-	}
-	return filtered, nil
-}
-
-func extractAssistantTextsFromAgentEnd(event map[string]any) []string {
-	rawMessages, _ := event["messages"].([]any)
-	if len(rawMessages) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(rawMessages))
-	for _, raw := range rawMessages {
-		msg, _ := raw.(map[string]any)
-		if msg == nil {
-			continue
-		}
-		role, _ := msg["role"].(string)
-		if role != "assistant" {
-			continue
-		}
-		content := extractTextFromContent(msg["content"])
-		if content != "" {
-			out = append(out, content)
-		}
-	}
-	return out
-}
-
-func extractTextFromContent(raw any) string {
-	items, _ := raw.([]any)
-	if len(items) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, item := range items {
-		obj, _ := item.(map[string]any)
-		if obj == nil {
-			continue
-		}
-		if typ, _ := obj["type"].(string); typ == "text" {
-			text, _ := obj["text"].(string)
-			b.WriteString(text)
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
 
 // Wait blocks until all specified agents reach a terminal state.
 func Wait(ctx context.Context, ids []string, timeoutSec int) error {
