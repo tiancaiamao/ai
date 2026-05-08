@@ -1754,17 +1754,81 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	server.RegisterSlash("resume", "List sessions or resume a session by ID/name", func(args string) (any, error) {
 		arg := strings.TrimSpace(args)
 		if arg == "" {
-			h, ok := server.GetSlashHandler("list_sessions")
-			if !ok {
-				return nil, fmt.Errorf("unknown command: list_sessions")
+			// List all sessions directly (was previously delegating to list_sessions alias → infinite recursion)
+			sessions, err := sessionMgr.ListSessions()
+			if err != nil {
+				return nil, fmt.Errorf("failed to list sessions: %w", err)
 			}
-			return h("")
+			return map[string]any{"sessions": sessions}, nil
 		}
-		h, ok := server.GetSlashHandler("switch_session")
-		if !ok {
-			return nil, fmt.Errorf("unknown command: switch_session")
+
+		// Resolve session by index, ID, or name
+		var targetID string
+		sessions, err := sessionMgr.ListSessions()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list sessions: %w", err)
 		}
-		return h(arg)
+
+		// Try numeric index first
+		if idx, err := strconv.Atoi(arg); err == nil {
+			if idx < 0 || idx >= len(sessions) {
+				return nil, fmt.Errorf("session index %d out of range (0-%d)", idx, len(sessions)-1)
+			}
+			targetID = sessions[idx].ID
+		} else {
+			// Try exact ID match, then name match
+			for _, s := range sessions {
+				if s.ID == arg {
+					targetID = s.ID
+					break
+				}
+			}
+			if targetID == "" {
+				for _, s := range sessions {
+					if s.Name == arg {
+						targetID = s.ID
+						break
+					}
+				}
+			}
+			if targetID == "" {
+				return nil, fmt.Errorf("session not found: %s", arg)
+			}
+		}
+
+		// Load the target session
+		newSess, err := sessionMgr.GetSession(targetID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load session %s: %w", targetID, err)
+		}
+
+		// Update session manager's current ID
+		if err := sessionMgr.SetCurrent(targetID); err != nil {
+			return nil, err
+		}
+		if err := sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+
+		// Switch to the new session
+		newSessionName := resolveSessionName(sessionMgr, targetID)
+		sess = newSess
+		sessionComp.Update(sess, compactor)
+		setAgentContext(createBaseContext())
+
+		// Update checkpoint manager for switched session
+		if err := updateCheckpointManager(); err != nil {
+			slog.Warn("Failed to update checkpoint manager for session switch", "error", err)
+		}
+
+		stateMu.Lock()
+		sessionID = targetID
+		sessionName = newSessionName
+		stateMu.Unlock()
+
+		slog.Info("Switched to session", "id", targetID, "name", newSessionName)
+		server.EmitEvent(map[string]any{"type": "session_switch", "session": targetID, "sessionName": newSessionName})
+		return map[string]any{"sessionId": targetID, "sessionName": newSessionName}, nil
 	})
 
 	// /context — composite: returns state + session stats + available models
