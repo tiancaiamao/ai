@@ -156,7 +156,7 @@ func NewAgentLoop(cfg *AppConfig, msgBus *bus.MessageBus) *AgentLoop {
 	}
 
 	// Create ConnManager — the core of the RPC architecture
-	connManager := NewConnManager(sessionsDir, cfg.SystemPrompt)
+	connManager := NewConnManager(sessionsDir, cfg.SystemPrompt, cfg.ClawDir)
 
 	// Create Feishu client (for voice file download)
 	var feishuClient *lark.Client

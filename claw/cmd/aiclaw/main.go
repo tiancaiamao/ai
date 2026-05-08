@@ -219,7 +219,7 @@ func main() {
 	// Load skills
 	skillLoader := skill.NewLoader(clawDir)
 	skillResult := skillLoader.Load(&skill.LoadOptions{
-		CWD:             "", // no workspace
+		CWD:             clawDir,
 		AgentDir:        clawDir,
 		SkillPaths:      nil,
 		IncludeDefaults: true,

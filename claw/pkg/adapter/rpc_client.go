@@ -54,7 +54,7 @@ type rpcResponseOrEvent struct {
 // The subprocess command is:
 //
 //	ai --mode rpc --session <sessionsDir>/<safeKey> --system-prompt @<systemPromptFile>
-func StartRPC(sessionKey, sessionsDir, systemPromptFile string) (*RPCConn, error) {
+func StartRPC(sessionKey, sessionsDir, systemPromptFile, workingDir string) (*RPCConn, error) {
 	sessionPath := sessionsDir + "/" + sessionKey
 	systemPromptArg := "@" + systemPromptFile
 
@@ -73,6 +73,12 @@ func StartRPC(sessionKey, sessionsDir, systemPromptFile string) (*RPCConn, error
 	}
 	// Route stderr to this process's stderr so subprocess logs are visible.
 	cmd.Stderr = os.Stderr
+
+	// Set working directory for the ai subprocess so it uses clawDir
+	// instead of inheriting aiclaw's process CWD.
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("rpc_client: start subprocess: %w", err)
@@ -389,15 +395,17 @@ type ConnManager struct {
 	mu          sync.RWMutex
 	sessionsDir string
 	sysprompt   string // system prompt content (written to temp file per conn)
+	workingDir  string // working directory for ai subprocess (clawDir)
 }
 
 // NewConnManager creates a new connection manager.
-func NewConnManager(sessionsDir, sysprompt string) *ConnManager {
+func NewConnManager(sessionsDir, sysprompt, workingDir string) *ConnManager {
 	return &ConnManager{
 		conns:       make(map[string]*RPCConn),
 		sessionsDir: sessionsDir,
 		sysprompt:   sysprompt,
-			}
+		workingDir:  workingDir,
+	}
 }
 
 // safeSessionKey replaces characters that are unsafe for filesystem paths.
@@ -520,7 +528,7 @@ func (m *ConnManager) getOrCreateConn(sessionKey string) (*RPCConn, error) {
 	}
 
 	// Launch the subprocess.
-	conn, err = StartRPC(safeKey, m.sessionsDir, promptFile.Name())
+	conn, err = StartRPC(safeKey, m.sessionsDir, promptFile.Name(), m.workingDir)
 	if err != nil {
 		return nil, fmt.Errorf("conn_manager: start rpc for %q: %w", sessionKey, err)
 	}
