@@ -1,9 +1,8 @@
 ---
 name: land
-description: |
-  Merge a PR automatically with safety checks.
-  Use when task is in "Merging" state and PR is approved.
-  Handles merge conflicts, failing checks, and cleanup.
+description:  Merge a PR automatically with safety checks.
+Use when task is in "Merging" state and PR is approved.
+Handles merge conflicts, failing checks, and cleanup.
 ---
 
 # Land Skill - 自动 Merge PR

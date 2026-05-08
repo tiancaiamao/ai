@@ -187,12 +187,13 @@ Skills extend the agent's capabilities with domain-specific instructions, prompt
 | `brainstorm` | Explore user intent through conversation |
 | `plan` | Read design docs, produce task YAML with dependency DAG |
 | `implement` | Code-driven task execution with ag task scheduler |
+| `brainstorm` | Interactive design exploration → design.md |
 | `review` | Code review using codex-rs methodology |
 | `systematic-debugging` | Structured debugging workflow |
 | `github` | GitHub interaction via `gh` CLI |
 | `land` | Merge PRs with branch management |
 | `tmux` | Background process management |
-| `wf` | Gate tool for brainstorm → plan → implement flow |
+
 
 ## Agent Orchestration (`ag`)
 

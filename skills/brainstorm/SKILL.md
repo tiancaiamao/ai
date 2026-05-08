@@ -85,27 +85,28 @@ NO IMPLEMENTATION until design.md is approved by the user.
 ### Step 5: Present & Gate
 
 1. 向用户展示 design.md 摘要（分段展示，不要一次贴一整篇）
-2. 运行 `wf approve --message "<用户原话>"`
-3. 运行 `wf advance --output design.md`
-4. 提示用户下一步：plan skill
+2. **等用户明确确认**（例如 "可以"、"没问题"、"LGTM"）才算 gate 通过
+3. 确认后提示用户下一步：plan skill
 
-如果用户有修改意见，回到 Step 2 迭代。
+Gate 规则：
+- 用户没说 OK 就不算通过，不能进入下一步
+- 不能自己替用户确认
+- 用户有修改意见 → 回到 Step 2 迭代
 
 ## ⛔ MANDATORY — Self-Check
 
-| 断言 | 触发条件 | 修正 |
-|------|----------|------|
-| 未读技能文件 | 开始 brainstorm 但没读这个 SKILL.md | 先读完 |
-| 未 approve 就 advance | `wf advance` 返回错误 | 先 `wf approve --message "用户原话"` |
-| self-approve | `--message` 不是用户说的话 | 等用户确认 |
-| 未展示产出就问确认 | design.md 存在但未向用户展示 | 先展示摘要 |
-| 缺少内容维度 | design.md 缺少 5 个维度中的任何一个 | 补充缺失维度 |
+| 断言 | 修正 |
+|------|------|
+| 未读技能文件 | 先读完本 SKILL.md 再开始 |
+| self-approve | 等用户明确说 OK，不能自己确认 |
+| 未展示产出就问确认 | 先展示 design.md 摘要 |
+| 缺少内容维度 | design.md 必须覆盖 5 个维度，缺了就补 |
 
 ## Skill Composition
 
 ```
 brainstorm (this skill) → design.md
-    ↓ (gate approved)
+    ↓ (user approved)
     ↓
 plan → implement
 ```
