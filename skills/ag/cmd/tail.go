@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/genius/ag/internal/agent"
+		"github.com/genius/ag/internal/agent"
+	"github.com/genius/ag/internal/conv"
+	"github.com/genius/ag/internal/run"
 	"github.com/spf13/cobra"
 )
 
@@ -55,13 +57,12 @@ func tailFromAI(id string, since int64) error {
 		return fmt.Errorf("get run ID for agent %s: %w", id, err)
 	}
 
-	homeDir, err := os.UserHomeDir()
+		eventsPath, err := run.EventsPath(runID)
 	if err != nil {
-		return fmt.Errorf("get home dir: %w", err)
+		return fmt.Errorf("get events path: %w", err)
 	}
 
-	eventsFile := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
-	f, err := os.Open(eventsFile)
+	f, err := os.Open(eventsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("---cursor:0")
@@ -155,9 +156,6 @@ func parseEventsTail(data []byte, since int64) (content string, newCursor int64,
 		}
 	}
 
-	messages, parseErr := parseAssistantMessages(chunk)
-	if parseErr != nil {
-		return "", 0, parseErr
-	}
+		messages := conv.BuildAssistantTexts(chunk)
 	return strings.Join(messages, "\n\n"), int64(len(data)), nil
 }

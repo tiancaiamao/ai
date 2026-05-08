@@ -82,7 +82,7 @@ func List() ([]AgentEntry, error) {
 		// Lazy status reconciliation: if activity.json says "running" but the
 		// process is dead, update the status so callers see the real state.
 		if activity.Status == "running" && activity.Pid > 0 {
-			if !isProcessAlive(activity.Pid) {
+					if !IsProcessAlive(activity.Pid) {
 				activity.Status = "done"
 				if activity.FinishedAt == 0 {
 					activity.FinishedAt = time.Now().Unix()
@@ -102,8 +102,8 @@ func List() ([]AgentEntry, error) {
 	return result, nil
 }
 
-// isProcessAlive checks if a process with the given PID is still running.
-func isProcessAlive(pid int) bool {
+// IsProcessAlive checks if a process with the given PID is still running.
+func IsProcessAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false

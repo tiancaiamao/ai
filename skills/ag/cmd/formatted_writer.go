@@ -10,14 +10,14 @@ import (
 	"github.com/genius/ag/internal/conv"
 )
 
-// FormattedStreamWriter 智能格式化的流式写入器
+// FormattedStreamWriter is a smart formatted stream writer.
 type FormattedStreamWriter struct {
 	file    *os.File
 	writer  *bufio.Writer
 	textBuf strings.Builder
 }
 
-// NewFormattedStreamWriter 创建新的格式化写入器
+// NewFormattedStreamWriter creates a new formatted stream writer.
 func NewFormattedStreamWriter(filePath string) (*FormattedStreamWriter, error) {
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -30,7 +30,7 @@ func NewFormattedStreamWriter(filePath string) (*FormattedStreamWriter, error) {
 	}, nil
 }
 
-// WriteJSONEvents 写入 JSON 事件流（用于 ai serve 输出）
+// WriteJSONEvents writes a JSON event stream (from ai serve output).
 func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 
@@ -40,13 +40,13 @@ func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 			continue
 		}
 
-		// 尝试解析为 JSON 事件
+		// Try to parse as a JSON event
 		formatted := conv.ParseEvent(line)
 		if formatted != nil {
-			// 写入格式化的文本
+			// Write formatted text
 			w.writeFormatted(formatted)
 		} else {
-			// 如果不是 JSON 事件，作为纯文本处理
+			// Not a JSON event, treat as plain text
 			w.writeRawText(line)
 		}
 	}
@@ -54,7 +54,7 @@ func (w *FormattedStreamWriter) WriteJSONEvents(output []byte) error {
 	return w.writer.Flush()
 }
 
-// WriteTextStream 写入文本流（用于非 JSON 格式的输出）
+// WriteTextStream writes a text stream (for non-JSON output).
 func (w *FormattedStreamWriter) WriteTextStream(output []byte) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 
@@ -66,53 +66,53 @@ func (w *FormattedStreamWriter) WriteTextStream(output []byte) error {
 	return w.writer.Flush()
 }
 
-// writeFormatted 写入格式化的事件
+// writeFormatted writes a formatted event.
 func (w *FormattedStreamWriter) writeFormatted(event *conv.FormattedEvent) {
 	switch event.Kind {
 	case conv.KindMeta:
-		// 元数据事件，添加时间戳和换行
+		// Meta events get a timestamp and newline
 		timestamp := time.Now().Format("15:04:05")
 		fmt.Fprintf(w.writer, "[%s] %s\n", timestamp, event.Text)
 	case conv.KindTool:
-		// 工具事件，直接写入
+		// Tool events written directly
 		fmt.Fprintf(w.writer, "%s\n", event.Text)
 	case conv.KindText:
-		// 文本事件，智能分段
+		// Text events get smart paragraphing
 		w.writeSmartText(event.Text)
 	}
 }
 
-// writeRawText 写入原始文本，进行智能分段
+// writeRawText writes raw text with smart paragraphing.
 func (w *FormattedStreamWriter) writeRawText(text string) {
 	w.writeSmartText(text)
 }
 
-// writeSmartText 智能写入文本，按语义分段
+// writeSmartText writes text with semantic paragraph segmentation.
 func (w *FormattedStreamWriter) writeSmartText(text string) {
-	// 累积到缓冲区
+	// Accumulate into buffer
 	w.textBuf.WriteString(text)
 
-	// 检查是否有完整的语义单元
+	// Check for complete semantic units
 	bufferStr := w.textBuf.String()
 
-	// 检查句子结束
+	// Check for sentence endings
 	if strings.ContainsAny(text, "。！？.!?") {
-		// 写入并清空缓冲区
+		// Write and clear buffer
 		fmt.Fprintf(w.writer, "%s", bufferStr)
 		w.textBuf.Reset()
 		return
 	}
 
-	// 检查是否是特殊行（标题、列表、代码块等）
+	// Check for special lines (headings, lists, code blocks, etc.)
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "#") ||
 		strings.HasPrefix(trimmed, "-") ||
 		strings.HasPrefix(trimmed, "*") ||
 		strings.HasPrefix(trimmed, "```") ||
 		strings.HasPrefix(trimmed, "|") {
-		// 换行后写入
+		// Write with preceding newline
 		if w.textBuf.Len() > len(text) {
-			// 说明缓冲区之前有内容，先写入之前的
+			// Buffer had prior content, write it first
 			prevText := bufferStr[:len(bufferStr)-len(text)]
 			fmt.Fprintf(w.writer, "%s", prevText)
 		}
@@ -121,16 +121,16 @@ func (w *FormattedStreamWriter) writeSmartText(text string) {
 		return
 	}
 
-	// 如果缓冲区太大，强制写入
+	// Force flush if buffer is too large
 	if w.textBuf.Len() > 200 {
 		fmt.Fprintf(w.writer, "%s", bufferStr)
 		w.textBuf.Reset()
 	}
 }
 
-// Flush 刷新所有待写入的内容
+// Flush writes any pending buffered content.
 func (w *FormattedStreamWriter) Flush() error {
-	// 写入剩余的缓冲区内容
+	// Write remaining buffer content
 	if w.textBuf.Len() > 0 {
 		fmt.Fprintf(w.writer, "%s", w.textBuf.String())
 		w.textBuf.Reset()
@@ -139,7 +139,7 @@ func (w *FormattedStreamWriter) Flush() error {
 	return w.writer.Flush()
 }
 
-// Close 关闭写入器
+// Close flushes and closes the writer.
 func (w *FormattedStreamWriter) Close() error {
 	if err := w.Flush(); err != nil {
 		return err
@@ -147,7 +147,7 @@ func (w *FormattedStreamWriter) Close() error {
 	return w.file.Close()
 }
 
-// WriteFormattedOutput 统一的格式化写入接口
+// WriteFormattedOutput is a unified formatted writing interface.
 func WriteFormattedOutput(agentDir string, output []byte, backendName string) error {
 	streamPath := agentDir + "/stream.log"
 
@@ -157,11 +157,11 @@ func WriteFormattedOutput(agentDir string, output []byte, backendName string) er
 	}
 	defer writer.Close()
 
-	// 根据 backend 类型选择不同的处理方式
+	// Choose processing based on backend type
 	if backendName == "ai" {
-		// ai backend 使用 JSON 事件流
+		// ai backend uses JSON event stream
 		return writer.WriteJSONEvents(output)
 	}
-	// 其他 backend 使用文本流
+	// Other backends use text stream
 	return writer.WriteTextStream(output)
 }

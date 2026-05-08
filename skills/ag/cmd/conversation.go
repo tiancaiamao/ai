@@ -1,157 +1,57 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/genius/ag/internal/conv"
+	"github.com/genius/ag/internal/run"
 )
 
-// ConversationMessage 表示对话中的一条消息
+// ConversationMessage represents a single message in a conversation.
 type ConversationMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	Turn    int    `json:"turn,omitempty"`
 }
 
-// Conversation 表示整个对话
+// Conversation represents an entire conversation.
 type Conversation struct {
 	Messages []ConversationMessage `json:"messages"`
 }
 
-// GetConversation 从 AI 适配器的 agent 获取清晰的对话格式
+// GetConversation retrieves a structured conversation from an agent's run events.
 func GetConversation(agentID string) (*Conversation, error) {
-	// 获取对应的 run ID
 	runID, err := aiAdapter.getRunIDForAgent(agentID)
 	if err != nil {
 		return nil, fmt.Errorf("get run ID for agent %s: %w", agentID, err)
 	}
 
-	// 读取 events.jsonl 文件
-	homeDir, err := os.UserHomeDir()
+	eventsPath, err := run.EventsPath(runID)
 	if err != nil {
-		return nil, fmt.Errorf("get home dir: %w", err)
+		return nil, fmt.Errorf("get events path: %w", err)
 	}
 
-	eventsFile := filepath.Join(homeDir, ".ai", "runs", runID, "events.jsonl")
-	data, err := os.ReadFile(eventsFile)
+	data, err := os.ReadFile(eventsPath)
 	if err != nil {
 		return nil, fmt.Errorf("read events.jsonl: %w", err)
 	}
 
-	// 解析 events.jsonl 并构建清晰的对话
-	return parseConversation(data)
-}
-
-// parseConversation 从 events.jsonl 数据中构建清晰的对话
-func parseConversation(data []byte) (*Conversation, error) {
-	lines := strings.Split(string(data), "\n")
-	var conversation Conversation
-	var currentMessage strings.Builder
-	var currentRole string
-	var currentTurn int
-	var lastTurn int
-	var messageID int // 用于跟踪消息的唯一ID
-
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		var event map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue // 跳过无效的 JSON 行
-		}
-
-				// 处理消息相关的事件
-		if eventType, ok := event["type"].(string); ok {
-			switch eventType {
-			case "message_start", "message_update":
-				if msg, ok := event["message"].(map[string]interface{}); ok {
-					if role, ok := msg["role"].(string); ok {
-						// 如果是新角色，保存前一条消息
-						if role != currentRole && currentMessage.Len() > 0 {
-							content := strings.TrimSpace(currentMessage.String())
-							if content != "" {
-								conversation.Messages = append(conversation.Messages, ConversationMessage{
-									Role:    currentRole,
-									Content: content,
-									Turn:    currentTurn,
-								})
-								messageID++
-							}
-							currentMessage.Reset()
-						}
-
-						currentRole = role
-
-						// 如果是用户消息，结束当前回合
-						if role == "user" && currentTurn > 0 {
-							lastTurn = currentTurn
-							currentTurn = 0
-						}
-
-						// Extract content - each message_update contains accumulated text,
-						// so we overwrite (not append) to avoid duplication from streaming deltas.
-						if content, ok := msg["content"].([]interface{}); ok {
-							for _, item := range content {
-								if contentItem, ok := item.(map[string]interface{}); ok {
-									itemType, _ := contentItem["type"].(string)
-									switch itemType {
-									case "text":
-										if text, ok := contentItem["text"].(string); ok {
-											currentMessage.Reset()
-											currentMessage.WriteString(text)
-										}
-									case "thinking":
-										// 忽略思考过程
-									}
-								}
-							}
-						}
-					}
-				}
-
-			case "turn_start":
-				// 新回合开始
-				if currentRole == "assistant" && currentTurn == 0 {
-					currentTurn = lastTurn + 1
-				}
-
-			case "message_end":
-				// 消息结束，保存当前消息
-				if currentMessage.Len() > 0 {
-					content := strings.TrimSpace(currentMessage.String())
-					if content != "" {
-						conversation.Messages = append(conversation.Messages, ConversationMessage{
-							Role:    currentRole,
-							Content: content,
-							Turn:    currentTurn,
-						})
-						currentMessage.Reset()
-					}
-				}
-			}
+	// Parse events.jsonl into structured conversation using conv package
+	msgs := conv.BuildConversation(data)
+	result := &Conversation{Messages: make([]ConversationMessage, len(msgs))}
+	for i, m := range msgs {
+		result.Messages[i] = ConversationMessage{
+			Role:    m.Role,
+			Content: m.Content,
+			Turn:    m.Turn,
 		}
 	}
-
-	// 添加最后一条消息
-	if currentMessage.Len() > 0 {
-		content := strings.TrimSpace(currentMessage.String())
-		if content != "" {
-			conversation.Messages = append(conversation.Messages, ConversationMessage{
-				Role:    currentRole,
-				Content: content,
-				Turn:    currentTurn,
-			})
-		}
-	}
-
-	return &conversation, nil
+	return result, nil
 }
 
-// FormatAsText 将对话格式化为纯文本
+// FormatAsText formats the conversation as plain text.
 func (c *Conversation) FormatAsText() string {
 	var builder strings.Builder
 
@@ -170,7 +70,7 @@ func (c *Conversation) FormatAsText() string {
 	return builder.String()
 }
 
-// FormatAsMarkdown 将对话格式化为 Markdown
+// FormatAsMarkdown formats the conversation as Markdown.
 func (c *Conversation) FormatAsMarkdown() string {
 	var builder strings.Builder
 
@@ -189,12 +89,12 @@ func (c *Conversation) FormatAsMarkdown() string {
 	return builder.String()
 }
 
-// GetLastAssistantResponse 获取助手的最后回复
+// GetLastAssistantResponse returns the last assistant response.
 func (c *Conversation) GetLastAssistantResponse() string {
 	return c.GetNthLastAssistantResponse(1)
 }
 
-// GetNthLastAssistantResponse 获取助手倒数第N条回复 (1=最后一条)
+// GetNthLastAssistantResponse returns the Nth-to-last assistant response (1=last).
 func (c *Conversation) GetNthLastAssistantResponse(n int) string {
 	count := 0
 	for i := len(c.Messages) - 1; i >= 0; i-- {
@@ -208,7 +108,7 @@ func (c *Conversation) GetNthLastAssistantResponse(n int) string {
 	return ""
 }
 
-// GetLastUserMessage 获取用户的最后消息
+// GetLastUserMessage returns the last user message.
 func (c *Conversation) GetLastUserMessage() string {
 	for i := len(c.Messages) - 1; i >= 0; i-- {
 		if c.Messages[i].Role == "user" {
