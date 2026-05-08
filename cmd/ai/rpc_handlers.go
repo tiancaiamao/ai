@@ -390,7 +390,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		writer:    sessionWriter,
 	}
 
-		concurrencyConfig := cfg.Concurrency
+	concurrencyConfig := cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
@@ -480,7 +480,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	currentThinkingLevel := "high"
 	autoCompactionEnabled := compactorConfig.AutoCompact
 	steeringMode := "all"
-		followUpMode := "one-at-a-time"
+	followUpMode := "one-at-a-time"
 	pendingSteer := false
 	var followUpQueue []string
 	showThinking := true
@@ -1003,7 +1003,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// get_available_models removed: /model already lists available models
 
-	server.RegisterSlash("set_model", "Set the active model by ID", func(args string) (any, error) {
+	server.RegisterHiddenSlash("set_model", "Set the active model by ID (internal, use /model instead)", func(args string) (any, error) {
 		var provider, modelID string
 		var jsonData struct {
 			Provider string `json:"provider"`
@@ -1466,7 +1466,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-	server.RegisterSlash("get_workflow_status", "Get workflow task status", func(args string) (any, error) {
+	server.RegisterHiddenSlash("get_workflow_status", "Get workflow task status (internal)", func(args string) (any, error) {
 		slog.Info("Received get_workflow_status")
 		status, err := getWorkflowStatus(ws.GetCWD())
 		if err != nil {
@@ -1480,7 +1480,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// cycle_thinking_level removed: use /set thinking-level instead
 
-	server.RegisterSlash("get_last_assistant_text", "Get the last assistant text response", func(args string) (any, error) {
+	server.RegisterHiddenSlash("get_last_assistant_text", "Get the last assistant text response (internal)", func(args string) (any, error) {
 		slog.Info("Received get_last_assistant_text")
 		messages := ag.GetMessages()
 		for i := len(messages) - 1; i >= 0; i-- {
@@ -1491,7 +1491,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return "", nil
 	})
 
-	server.RegisterSlash("get_fork_messages", "Get messages for a fork point", func(args string) (any, error) {
+	server.RegisterHiddenSlash("get_fork_messages", "Get messages for a fork point (internal)", func(args string) (any, error) {
 		slog.Info("Received get_fork_messages")
 		forkMessages := sess.GetUserMessagesForForking()
 		result := make([]rpc.ForkMessage, 0, len(forkMessages))
@@ -1505,7 +1505,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	})
 
 	// get_tree kept for win client compatibility (tree display still works in win)
-	server.RegisterSlash("get_tree", "Get the conversation tree structure", func(args string) (any, error) {
+	server.RegisterHiddenSlash("get_tree", "Get the conversation tree structure (internal)", func(args string) (any, error) {
 		slog.Info("Received get_tree")
 		entries := sess.GetEntries()
 		tree := buildTreeEntries(entries, sess.GetLeafID())
@@ -1608,9 +1608,9 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// These map the short command names users type (e.g. /help, /session)
 	// to the canonical RPC handlers registered above.
 
-	// Simple aliases: forward to an existing handler.
-	registerAlias := func(alias, desc, canonical string) {
-		server.RegisterSlash(alias, desc, func(args string) (any, error) {
+	// Hidden aliases: callable via RPC but not shown in /help.
+	registerHiddenAlias := func(alias, desc, canonical string) {
+		server.RegisterHiddenSlash(alias, desc, func(args string) (any, error) {
 			h, ok := server.GetSlashHandler(canonical)
 			if !ok {
 				return nil, fmt.Errorf("unknown command: /%s", canonical)
@@ -1656,19 +1656,19 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return h("trace-events " + args)
 	})
 
-	// /model-select → same logic as /model
-	registerAlias("model-select", "Select a model", "model")
+	// /model-select → same logic as /model (hidden, use /model instead)
+	registerHiddenAlias("model-select", "Select a model (alias for /model)", "model")
 
 	// Backward-compatible aliases for win client (internal RPC names).
 	// These old names are still sent by the win client and must be kept as aliases.
-	registerAlias("get_available_models", "List all available models (internal)", "model")
-	registerAlias("get_messages", "Get session messages (internal)", "messages")
-	registerAlias("get_state", "Get agent state (internal)", "session")
-	registerAlias("get_commands", "List commands (internal)", "skills")
-	registerAlias("get_session_stats", "Get session stats (internal)", "session")
-	registerAlias("new_session", "Create new session (internal)", "new")
-	registerAlias("list_sessions", "List sessions (internal)", "resume")
-	registerAlias("switch_session", "Switch session (internal)", "resume")
+	registerHiddenAlias("get_available_models", "List all available models (internal)", "model")
+	registerHiddenAlias("get_messages", "Get session messages (internal)", "messages")
+	registerHiddenAlias("get_state", "Get agent state (internal)", "session")
+	registerHiddenAlias("get_commands", "List commands (internal)", "skills")
+	registerHiddenAlias("get_session_stats", "Get session stats (internal)", "session")
+	registerHiddenAlias("new_session", "Create new session (internal)", "new")
+	registerHiddenAlias("list_sessions", "List sessions (internal)", "resume")
+	registerHiddenAlias("switch_session", "Switch session (internal)", "resume")
 
 	// For set_* commands, the win client sends args like {"enabled":true} but /set expects "subcommand value".
 	// We need custom forwarders that prepend the subcommand prefix.
@@ -1681,10 +1681,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return h(subcmd + " " + args)
 		}
 	}
-	server.RegisterSlash("set_auto_compaction", "Set auto-compaction (internal)", forwardToSet("auto-compaction"))
-	server.RegisterSlash("set_thinking_level", "Set thinking level (internal)", forwardToSet("thinking-level"))
-	server.RegisterSlash("set_trace_events", "Set trace events (internal)", forwardToSet("trace-events"))
-	server.RegisterSlash("get_trace_events", "Get trace events (internal)", forwardToSet("trace-events"))
+	server.RegisterHiddenSlash("set_auto_compaction", "Set auto-compaction (internal)", forwardToSet("auto-compaction"))
+	server.RegisterHiddenSlash("set_thinking_level", "Set thinking level (internal)", forwardToSet("thinking-level"))
+	server.RegisterHiddenSlash("set_trace_events", "Set trace events (internal)", forwardToSet("trace-events"))
+	server.RegisterHiddenSlash("get_trace_events", "Get trace events (internal)", forwardToSet("trace-events"))
 
 	// /model — no args: list models and mark current; with args: select model by index or id
 	server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
@@ -1844,12 +1844,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		statsResult, _ := statsH("")
 		modelsResult, _ := modelsH("")
 
-				return map[string]any{
+		return map[string]any{
 			"state":  stateResult,
 			"stats":  statsResult,
 			"models": modelsResult,
 		}, nil
-		})
+	})
 
 	// Display settings: /toggle thinking|prefix, /set tools|busy-mode
 	server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix, tools)", func(args string) (any, error) {
@@ -1869,7 +1869,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	})
 
-		server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+	server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
 		subCmd := strings.TrimSpace(args)
 		switch subCmd {
 		case "settings", "":
@@ -1918,20 +1918,20 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			return map[string]any{
 				"type": "settings",
 				"data": map[string]any{
-					"model":                          model,
-					"show-thinking":                  showThinkingStr,
-					"tools":                          showToolsStr,
-					"prefix":                         showPrefixStr,
-					"thinking-level":                 currentThinkingLevel,
-					"busy-mode":                      busyMode,
-					"auto-compaction":                autoCompStr,
-					"compaction-context-window":      compactionContext,
-					"compaction-reserve-tokens":      compactionReserve,
-					"compaction-token-limit":         compactionLimit,
-					"compaction-max-messages":        compactionMaxMessages,
-					"compaction-max-tokens":          compactionMaxTokens,
-					"compaction-keep-recent":         compactionKeepRecent,
-					"compaction-keep-recent-tokens":  compactionKeepRecentTokens,
+					"model":                         model,
+					"show-thinking":                 showThinkingStr,
+					"tools":                         showToolsStr,
+					"prefix":                        showPrefixStr,
+					"thinking-level":                currentThinkingLevel,
+					"busy-mode":                     busyMode,
+					"auto-compaction":               autoCompStr,
+					"compaction-context-window":     compactionContext,
+					"compaction-reserve-tokens":     compactionReserve,
+					"compaction-token-limit":        compactionLimit,
+					"compaction-max-messages":       compactionMaxMessages,
+					"compaction-max-tokens":         compactionMaxTokens,
+					"compaction-keep-recent":        compactionKeepRecent,
+					"compaction-keep-recent-tokens": compactionKeepRecentTokens,
 				},
 			}, nil
 		case "pipeline":
@@ -1939,7 +1939,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		default:
 			return nil, fmt.Errorf("usage: /show settings|pipeline")
 		}
-		})
+	})
 
 	// /quit — quit the application
 	server.RegisterSlash("quit", "Exit the application", func(args string) (any, error) {
@@ -1954,11 +1954,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not streaming")
 		}
-		
+
 		ag.Abort()
 		return map[string]any{"status": "aborting"}, nil
 	})
@@ -1969,32 +1969,32 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		if message == "" {
 			return nil, fmt.Errorf("usage: /follow-up <message>")
 		}
-		
+
 		slog.Info("Received follow-up command")
 		stateMu.Lock()
 		streaming := isStreaming
 		stateMu.Unlock()
-		
+
 		if !streaming {
 			return nil, fmt.Errorf("agent is not busy")
 		}
-		
+
 		// Check if follow-up mode allows this
 		if followUpMode != "one-at-a-time" && followUpMode != "queue" {
 			return nil, fmt.Errorf("follow-up mode is '%s', not enabled", followUpMode)
 		}
-		
+
 		// Check if there's already a pending follow-up
 		if len(followUpQueue) > 0 && followUpMode == "one-at-a-time" {
 			return nil, fmt.Errorf("follow-up queue already has a pending message")
 		}
-		
+
 		expandedMessage := expandSkillCommands(message)
 		followUpQueue = append(followUpQueue, expandedMessage)
 		return map[string]any{"status": "queued", "message": expandedMessage}, nil
 	})
 
-		// /steer — alias for steering when agent is busy
+	// /steer — alias for steering when agent is busy
 	// steer removed: now default behavior when agent is streaming (busy-mode default is steer)
 
 	// Start event emitter

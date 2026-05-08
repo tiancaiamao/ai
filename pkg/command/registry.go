@@ -19,6 +19,7 @@ type Handler func(args string) (any, error)
 type CommandInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Hidden      bool   `json:"hidden,omitempty"`
 }
 
 // SetSubcommand describes a subcommand available under /set.
@@ -32,6 +33,7 @@ type Registry struct {
 	mu       sync.RWMutex
 	handlers map[string]Handler
 	info     map[string]string // name -> description
+	hidden   map[string]bool   // name -> hidden from user-facing listings
 
 	setMu       sync.RWMutex
 	setHandlers map[string]Handler
@@ -43,6 +45,7 @@ func New() *Registry {
 	return &Registry{
 		handlers:    make(map[string]Handler),
 		info:        make(map[string]string),
+		hidden:      make(map[string]bool),
 		setHandlers: make(map[string]Handler),
 		setInfo:     make(map[string]string),
 	}
@@ -56,6 +59,15 @@ func (r *Registry) Register(name, description string, handler Handler) {
 	defer r.mu.Unlock()
 	r.handlers[name] = handler
 	r.info[name] = description
+}
+
+// RegisterHidden registers a slash command that is callable but hidden from /help listings.
+func (r *Registry) RegisterHidden(name, description string, handler Handler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.handlers[name] = handler
+	r.info[name] = description
+	r.hidden[name] = true
 }
 
 // Get looks up a handler by command name.
@@ -79,13 +91,34 @@ func (r *Registry) List() []string {
 	return names
 }
 
-// ListCommands returns all registered commands with descriptions, sorted by name.
+// ListCommands returns user-visible commands (excluding hidden ones), sorted by name.
 func (r *Registry) ListCommands() []CommandInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]CommandInfo, 0, len(r.handlers))
 	for name, desc := range r.info {
+		if r.hidden[name] {
+			continue
+		}
 		result = append(result, CommandInfo{Name: name, Description: desc})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+// AllCommands returns all registered commands including hidden ones, sorted by name.
+func (r *Registry) AllCommands() []CommandInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]CommandInfo, 0, len(r.handlers))
+	for name, desc := range r.info {
+		result = append(result, CommandInfo{
+			Name:        name,
+			Description: desc,
+			Hidden:      r.hidden[name],
+		})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name < result[j].Name

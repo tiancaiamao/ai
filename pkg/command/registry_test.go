@@ -193,6 +193,40 @@ func TestParseSlashCommand(t *testing.T) {
 	}
 }
 
+func TestRegistryListCommandsHiddenExcluded(t *testing.T) {
+	r := New()
+	r.Register("alpha", "first command", func(args string) (any, error) { return nil, nil })
+	r.RegisterHidden("bravo", "hidden command", func(args string) (any, error) { return nil, nil })
+	r.Register("charlie", "third command", func(args string) (any, error) { return nil, nil })
+
+	// ListCommands should exclude hidden
+	infos := r.ListCommands()
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 visible commands, got %d: %v", len(infos), infos)
+	}
+	if infos[0].Name != "alpha" || infos[1].Name != "charlie" {
+		t.Fatalf("expected [alpha, charlie], got %v", infos)
+	}
+
+	// AllCommands should include all with Hidden flag
+	all := r.AllCommands()
+	if len(all) != 3 {
+		t.Fatalf("expected 3 total commands, got %d", len(all))
+	}
+	if all[0].Hidden {
+		t.Fatalf("alpha should not be hidden")
+	}
+	if !all[1].Hidden {
+		t.Fatalf("bravo should be hidden")
+	}
+
+	// Hidden command should still be callable
+	_, ok := r.Get("bravo")
+	if !ok {
+		t.Fatal("hidden command should still be callable via Get")
+	}
+}
+
 func TestParseSlashCommandWhitespace(t *testing.T) {
 	cmd, args, err := ParseSlashCommand("/model   gpt-4  o3")
 	if err != nil {

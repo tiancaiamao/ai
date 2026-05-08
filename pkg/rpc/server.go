@@ -72,12 +72,17 @@ func (s *Server) RegisterSlash(name, description string, handler SlashHandler) {
 	s.commands.Register(name, description, handler)
 }
 
+// RegisterHiddenSlash registers a slash command that is callable but hidden from /help.
+func (s *Server) RegisterHiddenSlash(name, description string, handler SlashHandler) {
+	s.commands.RegisterHidden(name, description, handler)
+}
+
 // GetSlashHandler returns the slash command handler for the given name, if any.
 func (s *Server) GetSlashHandler(name string) (SlashHandler, bool) {
 	return s.commands.Get(name)
 }
 
-// ListSlashCommands returns all registered slash commands sorted by name.
+// ListSlashCommands returns user-visible slash commands (excludes hidden), sorted by name.
 func (s *Server) ListSlashCommands() []SlashCommandInfo {
 	return s.commands.ListCommands()
 }
