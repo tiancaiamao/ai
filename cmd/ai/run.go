@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -270,8 +271,26 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	// Print run ID to stdout — caller can capture this.
+		// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
+
+	// Watch events.jsonl for agent_end — when the agent finishes, close stdin
+	// to trigger the RPC subprocess to exit. Without this, "ai serve" blocks
+	// forever because the RPC server loops on stdin.
+	go func() {
+		for {
+			data, err := os.ReadFile(eventsPath)
+			if err != nil {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			if bytes.Contains(data, []byte(`"agent_end"`)) {
+				stdinWriter.Close()
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
 
 	// Wait for subprocess to exit.
 	waitErr := cmd.Wait()
