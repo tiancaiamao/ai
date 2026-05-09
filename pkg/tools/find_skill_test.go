@@ -292,7 +292,8 @@ func TestFindSkill_SearchLimitsToFive(t *testing.T) {
 			Content:     "content",
 		})
 	}
-	tool := NewFindSkillTool(skills, nil)
+		tool := NewFindSkillTool(skills, nil)
+	tool.SetIndexPath("") // disable index loading to test pure skill search
 
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"query": "skill",

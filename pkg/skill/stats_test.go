@@ -19,6 +19,48 @@ func TestStatsLoadNonexistentFile(t *testing.T) {
 	}
 	if s.Version != statsVersion {
 		t.Errorf("expected Version=%d, got %d", statsVersion, s.Version)
+		}
+}
+
+func TestStatsConcurrentRecordUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+	s := LoadStats(path)
+
+	// Simulate 15 concurrent find_skill calls all calling RecordUsage + Save
+	const concurrency = 15
+	done := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(idx int) {
+			name := []string{
+				"skill", "agent", "web", "automate", "code",
+				"debug", "plan", "tool", "notes", "docs",
+				"search", "analyze", "security", "test", "deploy",
+			}[idx]
+			s.RecordUsage(name)
+			done <- s.Save()
+		}(i)
+	}
+
+	for i := 0; i < concurrency; i++ {
+		if err := <-done; err != nil {
+			t.Errorf("goroutine %d: Save failed: %v", i, err)
+		}
+	}
+
+	// Verify all 15 entries were recorded
+	if len(s.Entries) != concurrency {
+		t.Errorf("expected %d entries, got %d", concurrency, len(s.Entries))
+	}
+
+	// Verify file is valid JSON
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("saved file is not valid JSON: %v", err)
 	}
 }
 

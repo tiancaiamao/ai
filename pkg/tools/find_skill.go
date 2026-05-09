@@ -47,11 +47,17 @@ func NewFindSkillTool(skills []skill.Skill, stats *skill.SkillStatsFile) *FindSk
 	if home != "" {
 		indexPath = filepath.Join(home, ".ai", "skill-index.json")
 	}
-	return &FindSkillTool{
+		return &FindSkillTool{
 		skills:    skills,
 		stats:     stats,
 		indexPath: indexPath,
 	}
+}
+
+// SetIndexPath overrides the default skill-index.json path.
+// Useful for testing to avoid loading the real index.
+func (t *FindSkillTool) SetIndexPath(path string) {
+	t.indexPath = path
 }
 
 // Name returns the tool name.

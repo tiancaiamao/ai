@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type SkillUsageEntry struct {
 
 // SkillStatsFile holds persisted skill usage statistics.
 type SkillStatsFile struct {
+	mu       sync.Mutex                   `json:"-"`
 	Version  int                         `json:"version"`
 	TopN     int                         `json:"topN"`
 	Entries  map[string]*SkillUsageEntry `json:"entries"`
@@ -80,6 +82,9 @@ func LoadStats(path string) *SkillStatsFile {
 // the increment. After incrementing Count and setting LastUsed to now,
 // Score is recomputed as the new Count (since hours since new LastUsed = 0).
 func (s *SkillStatsFile) RecordUsage(skillName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	now := time.Now()
 
 	entry, ok := s.Entries[skillName]
@@ -94,8 +99,11 @@ func (s *SkillStatsFile) RecordUsage(skillName string) {
 }
 
 // Save writes the stats to s.FilePath as JSON.
+// Caller must NOT hold s.mu; Save acquires it internally.
 func (s *SkillStatsFile) Save() error {
+	s.mu.Lock()
 	data, err := json.MarshalIndent(s, "", "  ")
+	s.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -119,6 +127,9 @@ func (s *SkillStatsFile) Save() error {
 // which equals Count * 0.5^(hours_since_last_use / 168).
 // If n <= 0, it returns an empty slice.
 func (s *SkillStatsFile) TopSkills(n int) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if n <= 0 {
 		return nil
 	}
