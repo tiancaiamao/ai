@@ -24,7 +24,7 @@ import (
 
 	"github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/sipeed/picoclaw/pkg/bus"
-			"github.com/tiancaiamao/ai/claw/pkg/voice"
+	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -101,7 +101,7 @@ type AgentLoop struct {
 
 	// Configuration
 	sessionsDir string // session storage directory (passed to ConnManager)
-	clawDir     string // claw config directory (~/.aiclaw)
+	clawDir     string // claw config directory (~/.ai)
 
 	// Voice transcription support
 	transcriber voice.Transcriber
@@ -129,7 +129,7 @@ type AppConfig struct {
 	SystemPrompt string // basic identity prompt passed to ai subprocess
 
 	// Paths
-	ClawDir string // claw config directory (~/.aiclaw)
+	ClawDir string // claw config directory (~/.ai)
 
 	// Voice support
 	Transcriber voice.Transcriber
@@ -654,7 +654,7 @@ func (a *AgentLoop) findFeishuAudioMessageID(ctx context.Context, chatID, fileKe
 		if item.MessageID == "" || item.MessageType != "audio" {
 			continue
 		}
-				if strings.Contains(item.Body.Content, fileKey) {
+		if strings.Contains(item.Body.Content, fileKey) {
 			return item.MessageID, nil
 		}
 	}
@@ -730,7 +730,7 @@ func (a *AgentLoop) getFeishuAccessToken(ctx context.Context) (string, error) {
 
 // feishuMessageListResponse represents the Feishu message list API response.
 type feishuMessageListResponse struct {
-	Code int `json:"code"`
+	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
 		Items []struct {
@@ -790,4 +790,3 @@ func truncate(s string, maxLen int) string {
 	}
 	return s[:maxLen]
 }
-

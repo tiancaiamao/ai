@@ -79,8 +79,8 @@ type Server struct {
 	clawDir      string
 	shutdownOnce sync.Once
 	// Weixin flow state
-	weixinMu     sync.RWMutex
-	weixinFlows  map[string]*weixinFlow
+	weixinMu    sync.RWMutex
+	weixinFlows map[string]*weixinFlow
 }
 
 // Config is the configuration for the web server.
@@ -106,7 +106,7 @@ func NewServer(cfg *Config, agentLoop *adapter.AgentLoop, msgBus *bus.MessageBus
 		cfg = DefaultConfig()
 	}
 
-			// Determine listen address: Host takes precedence over deprecated Public flag
+	// Determine listen address: Host takes precedence over deprecated Public flag
 	host := cfg.Host
 	if host == "" {
 		if cfg.Public {
@@ -150,7 +150,7 @@ func (s *Server) Start() (string, error) {
 	go func() {
 		fmt.Printf("\n")
 		fmt.Printf("╔═══════════════════════════════════════════════════════════════╗\n")
-				fmt.Printf("║  🌐 Claw Web Server                                         ║\n")
+		fmt.Printf("║  🌐 Claw Web Server                                         ║\n")
 		fmt.Printf("╠═══════════════════════════════════════════════════════════════╣\n")
 		displayHost := s.addr
 		fmt.Printf("║  Web UI: http://%-43s║\n", displayHost)
@@ -360,7 +360,7 @@ func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
 
 	// Send welcome message (Pico protocol format)
 	if err := conn.WriteJSON(map[string]any{
-		"type":    "connected",
+		"type": "connected",
 		"payload": map[string]any{
 			"message":    "Connected to Claw Web Server",
 			"session_id": sessionID,
@@ -441,7 +441,7 @@ func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
 				if err != nil {
 					fmt.Printf("[Web Server] Error processing message: %v\n", err)
 					conn.WriteJSON(map[string]any{
-						"type":    "error",
+						"type": "error",
 						"payload": map[string]any{
 							"code":    "processing_error",
 							"message": fmt.Sprintf("Error: %v", err),
@@ -459,7 +459,7 @@ func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
 
 				// Send response as message.create (Pico protocol format)
 				if err := conn.WriteJSON(map[string]any{
-					"type":    "message.create",
+					"type": "message.create",
 					"payload": map[string]any{
 						"content": response,
 					},
@@ -474,7 +474,7 @@ func (s *Server) handleWebSocketConnection(conn *websocket.Conn, token string) {
 			if requestedSessionID != "" {
 				sessionID = requestedSessionID
 				conn.WriteJSON(map[string]any{
-					"type":    "session_resumed",
+					"type":       "session_resumed",
 					"session_id": sessionID,
 				})
 			}
@@ -496,8 +496,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]any, 0)
 	for _, key := range sessionKeys {
 		result = append(result, map[string]any{
-			"id":   key,
-			"key":  key,
+			"id":  key,
+			"key": key,
 		})
 	}
 
@@ -594,7 +594,7 @@ func (s *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		// Read default model name from agents.defaults.model_name (picoclaw format)
+	// Read default model name from agents.defaults.model_name (picoclaw format)
 	currentModelName := ""
 	if configData, err := os.ReadFile(s.configPath); err == nil {
 		var config map[string]any
@@ -691,7 +691,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		// Get default model name from agents.defaults.model_name (picoclaw format)
+	// Get default model name from agents.defaults.model_name (picoclaw format)
 	defaultModelName := ""
 	if agents, ok := config["agents"].(map[string]any); ok {
 		if defaults, ok := agents["defaults"].(map[string]any); ok {
@@ -702,7 +702,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to use model_list from config first (for picoclaw frontend compatibility)
-		// Load auth.json for masked API key display
+	// Load auth.json for masked API key display
 	authKeys := s.loadAuthKeys()
 
 	modelList := []map[string]any{}
@@ -721,14 +721,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 				}
 
 				modelInfo := map[string]any{
-					"index":       i,
-					"model_name":  modelMap["model_name"],
-					"model":       modelMap["model"],
-					"api_base":    modelMap["api_base"],
-					"provider":    provider,
-					"configured":  true,
-					"is_default":  false,
-					"is_virtual":  false,
+					"index":      i,
+					"model_name": modelMap["model_name"],
+					"model":      modelMap["model"],
+					"api_base":   modelMap["api_base"],
+					"provider":   provider,
+					"configured": true,
+					"is_default": false,
+					"is_virtual": false,
 				}
 
 				// Add masked API key if available
@@ -752,7 +752,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	if !hasModelList {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
-			modelsPath := filepath.Join(homeDir, ".aiclaw", "models.json")
+			modelsPath := filepath.Join(homeDir, ".ai", "models.json")
 			specs, err := aiconfig.LoadModelSpecs(modelsPath)
 			if err == nil {
 				for i, spec := range specs {
@@ -762,14 +762,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 					}
 
 					modelInfo := map[string]any{
-						"index":       i,
-						"model_name":  displayName,
-						"model":       spec.ID,
-						"api_base":    spec.BaseURL,
-						"provider":    spec.Provider,
-						"configured":  true,
-						"is_default":  false,
-						"is_virtual":  false,
+						"index":      i,
+						"model_name": displayName,
+						"model":      spec.ID,
+						"api_base":   spec.BaseURL,
+						"provider":   spec.Provider,
+						"configured": true,
+						"is_default": false,
+						"is_virtual": false,
 					}
 
 					// Add masked API key if available
@@ -842,7 +842,7 @@ func (s *Server) handleAddModel(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "error",
-		"message": "Model management through UI not supported. Configure model in ~/.aiclaw/config.json",
+		"message": "Model management through UI not supported. Configure model in ~/.ai/config.json",
 	})
 }
 
@@ -948,7 +948,7 @@ func (s *Server) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 }
 
 // handleDeleteModel deletes a model (not supported for claw).
@@ -961,7 +961,7 @@ func (s *Server) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "error",
-		"message": "Model deletion through UI not supported. Configure model in ~/.aiclaw/config.json",
+		"message": "Model deletion through UI not supported. Configure model in ~/.ai/config.json",
 	})
 }
 
@@ -1096,10 +1096,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-// Note: Service restart is required for config changes to take effect
+	// Note: Service restart is required for config changes to take effect
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":  "success",
-		"message": "Configuration updated. Service restart is required for changes to take effect.",
+		"status":      "success",
+		"message":     "Configuration updated. Service restart is required for changes to take effect.",
 		"config_path": s.configPath,
 	})
 }
@@ -1716,33 +1716,33 @@ func (s *Server) handleChannelsCatalog(w http.ResponseWriter, r *http.Request) {
 
 	// Display names for channels
 	displayNames := map[string]string{
-		"dingtalk":  "DingTalk",
-		"discord":   "Discord",
-		"feishu":     "Feishu/Lark",
-		"irc":       "IRC",
-		"line":      "LINE",
-		"maixcam":   "MaixCAM",
-		"matrix":    "Matrix",
-		"onebot":    "OneBot",
-		"pico":      "PicoClaw Web",
+		"dingtalk":    "DingTalk",
+		"discord":     "Discord",
+		"feishu":      "Feishu/Lark",
+		"irc":         "IRC",
+		"line":        "LINE",
+		"maixcam":     "MaixCAM",
+		"matrix":      "Matrix",
+		"onebot":      "OneBot",
+		"pico":        "PicoClaw Web",
 		"pico_client": "PicoClaw Client",
-		"qq":        "QQ",
-		"slack":     "Slack",
-		"telegram":  "Telegram",
-		"wecom":     "WeCom",
+		"qq":          "QQ",
+		"slack":       "Slack",
+		"telegram":    "Telegram",
+		"wecom":       "WeCom",
 		"wecom_aibot": "WeCom AiBot",
-		"wecom_app": "WeCom App",
-		"weixin":    "Weixin",
-		"whatsapp":  "WhatsApp",
+		"wecom_app":   "WeCom App",
+		"weixin":      "Weixin",
+		"whatsapp":    "WhatsApp",
 	}
 
 	for name, cfg := range channels {
 		if cfgMap, ok := cfg.(map[string]any); ok {
 			channelInfo := map[string]any{
-				"name":        name,
+				"name":         name,
 				"display_name": displayNames[name],
-				"config_key":  name,
-				"enabled":     cfgMap["enabled"],
+				"config_key":   name,
+				"enabled":      cfgMap["enabled"],
 			}
 			supportedChannels = append(supportedChannels, channelInfo)
 		}
@@ -1867,8 +1867,8 @@ func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 	if channelMap, ok := channel.(map[string]any); ok {
 		filterSensitiveFields(channelMap)
 		json.NewEncoder(w).Encode(map[string]any{
-			"name":     channelName,
-			"config":   channelMap,
+			"name":   channelName,
+			"config": channelMap,
 		})
 	} else {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1958,7 +1958,7 @@ func main() {
 	public := flag.Bool("public", false, "Listen on all interfaces")
 	flag.Parse()
 
-		if err := RunAsStandalone(*port, *public); err != nil {
+	if err := RunAsStandalone(*port, *public); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -1982,19 +1982,19 @@ func (s *Server) deriveProviderFromModel(entry map[string]any) string {
 			host := u.Hostname()
 			// Map known hosts to provider names
 			hostToProvider := map[string]string{
-				"api.openai.com":              "openai",
-				"api.anthropic.com":           "anthropic",
-				"api.deepseek.com":            "deepseek",
-				"api.moonshot.cn":             "moonshot",
-				"dashscope.aliyuncs.com":      "qwen",
+				"api.openai.com":                    "openai",
+				"api.anthropic.com":                 "anthropic",
+				"api.deepseek.com":                  "deepseek",
+				"api.moonshot.cn":                   "moonshot",
+				"dashscope.aliyuncs.com":            "qwen",
 				"generativelanguage.googleapis.com": "google",
-				"api.minimaxi.com":            "minimax",
-				"openrouter.ai":               "openrouter",
-				"api.cerebras.ai":             "cerebras",
-				"ark.cn-beijing.volces.com":   "volcengine",
-				"api.shengsuanyun.com":        "shengsuanyun",
-				"api.z.ai":                    "zai",
-				"api.zhipuai.com":             "zhipu",
+				"api.minimaxi.com":                  "minimax",
+				"openrouter.ai":                     "openrouter",
+				"api.cerebras.ai":                   "cerebras",
+				"ark.cn-beijing.volces.com":         "volcengine",
+				"api.shengsuanyun.com":              "shengsuanyun",
+				"api.z.ai":                          "zai",
+				"api.zhipuai.com":                   "zhipu",
 			}
 			for hostPattern, provider := range hostToProvider {
 				if strings.Contains(host, hostPattern) {
@@ -2012,14 +2012,14 @@ func (s *Server) deriveProviderFromModel(entry map[string]any) string {
 	return ""
 }
 
-// saveAPIKeyToAuth saves an API key for a provider to ~/.aiclaw/auth.json.
+// saveAPIKeyToAuth saves an API key for a provider to ~/.ai/auth.json.
 func (s *Server) saveAPIKeyToAuth(provider, apiKey string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home dir: %w", err)
 	}
 
-	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
+	authPath := filepath.Join(homeDir, ".ai", "auth.json")
 
 	// Read existing auth.json or start fresh
 	auth := make(map[string]map[string]string)
@@ -2035,7 +2035,7 @@ func (s *Server) saveAPIKeyToAuth(provider, apiKey string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth.json: %w", err)
 	}
-		return os.WriteFile(authPath, data, 0644)
+	return os.WriteFile(authPath, data, 0644)
 }
 
 // loadAuthKeys reads auth.json and returns a map of provider -> apiKey.
@@ -2045,7 +2045,7 @@ func (s *Server) loadAuthKeys() map[string]string {
 	if err != nil {
 		return keys
 	}
-	authPath := filepath.Join(homeDir, ".aiclaw", "auth.json")
+	authPath := filepath.Join(homeDir, ".ai", "auth.json")
 	data, err := os.ReadFile(authPath)
 	if err != nil {
 		return keys
@@ -2077,19 +2077,19 @@ func deriveProvider(entry map[string]any) string {
 		if err == nil {
 			host := u.Hostname()
 			hostToProvider := map[string]string{
-				"api.openai.com":                         "openai",
-				"api.anthropic.com":                      "anthropic",
-				"api.deepseek.com":                       "deepseek",
-				"api.moonshot.cn":                        "moonshot",
-				"dashscope.aliyuncs.com":                 "qwen",
-				"generativelanguage.googleapis.com":       "google",
-				"api.minimaxi.com":                       "minimax",
-				"openrouter.ai":                          "openrouter",
-				"api.cerebras.ai":                        "cerebras",
-				"ark.cn-beijing.volces.com":              "volcengine",
-				"api.shengsuanyun.com":                   "shengsuanyun",
-				"api.z.ai":                               "zai",
-				"api.zhipuai.com":                        "zhipu",
+				"api.openai.com":                    "openai",
+				"api.anthropic.com":                 "anthropic",
+				"api.deepseek.com":                  "deepseek",
+				"api.moonshot.cn":                   "moonshot",
+				"dashscope.aliyuncs.com":            "qwen",
+				"generativelanguage.googleapis.com": "google",
+				"api.minimaxi.com":                  "minimax",
+				"openrouter.ai":                     "openrouter",
+				"api.cerebras.ai":                   "cerebras",
+				"ark.cn-beijing.volces.com":         "volcengine",
+				"api.shengsuanyun.com":              "shengsuanyun",
+				"api.z.ai":                          "zai",
+				"api.zhipuai.com":                   "zhipu",
 			}
 			for hostPattern, provider := range hostToProvider {
 				if strings.Contains(host, hostPattern) {

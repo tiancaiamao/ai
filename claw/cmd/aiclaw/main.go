@@ -1,5 +1,5 @@
 // aiclaw - AI Claw Bot with picoclaw channels and ai agent core.
-// Configuration is unified in ~/.aiclaw/config.json
+// Configuration is unified in ~/.ai/config.json
 package main
 
 import (
@@ -24,12 +24,12 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
-	_ "github.com/sipeed/picoclaw/pkg/channels/feishu"    // 注册飞书通道工厂
-	_ "github.com/sipeed/picoclaw/pkg/channels/pico"      // 注册 Pico Channel 工厂
-	_ "github.com/sipeed/picoclaw/pkg/channels/weixin"    // 注册微信通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/feishu" // 注册飞书通道工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/pico"   // 注册 Pico Channel 工厂
+	_ "github.com/sipeed/picoclaw/pkg/channels/weixin" // 注册微信通道工厂
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
-		"github.com/tiancaiamao/ai/claw/pkg/adapter"
+	"github.com/tiancaiamao/ai/claw/pkg/adapter"
 	"github.com/tiancaiamao/ai/claw/pkg/cron"
 	"github.com/tiancaiamao/ai/claw/pkg/voice"
 	"github.com/tiancaiamao/ai/claw/pkg/web"
@@ -39,7 +39,7 @@ import (
 
 var (
 	logLevel = flag.String("log-level", "info", "Log level: debug, info, warn, error")
-	trace    = flag.Bool("trace", false, "Enable trace output to ~/.aiclaw/traces/")
+	trace    = flag.Bool("trace", false, "Enable trace output to ~/.ai/traces/")
 )
 
 // ModelConfig 模型配置
@@ -75,14 +75,14 @@ func main() {
 	// Setup logging
 	setupLogging(*logLevel)
 
-	// 加载统一配置 (~/.aiclaw/config.json)
+	// 加载统一配置 (~/.ai/config.json)
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("Failed to get home directory", "error", err)
 		os.Exit(1)
 	}
 
-		clawDir := filepath.Join(homeDir, ".ai")
+	clawDir := filepath.Join(homeDir, ".ai")
 
 	lockFile, err := acquireInstanceLock(clawDir)
 	if err != nil {
@@ -91,7 +91,7 @@ func main() {
 	}
 	defer releaseInstanceLock(lockFile)
 
-	// 设置 trace 输出到 ~/.aiclaw/traces/（可选，调试时启用）
+	// 设置 trace 输出到 ~/.ai/traces/（可选，调试时启用）
 	if *trace {
 		if err := setupTracing(clawDir); err != nil {
 			slog.Warn("Failed to setup tracing", "error", err)
@@ -177,7 +177,7 @@ func main() {
 		os.Exit(1)
 	}
 
-		// Create AgentLoop
+	// Create AgentLoop
 	var transcriber voice.Transcriber
 	if cfg.Voice.Enabled {
 		// 确定语音服务提供商
@@ -234,17 +234,17 @@ func main() {
 			}
 		}
 	}
-		if len(skillResult.Skills) > 0 {
+	if len(skillResult.Skills) > 0 {
 		slog.Info("Loaded skills", "count", len(skillResult.Skills))
 	}
 
 	// Load skill usage stats for progressive disclosure
 	skillStats := skill.LoadStats(filepath.Join(clawDir, "skill-stats.json"))
 
-		slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
+	slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
 
 	agentConfig := &adapter.AppConfig{
-				SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills, skillStats),
+		SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills, skillStats),
 		ClawDir:         clawDir,
 		Transcriber:     transcriber,
 		FeishuAppID:     picoCfg.Channels.Feishu.AppID,
@@ -252,7 +252,7 @@ func main() {
 		Skills:          skillResult.Skills,
 	}
 
-			// Create AgentLoop
+	// Create AgentLoop
 	agentLoop := adapter.NewAgentLoop(agentConfig, msgBus)
 
 	// Setup context and signal handling
@@ -284,7 +284,7 @@ func main() {
 	}
 
 	// 注册 cron 命令
-		registerCronCommands(agentLoop, cronService)
+	registerCronCommands(agentLoop, cronService)
 
 	// Start cron service
 	if err := cronService.Start(); err != nil {
@@ -294,7 +294,7 @@ func main() {
 	}
 	defer cronService.Stop()
 
-							// 启动 Web 服务器（可选）
+	// 启动 Web 服务器（可选）
 	var webSrv *web.Server
 	// WebEnabled: nil (not configured) or true → enabled, explicit false → disabled.
 	webDisabled := cfg.WebEnabled != nil && !*cfg.WebEnabled
@@ -467,7 +467,7 @@ func (h *simpleHandler) WithGroup(name string) slog.Handler {
 	return h
 }
 
-// setupTracing 配置 trace 输出到 ~/.aiclaw/traces/
+// setupTracing 配置 trace 输出到 ~/.ai/traces/
 // claw 模式：slog 日志到控制台，trace 事件到文件（分离模式）
 func setupTracing(clawDir string) error {
 	tracesDir := filepath.Join(clawDir, "traces")
@@ -580,7 +580,7 @@ func loadConfig(path string) (*Config, error) {
 }
 
 // validate ensures required configuration fields are present
-// 
+//
 // Why load from config instead of hardcoding defaults?
 // 1. User flexibility: Different users may prefer different models (e.g., glm-4-flash, gpt-4, claude)
 // 2. Environment-specific: Development vs production may use different providers
@@ -588,15 +588,15 @@ func loadConfig(path string) (*Config, error) {
 // 4. No surprises: Explicit config prevents unexpected behavior from silent defaults
 // 5. Multi-tenant: Different deployments can use different models without code changes
 func (c *Config) validate() error {
-	// Model ID is required - should be configured in ~/.aiclaw/config.json
+	// Model ID is required - should be configured in ~/.ai/config.json
 	if c.Model.ID == "" {
 		return fmt.Errorf("model.id is required in config.json")
 	}
-	// Provider is required - should be configured in ~/.aiclaw/config.json
+	// Provider is required - should be configured in ~/.ai/config.json
 	if c.Model.Provider == "" {
 		return fmt.Errorf("model.provider is required in config.json")
 	}
-	// BaseURL is required - should be configured in ~/.aiclaw/config.json
+	// BaseURL is required - should be configured in ~/.ai/config.json
 	if c.Model.BaseURL == "" {
 		return fmt.Errorf("model.baseUrl is required in config.json")
 	}
@@ -640,7 +640,7 @@ func resolveAPIKey(clawDir, provider string) (string, error) {
 }
 
 // buildSystemPrompt 构建 system prompt (picoclaw style)
-// 支持从 ~/.aiclaw/AGENTS.md 加载自定义身份
+// 支持从 ~/.ai/AGENTS.md 加载自定义身份
 // 集成 memory 系统 (MEMORY.md + daily notes)
 func buildSystemPrompt(clawDir string, skills []skill.Skill, skillStats *skill.SkillStatsFile) string {
 	// Picoclaw 风格的默认身份
@@ -657,7 +657,7 @@ You are claw, a helpful AI assistant.
 3. **Be concise** - Chat messages should be brief and readable. Avoid overly long explanations.
 
 4. **Memory** - When you learn something memorable about the user (preferences, decisions, important facts), use the tiered-memory skill via Bash tool:
-   - To store: 'python3 ~/.aiclaw/skills/tiered-memory/scripts/memory_cli.py store --text "fact" --category "category" --importance 0.8'
+      - To store: 'python3 ~/.ai/skills/tiered-memory/scripts/memory_cli.py store --text "fact" --category "category" --importance 0.8'
    - Categories: preferences, decisions, projects, lessons, conversations
    - For more details, read the tiered-memory skill file using the Read tool
 
@@ -667,7 +667,7 @@ You are claw, a helpful AI assistant.
 - Skills: %s/skills/{skill-name}/SKILL.md
 `, clawDir, clawDir)
 
-		// Try to load custom identity from AGENTS.md (prefer ~/.ai, fall back to ~/.aiclaw)
+	// Try to load custom identity from AGENTS.md (prefer ~/.ai, fall back to ~/.aiclaw)
 	basePrompt := defaultIdentity
 	agentsPath := filepath.Join(clawDir, "AGENTS.md")
 	if content, err := os.ReadFile(agentsPath); err == nil && len(content) > 0 {
@@ -686,7 +686,7 @@ You are claw, a helpful AI assistant.
 	// 构建提示词部分
 	parts := []string{basePrompt}
 
-		// Add skills section using shared formatter (top-N filtering + find_skill footer)
+	// Add skills section using shared formatter (top-N filtering + find_skill footer)
 	if skillsText := skill.FormatForPrompt(skills, skillStats); skillsText != "" {
 		parts = append(parts, skillsText)
 	}
@@ -697,7 +697,7 @@ You are claw, a helpful AI assistant.
 // registerCronCommands registers cron control commands.
 func registerCronCommands(agentLoop *adapter.AgentLoop, cronService *cron.CronService) {
 	// /cron - shows cron usage
-		agentLoop.RegisterCommand("cron", func(args string) (string, error) {
+	agentLoop.RegisterCommand("cron", func(args string) (string, error) {
 		if cronService == nil {
 			return "Cron service is not configured", nil
 		}
@@ -896,5 +896,3 @@ func truncate(s string, maxLen int) string {
 	}
 	return s[:maxLen]
 }
-
-

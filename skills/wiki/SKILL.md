@@ -28,6 +28,7 @@ This is an Obsidian vault. The wiki lives at:
 │   ├── webclips/
 │   ├── papers/
 │   ├── repos/
+│   ├── chat/              # Curated AI chat transcripts with learning value
 │   └── assets/
 ├── wiki/
 │   ├── index.md           # Hub — lists all pages, updated on every ingest
