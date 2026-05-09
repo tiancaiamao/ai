@@ -26,10 +26,10 @@ type SkillIndexEntry struct {
 
 // SkillIndex represents the structure of ~/.ai/skill-index.json.
 type SkillIndex struct {
-	Version      int               `json:"version"`
+	Version     int               `json:"version"`
 	GeneratedAt string            `json:"generated_at"`
 	EntryCount  int               `json:"entry_count"`
-	Entries      []SkillIndexEntry `json:"entries"`
+	Entries     []SkillIndexEntry `json:"entries"`
 }
 
 // FindSkillTool lets the LLM discover skills by keyword search
@@ -38,6 +38,7 @@ type FindSkillTool struct {
 	skills    []skill.Skill
 	stats     *skill.SkillStatsFile
 	indexPath string // path to skill-index.json; defaults to ~/.ai/skill-index.json
+	skillsDir string // override for ~/.ai/skills/ (used in testing)
 }
 
 // NewFindSkillTool creates a new FindSkillTool with the given skills and stats.
@@ -47,7 +48,7 @@ func NewFindSkillTool(skills []skill.Skill, stats *skill.SkillStatsFile) *FindSk
 	if home != "" {
 		indexPath = filepath.Join(home, ".ai", "skill-index.json")
 	}
-		return &FindSkillTool{
+	return &FindSkillTool{
 		skills:    skills,
 		stats:     stats,
 		indexPath: indexPath,
@@ -58,6 +59,12 @@ func NewFindSkillTool(skills []skill.Skill, stats *skill.SkillStatsFile) *FindSk
 // Useful for testing to avoid loading the real index.
 func (t *FindSkillTool) SetIndexPath(path string) {
 	t.indexPath = path
+}
+
+// SetSkillsDir overrides the default ~/.ai/skills/ directory used for
+// disk fallback in executeLoad. Useful for testing.
+func (t *FindSkillTool) SetSkillsDir(dir string) {
+	t.skillsDir = dir
 }
 
 // Name returns the tool name.
@@ -88,7 +95,7 @@ func (t *FindSkillTool) Parameters() map[string]any {
 				"description": "Exact skill name to load (used with load=true for direct loading)",
 			},
 		},
-				"required": []string{},
+		"required": []string{},
 	}
 }
 
@@ -273,7 +280,11 @@ func (t *FindSkillTool) findLoadedSkill(name string) (skill.Skill, bool) {
 }
 
 // executeLoad returns the full content of a skill by exact name match.
+// It first checks loaded skills, then falls back to reading from disk
+// (~/.ai/skills/<name>/SKILL.md) for skills that weren't pre-loaded
+// (e.g., missing frontmatter) but exist on disk.
 func (t *FindSkillTool) executeLoad(name string) ([]agentctx.ContentBlock, error) {
+	// Phase 1: check loaded skills
 	for _, s := range t.skills {
 		if s.Name == name {
 			t.recordUsage(name)
@@ -284,6 +295,36 @@ func (t *FindSkillTool) executeLoad(name string) ([]agentctx.ContentBlock, error
 				},
 			}, nil
 		}
+	}
+
+	// Phase 2: fallback — read from disk using skill directory convention
+	home, _ := os.UserHomeDir()
+	skillsBase := t.skillsDir
+	if skillsBase == "" {
+		if home == "" {
+			return nil, fmt.Errorf("skill '%s' not found", name)
+		}
+		skillsBase = filepath.Join(home, ".ai", "skills")
+	}
+
+	// Try standard skill paths: <skillsDir>/<name>/SKILL.md and <skillsDir>/<name>.md
+	candidates := []string{
+		filepath.Join(skillsBase, name, "SKILL.md"),
+		filepath.Join(skillsBase, name+".md"),
+	}
+
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		t.recordUsage(name)
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: string(data),
+			},
+		}, nil
 	}
 
 	return nil, fmt.Errorf("skill '%s' not found", name)

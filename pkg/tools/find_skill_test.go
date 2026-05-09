@@ -134,7 +134,7 @@ func TestFindSkill_LoadReturnsFullContent(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 	text := firstText(result)
-		if !strings.Contains(text, "full review skill content") {
+	if !strings.Contains(text, "full review skill content") {
 		t.Errorf("Expected full skill content, got: %s", text)
 	}
 }
@@ -292,7 +292,7 @@ func TestFindSkill_SearchLimitsToFive(t *testing.T) {
 			Content:     "content",
 		})
 	}
-		tool := NewFindSkillTool(skills, nil)
+	tool := NewFindSkillTool(skills, nil)
 	tool.SetIndexPath("") // disable index loading to test pure skill search
 
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -542,5 +542,74 @@ func TestFindSkill_SortingExactNameFirst(t *testing.T) {
 	}
 	if !strings.Contains(firstLine, "github") {
 		t.Errorf("Expected 'github' as first result (exact name match), first line: %s", firstLine)
+	}
+}
+
+// TestFindSkill_LoadFallbackToDisk tests that executeLoad falls back to reading
+// from disk when a skill exists on disk but wasn't pre-loaded (e.g., missing frontmatter).
+func TestFindSkill_LoadFallbackToDisk(t *testing.T) {
+	// Create a temp skills directory with a skill that has no frontmatter
+	tmpSkills := t.TempDir()
+	skillDir := filepath.Join(tmpSkills, "my-unloaded-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a SKILL.md without YAML frontmatter (simulates session-analyzer)
+	skillContent := "# My Unloaded Skill\n\nThis skill has no frontmatter.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create tool with empty loaded skills and custom skills dir
+	tool := NewFindSkillTool([]skill.Skill{}, nil)
+	tool.SetIndexPath("")
+	tool.SetSkillsDir(tmpSkills)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"load": true,
+		"name": "my-unloaded-skill",
+	})
+	if err != nil {
+		t.Fatalf("executeLoad should fall back to disk, got error: %v", err)
+	}
+
+	text := firstText(result)
+	if !strings.Contains(text, "My Unloaded Skill") {
+		t.Errorf("Expected loaded content to contain 'My Unloaded Skill', got: %s", text)
+	}
+	if !strings.Contains(text, "no frontmatter") {
+		t.Errorf("Expected loaded content to contain 'no frontmatter', got: %s", text)
+	}
+}
+
+// TestFindSkill_LoadFallbackToDiskReal tests the disk fallback using
+// the real session-analyzer skill that exists on disk but lacks frontmatter.
+func TestFindSkill_LoadFallbackToDiskReal(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("Cannot determine home directory")
+	}
+
+	skillPath := filepath.Join(home, ".ai", "skills", "session-analyzer", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Skipf("session-analyzer skill not found at %s", skillPath)
+	}
+
+	// Create tool with empty loaded skills
+	tool := NewFindSkillTool([]skill.Skill{}, nil)
+	tool.SetIndexPath("")
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"load": true,
+		"name": "session-analyzer",
+	})
+	if err != nil {
+		t.Fatalf("executeLoad should fall back to disk for session-analyzer, got error: %v", err)
+	}
+
+	text := firstText(result)
+	if !strings.Contains(text, "Session Analyzer") {
+		t.Errorf("Expected loaded content to contain 'Session Analyzer', got: %s", text[:min(len(text), 200, len(text))])
 	}
 }
