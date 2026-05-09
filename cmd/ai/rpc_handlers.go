@@ -243,8 +243,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	slog.Info("Loaded  skills", "count", len(skillResult.Skills))
 	for _, s := range skillResult.Skills {
-		slog.Info("Skill", "name", s.Name, "description", s.Description)
+				slog.Info("Skill", "name", s.Name, "description", s.Description)
 	}
+
+	// Load skill usage stats and register find_skill tool
+	skillStats := skill.LoadStats(filepath.Join(agentDir, "skill-stats.json"))
+	registry.Register(tools.NewFindSkillTool(skillResult.Skills, skillStats))
 
 	// Build the full system prompt (used for agent and compactor)
 	buildSystemPrompt := func(currentSess *session.Session) string {
@@ -255,7 +259,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		// Use workspace to get dynamic cwd for each prompt build
 		promptBuilder := prompt.NewBuilderWithWorkspace("", ws)
-		promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills)
+				promptBuilder.SetTools(registry.All()).SetSkills(skillResult.Skills).SetSkillStats(skillStats)
 
 		// Set llm context for system prompt explanation (tells LLM about the mechanism)
 		// The actual content is injected dynamically in the agent loop.
@@ -489,9 +493,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	busyMode := "steer"
 	ag.SetThinkingLevel(currentThinkingLevel)
 
-	// Helper function to expand /skill:name commands
+		// Helper function to expand /skill:name commands and record usage
 	expandSkillCommands := func(text string) string {
-		return skill.ExpandCommand(text, skillResult.Skills)
+		expanded := skill.ExpandCommand(text, skillResult.Skills)
+		if skill.IsSkillCommand(text) {
+			skillName := skill.ExtractSkillName(text)
+			skillStats.RecordUsage(skillName)
+			if err := skillStats.Save(); err != nil {
+				slog.Error("Failed to save skill stats", "skill", skillName, "error", err)
+			}
+		}
+		return expanded
 	}
 
 	// Trigger automatic compaction right before a new request is executed

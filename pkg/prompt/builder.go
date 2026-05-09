@@ -74,8 +74,11 @@ type Builder struct {
 	// Available tools (for Tooling section)
 	tools []ToolInfo
 
-	// Skills (for Skills section)
+		// Skills (for Skills section)
 	skills []skill.Skill
+
+	// Skill usage stats (optional, for progressive disclosure)
+	skillStats *skill.SkillStatsFile
 
 	// Context meta (for runtime_state telemetry, set by agent loop)
 	contextMeta string
@@ -153,6 +156,12 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 	return b
 }
 
+// SetSkillStats sets the skill usage statistics for progressive disclosure.
+func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder {
+	b.skillStats = stats
+	return b
+}
+
 // SetContextMeta sets the runtime_state telemetry metadata.
 func (b *Builder) SetContextMeta(meta string) *Builder {
 	b.contextMeta = meta
@@ -185,7 +194,7 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 	// Replace skills (optional section)
 	skills := ""
 	if !b.minimal && len(b.skills) > 0 {
-		if skillsText := skill.FormatForPrompt(b.skills); skillsText != "" {
+						if skillsText := skill.FormatForPrompt(b.skills, b.skillStats); skillsText != "" {
 			skills = skillsText
 		}
 	}

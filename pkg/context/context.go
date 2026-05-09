@@ -144,7 +144,7 @@ func NewAgentContextWithSkills(systemPrompt string, skills []skill.Skill) *Agent
 
 	// Append skills to system prompt
 	if len(skills) > 0 {
-		skillsText := skill.FormatForPrompt(skills)
+		skillsText := skill.FormatForPrompt(skills, nil)
 		if skillsText != "" {
 			ctx.SystemPrompt = systemPrompt + skillsText
 		}
