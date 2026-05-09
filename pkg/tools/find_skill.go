@@ -82,7 +82,7 @@ func (t *FindSkillTool) Parameters() map[string]any {
 				"description": "Exact skill name to load (used with load=true for direct loading)",
 			},
 		},
-		"required": []string{"query"},
+				"required": []string{},
 	}
 }
 
