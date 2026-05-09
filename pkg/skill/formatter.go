@@ -7,7 +7,7 @@ import (
 
 const (
 	maxSkillDescriptionRunes = 220
-		defaultPromptTopN        = 10
+	defaultPromptTopN        = 10
 )
 
 // FormatForPrompt formats skills for inclusion in a system prompt.
@@ -108,8 +108,11 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 	)
 
-	if stats != nil {
-		lines = append(lines, "*Use the find_skill tool to discover more skills by keyword.*")
+	if stats != nil && len(stats.Entries) > 0 {
+		// Hint about discoverable skills so LLM knows what to search for.
+		// Keep it short — this is a cold-start bridge, not an exhaustive list.
+		lines = append(lines, "",
+			"*Additional skills are available via `find_skill`. Try keywords: coding, debug, browser, git, mobile, device, PDF, Obsidian, notes, orchestration, architecture, review, planning, brainstorm, security, hardware.*")
 	} else if len(visibleSkills) > topN {
 		omitted := len(visibleSkills) - topN
 		lines = append(lines, fmt.Sprintf("*Note: %d additional skills omitted for brevity.*", omitted))

@@ -21,7 +21,7 @@ func TestFormatForPromptLimitsSkillCount(t *testing.T) {
 	// Count markdown list items (- **skill-N**:)
 	skillCount := strings.Count(out, "- **skill-")
 	// With nil stats, default topN is 10
-		if skillCount != 10 {
+	if skillCount != 10 {
 		t.Fatalf("expected 10 skills in prompt (nil stats, default cap), got %d", skillCount)
 	}
 	// 30 - 10 = 20 omitted
@@ -96,8 +96,8 @@ func TestFormatForPromptWithStatsRanked(t *testing.T) {
 	}
 
 	// Footer should be present
-	if !strings.Contains(out, "*Use the find_skill tool to discover more skills by keyword.*") {
-		t.Error("expected find_skill footer when stats is non-nil")
+	if !strings.Contains(out, "Additional skills are available via `find_skill`") {
+		t.Error("expected find_skill hint when stats is non-nil")
 	}
 }
 
@@ -159,8 +159,8 @@ func TestFormatForPromptWithStatsAllStale(t *testing.T) {
 		t.Error("expected beta in output (all-stale fallback)")
 	}
 	// Footer should still be present (stats is non-nil)
-	if !strings.Contains(out, "*Use the find_skill tool to discover more skills by keyword.*") {
-		t.Error("expected find_skill footer")
+	if !strings.Contains(out, "Additional skills are available via `find_skill`") {
+		t.Error("expected find_skill hint")
 	}
 }
 
@@ -174,7 +174,7 @@ func TestFormatForPromptColdStart(t *testing.T) {
 		})
 	}
 
-		// Stats with empty entries (cold start)
+	// Stats with empty entries (cold start)
 	stats := &SkillStatsFile{
 		Version: 1,
 		TopN:    10,
@@ -188,9 +188,13 @@ func TestFormatForPromptColdStart(t *testing.T) {
 	if skillCount != 10 {
 		t.Fatalf("expected 10 skills in prompt (cold start, capped at TopN), got %d", skillCount)
 	}
-	// Footer should be present (stats is non-nil)
-	if !strings.Contains(out, "*Use the find_skill tool to discover more skills by keyword.*") {
-		t.Error("expected find_skill footer")
+	// Footer should show omitted count (cold start with empty stats)
+	if !strings.Contains(out, "5 additional skills omitted for brevity") {
+		t.Error("expected '5 additional skills omitted for brevity' footer for cold start with empty stats")
+	}
+	// Should NOT show find_skill hint (no stats entries = no ranking data)
+	if strings.Contains(out, "find_skill") {
+		t.Error("cold start with empty stats should not show find_skill hint")
 	}
 }
 
