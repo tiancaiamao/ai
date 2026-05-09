@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -270,8 +271,28 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	// Print run ID to stdout — caller can capture this.
+		// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
+
+		// Watch events.jsonl for agent_end — when the agent finishes, close stdin
+	// to trigger the RPC subprocess to exit. Without this, "ai serve" blocks
+	// forever because the RPC server loops on stdin.
+	// We parse JSONL lines and check the "type" field instead of raw substring
+	// search to avoid false positives from assistant output containing "agent_end".
+	go func() {
+		for {
+			data, err := os.ReadFile(eventsPath)
+			if err != nil {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			if hasAgentEndEvent(data) {
+				stdinWriter.Close()
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
 
 	// Wait for subprocess to exit.
 	waitErr := cmd.Wait()
@@ -296,6 +317,25 @@ func serveSubcommand(binPath string) {
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
+// hasAgentEndEvent parses JSONL data and checks if any line has type "agent_end".
+// This avoids false positives from raw substring matching (e.g. assistant output
+// containing the text "agent_end").
+func hasAgentEndEvent(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var evt struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(line, &evt) == nil && evt.Type == "agent_end" {
+			return true
+		}
+	}
+	return false
+}
+
 func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http string) []string {
 	var flags []string
 	if session != "" {

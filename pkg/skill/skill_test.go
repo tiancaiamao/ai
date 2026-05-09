@@ -259,7 +259,7 @@ func TestFormatForPrompt(t *testing.T) {
 		},
 	}
 
-	result := FormatForPrompt(skills)
+	result := FormatForPrompt(skills, nil)
 
 	if !strings.Contains(result, "test-skill") {
 		t.Error("expected test-skill in output")
@@ -280,7 +280,7 @@ func TestFormatForPrompt(t *testing.T) {
 }
 
 func TestFormatForPromptEmpty(t *testing.T) {
-	result := FormatForPrompt([]Skill{})
+	result := FormatForPrompt([]Skill{}, nil)
 	if result != "" {
 		t.Errorf("expected empty string for no skills, got %q", result)
 	}
@@ -293,7 +293,7 @@ func TestFormatForPromptEmpty(t *testing.T) {
 		},
 	}
 
-	result = FormatForPrompt(skills)
+	result = FormatForPrompt(skills, nil)
 	if result != "" {
 		t.Errorf("expected empty string when all skills disabled, got %q", result)
 	}

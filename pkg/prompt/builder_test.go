@@ -282,6 +282,75 @@ func TestNoWorkspaceMode(t *testing.T) {
 	}
 }
 
+func TestBuilderWithSkillStats(t *testing.T) {
+	cwd := "/workspace"
+
+	skills := []skill.Skill{
+		{Name: "popular", Description: "A popular skill", FilePath: "/tmp/popular/SKILL.md"},
+		{Name: "unpopular", Description: "An unpopular skill", FilePath: "/tmp/unpopular/SKILL.md"},
+		{Name: "medium", Description: "A medium skill", FilePath: "/tmp/medium/SKILL.md"},
+	}
+
+	stats := &skill.SkillStatsFile{
+		Version: 1,
+		TopN:    2,
+		Entries: map[string]*skill.SkillUsageEntry{
+			"popular":   {Name: "popular", Count: 100, Score: 100.0},
+			"unpopular": {Name: "unpopular", Count: 1, Score: 1.0},
+		},
+	}
+
+	b := NewBuilder("", cwd)
+	b.SetSkills(skills)
+	b.SetSkillStats(stats)
+	result := b.Build()
+
+	if !contains(result, "## Skills") {
+		t.Error("Skills section missing")
+	}
+
+	// With TopN=2 and "popular" ranked highest, "medium" should not appear
+	// because it has no stats entry and popular + unpopular fill the top 2.
+	// Actually, let's check: popular (ranked), unpopular (ranked) → top 2 from stats.
+	// "medium" has no stats → it gets added as unranked supplement only if room.
+	// TopN=2, ranked=2 → selected has 2 → medium is excluded.
+	if !contains(result, "**popular**") {
+		t.Error("popular skill should appear")
+	}
+	if contains(result, "**medium**") {
+		t.Error("medium skill should be filtered out (TopN=2, not in top entries)")
+	}
+
+	// Stats present → should include find_skill hint
+	if !contains(result, "find_skill") {
+		t.Error("find_skill hint should appear when stats are set")
+	}
+}
+
+func TestBuilderWithSkillStatsNil(t *testing.T) {
+	cwd := "/workspace"
+
+	skills := []skill.Skill{
+		{Name: "test", Description: "A test skill", FilePath: "/tmp/test/SKILL.md"},
+	}
+
+	b := NewBuilder("", cwd)
+	b.SetSkills(skills)
+	// SetSkillStats not called → skillStats is nil → backward compat
+	result := b.Build()
+
+	if !contains(result, "## Skills") {
+		t.Error("Skills section missing")
+	}
+	if !contains(result, "A test skill") {
+		t.Error("Skill description missing")
+	}
+	// No stats → should NOT show find_skill hint
+	if contains(result, "find_skill") {
+		t.Error("find_skill hint should not appear when stats are nil")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)

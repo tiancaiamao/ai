@@ -37,7 +37,7 @@ func TestIntegrationRealSkills(t *testing.T) {
 
 	// Format for prompt
 	if len(result.Skills) > 0 {
-		prompt := FormatForPrompt(result.Skills)
+		prompt := FormatForPrompt(result.Skills, nil)
 		t.Logf("Skills in prompt:\n%s", prompt)
 	}
 }

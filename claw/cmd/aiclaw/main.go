@@ -82,7 +82,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	clawDir := filepath.Join(homeDir, ".aiclaw")
+		clawDir := filepath.Join(homeDir, ".ai")
 
 	lockFile, err := acquireInstanceLock(clawDir)
 	if err != nil {
@@ -234,14 +234,17 @@ func main() {
 			}
 		}
 	}
-	if len(skillResult.Skills) > 0 {
+		if len(skillResult.Skills) > 0 {
 		slog.Info("Loaded skills", "count", len(skillResult.Skills))
 	}
+
+	// Load skill usage stats for progressive disclosure
+	skillStats := skill.LoadStats(filepath.Join(clawDir, "skill-stats.json"))
 
 		slog.Info("Feishu config", "app_id", picoCfg.Channels.Feishu.AppID, "has_app_secret", picoCfg.Channels.Feishu.AppSecret() != "")
 
 	agentConfig := &adapter.AppConfig{
-		SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills),
+				SystemPrompt:    buildSystemPrompt(clawDir, skillResult.Skills, skillStats),
 		ClawDir:         clawDir,
 		Transcriber:     transcriber,
 		FeishuAppID:     picoCfg.Channels.Feishu.AppID,
@@ -639,7 +642,7 @@ func resolveAPIKey(clawDir, provider string) (string, error) {
 // buildSystemPrompt 构建 system prompt (picoclaw style)
 // 支持从 ~/.aiclaw/AGENTS.md 加载自定义身份
 // 集成 memory 系统 (MEMORY.md + daily notes)
-func buildSystemPrompt(clawDir string, skills []skill.Skill) string {
+func buildSystemPrompt(clawDir string, skills []skill.Skill, skillStats *skill.SkillStatsFile) string {
 	// Picoclaw 风格的默认身份
 	defaultIdentity := fmt.Sprintf(`# Claw 🦀
 
@@ -664,43 +667,31 @@ You are claw, a helpful AI assistant.
 - Skills: %s/skills/{skill-name}/SKILL.md
 `, clawDir, clawDir)
 
-	// 尝试从 ~/.aiclaw/AGENTS.md 加载自定义身份
+		// Try to load custom identity from AGENTS.md (prefer ~/.ai, fall back to ~/.aiclaw)
 	basePrompt := defaultIdentity
 	agentsPath := filepath.Join(clawDir, "AGENTS.md")
 	if content, err := os.ReadFile(agentsPath); err == nil && len(content) > 0 {
 		basePrompt = string(content)
 		slog.Info("Loaded custom identity from AGENTS.md", "path", agentsPath)
+	} else {
+		// Fallback to legacy ~/.aiclaw/AGENTS.md
+		homeDir2, _ := os.UserHomeDir()
+		legacyPath := filepath.Join(homeDir2, ".aiclaw", "AGENTS.md")
+		if content2, err2 := os.ReadFile(legacyPath); err2 == nil && len(content2) > 0 {
+			basePrompt = string(content2)
+			slog.Info("Loaded custom identity from legacy AGENTS.md", "path", legacyPath)
+		}
 	}
 
 	// 构建提示词部分
 	parts := []string{basePrompt}
 
-	// 添加技能列表
-	if len(skills) > 0 {
-		skillsSummary := buildSkillsSummary(skills)
-		if skillsSummary != "" {
-			parts = append(parts, fmt.Sprintf(`# Skills
-
-The following skills extend your capabilities.
-
-%s`, skillsSummary))
-		}
+		// Add skills section using shared formatter (top-N filtering + find_skill footer)
+	if skillsText := skill.FormatForPrompt(skills, skillStats); skillsText != "" {
+		parts = append(parts, skillsText)
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
-}
-
-// buildSkillsSummary 构建技能摘要
-func buildSkillsSummary(skills []skill.Skill) string {
-	if len(skills) == 0 {
-		return ""
-	}
-
-	var lines []string
-	for _, s := range skills {
-		lines = append(lines, fmt.Sprintf("- **%s**: %s", s.Name, s.Description))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // registerCronCommands registers cron control commands.
