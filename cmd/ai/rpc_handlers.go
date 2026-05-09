@@ -1677,7 +1677,10 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registerHiddenAlias("get_messages", "Get session messages (internal)", "messages")
 	registerHiddenAlias("get_state", "Get agent state (internal)", "session")
 	registerHiddenAlias("get_commands", "List commands (internal)", "skills")
-	registerHiddenAlias("get_session_stats", "Get session stats (internal)", "session")
+	// get_session_stats: compute real SessionStats from messages and metrics.
+	server.RegisterHiddenSlash("get_session_stats", "Get session stats (internal)", func(args string) (any, error) {
+		return computeSessionStats(ag, sess, compactor, registry, currentContextWindow, systemPrompt, ws), nil
+	})
 	registerHiddenAlias("new_session", "Create new session (internal)", "new")
 	registerHiddenAlias("list_sessions", "List sessions (internal)", "resume")
 	registerHiddenAlias("switch_session", "Switch session (internal)", "resume")
@@ -2292,4 +2295,122 @@ func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
 	}
 
 	return state, nil
+}
+
+// computeSessionStats builds a SessionStats from live session data.
+func computeSessionStats(ag *agent.Agent, sess *session.Session, compactor *compact.Compactor, registry *tools.Registry, contextWindow int, systemPrompt string, ws *tools.Workspace) *rpc.SessionStats {
+	messages := ag.GetMessages()
+
+	var userMsgs, assistantMsgs, toolCalls, toolResults int
+	var totalInput, totalOutput, totalCacheRead, totalCacheWrite int
+	var totalCost float64
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			userMsgs++
+		case "assistant":
+			assistantMsgs++
+			// Count tool calls in assistant messages
+			calls := msg.ExtractToolCalls()
+			toolCalls += len(calls)
+		case "toolResult":
+			toolResults++
+		}
+
+		// Accumulate token usage from assistant messages
+		if msg.Usage != nil {
+			totalInput += msg.Usage.InputTokens
+			totalOutput += msg.Usage.OutputTokens
+			totalCacheRead += msg.Usage.CacheRead
+			totalCacheWrite += msg.Usage.CacheWrite
+			totalCost += msg.Usage.Cost.Total
+		}
+	}
+
+	// Estimate active window tokens
+	activeWindowTokens := 0
+	if compactor != nil {
+		activeWindowTokens = compactor.EstimateContextTokensOld(messages)
+	}
+
+	// Estimate system prompt tokens
+	systemPromptTokens := 0
+	if systemPrompt != "" {
+		systemPromptTokens = estimateTokenCount(systemPrompt)
+	}
+
+	// Estimate system tools tokens from tool definitions
+	systemToolsTokens := 0
+	if registry != nil {
+		toolDefs := registry.ToLLMTools()
+		if data, err := json.Marshal(toolDefs); err == nil {
+			systemToolsTokens = estimateTokenCount(string(data))
+		}
+	}
+
+	// Compute token rate from metrics
+	var tokenRate *rpc.TokenRateStats
+	if metrics := ag.GetMetrics(); metrics != nil {
+		llmMetrics := metrics.GetLLMMetrics()
+		tokenRate = &rpc.TokenRateStats{
+			ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
+			ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
+			ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
+			WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
+			WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+			WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
+			LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
+			LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
+			LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
+			RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
+			RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
+			RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
+			RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
+		}
+	}
+
+	compactionCount := 0
+	if sess != nil {
+		compactionCount = sess.GetCompactionCount()
+	}
+
+	var sessionFile, sessionID string
+	if sess != nil {
+		sessionFile = sess.GetPath()
+		sessionID = sess.GetID()
+	}
+
+	return &rpc.SessionStats{
+		SessionFile:       sessionFile,
+		SessionID:         sessionID,
+		UserMessages:      userMsgs,
+		AssistantMessages: assistantMsgs,
+		ToolCalls:         toolCalls,
+		ToolResults:       toolResults,
+		TotalMessages:     userMsgs + assistantMsgs + toolResults,
+		CompactionCount:   compactionCount,
+		Tokens: rpc.SessionTokenStats{
+			Input:              totalInput,
+			Output:             totalOutput,
+			CacheRead:          totalCacheRead,
+			CacheWrite:         totalCacheWrite,
+			Total:              totalInput + totalOutput,
+			ActiveWindowTokens: activeWindowTokens,
+			SystemPromptTokens: systemPromptTokens,
+			SystemToolsTokens:  systemToolsTokens,
+		},
+		TokenRate: tokenRate,
+		Cost:      totalCost,
+		Workspace: ws.GetGitRoot(),
+		CurrentWorkdir: ws.GetCWD(),
+	}
+}
+
+// estimateTokenCount provides a rough token estimation for a string.
+func estimateTokenCount(s string) int {
+	if len(s) == 0 {
+		return 0
+	}
+	return int(float64(len(s)) / 4.0)
 }
