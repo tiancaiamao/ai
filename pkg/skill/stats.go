@@ -2,8 +2,10 @@ package skill
 
 import (
 	"encoding/json"
+	"log/slog"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -45,10 +47,17 @@ func LoadStats(path string) *SkillStatsFile {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// File exists but unreadable — log but don't overwrite on Save.
+			slog.Warn("[SkillStats] failed to read stats file, starting fresh",
+				"path", path, "error", err)
+		}
 		return s
 	}
 
 	if len(data) == 0 {
+		slog.Warn("[SkillStats] stats file is empty, starting fresh",
+			"path", path)
 		return s
 	}
 
@@ -58,6 +67,8 @@ func LoadStats(path string) *SkillStatsFile {
 		Entries map[string]*SkillUsageEntry `json:"entries"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
+		slog.Warn("[SkillStats] stats file has invalid JSON, starting fresh",
+			"path", path, "error", err)
 		return s
 	}
 
@@ -98,8 +109,8 @@ func (s *SkillStatsFile) RecordUsage(skillName string) {
 	entry.Score = float64(entry.Count)
 }
 
-// Save writes the stats to s.FilePath as JSON.
-// Caller must NOT hold s.mu; Save acquires it internally.
+// Save writes the stats to s.FilePath atomically using write-to-temp + rename.
+// The caller must NOT hold s.mu; Save acquires it internally.
 func (s *SkillStatsFile) Save() error {
 	s.mu.Lock()
 	data, err := json.MarshalIndent(s, "", "  ")
@@ -108,14 +119,27 @@ func (s *SkillStatsFile) Save() error {
 		return err
 	}
 
-	f, err := os.OpenFile(s.FilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	// Atomic write: temp file in same directory, then rename.
+	// This prevents concurrent Save() calls from corrupting the file
+	// (e.g. O_TRUNC race leaving a 0-byte file).
+	dir := filepath.Dir(s.FilePath)
+	tmp, err := os.CreateTemp(dir, ".skill-stats-*.tmp")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	tmpPath := tmp.Name()
 
-	_, err = f.Write(data)
-	return err
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	return os.Rename(tmpPath, s.FilePath)
 }
 
 // TopSkills returns up to n skill names sorted by descending time-decayed score.
