@@ -11,8 +11,8 @@ import (
 
 func TestStatsLoadNonexistentFile(t *testing.T) {
 	s := LoadStats("/tmp/ai-skill-stats-nonexistent-" + t.Name() + ".json")
-	if s.TopN != 7 {
-		t.Errorf("expected TopN=7, got %d", s.TopN)
+	if s.TopN != 10 {
+		t.Errorf("expected TopN=10, got %d", s.TopN)
 	}
 	if len(s.Entries) != 0 {
 		t.Errorf("expected empty entries, got %d", len(s.Entries))
@@ -28,8 +28,8 @@ func TestStatsLoadEmptyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := LoadStats(path)
-	if s.TopN != 7 {
-		t.Errorf("expected TopN=7, got %d", s.TopN)
+	if s.TopN != 10 {
+		t.Errorf("expected TopN=10, got %d", s.TopN)
 	}
 	if len(s.Entries) != 0 {
 		t.Errorf("expected empty entries, got %d", len(s.Entries))
@@ -42,8 +42,8 @@ func TestStatsLoadMalformedJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := LoadStats(path)
-	if s.TopN != 7 {
-		t.Errorf("expected TopN=7, got %d", s.TopN)
+	if s.TopN != 10 {
+		t.Errorf("expected TopN=10, got %d", s.TopN)
 	}
 	if len(s.Entries) != 0 {
 		t.Errorf("expected empty entries, got %d", len(s.Entries))

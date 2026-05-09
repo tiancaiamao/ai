@@ -26,13 +26,13 @@ type SkillStatsFile struct {
 
 const (
 	statsVersion       = 1
-	defaultTopN        = 7
+		defaultTopN        = 10
 	decayHalfLifeHours = 168.0 // 1 week
 )
 
 // LoadStats reads skill usage statistics from a JSON file at path.
 // If the file is missing or contains invalid JSON, it returns an empty
-// SkillStatsFile with TopN=7 and no error.
+// SkillStatsFile with TopN=10 and no error.
 func LoadStats(path string) *SkillStatsFile {
 	s := &SkillStatsFile{
 		Version:  statsVersion,

@@ -20,12 +20,12 @@ func TestFormatForPromptLimitsSkillCount(t *testing.T) {
 	out := FormatForPrompt(skills, nil)
 	// Count markdown list items (- **skill-N**:)
 	skillCount := strings.Count(out, "- **skill-")
-	// With nil stats, default topN is 7
-	if skillCount != 7 {
-		t.Fatalf("expected 7 skills in prompt (nil stats, default cap), got %d", skillCount)
+	// With nil stats, default topN is 10
+		if skillCount != 10 {
+		t.Fatalf("expected 10 skills in prompt (nil stats, default cap), got %d", skillCount)
 	}
-	// 30 - 7 = 23 omitted
-	if !strings.Contains(out, "*Note: 23 additional skills omitted for brevity.*") {
+	// 30 - 10 = 20 omitted
+	if !strings.Contains(out, "*Note: 20 additional skills omitted for brevity.*") {
 		t.Fatalf("expected 23 omitted note, got output: %s", out)
 	}
 	// No footer when stats is nil
@@ -174,19 +174,19 @@ func TestFormatForPromptColdStart(t *testing.T) {
 		})
 	}
 
-	// Stats with empty entries (cold start)
+		// Stats with empty entries (cold start)
 	stats := &SkillStatsFile{
 		Version: 1,
-		TopN:    7,
+		TopN:    10,
 		Entries: map[string]*SkillUsageEntry{},
 	}
 
 	out := FormatForPrompt(skills, stats)
 
-	// Should show all skills capped at TopN=7
+	// Should show all skills capped at TopN=10
 	skillCount := strings.Count(out, "- **skill-")
-	if skillCount != 7 {
-		t.Fatalf("expected 7 skills in prompt (cold start, capped at TopN), got %d", skillCount)
+	if skillCount != 10 {
+		t.Fatalf("expected 10 skills in prompt (cold start, capped at TopN), got %d", skillCount)
 	}
 	// Footer should be present (stats is non-nil)
 	if !strings.Contains(out, "*Use the find_skill tool to discover more skills by keyword.*") {

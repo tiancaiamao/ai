@@ -7,7 +7,7 @@ import (
 
 const (
 	maxSkillDescriptionRunes = 220
-	defaultPromptTopN        = 7
+		defaultPromptTopN        = 10
 )
 
 // FormatForPrompt formats skills for inclusion in a system prompt.
