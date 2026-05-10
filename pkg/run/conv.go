@@ -860,6 +860,13 @@ func renderSessionState(dataJSON []byte) *FormattedEvent {
 
 // renderMessages renders /messages output.
 func renderMessages(dataJSON []byte) *FormattedEvent {
+	// Try new MessagesResult format first (has total/showing/preview fields)
+	var result rpc.MessagesResult
+	if err := json.Unmarshal(dataJSON, &result); err == nil && result.Total > 0 {
+		return renderFormattedMessages(result)
+	}
+
+	// Legacy format: {messages: [{role, content}]}
 	var payload struct {
 		Messages []struct {
 			Role    string `json:"role"`
@@ -882,31 +889,57 @@ func renderMessages(dataJSON []byte) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: "no messages"}
 	}
 
-	const maxMessages = 10
-	total := len(payload.Messages)
-	display := payload.Messages
-	baseIndex := 0
-	if total > maxMessages {
-		baseIndex = total - maxMessages
-		display = payload.Messages[baseIndex:]
+	// Convert legacy format to MessagesResult
+	legacyResult := rpc.MessagesResult{
+		Total:    len(payload.Messages),
+		Showing:  len(payload.Messages),
+		Messages: make([]rpc.FormattedMessage, len(payload.Messages)),
+	}
+	for i, msg := range payload.Messages {
+		legacyResult.Messages[i] = rpc.FormattedMessage{
+			Index:   i,
+			Role:    msg.Role,
+			Preview: msg.Content,
+		}
+	}
+	return renderFormattedMessages(legacyResult)
+}
+
+// renderFormattedMessages renders a MessagesResult into a human-readable display.
+func renderFormattedMessages(result rpc.MessagesResult) *FormattedEvent {
+	if len(result.Messages) == 0 {
+		return &FormattedEvent{Kind: KindMeta, Text: "no messages"}
 	}
 
 	var b strings.Builder
-	if total > maxMessages {
-		b.WriteString(fmt.Sprintf("Messages (last %d of %d):\n", maxMessages, total))
+	if result.Showing < result.Total {
+		b.WriteString(fmt.Sprintf("Messages (last %d of %d):\n", result.Showing, result.Total))
 	} else {
-		b.WriteString("Messages:\n")
+		b.WriteString(fmt.Sprintf("Messages (%d):\n", result.Total))
 	}
 
-	for i, msg := range display {
-		text := strings.TrimSpace(msg.Content)
+	for _, msg := range result.Messages {
+		text := strings.TrimSpace(msg.Preview)
 		if text == "" {
 			text = "(no text)"
 		}
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
-		b.WriteString(fmt.Sprintf("  [%d] %s: %s\n", baseIndex+i, msg.Role, text))
+
+		role := msg.Role
+		if msg.ToolName != "" {
+			role = fmt.Sprintf("%s: %s", msg.Role, msg.ToolName)
+		}
+
+		line := fmt.Sprintf("  [%d] %s: %s", msg.Index, role, text)
+
+		// Append tool call names if present
+		if len(msg.ToolCalls) > 0 {
+			line += fmt.Sprintf(" (tools: %s)", strings.Join(msg.ToolCalls, ", "))
+		}
+
+		b.WriteString(line + "\n")
 	}
 
 	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
