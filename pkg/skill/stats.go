@@ -30,7 +30,7 @@ type SkillStatsFile struct {
 
 const (
 	statsVersion       = 1
-		defaultTopN        = 10
+	DefaultTopN        = 10
 	decayHalfLifeHours = 168.0 // 1 week
 )
 
@@ -40,7 +40,7 @@ const (
 func LoadStats(path string) *SkillStatsFile {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: path,
 	}
