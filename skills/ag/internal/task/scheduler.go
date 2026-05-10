@@ -63,8 +63,27 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		fmt.Println("≤2 tasks, skipping review phase.")
 	}
 
-		fmt.Printf("Scheduler started: %d tasks, max concurrent=%d, review=%v\n",
+	fmt.Printf("Scheduler started: %d tasks, max concurrent=%d, review=%v\n",
 		len(tasks), cfg.MaxConcurrent, !cfg.SkipReview)
+
+	// Heartbeat: write timestamp every poll interval so `ag task stop`
+	// can detect stale scheduler vs. dead scheduler.
+	heartbeatPath := filepath.Join(storage.BaseDir, "scheduler.heartbeat")
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				os.Remove(heartbeatPath)
+				return
+			case <-time.After(cfg.PollInterval):
+				os.WriteFile(heartbeatPath, []byte(fmt.Sprintf("%d", time.Now().Unix())), 0644)
+			}
+		}
+	}()
+
+	// Circuit breaker: stop after N consecutive failures
+	consecutiveFailures := 0
+	const maxConsecutiveFailures = 3
 
 	// Print blocking status for each pending task
 	pendingTasks, _ := List(StatusPending)
@@ -106,9 +125,24 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		default:
 		}
 
-		progress, err := tick(ctx, cfg)
+				progress, err := tick(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("scheduler tick: %w", err)
+		}
+
+		// Circuit breaker: count consecutive failures
+		failed, _ := List(StatusFailed)
+		if len(failed) > 0 && !progress {
+			consecutiveFailures++
+			if consecutiveFailures >= maxConsecutiveFailures {
+				fmt.Printf("\n⛔ Circuit breaker: %d consecutive failures without progress\n", consecutiveFailures)
+				fmt.Println("Stopping scheduler to prevent wasting resources.")
+				printSummary()
+				return fmt.Errorf("circuit breaker triggered: %d consecutive failures", consecutiveFailures)
+			}
+			log.Printf("[scheduler] circuit breaker: %d/%d consecutive failures", consecutiveFailures, maxConsecutiveFailures)
+		} else if progress {
+			consecutiveFailures = 0
 		}
 
 		// Check if all done
@@ -440,21 +474,38 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			completed, summary = checkAIServeRun(runID, t.ID)
 			// Fall back to PID liveness if events are unavailable
 			if !completed && pid > 0 && !agent.IsProcessAlive(pid) {
-				// Process died but events never showed agent_end — treat as failure
-				Fail(t.ID, "ai-serve process died without completing", true)
+							// Process died but events never showed agent_end — treat as failure
+				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
+				lastOutput := ""
+				if storage.Exists(outputFile) {
+					lastOutput = truncate(readFile(outputFile), 300)
+				}
+				errMsg := "ai-serve process died without completing"
+				if lastOutput != "" {
+					errMsg += "\nLast output:\n" + lastOutput
+				}
+				Fail(t.ID, errMsg, true)
 				fmt.Printf("  ❌ Detected failure %s (ai-serve process died)\n", t.ID)
 				progress = true
 				continue
 			}
 		} else if pid > 0 {
 			// Legacy worker: check if process is alive
-			if !agent.IsProcessAlive(pid) {
+						if !agent.IsProcessAlive(pid) {
 				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
 				if storage.Exists(outputFile) {
 					summary = readSummary(outputFile)
 					completed = true
 				} else {
-					Fail(t.ID, "agent process died without output", true)
+					lastOutput := ""
+					if storage.Exists(outputFile) {
+						lastOutput = truncate(readFile(outputFile), 300)
+					}
+					errMsg := "agent process died without output"
+					if lastOutput != "" {
+						errMsg += "\nLast output:\n" + lastOutput
+					}
+					Fail(t.ID, errMsg, true)
 					fmt.Printf("  ❌ Detected failure %s (process died)\n", t.ID)
 					progress = true
 					continue

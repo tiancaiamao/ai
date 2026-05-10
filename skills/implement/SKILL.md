@@ -33,6 +33,11 @@ pending → claimed → running → done
 **在启动 scheduler 之前，必须确认：**
 
 ```bash
+# 0. 工具链健康检查（新增！）
+ag doctor
+# 16 checks: storage, state machine, deps, cleanup, ai binary, git
+# 任何 ❌ 都必须先修复才能继续
+
 # 1. 确认有 pending tasks
 ag task ls
 # 如果 "No tasks" → 提示用户先跑 plan skill

@@ -708,19 +708,27 @@ var taskListCmd = &cobra.Command{
 			return
 		}
 
-		if len(tasks) == 0 {
+				if len(tasks) == 0 {
 			fmt.Println("No tasks.")
 			return
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tDESCRIPTION")
+		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tELAPSED\tDESCRIPTION")
 		for _, t := range tasks {
 			desc := t.Description
+			if t.Title != "" {
+				desc = t.Title
+			}
 			if len(desc) > 50 {
 				desc = desc[:50] + "..."
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID, t.Status, t.Claimant, desc)
+			elapsed := ""
+			if t.ClaimedAt > 0 {
+				dur := time.Since(time.Unix(t.ClaimedAt, 0)).Round(time.Second)
+				elapsed = dur.String()
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, t.Claimant, elapsed, desc)
 		}
 		w.Flush()
 	},
@@ -876,6 +884,8 @@ var taskStopCmd = &cobra.Command{
 	Short: "Stop a running background scheduler",
 	Run: func(cmd *cobra.Command, args []string) {
 		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+		heartbeatPath := filepath.Join(storage.BaseDir, "scheduler.heartbeat")
+
 		data, err := os.ReadFile(pidPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "No running scheduler found (missing PID file)")
@@ -886,6 +896,20 @@ var taskStopCmd = &cobra.Command{
 		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
 			fmt.Fprintf(os.Stderr, "Invalid PID file: %s\n", string(data))
 			os.Exit(1)
+		}
+
+		// Check heartbeat to detect stale vs active
+		if hbData, err := os.ReadFile(heartbeatPath); err == nil {
+			var hbTs int64
+			fmt.Sscanf(strings.TrimSpace(string(hbData)), "%d", &hbTs)
+			if hbTs > 0 {
+				age := time.Since(time.Unix(hbTs, 0))
+				if age > 30*time.Second {
+					fmt.Printf("⚠️  Scheduler heartbeat is %s old (may already be dead)\n", age.Round(time.Second))
+				} else {
+					fmt.Printf("Scheduler heartbeat: %s ago (alive)\n", age.Round(time.Second))
+				}
+			}
 		}
 
 		// Check if process is running
@@ -1099,6 +1123,141 @@ func init() {
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
 				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
 
-	// Root subcommands
-	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
+		// Root subcommands
+	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd, doctorCmd)
+}
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Pre-flight check: verify ag toolchain is healthy",
+	Run: func(cmd *cobra.Command, args []string) {
+		pass, fail, warn := 0, 0, 0
+		check := func(name string, err error) {
+			if err != nil {
+				fmt.Printf("  ❌ %s: %v\n", name, err)
+				fail++
+			} else {
+				fmt.Printf("  ✅ %s\n", name)
+				pass++
+			}
+		}
+		warnCheck := func(name string, err error) {
+			if err != nil {
+				fmt.Printf("  ⚠️  %s: %v\n", name, err)
+				warn++
+			} else {
+				fmt.Printf("  ✅ %s\n", name)
+				pass++
+			}
+		}
+
+				fmt.Println("🔍 ag toolchain health check")
+		fmt.Println()
+
+		// 1. Storage directory writable
+		agentsDir, channelsDir, tasksDir := storage.Paths()
+		check("storage dirs exist", os.MkdirAll(agentsDir, 0755))
+		check("storage dirs exist", os.MkdirAll(channelsDir, 0755))
+		check("storage dirs exist", os.MkdirAll(tasksDir, 0755))
+
+		// Write test
+		testFile := filepath.Join(tasksDir, ".health-check")
+		check("storage writable", os.WriteFile(testFile, []byte("ok"), 0644))
+		os.Remove(testFile)
+
+		// 2. Task state machine smoke test
+		t1, err := task.Create("doctor smoke test", "")
+		check("task create", err)
+		if err == nil {
+			check("task claim → claimed", func() error {
+				_, e := task.Claim(t1.ID, "doctor")
+				return e
+			}())
+			check("task transition claimed→done", func() error {
+				_, e := task.Transition(t1.ID, task.StatusDone)
+				return e
+			}())
+			check("task show", func() error {
+				_, e := task.Load(t1.ID)
+				return e
+			}())
+		}
+
+		// 3. Invalid transition rejected
+		t2, _ := task.Create("doctor invalid test", "")
+		if t2 != nil {
+			check("invalid transition rejected", func() error {
+				_, e := task.Transition(t2.ID, task.StatusDone)
+				if e != nil {
+					return nil // expected
+				}
+				return fmt.Errorf("pending→done should be invalid")
+			}())
+		}
+
+		// 4. Dependency + cycle detection
+		if t1 != nil && t2 != nil {
+			check("dependency add", func() error {
+				_, e := task.AddDependency(t2.ID, t1.ID)
+				return e
+			}())
+			check("cycle detection", func() error {
+				_, e := task.AddDependency(t1.ID, t2.ID)
+				if e != nil {
+					return nil // expected: cycle detected
+				}
+				return fmt.Errorf("cycle should be detected")
+			}())
+		}
+
+		// 5. Cleanup
+		cleaned, deps, err := task.Cleanup()
+		check("cleanup", err)
+		if err == nil {
+			fmt.Printf("     (cleaned %d tasks, %d dangling deps)\n", cleaned, deps)
+		}
+
+		// 6. `ai` binary available
+		aiPath, err := exec.LookPath("ai")
+		warnCheck("ai binary in PATH", err)
+		if err == nil {
+			// Try running it
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			aiCmd := exec.CommandContext(ctx, aiPath, "--help")
+			aiCmd.Stdout = nil
+			aiCmd.Stderr = nil
+			warnCheck("ai --help runs", aiCmd.Run())
+		}
+
+		// 7. git repo
+		warnCheck("git repo present", func() error {
+			_, e := exec.LookPath("git")
+			return e
+		}())
+
+		// 8. ag binary not stale
+		exe, _ := os.Executable()
+		if exe != "" {
+			exeInfo, _ := os.Stat(exe)
+			modTime := exeInfo.ModTime()
+			if time.Since(modTime) > 24*time.Hour {
+				fmt.Printf("  ⚠️  ag binary is %s old (may need rebuild)\n", time.Since(modTime).Round(time.Hour))
+				warn++
+			} else {
+				fmt.Printf("  ✅ ag binary built %s ago\n", time.Since(modTime).Round(time.Minute))
+				pass++
+			}
+		}
+
+		// Summary
+		fmt.Printf("\n📊 Results: %d passed, %d failed, %d warnings\n", pass, fail, warn)
+		if fail > 0 {
+			fmt.Println("\n⛔ Fix errors above before running scheduler.")
+			os.Exit(1)
+		}
+		if warn > 0 {
+			fmt.Println("\n⚠️  Warnings are non-blocking but should be addressed.")
+		}
+	},
 }

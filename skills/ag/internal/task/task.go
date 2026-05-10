@@ -238,11 +238,17 @@ func Transition(taskID, to string) (*Task, error) {
 		return nil, err
 	}
 
-	if !CanTransition(task.Status, to) {
+		if !CanTransition(task.Status, to) {
 		return nil, fmt.Errorf("invalid transition: %s → %s for task %s", task.Status, to, taskID)
 	}
 
-	task.Status = to
+		task.Status = to
+	if to == StatusClaimed && task.ClaimedAt == 0 {
+		task.ClaimedAt = time.Now().Unix()
+	}
+	if to == StatusDone || to == StatusFailed {
+		task.FinishedAt = time.Now().Unix()
+	}
 	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
 		return nil, err
 	}
