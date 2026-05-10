@@ -9,9 +9,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
-// helper to create a bool pointer
-func boolPtr(b bool) *bool { return &b }
-
 func TestFormatMessagesForDisplay_BasicUserMessage(t *testing.T) {
 	msgs := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("Hello, world!"),
