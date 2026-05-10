@@ -644,3 +644,94 @@ func TestParseEvent_MessageUpdate_ThinkingDelta(t *testing.T) {
 		t.Fatalf("expected text 'Valid thinking', got %q", evt.Text)
 	}
 }
+
+func TestRenderMessages_NewFormat(t *testing.T) {
+	data := `{"total":5,"showing":3,"messages":[{"index":2,"role":"user","preview":"Hello world"},{"index":3,"role":"assistant","preview":"Let me check","toolCalls":["bash","read"]},{"index":4,"role":"toolResult","toolName":"bash","preview":"file1.txt\nfile2.txt"}]}`
+	evt := renderMessages([]byte(data))
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if evt.Kind != KindMeta {
+		t.Fatalf("expected KindMeta, got %s", evt.Kind)
+	}
+	// Should show "last 3 of 5"
+	if !contains(evt.Text, "last 3 of 5") {
+		t.Fatalf("expected 'last 3 of 5' in output, got: %s", evt.Text)
+	}
+	// Should show preview text
+	if !contains(evt.Text, "Hello world") {
+		t.Fatalf("expected 'Hello world' in output, got: %s", evt.Text)
+	}
+	// Should show tool calls
+	if !contains(evt.Text, "tools: bash, read") {
+		t.Fatalf("expected 'tools: bash, read' in output, got: %s", evt.Text)
+	}
+	// Should show tool name for toolResult
+	if !contains(evt.Text, "toolResult: bash") {
+		t.Fatalf("expected 'toolResult: bash' in output, got: %s", evt.Text)
+	}
+}
+
+func TestRenderMessages_NewFormatAllShown(t *testing.T) {
+	data := `{"total":3,"showing":3,"messages":[{"index":0,"role":"user","preview":"Hi"},{"index":1,"role":"assistant","preview":"Hello"},{"index":2,"role":"user","preview":"Bye"}]}`
+	evt := renderMessages([]byte(data))
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	// Should show "Messages (3):" not "last N of N"
+	if contains(evt.Text, "last") {
+		t.Fatalf("should not contain 'last' when all shown, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "Messages (3):") {
+		t.Fatalf("expected 'Messages (3):' in output, got: %s", evt.Text)
+	}
+}
+
+func TestRenderMessages_NewFormatEmptyPreview(t *testing.T) {
+	data := `{"total":1,"showing":1,"messages":[{"index":0,"role":"assistant","preview":""}]}`
+	evt := renderMessages([]byte(data))
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !contains(evt.Text, "(no text)") {
+		t.Fatalf("expected '(no text)' for empty preview, got: %s", evt.Text)
+	}
+}
+
+func TestRenderMessages_LegacyFormat(t *testing.T) {
+	data := `{"messages":[{"role":"user","content":"Hello"},{"role":"assistant","content":"World"}]}`
+	evt := renderMessages([]byte(data))
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !contains(evt.Text, "Hello") {
+		t.Fatalf("expected 'Hello' in output, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "World") {
+		t.Fatalf("expected 'World' in output, got: %s", evt.Text)
+	}
+}
+
+func TestRenderMessages_Empty(t *testing.T) {
+	data := `{"total":0,"showing":0,"messages":[]}`
+	evt := renderMessages([]byte(data))
+	if evt == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !contains(evt.Text, "no messages") {
+		t.Fatalf("expected 'no messages' in output, got: %s", evt.Text)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || containsSubstr(s, sub))
+}
+
+func containsSubstr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
