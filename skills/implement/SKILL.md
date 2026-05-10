@@ -47,13 +47,28 @@ git branch --show-current
 
 ## Execution: `ag task run`
 
-**⚠️ Use tmux for long-running scheduler.** The default bash timeout (2 minutes) will kill the scheduler mid-task, leaving files in half-written state. Always run in tmux:
+**Two modes: foreground (default) or background (`--detach`).**
+
+### Background mode (recommended for long runs)
 
 ```bash
-# Start tmux session first
-tmux new -s implement
+ag task run --detach \
+  --design docs/design/xxx.md \
+  --max-concurrent 2 \
+  --timeout 600
 
-# Then inside tmux:
+# Monitor progress:
+ag task log              # tail -f style, follow scheduler output
+ag task log --tail 20    # snapshot last 20 lines
+ag task ls               # see current task statuses
+ag task stop             # stop the scheduler
+```
+
+**Foreground logs are also written to `.ag/scheduler.log`** — so `ag task log` works even in foreground mode.
+
+### Foreground mode (for quick tasks / debugging)
+
+```bash
 ag task run \
   --design docs/design/xxx.md \
   --max-concurrent 2 \
@@ -61,7 +76,10 @@ ag task run \
   --poll 5000
 ```
 
+Use foreground when you expect < 2 minutes total runtime. For anything longer, use `--detach`.
+
 **Parameters:**
+- `--detach`: Run in background, log to `.ag/scheduler.log`
 - `--design`: Path to design.md for worker context
 - `--max-concurrent`: Max parallel workers (default 2)
 - `--timeout`: Seconds per task (default 600 = 10 min)
