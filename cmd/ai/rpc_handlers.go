@@ -6,6 +6,7 @@ import (
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
+	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -1846,19 +1847,77 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// /context — composite: returns state + session stats + available models
 	server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
 		stateH, _ := server.GetSlashHandler("get_state")
-		statsH, _ := server.GetSlashHandler("get_session_stats")
 		modelsH, _ := server.GetSlashHandler("get_available_models")
 
 		stateResult, err := stateH("")
 		if err != nil {
 			return nil, err
 		}
-		statsResult, _ := statsH("")
 		modelsResult, _ := modelsH("")
+
+		// Compute session stats inline (get_session_stats was aliased to /session which
+		// returns SessionState, not SessionStats, causing all-zero data in the frontend).
+		messages := ag.GetMessages()
+		userCount, assistantCount, toolCalls, toolResults, tokenStats, cost := collectSessionUsage(messages)
+
+		activeWindowTokens := compactor.EstimateContextTokensOld(messages)
+		systemPromptTokens := 0
+		if systemPrompt != "" {
+			systemPromptTokens = int(math.Ceil(float64(len(systemPrompt)) / 4.0))
+		}
+		systemToolsTokens := ag.GetContext().EstimateToolsTokens()
+
+		tokenStats.ActiveWindowTokens = activeWindowTokens
+		tokenStats.SystemPromptTokens = systemPromptTokens
+		tokenStats.SystemToolsTokens = systemToolsTokens
+
+		// Populate input tokens from usage data
+		for _, msg := range messages {
+			if msg.Role == "assistant" && msg.Usage != nil {
+				tokenStats.Input += msg.Usage.InputTokens
+				tokenStats.CacheRead += msg.Usage.CacheRead
+				tokenStats.CacheWrite += msg.Usage.CacheWrite
+			}
+		}
+
+		stats := rpc.SessionStats{
+			SessionFile:       sess.GetPath(),
+			SessionID:         sessionID,
+			UserMessages:      userCount,
+			AssistantMessages: assistantCount,
+			ToolCalls:         toolCalls,
+			ToolResults:       toolResults,
+			TotalMessages:     userCount + assistantCount + toolResults,
+			CompactionCount:   sess.GetCompactionCount(),
+			Tokens:            tokenStats,
+			Cost:              cost,
+			Workspace:         ws.GetGitRoot(),
+			CurrentWorkdir:    ws.GetCWD(),
+		}
+
+		// Populate token rate from agent metrics if available
+		if metrics := ag.GetMetrics(); metrics != nil {
+			llmMetrics := metrics.GetLLMMetrics()
+			stats.TokenRate = &rpc.TokenRateStats{
+				ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
+				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
+				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
+				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
+				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
+				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
+				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
+				LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
+				RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
+				RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
+				RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
+				RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
+			}
+		}
 
 		return map[string]any{
 			"state":  stateResult,
-			"stats":  statsResult,
+			"stats":  stats,
 			"models": modelsResult,
 		}, nil
 	})
