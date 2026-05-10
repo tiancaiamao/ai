@@ -36,6 +36,8 @@ Break the design into tasks following these rules:
 - > 6 hours → split into multiple tasks
 - < 1 hour → merge with related work
 
+**Estimated Hours**: Every task MUST have `estimated_hours` (required by plan-lint). Default range: 2-4. This field is used for scheduling and progress tracking.
+
 **Boundary**: Each task should be one logical unit of work that:
 - Can be implemented without breaking compilation for other tasks
 - Has clear inputs and outputs
@@ -75,9 +77,10 @@ tasks:
       - Edge case 1 and how to handle it
 
       ## Done when
-      - [ ] Testable criterion 1
-      - [ ] Testable criterion 2
-      - [ ] go build ./... passes
+      - [ ] <observable behavior 1 — what an observer can verify>
+      - [ ] <observable behavior 2>
+      - [ ] <edge case behavior>
+    estimated_hours: 3
     group: group-name
     dependencies: []
 
@@ -104,7 +107,7 @@ Every task description MUST include these sections:
 | `## Goal` | What this task achieves | One concrete sentence |
 | `## Key changes` | What to change in code | ≥1 specific change |
 | `## Files` | Which files to modify/create | ≥1 real file path |
-| `## Done when` | When the task is complete | ≥1 testable criterion |
+| `## Done when` | When the task is complete | ≥1 behavioral criterion (see rules below) |
 
 Optional but recommended:
 
@@ -112,6 +115,24 @@ Optional but recommended:
 |---------|------------|
 | `## Design decision` | Multiple implementation approaches exist |
 | `## Edge cases` | Non-obvious boundary conditions |
+
+### Done-When Rules (CRITICAL)
+
+The done-when section defines **what "done" means** in behavioral terms. It is the verification contract between plan and implement.
+
+**Source:** Done-when criteria MUST be derived from the design.md's Acceptance Scenarios. If design says "agent loop handles concurrent tool calls", the corresponding task's done-when must verify that behavior.
+
+**Good done-when (behavioral — what an observer sees):**
+- "Given a mock LLM that returns a tool_call, the agent executes the tool and feeds the result back to the LLM"
+- "Session file is valid JSONL — each line is a complete JSON object"
+- "Edit tool replaces exact text match; returns error if old text not found"
+- "MaxTurns=2 → agent stops after 2 turns even if LLM returns more tool_calls"
+
+**Bad done-when (non-behavioral):**
+- "`go test ./pkg/agent/... -v` passes" ← tests can pass without covering real behavior
+- "Code is clean and well-documented" ← subjective
+- "Implementation matches design" ← vague
+- "Similar to T001" ← worker can't see other tasks
 
 ## Grouping Principles
 
@@ -135,10 +156,11 @@ These will cause subagent failure. Avoid at all costs:
 ## Verification Checklist
 
 Before outputting, verify:
+- [ ] Every acceptance scenario in design.md is covered by at least one task's done-when
 - [ ] Every key decision in design.md is covered by at least one task
 - [ ] Every task has Goal, Key changes, Files, Done when
 - [ ] File paths are real paths, not vague references
-- [ ] Done-when criteria are testable by command or observation
+- [ ] Done-when criteria are behavioral (observable outcomes), not just "tests pass"
 - [ ] Dependencies are explicit and acyclic
 - [ ] Each group is a compilable increment
 - [ ] Tasks are 2-4 hours each

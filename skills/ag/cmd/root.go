@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -30,10 +32,43 @@ func Execute() {
 	}
 }
 
+// checkBinaryStaleness warns if the ag binary is older than its source code,
+// which means the user needs to rebuild.
+func checkBinaryStaleness() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exeInfo, err := os.Stat(exe)
+	if err != nil {
+		return
+	}
+
+	// Walk source files in the executable's directory tree
+	// (assuming the source is nearby, e.g. ~/.ai/skills/ag/)
+	sourceDir := filepath.Dir(exe)
+	newerFiles := 0
+	filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && info.ModTime().After(exeInfo.ModTime()) {
+			newerFiles++
+		}
+		return nil
+	})
+
+	if newerFiles > 0 {
+		log.Printf("⚠️  Binary is stale (%d source files newer). Run: cd %s && go build -o ag .", newerFiles, sourceDir)
+	}
+}
+
 var taskRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run scheduler to execute tasks automatically",
-	Run: func(cmd *cobra.Command, args []string) {
+		Run: func(cmd *cobra.Command, args []string) {
+		checkBinaryStaleness()
+
 		maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
 		maxRetries, _ := cmd.Flags().GetInt("max-retries")
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
@@ -689,6 +724,23 @@ var taskFailCmd = &cobra.Command{
 	},
 }
 
+var taskCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Remove done/failed tasks and fix dangling dependencies",
+	Run: func(cmd *cobra.Command, args []string) {
+		cleaned, depsFixed, err := task.Cleanup()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("cleaned up %d tasks", cleaned)
+		if depsFixed > 0 {
+			fmt.Printf(", fixed %d dangling dependencies", depsFixed)
+		}
+		fmt.Println()
+	},
+}
+
 var taskShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show task details",
@@ -879,7 +931,7 @@ func init() {
 
 		// Task subcommands
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd)
+		taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd)
 
 	// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)

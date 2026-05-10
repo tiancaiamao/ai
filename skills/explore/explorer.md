@@ -108,6 +108,48 @@ Cover: layer boundaries, dependency directions, existing patterns, integration p
 
 ---
 
+## Completeness Checklist (MANDATORY — always include)
+
+This checklist is the bridge between explore and design. It ensures the design phase does not silently omit important parts of the system. For every item, the design MUST explicitly state: covered, deferred (with reason), or merged (with rationale).
+
+```markdown
+## Completeness Checklist
+
+### Packages / Modules
+<!-- List EVERY package/module discovered. The design must address each one. -->
+- [ ] pkg/agent — <purpose>
+- [ ] pkg/tools — <purpose>
+- [ ] ...
+
+### Public API Surface
+<!-- List ALL commands, endpoints, protocols, CLI subcommands. -->
+- [ ] RPC command: prompt
+- [ ] RPC command: abort
+- [ ] CLI subcommand: rpc
+- [ ] ...
+
+### Key Behaviors
+<!-- List critical behaviors observed in the code. The design must preserve or explicitly simplify each. -->
+- [ ] Multi-turn tool use loop
+- [ ] Concurrent tool execution (parallel tool calls)
+- [ ] Context cancellation propagation
+- [ ] Session crash safety (append-only)
+- [ ] ...
+
+### Cross-cutting Concerns
+- [ ] Error handling pattern
+- [ ] Logging / observability
+- [ ] Configuration loading
+- [ ] ...
+```
+
+**Rules for this checklist:**
+- Be exhaustive — missing an item here means the design phase won't know to consider it
+- Be specific — "agent loop" is too vague; "agent loop with concurrent tool execution and max-turns guard" is useful
+- Don't judge importance — just list what exists. The design phase decides what to keep.
+
+---
+
 ## Constraints
 
 - **Do NOT modify any files** — observe only

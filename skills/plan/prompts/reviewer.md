@@ -26,7 +26,7 @@ For every task, check if its `description` field alone is sufficient to implemen
 - **Goal**: Is it a single concrete sentence? "Improve error handling" = REJECT. "Add structured error wrapping with error codes to all storage/ functions" = PASS.
 - **Key changes**: Are changes specific to code? "Update the handler" = REJECT. "Add flock() call in Load() before reading JSON" = PASS.
 - **Files**: Are paths real and concrete? "The relevant file" / "appropriate module" = REJECT. "pkg/storage/loader.go" = PASS.
-- **Done when**: Can each criterion be verified by running a command or observing behavior? "Code is clean" = REJECT. "`go test ./pkg/storage/... passes`" = PASS.
+- **Done when**: Are criteria behavioral (observable outcomes)? "Code is clean" = REJECT. "`go test ./pkg/storage/... passes`" = BARELY ACCEPTABLE. "Edit tool replaces exact text match; returns error if old text not found" = GOOD.
 
 If ANY task fails self-containedness, the plan is REJECTED. This is the #1 cause of subagent failure.
 
@@ -37,7 +37,32 @@ If ANY task fails self-containedness, the plan is REJECTED. This is the #1 cause
 - No missing prerequisites (if task B uses a type introduced by task A, B must depend on A)
 - Group order respects task dependencies
 
-#### C. YAML Structure
+#### C. Coverage (PROMOTED TO MUST PASS)
+
+**This was previously "Should Pass". It is now "Must Pass" because silent feature omission was the #1 root cause of the ai2 rewrite gap.**
+
+- Every key decision in design.md has at least one task
+- Every P0 feature in design.md has at least one task
+- Edge cases from design.md are assigned to specific tasks
+- No implicit requirements in design.md that no task addresses
+
+#### D. Acceptance Completeness (NEW — MUST PASS)
+
+**For each P0 feature in design.md with Acceptance Scenarios, verify that every scenario is covered by at least one task's done-when criteria.**
+
+Check:
+1. Read design.md's Acceptance Scenarios section
+2. For each scenario, find a task whose done-when covers it
+3. Any uncovered scenario = finding
+
+Example:
+- design.md says "Agent Loop handles concurrent tool calls" as an acceptance scenario
+- No task's done-when mentions concurrent tool calls
+- → CHANGES_REQUESTED with specific finding
+
+This ensures the behavioral contract flows from design → plan → implement without loss.
+
+#### E. YAML Structure
 
 - Valid YAML syntax
 - Required fields present: id, title, description, dependencies
@@ -46,20 +71,13 @@ If ANY task fails self-containedness, the plan is REJECTED. This is the #1 cause
 
 ### Should Pass (Improvements) — May Request Changes
 
-#### D. Coverage
-
-- Every key decision in design.md has at least one task
-- Edge cases from design.md are assigned to specific tasks
-- Test tasks are included for new code
-- No implicit requirements in design.md that no task addresses
-
-#### E. Task Granularity
+#### F. Task Granularity
 
 - Each task is 2-4 hours of work
 - Tasks > 6 hours should be split (look for multiple distinct goals in one description)
 - Tasks < 1 hour should be merged with related work
 
-#### F. Grouping
+#### G. Grouping
 
 - Groups are cohesive: related tasks together
 - Each group produces a compilable, runnable increment
@@ -145,10 +163,15 @@ Critical failures. Plan needs significant rework.
 - ❌ T005 depends on T999 (non-existent task)
 - ❌ T001→T002→T001 (circular)
 
-### Coverage Problems
+### Coverage Problems (NOW A BLOCKER)
 - ❌ design.md describes retry logic but no task implements it
-- ❌ No test tasks for new code
+- ❌ design.md defines 5 acceptance scenarios for Agent Loop, but tasks only cover 2 of them
 - ❌ Edge case mentioned in design.md but not assigned to any task
+
+### Acceptance Completeness Problems (NEW BLOCKER)
+- ❌ design.md says "handles concurrent tool calls" but no task's done-when mentions concurrency
+- ❌ design.md says "context cancellation propagates cleanly" but done-when only says "tests pass"
+- ❌ Plan has tasks for the happy path but design's edge case scenarios are uncovered
 
 ### Granularity Problems
 - ❌ "Implement full auth system" (too broad, >6h)
@@ -157,6 +180,11 @@ Critical failures. Plan needs significant rework.
 ## Rules
 
 - Be specific. Point to the exact field that's wrong and show what it should be.
+- **Quote source material verbatim.** When reporting dependency, coverage, or self-containedness issues, include the relevant YAML snippet with line context. For example:
+  ```
+  T009 line 45: dependencies: [T001, T002]  ← missing T003 which introduces the RunLoop type used in T009
+  ```
+  This prevents false findings (e.g., claiming "T009 depends on T008" when the YAML actually says `[T001, T002]`).
 - Don't be lenient. The subagent will fail silently if context is missing — your job is to prevent that.
 - Do NOT suggest implementation approaches. You review the plan quality, not the code design.
 - Every finding must have a concrete suggestion, not just "fix this".

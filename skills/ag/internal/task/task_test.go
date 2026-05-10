@@ -501,28 +501,33 @@ func TestStateMachine_InvalidTransitions(t *testing.T) {
 		t.Fatalf("pending → claimed should succeed: %v", err)
 	}
 
-	// claimed → done is invalid (must go through running)
-	_, err = Transition("t001", StatusDone)
-	if err == nil {
-		t.Fatal("expected error: claimed → done is invalid")
-	}
-
-	// claimed → running is valid
-	_, err = Transition("t001", StatusRunning)
-	if err != nil {
-		t.Fatalf("claimed → running should succeed: %v", err)
-	}
-
-	// running → done is valid
+			// claimed → done is now valid (manual override when work is complete)
 	_, err = Transition("t001", StatusDone)
 	if err != nil {
-		t.Fatalf("running → done should succeed: %v", err)
+		t.Fatalf("claimed → done should succeed: %v", err)
 	}
 
 	// done → anything is invalid (terminal state)
 	_, err = Transition("t001", StatusRunning)
 	if err == nil {
 		t.Fatal("expected error: done is terminal")
+	}
+}
+
+func TestStateMachine_FailedToDone(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+
+	// pending → claimed → running → failed
+	Transition("t001", StatusClaimed)
+	Transition("t001", StatusRunning)
+	Fail("t001", "some error", true)
+
+	// failed → done is now valid (manual override after human verification)
+	_, err := Transition("t001", StatusDone)
+	if err != nil {
+		t.Fatalf("failed → done should succeed: %v", err)
 	}
 }
 

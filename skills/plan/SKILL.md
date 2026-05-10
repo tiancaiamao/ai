@@ -151,3 +151,10 @@ brainstorm → design.md → plan (this skill) → ag task queue → implement
 | lint 未通过 | plan-lint 报错 | 修复后再继续 |
 | 未展示产出就问确认 | tasks.yml 存在但未向用户展示 | 先展示摘要 |
 | 未导入就结束 | plan 完成但没有 import-plan | 先导入 ag task |
+
+**Reviewer 的 Must Pass 标准（任何一项失败 = 打回重做）：**
+1. **Self-Containedness** — task description 自足，不需要外部文件
+2. **Dependency Correctness** — 无循环、无悬空依赖
+3. **Coverage** — design.md 每个关键决策和 P0 feature 都有 task 覆盖
+4. **Acceptance Completeness** — design.md 每个 Acceptance Scenario 都有 task 的 done-when 覆盖
+5. **YAML Structure** — 格式正确、字段完整

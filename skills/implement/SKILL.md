@@ -47,13 +47,26 @@ git branch --show-current
 
 ## Execution: `ag task run`
 
+**⚠️ Use tmux for long-running scheduler.** The default bash timeout (2 minutes) will kill the scheduler mid-task, leaving files in half-written state. Always run in tmux:
+
 ```bash
+# Start tmux session first
+tmux new -s implement
+
+# Then inside tmux:
 ag task run \
   --design docs/design/xxx.md \
   --max-concurrent 2 \
   --timeout 600 \
   --poll 5000
 ```
+
+**Parameters:**
+- `--design`: Path to design.md for worker context
+- `--max-concurrent`: Max parallel workers (default 2)
+- `--timeout`: Seconds per task (default 600 = 10 min)
+- `--poll`: Milliseconds between status checks (default 5000)
+- `--skip-review`: Skip review phase (requires user approval)
 
 **scheduler 自动处理：**
 1. 选取 dependency-unblocked 的 pending tasks
@@ -117,6 +130,8 @@ ag task ls --status running
 
 - `ag task` 队列（必需 — 来自 plan skill 的 `ag task import-plan`）
 
+**关键约束：** Worker 的验证标准来自 task description 的 done-when，不是 worker 自己的判断。如果 worker 发现 done-when 标准不够，应该报告问题而不是自己发明新的验证标准。
+
 ## Tools
 
 - `ag task run` — 启动 scheduler（核心命令）
@@ -135,3 +150,38 @@ ag task ls --status running
 | 跳过 review | `--skip-review` 但没有用户同意 | 默认不跳过 |
 | 静默失败 | scheduler 报错但没向用户汇报 | 停下来汇报 |
 | 在 main 上运行 | git branch 是 main | 切换到 feature branch |
+
+## Post-Implementation Checklist
+
+After `ag task run` completes (all tasks done), perform these cleanup steps:
+
+```bash
+# 1. Verify all tasks are done
+ag task ls
+# Should show all tasks in "done" state
+
+# 2. Run full test suite
+go test ./...
+# If E2E tests exist:
+go test -tags=e2e ./test/e2e/
+
+# 3. Clean worker artifacts
+rm -rf .ag/agents/worker-*
+
+# 4. Clean stale lock files
+find .ag/tasks -name '.claim-lock' -delete
+
+# 5. Clean binary artifacts
+rm -f ai3 ai3_bin
+
+# 6. Show final status
+ag task ls
+git log --oneline -10
+
+# 7. Ask user about next steps:
+#    - Merge feature branch to main?
+#    - Run comparison tests?
+#    - Archive task files?
+```
+
+**Do not skip this checklist.** Worker artifacts, stale locks, and untested code are the most common sources of post-implementation issues.

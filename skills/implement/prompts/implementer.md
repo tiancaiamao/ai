@@ -24,10 +24,12 @@ If anything is unclear about:
 ## Your Job
 
 1. Implement exactly what the task specifies — nothing more, nothing less
-2. Write tests (following TDD if task says to)
-3. Verify implementation works (run tests, check output)
+2. Write tests that verify the task's **done-when criteria** (these come from the plan, NOT from your own judgment)
+3. Verify each done-when criterion is met by running your tests and checking observable behavior
 4. Commit your work with a descriptive message
 5. Self-review before reporting
+
+**CRITICAL: Verification comes from the plan, not from you.** The task's "Done when" section defines what "done" means. Your job is to make each of those criteria observable and true. Do NOT invent your own verification criteria. If the plan says "Edit tool replaces exact text match; returns error if old text not found", your tests must verify exactly those behaviors.
 
 ## Before Reporting: Self-Review
 
@@ -49,9 +51,10 @@ Review your work with fresh eyes:
 - Did I follow existing patterns in the codebase?
 
 **Testing:**
-- Do tests verify behavior (not just mock behavior)?
-- Did I follow TDD if required?
-- Are tests comprehensive?
+- Do tests verify the specific behaviors from the task's done-when section?
+- Or did I write shallow tests that pass without verifying real behavior?
+- Are edge cases from the task description covered?
+- Did I avoid testing implementation details (internal state) in favor of observable behavior?
 
 If you find issues during self-review, fix them now.
 

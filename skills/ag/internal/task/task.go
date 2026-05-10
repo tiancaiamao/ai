@@ -3,12 +3,14 @@ package task
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/genius/ag/internal/storage"
@@ -30,12 +32,20 @@ const (
 // Any transition not in this map is rejected.
 var validTransitions = map[string][]string{
 	StatusPending:  {StatusClaimed},
-	StatusClaimed:  {StatusRunning, StatusFailed},
+	StatusClaimed:  {StatusRunning, StatusDone, StatusFailed},       // claimed→done: manual override when work is complete
 	StatusRunning:  {StatusDone, StatusFailed, StatusReview},
 	StatusReview:   {StatusDone, StatusRevision, StatusFailed},
 	StatusRevision: {StatusReview, StatusFailed},
-	StatusDone:     {}, // Terminal
-	StatusFailed:   {StatusPending}, // Retry
+	StatusDone:     {},                    // Terminal
+	StatusFailed:   {StatusPending, StatusDone}, // failed→done: manual override after human verification
+}
+
+// isWorkComplete returns true if the task's code work is finished,
+// meaning downstream tasks can safely build on top of it.
+// Both "done" (fully complete) and "review" (code done, awaiting review)
+// count as work complete.
+func isWorkComplete(status string) bool {
+	return status == StatusDone || status == StatusReview
 }
 
 // CanTransition checks if a state transition is valid.
@@ -152,8 +162,9 @@ func createWithID(id string, description string, specFile string) (*Task, error)
 }
 
 // Claim claims a pending task for an agent.
-// Cross-process safety: O_EXCL on .claim-lock is the primary guard.
+// Cross-process safety: flock is the primary guard.
 // We acquire the lock FIRST, then check status — this prevents TOCTOU races.
+// flock is automatically released when the process exits, so no stale locks.
 func Claim(taskID, agentID string) (*Task, error) {
 	taskMu.Lock()
 	defer taskMu.Unlock()
@@ -163,24 +174,36 @@ func Claim(taskID, agentID string) (*Task, error) {
 		return nil, fmt.Errorf("task not found: %s", taskID)
 	}
 
-	// Acquire exclusive lock FIRST (atomic cross-process guard)
+	// Acquire exclusive lock using flock — auto-released on process exit.
+	// No stale lock files possible, unlike O_EXCL.
 	lockPath := filepath.Join(taskDir, ".claim-lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		return nil, fmt.Errorf("task %s: open lock file: %w", taskID, err)
+	}
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
 		return nil, fmt.Errorf("task %s already claimed by another process", taskID)
 	}
-	defer f.Close()
+	// Note: we intentionally keep f open until Claim returns,
+	// holding the lock for the duration of the status update.
+	defer func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}()
+
+	f.Truncate(0)
+	f.Seek(0, 0)
 	f.WriteString(agentID)
 
 	// NOW check status (safe because we hold the lock)
 	task, err := loadTask(taskID)
 	if err != nil {
-		os.Remove(lockPath)
 		return nil, err
 	}
 
 	if task.Status != StatusPending {
-		os.Remove(lockPath)
 		return nil, fmt.Errorf("task %s is %s (not pending)", taskID, task.Status)
 	}
 
@@ -190,16 +213,13 @@ func Claim(taskID, agentID string) (*Task, error) {
 
 	unmet, err := unmetDependencies(task)
 	if err != nil {
-		os.Remove(lockPath)
 		return nil, err
 	}
 	if len(unmet) > 0 {
-		os.Remove(lockPath)
 		return nil, fmt.Errorf("task %s is blocked by: %s", taskID, strings.Join(unmet, ", "))
 	}
 
 	if err := storage.AtomicWriteJSON(filepath.Join(taskDir, "task.json"), task); err != nil {
-		os.Remove(lockPath)
 		return nil, err
 	}
 
@@ -368,6 +388,96 @@ func AllDone() (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// Cleanup removes done/failed tasks and fixes dangling dependencies in remaining tasks.
+// Returns the number of tasks cleaned up and the number of dangling deps fixed.
+func Cleanup() (cleaned int, depsFixed int, err error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	_, _, tasksDir := storage.Paths()
+	entries, err := os.ReadDir(tasksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+
+	// Phase 1: Identify terminal tasks to remove
+	toRemove := map[string]bool{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		t, loadErr := loadTask(entry.Name())
+		if loadErr != nil {
+			continue
+		}
+		if IsTerminal(t.Status) {
+			toRemove[t.ID] = true
+		}
+	}
+
+	// Phase 2: Remove terminal task directories
+	for id := range toRemove {
+		taskDir := storage.TaskDir(id)
+		if rmErr := os.RemoveAll(taskDir); rmErr != nil {
+			log.Printf("[task] cleanup: failed to remove %s: %v", id, rmErr)
+			continue
+		}
+		cleaned++
+		log.Printf("[task] cleanup: removed %s", id)
+	}
+
+	if cleaned == 0 {
+		return 0, 0, nil
+	}
+
+	// Phase 3: Fix dangling dependencies in remaining tasks
+	remaining, _ := os.ReadDir(tasksDir)
+	for _, entry := range remaining {
+		if !entry.IsDir() {
+			continue
+		}
+		t, loadErr := loadTask(entry.Name())
+		if loadErr != nil {
+			continue
+		}
+		if len(t.Dependencies) == 0 {
+			continue
+		}
+
+		fixed := false
+		newDeps := make([]string, 0, len(t.Dependencies))
+		for _, depID := range t.Dependencies {
+			if toRemove[depID] {
+				log.Printf("[task] cleanup: removing dangling dep %s from %s (deleted task)", depID, t.ID)
+				fixed = true
+				continue
+			}
+			// Also check if dep task directory actually exists
+			depDir := storage.TaskDir(depID)
+			if !storage.Exists(depDir) {
+				log.Printf("[task] cleanup: removing dangling dep %s from %s (dir not found)", depID, t.ID)
+				fixed = true
+				continue
+			}
+			newDeps = append(newDeps, depID)
+		}
+
+		if fixed {
+			t.Dependencies = newDeps
+			taskPath := filepath.Join(storage.TaskDir(t.ID), "task.json")
+			if writeErr := storage.AtomicWriteJSON(taskPath, t); writeErr != nil {
+				log.Printf("[task] cleanup: failed to update %s deps: %v", t.ID, writeErr)
+			}
+			depsFixed++
+		}
+	}
+
+	return cleaned, depsFixed, nil
 }
 
 // Load loads a task by ID (alias for reading task.json).
@@ -621,10 +731,11 @@ func unmetDependencies(taskObj *Task) ([]string, error) {
 	for _, depID := range taskObj.Dependencies {
 		depTask, err := loadTask(depID)
 		if err != nil {
+			log.Printf("[task] unmetDependencies: dependency %s not found for %s", depID, taskObj.ID)
 			unmet = append(unmet, depID)
 			continue
 		}
-		if depTask.Status != StatusDone {
+		if !isWorkComplete(depTask.Status) {
 			unmet = append(unmet, depID)
 		}
 	}
