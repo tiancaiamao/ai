@@ -1677,7 +1677,53 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	registerHiddenAlias("get_messages", "Get session messages (internal)", "messages")
 	registerHiddenAlias("get_state", "Get agent state (internal)", "session")
 	registerHiddenAlias("get_commands", "List commands (internal)", "skills")
-	registerHiddenAlias("get_session_stats", "Get session stats (internal)", "session")
+		// get_session_stats: compute real SessionStats (restored from rpc_commands.go handleGetSessionStats).
+	// Was incorrectly aliased to /session which returns SessionState, causing all-zero stats.
+	server.RegisterHiddenSlash("get_session_stats", "Get session stats (internal)", func(args string) (any, error) {
+		messages := ag.GetMessages()
+		userCount, assistantCount, toolCalls, toolResults, tokens, cost := collectSessionUsage(messages)
+
+		agentCtx := ag.GetContext()
+		tokens.SystemPromptTokens = len(systemPrompt) / 4
+		tokens.SystemToolsTokens = agentCtx.EstimateToolsTokens()
+		activeWindowTokens := agent.EstimateConversationTokens(messages)
+		tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
+
+		var tokenRate *rpc.TokenRateStats
+		if metrics := ag.GetMetrics(); metrics != nil {
+			llmMetrics := metrics.GetLLMMetrics()
+			tokenRate = &rpc.TokenRateStats{
+				ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
+				ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
+				ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
+				WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
+				WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
+				WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
+				LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
+				LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
+				LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
+				RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
+				RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
+				RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
+				RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
+			}
+		}
+		return &rpc.SessionStats{
+			SessionFile:       sess.GetPath(),
+			SessionID:         sessionID,
+			UserMessages:      userCount,
+			AssistantMessages: assistantCount,
+			ToolCalls:         toolCalls,
+			ToolResults:       toolResults,
+			TotalMessages:     len(messages),
+			CompactionCount:   sess.GetCompactionCount(),
+			Tokens:            tokens,
+			TokenRate:         tokenRate,
+			Cost:              cost,
+			Workspace:         ws.GetGitRoot(),
+			CurrentWorkdir:    ws.GetCWD(),
+		}, nil
+	})
 	registerHiddenAlias("new_session", "Create new session (internal)", "new")
 	registerHiddenAlias("list_sessions", "List sessions (internal)", "resume")
 	registerHiddenAlias("switch_session", "Switch session (internal)", "resume")
