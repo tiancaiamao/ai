@@ -7,7 +7,6 @@ import (
 
 const (
 	maxSkillDescriptionRunes = 220
-	defaultPromptTopN        = 10
 )
 
 // FormatForPrompt formats skills for inclusion in a system prompt.
@@ -19,7 +18,7 @@ const (
 //
 // If stats is non-nil and has entries, only the top-N ranked skills from
 // stats are shown. Otherwise (cold start / nil stats), all visible skills
-// are shown capped at defaultPromptTopN.
+// are shown capped at DefaultTopN.
 func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	// Filter out skills that shouldn't be auto-included
 	visibleSkills := make([]Skill, 0, len(skills))
@@ -33,7 +32,7 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 		return ""
 	}
 
-	topN := defaultPromptTopN
+	topN := DefaultTopN
 	if stats != nil && stats.TopN > 0 {
 		topN = stats.TopN
 	}

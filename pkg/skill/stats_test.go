@@ -95,7 +95,7 @@ func TestStatsLoadMalformedJSON(t *testing.T) {
 func TestStatsRecordUsageCreatesEntry(t *testing.T) {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: filepath.Join(t.TempDir(), "stats.json"),
 	}
@@ -117,7 +117,7 @@ func TestStatsRecordUsageCreatesEntry(t *testing.T) {
 func TestStatsRecordUsageIncrementsCount(t *testing.T) {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: filepath.Join(t.TempDir(), "stats.json"),
 	}
@@ -138,7 +138,7 @@ func TestStatsRecordUsageIncrementsCount(t *testing.T) {
 func TestStatsTimeDecayOldEntryLowerScore(t *testing.T) {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: filepath.Join(t.TempDir(), "stats.json"),
 	}
@@ -186,7 +186,7 @@ func TestStatsTimeDecayOldEntryLowerScore(t *testing.T) {
 func TestStatsTopSkillsOrderingAndLimit(t *testing.T) {
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: filepath.Join(t.TempDir(), "stats.json"),
 	}
@@ -240,7 +240,7 @@ func TestStatsSaveLoadRoundtrip(t *testing.T) {
 
 	s := &SkillStatsFile{
 		Version:  statsVersion,
-		TopN:     defaultTopN,
+		TopN:     DefaultTopN,
 		Entries:  make(map[string]*SkillUsageEntry),
 		FilePath: path,
 	}
