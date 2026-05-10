@@ -28,6 +28,22 @@ pending → claimed → running → done
                   ↘ review → revision → review (max 2轮) → done
 ```
 
+## Standard Startup Sequence
+
+按这个顺序执行，不要跳步：
+
+```
+1. ag doctor                    # 工具链检查，必须全绿
+2. ag task ls                   # 确认有 pending tasks
+3. ai serve --help              # 手动确认 ai serve 可用（doctor 不检查这个）
+4. plan-lint PLAN.yml           # 单独跑一次，exit 0 才继续
+5. ag task import-plan PLAN.yml # 导入
+6. ag task run --detach --design docs/design/xxx.md
+7. ag task log                  # 跟踪
+```
+
+**为什么 plan-lint 要在 import 前单独跑：** plan-lint exit 0 for warnings / exit 1 for errors。如果 plan 有 error（控制字符、空字段），import 进去就是脏数据。
+
 ## Pre-Flight Checklist
 
 **在启动 scheduler 之前，必须确认：**
@@ -208,3 +224,48 @@ git log --oneline -10
 ```
 
 **Do not skip this checklist.** Worker artifacts, stale locks, and untested code are the most common sources of post-implementation issues.
+
+## Known Pitfalls
+
+从实战中踩过的坑。如果重来一遍，这些是最容易翻车的地方：
+
+### 1. `ai serve` 不可用
+scheduler 依赖 `ai serve` spawn worker。`ag doctor` 检查 `ai` binary 但不测 `ai serve`。
+**修复：** 启动前手动 `ai serve --help`，或在 Pre-Flight 阶段加一步测试。
+
+### 2. 忘传 `--design`
+worker 没有 design.md 做参考，实现会偏离设计意图。
+**后果：** worker 按"自己的理解"实现，review 阶段才发现偏差，大量返工。
+**修复：** `ag task run --design docs/design/xxx.md` 是必填参数，不要省略。
+
+### 3. plan 有隐藏控制字符
+从 plan skill 生成的 YAML 可能包含 `\x01`（regex 损坏残留）或其它控制字符。
+plan-lint 现在会检测这些，但必须在 import 前跑。
+**修复：** `plan-lint PLAN.yml && ag task import-plan PLAN.yml` 作为固定流水线。
+
+### 4. cleanup 删除 task 后 show 报错
+`ag task cleanup` 会删除 done/failed 的 task。之后 `ag task show t001` 报 `task not found`。
+**修复：** cleanup 放在所有检查之后，不要在调试中途跑。
+
+### 5. Worker 的 done-when 标准模糊
+task description 里的 done-when 如果写得模糊，worker 会按自己的标准完成。
+**修复：** 在 plan 阶段用 reviewer 检查 done-when 是否具体、可验证。
+
+## Health Signals
+
+scheduler 运行过程中，通过这些信号判断是否正常：
+
+| 信号 | 正常 | 异常 |
+|------|------|------|
+| `ag task ls` ELAPSED 列 | 在涨（如 `12s`, `35s`） | 空白或不变 |
+| `ag task log` 输出 | 有 `🚀 Started` / `✅ Done` | 无输出超过 30s |
+| `ag task stop` heartbeat | `heartbeat: 3s ago (alive)` | `heartbeat: 2m old (may be dead)` |
+| 熔断器 | 未触发 | `⛔ Circuit breaker: 3 consecutive failures` |
+| `ag task ls` 状态 | pending → claimed → running → done | 大量 failed |
+
+**异常处理流程：**
+1. `ag task stop` 停 scheduler
+2. `ag task log --tail 50` 看最后输出
+3. `ag task show <failed-id>` 看错误详情（现在包含 worker 最后 300 字符输出）
+4. 修复问题后 `ag task retry <id>`
+5. 重新 `ag task run --detach`
