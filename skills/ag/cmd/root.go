@@ -1193,21 +1193,31 @@ var doctorCmd = &cobra.Command{
 				}
 				return fmt.Errorf("pending→done should be invalid")
 			}())
+
+			// Clean up immediately to prevent the scheduler from claiming
+			// this transient test task while it sits in pending state.
+			os.RemoveAll(storage.TaskDir(t2.ID))
 		}
 
 		// 4. Dependency + cycle detection
-		if t1 != nil && t2 != nil {
-			check("dependency add", func() error {
-				_, e := task.AddDependency(t2.ID, t1.ID)
-				return e
-			}())
-			check("cycle detection", func() error {
-				_, e := task.AddDependency(t1.ID, t2.ID)
-				if e != nil {
-					return nil // expected: cycle detected
-				}
-				return fmt.Errorf("cycle should be detected")
-			}())
+		if t1 != nil {
+			t3, _ := task.Create("doctor dep test", "")
+			if t3 != nil {
+				check("dependency add", func() error {
+					_, e := task.AddDependency(t3.ID, t1.ID)
+					return e
+				}())
+				check("cycle detection", func() error {
+					_, e := task.AddDependency(t1.ID, t3.ID)
+					if e != nil {
+						return nil // expected: cycle detected
+					}
+					return fmt.Errorf("cycle should be detected")
+				}())
+
+				// t3 is in pending state (never transitioned), clean up directly.
+				os.RemoveAll(storage.TaskDir(t3.ID))
+			}
 		}
 
 		// 5. Cleanup
