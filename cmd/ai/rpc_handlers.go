@@ -919,14 +919,21 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}, nil
 	})
 
-	server.RegisterSlash("messages", "Get all messages in the current session", func(args string) (any, error) {
-		slog.Info("Received get_messages")
-		messages := ag.GetMessages()
-		result := make([]any, len(messages))
-		for i, msg := range messages {
-			result[i] = msg
+	server.RegisterSlash("messages", "Get formatted message summaries for the current session", func(args string) (any, error) {
+		slog.Info("Received get_messages", "args", args)
+		const defaultCount = 20
+		const maxPreviewLen = 200
+
+		count := defaultCount
+		args = strings.TrimSpace(args)
+		if args != "" {
+			if n, err := strconv.Atoi(args); err == nil && n > 0 {
+				count = n
+			}
 		}
-		return map[string]any{"messages": result}, nil
+
+		messages := ag.GetMessages()
+		return formatMessagesForDisplay(messages, count, maxPreviewLen), nil
 	})
 
 	server.RegisterSlash("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
@@ -2292,4 +2299,62 @@ func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
 	}
 
 	return state, nil
+}
+
+// formatMessagesForDisplay converts AgentMessages into a structured summary for the /messages command.
+// It returns the last `count` messages with previews truncated to maxPreviewLen characters.
+func formatMessagesForDisplay(messages []agentctx.AgentMessage, count int, maxPreviewLen int) rpc.MessagesResult {
+	total := len(messages)
+
+	start := total - count
+	if start < 0 {
+		start = 0
+	}
+	showing := total - start
+
+	formatted := make([]rpc.FormattedMessage, 0, showing)
+	for i := start; i < total; i++ {
+		msg := messages[i]
+		fm := rpc.FormattedMessage{
+			Index: i,
+			Role:  msg.Role,
+		}
+
+		// Build preview from text content
+		preview := msg.ExtractText()
+		if preview == "" {
+			// Try thinking content as fallback for assistant messages
+			if thinking := msg.ExtractThinking(); thinking != "" {
+				preview = "(thinking) " + thinking
+			}
+		}
+		if len(preview) > maxPreviewLen {
+			preview = preview[:maxPreviewLen] + "..."
+		}
+		fm.Preview = preview
+
+		// Extract tool call names for assistant messages
+		toolCalls := msg.ExtractToolCalls()
+		if len(toolCalls) > 0 {
+			names := make([]string, 0, len(toolCalls))
+			for _, tc := range toolCalls {
+				names = append(names, tc.Name)
+			}
+			fm.ToolCalls = names
+		}
+
+		// Include tool name for tool results
+		if msg.ToolName != "" {
+			fm.ToolName = msg.ToolName
+		}
+		fm.IsError = msg.IsError
+
+		formatted = append(formatted, fm)
+	}
+
+	return rpc.MessagesResult{
+		Total:    total,
+		Showing:  showing,
+		Messages: formatted,
+	}
 }

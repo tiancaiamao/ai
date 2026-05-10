@@ -176,6 +176,23 @@ type CycleModelResult struct {
 	ScopedProvider string    `json:"scopedProvider,omitempty"`
 }
 
+// FormattedMessage represents a summarized message for display purposes.
+type FormattedMessage struct {
+	Index     int      `json:"index"`
+	Role      string   `json:"role"`
+	Preview   string   `json:"preview"`
+	ToolCalls []string `json:"toolCalls,omitempty"`
+	ToolName  string   `json:"toolName,omitempty"`
+	IsError   bool     `json:"isError,omitempty"`
+}
+
+// MessagesResult represents the result of the /messages slash command.
+type MessagesResult struct {
+	Total    int               `json:"total"`
+	Showing  int               `json:"showing"`
+	Messages []FormattedMessage `json:"messages"`
+}
+
 // BashResult represents a shell execution result.
 type BashResult struct {
 	ExitCode int    `json:"exitCode"`
