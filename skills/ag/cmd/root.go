@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -66,7 +70,7 @@ func checkBinaryStaleness() {
 var taskRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run scheduler to execute tasks automatically",
-		Run: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, args []string) {
 		checkBinaryStaleness()
 
 		maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
@@ -75,6 +79,7 @@ var taskRunCmd = &cobra.Command{
 		pollMs, _ := cmd.Flags().GetInt("poll")
 		design, _ := cmd.Flags().GetString("design")
 		skipReview, _ := cmd.Flags().GetBool("skip-review")
+		detach, _ := cmd.Flags().GetBool("detach")
 
 		cfg := task.DefaultSchedulerConfig()
 		cfg.MaxConcurrent = maxConcurrent
@@ -87,10 +92,27 @@ var taskRunCmd = &cobra.Command{
 		cwd, _ := os.Getwd()
 		cfg.WorkDir = cwd
 
+		if detach {
+			runDetached(os.Args)
+			return
+		}
+
+		// Setup logging to file + stderr when running in foreground
+		logFile, err := os.OpenFile(filepath.Join(storage.BaseDir, "scheduler.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+			defer logFile.Close()
+		}
+
+		// Write PID file
+		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+		os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-				// Handle Ctrl+C gracefully
+		// Handle Ctrl+C gracefully
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
 		go func() {
@@ -104,6 +126,49 @@ var taskRunCmd = &cobra.Command{
 			os.Exit(1)
 		}
 	},
+}
+
+// runDetached re-executes the same command without --detach in the background,
+// redirecting output to scheduler.log.
+func runDetached(originalArgs []string) {
+	// Build args without --detach
+	var cleanArgs []string
+	for _, a := range originalArgs {
+		if a != "--detach" {
+			cleanArgs = append(cleanArgs, a)
+		}
+	}
+
+	logPath := filepath.Join(storage.BaseDir, "scheduler.log")
+	pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+
+	// Open log file
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(cleanArgs[0], cleanArgs[1:]...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		fmt.Fprintf(os.Stderr, "Failed to start scheduler: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write PID
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
+
+	fmt.Printf("Scheduler started in background (PID %d)\n", cmd.Process.Pid)
+	fmt.Printf("  ag task log     — follow output\n")
+	fmt.Printf("  ag task stop    — stop scheduler\n")
+	fmt.Printf("  ag task ls      — check progress\n")
+	cmd.Process.Release()
 }
 
 var taskTransitionCmd = &cobra.Command{
@@ -741,6 +806,105 @@ var taskCleanupCmd = &cobra.Command{
 	},
 }
 
+var taskLogCmd = &cobra.Command{
+	Use:   "log",
+	Short: "Follow scheduler log output (like kubectl logs -f)",
+	Run: func(cmd *cobra.Command, args []string) {
+		logPath := filepath.Join(storage.BaseDir, "scheduler.log")
+
+		tailN, _ := cmd.Flags().GetInt("tail")
+		if tailN > 0 {
+			// Print last N lines then exit
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "No scheduler log found at %s\n", logPath)
+				os.Exit(1)
+			}
+			lines := strings.Split(string(data), "\n")
+			start := len(lines) - tailN
+			if start < 0 {
+				start = 0
+			}
+			for _, l := range lines[start:] {
+				fmt.Println(l)
+			}
+			return
+		}
+
+		// Tail -f mode: print existing, then follow
+		f, err := os.Open(logPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "No scheduler log found at %s\n", logPath)
+			os.Exit(1)
+		}
+		defer f.Close()
+
+		// Print existing content
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+
+		// Follow for new content
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				scanner := bufio.NewScanner(f)
+				for scanner.Scan() {
+					fmt.Println(scanner.Text())
+				}
+			}
+		}
+	},
+}
+
+var taskStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop a running background scheduler",
+	Run: func(cmd *cobra.Command, args []string) {
+		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+		data, err := os.ReadFile(pidPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "No running scheduler found (missing PID file)")
+			os.Exit(1)
+		}
+
+		var pid int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid PID file: %s\n", string(data))
+			os.Exit(1)
+		}
+
+		// Check if process is running
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Process %d not found\n", pid)
+			os.Exit(1)
+		}
+
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to stop process %d: %v\n", pid, err)
+			os.Exit(1)
+		}
+
+		os.Remove(pidPath)
+		fmt.Printf("Scheduler (PID %d) stopped\n", pid)
+	},
+}
+
 var taskShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show task details",
@@ -911,6 +1075,8 @@ func init() {
 	taskRunCmd.Flags().Int("poll", 5000, "Poll interval in milliseconds")
 	taskRunCmd.Flags().String("design", "", "Path to design.md for worker context")
 	taskRunCmd.Flags().Bool("skip-review", false, "Skip review phase")
+		taskRunCmd.Flags().Bool("detach", false, "Run scheduler in background (log to .ag/scheduler.log)")
+	taskLogCmd.Flags().Int("tail", 0, "Show last N lines (default: follow mode)")
 	taskRetryCmd.Flags().Int("max-retries", 3, "Max retries allowed")
 
 	// Send/recv flags
@@ -931,7 +1097,7 @@ func init() {
 
 		// Task subcommands
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-		taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd)
+				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
 
 	// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
