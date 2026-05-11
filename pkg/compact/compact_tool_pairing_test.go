@@ -224,11 +224,11 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 // TestFullCompactPreservesPairing tests the full compaction flow preserves tool_call/tool_result pairing
 func TestFullCompactPreservesPairing(t *testing.T) {
 	config := &Config{
-		MaxMessages:        10,
-		MaxTokens:          1000,
-		KeepRecent:         2,
-		KeepRecentTokens:   100,
-		AutoCompact:        true,
+		MaxMessages:      10,
+		MaxTokens:        1000,
+		KeepRecent:       2,
+		KeepRecentTokens: 100,
+		AutoCompact:      true,
 	}
 
 	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
@@ -242,9 +242,9 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-full-1",
-					Type: "toolCall",
-					Name: "bash",
+					ID:       "call-full-1",
+					Type:     "toolCall",
+					Name:     "bash",
 					Arguments: map[string]any{"command": "ls"},
 				},
 			},
@@ -261,7 +261,10 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 		agentctx.NewUserMessage("last message"),
 	}
 
-	result, err := compactor.CompactOld(messages, "")
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: messages,
+	}
+	result, err := compactor.Compact(agentCtx)
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}
@@ -269,7 +272,7 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 	// After compaction, check that all tool_results have their corresponding tool_calls visible
 	// Collect all visible tool_call IDs
 	visibleToolCalls := make(map[string]bool)
-	for _, msg := range result.Messages {
+	for _, msg := range agentCtx.RecentMessages {
 		if msg.Role == "assistant" && msg.IsAgentVisible() {
 			for _, tc := range msg.ExtractToolCalls() {
 				visibleToolCalls[tc.ID] = true
@@ -278,13 +281,14 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 	}
 
 	// Check all visible tool_results have their tool_calls visible
-	for _, msg := range result.Messages {
+	for _, msg := range agentCtx.RecentMessages {
 		if msg.Role == "toolResult" && msg.IsAgentVisible() {
 			if !visibleToolCalls[msg.ToolCallID] {
 				t.Errorf("BUG: tool_result with id %s is visible but its tool_call is not visible", msg.ToolCallID)
 			}
 		}
 	}
+	_ = result
 }
 
 // TestEnsureToolCallPairingWithGrace_ProtectsRecentToolResults tests that grace period protects recent tool results

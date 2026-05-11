@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -46,70 +44,13 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Build runtime appendix (llm context + context meta) as a user message
+		// Build runtime appendix (llm context + context meta) as a user message
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
 	// LLMContext content is always injected when non-empty.
 	// runtime_state telemetry is ALWAYS injected from turn 1 so path info is available immediately.
-
-	// Block A: LLMContext content injection — whenever non-empty.
-	var llmContextContent string
-	if agentCtx.LLMContext != "" {
-		llmContextContent = agentCtx.LLMContext
-	}
-
-	// Block B: runtime_state telemetry — always, from turn 1.
-	const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
-	tokensMax := defaultContextWindow
-	if config.ContextWindow > 0 {
-		tokensMax = config.ContextWindow
-	}
-	tokensUsedApprox := EstimateConversationTokens(agentCtx.RecentMessages)
-
-	// Update AgentState with token usage info
-	agentCtx.AgentState.TokensUsed = tokensUsedApprox
-	agentCtx.AgentState.TokensLimit = tokensMax
-	agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
-
-	// Update CWD in AgentState so checkpoints preserve it for session restore
-	if config.GetWorkingDir != nil {
-		agentCtx.AgentState.CurrentWorkingDir = config.GetWorkingDir()
-	}
-	if config.GetStartupPath != nil {
-		agentCtx.AgentState.WorkspaceRoot = config.GetStartupPath()
-	}
-
-	currentWorkdir := agentCtx.AgentState.CurrentWorkingDir
-	startupPath := ""
-	if config.GetStartupPath != nil {
-		startupPath = config.GetStartupPath()
-	}
-
-	// Build meta for runtime snapshot from AgentState
-	metaTokensUsed := agentCtx.AgentState.TokensUsed
-	if metaTokensUsed == 0 {
-		metaTokensUsed = tokensUsedApprox
-	}
-	metaTokensMax := agentCtx.AgentState.TokensLimit
-	if metaTokensMax == 0 {
-		metaTokensMax = tokensMax
-	}
-	metaTokensPercent := float64(0)
-	if metaTokensMax > 0 {
-		metaTokensPercent = float64(metaTokensUsed) / float64(metaTokensMax) * 100
-	}
-
-	meta := agentctx.ContextMeta{
-		TokensUsed:        metaTokensUsed,
-		TokensMax:         metaTokensMax,
-		TokensPercent:     metaTokensPercent,
-		MessagesInHistory: len(agentCtx.RecentMessages),
-		LLMContextSize:    len(agentCtx.LLMContext),
-	}
-
-	runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
-	runtimeAppendix := buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
+	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
 
 	// Insert runtime_state before the last user message for better attention.
 	if runtimeAppendix != "" {
@@ -144,7 +85,7 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-	llmStream := llm.StreamLLM(
+		llmStream := llm.StreamLLM(
 		llmCtx,
 		model,
 		llmCtxParams,
@@ -152,164 +93,83 @@ func streamAssistantResponse(
 		config.LLMFirstResponseTimeout,
 	)
 
-	type toolCallState struct {
-		id        string
-		name      string
-		callType  string
-		arguments string
-	}
-
 	var partialMessage *agentctx.AgentMessage
-	var textBuilder strings.Builder
-	var thinkingBuilder strings.Builder
-	toolCalls := map[int]*toolCallState{}
-
-	buildContent := func(text string, thinking string, calls map[int]*toolCallState) []agentctx.ContentBlock {
-		content := make([]agentctx.ContentBlock, 0, 2+len(calls))
-		if thinking != "" {
-			content = append(content, agentctx.ThinkingContent{
-				Type:     "thinking",
-				Thinking: thinking,
-			})
-		}
-		if text != "" {
-			content = append(content, agentctx.TextContent{
-				Type: "text",
-				Text: text,
-			})
-		}
-
-		if len(calls) == 0 {
-			return content
-		}
-
-		indexes := make([]int, 0, len(calls))
-		for idx := range calls {
-			indexes = append(indexes, idx)
-		}
-		sort.Ints(indexes)
-
-		for _, idx := range indexes {
-			call := calls[idx]
-			argsMap := make(map[string]any)
-			if call.arguments != "" {
-				if err := json.Unmarshal([]byte(call.arguments), &argsMap); err != nil {
-					argsMap = make(map[string]any)
-				}
-			}
-
-			content = append(content, agentctx.ToolCallContent{
-				ID:        call.id,
-				Type:      "toolCall",
-				Name:      call.name,
-				Arguments: argsMap,
-			})
-		}
-
-		return content
-	}
+	chunkState := NewStreamChunkState()
 
 	for event := range llmStream.Iterator(ctx) {
 		if event.Done {
 			break
 		}
 
-		switch e := event.Value.(type) {
-		case llm.LLMStartEvent:
+		result := processStreamChunk(chunkState, event.Value, thinkingLevel)
+
+		switch result.EventType {
+		case ChunkStart:
 			partialMessage = new(agentctx.AgentMessage)
 			*partialMessage = agentctx.NewAssistantMessage()
-			textBuilder.Reset()
-			thinkingBuilder.Reset()
-			toolCalls = map[int]*toolCallState{}
 			stream.Push(NewMessageStartEvent(*partialMessage))
 			stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 				Type:         "text_start",
 				ContentIndex: 0,
 			}))
 
-		case llm.LLMTextDeltaEvent:
+		case ChunkTextDelta:
 			if partialMessage != nil {
 				if !firstTokenRecorded {
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
 				traceevent.Log(ctx, traceevent.CategoryLLM, "text_delta",
-					traceevent.Field{Key: "content_index", Value: e.Index},
-					traceevent.Field{Key: "delta", Value: e.Delta},
+					traceevent.Field{Key: "content_index", Value: result.ContentIndex},
+					traceevent.Field{Key: "delta", Value: result.Delta},
 				)
-				textBuilder.WriteString(e.Delta)
-				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
+				partialMessage.Content = result.Content
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "text_delta",
-					ContentIndex: e.Index,
-					Delta:        e.Delta,
+					ContentIndex: result.ContentIndex,
+					Delta:        result.Delta,
 				}))
 			}
 
-		case llm.LLMThinkingDeltaEvent:
+		case ChunkThinkingDelta:
 			if partialMessage != nil {
-				if thinkingLevel == "off" {
-					break
-				}
 				if !firstTokenRecorded {
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
 				traceevent.Log(ctx, traceevent.CategoryLLM, "thinking_delta",
-					traceevent.Field{Key: "content_index", Value: e.Index},
-					traceevent.Field{Key: "delta", Value: e.Delta},
+					traceevent.Field{Key: "content_index", Value: result.ContentIndex},
+					traceevent.Field{Key: "delta", Value: result.Delta},
 				)
-				// Accumulate thinking content via builder (same pattern as text_delta)
-				// to avoid O(N^2) space from appending a new ThinkingContent per delta.
-				thinkingBuilder.WriteString(e.Delta)
-				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
+				partialMessage.Content = result.Content
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "thinking_delta",
-					ContentIndex: e.Index,
-					Delta:        e.Delta,
+					ContentIndex: result.ContentIndex,
+					Delta:        result.Delta,
 				}))
 			}
 
-		case llm.LLMToolCallDeltaEvent:
+		case ChunkToolCallDelta:
 			if partialMessage != nil {
 				if !firstTokenRecorded {
 					firstTokenRecorded = true
 					firstTokenLatency = time.Since(llmStart)
 				}
+				e := event.Value.(llm.LLMToolCallDeltaEvent)
 				traceevent.Log(ctx, traceevent.CategoryLLM, "tool_call_delta",
 					traceevent.Field{Key: "content_index", Value: e.Index},
 					traceevent.Field{Key: "tool_call_id", Value: e.ToolCall.ID},
 					traceevent.Field{Key: "tool_name", Value: e.ToolCall.Function.Name},
 				)
-				call, ok := toolCalls[e.Index]
-				if !ok {
-					call = &toolCallState{}
-					toolCalls[e.Index] = call
-				}
-
-				if e.ToolCall.ID != "" {
-					call.id = e.ToolCall.ID
-				}
-				if e.ToolCall.Type != "" {
-					call.callType = e.ToolCall.Type
-				}
-				if e.ToolCall.Function.Name != "" {
-					call.name = e.ToolCall.Function.Name
-				}
-				if e.ToolCall.Function.Arguments != "" {
-					// Anthropic API sends incremental arguments as streaming delta, so we need to concatenate
-					// (not replace) to accumulate the full JSON
-					call.arguments += e.ToolCall.Function.Arguments
-				}
-
-				partialMessage.Content = buildContent(textBuilder.String(), thinkingBuilder.String(), toolCalls)
+				partialMessage.Content = result.Content
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "toolcall_delta",
-					ContentIndex: e.Index,
+					ContentIndex: result.ContentIndex,
 				}))
 			}
 
-		case llm.LLMDoneEvent:
+		case ChunkDone:
+			e := result.DoneEvent
 			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
@@ -333,8 +193,6 @@ func streamAssistantResponse(
 			var finalMessage agentctx.AgentMessage
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
-				// Prefer the incrementally built message so thinking/tool-tag content
-				// emitted via deltas is not lost when done payload omits it.
 				finalMessage = *partialMessage
 			} else if e.Message != nil {
 				finalMessage = ConvertLLMMessageToAgent(*e.Message)
@@ -359,7 +217,6 @@ func streamAssistantResponse(
 			} else if updated, ok := injectToolCallsFromThinking(finalMessage); ok {
 				finalMessage = updated
 			} else {
-				// Check for incomplete tool calls and log for debugging
 				text := finalMessage.ExtractText()
 				if len(text) > 0 && strings.Contains(text, "<") {
 					issues := DetectIncompleteToolCalls(text)
@@ -375,8 +232,8 @@ func streamAssistantResponse(
 			stream.Push(NewMessageEndEvent(finalMessage))
 			return &finalMessage, nil
 
-		case llm.LLMErrorEvent:
-			errVal := e.Error
+		case ChunkError:
+			errVal := result.Error
 			if errVal == nil {
 				errVal = errors.New("unknown llm error")
 			}

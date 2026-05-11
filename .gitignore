@@ -2,7 +2,7 @@ bin/*
 .worktrees/
 .aiclaw/
 coverage.out
-ai
+/ai
 
 # Benchmark temp
 __pycache__/
@@ -18,3 +18,5 @@ claw/skills/.*
 WORKPAD.md
 WORKFLOW.md
 .ag/
+docs/refactor/
+coverage_new.out
