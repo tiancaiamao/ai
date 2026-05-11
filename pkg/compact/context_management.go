@@ -17,11 +17,11 @@ import (
 
 // Trigger thresholds for context management.
 const (
-	MgmtTokenLow    = 0.20 // 20%: start periodic checks
+	MgmtTokenLow    = 0.35 // 35%: start periodic checks
 	MgmtTokenMedium = 0.33 // 30%: more aggressive checks
 	MgmtTokenHigh   = 0.50 // 50%: frequent checks
 
-			MgmtIntervalLow    = 15 // At 20%: every 15 tool calls
+	MgmtIntervalLow    = 15 // At 20%: every 15 tool calls
 	MgmtIntervalMedium = 10 // At 40%: every 10 tool calls
 	MgmtIntervalHigh   = 7  // At 60%: every 7 tool calls
 
@@ -218,6 +218,15 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 			return nil, fmt.Errorf("context management LLM call failed: %w", err)
 		}
 
+		llmSpan := traceevent.StartSpan(parent, "llm_call", traceevent.CategoryLLM,
+			traceevent.Field{Key: "model", Value: c.model.ID},
+			traceevent.Field{Key: "provider", Value: c.model.Provider},
+			traceevent.Field{Key: "api", Value: c.model.API},
+			traceevent.Field{Key: "attempt", Value: attempt},
+			traceevent.Field{Key: "caller", Value: "context_management"},
+		)
+		llmCallStart := time.Now()
+
 		stream := llm.StreamLLM(
 			parent,
 			c.model,
@@ -231,7 +240,30 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 
 		// 4. Extract tool calls from stream
 		var err error
-		toolCalls, err = c.extractToolCalls(parent, stream)
+		var usage llm.Usage
+		var firstTokenLatency time.Duration
+		toolCalls, usage, firstTokenLatency, err = c.extractToolCalls(parent, stream)
+
+		// Add token usage metrics to span
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			llmSpan.AddField("input_tokens", usage.InputTokens)
+			llmSpan.AddField("output_tokens", usage.OutputTokens)
+			llmSpan.AddField("total_tokens", usage.TotalTokens)
+			duration := time.Since(llmCallStart)
+			if duration.Seconds() > 0 {
+				llmSpan.AddField("input_tokens_per_sec", float64(usage.InputTokens)/duration.Seconds())
+				llmSpan.AddField("output_tokens_per_sec", float64(usage.OutputTokens)/duration.Seconds())
+			}
+		}
+		if firstTokenLatency > 0 {
+			llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
+		}
+
+		if err != nil {
+			llmSpan.AddField("error", err.Error())
+		}
+		llmSpan.End()
+
 		if err == nil {
 			lastErr = nil
 			break
@@ -498,7 +530,7 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 	tokenPercent := c.estimateTokenPercent(agentCtx)
 	recommendedTruncate := estimatedSavingsTokens >= mgmtForceTruncateSavingsTokens
 	llmContextEmpty := agentCtx.LLMContext == ""
-	
+
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
 Estimated savings if truncating selectable outputs: ~%d tokens
@@ -603,8 +635,13 @@ func (c *ContextManager) convertToolsToLLM(tools []context_mgmt.Tool) []llm.LLMT
 }
 
 // extractToolCalls reads tool calls from the LLM stream.
-func (c *ContextManager) extractToolCalls(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) ([]llm.ToolCall, error) {
+func (c *ContextManager) extractToolCalls(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) ([]llm.ToolCall, llm.Usage, time.Duration, error) {
 	var toolCalls []llm.ToolCall
+	var usage llm.Usage
+	var firstTokenLatency time.Duration
+	llmStart := time.Now()
+	firstToken := true
+
 	for event := range stream.Iterator(ctx) {
 		if event.Done {
 			break
@@ -614,11 +651,22 @@ func (c *ContextManager) extractToolCalls(ctx context.Context, stream *llm.Event
 			if e.Message != nil {
 				toolCalls = append(toolCalls, e.Message.ToolCalls...)
 			}
+			usage = e.Usage
+		case llm.LLMTextDeltaEvent:
+			if firstToken {
+				firstTokenLatency = time.Since(llmStart)
+				firstToken = false
+			}
+		case llm.LLMThinkingDeltaEvent:
+			if firstToken {
+				firstTokenLatency = time.Since(llmStart)
+				firstToken = false
+			}
 		case llm.LLMErrorEvent:
-			return nil, e.Error
+			return nil, usage, firstTokenLatency, e.Error
 		}
 	}
-	return toolCalls, nil
+	return toolCalls, usage, firstTokenLatency, nil
 }
 
 // executeToolCalls runs each tool call and logs the result.
