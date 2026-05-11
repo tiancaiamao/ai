@@ -548,10 +548,22 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 	lastNHook, result := conv.CollectLastN(20, conv.KindTool, conv.KindMeta)
 
 	agentDone := false
+	agentFailed := false
+	hasError := false
+	toolCallsSinceLastError := 0
+
 	doneHook := func(evt *conv.FormattedEvent) bool {
 		if conv.IsAgentDone(evt) {
 			agentDone = true
-			return false // stop scanning
+			agentFailed = strings.Contains(evt.Text, "agent failed")
+			return false
+		}
+		if evt.Kind == conv.KindMeta && strings.HasPrefix(evt.Text, "❌ error:") {
+			hasError = true
+			toolCallsSinceLastError = 0
+		}
+		if evt.Kind == conv.KindTool {
+			toolCallsSinceLastError++
 		}
 		return true
 	}
@@ -560,6 +572,18 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 
 	if !agentDone {
 		return false, "" // still running
+	}
+
+	// If the agent ended with an explicit failure marker, treat as not-completed.
+	if agentFailed {
+		return false, ""
+	}
+
+	// Heuristic: if the last event before agent_done was an error and no tools
+	// were called after that error, the agent was killed by an unrecoverable
+	// error (e.g. 429 rate/usage limit) rather than completing its work.
+	if hasError && toolCallsSinceLastError == 0 {
+		return false, ""
 	}
 
 	summary := strings.Join(*result, "\n")
@@ -659,11 +683,22 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	waitErr := cmd.Wait()
 	outFile.Close()
 
-	if waitErr != nil {
-		// Reviewer failed — pass anyway to not block
-		fmt.Printf("  ⚠️ Reviewer failed for group %s (run %s), auto-passing: %v\n", group, runID, waitErr)
+		if waitErr != nil {
+		// Reviewer failed — mark tasks as failed (retryable)
+		// so the scheduler can retry them instead of silently passing.
+		fmt.Printf("  ❌ Reviewer failed for group %s (run %s): %v\n", group, runID, waitErr)
 		for _, t := range tasks {
-			Done(t.ID, "auto-passed: reviewer failed")
+			Fail(t.ID, fmt.Sprintf("reviewer process error: %v", waitErr), true)
+		}
+		return
+	}
+
+	if runID == "" {
+		fmt.Printf("  ⚠️ Reviewer for group %s returned empty run ID, treating as pass\n", group)
+		for _, t := range tasks {
+			if _, err := Done(t.ID, t.Summary); err != nil {
+				fmt.Printf("  ❌ Done(%s) failed: %v\n", t.ID, err)
+			}
 		}
 		return
 	}
@@ -674,15 +709,24 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 
 	if strings.Contains(eventsData, "REVIEW_PASS") {
 		fmt.Printf("  ✅ Review passed for group %s\n", group)
-		for _, t := range tasks {
-			Done(t.ID, t.Summary)
-		}
 	} else {
 		fmt.Printf("  🔧 Revision requested for group %s\n", group)
-		// For now, auto-pass after review (revision loop can be added later)
-		for _, t := range tasks {
-			Done(t.ID, "reviewed with comments")
+	}
+
+	// Transition tasks to done with error handling.
+	allOK := true
+	for _, t := range tasks {
+		summary := t.Summary
+		if !strings.Contains(eventsData, "REVIEW_PASS") {
+			summary = "reviewed with comments"
 		}
+		if _, err := Done(t.ID, summary); err != nil {
+			fmt.Printf("  ❌ Done(%s) failed after review: %v\n", t.ID, err)
+			allOK = false
+		}
+	}
+	if !allOK {
+		fmt.Printf("  ⚠️ Some Done() calls failed for group %s — manual retry may be needed\n", group)
 	}
 }
 
