@@ -17,7 +17,7 @@ import (
 
 // Trigger thresholds for context management.
 const (
-	MgmtTokenLow    = 0.35 // 35%: start periodic checks
+	MgmtTokenLow    = 0.20 // 20%: start periodic checks
 	MgmtTokenMedium = 0.33 // 30%: more aggressive checks
 	MgmtTokenHigh   = 0.50 // 50%: frequent checks
 
@@ -261,6 +261,13 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 
 		if err != nil {
 			llmSpan.AddField("error", err.Error())
+			llmSpan.AddField("retryable", llm.IsRetryableError(err))
+			traceevent.Log(parent, traceevent.CategoryLLM, "llm_call_error",
+				traceevent.Field{Key: "caller", Value: "context_management"},
+				traceevent.Field{Key: "attempt", Value: attempt},
+				traceevent.Field{Key: "error", Value: err.Error()},
+				traceevent.Field{Key: "retryable", Value: llm.IsRetryableError(err)},
+			)
 		}
 		llmSpan.End()
 
