@@ -105,9 +105,10 @@ var taskRunCmd = &cobra.Command{
 			defer logFile.Close()
 		}
 
-		// Write PID file
+				// Write PID file and ensure cleanup on exit
 		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
 		os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+		defer os.Remove(pidPath)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -121,7 +122,8 @@ var taskRunCmd = &cobra.Command{
 			cancel()
 		}()
 
-		if err := task.RunScheduler(ctx, cfg); err != nil {
+				if err := task.RunScheduler(ctx, cfg); err != nil {
+			os.Remove(pidPath)
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -131,12 +133,16 @@ var taskRunCmd = &cobra.Command{
 // runDetached re-executes the same command without --detach in the background,
 // redirecting output to scheduler.log.
 func runDetached(originalArgs []string) {
-	// Build args without --detach
+	// Build args without any --detach / --detach=true / --detach=false form
 	var cleanArgs []string
 	for _, a := range originalArgs {
-		if a != "--detach" {
-			cleanArgs = append(cleanArgs, a)
+		if a == "--detach" || a == "--detach=true" || a == "--detach=false" {
+			continue
 		}
+		if strings.HasPrefix(a, "--detach=") {
+			continue
+		}
+		cleanArgs = append(cleanArgs, a)
 	}
 
 	logPath := filepath.Join(storage.BaseDir, "scheduler.log")

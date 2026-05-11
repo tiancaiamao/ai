@@ -547,23 +547,14 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 	// Use conv streaming API to scan for agent_end and collect summary.
 	lastNHook, result := conv.CollectLastN(20, conv.KindTool, conv.KindMeta)
 
-	agentDone := false
+		agentDone := false
 	agentFailed := false
-	hasError := false
-	toolCallsSinceLastError := 0
 
 	doneHook := func(evt *conv.FormattedEvent) bool {
 		if conv.IsAgentDone(evt) {
 			agentDone = true
 			agentFailed = strings.Contains(evt.Text, "agent failed")
 			return false
-		}
-		if evt.Kind == conv.KindMeta && strings.HasPrefix(evt.Text, "❌ error:") {
-			hasError = true
-			toolCallsSinceLastError = 0
-		}
-		if evt.Kind == conv.KindTool {
-			toolCallsSinceLastError++
 		}
 		return true
 	}
@@ -574,15 +565,9 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 		return false, "" // still running
 	}
 
-	// If the agent ended with an explicit failure marker, treat as not-completed.
+	// If the agent ended with an explicit failure marker (e.g. 429 rate limit
+	// causing a fatal exit), treat as not-completed so the scheduler can retry.
 	if agentFailed {
-		return false, ""
-	}
-
-	// Heuristic: if the last event before agent_done was an error and no tools
-	// were called after that error, the agent was killed by an unrecoverable
-	// error (e.g. 429 rate/usage limit) rather than completing its work.
-	if hasError && toolCallsSinceLastError == 0 {
 		return false, ""
 	}
 
