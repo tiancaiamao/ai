@@ -12,11 +12,35 @@ import (
 )
 
 const (
-	// defaultReadMaxBytes is the default maximum file size to read (50KB).
-	defaultReadMaxBytes = 50 * 1024
+	// defaultReadMaxBytes is the default maximum file size to read.
+	// Can be overridden via AI_READ_MAX_BYTES environment variable.
+	defaultReadMaxBytes = 100 * 1024 // 100KB
 	// defaultReadLimit is the default maximum number of lines to return.
-	defaultReadLimit = 2000
+	// Can be overridden via AI_READ_MAX_LINES environment variable.
+	defaultReadLimit = 4000
 )
+
+// getReadMaxBytes returns the effective max bytes for read operations.
+// Checks AI_READ_MAX_BYTES env var first, then falls back to default.
+func getReadMaxBytes() int {
+	if v := os.Getenv("AI_READ_MAX_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultReadMaxBytes
+}
+
+// getReadLimit returns the effective line limit for read operations.
+// Checks AI_READ_MAX_LINES env var first, then falls back to default.
+func getReadLimit() int {
+	if v := os.Getenv("AI_READ_MAX_LINES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultReadLimit
+}
 
 // ReadTool reads file contents with dynamic workspace support.
 type ReadTool struct {
@@ -41,7 +65,7 @@ func (t *ReadTool) Name() string {
 
 // Description returns the tool description.
 func (t *ReadTool) Description() string {
-		return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges. For large or unfamiliar files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially."
+	return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges. For large or unfamiliar files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.
@@ -59,7 +83,7 @@ func (t *ReadTool) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type":        "number",
-				"description": "Maximum number of lines to read. Defaults to 2000.",
+				"description": "Maximum number of lines to read. Defaults to 4000.",
 			},
 		},
 		"required": []string{"path"},
@@ -104,7 +128,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, err
 	}
 
-	limit, err := parsePositiveIntArg(args, "limit", defaultReadLimit)
+	limit, err := parsePositiveIntArg(args, "limit", getReadLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -140,9 +164,10 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Check size of selected content (not entire file).
 	// This allows reading sections of large files via offset/limit.
-	if len(output) > defaultReadMaxBytes {
+	maxBytes := getReadMaxBytes()
+	if len(output) > maxBytes {
 		return nil, fmt.Errorf("selected range is too large (%d lines, %d bytes). Use a smaller limit value, e.g. limit=%d",
-			len(selectedLines), len(output), defaultReadMaxBytes/80) // rough line-width estimate
+			len(selectedLines), len(output), maxBytes/80) // rough line-width estimate
 	}
 
 	// Add continuation hints when content is truncated
@@ -151,7 +176,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		header = fmt.Sprintf("[%d lines above omitted. Use offset=1, limit=%d to read from start.]\n\n",
 			offset-1, offset-1)
 	}
-		if end < totalLines {
+	if end < totalLines {
 		remaining := totalLines - end
 		footer = fmt.Sprintf("\n\n[%d more lines below. Use grep to find specific patterns, or offset=%d to continue reading.]",
 			remaining, end+1)

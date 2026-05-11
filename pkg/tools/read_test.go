@@ -102,7 +102,7 @@ func TestReadTool_OffsetOnly(t *testing.T) {
 	ws, _ := NewWorkspace(dir)
 	tool := NewReadTool(ws)
 
-	// Read from line 90 (offset=90, default limit=2000)
+	// Read from line 90 (offset=90, default limit=4000)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"path":   filePath,
 		"offset": float64(90),
@@ -154,9 +154,9 @@ func TestReadTool_SelectedRangeTooLarge(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "large.txt")
 
-	// Create a file larger than 50KB with many lines
+	// Create a file larger than 100KB with many lines
 	var content string
-	for len(content) < 60*1024 {
+	for len(content) < 120*1024 {
 		content += strings.Repeat("a", 100) + "\n"
 	}
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
@@ -166,7 +166,7 @@ func TestReadTool_SelectedRangeTooLarge(t *testing.T) {
 	ws, _ := NewWorkspace(dir)
 	tool := NewReadTool(ws)
 
-	// Reading without offset/limit selects all lines, which exceeds 50KB
+	// Reading without offset/limit selects all lines, which exceeds 100KB
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"path": filePath,
 	})
@@ -185,7 +185,7 @@ func TestReadTool_LargeFileWithOffsetLimit(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "large.txt")
 
-	// Create a file larger than 50KB with many lines
+	// Create a file larger than 100KB with many lines
 	var content string
 	lineWidth := 100
 	for len(content) < 60*1024 {
@@ -198,7 +198,7 @@ func TestReadTool_LargeFileWithOffsetLimit(t *testing.T) {
 	ws, _ := NewWorkspace(dir)
 	tool := NewReadTool(ws)
 
-	// Reading with limit=5 should succeed even though file is > 50KB
+	// Reading with limit=5 should succeed even though file is > 100KB
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"path":  filePath,
 		"limit": float64(5),
