@@ -1,0 +1,693 @@
+version: "1"
+metadata:
+  spec_file: "docs/refactor/design.md"
+  created_at: "2026-05-11"
+
+tasks:
+  # ===================== Phase 0: Preparation =====================
+  - id: T001
+    title: "Record baseline test coverage"
+    description: |
+      ## Goal
+      Record the current test coverage baseline for the project before any refactoring begins.
+
+      ## Key changes
+      - Run `go test ./... -coverprofile=docs/refactor/baseline.out` to generate coverage profile
+      - Run `go tool cover -func=docs/refactor/baseline.out > docs/refactor/baseline-coverage.md` to produce human-readable report
+      - Identify top-10 least-covered functions in `pkg/agent/`, `cmd/ai/`, `pkg/compact/`
+      - Commit both files under `docs/refactor/`
+
+      ## Files
+      - CREATE: docs/refactor/baseline.out
+      - CREATE: docs/refactor/baseline-coverage.md
+
+      ## Done when
+      - [ ] `docs/refactor/baseline-coverage.md` exists with per-function coverage percentages
+      - [ ] Top-10 coverage gaps in agent/cmd/compact packages are listed with function names and file paths
+      - [ ] All existing tests still pass: `go test ./...` exits 0 (known failure in pkg/tools is acceptable)
+    estimated_hours: 1
+    group: phase0-preparation
+    dependencies: []
+
+  - id: T002
+    title: "Fill characterization test gaps for agent loop"
+    description: |
+      ## Goal
+      Add characterization tests through the Agent public API to cover behavioral gaps identified in T001's coverage report.
+
+      ## Key changes
+      - Review T001's coverage gaps for `pkg/agent/loop.go` and `pkg/agent/llm_stream.go`
+      - Add tests in `pkg/agent/` using the established `httptest.NewServer` mock LLM pattern (see existing tests in `loop_stream_integration_test.go` for the pattern)
+      - Tests must go through `Agent` public API: `NewAgentFromConfigWithContext`, `Prompt`, `Events()`, `Wait()`
+      - Focus on gaps only — do NOT rewrite existing tests
+      - Priority behaviors to cover if gaps exist:
+        1. MaxTurns enforcement: given MaxTurns=2, agent stops after 2 LLM turns even if LLM returns more tool_calls
+        2. Tool loop guard: consecutive identical tool call signatures are blocked after threshold
+        3. Context cancellation: `ctx.Cancel()` mid-loop produces `EventAgentEnd` with messages accumulated so far
+        4. Compaction trigger: when token count exceeds threshold, compaction fires automatically
+
+      ## Files
+      - MODIFY: pkg/agent/loop_stream_integration_test.go (or create new test file if more appropriate)
+
+      ## Design decision
+      Use public API testing (not internal function testing) because internal tests break when Phase 3 restructures `runInnerLoop`. Public API tests survive the entire refactoring.
+
+      ## Done when
+      - [ ] Coverage for `runInnerLoop` and `streamAssistantResponse` is higher than T001 baseline (measurable delta)
+      - [ ] All new tests pass: `go test ./pkg/agent/... -v -run TestNew` exits 0
+      - [ ] No existing tests broken
+    estimated_hours: 3
+    group: phase0-preparation
+    dependencies: [T001]
+
+  - id: T003
+    title: "Document package dependency graph"
+    description: |
+      ## Goal
+      Generate and commit a dependency graph showing current package import relationships.
+
+      ## Key changes
+      - For each package under `pkg/`, list its imports of other `pkg/*` packages
+      - Produce `docs/refactor/dependency-graph.md` with:
+        - A table: package → imported internal packages
+        - Any circular or tangled dependencies highlighted
+        - Special focus on `pkg/agent/` imports (currently imports 7 concrete packages)
+      - Use `go list -f '{{.ImportPath}}: {{.Imports}}' ./pkg/...` or similar
+
+      ## Files
+      - CREATE: docs/refactor/dependency-graph.md
+
+      ## Done when
+      - [ ] `docs/refactor/dependency-graph.md` exists with all 16 internal packages listed
+      - [ ] `pkg/agent/` dependencies are clearly highlighted
+      - [ ] Any circular dependencies are flagged
+    estimated_hours: 1
+    group: phase0-preparation
+    dependencies: []
+
+  # ===================== Phase 1: Split rpc_handlers.go =====================
+  - id: T010
+    title: "Introduce rpcApp struct to replace closure captures"
+    description: |
+      ## Goal
+      Create an `rpcApp` struct in `cmd/ai/` to hold all local variables currently captured by the 35 `server.Register`/`server.RegisterSlash` closures in `runRPC`.
+
+      ## Key changes
+      - Create `cmd/ai/rpc_app.go` with `type rpcApp struct` containing fields for all closure-captured variables:
+        - `agent *agent.Agent`
+        - `sess *session.Session`
+        - `sessionMgr *session.SessionManager`
+        - `cfg *config.Config`
+        - `compactor *compact.Compactor`
+        - `ctxManager *compact.ContextManager`
+        - `model llm.Model`
+        - `apiKey string`
+        - `cwd string`
+        - `currentModelInfo` (whatever type is used)
+        - `activeSpec` (model spec)
+        - `currentContextWindow int`
+        - `sessionID string`
+        - `sessionName string`
+        - `debugAddr string`
+        - `server *rpc.Server` (or whatever the RPC server type is)
+        - Any other variables captured by closures in `runRPC`
+      - Read `cmd/ai/rpc_handlers.go` lines 34-615 (the setup section of `runRPC`) to identify ALL captured variables
+      - Create a constructor `func newRPCApp(...) *rpcApp` that encapsulates the setup logic
+      - In `runRPC`, construct `app := newRPCApp(...)` and change closures to use `app.field` instead of bare local variables
+      - This PR does NOT yet move any handlers to separate files — only introduces the struct
+
+      ## Files
+      - CREATE: cmd/ai/rpc_app.go
+      - MODIFY: cmd/ai/rpc_handlers.go (refactor `runRPC` to use rpcApp)
+
+      ## Edge cases
+      - Some closures may mutate local variables (e.g., session switching). These must become mutations on `app.field`
+      - The `runRPC` function signature must not change — it's called from main
+
+      ## Done when
+      - [ ] `cmd/ai/rpc_app.go` exists with `type rpcApp struct` containing all closure-captured state
+      - [ ] `runRPC` in `rpc_handlers.go` constructs `rpcApp` and all closures use `app.X` instead of bare locals
+      - [ ] All tests pass: `go test ./cmd/ai/... -v`
+      - [ ] No behavior change — agent still works in RPC mode
+    estimated_hours: 4
+    group: phase1-rpc-split
+    dependencies: [T001]
+
+  - id: T011
+    title: "Migrate RPC command handlers to rpcApp methods"
+    description: |
+      ## Goal
+      Move the 4 `server.Register(rpc.Command*)` handler closures to named methods on `rpcApp`.
+
+      ## Key changes
+      - In `cmd/ai/rpc_handlers.go`, identify the 4 RPC command registrations:
+        - `server.Register(rpc.CommandPrompt, ...)` at line ~616
+        - `server.Register(rpc.CommandSteer, ...)` at line ~716
+        - `server.Register(rpc.CommandFollowUp, ...)` at line ~758
+        - `server.Register(rpc.CommandAbort, ...)` at line ~790
+      - Extract each closure body into `(app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error)` etc.
+      - Registration becomes: `server.Register(rpc.CommandPrompt, app.handlePrompt)`
+      - These 4 methods stay in `cmd/ai/rpc_handlers.go`
+
+      ## Files
+      - MODIFY: cmd/ai/rpc_handlers.go
+
+      ## Done when
+      - [ ] 4 handler closures replaced by named `rpcApp` methods
+      - [ ] `go test ./cmd/ai/... -v` passes
+      - [ ] RPC command dispatch still works (send prompt, steer, follow-up, abort)
+    estimated_hours: 2
+    group: phase1-rpc-split
+    dependencies: [T010]
+
+  - id: T012
+    title: "Migrate slash command handlers to topic-specific files"
+    description: |
+      ## Goal
+      Move ~30 `server.RegisterSlash`/`server.RegisterHiddenSlash` handler closures to named methods on `rpcApp`, distributed across topic-specific files.
+
+      ## Key changes
+      - Read `cmd/ai/rpc_handlers.go` to identify all `server.RegisterSlash` and `server.RegisterHiddenSlash` calls (lines ~815-2032)
+      - Extract each closure into a named method on `rpcApp`
+      - Distribute methods across new files:
+        - `cmd/ai/rpc_session_handlers.go` — `/new`, `/resume`, `/session`, `/rewind`, `/fork`, hidden session commands
+        - `cmd/ai/rpc_message_handlers.go` — `/messages`, `/context`, `/export_html`, hidden message commands
+        - `cmd/ai/rpc_config_handlers.go` — `/set`, `/model`, `/thinking`, `/toggle`, `/show`, `/trace-events`, hidden config commands
+        - `cmd/ai/rpc_help_handlers.go` — `/help`, `/skills`, `/quit`, `/abort`, `/follow-up`
+      - Registration calls in `runRPC` become: `server.RegisterSlash("new", "...", app.handleNew)`
+      - Helper functions `getWorkflowStatus` (line 2255), `formatMessagesForDisplay` (line 2352) move to appropriate files
+
+      ## Files
+      - CREATE: cmd/ai/rpc_session_handlers.go
+      - CREATE: cmd/ai/rpc_message_handlers.go
+      - CREATE: cmd/ai/rpc_config_handlers.go
+      - CREATE: cmd/ai/rpc_help_handlers.go
+      - MODIFY: cmd/ai/rpc_handlers.go (remove migrated code)
+
+      ## Edge cases
+      - Some slash commands call `forwardToSet("...")` — these are single-line registrations that can stay in the registration block
+      - `/set` handler is large (~330 lines, lines 1156-1488) — it stays in `rpc_config_handlers.go` as a method
+      - Keep the `server.Register`/`server.RegisterSlash` call sites in `runRPC` (just point to methods instead of closures)
+
+      ## Done when
+      - [ ] `cmd/ai/rpc_handlers.go` is under 800 lines (setup + registration calls only)
+      - [ ] Handler logic distributed across 4-5 topic-specific files
+      - [ ] All slash commands still work: `/new`, `/messages`, `/compact`, `/model`, `/resume`, `/help`, etc.
+      - [ ] `go test ./cmd/ai/... -v` passes
+    estimated_hours: 4
+    group: phase1-rpc-split
+    dependencies: [T011]
+
+  - id: T013
+    title: "Extract rpcApp setup helpers and remove dead code"
+    description: |
+      ## Goal
+      Move config loading, session initialization, tool registration, and compactor setup from `runRPC` into `rpcApp` constructor and helper methods. Remove dead code.
+
+      ## Key changes
+      - Extract `runRPC` setup sections into `newRPCApp(...)` constructor or `rpcApp` helper methods:
+        - Config loading + logger setup (lines ~35-55 of current `runRPC`)
+        - Model + API key resolution (lines ~56-80)
+        - Session loading/creation (lines ~114-170)
+        - Tool registration (lines ~180-380)
+        - Compactor creation (lines ~381-430)
+      - Move `newRPCApp` and helpers to `cmd/ai/rpc_setup.go`
+      - Remove dead code:
+        - Pipeline placeholder (returns "not yet available" at ~line 1937-1940)
+        - Any unreachable handlers
+      - Final state: `rpc_handlers.go` should be under 500 lines
+
+      ## Files
+      - CREATE: cmd/ai/rpc_setup.go
+      - MODIFY: cmd/ai/rpc_handlers.go
+
+      ## Done when
+      - [ ] `cmd/ai/rpc_handlers.go` is under 500 lines
+      - [ ] `cmd/ai/rpc_setup.go` contains `newRPCApp` constructor
+      - [ ] Pipeline placeholder removed
+      - [ ] `go test ./cmd/ai/... -v` passes
+      - [ ] RPC mode still works end-to-end
+    estimated_hours: 3
+    group: phase1-rpc-split
+    dependencies: [T012]
+
+  # ===================== Phase 2: Unify Compaction Interface =====================
+  - id: T020
+    title: "Migrate all callers from Compactor Old methods to new interface"
+    description: |
+      ## Goal
+      Change all 7 call sites that use `ShouldCompactOld`/`CompactOld`/`EstimateContextTokensOld` to use the new `ShouldCompact`/`Compact`/`EstimateTokens` methods instead.
+
+      ## Key changes
+      The Old methods accept `[]agentctx.AgentMessage`; the new methods accept `*agentctx.AgentContext`. Callers need to be adapted:
+
+      1. `cmd/ai/rpc_handlers.go` (3 sites after Phase 1, now in `rpcApp` methods):
+         - `compactor.ShouldCompactOld(messages)` → `compactor.ShouldCompact(ctx, agentCtx)` where `agentCtx.RecentMessages` contains the messages
+         - `compactor.EstimateContextTokensOld(messages)` → `compactor.EstimateTokens(messages)` (if available) or construct AgentContext
+         - `compactor.EstimateContextTokensOld(ag.GetMessages())` → same migration
+
+      2. `pkg/agent/compaction_controller.go` (2 sites):
+         - `cc.deps.Compactor.ShouldCompactOld(messages)` → `cc.deps.Compactor.ShouldCompact(ctx, agentCtx)`
+         - `cc.deps.Compactor.EstimateContextTokensOld(messages)` → new method
+
+      3. `pkg/session/compaction.go` (2 sites):
+         - `compactor.EstimateContextTokensOld(messages)` → new method
+         - `compactor.EstimateContextTokensOld(updatedContext)` → new method
+
+      Read each file to understand the exact call context and what data is available. The key difference: Old methods take message slices directly; new methods read messages from inside `AgentContext`. If caller already has `AgentContext`, just pass it. If caller only has messages, construct a minimal `AgentContext` or use `EstimateTokens` if available.
+
+      ## Files
+      - MODIFY: cmd/ai/rpc_config_handlers.go (or wherever `/compact` handler migrated in Phase 1)
+      - MODIFY: pkg/agent/compaction_controller.go
+      - MODIFY: pkg/session/compaction.go
+
+      ## Edge cases
+      - `/compact` slash command in RPC handler: currently calls `ShouldCompactOld(messages)` and `CompactOld(messages, summary)`. After migration, it needs an `*agentctx.AgentContext`. The `ag.GetContext()` method should provide this.
+      - `pkg/session/compaction.go`: check if it has access to `AgentContext` or only message slices. May need to thread `AgentContext` through.
+
+      ## Done when
+      - [ ] Zero calls to `ShouldCompactOld`, `CompactOld`, `EstimateContextTokensOld` in non-test code: `grep -rn 'ShouldCompactOld\|CompactOld\|EstimateContextTokensOld' --include='*.go'` returns only definitions in `compact.go`
+      - [ ] `go test ./pkg/agent/... ./pkg/session/... ./cmd/ai/... -v` passes
+      - [ ] `/compact` slash command still triggers compaction correctly
+    estimated_hours: 3
+    group: phase2-compaction
+    dependencies: [T013]
+
+  - id: T021
+    title: "Remove Compactor Old methods and adapter"
+    description: |
+      ## Goal
+      Delete all legacy Compactor methods and the `ToContextCompactor()` adapter from `pkg/compact/compact.go`.
+
+      ## Key changes
+      - Delete the following from `pkg/compact/compact.go`:
+        - `ShouldCompactOld` (currently ~L84-103, 20 lines)
+        - `CompactOld` (currently ~L190-279, 90 lines)
+        - `EstimateContextTokensOld` (currently ~L424-442, 19 lines)
+        - `ensureToolCallPairing` (currently ~L767-845, 79 lines) — only used by Old path
+        - `ensureToolCallPairingWithGrace` (currently ~L846-951, 106 lines) — only used by Old path
+        - `ToContextCompactor` (currently ~L952-961, 10 lines) — adapter no longer needed
+        - `CompactIfNeeded` (currently ~L443-453, 11 lines) — wrapper around Old methods
+      - Remove any test code testing these deleted methods
+      - Verify `compact.Compactor` struct directly satisfies `agentctx.Compactor` interface without adapter
+
+      ## Files
+      - MODIFY: pkg/compact/compact.go
+      - MODIFY: pkg/compact/compact_test.go (if Old method tests exist)
+
+      ## Done when
+      - [ ] `grep -rn 'ShouldCompactOld\|CompactOld\|EstimateContextTokensOld\|ToContextCompactor\|CompactIfNeeded' --include='*.go'` returns zero results
+      - [ ] `pkg/compact/compact.go` is under 800 lines
+      - [ ] `go test ./pkg/compact/... -v` passes
+    estimated_hours: 2
+    group: phase2-compaction
+    dependencies: [T020]
+
+  # ===================== Phase 3: Deep Split of runInnerLoop =====================
+  - id: T030
+    title: "Extract runtime meta injection from runInnerLoop"
+    description: |
+      ## Goal
+      Extract the runtime meta telemetry injection logic from `runInnerLoop` into a standalone helper function.
+
+      ## Key changes
+      - Read `pkg/agent/loop.go` to find the runtime meta injection block (it uses functions from `pkg/agent/runtime_meta.go`)
+      - Extract the injection logic into a package-level function: `func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig)` or similar
+      - The function is read-only (reads config, writes to agentCtx metadata) — no loop state mutation
+      - Replace inline code in `runInnerLoop` with a single call to the extracted function
+      - No struct needed yet — this is a standalone function
+
+      ## Files
+      - MODIFY: pkg/agent/loop.go
+      - MODIFY: pkg/agent/runtime_meta.go (move/add the extracted function here)
+
+      ## Done when
+      - [ ] Runtime meta injection is a single function call in `runInnerLoop` instead of inline logic
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Runtime meta telemetry still appears in agent events
+    estimated_hours: 2
+    group: phase3-loop-split
+    dependencies: [T002, T021]
+
+  - id: T031
+    title: "Extract checkpoint save/restore from runInnerLoop"
+    description: |
+      ## Goal
+      Extract checkpoint management logic scattered through `runInnerLoop` into helper functions, consolidating with the existing `pkg/agent/checkpoint_manager.go`.
+
+      ## Key changes
+      - Read `pkg/agent/loop.go` to find all checkpoint-related code in `runInnerLoop`:
+        - Checkpoint initialization (creating `AgentContextCheckpointManager`)
+        - Checkpoint save after compaction (with LLM context updated check)
+        - Checkpoint save after context limit recovery
+        - Checkpoint restore logic
+        - Checkpoint cleanup in defer
+      - Extract into helper functions in `pkg/agent/checkpoint_manager.go`:
+        - `func initCheckpointManager(config *LoopConfig) (*AgentContextCheckpointManager, error)`
+        - `func saveCheckpoint(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, llmContext string, turnCount int, trigger string) error`
+        - `func restoreFromCheckpoint(mgr *AgentContextCheckpointManager) ([]agentctx.AgentMessage, error)`
+      - Replace inline code in `runInnerLoop` with calls to these helpers
+
+      ## Files
+      - MODIFY: pkg/agent/loop.go
+      - MODIFY: pkg/agent/checkpoint_manager.go
+
+      ## Done when
+      - [ ] Checkpoint logic in `runInnerLoop` is 3-4 function calls instead of ~40 lines of inline code
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Checkpoint creation and restore still works (existing checkpoint tests pass)
+    estimated_hours: 2
+    group: phase3-loop-split
+    dependencies: [T030]
+
+  - id: T032
+    title: "Extract shared performCompaction from runInnerLoop"
+    description: |
+      ## Goal
+      Extract the compaction check-and-execute logic that appears twice in `runInnerLoop` (pre-LLM threshold + context limit recovery) into a single shared function.
+
+      ## Key changes
+      - Read `pkg/agent/loop.go` carefully. The loop has two compaction sites:
+        1. Pre-LLM compaction (iterates `config.Compactors`, calls `ShouldCompact`/`Compact`, handles errors, emits events)
+        2. Context limit recovery compaction (when LLM returns context-too-long error, also triggers compaction)
+      - Extract a shared function: `func performCompaction(ctx context.Context, agentCtx *agentctx.AgentContext, config *LoopConfig, stream *EventStream, trigger string) (*agentctx.CompactionResult, error)`
+      - The function handles: iterate compactors → check threshold → execute compact → emit CompactionStart/CompactionEnd events → return result
+      - Both call sites in the loop delegate to this function
+      - Parameters are explicit (no struct yet) — pass `compactionRecoveries` in/out or use a mutable counter
+
+      ## Files
+      - MODIFY: pkg/agent/loop.go
+
+      ## Design decision
+      The two compaction sites have slightly different error handling (recovery path resets messages, pre-LLM path just logs). The shared function should handle the common logic; callers handle site-specific post-processing.
+
+      ## Edge cases
+      - Compaction recovery counter (`compactionRecoveries`) must be tracked — the function could return a boolean `recovered` or accept a `*int` counter
+      - `trigger` parameter differentiates "pre_llm_threshold" vs "context_limit_recovery" for events
+
+      ## Done when
+      - [ ] Compaction logic appears once as a shared function, called from two sites in the loop
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Both pre-LLM and recovery compaction still trigger correctly
+    estimated_hours: 3
+    group: phase3-loop-split
+    dependencies: [T031]
+
+  - id: T033
+    title: "Extract tool execution block from runInnerLoop"
+    description: |
+      ## Goal
+      Extract the tool call dispatch → execution → result collection → stream emission block from `runInnerLoop`.
+
+      ## Key changes
+      - Read `pkg/agent/loop.go` to find the tool execution block (after LLM returns tool_calls)
+      - The block includes:
+        - Parsing tool calls from LLM response
+        - Loop guard check (consecutive identical calls)
+        - Dispatching to `ToolExecutor`
+        - Collecting results
+        - Pushing tool results to stream
+        - Adding tool result messages to context
+        - Normalizing tool output (truncation)
+      - Extract into: `func executeToolCalls(ctx context.Context, agentCtx *agentctx.AgentContext, config *LoopConfig, stream *EventStream, toolCalls []ToolCall) ([]agentctx.AgentMessage, error)`
+      - The function returns the tool result messages to be appended to conversation
+
+      ## Files
+      - MODIFY: pkg/agent/loop.go
+
+      ## Edge cases
+      - Loop guard needs `loopGuard` state — pass it as parameter or accept `*loopGuard`
+      - Tool output normalization uses `config.ToolOutput` limits
+      - Tool call cutoff may modify `agentCtx`
+
+      ## Done when
+      - [ ] Tool execution is a single function call in `runInnerLoop` instead of ~80 lines of inline code
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Tool execution, loop guard, and output truncation still work correctly
+    estimated_hours: 3
+    group: phase3-loop-split
+    dependencies: [T032]
+
+  - id: T034
+    title: "Extract turn boundary management from runInnerLoop"
+    description: |
+      ## Goal
+      Extract turn counting, turn event emission, and turn boundary logic from `runInnerLoop`.
+
+      ## Key changes
+      - Read `pkg/agent/loop.go` to find turn-related code:
+        - Turn counter increment
+        - Max turns check at loop top
+        - Turn start/end event emission
+      - Extract into helper functions:
+        - `func checkMaxTurns(turnCount int, maxTurns int) bool` (returns true if limit reached)
+        - `func advanceTurn(turnCount *int, stream *EventStream)` (increments and emits events)
+      - These are lightweight helpers — no struct needed yet
+
+      ## Files
+      - MODIFY: pkg/agent/loop.go
+
+      ## Done when
+      - [ ] Turn logic is 2-3 function calls instead of inline counting/checking
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] MaxTurns enforcement still works (covered by T002 characterization tests)
+    estimated_hours: 1
+    group: phase3-loop-split
+    dependencies: [T033]
+
+  - id: T035
+    title: "Introduce loopState struct and finalize runInnerLoop"
+    description: |
+      ## Goal
+      Introduce `type loopState struct` to hold shared loop variables, convert extracted functions to methods, and reduce `runInnerLoop` to ~100-150 lines of skeleton code.
+
+      ## Key changes
+      - After T030-T034, the extracted functions share several parameters: `config`, `agentCtx`, `stream`, `compactionRecoveries`, `turnCount`, `loopGuard`, `checkpointMgr`, `emptyResponseRetries`
+      - Create `type loopState struct` in a new file `pkg/agent/loop_state.go`:
+        ```go
+        type loopState struct {
+            config           *LoopConfig
+            agentCtx         *agentctx.AgentContext
+            stream           *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
+            compactionRecs   int
+            turnCount        int
+            loopGuard        *toolLoopGuard
+            checkpointMgr    *AgentContextCheckpointManager
+            emptyRetries     int
+            malformedRecs    int
+        }
+        ```
+      - Create `func newLoopState(config, agentCtx, stream) *loopState`
+      - Convert extracted functions to `loopState` methods:
+        - `(s *loopState) injectMeta(ctx)`
+        - `(s *loopState) performCompaction(ctx) bool`
+        - `(s *loopState) executeToolCalls(ctx, toolCalls) []AgentMessage`
+        - `(s *loopState) shouldStop(ctx) bool`
+        - `(s *loopState) advanceTurn()`
+        - `(s *loopState) saveCheckpoint(trigger) error`
+        - `(s *loopState) cleanup()`
+      - Rewrite `runInnerLoop` to use `loopState`:
+        ```go
+        func runInnerLoop(ctx, agentCtx, messages, config, stream) {
+            state := newLoopState(config, agentCtx, stream)
+            defer state.cleanup()
+            for {
+                if state.shouldStop(ctx) { return }
+                if state.performCompaction(ctx) { continue }
+                response := callLLM(ctx, state) // or keep streamAssistantResponse as-is
+                // ... handle response ...
+                toolCalls := parseToolCalls(response)
+                if len(toolCalls) == 0 { return }
+                state.executeToolCalls(ctx, toolCalls)
+                state.advanceTurn()
+            }
+        }
+        ```
+
+      ## Files
+      - CREATE: pkg/agent/loop_state.go
+      - MODIFY: pkg/agent/loop.go
+
+      ## Done when
+      - [ ] `runInnerLoop` is under 150 lines
+      - [ ] `loopState` struct exists with all shared state as fields
+      - [ ] All extracted functions are `loopState` methods
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] All agent behavior preserved (no regressions in characterization tests from T002)
+    estimated_hours: 4
+    group: phase3-loop-split
+    dependencies: [T034]
+
+  # ===================== Phase 4: Extract streamAssistantResponse =====================
+  - id: T040
+    title: "Extract stream chunk parsing from streamAssistantResponse"
+    description: |
+      ## Goal
+      Extract SSE/JSON chunk parsing logic from `streamAssistantResponse` into a pure, testable function.
+
+      ## Key changes
+      - Read `pkg/agent/llm_stream.go` to find the streaming response handler (~400 lines starting at line 19)
+      - Identify the chunk parsing section: where raw SSE `data:` lines are deserialized into structured types
+      - Extract into a pure function: `func parseStreamChunk(data []byte) (StreamChunkResult, error)` in a new file `pkg/agent/llm_stream_parse.go`
+      - The function handles: JSON deserialization, content/reasoning delta extraction, tool call delta parsing
+      - Replace inline parsing in `streamAssistantResponse` with calls to `parseStreamChunk`
+      - Write unit tests for `parseStreamChunk` with various SSE data payloads
+
+      ## Files
+      - CREATE: pkg/agent/llm_stream_parse.go
+      - CREATE: pkg/agent/llm_stream_parse_test.go
+      - MODIFY: pkg/agent/llm_stream.go
+
+      ## Design decision
+      Whether `streamAssistantResponse` becomes a `loopState` method or stays as a package function will be determined here. Evaluate:
+      - If Phase 3's `loopState` naturally calls LLM via a method, streamAssistantResponse should be that method's internal helper → stays as package function
+      - If `loopState` delegates LLM calls externally, streamAssistantResponse stays as package function
+      In either case, the parsing extraction is independent of this decision.
+
+      ## Done when
+      - [ ] `parseStreamChunk` is a pure, exported function with unit tests
+      - [ ] `streamAssistantResponse` delegates parsing to `parseStreamChunk`
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Stream parsing still handles: text deltas, reasoning deltas, tool call deltas, finish_reason
+    estimated_hours: 3
+    group: phase4-stream-split
+    dependencies: [T035]
+
+  - id: T041
+    title: "Extract thinking block processing from streamAssistantResponse"
+    description: |
+      ## Goal
+      Extract thinking block detection and content extraction into a standalone, testable function.
+
+      ## Key changes
+      - Read `pkg/agent/llm_stream.go` to find thinking block handling (~60 lines):
+        - Detection of thinking start/end in stream
+        - Extraction of reasoning content from delta
+        - Assembly of thinking content into message blocks
+      - Extract into: `func processThinkingBlock(delta AgentMessage) (thinking string, content string, isThinking bool)` or similar
+      - Place in `pkg/agent/llm_stream_parse.go` alongside `parseStreamChunk`
+      - Write unit tests
+
+      ## Files
+      - MODIFY: pkg/agent/llm_stream.go
+      - MODIFY: pkg/agent/llm_stream_parse.go
+      - MODIFY: pkg/agent/llm_stream_parse_test.go
+
+      ## Done when
+      - [ ] Thinking block processing is a testable pure function
+      - [ ] `streamAssistantResponse` delegates thinking logic to extracted function
+      - [ ] `go test ./pkg/agent/... -v` passes
+    estimated_hours: 2
+    group: phase4-stream-split
+    dependencies: [T040]
+
+  - id: T042
+    title: "Consolidate stream error/retry logic"
+    description: |
+      ## Goal
+      Consolidate streaming error handling and retry logic, building on the existing `pkg/agent/llm_retry.go`.
+
+      ## Key changes
+      - Read `pkg/agent/llm_retry.go` and `pkg/agent/llm_error_types.go` to understand current retry/error structure
+      - Read error handling in `pkg/agent/llm_stream.go` (the retry/recovery paths in `streamAssistantResponse`)
+      - Consolidate: ensure retry decision logic lives in `llm_retry.go`, error classification in `llm_error_types.go`
+      - `streamAssistantResponse` should call `shouldRetry(err) bool` and `retryDelay(attempt) time.Duration` from `llm_retry.go`
+      - Remove any inline retry logic from `streamAssistantResponse`
+
+      ## Files
+      - MODIFY: pkg/agent/llm_stream.go
+      - MODIFY: pkg/agent/llm_retry.go
+
+      ## Done when
+      - [ ] `streamAssistantResponse` has zero inline retry logic — all delegated to `llm_retry.go`
+      - [ ] `go test ./pkg/agent/... -v` passes
+      - [ ] Stream error recovery (network failure, rate limit, context too long) still works
+    estimated_hours: 2
+    group: phase4-stream-split
+    dependencies: [T041]
+
+  # ===================== Phase 6: Clean Up =====================
+  - id: T050
+    title: "Remove dead code and update documentation"
+    description: |
+      ## Goal
+      Final cleanup pass: remove dead code exposed by Phases 1-4, standardize error handling, update project documentation.
+
+      ## Key changes
+      - Scan for unused functions introduced or exposed during refactoring:
+        - `go vet ./...` for static analysis
+        - Check if `CompactIfNeeded` was already removed (T021); verify no other legacy methods remain
+      - Audit `pkg/agent/error_stack.go` — verify error wrapping is consistent across refactored code
+      - Update `AGENTS.md`:
+        - New file organization in `cmd/ai/` (rpcApp, topic-specific handler files)
+        - New loop architecture (loopState, extracted methods)
+        - Updated compaction interface (unified, no Old methods)
+      - Remove any TODO/FIXME comments added during refactoring that are now resolved
+      - Verify `docs/refactor/dependency-graph.md` (from T003) is still accurate; update if needed
+
+      ## Files
+      - MODIFY: AGENTS.md
+      - MODIFY: docs/refactor/dependency-graph.md (if outdated)
+      - Various: any files with dead code discovered
+
+      ## Done when
+      - [ ] `go vet ./...` passes clean
+      - [ ] AGENTS.md reflects new file organization and loop architecture
+      - [ ] No TODO/FIXME comments from the refactoring remain
+      - [ ] All tests pass: `go test ./...` (known pkg/tools failure acceptable)
+    estimated_hours: 2
+    group: phase6-cleanup
+    dependencies: [T042]
+
+groups:
+  - name: phase0-preparation
+    title: "Phase 0: Preparation & Safety Net"
+    description: "Record baseline coverage, fill test gaps, document dependencies. Safety net before structural changes."
+    tasks: [T001, T002, T003]
+    commit_message: "test(agent): add baseline coverage and characterization test gaps"
+
+  - name: phase1-rpc-split
+    title: "Phase 1: Split rpc_handlers.go via rpcApp Struct"
+    description: "Break 2406-line rpc_handlers.go into 5-6 focused files by introducing rpcApp struct to replace closure captures."
+    tasks: [T010, T011, T012, T013]
+    commit_message: "refactor(cmd): split rpc_handlers.go into focused files with rpcApp struct"
+
+  - name: phase2-compaction
+    title: "Phase 2: Unify Compaction Interface"
+    description: "Migrate all callers from Old methods to new interface, then delete ~314 lines of legacy compaction code."
+    tasks: [T020, T021]
+    commit_message: "refactor(compact): unify compaction interface, remove legacy Old methods"
+
+  - name: phase3-loop-split
+    title: "Phase 3: Deep Split of runInnerLoop"
+    description: "Extract 5 responsibilities from runInnerLoop into helpers, then introduce loopState struct. Target: ~150 lines."
+    tasks: [T030, T031, T032, T033, T034, T035]
+    commit_message: "refactor(agent): deep split runInnerLoop with loopState struct"
+
+  - name: phase4-stream-split
+    title: "Phase 4: Extract streamAssistantResponse"
+    description: "Break streaming function into chunk parsing, thinking block handling, and error/retry consolidation."
+    tasks: [T040, T041, T042]
+    commit_message: "refactor(agent): extract streamAssistantResponse into testable components"
+
+  - name: phase6-cleanup
+    title: "Phase 6: Clean Up & Documentation"
+    description: "Remove dead code, standardize error handling, update AGENTS.md and dependency docs."
+    tasks: [T050]
+    commit_message: "docs: update documentation and remove dead code after refactoring"
+
+group_order: [phase0-preparation, phase1-rpc-split, phase2-compaction, phase3-loop-split, phase4-stream-split, phase6-cleanup]
+
+risks:
+  - area: "runInnerLoop extraction"
+    risk: "Extracted functions may miss shared state interactions (e.g., compaction recovery counter, loop guard)"
+    mitigation: "T002 characterization tests cover max turns, tool loop guard, compaction trigger — any regression caught"
+  - area: "rpcApp migration"
+    risk: "Some closures mutate local variables; missing a mutation breaks behavior silently"
+    mitigation: "T010 carefully audits all captured variables; tests in cmd/ai/ cover RPC commands"
+  - area: "Compaction interface migration"
+    risk: "Old methods accept []Message; new methods accept *AgentContext. Callers may not have AgentContext readily available"
+    mitigation: "T020 identifies each caller's context and adapts; Agent.GetContext() provides AgentContext where needed"
+  - area: "Test regression"
+    risk: "Refactoring breaks behavior that existing 684 tests don't cover"
+    mitigation: "Phase 0 fills coverage gaps first; all tests run after every PR"
