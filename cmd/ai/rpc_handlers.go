@@ -123,11 +123,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.server = server
 
 	// --- Register all handlers ---
-	validToolSummaryStrategies := map[string]bool{"full": true, "summary": true, "full-then-summary": true}
-	validToolSummaryAutomations := map[string]bool{"auto": true, "manual": true, "off": true}
-	validSteeringModes := map[string]bool{"all": true, "off": true}
-	validFollowUpModes := map[string]bool{"one-at-a-time": true, "queue": true, "off": true}
-	validThinkingLevels := map[string]bool{"off": true, "low": true, "medium": true, "high": true}
+		validToolSummaryStrategies := map[string]bool{"llm": true, "heuristic": true, "off": true}
+	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
+	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
+	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
+	validThinkingLevels := map[string]bool{"off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true}
 
 	app.registerHandlers(
 		validToolSummaryStrategies,
