@@ -28,6 +28,7 @@ type SchedulerConfig struct {
 	WorkDir         string
 	SkipReview      bool
 	MaxReviewRounds int
+	Callback        string // Shell command to execute after all tasks complete
 }
 
 // DefaultSchedulerConfig returns sensible defaults.
@@ -130,17 +131,57 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 			return fmt.Errorf("scheduler tick: %w", err)
 		}
 
-		// Circuit breaker: count consecutive failures
+						// Circuit breaker: count consecutive failures or truly stuck reviews
+		// "Truly stuck" means: reviews in a fully-ready group (all tasks in review)
+		// with no reviewer process alive — indicating reviewer crashed.
 		failed, _ := List(StatusFailed)
-		if len(failed) > 0 && !progress {
+		trulyStuck := false
+		if len(failed) == 0 {
+			// Check if any review group is fully in review but has no reviewer alive
+			reviewTasks, _ := List(StatusReview)
+			if len(reviewTasks) > 0 {
+				groups, _ := Groups()
+				for _, g := range groups {
+					gtasks, _ := GroupTasks(g)
+					allReview := len(gtasks) > 0
+					for _, gt := range gtasks {
+						if gt.Status != StatusReview {
+							allReview = false
+							break
+						}
+					}
+					if allReview {
+						// Group fully in review — check if reviewer is alive
+						reviewerKey := fmt.Sprintf("reviewer-%s", g)
+						reviewerAgentDir := storage.AgentDir(reviewerKey)
+						metaPath := filepath.Join(reviewerAgentDir, "worker-meta.json")
+						if storage.Exists(metaPath) {
+							var meta struct {
+								Pid int `json:"pid"`
+							}
+							if err := storage.ReadJSON(metaPath, &meta); err == nil && meta.Pid > 0 && agent.IsProcessAlive(meta.Pid) {
+								continue // reviewer alive, not stuck
+							}
+						}
+						// No reviewer alive for a fully-in-review group — stuck!
+						trulyStuck = true
+						break
+					}
+				}
+			}
+		}
+		if (len(failed) > 0 || trulyStuck) && !progress {
 			consecutiveFailures++
 			if consecutiveFailures >= maxConsecutiveFailures {
-				fmt.Printf("\n⛔ Circuit breaker: %d consecutive failures without progress\n", consecutiveFailures)
+				fmt.Printf("\n⛔ Circuit breaker: %d consecutive ticks without progress\n", consecutiveFailures)
+				if trulyStuck {
+					fmt.Println("  Reason: review group fully in review but no reviewer alive")
+				}
 				fmt.Println("Stopping scheduler to prevent wasting resources.")
 				printSummary()
 				return fmt.Errorf("circuit breaker triggered: %d consecutive failures", consecutiveFailures)
 			}
-			log.Printf("[scheduler] circuit breaker: %d/%d consecutive failures", consecutiveFailures, maxConsecutiveFailures)
+			log.Printf("[scheduler] circuit breaker: %d/%d (failed=%d, trulyStuck=%v)", consecutiveFailures, maxConsecutiveFailures, len(failed), trulyStuck)
 		} else if progress {
 			consecutiveFailures = 0
 		}
@@ -150,9 +191,10 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		if err != nil {
 			return fmt.Errorf("check all done: %w", err)
 		}
-		if allDone {
+				if allDone {
 			fmt.Println("\n✅ All tasks completed.")
 			printSummary()
+			executeCallback(cfg)
 			return nil
 		}
 
@@ -611,10 +653,24 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 			continue
 		}
 
-		// All in review — spawn reviewer (after transitions are committed)
-		fmt.Printf("  🔍 Reviewing group %s\n", group)
-		go spawnReviewer(group, tasks, cfg)
-		progress = true
+			// All in review — spawn reviewer (after transitions are committed)
+	// Guard: only spawn if no reviewer is already running for this group.
+	reviewerKey := fmt.Sprintf("reviewer-%s", group)
+	reviewerAgentDir := storage.AgentDir(reviewerKey)
+	if storage.Exists(filepath.Join(reviewerAgentDir, "worker-meta.json")) {
+		// Check if the reviewer process is still alive
+		var meta struct {
+			Pid int `json:"pid"`
+		}
+		if err := storage.ReadJSON(filepath.Join(reviewerAgentDir, "worker-meta.json"), &meta); err == nil && meta.Pid > 0 {
+			if agent.IsProcessAlive(meta.Pid) {
+				continue // reviewer already running, skip
+			}
+		}
+	}
+	fmt.Printf("  🔍 Reviewing group %s\n", group)
+	go spawnReviewer(group, tasks, cfg)
+	progress = true
 	}
 	return progress, nil
 }
@@ -658,15 +714,32 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		return
 	}
 
-	// Read run ID from stdout
+		// Read run ID from stdout
 	reader := bufio.NewReader(stdout)
 	firstLine, _ := reader.ReadString('\n')
 	stdout.Close()
 	runID := strings.TrimSpace(firstLine)
 
+	// Write worker-meta.json so checkGroupReview can deduplicate reviewers.
+	agentDir := storage.AgentDir(agentID)
+	os.MkdirAll(agentDir, 0755)
+	workerMeta := map[string]interface{}{
+		"pid":       cmd.Process.Pid,
+		"runID":     runID,
+		"startedAt": time.Now().Unix(),
+		"group":     group,
+	}
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if err := storage.AtomicWriteJSON(metaPath, workerMeta); err != nil {
+		log.Printf("[scheduler] reviewer %s: write worker-meta: %v", group, err)
+	}
+
 	// Wait for ai serve to complete (it exits when the RPC subprocess finishes)
 	waitErr := cmd.Wait()
 	outFile.Close()
+
+	// Clean up worker-meta.json after review completes to avoid stale PID reuse.
+	defer os.Remove(metaPath)
 
 		if waitErr != nil {
 		// Reviewer failed — mark tasks as failed (retryable)
@@ -698,8 +771,7 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		fmt.Printf("  🔧 Revision requested for group %s\n", group)
 	}
 
-	// Transition tasks to done with error handling.
-	allOK := true
+				// Transition tasks to done with error handling.
 	for _, t := range tasks {
 		summary := t.Summary
 		if !strings.Contains(eventsData, "REVIEW_PASS") {
@@ -707,11 +779,34 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		}
 		if _, err := Done(t.ID, summary); err != nil {
 			fmt.Printf("  ❌ Done(%s) failed after review: %v\n", t.ID, err)
-			allOK = false
+			// Task state may have been changed externally (e.g. retryFailed reset to pending).
+			// Try to recover: re-read current state and transition appropriately.
+			current, loadErr := loadTask(t.ID)
+			if loadErr != nil {
+				fmt.Printf("  ❌ Cannot load task %s: %v\n", t.ID, loadErr)
+				continue
+			}
+			switch current.Status {
+			case StatusDone:
+				// Already done — nothing to do
+				fmt.Printf("  ℹ️ %s already done, skipping\n", t.ID)
+			case StatusPending:
+				// Was reset to pending — the work is done but state was lost.
+				// Force-transition: pending→claimed→done
+				if _, te := Transition(t.ID, StatusClaimed); te != nil {
+					fmt.Printf("  ❌ Cannot claim %s: %v\n", t.ID, te)
+				} else if _, de := Done(t.ID, summary); de != nil {
+					fmt.Printf("  ❌ Cannot done %s: %v\n", t.ID, de)
+				} else {
+					fmt.Printf("  ✅ Recovered %s (pending→claimed→done)\n", t.ID)
+				}
+			case StatusFailed:
+				// Was failed — retryFailed will handle
+				fmt.Printf("  ℹ️ %s already failed, retryFailed will handle\n", t.ID)
+			default:
+				fmt.Printf("  ⚠️ %s in unexpected state %s after review\n", t.ID, current.Status)
+			}
 		}
-	}
-	if !allOK {
-		fmt.Printf("  ⚠️ Some Done() calls failed for group %s — manual retry may be needed\n", group)
 	}
 }
 
@@ -800,4 +895,26 @@ func printSummary() {
 			fmt.Printf("     Error: %s\n", t.Error)
 		}
 	}
+}
+
+// executeCallback runs the callback shell command if configured.
+// This is the "prompt-as-callback" mechanism: typically
+//   ag agent prompt <main-id> "scheduler done"
+// Errors are logged but not fatal — the scheduler has already completed its work.
+func executeCallback(cfg SchedulerConfig) {
+	if cfg.Callback == "" {
+		return
+	}
+	fmt.Printf("\n📞 Executing callback: %s\n", cfg.Callback)
+	cmd := exec.Command("sh", "-c", cfg.Callback)
+	if cfg.WorkDir != "" {
+		cmd.Dir = cfg.WorkDir
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[scheduler] callback failed: %v\noutput: %s", err, string(output))
+		fmt.Printf("  ⚠️ Callback failed: %v\n", err)
+		return
+	}
+	fmt.Printf("  ✅ Callback executed successfully\n")
 }
