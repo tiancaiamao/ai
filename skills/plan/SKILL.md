@@ -91,6 +91,10 @@ done
 
 ```bash
 # Lint 是最后的安全网
+if [ ! -f ~/.ai/skills/plan/bin/plan-lint ]; then
+  echo "Building plan-lint..."
+  (cd ~/.ai/skills/plan/cmd/plan-lint && go build -o ../../bin/plan-lint .)
+fi
 ~/.ai/skills/plan/bin/plan-lint tasks.yml
 ```
 
@@ -136,9 +140,28 @@ brainstorm → design.md → plan (this skill) → ag task queue → implement
                                          ↻ up to 3 rounds
 ```
 
+## Auto-Build
+
+The `bin/plan-lint` binary is **not committed to git**. It must be built from source before first use.
+
+**Build command:**
+```bash
+cd ~/.ai/skills/plan/cmd/plan-lint && go build -o ../../bin/plan-lint .
+```
+
+**Auto-build rule:** Before running `plan-lint`, always check if the binary exists. If not, build it automatically:
+```bash
+if [ ! -f ~/.ai/skills/plan/bin/plan-lint ]; then
+  echo "Building plan-lint..."
+  cd ~/.ai/skills/plan/cmd/plan-lint && go build -o ../../bin/plan-lint .
+fi
+```
+
+Source code lives at `cmd/plan-lint/main.go`. The `bin/` directory is git-ignored.
+
 ## Tools
 
-- `~/.ai/skills/plan/bin/plan-lint <tasks.yml>` — 验证 tasks.yml 结构和依赖
+- `~/.ai/skills/plan/bin/plan-lint <tasks.yml>` — 验证 tasks.yml 结构和依赖（auto-built from `cmd/plan-lint/`）
 - `ag task import-plan <tasks.yml>` — 导入任务到运行时队列
 - `ag task ls` — 查看导入结果
 
@@ -151,3 +174,10 @@ brainstorm → design.md → plan (this skill) → ag task queue → implement
 | lint 未通过 | plan-lint 报错 | 修复后再继续 |
 | 未展示产出就问确认 | tasks.yml 存在但未向用户展示 | 先展示摘要 |
 | 未导入就结束 | plan 完成但没有 import-plan | 先导入 ag task |
+
+**Reviewer 的 Must Pass 标准（任何一项失败 = 打回重做）：**
+1. **Self-Containedness** — task description 自足，不需要外部文件
+2. **Dependency Correctness** — 无循环、无悬空依赖
+3. **Coverage** — design.md 每个关键决策和 P0 feature 都有 task 覆盖
+4. **Acceptance Completeness** — design.md 每个 Acceptance Scenario 都有 task 的 done-when 覆盖
+5. **YAML Structure** — 格式正确、字段完整

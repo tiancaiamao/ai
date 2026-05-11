@@ -75,9 +75,45 @@ NO IMPLEMENTATION until design.md is approved by the user.
 - 涉及哪些文件需要改/新建
 - 状态机、流程图用文字或 mermaid 描述
 
-**5. 边界条件和特殊情况**
+**5. 验收场景（每个 P0 feature 必须有）**
+
+对于 design 中标记为 P0 的每个功能，必须定义 **行为级验收场景**。这不是测试用例，而是 "做完之后，观察者能看到什么行为"。
+
+格式：
+```markdown
+### P0 Feature: <feature name>
+**Acceptance Scenarios:**
+1. <concrete observable behavior>
+2. <concrete observable behavior>
+3. <edge case behavior>
+```
+
+示例：
+```markdown
+### P0 Feature: Agent Loop
+**Acceptance Scenarios:**
+1. User sends prompt → agent returns text response
+2. LLM returns tool_call → tool executes → result fed back → agent continues
+3. LLM returns 3 concurrent tool_calls → all execute in parallel
+4. MaxTurns=2 → agent stops after 2 turns even if LLM wants more
+5. Context cancelled mid-stream → agent stops and emits AgentEnd
+```
+
+**为什么这很重要：** plan 阶段会把这些场景转化为 task 的 done-when。如果 design 没有定义具体场景，plan 就只能写 "go test passes" 这种不可靠的验证标准。
+
+**6. 边界条件和特殊情况**
 - corner cases：错误处理、并发、大数据量、兼容性
 - 不是只写 happy path
+
+**7. Completeness Checklist 对照（如果 explore 阶段有输出）**
+
+如果 explorer 输出中包含 Completeness Checklist，design 必须逐项回应。对于每一项，明确标注：
+
+- ✅ Covered — 本 design 包含此功能（指向对应的 feature/section）
+- ⏸️ Deferred — 推迟到后续版本（必须说明理由和影响）
+- 🔀 Merged — 合并到其他功能中（必须说明合并到哪里）
+
+如果 explore 的 checklist 有 19 个包但 design 只规划了 8 个包，剩余 11 个必须逐个标注。不允许静默省略。
 
 **可选但建议有**：Goals / Non-Goals、Impacts & Risks
 **不需要**：测试计划、任务拆解、八股模板
@@ -100,7 +136,10 @@ Gate 规则：
 | 未读技能文件 | 先读完本 SKILL.md 再开始 |
 | self-approve | 等用户明确说 OK，不能自己确认 |
 | 未展示产出就问确认 | 先展示 design.md 摘要 |
-| 缺少内容维度 | design.md 必须覆盖 5 个维度，缺了就补 |
+| 缺少内容维度 | design.md 必须覆盖 7 个维度（含验收场景和 checklist 对照），缺了就补 |
+| P0 feature 没有验收场景 | 每个 P0 feature 必须有具体的 Acceptance Scenarios |
+| explore checklist 未逐项回应 | 如果有 explore 输出，每个 checklist 项必须标注 covered/deferred/merged |
+| scope 定义自相矛盾 | Success criteria 和 feature list 不能矛盾。不能同时说 "drop-in replacement" 又省略功能 |
 
 ## Skill Composition
 
