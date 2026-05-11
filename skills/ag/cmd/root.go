@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -30,16 +36,50 @@ func Execute() {
 	}
 }
 
+// checkBinaryStaleness warns if the ag binary is older than its source code,
+// which means the user needs to rebuild.
+func checkBinaryStaleness() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exeInfo, err := os.Stat(exe)
+	if err != nil {
+		return
+	}
+
+	// Walk source files in the executable's directory tree
+	// (assuming the source is nearby, e.g. ~/.ai/skills/ag/)
+	sourceDir := filepath.Dir(exe)
+	newerFiles := 0
+	filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") && info.ModTime().After(exeInfo.ModTime()) {
+			newerFiles++
+		}
+		return nil
+	})
+
+	if newerFiles > 0 {
+		log.Printf("⚠️  Binary is stale (%d source files newer). Run: cd %s && go build -o ag .", newerFiles, sourceDir)
+	}
+}
+
 var taskRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run scheduler to execute tasks automatically",
 	Run: func(cmd *cobra.Command, args []string) {
+		checkBinaryStaleness()
+
 		maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
 		maxRetries, _ := cmd.Flags().GetInt("max-retries")
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
 		pollMs, _ := cmd.Flags().GetInt("poll")
 		design, _ := cmd.Flags().GetString("design")
 		skipReview, _ := cmd.Flags().GetBool("skip-review")
+		detach, _ := cmd.Flags().GetBool("detach")
 
 		cfg := task.DefaultSchedulerConfig()
 		cfg.MaxConcurrent = maxConcurrent
@@ -52,10 +92,28 @@ var taskRunCmd = &cobra.Command{
 		cwd, _ := os.Getwd()
 		cfg.WorkDir = cwd
 
+		if detach {
+			runDetached(os.Args)
+			return
+		}
+
+		// Setup logging to file + stderr when running in foreground
+		logFile, err := os.OpenFile(filepath.Join(storage.BaseDir, "scheduler.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+			defer logFile.Close()
+		}
+
+				// Write PID file and ensure cleanup on exit
+		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+		os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+		defer os.Remove(pidPath)
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-				// Handle Ctrl+C gracefully
+		// Handle Ctrl+C gracefully
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
 		go func() {
@@ -64,11 +122,59 @@ var taskRunCmd = &cobra.Command{
 			cancel()
 		}()
 
-		if err := task.RunScheduler(ctx, cfg); err != nil {
+				if err := task.RunScheduler(ctx, cfg); err != nil {
+			os.Remove(pidPath)
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	},
+}
+
+// runDetached re-executes the same command without --detach in the background,
+// redirecting output to scheduler.log.
+func runDetached(originalArgs []string) {
+	// Build args without any --detach / --detach=true / --detach=false form
+	var cleanArgs []string
+	for _, a := range originalArgs {
+		if a == "--detach" || a == "--detach=true" || a == "--detach=false" {
+			continue
+		}
+		if strings.HasPrefix(a, "--detach=") {
+			continue
+		}
+		cleanArgs = append(cleanArgs, a)
+	}
+
+	logPath := filepath.Join(storage.BaseDir, "scheduler.log")
+	pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+
+	// Open log file
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(cleanArgs[0], cleanArgs[1:]...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		fmt.Fprintf(os.Stderr, "Failed to start scheduler: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write PID
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644)
+
+	fmt.Printf("Scheduler started in background (PID %d)\n", cmd.Process.Pid)
+	fmt.Printf("  ag task log     — follow output\n")
+	fmt.Printf("  ag task stop    — stop scheduler\n")
+	fmt.Printf("  ag task ls      — check progress\n")
+	cmd.Process.Release()
 }
 
 var taskTransitionCmd = &cobra.Command{
@@ -608,19 +714,27 @@ var taskListCmd = &cobra.Command{
 			return
 		}
 
-		if len(tasks) == 0 {
+				if len(tasks) == 0 {
 			fmt.Println("No tasks.")
 			return
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tDESCRIPTION")
+		fmt.Fprintln(w, "ID\tSTATUS\tCLAIMANT\tELAPSED\tDESCRIPTION")
 		for _, t := range tasks {
 			desc := t.Description
+			if t.Title != "" {
+				desc = t.Title
+			}
 			if len(desc) > 50 {
 				desc = desc[:50] + "..."
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.ID, t.Status, t.Claimant, desc)
+			elapsed := ""
+			if t.ClaimedAt > 0 {
+				dur := time.Since(time.Unix(t.ClaimedAt, 0)).Round(time.Second)
+				elapsed = dur.String()
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.Status, t.Claimant, elapsed, desc)
 		}
 		w.Flush()
 	},
@@ -686,6 +800,138 @@ var taskFailCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Println("failed")
+	},
+}
+
+var taskCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Remove done/failed tasks and fix dangling dependencies",
+	Run: func(cmd *cobra.Command, args []string) {
+		cleaned, depsFixed, err := task.Cleanup()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("cleaned up %d tasks", cleaned)
+		if depsFixed > 0 {
+			fmt.Printf(", fixed %d dangling dependencies", depsFixed)
+		}
+		fmt.Println()
+	},
+}
+
+var taskLogCmd = &cobra.Command{
+	Use:   "log",
+	Short: "Follow scheduler log output (like kubectl logs -f)",
+	Run: func(cmd *cobra.Command, args []string) {
+		logPath := filepath.Join(storage.BaseDir, "scheduler.log")
+
+		tailN, _ := cmd.Flags().GetInt("tail")
+		if tailN > 0 {
+			// Print last N lines then exit
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "No scheduler log found at %s\n", logPath)
+				os.Exit(1)
+			}
+			lines := strings.Split(string(data), "\n")
+			start := len(lines) - tailN
+			if start < 0 {
+				start = 0
+			}
+			for _, l := range lines[start:] {
+				fmt.Println(l)
+			}
+			return
+		}
+
+		// Tail -f mode: print existing, then follow
+		f, err := os.Open(logPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "No scheduler log found at %s\n", logPath)
+			os.Exit(1)
+		}
+		defer f.Close()
+
+		// Print existing content
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+
+		// Follow for new content
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				scanner := bufio.NewScanner(f)
+				for scanner.Scan() {
+					fmt.Println(scanner.Text())
+				}
+			}
+		}
+	},
+}
+
+var taskStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop a running background scheduler",
+	Run: func(cmd *cobra.Command, args []string) {
+		pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
+		heartbeatPath := filepath.Join(storage.BaseDir, "scheduler.heartbeat")
+
+		data, err := os.ReadFile(pidPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "No running scheduler found (missing PID file)")
+			os.Exit(1)
+		}
+
+		var pid int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid PID file: %s\n", string(data))
+			os.Exit(1)
+		}
+
+		// Check heartbeat to detect stale vs active
+		if hbData, err := os.ReadFile(heartbeatPath); err == nil {
+			var hbTs int64
+			fmt.Sscanf(strings.TrimSpace(string(hbData)), "%d", &hbTs)
+			if hbTs > 0 {
+				age := time.Since(time.Unix(hbTs, 0))
+				if age > 30*time.Second {
+					fmt.Printf("⚠️  Scheduler heartbeat is %s old (may already be dead)\n", age.Round(time.Second))
+				} else {
+					fmt.Printf("Scheduler heartbeat: %s ago (alive)\n", age.Round(time.Second))
+				}
+			}
+		}
+
+		// Check if process is running
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Process %d not found\n", pid)
+			os.Exit(1)
+		}
+
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to stop process %d: %v\n", pid, err)
+			os.Exit(1)
+		}
+
+		os.Remove(pidPath)
+		fmt.Printf("Scheduler (PID %d) stopped\n", pid)
 	},
 }
 
@@ -859,6 +1105,8 @@ func init() {
 	taskRunCmd.Flags().Int("poll", 5000, "Poll interval in milliseconds")
 	taskRunCmd.Flags().String("design", "", "Path to design.md for worker context")
 	taskRunCmd.Flags().Bool("skip-review", false, "Skip review phase")
+		taskRunCmd.Flags().Bool("detach", false, "Run scheduler in background (log to .ag/scheduler.log)")
+	taskLogCmd.Flags().Int("tail", 0, "Show last N lines (default: follow mode)")
 	taskRetryCmd.Flags().Int("max-retries", 3, "Max retries allowed")
 
 	// Send/recv flags
@@ -879,8 +1127,153 @@ func init() {
 
 		// Task subcommands
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-	taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd)
+				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
 
-	// Root subcommands
-	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd)
+		// Root subcommands
+	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd, doctorCmd)
+}
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Pre-flight check: verify ag toolchain is healthy",
+	Run: func(cmd *cobra.Command, args []string) {
+		pass, fail, warn := 0, 0, 0
+		check := func(name string, err error) {
+			if err != nil {
+				fmt.Printf("  ❌ %s: %v\n", name, err)
+				fail++
+			} else {
+				fmt.Printf("  ✅ %s\n", name)
+				pass++
+			}
+		}
+		warnCheck := func(name string, err error) {
+			if err != nil {
+				fmt.Printf("  ⚠️  %s: %v\n", name, err)
+				warn++
+			} else {
+				fmt.Printf("  ✅ %s\n", name)
+				pass++
+			}
+		}
+
+				fmt.Println("🔍 ag toolchain health check")
+		fmt.Println()
+
+		// 1. Storage directory writable
+		agentsDir, channelsDir, tasksDir := storage.Paths()
+		check("storage dirs exist", os.MkdirAll(agentsDir, 0755))
+		check("storage dirs exist", os.MkdirAll(channelsDir, 0755))
+		check("storage dirs exist", os.MkdirAll(tasksDir, 0755))
+
+		// Write test
+		testFile := filepath.Join(tasksDir, ".health-check")
+		check("storage writable", os.WriteFile(testFile, []byte("ok"), 0644))
+		os.Remove(testFile)
+
+		// 2. Task state machine smoke test
+		t1, err := task.Create("doctor smoke test", "")
+		check("task create", err)
+		if err == nil {
+			check("task claim → claimed", func() error {
+				_, e := task.Claim(t1.ID, "doctor")
+				return e
+			}())
+			check("task transition claimed→done", func() error {
+				_, e := task.Transition(t1.ID, task.StatusDone)
+				return e
+			}())
+			check("task show", func() error {
+				_, e := task.Load(t1.ID)
+				return e
+			}())
+		}
+
+		// 3. Invalid transition rejected
+		t2, _ := task.Create("doctor invalid test", "")
+		if t2 != nil {
+			check("invalid transition rejected", func() error {
+				_, e := task.Transition(t2.ID, task.StatusDone)
+				if e != nil {
+					return nil // expected
+				}
+				return fmt.Errorf("pending→done should be invalid")
+			}())
+
+			// Clean up immediately to prevent the scheduler from claiming
+			// this transient test task while it sits in pending state.
+			os.RemoveAll(storage.TaskDir(t2.ID))
+		}
+
+		// 4. Dependency + cycle detection
+		if t1 != nil {
+			t3, _ := task.Create("doctor dep test", "")
+			if t3 != nil {
+				check("dependency add", func() error {
+					_, e := task.AddDependency(t3.ID, t1.ID)
+					return e
+				}())
+				check("cycle detection", func() error {
+					_, e := task.AddDependency(t1.ID, t3.ID)
+					if e != nil {
+						return nil // expected: cycle detected
+					}
+					return fmt.Errorf("cycle should be detected")
+				}())
+
+				// t3 is in pending state (never transitioned), clean up directly.
+				os.RemoveAll(storage.TaskDir(t3.ID))
+			}
+		}
+
+		// 5. Cleanup
+		cleaned, deps, err := task.Cleanup()
+		check("cleanup", err)
+		if err == nil {
+			fmt.Printf("     (cleaned %d tasks, %d dangling deps)\n", cleaned, deps)
+		}
+
+		// 6. `ai` binary available
+		aiPath, err := exec.LookPath("ai")
+		warnCheck("ai binary in PATH", err)
+		if err == nil {
+			// Try running it
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			aiCmd := exec.CommandContext(ctx, aiPath, "--help")
+			aiCmd.Stdout = nil
+			aiCmd.Stderr = nil
+			warnCheck("ai --help runs", aiCmd.Run())
+		}
+
+		// 7. git repo
+		warnCheck("git repo present", func() error {
+			_, e := exec.LookPath("git")
+			return e
+		}())
+
+		// 8. ag binary not stale
+		exe, _ := os.Executable()
+		if exe != "" {
+			exeInfo, _ := os.Stat(exe)
+			modTime := exeInfo.ModTime()
+			if time.Since(modTime) > 24*time.Hour {
+				fmt.Printf("  ⚠️  ag binary is %s old (may need rebuild)\n", time.Since(modTime).Round(time.Hour))
+				warn++
+			} else {
+				fmt.Printf("  ✅ ag binary built %s ago\n", time.Since(modTime).Round(time.Minute))
+				pass++
+			}
+		}
+
+		// Summary
+		fmt.Printf("\n📊 Results: %d passed, %d failed, %d warnings\n", pass, fail, warn)
+		if fail > 0 {
+			fmt.Println("\n⛔ Fix errors above before running scheduler.")
+			os.Exit(1)
+		}
+		if warn > 0 {
+			fmt.Println("\n⚠️  Warnings are non-blocking but should be addressed.")
+		}
+	},
 }
