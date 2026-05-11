@@ -68,7 +68,8 @@ For each changed skill, produce one JSON object with these fields:
 {
   "name": "skill-directory-name",
   "description": "One-sentence description of what the skill does",
-  "aliases": ["synonym1", "synonym2", "debug", "调试", "troubleshoot"],
+  "aliases": ["synonym1", "TDD", "mobile", "debug", "调试"],
+  "keywords": ["test", "unit test", "red-green", "refactor", "fixture", "assert", "mock", "stub", "coverage", "CI", "fail-fast", "JavaScript", "Python", "Go"],
   "use_when": [
     "encountering bugs",
     "test failures",
@@ -83,13 +84,37 @@ For each changed skill, produce one JSON object with these fields:
 
 - **name**: Must match the directory name under `~/.ai/skills/`
 - **description**: Concise, in English, derived from frontmatter + first heading
-- **aliases**: 3–8 entries. Include:
-  - Common abbreviations and synonyms
-  - Chinese translations if the skill description or body contains Chinese
-  - Related verbs/nouns a user might search for
+- **aliases**: 5–12 entries (aim for breadth). Must include ALL of the following dimensions:
+  - **Synonyms & abbreviations**: Common alternative names and abbreviations (e.g. "TDD" for test-driven-development)
+  - **Hypernyms (broader terms)**: What broader category would a user search for? (e.g. burner-phone → "mobile", "android", "device", "phone"; hardware → "embedded", "iot", "peripheral")
+  - **Tech stack keywords**: Underlying tools/protocols/standards the skill uses (e.g. agent-browser → "chrome", "CDP", "chromium"; burner-phone → "adb", "screenshot", "UI automation")
+  - **Chinese equivalents**: If the skill has Chinese content or is commonly used in Chinese context, include 1–2 Chinese translations
+  - **Misspellings & variant spellings**: Include common misspellings only if the skill name is easily misspelled
   - Do NOT include the name itself (it's already matched)
+- **keywords**: A flat bag-of-words array (10–20 entries) purely for search recall. Unlike aliases (which are curated), keywords should aggressively cover:
+  - Every significant noun/verb from the skill body
+  - Platform names (macOS, Linux, Android, Chrome, etc.)
+  - File formats handled (PDF, Markdown, JSON, YAML, etc.)
+  - Programming languages or frameworks involved
+  - Problem-domain terms a user might type when looking for this skill
+  - This field is NOT displayed to users — it exists solely to maximize search hit rate
 - **use_when**: 2–5 short phrases describing WHEN a user would want this skill. Think about user intent, not skill mechanics.
-- **categories**: 1–3 broad category labels. Use consistent categories across skills (e.g., "development", "debugging", "testing", "orchestration", "git", "documentation", "system", "planning").
+- **categories**: 1–3 labels drawn from the **fixed category vocabulary** below. Do NOT invent new categories — use the closest match:
+  - `development` — writing, editing, reviewing code
+  - `debugging` — finding and fixing bugs, tracing errors
+  - `testing` — writing/running tests, TDD, E2E
+  - `orchestration` — multi-agent, subagent, task scheduling
+  - `git` — version control, branching, PRs, worktrees
+  - `browser` — web automation, scraping, CDP
+  - `documentation` — notes, PDF, markdown, writing
+  - `planning` — brainstorm, design, task breakdown
+  - `system` — OS, security, hardware, device control
+  - `automation` — workflow automation, scripting
+  - `productivity` — personal tools, notes, reminders, dictionary
+  - `hardware` — I2C, SPI, embedded, IoT, peripherals
+  - `mobile` — Android, phone, ADB, device screen
+  - `language` — translation, dictionary, NLP
+  - `security` — audit, hardening, reverse engineering
 - **mtime**: Unix epoch seconds from Step 1, stored for future incremental comparisons.
 
 When re-indexing a modified skill, review its existing aliases and categories for consistency with the updated content, but preserve stable entries that still apply.
