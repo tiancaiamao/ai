@@ -55,13 +55,40 @@ No `Makefile` is used in this repo.
 
 ## High-Value Code Paths
 
-- RPC entrypoint: `cmd/ai/rpc_handlers.go`
-- Agent loop: `pkg/agent/loop.go`
-- Agent context/model wiring: `pkg/agent/agent.go`
+### `cmd/ai/` — RPC Server & Wiring
+
+The RPC server is decomposed into topic-specific handler files, all sharing state via the `rpcApp` struct defined in `rpc_app.go`:
+
+- `rpc_app.go` — `rpcApp` struct: holds config, session, agent, compactor, skills; shared by all handlers
+- `rpc_handlers.go` — `runRPC()` entrypoint, main request loop
+- `rpc_setup.go` — `newRPCApp()` construction & dependency wiring
+- `rpc_config_handlers.go` — config-related RPC methods
+- `rpc_help_handlers.go` — help/documentation RPC methods
+- `rpc_message_handlers.go` — message handling (send, etc.)
+- `rpc_session_handlers.go` — session management RPC methods
+
+### `pkg/agent/` — Agent Loop
+
+The agent loop has been refactored from a monolithic function into a structured state machine:
+
+- `agent.go` — Agent struct, context/model wiring, public API (`Run`, `Compact`, etc.)
+- `loop.go` — Outer loop: turns, tool calls, compaction orchestration
+- `loop_state.go` — `loopState` struct & extracted methods (`performCompaction`, `processToolCalls`, `shouldStop`, `advanceTurn`, `cleanup`)
+- `compaction_controller.go` — Background compaction trigger logic
+- `executor.go` — Tool execution dispatch
+- `llm_stream.go`, `llm_stream_parse.go` — LLM streaming response handling
+- `llm_retry.go` — Retry logic for LLM API calls
+- `error_stack.go` — Error wrapping with stack traces
+- `checkpoint_manager.go` — AgentContext checkpoint/restore for recovery
+
+### Other Key Packages
+
 - Shared RPC types: `pkg/rpc/types.go`
 - Session storage/loading: `pkg/session/`
 - Prompt building: `pkg/prompt/builder.go`
 - Tool implementations: `pkg/tools/`
+- Compaction: `pkg/compact/` (implements `context.Compactor` interface via `ShouldCompact`, `Compact`, `EstimateTokens`)
+- Context management: `pkg/context/` (defines `AgentContext`, `Compactor` interface)
 
 ## Guardrails
 

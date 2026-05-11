@@ -1,284 +1,27 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	_ "net/http/pprof"
-	"os"
-	"path/filepath"
 	"time"
 
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
-	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
-	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/rpc"
-	"github.com/tiancaiamao/ai/pkg/session"
-	"github.com/tiancaiamao/ai/pkg/skill"
-	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration) error {
-	// Load configuration
-	configPath, err := config.GetDefaultConfigPath()
-	if err != nil {
-		return fmt.Errorf("failed to get config path: %w", err)
-	}
-
-	cfg, err := config.LoadConfig(configPath)
-	if err != nil {
-		slog.Warn("Failed to load config", "path", configPath, "error", err)
-		// Use defaults - LoadConfig already provides defaults
-		cfg, _ = config.LoadConfig(configPath)
-	}
-	// Initialize logger from config
-	log, err := cfg.Log.CreateLogger()
-	if err != nil {
-		return fmt.Errorf("failed to create logger: %w", err)
-	}
-
-	// Set the default slog logger
-	slog.SetDefault(log)
-	traceOutputPath := ""
-
-	// Convert config to llm.Model
-	model := cfg.GetLLMModel()
-
-	// Verify model type (ensures llm package is used)
-	var _ llm.Model = model
-
-	apiKey, err := config.ResolveAPIKey(model.Provider)
-	if err != nil {
-		return fmt.Errorf("missing API key: %w", err)
-	}
-
-	// Log model info
-	slog.Info("Model", "id", model.ID, "provider", model.Provider, "baseURL", model.BaseURL)
-	if cfg.Compactor != nil {
-		slog.Info("Compactor", "maxMessages", cfg.Compactor.MaxMessages, "maxTokens", cfg.Compactor.MaxTokens,
-			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
-			"reserveTokens", cfg.Compactor.ReserveTokens,
-			"toolCallCutoff", cfg.Compactor.ToolCallCutoff,
-			"toolSummaryStrategy", cfg.Compactor.ToolSummaryStrategy,
-			"toolSummaryAutomation", cfg.Compactor.ToolSummaryAutomation)
-	}
-
-	activeSpec, err := resolveActiveModelSpec(cfg)
-	if err != nil {
-		slog.Info("Model spec fallback", "error", err)
-	}
-	model = applyModelLimitsFromSpec(model, activeSpec)
-	currentModelInfo := modelInfoFromSpec(activeSpec)
-	currentModelInfo.MaxTokens = model.MaxTokens
-	currentModelInfo.ContextWindow = model.ContextWindow
-	currentContextWindow := activeSpec.ContextWindow
-
-	// Get current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	// Set workspace (startup path) in config
-	cfg.Workspace = cwd
-
-	sessionPath, err = normalizeSessionPath(sessionPath)
-	if err != nil {
-		return fmt.Errorf("failed to normalize session path: %w", err)
-	}
-
-	// Initialize session manager
-	sessionsDir, err := session.GetDefaultSessionsDir(cwd)
-	if err != nil {
-		return fmt.Errorf("failed to get sessions path: %w", err)
-	}
-
-	if sessionPath != "" {
-		sessionsDir = filepath.Dir(sessionPath)
-	}
-	sessionMgr := session.NewSessionManager(sessionsDir)
-
-	// Load current session
-	var sess *session.Session
-	sessionID := ""
-	sessionName := ""
-	if sessionPath != "" {
-		// Create load options with llm context (will be set later in createBaseContext)
-		opts := session.DefaultLoadOptions()
-		sess, err = session.LoadSessionLazy(sessionPath, opts)
-		if err != nil {
-			return fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
-		}
-		sessionID = sess.GetID()
-		sessionName = resolveSessionName(sessionMgr, sessionID)
-		_ = sessionMgr.SetCurrent(sessionID)
-		if err := sessionMgr.SaveCurrent(); err != nil {
-			slog.Info("Failed to update session metadata:", "value", err)
-		}
-		slog.Info("Loaded session", "path", sessionPath, "count", len(sess.GetMessages()))
-	} else {
-		// If no session path specified, try to restore the current session
-		sess, sessionID, err = sessionMgr.LoadCurrent()
-		if err != nil {
-			// No current session or failed to load, create a new one
-			name := time.Now().Format("20060102-150405")
-			sess, err = sessionMgr.CreateSession(name, name)
-			if err != nil {
-				return fmt.Errorf("failed to create new session: %w", err)
-			}
-			sessionID = sess.GetID()
-			sessionName = name
-			if err := sessionMgr.SetCurrent(sessionID); err != nil {
-				slog.Info("Failed to set current session:", "value", err)
-			}
-			if err := sessionMgr.SaveCurrent(); err != nil {
-				slog.Info("Failed to update session metadata:", "value", err)
-			}
-			slog.Info("Created new session", "id", sessionID, "count", len(sess.GetMessages()))
-		} else {
-			// Successfully restored previous session
-			sessionName = resolveSessionName(sessionMgr, sessionID)
-			slog.Info("Restored previous session", "id", sessionID, "name", sessionName, "count", len(sess.GetMessages()))
-		}
-	}
-
-	// Create tool registry and register tools
-	// Create a shared workspace object for all tools to track directory changes
-	ws, err := tools.NewWorkspace(cwd)
-	if err != nil {
-		return fmt.Errorf("failed to create workspace: %w", err)
-	}
-
-	registry := tools.NewRegistry()
-	readTool := tools.NewReadTool(ws)
-	editTool := tools.NewEditTool(ws)
-
-	// Apply hashline configuration if enabled
-	if cfg.ToolOutput != nil && cfg.ToolOutput.HashLines {
-		readTool.SetHashLines(true)
-	}
-	if cfg.Edit != nil && cfg.Edit.Mode == "hashline" {
-		editTool.SetEditMode(tools.EditModeHashline)
-	}
-
-	registry.Register(readTool)
-	registry.Register(tools.NewBashTool(ws))
-	registry.Register(tools.NewWriteTool(ws))
-	registry.Register(tools.NewGrepTool(ws))
-	registry.Register(editTool)
-	registry.Register(tools.NewChangeWorkspaceTool(ws))
-
-	// Create compactors for automatic context compression
-	compactorConfig := cfg.Compactor
-	if compactorConfig == nil {
-		compactorConfig = compact.DefaultConfig()
-	}
-	compactor := compact.NewCompactor(
-		compactorConfig,
-		model,
-		apiKey,
-		prompt.CompactorBasePrompt(),
-		currentContextWindow,
-	)
-
-	// LLM-driven mini compactor for lightweight context management
-	ctxManager := compact.NewContextManager(
-		compact.DefaultContextManagerConfig(),
-		model,
-		apiKey,
-		currentContextWindow,
-		prompt.ContextManagementSystemPrompt(),
-		compactor, // Pass compactor to enable compact tool
-	)
-
-	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
-
-	// Load skills
-	_, traceOutputPath, err = initTraceFileHandler(sessionID)
-	if err != nil {
-		slog.Warn("Failed to create trace handler", "outputDir", traceOutputPath, "error", err)
-	} else {
-		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	agentDir := filepath.Join(homeDir, ".ai")
-
-	skillLoader := skill.NewLoader(agentDir)
-	skillResult := skillLoader.Load(&skill.LoadOptions{
-		CWD:             cwd,
-		AgentDir:        agentDir,
-		SkillPaths:      nil,
-		IncludeDefaults: true,
+	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
+	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
+		customSystemPrompt: customSystemPrompt,
+		maxTurns:           maxTurns,
+		debugAddr:          debugAddr,
 	})
-
-	// Log skill diagnostics
-	if len(skillResult.Diagnostics) > 0 {
-		slog.Info("Skill loading:  diagnostics", "count", len(skillResult.Diagnostics))
-		for _, diag := range skillResult.Diagnostics {
-			if diag.Type == "error" {
-				slog.Error("Skill error", "type", diag.Type, "path", diag.Path, "message", diag.Message)
-			} else {
-				slog.Warn("Skill warning", "type", diag.Type, "path", diag.Path, "message", diag.Message)
-			}
-		}
+	if err != nil {
+		return err
 	}
-
-	slog.Info("Loaded  skills", "count", len(skillResult.Skills))
-	for _, s := range skillResult.Skills {
-		slog.Info("Skill", "name", s.Name, "description", s.Description)
-	}
-
-	// Load skill usage stats and register find_skill tool
-	skillStats := skill.LoadStats(filepath.Join(agentDir, "skill-stats.json"))
-	registry.Register(tools.NewFindSkillTool(skillResult.Skills, skillStats))
-
-	// --- Construct rpcApp ---
-	app := &rpcApp{
-		customSystemPrompt:    customSystemPrompt,
-		maxTurns:              maxTurns,
-		output:                output,
-		debugAddr:             debugAddr,
-		cfg:                   cfg,
-		configPath:            configPath,
-		model:                 model,
-		apiKey:                apiKey,
-		activeSpec:            activeSpec,
-		currentModelInfo:      currentModelInfo,
-		currentContextWindow:  currentContextWindow,
-		cwd:                   cwd,
-		agentDir:              agentDir,
-		sessionPath:           sessionPath,
-		sessionMgr:            sessionMgr,
-		sess:                  sess,
-		sessionID:             sessionID,
-		sessionName:           sessionName,
-		ws:                    ws,
-		registry:              registry,
-		compactor:             compactor,
-		ctxManager:            ctxManager,
-		compactorConfig:       compactorConfig,
-		traceOutputPath:       traceOutputPath,
-		skillResult:           skillResult,
-		skillStats:            skillStats,
-		autoCompactionEnabled: compactorConfig.AutoCompact,
-		steeringMode:          "all",
-		followUpMode:          "one-at-a-time",
-		currentThinkingLevel:  "high",
-		showThinking:          true,
-		showTools:             true,
-		showPrefix:            true,
-		busyMode:              "steer",
-	}
-
-	app.initHelpers()
 
 	// --- Create agent context ---
 	agentCtx := app.createBaseContext()
@@ -287,14 +30,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
-		session:   sess,
-		compactor: compactor,
+		session:   app.sess,
+		compactor: app.compactor,
 		writer:    sessionWriter,
 	}
 	app.sessionWriter = sessionWriter
 	app.sessionComp = sessionComp
 
-	concurrencyConfig := cfg.Concurrency
+	concurrencyConfig := app.cfg.Concurrency
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
@@ -303,17 +46,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		concurrencyConfig.QueueTimeout,
 	)
 
-	toolOutputConfig := cfg.ToolOutput
+	toolOutputConfig := app.cfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
 	}
 	app.toolOutputConfig = toolOutputConfig
 
 	// Build LoopConfig with all settings
-	loopCfg := cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{ctxManager, sessionComp}),
-		config.WithContextWindow(currentContextWindow),
-		config.WithToolCallCutoff(compactorConfig.ToolCallCutoff),
+	loopCfg := app.cfg.ToLoopConfig(
+		config.WithCompactors([]agent.Compactor{app.ctxManager, sessionComp}),
+		config.WithContextWindow(app.currentContextWindow),
+		config.WithToolCallCutoff(app.compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),
 		config.WithToolOutputLimits(agent.ToolOutputLimits{
 			MaxChars: toolOutputConfig.MaxChars,
@@ -321,13 +64,13 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	)
 
 	// Set model and apiKey
-	loopCfg.Model = model
-	loopCfg.APIKey = apiKey
-	loopCfg.GetWorkingDir = ws.GetCWD
-	loopCfg.GetStartupPath = ws.GetInitialCWD
+	loopCfg.Model = app.model
+	loopCfg.APIKey = app.apiKey
+	loopCfg.GetWorkingDir = app.ws.GetCWD
+	loopCfg.GetStartupPath = app.ws.GetInitialCWD
 	loopCfg.GetSessionDir = func() string {
-		if sess != nil {
-			return sess.GetDir()
+		if app.sess != nil {
+			return app.sess.GetDir()
 		}
 		return ""
 	}
@@ -340,7 +83,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.loopCfg = loopCfg
 
 	// Create agent with LoopConfig
-	ag := agent.NewAgentFromConfigWithContext(model, apiKey, agentCtx, loopCfg)
+	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 	ag.SetThinkingLevel("high")
 	app.ag = ag
@@ -355,8 +98,8 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// Initialize checkpoint manager for persistent state
-	if sess != nil {
-		sessionDir := sess.GetDir()
+	if app.sess != nil {
+		sessionDir := app.sess.GetDir()
 		if mgr, err := agent.NewAgentContextCheckpointManager(sessionDir); err != nil {
 			slog.Warn("Failed to create checkpoint manager", "error", err)
 			app.checkpointMgr = nil
@@ -370,7 +113,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 	}
 
-	slog.Info("Auto-compact enabled", "maxMessages", compactorConfig.MaxMessages, "maxTokens", compactorConfig.MaxTokens)
+	slog.Info("Auto-compact enabled", "maxMessages", app.compactorConfig.MaxMessages, "maxTokens", app.compactorConfig.MaxTokens)
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
@@ -405,7 +148,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			Description: cmd.Description,
 		})
 	}
-	for _, s := range skillResult.Skills {
+	for _, s := range app.skillResult.Skills {
 		app.skillCommands = append(app.skillCommands, rpc.SlashCommand{
 			Name:        "/skill:" + s.Name,
 			Description: s.Description,
@@ -422,7 +165,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.startDebugServer()
 
 	// --- Run RPC server ---
-	slog.Info("RPC server started", "model", model.ID, "cwd", cwd)
+	slog.Info("RPC server started", "model", app.model.ID, "cwd", app.cwd)
 	slog.Info("Waiting for commands...")
 	runErr := server.RunWithIO(input, output)
 
@@ -439,5 +182,3 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Agent completed, exiting...")
 	return runErr
 }
-
-// getWorkflowStatus reads .workflow/state.json and tasks.md to return workflow state.

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"math/rand"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -151,245 +150,29 @@ func runInnerLoop(
 	span := traceevent.StartSpan(ctx, "runInnerLoop", traceevent.CategoryEvent)
 	defer span.End()
 
-	const maxCompactionRecoveries = 1
-	compactionRecoveries := 0
-	loopGuard := newToolLoopGuard(config)
-	malformedToolCallRecoveries := 0
-	emptyResponseRetries := 0
-
-	// Turn counter for MaxTurns limit
-	turnCount := 0
-
-	// Initialize checkpoint manager if enabled
-	var checkpointMgr *AgentContextCheckpointManager
-	var checkpointErr error
-	if config.EnableCheckpoint && config.GetSessionDir != nil {
-		checkpointMgr, checkpointErr = NewAgentContextCheckpointManager(config.GetSessionDir())
-		if checkpointErr != nil {
-			slog.Warn("[Loop] Failed to initialize checkpoint manager", "error", checkpointErr)
-		}
-		defer func() {
-			if checkpointMgr != nil {
-				_ = checkpointMgr.Close()
-			}
-		}()
-	}
+	state := newLoopState(config, agentCtx, stream, newMessages)
+	defer state.cleanup()
 
 	for {
-		// Check for context cancellation
-		select {
-		case <-ctx.Done():
-			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
-			return
-		default:
-		}
-
-		// Check for max turns limit
-		if config.MaxTurns > 0 && turnCount >= config.MaxTurns {
-			slog.Info("[Loop] max turns limit reached",
-				"turns", turnCount,
-				"maxTurns", config.MaxTurns)
-			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
+		if state.shouldStop(ctx) {
 			return
 		}
+		state.advanceTurn()
 
-		turnCount++
-
-		// Try each compactor in order (first trigger wins).
-		// Emit compaction_start BEFORE executing Compact() so the user sees
-		// immediate feedback instead of waiting for the full compaction to complete.
-		var compacted *agentctx.CompactionResult
-		var compactErr error
-		var compactionStarted bool
-		var before int
-		var compactionSpan *traceevent.Span
-		for _, c := range config.Compactors {
-			if c.ShouldCompact(ctx, agentCtx) {
-				if !compactionStarted {
-					before = len(agentCtx.RecentMessages)
-					compactionSpan = traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-						traceevent.Field{Key: "source", Value: "pre_llm_threshold"},
-						traceevent.Field{Key: "auto", Value: true},
-						traceevent.Field{Key: "before_messages", Value: before},
-						traceevent.Field{Key: "trigger", Value: "pre_llm_threshold"},
-					)
-					stream.Push(NewCompactionStartEvent(CompactionInfo{
-						Auto:    true,
-						Before:  before,
-						Trigger: "pre_llm_threshold",
-					}))
-					compactionStarted = true
-				}
-				slog.Info("[Loop] Pre-LLM compaction triggered", "compactor", fmt.Sprintf("%T", c))
-				compacted, compactErr = c.Compact(agentCtx)
-				if compactErr == nil {
-					break // First successful compaction wins
-				} else {
-					slog.Warn("[Loop] Pre-LLM compaction failed", "compactor", fmt.Sprintf("%T", c), "error", compactErr)
-				}
-			}
+		// Pre-LLM compaction: check thresholds and compact if needed.
+		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
+		if compacted != nil {
+			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
 		}
 
-		// Process compaction result
-		if compactionStarted {
-			if compactErr != nil {
-				// Compaction triggered but all compactors failed
-				slog.Warn("[Loop] Compaction triggered but all compactors failed", "error", compactErr)
-				compactionSpan.AddField("error", true)
-				compactionSpan.AddField("error_message", compactErr.Error())
-				compactionSpan.End()
-				stream.Push(NewCompactionEndEvent(CompactionInfo{
-					Auto:    true,
-					Before:  before,
-					Error:   compactErr.Error(),
-					Trigger: "pre_llm_threshold",
-				}))
-			} else if compacted == nil {
-				// ShouldCompact returned true but Compact returned nil result without error
-				slog.Warn("[Loop] Compaction triggered but returned nil result")
-				compactionSpan.End()
-				stream.Push(NewCompactionEndEvent(CompactionInfo{
-					Auto:    true,
-					Before:  before,
-					Trigger: "pre_llm_threshold",
-				}))
-			} else {
-				// Note: Compactor now directly modifies agentCtx.RecentMessages
-				// We just need to update the summary.
-				// Compact events are already appended via OnCompactEvent in the tools.
-				agentCtx.LastCompactionSummary = compacted.Summary
-				after := len(agentCtx.RecentMessages)
-				compactionSpan.AddField("after_messages", after)
-				compactionSpan.End()
-				stream.Push(NewCompactionEndEvent(CompactionInfo{
-					Type:              compacted.Type,
-					Auto:              true,
-					Before:            before,
-					After:             after,
-					Trigger:           "pre_llm_threshold",
-					TokensBefore:      compacted.TokensBefore,
-					TokensAfter:       compacted.TokensAfter,
-					TruncatedCount:    compacted.TruncatedCount,
-					LLMContextUpdated: compacted.LLMContextUpdated,
-				}))
-
-				// Create checkpoint after compaction to preserve AgentState for resume
-				// Only create checkpoint if LLM context was updated (meaningful state change)
-				if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-					if compacted.LLMContextUpdated {
-						llmContextContent := agentCtx.LLMContext
-						if _, err := checkpointMgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
-							slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
-						} else {
-							slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "pre_llm_threshold", "turn", turnCount)
-						}
-					} else {
-						slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "pre_llm_threshold", "turn", turnCount)
-					}
-				}
-			}
-		}
-
-		// Stream assistant response with retry logic
+		// Stream assistant response with retry logic.
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
-			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && compactionRecoveries < maxCompactionRecoveries {
-				before := len(agentCtx.RecentMessages)
-				compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-					traceevent.Field{Key: "source", Value: "context_limit_recovery"},
-					traceevent.Field{Key: "auto", Value: true},
-					traceevent.Field{Key: "before_messages", Value: before},
-					traceevent.Field{Key: "trigger", Value: "context_limit_recovery"},
-				)
-				stream.Push(NewCompactionStartEvent(CompactionInfo{
-					Auto:    true,
-					Before:  before,
-					Trigger: "context_limit_recovery",
-				}))
-
-				// Try each compactor in order (first success wins)
-				var recoveryCompacted *agentctx.CompactionResult
-				var recoveryErr error
-				for _, c := range config.Compactors {
-					recoveryCompacted, recoveryErr = c.Compact(agentCtx)
-					if recoveryErr == nil {
-						break // First successful compaction wins
-					}
-				}
-
-				if recoveryErr != nil {
-					slog.Error("All compactors failed for recovery", "error", recoveryErr)
-					compactionSpan.AddField("error", true)
-					compactionSpan.AddField("error_message", recoveryErr.Error())
-					if stack := ErrorStack(recoveryErr); stack != "" {
-						compactionSpan.AddField("error_stack", stack)
-					}
-					compactionSpan.End()
-					stream.Push(NewCompactionEndEvent(CompactionInfo{
-						Auto:    true,
-						Before:  before,
-						Error:   recoveryErr.Error(),
-						Trigger: "context_limit_recovery",
-					}))
-				} else {
-					compactionRecoveries++
-					if recoveryCompacted != nil {
-						// Compactor directly modified agentCtx.RecentMessages
-						agentCtx.LastCompactionSummary = recoveryCompacted.Summary
-						// Compact events are already appended via OnCompactEvent in the tools.
-					}
-					compactionSpan.AddField("after_messages", len(agentCtx.RecentMessages))
-					compactionSpan.End()
-					stream.Push(NewCompactionEndEvent(CompactionInfo{
-						Type: func() string {
-							if recoveryCompacted != nil {
-								return recoveryCompacted.Type
-							}
-							return ""
-						}(),
-						Auto:    true,
-						Before:  before,
-						After:   len(agentCtx.RecentMessages),
-						Trigger: "context_limit_recovery",
-						TokensBefore: func() int {
-							if recoveryCompacted != nil {
-								return recoveryCompacted.TokensBefore
-							}
-							return 0
-						}(),
-						TokensAfter: func() int {
-							if recoveryCompacted != nil {
-								return recoveryCompacted.TokensAfter
-							}
-							return 0
-						}(),
-						TruncatedCount: func() int {
-							if recoveryCompacted != nil {
-								return recoveryCompacted.TruncatedCount
-							}
-							return 0
-						}(),
-						LLMContextUpdated: func() bool {
-							if recoveryCompacted != nil {
-								return recoveryCompacted.LLMContextUpdated
-							}
-							return false
-						}(),
-					}))
-
-					// Create checkpoint after compaction to preserve AgentState for resume
-					// Only create checkpoint if LLM context was updated (meaningful state change)
-					if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() {
-						if recoveryCompacted != nil && recoveryCompacted.LLMContextUpdated {
-							if _, err := checkpointMgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
-								slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
-							} else {
-								slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", "context_limit_recovery", "turn", turnCount)
-							}
-						} else {
-							slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", "context_limit_recovery", "turn", turnCount)
-						}
-					}
+			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && state.compactionRecs < maxCompactionRecoveries {
+				recoveryResult, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
+				if recoveryErr == nil {
+					recoveryUpdated := recoveryResult != nil && recoveryResult.LLMContextUpdated
+					saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, recoveryUpdated, state.turnCount, "context_limit_recovery")
 					continue
 				}
 			}
@@ -409,113 +192,58 @@ func runInnerLoop(
 		}
 
 		if msg == nil {
-			// Message was nil (aborted)
 			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages, *msg)
-		newMessages = append(newMessages, *msg)
+		state.newMessages = append(state.newMessages, *msg)
 
-		// Update AgentState with token usage after successful LLM response
+		// Update AgentState with token usage after successful LLM response.
 		if msg.Usage != nil && msg.Usage.TotalTokens > 0 {
-			// Use context window from config if available, otherwise use a default
-			const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
+			const defaultContextWindow = 200000
 			tokensMax := defaultContextWindow
 			if config.ContextWindow > 0 {
 				tokensMax = config.ContextWindow
 			}
-			// Update AgentState with usage info
 			agentCtx.AgentState.TokensUsed = msg.Usage.TotalTokens
 			agentCtx.AgentState.TokensLimit = tokensMax
 			agentCtx.AgentState.TotalTurns = len(agentCtx.RecentMessages)
 		}
 
-		// Check for error or abort (special cases that end the loop immediately)
+		// Check for error or abort (special cases that end the loop immediately).
 		if msg.StopReason == "error" || msg.StopReason == "aborted" {
 			stream.Push(NewTurnEndEvent(msg, nil))
 			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 			return
 		}
 
-		// Check for non-success stopReason and notify user
-		// This handles network_error, rate_limit_error, timeout, and any other
-		// error conditions that should be reported to the user instead of silent failure.
+		// Check for non-success stopReason and notify user.
 		if sanitized := sanitizeMessageForNonSuccessStopReason(msg); sanitized {
 			slog.Warn("[Loop] LLM request ended with non-success stopReason", "stopReason", msg.StopReason)
 			traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
 				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
-			// Update the message in both arrays to include the error notification
 			agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
-			newMessages[len(newMessages)-1] = *msg
+			state.newMessages[len(state.newMessages)-1] = *msg
 		}
 
-		// Check for tool calls
-		toolCalls := msg.ExtractToolCalls()
-		hasMoreToolCalls := len(toolCalls) > 0
-		if hasMoreToolCalls {
-			malformedToolCallRecoveries = 0
-		}
-		if hasMoreToolCalls && loopGuard != nil {
-			if blocked, reason := loopGuard.Observe(toolCalls); blocked {
-				slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
-				stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: reason}))
-				traceevent.Log(ctx, traceevent.CategoryEvent, "tool_loop_guard_triggered",
-					traceevent.Field{Key: "reason", Value: reason},
-					traceevent.Field{Key: "call_count", Value: len(toolCalls)},
-				)
-				sanitizeMessageForToolLoopGuard(msg, reason)
-				agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
-				newMessages[len(newMessages)-1] = *msg
-				hasMoreToolCalls = false
-			}
-		}
-
-		var toolResults []agentctx.AgentMessage
-		if hasMoreToolCalls {
-			toolResults = executeToolCalls(ctx, agentCtx, agentCtx.Tools, agentCtx.GetAllowedToolsMap(), msg, stream, config.Executor, config.Metrics, config.ToolOutput)
-			for _, result := range toolResults {
-				agentCtx.RecentMessages = append(agentCtx.RecentMessages, result)
-				newMessages = append(newMessages, result)
-			}
-		}
+		hasMore, toolResults := state.processToolCalls(ctx, msg)
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
-		// Increment tool call counter for compactor trigger intervals
-		if hasMoreToolCalls {
-			agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
-		}
-
-		// Note: toolResult persistence is handled by the sessionWriter (via tool_execution_end
-		// events) in all modes (RPC, headless, json). We do NOT write toolResults to the journal
-		// here to avoid duplicating each message in messages.jsonl.
-
-		// Create checkpoint after update_llm_context tool execution
-		if checkpointMgr != nil && checkpointMgr.ShouldCheckpoint() && hasToolResultNamed(toolResults, "update_llm_context") {
-			llmContextContent := agentCtx.LLMContext
-			if _, err := checkpointMgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
-				slog.Warn("[Loop] Failed to create checkpoint after update_llm_context", "error", err, "turn", turnCount)
-			} else {
-				slog.Info("[Loop] Checkpoint created after update_llm_context", "turn", turnCount)
-			}
-		}
-
-		// If no more tool calls, end the conversation
-		if !hasMoreToolCalls {
-			if maybeRecoverMalformedToolCall(ctx, agentCtx, &newMessages, stream, msg, &malformedToolCallRecoveries) {
+		// If no more tool calls, end the conversation.
+		if !hasMore {
+			if maybeRecoverMalformedToolCall(ctx, agentCtx, &state.newMessages, stream, msg, &state.malformedRecs) {
 				continue
 			}
 
-			// Check for empty response: stop_reason=stop but no actionable content
-			// (no text, no tool calls — only thinking content). This can happen with
-			// models like glm-5.1 that sometimes return only thinking and stop.
-			if msg.StopReason == "stop" && isEmptyActionableResponse(msg) && emptyResponseRetries < defaultEmptyResponseMaxRetries {
-				emptyResponseRetries++
+			// Check for empty response: stop_reason=stop but no actionable content.
+			if msg.StopReason == "stop" && isEmptyActionableResponse(msg) && state.emptyRetries < defaultEmptyResponseMaxRetries {
+				state.emptyRetries++
 				slog.Warn("[Loop] LLM returned stop_reason=stop with empty actionable output (no text, no tool calls); retrying",
 					"stopReason", msg.StopReason,
-					"turn", turnCount,
-					"retry_attempt", emptyResponseRetries,
+					"turn", state.turnCount,
+					"retry_attempt", state.emptyRetries,
 					"max_retries", defaultEmptyResponseMaxRetries,
 				)
 				continue

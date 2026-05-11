@@ -44,19 +44,19 @@ func (cc *CompactionController) MaybeCompact(trigger string, sess *session.Sessi
 		return
 	}
 
-	messages := cc.deps.Agent.GetMessages()
-	if !cc.deps.Compactor.ShouldCompactOld(messages) {
+		if !cc.deps.Compactor.ShouldCompact(context.Background(), cc.deps.Agent.GetContext()) {
 		return
 	}
 	if !sess.CanCompact(cc.deps.Compactor) {
+		messages := cc.deps.Agent.GetMessages()
 		slog.Info("Pre-request compaction skipped: session not compactable",
 			"trigger", trigger,
 			"messages", len(messages),
-			"estimatedTokens", cc.deps.Compactor.EstimateContextTokensOld(messages))
+			"estimatedTokens", cc.deps.Compactor.EstimateTokens(messages))
 		return
 	}
 
-	beforeCount := len(messages)
+		beforeCount := len(cc.deps.Agent.GetMessages())
 	compactionInfo := CompactionInfo{
 		Auto:    true,
 		Before:  beforeCount,

@@ -699,10 +699,8 @@ func (app *rpcApp) handleShow(args string) (any, error) {
 	switch subCmd {
 	case "settings", "":
 		return app.handleShowSettings()
-	case "pipeline":
-		return map[string]any{"message": "pipeline info not yet available"}, nil
-	default:
-		return nil, fmt.Errorf("usage: /show settings|pipeline")
+			default:
+		return nil, fmt.Errorf("usage: /show settings")
 	}
 }
 

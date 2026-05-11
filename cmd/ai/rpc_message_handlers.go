@@ -25,7 +25,7 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 	slog.Info("Received compact")
 	beforeCount := len(app.ag.GetMessages())
 
-	estimatedTokens := app.compactor.EstimateContextTokensOld(app.ag.GetMessages())
+		estimatedTokens := app.compactor.EstimateTokens(app.ag.GetMessages())
 	keepTokens := app.compactor.KeepRecentTokens()
 
 	if !app.sess.CanCompact(app.compactor) {

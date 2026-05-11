@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -129,4 +130,49 @@ func (m *AgentContextCheckpointManager) Close() error {
 		return nil
 	}
 	return m.journal.Close()
+}
+
+// initCheckpointManager creates a checkpoint manager from LoopConfig.
+// Returns nil manager (no error) if checkpoint is disabled or no session dir.
+func initCheckpointManager(config *LoopConfig) *AgentContextCheckpointManager {
+	if !config.EnableCheckpoint || config.GetSessionDir == nil {
+		return nil
+	}
+	mgr, err := NewAgentContextCheckpointManager(config.GetSessionDir())
+	if err != nil {
+		slog.Warn("[Loop] Failed to initialize checkpoint manager", "error", err)
+		return nil
+	}
+	return mgr
+}
+
+// saveCheckpointAfterCompaction creates a checkpoint if LLM context was updated
+// during compaction. This avoids saving checkpoints for trivial compactions.
+func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, llmContextUpdated bool, turnCount int, trigger string) {
+	if mgr == nil || !mgr.ShouldCheckpoint() {
+		return
+	}
+	if !llmContextUpdated {
+		slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", trigger, "turn", turnCount)
+		return
+	}
+	if _, err := mgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+		slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+	} else {
+		slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", trigger, "turn", turnCount)
+	}
+}
+
+// saveCheckpointAfterToolExecution creates a checkpoint after specific tool
+// executions that meaningfully update state (e.g. update_llm_context).
+func saveCheckpointAfterToolExecution(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, turnCount int, toolName string) {
+	if mgr == nil || !mgr.ShouldCheckpoint() {
+		return
+	}
+	llmContextContent := agentCtx.LLMContext
+	if _, err := mgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
+		slog.Warn("[Loop] Failed to create checkpoint after "+toolName, "error", err, "turn", turnCount)
+	} else {
+		slog.Info("[Loop] Checkpoint created after "+toolName, "turn", turnCount)
+	}
 }

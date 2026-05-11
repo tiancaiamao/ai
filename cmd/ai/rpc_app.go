@@ -265,19 +265,19 @@ func (app *rpcApp) initHelpers() {
 			return
 		}
 
-		messages := app.ag.GetMessages()
-		if !app.compactor.ShouldCompactOld(messages) {
+				if !app.compactor.ShouldCompact(context.Background(), app.ag.GetContext()) {
 			return
 		}
 		if !app.sess.CanCompact(app.compactor) {
+			messages := app.ag.GetMessages()
 			slog.Info("Pre-request compaction skipped: session not compactable",
 				"trigger", trigger,
 				"messages", len(messages),
-				"estimatedTokens", app.compactor.EstimateContextTokensOld(messages))
+				"estimatedTokens", app.compactor.EstimateTokens(messages))
 			return
 		}
 
-		beforeCount := len(messages)
+				beforeCount := len(app.ag.GetMessages())
 		compactionInfo := agent.CompactionInfo{
 			Auto:    true,
 			Before:  beforeCount,
