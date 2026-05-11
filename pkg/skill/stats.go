@@ -72,9 +72,13 @@ func LoadStats(path string) *SkillStatsFile {
 		return s
 	}
 
-	s.Version = file.Version
+		s.Version = file.Version
 	if file.TopN > 0 {
 		s.TopN = file.TopN
+	}
+	// Upgrade stale topN values to current default
+	if s.TopN < DefaultTopN {
+		s.TopN = DefaultTopN
 	}
 	if file.Entries != nil {
 		s.Entries = file.Entries
