@@ -37,9 +37,9 @@ pending → claimed → running → done
 2. ag task ls                   # 确认有 pending tasks
 3. ai serve --help              # 手动确认 ai serve 可用（doctor 不检查这个）
 4. plan-lint PLAN.yml           # 单独跑一次，exit 0 才继续
-5. ag task import-plan PLAN.yml # 导入
-6. ag task run --detach --design docs/design/xxx.md
-7. ag task log                  # 跟踪
+6. ag task import-plan PLAN.yml # 导入
+7. ag task run --detach --design docs/design/xxx.md --callback "ag agent prompt <main-id> 'scheduler done'"
+8. 主 agent 继续工作或等待，scheduler 完成后自动回调
 ```
 
 **为什么 plan-lint 要在 import 前单独跑：** plan-lint exit 0 for warnings / exit 1 for errors。如果 plan 有 error（控制字符、空字段），import 进去就是脏数据。
@@ -76,9 +76,16 @@ git branch --show-current
 ag task run --detach \
   --design docs/design/xxx.md \
   --max-concurrent 2 \
-  --timeout 600
+  --timeout 600 \
+  --callback "ag agent prompt <main-id> 'scheduler done'"
+```
 
-# Monitor progress:
+**Callback 机制（推荐）：** `--callback` 参数指定 scheduler 全部完成后的回调命令。
+scheduler 完成后自动执行该命令，主 agent 被 `prompt` 唤醒，无需轮询。
+
+如果不支持 `--callback`，退化为手动监控：
+
+```bash
 ag task log              # tail -f style, follow scheduler output
 ag task log --tail 20    # snapshot last 20 lines
 ag task ls               # see current task statuses
@@ -174,10 +181,34 @@ ag task ls --status running
 ## Tools
 
 - `ag task run` — 启动 scheduler（核心命令）
+- `ag task wait [timeout]` — 阻塞等待所有任务完成（替代重复轮询 `ag task ls`）
 - `ag task ls` — 查看任务列表
 - `ag task show <id>` — 查看任务详情
 - `ag task transition <id> <state>` — 手动状态转换
 - `ag task retry <id>` — 手动重试
+
+## Monitoring Pattern
+
+**❌ 不要重复轮询：**
+```bash
+# BAD — 会触发 loop guard
+sleep 25 && ag task ls
+sleep 25 && ag task ls
+sleep 25 && ag task ls
+```
+
+**✅ 用 tmux + wait：**
+```bash
+# 1. scheduler 在 tmux 中运行
+tmux new -s scheduler -d -c /path/to/worktree "ag task run --design docs/design.md --timeout 1200"
+
+# 2. 阻塞等待所有任务完成（可设超时）
+ag task wait 3600
+
+# 3. 检查结果
+ag task ls
+git log --oneline -10
+```
 
 ## ⛔ MANDATORY — Self-Check
 
@@ -250,6 +281,40 @@ plan-lint 现在会检测这些，但必须在 import 前跑。
 ### 5. Worker 的 done-when 标准模糊
 task description 里的 done-when 如果写得模糊，worker 会按自己的标准完成。
 **修复：** 在 plan 阶段用 reviewer 检查 done-when 是否具体、可验证。
+
+### 6. Worker 超时但实际已完成（"成功的失败"）
+**症状：** scheduler 标记 task failed ("timed out after 18m")，但 git log 显示 worker 已经 commit 了代码，测试也通过。
+**根因：** scheduler 的 `checkRunning` 函数里，超时检查在完成检查（`checkAIServeRun`）之前执行。Worker 已经完成工作（events.jsonl 里有 `agent_end`），但 poll 时先命中超时分支，直接 Fail，`checkAIServeRun` 永远没机会运行。
+**已修复（ag v2）：** 调整 `checkRunning` 的检查顺序——先检查 events.jsonl 的 `agent_end`（完成检测），再检查超时。超时作为兜底，并且加了 `hasWorkerCommit()` 二次兜底检查 git commit。
+**检测方法（如仍遇到）：**
+```bash
+# 1. 看 failed task 的 git log（检查是否有 worker commit）
+git log --oneline -5
+
+# 2. 检查 worker 的 events.jsonl 是否有 agent_end
+cat ~/.ai/runs/<runID>/events.jsonl | python3 -c "
+import sys,json
+for l in sys.stdin:
+    d=json.loads(l.strip())
+    if d.get('type')=='agent_end': print('FOUND agent_end'); break
+else: print('NO agent_end')
+"
+
+# 3. 验证代码质量
+go build ./... && go test ./affected/... -v
+```
+
+### 7. Worker 分支残留
+Worker 在执行时会 `git checkout -b refactor/T010-xxx`。如果 task failed，分支还在。
+**后果：** 下一个 task 的 worker 可能从错误分支开始，或者 merge 冲突。
+**修复：** failed task 处理完后，检查 `git branch` 清理残留分支。手动 merge 或 rebase 到正确的 base branch。
+
+### 8. Worker 修改未 Commit
+Worker 做了代码修改但没有 git commit。Reviewer pass 后也没有 commit。
+**后果：** 所有 worker 的改动堆积在工作区（unstaged/uncommitted），任务完成后代码丢失风险高，且无法追踪每个 task 的变更。
+**根因：** `spawnReviewer` 在 REVIEW_PASS 后直接 `Done()`，没有 `git add + commit`。
+**已修复（ag v2）：** 添加 `commitChanges()` 函数，在 reviewer pass 后自动 `git add -A && git commit`。Review fail 时也 best-effort commit，避免工作丢失。
+**手动补救（如已发生）：** 在 worktree 中 `git add -A && git commit -m "refactor: worker changes batch"`。
 
 ## Health Signals
 

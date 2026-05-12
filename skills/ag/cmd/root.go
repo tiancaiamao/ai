@@ -73,13 +73,14 @@ var taskRunCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		checkBinaryStaleness()
 
-		maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
+				maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
 		maxRetries, _ := cmd.Flags().GetInt("max-retries")
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
 		pollMs, _ := cmd.Flags().GetInt("poll")
 		design, _ := cmd.Flags().GetString("design")
 		skipReview, _ := cmd.Flags().GetBool("skip-review")
 		detach, _ := cmd.Flags().GetBool("detach")
+		callback, _ := cmd.Flags().GetString("callback")
 
 		cfg := task.DefaultSchedulerConfig()
 		cfg.MaxConcurrent = maxConcurrent
@@ -88,6 +89,7 @@ var taskRunCmd = &cobra.Command{
 		cfg.PollInterval = time.Duration(pollMs) * time.Millisecond
 		cfg.DesignFile = design
 		cfg.SkipReview = skipReview
+		cfg.Callback = callback
 
 		cwd, _ := os.Getwd()
 		cfg.WorkDir = cwd
@@ -1105,7 +1107,8 @@ func init() {
 	taskRunCmd.Flags().Int("poll", 5000, "Poll interval in milliseconds")
 	taskRunCmd.Flags().String("design", "", "Path to design.md for worker context")
 	taskRunCmd.Flags().Bool("skip-review", false, "Skip review phase")
-		taskRunCmd.Flags().Bool("detach", false, "Run scheduler in background (log to .ag/scheduler.log)")
+	taskRunCmd.Flags().Bool("detach", false, "Run scheduler in background (log to .ag/scheduler.log)")
+	taskRunCmd.Flags().String("callback", "", "Shell command to execute when all tasks complete (e.g. 'ag agent prompt main \"done\"')")
 	taskLogCmd.Flags().Int("tail", 0, "Show last N lines (default: follow mode)")
 	taskRetryCmd.Flags().Int("max-retries", 3, "Max retries allowed")
 

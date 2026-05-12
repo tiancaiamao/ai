@@ -305,6 +305,71 @@ func TestConvertMessagesToLLMRetainsResolvedToolCallsWhenPartiallyMatched(t *tes
 	}
 }
 
+func TestConvertMessagesToLLMPreservesThinkingContent(t *testing.T) {
+	// Verify that ThinkingContent blocks are extracted into LLMMessage.Thinking
+	// so they get serialized as reasoning_content for providers like DeepSeek.
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ThinkingContent{Type: "thinking", Thinking: "I need to read the file first"},
+		agentctx.TextContent{Type: "text", Text: "Let me check that file."},
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
+	}
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("read a.go"),
+		assistant,
+		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "file contents"},
+		}, false),
+	})
+
+	// Find the assistant message with tool calls
+	var found *llm.LLMMessage
+	for i := range llmMessages {
+		if llmMessages[i].Role == "assistant" && len(llmMessages[i].ToolCalls) > 0 {
+			found = &llmMessages[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected assistant message with tool calls")
+	}
+	if found.Thinking != "I need to read the file first" {
+		t.Fatalf("expected thinking content to be preserved, got %q", found.Thinking)
+	}
+
+	// Verify it serializes as reasoning_content
+	raw, err := json.Marshal(found)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if !strings.Contains(string(raw), "reasoning_content") {
+		t.Fatalf("expected reasoning_content in serialized JSON, got: %s", raw)
+	}
+}
+
+func TestConvertMessagesToLLMThinkingWithoutToolCalls(t *testing.T) {
+	// Even without tool calls, thinking should be preserved in the LLM message
+	// (providers may or may not use it, but it should be available).
+	assistant := agentctx.NewAssistantMessage()
+	assistant.Content = []agentctx.ContentBlock{
+		agentctx.ThinkingContent{Type: "thinking", Thinking: "Let me analyze this..."},
+		agentctx.TextContent{Type: "text", Text: "The answer is 42."},
+	}
+
+	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+		agentctx.NewUserMessage("What is the answer?"),
+		assistant,
+	})
+
+	if len(llmMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(llmMessages))
+	}
+	if llmMessages[1].Thinking != "Let me analyze this..." {
+		t.Fatalf("expected thinking to be preserved, got %q", llmMessages[1].Thinking)
+	}
+}
+
 func assertNoOrphanedToolProtocol(t *testing.T, messages []llm.LLMMessage) {
 	t.Helper()
 	pending := map[string]struct{}{}

@@ -28,11 +28,18 @@ tools: [bash]
 ## 执行流程
 
 1. **解析用户输入** - 识别 review 模式（PR/commit/uncommitted）
-2. **获取代码变更** - 通过 gh pr diff 或 git 命令获取变更
-3. **准备任务文件** - 将大内容（如 diff）写入文件，准备任务描述
-4. **启动 agent** - 使用 `ag agent spawn` + review system prompt
-5. **等待完成** - 使用 `ag agent wait` 等待 agent 执行完毕
-6. **读取结果** - 从文件读取 JSON 输出，格式化展示
+2. **确定项目目录和变更范围** - 解析出项目路径和需要 review 的变更描述
+3. **启动 agent** - 使用 `ag agent spawn` + review system prompt，传入项目目录和变更说明
+4. **等待完成** - 使用 `ag agent wait` 等待 agent 执行完毕
+5. **读取结果** - 从文件读取 JSON 输出，格式化展示
+
+### 为什么不生成 diff 文件？
+
+Agent 足够智能，给它项目目录和变更说明，它可以自己执行 `git diff`、读取源文件、
+理解上下文。预生成 diff 文件会带来问题：
+- 大 diff 可能超出 read tool 的限制，导致 agent 被迫多次 grep/read
+- 多次读取导致 context 膨胀，触发 compaction 浪费大量时间
+- Agent 自己 `git diff` 可以灵活控制范围，按需读取相关源文件
 
 ## Review System Prompt
 
@@ -70,40 +77,43 @@ tools: [bash]
 
 ## 示例
 
-### Review PR (codex backend)
+### Review PR
 
 ```bash
-# Proxy env is handled automatically by ag for codex backend
-cp /Users/genius/.ai/skills/ag/backends.yaml /tmp/
-cd /tmp
-
 PR_NUM=42
-gh pr diff $PR_NUM > /tmp/pr${PR_NUM}.diff
-
+# 让 agent 在项目目录中自己执行 git diff，直接读源文件
 ag agent spawn reviewer-$PR_NUM \
-  --backend codex \
   --system @/Users/genius/.ai/skills/review/reviewer.md \
-  --input "Read the diff from /tmp/pr${PR_NUM}.diff and review it. Write result to /tmp/review-${PR_NUM}.json"
+  --input "You are in the project directory. Review PR #${PR_NUM}. Steps: 1) Run 'gh pr diff ${PR_NUM}' to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to /tmp/review-${PR_NUM}.json following the output format in your system prompt."
 
 ag agent wait reviewer-$PR_NUM --timeout 600
 cat /tmp/review-${PR_NUM}.json
 ag agent rm reviewer-$PR_NUM
 ```
 
-### Review PR (default ai backend)
+### Review uncommitted changes
 
 ```bash
-
-PR_NUM=42
-gh pr diff $PR_NUM > /tmp/pr${PR_NUM}.diff
-
-ag agent spawn reviewer-$PR_NUM \
+ag agent spawn reviewer-local \
   --system @/Users/genius/.ai/skills/review/reviewer.md \
-  --input "Read the diff from /tmp/pr${PR_NUM}.diff and review it. Write result to /tmp/review-${PR_NUM}.json"
+  --input "You are in the project directory. Review the current uncommitted changes. Steps: 1) Run 'git diff' and/or 'git diff --cached' to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to /tmp/review-local.json following the output format in your system prompt."
 
-ag agent wait reviewer-$PR_NUM --timeout 600
-cat /tmp/review-${PR_NUM}.json
-ag agent rm reviewer-$PR_NUM
+ag agent wait reviewer-local --timeout 600
+cat /tmp/review-local.json
+ag agent rm reviewer-local
+```
+
+### Review a specific commit
+
+```bash
+COMMIT=abc123
+ag agent spawn reviewer-$COMMIT \
+  --system @/Users/genius/.ai/skills/review/reviewer.md \
+  --input "You are in the project directory. Review commit ${COMMIT}. Steps: 1) Run 'git show ${COMMIT}' to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to /tmp/review-${COMMIT}.json following the output format in your system prompt."
+
+ag agent wait reviewer-$COMMIT --timeout 600
+cat /tmp/review-${COMMIT}.json
+ag agent rm reviewer-$COMMIT
 ```
 
 ## ⚠️ 常见错误
@@ -133,7 +143,7 @@ ag agent rm reviewer-$PR_NUM
 
 - **完全依赖 ag CLI** - 使用 `ag agent spawn` 启动 agent，不要直接调用 `ai`
 - **必须等待完成** - 使用 `ag agent wait` 确保执行完毕再读取结果
-- **大内容通过文件传递** - Diff 等大内容写入文件，通过文件路径传递给 agent
+- **传递项目目录而非 diff 文件** - 让 agent 自己 `git diff` 和读取源文件，避免大文件读取问题
 - **解析 JSON 格式输出** - 从指定文件读取 JSON 结果
 - **如果没有 findings** - 输出 "No issues found"
 - **overall_correctness** - 只能是 "patch is correct" 或 "patch is incorrect"
@@ -146,9 +156,7 @@ ag agent rm reviewer-$PR_NUM
 | 无变更 | 输出 "No changes to review" |
 | Agent 超时 | 增加 `ag agent wait --timeout` 或简化 review 范围 |
 | JSON 解析失败 | 尝试修复 JSON 或要求 agent 重试 |
-| `unknown backend "codex"` | `backends.yaml` 不在 CWD。`cp ~/.ai/skills/ag/backends.yaml ./` |
 | `ag ls` 显示 backend 为 `ai` | 回到 spawn 时的 CWD 查看 |
-| Codex agent 无活动 | 检查 `stderr`：`cat .ag/agents/<id>/stderr`，常见原因是代理未设置 |
 
 ## 参考文档
 

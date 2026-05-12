@@ -3,6 +3,7 @@ package task
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -22,12 +23,13 @@ import (
 type SchedulerConfig struct {
 	MaxConcurrent   int
 	MaxRetries      int
-	Timeout         time.Duration
+	Timeout         time.Duration // Base timeout per task
 	PollInterval    time.Duration
 	DesignFile      string
 	WorkDir         string
 	SkipReview      bool
 	MaxReviewRounds int
+	Callback        string // Shell command to execute after all tasks complete
 }
 
 // DefaultSchedulerConfig returns sensible defaults.
@@ -41,6 +43,17 @@ func DefaultSchedulerConfig() SchedulerConfig {
 		MaxReviewRounds: 2,
 	}
 }
+
+const (
+	// maxTimeout is the absolute ceiling for task timeout.
+	// A task's timeout starts at cfg.Timeout and extends up to this limit
+	// while the worker is actively streaming events (dynamic timeout).
+	maxTimeout = 60 * time.Minute
+
+	// timeoutExtendPerActivity adds this much to the deadline each time
+	// we detect the worker is still actively writing events.
+	timeoutExtendPerActivity = 5 * time.Minute
+)
 
 // RunScheduler executes the scheduler loop until all tasks are terminal
 // or the context is cancelled.
@@ -130,17 +143,57 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 			return fmt.Errorf("scheduler tick: %w", err)
 		}
 
-		// Circuit breaker: count consecutive failures
+						// Circuit breaker: count consecutive failures or truly stuck reviews
+		// "Truly stuck" means: reviews in a fully-ready group (all tasks in review)
+		// with no reviewer process alive — indicating reviewer crashed.
 		failed, _ := List(StatusFailed)
-		if len(failed) > 0 && !progress {
+		trulyStuck := false
+		if len(failed) == 0 {
+			// Check if any review group is fully in review but has no reviewer alive
+			reviewTasks, _ := List(StatusReview)
+			if len(reviewTasks) > 0 {
+				groups, _ := Groups()
+				for _, g := range groups {
+					gtasks, _ := GroupTasks(g)
+					allReview := len(gtasks) > 0
+					for _, gt := range gtasks {
+						if gt.Status != StatusReview {
+							allReview = false
+							break
+						}
+					}
+					if allReview {
+						// Group fully in review — check if reviewer is alive
+						reviewerKey := fmt.Sprintf("reviewer-%s", g)
+						reviewerAgentDir := storage.AgentDir(reviewerKey)
+						metaPath := filepath.Join(reviewerAgentDir, "worker-meta.json")
+						if storage.Exists(metaPath) {
+							var meta struct {
+								Pid int `json:"pid"`
+							}
+							if err := storage.ReadJSON(metaPath, &meta); err == nil && meta.Pid > 0 && agent.IsProcessAlive(meta.Pid) {
+								continue // reviewer alive, not stuck
+							}
+						}
+						// No reviewer alive for a fully-in-review group — stuck!
+						trulyStuck = true
+						break
+					}
+				}
+			}
+		}
+		if (len(failed) > 0 || trulyStuck) && !progress {
 			consecutiveFailures++
 			if consecutiveFailures >= maxConsecutiveFailures {
-				fmt.Printf("\n⛔ Circuit breaker: %d consecutive failures without progress\n", consecutiveFailures)
+				fmt.Printf("\n⛔ Circuit breaker: %d consecutive ticks without progress\n", consecutiveFailures)
+				if trulyStuck {
+					fmt.Println("  Reason: review group fully in review but no reviewer alive")
+				}
 				fmt.Println("Stopping scheduler to prevent wasting resources.")
 				printSummary()
 				return fmt.Errorf("circuit breaker triggered: %d consecutive failures", consecutiveFailures)
 			}
-			log.Printf("[scheduler] circuit breaker: %d/%d consecutive failures", consecutiveFailures, maxConsecutiveFailures)
+			log.Printf("[scheduler] circuit breaker: %d/%d (failed=%d, trulyStuck=%v)", consecutiveFailures, maxConsecutiveFailures, len(failed), trulyStuck)
 		} else if progress {
 			consecutiveFailures = 0
 		}
@@ -150,9 +203,10 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		if err != nil {
 			return fmt.Errorf("check all done: %w", err)
 		}
-		if allDone {
+				if allDone {
 			fmt.Println("\n✅ All tasks completed.")
 			printSummary()
+			executeCallback(cfg)
 			return nil
 		}
 
@@ -209,7 +263,8 @@ func tick(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 }
 
 // retryFailed retries failed tasks that haven't exceeded max retries.
-// Before retrying, kills any leftover worker processes from the failed attempt.
+// Before retrying, kills any leftover worker processes from the failed attempt
+// and waits for them to actually die before resetting the task to pending.
 func retryFailed(cfg SchedulerConfig) (bool, error) {
 	failed, err := List(StatusFailed)
 	if err != nil {
@@ -225,6 +280,11 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 		// Kill any leftover worker from the failed attempt
 		killWorker(t.ID, t.Claimant)
 
+		// Wait for the worker process to actually die.
+		// This prevents spawning a new worker while the old one is still
+		// writing files or holding resources.
+		waitForWorkerDeath(t.Claimant, 5*time.Second)
+
 		_, err := Retry(t.ID, cfg.MaxRetries)
 		if err != nil {
 			log.Printf("[scheduler] skip retry %s: %v", t.ID, err)
@@ -234,6 +294,34 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 		progress = true
 	}
 	return progress, nil
+}
+
+// waitForWorkerDeath polls until the worker process is confirmed dead
+// or the timeout elapses.
+func waitForWorkerDeath(claimant string, timeout time.Duration) {
+	if claimant == "" {
+		return
+	}
+	agentDir := storage.AgentDir(claimant)
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if !storage.Exists(metaPath) {
+		return
+	}
+	var meta struct {
+		Pid int `json:"pid"`
+	}
+	if err := storage.ReadJSON(metaPath, &meta); err != nil || meta.Pid <= 0 {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !agent.IsProcessAlive(meta.Pid) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Printf("[scheduler] waitForWorkerDeath: pid %d still alive after %v", meta.Pid, timeout)
 }
 
 // spawnWorkers picks pending tasks with met dependencies and spawns worker agents.
@@ -350,14 +438,16 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
 	}
 
 	// Write worker metadata to a separate file that ai serve won't overwrite.
-	// This solves the race where ai serve's activity.json overwrites our runID.
+		// This solves the race where ai serve's activity.json overwrites our runID.
 	agentDir := storage.AgentDir(agentID)
 	os.MkdirAll(agentDir, 0755)
+	now := time.Now().Unix()
 	workerMeta := map[string]interface{}{
-		"pid":       pid,
-		"runID":     runID,
-		"startedAt": time.Now().Unix(),
-		"taskID":    taskID,
+		"pid":          pid,
+		"runID":        runID,
+		"startedAt":    now,
+		"lastActivity": now, // Heartbeat: updated by checkRunning while streaming
+		"taskID":       taskID,
 	}
 	metaPath := filepath.Join(agentDir, "worker-meta.json")
 	if err := storage.AtomicWriteJSON(metaPath, workerMeta); err != nil {
@@ -437,13 +527,38 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			startedAt = act.StartedAt
 		}
 
-				// Check for scheduler timeout — if the worker has been running too long,
+						// Check for scheduler timeout — if the worker has been running too long,
 		// treat it as failed to prevent hung runs from occupying slots forever.
-		// But first check if the run actually completed (events have agent_end)
-		// even if it ran over the timeout.
+		// Dynamic timeout: extend while the worker is actively streaming events.
 		if startedAt > 0 && cfg.Timeout > 0 {
 			elapsed := time.Since(time.Unix(startedAt, 0))
-			if elapsed > cfg.Timeout {
+			effectiveTimeout := cfg.Timeout
+
+						// Dynamic timeout: if the worker is actively streaming events,
+			// extend the timeout. Check events.jsonl modification time as heartbeat.
+			if runID != "" {
+				eventsPath, _ := run.EventsPath(runID)
+				if fi, err := os.Stat(eventsPath); err == nil {
+					eventsAge := time.Since(fi.ModTime())
+					if eventsAge < cfg.PollInterval*3 {
+						// Events are fresh — worker is actively streaming.
+						// Extend timeout up to maxTimeout.
+						effectiveTimeout = maxTimeout
+						if elapsed > cfg.Timeout {
+							log.Printf("[scheduler] %s: extending timeout (events fresh, age=%v, elapsed=%v)",
+								t.ID, eventsAge.Round(time.Second), elapsed.Round(time.Minute))
+						}
+						// Heartbeat: update lastActivity timestamp in worker-meta.json
+						// so external tools can detect "still alive" workers.
+						updateWorkerHeartbeat(agentDir)
+					} else if eventsAge < cfg.PollInterval*6 {
+						// Events somewhat recent — partial extension
+						effectiveTimeout = cfg.Timeout + timeoutExtendPerActivity
+					}
+				}
+			}
+
+			if elapsed > effectiveTimeout {
 				// Before failing, check if the run actually completed
 				if runID != "" {
 					completed, summary := checkAIServeRun(runID, t.ID)
@@ -459,6 +574,9 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 						continue
 					}
 				}
+								// Kill the worker BEFORE marking as failed, so retryFailed
+				// won't spawn a new worker while the old one is still alive.
+				killWorker(t.ID, t.Claimant)
 				Fail(t.ID, fmt.Sprintf("task timed out after %v", elapsed.Round(time.Minute)), true)
 				fmt.Printf("  ⏰ Detected timeout %s (ran for %v)\n", t.ID, elapsed.Round(time.Minute))
 				progress = true
@@ -513,7 +631,18 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			}
 		}
 
-		if completed {
+				if completed {
+			// Cross-task file modification detection (Problem 4):
+			// Check if the worker modified files outside its declared scope.
+			if warning := checkCrossTaskModifications(cfg.WorkDir, t); warning != "" {
+				log.Printf("[scheduler] ⚠️ %s: %s", t.ID, warning)
+				fmt.Printf("  ⚠️ %s\n", warning)
+				// Append warning to task output for review visibility
+				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
+				existing := readFile(outputFile)
+				os.WriteFile(outputFile, []byte(existing+"\n\n⚠️ "+warning+"\n"), 0644)
+			}
+
 			if cfg.SkipReview {
 				Done(t.ID, summary)
 				fmt.Printf("  ✅ Detected completion %s (run done)\n", t.ID)
@@ -611,15 +740,32 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 			continue
 		}
 
-		// All in review — spawn reviewer (after transitions are committed)
-		fmt.Printf("  🔍 Reviewing group %s\n", group)
-		go spawnReviewer(group, tasks, cfg)
-		progress = true
+			// All in review — spawn reviewer (after transitions are committed)
+	// Guard: only spawn if no reviewer is already running for this group.
+	reviewerKey := fmt.Sprintf("reviewer-%s", group)
+	reviewerAgentDir := storage.AgentDir(reviewerKey)
+	if storage.Exists(filepath.Join(reviewerAgentDir, "worker-meta.json")) {
+		// Check if the reviewer process is still alive
+		var meta struct {
+			Pid int `json:"pid"`
+		}
+		if err := storage.ReadJSON(filepath.Join(reviewerAgentDir, "worker-meta.json"), &meta); err == nil && meta.Pid > 0 {
+			if agent.IsProcessAlive(meta.Pid) {
+				continue // reviewer already running, skip
+			}
+		}
+	}
+	fmt.Printf("  🔍 Reviewing group %s\n", group)
+	go spawnReviewer(group, tasks, cfg)
+	progress = true
 	}
 	return progress, nil
 }
 
 // spawnReviewer runs a reviewer agent for a group of tasks.
+// It writes the prompt to a temp file (--input-file) to avoid OS argument
+// length limits, and writes activity.json so agent commands can find it.
+// The reviewer runs synchronously within this goroutine (blocks until cmd.Wait).
 func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	// Get diff of changes
 	diff := getDiff(cfg.WorkDir)
@@ -627,9 +773,20 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	prompt := BuildReviewerPrompt(tasks, diff)
 	agentID := fmt.Sprintf("reviewer-%s", group)
 
+	// Write prompt to a temp file to avoid OS ARG_MAX limits.
+	// Reviewer prompts include full git diffs which can be very large.
+	promptFile := filepath.Join(storage.TaskDir(tasks[0].ID), "review-prompt.txt")
+	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {
+		for _, t := range tasks {
+			Fail(t.ID, fmt.Sprintf("write reviewer prompt: %v", err), true)
+		}
+		return
+	}
+
 	// Spawn reviewer using "ai serve" — same pattern as spawnWorker.
+	// Use --input-file to pass the prompt via file instead of CLI arg.
 	cmd := exec.Command("ai", "serve")
-	cmd.Args = append(cmd.Args, "--input", prompt)
+	cmd.Args = append(cmd.Args, "--input-file", promptFile)
 	cmd.Args = append(cmd.Args, "--name", agentID)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
@@ -664,11 +821,72 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 	stdout.Close()
 	runID := strings.TrimSpace(firstLine)
 
+	pid := cmd.Process.Pid
+
+	// Write worker-meta.json so checkGroupReview can deduplicate reviewers.
+	agentDir := storage.AgentDir(agentID)
+	os.MkdirAll(agentDir, 0755)
+	workerMeta := map[string]interface{}{
+		"pid":       pid,
+		"runID":     runID,
+		"startedAt": time.Now().Unix(),
+		"group":     group,
+	}
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if err := storage.AtomicWriteJSON(metaPath, workerMeta); err != nil {
+		log.Printf("[scheduler] reviewer %s: write worker-meta: %v", group, err)
+	}
+
+	// Write activity.json for compatibility with agent ls, ag task status, etc.
+	// This mirrors spawnWorker's activity.json write.
+	activity := map[string]interface{}{
+		"status":    "running",
+		"backend":   "ai",
+		"startedAt": time.Now().Unix(),
+		"pid":       pid,
+		"runID":     runID,
+	}
+	storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity)
+
 	// Wait for ai serve to complete (it exits when the RPC subprocess finishes)
-	waitErr := cmd.Wait()
+	// Apply reviewer timeout (2x base timeout) — reviewers shouldn't run forever.
+	reviewTimeout := cfg.Timeout * 2
+	if reviewTimeout < 20*time.Minute {
+		reviewTimeout = 20 * time.Minute
+	}
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
+
+	var waitErr error
+	select {
+	case waitErr = <-doneCh:
+		// Normal completion
+	case <-time.After(reviewTimeout):
+		// Reviewer timed out — kill it
+		log.Printf("[scheduler] reviewer %s timed out after %v, killing", group, reviewTimeout)
+		if pid > 0 {
+			syscall.Kill(-pid, syscall.SIGKILL)
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+		waitErr = fmt.Errorf("reviewer timed out after %v", reviewTimeout)
+		<-doneCh // Wait for cmd.Wait to return after kill
+	}
 	outFile.Close()
 
-		if waitErr != nil {
+	// Update activity.json to reflect completion
+	activity["status"] = "done"
+	if waitErr != nil {
+		activity["status"] = "failed"
+	}
+	activity["finishedAt"] = time.Now().Unix()
+	storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity)
+
+	// Clean up worker-meta.json after review completes to avoid stale PID reuse.
+	defer os.Remove(metaPath)
+
+	if waitErr != nil {
 		// Reviewer failed — mark tasks as failed (retryable)
 		// so the scheduler can retry them instead of silently passing.
 		fmt.Printf("  ❌ Reviewer failed for group %s (run %s): %v\n", group, runID, waitErr)
@@ -698,8 +916,7 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		fmt.Printf("  🔧 Revision requested for group %s\n", group)
 	}
 
-	// Transition tasks to done with error handling.
-	allOK := true
+				// Transition tasks to done with error handling.
 	for _, t := range tasks {
 		summary := t.Summary
 		if !strings.Contains(eventsData, "REVIEW_PASS") {
@@ -707,19 +924,44 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 		}
 		if _, err := Done(t.ID, summary); err != nil {
 			fmt.Printf("  ❌ Done(%s) failed after review: %v\n", t.ID, err)
-			allOK = false
+			// Task state may have been changed externally (e.g. retryFailed reset to pending).
+			// Try to recover: re-read current state and transition appropriately.
+			current, loadErr := loadTask(t.ID)
+			if loadErr != nil {
+				fmt.Printf("  ❌ Cannot load task %s: %v\n", t.ID, loadErr)
+				continue
+			}
+			switch current.Status {
+			case StatusDone:
+				// Already done — nothing to do
+				fmt.Printf("  ℹ️ %s already done, skipping\n", t.ID)
+			case StatusPending:
+				// Was reset to pending — the work is done but state was lost.
+				// Force-transition: pending→claimed→done
+				if _, te := Transition(t.ID, StatusClaimed); te != nil {
+					fmt.Printf("  ❌ Cannot claim %s: %v\n", t.ID, te)
+				} else if _, de := Done(t.ID, summary); de != nil {
+					fmt.Printf("  ❌ Cannot done %s: %v\n", t.ID, de)
+				} else {
+					fmt.Printf("  ✅ Recovered %s (pending→claimed→done)\n", t.ID)
+				}
+			case StatusFailed:
+				// Was failed — retryFailed will handle
+				fmt.Printf("  ℹ️ %s already failed, retryFailed will handle\n", t.ID)
+			default:
+				fmt.Printf("  ⚠️ %s in unexpected state %s after review\n", t.ID, current.Status)
+			}
 		}
-	}
-	if !allOK {
-		fmt.Printf("  ⚠️ Some Done() calls failed for group %s — manual retry may be needed\n", group)
 	}
 }
 
 // Helper functions
 
 // killWorker terminates any leftover worker process for a task.
-// Reads worker-meta.json and/or activity.json to find the PID and runID,
+// Reads worker-meta.json to find the PID and runID,
 // then kills both the ai-serve process and the RPC subprocess.
+// Uses SIGKILL to ensure prompt termination (SIGTERM may be ignored by runaway workers).
+// Kills the entire process group since spawnWorker sets Setpgid=true.
 func killWorker(taskID, claimant string) {
 	if claimant == "" {
 		return
@@ -736,13 +978,17 @@ func killWorker(taskID, claimant string) {
 		if err := storage.ReadJSON(metaPath, &meta); err == nil {
 			if meta.Pid > 0 && agent.IsProcessAlive(meta.Pid) {
 				log.Printf("[scheduler] killing leftover worker pid %d for %s", meta.Pid, taskID)
-				syscall.Kill(meta.Pid, syscall.SIGTERM)
+				// Kill entire process group (negative PID = process group)
+				syscall.Kill(-meta.Pid, syscall.SIGKILL)
+				// Also kill the process directly as fallback
+				syscall.Kill(meta.Pid, syscall.SIGKILL)
 			}
 			if meta.RunID != "" {
 				runMeta, err := run.ReadMeta(meta.RunID)
 				if err == nil && runMeta.PID > 0 && agent.IsProcessAlive(runMeta.PID) {
 					log.Printf("[scheduler] killing leftover RPC subprocess pid %d for %s", runMeta.PID, taskID)
-					syscall.Kill(runMeta.PID, syscall.SIGTERM)
+					syscall.Kill(-runMeta.PID, syscall.SIGKILL)
+					syscall.Kill(runMeta.PID, syscall.SIGKILL)
 				}
 			}
 		}
@@ -759,6 +1005,97 @@ func getDiff(workDir string) string {
 		return "(no diff available)"
 	}
 	return string(out)
+}
+
+// updateWorkerHeartbeat updates the lastActivity timestamp in worker-meta.json.
+// This provides a "still alive" signal that external tools can check
+// without needing to read events.jsonl.
+func updateWorkerHeartbeat(agentDir string) {
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if !storage.Exists(metaPath) {
+		return
+	}
+	// Read existing meta, update lastActivity, write back
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return
+	}
+	meta["lastActivity"] = time.Now().Unix()
+	storage.AtomicWriteJSON(metaPath, meta)
+}
+
+// checkCrossTaskModifications scans git diff to detect files modified by a task
+// that fall outside its declared file scope. Returns a warning string if
+// violations are found, or empty string if all clean.
+func checkCrossTaskModifications(workDir string, task *Task) string {
+	if workDir == "" {
+		return ""
+	}
+
+	// Get the list of files changed in working tree
+	cmd := exec.Command("git", "diff", "--name-only")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "" // Can't check, skip silently
+	}
+	changedFiles := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(changedFiles) == 0 || (len(changedFiles) == 1 && changedFiles[0] == "") {
+		return ""
+	}
+
+	// Build allowed file set from task's FileScope
+	allowed := parseFileScope(task.FileScope)
+	if len(allowed) == 0 {
+		return "" // No file scope declared, can't check
+	}
+
+	var violations []string
+	for _, f := range changedFiles {
+		if f == "" {
+			continue
+		}
+		if !isFileInScope(f, allowed) {
+			violations = append(violations, f)
+		}
+	}
+
+	if len(violations) > 0 {
+		return fmt.Sprintf("cross-task file modification: %s modified files outside scope: %s",
+			task.ID, strings.Join(violations, ", "))
+	}
+	return ""
+}
+
+// parseFileScope parses the FileScope field into a list of path prefixes.
+// Supports comma-separated paths: "pkg/agent/,pkg/rpc/".
+func parseFileScope(fileScope string) []string {
+	if fileScope == "" {
+		return nil
+	}
+	parts := strings.Split(fileScope, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// isFileInScope checks if a file path matches any of the allowed prefixes.
+func isFileInScope(file string, allowed []string) bool {
+	for _, prefix := range allowed {
+		if strings.HasPrefix(file, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readSummary(outputFile string) string {
@@ -800,4 +1137,26 @@ func printSummary() {
 			fmt.Printf("     Error: %s\n", t.Error)
 		}
 	}
+}
+
+// executeCallback runs the callback shell command if configured.
+// This is the "prompt-as-callback" mechanism: typically
+//   ag agent prompt <main-id> "scheduler done"
+// Errors are logged but not fatal — the scheduler has already completed its work.
+func executeCallback(cfg SchedulerConfig) {
+	if cfg.Callback == "" {
+		return
+	}
+	fmt.Printf("\n📞 Executing callback: %s\n", cfg.Callback)
+	cmd := exec.Command("sh", "-c", cfg.Callback)
+	if cfg.WorkDir != "" {
+		cmd.Dir = cfg.WorkDir
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[scheduler] callback failed: %v\noutput: %s", err, string(output))
+		fmt.Printf("  ⚠️ Callback failed: %v\n", err)
+		return
+	}
+	fmt.Printf("  ✅ Callback executed successfully\n")
 }

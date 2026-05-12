@@ -33,12 +33,17 @@ type LLMMessage struct {
 	ToolCallID   string        `json:"tool_call_id,omitempty"`
 }
 
-// MarshalJSON custom marshaling for LLMMessage to handle both Content and ContentParts
+// MarshalJSON custom marshaling for LLMMessage to handle both Content and ContentParts.
+// For reasoning models (e.g. DeepSeek), the Thinking field is serialized as
+// "reasoning_content" at the same level as "content", so providers that require
+// it can receive it in the format they expect. Providers that don't understand
+// this field will simply ignore it.
 func (m LLMMessage) MarshalJSON() ([]byte, error) {
 	// Build a map for JSON serialization
 	type Alias LLMMessage
 	tmp := struct {
-		Content interface{} `json:"content,omitempty"`
+		Content          interface{} `json:"content,omitempty"`
+		ReasoningContent string      `json:"reasoning_content,omitempty"`
 		Alias
 	}{
 		Alias: (Alias)(m),
@@ -51,6 +56,10 @@ func (m LLMMessage) MarshalJSON() ([]byte, error) {
 		// Otherwise use Content string
 		tmp.Content = m.Content
 	}
+
+	// Serialize thinking content as reasoning_content (required by DeepSeek
+	// and other reasoning models for tool-call rounds).
+	tmp.ReasoningContent = m.Thinking
 
 	return json.Marshal(tmp)
 }

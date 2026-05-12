@@ -166,13 +166,14 @@ func runSubcommand(binPath string) {
 // The socket server runs in-process, enabling ai send/watch control.
 // Use "ai serve &" or "nohup ai serve &" for background operation.
 func serveSubcommand(binPath string) {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	fs.Parse(os.Args[1:])
 
@@ -264,9 +265,19 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-	// Send initial input if provided.
-	if *inputFlag != "" {
-		if err := sendRPCCommand(stdinWriter, "prompt", *inputFlag); err != nil {
+		// Send initial input if provided.
+	inputText := *inputFlag
+	if *inputFileFlag != "" {
+		data, err := os.ReadFile(*inputFileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: failed to read input file: %v\n", err)
+			cmd.Process.Kill()
+			os.Exit(1)
+		}
+		inputText = string(data)
+	}
+	if inputText != "" {
+		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
 		}
 	}

@@ -278,6 +278,61 @@ spawning → running → done
 
 Stale detection: if process PID is no longer alive but activity shows "running", `ag agent status` auto-marks as "failed" with reason.
 
+## Callback Protocol (Prompt-as-Callback)
+
+后台任务完成后，通过 `ag agent prompt` 回调主 agent，而非主 agent 轮询等待。
+
+### 核心约定
+
+```
+主 agent (ID: main)          后台任务 (任何进程)
+     │                              │
+     ├── spawn + 传自己的 ID ──────→│
+     │   "完成后执行:                │
+     │    ag agent prompt main      │
+     │    'task:<name> result:...'" │
+     │                              │
+     │  ← 继续做别的事或等消息 ──────│ ... 执行中 ...
+     │                              │
+     │←── ag agent prompt main ─────│ 完成！
+     │    "task:build result:ok"     │
+     │                              │
+     └── LLM 收到新 prompt，被唤醒处理
+```
+
+### 三要素
+
+1. **Agent ID = 回信地址**：主 agent 把自己的 ID 告诉后台任务
+2. **`ag agent prompt <id> <msg>` = 叩门**：后台任务完成时执行这一条命令
+3. **ai 进程活着 = 前提**：前台 agent 的 LLM 会话保持运行，prompt 注入后自然唤醒
+
+### 适用场景
+
+| 场景 | 传统方式 | Callback 方式 |
+|------|---------|--------------|
+| `ag task run --detach` | 主 agent 轮询 `ag task log` | scheduler 完成后 `ag agent prompt main` |
+| 子 agent spawn | `ag agent wait`（阻塞） | 子 agent 完成后 `ag agent prompt main` |
+| shell 后台任务 | 主 agent 等待 | 脚本末尾 `ag agent prompt main` |
+| CI/CD pipeline | 无通知 | pipeline 末尾回调 |
+
+### 在 Prompt 中的写法
+
+主 agent 在 delegation prompt 中加入：
+
+```
+你的回调地址是 agent ID: "<main-agent-id>"。
+完成全部工作后，执行以下命令通知我:
+ag agent prompt <main-agent-id> "task:<task-name> status:done summary:<简要结果>"
+如果失败，执行:
+ag agent prompt <main-agent-id> "task:<task-name> status:failed error:<错误原因>"
+```
+
+### 注意事项
+
+- `ag agent prompt` 要求 ai 进程仍然存活。如果 agent 已退出，prompt 会失败
+- 如果后台任务可能比主 agent 存活更久，使用 `ag send <channel>` 作为持久化备选（消息写入文件，不依赖进程存活）
+- 主 agent 不需要做任何特殊配置——它只需要保持 LLM 会话运行
+
 ## Concurrency Limit
 
 ⚠️ **LLM 提供商限流**：主 agent + 子 agent 同时运行数**不得超过 3**（即最多 2 个子 agent）。并发稍高即触发 API rate limit，导致子 agent 卡住或失败。

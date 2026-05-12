@@ -30,7 +30,7 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 			Role: role,
 		}
 
-		// Extract content
+				// Extract content and thinking
 		for _, block := range msg.Content {
 			switch b := block.(type) {
 			case agentctx.TextContent:
@@ -45,6 +45,10 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 						URL: b.Data,
 					},
 				})
+			case agentctx.ThinkingContent:
+				// Preserve reasoning content for providers like DeepSeek
+				// that require it to be passed back (especially for tool-call rounds).
+				llmMsg.Thinking = b.Thinking
 			}
 		}
 
