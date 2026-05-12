@@ -77,6 +77,7 @@ type Task struct {
 	Description  string   `json:"description"`
 	SpecFile     string   `json:"specFile,omitempty"`
 	OutputFile   string   `json:"outputFile,omitempty"`
+	FileScope    string   `json:"fileScope,omitempty"` // Comma-separated path prefixes this task should modify
 	Dependencies []string `json:"dependencies,omitempty"`
 	Group        string   `json:"group,omitempty"`
 	CreatedAt    int64    `json:"createdAt"`
