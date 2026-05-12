@@ -251,7 +251,8 @@ func tick(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 }
 
 // retryFailed retries failed tasks that haven't exceeded max retries.
-// Before retrying, kills any leftover worker processes from the failed attempt.
+// Before retrying, kills any leftover worker processes from the failed attempt
+// and waits for them to actually die before resetting the task to pending.
 func retryFailed(cfg SchedulerConfig) (bool, error) {
 	failed, err := List(StatusFailed)
 	if err != nil {
@@ -267,6 +268,11 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 		// Kill any leftover worker from the failed attempt
 		killWorker(t.ID, t.Claimant)
 
+		// Wait for the worker process to actually die.
+		// This prevents spawning a new worker while the old one is still
+		// writing files or holding resources.
+		waitForWorkerDeath(t.Claimant, 5*time.Second)
+
 		_, err := Retry(t.ID, cfg.MaxRetries)
 		if err != nil {
 			log.Printf("[scheduler] skip retry %s: %v", t.ID, err)
@@ -276,6 +282,34 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 		progress = true
 	}
 	return progress, nil
+}
+
+// waitForWorkerDeath polls until the worker process is confirmed dead
+// or the timeout elapses.
+func waitForWorkerDeath(claimant string, timeout time.Duration) {
+	if claimant == "" {
+		return
+	}
+	agentDir := storage.AgentDir(claimant)
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if !storage.Exists(metaPath) {
+		return
+	}
+	var meta struct {
+		Pid int `json:"pid"`
+	}
+	if err := storage.ReadJSON(metaPath, &meta); err != nil || meta.Pid <= 0 {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !agent.IsProcessAlive(meta.Pid) {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Printf("[scheduler] waitForWorkerDeath: pid %d still alive after %v", meta.Pid, timeout)
 }
 
 // spawnWorkers picks pending tasks with met dependencies and spawns worker agents.
@@ -501,6 +535,9 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 						continue
 					}
 				}
+								// Kill the worker BEFORE marking as failed, so retryFailed
+				// won't spawn a new worker while the old one is still alive.
+				killWorker(t.ID, t.Claimant)
 				Fail(t.ID, fmt.Sprintf("task timed out after %v", elapsed.Round(time.Minute)), true)
 				fmt.Printf("  ⏰ Detected timeout %s (ran for %v)\n", t.ID, elapsed.Round(time.Minute))
 				progress = true
@@ -813,8 +850,10 @@ func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
 // Helper functions
 
 // killWorker terminates any leftover worker process for a task.
-// Reads worker-meta.json and/or activity.json to find the PID and runID,
+// Reads worker-meta.json to find the PID and runID,
 // then kills both the ai-serve process and the RPC subprocess.
+// Uses SIGKILL to ensure prompt termination (SIGTERM may be ignored by runaway workers).
+// Kills the entire process group since spawnWorker sets Setpgid=true.
 func killWorker(taskID, claimant string) {
 	if claimant == "" {
 		return
@@ -831,13 +870,17 @@ func killWorker(taskID, claimant string) {
 		if err := storage.ReadJSON(metaPath, &meta); err == nil {
 			if meta.Pid > 0 && agent.IsProcessAlive(meta.Pid) {
 				log.Printf("[scheduler] killing leftover worker pid %d for %s", meta.Pid, taskID)
-				syscall.Kill(meta.Pid, syscall.SIGTERM)
+				// Kill entire process group (negative PID = process group)
+				syscall.Kill(-meta.Pid, syscall.SIGKILL)
+				// Also kill the process directly as fallback
+				syscall.Kill(meta.Pid, syscall.SIGKILL)
 			}
 			if meta.RunID != "" {
 				runMeta, err := run.ReadMeta(meta.RunID)
 				if err == nil && runMeta.PID > 0 && agent.IsProcessAlive(runMeta.PID) {
 					log.Printf("[scheduler] killing leftover RPC subprocess pid %d for %s", runMeta.PID, taskID)
-					syscall.Kill(runMeta.PID, syscall.SIGTERM)
+					syscall.Kill(-runMeta.PID, syscall.SIGKILL)
+					syscall.Kill(runMeta.PID, syscall.SIGKILL)
 				}
 			}
 		}
