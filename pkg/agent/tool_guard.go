@@ -14,12 +14,25 @@ import (
 // toolLoopGuard detects and prevents infinite tool call loops.
 // It only counts consecutive calls with the same signature (name + arguments hash).
 // When the tool or arguments change, the counter resets to 1.
+//
+// Strategy: instead of aborting immediately, the guard returns a ToolResult
+// with actionable feedback so the LLM can self-correct. After maxFeedbackAttempts
+// the guard escalates to a hard abort.
 type toolLoopGuard struct {
 	maxConsecutive int
 
 	lastSignature  string
 	consecutiveRun int
+
+	// feedbackCount tracks how many times the guard has returned feedback
+	// to the LLM for the same repeated signature.
+	feedbackCount int
+	// maxFeedbackAttempts is the number of feedback rounds before hard abort.
+	// 0 means use the default (defaultLoopGuardMaxFeedback).
+	maxFeedbackAttempts int
 }
+
+const defaultLoopGuardMaxFeedback = 2
 
 func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
 	if config == nil {
@@ -29,8 +42,13 @@ func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
 	if maxConsecutive == 0 {
 		return nil
 	}
+	maxFeedback := defaultLoopGuardMaxFeedback
+	if config.MaxLoopGuardFeedback > 0 {
+		maxFeedback = config.MaxLoopGuardFeedback
+	}
 	return &toolLoopGuard{
-		maxConsecutive: maxConsecutive,
+		maxConsecutive:     maxConsecutive,
+		maxFeedbackAttempts: maxFeedback,
 	}
 }
 
@@ -44,10 +62,26 @@ func resolveLoopGuardLimit(value, defaultValue int) int {
 	return value
 }
 
+// ObserveResult holds the outcome of a loop guard check.
+type ObserveResult struct {
+	// Blocked is true when a loop is detected.
+	Blocked bool
+	// Reason describes why the loop was detected.
+	Reason string
+	// HardAbort is true when the guard has exhausted feedback attempts
+	// and the loop must be terminated.
+	HardAbort bool
+	// FeedbackAttempt is the 1-based feedback round number (0 if not feedback).
+	FeedbackAttempt int
+}
+
 // Observe checks tool calls for loop patterns.
 // It only counts consecutive calls with the same signature (name + arguments hash).
 // When the signature changes, the counter resets.
-func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, string) {
+//
+// Returns an ObserveResult indicating whether a loop was detected and whether
+// the guard should return feedback to the LLM (soft) or abort (hard).
+func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) ObserveResult {
 	for _, tc := range toolCalls {
 		name := strings.ToLower(strings.TrimSpace(tc.Name))
 		if name == "" {
@@ -60,13 +94,64 @@ func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) (bool, str
 		} else {
 			g.lastSignature = signature
 			g.consecutiveRun = 1
+			g.feedbackCount = 0
 		}
 
 		if g.maxConsecutive > 0 && g.consecutiveRun > g.maxConsecutive {
-			return true, fmt.Sprintf("detected %d consecutive identical tool calls (%s)", g.consecutiveRun, name)
+			reason := fmt.Sprintf("detected %d consecutive identical tool calls (%s)", g.consecutiveRun, name)
+
+			// Check if we've exhausted feedback attempts.
+			if g.feedbackCount >= g.maxFeedbackAttempts {
+				return ObserveResult{
+					Blocked:   true,
+					Reason:    reason,
+					HardAbort: true,
+				}
+			}
+
+			g.feedbackCount++
+			return ObserveResult{
+				Blocked:         true,
+				Reason:          reason,
+				HardAbort:       false,
+				FeedbackAttempt: g.feedbackCount,
+			}
 		}
 	}
-	return false, ""
+	return ObserveResult{Blocked: false}
+}
+
+// buildLoopGuardToolResults creates ToolResult messages for each tool call that
+// was blocked by the loop guard. These results are returned to the LLM as
+// feedback so it can self-correct its approach.
+func buildLoopGuardToolResults(toolCalls []agentctx.ToolCallContent, result ObserveResult, maxFeedback int) []agentctx.AgentMessage {
+	results := make([]agentctx.AgentMessage, 0, len(toolCalls))
+	feedbackMsg := fmt.Sprintf(
+		"[Loop guard] Repeated identical tool call detected: %s\n\n"+
+			"You have made the same tool call with identical arguments multiple times in a row. "+
+			"This suggests the tool is not producing the expected result or you are stuck in a loop.\n\n"+
+			"Please try a different approach:\n"+
+			"- Use different arguments or parameters\n"+
+			"- Try a different tool entirely\n"+
+			"- If the tool keeps returning an error, investigate the root cause first\n"+
+			"- Consider whether you need this tool call at all\n\n"+
+			"Feedback attempt %d of %d. If you continue with the same call, the loop will be terminated.",
+		strings.TrimSpace(result.Reason),
+		result.FeedbackAttempt,
+		maxFeedback,
+	)
+
+	for _, tc := range toolCalls {
+		name := strings.ToLower(strings.TrimSpace(tc.Name))
+		if name == "" {
+			name = "unknown"
+		}
+		toolResult := agentctx.NewToolResultMessage(tc.ID, name, []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: feedbackMsg},
+		}, true)
+		results = append(results, toolResult)
+	}
+	return results
 }
 
 func sanitizeMessageForToolLoopGuard(msg *agentctx.AgentMessage, reason string) {
