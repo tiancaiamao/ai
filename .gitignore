@@ -20,3 +20,12 @@ WORKFLOW.md
 .ag/
 docs/refactor/
 coverage_new.out
+
+# Binary outputs
+cmd/ai/ai
+
+# Coverage
+cover.out
+
+# Benchmark results
+benchmark/results/result_*.json
