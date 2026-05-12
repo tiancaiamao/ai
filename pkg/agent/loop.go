@@ -67,7 +67,7 @@ type LoopConfig struct {
 	// EnableCheckpoint enables automatic checkpoint creation (default true).
 	EnableCheckpoint bool
 	// MaxLoopGuardFeedback is the number of feedback rounds the loop guard gives
-	// the LLM before escalating to a hard abort (0=default=2, <0=always feedback/never hard-abort).
+	// the LLM before escalating to a hard abort (0=default=2).
 	MaxLoopGuardFeedback int
 }
 
