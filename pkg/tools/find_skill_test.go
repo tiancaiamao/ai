@@ -34,7 +34,7 @@ func testSkills() []skill.Skill {
 		},
 		{
 			Name:        "plan",
-			Description: "Read design.md, produce tasks.yml with plan-lint validation",
+			Description: "Read design.md, produce tasks.md with plan-lint validation",
 			FilePath:    "/home/user/.ai/skills/plan/SKILL.md",
 			Content:     "# Plan Skill\n\nThis is the full plan skill content.",
 		},
