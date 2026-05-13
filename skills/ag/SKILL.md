@@ -362,17 +362,21 @@ ag agent prompt <main-agent-id> "task:<task-name> status:failed error:<错误原
 
 一个 agent 产出，另一个 agent 审查，循环直到通过。
 
+**Worker 保持跨轮次存活**：worker 只 spawn 一次，后续轮次通过 `ag agent prompt` 发送 judge 反馈。这保留了 worker 的完整上下文，使其能在先前尝试的基础上迭代改进。Judge 每轮重新 spawn 以保持独立性。
+
 ```
 1. ag agent spawn worker --system worker-prompt --input "task description"
 2. ag agent wait worker --timeout 300
 3. ag agent output worker > /tmp/worker-output.txt
-4. ag agent rm worker
-5. ag agent spawn judge --system judge-prompt --input "$(cat /tmp/worker-output.txt)"
-6. ag agent wait judge --timeout 60
-7. ag agent output judge > /tmp/judge-output.txt
-8. ag agent rm judge
-9. if APPROVED → done
-   else → feed judge feedback back to worker, repeat from step 1
+   (do NOT rm worker — keep it alive for the loop)
+4. ag agent spawn judge --system judge-prompt --input "$(cat /tmp/worker-output.txt)"
+5. ag agent wait judge --timeout 60
+6. ag agent output judge > /tmp/judge-output.txt
+7. ag agent rm judge
+8. if APPROVED → ag agent rm worker, done
+   else → ag agent prompt worker "$(cat /tmp/judge-feedback.txt)"
+          ag agent wait worker --timeout 300
+          repeat from step 3
 ```
 
 封装在 `patterns/pair.sh` 中：

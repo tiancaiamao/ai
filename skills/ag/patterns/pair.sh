@@ -6,6 +6,11 @@
 # Worker and judge prompt args are file paths. Their contents are read and
 # passed as --system to ag agent spawn.
 #
+# The worker agent is kept alive across rounds so it retains context from
+# previous iterations. Judge feedback is sent as a follow-up prompt via
+# `ag agent prompt`. The judge is freshly spawned each round to maintain
+# independence.
+#
 # Environment:
 #   AG_BINARY — path to ag binary (defaults to "ag")
 #
@@ -18,6 +23,18 @@ JUDGE_PROMPT_FILE="$2"
 INPUT_FILE="$3"
 MAX_ROUNDS="${4:-3}"
 
+WORKER_ID="pair-w-$$"
+WORKER_RUNNING=false
+
+cleanup() {
+  if [ "$WORKER_RUNNING" = true ]; then
+    echo "[pair] Cleaning up worker agent ($WORKER_ID)..."
+    $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
+    WORKER_RUNNING=false
+  fi
+}
+trap cleanup EXIT
+
 # --system @file reads the file content directly.
 # Prompt file args are paths prefixed with @.
 
@@ -25,31 +42,27 @@ echo "[pair] Starting worker-judge loop (max $MAX_ROUNDS rounds)"
 echo "[pair] Worker prompt: $WORKER_PROMPT_FILE ($(wc -l < "$WORKER_PROMPT_FILE" | tr -d ' ') lines)"
 echo "[pair] Judge prompt:  $JUDGE_PROMPT_FILE ($(wc -l < "$JUDGE_PROMPT_FILE" | tr -d ' ') lines)"
 
-FEEDBACK_FILE=""
-
 for round in $(seq 1 "$MAX_ROUNDS"); do
-  # Unique IDs per round to avoid "agent already exists"
-  WORKER_ID="pair-w-$$-r${round}"
   JUDGE_ID="pair-j-$$-r${round}"
 
   echo "[pair] === Round $round ==="
 
-  # --- Spawn worker ---
-  if [ "$round" -gt 1 ] && [ -n "$FEEDBACK_FILE" ]; then
-    CURRENT_INPUT=$(cat "$FEEDBACK_FILE")
-  else
-    CURRENT_INPUT=$(cat "$INPUT_FILE")
-  fi
-
+  if [ "$round" -eq 1 ]; then
+    # --- Spawn worker (once, at start of round 1) ---
     $AG_BINARY agent spawn "$WORKER_ID" \
-    --system "@$WORKER_PROMPT_FILE" \
-    --input "$CURRENT_INPUT"
+      --system "@$WORKER_PROMPT_FILE" \
+      --input "$(cat "$INPUT_FILE")"
+    WORKER_RUNNING=true
+  else
+    # --- Resume worker with judge feedback (not respawn) ---
+    echo "[pair] Sending judge feedback to existing worker ($WORKER_ID)..."
+    $AG_BINARY agent prompt "$WORKER_ID" "$(cat "$FEEDBACK_FILE")"
+  fi
 
   # --- Wait for worker ---
   echo "[pair] Waiting for worker ($WORKER_ID)..."
   if ! $AG_BINARY agent wait "$WORKER_ID" --timeout 120; then
     echo "[pair] Worker failed in round $round"
-    $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
     continue
   fi
 
@@ -58,12 +71,9 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   $AG_BINARY agent output "$WORKER_ID" > "$WORKER_OUTPUT"
   echo "[pair] Worker output: $(wc -l < "$WORKER_OUTPUT" | tr -d ' ') lines"
 
-  # Clean up worker agent
-  $AG_BINARY agent rm "$WORKER_ID" 2>/dev/null || true
-
-  # --- Spawn judge ---
+  # --- Spawn judge (fresh each round for independence) ---
   JUDGE_INPUT=$(cat "$WORKER_OUTPUT")
-    $AG_BINARY agent spawn "$JUDGE_ID" \
+  $AG_BINARY agent spawn "$JUDGE_ID" \
     --system "@$JUDGE_PROMPT_FILE" \
     --input "$JUDGE_INPUT"
 
@@ -90,22 +100,14 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     echo "[pair] ✅ Approved in round $round"
     cat "$WORKER_OUTPUT"
     rm -f "$WORKER_OUTPUT" "$JUDGE_OUTPUT"
-    [ -n "$FEEDBACK_FILE" ] && rm -f "$FEEDBACK_FILE"
+    [ -n "${FEEDBACK_FILE:-}" ] && rm -f "$FEEDBACK_FILE"
     exit 0
   fi
 
   # --- Prepare feedback for next round ---
   FEEDBACK_FILE=$(mktemp)
   {
-    echo "# Original task (from round 1)"
-    echo ""
-    cat "$INPUT_FILE"
-    echo ""
-    echo "# Previous attempt (round $round)"
-    echo ""
-    cat "$WORKER_OUTPUT"
-    echo ""
-    echo "# Judge feedback"
+    echo "# Judge feedback from round $round"
     echo ""
     cat "$JUDGE_OUTPUT"
     echo ""
@@ -118,5 +120,5 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
 done
 
 echo "[pair] ❌ Max rounds ($MAX_ROUNDS) reached without approval"
-[ -n "$FEEDBACK_FILE" ] && rm -f "$FEEDBACK_FILE"
+[ -n "${FEEDBACK_FILE:-}" ] && rm -f "$FEEDBACK_FILE"
 exit 1
