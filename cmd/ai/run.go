@@ -90,12 +90,13 @@ func runSubcommand(binPath string) {
 
 	// Write initial run.json.
 	meta := &run.RunMeta{
-		ID:        id,
-		PID:       cmd.Process.Pid,
-		CWD:       cwd,
-		Status:    run.StatusRunning,
-		StartedAt: time.Now().Unix(),
-		Name:      *nameFlag,
+		ID:           id,
+		PID:          cmd.Process.Pid,
+		CWD:          cwd,
+		Status:       run.StatusRunning,
+		StartedAt:    time.Now().Unix(),
+		Name:         *nameFlag,
+		PidStartTime: run.GetProcessStartTime(cmd.Process.Pid),
 	}
 	metaPath := run.RunMetaPath(baseDir, id)
 	if err := run.SaveRunMeta(meta, metaPath); err != nil {
@@ -237,12 +238,13 @@ func serveSubcommand(binPath string) {
 
 	// Write initial run.json.
 	meta := &run.RunMeta{
-		ID:        id,
-		PID:       cmd.Process.Pid,
-		CWD:       cwd,
-		Status:    run.StatusRunning,
-		StartedAt: time.Now().Unix(),
-		Name:      *nameFlag,
+		ID:           id,
+		PID:          cmd.Process.Pid,
+		CWD:          cwd,
+		Status:       run.StatusRunning,
+		StartedAt:    time.Now().Unix(),
+		Name:         *nameFlag,
+		PidStartTime: run.GetProcessStartTime(cmd.Process.Pid),
 	}
 	metaPath := run.RunMetaPath(baseDir, id)
 	if err := run.SaveRunMeta(meta, metaPath); err != nil {

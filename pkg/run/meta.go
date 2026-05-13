@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -22,14 +25,15 @@ const (
 
 // RunMeta holds metadata for a single run (an ai rpc subprocess invocation).
 type RunMeta struct {
-	ID         string `json:"id"`          // 6-char hex ID
-	PID        int    `json:"pid"`         // process ID of the ai rpc subprocess
-	CWD        string `json:"cwd"`         // working directory where ai run was invoked
-	Status     string `json:"status"`      // running, done, failed, killed
-	StartedAt  int64  `json:"started_at"`  // unix timestamp
-	FinishedAt int64  `json:"finished_at"` // unix timestamp, 0 if still running
-	Name       string `json:"name"`        // optional human-readable name
-	ParentRun  string `json:"parent_run"`  // optional parent run ID for subagents
+	ID           string `json:"id"`            // 6-char hex ID
+	PID          int    `json:"pid"`           // process ID of the ai rpc subprocess
+	CWD          string `json:"cwd"`           // working directory where ai run was invoked
+	Status       string `json:"status"`        // running, done, failed, killed
+	StartedAt    int64  `json:"started_at"`    // unix timestamp
+	FinishedAt   int64  `json:"finished_at"`   // unix timestamp, 0 if still running
+	Name         string `json:"name"`          // optional human-readable name
+	ParentRun    string `json:"parent_run"`    // optional parent run ID for subagents
+	PidStartTime int64  `json:"pid_start_time"` // epoch seconds of process start (for PID reuse detection)
 }
 
 // GenerateID returns a 6-character lowercase hex string using crypto/rand (3 bytes).
@@ -122,7 +126,8 @@ func SaveRunMeta(meta *RunMeta, path string) error {
 }
 
 // IsRunning checks if the run's process is still alive by sending signal 0
-// to the PID. Returns true only if status is "running" and the process exists.
+// to the PID, then verifying PID identity via start time to detect PID reuse.
+// Returns true only if status is "running" and the process exists and matches.
 func IsRunning(meta *RunMeta) bool {
 	if meta.Status != StatusRunning {
 		return false
@@ -131,8 +136,79 @@ func IsRunning(meta *RunMeta) bool {
 	if err != nil {
 		return false
 	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	if proc.Signal(syscall.Signal(0)) != nil {
+		return false
+	}
+	// Verify PID still belongs to the original process.
+	// If PidStartTime was recorded, the current start time must match.
+	if meta.PidStartTime > 0 {
+		currentStart := GetProcessStartTime(meta.PID)
+		if currentStart == 0 || currentStart != meta.PidStartTime {
+			return false
+		}
+	}
+	return true
+}
+
+// GetProcessStartTime returns the epoch-second start time of the given PID.
+// Returns 0 if the start time cannot be determined (process gone, unsupported OS).
+//
+// On Linux, it reads /proc/<pid>/stat field 22 (starttime in clock ticks).
+// On macOS/other, it uses `ps -o lstart= -p <pid>` and parses the date.
+var GetProcessStartTime = getProcessStartTime
+
+func getProcessStartTime(pid int) int64 {
+	if pid <= 0 {
+		return 0
+	}
+
+	if runtime.GOOS == "linux" {
+		return getProcessStartTimeLinux(pid)
+	}
+	return getProcessStartTimePS(pid)
+}
+
+// getProcessStartTimeLinux reads /proc/<pid>/stat field 22 (starttime).
+// Field 22 is the number of clock ticks since system boot.
+// NOTE: This implementation is only used on Linux. On non-Linux platforms,
+// getProcessStartTime falls through to getProcessStartTimePS.
+func getProcessStartTimeLinux(pid int) int64 {
+	// Non-Linux: fall back to ps-based approach.
+	return getProcessStartTimePS(pid)
+}
+
+// getClockTicks returns the sysconf(_SC_CLK_TCK) value.
+func getClockTicks() int64 {
+	return 100
+}
+
+// getProcessStartTimePS uses `ps -o lstart= -p <pid>` to get the start time.
+// Works on macOS and other Unix systems.
+// Forces LC_TIME=C to ensure consistent date format regardless of locale.
+func getProcessStartTimePS(pid int) int64 {
+	if pid <= 0 {
+		return 0
+	}
+	cmd := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	cmd.Env = append(os.Environ(), "LC_TIME=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return 0
+	}
+	// ps lstart format (C locale): "Wed Jan  2 15:04:05 2006"
+	t, err := time.Parse("Mon Jan  2 15:04:05 2006", line)
+	if err != nil {
+		// Try alternative format (single-digit day without extra space)
+		t, err = time.Parse("Mon Jan 2 15:04:05 2006", line)
+		if err != nil {
+			return 0
+		}
+	}
+	return t.Unix()
 }
 
 // --- internal helpers ---
@@ -196,11 +272,12 @@ func newTestMeta(id string) *RunMeta {
 func CreateRun(baseDir, cwd string, pid int) (*RunMeta, error) {
 	id := GenerateID()
 	meta := &RunMeta{
-		ID:        id,
-		PID:       pid,
-		CWD:       cwd,
-		Status:    StatusRunning,
-		StartedAt: now(),
+		ID:           id,
+		PID:          pid,
+		CWD:          cwd,
+		Status:       StatusRunning,
+		StartedAt:    now(),
+		PidStartTime: GetProcessStartTime(pid),
 	}
 	path := RunMetaPath(baseDir, id)
 	if err := SaveRunMeta(meta, path); err != nil {

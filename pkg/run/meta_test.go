@@ -275,3 +275,66 @@ func TestSyscallSignalZero(t *testing.T) {
 	err = proc.Signal(syscall.Signal(0))
 	assert.NoError(t, err, "signal 0 on own process should succeed")
 }
+
+func TestGetProcessStartTime_CurrentProcess(t *testing.T) {
+	// Should return a non-zero start time for the current process.
+	startTime := GetProcessStartTime(os.Getpid())
+	assert.Greater(t, startTime, int64(0), "start time should be > 0 for current process")
+}
+
+func TestGetProcessStartTime_NonexistentPID(t *testing.T) {
+	startTime := GetProcessStartTime(99999999)
+	assert.Equal(t, int64(0), startTime, "start time should be 0 for nonexistent PID")
+}
+
+func TestGetProcessStartTime_InvalidPID(t *testing.T) {
+	startTime := GetProcessStartTime(0)
+	assert.Equal(t, int64(0), startTime)
+	startTime = GetProcessStartTime(-1)
+	assert.Equal(t, int64(0), startTime)
+}
+
+func TestIsRunning_PIDReuseDetection(t *testing.T) {
+	// Simulate PID reuse: current process PID is alive, but with wrong start time.
+	realStartTime := GetProcessStartTime(os.Getpid())
+
+	// With correct start time → should be running.
+	meta := &RunMeta{
+		ID:           "reuse01",
+		PID:          os.Getpid(),
+		CWD:          "/tmp",
+		Status:       StatusRunning,
+		StartedAt:    1,
+		PidStartTime: realStartTime,
+	}
+	assert.True(t, IsRunning(meta), "should be running with correct start time")
+
+	// With wrong start time → should NOT be running (PID recycled).
+	meta.PidStartTime = realStartTime - 100000
+	assert.False(t, IsRunning(meta), "should NOT be running with wrong start time (PID reused)")
+
+	// With zero start time → should be running (backward compat, no check).
+	meta.PidStartTime = 0
+	assert.True(t, IsRunning(meta), "should be running with zero start time (backward compat)")
+}
+
+func TestIsRunning_PIDReuseWithDeadProcess(t *testing.T) {
+	// Dead process with wrong start time → should not be running.
+	meta := &RunMeta{
+		ID:           "reuse02",
+		PID:          99999999, // nonexistent
+		CWD:          "/tmp",
+		Status:       StatusRunning,
+		StartedAt:    1,
+		PidStartTime: 12345,
+	}
+	assert.False(t, IsRunning(meta), "dead process should not be running regardless of start time")
+}
+
+func TestCreateRun_RecordsPidStartTime(t *testing.T) {
+	tmpDir := t.TempDir()
+	meta, err := CreateRun(tmpDir, "/test", os.Getpid())
+	require.NoError(t, err)
+	assert.Equal(t, GetProcessStartTime(os.Getpid()), meta.PidStartTime,
+		"CreateRun should record process start time")
+}
