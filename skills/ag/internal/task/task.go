@@ -71,23 +71,24 @@ func IsTerminal(state string) bool {
 
 // Task represents a work unit.
 type Task struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title,omitempty"`
-	Status       string   `json:"status"`
-	Claimant     string   `json:"claimant,omitempty"`
-	Description  string   `json:"description"`
-	SpecFile     string   `json:"specFile,omitempty"`
-	OutputFile   string   `json:"outputFile,omitempty"`
-	FileScope    string   `json:"fileScope,omitempty"` // Comma-separated path prefixes this task should modify
-	Dependencies []string `json:"dependencies,omitempty"`
-	Group        string   `json:"group,omitempty"`
-	CreatedAt    int64    `json:"createdAt"`
-	ClaimedAt    int64    `json:"claimedAt,omitempty"`
-	FinishedAt   int64    `json:"finishedAt,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
-	Retryable    bool     `json:"retryable,omitempty"`
-	RetryCount   int      `json:"retryCount,omitempty"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title,omitempty"`
+	Status           string   `json:"status"`
+	Claimant         string   `json:"claimant,omitempty"`
+	Description      string   `json:"description"`
+	SpecFile         string   `json:"specFile,omitempty"`
+	OutputFile       string   `json:"outputFile,omitempty"`
+	FileScope        string   `json:"fileScope,omitempty"` // Comma-separated path prefixes this task should modify
+	Dependencies     []string `json:"dependencies,omitempty"`
+	Group            string   `json:"group,omitempty"`
+	EstimatedMinutes int      `json:"estimatedMinutes,omitempty"` // Per-task timeout hint: scheduler uses 2× this value
+	CreatedAt        int64    `json:"createdAt"`
+	ClaimedAt        int64    `json:"claimedAt,omitempty"`
+	FinishedAt       int64    `json:"finishedAt,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	Retryable        bool     `json:"retryable,omitempty"`
+	RetryCount       int      `json:"retryCount,omitempty"`
 }
 
 var (
@@ -538,12 +539,13 @@ func ImportPlan(filePath string) (int, error) {
 				continue
 			}
 		}
-		// Set title and group
+				// Set title and group
 		t.Title = pt.Title
 		t.Group = pt.Group
 		if t.Group == "" {
 			t.Group = "default"
 		}
+		t.EstimatedMinutes = pt.EstimatedMinutes
 		taskMu.Lock()
 		storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(t.ID), "task.json"), t)
 		taskMu.Unlock()
@@ -570,11 +572,12 @@ func ImportPlan(filePath string) (int, error) {
 
 // planTask represents a parsed task from a Markdown plan file.
 type planTask struct {
-	ID           string
-	Title        string
-	Description  string
-	Dependencies []string
-	Group        string
+	ID               string
+	Title            string
+	Description      string
+	Dependencies     []string
+	Group            string
+	EstimatedMinutes int
 }
 
 // parseMarkdownPlan parses a Markdown file with YAML frontmatter and task sections.
@@ -605,11 +608,12 @@ func parseMarkdownPlan(data []byte) ([]planTask, error) {
 func parseLegacyYAMLPlan(data []byte) ([]planTask, error) {
 	var plan struct {
 		Tasks []struct {
-			ID           string   `yaml:"id"`
-			Title        string   `yaml:"title"`
-			Description  string   `yaml:"description"`
-			Dependencies []string `yaml:"dependencies"`
-			Group        string   `yaml:"group"`
+			ID               string   `yaml:"id"`
+			Title            string   `yaml:"title"`
+			Description      string   `yaml:"description"`
+			Dependencies     []string `yaml:"dependencies"`
+			Group            string   `yaml:"group"`
+			EstimatedMinutes int      `yaml:"estimated_minutes"`
 		} `yaml:"tasks"`
 	}
 	if err := yaml.Unmarshal(data, &plan); err != nil {
@@ -619,11 +623,12 @@ func parseLegacyYAMLPlan(data []byte) ([]planTask, error) {
 	var tasks []planTask
 	for _, t := range plan.Tasks {
 		tasks = append(tasks, planTask{
-			ID:           t.ID,
-			Title:        t.Title,
-			Description:  t.Description,
-			Dependencies: t.Dependencies,
-			Group:        t.Group,
+			ID:               t.ID,
+			Title:            t.Title,
+			Description:      t.Description,
+			Dependencies:     t.Dependencies,
+			Group:            t.Group,
+			EstimatedMinutes: t.EstimatedMinutes,
 		})
 	}
 	return tasks, nil
@@ -687,6 +692,12 @@ func parseTaskSection(lines []string) *planTask {
 
 	task.ID = headerMatch[1]
 	task.Title = strings.TrimSpace(headerMatch[2])
+	// Parse optional hours estimate (e.g. "(3h)") and convert to minutes
+	if headerMatch[3] != "" {
+		if hours, err := strconv.ParseFloat(headerMatch[3], 64); err == nil && hours > 0 {
+			task.EstimatedMinutes = int(hours * 60)
+		}
+	}
 
 	// Parse metadata lines and collect body
 	var bodyLines []string

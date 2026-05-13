@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -103,12 +105,64 @@ func List() ([]AgentEntry, error) {
 }
 
 // IsProcessAlive checks if a process with the given PID is still running.
+// It distinguishes between running, zombie, and exited processes:
+//   - Running → true
+//   - Zombie (Z state) → false (process exited but parent hasn't reaped)
+//   - Exited/nonexistent → false
+//
+// On macOS/Linux, os.FindProcess always succeeds, and proc.Signal(0) returns
+// nil for zombie processes (the PID still exists in the process table).
+// We use syscall.Wait4 with WNOHANG to detect zombies without blocking.
 func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	// Fast check: if signal fails, process is definitely gone.
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	if proc.Signal(syscall.Signal(0)) != nil {
+		return false
+	}
+
+	// Signal succeeded — but on Unix, zombies also accept signal(0).
+	// Use Wait4 with WNOHANG to distinguish zombie from running.
+	var status syscall.WaitStatus
+	var rusage syscall.Rusage
+	wpid, err := syscall.Wait4(pid, &status, syscall.WNOHANG, &rusage)
+	if err != nil {
+		// ECHILD: not our child process — can't wait4 it.
+		// This is the common case for spawned agents (different process group).
+		// Fall back to checking /proc or ps for zombie state.
+		return !isZombieFromPS(pid)
+	}
+	if wpid == 0 {
+		// Child is still running (WNOHANG returns 0 if not exited).
+		return true
+	}
+	// wpid > 0: child exited, was reaped by Wait4. It's dead.
+	return false
+}
+
+// isZombieFromPS checks if a process is in zombie state using ps.
+// This handles the case where the process is not our direct child
+// (so Wait4 returns ECHILD) but may be a zombie.
+func isZombieFromPS(pid int) bool {
+	// ps -o stat= -p <pid> prints the 2-4 char state string.
+	// "Z" or "Z+" means zombie. Empty output means process doesn't exist.
+	out, err := exec.Command("ps", "-o", "stat=", "-p", fmt.Sprintf("%d", pid)).Output()
+	if err != nil {
+		// ps failed — process likely gone entirely.
+		return false
+	}
+	stat := strings.TrimSpace(string(out))
+	if stat == "" {
+		return false // process doesn't exist
+	}
+	// Check for zombie state: starts with 'Z'
+	return strings.HasPrefix(stat, "Z")
 }
 
 // ReadActivity reads activity.json for an agent.
