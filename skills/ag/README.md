@@ -77,7 +77,7 @@ ai rpc | ag conv --only tools          # Only tool calls
 
 ```bash
 ag task create "Implement OAuth2"
-ag task import-plan PLAN.yml                      # Import from plan with dependencies
+ag task import-plan tasks.md                      # Import from plan with dependencies
 ag task list [--status pending|claimed|done|failed]
 ag task claim <id> --as worker-1
 ag task next --as worker-1                        # Claim next unblocked task

@@ -36,8 +36,8 @@ pending → claimed → running → done
 1. ag doctor                    # 工具链检查，必须全绿
 2. ag task ls                   # 确认有 pending tasks
 3. ai serve --help              # 手动确认 ai serve 可用（doctor 不检查这个）
-4. plan-lint PLAN.yml           # 单独跑一次，exit 0 才继续
-6. ag task import-plan PLAN.yml # 导入
+4. plan-lint tasks.md           # 单独跑一次，exit 0 才继续
+6. ag task import-plan tasks.md # 导入
 7. ag task run --detach --design docs/design/xxx.md --callback "ag agent prompt <main-id> 'scheduler done'"
 8. 主 agent 继续工作或等待，scheduler 完成后自动回调
 ```
@@ -272,7 +272,7 @@ worker 没有 design.md 做参考，实现会偏离设计意图。
 ### 3. plan 有隐藏控制字符
 从 plan skill 生成的 YAML 可能包含 `\x01`（regex 损坏残留）或其它控制字符。
 plan-lint 现在会检测这些，但必须在 import 前跑。
-**修复：** `plan-lint PLAN.yml && ag task import-plan PLAN.yml` 作为固定流水线。
+**修复：** `plan-lint tasks.md && ag task import-plan tasks.md` 作为固定流水线。
 
 ### 4. cleanup 删除 task 后 show 报错
 `ag task cleanup` 会删除 done/failed 的 task。之后 `ag task show t001` 报 `task not found`。
