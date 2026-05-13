@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -502,7 +503,7 @@ func ClaimNext(claimant string) (string, error) {
 	return t.ID, nil
 }
 
-// ImportPlan imports tasks from a PLAN.yml file.
+// ImportPlan imports tasks from a plan file (supports Markdown format with YAML frontmatter).
 // Returns the number of tasks imported.
 func ImportPlan(filePath string) (int, error) {
 	data, err := os.ReadFile(filePath)
@@ -510,17 +511,8 @@ func ImportPlan(filePath string) (int, error) {
 		return 0, fmt.Errorf("read plan file: %w", err)
 	}
 
-	// Parse YAML plan
-	var plan struct {
-		Tasks []struct {
-			ID           string   `yaml:"id"`
-			Title        string   `yaml:"title"`
-			Description  string   `yaml:"description"`
-			Dependencies []string `yaml:"dependencies"`
-			Group        string   `yaml:"group"`
-		} `yaml:"tasks"`
-	}
-	if err := yaml.Unmarshal(data, &plan); err != nil {
+	tasks, err := parseMarkdownPlan(data)
+	if err != nil {
 		return 0, fmt.Errorf("parse plan: %w", err)
 	}
 
@@ -528,7 +520,7 @@ func ImportPlan(filePath string) (int, error) {
 	var depErrors []string
 
 	// Phase 1: Create all tasks first (ensures forward dependencies resolve)
-	for _, pt := range plan.Tasks {
+	for _, pt := range tasks {
 		desc := pt.Title
 		if pt.Description != "" {
 			desc = pt.Description
@@ -559,7 +551,7 @@ func ImportPlan(filePath string) (int, error) {
 	}
 
 	// Phase 2: Add dependencies (all tasks now exist, forward refs resolve)
-	for _, pt := range plan.Tasks {
+	for _, pt := range tasks {
 		if pt.ID == "" {
 			continue
 		}
@@ -574,6 +566,157 @@ func ImportPlan(filePath string) (int, error) {
 		return count, fmt.Errorf("dependency errors: %s", strings.Join(depErrors, "; "))
 	}
 	return count, nil
+}
+
+// planTask represents a parsed task from a Markdown plan file.
+type planTask struct {
+	ID           string
+	Title        string
+	Description  string
+	Dependencies []string
+	Group        string
+}
+
+// parseMarkdownPlan parses a Markdown file with YAML frontmatter and task sections.
+func parseMarkdownPlan(data []byte) ([]planTask, error) {
+	text := string(data)
+	text = strings.TrimSpace(text)
+
+	if !strings.HasPrefix(text, "---") {
+		// Fallback: try legacy YAML format
+		return parseLegacyYAMLPlan(data)
+	}
+
+	// Extract frontmatter
+	rest := text[3:]
+	closingIdx := strings.Index(rest, "\n---")
+	if closingIdx < 0 {
+		return nil, fmt.Errorf("frontmatter not closed: missing closing ---")
+	}
+
+	body := rest[closingIdx+4:]
+	body = strings.TrimPrefix(body, "\n")
+
+	// Parse task sections from Markdown body
+	return parseTaskSections(body), nil
+}
+
+// parseLegacyYAMLPlan parses the old YAML-only format for backward compatibility.
+func parseLegacyYAMLPlan(data []byte) ([]planTask, error) {
+	var plan struct {
+		Tasks []struct {
+			ID           string   `yaml:"id"`
+			Title        string   `yaml:"title"`
+			Description  string   `yaml:"description"`
+			Dependencies []string `yaml:"dependencies"`
+			Group        string   `yaml:"group"`
+		} `yaml:"tasks"`
+	}
+	if err := yaml.Unmarshal(data, &plan); err != nil {
+		return nil, fmt.Errorf("parse YAML plan: %w", err)
+	}
+
+	var tasks []planTask
+	for _, t := range plan.Tasks {
+		tasks = append(tasks, planTask{
+			ID:           t.ID,
+			Title:        t.Title,
+			Description:  t.Description,
+			Dependencies: t.Dependencies,
+			Group:        t.Group,
+		})
+	}
+	return tasks, nil
+}
+
+// taskHeaderRe matches `## T001 — Task title (3h)` or `## T001 - Task title (3h)`
+var taskHeaderRe = regexp.MustCompile(`^## (T\d+)\s*[—\-]\s*(.+?)(?:\s*\((\d+(?:\.\d+)?)h\))?\s*$`)
+
+// depLineRe matches `**Dependencies:** T001, T003` or `**Dependencies:** none`
+var depLineRe = regexp.MustCompile(`^\*\*Dependencies?:\*\*\s*(.+)$`)
+
+// groupLineRe matches `**Group:** agent`
+var groupLineRe = regexp.MustCompile(`^\*\*Group:\*\*\s*(.+)$`)
+
+// parseTaskSections splits the Markdown body into task sections by `## Txxx` headers.
+func parseTaskSections(body string) []planTask {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+
+	lines := strings.Split(body, "\n")
+
+	type section struct {
+		lines []string
+	}
+	var sections []section
+
+	currentSection := -1
+	for _, line := range lines {
+		if taskHeaderRe.MatchString(line) {
+			sections = append(sections, section{lines: []string{line}})
+			currentSection = len(sections) - 1
+		} else if currentSection >= 0 {
+			sections[currentSection].lines = append(sections[currentSection].lines, line)
+		}
+	}
+
+	var tasks []planTask
+	for _, sec := range sections {
+		task := parseTaskSection(sec.lines)
+		if task != nil {
+			tasks = append(tasks, *task)
+		}
+	}
+	return tasks
+}
+
+// parseTaskSection parses a single task section into a planTask.
+func parseTaskSection(lines []string) *planTask {
+	if len(lines) == 0 {
+		return nil
+	}
+
+	task := &planTask{}
+
+	// Parse header line
+	headerMatch := taskHeaderRe.FindStringSubmatch(lines[0])
+	if headerMatch == nil {
+		return nil
+	}
+
+	task.ID = headerMatch[1]
+	task.Title = strings.TrimSpace(headerMatch[2])
+
+	// Parse metadata lines and collect body
+	var bodyLines []string
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+
+		if depMatch := depLineRe.FindStringSubmatch(trimmed); depMatch != nil {
+			depStr := strings.TrimSpace(depMatch[1])
+			if !strings.EqualFold(depStr, "none") && depStr != "" {
+				parts := strings.Split(depStr, ",")
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p != "" {
+						task.Dependencies = append(task.Dependencies, p)
+					}
+				}
+			}
+			continue
+		}
+
+		if groupMatch := groupLineRe.FindStringSubmatch(trimmed); groupMatch != nil {
+			task.Group = strings.TrimSpace(groupMatch[1])
+			continue
+		}
+
+		bodyLines = append(bodyLines, line)
+	}
+
+	task.Description = strings.TrimSpace(strings.Join(bodyLines, "\n"))
+	return task
 }
 
 // Show returns task details.
