@@ -429,13 +429,18 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
 	stdout.Close()
 	runID := strings.TrimSpace(firstLine)
 
-	// Save PID before Release
+		// Save PID before releasing to background goroutine.
 	pid := cmd.Process.Pid
 
-	// Release process so it runs independently
-	if err := cmd.Process.Release(); err != nil {
-		log.Printf("[scheduler] worker %s: release warning: %v", taskID, err)
-	}
+	// Reap the child process in a background goroutine.
+	// Without Wait(), the child becomes a zombie after exit.
+	// We can't block here (need to return to scheduler loop),
+	// so Wait() runs in a goroutine that cleans up the zombie.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[scheduler] worker %s: process reaped with error: %v", taskID, err)
+		}
+	}()
 
 	// Write worker metadata to a separate file that ai serve won't overwrite.
 		// This solves the race where ai serve's activity.json overwrites our runID.
@@ -527,12 +532,22 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 			startedAt = act.StartedAt
 		}
 
-						// Check for scheduler timeout — if the worker has been running too long,
+											// Check for scheduler timeout — if the worker has been running too long,
 		// treat it as failed to prevent hung runs from occupying slots forever.
 		// Dynamic timeout: extend while the worker is actively streaming events.
 		if startedAt > 0 && cfg.Timeout > 0 {
 			elapsed := time.Since(time.Unix(startedAt, 0))
+
+			// Per-task timeout: if estimated_minutes is set, use 2× that value.
+			// Otherwise fall back to the global cfg.Timeout.
 			effectiveTimeout := cfg.Timeout
+			if t.EstimatedMinutes > 0 {
+				taskTimeout := time.Duration(t.EstimatedMinutes) * 2 * time.Minute
+				if taskTimeout < 5*time.Minute {
+					taskTimeout = 5 * time.Minute
+				}
+				effectiveTimeout = taskTimeout
+			}
 
 						// Dynamic timeout: if the worker is actively streaming events,
 			// extend the timeout. Check events.jsonl modification time as heartbeat.
