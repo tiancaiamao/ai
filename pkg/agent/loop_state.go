@@ -203,19 +203,35 @@ func (s *loopState) processToolCalls(
 
 	// Check loop guard for consecutive identical tool call patterns.
 	if hasMore && s.loopGuard != nil {
-		if blocked, reason := s.loopGuard.Observe(toolCalls); blocked {
-			slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
-			s.stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: reason}))
+		result := s.loopGuard.Observe(toolCalls)
+		if result.Blocked {
+			slog.Warn("[Loop] tool call loop guard triggered", "reason", result.Reason, "hardAbort", result.HardAbort, "feedbackAttempt", result.FeedbackAttempt)
+			s.stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: result.Reason}))
 			traceevent.Log(ctx, traceevent.CategoryEvent, "tool_loop_guard_triggered",
-				traceevent.Field{Key: "reason", Value: reason},
+				traceevent.Field{Key: "reason", Value: result.Reason},
 				traceevent.Field{Key: "call_count", Value: len(toolCalls)},
+				traceevent.Field{Key: "hard_abort", Value: result.HardAbort},
+				traceevent.Field{Key: "feedback_attempt", Value: result.FeedbackAttempt},
 			)
-			sanitizeMessageForToolLoopGuard(msg, reason)
-			// Update the message in both arrays to reflect sanitization.
-			s.agentCtx.RecentMessages[len(s.agentCtx.RecentMessages)-1] = *msg
-			s.newMessages = replaceLast(s.newMessages, *msg)
-			hasMore = false
-			return hasMore, nil
+
+			if result.HardAbort {
+				// Escalation limit reached: sanitize the message and abort.
+				sanitizeMessageForToolLoopGuard(msg, result.Reason)
+				s.agentCtx.RecentMessages[len(s.agentCtx.RecentMessages)-1] = *msg
+				s.newMessages = replaceLast(s.newMessages, *msg)
+				hasMore = false
+				return hasMore, nil
+			}
+
+			// Soft feedback: construct ToolResult messages for each blocked tool call
+			// and return them to the LLM so it can self-correct.
+			toolResults := buildLoopGuardToolResults(toolCalls, result, s.loopGuard.maxFeedbackAttempts)
+			for _, tr := range toolResults {
+				s.agentCtx.RecentMessages = append(s.agentCtx.RecentMessages, tr)
+				s.newMessages = append(s.newMessages, tr)
+			}
+			// hasMore stays true — the LLM will see the feedback results and get another turn.
+			return hasMore, toolResults
 		}
 	}
 
