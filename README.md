@@ -185,7 +185,7 @@ Skills extend the agent's capabilities with domain-specific instructions, prompt
 |-------|-------------|
 | `ag` | Agent orchestration runtime — spawn, steer, and coordinate AI agents |
 | `brainstorm` | Explore user intent through conversation |
-| `plan` | Read design docs, produce task YAML with dependency DAG |
+| `plan` | Read design docs, produce task plan with dependency DAG |
 | `implement` | Code-driven task execution with ag task scheduler |
 | `brainstorm` | Interactive design exploration → design.md |
 | `review` | Code review using codex-rs methodology |
@@ -216,7 +216,7 @@ ag agent steer worker-1 "also check error handling"
 ag agent kill worker-1
 
 # Task DAG scheduling
-ag task import-plan tasks.yml
+ag task import-plan tasks.md
 ag task next --claimant worker-1
 ag task done T001 --summary "completed"
 ```

@@ -684,7 +684,7 @@ var taskCreateCmd = &cobra.Command{
 
 var taskImportPlanCmd = &cobra.Command{
 	Use:   "import-plan <file>",
-	Short: "Import tasks from a PLAN.yml file",
+	Short: "Import tasks from a plan file (Markdown or YAML)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		count, err := task.ImportPlan(args[0])

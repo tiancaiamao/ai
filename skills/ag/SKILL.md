@@ -202,11 +202,11 @@ Common mistake: passing a hand-written `--system` that is *worse* than the defau
 # Create task
 ag task create "Implement OAuth2" [--file spec.md]
 
-# Import from plan YAML
-ag task import-plan tasks.yml
+# Import from plan file (Markdown or YAML)
+ag task import-plan tasks.md
 
-# Import from plan YAML (two-phase: create all, then link deps)
-ag task import-plan PLAN.yml [--design design.md]
+# Import from plan file (two-phase: create all, then link deps)
+ag task import-plan tasks.md [--design design.md]
 
 # List / filter
 ag task list [--status pending|claimed|done|failed]
@@ -349,7 +349,7 @@ ag agent prompt <main-agent-id> "task:<task-name> status:failed error:<错误原
 并行执行多个独立任务，每个任务一个 agent。
 
 ```
-1. ag task import-plan tasks.yml
+1. ag task import-plan tasks.md
 2. Get next task: ID=$(ag task next --claimant worker-N)
    Get description: ag task show $ID
 3. ag agent spawn worker-N --input "Task $ID: <title>\n<description>"
