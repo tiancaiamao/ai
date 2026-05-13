@@ -38,6 +38,8 @@ Break the design into tasks following these rules:
 
 **Estimated Hours**: Every task MUST have an estimated duration in the header. Default range: 2-4. This field is used for scheduling and progress tracking.
 
+**Estimated Minutes (optional)**: For fine-grained scheduling, add `estimated_minutes`. If present, the scheduler uses it to compute per-task timeout (default: 2× estimated_minutes, minimum 5 minutes). Without it, the global `--timeout` is used. Example: `estimated_minutes: 30` → scheduler allows 60 minutes for this task.
+
 **Boundary**: Each task should be one logical unit of work that:
 - Can be implemented without breaking compilation for other tasks
 - Has clear inputs and outputs

@@ -30,6 +30,7 @@ type Task struct {
 	Title          string
 	Description    string // Full Markdown body of the task section
 	EstimatedHours float64
+	EstimatedMinutes int
 	DependsOn      []string
 	Dependencies   []string
 	Group          string
@@ -329,9 +330,17 @@ func Lint(plan *Plan) []Diagnostic {
 			diags = append(diags, Diagnostic{Warning, fmt.Sprintf("task %s: estimated %.1f hours — consider splitting into smaller tasks", t.ID, t.EstimatedHours)})
 		}
 
-		// Info: task < 1 hour
+				// Info: task < 1 hour
 		if t.EstimatedHours > 0 && t.EstimatedHours < 1 {
 			diags = append(diags, Diagnostic{Info, fmt.Sprintf("task %s: estimated %.1f hours — very small, consider merging with related work", t.ID, t.EstimatedHours)})
+		}
+
+		// Granularity: warn if task has too many checklist items in Done when
+		checklistItems := countChecklistItems(trimmedDesc)
+		if checklistItems > 10 {
+			diags = append(diags, Diagnostic{Warning, fmt.Sprintf(
+				"task %s: %d checklist items in Done when — consider splitting into 2+ tasks (each should have ≤10 items)",
+				t.ID, checklistItems)})
 		}
 	}
 
@@ -441,6 +450,13 @@ func effectiveDeps(t Task) []string {
 		return t.DependsOn
 	}
 	return t.Dependencies
+}
+
+// countChecklistItems counts `- [ ]` checklist items in a description.
+// Used to detect oversized tasks that should be split.
+func countChecklistItems(desc string) int {
+	re := regexp.MustCompile(`(?m)^\s*- \[[ xX]\]`)
+	return len(re.FindAllString(desc, -1))
 }
 
 func findTask(tasks []Task, id string) *Task {

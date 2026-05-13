@@ -47,6 +47,12 @@ Read the implementation code and verify:
 - Did they interpret requirements differently than intended?
 - Did they solve the wrong problem?
 
+**Design signature consistency:**
+- For each public function/method mentioned in the spec, verify the actual return type matches
+- Check: does `function X()` return `TypeA` as specified, or `None`/`void`?
+- Common deviation: spec says `→ EventStream` but implementation returns `→ None`
+- Flag any undocumented return type changes — they may indicate misunderstood requirements
+
 **Verify by reading code, not by trusting report.**
 
 ## Report Format
