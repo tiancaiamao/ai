@@ -84,7 +84,7 @@ func List() ([]AgentEntry, error) {
 		// Lazy status reconciliation: if activity.json says "running" but the
 		// process is dead, update the status so callers see the real state.
 		if activity.Status == "running" && activity.Pid > 0 {
-					if !IsProcessAlive(activity.Pid) {
+					if !IsProcessAlive(activity.Pid, activity.PidStartTime) {
 				activity.Status = "done"
 				if activity.FinishedAt == 0 {
 					activity.FinishedAt = time.Now().Unix()
@@ -105,15 +105,20 @@ func List() ([]AgentEntry, error) {
 }
 
 // IsProcessAlive checks if a process with the given PID is still running.
-// It distinguishes between running, zombie, and exited processes:
+// It distinguishes between running, zombie, exited, and PID-reused processes:
 //   - Running → true
 //   - Zombie (Z state) → false (process exited but parent hasn't reaped)
 //   - Exited/nonexistent → false
+//   - PID reused (start time mismatch) → false
+//
+// If startTimeEpoch > 0, the function additionally verifies that the current
+// process at this PID started at the same time as the original, preventing
+// false positives from OS PID recycling.
 //
 // On macOS/Linux, os.FindProcess always succeeds, and proc.Signal(0) returns
 // nil for zombie processes (the PID still exists in the process table).
 // We use syscall.Wait4 with WNOHANG to detect zombies without blocking.
-func IsProcessAlive(pid int) bool {
+func IsProcessAlive(pid int, startTimeEpoch ...int64) bool {
 	if pid <= 0 {
 		return false
 	}
@@ -136,14 +141,24 @@ func IsProcessAlive(pid int) bool {
 		// ECHILD: not our child process — can't wait4 it.
 		// This is the common case for spawned agents (different process group).
 		// Fall back to checking /proc or ps for zombie state.
-		return !isZombieFromPS(pid)
+		if isZombieFromPS(pid) {
+			return false
+		}
+	} else if wpid > 0 {
+		// wpid > 0: child exited, was reaped by Wait4. It's dead.
+		return false
 	}
-	if wpid == 0 {
-		// Child is still running (WNOHANG returns 0 if not exited).
-		return true
+	// wpid == 0 or ECHILD with non-zombie: process appears alive.
+
+	// Verify PID hasn't been recycled by checking start time.
+	if len(startTimeEpoch) > 0 && startTimeEpoch[0] > 0 {
+		currentStart := getProcessStartTime(pid)
+		if currentStart == 0 || currentStart != startTimeEpoch[0] {
+			return false
+		}
 	}
-	// wpid > 0: child exited, was reaped by Wait4. It's dead.
-	return false
+
+	return true
 }
 
 // isZombieFromPS checks if a process is in zombie state using ps.
@@ -182,18 +197,19 @@ func ReadActivity(id string) (*Activity, error) {
 // Activity mirrors bridge.AgentActivity for use by CLI commands.
 // Defined here to avoid circular imports (bridge imports storage, agent imports storage).
 type Activity struct {
-	Status      string `json:"status"`
-	Pid         int    `json:"pid,omitempty"`
-	StartedAt   int64  `json:"startedAt,omitempty"`
-	FinishedAt  int64  `json:"finishedAt,omitempty"`
-	Turns       int    `json:"turns"`
-	TokensIn    int64  `json:"tokensIn"`
-	TokensOut   int64  `json:"tokensOut"`
-	TokensTotal int64  `json:"tokensTotal"`
-	LastTool    string `json:"lastTool,omitempty"`
-	LastText    string `json:"lastText,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Backend     string `json:"backend,omitempty"`
+	Status       string `json:"status"`
+	Pid          int    `json:"pid,omitempty"`
+	StartedAt    int64  `json:"startedAt,omitempty"`
+	FinishedAt   int64  `json:"finishedAt,omitempty"`
+	PidStartTime int64  `json:"pidStartTime,omitempty"` // epoch seconds, for PID reuse detection
+	Turns        int    `json:"turns"`
+	TokensIn     int64  `json:"tokensIn"`
+	TokensOut    int64  `json:"tokensOut"`
+	TokensTotal  int64  `json:"tokensTotal"`
+	LastTool     string `json:"lastTool,omitempty"`
+	LastText     string `json:"lastText,omitempty"`
+	Error        string `json:"error,omitempty"`
+	Backend      string `json:"backend,omitempty"`
 }
 
 // IsTerminal returns true if the agent status is terminal (won't change).
@@ -204,4 +220,30 @@ func IsTerminal(status string) bool {
 // timeNow returns current Unix timestamp.
 func timeNow() int64 {
 	return time.Now().Unix()
+}
+
+// getProcessStartTime returns the epoch-second start time of the given PID
+// using `ps -o lstart= -p <pid>`. Returns 0 on error.
+func getProcessStartTime(pid int) int64 {
+	if pid <= 0 {
+		return 0
+	}
+	cmd := exec.Command("ps", "-o", "lstart=", "-p", fmt.Sprintf("%d", pid))
+	cmd.Env = append(os.Environ(), "LC_TIME=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return 0
+	}
+	t, err := time.Parse("Mon Jan  2 15:04:05 2006", line)
+	if err != nil {
+		t, err = time.Parse("Mon Jan 2 15:04:05 2006", line)
+		if err != nil {
+			return 0
+		}
+	}
+	return t.Unix()
 }

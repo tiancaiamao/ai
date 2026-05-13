@@ -32,7 +32,7 @@ func GetAgentStatus(agentID string) (*agent.Activity, error) {
 
 	// For raw backends (codex, etc.), check process liveness and output.
 	if activity.Pid > 0 && activity.Status == "running" {
-		alive := agent.IsProcessAlive(activity.Pid)
+		alive := agent.IsProcessAlive(activity.Pid, activity.PidStartTime)
 		if !alive {
 			// Process exited. Scan output for terminal events.
 			agentDir := agent.AgentDir(agentID)
@@ -55,10 +55,11 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 	}
 
 		activity := &agent.Activity{
-		Status:    convertAIStatus(runMeta.Status),
-		Pid:       runMeta.PID,
-		StartedAt: runMeta.StartedAt,
-		Backend:   "ai",
+		Status:       convertAIStatus(runMeta.Status),
+		Pid:          runMeta.PID,
+		StartedAt:    runMeta.StartedAt,
+		Backend:      "ai",
+		PidStartTime: runMeta.PidStartTime,
 	}
 
 	if runMeta.FinishedAt > 0 {
@@ -68,7 +69,7 @@ func getAgentStatusWithAI(agentID string) (*agent.Activity, error) {
 	// ai serve detached via Process.Release may not update run.json on exit.
 	// If run.json says running but PID is dead, mark as done.
 	if activity.Status == "running" && activity.Pid > 0 {
-		if !agent.IsProcessAlive(activity.Pid) {
+		if !agent.IsProcessAlive(activity.Pid, activity.PidStartTime) {
 			activity.Status = "done"
 			if activity.FinishedAt == 0 {
 				activity.FinishedAt = time.Now().Unix()
