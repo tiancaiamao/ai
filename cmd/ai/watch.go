@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -48,6 +51,26 @@ type fileChecked struct {
 }
 
 type errMsg struct {
+	err error
+}
+
+// broadcasterEvent is a tea.Msg delivered when a new event arrives from
+// the in-memory broadcaster (used by `ai run` embedded TUI).
+type broadcasterEvent struct {
+	line string
+}
+
+// socketEvent is a tea.Msg delivered when a new event arrives from the
+// unix socket stream (used by `ai watch` connecting to `ai serve`).
+type socketEvent struct {
+	line string
+}
+
+// socketConnected is a tea.Msg delivered when socket stream connection is established.
+type socketConnected struct{}
+
+// socketConnectFailed is a tea.Msg delivered when socket stream connection fails.
+type socketConnectFailed struct {
 	err error
 }
 
@@ -110,8 +133,8 @@ func hasSentenceBoundary(s string) bool {
 
 type watchModel struct {
 	viewport    viewport.Model
-	eventsPath  string
-	offset      int64 // current read position in events.jsonl
+	eventsPath  string // legacy: for file-based polling (machine mode only)
+	offset      int64  // legacy: current read position in events.jsonl
 	content     *strings.Builder
 	ready       bool
 	err         error
@@ -133,6 +156,15 @@ type watchModel struct {
 	showPrefixes bool   // whether to show "role: " prefixes (default true)
 	showThinking bool   // whether to show thinking content
 	showTools    bool   // whether to show tool content
+
+	// In-memory event source (used by ai run embedded TUI).
+	broadcaster    *run.EventBroadcaster
+	broadcasterSub *run.Consumer
+
+	// Socket stream event source (used by ai watch connecting to ai serve).
+	sockConn    net.Conn
+	sockPath    string
+	sockScanner *bufio.Scanner
 }
 
 func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool) watchModel {
@@ -147,6 +179,52 @@ func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
+	}
+	m.sentBuf = newSentenceBuffer(func(text string) {
+		m.appendInline(text)
+	})
+	return m
+}
+
+// newWatchModelFromBroadcaster creates a watchModel that reads events from
+// an in-memory EventBroadcaster (used by the `ai run` embedded TUI).
+func newWatchModelFromBroadcaster(b *run.EventBroadcaster, runID string) watchModel {
+	m := watchModel{
+		runID:        runID,
+		mode:         "live",
+		caughtUp:     true,
+		statusLine:   fmt.Sprintf("ai run | run %s | live", runID),
+		content:      &strings.Builder{},
+		showPrefixes: true,
+		showThinking: true,
+		showTools:    true,
+		broadcaster:  b,
+	}
+	m.sentBuf = newSentenceBuffer(func(text string) {
+		m.appendInline(text)
+	})
+
+	// Subscribe to broadcaster for live events.
+	if b != nil {
+		m.broadcasterSub = b.Subscribe(0)
+	}
+
+	return m
+}
+
+// newWatchModelFromSocket creates a watchModel that reads events from
+// a unix socket stream (used by `ai watch` connecting to `ai serve`).
+func newWatchModelFromSocket(sockPath, runID string) watchModel {
+	m := watchModel{
+		runID:        runID,
+		mode:         "live",
+		caughtUp:     true,
+		statusLine:   fmt.Sprintf("ai watch | run %s | connecting...", runID),
+		content:      &strings.Builder{},
+		showPrefixes: true,
+		showThinking: true,
+		showTools:    true,
+		sockPath:     sockPath,
 	}
 	m.sentBuf = newSentenceBuffer(func(text string) {
 		m.appendInline(text)
@@ -196,8 +274,6 @@ func (m *watchModel) appendContent(text string) {
 	m.syncContent()
 }
 
-// appendInline appends text to the current line without a newline.
-// Used for streaming deltas (thinking, text) that build up a single line.
 func (m *watchModel) appendInline(text string) {
 	m.content.WriteString(text)
 	m.syncContent()
@@ -265,6 +341,18 @@ func (m watchModel) Init() tea.Cmd {
 	if m.machineMode {
 		return nil
 	}
+
+	// If using broadcaster, start polling the consumer channel.
+	if m.broadcaster != nil && m.broadcasterSub != nil {
+		return pollBroadcaster(m.broadcasterSub)
+	}
+
+	// If using socket stream, connect first.
+	if m.sockPath != "" {
+		return connectSocketStream(m.sockPath)
+	}
+
+	// Legacy: file-based polling.
 	return readAllExisting(m.eventsPath, m.sinceFlag)
 }
 
@@ -300,6 +388,43 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Re-wrap content to the new width.
 		m.syncContent()
+
+	case broadcasterEvent:
+		// Event from in-memory broadcaster (ai run).
+		formatted := run.ParseEvent(msg.line)
+		if formatted == nil {
+			return m, pollBroadcaster(m.broadcasterSub)
+		}
+		m.processEvent(formatted)
+		m.updateStatus()
+		return m, pollBroadcaster(m.broadcasterSub)
+
+	case socketConnected:
+		// Socket stream connected — now read events.
+		// Pick up the scanner stored by connectSocketStream.
+		socketStreamMu.Lock()
+		m.sockConn = socketStreamConn
+		m.sockScanner = socketStreamScanner
+		socketStreamMu.Unlock()
+
+		m.mode = "live"
+		m.caughtUp = true
+		m.updateStatus()
+		return m, readSocketEvent(m.sockScanner)
+
+	case socketConnectFailed:
+		m.appendContent(errStyle.Render(fmt.Sprintf("connection failed: %v", msg.err)))
+		return m, tea.Quit
+
+	case socketEvent:
+		// Event from unix socket stream (ai watch → ai serve).
+		formatted := run.ParseEvent(msg.line)
+		if formatted == nil {
+			return m, readSocketEvent(m.sockScanner)
+		}
+		m.processEvent(formatted)
+		m.updateStatus()
+		return m, readSocketEvent(m.sockScanner)
 
 	case replayDone:
 		// Finished replaying history, switch to live mode.
@@ -365,7 +490,104 @@ func (m watchModel) View() string {
 	return m.viewport.View() + "\n" + statusBar.Render(m.statusLine)
 }
 
-// --- File reading commands ---
+// --- Event source commands ---
+
+// pollBroadcaster reads one event from the broadcaster consumer channel
+// and returns it as a broadcasterEvent tea.Msg.
+func pollBroadcaster(c *run.Consumer) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-c.Events()
+		if !ok {
+			return tea.Quit
+		}
+		return broadcasterEvent{line: string(event)}
+	}
+}
+
+// connectSocketStream connects to the unix socket and starts streaming events.
+func connectSocketStream(sockPath string) tea.Cmd {
+	return func() tea.Msg {
+		conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
+		if err != nil {
+			return socketConnectFailed{err: err}
+		}
+
+		// Send stream command.
+		cmd := run.Command{Type: "stream", FromSeq: 0}
+		cmdData, err := json.Marshal(cmd)
+		if err != nil {
+			conn.Close()
+			return socketConnectFailed{err: err}
+		}
+		cmdData = append(cmdData, '\n')
+		if _, err := conn.Write(cmdData); err != nil {
+			conn.Close()
+			return socketConnectFailed{err: err}
+		}
+
+		// Read initial response.
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		reader := bufio.NewReader(conn)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			conn.Close()
+			return socketConnectFailed{err: fmt.Errorf("read stream response: %w", err)}
+		}
+
+		var resp run.Response
+		if err := json.Unmarshal([]byte(strings.TrimRight(line, "\n")), &resp); err != nil {
+			conn.Close()
+			return socketConnectFailed{err: fmt.Errorf("parse stream response: %w", err)}
+		}
+		if !resp.OK {
+			conn.Close()
+			return socketConnectFailed{err: fmt.Errorf("stream rejected: %s", resp.Error)}
+		}
+
+		// Clear deadline — long-lived connection.
+		conn.SetDeadline(time.Time{})
+
+		// Store connection in a temporary that will be picked up by the model.
+		// We need to thread the scanner back. Use a channel-based approach instead.
+		// Actually, we'll return the scanner through the message and the model will store it.
+		// But we can't modify the model in a Cmd... 
+		// Let's use a different approach: store conn and scanner in a package-level var.
+		socketStreamMu.Lock()
+		socketStreamConn = conn
+		socketStreamScanner = bufio.NewScanner(conn)
+		socketStreamScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		socketStreamMu.Unlock()
+
+		return socketConnected{}
+	}
+}
+
+// Package-level state for socket stream (set by connectSocketStream, consumed by readSocketEvent).
+// This is a pragmatic approach since tea.Cmd can't modify the model directly.
+var (
+	socketStreamMu       sync.Mutex
+	socketStreamConn     net.Conn
+	socketStreamScanner  *bufio.Scanner
+)
+
+// readSocketEvent reads one event from the socket scanner.
+func readSocketEvent(scanner *bufio.Scanner) tea.Cmd {
+	return func() tea.Msg {
+		if scanner == nil {
+			return socketConnectFailed{err: fmt.Errorf("scanner not initialized")}
+		}
+		if scanner.Scan() {
+			return socketEvent{line: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			return socketConnectFailed{err: err}
+		}
+		// Stream ended — broadcaster likely shut down.
+		return tea.Quit
+	}
+}
+
+// --- Legacy file reading commands ---
 
 // replayBatch is returned by readAllExisting when multiple lines are read at once.
 type replayBatch struct {
@@ -454,24 +676,24 @@ func watchSubcommand() {
 		os.Exit(1)
 	}
 
-	eventsPath := run.EventsPath("", meta.ID)
-
 	// Machine-readable mode: print raw events + final offset.
+	// This still uses file-based polling since machine mode is a one-shot read.
 	if *sinceFlag >= 0 {
+		eventsPath := run.EventsPath("", meta.ID)
 		machineWatch(eventsPath, *sinceFlag)
 		return
 	}
 
-	// Check that events.jsonl exists (or wait briefly for it).
-	if _, err := os.Stat(eventsPath); err != nil {
-		time.Sleep(500 * time.Millisecond)
-		if _, err := os.Stat(eventsPath); err != nil {
-			fmt.Fprintf(os.Stderr, "error: events file not found: %s\n", eventsPath)
-			os.Exit(1)
-		}
+	// Connect via socket stream for live events.
+	sockPath := run.SocketPath("", meta.ID)
+
+	// Check that the socket exists.
+	if _, err := os.Stat(sockPath); err != nil {
+		fmt.Fprintf(os.Stderr, "error: socket not found: %s\n", sockPath)
+		os.Exit(1)
 	}
 
-	model := newWatchModel(eventsPath, meta.ID, 0, false)
+	model := newWatchModelFromSocket(sockPath, meta.ID)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -482,6 +704,8 @@ func watchSubcommand() {
 
 // machineWatch reads events from offset and prints raw lines + final offset.
 // Used for machine-readable incremental consumption.
+// NOTE: machineWatch still uses file-based polling as a fallback for
+// completed runs where no broadcaster is active.
 func machineWatch(eventsPath string, offset int64) {
 	f, err := os.Open(eventsPath)
 	if err != nil {
