@@ -90,6 +90,7 @@ var taskRunCmd = &cobra.Command{
 		cfg.DesignFile = design
 		cfg.SkipReview = skipReview
 		cfg.Callback = callback
+		cfg.MaxProcesses, _ = cmd.Flags().GetInt("max-processes")
 
 		cwd, _ := os.Getwd()
 		cfg.WorkDir = cwd
@@ -151,7 +152,7 @@ func runDetached(originalArgs []string) {
 	pidPath := filepath.Join(storage.BaseDir, "scheduler.pid")
 
 	// Open log file
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
 		os.Exit(1)
@@ -198,6 +199,16 @@ var taskRetryCmd = &cobra.Command{
 	Short: "Retry a failed task",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
+		if force {
+			t, err := task.RetryForce(args[0])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Printf("force retried %s (attempt %d)\n", t.ID, t.RetryCount)
+			return
+		}
 		maxRetries, _ := cmd.Flags().GetInt("max-retries")
 		t, err := task.Retry(args[0], maxRetries)
 		if err != nil {
@@ -205,6 +216,20 @@ var taskRetryCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Printf("retried %s (attempt %d)\n", t.ID, t.RetryCount)
+	},
+}
+
+var taskResetCmd = &cobra.Command{
+	Use:   "reset <id>",
+	Short: "Fully reset a task to pending (clear claimant, retryCount, error)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		t, err := task.Reset(args[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("reset %s to pending\n", t.ID)
 	},
 }
 
@@ -732,7 +757,17 @@ var taskListCmd = &cobra.Command{
 				desc = desc[:50] + "..."
 			}
 			elapsed := ""
-			if t.ClaimedAt > 0 {
+			if t.Status == task.StatusRunning || t.Status == task.StatusClaimed {
+				// Use worker-meta.json startedAt for accurate elapsed display
+				startedAt := task.GetWorkerStartedAt(t.ID)
+				if startedAt > 0 {
+					dur := time.Since(time.Unix(startedAt, 0)).Round(time.Second)
+					elapsed = dur.String()
+				} else if t.ClaimedAt > 0 {
+					dur := time.Since(time.Unix(t.ClaimedAt, 0)).Round(time.Second)
+					elapsed = dur.String()
+				}
+			} else if t.ClaimedAt > 0 {
 				dur := time.Since(time.Unix(t.ClaimedAt, 0)).Round(time.Second)
 				elapsed = dur.String()
 			}
@@ -985,7 +1020,38 @@ var taskShowCmd = &cobra.Command{
 		}
 		if t.FinishedAt > 0 {
 			fmt.Printf("Finished: %s\n", formatTime(t.FinishedAt))
-			fmt.Printf("Duration: %s\n", formatDuration(t.FinishedAt-t.ClaimedAt))
+			// Use worker-meta.json startedAt for accurate duration
+			startedAt := task.GetWorkerStartedAt(t.ID)
+			if startedAt > 0 {
+				fmt.Printf("Duration: %s\n", formatDuration(t.FinishedAt-startedAt))
+			} else if t.ClaimedAt > 0 {
+				fmt.Printf("Duration: %s\n", formatDuration(t.FinishedAt-t.ClaimedAt))
+			}
+		}
+
+		if t.RetryCount > 0 {
+			fmt.Printf("Retry Count: %d\n", t.RetryCount)
+		}
+		if len(t.PreviousRuns) > 0 {
+			fmt.Printf("Previous Runs:\n")
+			for i, run := range t.PreviousRuns {
+				runID := run.RunID
+				if runID == "" {
+					runID = "(unknown)"
+				}
+				fmt.Printf("  #%d: run %s, started %s", i+1, runID, formatTime(run.StartedAt))
+				if run.FailedAt > 0 {
+					fmt.Printf(", failed %s", formatTime(run.FailedAt))
+				}
+				if run.Error != "" {
+					errStr := run.Error
+					if len(errStr) > 80 {
+						errStr = errStr[:80] + "..."
+					}
+					fmt.Printf(" — %s", errStr)
+				}
+				fmt.Println()
+			}
 		}
 
 		// Aggregate turns/tokens from claimant agent's activity.json (FR-023)
@@ -1109,8 +1175,10 @@ func init() {
 	taskRunCmd.Flags().Bool("skip-review", false, "Skip review phase")
 	taskRunCmd.Flags().Bool("detach", false, "Run scheduler in background (log to .ag/scheduler.log)")
 	taskRunCmd.Flags().String("callback", "", "Shell command to execute when all tasks complete (e.g. 'ag agent prompt main \"done\"')")
+	taskRunCmd.Flags().Int("max-processes", 0, "Global process cap (workers+reviewers). 0 = max-concurrent+1")
 	taskLogCmd.Flags().Int("tail", 0, "Show last N lines (default: follow mode)")
 	taskRetryCmd.Flags().Int("max-retries", 3, "Max retries allowed")
+	taskRetryCmd.Flags().Bool("force", false, "Force retry even if max retries exceeded")
 
 	// Send/recv flags
 	sendCmd.Flags().String("file", "", "Send file contents from path")
@@ -1130,7 +1198,7 @@ func init() {
 
 		// Task subcommands
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
-				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
+				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskResetCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
 
 		// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd, doctorCmd)

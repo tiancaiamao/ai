@@ -89,6 +89,15 @@ type Task struct {
 	Summary          string   `json:"summary,omitempty"`
 	Retryable        bool     `json:"retryable,omitempty"`
 	RetryCount       int      `json:"retryCount,omitempty"`
+	PreviousRuns     []RunRecord `json:"previousRuns,omitempty"` // History of failed run attempts
+}
+
+// RunRecord stores metadata about a single task run attempt.
+type RunRecord struct {
+	RunID     string `json:"runId,omitempty"`
+	StartedAt int64  `json:"startedAt,omitempty"`
+	FailedAt  int64  `json:"failedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 var (
@@ -311,6 +320,17 @@ func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
 // Retry resets a failed task back to pending for re-execution.
 // Increments RetryCount. Returns error if task is not failed or max retries exceeded.
 func Retry(taskID string, maxRetries int) (*Task, error) {
+	return retryInternal(taskID, maxRetries, false)
+}
+
+// RetryForce resets a failed task back to pending, bypassing the max retries check.
+// Use for manual recovery of stuck tasks.
+func RetryForce(taskID string) (*Task, error) {
+	return retryInternal(taskID, 0, true)
+}
+
+// retryInternal is the shared implementation for Retry and RetryForce.
+func retryInternal(taskID string, maxRetries int, force bool) (*Task, error) {
 	taskMu.Lock()
 	defer taskMu.Unlock()
 
@@ -323,7 +343,7 @@ func Retry(taskID string, maxRetries int) (*Task, error) {
 		return nil, fmt.Errorf("task %s is %s (not failed, cannot retry)", taskID, task.Status)
 	}
 
-	if task.RetryCount >= maxRetries {
+	if !force && task.RetryCount >= maxRetries {
 		return nil, fmt.Errorf("task %s exceeded max retries (%d)", taskID, maxRetries)
 	}
 
@@ -342,6 +362,91 @@ func Retry(taskID string, maxRetries int) (*Task, error) {
 		return nil, err
 	}
 	return task, nil
+}
+
+// Reset fully resets a task to pending state, clearing all runtime fields.
+// Unlike Retry, this clears RetryCount and makes the task appear as new.
+// Useful for manual recovery of stuck or permanently-failed tasks.
+func Reset(taskID string) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reset all runtime fields
+	task.Status = StatusPending
+	task.Claimant = ""
+	task.ClaimedAt = 0
+	task.FinishedAt = 0
+	task.Error = ""
+	task.Summary = ""
+	task.Retryable = false
+	task.RetryCount = 0
+
+	// Remove claim lock so Claim can succeed
+	os.Remove(filepath.Join(storage.TaskDir(taskID), ".claim-lock"))
+
+	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// MarkNonRetryable sets Retryable=false on a task so the scheduler
+// will stop retrying it and AllDone() can treat it as terminal.
+func MarkNonRetryable(taskID string) error {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return err
+	}
+	task.Retryable = false
+	return storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task)
+}
+
+// RecordFailedRun appends a run record to the task's PreviousRuns history.
+// This preserves failed run IDs for debugging and retry history display.
+func RecordFailedRun(taskID, runID string, startedAt int64, errMsg string) error {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return err
+	}
+	task.PreviousRuns = append(task.PreviousRuns, RunRecord{
+		RunID:     runID,
+		StartedAt: startedAt,
+		FailedAt:  time.Now().Unix(),
+		Error:     errMsg,
+	})
+	return storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task)
+}
+
+// GetWorkerStartedAt returns the startedAt timestamp from worker-meta.json
+// for a task's claimant agent, or 0 if not available.
+func GetWorkerStartedAt(taskID string) int64 {
+	t, err := loadTask(taskID)
+	if err != nil || t.Claimant == "" {
+		return 0
+	}
+	agentDir := storage.AgentDir(t.Claimant)
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if !storage.Exists(metaPath) {
+		return 0
+	}
+	var meta struct {
+		StartedAt int64 `json:"startedAt"`
+	}
+	if err := storage.ReadJSON(metaPath, &meta); err != nil {
+		return 0
+	}
+	return meta.StartedAt
 }
 
 // Groups returns all unique group names across all tasks.

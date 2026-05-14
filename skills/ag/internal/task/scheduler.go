@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,6 +32,7 @@ type SchedulerConfig struct {
 	SkipReview      bool
 	MaxReviewRounds int
 	Callback        string // Shell command to execute after all tasks complete
+	MaxProcesses    int    // Global cap on concurrent ai serve processes (workers + reviewers). 0 = MaxConcurrent+1
 }
 
 // DefaultSchedulerConfig returns sensible defaults.
@@ -53,7 +56,77 @@ const (
 	// timeoutExtendPerActivity adds this much to the deadline each time
 	// we detect the worker is still actively writing events.
 	timeoutExtendPerActivity = 5 * time.Minute
+
+	// firstResponseTimeout is how long we wait for the LLM to produce
+	// its first assistant message before failing fast. If events.jsonl
+	// has zero assistant messages after this duration, the worker is
+	// considered dead (LLM never responded).
+	firstResponseTimeout = 5 * time.Minute
+
+	// retryBackoffDurations defines exponential backoff delays between retries.
+	// Index 0 = first retry (30s), index 1 = second retry (2min), index 2+ = 5min.
+	retryBackoffDurations = 3
+
+	// maxConsecutiveFailures is the per-task circuit breaker threshold.
+	// After this many consecutive failures, a task is marked non-retryable.
+	maxConsecutiveFailures = 3
 )
+
+// schedulerState holds mutable state shared across the scheduler loop.
+type schedulerState struct {
+	// activeProcessCount tracks the number of currently running ai serve
+	// processes (workers + reviewers). This is a global cap that prevents
+	// resource exhaustion when multiple reviewers spawn simultaneously.
+	activeProcessCount atomic.Int64
+
+	// maxProcesses is the cap for activeProcessCount.
+	maxProcesses int64
+
+// perTaskFailures tracks consecutive failures per task ID for per-task
+// circuit breaking instead of a global circuit breaker.
+perTaskFailures sync.Map // map[string]*atomic.Int64
+}
+
+// tryAcquireSlot attempts to reserve a process slot. Returns true on success.
+// Call releaseSlot() when the process finishes.
+func (s *schedulerState) tryAcquireSlot() bool {
+	current := s.activeProcessCount.Load()
+	if current >= s.maxProcesses {
+		return false
+	}
+	return s.activeProcessCount.CompareAndSwap(current, current+1)
+}
+
+// releaseSlot releases a process slot after a worker/reviewer finishes.
+func (s *schedulerState) releaseSlot() {
+	s.activeProcessCount.Add(-1)
+}
+
+// activeSlots returns the number of currently active process slots.
+func (s *schedulerState) activeSlots() int64 {
+	return s.activeProcessCount.Load()
+}
+
+// recordTaskFailure increments the per-task failure counter and returns the new count.
+func (s *schedulerState) recordTaskFailure(taskID string) int {
+	val, _ := s.perTaskFailures.LoadOrStore(taskID, new(atomic.Int64))
+	counter := val.(*atomic.Int64)
+	return int(counter.Add(1))
+}
+
+// resetTaskFailures clears the per-task failure counter (e.g. on success).
+func (s *schedulerState) resetTaskFailures(taskID string) {
+	s.perTaskFailures.Store(taskID, new(atomic.Int64))
+}
+
+// getTaskFailures returns the current failure count for a task.
+func (s *schedulerState) getTaskFailures(taskID string) int {
+	val, ok := s.perTaskFailures.Load(taskID)
+	if !ok {
+		return 0
+	}
+	return int(val.(*atomic.Int64).Load())
+}
 
 // RunScheduler executes the scheduler loop until all tasks are terminal
 // or the context is cancelled.
@@ -79,6 +152,15 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 	fmt.Printf("Scheduler started: %d tasks, max concurrent=%d, review=%v\n",
 		len(tasks), cfg.MaxConcurrent, !cfg.SkipReview)
 
+	// Initialize global process cap state
+	state := &schedulerState{}
+	if cfg.MaxProcesses > 0 {
+		state.maxProcesses = int64(cfg.MaxProcesses)
+	} else {
+		state.maxProcesses = int64(cfg.MaxConcurrent) + 1 // +1 for reviewer
+	}
+	fmt.Printf("  Global process cap: %d (workers + reviewers)\n", state.maxProcesses)
+
 	// Heartbeat: write timestamp every poll interval so `ag task stop`
 	// can detect stale scheduler vs. dead scheduler.
 	heartbeatPath := filepath.Join(storage.BaseDir, "scheduler.heartbeat")
@@ -94,9 +176,7 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		}
 	}()
 
-	// Circuit breaker: stop after N consecutive failures
-	consecutiveFailures := 0
-	const maxConsecutiveFailures = 3
+	// Circuit breaker: per-task tracking (maxConsecutiveFailures per task)
 
 	// Print blocking status for each pending task
 	pendingTasks, _ := List(StatusPending)
@@ -138,17 +218,29 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 		default:
 		}
 
-				progress, err := tick(ctx, cfg)
+				progress, err := tick(ctx, cfg, state)
 		if err != nil {
 			return fmt.Errorf("scheduler tick: %w", err)
 		}
 
-						// Circuit breaker: count consecutive failures or truly stuck reviews
-		// "Truly stuck" means: reviews in a fully-ready group (all tasks in review)
-		// with no reviewer process alive — indicating reviewer crashed.
+						// Per-task circuit breaker: check if any single task has exceeded max failures.
+		// Unlike the previous global breaker, this only marks the failing task as
+		// permanently failed (non-retryable) so AllDone() can proceed without
+		// stopping the entire scheduler.
 		failed, _ := List(StatusFailed)
+		for _, ft := range failed {
+			failures := state.getTaskFailures(ft.ID)
+			if failures >= maxConsecutiveFailures && ft.Retryable {
+				// Permanently fail this task so the scheduler can move on.
+				log.Printf("[scheduler] %s: exceeded %d consecutive failures, marking non-retryable", ft.ID, maxConsecutiveFailures)
+				// Set Retryable=false so retryFailed skips it and AllDone treats it as terminal.
+				MarkNonRetryable(ft.ID)
+			}
+		}
+
+		// Check for truly stuck reviews (reviewer crashed without updating tasks)
 		trulyStuck := false
-		if len(failed) == 0 {
+		{
 			// Check if any review group is fully in review but has no reviewer alive
 			reviewTasks, _ := List(StatusReview)
 			if len(reviewTasks) > 0 {
@@ -182,20 +274,8 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 				}
 			}
 		}
-		if (len(failed) > 0 || trulyStuck) && !progress {
-			consecutiveFailures++
-			if consecutiveFailures >= maxConsecutiveFailures {
-				fmt.Printf("\n⛔ Circuit breaker: %d consecutive ticks without progress\n", consecutiveFailures)
-				if trulyStuck {
-					fmt.Println("  Reason: review group fully in review but no reviewer alive")
-				}
-				fmt.Println("Stopping scheduler to prevent wasting resources.")
-				printSummary()
-				return fmt.Errorf("circuit breaker triggered: %d consecutive failures", consecutiveFailures)
-			}
-			log.Printf("[scheduler] circuit breaker: %d/%d (failed=%d, trulyStuck=%v)", consecutiveFailures, maxConsecutiveFailures, len(failed), trulyStuck)
-		} else if progress {
-			consecutiveFailures = 0
+		if trulyStuck && !progress {
+			log.Printf("[scheduler] truly stuck review detected but continuing (per-task circuit breaker handles individual tasks)")
 		}
 
 		// Check if all done
@@ -226,25 +306,25 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 }
 
 // tick executes one scheduler cycle. Returns true if any progress was made.
-func tick(ctx context.Context, cfg SchedulerConfig) (bool, error) {
+func tick(ctx context.Context, cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	progress := false
 
 	// 1. Retry failed tasks
-	if p, err := retryFailed(cfg); err != nil {
+	if p, err := retryFailed(cfg, state); err != nil {
 		return false, err
 	} else if p {
 		progress = true
 	}
 
 	// 2. Spawn workers for runnable tasks
-	if p, err := spawnWorkers(ctx, cfg); err != nil {
+	if p, err := spawnWorkers(ctx, cfg, state); err != nil {
 		return false, err
 	} else if p {
 		progress = true
 	}
 
 	// 3. Check running tasks for completion
-	if p, err := checkRunning(cfg); err != nil {
+	if p, err := checkRunning(cfg, state); err != nil {
 		return false, err
 	} else if p {
 		progress = true
@@ -252,7 +332,7 @@ func tick(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 
 	// 4. Group review
 	if !cfg.SkipReview {
-		if p, err := checkGroupReview(ctx, cfg); err != nil {
+		if p, err := checkGroupReview(ctx, cfg, state); err != nil {
 			return false, err
 		} else if p {
 			progress = true
@@ -265,7 +345,8 @@ func tick(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 // retryFailed retries failed tasks that haven't exceeded max retries.
 // Before retrying, kills any leftover worker processes from the failed attempt
 // and waits for them to actually die before resetting the task to pending.
-func retryFailed(cfg SchedulerConfig) (bool, error) {
+// Applies exponential backoff between retries: 30s, 2min, 5min.
+func retryFailed(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	failed, err := List(StatusFailed)
 	if err != nil {
 		return false, err
@@ -274,6 +355,13 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 	for _, t := range failed {
 		if !t.Retryable {
 			log.Printf("[scheduler] skip retry %s: not retryable (error: %s)", t.ID, t.Error)
+			continue
+		}
+
+		// Per-task circuit breaker: if this task has failed too many times in a row,
+		// don't retry it. The main loop's circuit breaker check will mark it non-retryable.
+		if state.getTaskFailures(t.ID) >= maxConsecutiveFailures {
+			log.Printf("[scheduler] skip retry %s: per-task circuit breaker (%d failures)", t.ID, state.getTaskFailures(t.ID))
 			continue
 		}
 
@@ -290,10 +378,35 @@ func retryFailed(cfg SchedulerConfig) (bool, error) {
 			log.Printf("[scheduler] skip retry %s: %v", t.ID, err)
 			continue // max retries exceeded, skip
 		}
+
+		// Exponential backoff: wait before spawning next attempt.
+		// Schedule: 30s for 1st retry, 2min for 2nd, 5min for 3rd+.
+		backoff := retryBackoff(t.RetryCount)
+		if backoff > 0 {
+			log.Printf("[scheduler] %s: backing off %v before retry attempt %d", t.ID, backoff, t.RetryCount+1)
+			time.Sleep(backoff)
+		}
+
 		fmt.Printf("  🔄 Retried %s (attempt %d)\n", t.ID, t.RetryCount+1)
 		progress = true
 	}
 	return progress, nil
+}
+
+// retryBackoff returns the delay duration for a given retry attempt (1-indexed).
+// Schedule: attempt 1 = 30s, attempt 2 = 2min, attempt 3+ = 5min.
+func retryBackoff(retryCount int) time.Duration {
+	switch retryCount {
+	case 1:
+		return 30 * time.Second
+	case 2:
+		return 2 * time.Minute
+	default:
+		if retryCount >= retryBackoffDurations {
+			return 5 * time.Minute
+		}
+		return 30 * time.Second
+	}
 }
 
 // waitForWorkerDeath polls until the worker process is confirmed dead
@@ -325,17 +438,9 @@ func waitForWorkerDeath(claimant string, timeout time.Duration) {
 }
 
 // spawnWorkers picks pending tasks with met dependencies and spawns worker agents.
-func spawnWorkers(ctx context.Context, cfg SchedulerConfig) (bool, error) {
-	// Count currently running tasks
-	running, err := List(StatusRunning)
-	if err != nil {
-		return false, err
-	}
-	slots := cfg.MaxConcurrent - len(running)
-	if slots <= 0 {
-		return false, nil
-	}
-
+// Uses the global process cap (state.activeProcessCount) to limit total concurrent
+// ai serve processes (workers + reviewers).
+func spawnWorkers(ctx context.Context, cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	// Find pending tasks with met dependencies
 	pending, err := List(StatusPending)
 	if err != nil {
@@ -344,15 +449,20 @@ func spawnWorkers(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 
 	progress := false
 	for _, t := range pending {
-		if slots <= 0 {
+		// Check global process cap before spawning
+		if !state.tryAcquireSlot() {
+			log.Printf("[scheduler] skip spawn: global process cap reached (%d/%d)", state.activeSlots(), state.maxProcesses)
 			break
 		}
+
 		unmet, err := UnmetDependencies(t.ID)
 		if err != nil {
+			state.releaseSlot() // won't spawn, release slot
 			log.Printf("[scheduler] skip %s: dependency check error: %v", t.ID, err)
 			continue
 		}
 		if len(unmet) > 0 {
+			state.releaseSlot() // won't spawn, release slot
 			log.Printf("[scheduler] skip %s: blocked by %v", t.ID, unmet)
 			continue
 		}
@@ -360,25 +470,28 @@ func spawnWorkers(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 		// Claim and transition to running
 		claimed, err := Claim(t.ID, fmt.Sprintf("worker-%s", t.ID))
 		if err != nil {
+			state.releaseSlot() // won't spawn, release slot
 			log.Printf("[scheduler] skip %s: claim failed: %v", t.ID, err)
 			continue
 		}
 		_, err = Transition(t.ID, StatusRunning)
 		if err != nil {
+			state.releaseSlot() // won't spawn, release slot
 			log.Printf("[scheduler] skip %s: transition to running failed: %v", t.ID, err)
 			continue
 		}
 
-		// Spawn worker agent
-		go spawnWorker(t.ID, claimed.Claimant, cfg)
-		slots--
+		// Spawn worker agent — slot is released in spawnWorker on completion
+		go spawnWorker(t.ID, claimed.Claimant, cfg, state)
 		progress = true
 	}
 	return progress, nil
 }
 
 // spawnWorker runs a worker agent for a single task.
-func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
+// Releases the global process slot when the worker finishes (success or failure).
+func spawnWorker(taskID, agentID string, cfg SchedulerConfig, state *schedulerState) {
+	defer state.releaseSlot()
 	t, err := Load(taskID)
 	if err != nil {
 		Fail(taskID, fmt.Sprintf("load task: %v", err), false)
@@ -479,7 +592,8 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig) {
 // checkRunning checks if any running tasks have completed (stale detection).
 // For ai-serve workers, checks the run.json status via runID.
 // For legacy workers, checks if PID is still alive.
-func checkRunning(cfg SchedulerConfig) (bool, error) {
+// Also detects LLM silence (zero assistant messages) and fails fast.
+func checkRunning(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	running, err := List(StatusRunning)
 	if err != nil {
 		return false, err
@@ -592,10 +706,34 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 								// Kill the worker BEFORE marking as failed, so retryFailed
 				// won't spawn a new worker while the old one is still alive.
 				killWorker(t.ID, t.Claimant)
-				Fail(t.ID, fmt.Sprintf("task timed out after %v", elapsed.Round(time.Minute)), true)
+				state.recordTaskFailure(t.ID)
+				errMsg := fmt.Sprintf("task timed out after %v", elapsed.Round(time.Minute))
+				Fail(t.ID, errMsg, true)
+				if runID != "" {
+					RecordFailedRun(t.ID, runID, startedAt, errMsg)
+				}
 				fmt.Printf("  ⏰ Detected timeout %s (ran for %v)\n", t.ID, elapsed.Round(time.Minute))
 				progress = true
 				continue
+			}
+		}
+
+		// LLM silence detection: if the worker has been running for a while but
+		// events.jsonl has zero assistant messages, the LLM backend is not responding.
+		// Fail fast instead of waiting for the full timeout.
+		if startedAt > 0 && runID != "" {
+			elapsed := time.Since(time.Unix(startedAt, 0))
+			if elapsed > firstResponseTimeout {
+				if !hasAssistantMessages(runID) {
+					killWorker(t.ID, t.Claimant)
+					state.recordTaskFailure(t.ID)
+					silenceErr := fmt.Sprintf("LLM silence: no assistant messages after %v", elapsed.Round(time.Minute))
+					Fail(t.ID, silenceErr, true)
+					RecordFailedRun(t.ID, runID, startedAt, silenceErr)
+					fmt.Printf("  🔇 LLM silence detected %s (no response after %v)\n", t.ID, elapsed.Round(time.Minute))
+					progress = true
+					continue
+				}
 			}
 		}
 
@@ -617,7 +755,11 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 				if lastOutput != "" {
 					errMsg += "\nLast output:\n" + lastOutput
 				}
+				state.recordTaskFailure(t.ID)
 				Fail(t.ID, errMsg, true)
+				if runID != "" {
+					RecordFailedRun(t.ID, runID, startedAt, errMsg)
+				}
 				fmt.Printf("  ❌ Detected failure %s (ai-serve process died)\n", t.ID)
 				progress = true
 				continue
@@ -638,6 +780,7 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 					if lastOutput != "" {
 						errMsg += "\nLast output:\n" + lastOutput
 					}
+					state.recordTaskFailure(t.ID)
 					Fail(t.ID, errMsg, true)
 					fmt.Printf("  ❌ Detected failure %s (process died)\n", t.ID)
 					progress = true
@@ -647,6 +790,9 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 		}
 
 				if completed {
+			// Task completed successfully — reset per-task failure counter
+			state.resetTaskFailures(t.ID)
+
 			// Cross-task file modification detection (Problem 4):
 			// Check if the worker modified files outside its declared scope.
 			if warning := checkCrossTaskModifications(cfg.WorkDir, t); warning != "" {
@@ -673,6 +819,23 @@ func checkRunning(cfg SchedulerConfig) (bool, error) {
 		}
 	}
 	return progress, nil
+}
+
+// hasAssistantMessages checks if events.jsonl for a run contains any assistant messages.
+// Returns false if no assistant messages are found, indicating LLM silence.
+func hasAssistantMessages(runID string) bool {
+	eventsPath, err := run.EventsPath(runID)
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return false // no events file yet = no messages
+	}
+	// Check for "assistant" role in events — a simple string scan is sufficient
+	// and avoids needing to parse the full JSONL.
+	return strings.Contains(string(data), `"role":"assistant"`) ||
+		strings.Contains(string(data), `"role": "assistant"`)
 }
 
 // checkAIServeRun checks events.jsonl for a specific run to see if the agent has finished.
@@ -729,7 +892,8 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 }
 
 // checkGroupReview checks if any group has all tasks in review and needs reviewer.
-func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
+// Acquires a global process slot before spawning the reviewer.
+func checkGroupReview(ctx context.Context, cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	groups, err := Groups()
 	if err != nil {
 		return false, err
@@ -770,8 +934,13 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 			}
 		}
 	}
+	// Check global process cap before spawning reviewer
+	if !state.tryAcquireSlot() {
+		log.Printf("[scheduler] skip reviewer for group %s: global process cap reached (%d/%d)", group, state.activeSlots(), state.maxProcesses)
+		continue
+	}
 	fmt.Printf("  🔍 Reviewing group %s\n", group)
-	go spawnReviewer(group, tasks, cfg)
+	go spawnReviewer(group, tasks, cfg, state)
 	progress = true
 	}
 	return progress, nil
@@ -781,7 +950,9 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig) (bool, error) {
 // It writes the prompt to a temp file (--input-file) to avoid OS argument
 // length limits, and writes activity.json so agent commands can find it.
 // The reviewer runs synchronously within this goroutine (blocks until cmd.Wait).
-func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig) {
+// Releases the global process slot when finished.
+func spawnReviewer(group string, tasks []*Task, cfg SchedulerConfig, state *schedulerState) {
+	defer state.releaseSlot()
 	// Get diff of changes
 	diff := getDiff(cfg.WorkDir)
 
