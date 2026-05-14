@@ -82,9 +82,9 @@ type schedulerState struct {
 	// maxProcesses is the cap for activeProcessCount.
 	maxProcesses int64
 
-	// perTaskFailures tracks consecutive failures per task ID for per-task
-	// circuit breaking instead of a global circuit breaker.
-	perTaskFailures sync.Map // map[string]int
+// perTaskFailures tracks consecutive failures per task ID for per-task
+// circuit breaking instead of a global circuit breaker.
+perTaskFailures sync.Map // map[string]*atomic.Int64
 }
 
 // tryAcquireSlot attempts to reserve a process slot. Returns true on success.
@@ -109,15 +109,14 @@ func (s *schedulerState) activeSlots() int64 {
 
 // recordTaskFailure increments the per-task failure counter and returns the new count.
 func (s *schedulerState) recordTaskFailure(taskID string) int {
-	val, _ := s.perTaskFailures.LoadOrStore(taskID, new(int))
-	counter := val.(*int)
-	*counter++
-	return *counter
+	val, _ := s.perTaskFailures.LoadOrStore(taskID, new(atomic.Int64))
+	counter := val.(*atomic.Int64)
+	return int(counter.Add(1))
 }
 
 // resetTaskFailures clears the per-task failure counter (e.g. on success).
 func (s *schedulerState) resetTaskFailures(taskID string) {
-	s.perTaskFailures.Store(taskID, new(int))
+	s.perTaskFailures.Store(taskID, new(atomic.Int64))
 }
 
 // getTaskFailures returns the current failure count for a task.
@@ -126,7 +125,7 @@ func (s *schedulerState) getTaskFailures(taskID string) int {
 	if !ok {
 		return 0
 	}
-	return *val.(*int)
+	return int(val.(*atomic.Int64).Load())
 }
 
 // RunScheduler executes the scheduler loop until all tasks are terminal
