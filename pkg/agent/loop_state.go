@@ -77,6 +77,32 @@ func (s *loopState) advanceTurn() {
 	s.turnCount++
 }
 
+// savePreCompactionCheckpoint saves a checkpoint before compaction modifies
+// agent context. This ensures progress is preserved if the compaction LLM
+// call crashes the process. Only saves when at least one compactor indicates
+// it should compact, to avoid unnecessary I/O on every turn.
+func (s *loopState) savePreCompactionCheckpoint(trigger string) {
+	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
+		return
+	}
+	// Check if any compactor would trigger before saving checkpoint.
+	shouldCompact := false
+	for _, c := range s.config.Compactors {
+		if c.ShouldCompact(context.Background(), s.agentCtx) {
+			shouldCompact = true
+			break
+		}
+	}
+	if !shouldCompact {
+		return
+	}
+	if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.agentCtx.LLMContext, s.turnCount); err != nil {
+		slog.Warn("[Loop] Failed to save pre-compaction checkpoint", "error", err, "trigger", trigger, "turn", s.turnCount)
+	} else {
+		slog.Info("[Loop] Pre-compaction checkpoint saved", "trigger", trigger, "turn", s.turnCount)
+	}
+}
+
 // performCompaction executes compaction using the configured compactors.
 // It iterates compactors in priority order, emits trace and stream events,
 // and updates agent context on success.
