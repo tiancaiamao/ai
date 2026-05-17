@@ -96,6 +96,17 @@ func (es *EventStream[T, R]) Iterator(ctx context.Context) <-chan IterResult[T] 
 
 	go func() {
 		defer close(ch)
+		defer func() {
+			if r := recover(); r != nil {
+				// Forward panic as a done signal so the consumer doesn't block.
+				// This should be extremely rare — the iterator goroutine only
+				// performs mutex operations and channel sends.
+				select {
+				case ch <- IterResult[T]{Done: true}:
+				default:
+				}
+			}
+		}()
 		for {
 			es.mu.Lock()
 

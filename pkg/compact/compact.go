@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"log/slog"
 
@@ -173,6 +174,8 @@ func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, e
 }
 
 // GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
+// It includes retry logic for transient LLM errors and a total timeout to prevent
+// the compaction path from hanging indefinitely on network failures.
 func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, previousSummary string) (string, error) {
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages to summarize")
@@ -204,30 +207,61 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 		Messages:     llmMessages,
 	}
 
-	ctx := context.Background()
-	// Use 0 for chunk timeout to use defaults - compaction is less latency-sensitive
-	llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, 0)
+	const maxRetries = 3
+	const totalTimeout = 5 * time.Minute
+	const chunkTimeout = 2 * time.Minute
+	var lastErr error
 
-	var summary strings.Builder
-	for event := range llmStream.Iterator(ctx) {
-		if event.Done {
-			break
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Use a bounded context with timeout instead of context.Background().
+		ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
+
+		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
+
+		var summary strings.Builder
+		var streamErr error
+		for event := range llmStream.Iterator(ctx) {
+			if event.Done {
+				break
+			}
+
+			switch e := event.Value.(type) {
+			case llm.LLMTextDeltaEvent:
+				summary.WriteString(e.Delta)
+			case llm.LLMErrorEvent:
+				streamErr = e.Error
+			}
+		}
+		cancel()
+
+		if streamErr != nil {
+			lastErr = streamErr
+			if !llm.IsRetryableError(streamErr) {
+				slog.Error("[Compact] Summary generation failed (non-retryable)",
+					"attempt", attempt, "error", streamErr)
+				return "", fmt.Errorf("failed to generate summary: %w", streamErr)
+			}
+			if attempt < maxRetries {
+				backoff := time.Duration(attempt) * 2 * time.Second
+				slog.Warn("[Compact] Summary generation failed (retryable), retrying",
+					"attempt", attempt,
+					"max_retries", maxRetries,
+					"backoff", backoff,
+					"error", streamErr)
+				time.Sleep(backoff)
+			}
+			continue
 		}
 
-		switch e := event.Value.(type) {
-		case llm.LLMTextDeltaEvent:
-			summary.WriteString(e.Delta)
-		case llm.LLMErrorEvent:
-			return "", e.Error
+		result := summary.String()
+		if strings.TrimSpace(result) == "" {
+			return "", fmt.Errorf("empty summary generated")
 		}
+
+		return result, nil
 	}
 
-	result := summary.String()
-	if strings.TrimSpace(result) == "" {
-		return "", fmt.Errorf("empty summary generated")
-	}
-
-	return result, nil
+	return "", fmt.Errorf("failed to generate summary after %d retries: %w", maxRetries, lastErr)
 }
 
 // ContextWindow returns the configured model context window.

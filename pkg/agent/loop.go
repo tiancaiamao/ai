@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -117,7 +118,20 @@ func RunLoop(
 	)
 
 	go func() {
+		// Panic recovery must be registered after stream.End so it
+		// executes BEFORE stream.End (defers are LIFO). If we recover
+		// from a panic, we push error events before stream.End closes
+		// the stream.
 		defer stream.End(nil)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("[Loop] Agent loop panic (recovered)",
+					"panic", r,
+					"turn", "unknown")
+				stream.Push(NewErrorEvent(fmt.Errorf("agent loop panic (recovered): %v", r)))
+				stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
+			}
+		}()
 
 		newMessages := append([]agentctx.AgentMessage{}, prompts...)
 		currentCtx := &agentctx.AgentContext{
@@ -163,6 +177,9 @@ func runInnerLoop(
 		state.advanceTurn()
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
+		// Save checkpoint BEFORE compaction so progress is preserved if the
+		// compaction LLM call crashes the process.
+		state.savePreCompactionCheckpoint("pre_llm_threshold")
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
 		if compacted != nil {
 			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
