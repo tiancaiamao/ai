@@ -7,7 +7,7 @@ Sessions persist the full conversation history for an agent instance as append-o
 1. **Append-only**: New entries are appended to `messages.jsonl`. Existing entries are never modified in place.
 2. **Tree structure**: Entries are linked via `parentId`, forming a conversation tree. The current branch tip is the `leafID`.
 3. **Crash-safe**: Append-only writes minimize data loss risk. Periodic checkpoints enable fast recovery.
-4. **Lazy-loadable**: Large sessions can load only recent entries + compaction summary.
+4. **Lazy-loadable**: Large sessions can be restored from checkpoint + journal, or loaded with only the recent messages needed.
 
 ## File Layout
 
@@ -343,6 +343,6 @@ Session metadata stored alongside the JSONL:
 
 Managed by `SessionManager`. Updated on each session save.
 
-## Migration
+## Legacy Format
 
-Legacy session formats (single `.jsonl` files without directories) are auto-migrated on load. The loader detects the format and converts to the directory-based layout.
+> **Warning:** Legacy session formats (single `.jsonl` files without directory layout, or old entry schemas) still exist in the codebase. The loader auto-detects and handles them, but this code should be cleaned up. Once legacy format support is removed, update this section accordingly.

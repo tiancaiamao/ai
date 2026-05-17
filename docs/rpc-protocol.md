@@ -29,18 +29,17 @@ Every command has an `id` field for correlation with responses.
 
 #### Command Types
 
-| Type | Description | Data Field |
-|------|-------------|------------|
-| `prompt` | Send a user message | `PromptRequest` |
-| `steer` | Inject a system message mid-conversation | String message |
-| `follow_up` | Queue a prompt for after current processing | String message |
-| `abort` | Cancel the current LLM stream | — |
-| `get_context` | Retrieve current agent context | — |
-| `set_context` | Update agent context | Context object |
-| `slash_command` | Execute a slash command | Command string |
-| `workflow_init` | Initialize workflow execution | `WorkflowState` |
-| `workflow_start` | Begin workflow processing | — |
-| `workflow_heartbeat` | Periodic workflow status check | — |
+The actual protocol commands registered by the RPC server (`pkg/rpc`):
+
+| Type | Constant | Description | Data Field |
+|------|----------|-------------|------------|
+| `prompt` | `CommandPrompt` | Send a user message | `PromptRequest` |
+| `steer` | `CommandSteer` | Inject a system message mid-conversation | String message |
+| `follow_up` | `CommandFollowUp` | Queue a prompt for after current processing | String message |
+| `abort` | `CommandAbort` | Cancel the current LLM stream | — |
+| `ping` | `CommandPing` | Health check / keep-alive | — |
+
+> **Note:** All other operations (state queries, settings, session management, model switching, etc.) are handled as **slash commands** sent through the `prompt` channel (e.g., `/model gpt-4`, `/compact`, `/help`). See `pkg/command` for the slash command registry.
 
 #### PromptRequest
 
@@ -106,37 +105,36 @@ Events are unsolicited messages emitted during processing. They have no `id` fie
 
 #### Event Envelope Types
 
-| Type | Description |
-|------|-------------|
-| `agent_event` | Agent lifecycle and stream events |
-| `session_event` | Session save/load/compact notifications |
-| `workflow_event` | Workflow state transitions |
-| `context_limit_recovery_event` | Context overflow recovery started |
-| `compaction_event` | Context compaction completed |
-| `ready` | Agent initialized and ready for commands |
+Events are emitted via `server.EmitEvent()` as plain JSON objects. The `type` field discriminates the event kind:
 
-#### Agent Events (within `agent_event` envelope)
+| Type | Source | Description |
+|------|--------|-------------|
+| `server_start` | `rpc_app.go` | Agent initialized with model and tool list |
+| `session_switch` | `rpc_session_handlers.go` | Active session changed |
+| Agent event types | `pkg/agent/event.go` | All agent lifecycle/stream events (see below) |
 
-The `data` field of `agent_event` contains an `AgentEvent` with its own `type` discriminator:
+Agent events are emitted directly (not nested under an envelope). Each has a `type` discriminator from `pkg/agent/event.go`:
 
-| Event Type | Description |
-|------------|-------------|
-| `agent_start` | Agent run started |
-| `agent_end` | Agent run completed |
-| `turn_start` | New LLM turn begins |
-| `turn_end` | LLM turn completed |
-| `text_delta` | Streaming text chunk |
-| `thinking_delta` | Reasoning/thinking content chunk |
-| `tool_call_delta` | Partial tool call (name + arguments) |
-| `tool_execution_start` | Tool execution begins |
-| `tool_execution_end` | Tool execution completed |
-| `message_update` | Full message snapshot |
-| `error` | Error during processing |
-| `checkpoint` | Session checkpoint saved |
-| `compaction` | Context compaction performed |
-| `context_limit_recovery` | Context overflow recovery |
-| `tool_call_recovery` | Malformed tool call auto-recovered |
-| `llm_retry` | LLM API call retry |
+| Event Type | Constant | Description |
+|------------|----------|-------------|
+| `agent_start` | `EventAgentStart` | Agent run started |
+| `agent_end` | `EventAgentEnd` | Agent run completed |
+| `turn_start` | `EventTurnStart` | New LLM turn begins |
+| `turn_end` | `EventTurnEnd` | LLM turn completed |
+| `message_start` | `EventMessageStart` | Message construction begins |
+| `message_end` | `EventMessageEnd` | Message construction completed |
+| `message_update` | `EventMessageUpdate` | Full message snapshot |
+| `text_delta` | `EventTextDelta` | Streaming text chunk |
+| `thinking_delta` | `EventThinkingDelta` | Reasoning/thinking content chunk |
+| `tool_call_delta` | `EventToolCallDelta` | Partial tool call (name + arguments) |
+| `tool_execution_start` | `EventToolExecutionStart` | Tool execution begins |
+| `tool_execution_end` | `EventToolExecutionEnd` | Tool execution completed |
+| `compaction_start` | `EventCompactionStart` | Context compaction started |
+| `compaction_end` | `EventCompactionEnd` | Context compaction completed |
+| `loop_guard_triggered` | `EventLoopGuardTriggered` | Tool-loop protection activated |
+| `tool_call_recovery` | `EventToolCallRecovery` | Malformed tool call auto-recovered |
+| `error` | `EventError` | Error during processing |
+| `llm_retry` | `EventLLMRetry` | LLM API call retry |
 
 #### Tool Execution Events
 
@@ -166,28 +164,7 @@ The `data` field of `agent_event` contains an `AgentEvent` with its own `type` d
 
 ## Workflow State
 
-Workflow events carry a `WorkflowState` payload:
-
-```json
-{
-  "type": "workflow_event",
-  "data": {
-    "phase": "worker",
-    "tasksFile": "/path/to/tasks.md",
-    "totalTasks": 5,
-    "pendingTasks": 3,
-    "doneTasks": 2,
-    "failedTasks": 0,
-    "inProgressTask": {
-      "id": "task-1",
-      "description": "Implement feature X",
-      "status": "in_progress"
-    },
-    "startedAt": "2025-01-15T10:30:00Z",
-    "lastUpdate": "2025-01-15T10:45:00Z"
-  }
-}
-```
+> **Note:** The `WorkflowState` and `WorkflowTask` types are defined in `pkg/rpc/types.go` for use by the `skills/ag` orchestration skill. The ag skill manages workflow lifecycle independently. This section is intentionally minimal — see `skills/ag/` for the full workflow protocol.
 
 ### Workflow Phases
 
