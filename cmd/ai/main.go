@@ -72,13 +72,15 @@ func main() {
 		lsSubcommand()
 	case "watch":
 		watchSubcommand()
-	case "send":
+		case "send":
 		sendSubcommand()
 	case "kill":
 		killSubcommand()
+	case "login-codex":
+		loginCodexSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", subcmd)
-		fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
+		fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, run, ls, watch, send, kill, login-codex\n")
 		os.Exit(1)
 	}
 }
@@ -132,6 +134,7 @@ Subcommands:
   watch           Attach to a running serve instance (TUI)
   send            Send a message to a running serve instance
   kill            Stop a running agent instance
+  login-codex     Authenticate with OpenAI Codex (ChatGPT subscription)
 
 Flags for 'run':
   --session <path>         Session file path

@@ -24,9 +24,14 @@ func StreamLLM(
 	apiKey string,
 	chunkIntervalTimeout time.Duration, // Timeout between chunks (e.g., 2min)
 ) *EventStream[LLMEvent, LLMMessage] {
-	// Route to Anthropic API if requested
+			// Route to Anthropic API if requested
 	if model.API == "anthropic-messages" {
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
+	}
+
+	// Route to OpenAI Codex Responses API if requested
+	if model.API == "openai-codex-responses" {
+		return StreamCodex(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
 	stream := NewEventStream[LLMEvent, LLMMessage](

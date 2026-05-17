@@ -34,6 +34,11 @@ func ResolveAPIKey(provider string) (string, error) {
 		providerKey = "zai"
 	}
 
+	// For Codex provider, resolve via OAuth tokens
+	if providerKey == "openai-codex" {
+		return resolveCodexAPIKey()
+	}
+
 	envVar := strings.ToUpper(providerKey) + "_API_KEY"
 	envValue := strings.TrimSpace(os.Getenv(envVar))
 
