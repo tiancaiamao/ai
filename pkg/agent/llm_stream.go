@@ -184,6 +184,23 @@ func streamAssistantResponse(
 			if firstTokenLatency > 0 {
 				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
+
+			// Check if stopReason indicates context length exceeded.
+			// Some providers return this as a normal completion (ChunkDone) rather
+			// than an error (ChunkError). We must convert it to a Go error so the
+			// context_limit_recovery path in loop.go can trigger compaction.
+			if llm.IsContextLengthStopReason(e.StopReason) {
+				ctxErr := &llm.ContextLengthExceededError{
+					Message: fmt.Sprintf("LLM returned stopReason=%s indicating context window exceeded", e.StopReason),
+				}
+				llmSpan.AddField("context_limit_detected", true)
+				traceevent.Log(ctx, traceevent.CategoryLLM, "context_limit_from_stop_reason",
+					traceevent.Field{Key: "stop_reason", Value: e.StopReason},
+					traceevent.Field{Key: "input_tokens", Value: e.Usage.InputTokens},
+				)
+				return nil, WithErrorStack(ctxErr)
+			}
+
 			if partialMessage != nil {
 				stream.Push(NewMessageUpdateEvent(*partialMessage, AssistantMessageEvent{
 					Type:         "text_end",

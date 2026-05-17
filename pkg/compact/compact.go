@@ -190,6 +190,30 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 	}
 
 	conversationText := serializeConversation(projected)
+
+	// Guard against sending a conversation that exceeds the model's context
+	// window. For large sessions the serialized text can be many megabytes,
+	// which the summarization model cannot process. Truncate oldest messages
+	// until the conversation fits within ~40% of the model's context window
+	// (leaving room for the prompt, system prompt, and response).
+	const maxContextFraction = 0.4
+	if c.contextWindow > 0 {
+		maxTokens := int(float64(c.contextWindow) * maxContextFraction)
+		// Each char is roughly 0.25 tokens, so maxBytes ≈ maxTokens * 4
+		maxChars := maxTokens * 4
+		if len(conversationText) > maxChars {
+			truncated := truncateConversationToCharBudget(projected, maxChars)
+			conversationText = serializeConversation(truncated)
+			slog.Info("[Compact] Truncated conversation for summarization",
+				"original_messages", len(projected),
+				"truncated_messages", len(truncated),
+				"original_chars", len(serializeConversation(projected)),
+				"truncated_chars", len(conversationText),
+				"context_window", c.contextWindow,
+				"max_chars", maxChars)
+		}
+	}
+
 	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
 	basePrompt := summarizationPrompt
 	if previousSummary != "" {
@@ -507,6 +531,75 @@ func serializeConversation(messages []agentctx.AgentMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// truncateConversationToCharBudget keeps the most recent messages whose
+// serialized text fits within charBudget. It drops oldest messages first.
+func truncateConversationToCharBudget(messages []agentctx.AgentMessage, charBudget int) []agentctx.AgentMessage {
+	if len(messages) == 0 || charBudget <= 0 {
+		return messages
+	}
+
+	// Walk from the end backwards, accumulating size until we exceed the budget.
+	totalChars := 0
+	cutoff := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		msgText := serializeSingleMessage(messages[i])
+		totalChars += len(msgText)
+		if totalChars > charBudget {
+			cutoff = i + 1
+			break
+		}
+	}
+
+	if cutoff >= len(messages) {
+		return messages
+	}
+	return messages[cutoff:]
+}
+
+// serializeSingleMessage returns the serialized text of a single message.
+func serializeSingleMessage(msg agentctx.AgentMessage) string {
+	switch msg.Role {
+	case "user":
+		if text := extractText(msg); text != "" {
+			return "[User]: " + text
+		}
+	case "assistant":
+		parts := make([]string, 0)
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case agentctx.TextContent:
+				if b.Text != "" {
+					parts = append(parts, b.Text)
+				}
+			case agentctx.ToolCallContent:
+				args := ""
+				if b.Arguments != nil {
+					if raw, err := json.Marshal(b.Arguments); err == nil {
+						args = string(raw)
+					}
+				}
+				if args != "" {
+					parts = append(parts, fmt.Sprintf("%s(%s)", b.Name, args))
+				} else {
+					parts = append(parts, fmt.Sprintf("%s()", b.Name))
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return "[Assistant]: " + strings.Join(parts, "\n")
+		}
+	case "toolResult":
+		if text := extractText(msg); text != "" {
+			toolName := strings.TrimSpace(msg.ToolName)
+			if toolName == "" {
+				return "[Tool result]: " + text
+			}
+			return "[Tool result " + toolName + "]: " + text
+		}
+	}
+	return ""
 }
 
 func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
@@ -858,10 +951,27 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	if keepRecentTokens > 0 {
 		oldMessages, recentMessages = splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
 		if len(oldMessages) == 0 {
-			return &agentctx.CompactionResult{
-				TokensBefore: tokensBefore,
-				TokensAfter:  tokensBefore,
-			}, nil
+			// Token estimation says all messages fit within budget, but if we have
+			// many messages the estimation is likely inaccurate (rough char/4
+			// heuristic). Force a split when message count is high.
+			const forceSplitMinMessages = 50
+			if len(ctx.RecentMessages) > forceSplitMinMessages {
+				// Keep the last 30% of messages (minimum 10)
+				keepCount := max(10, int(float64(len(ctx.RecentMessages))*0.3))
+				splitIndex := len(ctx.RecentMessages) - keepCount
+				oldMessages = ctx.RecentMessages[:splitIndex]
+				recentMessages = ctx.RecentMessages[splitIndex:]
+				slog.Info("[Compact] Forced split: token budget covered all messages but count exceeds threshold",
+					"count", len(ctx.RecentMessages),
+					"keepCount", keepCount,
+					"keepTokens", keepRecentTokens,
+					"forceSplitMin", forceSplitMinMessages)
+			} else {
+				return &agentctx.CompactionResult{
+					TokensBefore: tokensBefore,
+					TokensAfter:  tokensBefore,
+				}, nil
+			}
 		}
 		slog.Info("[Compact] Compressing messages",
 			"count", len(ctx.RecentMessages),

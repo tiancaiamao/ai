@@ -205,6 +205,14 @@ func extractAPIErrorMessage(payload string) string {
 	return ""
 }
 
+// IsContextLengthStopReason reports whether an LLM stopReason indicates that
+// the context window was exceeded. Some providers return this as a normal
+// completion event rather than an API error, so we must check the stopReason
+// field in addition to error classification.
+func IsContextLengthStopReason(stopReason string) bool {
+	return looksLikeContextLengthExceeded(stopReason)
+}
+
 func looksLikeContextLengthExceeded(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
@@ -213,7 +221,9 @@ func looksLikeContextLengthExceeded(s string) bool {
 
 	needles := []string{
 		"context length",
+		"context_length",
 		"context window",
+		"context_window",
 		"contextwindow",
 		"maximum context",
 		"max context",
@@ -223,7 +233,6 @@ func looksLikeContextLengthExceeded(s string) bool {
 		"prompt is too long",
 		"token limit exceeded",
 		"contextlength",
-		"context_window_exceeded",
 		"contextwindowexceeded",
 		"finishreasonlength",
 	}

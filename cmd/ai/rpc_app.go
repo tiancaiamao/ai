@@ -107,6 +107,7 @@ type rpcApp struct {
 	showTools          bool
 	showPrefix         bool
 	busyMode           string
+	consecutiveCompactionFailures int
 
 	// --- Internal helper functions ---
 	// These are assigned in initHelpers and used by handler closures.
@@ -127,6 +128,45 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 		return json.Unmarshal([]byte(args), target) == nil
 	}
 	return false
+}
+
+// nuclearTruncate force-truncates oldest messages without LLM summary.
+// This is the last-resort fallback when compaction repeatedly fails (e.g.,
+// the summarization model cannot handle the conversation size).
+func (app *rpcApp) nuclearTruncate() {
+	if app.ag == nil {
+		return
+	}
+	agentCtx := app.ag.GetContext()
+	if agentCtx == nil {
+		return
+	}
+	messages := agentCtx.RecentMessages
+	if len(messages) <= 10 {
+		return
+	}
+
+	// Keep only the last 20% of messages (minimum 10)
+	keepCount := max(10, int(float64(len(messages))*0.2))
+	truncatedCount := len(messages) - keepCount
+	agentCtx.RecentMessages = messages[len(messages)-keepCount:]
+
+	// Also sync to session
+	if app.sess != nil {
+		if err := app.sess.SaveMessages(agentCtx.RecentMessages); err != nil {
+			slog.Error("[Compact] Nuclear truncation failed to save session", "error", err)
+		}
+	}
+
+	// Reset failure counter after nuclear truncation
+	app.stateMu.Lock()
+	app.consecutiveCompactionFailures = 0
+	app.stateMu.Unlock()
+
+	slog.Warn("[Compact] Nuclear truncation completed",
+		"messages_before", len(messages),
+		"messages_after", keepCount,
+		"truncated_count", truncatedCount)
 }
 
 // initHelpers creates the closures that need access to app fields.
@@ -326,6 +366,26 @@ func (app *rpcApp) initHelpers() {
 			} else {
 				slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
 			}
+
+			// Nuclear fallback: after consecutive compaction failures, force-truncate
+			// oldest messages without LLM summary. This prevents permanent session death
+			// when the summarization model itself cannot handle the conversation size.
+			const maxConsecutiveFailures = 3
+			app.stateMu.Lock()
+			app.consecutiveCompactionFailures++
+			failures := app.consecutiveCompactionFailures
+			app.stateMu.Unlock()
+
+			if failures >= maxConsecutiveFailures {
+				slog.Warn("[Compact] Nuclear fallback: force-truncating oldest messages after consecutive compaction failures",
+					"failures", failures,
+					"trigger", trigger)
+				app.nuclearTruncate()
+			}
+		} else {
+			app.stateMu.Lock()
+			app.consecutiveCompactionFailures = 0
+			app.stateMu.Unlock()
 		}
 		app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}

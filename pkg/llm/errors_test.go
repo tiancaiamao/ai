@@ -32,6 +32,32 @@ func TestClassifyAPIErrorGeneric(t *testing.T) {
 	}
 }
 
+func TestIsContextLengthStopReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopReason string
+		want       bool
+	}{
+		{"model_context_window_exceeded", "model_context_window_exceeded", true},
+		{"context_window_exceeded", "context_window_exceeded", true},
+		{"context_length_exceeded", "context_length_exceeded", true},
+		{"stop", "stop", false},
+		{"tool_calls", "tool_calls", false},
+		{"length", "length", false},
+		{"empty", "", false},
+		{"end_turn", "end_turn", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsContextLengthStopReason(tt.stopReason)
+			if got != tt.want {
+				t.Errorf("IsContextLengthStopReason(%q) = %v, want %v", tt.stopReason, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsContextLengthExceeded(t *testing.T) {
 	if !IsContextLengthExceeded(&ContextLengthExceededError{Message: "context window exceeded"}) {
 		t.Fatal("expected typed context length error to match")
