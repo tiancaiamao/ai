@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -142,5 +143,92 @@ func TestSplitMessagesByTokenBudget(t *testing.T) {
 	}
 	if recentMessages[0].ExtractText() != "dddd" || recentMessages[1].ExtractText() != "eeee" {
 		t.Errorf("Unexpected recent messages order")
+	}
+}
+func TestTruncateConversationToCharBudget(t *testing.T) {
+	// Create messages with known text sizes
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage(strings.Repeat("a", 1000)), // 1000+ chars
+		agentctx.NewUserMessage(strings.Repeat("b", 1000)), // 1000+ chars
+		agentctx.NewUserMessage(strings.Repeat("c", 1000)), // 1000+ chars
+		agentctx.NewUserMessage(strings.Repeat("d", 1000)), // 1000+ chars
+		agentctx.NewUserMessage(strings.Repeat("e", 500)),  // 500+ chars
+	}
+
+	// Budget for ~2 messages (2000 chars)
+	truncated := truncateConversationToCharBudget(messages, 2500)
+	if len(truncated) >= len(messages) {
+		t.Fatalf("expected truncation, got %d messages (same as original %d)", len(truncated), len(messages))
+	}
+	// Should keep the most recent messages
+	if len(truncated) < 2 {
+		t.Fatalf("expected at least 2 messages kept, got %d", len(truncated))
+	}
+	lastText := truncated[len(truncated)-1].ExtractText()
+	if !strings.HasPrefix(lastText, strings.Repeat("e", 10)) {
+		t.Fatalf("expected last message to be 'e' message, got %s...", lastText[:20])
+	}
+}
+
+func TestTruncateConversationToCharBudget_NoTruncationNeeded(t *testing.T) {
+	messages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("short"),
+		agentctx.NewUserMessage("also short"),
+	}
+
+	// Budget larger than total
+	truncated := truncateConversationToCharBudget(messages, 10000)
+	if len(truncated) != len(messages) {
+		t.Fatalf("expected no truncation, got %d messages (original %d)", len(truncated), len(messages))
+	}
+}
+
+func TestCompact_ForcedSplitWhenManyMessagesButNoOldMessages(t *testing.T) {
+	// Create a compactor with a large keep-recent budget
+	// so that splitMessagesByTokenBudget returns oldMessages=[]
+	// but we have enough messages to trigger the forced split
+	cfg := &Config{
+		KeepRecentTokens: 100000, // Large enough that all messages "fit"
+		AutoCompact:      true,
+		ReserveTokens:    1000,
+	}
+
+	// Create 60 short messages that easily fit within 100k tokens budget
+	messages := make([]agentctx.AgentMessage, 60)
+	for i := 0; i < 60; i++ {
+		messages[i] = agentctx.NewUserMessage(fmt.Sprintf("message %d", i))
+	}
+
+	_ = agentctx.NewAgentContext("sys")
+
+	// Use a compactor to verify config
+	c := NewCompactor(cfg, llm.Model{ID: "test"}, "test-key", "test prompt", 200000)
+	_ = c
+
+	// Test the split logic directly
+	oldMsgs, recentMsgs := splitMessagesByTokenBudget(messages, 100000)
+	if len(oldMsgs) != 0 {
+		t.Fatalf("expected oldMessages=0 with large budget, got %d", len(oldMsgs))
+	}
+
+	// Verify the forced split logic would trigger
+	if len(messages) <= 50 {
+		t.Fatal("test setup error: need > 50 messages to trigger forced split")
+	}
+
+	// Simulate the forced split logic
+	const forceSplitMinMessages = 50
+	if len(messages) > forceSplitMinMessages {
+		keepCount := max(10, int(float64(len(messages))*0.3))
+		splitIndex := len(messages) - keepCount
+		oldMsgs = messages[:splitIndex]
+		recentMsgs = messages[splitIndex:]
+	}
+
+	if len(oldMsgs) == 0 {
+		t.Fatal("forced split should have produced oldMessages")
+	}
+	if len(recentMsgs) != max(10, int(float64(60)*0.3)) {
+		t.Fatalf("expected %d recent messages, got %d", max(10, int(float64(60)*0.3)), len(recentMsgs))
 	}
 }

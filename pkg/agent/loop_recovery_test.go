@@ -1056,3 +1056,78 @@ func TestLoopGuardFeedbackResetsOnSignatureChange(t *testing.T) {
 		t.Fatalf("expected 2 guard events (one per signature), got %d", guardEventCount)
 	}
 }
+
+func TestRunInnerLoopCompactionRecoveryOnContextLimitStopReason(t *testing.T) {
+	// Test that when LLM returns stopReason=model_context_window_exceeded
+	// in a ChunkDone event (NOT an error), the context_limit_recovery path
+	// still triggers compaction.
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	compactor := &recoveryCompactor{}
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		if callCount == 1 {
+			// Simulate LLM returning context limit via stopReason (not error).
+			// In real code, streamAssistantResponse detects this in ChunkDone
+			// and converts it to a ContextLengthExceededError.
+			return nil, &llm.ContextLengthExceededError{
+				Message: "LLM returned stopReason=model_context_window_exceeded indicating context window exceeded",
+			}
+		}
+
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "recovered"},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+
+	config := &LoopConfig{
+		Compactors: []Compactor{compactor},
+	}
+
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, config, stream)
+
+	var gotStart, gotEnd bool
+	var finalMessages []agentctx.AgentMessage
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventCompactionStart {
+			gotStart = true
+		}
+		if item.Value.Type == EventCompactionEnd {
+			gotEnd = true
+		}
+		if item.Value.Type == EventAgentEnd {
+			finalMessages = item.Value.Messages
+		}
+	}
+
+	if compactor.calls != 1 {
+		t.Fatalf("expected compactor to be called once, got %d", compactor.calls)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected assistant streaming to be called twice (recovery), got %d", callCount)
+	}
+	if !gotStart || !gotEnd {
+		t.Fatalf("expected compaction start/end events, got start=%v end=%v", gotStart, gotEnd)
+	}
+	// Verify the agent recovered and returned the second response
+	if len(finalMessages) == 0 {
+		t.Fatal("expected final messages after recovery")
+	}
+}
