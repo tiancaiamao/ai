@@ -171,7 +171,7 @@ func StreamCodex(
 		defer resp.Body.Close()
 
 		// Process SSE stream
-		processCodexSSE(resp.Body, stream, chunkIntervalTimeout)
+				processCodexSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
 
 	return stream
@@ -335,7 +335,7 @@ func resolveCodexURL(baseURL string) string {
 }
 
 // processCodexSSE reads the SSE stream from the Codex Responses API and emits events.
-func processCodexSSE(body io.Reader, stream *EventStream[LLMEvent, LLMMessage], chunkIntervalTimeout time.Duration) {
+func processCodexSSE(ctx context.Context, body io.Reader, stream *EventStream[LLMEvent, LLMMessage], chunkIntervalTimeout time.Duration) {
 	partial := NewPartialMessage()
 	var lastUsage Usage
 	chunkIndex := 0
@@ -351,35 +351,44 @@ func processCodexSSE(body io.Reader, stream *EventStream[LLMEvent, LLMMessage], 
 	textStarted := false
 	thinkingStarted := false
 
-	scanner := bufio.NewScanner(body)
+		scanner := bufio.NewScanner(body)
 	// Increase buffer size for large SSE events
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	// Timeout timer for chunk interval
-	timeoutCh := make(chan struct{})
-	go func() {
-		timer := time.NewTimer(chunkIntervalTimeout)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			close(timeoutCh)
-		case <-timeoutCh:
-			// consumed
-		}
-	}()
-
-	if chunkIndex == 0 {
-		stream.Push(LLMStartEvent{Partial: partial})
+	// Set read deadline for chunk interval timeout (same pattern as client.go/anthropic.go)
+	type deadliner interface {
+		SetReadDeadline(time.Time) error
 	}
 
+	if dl, ok := body.(deadliner); ok && chunkIntervalTimeout > 0 {
+		nextDeadline := time.Now().Add(chunkIntervalTimeout)
+		if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+			nextDeadline = ctxDeadline
+		}
+		dl.SetReadDeadline(nextDeadline)
+	}
+
+	stream.Push(LLMStartEvent{Partial: partial})
+
 	for scanner.Scan() {
-		// Reset timeout on each chunk
-		select {
-		case timeoutCh <- struct{}{}:
-		default:
+		// Update read deadline for each chunk, capped by context deadline.
+		if dl, ok := body.(deadliner); ok && chunkIntervalTimeout > 0 {
+			nextDeadline := time.Now().Add(chunkIntervalTimeout)
+			if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+				nextDeadline = ctxDeadline
+			}
+			dl.SetReadDeadline(nextDeadline)
 		}
 
-		line := scanner.Text()
+				line := scanner.Text()
+
+		// Check parent context cancellation
+		select {
+		case <-ctx.Done():
+			stream.Push(LLMErrorEvent{Error: ctx.Err()})
+			return
+		default:
+		}
 
 		// SSE data lines
 		if !strings.HasPrefix(line, "data: ") {
