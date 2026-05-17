@@ -1,9 +1,11 @@
 package task
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func setupTest(t *testing.T) {
@@ -772,5 +774,265 @@ tasks:
 	t2, _ := Load("T002")
 	if t2.Group != "frontend" {
 		t.Fatalf("expected frontend group, got %s", t2.Group)
+	}
+}
+
+func TestRetryForce(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+
+	// Fail and retry 3 times to exceed max
+	for i := 0; i < 3; i++ {
+		Fail("t001", "error", true)
+		Retry("t001", 3)
+		claimAndRun(t, "t001", fmt.Sprintf("worker-%d", i))
+	}
+	Fail("t001", "final error", true)
+
+	// Normal retry should fail (max exceeded)
+	_, err := Retry("t001", 3)
+	if err == nil {
+		t.Fatal("expected error: max retries exceeded")
+	}
+
+	// Force retry should succeed
+	task, err := RetryForce("t001")
+	if err != nil {
+		t.Fatalf("RetryForce: %v", err)
+	}
+	if task.Status != StatusPending {
+		t.Fatalf("expected pending, got %s", task.Status)
+	}
+	if task.RetryCount != 4 {
+		t.Fatalf("expected retry count 4, got %d", task.RetryCount)
+	}
+}
+
+func TestReset(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+	Fail("t001", "some error", true)
+	Retry("t001", 3)
+	claimAndRun(t, "t001", "worker-2")
+	Fail("t001", "another error", true)
+
+	// Reset should clear everything
+	task, err := Reset("t001")
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if task.Status != StatusPending {
+		t.Fatalf("expected pending, got %s", task.Status)
+	}
+	if task.Claimant != "" {
+		t.Fatalf("claimant should be empty, got %s", task.Claimant)
+	}
+	if task.Error != "" {
+		t.Fatalf("error should be empty, got %s", task.Error)
+	}
+	if task.RetryCount != 0 {
+		t.Fatalf("retry count should be 0, got %d", task.RetryCount)
+	}
+	if task.ClaimedAt != 0 {
+		t.Fatalf("claimedAt should be 0, got %d", task.ClaimedAt)
+	}
+
+	// Should be claimable again
+	_, err = Claim("t001", "fresh-worker")
+	if err != nil {
+		t.Fatalf("should be claimable after reset: %v", err)
+	}
+}
+
+func TestMarkNonRetryable(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+	Fail("t001", "error", true)
+
+	task, _ := Load("t001")
+	if !task.Retryable {
+		t.Fatal("should be retryable initially")
+	}
+
+	MarkNonRetryable("t001")
+
+	task, _ = Load("t001")
+	if task.Retryable {
+		t.Fatal("should be non-retryable after MarkNonRetryable")
+	}
+}
+
+func TestRecordFailedRun(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+	claimAndRun(t, "t001", "worker-1")
+	Fail("t001", "timeout", true)
+
+	// Record a failed run
+	err := RecordFailedRun("t001", "run-abc123", 1000000, "task timed out")
+	if err != nil {
+		t.Fatalf("RecordFailedRun: %v", err)
+	}
+
+	task, _ := Load("t001")
+	if len(task.PreviousRuns) != 1 {
+		t.Fatalf("expected 1 previous run, got %d", len(task.PreviousRuns))
+	}
+	if task.PreviousRuns[0].RunID != "run-abc123" {
+		t.Fatalf("wrong run ID: %s", task.PreviousRuns[0].RunID)
+	}
+	if task.PreviousRuns[0].Error != "task timed out" {
+		t.Fatalf("wrong error: %s", task.PreviousRuns[0].Error)
+	}
+
+	// Record another failed run
+	RecordFailedRun("t001", "run-def456", 2000000, "LLM silence")
+	task, _ = Load("t001")
+	if len(task.PreviousRuns) != 2 {
+		t.Fatalf("expected 2 previous runs, got %d", len(task.PreviousRuns))
+	}
+}
+
+func TestGetWorkerStartedAt(t *testing.T) {
+	setupTest(t)
+
+	Create("Task", "")
+
+	// No claimant — should return 0
+	ts := GetWorkerStartedAt("t001")
+	if ts != 0 {
+		t.Fatalf("expected 0 with no claimant, got %d", ts)
+	}
+
+	// With claimant but no worker-meta.json — should return 0
+	Claim("t001", "worker-t001")
+	ts = GetWorkerStartedAt("t001")
+	if ts != 0 {
+		t.Fatalf("expected 0 with no meta file, got %d", ts)
+	}
+}
+
+func TestRetryBackoff(t *testing.T) {
+	tests := []struct {
+		retryCount int
+		expected   time.Duration
+	}{
+		{0, 30 * time.Second},
+		{1, 30 * time.Second},
+		{2, 2 * time.Minute},
+		{3, 5 * time.Minute},
+		{5, 5 * time.Minute},
+	}
+	for _, tt := range tests {
+		got := retryBackoff(tt.retryCount)
+		if got != tt.expected {
+			t.Errorf("retryBackoff(%d) = %v, want %v", tt.retryCount, got, tt.expected)
+		}
+	}
+}
+
+func TestSchedulerStateProcessSlots(t *testing.T) {
+	state := &schedulerState{maxProcesses: 3}
+
+	if state.activeSlots() != 0 {
+		t.Fatalf("expected 0 active slots, got %d", state.activeSlots())
+	}
+
+	// Acquire slots up to max
+	if !state.tryAcquireSlot() {
+		t.Fatal("should acquire slot 1")
+	}
+	if !state.tryAcquireSlot() {
+		t.Fatal("should acquire slot 2")
+	}
+	if !state.tryAcquireSlot() {
+		t.Fatal("should acquire slot 3")
+	}
+	if state.tryAcquireSlot() {
+		t.Fatal("should NOT acquire slot 4 (at cap)")
+	}
+
+	// Release one and acquire again
+	state.releaseSlot()
+	if state.activeSlots() != 2 {
+		t.Fatalf("expected 2 active slots, got %d", state.activeSlots())
+	}
+	if !state.tryAcquireSlot() {
+		t.Fatal("should acquire slot after release")
+	}
+}
+
+func TestSchedulerStatePerTaskFailures(t *testing.T) {
+	state := &schedulerState{}
+
+	if state.getTaskFailures("t001") != 0 {
+		t.Fatal("initial failures should be 0")
+	}
+
+	count := state.recordTaskFailure("t001")
+	if count != 1 {
+		t.Fatalf("expected 1, got %d", count)
+	}
+	count = state.recordTaskFailure("t001")
+	if count != 2 {
+		t.Fatalf("expected 2, got %d", count)
+	}
+
+	state.resetTaskFailures("t001")
+	if state.getTaskFailures("t001") != 0 {
+		t.Fatal("failures should be 0 after reset")
+	}
+
+	// Different task should be independent
+	state.recordTaskFailure("t002")
+	if state.getTaskFailures("t001") != 0 {
+		t.Fatal("t001 failures should be independent of t002")
+	}
+	if state.getTaskFailures("t002") != 1 {
+		t.Fatal("t002 should have 1 failure")
+	}
+}
+
+func TestHasAssistantMessages(t *testing.T) {
+	// Create a fake run directory with events
+	tmpDir := t.TempDir()
+
+	// Test with no run directory
+	if hasAssistantMessages("nonexistent-run") {
+		t.Fatal("should return false for nonexistent run")
+	}
+
+	// Create a run directory with events containing assistant messages
+	runDir := filepath.Join(tmpDir, ".ai", "runs", "test-run")
+	os.MkdirAll(runDir, 0755)
+	eventsContent := `{"role":"user","content":"hello"}
+{"role":"assistant","content":"hi there"}
+`
+	os.WriteFile(filepath.Join(runDir, "events.jsonl"), []byte(eventsContent), 0644)
+
+	// Override home dir for the test
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	if !hasAssistantMessages("test-run") {
+		t.Fatal("should find assistant messages")
+	}
+
+	// Test with no assistant messages
+	runDir2 := filepath.Join(tmpDir, ".ai", "runs", "test-run2")
+	os.MkdirAll(runDir2, 0755)
+	os.WriteFile(filepath.Join(runDir2, "events.jsonl"), []byte(`{"role":"user","content":"hello"}
+`), 0644)
+
+	if hasAssistantMessages("test-run2") {
+		t.Fatal("should NOT find assistant messages in run2")
 	}
 }

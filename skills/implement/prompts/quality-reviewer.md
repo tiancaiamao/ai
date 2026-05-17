@@ -15,6 +15,10 @@ The code does the right thing — your job is to check if it's done WELL.
 - **Error handling:** Errors are caught, meaningful messages, no panics
 - **Resource cleanup:** Files/connections/sessions properly closed
 - **Security:** No injection, no credential leaks, input validated
+- **Design consistency:** Public API return types match design specification.
+  If design says `steer() → EventStream`, implementation must not silently
+  return `None`. Undocumented signature changes are blocking issues — they
+  indicate the implementer deviated from spec without explicit approval.
 
 ### Should Have (strongly recommended)
 

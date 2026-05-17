@@ -77,6 +77,32 @@ func (s *loopState) advanceTurn() {
 	s.turnCount++
 }
 
+// savePreCompactionCheckpoint saves a checkpoint before compaction modifies
+// agent context. This ensures progress is preserved if the compaction LLM
+// call crashes the process. Only saves when at least one compactor indicates
+// it should compact, to avoid unnecessary I/O on every turn.
+func (s *loopState) savePreCompactionCheckpoint(trigger string) {
+	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
+		return
+	}
+	// Check if any compactor would trigger before saving checkpoint.
+	shouldCompact := false
+	for _, c := range s.config.Compactors {
+		if c.ShouldCompact(context.Background(), s.agentCtx) {
+			shouldCompact = true
+			break
+		}
+	}
+	if !shouldCompact {
+		return
+	}
+	if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.agentCtx.LLMContext, s.turnCount); err != nil {
+		slog.Warn("[Loop] Failed to save pre-compaction checkpoint", "error", err, "trigger", trigger, "turn", s.turnCount)
+	} else {
+		slog.Info("[Loop] Pre-compaction checkpoint saved", "trigger", trigger, "turn", s.turnCount)
+	}
+}
+
 // performCompaction executes compaction using the configured compactors.
 // It iterates compactors in priority order, emits trace and stream events,
 // and updates agent context on success.
@@ -203,19 +229,35 @@ func (s *loopState) processToolCalls(
 
 	// Check loop guard for consecutive identical tool call patterns.
 	if hasMore && s.loopGuard != nil {
-		if blocked, reason := s.loopGuard.Observe(toolCalls); blocked {
-			slog.Warn("[Loop] tool call loop guard triggered", "reason", reason)
-			s.stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: reason}))
+		result := s.loopGuard.Observe(toolCalls)
+		if result.Blocked {
+			slog.Warn("[Loop] tool call loop guard triggered", "reason", result.Reason, "hardAbort", result.HardAbort, "feedbackAttempt", result.FeedbackAttempt)
+			s.stream.Push(NewLoopGuardTriggeredEvent(LoopGuardInfo{Reason: result.Reason}))
 			traceevent.Log(ctx, traceevent.CategoryEvent, "tool_loop_guard_triggered",
-				traceevent.Field{Key: "reason", Value: reason},
+				traceevent.Field{Key: "reason", Value: result.Reason},
 				traceevent.Field{Key: "call_count", Value: len(toolCalls)},
+				traceevent.Field{Key: "hard_abort", Value: result.HardAbort},
+				traceevent.Field{Key: "feedback_attempt", Value: result.FeedbackAttempt},
 			)
-			sanitizeMessageForToolLoopGuard(msg, reason)
-			// Update the message in both arrays to reflect sanitization.
-			s.agentCtx.RecentMessages[len(s.agentCtx.RecentMessages)-1] = *msg
-			s.newMessages = replaceLast(s.newMessages, *msg)
-			hasMore = false
-			return hasMore, nil
+
+			if result.HardAbort {
+				// Escalation limit reached: sanitize the message and abort.
+				sanitizeMessageForToolLoopGuard(msg, result.Reason)
+				s.agentCtx.RecentMessages[len(s.agentCtx.RecentMessages)-1] = *msg
+				s.newMessages = replaceLast(s.newMessages, *msg)
+				hasMore = false
+				return hasMore, nil
+			}
+
+			// Soft feedback: construct ToolResult messages for each blocked tool call
+			// and return them to the LLM so it can self-correct.
+			toolResults := buildLoopGuardToolResults(toolCalls, result, s.loopGuard.maxFeedbackAttempts)
+			for _, tr := range toolResults {
+				s.agentCtx.RecentMessages = append(s.agentCtx.RecentMessages, tr)
+				s.newMessages = append(s.newMessages, tr)
+			}
+			// hasMore stays true — the LLM will see the feedback results and get another turn.
+			return hasMore, toolResults
 		}
 	}
 

@@ -49,6 +49,14 @@ func lsSubcommand() {
 			continue
 		}
 
+		// Reconcile stale runs: if run.json says "running" but PID is
+		// dead or recycled, update to "failed" so callers see the real state.
+		if meta.Status == run.StatusRunning && !run.IsRunning(meta) {
+			meta.Status = run.StatusFailed
+			meta.FinishedAt = time.Now().Unix()
+			_ = run.SaveRunMeta(meta, metaPath)
+		}
+
 		// For non --all mode, check if the run is actually alive.
 		if !*allFlag {
 			if !run.IsRunning(meta) {

@@ -101,14 +101,18 @@ func (a *AIAdapter) SpawnWithAIServe(id, system, input, cwd string) error {
 	// Save PID (Release zeroes the Pid field)
 	pid := cmd.Process.Pid
 
+	// Record process start time for PID reuse detection.
+	pidStartTime := getProcessStartTime(pid)
+
 	// Detach ai serve process from parent so spawn doesn't block
 	if err := cmd.Process.Release(); err != nil {
 		// Non-fatal, process is already started
 		fmt.Fprintf(os.Stderr, "warning: could not release ai serve process: %v\n", err)
 	}
 
-	// Save PID to activity
+	// Save PID and start time to activity
 	activity["pid"] = pid
+	activity["pidStartTime"] = pidStartTime
 	if err := storage.AtomicWriteJSON(filepath.Join(agentDir, "activity.json"), activity); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to update activity.json with PID: %v\n", err)
 	}
@@ -309,3 +313,29 @@ func (a *AIAdapter) getRunIDForAgent(agentID string) (string, error) {
 
 // Global adapter instance
 var aiAdapter = NewAIAdapter()
+
+// getProcessStartTime returns the epoch-second start time of the given PID.
+// Uses `ps -o lstart= -p <pid>`. Returns 0 on error.
+func getProcessStartTime(pid int) int64 {
+	if pid <= 0 {
+		return 0
+	}
+	cmd := exec.Command("ps", "-o", "lstart=", "-p", fmt.Sprintf("%d", pid))
+	cmd.Env = append(os.Environ(), "LC_TIME=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return 0
+	}
+	t, err := time.Parse("Mon Jan  2 15:04:05 2006", line)
+	if err != nil {
+		t, err = time.Parse("Mon Jan 2 15:04:05 2006", line)
+		if err != nil {
+			return 0
+		}
+	}
+	return t.Unix()
+}

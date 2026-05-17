@@ -84,7 +84,7 @@ func (t *FindSkillTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Extract concise keywords from user input first, then search. Matches each keyword against skill name, description, aliases, use-when triggers, and categories (case-insensitive substring). Prefer short terms (e.g. 'grill' not 'grill me about my design'). Multiple short queries are better than one long query.",
+				"description": "Extract concise keywords from user input first, then search. Matches each keyword against skill name, description, aliases, use-when triggers, and categories (case-insensitive substring). Prefer short terms (e.g. use 'grill' not 'grill me about my design'). Multiple short queries are better than one long query.",
 			},
 			"load": map[string]any{
 				"type":        "boolean",

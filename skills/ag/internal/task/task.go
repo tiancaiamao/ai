@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,23 +71,33 @@ func IsTerminal(state string) bool {
 
 // Task represents a work unit.
 type Task struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title,omitempty"`
-	Status       string   `json:"status"`
-	Claimant     string   `json:"claimant,omitempty"`
-	Description  string   `json:"description"`
-	SpecFile     string   `json:"specFile,omitempty"`
-	OutputFile   string   `json:"outputFile,omitempty"`
-	FileScope    string   `json:"fileScope,omitempty"` // Comma-separated path prefixes this task should modify
-	Dependencies []string `json:"dependencies,omitempty"`
-	Group        string   `json:"group,omitempty"`
-	CreatedAt    int64    `json:"createdAt"`
-	ClaimedAt    int64    `json:"claimedAt,omitempty"`
-	FinishedAt   int64    `json:"finishedAt,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
-	Retryable    bool     `json:"retryable,omitempty"`
-	RetryCount   int      `json:"retryCount,omitempty"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title,omitempty"`
+	Status           string   `json:"status"`
+	Claimant         string   `json:"claimant,omitempty"`
+	Description      string   `json:"description"`
+	SpecFile         string   `json:"specFile,omitempty"`
+	OutputFile       string   `json:"outputFile,omitempty"`
+	FileScope        string   `json:"fileScope,omitempty"` // Comma-separated path prefixes this task should modify
+	Dependencies     []string `json:"dependencies,omitempty"`
+	Group            string   `json:"group,omitempty"`
+	EstimatedMinutes int      `json:"estimatedMinutes,omitempty"` // Per-task timeout hint: scheduler uses 2× this value
+	CreatedAt        int64    `json:"createdAt"`
+	ClaimedAt        int64    `json:"claimedAt,omitempty"`
+	FinishedAt       int64    `json:"finishedAt,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	Retryable        bool     `json:"retryable,omitempty"`
+	RetryCount       int      `json:"retryCount,omitempty"`
+	PreviousRuns     []RunRecord `json:"previousRuns,omitempty"` // History of failed run attempts
+}
+
+// RunRecord stores metadata about a single task run attempt.
+type RunRecord struct {
+	RunID     string `json:"runId,omitempty"`
+	StartedAt int64  `json:"startedAt,omitempty"`
+	FailedAt  int64  `json:"failedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 var (
@@ -309,6 +320,17 @@ func Fail(taskID string, errMsg string, retryable bool) (*Task, error) {
 // Retry resets a failed task back to pending for re-execution.
 // Increments RetryCount. Returns error if task is not failed or max retries exceeded.
 func Retry(taskID string, maxRetries int) (*Task, error) {
+	return retryInternal(taskID, maxRetries, false)
+}
+
+// RetryForce resets a failed task back to pending, bypassing the max retries check.
+// Use for manual recovery of stuck tasks.
+func RetryForce(taskID string) (*Task, error) {
+	return retryInternal(taskID, 0, true)
+}
+
+// retryInternal is the shared implementation for Retry and RetryForce.
+func retryInternal(taskID string, maxRetries int, force bool) (*Task, error) {
 	taskMu.Lock()
 	defer taskMu.Unlock()
 
@@ -321,7 +343,7 @@ func Retry(taskID string, maxRetries int) (*Task, error) {
 		return nil, fmt.Errorf("task %s is %s (not failed, cannot retry)", taskID, task.Status)
 	}
 
-	if task.RetryCount >= maxRetries {
+	if !force && task.RetryCount >= maxRetries {
 		return nil, fmt.Errorf("task %s exceeded max retries (%d)", taskID, maxRetries)
 	}
 
@@ -340,6 +362,91 @@ func Retry(taskID string, maxRetries int) (*Task, error) {
 		return nil, err
 	}
 	return task, nil
+}
+
+// Reset fully resets a task to pending state, clearing all runtime fields.
+// Unlike Retry, this clears RetryCount and makes the task appear as new.
+// Useful for manual recovery of stuck or permanently-failed tasks.
+func Reset(taskID string) (*Task, error) {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reset all runtime fields
+	task.Status = StatusPending
+	task.Claimant = ""
+	task.ClaimedAt = 0
+	task.FinishedAt = 0
+	task.Error = ""
+	task.Summary = ""
+	task.Retryable = false
+	task.RetryCount = 0
+
+	// Remove claim lock so Claim can succeed
+	os.Remove(filepath.Join(storage.TaskDir(taskID), ".claim-lock"))
+
+	if err := storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// MarkNonRetryable sets Retryable=false on a task so the scheduler
+// will stop retrying it and AllDone() can treat it as terminal.
+func MarkNonRetryable(taskID string) error {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return err
+	}
+	task.Retryable = false
+	return storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task)
+}
+
+// RecordFailedRun appends a run record to the task's PreviousRuns history.
+// This preserves failed run IDs for debugging and retry history display.
+func RecordFailedRun(taskID, runID string, startedAt int64, errMsg string) error {
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	task, err := loadTask(taskID)
+	if err != nil {
+		return err
+	}
+	task.PreviousRuns = append(task.PreviousRuns, RunRecord{
+		RunID:     runID,
+		StartedAt: startedAt,
+		FailedAt:  time.Now().Unix(),
+		Error:     errMsg,
+	})
+	return storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(taskID), "task.json"), task)
+}
+
+// GetWorkerStartedAt returns the startedAt timestamp from worker-meta.json
+// for a task's claimant agent, or 0 if not available.
+func GetWorkerStartedAt(taskID string) int64 {
+	t, err := loadTask(taskID)
+	if err != nil || t.Claimant == "" {
+		return 0
+	}
+	agentDir := storage.AgentDir(t.Claimant)
+	metaPath := filepath.Join(agentDir, "worker-meta.json")
+	if !storage.Exists(metaPath) {
+		return 0
+	}
+	var meta struct {
+		StartedAt int64 `json:"startedAt"`
+	}
+	if err := storage.ReadJSON(metaPath, &meta); err != nil {
+		return 0
+	}
+	return meta.StartedAt
 }
 
 // Groups returns all unique group names across all tasks.
@@ -502,7 +609,7 @@ func ClaimNext(claimant string) (string, error) {
 	return t.ID, nil
 }
 
-// ImportPlan imports tasks from a PLAN.yml file.
+// ImportPlan imports tasks from a plan file (supports Markdown format with YAML frontmatter).
 // Returns the number of tasks imported.
 func ImportPlan(filePath string) (int, error) {
 	data, err := os.ReadFile(filePath)
@@ -510,17 +617,8 @@ func ImportPlan(filePath string) (int, error) {
 		return 0, fmt.Errorf("read plan file: %w", err)
 	}
 
-	// Parse YAML plan
-	var plan struct {
-		Tasks []struct {
-			ID           string   `yaml:"id"`
-			Title        string   `yaml:"title"`
-			Description  string   `yaml:"description"`
-			Dependencies []string `yaml:"dependencies"`
-			Group        string   `yaml:"group"`
-		} `yaml:"tasks"`
-	}
-	if err := yaml.Unmarshal(data, &plan); err != nil {
+	tasks, err := parseMarkdownPlan(data)
+	if err != nil {
 		return 0, fmt.Errorf("parse plan: %w", err)
 	}
 
@@ -528,7 +626,7 @@ func ImportPlan(filePath string) (int, error) {
 	var depErrors []string
 
 	// Phase 1: Create all tasks first (ensures forward dependencies resolve)
-	for _, pt := range plan.Tasks {
+	for _, pt := range tasks {
 		desc := pt.Title
 		if pt.Description != "" {
 			desc = pt.Description
@@ -546,12 +644,13 @@ func ImportPlan(filePath string) (int, error) {
 				continue
 			}
 		}
-		// Set title and group
+				// Set title and group
 		t.Title = pt.Title
 		t.Group = pt.Group
 		if t.Group == "" {
 			t.Group = "default"
 		}
+		t.EstimatedMinutes = pt.EstimatedMinutes
 		taskMu.Lock()
 		storage.AtomicWriteJSON(filepath.Join(storage.TaskDir(t.ID), "task.json"), t)
 		taskMu.Unlock()
@@ -559,7 +658,7 @@ func ImportPlan(filePath string) (int, error) {
 	}
 
 	// Phase 2: Add dependencies (all tasks now exist, forward refs resolve)
-	for _, pt := range plan.Tasks {
+	for _, pt := range tasks {
 		if pt.ID == "" {
 			continue
 		}
@@ -574,6 +673,166 @@ func ImportPlan(filePath string) (int, error) {
 		return count, fmt.Errorf("dependency errors: %s", strings.Join(depErrors, "; "))
 	}
 	return count, nil
+}
+
+// planTask represents a parsed task from a Markdown plan file.
+type planTask struct {
+	ID               string
+	Title            string
+	Description      string
+	Dependencies     []string
+	Group            string
+	EstimatedMinutes int
+}
+
+// parseMarkdownPlan parses a Markdown file with YAML frontmatter and task sections.
+func parseMarkdownPlan(data []byte) ([]planTask, error) {
+	text := string(data)
+	text = strings.TrimSpace(text)
+
+	if !strings.HasPrefix(text, "---") {
+		// Fallback: try legacy YAML format
+		return parseLegacyYAMLPlan(data)
+	}
+
+	// Extract frontmatter
+	rest := text[3:]
+	closingIdx := strings.Index(rest, "\n---")
+	if closingIdx < 0 {
+		return nil, fmt.Errorf("frontmatter not closed: missing closing ---")
+	}
+
+	body := rest[closingIdx+4:]
+	body = strings.TrimPrefix(body, "\n")
+
+	// Parse task sections from Markdown body
+	return parseTaskSections(body), nil
+}
+
+// parseLegacyYAMLPlan parses the old YAML-only format for backward compatibility.
+func parseLegacyYAMLPlan(data []byte) ([]planTask, error) {
+	var plan struct {
+		Tasks []struct {
+			ID               string   `yaml:"id"`
+			Title            string   `yaml:"title"`
+			Description      string   `yaml:"description"`
+			Dependencies     []string `yaml:"dependencies"`
+			Group            string   `yaml:"group"`
+			EstimatedMinutes int      `yaml:"estimated_minutes"`
+		} `yaml:"tasks"`
+	}
+	if err := yaml.Unmarshal(data, &plan); err != nil {
+		return nil, fmt.Errorf("parse YAML plan: %w", err)
+	}
+
+	var tasks []planTask
+	for _, t := range plan.Tasks {
+		tasks = append(tasks, planTask{
+			ID:               t.ID,
+			Title:            t.Title,
+			Description:      t.Description,
+			Dependencies:     t.Dependencies,
+			Group:            t.Group,
+			EstimatedMinutes: t.EstimatedMinutes,
+		})
+	}
+	return tasks, nil
+}
+
+// taskHeaderRe matches `## T001 — Task title (3h)` or `## T001 - Task title (3h)`
+var taskHeaderRe = regexp.MustCompile(`^## (T\d+)\s*[—\-]\s*(.+?)(?:\s*\((\d+(?:\.\d+)?)h\))?\s*$`)
+
+// depLineRe matches `**Dependencies:** T001, T003` or `**Dependencies:** none`
+var depLineRe = regexp.MustCompile(`^\*\*Dependencies?:\*\*\s*(.+)$`)
+
+// groupLineRe matches `**Group:** agent`
+var groupLineRe = regexp.MustCompile(`^\*\*Group:\*\*\s*(.+)$`)
+
+// parseTaskSections splits the Markdown body into task sections by `## Txxx` headers.
+func parseTaskSections(body string) []planTask {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+
+	lines := strings.Split(body, "\n")
+
+	type section struct {
+		lines []string
+	}
+	var sections []section
+
+	currentSection := -1
+	for _, line := range lines {
+		if taskHeaderRe.MatchString(line) {
+			sections = append(sections, section{lines: []string{line}})
+			currentSection = len(sections) - 1
+		} else if currentSection >= 0 {
+			sections[currentSection].lines = append(sections[currentSection].lines, line)
+		}
+	}
+
+	var tasks []planTask
+	for _, sec := range sections {
+		task := parseTaskSection(sec.lines)
+		if task != nil {
+			tasks = append(tasks, *task)
+		}
+	}
+	return tasks
+}
+
+// parseTaskSection parses a single task section into a planTask.
+func parseTaskSection(lines []string) *planTask {
+	if len(lines) == 0 {
+		return nil
+	}
+
+	task := &planTask{}
+
+	// Parse header line
+	headerMatch := taskHeaderRe.FindStringSubmatch(lines[0])
+	if headerMatch == nil {
+		return nil
+	}
+
+	task.ID = headerMatch[1]
+	task.Title = strings.TrimSpace(headerMatch[2])
+	// Parse optional hours estimate (e.g. "(3h)") and convert to minutes
+	if headerMatch[3] != "" {
+		if hours, err := strconv.ParseFloat(headerMatch[3], 64); err == nil && hours > 0 {
+			task.EstimatedMinutes = int(hours * 60)
+		}
+	}
+
+	// Parse metadata lines and collect body
+	var bodyLines []string
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+
+		if depMatch := depLineRe.FindStringSubmatch(trimmed); depMatch != nil {
+			depStr := strings.TrimSpace(depMatch[1])
+			if !strings.EqualFold(depStr, "none") && depStr != "" {
+				parts := strings.Split(depStr, ",")
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p != "" {
+						task.Dependencies = append(task.Dependencies, p)
+					}
+				}
+			}
+			continue
+		}
+
+		if groupMatch := groupLineRe.FindStringSubmatch(trimmed); groupMatch != nil {
+			task.Group = strings.TrimSpace(groupMatch[1])
+			continue
+		}
+
+		bodyLines = append(bodyLines, line)
+	}
+
+	task.Description = strings.TrimSpace(strings.Join(bodyLines, "\n"))
+	return task
 }
 
 // Show returns task details.

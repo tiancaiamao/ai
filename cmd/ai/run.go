@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -72,15 +72,13 @@ func runSubcommand(binPath string) {
 	stdinReader, stdinWriter := io.Pipe()
 	cmd.Stdin = stdinReader
 
-	// Stdout goes ONLY to events.jsonl — watch TUI reads from there.
-	eventsPath := run.EventsPath(baseDir, id)
-	eventsFile, err := os.Create(eventsPath)
-	if err != nil {
-		slog.Error("failed to create events file", "path", eventsPath, "error", err)
-		os.Exit(1)
-	}
-	defer eventsFile.Close()
-	cmd.Stdout = eventsFile
+	// Stdout goes to event broadcaster instead of events.jsonl.
+	// The broadcaster fans out to N watch clients via ring buffer + channels.
+	broadcaster := run.NewEventBroadcaster()
+	defer broadcaster.Close()
+
+	pipeReader, pipeWriter := io.Pipe()
+	cmd.Stdout = pipeWriter
 
 	// Start the subprocess.
 	if err := cmd.Start(); err != nil {
@@ -88,23 +86,41 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
+	go func() {
+		defer pipeReader.Close()
+		scanner := bufio.NewScanner(pipeReader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			lineCopy := make([]byte, len(line))
+			copy(lineCopy, line)
+			broadcaster.Push(lineCopy)
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Error("stdout bridge scanner error", "error", err)
+		}
+	}()
+
 	// Write initial run.json.
 	meta := &run.RunMeta{
-		ID:        id,
-		PID:       cmd.Process.Pid,
-		CWD:       cwd,
-		Status:    run.StatusRunning,
-		StartedAt: time.Now().Unix(),
-		Name:      *nameFlag,
+		ID:           id,
+		PID:          cmd.Process.Pid,
+		CWD:          cwd,
+		Status:       run.StatusRunning,
+		StartedAt:    time.Now().Unix(),
+		Name:         *nameFlag,
+		PidStartTime: run.GetProcessStartTime(cmd.Process.Pid),
 	}
 	metaPath := run.RunMetaPath(baseDir, id)
 	if err := run.SaveRunMeta(meta, metaPath); err != nil {
 		slog.Error("failed to save run meta", "error", err)
 	}
 
-	// Start socket server for external commands.
+	// Start socket server for external commands + event streaming.
 	sockPath := run.SocketPath(baseDir, id)
 	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
+	socketServer.SetBroadcaster(broadcaster)
 	if err := socketServer.Start(); err != nil {
 		slog.Error("failed to start socket server", "error", err)
 		cmd.Process.Kill()
@@ -126,9 +142,9 @@ func runSubcommand(binPath string) {
 	}
 
 	// Launch watch TUI in foreground.
-	// The TUI reads events.jsonl and renders to the terminal.
+	// The TUI reads events from broadcaster via ring buffer and renders to the terminal.
 	// User input is forwarded to the subprocess via the socket.
-	m := newRunModel(eventsPath, id, sockPath, cmd.Process, stdinWriter, meta, metaPath)
+	m := newRunModel(broadcaster, id, sockPath, cmd.Process, stdinWriter, meta, metaPath)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		slog.Error("TUI error", "error", err)
@@ -153,7 +169,6 @@ func runSubcommand(binPath string) {
 			<-done
 		}
 	}
-	eventsFile.Close()
 
 	// Update final status.
 	meta.Status = run.StatusDone
@@ -166,7 +181,7 @@ func runSubcommand(binPath string) {
 // The socket server runs in-process, enabling ai send/watch control.
 // Use "ai serve &" or "nohup ai serve &" for background operation.
 func serveSubcommand(binPath string) {
-		fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
@@ -219,15 +234,12 @@ func serveSubcommand(binPath string) {
 	stdinReader, stdinWriter := io.Pipe()
 	cmd.Stdin = stdinReader
 
-	// Stdout goes ONLY to events.jsonl.
-	eventsPath := run.EventsPath(baseDir, id)
-	eventsFile, err := os.Create(eventsPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to create events file: %v\n", err)
-		os.Exit(1)
-	}
-	defer eventsFile.Close()
-	cmd.Stdout = eventsFile
+	// Stdout goes to event broadcaster instead of events.jsonl.
+	broadcaster := run.NewEventBroadcaster()
+	defer broadcaster.Close()
+
+	pipeReader, pipeWriter := io.Pipe()
+	cmd.Stdout = pipeWriter
 
 	// Start the subprocess.
 	if err := cmd.Start(); err != nil {
@@ -235,23 +247,50 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
+	agentEndCh := make(chan struct{}, 1)
+	go func() {
+		defer pipeReader.Close()
+		scanner := bufio.NewScanner(pipeReader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			lineCopy := make([]byte, len(line))
+			copy(lineCopy, line)
+			broadcaster.Push(lineCopy)
+
+			// Check for agent_end event to signal subprocess completion.
+			if hasAgentEndEvent(lineCopy) {
+				select {
+				case agentEndCh <- struct{}{}:
+				default:
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Error("stdout bridge scanner error", "error", err)
+		}
+	}()
+
 	// Write initial run.json.
 	meta := &run.RunMeta{
-		ID:        id,
-		PID:       cmd.Process.Pid,
-		CWD:       cwd,
-		Status:    run.StatusRunning,
-		StartedAt: time.Now().Unix(),
-		Name:      *nameFlag,
+		ID:           id,
+		PID:          cmd.Process.Pid,
+		CWD:          cwd,
+		Status:       run.StatusRunning,
+		StartedAt:    time.Now().Unix(),
+		Name:         *nameFlag,
+		PidStartTime: run.GetProcessStartTime(cmd.Process.Pid),
 	}
 	metaPath := run.RunMetaPath(baseDir, id)
 	if err := run.SaveRunMeta(meta, metaPath); err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to save run meta: %v\n", err)
 	}
 
-	// Start socket server for external commands.
+	// Start socket server for external commands + event streaming.
 	sockPath := run.SocketPath(baseDir, id)
 	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
+	socketServer.SetBroadcaster(broadcaster)
 	if err := socketServer.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to start socket server: %v\n", err)
 		cmd.Process.Kill()
@@ -265,7 +304,7 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-		// Send initial input if provided.
+	// Send initial input if provided.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
@@ -282,27 +321,15 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-		// Print run ID to stdout — caller can capture this.
+	// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
 
-		// Watch events.jsonl for agent_end — when the agent finishes, close stdin
-	// to trigger the RPC subprocess to exit. Without this, "ai serve" blocks
-	// forever because the RPC server loops on stdin.
-	// We parse JSONL lines and check the "type" field instead of raw substring
-	// search to avoid false positives from assistant output containing "agent_end".
+	// Wait for agent_end via bridge goroutine signal.
+	// When the agent finishes, close stdin to trigger the RPC subprocess to exit.
+	// Without this, "ai serve" blocks forever because the RPC server loops on stdin.
 	go func() {
-		for {
-			data, err := os.ReadFile(eventsPath)
-			if err != nil {
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-			if hasAgentEndEvent(data) {
-				stdinWriter.Close()
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
+		<-agentEndCh
+		stdinWriter.Close()
 	}()
 
 	// Wait for subprocess to exit.
@@ -328,25 +355,6 @@ func serveSubcommand(binPath string) {
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-// hasAgentEndEvent parses JSONL data and checks if any line has type "agent_end".
-// This avoids false positives from raw substring matching (e.g. assistant output
-// containing the text "agent_end").
-func hasAgentEndEvent(data []byte) bool {
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var evt struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(line, &evt) == nil && evt.Type == "agent_end" {
-			return true
-		}
-	}
-	return false
-}
-
 func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http string) []string {
 	var flags []string
 	if session != "" {
@@ -380,6 +388,23 @@ func sendRPCCommand(w io.Writer, cmdType, message string) error {
 	data = append(data, '\n')
 	_, err = w.Write(data)
 	return err
+}
+
+// hasAgentEndEvent checks if a raw JSON line has type "agent_end".
+func hasAgentEndEvent(data []byte) bool {
+	// Fast path: check for the string before full JSON parse.
+	// This avoids allocation for the vast majority of events.
+	s := string(data)
+	if !strings.Contains(s, `"agent_end"`) {
+		return false
+	}
+	var evt struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return false
+	}
+	return evt.Type == "agent_end"
 }
 
 // runSocketHandler returns a CommandHandler that processes socket commands
@@ -428,31 +453,33 @@ func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdi
 // for sending messages to the running agent via socket.
 type runModel struct {
 	watchModel
-	sockPath  string
-	proc      *os.Process
-	stdinPipe *io.PipeWriter
-	meta      *run.RunMeta
-	metaPath  string
-	inputMode bool // true when user is typing a message
-	inputBuf  *strings.Builder
+	sockPath    string
+	proc        *os.Process
+	stdinPipe   *io.PipeWriter
+	meta        *run.RunMeta
+	metaPath    string
+	inputMode   bool // true when user is typing a message
+	inputBuf    *strings.Builder
+	broadcaster *run.EventBroadcaster
 }
 
 func newRunModel(
-	eventsPath, runID, sockPath string,
+	broadcaster *run.EventBroadcaster, runID, sockPath string,
 	proc *os.Process,
 	stdinPipe *io.PipeWriter,
 	meta *run.RunMeta,
 	metaPath string,
 ) runModel {
-	w := newWatchModel(eventsPath, runID, 0, false)
+	w := newWatchModelFromBroadcaster(broadcaster, runID)
 	return runModel{
-		watchModel: w,
-		sockPath:   sockPath,
-		proc:       proc,
-		stdinPipe:  stdinPipe,
-		meta:       meta,
-		metaPath:   metaPath,
-		inputBuf:   &strings.Builder{},
+		watchModel:  w,
+		sockPath:    sockPath,
+		proc:        proc,
+		stdinPipe:   stdinPipe,
+		meta:        meta,
+		metaPath:    metaPath,
+		inputBuf:    &strings.Builder{},
+		broadcaster: broadcaster,
 	}
 }
 

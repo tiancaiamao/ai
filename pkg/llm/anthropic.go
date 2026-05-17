@@ -40,6 +40,11 @@ func StreamAnthropic(
 
 	go func() {
 		defer stream.End(LLMMessage{})
+		defer func() {
+			if r := recover(); r != nil {
+				stream.Push(LLMErrorEvent{Error: fmt.Errorf("LLM stream panic (recovered): %v", r)})
+			}
+		}()
 
 		// Get API key from environment if not provided
 		if apiKey == "" {

@@ -183,18 +183,25 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 		MaxToolCallsPerName:     100,
 	}, stream)
 
-	if callCount != 3 {
-		t.Fatalf("expected loop guard to stop on third repeated call, got %d calls", callCount)
+	// With the feedback-to-LLM strategy:
+	//   call 1-2: normal execution
+	//   call 3: guard triggers → feedback #1 → LLM retries
+	//   call 4: guard triggers → feedback #2 → LLM retries
+	//   call 5: guard triggers → hard abort (feedback limit exhausted)
+	if callCount != 5 {
+		t.Fatalf("expected loop guard to hard-abort after 5 calls (2 normal + 2 feedback + 1 abort), got %d calls", callCount)
 	}
 
 	var sawGuardedTurn bool
 	var sawGuardEvent bool
+	var guardEventCount int
 	for item := range stream.Iterator(context.Background()) {
 		if item.Done {
 			break
 		}
 		if item.Value.Type == EventLoopGuardTriggered && item.Value.LoopGuard != nil && strings.TrimSpace(item.Value.LoopGuard.Reason) != "" {
 			sawGuardEvent = true
+			guardEventCount++
 		}
 		if item.Value.Type != EventTurnEnd || item.Value.Message == nil {
 			continue
@@ -210,6 +217,10 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	}
 	if !sawGuardEvent {
 		t.Fatal("expected loop_guard_triggered event")
+	}
+	// Guard should trigger 3 times: 2 feedback + 1 hard abort
+	if guardEventCount != 3 {
+		t.Fatalf("expected 3 loop guard events (2 feedback + 1 hard abort), got %d", guardEventCount)
 	}
 }
 
@@ -244,8 +255,13 @@ func TestRunInnerLoopStopsRepeatedToolCallsByDefaultGuard(t *testing.T) {
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
 	// defaultLoopMaxConsecutiveToolCalls = 6, so guard triggers on the 7th call.
-	if callCount != 7 {
-		t.Fatalf("expected default loop guard to stop on 7th repeated call, got %d calls", callCount)
+	// With feedback-to-LLM strategy (defaultLoopGuardMaxFeedback = 2):
+	//   call 1-6: normal execution
+	//   call 7: guard triggers → feedback #1 → LLM retries
+	//   call 8: guard triggers → feedback #2 → LLM retries
+	//   call 9: guard triggers → hard abort (feedback limit exhausted)
+	if callCount != 9 {
+		t.Fatalf("expected default loop guard to hard-abort after 9 calls (6 normal + 2 feedback + 1 abort), got %d calls", callCount)
 	}
 }
 
@@ -848,5 +864,270 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 
 	if guardTriggeredForLLMContextUpdate {
 		t.Fatal("task_tracking should NOT trigger loop guard")
+	}
+}
+
+// TestLoopGuardFeedbackAllowsLLMSelfCorrection verifies that when the loop guard
+// detects repeated tool calls, it returns a ToolResult (feedback) to the LLM
+// instead of immediately aborting. The LLM can then self-correct by calling a
+// different tool and completing successfully.
+func TestLoopGuardFeedbackAllowsLLMSelfCorrection(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		msg := agentctx.NewAssistantMessage()
+
+		if callCount <= 3 {
+			// First 3 calls: repeat the same tool call (will trigger guard on call 3)
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        "call-repeat-" + fmt.Sprint(callCount),
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/a.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		// After receiving loop guard feedback, LLM self-corrects and returns text
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "I see the file doesn't exist. Let me try something else."},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
+		MaxConsecutiveToolCalls: 2,
+		MaxToolCallsPerName:     100,
+	}, stream)
+
+	// call 1-2: normal execution
+	// call 3: guard triggers → feedback → LLM sees result, tries again
+	// call 4: LLM self-corrects and returns text (stop)
+	if callCount != 4 {
+		t.Fatalf("expected 4 calls (2 normal + 1 guard feedback + 1 self-correction), got %d", callCount)
+	}
+
+	// Verify loop guard event was emitted (soft feedback, not hard abort)
+	var sawFeedbackEvent bool
+	var sawHardAbort bool
+	var sawFeedbackInTurnEnd bool
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventLoopGuardTriggered && item.Value.LoopGuard != nil {
+			sawFeedbackEvent = true
+		}
+		if item.Value.Type == EventTurnEnd {
+			if item.Value.Message != nil && item.Value.Message.StopReason == "aborted" {
+				sawHardAbort = true
+			}
+			// Check if the tool results in the turn end contain loop guard feedback
+			for _, tr := range item.Value.ToolResults {
+				if tr.IsError && strings.Contains(tr.ExtractText(), "[Loop guard]") {
+					sawFeedbackInTurnEnd = true
+				}
+			}
+		}
+	}
+
+	if !sawFeedbackEvent {
+		t.Fatal("expected loop_guard_triggered event for soft feedback")
+	}
+	if sawHardAbort {
+		t.Fatal("expected no hard abort — LLM should self-correct after feedback")
+	}
+	if !sawFeedbackInTurnEnd {
+		t.Fatal("expected tool result with loop guard feedback in turn_end event")
+	}
+}
+
+// TestLoopGuardFeedbackResetsOnSignatureChange verifies that the feedback counter
+// resets when the LLM changes its tool call signature after receiving feedback.
+func TestLoopGuardFeedbackResetsOnSignatureChange(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		msg := agentctx.NewAssistantMessage()
+
+		if callCount <= 3 {
+			// First 3 calls: repeat read /tmp/a.txt (guard triggers on call 3)
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        "call-read-a-" + fmt.Sprint(callCount),
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/a.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		if callCount == 4 {
+			// After guard feedback, LLM switches to a different file (signature changes)
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        "call-read-b-4",
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/b.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		if callCount <= 6 {
+			// Repeat /tmp/b.txt for calls 5 and 6
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        "call-read-b-" + fmt.Sprint(callCount),
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/b.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		// Self-correct after second guard feedback
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "done"},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
+		MaxConsecutiveToolCalls: 2,
+		MaxToolCallsPerName:     100,
+	}, stream)
+
+	// call 1: read a.txt (consecutive=1) — executed
+	// call 2: read a.txt (consecutive=2) — executed
+	// call 3: read a.txt (consecutive=3) → guard triggers feedback #1
+	// call 4: read b.txt (signature reset, consecutive=1) — executed
+	// call 5: read b.txt (consecutive=2) — executed
+	// call 6: read b.txt (consecutive=3) → guard triggers feedback #1 (fresh counter)
+	// call 7: LLM self-corrects → done
+	if callCount != 7 {
+		t.Fatalf("expected 7 calls with signature reset, got %d", callCount)
+	}
+
+	var guardEventCount int
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventLoopGuardTriggered {
+			guardEventCount++
+		}
+	}
+	// Two guard events: one for /tmp/a.txt loop, one for /tmp/b.txt loop
+	if guardEventCount != 2 {
+		t.Fatalf("expected 2 guard events (one per signature), got %d", guardEventCount)
+	}
+}
+
+func TestRunInnerLoopCompactionRecoveryOnContextLimitStopReason(t *testing.T) {
+	// Test that when LLM returns stopReason=model_context_window_exceeded
+	// in a ChunkDone event (NOT an error), the context_limit_recovery path
+	// still triggers compaction.
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	compactor := &recoveryCompactor{}
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		if callCount == 1 {
+			// Simulate LLM returning context limit via stopReason (not error).
+			// In real code, streamAssistantResponse detects this in ChunkDone
+			// and converts it to a ContextLengthExceededError.
+			return nil, &llm.ContextLengthExceededError{
+				Message: "LLM returned stopReason=model_context_window_exceeded indicating context window exceeded",
+			}
+		}
+
+		msg := agentctx.NewAssistantMessage()
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "recovered"},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+
+	config := &LoopConfig{
+		Compactors: []Compactor{compactor},
+	}
+
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, config, stream)
+
+	var gotStart, gotEnd bool
+	var finalMessages []agentctx.AgentMessage
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventCompactionStart {
+			gotStart = true
+		}
+		if item.Value.Type == EventCompactionEnd {
+			gotEnd = true
+		}
+		if item.Value.Type == EventAgentEnd {
+			finalMessages = item.Value.Messages
+		}
+	}
+
+	if compactor.calls != 1 {
+		t.Fatalf("expected compactor to be called once, got %d", compactor.calls)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected assistant streaming to be called twice (recovery), got %d", callCount)
+	}
+	if !gotStart || !gotEnd {
+		t.Fatalf("expected compaction start/end events, got start=%v end=%v", gotStart, gotEnd)
+	}
+	// Verify the agent recovered and returned the second response
+	if len(finalMessages) == 0 {
+		t.Fatal("expected final messages after recovery")
 	}
 }

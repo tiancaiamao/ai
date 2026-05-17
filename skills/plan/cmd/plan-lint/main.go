@@ -4,17 +4,18 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// --- YAML schema types ---
+// --- Frontmatter schema types (YAML) ---
 
 type Plan struct {
 	Version    string   `yaml:"version"`
 	Metadata   Metadata `yaml:"metadata"`
-	Tasks      []Task   `yaml:"tasks"`
+	Tasks      []Task   // Parsed from Markdown body, not YAML
 	Groups     []Group  `yaml:"groups"`
 	GroupOrder []string `yaml:"group_order"`
 	Risks      []Risk   `yaml:"risks"`
@@ -25,13 +26,14 @@ type Metadata struct {
 }
 
 type Task struct {
-	ID             string   `yaml:"id"`
-	Title          string   `yaml:"title"`
-	Description    string   `yaml:"description"`
-	EstimatedHours float64  `yaml:"estimated_hours"`
-	DependsOn      []string `yaml:"depends_on"`
-	Dependencies   []string `yaml:"dependencies"`
-	Group          string   `yaml:"group"`
+	ID             string
+	Title          string
+	Description    string // Full Markdown body of the task section
+	EstimatedHours float64
+	EstimatedMinutes int
+	DependsOn      []string
+	Dependencies   []string
+	Group          string
 }
 
 type Group struct {
@@ -76,6 +78,180 @@ func (d Diagnostic) String() string {
 	}
 }
 
+// --- Markdown Parser ---
+
+// parseMarkdownPlan splits a Markdown file into frontmatter and task sections.
+func parseMarkdownPlan(data []byte) (*Plan, []Diagnostic) {
+	var diags []Diagnostic
+
+	text := string(data)
+	frontmatterYAML, body, err := extractFrontmatter(text)
+	if err != nil {
+		diags = append(diags, Diagnostic{Error, fmt.Sprintf("failed to extract frontmatter: %v", err)})
+		return nil, diags
+	}
+
+	plan := &Plan{}
+
+	// Parse frontmatter YAML
+	if err := yaml.Unmarshal([]byte(frontmatterYAML), plan); err != nil {
+		diags = append(diags, Diagnostic{Error, fmt.Sprintf("failed to parse frontmatter YAML: %v", err)})
+		return nil, diags
+	}
+
+	// Parse task sections from Markdown body
+	tasks, taskDiags := parseTaskSections(body)
+	diags = append(diags, taskDiags...)
+	plan.Tasks = tasks
+
+	return plan, diags
+}
+
+// extractFrontmatter splits text into YAML frontmatter (between --- delimiters) and body.
+func extractFrontmatter(text string) (frontmatter string, body string, err error) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "---") {
+		return "", "", fmt.Errorf("file must start with YAML frontmatter (---)")
+	}
+
+	// Find the closing ---
+	// Start after the first ---
+	rest := text[3:]
+	// Look for the next --- on its own line
+	closingIdx := strings.Index(rest, "\n---")
+	if closingIdx < 0 {
+		return "", "", fmt.Errorf("frontmatter not closed: missing closing ---")
+	}
+
+	frontmatter = rest[:closingIdx]
+	body = rest[closingIdx+4:] // skip \n---
+	body = strings.TrimPrefix(body, "\n")
+
+	return frontmatter, body, nil
+}
+
+// taskHeaderRe matches `## T001 — Task title (3h)` or `## T001 - Task title (3h)`
+var taskHeaderRe = regexp.MustCompile(`^## (T\d+)\s*[—\-]\s*(.+?)(?:\s*\((\d+(?:\.\d+)?)h\))?\s*$`)
+
+// depLineRe matches `**Dependencies:** T001, T003` or `**Dependencies:** none`
+var depLineRe = regexp.MustCompile(`^\*\*Dependencies?:\*\*\s*(.+)$`)
+
+// groupLineRe matches `**Group:** agent`
+var groupLineRe = regexp.MustCompile(`^\*\*Group:\*\*\s*(.+)$`)
+
+// parseTaskSections splits the Markdown body into task sections by `## Txxx` headers.
+func parseTaskSections(body string) ([]Task, []Diagnostic) {
+	var diags []Diagnostic
+	var tasks []Task
+
+	if strings.TrimSpace(body) == "" {
+		return tasks, diags
+	}
+
+	// Split on `## T` pattern. We use a regex to find all task headers.
+	// First, split by lines and find task header positions.
+	lines := strings.Split(body, "\n")
+
+	type section struct {
+		headerIdx int
+		lines     []string
+	}
+	var sections []section
+
+	currentSection := -1
+	for i, line := range lines {
+		if taskHeaderRe.MatchString(line) {
+			sections = append(sections, section{headerIdx: i, lines: []string{line}})
+			currentSection = len(sections) - 1
+		} else if currentSection >= 0 {
+			sections[currentSection].lines = append(sections[currentSection].lines, line)
+		}
+		// Lines before the first task header are ignored (could be intro text)
+	}
+
+	for _, sec := range sections {
+		task, taskDiags := parseTaskSection(sec.lines)
+		diags = append(diags, taskDiags...)
+		if task != nil {
+			tasks = append(tasks, *task)
+		}
+	}
+
+	return tasks, diags
+}
+
+// parseTaskSection parses a single task section into a Task.
+func parseTaskSection(lines []string) (*Task, []Diagnostic) {
+	var diags []Diagnostic
+
+	if len(lines) == 0 {
+		return nil, diags
+	}
+
+	task := &Task{}
+
+	// Parse header line: `## T001 — Task title (3h)`
+	headerMatch := taskHeaderRe.FindStringSubmatch(lines[0])
+	if headerMatch == nil {
+		diags = append(diags, Diagnostic{Error, fmt.Sprintf("invalid task header: %s", lines[0])})
+		return nil, diags
+	}
+
+	task.ID = headerMatch[1]
+	task.Title = strings.TrimSpace(headerMatch[2])
+	if headerMatch[3] != "" {
+		hours, err := strconv.ParseFloat(headerMatch[3], 64)
+		if err == nil {
+			task.EstimatedHours = hours
+		}
+	}
+
+	// Parse metadata lines and collect body
+	var bodyLines []string
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+
+		if depMatch := depLineRe.FindStringSubmatch(trimmed); depMatch != nil {
+			depStr := strings.TrimSpace(depMatch[1])
+			if strings.EqualFold(depStr, "none") || depStr == "" {
+				task.DependsOn = []string{}
+				task.Dependencies = []string{}
+			} else {
+				deps := parseDepList(depStr)
+				task.DependsOn = deps
+				task.Dependencies = deps
+			}
+			continue
+		}
+
+		if groupMatch := groupLineRe.FindStringSubmatch(trimmed); groupMatch != nil {
+			task.Group = strings.TrimSpace(groupMatch[1])
+			continue
+		}
+
+		bodyLines = append(bodyLines, line)
+	}
+
+	task.Description = strings.Join(bodyLines, "\n")
+	// Trim leading/trailing blank lines from description
+	task.Description = strings.TrimSpace(task.Description)
+
+	return task, diags
+}
+
+// parseDepList parses a comma-separated dependency list like "T001, T003"
+func parseDepList(s string) []string {
+	parts := strings.Split(s, ",")
+	var deps []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			deps = append(deps, p)
+		}
+	}
+	return deps
+}
+
 // --- Linter ---
 
 func Lint(plan *Plan) []Diagnostic {
@@ -97,12 +273,12 @@ func Lint(plan *Plan) []Diagnostic {
 
 	// 1. Missing version
 	if plan.Version == "" {
-		diags = append(diags, Diagnostic{Error, "missing top-level 'version' field"})
+		diags = append(diags, Diagnostic{Error, "missing top-level 'version' field in frontmatter"})
 	}
 
 	// 2. Missing metadata.spec_file
 	if plan.Metadata.SpecFile == "" {
-		diags = append(diags, Diagnostic{Error, "missing 'metadata.spec_file' field"})
+		diags = append(diags, Diagnostic{Error, "missing 'metadata.spec_file' field in frontmatter"})
 	}
 
 	// 3. No tasks
@@ -120,12 +296,12 @@ func Lint(plan *Plan) []Diagnostic {
 	designRefRe := regexp.MustCompile(`(?i)(design\.md|see\s+design)`)
 
 	for _, t := range plan.Tasks {
-		// 7. estimated_hours must be > 0
+		// estimated_hours must be > 0
 		if t.EstimatedHours <= 0 {
 			diags = append(diags, Diagnostic{Error, fmt.Sprintf("task %s: estimated_hours must be > 0", t.ID)})
 		}
 
-		// 5. depends_on references non-existent task
+		// depends_on references non-existent task
 		deps := effectiveDeps(t)
 		for _, dep := range deps {
 			if !taskIDs[dep] {
@@ -133,18 +309,18 @@ func Lint(plan *Plan) []Diagnostic {
 			}
 		}
 
-		// New: task description empty or shorter than 50 chars
+		// task description empty or shorter than 50 chars
 		trimmedDesc := strings.TrimSpace(t.Description)
 		if len(trimmedDesc) < 50 {
 			diags = append(diags, Diagnostic{Error, fmt.Sprintf("task %s: description is too short (%d chars, minimum 50)", t.ID, len(trimmedDesc))})
 		}
 
-		// New: task description must contain "Done when" or "done-when" or "Acceptance"
+		// task description must contain "Done when" or "done-when" or "Acceptance"
 		if len(trimmedDesc) >= 50 && !descDoneWhenRe.MatchString(trimmedDesc) {
 			diags = append(diags, Diagnostic{Error, fmt.Sprintf("task %s: description must contain a 'Done when' or 'Acceptance' section", t.ID)})
 		}
 
-		// New: task description references design.md / see design
+		// task description references design.md / see design
 		if designRefRe.MatchString(trimmedDesc) {
 			diags = append(diags, Diagnostic{Warning, fmt.Sprintf("task %s: description references design.md — tasks should be self-contained", t.ID)})
 		}
@@ -154,16 +330,24 @@ func Lint(plan *Plan) []Diagnostic {
 			diags = append(diags, Diagnostic{Warning, fmt.Sprintf("task %s: estimated %.1f hours — consider splitting into smaller tasks", t.ID, t.EstimatedHours)})
 		}
 
-		// Info: task < 1 hour
+				// Info: task < 1 hour
 		if t.EstimatedHours > 0 && t.EstimatedHours < 1 {
 			diags = append(diags, Diagnostic{Info, fmt.Sprintf("task %s: estimated %.1f hours — very small, consider merging with related work", t.ID, t.EstimatedHours)})
 		}
+
+		// Granularity: warn if task has too many checklist items in Done when
+		checklistItems := countChecklistItems(trimmedDesc)
+		if checklistItems > 10 {
+			diags = append(diags, Diagnostic{Warning, fmt.Sprintf(
+				"task %s: %d checklist items in Done when — consider splitting into 2+ tasks (each should have ≤10 items)",
+				t.ID, checklistItems)})
+		}
 	}
 
-	// 6 & New: Circular dependency detection (build graph, detect cycles)
+	// Circular dependency detection (build graph, detect cycles)
 	diags = append(diags, detectCycles(plan.Tasks, taskIDs)...)
 
-	// 8. Group references non-existent task
+	// Group references non-existent task
 	for _, g := range plan.Groups {
 		for _, tid := range g.Tasks {
 			if !taskIDs[tid] {
@@ -172,22 +356,19 @@ func Lint(plan *Plan) []Diagnostic {
 		}
 	}
 
-	// 9. group_order references non-existent group
+	// group_order references non-existent group
 	for _, gn := range plan.GroupOrder {
 		if !groupNames[gn] {
 			diags = append(diags, Diagnostic{Error, fmt.Sprintf("group_order: references non-existent group %q", gn)})
 		}
 	}
 
-	// New: Group contains tasks with no dependency between them
+	// Group contains tasks with no dependency links between them (suggests missing dependency or wrong grouping)
 	for _, g := range plan.Groups {
 		taskIDSet := make(map[string]bool)
 		for _, tid := range g.Tasks {
 			taskIDSet[tid] = true
 		}
-		// Check if there exists at least one pair of tasks in the group
-		// where neither depends on the other (directly or transitively).
-		// We just check direct dependencies for simplicity.
 		if len(g.Tasks) > 1 {
 			anyLinked := false
 			for _, tid := range g.Tasks {
@@ -210,16 +391,54 @@ func Lint(plan *Plan) []Diagnostic {
 		}
 	}
 
+	// Cross-validation: tasks in frontmatter groups must match task sections
+	diags = append(diags, crossValidateGroups(plan)...)
+
 	// --- Warnings ---
 
-	// 1. Missing group_order
+	// Missing group_order
 	if len(plan.GroupOrder) == 0 {
 		diags = append(diags, Diagnostic{Warning, "missing 'group_order' field — recommended to define execution order"})
 	}
 
-	// 2. No risks
+	// No risks
 	if len(plan.Risks) == 0 {
 		diags = append(diags, Diagnostic{Warning, "no risks defined — recommend adding 2-5 risks with mitigations"})
+	}
+
+	return diags
+}
+
+// crossValidateGroups checks that frontmatter groups[].tasks and task sections are consistent.
+func crossValidateGroups(plan *Plan) []Diagnostic {
+	var diags []Diagnostic
+
+	// Collect all tasks referenced in groups
+	groupTaskIDs := make(map[string]bool)
+	for _, g := range plan.Groups {
+		for _, tid := range g.Tasks {
+			groupTaskIDs[tid] = true
+		}
+	}
+
+	// Collect all task section IDs
+	sectionIDs := make(map[string]bool)
+	for _, t := range plan.Tasks {
+		sectionIDs[t.ID] = true
+	}
+
+	// Tasks in groups but not in sections
+	for tid := range groupTaskIDs {
+		if !sectionIDs[tid] {
+			diags = append(diags, Diagnostic{Error, fmt.Sprintf("groups[].tasks references %s but no matching task section found", tid)})
+		}
+	}
+
+	// Task sections not referenced in any group
+	for tid := range sectionIDs {
+		if !groupTaskIDs[tid] {
+			diags = append(diags, Diagnostic{Warning, fmt.Sprintf("task %s has a section but is not referenced in any group", tid)})
+		}
 	}
 
 	return diags
@@ -231,6 +450,13 @@ func effectiveDeps(t Task) []string {
 		return t.DependsOn
 	}
 	return t.Dependencies
+}
+
+// countChecklistItems counts `- [ ]` checklist items in a description.
+// Used to detect oversized tasks that should be split.
+func countChecklistItems(desc string) int {
+	re := regexp.MustCompile(`(?m)^\s*- \[[ xX]\]`)
+	return len(re.FindAllString(desc, -1))
 }
 
 func findTask(tasks []Task, id string) *Task {
@@ -256,7 +482,7 @@ func detectCycles(tasks []Task, taskIDs map[string]bool) []Diagnostic {
 	state := make(map[string]int)
 	inStack := make(map[string]bool)
 
-	var cycleEdges []string // "A → B → C → A" formatted cycles
+	var cycleEdges []string
 
 	var dfs func(id string, path []string)
 	dfs = func(id string, path []string) {
@@ -264,7 +490,6 @@ func detectCycles(tasks []Task, taskIDs map[string]bool) []Diagnostic {
 			return
 		}
 		if inStack[id] {
-			// Found cycle — find where it starts in path
 			cycleStart := -1
 			for i, p := range path {
 				if p == id {
@@ -313,7 +538,7 @@ func detectCycles(tasks []Task, taskIDs map[string]bool) []Diagnostic {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: plan-lint <tasks.yml>\n")
+		fmt.Fprintf(os.Stderr, "Usage: plan-lint <tasks.md>\n")
 		os.Exit(2)
 	}
 
@@ -324,25 +549,29 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Detect control characters (e.g., \x01 from Python regex backreference corruption)
+	// Detect control characters
 	controlChars := detectControlChars(data)
 	if len(controlChars) > 0 {
 		fmt.Fprintf(os.Stderr, "⚠️  File contains %d control characters:\n", len(controlChars))
 		for _, cc := range controlChars {
 			fmt.Fprintf(os.Stderr, "   Line %d byte %d: \\x%02x\n", cc.Line, cc.ByteOffset, cc.Byte)
 		}
-		fmt.Fprintf(os.Stderr, "   This may be caused by regex backreference corruption (e.g., Python re.sub using \\1 → \\x01).\n")
+		fmt.Fprintf(os.Stderr, "   This may be caused by regex backreference corruption.\n")
 		fmt.Fprintf(os.Stderr, "   Fix: sed -i 's/\\x01//g' %s\n", path)
 		fmt.Println()
 	}
 
-	var plan Plan
-	if err := yaml.Unmarshal(data, &plan); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to parse YAML: %v\n", err)
+	plan, parseDiags := parseMarkdownPlan(data)
+	if plan == nil {
+		for _, d := range parseDiags {
+			fmt.Println(d.String())
+		}
+		fmt.Println()
+		fmt.Println("❌ Plan parsing failed")
 		os.Exit(2)
 	}
 
-	diags := Lint(&plan)
+	diags := append(parseDiags, Lint(plan)...)
 
 	hasErrors := false
 	hasWarnings := false
@@ -388,12 +617,11 @@ func detectControlChars(data []byte) []ControlCharLoc {
 			offset = 0
 			continue
 		}
-			_ = i
+		_ = i
 		offset++
-		// Control chars except \t (0x09), \n (0x0A), \r (0x0D)
 		if b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0D {
 			results = append(results, ControlCharLoc{Line: line, ByteOffset: offset, Byte: b})
-			if len(results) >= 20 { // Cap at 20 to avoid flooding output
+			if len(results) >= 20 {
 				break
 			}
 		}

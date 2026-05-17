@@ -9,6 +9,7 @@ require (
 	github.com/sipeed/picoclaw v0.2.4
 	github.com/tiancaiamao/ai v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -52,7 +53,6 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )
 
 replace github.com/tiancaiamao/ai => ../
