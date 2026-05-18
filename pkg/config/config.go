@@ -35,9 +35,6 @@ type Config struct {
 
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
-
-	// Workspace is the working directory path (the git repo path bound at startup)
-	Workspace string `json:"workspace,omitempty"`
 }
 
 // LogConfig contains logging configuration.

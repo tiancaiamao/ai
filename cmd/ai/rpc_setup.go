@@ -49,8 +49,6 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-	cfg.Workspace = cwd
-
 	// --- Session ---
 	sessionPath, err = normalizeSessionPath(sessionPath)
 	if err != nil {
