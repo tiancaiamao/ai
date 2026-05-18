@@ -823,7 +823,83 @@ func TestBuildTraceEventJSONToolCallTidStableForSpanPair(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected end tid to be int, got %T", endJSON["tid"])
 	}
-	if beginTid != endTid {
+		if beginTid != endTid {
 		t.Fatalf("expected same tid for span pair, got begin=%d end=%d", beginTid, endTid)
+	}
+}
+
+func TestSetSessionID_UpdatesTraceFilePath(t *testing.T) {
+	tmp := t.TempDir()
+	h, err := NewFileHandler(tmp)
+	if err != nil {
+		t.Fatalf("NewFileHandler failed: %v", err)
+	}
+
+	// Initial state: no session ID set.
+	initialPath := h.TraceFilePath("")
+	if !strings.Contains(initialPath, "sessunknown") {
+		t.Fatalf("expected 'sessunknown' in initial path, got %s", initialPath)
+	}
+
+	// Set session A.
+	h.SetSessionID("session-alpha")
+	pathA := h.TraceFilePath("")
+	if !strings.Contains(pathA, "sesssession-alpha") {
+		t.Fatalf("expected 'sesssession-alpha' in path, got %s", pathA)
+	}
+
+	// Switch to session B — regression test: TraceFilePath must reflect the new ID.
+	h.SetSessionID("session-beta")
+	pathB := h.TraceFilePath("")
+	if !strings.Contains(pathB, "sesssession-beta") {
+		t.Fatalf("expected 'sesssession-beta' in path after switch, got %s", pathB)
+	}
+	if pathA == pathB {
+		t.Fatalf("paths should differ after session switch, both are %s", pathA)
+	}
+}
+
+func TestSetSessionID_ClosesOpenStreams(t *testing.T) {
+	tmp := t.TempDir()
+	h, err := NewFileHandler(tmp)
+	if err != nil {
+		t.Fatalf("NewFileHandler failed: %v", err)
+	}
+	h.SetSessionID("session-old")
+
+	// Write a trace to open a stream file.
+	traceID := []byte("trace-1")
+	events := []TraceEvent{
+		{Timestamp: time.Now(), Name: "test", Phase: PhaseBegin, Category: CategoryEvent},
+		{Timestamp: time.Now(), Name: "test", Phase: PhaseEnd, Category: CategoryEvent},
+	}
+	if err := h.HandleChunk(context.Background(), traceID, events, true); err != nil {
+		t.Fatalf("HandleChunk failed: %v", err)
+	}
+
+	// Verify the old trace file exists.
+	oldPaths, err := filepath.Glob(filepath.Join(tmp, "*session-old*"))
+	if err != nil {
+		t.Fatalf("Glob failed: %v", err)
+	}
+	if len(oldPaths) == 0 {
+		t.Fatal("expected trace file for session-old to exist")
+	}
+
+	// Switch session — should close old streams.
+	h.SetSessionID("session-new")
+
+	// Write a new trace under the new session.
+	traceID2 := []byte("trace-2")
+	if err := h.HandleChunk(context.Background(), traceID2, events, true); err != nil {
+		t.Fatalf("HandleChunk after switch failed: %v", err)
+	}
+
+	newPaths, err := filepath.Glob(filepath.Join(tmp, "*session-new*"))
+	if err != nil {
+		t.Fatalf("Glob failed: %v", err)
+	}
+	if len(newPaths) == 0 {
+		t.Fatal("expected trace file for session-new to exist after switch")
 	}
 }
