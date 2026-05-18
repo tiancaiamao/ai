@@ -10,6 +10,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // --- Session management handlers --@
@@ -21,6 +22,14 @@ func (app *rpcApp) setSession(newSess *session.Session, newID, newName string) {
 
 	if err := app.updateCheckpointManager(); err != nil {
 		slog.Warn("Failed to update checkpoint manager", "error", err)
+	}
+
+	// Update trace handler to use the new session ID.
+	if handler := traceevent.GetHandler(); handler != nil {
+		if fh, ok := handler.(*traceevent.FileHandler); ok {
+			fh.SetSessionID(newID)
+			app.traceOutputPath = fh.TraceFilePath("")
+		}
 	}
 
 	app.stateMu.Lock()
