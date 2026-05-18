@@ -174,6 +174,16 @@ type tokenError struct {
 	ErrorDescription string `json:"error_description"`
 }
 
+// proxyClient returns an *http.Client that respects HTTP_PROXY/HTTPS_PROXY
+// environment variables via http.ProxyFromEnvironment.
+func proxyClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		},
+	}
+}
+
 func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -183,7 +193,7 @@ func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
 		"redirect_uri":  {CodexRedirectURI},
 	}
 
-	resp, err := http.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	resp, err := proxyClient().Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request: %w", err)
 	}
@@ -229,10 +239,10 @@ func RefreshCodexToken(refreshToken string) (*CodexCredentials, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-		"client_id":     {CodexClientID},
+				"client_id":     {CodexClientID},
 	}
 
-	resp, err := http.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	resp, err := proxyClient().Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request: %w", err)
 	}
@@ -435,11 +445,17 @@ func LoadCodexCredentials() (*CodexCredentials, error) {
 		return nil, fmt.Errorf("parse openai-codex entry: %w", err)
 	}
 
-	creds := &CodexCredentials{
+			creds := &CodexCredentials{
 		Access:    entry.Access,
 		Refresh:   entry.Refresh,
 		Expires:   entry.Expires,
 		AccountID: entry.AccountID,
+	}
+	// Normalize expires to milliseconds. JWT exp claims are in seconds,
+	// while our internal format uses milliseconds. If the value looks like
+	// seconds (< year 2001 in ms), convert it.
+	if creds.Expires > 0 && creds.Expires < 1_000_000_000_000 {
+		creds.Expires = creds.Expires * 1000
 	}
 
 	// Auto-refresh if expired
