@@ -430,8 +430,173 @@ func TestSession_ConcurrentWrites(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Steer & Follow-up behavioral tests
+// ---------------------------------------------------------------------------
+
+// TestHarness_SteerDuringStreaming verifies that steering mid-stream cancels
+// the current execution and restarts with the steered message. The agent
+// should produce two agent_end cycles (or at least process the steered text).
+func TestHarness_SteerDuringStreaming(t *testing.T) {
+	// First call is slow (simulates mid-stream); second call responds immediately.
+	firstCallDone := make(chan struct{})
+	srv := testutil.LLMServerFactory(func(i int, r *http.Request) string {
+		if i == 0 {
+			// Hold the first response open so we can steer mid-stream.
+			time.Sleep(200 * time.Millisecond)
+			close(firstCallDone)
+			return testutil.TextResponse("interrupted")
+		}
+		// Second call: the steered response.
+		return testutil.TextResponse("steered response")
+	})
+	defer srv.Close()
+
+	model := llm.Model{ID: "test", Provider: "test", API: "openai-completions", BaseURL: srv.URL}
+	a := agent.NewAgent(model, "test-key", "You are helpful.")
+	collector := testutil.NewEventCollector()
+	unsub := collector.Subscribe(a.Events())
+	defer unsub()
+
+	if err := a.Prompt("initial"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+
+	// Steer while the first LLM call is still in progress.
+	time.Sleep(30 * time.Millisecond)
+	a.Steer("go east")
+
+	a.Wait()
+	time.Sleep(10 * time.Millisecond)
+
+	// Agent must complete with an agent_end event.
+	if !collector.HasEvent(agent.EventAgentEnd) {
+		t.Error("expected agent_end after steer")
+	}
+
+		// There should be at least one text_delta containing the steered response.
+	textDeltas := collectTextDeltas(collector)
+	found := false
+	for _, d := range textDeltas {
+		if d == "steered response" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected text delta with 'steered response', got deltas: %v", textDeltas)
+	}
+}
+
+// TestHarness_FollowUpDuringStreaming verifies that a follow-up queued while
+// the agent is streaming gets processed after the current turn finishes.
+func TestHarness_FollowUpDuringStreaming(t *testing.T) {
+	// First response is slow; second is fast.
+	srv := testutil.LLMServerFactory(func(i int, r *http.Request) string {
+		if i == 0 {
+			time.Sleep(100 * time.Millisecond)
+			return testutil.TextResponse("first")
+		}
+		return testutil.TextResponse("follow-up processed")
+	})
+	defer srv.Close()
+
+	model := llm.Model{ID: "test", Provider: "test", API: "openai-completions", BaseURL: srv.URL}
+	a := agent.NewAgent(model, "test-key", "You are helpful.")
+	collector := testutil.NewEventCollector()
+	unsub := collector.Subscribe(a.Events())
+	defer unsub()
+
+	if err := a.Prompt("initial"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+
+	// Queue follow-up while the first call is still streaming.
+	time.Sleep(20 * time.Millisecond)
+	if err := a.FollowUp("do more"); err != nil {
+		t.Fatalf("FollowUp failed: %v", err)
+	}
+
+	// Wait for both the initial and follow-up turns to complete.
+	waitWithTimeout(t, a, 5*time.Second)
+
+		// Must have processed the follow-up — look for its text output.
+	textDeltas := collectTextDeltas(collector)
+	found := false
+	for _, d := range textDeltas {
+		if d == "follow-up processed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected text delta with 'follow-up processed', got deltas: %v", textDeltas)
+	}
+}
+
+// TestHarness_MultipleFollowUps verifies that multiple queued follow-ups
+// are all processed in order.
+func TestHarness_MultipleFollowUps(t *testing.T) {
+	responses := []string{
+		testutil.TextResponse("response-0"),
+		testutil.TextResponse("response-1"),
+		testutil.TextResponse("response-2"),
+	}
+	h := testutil.NewAgentHarness(t, responses, testutil.WithMaxTurns(5))
+	defer h.Close()
+
+	h.Prompt("start")
+
+	// Queue two follow-ups immediately.
+	h.FollowUp("second")
+	h.FollowUp("third")
+
+	h.Wait(5 * time.Second)
+
+		textDeltas := collectTextDeltas(h.Events)
+	var texts []string
+	for _, d := range textDeltas {
+		texts = append(texts, d)
+	}
+
+	// All three responses should appear.
+	assertContains(t, texts, "response-0")
+	assertContains(t, texts, "response-1")
+	assertContains(t, texts, "response-2")
+}
+
+// waitWithTimeout waits for the agent to finish or fatals on timeout.
+func waitWithTimeout(t *testing.T, a *agent.Agent, timeout time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		a.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		time.Sleep(10 * time.Millisecond)
+	case <-time.After(timeout):
+		t.Fatalf("agent did not finish within %v", timeout)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// collectTextDeltas extracts all text delta content from message_update events.
+func collectTextDeltas(collector *testutil.EventCollector) []string {
+	updates := collector.EventsOfType(agent.EventMessageUpdate)
+	var deltas []string
+	for _, e := range updates {
+		if ame, ok := e.AssistantMessageEvent.(agent.AssistantMessageEvent); ok {
+			if ame.Delta != "" {
+				deltas = append(deltas, ame.Delta)
+			}
+		}
+	}
+	return deltas
+}
 
 // testCompactor is a simple compactor for testing.
 type testCompactor struct {
