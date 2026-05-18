@@ -67,10 +67,12 @@ func TestHarness_RetryAfterTransientError(t *testing.T) {
 	unsub := collector.Subscribe(a.Events())
 	defer unsub()
 
-	if err := a.Prompt("test"); err != nil {
+		if err := a.Prompt("test"); err != nil {
 		t.Fatalf("Prompt failed: %v", err)
 	}
 	a.Wait()
+	// Yield to let event subscriber drain the final events.
+	time.Sleep(10 * time.Millisecond)
 
 	if !collector.HasEvent(agent.EventAgentEnd) {
 		t.Error("expected agent_end event")
@@ -187,9 +189,11 @@ func TestHarness_AbortDuringStreaming(t *testing.T) {
 
 	// Abort after a small delay
 	time.Sleep(20 * time.Millisecond)
-	a.Abort()
+		a.Abort()
 
 	a.Wait()
+	// Yield to let event subscriber drain the final events.
+	time.Sleep(10 * time.Millisecond)
 
 	if !collector.HasEvent(agent.EventAgentEnd) {
 		t.Error("expected agent_end after abort")
@@ -306,7 +310,9 @@ func TestHarness_LLMRetryEvent(t *testing.T) {
 	if err := a.Prompt("test"); err != nil {
 		t.Fatalf("Prompt failed: %v", err)
 	}
-	a.Wait()
+		a.Wait()
+	// Yield to let event subscriber drain the final events.
+	time.Sleep(10 * time.Millisecond)
 
 	if !collector.HasEvent(agent.EventLLMRetry) {
 		t.Error("expected llm_retry event")
@@ -333,9 +339,11 @@ func TestHarness_ContextCancellation(t *testing.T) {
 	}
 
 	// Abort after a short delay (simulates context cancellation)
-	time.Sleep(30 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 	a.Abort()
 	a.Wait()
+	// Yield to let event subscriber drain the final events.
+	time.Sleep(10 * time.Millisecond)
 
 	// Agent should have ended
 	if !collector.HasEvent(agent.EventAgentEnd) {
