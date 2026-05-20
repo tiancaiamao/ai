@@ -818,11 +818,11 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 // --- Pretty printing helpers ---
 
 type prettyContentBlock struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text"`
-	Thinking string          `json:"thinking"`
-	Name     string          `json:"name"`
-	Input    json.RawMessage `json:"input"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 type prettyMessage struct {
@@ -893,7 +893,11 @@ func prettyPrintAgentEnd(line string) {
 		return
 	}
 
-			for _, msg := range event.Messages {
+				for _, msg := range event.Messages {
+		// Skip tool result messages — output is too verbose.
+		if msg.Role == "toolResult" {
+			continue
+		}
 		for _, block := range msg.Content {
 			switch block.Type {
 			case "text":
@@ -915,10 +919,8 @@ func prettyPrintAgentEnd(line string) {
 					t = t[:300] + "..."
 				}
 				fmt.Printf("thinking: %s\n", t)
-			case "tool_use":
-				fmt.Printf("tool: %s(%s)\n", block.Name, summarizeToolInput(block.Name, block.Input))
-			case "tool_result":
-				// Skip — too verbose. The assistant's text summarizes results.
+			case "toolCall":
+				fmt.Printf("tool: %s(%s)\n", block.Name, summarizeToolInput(block.Name, block.Arguments))
 			}
 		}
 	}
