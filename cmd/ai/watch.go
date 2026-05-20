@@ -791,8 +791,7 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 	}
 
 	// Pretty mode: stream formatted output in real-time using ParseEvent.
-	// Each incremental event (text_delta, thinking_delta, tool_execution, etc.)
-	// is formatted and printed immediately.
+	// No ANSI colors — this output is consumed by agents, not humans.
 	seq := fromSeq
 	lastKind := run.EventKind("")
 	for scanner.Scan() {
@@ -802,45 +801,23 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 		}
 		seq++
 
-				evt := run.ParseEvent(line)
+		evt := run.ParseEvent(line)
 		if evt == nil {
 			continue
 		}
 
-		// On kind transition, add visual separation.
-		transition := evt.Kind != lastKind && lastKind != ""
-		if transition {
-			switch {
-			case lastKind == run.KindThinking && evt.Kind == run.KindText:
-				fmt.Print("\033[0m\n") // end thinking block, new line for response
-			case lastKind == run.KindText && evt.Kind == run.KindThinking:
-				fmt.Print("\n\033[2m") // new line, start thinking block
-			case lastKind == run.KindTool && evt.Kind == run.KindText:
-				fmt.Print("\033[0m") // tool already has its own newlines
-			case evt.Kind == run.KindTool:
-				fmt.Print("\033[0m") // reset before tool
-			default:
-				fmt.Print("\033[0m\n") // generic: reset + newline
-			}
+		// On kind transition, add line break for readability.
+		if evt.Kind != lastKind && lastKind != "" && lastKind != run.KindTool {
+			fmt.Println()
 		}
 
 		switch evt.Kind {
 		case run.KindText:
-			if !transition {
-				if lastKind != run.KindText {
-					fmt.Print("\033[0m")
-				}
-			}
 			fmt.Print(evt.Text)
 		case run.KindThinking:
-			if !transition {
-				if lastKind != run.KindThinking {
-					fmt.Print("\033[2m")
-				}
-			}
 			fmt.Print(evt.Text)
 		case run.KindTool:
-			fmt.Printf("\033[36m  %s\033[0m\n", evt.Text)
+			fmt.Printf("  %s\n", evt.Text)
 		case run.KindMeta:
 			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
 		case run.KindResponse:
@@ -854,7 +831,7 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 
 		// On agent_end, flush and exit.
 		if strings.Contains(line, `"agent_end"`) {
-			fmt.Print("\033[0m\n")
+			fmt.Println()
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 			return
 		}
