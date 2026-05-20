@@ -19,6 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+		"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
@@ -31,6 +32,7 @@ func runSubcommand(binPath string) {
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -47,8 +49,19 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+					// Resolve system prompt: --system-prompt overrides --role.
+	sysPrompt := *systemPromptFlag
+	if sysPrompt == "" && *roleFlag != "coder" {
+		tmpl, err := prompt.TemplateForRole(*roleFlag)
+		if err != nil {
+			slog.Error("invalid role", "error", err)
+			os.Exit(1)
+		}
+		sysPrompt = tmpl
+	}
+
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -187,9 +200,10 @@ func serveSubcommand(binPath string) {
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
-	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -206,8 +220,19 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+		// Resolve system prompt: --system-prompt overrides --role.
+	sysPrompt := *systemPromptFlag
+	if sysPrompt == "" && *roleFlag != "coder" {
+		tmpl, err := prompt.TemplateForRole(*roleFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		sysPrompt = tmpl
+	}
+
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -248,7 +273,6 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
-	agentEndCh := make(chan struct{}, 1)
 	go func() {
 		defer pipeReader.Close()
 		scanner := bufio.NewScanner(pipeReader)
@@ -258,14 +282,6 @@ func serveSubcommand(binPath string) {
 			lineCopy := make([]byte, len(line))
 			copy(lineCopy, line)
 			broadcaster.Push(lineCopy)
-
-			// Check for agent_end event to signal subprocess completion.
-			if hasAgentEndEvent(lineCopy) {
-				select {
-				case agentEndCh <- struct{}{}:
-				default:
-				}
-			}
 		}
 		if err := scanner.Err(); err != nil {
 			slog.Error("stdout bridge scanner error", "error", err)
@@ -304,7 +320,7 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-	// Send initial input if provided.
+		// Send initial input if provided.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
@@ -314,7 +330,8 @@ func serveSubcommand(binPath string) {
 			os.Exit(1)
 		}
 		inputText = string(data)
-	}
+		}
+
 	if inputText != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
@@ -324,15 +341,11 @@ func serveSubcommand(binPath string) {
 	// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
 
-	// Wait for agent_end via bridge goroutine signal.
-	// When the agent finishes, close stdin to trigger the RPC subprocess to exit.
-	// Without this, "ai serve" blocks forever because the RPC server loops on stdin.
-	go func() {
-		<-agentEndCh
-		stdinWriter.Close()
-	}()
-
 	// Wait for subprocess to exit.
+	// Note: we do NOT close stdin on agent_end — ai serve should remain alive
+	// to accept further ai send commands. The subprocess exits when:
+	// - stdin is explicitly closed (ai kill, or socket shutdown command)
+	// - the subprocess crashes
 	waitErr := cmd.Wait()
 
 	// Determine final status.

@@ -87,7 +87,7 @@ type rpcApp struct {
 	sessionWriter *sessionWriter
 	sessionComp   *sessionCompactor
 
-	// --- System prompt ---
+			// --- System prompt ---
 	systemPrompt string
 
 	// --- RPC Server ---
@@ -173,13 +173,13 @@ func (app *rpcApp) nuclearTruncate() {
 // Must be called after all fields are populated.
 
 func (app *rpcApp) initHelpers() {
-	// buildSystemPrompt builds the full system prompt for the given session.
+		// buildSystemPrompt builds the full system prompt for the given session.
 	app.buildSystemPrompt = func(currentSess *session.Session) string {
 		if app.customSystemPrompt != "" {
 			slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
 			return app.customSystemPrompt
 		}
-		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
+				promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 		promptBuilder.SetTools(app.registry.All()).SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
 
 		if currentSess != nil {

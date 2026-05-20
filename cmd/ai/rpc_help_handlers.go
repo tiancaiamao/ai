@@ -5,9 +5,44 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
 // --- Help and miscellaneous handlers ---
+
+func (app *rpcApp) handleSteerSlash(args string) (any, error) {
+	message := strings.TrimSpace(args)
+	if message == "" {
+		return nil, fmt.Errorf("usage: /steer <message>")
+	}
+
+	slog.Info("Received steer slash command", "value", message)
+
+	expandedMessage := app.expandSkillCommands(message)
+	if skill.IsSkillCommand(message) {
+		slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
+	}
+
+	app.stateMu.Lock()
+	mode := app.steeringMode
+	pending := app.pendingSteer
+	streaming := app.isStreaming
+	app.stateMu.Unlock()
+
+	if mode == "one-at-a-time" && pending {
+		return nil, fmt.Errorf("steer already pending")
+	}
+	if !streaming {
+		app.compactBeforeRequest("pre_request_steer")
+	}
+
+	app.stateMu.Lock()
+	app.pendingSteer = true
+	app.stateMu.Unlock()
+	app.ag.Steer(expandedMessage)
+	return map[string]any{"status": "steered"}, nil
+}
 
 func (app *rpcApp) handleFollowUpSlash(args string) (any, error) {
 	message := strings.TrimSpace(args)
@@ -37,7 +72,6 @@ func (app *rpcApp) handleFollowUpSlash(args string) (any, error) {
 	return map[string]any{"status": "queued", "message": expandedMessage}, nil
 }
 
-
 func (app *rpcApp) handleAbortSlash(args string) (any, error) {
 	_ = args
 	slog.Info("Received abort command")
@@ -52,7 +86,6 @@ func (app *rpcApp) handleAbortSlash(args string) (any, error) {
 	app.ag.Abort()
 	return map[string]any{"status": "aborting"}, nil
 }
-
 
 // registerHelpHandlers registers help and miscellaneous slash commands.
 func (app *rpcApp) registerHelpHandlers() {
@@ -76,6 +109,11 @@ func (app *rpcApp) registerHelpHandlers() {
 		slog.Info("Received quit command, exiting application")
 		os.Exit(0)
 		return nil, nil
+	})
+
+	// /steer
+	app.server.RegisterSlash("steer", "Inject mid-conversation guidance", func(args string) (any, error) {
+		return app.handleSteerSlash(args)
 	})
 
 	// /abort

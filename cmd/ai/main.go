@@ -156,6 +156,7 @@ Flags for 'ls':
 Flags for 'watch':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
   --since <offset>         Start reading from byte offset (machine-readable)
+  --follow                 Continuously stream events until agent exits
 
 Flags for 'send':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
