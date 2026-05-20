@@ -667,7 +667,8 @@ func watchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
-	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
+				followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
+	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until agent process exits; default without this flag: exit on agent_end)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
 	fs.Parse(os.Args[1:])
 
@@ -696,7 +697,7 @@ func watchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-		followWatch(meta, 0, *prettyFlag)
+								followWatch(meta, 0, *prettyFlag, *watchTimeoutFlag)
 		return
 	}
 
@@ -761,7 +762,7 @@ func machineWatch(eventsPath string, offset int64) {
 // followWatch continuously streams events from the agent via socket.
 // It connects to the Unix domain socket and subscribes to the event stream,
 // printing each event line to stdout until the connection closes (agent exits).
-func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
+func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, watchTimeout time.Duration) {
 	sockPath := run.SocketPath("", meta.ID)
 
 	client := run.NewSocketClient(sockPath)
@@ -771,6 +772,13 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 		os.Exit(1)
 	}
 	defer conn.Close()
+
+	// watchTimeout == -1: flag not set → default behavior (exit on agent_end)
+	// watchTimeout == 0: wait forever (until agent process exits)
+	// watchTimeout > 0: wait up to this duration
+	if watchTimeout > 0 {
+		conn.SetDeadline(time.Now().Add(watchTimeout))
+	}
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -829,11 +837,18 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 			lastKind = evt.Kind
 		}
 
-		// On agent_end, flush and exit.
+								// On agent_end:
+		// - Default (no --timeout flag): exit immediately. One-shot task complete.
+		// - With --timeout 0 or --timeout N: continue waiting for more events.
 		if strings.Contains(line, `"agent_end"`) {
 			fmt.Println()
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-			return
+			if watchTimeout < 0 {
+				// No --timeout flag → one-shot mode, exit.
+				return
+			}
+			// --timeout set (0 or positive) → keep going.
+			continue
 		}
 	}
 	fmt.Fprintf(os.Stderr, "--- agent stream ended without agent_end event ---\n")

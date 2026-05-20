@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
@@ -84,6 +85,8 @@ func ParseEvent(line string) *FormattedEvent {
 		return parseResponseEvent(evt)
 	case "session_switch":
 		return parseSessionSwitch(evt)
+		case "llm_retry":
+		return parseLLMRetry(evt)
 	case "loop_guard_triggered":
 		return parseLoopGuard(evt)
 	case "tool_call_recovery":
@@ -417,8 +420,46 @@ func parseToolCallRecovery(evt map[string]any) *FormattedEvent {
 	if attempt > 0 {
 		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: recovered malformed tool call (attempt %d): %s", attempt, truncate(reason, 220))}
 	}
-	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncate(reason, 220)}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncate(reason, 220)}
 }
+
+// parseLLMRetry handles llm_retry events, making rate-limit and other
+// transient LLM errors visible to watchers.
+func parseLLMRetry(evt map[string]any) *FormattedEvent {
+	info, _ := evt["llmRetry"].(map[string]any)
+	if info == nil {
+		return nil
+	}
+	attempt := intFromMap(info, "attempt")
+	maxRetries := intFromMap(info, "maxRetries")
+	delayNs := intFromMap(info, "delay")
+	errorType, _ := info["errorType"].(string)
+	errMsg, _ := info["error"].(string)
+
+	if attempt <= 0 {
+		return nil
+	}
+
+	delay := time.Duration(delayNs) * time.Nanosecond
+	delayStr := delay.Round(time.Millisecond).String()
+	if delay >= time.Second {
+		delayStr = fmt.Sprintf("%.1fs", delay.Seconds())
+	}
+
+	label := errorType
+	if label == "" {
+		label = "unknown"
+	}
+
+	text := fmt.Sprintf("ai: LLM retry %d/%d (%s, waiting %s)",
+		attempt, maxRetries, label, delayStr)
+	if errMsg != "" {
+		text += ": " + truncate(errMsg, 120)
+	}
+
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: text}
+}
+
 
 // formatToolDetail tries to extract a short summary of tool arguments.
 func formatToolDetail(evt map[string]any, toolName string) string {

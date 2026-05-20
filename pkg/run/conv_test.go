@@ -735,3 +735,48 @@ func containsSubstr(s, sub string) bool {
 	}
 	return false
 }
+
+func TestParseEvent_LLMRetry(t *testing.T) {
+	raw := `{"type":"llm_retry","llmRetry":{"attempt":3,"maxRetries":8,"delay":12000000000,"errorType":"rate_limit","error":"rate limit exceeded"}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event for llm_retry")
+	}
+	if evt.Kind != KindMeta {
+		t.Fatalf("expected KindMeta, got %s", evt.Kind)
+	}
+	if !contains(evt.Text, "retry 3/8") {
+		t.Fatalf("expected attempt info, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "rate_limit") {
+		t.Fatalf("expected error type, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "12.0s") {
+		t.Fatalf("expected delay, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "rate limit exceeded") {
+		t.Fatalf("expected error message, got: %s", evt.Text)
+	}
+}
+
+func TestParseEvent_LLMRetry_NoInfo(t *testing.T) {
+	raw := `{"type":"llm_retry"}`
+	evt := ParseEvent(raw)
+	if evt != nil {
+		t.Fatalf("expected nil for llm_retry without llmRetry field, got: %v", evt)
+	}
+}
+
+func TestParseEvent_LLMRetry_ServerError(t *testing.T) {
+	raw := `{"type":"llm_retry","llmRetry":{"attempt":1,"maxRetries":3,"delay":1000000000,"errorType":"server"}}`
+	evt := ParseEvent(raw)
+	if evt == nil {
+		t.Fatal("expected non-nil event for llm_retry")
+	}
+	if !contains(evt.Text, "retry 1/3") {
+		t.Fatalf("expected attempt info, got: %s", evt.Text)
+	}
+	if !contains(evt.Text, "server") {
+		t.Fatalf("expected error type, got: %s", evt.Text)
+	}
+}

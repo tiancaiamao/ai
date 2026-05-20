@@ -336,3 +336,58 @@ var (
 	_ io.Reader
 	_ context.Context
 )
+func TestContextReader_Cancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Use a pipe that nobody writes to — Read will block forever.
+	r, _ := io.Pipe()
+	cr := &contextReader{reader: r, ctx: ctx}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cr.Read(make([]byte, 64))
+		done <- err
+	}()
+
+	// Give the goroutine time to enter Read.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context — Read should unblock with context error.
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected error after cancel, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read did not unblock after context cancel")
+	}
+}
+
+func TestContextReader_Normal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cr := &contextReader{reader: strings.NewReader("hello"), ctx: ctx}
+	buf := make([]byte, 10)
+	n, err := cr.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(buf[:n]) != "hello" {
+		t.Fatalf("expected 'hello', got '%s'", string(buf[:n]))
+	}
+}
+
+func TestContextReader_AlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cr := &contextReader{reader: strings.NewReader("hello"), ctx: ctx}
+	_, err := cr.Read(make([]byte, 10))
+	if err == nil {
+		t.Error("expected error from already-canceled context")
+	}
+}

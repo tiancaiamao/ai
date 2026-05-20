@@ -109,7 +109,11 @@ func (s *Server) Run() error {
 // RunWithIO starts the RPC server using the provided reader and writer.
 // This method blocks until an error occurs or the reader is closed.
 func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
-	scanner := bufio.NewScanner(reader)
+	// Wrap reader so reads are cancellable via server context.
+	// Without this, scanner.Scan() blocks forever and timeout watchdog
+	// cannot cause the server to exit.
+	cr := &contextReader{reader: reader, ctx: s.ctx}
+	scanner := bufio.NewScanner(cr)
 	// Set larger buffer: 4MB initial, 16MB max to handle large JSON commands (>64KB)
 	buf := make([]byte, 0, 4*1024*1024) // 4MB
 	scanner.Buffer(buf, 16*1024*1024)   // 16MB max
@@ -261,4 +265,44 @@ func (s *Server) writeJSON(data []byte) {
 // Context returns the server's context.
 func (s *Server) Context() context.Context {
 	return s.ctx
+}
+
+// Cancel shuts down the server by canceling its context.
+// This causes RunWithIO to unblock and return, allowing the process to exit.
+func (s *Server) Cancel() {
+	s.cancel()
+}
+
+// contextReader wraps an io.Reader so that Read calls are cancellable via context.
+// When the context is canceled, ongoing and future Read calls return an error,
+// unblocking any scanner that is waiting for input.
+type contextReader struct {
+	reader io.Reader
+	ctx    context.Context
+}
+
+func (cr *contextReader) Read(p []byte) (int, error) {
+	// Fast path: context already done.
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+	// If the underlying reader is a file/pipe, we can't interrupt a blocking
+	// Read directly. Use a goroutine with a race between the read and context
+	// cancellation.
+	done := make(chan readResult, 1)
+	go func() {
+		n, err := cr.reader.Read(p)
+		done <- readResult{n: n, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.n, r.err
+	case <-cr.ctx.Done():
+		return 0, cr.ctx.Err()
+	}
+}
+
+type readResult struct {
+	n   int
+	err error
 }
