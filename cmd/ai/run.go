@@ -273,7 +273,6 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
-	agentEndCh := make(chan struct{}, 1)
 	go func() {
 		defer pipeReader.Close()
 		scanner := bufio.NewScanner(pipeReader)
@@ -283,14 +282,6 @@ func serveSubcommand(binPath string) {
 			lineCopy := make([]byte, len(line))
 			copy(lineCopy, line)
 			broadcaster.Push(lineCopy)
-
-			// Check for agent_end event to signal subprocess completion.
-			if hasAgentEndEvent(lineCopy) {
-				select {
-				case agentEndCh <- struct{}{}:
-				default:
-				}
-			}
 		}
 		if err := scanner.Err(); err != nil {
 			slog.Error("stdout bridge scanner error", "error", err)
@@ -350,15 +341,11 @@ func serveSubcommand(binPath string) {
 	// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
 
-	// Wait for agent_end via bridge goroutine signal.
-	// When the agent finishes, close stdin to trigger the RPC subprocess to exit.
-	// Without this, "ai serve" blocks forever because the RPC server loops on stdin.
-	go func() {
-		<-agentEndCh
-		stdinWriter.Close()
-	}()
-
 	// Wait for subprocess to exit.
+	// Note: we do NOT close stdin on agent_end — ai serve should remain alive
+	// to accept further ai send commands. The subprocess exits when:
+	// - stdin is explicitly closed (ai kill, or socket shutdown command)
+	// - the subprocess crashes
 	waitErr := cmd.Wait()
 
 	// Determine final status.
