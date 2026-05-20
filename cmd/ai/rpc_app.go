@@ -87,9 +87,8 @@ type rpcApp struct {
 	sessionWriter *sessionWriter
 	sessionComp   *sessionCompactor
 
-		// --- System prompt ---
+			// --- System prompt ---
 	systemPrompt string
-	agentMode   string // "default" or "peg"
 
 	// --- RPC Server ---
 	server *rpc.Server
@@ -180,13 +179,8 @@ func (app *rpcApp) initHelpers() {
 			slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
 			return app.customSystemPrompt
 		}
-		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
+				promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 		promptBuilder.SetTools(app.registry.All()).SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
-
-		// Switch template based on agent mode.
-		if app.agentMode == "peg" {
-			promptBuilder.SetTemplate(prompt.OrchestratorTemplate())
-		}
 
 		if currentSess != nil {
 			sessionDir := currentSess.GetDir()

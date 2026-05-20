@@ -19,6 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+		"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
@@ -31,6 +32,7 @@ func runSubcommand(binPath string) {
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	pegFlag := fs.Bool("peg", false, "Use PEG orchestrator system prompt")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -47,8 +49,14 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+		// PEG mode overrides system prompt.
+	sysPrompt := *systemPromptFlag
+	if *pegFlag {
+		sysPrompt = prompt.OrchestratorTemplate()
+	}
+
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -190,7 +198,7 @@ func serveSubcommand(binPath string) {
 		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	modeFlag := fs.String("mode", "", "Agent mode: default, peg (switches system prompt)")
+	pegFlag := fs.Bool("peg", false, "Use PEG orchestrator system prompt")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -207,8 +215,14 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
+	// PEG mode overrides system prompt.
+	sysPrompt := *systemPromptFlag
+	if *pegFlag {
+		sysPrompt = prompt.OrchestratorTemplate()
+	}
+
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, *systemPromptFlag, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -315,14 +329,7 @@ func serveSubcommand(binPath string) {
 			os.Exit(1)
 		}
 		inputText = string(data)
-	}
-
-	// Switch agent mode before sending input.
-	if *modeFlag == "peg" {
-		if err := sendRPCCommand(stdinWriter, "prompt", "/peg"); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: failed to switch to PEG mode: %v\n", err)
 		}
-	}
 
 	if inputText != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {
