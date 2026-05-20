@@ -1,29 +1,74 @@
-# PGE Skill — Planner-Generator-Executor Orchestration
+# PGE Skill — Planner-Generator-Evaluator Orchestration
 
 ## What
 
-PGE 模式让一个 agent（编排器）通过 `ai serve`/`ai send`/`ai watch`/`ai kill` 控制多个子 agent，实现复杂任务的拆解-执行-验证循环。
+PGE 模式借鉴 GAN（生成对抗网络）的多 agent 竞争反馈循环，将复杂编码任务拆为三个独立角色——Planner（编排器）、Generator（实现者）、Evaluator（评估者），通过 `ai` CLI 的 `serve`/`send`/`watch`/`kill` 控制子 agent，实现动态的任务拆解-执行-验证闭环。
 
 **触发方式：**
 ```bash
-ai run --peg "implement dark mode for the web app"
-ai serve --peg --name "orchestrator"
+ai run --role orchestrator "implement dark mode for the web app"
+ai serve --role orchestrator --name "orchestrator"
 ```
 
-`--peg` 将 system prompt 替换为编排器模板（`pkg/prompt/orchestrator.md`），描述了子 agent 控制协议。
+`--role orchestrator` 将 system prompt 替换为编排器模板，描述了子 agent 控制协议。
 
 ## Why
 
-当前 `implement` skill 的 `ag task run` 是静态 DAG 调度：
+### 旧方案的问题
+
+`implement` skill 的 `ag task run` 是静态 DAG 调度：
 - task 在执行前全部定义好
 - scheduler 按固定依赖推进
 - 无法根据中间结果调整计划
+- review 和实现共享同一个 agent（self-evaluation bias）
+- 依赖 `ag` Go binary（外部基础设施）
+
+### PGE 的改进
 
 PGE 的编排器是 **动态的**：
 - 根据 spec 拆出第一批 task
 - 执行后看结果，决定下一批
 - 验证失败时重新规划
 - 直到所有验收标准通过
+- Generator 和 Evaluator 完全独立（消除 self-evaluation bias）
+- 直接用 `ai` CLI（无需外部依赖）
+
+### 理论基础
+
+#### GAN 启发（Anthropic）
+
+Anthropic 的 Prithvi Rajasekaran 发现：
+- 把 "生成" 和 "评估" 拆给两个独立 agent，像 GAN 的 Generator 和 Discriminator
+- Evaluator 用 Playwright MCP 实际操作页面来评估前端质量，而非只看代码
+- 对主观任务（UI 设计）和客观任务（全栈开发）都有效
+- **关键发现：Evaluator 的标准本身就是 feedforward control** — 明确告诉 Generator "什么是好的"比事后再审更有效
+
+#### Self-evaluation Bias（Anthropic）
+
+Agent 审查自己的代码时会产生系统性偏差：
+- 高估代码质量
+- 忽略自己引入的 bug
+- 对设计决策的合理性过度自信
+
+**解决方案：** Evaluator 必须是完全独立的 agent，不看到 Generator 的 system prompt 和思考过程。
+
+#### Context Anxiety（Anthropic）
+
+模型接近上下文窗口限制时会：
+- 提前结束任务（"看起来差不多了"）
+- 跳过边缘情况
+- 简化实现
+
+**解决方案：** 不要用 compaction 压缩上下文传给下一个 Generator。而是写结构化的 `state.md`，让每个 Generator 从满上下文窗口开始。
+
+#### Progressive Disclosure（OpenAI）
+
+OpenAI 的 Harness Engineering 实验发现：
+- AGENTS.md 应该 ~100 行，只做指针/索引
+- Agent 从小入口开始，按需深入
+- 不要在 system prompt 里塞入全部信息
+
+**PGE 体现：** spec.md 就是 Generator 的入口点，task description 包含实现所需的所有上下文，Generator 不需要读整个项目。
 
 ## Architecture
 
@@ -32,208 +77,124 @@ User
   │
   ▼
 ┌─────────────────────────┐
-│  Orchestrator (ai --peg) │  ← planner + coordinator
-│  System: orchestrator.md │
+│  Orchestrator (ai --role│  ← Planner: 你（当前 agent）
+│  orchestrator)          │
+│                         │
+│  1. Write spec.md       │
+│  2. Decompose tasks     │
+│  3. Spawn generators    │
+│  4. Spawn evaluators    │
+│  5. Interpret feedback  │
+│  6. Adjust plan         │
 └────────┬────────────────┘
-         │ ai serve / ai send / ai watch / ai kill
          │
     ┌────┴────┐
     ▼         ▼
-┌───────┐ ┌─────────┐
-│ Gen 1 │ │ Gen 2   │  ← normal ai serve (default prompt)
-└───┬───┘ └────┬────┘
-    │          │
-    ▼          ▼
-┌─────────────────┐
-│   Validator     │  ← normal ai serve (default prompt)
-└─────────────────┘
+┌────────┐ ┌──────────┐
+│Generator│ │Evaluator │  ← Independent agents
+│(ai --  │ │(ai --    │
+│role    │ │role      │
+│coder)  │ │validator)│
+└────────┘ └──────────┘
 ```
 
-**三个角色：**
-
-| Role | Who | What |
-|------|-----|------|
-| **Planner** | Orchestrator itself | 分析需求，拆解 task，验证结果 |
-| **Generator** | Sub-agent (`ai serve`) | 写代码，执行具体 task |
-| **Validator** | Sub-agent (`ai serve`) | 验证代码是否符合 spec |
-
-Planner 不写代码。Generator 和 Validator 用默认 coding agent prompt。
-
-## Sub-Agent Control Protocol
-
-编排器通过 bash 工具调用 `ai` CLI：
-
-```bash
-# 启动子 agent
-RUN_ID=$(ai serve --name "gen-001-add-auth")
-
-# 发送任务
-ai send --id $RUN_ID "implement JWT authentication for /api/login"
-
-# 实时监控（JSONL 流，agent 结束后自动退出）
-ai watch --follow --id $RUN_ID
-
-# 中途调整方向
-ai send --id $RUN_ID "/steer also add rate limiting"
-
-# 终止
-ai kill --id $RUN_ID
+**控制流：**
+```
+Orchestrator ──spawn──► Generator ──output──► Orchestrator ──spawn──► Evaluator
+                                                                          │
+Orchestrator ◄──result── Evaluator ◄──eval──┘
+     │
+     ├── all pass ──► next task
+     └── some fail ──► create fix task ──► loop (max 3 rounds)
 ```
 
-### Event Parsing
+## Dependency Skills
 
-`ai watch --follow` 输出 JSONL。关键事件：
-
-| Event | Meaning |
+| Skill | Purpose |
 |-------|---------|
-| `agent_start` | Agent started |
-| `message_update` | Streaming delta (look for `assistantMessageEvent.type`) |
-| `turn_end` | Turn complete, has final message + usage |
-| `agent_end` | Agent finished, has full message history |
+| `subagent` | ai serve/send/watch/kill 的 spawn-monitor-control 模式 |
+| `worker-judge` | Worker-Judge 迭代循环的通用框架（PGE 的 Gen-Eval 循环是其特化） |
 
-Generator 完成的标志：`agent_end` + `stopReason == "stop"`。
+## Feedforward + Feedback Framework
 
-### Output Extraction
+来自 Martin Fowler 的 Harness Engineering 框架：
 
-从 `agent_end` 事件中提取 assistant 最终回复：
+| 方向 | 类型 | PGE 中的体现 |
+|------|------|-------------|
+| 前馈 (Feedforward) | 推断性 | spec.md, task description |
+| 前馈 (Feedforward) | 计算性 | 代码生成模板, 文件结构约定 |
+| 反馈 (Feedback) | 计算性 | linter, 测试, 构建检查 |
+| 反馈 (Feedback) | 推断性 | Evaluator agent 的结构化审查 |
 
-```bash
-ai watch --follow --id $RUN_ID | while read -r line; do
-  TYPE=$(echo "$line" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('type',''))" 2>/dev/null)
-  if [ "$TYPE" = "agent_end" ]; then
-    echo "$line" | python3 -c "
-import sys,json
-d=json.loads(sys.stdin.read())
-for m in d.get('messages',[]):
-  if m['role']=='assistant':
-    for c in m.get('content',[]):
-      if c.get('type')=='text':
-        print(c['text'])
-" 2>/dev/null
-  fi
-done
-```
+**编排器的核心职责：** 观察 Generator-Evaluator 循环中的重复问题，迭代改进 feedforward（spec 更清晰）和 feedback（Evaluator 标准更严格）。
 
-## Execution Flow
+## Context Management Strategy
 
-### Phase 1: Spec (user + orchestrator)
+### Problem: Context Degradation
 
-1. 用户描述需求
-2. 编排器写入 `.pge/spec.md`：
-   ```markdown
-   # Spec: <title>
-   
-   ## Goal
-   <one sentence>
-   
-   ## Acceptance Criteria
-   - [ ] <criterion 1>
-   - [ ] <criterion 2>
-   
-   ## Constraints
-   - <constraint>
-   
-   ## Out of Scope
-   - <excluded>
-   ```
-3. 用户确认 spec
+长时间运行的 agent 面临两个问题：
+1. **Context anxiety** — 接近窗口限制时提前收摊
+2. **Noise accumulation** — 中间工具调用、错误修复等无用信息填满窗口
 
-### Phase 2: Execute (autonomous)
-
-编排器循环：
+### Solution: Structured State Handoff
 
 ```
-while spec has unchecked acceptance criteria:
-    1. Pick next work item (may parallelize)
-    2. Create task file → .pge/tasks/NNN-<name>.md
-    3. Spawn generator: ai serve --name "gen-NNN"
-    4. Send task + watch --follow
-    5. Parse result, check if task done
-    6. When enough tasks done → spawn validator
-    7. Validator checks acceptance criteria
-    8. Update .pge/spec.md checkboxes
-    9. If criteria fail → create fix tasks, loop
+Generator 1              Generator 2              Generator 3
+[full context]    →     [full context]    →     [full context]
+reads:                    reads:                   reads:
+  spec.md                  spec.md                  spec.md
+  task-001.md              state.md                 state.md
+                           task-002.md              task-003.md
 ```
 
-### Phase 3: Report
+每个 Generator 从干净状态启动，只读必要的文件：
+- `spec.md` — 全局目标（稳定，不变）
+- `state.md` — 前序工作总结（Generator 1 完成后由 Orchestrator 编写）
+- `task-NNN.md` — 当前任务描述
 
-- Summary of what was done
-- Final spec with checkmarks
-- Any deviations or open issues
-
-## Task File Format
-
-`.pge/tasks/NNN-<name>.md`:
+**state.md 结构：**
 ```markdown
-# Task: <short description>
+# State
 
-## Goal
-<what this task accomplishes>
+## Completed Tasks
+- T001: Add JWT auth — done, files: src/auth/jwt.go, src/api/login.go
+- T002: Add RBAC middleware — done, files: src/middleware/rbac.go
 
-## Files
-<expected files to modify>
+## Key Decisions
+- Token in http-only cookie (not localStorage)
+- Roles: admin, editor, viewer
 
-## Status
-pending | running | done | failed
+## Known Issues
+- Token refresh not yet implemented (T003)
 
-## Result
-<filled after generator completes>
+## What's Next
+- T003: Implement token refresh
 ```
-
-## Progress File
-
-`.pge/progress.md` — append-only log:
-```markdown
-## [timestamp] Task NNN started
-- Generator: <run ID>
-- Input: <task summary>
-
-## [timestamp] Task NNN completed
-- Result: <summary>
-- Files changed: <list>
-
-## [timestamp] Validation run
-- Spec criteria checked: N/M passed
-```
-
-## Parallelization Rules
-
-- **Parallel**: Tasks touch different files, no data dependency
-- **Sequential**: Task B needs output from Task A
-
-编排器自行判断并发度。简单规则：同目录的文件串行，不同目录可并行。
-
-## Error Handling
-
-| Scenario | Action |
-|----------|--------|
-| Generator failed (exit error) | Retry once, then report |
-| Same task fails 3 times | Pause, report to user |
-| Validator says criteria not met | Create fix tasks, loop |
-| Spec changed by user mid-run | Re-evaluate, mark affected tasks |
-| Generator timeout | Kill, retry once |
 
 ## File Layout
 
 ```
 .pge/
   spec.md              # Requirements + acceptance criteria
+  state.md             # Current state — updated after each generator
   tasks/
     001-add-auth.md
-    002-add-ratelimit.md
+    002-add-rbac.md
   progress.md          # Append-only execution log
 ```
 
 ## Key Differences from `implement` Skill
 
-| | implement (ag task) | PGE (ai --peg) |
+| | implement (ag task) | PGE (ai --role orchestrator) |
 |---|---|---|
-| Task definition | Static DAG (tasks.md) | Dynamic (planner decides on-the-fly) |
+| Infrastructure | ag Go binary | ai CLI (native) |
+| Task definition | Static DAG (tasks.md) | Dynamic (orchestrator decides on-the-fly) |
 | Scheduling | Fixed dependency order | Adaptive based on results |
-| Validation | Per-task review | Spec-level acceptance criteria |
-| Infrastructure | ag CLI + scheduler | ai CLI + orchestrator |
-| Failure recovery | Retry ×3, manual after | Planner adjusts plan dynamically |
+| Validation | Per-task review in same agent | Independent Evaluator agent |
+| Failure recovery | Retry ×3, manual after | Orchestrator adjusts plan dynamically |
+| Context management | Compaction | Structured state.md handoff |
 | Human involvement | Setup only | Spec approval + error escalation |
+| Self-evaluation | Review by same agent | Separate Evaluator (no bias) |
 
 ## Non-Goals
 

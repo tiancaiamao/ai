@@ -5,17 +5,19 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 # Explore Skill
 
-使用 `ag` CLI 派生 **独立子 agent** 探索代码库、仓库或主题，收集关键信息供后续阶段使用。
+使用 `ai serve` 派生 **独立子 agent** 探索代码库、仓库或主题，收集关键信息供后续阶段使用。
 
-## ⚠️ MANDATORY: 必须使用 ag 子 agent 执行
+## ⚠️ MANDATORY: 必须使用子 agent 执行
 
-**当用户触发 explore 技能时，你（调度 agent）必须通过 `ag` 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
+**当用户触发 explore 技能时，你（调度 agent）必须通过 `ai serve` + tmux 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
 
 原因：
-- 子 agent 作为独立的后台进程运行，不阻塞主对话
-- `ag agent spawn` 使用 detached process 架构，每个 agent 独立运行
+- 子 agent 作为独立进程运行，不阻塞主对话
+- 每个 agent 有独立的上下文窗口（context firewall），不污染主 agent 的对话历史
 - 可以并行派生多个子 agent 同时探索不同目标
 - explorer.md persona 指导子 agent 按标准格式输出
+
+**子 agent 操作详见 `subagent` 技能。**
 
 ## ⛔ CONCURRENCY LIMIT: 最多 2 个子 agent 同时运行
 
@@ -25,10 +27,9 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 **规则**：
 - 单次 spawn 上限：2 个子 agent
-- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → `wait` → `rm` → 再 spawn 下一批
-- 不可用循环一次性 spawn 超过 2 个 agent
+- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → wait → cleanup → 再 spawn 下一批
 
-**你的角色（调度 agent）**：解析用户意图 → 构造 input → 派生 ag agent → 等待 → 汇总结果
+**你的角色（调度 agent）**：解析用户意图 → 构造 input → 派生子 agent → 等待 → 汇总结果
 **子 agent 角色（explorer）**：按 `explorer.md` persona 执行实际探索，写入文件
 
 ## 执行流程（强制）
@@ -39,66 +40,73 @@ description: Explore codebases, repositories, or topics and collect key informat
 # 被探索项目的路径
 TARGET_PROJECT="/path/to/project"
 
-# 确保 ag 已构建
-AG_BIN="$HOME/.ai/skills/ag/ag"
-if [ ! -x "$AG_BIN" ]; then
-  (cd "$HOME/.ai/skills/ag" && go build -o ag .)
-fi
-
 # 在目标项目中创建输出目录
 mkdir -p "$TARGET_PROJECT/explorer"
 ```
 
 ### Step 2: 派生子 agent
 
-⚠️ **重要 - 直接调用 ag，不要用 tmux 包装**：
-- `ag agent spawn` 本身会在后台创建 detached process，不需要额外的 tmux 层
-- ❌ 错误：`tmux new-session -d "ag agent spawn ..."`
-- ✅ 正确：直接在 bash 中执行 `ag agent spawn ...`
-
-⚠️ **`--cwd` 必须传被探索项目的路径**，否则子 agent 会在当前 shell 的 CWD 下运行，导致探索错误的项目。
+⚠️ **`ai serve` 是阻塞命令，必须用 tmux 后台运行。**
 
 ```bash
 # 单目标探索
-TARGET_PROJECT="/path/to/project"  # 被探索的项目路径
+TARGET_PROJECT="/path/to/project"
 
-$AG_BIN agent spawn explore-<TARGET> \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "<探索指令>. Write findings to: $TARGET_PROJECT/explorer/<target>.md"
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the authentication module. Focus on: how auth works, middleware chain, token handling. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' \
+   --timeout 15m"
+
+sleep 2
+EXPLORE_ID=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
 ```
 
 ```bash
-# 多目标并行探索（同时启动多个 agent）
+# 多目标并行探索（最多 2 个 agent 同时）
 TARGET_PROJECT="/path/to/project"
 
-$AG_BIN agent spawn explore-auth \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md"
+# Agent 1
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' \
+   --timeout 15m"
 
-$AG_BIN agent spawn explore-rpc \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md"
+# Agent 2
+tmux new-session -d -s "explore-rpc" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md' \
+   --name 'explore-rpc' \
+   --timeout 15m"
+
+sleep 2
+ID_AUTH=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
+ID_RPC=$(tmux capture-pane -t "explore-rpc" -p | head -1 | tr -d '[:space:]')
 ```
 
 ### Step 3: 等待并收集
 
 ```bash
-# 等待 agent 完成（不是等待 tmux session）
-# --timeout 单位是秒，探索任务建议 600-900 秒
-$AG_BIN agent wait explore-<TARGET> --timeout 600
+# Watch agent output (blocks until agent finishes or timeout)
+ai watch --id "$ID_AUTH" --follow --pretty
 
-# 查看结果（输出已写入 $TARGET_PROJECT/explorer/<target>.md，由子 agent 直接写文件）
-# 如果需要查看 agent 的完整输出：
-# $AG_BIN agent output explore-<TARGET>
+# If parallel, wait for the second one too
+ai watch --id "$ID_RPC" --follow --pretty
 
-# 清理 agent（agent 必须先达到 terminal 状态：done/failed/killed）
-$AG_BIN agent rm explore-<TARGET>
+# Results are written by the explorer agent to $TARGET_PROJECT/explorer/<target>.md
 ```
 
-### Step 4: 汇总
+### Step 4: 清理
+
+```bash
+ai kill --id "$ID_AUTH" 2>/dev/null
+ai kill --id "$ID_RPC" 2>/dev/null
+tmux kill-session -t "explore-auth" 2>/dev/null
+tmux kill-session -t "explore-rpc" 2>/dev/null
+```
+
+### Step 5: 汇总
 
 读取 `$TARGET_PROJECT/explorer/` 下的文件，向用户展示关键发现。
 
@@ -108,9 +116,7 @@ $AG_BIN agent rm explore-<TARGET>
 
 1. **探索目标**：要探索什么（代码库路径、模块名、主题）
 2. **关注点**：用户特别想了解的方面（可选）
-3. **输出路径**：`Write findings to: <绝对路径>`（必须使用目标项目下的绝对路径）
-
-⚠️ **输出路径必须使用目标项目的绝对路径**，不要依赖相对路径或 `$EXPLORER_DIR` 变量，因为子 agent 的 CWD 由 `--cwd` 控制。
+3. **输出路径**：`Write findings to: <绝对路径>`（必须使用绝对路径）
 
 示例 input：
 ```
@@ -143,34 +149,40 @@ Output an "Architecture Constraints" section with a checklist.
 TARGET_PROJECT="/path/to/large/repo"
 
 # === Batch 1: spawn up to 2 agents ===
-$AG_BIN agent spawn explore-auth \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md"
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' --timeout 15m"
 
-$AG_BIN agent spawn explore-api \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md"
+tmux new-session -d -s "explore-api" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md' \
+   --name 'explore-api' --timeout 15m"
 
-# Wait and clean up batch 1
-$AG_BIN agent wait explore-auth explore-api --timeout 900
-$AG_BIN agent rm explore-auth explore-api
+sleep 2
+ID1=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
+ID2=$(tmux capture-pane -t "explore-api" -p | head -1 | tr -d '[:space:]')
+
+# Wait for batch 1
+ai watch --id "$ID1" --follow --pretty
+ai watch --id "$ID2" --follow --pretty
+
+# Cleanup batch 1
+ai kill --id "$ID1" 2>/dev/null; ai kill --id "$ID2" 2>/dev/null
+tmux kill-session -t "explore-auth" 2>/dev/null; tmux kill-session -t "explore-api" 2>/dev/null
 
 # === Batch 2: spawn next 2 agents ===
-$AG_BIN agent spawn explore-storage \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md"
+tmux new-session -d -s "explore-storage" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md' \
+   --name 'explore-storage' --timeout 15m"
 
-$AG_BIN agent spawn explore-infra \
-  --cwd "$TARGET_PROJECT" \
-  --system @"$HOME/.ai/skills/explore/explorer.md" \
-  --input "Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md"
+tmux new-session -d -s "explore-infra" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md' \
+   --name 'explore-infra' --timeout 15m"
 
-# Wait and clean up batch 2
-$AG_BIN agent wait explore-storage explore-infra --timeout 900
-$AG_BIN agent rm explore-storage explore-infra
+# Wait and cleanup batch 2...
 ```
 
 ## 输出约定
@@ -183,40 +195,18 @@ $AG_BIN agent rm explore-storage explore-infra
 
 ### ⚠️ MANDATORY: 子 agent 失败时，停止并报告给用户
 
-当子 agent 失败（status 为 `failed`、`error` 或超时）时，**禁止自行诊断或重试**。立即向用户报告失败信息，让用户决定下一步。
+当子 agent 失败或超时时，**禁止自行诊断或重试**。立即向用户报告失败信息。
 
-**报告内容**：
-
-```bash
-# 查看失败状态
-$AG_BIN agent status explore-<TARGET>
-
-# 查看已产生的输出（可能包含线索）
-$AG_BIN agent output explore-<TARGET>
-```
-
-将 status 和 output 的内容**原样展示给用户**，不要自己判断原因或尝试修复。
+**报告内容**：展示 agent 的最后输出（通过 `ai watch` 已获得）
 
 **禁止的操作**：
-- ❌ 自行 `rm` + 重新 `spawn`（盲目重试）
-- ❌ 自行分析错误原因并尝试修正参数
-- ❌ 修改 `--input` 或 `--system` 参数后重试
+- ❌ 盲目重新 spawn（不做分析就重试）
+- ❌ 自行修改参数后重试
+- ❌ 自己直接用 bash/read/grep 探索（绕过子 agent）
 
 **唯一允许的操作**：
 - ✅ 报告失败信息给用户
 - ✅ 在用户明确指示后才执行后续操作
-
-### 清理
-
-```bash
-# 清理 agent 元数据（ag agent 会自动清理自己的后台进程）
-$AG_BIN agent rm explore-<TARGET>
-```
-
-⚠️ **不需要手动清理 tmux session**：
-- `ag agent spawn` 使用 detached process，不创建 tmux session
-- `ag agent rm` 会清理 agent 相关的所有进程和文件
-- 如果需要强制清理仍在运行的 agent：`$AG_BIN agent rm --force explore-<TARGET>`
 
 ## 流程定位
 
@@ -224,7 +214,7 @@ $AG_BIN agent rm explore-<TARGET>
 用户需求
     ↓
 ┌─────────────────────┐
-│  explore 技能        │  ← 你在这里：用 ag 派生子 agent
+│  explore 技能        │  ← 你在这里：用 ai serve 派生子 agent
 └──────────┬──────────┘
            ↓
 explorer/*.md
@@ -233,5 +223,5 @@ explorer/*.md
 │  brainstorm 技能     │  ← 基于探索结果决策
 └──────────┬──────────┘
            ↓
-decisions.md → spec.md → plan.md → implement
+design.md → PGE（Orchestrator + Generator + Evaluator）
 ```

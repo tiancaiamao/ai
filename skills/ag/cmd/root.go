@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -29,6 +30,13 @@ var rootCmd = &cobra.Command{
 	Long:  "ag provides primitives for spawning, communicating, and coordinating AI agents.",
 }
 
+// agSourceDir is set via -ldflags at build time to embed the source directory.
+// If empty, resolveSourceDir falls back to runtime detection.
+var agSourceDir string
+
+// skipStaleCheck is set via --skip-stale-check flag.
+var skipStaleCheck bool
+
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
@@ -36,9 +44,66 @@ func Execute() {
 	}
 }
 
-// checkBinaryStaleness warns if the ag binary is older than its source code,
-// which means the user needs to rebuild.
+// resolveSourceDir finds the ag source directory using (in order):
+// 1. Build-time injected variable (-ldflags)
+// 2. runtime.Caller(0) — location of this source file
+// 3. Well-known path ~/.ai/skills/ag/
+func resolveSourceDir() string {
+	// Option 1: build-time injection
+	if agSourceDir != "" {
+		return agSourceDir
+	}
+	// Option 2: use this file's location
+	if _, file, _, ok := runtime.Caller(1); ok {
+		// file is e.g. /Users/genius/.ai/skills/ag/cmd/root.go
+		candidate := filepath.Dir(filepath.Dir(file)) // -> /Users/genius/.ai/skills/ag
+		if hasGoFiles(candidate) {
+			return candidate
+		}
+	}
+	// Option 3: well-known path
+	home, err := os.UserHomeDir()
+	if err == nil {
+		candidate := filepath.Join(home, ".ai", "skills", "ag")
+		if hasGoFiles(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func hasGoFiles(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, _ := f.Readdirnames(10)
+	for _, n := range names {
+		if strings.HasSuffix(n, ".go") {
+			return true
+		}
+	}
+	// Also check subdirs (cmd/, internal/)
+	sub, err := os.Open(filepath.Join(dir, "cmd"))
+	if err == nil {
+		defer sub.Close()
+		names2, _ := sub.Readdirnames(5)
+		for _, n := range names2 {
+			if strings.HasSuffix(n, ".go") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkBinaryStaleness fails hard if the ag binary is older than its source code.
+// This prevents silent breakage from running a stale binary with new features missing.
 func checkBinaryStaleness() {
+	if skipStaleCheck {
+		return
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return
@@ -48,9 +113,11 @@ func checkBinaryStaleness() {
 		return
 	}
 
-	// Walk source files in the executable's directory tree
-	// (assuming the source is nearby, e.g. ~/.ai/skills/ag/)
-	sourceDir := filepath.Dir(exe)
+	sourceDir := resolveSourceDir()
+	if sourceDir == "" {
+		return // can't check, silently skip
+	}
+
 	newerFiles := 0
 	filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -63,16 +130,16 @@ func checkBinaryStaleness() {
 	})
 
 	if newerFiles > 0 {
-		log.Printf("⚠️  Binary is stale (%d source files newer). Run: cd %s && go build -o ag .", newerFiles, sourceDir)
+		log.Fatalf("❌ FATAL: ag binary is stale (%d source files newer than binary). "+
+			"Rebuild with: cd %s && go build -o %s .  (or use --skip-stale-check to override)",
+			newerFiles, sourceDir, exe)
 	}
 }
 
 var taskRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run scheduler to execute tasks automatically",
-	Run: func(cmd *cobra.Command, args []string) {
-		checkBinaryStaleness()
-
+		Run: func(cmd *cobra.Command, args []string) {
 				maxConcurrent, _ := cmd.Flags().GetInt("max-concurrent")
 		maxRetries, _ := cmd.Flags().GetInt("max-retries")
 		timeoutSec, _ := cmd.Flags().GetInt("timeout")
@@ -100,12 +167,23 @@ var taskRunCmd = &cobra.Command{
 			return
 		}
 
-		// Setup logging to file + stderr when running in foreground
-		logFile, err := os.OpenFile(filepath.Join(storage.BaseDir, "scheduler.log"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			log.SetOutput(io.MultiWriter(os.Stderr, logFile))
-			defer logFile.Close()
+				// Setup logging to file + stderr.
+		// When running detached, stderr is already redirected to scheduler.log
+		// (the parent set cmd.Stderr = logFile). Opening the same file again and
+		// using MultiWriter would cause double writes.
+		// Detect detached mode by checking if stderr is a regular file (not terminal/pipe).
+				stderrStat, _ := os.Stderr.Stat()
+		if stderrStat != nil && stderrStat.Mode().IsRegular() {
+			// Detached mode: stderr is already the log file.
+			log.SetOutput(os.Stderr)
+		} else {
+			// Foreground mode: open separate log file and write to both.
+			logFile, err := os.OpenFile(filepath.Join(storage.BaseDir, "scheduler.log"),
+				os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+				defer logFile.Close()
+			}
 		}
 
 				// Write PID file and ensure cleanup on exit
@@ -133,8 +211,8 @@ var taskRunCmd = &cobra.Command{
 	},
 }
 
-// runDetached re-executes the same command without --detach in the background,
-// redirecting output to scheduler.log.
+// runDetached starts the scheduler in a background process with output
+// redirected to scheduler.log.
 func runDetached(originalArgs []string) {
 	// Build args without any --detach / --detach=true / --detach=false form
 	var cleanArgs []string
@@ -239,6 +317,8 @@ func init() {
 			fmt.Fprintf(os.Stderr, "Error initializing storage: %v\n", err)
 			os.Exit(1)
 		}
+		// Hard fail if binary is stale — prevents silent breakage
+		checkBinaryStaleness()
 	}
 }
 
@@ -962,13 +1042,23 @@ var taskStopCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if err := proc.Signal(syscall.SIGTERM); err != nil {
+				if err := proc.Signal(syscall.SIGTERM); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to stop process %d: %v\n", pid, err)
 			os.Exit(1)
 		}
 
+		// Wait for the scheduler to actually exit (with timeout).
+				done := make(chan struct{})
+		go func() { proc.Wait(); close(done) }()
+		select {
+		case <-done:
+			fmt.Printf("Scheduler (PID %d) stopped\n", pid)
+		case <-time.After(10 * time.Second):
+			// Force kill if it doesn't exit gracefully
+			proc.Signal(syscall.SIGKILL)
+			fmt.Printf("Scheduler (PID %d) force-killed (didn't exit in 10s)\n", pid)
+		}
 		os.Remove(pidPath)
-		fmt.Printf("Scheduler (PID %d) stopped\n", pid)
 	},
 }
 
@@ -1200,8 +1290,11 @@ func init() {
 	taskDepCmd.AddCommand(taskDepAddCmd, taskDepRmCmd, taskDepLsCmd)
 				taskCmd.AddCommand(taskCreateCmd, taskImportPlanCmd, taskListCmd, taskClaimCmd, taskNextCmd, taskDoneCmd, taskFailCmd, taskShowCmd, taskDepCmd, taskRunCmd, taskTransitionCmd, taskRetryCmd, taskResetCmd, taskCleanupCmd, taskLogCmd, taskStopCmd)
 
-		// Root subcommands
+			// Root subcommands
 	rootCmd.AddCommand(agentCmd, bridgeCmd, sendCmd, recvCmd, channelCmd, taskCmd, convCmd, doctorCmd)
+
+	// Global flags
+	rootCmd.PersistentFlags().BoolVar(&skipStaleCheck, "skip-stale-check", false, "Skip binary staleness check")
 }
 
 var doctorCmd = &cobra.Command{
@@ -1323,17 +1416,38 @@ var doctorCmd = &cobra.Command{
 			return e
 		}())
 
-		// 8. ag binary not stale
+				// 8. ag binary not stale
 		exe, _ := os.Executable()
 		if exe != "" {
 			exeInfo, _ := os.Stat(exe)
-			modTime := exeInfo.ModTime()
-			if time.Since(modTime) > 24*time.Hour {
-				fmt.Printf("  ⚠️  ag binary is %s old (may need rebuild)\n", time.Since(modTime).Round(time.Hour))
-				warn++
+			sourceDir := resolveSourceDir()
+			if sourceDir != "" {
+				newerFiles := 0
+				filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return nil
+					}
+					if strings.HasSuffix(path, ".go") && info.ModTime().After(exeInfo.ModTime()) {
+						newerFiles++
+					}
+					return nil
+				})
+				if newerFiles > 0 {
+					fmt.Printf("  ❌ ag binary is STALE (%d source files newer). Rebuild: cd %s && go build -o %s .\n", newerFiles, sourceDir, exe)
+					fail++
+				} else {
+					fmt.Printf("  ✅ ag binary up-to-date (source at %s)\n", sourceDir)
+					pass++
+				}
 			} else {
-				fmt.Printf("  ✅ ag binary built %s ago\n", time.Since(modTime).Round(time.Minute))
-				pass++
+				modTime := exeInfo.ModTime()
+				if time.Since(modTime) > 24*time.Hour {
+					fmt.Printf("  ⚠️  ag binary is %s old (can't find source to verify freshness)\n", time.Since(modTime).Round(time.Hour))
+					warn++
+				} else {
+					fmt.Printf("  ✅ ag binary built %s ago\n", time.Since(modTime).Round(time.Minute))
+					pass++
+				}
 			}
 		}
 
