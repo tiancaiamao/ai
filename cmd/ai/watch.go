@@ -667,19 +667,41 @@ func watchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
+	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
 	fs.Parse(os.Args[1:])
 
-	// Resolve the run.
-	meta, err := resolveRunForWatch(*idFlag)
+	machineMode := *followFlag || *sinceFlag >= 0
+
+	// Machine-readable modes (--since, --follow) allow completed runs.
+	// TUI mode requires a running agent (for live socket stream).
+	var meta *run.RunMeta
+	var err error
+	if machineMode {
+		meta, err = resolveRunForMachineWatch(*idFlag)
+	} else {
+		meta, err = resolveRunForWatch(*idFlag)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
+	eventsPath := run.EventsPath("", meta.ID)
+
+		// Follow mode: continuously stream events until agent exits.
+	if *followFlag {
+		// --follow requires the agent to be running (uses socket stream).
+		if !run.IsRunning(meta) {
+			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
+			os.Exit(1)
+		}
+		followWatch(meta, 0)
+		return
+	}
+
 	// Machine-readable mode: print raw events + final offset.
 	// This still uses file-based polling since machine mode is a one-shot read.
 	if *sinceFlag >= 0 {
-		eventsPath := run.EventsPath("", meta.ID)
 		machineWatch(eventsPath, *sinceFlag)
 		return
 	}
@@ -731,8 +753,35 @@ func machineWatch(eventsPath string, offset int64) {
 			break
 		}
 	}
-	// Print final offset as last line.
+		// Print final offset as last line.
 	fmt.Printf("__offset:%d\n", lastOffset)
+}
+
+// followWatch continuously streams events from the agent via socket.
+// It connects to the Unix domain socket and subscribes to the event stream,
+// printing each event line to stdout until the connection closes (agent exits).
+func followWatch(meta *run.RunMeta, fromSeq uint64) {
+	sockPath := run.SocketPath("", meta.ID)
+
+	client := run.NewSocketClient(sockPath)
+	conn, _, err := client.Stream(fromSeq)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot connect to agent stream: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	scanner := bufio.NewScanner(conn)
+	seq := fromSeq
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		fmt.Println(line)
+		seq++
+	}
+	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
 // resolveRunForWatch resolves a run by ID flag or auto-selection.
@@ -792,7 +841,63 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		}
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
-	return &alive[0], nil
+		return &alive[0], nil
+}
+
+// resolveRunForMachineWatch resolves a run without requiring it to be running.
+// Used by --since and --follow modes for replaying completed runs.
+func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
+	if idFlag != "" {
+		// Try exact match first.
+		meta, err := run.LoadRunMeta(run.RunMetaPath("", idFlag))
+		if err == nil {
+			return meta, nil
+		}
+		// Try prefix match.
+		results, err := run.FindByPrefix("", idFlag)
+		if err != nil {
+			return nil, fmt.Errorf("prefix lookup for %q: %w", idFlag, err)
+		}
+		if len(results) == 0 {
+			return nil, fmt.Errorf("no run found matching %q", idFlag)
+		}
+		if len(results) == 1 {
+			return &results[0], nil
+		}
+		return nil, fmt.Errorf("ambiguous prefix %q matches %d runs", idFlag, len(results))
+	}
+
+	// Auto-select by cwd — prefer running, fall back to most recent.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get cwd: %w", err)
+	}
+	running, err := run.FindRunningByCwd("", cwd)
+	if err != nil {
+		return nil, fmt.Errorf("find runs: %w", err)
+	}
+	var alive []run.RunMeta
+	for _, r := range running {
+		if run.IsRunning(&r) {
+			alive = append(alive, r)
+		}
+	}
+	if len(alive) == 1 {
+		return &alive[0], nil
+	}
+	if len(alive) > 1 {
+		ids := make([]string, len(alive))
+		for i, r := range alive {
+			ids[i] = r.ID
+		}
+		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
+	}
+
+	// No running instances — fall back to most recent run in this cwd.
+	if len(running) > 0 {
+		return &running[0], nil
+	}
+	return nil, fmt.Errorf("no runs found in %s", cwd)
 }
 
 // processEvent handles a single parsed event with role-aware streaming.
