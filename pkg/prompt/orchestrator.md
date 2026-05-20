@@ -40,6 +40,31 @@ ai send --id "$RUN_ID" "/steer <correction>"   # Adjust direction
 ai kill --id "$RUN_ID"                          # Terminate
 ```
 
+### Validator Spawn Pattern
+
+Validator MUST use dedicated system prompt for role separation:
+
+```bash
+# 1. Spawn validator with validator.md system prompt
+tmux new-session -d -s "val-NNN" \
+  "ai serve --name 'val-NNN-task-name' --system-prompt @.pge/validator.md"
+sleep 1
+VAL_ID=$(tmux capture-pane -t "val-NNN" -p | head -1)
+
+# 2. Watch and send validation task
+ai watch --follow --pretty --id "$VAL_ID" > /tmp/pge-val-NNN.log 2>&1 &
+WATCH_PID=$!
+sleep 0.5
+
+ai send --id "$VAL_ID" "验证 .pge/spec.md 中的验收标准。对每条写独立测试。"
+
+timeout 600 wait $WATCH_PID
+cat /tmp/pge-val-NNN.log
+tmux kill-session -t "val-NNN" 2>/dev/null
+```
+
+The `validator.md` file should be written to `.pge/validator.md` by the orchestrator at the start of execution. It instructs the agent to ONLY write tests, NEVER read implementation source, and validate against spec acceptance criteria.
+
 ### Health Check
 
 ```bash
