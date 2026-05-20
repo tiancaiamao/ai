@@ -790,29 +790,59 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool) {
 		return
 	}
 
-	// Pretty mode: format agent_end into readable conversation.
-	// Silently consume all events, format on agent_end.
-	var agentEndLine string
-			seq := fromSeq
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
-			seq++
+	// Pretty mode: stream formatted output in real-time using ParseEvent.
+	// Each incremental event (text_delta, thinking_delta, tool_execution, etc.)
+	// is formatted and printed immediately.
+	seq := fromSeq
+	lastKind := run.EventKind("")
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		seq++
 
-			// Detect agent_end — contains full message history.
-			if strings.Contains(line, `"agent_end"`) {
-				agentEndLine = line
-			}
+		evt := run.ParseEvent(line)
+		if evt == nil {
+			continue
 		}
 
-		if agentEndLine != "" {
-			prettyPrintAgentEnd(agentEndLine)
-		} else {
-			fmt.Fprintln(os.Stderr, "--- agent ended without agent_end event ---")
+		switch evt.Kind {
+		case run.KindText:
+			if lastKind != run.KindText {
+				fmt.Print("\033[0m") // reset if coming from thinking
+			}
+			fmt.Print(evt.Text)
+		case run.KindThinking:
+			if lastKind != run.KindThinking {
+				fmt.Print("\033[2m") // dim
+			}
+			fmt.Print(evt.Text)
+		case run.KindTool:
+			fmt.Print("\033[0m") // reset
+			fmt.Printf("\n\033[36m  %s\033[0m\n", evt.Text)
+		case run.KindMeta:
+			fmt.Print("\033[0m")
+			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
+		case run.KindResponse:
+			fmt.Print("\033[0m")
+			fmt.Print(evt.Text)
+		case run.KindSessionSwitch:
+			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
 		}
-		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+		if evt.Kind != run.KindMeta && evt.Kind != run.KindSessionSwitch {
+			lastKind = evt.Kind
+		}
+
+		// On agent_end, flush and exit.
+		if strings.Contains(line, `"agent_end"`) {
+			fmt.Print("\033[0m\n")
+			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "--- agent stream ended without agent_end event ---\n")
+	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
 // --- Pretty printing helpers ---
