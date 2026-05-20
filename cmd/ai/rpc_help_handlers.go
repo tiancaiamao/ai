@@ -63,13 +63,12 @@ func (app *rpcApp) handleFollowUpSlash(args string) (any, error) {
 		return nil, fmt.Errorf("follow-up mode is '%s', not enabled", app.followUpMode)
 	}
 
-	if len(app.followUpQueue) > 0 && app.followUpMode == "one-at-a-time" {
+	if app.followUpMode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
 		return nil, fmt.Errorf("follow-up queue already has a pending message")
 	}
 
 	expandedMessage := app.expandSkillCommands(message)
-	app.followUpQueue = append(app.followUpQueue, expandedMessage)
-	return map[string]any{"status": "queued", "message": expandedMessage}, nil
+	return nil, app.ag.FollowUp(expandedMessage)
 }
 
 func (app *rpcApp) handleAbortSlash(args string) (any, error) {
