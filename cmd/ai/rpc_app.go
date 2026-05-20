@@ -102,7 +102,6 @@ type rpcApp struct {
 	steeringMode       string
 	followUpMode       string
 	pendingSteer       bool
-	followUpQueue      []string
 	showThinking       bool
 	showTools          bool
 	showPrefix         bool
