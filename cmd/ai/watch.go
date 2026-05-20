@@ -1043,11 +1043,7 @@ func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
 
-	// No running instances — fall back to most recent run in this cwd.
-	if len(running) > 0 {
-		return &running[0], nil
-	}
-	return nil, fmt.Errorf("no runs found in %s", cwd)
+		return nil, fmt.Errorf("no running instances in %s (use --id to select a specific run)", cwd)
 }
 
 // processEvent handles a single parsed event with role-aware streaming.

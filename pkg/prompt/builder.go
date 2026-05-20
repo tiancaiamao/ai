@@ -366,3 +366,19 @@ func OrchestratorTemplate() string {
 func ValidatorTemplate() string {
 	return validatorTemplate
 }
+
+// TemplateForRole returns the system prompt template for the given role.
+// Supported roles: "coder" (default), "orchestrator", "validator".
+// Returns empty string for unknown roles.
+func TemplateForRole(role string) (string, error) {
+	switch role {
+	case "", "coder":
+		return promptTemplate, nil
+	case "orchestrator":
+		return orchestratorTemplate, nil
+	case "validator":
+		return validatorTemplate, nil
+	default:
+		return "", fmt.Errorf("unknown role %q (valid: coder, orchestrator, validator)", role)
+	}
+}

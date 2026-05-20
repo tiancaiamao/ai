@@ -45,9 +45,9 @@ ai kill --id "$RUN_ID"                          # Terminate
 Validator MUST use dedicated system prompt for role separation:
 
 ```bash
-# 1. Spawn validator with validator.md system prompt
+# 1. Spawn validator with dedicated system prompt
 tmux new-session -d -s "val-NNN" \
-  "ai serve --name 'val-NNN-task-name' --system-prompt @.pge/validator.md"
+  "ai serve --name 'val-NNN-task-name' --role validator"
 sleep 1
 VAL_ID=$(tmux capture-pane -t "val-NNN" -p | head -1)
 
@@ -63,7 +63,7 @@ cat /tmp/pge-val-NNN.log
 tmux kill-session -t "val-NNN" 2>/dev/null
 ```
 
-The `.pge/validator.md` file is auto-created by `ai serve --peg` at startup. It tells the validator agent to act as an independent judge — free to use any validation method, but must reach its own conclusions.
+The `--role validator` flag loads the validator system prompt from the embedded binary. No file management needed — the prompt is compiled into `ai`.
 
 ### Health Check
 
@@ -79,7 +79,7 @@ tmux capture-pane -t "gen-NNN" -p -S -50       # See agent stderr
 | **Generator** | Implements code, fixes bugs, executes tasks. **MUST NOT write test files.** |
 | **Validator** | Independent judge. Validates that work is actually done. Uses any method it chooses (review, tests, build checks, behavioral verification). **Only Validator's assessment counts as "done".** |
 
-Generator uses default coding prompt. Validator uses dedicated `validator.md` prompt (auto-created by `--peg`).
+Generator uses default coding prompt. Validator uses `--role validator` (embedded prompt). Orchestrator uses `--role orchestrator` (embedded prompt).
 
 ### ⚠️ CRITICAL: Role Separation
 
@@ -118,7 +118,7 @@ You dynamically create tasks and delegate:
 3. Monitor progress via `ai watch --follow`
 4. **After each Generator completes, update `.pge/state.md`** — this is how subsequent generators know what changed
 5. **MANDATORY: After Generator completes, spawn an independent Validator**
-   - Validator MUST be a separate tmux session with `--system-prompt @.pge/validator.md`
+      - Validator MUST be a separate tmux session with `--role validator`
    - Validator decides its own validation method (review, tests, build checks, etc.)
    - **Only Validator's assessment counts as "done"** — Generator's self-report is meaningless
 6. Review validation results — fix, retry, or adjust plan based on Validator's feedback
@@ -212,7 +212,6 @@ Generator is done when you see `agent_end`. Check last message's `stopReason`:
   tasks/
     001-xxx.md     # Task description (you create dynamically)
   progress.md      # Execution log (append-only)
-  validator.md     # Validator system prompt (auto-created by --peg)
 ```
 
 %WORKSPACE_SECTION%

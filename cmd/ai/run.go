@@ -32,7 +32,7 @@ func runSubcommand(binPath string) {
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	pegFlag := fs.Bool("peg", false, "Use PEG orchestrator system prompt")
+	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -49,23 +49,15 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-				// PEG mode overrides system prompt.
+					// Resolve system prompt: --system-prompt overrides --role.
 	sysPrompt := *systemPromptFlag
-	if *pegFlag {
-		sysPrompt = prompt.OrchestratorTemplate()
-
-		// Write validator prompt template to .pge/validator.md so orchestrator
-		// can spawn validators with: --system-prompt @.pge/validator.md
-		pgeDir := filepath.Join(homeDir, ".ai", ".pge")
-		if wd, err := os.Getwd(); err == nil {
-			pgeDir = filepath.Join(wd, ".pge")
+	if sysPrompt == "" && *roleFlag != "coder" {
+		tmpl, err := prompt.TemplateForRole(*roleFlag)
+		if err != nil {
+			slog.Error("invalid role", "error", err)
+			os.Exit(1)
 		}
-		if err := os.MkdirAll(pgeDir, 0o755); err == nil {
-			validatorPath := filepath.Join(pgeDir, "validator.md")
-			if _, err := os.Stat(validatorPath); os.IsNotExist(err) {
-				os.WriteFile(validatorPath, []byte(prompt.ValidatorTemplate()), 0o644)
-			}
-		}
+		sysPrompt = tmpl
 	}
 
 	// Build RPC flags to forward.
@@ -211,7 +203,7 @@ func serveSubcommand(binPath string) {
 		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	pegFlag := fs.Bool("peg", false, "Use PEG orchestrator system prompt")
+	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -228,10 +220,15 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-	// PEG mode overrides system prompt.
+		// Resolve system prompt: --system-prompt overrides --role.
 	sysPrompt := *systemPromptFlag
-	if *pegFlag {
-		sysPrompt = prompt.OrchestratorTemplate()
+	if sysPrompt == "" && *roleFlag != "coder" {
+		tmpl, err := prompt.TemplateForRole(*roleFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		sysPrompt = tmpl
 	}
 
 	// Build RPC flags to forward.
