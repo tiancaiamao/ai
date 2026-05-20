@@ -403,6 +403,49 @@ func sendRPCCommand(w io.Writer, cmdType, message string) error {
 	return err
 }
 
+// sendRPCCommandWithTimeout is like sendRPCCommand but aborts the write
+// after the given deadline.  This is necessary because io.PipeWriter.Write
+// blocks until the reader consumes the data; if the subprocess (reader)
+// has exited the write would hang forever.
+func sendRPCCommandWithTimeout(w *io.PipeWriter, cmdType, message string, timeout time.Duration) error {
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+
+	go func() {
+		n, err := sendRPCCommandResult(w, cmdType, message)
+		done <- result{n, err}
+	}()
+
+	select {
+	case r := <-done:
+		return r.err
+	case <-time.After(timeout):
+		// Close the pipe to unblock the goroutine's Write.
+		// The pipe is now permanently broken — but the subprocess is
+		// already dead (or unresponsive), so no further commands can
+		// succeed anyway.
+		w.Close()
+		<-done // let the goroutine finish
+		return fmt.Errorf("write timed out after %v (subprocess likely dead)", timeout)
+	}
+}
+
+func sendRPCCommandResult(w io.Writer, cmdType, message string) (int, error) {
+	rpcCmd := map[string]string{
+		"type":    cmdType,
+		"message": message,
+	}
+	data, err := json.Marshal(rpcCmd)
+	if err != nil {
+		return 0, fmt.Errorf("marshal rpc command: %w", err)
+	}
+	data = append(data, '\n')
+	return w.Write(data)
+}
+
 // hasAgentEndEvent checks if a raw JSON line has type "agent_end".
 func hasAgentEndEvent(data []byte) bool {
 	// Fast path: check for the string before full JSON parse.
@@ -425,6 +468,17 @@ func hasAgentEndEvent(data []byte) bool {
 func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdinWriter *io.PipeWriter) run.CommandHandler {
 	var mu sync.Mutex
 
+	// isAlive checks whether the RPC subprocess is still running.
+	// A zombie (<defunct>) child will still pass the signal(0) test,
+	// so we also check for zero-length state which indicates the
+	// process has exited but hasn't been reaped yet.
+	isAlive := func() bool {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return false
+		}
+		return true
+	}
+
 	return func(cmd run.Command) run.Response {
 		mu.Lock()
 		defer mu.Unlock()
@@ -434,8 +488,13 @@ func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdi
 			if cmd.Message == "" {
 				return run.Response{OK: false, Error: "command requires a message"}
 			}
+			if !isAlive() {
+				return run.Response{OK: false, Error: "subprocess is no longer alive"}
+			}
 			// Forward as "prompt" so RPC handles slash commands correctly.
-			if err := sendRPCCommand(stdinWriter, "prompt", cmd.Message); err != nil {
+			// Use a deadline so the write does not block forever when the
+			// subprocess dies between the liveness check and the write.
+			if err := sendRPCCommandWithTimeout(stdinWriter, "prompt", cmd.Message, 10*time.Second); err != nil {
 				return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
 			}
 			return run.Response{OK: true}
