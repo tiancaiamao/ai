@@ -24,9 +24,9 @@ pip install pytest pytest-cov -q 2>/dev/null
 PYTHONPATH="$TASK_DIR/setup" python3 -m pytest test_export_flows.py \
   --cov=export_flows \
   --cov-report=term-missing \
-  --cov-fail-under=80 \
+  --cov-fail-under=90 \
   -v
 
 echo ""
-echo "All tests passed with ≥80% coverage!"
+echo "All tests passed with ≥90% coverage!"
 exit 0
