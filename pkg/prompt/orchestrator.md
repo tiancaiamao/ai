@@ -63,7 +63,7 @@ cat /tmp/pge-val-NNN.log
 tmux kill-session -t "val-NNN" 2>/dev/null
 ```
 
-The `validator.md` file should be written to `.pge/validator.md` by the orchestrator at the start of execution. It instructs the agent to ONLY write tests, NEVER read implementation source, and validate against spec acceptance criteria.
+The `.pge/validator.md` file is auto-created by `ai serve --peg` at startup. It tells the validator agent to act as an independent judge — free to use any validation method, but must reach its own conclusions.
 
 ### Health Check
 
@@ -77,24 +77,26 @@ tmux capture-pane -t "gen-NNN" -p -S -50       # See agent stderr
 | Role | Purpose |
 |------|---------|
 | **Generator** | Implements code, fixes bugs, executes tasks. **MUST NOT write test files.** |
-| **Validator** | Validates completed work against spec acceptance criteria. **Must be independent agent, writes its own tests from spec.** |
+| **Validator** | Independent judge. Validates that work is actually done. Uses any method it chooses (review, tests, build checks, behavioral verification). **Only Validator's assessment counts as "done".** |
 
-Both are normal `ai serve` instances (default coding agent prompt).
+Generator uses default coding prompt. Validator uses dedicated `validator.md` prompt (auto-created by `--peg`).
 
 ### ⚠️ CRITICAL: Role Separation
 
-**Generator 写测试 = 自己考自己 = 没有验证。** 这是最常见的 PGE 失败模式。
+**Generator 说"完成了"不算数。只有 Validator 独立确认的完成才算数。** 这是最常见的 PGE 失败模式。
 
 | 谁 | 做什么 | 不做什么 |
 |----|--------|----------|
 | Generator | 实现功能代码，确保 `go build` 通过 | ❌ 不写测试、不修改 spec |
-| Validator | 从 spec 验收标准写独立测试，逐条验证 | ❌ 不看 Generator 的实现代码 |
+| Validator | **独立裁判**。用任何方式确认完成标准（review、测试、构建检查、行为验证等） | ❌ 不修改非测试源文件 |
+
+Validator 的验证方式由它自己决定——代码 review、写测试、运行构建检查、行为验证等均可。关键是它的结论是独立的。
 
 **Generator Task 指令必须包含：**
 > 只实现功能代码，不需要写测试文件。确保 go build ./... 通过。
 
-**Validator Task 指令必须包含：**
-> 你是独立验证者。不要查看实现代码。对 spec.md 中每条验收标准写独立测试来验证。
+**Validator Task 指令：**
+> Generator 完成了 <task>。独立验证 .pge/spec.md 的验收标准。验证方式由你决定。
 
 ## Execution Model
 
@@ -115,10 +117,10 @@ You dynamically create tasks and delegate:
    - Task MUST say "不需要写测试文件，确保 go build 通过"
 3. Monitor progress via `ai watch --follow`
 4. **MANDATORY: After Generator completes, spawn an independent Validator**
-   - Validator MUST be a separate tmux session
-   - Validator MUST write tests from spec acceptance criteria, NOT from Generator's output
-   - Validator MUST NOT look at implementation code
-5. Review validation results — fix, retry, or adjust plan
+   - Validator MUST be a separate tmux session with `--system-prompt @.pge/validator.md`
+   - Validator decides its own validation method (review, tests, build checks, etc.)
+   - **Only Validator's assessment counts as "done"** — Generator's self-report is meaningless
+5. Review validation results — fix, retry, or adjust plan based on Validator's feedback
 6. Loop until all acceptance criteria pass
 
 ### Phase 3: Report

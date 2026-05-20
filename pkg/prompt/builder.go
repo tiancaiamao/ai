@@ -31,6 +31,9 @@ var contextManagementSystemPrompt string
 //go:embed "orchestrator.md"
 var orchestratorTemplate string
 
+//go:embed "validator.md"
+var validatorTemplate string
+
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
@@ -354,7 +357,12 @@ func ContextManagementSystemPrompt() string {
 	return contextManagementSystemPrompt
 }
 
-// OrchestratorTemplate returns the PEG orchestrator prompt template.
+// OrchestratorTemplate returns the PGE orchestrator prompt template.
 func OrchestratorTemplate() string {
 	return orchestratorTemplate
+}
+
+// ValidatorTemplate returns the PGE validator prompt template.
+func ValidatorTemplate() string {
+	return validatorTemplate
 }

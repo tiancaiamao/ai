@@ -49,10 +49,23 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-		// PEG mode overrides system prompt.
+				// PEG mode overrides system prompt.
 	sysPrompt := *systemPromptFlag
 	if *pegFlag {
 		sysPrompt = prompt.OrchestratorTemplate()
+
+		// Write validator prompt template to .pge/validator.md so orchestrator
+		// can spawn validators with: --system-prompt @.pge/validator.md
+		pgeDir := filepath.Join(homeDir, ".ai", ".pge")
+		if wd, err := os.Getwd(); err == nil {
+			pgeDir = filepath.Join(wd, ".pge")
+		}
+		if err := os.MkdirAll(pgeDir, 0o755); err == nil {
+			validatorPath := filepath.Join(pgeDir, "validator.md")
+			if _, err := os.Stat(validatorPath); os.IsNotExist(err) {
+				os.WriteFile(validatorPath, []byte(prompt.ValidatorTemplate()), 0o644)
+			}
+		}
 	}
 
 	// Build RPC flags to forward.
