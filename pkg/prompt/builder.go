@@ -28,6 +28,9 @@ var compactUpdatePrompt string
 //go:embed "context_management.md"
 var contextManagementSystemPrompt string
 
+//go:embed "orchestrator.md"
+var orchestratorTemplate string
+
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
@@ -79,6 +82,9 @@ type Builder struct {
 
 	// Skill usage stats (optional, for progressive disclosure)
 	skillStats *skill.SkillStatsFile
+
+		// Custom template (if empty, uses embedded promptTemplate)
+	template string
 
 	// Context meta (for runtime_state telemetry, set by agent loop)
 	contextMeta string
@@ -162,6 +168,12 @@ func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder {
 	return b
 }
 
+// SetTemplate sets a custom prompt template. If empty, uses the default embedded prompt.md.
+func (b *Builder) SetTemplate(t string) *Builder {
+	b.template = t
+	return b
+}
+
 // SetContextMeta sets the runtime_state telemetry metadata.
 func (b *Builder) SetContextMeta(meta string) *Builder {
 	b.contextMeta = meta
@@ -177,6 +189,9 @@ func (b *Builder) SetTokensPercent(pct float64) *Builder {
 // Build builds final system prompt by replacing placeholders in the template.
 func (b *Builder) Build() string {
 	result := promptTemplate
+	if b.template != "" {
+		result = b.template
+	}
 
 	// Replace workspace section (optional - empty when noWorkspace is true)
 	workspaceSection := ""
@@ -337,4 +352,9 @@ func NormalizeThinkingLevel(level string) string {
 // ContextManagementSystemPrompt returns system prompt for context management.
 func ContextManagementSystemPrompt() string {
 	return contextManagementSystemPrompt
+}
+
+// OrchestratorTemplate returns the PEG orchestrator prompt template.
+func OrchestratorTemplate() string {
+	return orchestratorTemplate
 }

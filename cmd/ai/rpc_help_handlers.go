@@ -88,6 +88,30 @@ func (app *rpcApp) handleAbortSlash(args string) (any, error) {
 	return map[string]any{"status": "aborting"}, nil
 }
 
+func (app *rpcApp) handlePegSlash(args string) (any, error) {
+	mode := strings.TrimSpace(args)
+	switch mode {
+	case "", "on":
+		app.agentMode = "peg"
+		// Rebuild system prompt and update agent context.
+		app.setAgentContext(app.createBaseContext())
+		slog.Info("Switched to PEG orchestrator mode")
+		return map[string]any{
+			"status": "peg mode activated",
+			"hint":   "System prompt replaced with PEG orchestrator. Use /peg off to return to default.",
+		}, nil
+	case "off":
+		app.agentMode = "default"
+		app.setAgentContext(app.createBaseContext())
+		slog.Info("Switched back to default mode")
+		return map[string]any{
+			"status": "default mode restored",
+		}, nil
+	default:
+		return nil, fmt.Errorf("usage: /peg [on|off] — switch to/from PEG orchestrator mode")
+	}
+}
+
 
 // registerHelpHandlers registers help and miscellaneous slash commands.
 func (app *rpcApp) registerHelpHandlers() {
@@ -123,9 +147,14 @@ func (app *rpcApp) registerHelpHandlers() {
 		return app.handleAbortSlash(args)
 	})
 
-	// /follow-up
+		// /follow-up
 	app.server.RegisterSlash("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
 		return app.handleFollowUpSlash(args)
+	})
+
+	// /peg
+	app.server.RegisterSlash("peg", "Switch to PEG orchestrator mode (/peg [on|off])", func(args string) (any, error) {
+		return app.handlePegSlash(args)
 	})
 
 	// Hidden aliases — help-related

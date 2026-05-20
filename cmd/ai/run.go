@@ -187,9 +187,10 @@ func serveSubcommand(binPath string) {
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
-	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
+	modeFlag := fs.String("mode", "", "Agent mode: default, peg (switches system prompt)")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -304,7 +305,7 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-	// Send initial input if provided.
+		// Send initial input if provided.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
@@ -315,6 +316,14 @@ func serveSubcommand(binPath string) {
 		}
 		inputText = string(data)
 	}
+
+	// Switch agent mode before sending input.
+	if *modeFlag == "peg" {
+		if err := sendRPCCommand(stdinWriter, "prompt", "/peg"); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to switch to PEG mode: %v\n", err)
+		}
+	}
+
 	if inputText != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
