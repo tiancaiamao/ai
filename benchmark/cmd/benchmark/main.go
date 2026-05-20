@@ -211,19 +211,22 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	}
 	agArgs := []string{r.AgBinary, "conv"}
 
-	// Build a three-process pipeline: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
+		// Build a three-process pipeline: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
 	// We use direct exec.Command pipe instead of sh -c to avoid shell interpreting
 	// backticks and other special characters in the JSON payload.
 	aiCmd := exec.CommandContext(ctx, aiArgs[0], aiArgs[1:]...)
 	agCmd := exec.CommandContext(ctx, agArgs[0], agArgs[1:]...)
 
-		// Wire: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
+	// Wire: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
 	var stdout, stderr bytes.Buffer
 	aiCmd.Stdin = bytes.NewBufferString(rpcPrompt)
 	agCmd.Stdout = &stdout
 	agCmd.Stderr = &stderr
 
-	// Pipe ai stdout -> ag stdin
+	// Pipe ai stdout -> ag stdin.
+	// When ag exits (error or otherwise), reads from aiAgPipe will fail,
+	// causing ai's stdout writes to fail. The goroutine below detects this
+	// and closes aiAgWriter so aiCmd.Wait() can complete.
 	aiAgPipe, aiAgWriter := io.Pipe()
 	aiCmd.Stdout = aiAgWriter
 	agCmd.Stdin = aiAgPipe
@@ -243,15 +246,18 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to start ag: %w", err)
 	}
 
-		// Wait for ai to finish, then close pipe writer
+			// Wait for ai to finish, then close pipe writer
 	aiDone := make(chan error, 1)
 	go func() {
 		aiDone <- aiCmd.Wait()
 		aiAgWriter.Close()
 	}()
 
-	// Wait for ag to finish
+	// Wait for ag to finish, then close pipe reader so ai doesn't
+	// block on stdout writes to a pipe nobody is reading.
 	agErr := agCmd.Wait()
+	aiAgPipe.Close()
+
 	aiErr := <-aiDone
 
 	output := stdout.String()
