@@ -82,20 +82,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	app.loopCfg = loopCfg
 
-	// Create agent with LoopConfig
+		// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 	ag.SetThinkingLevel("high")
 	app.ag = ag
-
-	// Start timeout watchdog if timeout is set
-	if timeout > 0 {
-		go func() {
-			<-time.After(timeout)
-			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
-			ag.Abort()
-		}()
-	}
 
 	// Initialize checkpoint manager for persistent state
 	if app.sess != nil {
@@ -117,10 +108,23 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
-	// --- Create RPC server ---
+		// --- Create RPC server ---
 	server := rpc.NewServer()
 	server.SetOutput(output)
 	app.server = server
+
+	// Start timeout watchdog if timeout is set.
+	// Must be after server creation so server.Cancel() is available.
+	if timeout > 0 {
+		go func() {
+			<-time.After(timeout)
+			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
+			ag.Abort()
+			// Cancel the RPC server so RunWithIO unblocks and the process exits.
+			// Without this, the process lingers forever waiting for stdin.
+			server.Cancel()
+		}()
+	}
 
 	// --- Register all handlers ---
 		validToolSummaryStrategies := map[string]bool{"llm": true, "heuristic": true, "off": true}
