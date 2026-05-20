@@ -93,7 +93,7 @@ Generator uses default coding prompt. Validator uses dedicated `validator.md` pr
 Validator 的验证方式由它自己决定——代码 review、写测试、运行构建检查、行为验证等均可。关键是它的结论是独立的。
 
 **Generator Task 指令必须包含：**
-> 只实现功能代码，不需要写测试文件。确保 go build ./... 通过。
+> Read .pge/spec.md and .pge/state.md for context. 只实现功能代码，不需要写测试文件。确保 go build ./... 通过。完成后列出修改的文件。
 
 **Validator Task 指令：**
 > Generator 完成了 <task>。独立验证 .pge/spec.md 的验收标准。验证方式由你决定。
@@ -116,12 +116,57 @@ You dynamically create tasks and delegate:
 2. Spawn a **Generator** sub-agent for each task (via tmux pattern)
    - Task MUST say "不需要写测试文件，确保 go build 通过"
 3. Monitor progress via `ai watch --follow`
-4. **MANDATORY: After Generator completes, spawn an independent Validator**
+4. **After each Generator completes, update `.pge/state.md`** — this is how subsequent generators know what changed
+5. **MANDATORY: After Generator completes, spawn an independent Validator**
    - Validator MUST be a separate tmux session with `--system-prompt @.pge/validator.md`
    - Validator decides its own validation method (review, tests, build checks, etc.)
    - **Only Validator's assessment counts as "done"** — Generator's self-report is meaningless
-5. Review validation results — fix, retry, or adjust plan based on Validator's feedback
-6. Loop until all acceptance criteria pass
+6. Review validation results — fix, retry, or adjust plan based on Validator's feedback
+7. Loop until all acceptance criteria pass
+
+### ⚠️ State Sync Between Generators
+
+Each generator runs in isolation — it does NOT know what other generators did. You must bridge this gap.
+
+**After every generator completes, write `.pge/state.md`:**
+
+```markdown
+# State
+
+## Completed
+- 001-add-auth: created src/auth/jwt.go, src/middleware/auth.go
+- 002-add-users: created src/models/user.go, modified src/db/schema.sql
+
+## Current File Map
+- src/auth/jwt.go — JWT token generation and validation
+- src/middleware/auth.go — HTTP auth middleware
+- src/models/user.go — User model
+- src/db/schema.sql — Added users table
+
+## Key Decisions
+- Using HMAC-SHA256 for JWT signing
+- User IDs are UUIDs
+```
+
+**Every generator task MUST start with:** "Read .pge/spec.md and .pge/state.md for context."
+
+### ⚠️ Parallel Task File Scope
+
+When spawning parallel generators, their file scopes MUST NOT overlap. Before spawning:
+
+1. Each parallel task declares which files it will modify/create
+2. You verify: no file appears in more than one parallel task
+3. If overlap exists → make them sequential, or split the contested file to one task
+
+```
+# ✅ Safe parallel: disjoint file sets
+gen-001: src/backend/*.go
+gen-002: src/frontend/*.tsx
+
+# ❌ Unsafe: both touch src/models/user.go
+gen-001: src/backend/*.go, src/models/user.go
+gen-002: src/frontend/*.tsx, src/models/user.go
+```
 
 ### Phase 3: Report
 - Summarize: what was done, deviations, final state
@@ -163,9 +208,11 @@ Generator is done when you see `agent_end`. Check last message's `stopReason`:
 ```
 .pge/
   spec.md          # Requirements + acceptance criteria (Phase 1 output)
+  state.md         # Current state — updated after each generator (Phase 2)
   tasks/
     001-xxx.md     # Task description (you create dynamically)
   progress.md      # Execution log (append-only)
+  validator.md     # Validator system prompt (auto-created by --peg)
 ```
 
 %WORKSPACE_SECTION%
