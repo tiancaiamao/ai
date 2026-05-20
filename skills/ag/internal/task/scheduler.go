@@ -57,11 +57,13 @@ const (
 	// we detect the worker is still actively writing events.
 	timeoutExtendPerActivity = 5 * time.Minute
 
-	// firstResponseTimeout is how long we wait for the LLM to produce
+		// firstResponseTimeout is how long we wait for the LLM to produce
 	// its first assistant message before failing fast. If events.jsonl
 	// has zero assistant messages after this duration, the worker is
 	// considered dead (LLM never responded).
-	firstResponseTimeout = 5 * time.Minute
+	// Note: some models (e.g., glm-5.1) may take longer to process
+	// tool-laden prompts. Set generously to avoid false positives.
+		firstResponseTimeout = 15 * time.Minute
 
 	// retryBackoffDurations defines exponential backoff delays between retries.
 	// Index 0 = first retry (30s), index 1 = second retry (2min), index 2+ = 5min.
@@ -111,7 +113,9 @@ func (s *schedulerState) activeSlots() int64 {
 func (s *schedulerState) recordTaskFailure(taskID string) int {
 	val, _ := s.perTaskFailures.LoadOrStore(taskID, new(atomic.Int64))
 	counter := val.(*atomic.Int64)
-	return int(counter.Add(1))
+	newVal := int(counter.Add(1))
+	log.Printf("[scheduler] recordTaskFailure(%s) → counter=%d", taskID, newVal)
+	return newVal
 }
 
 // resetTaskFailures clears the per-task failure counter (e.g. on success).
@@ -247,14 +251,15 @@ func RunScheduler(ctx context.Context, cfg SchedulerConfig) error {
 				groups, _ := Groups()
 				for _, g := range groups {
 					gtasks, _ := GroupTasks(g)
-					allReview := len(gtasks) > 0
+									// Same logic as checkGroupReview: done tasks count as reviewed
+					allReviewable := len(gtasks) > 0
 					for _, gt := range gtasks {
-						if gt.Status != StatusReview {
-							allReview = false
+						if gt.Status != StatusReview && gt.Status != StatusDone {
+							allReviewable = false
 							break
 						}
 					}
-					if allReview {
+					if allReviewable {
 						// Group fully in review — check if reviewer is alive
 						reviewerKey := fmt.Sprintf("reviewer-%s", g)
 						reviewerAgentDir := storage.AgentDir(reviewerKey)
@@ -498,13 +503,19 @@ func spawnWorker(taskID, agentID string, cfg SchedulerConfig, state *schedulerSt
 		return
 	}
 
-	prompt := BuildWorkerPrompt(t, cfg.DesignFile)
+		prompt := BuildWorkerPrompt(t, cfg.DesignFile)
 
-	// Spawn agent using "ai serve" — same pattern as aiAdapter.SpawnWithAIServe.
-	// Key: --input receives the prompt TEXT, not a file path.
-	// We read stdout to get the run ID, then Release the process.
+	// Write prompt to a temp file to avoid OS ARG_MAX limits.
+	// Worker prompts can be very large (task description + design doc context).
+	promptFile := filepath.Join(storage.TaskDir(taskID), "worker-prompt.txt")
+	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {
+		Fail(taskID, fmt.Sprintf("write worker prompt: %v", err), true)
+		return
+	}
+
+	// Spawn agent using "ai serve" with --input-file to avoid command line length limits.
 	cmd := exec.Command("ai", "serve")
-	cmd.Args = append(cmd.Args, "--input", prompt)
+	cmd.Args = append(cmd.Args, "--input-file", promptFile)
 	cmd.Args = append(cmd.Args, "--name", "ag-worker-"+taskID)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
@@ -680,9 +691,12 @@ func checkRunning(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 						// Heartbeat: update lastActivity timestamp in worker-meta.json
 						// so external tools can detect "still alive" workers.
 						updateWorkerHeartbeat(agentDir)
-					} else if eventsAge < cfg.PollInterval*6 {
-						// Events somewhat recent — partial extension
-						effectiveTimeout = cfg.Timeout + timeoutExtendPerActivity
+										} else if eventsAge < cfg.PollInterval*6 {
+						// Events somewhat recent — partial extension.
+						// Use max() to avoid overriding a larger per-task timeout
+						// (e.g. estimatedMinutes=240 → 480min) with the small
+						// cfg.Timeout + timeoutExtendPerActivity (default 15min).
+						effectiveTimeout = max(effectiveTimeout, cfg.Timeout+timeoutExtendPerActivity)
 					}
 				}
 			}
@@ -721,10 +735,12 @@ func checkRunning(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 		// LLM silence detection: if the worker has been running for a while but
 		// events.jsonl has zero assistant messages, the LLM backend is not responding.
 		// Fail fast instead of waiting for the full timeout.
-		if startedAt > 0 && runID != "" {
+							if startedAt > 0 && runID != "" {
 			elapsed := time.Since(time.Unix(startedAt, 0))
 			if elapsed > firstResponseTimeout {
-				if !hasAssistantMessages(runID) {
+				msg := hasAssistantMessages(runID)
+				log.Printf("[scheduler] %s: SILENCE_DIAG elapsed=%v timeout=%v hasMsg=%v", t.ID, elapsed.Round(time.Second), firstResponseTimeout, msg)
+				if !msg {
 					killWorker(t.ID, t.Claimant)
 					state.recordTaskFailure(t.ID)
 					silenceErr := fmt.Sprintf("LLM silence: no assistant messages after %v", elapsed.Round(time.Minute))
@@ -737,32 +753,42 @@ func checkRunning(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 			}
 		}
 
-		completed := false
+			completed := false
 		summary := ""
 
-		if runID != "" {
-			// ai-serve worker: check events.jsonl for completion
-			completed, summary = checkAIServeRun(runID, t.ID)
-			// Fall back to PID liveness if events are unavailable
-			if !completed && pid > 0 && !agent.IsProcessAlive(pid) {
-							// Process died but events never showed agent_end — treat as failure
-				outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
-				lastOutput := ""
-				if storage.Exists(outputFile) {
-					lastOutput = truncate(readFile(outputFile), 300)
-				}
-				errMsg := "ai-serve process died without completing"
-				if lastOutput != "" {
-					errMsg += "\nLast output:\n" + lastOutput
-				}
-				state.recordTaskFailure(t.ID)
-				Fail(t.ID, errMsg, true)
 				if runID != "" {
-					RecordFailedRun(t.ID, runID, startedAt, errMsg)
+			// ai-serve worker: check run.json for completion
+			completed, summary = checkAIServeRun(runID, t.ID)
+			// Fall back to PID liveness if run.json still shows running
+			if !completed && pid > 0 && !agent.IsProcessAlive(pid) {
+				// Process died — but ai serve may not have flushed run.json yet.
+				// Retry a few times with a short delay to give the filesystem time.
+				for retry := 0; retry < 3 && !completed; retry++ {
+					time.Sleep(500 * time.Millisecond)
+					completed, summary = checkAIServeRun(runID, t.ID)
 				}
-				fmt.Printf("  ❌ Detected failure %s (ai-serve process died)\n", t.ID)
-				progress = true
-				continue
+				if completed {
+					log.Printf("[scheduler] %s: process died but run.json shows done, accepting", t.ID)
+				} else {
+					// Process died and run.json doesn't show done — genuine failure
+					outputFile := filepath.Join(storage.TaskDir(t.ID), "output")
+					lastOutput := ""
+					if storage.Exists(outputFile) {
+						lastOutput = truncate(readFile(outputFile), 300)
+					}
+									errMsg := "ai-serve process died without completing"
+					if lastOutput != "" {
+						errMsg += "\nLast output:\n" + lastOutput
+					}
+					state.recordTaskFailure(t.ID)
+					Fail(t.ID, errMsg, true)
+					if runID != "" {
+						RecordFailedRun(t.ID, runID, startedAt, errMsg)
+					}
+					fmt.Printf("  ❌ Detected failure %s (ai-serve process died)\n", t.ID)
+					progress = true
+					continue
+				}
 			}
 		} else if pid > 0 {
 			// Legacy worker: check if process is alive
@@ -821,42 +847,94 @@ func checkRunning(cfg SchedulerConfig, state *schedulerState) (bool, error) {
 	return progress, nil
 }
 
-// hasAssistantMessages checks if events.jsonl for a run contains any assistant messages.
-// Returns false if no assistant messages are found, indicating LLM silence.
+// hasAssistantMessages checks if the LLM has produced any output for a run.
+// In ai serve mode, events.jsonl is not written (events go to in-memory broadcaster).
+// Instead, we check run.json status and rpc.log size:
+//   - run.json status=done/failed → the model definitely responded
+//   - rpc.log non-empty → model is actively working (ai rpc writes stderr there)
+//   - Otherwise → still waiting for first response
 func hasAssistantMessages(runID string) bool {
+	// Check run.json status:
+	// - done/failed/killed → model definitely responded → true
+	// - running → process still alive, can't be "silent" → true
+	//   (ai serve mode doesn't write events.jsonl, so we can't check
+	//   for assistant messages while the run is in progress)
+	meta, err := run.ReadMeta(runID)
+	if err == nil && meta.Status != "" {
+		// Any known status means the run exists and was processed.
+		// "running" means the process is alive (or was recently alive),
+		// which is NOT silence.
+		return true
+	}
+
+	// run.json not found or unreadable — fall back to events.jsonl
 	eventsPath, err := run.EventsPath(runID)
+	if err == nil {
+		data, err := os.ReadFile(eventsPath)
+		if err == nil && (strings.Contains(string(data), `"role":"assistant"`) ||
+			strings.Contains(string(data), `"role": "assistant"`)) {
+			return true
+		}
+	}
+
+	// Fallback: check rpc.log size
+	dir, err := run.Dir(runID)
 	if err != nil {
 		return false
 	}
-	data, err := os.ReadFile(eventsPath)
+	rpcLog := filepath.Join(dir, "rpc.log")
+	info, err := os.Stat(rpcLog)
 	if err != nil {
-		return false // no events file yet = no messages
+		return false
 	}
-	// Check for "assistant" role in events — a simple string scan is sufficient
-	// and avoids needing to parse the full JSONL.
-	return strings.Contains(string(data), `"role":"assistant"`) ||
-		strings.Contains(string(data), `"role": "assistant"`)
+	return info.Size() > 0
 }
 
-// checkAIServeRun checks events.jsonl for a specific run to see if the agent has finished.
+// checkAIServeRun checks if an ai-serve worker has finished.
+// In ai serve mode, events.jsonl is not written (events go to in-memory broadcaster).
+// Primary detection: run.json status (done/failed).
+// Fallback: events.jsonl for rpc mode where it IS written.
 // Returns (completed, summary).
 func checkAIServeRun(runID, taskID string) (bool, string) {
+	// Primary: check run.json for status
+	meta, err := run.ReadMeta(runID)
+	if err != nil {
+		return false, "" // can't read meta, still starting
+	}
+
+	if meta.Status == "done" || meta.Status == "failed" || meta.Status == "killed" {
+		// Try to extract summary from events.jsonl if available
+		summary := ""
+		eventsPath, _ := run.EventsPath(runID)
+		data, err := os.ReadFile(eventsPath)
+		if err == nil && len(data) > 0 {
+			lastNHook, result := conv.CollectLastN(20, conv.KindTool, conv.KindMeta)
+			doneHook := func(evt *conv.FormattedEvent) bool { return true }
+			conv.StreamEventsFromString(string(data), lastNHook, doneHook) //nolint:errcheck
+			summary = strings.Join(*result, "\n")
+		}
+
+		if meta.Status == "done" {
+			return true, summary
+		}
+		// failed/killed: not-completed so scheduler can retry
+		return false, ""
+	}
+
+	// Still running — try events.jsonl for agent_end (rpc mode fallback)
 	eventsPath, err := run.EventsPath(runID)
 	if err != nil {
 		return false, ""
 	}
-
 	data, err := os.ReadFile(eventsPath)
 	if err != nil {
-		return false, "" // events file not found yet, still starting
+		return false, "" // no events file, still running
 	}
 
-	// Use conv streaming API to scan for agent_end and collect summary.
+	// Scan for agent_end in events
 	lastNHook, result := conv.CollectLastN(20, conv.KindTool, conv.KindMeta)
-
-		agentDone := false
+	agentDone := false
 	agentFailed := false
-
 	doneHook := func(evt *conv.FormattedEvent) bool {
 		if conv.IsAgentDone(evt) {
 			agentDone = true
@@ -865,15 +943,11 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 		}
 		return true
 	}
-
-	conv.StreamEventsFromString(string(data), lastNHook, doneHook) //nolint:errcheck // best-effort event scanning
+	conv.StreamEventsFromString(string(data), lastNHook, doneHook) //nolint:errcheck
 
 	if !agentDone {
-		return false, "" // still running
+		return false, ""
 	}
-
-	// If the agent ended with an explicit failure marker (e.g. 429 rate limit
-	// causing a fatal exit), treat as not-completed so the scheduler can retry.
 	if agentFailed {
 		return false, ""
 	}
@@ -881,8 +955,7 @@ func checkAIServeRun(runID, taskID string) (bool, string) {
 	summary := strings.Join(*result, "\n")
 
 	// Kill the RPC subprocess so ai serve can exit and clean up
-	meta, err := run.ReadMeta(runID)
-	if err == nil && meta.PID > 0 {
+	if meta.PID > 0 {
 		if proc, err := os.FindProcess(meta.PID); err == nil {
 			proc.Signal(syscall.SIGTERM)
 		}
@@ -906,17 +979,27 @@ func checkGroupReview(ctx context.Context, cfg SchedulerConfig, state *scheduler
 			continue
 		}
 
-		// Check if all tasks in group are in review state
-		allReview := true
+				// Check if all tasks in group are in review or done state.
+		// Tasks marked done (e.g. manually approved) are considered reviewed.
+		reviewableCount := 0
 		for _, t := range tasks {
-			if t.Status != StatusReview {
-				allReview = false
+			if t.Status == StatusReview || t.Status == StatusDone {
+				reviewableCount++
+			}
+		}
+		if reviewableCount < len(tasks) {
+			continue
+		}
+		// Only spawn reviewer if there's at least one task still in review
+		needsReview := false
+		for _, t := range tasks {
+			if t.Status == StatusReview {
+				needsReview = true
 				break
 			}
 		}
-
-		if !allReview {
-			continue
+		if !needsReview {
+			continue // all done, nothing to review
 		}
 
 			// All in review — spawn reviewer (after transitions are committed)

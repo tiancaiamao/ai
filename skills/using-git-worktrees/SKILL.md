@@ -240,20 +240,20 @@ Ready to implement auth feature
 
 **Pairs with:**
 - **finishing-a-development-branch** - REQUIRED for cleanup after work complete
-- **ag** - Combine for persistent, observable task execution
+- **subagent** - Combine for persistent, observable task execution with ai serve
 
 ## Agent Worktrees
 
-Combine git worktrees with `ag` CLI for persistent, observable task execution in isolated environments.
+Combine git worktrees with `ai serve` + tmux for persistent, observable task execution in isolated environments.
 
 ### When to Use
 
 | Scenario | Approach | Why |
 |----------|----------|-----|
-| Long-running analysis | Worktree + ag spawn | Results persist in worktree after completion |
+| Long-running analysis | Worktree + ai serve | Results persist in worktree after completion |
 | Parallel feature work | Multiple worktrees | Isolated branches, no conflicts |
-| Code review before merge | Worktree + Explorer profile | Read-only review in isolated environment |
-| Experimental changes | Worktree + Builder profile | Safely iterate without affecting main branch |
+| Code review before merge | Worktree + review agent | Read-only review in isolated environment |
+| Experimental changes | Worktree + coder agent | Safely iterate without affecting main branch |
 
 ### Workflow
 
@@ -261,17 +261,20 @@ Combine git worktrees with `ag` CLI for persistent, observable task execution in
 # 1. Create worktree for the task
 git worktree add .worktrees/review-auth -b review/auth
 
-# 2. Use ag spawn with --cwd to set workspace
-ag spawn \
-  --id "review-auth" \
-  --cwd "/path/to/project/.worktrees/review-auth" \
-  --system @/path/to/reviewer.md \
-  --input "Review auth changes for security issues" \
-  --timeout 15m
+# 2. Spawn agent in worktree using ai serve + tmux
+tmux new-session -d -s "review-auth" \
+  "ai serve --system-prompt '@/path/to/reviewer.md' \
+   --input 'Review auth changes for security issues' \
+   --name 'review-auth' \
+   --timeout 15m"
 
-ag wait "review-auth" --timeout 900
-OUTPUT=$(ag output "review-auth")
-ag rm "review-auth"
+sleep 2
+AGENT_ID=$(tmux capture-pane -t "review-auth" -p | head -1 | tr -d '[:space:]')
+ai watch --id "$AGENT_ID" --follow --pretty
+
+# 3. Cleanup agent (results remain in worktree)
+ai kill --id "$AGENT_ID"
+tmux kill-session -t "review-auth" 2>/dev/null
 
 # 4. Results remain in worktree for inspection
 # Original worktree remains untouched
@@ -284,15 +287,18 @@ ag rm "review-auth"
 git worktree add .worktrees/review-feature-x -b review/feature-x
 
 # Run reviewer agent in worktree
-ag spawn \
-  --id "review-feature-x" \
-  --cwd "/path/to/project/.worktrees/review-feature-x" \
-  --system @/path/to/reviewer.md \
-  --input "Review changes against main: security, correctness, style" \
-  --timeout 15m
+tmux new-session -d -s "review-feature-x" \
+  "ai serve --system-prompt '@/path/to/reviewer.md' \
+   --input 'Review changes against main: security, correctness, style' \
+   --name 'review-feature-x' \
+   --timeout 15m"
 
-ag wait "review-feature-x" --timeout 900
-ag rm "review-feature-x"
+sleep 2
+AGENT_ID=$(tmux capture-pane -t "review-feature-x" -p | head -1 | tr -d '[:space:]')
+ai watch --id "$AGENT_ID" --follow --pretty
+
+ai kill --id "$AGENT_ID"
+tmux kill-session -t "review-feature-x" 2>/dev/null
 
 # Worktree stays available for:
 # - Manual inspection of changes
@@ -307,14 +313,23 @@ ag rm "review-feature-x"
 git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
 
-# Run builders in parallel using ag patterns/parallel.sh
-ag patterns/parallel.sh \
-  2 \
-  @/path/to/builder.md \
-  "Implement feature in current worktree" \
-  /tmp/parallel-results \
-  --cwd-auth="/path/to/project/.worktrees/feature-auth" \
-  --cwd-api="/path/to/project/.worktrees/feature-api"
+# Spawn agents in parallel (max 2 concurrent)
+tmux new-session -d -s "build-auth" \
+  "ai serve --system-prompt '@/path/to/builder.md' \
+   --input 'Implement auth feature in current worktree' \
+   --name 'build-auth' --timeout 15m"
+
+tmux new-session -d -s "build-api" \
+  "ai serve --system-prompt '@/path/to/builder.md' \
+   --input 'Implement API feature in current worktree' \
+   --name 'build-api' --timeout 15m"
+
+sleep 2
+ID_AUTH=$(tmux capture-pane -t "build-auth" -p | head -1 | tr -d '[:space:]')
+ID_API=$(tmux capture-pane -t "build-api" -p | head -1 | tr -d '[:space:]')
+
+ai watch --id "$ID_AUTH" --follow --pretty
+ai watch --id "$ID_API" --follow --pretty
 
 # Both worktrees have isolated changes
 # Merge independently when ready
@@ -326,11 +341,11 @@ ag patterns/parallel.sh \
 |----------------|----------------|
 | Results lost after completion | Results persist in worktree |
 | Hard to inspect intermediate state | Full git history available |
-| Difficult to debug failures | Can check ag status and investigate |
+| Difficult to debug failures | Can check worktree state and git diff |
 | Single-shot execution | Can spawn new agents and iterate |
 
 ### Cleanup
 
 After task completion, use the `finishing-a-development-branch` skill to clean up worktrees.
 
-**See also:** `ag` skill for agent orchestration details
+**See also:** `subagent` skill for ai serve/send/watch/kill pattern details
