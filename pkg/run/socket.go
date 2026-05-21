@@ -98,7 +98,9 @@ func (s *SocketServer) Wait() {
 	<-s.done
 }
 
-// acceptLoop accepts connections and dispatches them based on command type.
+// acceptLoop accepts connections and dispatches them concurrently.
+// Each connection is handled in its own goroutine so that a slow or
+// blocked handler does not prevent subsequent connections from being served.
 func (s *SocketServer) acceptLoop() {
 	defer close(s.done)
 
@@ -109,7 +111,7 @@ func (s *SocketServer) acceptLoop() {
 			return
 		}
 
-		s.handleConn(conn)
+		go s.handleConn(conn)
 	}
 }
 
