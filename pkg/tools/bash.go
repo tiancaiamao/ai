@@ -160,20 +160,33 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Setpgid: true,
 	}
 
-	// Setup pipes for stdout and stderr
-	stdout, err := cmd.StdoutPipe()
+	// Setup pipes for stdout and stderr using os.Pipe() instead of
+	// cmd.StdoutPipe()/StderrPipe() to avoid a race condition:
+	// cmd.Wait() closes pipes returned by StdoutPipe()/StderrPipe(),
+	// which can race with our streaming goroutines that are still reading
+	// from them, causing "file already closed" errors.
+	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	stderr, err := cmd.StderrPipe()
+	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
+		stdoutRead.Close()
+		stdoutWrite.Close()
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
+
+	cmd.Stdout = stdoutWrite
+	cmd.Stderr = stderrWrite
 
 	// Start the command
 	startTime := time.Now()
 	if err := cmd.Start(); err != nil {
+		stdoutRead.Close()
+		stdoutWrite.Close()
+		stderrRead.Close()
+		stderrWrite.Close()
 		msg := fmt.Sprintf("Failed to start command: %v", err)
 		if cmd.Dir != "" {
 			if _, statErr := os.Stat(cmd.Dir); statErr != nil {
@@ -187,6 +200,13 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 			},
 		}, nil
 	}
+
+	// Close write ends in the parent process. The child process has its own
+	// copies via fork/exec. Closing the parent's write ends ensures:
+	// 1. No fd leak in parent
+	// 2. When child exits, the write end is fully closed → our goroutines get EOF
+	stdoutWrite.Close()
+	stderrWrite.Close()
 
 	// Stream stdout/stderr concurrently to avoid pipe backpressure deadlocks
 	var output strings.Builder
@@ -215,14 +235,20 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	outputWG.Add(2)
-	go streamPipe(stdout)
-	go streamPipe(stderr)
+	go streamPipe(stdoutRead)
+	go streamPipe(stderrRead)
 
-	// Wait for command to finish
+	// Wait for command to finish. Since we use our own os.Pipe(),
+	// cmd.Wait() will NOT close our pipes — we control the lifecycle.
 	err = cmd.Wait()
 
-	// Wait for output streaming to complete
+	// Wait for output streaming to complete (goroutines get EOF after
+	// child's write ends are closed on process exit).
 	outputWG.Wait()
+
+	// Close read ends now that goroutines have finished.
+	stdoutRead.Close()
+	stderrRead.Close()
 
 	elapsed := time.Since(startTime)
 

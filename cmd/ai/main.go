@@ -147,6 +147,7 @@ Flags for 'serve':
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')
   --input <text>           Initial prompt to send after startup (serve only)
+  --input-file <path>      Read initial prompt from file (serve only)
   --name <text>            Human-readable name for the run (serve only)
 
 Flags for 'ls':
