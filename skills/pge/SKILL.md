@@ -78,7 +78,11 @@ ai serve --role orchestrator --name "my-orchestrator"
 ### Phase 1: Spec Alignment
 
 1. **Understand** — 和用户讨论需求
-2. **Write spec** — 写入 `.pge/spec.md`
+2. **Write spec** — 写入 `.pge/spec.md`（使用下方 Spec Template）
+3. **Spec Quality Gate** — 每个 acceptance criterion 必须通过 Spec Checklist（见下方）
+4. **Get user confirmation** — 展示 spec，等用户说 ok
+
+#### Spec Template
 
 ```markdown
 # Spec: <title>
@@ -87,8 +91,14 @@ ai serve --role orchestrator --name "my-orchestrator"
 <one sentence>
 
 ## Acceptance Criteria
-- [ ] <criterion 1 — must be specific and verifiable>
-- [ ] <criterion 2>
+
+### L1 — Structural (must pass before L2)
+- [ ] <criterion> — Verify: `<executable command>`
+- [ ] <criterion> — Verify: `<executable command>`
+
+### L2 — Behavioral (validates correctness, not just existence)
+- [ ] <criterion> — Verify: `<test command or manual check>`
+- [ ] <criterion> — Verify: `<test command or manual check>`
 
 ## Constraints
 - <technical constraints>
@@ -97,11 +107,35 @@ ai serve --role orchestrator --name "my-orchestrator"
 - <explicitly excluded>
 ```
 
-3. **Get user confirmation** — 展示 spec，等用户说 ok
+**L1 vs L2 distinction:**
+- **L1 (Structural)**: `go build ./...` passes, files exist, correct number of files, correct function signatures, imports resolve. Does NOT prove correctness.
+- **L2 (Behavioral)**: Unit tests pass, golden file matches, smoke test produces expected output, API returns expected status codes. Proves correctness.
+
+#### Spec Checklist (Quality Gate for Each Criterion)
+
+Before starting Phase 2, Orchestrator must verify **every** acceptance criterion passes this checklist:
+
+```
+For each criterion in spec.md:
+  □ Is it specific? (not "the system should work well")
+  □ Is it falsifiable? (there exists a scenario where it clearly fails)
+  □ Does it have an executable verification command?
+    - L1: e.g., `go build ./...`, `grep -r "func HandleLogin" pkg/`,
+            `test -f pkg/auth/jwt.go`
+    - L2: e.g., `go test ./pkg/auth/... -run TestJWTExpiry`,
+            `curl -s localhost:8080/api/login | jq .status`
+  □ Can a new agent (with no prior context) execute the verification?
+
+If ANY criterion fails the checklist → rewrite that criterion before proceeding.
+```
+
+**Rule: Unverifiable criterion =不合格 criterion.** If you cannot write a verification command, the criterion is too vague. Tighten it or split it into verifiable sub-criteria.
 
 ### Phase 2: Task Decomposition
 
 分析 spec，拆解成可执行的 task。写入 `.pge/tasks/NNN-<name>.md`。
+
+#### Task Template
 
 ```markdown
 # Task: <short description>
@@ -124,97 +158,153 @@ ai serve --role orchestrator --name "my-orchestrator"
 
 **Delegation Tips — 给 WHAT (outcome)，不给 HOW (实现)。但包含足够上下文让 Generator 独立工作。**
 
-✅ Good: `"Implement JWT auth for /api/login. Use User model in src/models/user.ts. Tokens in http-only cookies."`
-❌ Bad: `"Add auth. Look at how auth usually works."`
+✅ Good: `"Implement JWT auth middleware. The handler should validate the token from the Authorization header and set user context. See spec.md acceptance criteria L1.1 and L2.1."`
 
-### Phase 3: Generator-Evaluator Loop
+❌ Bad: `"Add some auth stuff"` — too vague
 
-对每个 task，执行 Generator → Evaluator 循环：
+#### Phase Validation Gate
 
-```
-┌─────────┐    output    ┌───────────┐
-│Generator│ ────────────►│ Evaluator │
-│(spawn)  │              │ (spawn)   │
-│         │◄── feedback ─│           │
-└─────────┘              └───────────┘
-     │                        │
-     │  if all ✅ ──────────► done → next task
-     │  if any ❌ ─────────► fix task → loop (max 3 rounds)
-     │
-     └── max 3 rounds ──► report to user
-```
+**At the end of each phase (or group of related tasks), the Orchestrator MUST:**
 
-**Generator spawn pattern:**
-```bash
-SESSION="gen-001"
-tmux new-session -d -s "$SESSION" \
-  "ai serve --role coder \
-   --system-prompt 'You are implementing task 001: Add authentication. Read .pge/spec.md and .pge/tasks/001-add-auth.md for context.' \
-   --input 'Implement the task. Write code. Commit when done.' \
-   --name 'gen-001-add-auth' \
-   --timeout 10m"
+1. Run all L1 verification commands for completed tasks
+2. If any L1 fails → create a **backfill task** to fix it before proceeding
+3. Run all relevant L2 verification commands (spawn Evaluator if needed)
+4. Record gate result in `progress.md`
 
-sleep 2
-GEN_ID=$(tmux capture-pane -t "$SESSION" -p | head -1 | tr -d '[:space:]')
-ai watch --id "$GEN_ID" --follow --pretty
-```
-
-**Evaluator spawn pattern:**
-```bash
-SESSION="eval-001"
-tmux new-session -d -s "$SESSION" \
-  "ai serve --role validator \
-   --input 'Generator 完成了 task 001 (Add authentication)。
-   请独立验证 .pge/spec.md 中以下验收标准是否被满足：
-   <列出相关标准>
-   对每条标准：✅ 通过 + 证据 / ❌ 不通过 + 具体原因 / ⚠️ 部分满足 + 缺什么
-   最后输出总结：X/Y 条完全通过。' \
-   --name 'eval-001-check-auth' \
-   --timeout 5m"
-
-sleep 2
-EVAL_ID=$(tmux capture-pane -t "$SESSION" -p | head -1 | tr -d '[:space:]')
-ai watch --id "$EVAL_ID" --follow --pretty
-```
-
-**Round convergence:**
-| Rounds | Meaning | Action |
-|--------|---------|--------|
-| 1 | Excellent | Proceed to next task |
-| 2-3 | Normal | Proceed to next task |
-| >3 | Warning | Re-examine spec clarity |
-| >5 | Problem | **Stop.** Report to user — spec likely needs revision |
-
-### Phase 4: Report
-
-- 更新 `.pge/spec.md` 所有 checkbox 为 `[x]`
-- 写最终报告到 `.pge/progress.md`
-- 向用户汇报
-
-## Context Management
-
-### State Handoff (NOT compaction)
-
-当 Generator 完成后，**不要**用 compaction 来压缩上下文给下一个 Generator。而是写结构化的 `state.md`：
+**Backfill Task Mechanism:**
+When a bug is discovered in a previously completed phase:
+- Create `.pge/tasks/NNN-fix-<name>.md` with `Dependencies: none` (urgency override)
+- Tag it as `type: backfill` in the task file
+- The backfill task MUST pass the same validation gate before the next phase continues
+- Backfill tasks take priority over new feature tasks
 
 ```markdown
-# State after Task 001
+# Task: Fix <bug description> (BACKFILL)
 
-## What was implemented
-<summary>
+## Type
+backfill
 
-## Files changed
-- src/auth/jwt.go — new file, JWT generation and validation
-- src/api/login.go — added auth middleware
+## Original Task
+<reference to the task that introduced the bug>
 
-## Key decisions
-- Token stored in http-only cookie (not localStorage)
+## Bug Description
+<what's wrong and how to reproduce>
 
-## Known issues
-- Token refresh not yet implemented (deferred to task 003)
+## Fix Verification
+<specific command to confirm the fix>
 
-## What's next
-- Task 002: Add role-based access control
+## Acceptance
+<must restore all previously passing L1/L2 criteria>
+```
+
+### Phase 3: Generate, Validate, Iterate
+
+For each task in the decomposition:
+
+1. **Spawn Generator** (via tmux) with the task file + spec.md + state.md
+2. **Poll Generator** — Every 60s, check:
+   - Has the Generator output `DONE: <file list>`?
+   - Do the listed files exist?
+   - Does `go build ./...` (or equivalent) pass?
+   - If yes to all → kill Generator, proceed to validation
+   - If Generator is still working → continue polling
+3. **Spawn Validator** (independent Evaluator agent) — **MANDATORY, not optional**
+4. **Interpret Validator feedback** — update progress.md with VALIDATED or issues
+5. **Loop if needed** — create fix tasks for any failed criteria (max 3 rounds per task)
+
+#### Validation Gate Per Task
+
+Each task must reach one of these terminal states in `progress.md`:
+
+| Status | Meaning | Can Commit? |
+|--------|---------|-------------|
+| `VALIDATED` | Evaluator confirmed all criteria pass | ✅ Yes |
+| `SELF-CHECKED` | Generator confirmed via build + DONE output, but Evaluator not yet run | ⚠️ Only if Evaluator is queued next |
+| `FAILED` | Build fails or Evaluator found issues | ❌ No |
+
+**Rule: No task may be committed in `FAILED` status.** If Generator times out but files exist and build passes, the task goes to `SELF-CHECKED` and a Validator MUST be spawned before moving to the next task.
+
+## Generator Rules & Completion Conditions
+
+### Mandatory Clauses for Every Generator Task
+
+When the Orchestrator spawns a Generator, the task instructions MUST include these clauses:
+
+```
+GENERATOR RULES (mandatory):
+
+1. READ BEFORE WRITE — Before using any external API, type, function, or package:
+   - Run: grep -r "func <name>" . or grep -r "type <name>" .
+   - If it doesn't exist, DO NOT use it. Find the real API or ask.
+   - If unsure about a package's API, read its source first.
+
+2. BUILD MUST PASS — After implementation:
+   - Run: go build ./... (or project-equivalent build command)
+   - If build fails → fix it immediately. Build failure = task not done.
+   - Do NOT output DONE until build passes.
+
+3. OUTPUT DONE MARKER — When genuinely complete:
+   - Output exactly: DONE: <comma-separated file list>
+   - Example: DONE: pkg/auth/jwt.go, pkg/middleware/auth.go
+   - If you cannot output DONE (build still failing), output:
+     BLOCKED: <reason>
+```
+
+### Orchestrator Polling Protocol
+
+After spawning a Generator, the Orchestrator polls every 60s:
+
+```
+Polling loop:
+1. Check Generator output for "DONE:" or "BLOCKED:"
+2. If DONE:
+   a. Verify listed files exist (ls <each file>)
+   b. Run build (go build ./...)
+   c. If both pass → kill Generator, mark task SELF-CHECKED
+   d. Spawn Validator → mark VALIDATED when passed
+3. If BLOCKED:
+   a. Read reason from Generator output
+   b. Kill Generator
+   c. If reason is API confusion → provide guidance, respawn
+   d. If reason is spec ambiguity → clarify spec, respawn
+4. If timeout (600s) reached:
+   a. Kill Generator
+   b. Check if any files were created
+   c. If files exist + build passes → mark SELF-CHECKED, spawn Validator
+   d. If no files or build fails → mark FAILED, report to user
+```
+
+### Test Policy
+
+- **Do NOT write tests-for-testing-sake** — no empty test scaffolding that proves nothing
+- **DO write behavioral verification tests** when they validate real correctness:
+  - Tests that catch real bugs (edge cases, error paths)
+  - Golden file tests that pin expected output
+  - Integration smoke tests that verify end-to-end flow
+- If the project already has test patterns, follow them
+- If L2 acceptance criteria require running `go test`, the Generator MUST write those tests
+
+## State Handoff
+
+After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
+
+```markdown
+# State
+
+## Completed Tasks
+- T001: <title> — VALIDATED
+  Files: <file list>
+  Key changes: <summary>
+
+## Key Decisions
+- <decision 1>
+- <decision 2>
+
+## Known Issues
+- <issue> (deferred to task NNN)
+
+## What's Next
+- T00N: <next task title>
 ```
 
 下一个 Generator 从 `state.md` + `spec.md` + 当前 task description 开始，获得干净的完整上下文。
@@ -225,12 +315,13 @@ ai watch --id "$EVAL_ID" --follow --pretty
 
 ```
 .pge/
-  spec.md              # Requirements + acceptance criteria
+  spec.md              # Requirements + acceptance criteria (L1 + L2)
   state.md             # Current state — updated after each generator
   tasks/
     001-add-auth.md
     002-add-rbac.md
-  progress.md          # Append-only execution log
+    003-fix-token-refresh.md   # backfill task example
+  progress.md          # Append-only execution log with VALIDATED/SELF-CHECKED status
 ```
 
 ## Progress Tracking
@@ -240,30 +331,47 @@ ai watch --id "$EVAL_ID" --follow --pretty
 ```markdown
 ## 14:30 — Started
 - Spec: implement dark mode
-- Acceptance criteria: 5
+- Acceptance criteria: L1: 3, L2: 4
 
 ## 14:35 — Task 001: Create theme tokens
 - Generator: a1b2c3 (tmux: gen-001)
-- Status: done
-- Files: src/theme.ts, src/tokens.css
+- Status: DONE: src/theme.ts, src/tokens.css
+- Build: PASS
+- Validator: spawned (c4d5e6, tmux: val-001)
+- Validation: VALIDATED — all L1 + L2 criteria pass
 
-## 14:42 — Evaluation round 1
-- Criteria passed: 3/5
-- Failed: toggle persistence, system preference detection
-- Fix tasks created: 003, 004
+## 14:42 — Task 002: Toggle component
+- Generator: e7f8g9 (tmux: gen-002)
+- Status: DONE: src/components/Toggle.tsx
+- Build: PASS
+- Validator: spawned (h0i1j2, tmux: val-002)
+- Validation: FAILED — L2.2 (toggle persistence) broken
+- Fix task created: 003-fix-toggle-persist.md
 
-## 15:00 — All criteria passed
+## 14:50 — Task 003 (BACKFILL): Fix toggle persistence
+- Generator: k3l4m5 (tmux: gen-003)
+- Status: DONE: src/components/Toggle.tsx, src/hooks/usePersist.ts
+- Build: PASS
+- Validator: spawned (n6o7p8, tmux: val-003)
+- Validation: VALIDATED — L2.2 restored
+
+## 15:00 — All criteria VALIDATED
 ```
+
+**Every task entry MUST include a Status line with one of: VALIDATED, SELF-CHECKED, FAILED.**
 
 ## Error Handling
 
 | Scenario | Detection | Action |
 |----------|-----------|--------|
-| Agent timeout | `timeout` exits 124 | `ai kill` → retry once with simpler task |
+| Generator timeout | `timeout` exits 124 or 600s reached | Kill → check files + build → if pass: SELF-CHECKED + spawn Validator; if fail: FAILED |
+| Generator outputs BLOCKED | Parse output for "BLOCKED:" | Kill → address reason → respawn once |
 | Agent crash | `ai ls` shows `failed` or `killed` | Check rpc.log → retry with modified instructions |
 | Agent off-track | Parse output, see wrong direction | `/steer` correction, or kill + respawn |
 | Same task fails 2× | Two consecutive failures | **Stop. Report to user.** |
-| Evaluator says not done | Criteria not all ✅ | Create specific fix tasks, loop |
+| Evaluator says not done | Criteria not all ✅ | Create specific fix tasks (backfill if in later phase) |
+| Validator not spawned | Task marked SELF-CHECKED but no Validator | **MUST spawn Validator before committing** |
+| Build fails after Generator | `go build` returns non-zero | Mark FAILED → fix task or respawn Generator |
 | tmux session died | `tmux has-session` fails | Check `ai ls` for status, may need cleanup |
 
 ## Key Constraints
@@ -273,9 +381,13 @@ ai watch --id "$EVAL_ID" --follow --pretty
 3. **Validate against spec, not against tasks** — tasks are means, spec is the end
 4. **Generator and Evaluator are separate agents** — self-evaluation is unreliable
 5. **Stop on repeated failure** — don't burn tokens retrying forever
-6. **Commit after each successful generator run** — incremental progress
+6. **Commit after each VALIDATED task** — not SELF-CHECKED, only VALIDATED
 7. **Always use tmux to spawn** — `ai serve` is blocking, direct call freezes orchestrator
 8. **Structured handoff between generators** — state.md, not compaction
+9. **Every acceptance criterion must have an executable verification command** — unverifiable = invalid
+10. **Phase validation gates are mandatory** — no building on broken foundations
+11. **Generator MUST read existing API before using it** — no hallucinated function calls
+12. **Build MUST pass before DONE** — build failure = task incomplete
 
 ## ⛔ Mandatory Self-Check
 
@@ -286,7 +398,6 @@ ai watch --id "$EVAL_ID" --follow --pretty
 | No user confirmation | Executing without user approval | Show spec, wait for ok |
 | Generator task too vague | Task description < 2 sentences | Add more context |
 | Skipped evaluation | Task done but criteria not checked | Spawn independent Evaluator |
-| Generator wrote tests | Output includes `*_test.go` files | Kill, strip tests, spawn Evaluator separately |
 | Self-evaluation | Generator reviews its own code | Must spawn separate Evaluator agent |
 | Silent failure | Generator failed but didn't report | Always check exit status |
 | No state.md update | Generator completed but state.md not updated | Write state.md before spawning next agent |
@@ -294,6 +405,11 @@ ai watch --id "$EVAL_ID" --follow --pretty
 | Task too large | Estimated >500 lines | Split into smaller tasks |
 | Task too small | Estimated <80 lines | Merge with adjacent task |
 | >5 eval rounds | Same task keeps failing validation | Stop. Report to user — spec needs revision |
+| Criterion lacks verification command | Acceptance criterion has no executable verify step | Rewrite criterion or add verify command |
+| Committing SELF-CHECKED task | Attempting to commit without VALIDATED status | Spawn Validator first |
+| Generator used hallucinated API | `grep` shows function doesn't exist | Kill Generator, provide correct API info |
+| No phase validation gate | Completed phase without L1/L2 check | Run validation gate before next phase |
+| Generator output has no DONE marker | Generator completed without DONE/BLOCKED output | Check output manually, add to error handling |
 
 ## Difference from Old Plan/Implement Workflow
 
@@ -306,6 +422,9 @@ ai watch --id "$EVAL_ID" --follow --pretty
 | Context management | Compaction | Structured state.md handoff |
 | Human involvement | Setup only | Spec approval + error escalation |
 | Knowledge passing | Agent reads tasks.md | Generator reads spec.md + state.md + task |
+| Spec quality | Best-effort | Mandatory Spec Checklist with verification commands |
+| Acceptance levels | Single level | L1 (structural) + L2 (behavioral) |
+| Phase gates | None | Validation gate between phases, backfill tasks |
 
 ## Reference Prompts
 
