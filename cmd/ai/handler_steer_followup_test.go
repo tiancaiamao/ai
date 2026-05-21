@@ -23,14 +23,10 @@ func newTestApp(t *testing.T) *rpcApp {
 	})
 
 	return &rpcApp{
-		ag:                    ag,
-		steeringMode:           "all",
-		followUpMode:           "all",
-		expandSkillCommands:     func(text string) string { return text },
-		expandSkillCommandsAsMessages: func(text string) (string, []agentctx.AgentMessage) {
-			return text, nil
-		},
-		generateToolCallID:    func() string { return "test_call_id" },
+		ag:                ag,
+		steeringMode:      "all",
+		followUpMode:      "all",
+		expandSkillCommands: func(text string) string { return text },
 		compactBeforeRequest: func(trigger string) {},
 	}
 }
