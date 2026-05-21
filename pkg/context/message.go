@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -135,6 +136,18 @@ func NewToolResultMessage(toolCallID, toolName string, content []ContentBlock, i
 		ToolName:   toolName,
 		IsError:    isError,
 		Metadata:   &MessageMetadata{Kind: "tool_result"},
+	}
+}
+
+// NewCompactionSummaryMessage creates a new compaction summary message.
+// This message type is distinct from regular user messages to prevent
+// re-compaction of previous summaries.
+func NewCompactionSummaryMessage(summary string) AgentMessage {
+	return AgentMessage{
+		Role:      "user",
+		Content:   []ContentBlock{TextContent{Type: "text", Text: fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)}},
+		Timestamp: time.Now().UnixMilli(),
+		Metadata:  &MessageMetadata{Kind: "compactionSummary"},
 	}
 }
 
