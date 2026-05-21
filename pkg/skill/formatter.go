@@ -120,11 +120,6 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 	return strings.Join(lines, "\n")
 }
 
-// EscapeXML escapes special XML characters.
-func EscapeXML(s string) string {
-	return escapeXML(s)
-}
-
 // escapeXML escapes special XML characters.
 func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")

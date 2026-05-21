@@ -115,10 +115,8 @@ type rpcApp struct {
 	createBaseContext               func() *agentctx.AgentContext
 	setAgentContext                 func(ctx *agentctx.AgentContext)
 	expandSkillCommands             func(text string) string
-	expandSkillCommandsAsMessages   func(text string) (userMsg string, injectedMsgs []agentctx.AgentMessage)
 	compactBeforeRequest            func(trigger string)
 	updateCheckpointManager         func() error
-	generateToolCallID             func() string
 }
 
 // parseJSONArgs attempts to unmarshal args as JSON into target.
@@ -299,91 +297,6 @@ func (app *rpcApp) initHelpers() {
 			}
 		}
 		return expanded
-	}
-
-	// expandSkillCommandsAsMessages converts /skill:xxx to ToolCall + ToolResult messages.
-	// Returns (userMessage, injectedMessages) where:
-	// - userMessage: original text (e.g., "/skill:pge" or unchanged if not a skill command)
-	// - injectedMessages: [AssistantMessage(ToolCall), ToolResultMessage] if skill command, nil otherwise
-	app.expandSkillCommandsAsMessages = func(text string) (string, []agentctx.AgentMessage) {
-		if !skill.IsSkillCommand(text) {
-			return text, nil
-		}
-
-		skillName := skill.ExtractSkillName(text)
-		app.skillStats.RecordUsage(skillName)
-		if err := app.skillStats.Save(); err != nil {
-			slog.Error("Failed to save skill stats", "skill", skillName, "error", err)
-		}
-
-		// Find the skill
-		var foundSkill *skill.Skill
-		for i := range app.skillResult.Skills {
-			if app.skillResult.Skills[i].Name == skillName {
-				foundSkill = &app.skillResult.Skills[i]
-				break
-			}
-		}
-
-		if foundSkill == nil {
-			// Skill not found, return original text (fallback behavior)
-			return text, nil
-		}
-
-		// Generate unique tool call ID
-		toolCallID := app.generateToolCallID()
-
-		// Create assistant message with tool call
-		asstMsg := agentctx.NewAssistantMessage()
-		asstMsg.Content = []agentctx.ContentBlock{
-			agentctx.ToolCallContent{
-				ID:   toolCallID,
-				Type:  "toolCall",
-				Name:  "load_skill",
-				Arguments: map[string]any{
-					"name": skillName,
-				},
-			},
-		}
-
-		// Build skill content in XML format (same as ExpandCommand)
-		skillBlock := fmt.Sprintf(`<skill name="%s" location="%s">
-References are relative to %s.
-
-%s
-</skill>`,
-			skill.EscapeXML(foundSkill.Name),
-			skill.EscapeXML(foundSkill.FilePath),
-			skill.EscapeXML(foundSkill.BaseDir),
-			foundSkill.Content,
-		)
-
-		// Create tool result message with skill content
-		toolResultMsg := agentctx.NewToolResultMessage(
-			toolCallID,
-			"load_skill",
-			[]agentctx.ContentBlock{
-				agentctx.TextContent{
-					Type: "text",
-					Text: skillBlock,
-				},
-			},
-			false, // isError
-		)
-
-		slog.Info("Converted skill invocation to tool call pattern",
-			"original", text,
-			"skill", skillName,
-			"tool_call_id", toolCallID,
-			"chars", len(skillBlock))
-
-		return text, []agentctx.AgentMessage{asstMsg, toolResultMsg}
-	}
-
-	app.generateToolCallID = func() string {
-		// Generate simple unique ID for tool calls
-		// Using timestamp + random number format
-		return fmt.Sprintf("call_skill_%d", time.Now().UnixNano())
 	}
 
 	app.compactBeforeRequest = func(trigger string) {
@@ -689,19 +602,8 @@ func (app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error) {
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
 	if skill.IsSkillCommand(message) {
-		userMsg, injectedMsgs := app.expandSkillCommandsAsMessages(message)
-
-		if len(injectedMsgs) > 0 {
-			slog.Info("Injecting skill tool call messages",
-				"original", message,
-				"injected_count", len(injectedMsgs))
-
-			// Inject ToolCall + ToolResult messages into agent context
-			agentCtx := app.ag.GetContext()
-			for _, msg := range injectedMsgs {
-				agentCtx.AddMessage(msg)
-			}
-		}
+		expandedMessage := app.expandSkillCommands(message)
+		slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
 
 		app.stateMu.Lock()
 		streaming := app.isStreaming
@@ -711,12 +613,12 @@ func (app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error) {
 			app.stateMu.Lock()
 			app.pendingSteer = true
 			app.stateMu.Unlock()
-			app.ag.Steer(userMsg)
+			app.ag.Steer(expandedMessage)
 			return nil, nil
 		}
 
 		app.compactBeforeRequest("pre_request_prompt")
-		return nil, app.ag.Prompt(userMsg)
+		return nil, app.ag.Prompt(expandedMessage)
 	}
 
 	// Intercept slash commands
@@ -789,21 +691,9 @@ func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
 		return nil, fmt.Errorf("empty steer message")
 	}
 
-	userMsg, injectedMsgs := app.expandSkillCommandsAsMessages(message)
+	expandedMessage := app.expandSkillCommands(message)
 	if skill.IsSkillCommand(message) {
 		slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
-	}
-
-	if len(injectedMsgs) > 0 {
-		slog.Info("Injecting skill tool call messages in steer",
-			"original", message,
-			"injected_count", len(injectedMsgs))
-
-		// Inject ToolCall + ToolResult messages into agent context
-		agentCtx := app.ag.GetContext()
-		for _, msg := range injectedMsgs {
-			agentCtx.AddMessage(msg)
-		}
 	}
 
 	app.stateMu.Lock()
@@ -820,7 +710,7 @@ func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
 	app.stateMu.Lock()
 	app.pendingSteer = true
 	app.stateMu.Unlock()
-	app.ag.Steer(userMsg)
+	app.ag.Steer(expandedMessage)
 	return nil, nil
 }
 
@@ -842,21 +732,9 @@ func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
 		return nil, fmt.Errorf("empty follow-up message")
 	}
 
-	userMsg, injectedMsgs := app.expandSkillCommandsAsMessages(message)
+	expandedMessage := app.expandSkillCommands(message)
 	if skill.IsSkillCommand(message) {
 		slog.Info("Expanded skill command in follow_up", "original", message, "skill", skill.ExtractSkillName(message))
-	}
-
-	if len(injectedMsgs) > 0 {
-		slog.Info("Injecting skill tool call messages in follow_up",
-			"original", message,
-			"injected_count", len(injectedMsgs))
-
-		// Inject ToolCall + ToolResult messages into agent context
-		agentCtx := app.ag.GetContext()
-		for _, msg := range injectedMsgs {
-			agentCtx.AddMessage(msg)
-		}
 	}
 
 	app.stateMu.Lock()
@@ -865,7 +743,7 @@ func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
 	if mode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
 		return nil, fmt.Errorf("follow-up queue already has a pending message")
 	}
-	return nil, app.ag.FollowUp(userMsg)
+	return nil, app.ag.FollowUp(expandedMessage)
 }
 
 
