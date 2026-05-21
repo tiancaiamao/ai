@@ -834,6 +834,11 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 			}
 
 			if hasOldToolCalls {
+				if len(filteredContent) == 0 {
+					// Empty shell! Hide the entire assistant message
+					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
+					continue
+				}
 				// Create a new message with filtered content
 				filteredMsg := msg
 				filteredMsg.Content = filteredContent
@@ -938,6 +943,11 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 			}
 
 			if hasOldToolCalls {
+				if len(filteredContent) == 0 {
+					// Empty shell! Hide the entire assistant message
+					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
+					continue
+				}
 				// Create a new message with filtered content
 				filteredMsg := msg
 				filteredMsg.Content = filteredContent
