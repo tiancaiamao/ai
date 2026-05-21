@@ -67,11 +67,11 @@ func runSubcommand(binPath string) {
 		binPath = "/proc/self/exe"
 	}
 
-			cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
+	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
 
-		// Redirect subprocess stderr to log file (not terminal — TUI owns the terminal).
+	// Redirect subprocess stderr to log file (not terminal — TUI owns the terminal).
 	logPath := filepath.Join(runDir, "rpc.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -195,27 +195,19 @@ func runSubcommand(binPath string) {
 // Use "ai serve &" or "nohup ai serve &" for background operation.
 func serveSubcommand(binPath string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	idFlag := fs.String("id", "", "Run ID (required, must be provided by caller)")
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
-	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator)")
+	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
 	fs.Parse(os.Args[1:])
 
-	// Require --id to be provided by caller.
-	if *idFlag == "" {
-		fmt.Fprintf(os.Stderr, "error: --id is required for 'ai serve'\n")
-		os.Exit(1)
-	}
-
-	// Use the provided ID instead of generating one.
-	id := *idFlag
-
+	// Generate run ID and create directory.
+	id := run.GenerateID()
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to get home directory: %v\n", err)
@@ -228,7 +220,7 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-	// Resolve system prompt: --system-prompt overrides --role.
+		// Resolve system prompt: --system-prompt overrides --role.
 	sysPrompt := *systemPromptFlag
 	if sysPrompt == "" && *roleFlag != "coder" {
 		tmpl, err := prompt.TemplateForRole(*roleFlag)
@@ -239,22 +231,6 @@ func serveSubcommand(binPath string) {
 		sysPrompt = tmpl
 	}
 
-	// Daemonize: exec self in background with special environment variable.
-	// The parent process (the original "ai serve" caller) will exit here,
-	// while the child process continues running in the background.
-	// We daemonize BEFORE starting the RPC subprocess, so the daemon process
-	// is the parent of the RPC subprocess.
-	if shouldDaemonize() {
-		if err := daemonize(binPath, os.Args); err != nil {
-			fmt.Fprintf(os.Stderr, "error: failed to daemonize: %v\n", err)
-			os.Exit(1)
-		}
-		// Parent process exits here — caller returns immediately.
-		os.Exit(0)
-	}
-
-	// If we reach here, we're in the daemon process (already daemonized).
-
 	// Build RPC flags to forward.
 	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
 
@@ -262,11 +238,11 @@ func serveSubcommand(binPath string) {
 		binPath = "/proc/self/exe"
 	}
 
-			cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
+	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
 
-		// Detach from terminal: new process group so signals don't propagate.
+	// Detach from terminal: new process group so signals don't propagate.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Redirect stderr to log file.
@@ -344,7 +320,7 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-					// Send initial input if provided.
+		// Send initial input if provided.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
@@ -354,13 +330,16 @@ func serveSubcommand(binPath string) {
 			os.Exit(1)
 		}
 		inputText = string(data)
-	}
+		}
 
 	if inputText != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: failed to send initial input: %v\n", err)
 		}
 	}
+
+	// Print run ID to stdout — caller can capture this.
+	fmt.Println(id)
 
 	// Wait for subprocess to exit.
 	// Note: we do NOT close stdin on agent_end — ai serve should remain alive
@@ -383,67 +362,9 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-			meta.Status = status
+	meta.Status = status
 	meta.FinishedAt = time.Now().Unix()
 	run.SaveRunMeta(meta, metaPath)
-
-		// Cleanup socket and exit.
-	socketServer.Stop()
-	os.Remove(sockPath)
-}
-
-// shouldDaemonize checks if we should daemonize (i.e., this is the first invocation).
-// We check for a special environment variable that the daemonized process sets.
-func shouldDaemonize() bool {
-	return os.Getenv("_AI_DAEMONIZED") == ""
-}
-
-// daemonize spawns a child process with the same arguments and exits the current process.
-// The child process will have _AI_DAEMONIZED=1 in its environment.
-func daemonize(binPath string, fullArgs []string) error {
-	// Prepare environment with the daemon marker
-	env := append(os.Environ(), "_AI_DAEMONIZED=1")
-
-	// Spawn the daemon process with the FULL arguments (including subcommand)
-	cmd := exec.Command(binPath, fullArgs...)
-	cmd.Env = env
-	cmd.Dir, _ = os.Getwd()
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	// Keep stderr for debugging
-	cmd.Stderr = os.Stderr
-
-	// Detach from terminal: new process group
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start daemon process: %w", err)
-	}
-
-	// Daemon process is now running in background
-	// We detach from it by not calling cmd.Wait()
-	return nil
-}
-
-// redirectStdStreams redirects stdin/stdout/stderr to /dev/null
-func redirectStdStreams() error {
-	devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer devNull.Close()
-	
-	if err := syscall.Dup2(int(devNull.Fd()), 0); err != nil {
-		return err
-	}
-	if err := syscall.Dup2(int(devNull.Fd()), 1); err != nil {
-		return err
-	}
-	if err := syscall.Dup2(int(devNull.Fd()), 2); err != nil {
-		return err
-	}
-	
-	return nil
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.

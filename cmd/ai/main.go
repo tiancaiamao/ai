@@ -141,13 +141,13 @@ Flags for 'run':
   --input <text>           Initial prompt to send after startup
 
 Flags for 'serve':
-  --id <run-id>           Run ID (required, must be provided by caller)
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')
   --input <text>           Initial prompt to send after startup (serve only)
+  --input-file <path>      Read initial prompt from file (serve only)
   --name <text>            Human-readable name for the run (serve only)
 
 Flags for 'ls':

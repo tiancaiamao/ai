@@ -22,32 +22,36 @@ LLM 提供商限流：并发稍高即触发 API rate limit，导致子 agent 卡
 
 ## Core Pattern: Spawn → Watch → Cleanup
 
-`ai serve` 是**后台守护进程**，启动后立即返回，进程在后台持续运行。
+`ai serve` 是**阻塞命令**。直接调用会卡死主 agent。必须用 tmux 后台运行。
 
 ### One-Shot Pattern（最常用）
 
 ```bash
-RUN_ID="my-task-$(date +%Y%m%d_%H%M%S)_$$"
+SESSION="my-agent"
+RUN_ID=""
 
-# 1. Spawn: 启动后台守护进程（指定 ID）
-ai serve --id "$RUN_ID" \
-  --system-prompt 'You are a coding assistant.' \
-  --input 'Fix the bug in auth.go' \
-  --name 'fix-auth'
+# 1. Spawn: tmux 后台启动（不需要 --timeout）
+tmux new-session -d -s "$SESSION" \
+  "ai serve --system-prompt 'You are a coding assistant.' \
+   --input 'Fix the bug in auth.go' \
+   --name 'fix-auth'"
 
-# 进程在后台运行，调用者立即返回
+# 2. Capture RUN_ID
+sleep 2
+RUN_ID=$(tmux capture-pane -t "$SESSION" -p | head -1 | tr -d '[:space:]')
 
-# 2. Watch: 连接到守护进程
+# 3. Watch: 默认在 agent_end 时退出
 ai watch --id "$RUN_ID" --follow --pretty
 
-# 3. Cleanup
-ai kill --id "$RUN_ID"
+# 4. Cleanup（watch 返回后子 agent 进程仍在，需 kill）
+ai kill --id "$RUN_ID" 2>/dev/null
+tmux kill-session -t "$SESSION" 2>/dev/null
 ```
 
 ### Watch Timeout（等不了就放弃）
 
 ```bash
-# 最多等 20 分钟
+# 最多等 20 分钟，超时 watch 退出，子 agent 不受影响
 ai watch --id "$RUN_ID" --follow --pretty --timeout 20m
 
 # 等到天荒地老（直到 kill 或进程崩溃）
@@ -64,48 +68,30 @@ ai watch --id "$RUN_ID" --follow --pretty --timeout 0
 
 ### Multi-Turn Pattern（send + watch 交替）
 
-需要多轮交互时，保持守护进程运行，多次 send：
+需要多轮交互时，用 `--timeout 0` 让 watch 跨越多个 agent_end：
 
 ```bash
-RUN_ID="worker-$(date +%Y%m%d_%H%M%S)_$$"
-
-# 启动守护进程
-ai serve --id "$RUN_ID" \
-  --system-prompt 'You are a coder.'
+tmux new-session -d -s "worker" \
+  "ai serve --system-prompt 'You are a coder.'"
+sleep 2
+RUN_ID=$(tmux capture-pane -t "worker" -p | head -1 | tr -d '[:space:]')
 
 # 第一轮
 ai send --id "$RUN_ID" "Read auth.go and identify the bug"
-ai watch --id "$RUN_ID" --follow --pretty
+ai watch --id "$RUN_ID" --follow --pretty    # 默认行为，agent_end 时退出
 
 # 第二轮
 ai send --id "$RUN_ID" "Now fix it and write tests"
-ai watch --id "$RUN_ID" --follow --pretty
+ai watch --id "$RUN_ID" --follow --pretty    # agent_end 时退出
+
+# 或者：发完所有指令后，一次 watch 等全部完成
+ai send --id "$RUN_ID" "Fix bug A"
+ai send --id "$RUN_ID" "Also fix bug B"
+ai watch --id "$RUN_ID" --follow --pretty --timeout 0   # 跨越多个 agent_end
 
 # 收工
 ai kill --id "$RUN_ID"
-```
-
-### Parallel Pattern（最多 2 个子 agent）
-
-```bash
-ID_A="task-a-$(date +%Y%m%d_%H%M%S)_$$"
-ID_B="task-b-$(date +%Y%m%d_%H%M%S)_$$"
-
-ai serve --id "$ID_A" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the auth module. Write findings to: /tmp/explore-auth.md' \
-  --name 'explore-auth'
-
-ai serve --id "$ID_B" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the RPC layer. Write findings to: /tmp/explore-rpc.md' \
-  --name 'explore-rpc'
-
-ai watch --id "$ID_A" --follow --pretty
-ai watch --id "$ID_B" --follow --pretty
-
-ai kill --id "$ID_A" 2>/dev/null
-ai kill --id "$ID_B" 2>/dev/null
+tmux kill-session -t "worker"
 ```
 
 ### Poll（非阻塞快照）
@@ -117,11 +103,33 @@ ai kill --id "$ID_B" 2>/dev/null
 ai watch --id "$RUN_ID" --since 0
 ```
 
+### Parallel Pattern（最多 2 个子 agent）
+
+```bash
+tmux new-session -d -s "agent-a" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the auth module. Write findings to: /tmp/explore-auth.md' \
+   --name 'explore-auth'"
+tmux new-session -d -s "agent-b" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the RPC layer. Write findings to: /tmp/explore-rpc.md' \
+   --name 'explore-rpc'"
+
+sleep 2
+ID_A=$(tmux capture-pane -t "agent-a" -p | head -1 | tr -d '[:space:]')
+ID_B=$(tmux capture-pane -t "agent-b" -p | head -1 | tr -d '[:space:]')
+
+ai watch --id "$ID_A" --follow --pretty
+ai watch --id "$ID_B" --follow --pretty
+
+ai kill --id "$ID_A" 2>/dev/null; ai kill --id "$ID_B" 2>/dev/null
+tmux kill-session -t "agent-a" 2>/dev/null; tmux kill-session -t "agent-b" 2>/dev/null
+```
+
 ## ai serve Flags
 
 | Flag | Description |
 |------|-------------|
-| `--id <run-id>` | **Run ID（必须由调用者提供）** |
 | `--system-prompt <string\|@file>` | Custom system prompt. `@file` reads file content. |
 | `--input <string>` | Initial prompt to send after startup |
 | `--input-file <path>` | Read initial prompt from file (avoids ARG_MAX) |
@@ -130,8 +138,6 @@ ai watch --id "$RUN_ID" --since 0
 | `--timeout <duration>` | Total execution timeout (e.g., `10m`, `600s`) |
 | `--session <path>` | Resume from existing session file |
 | `--max-turns <int>` | Max conversation turns |
-
-**关键变化：** `ai serve` 不再自动生成 ID，调用者必须通过 `--id` 指定。启动后立即返回，进程在后台守护运行。
 
 ## ai watch --follow Flags
 
@@ -151,12 +157,12 @@ ai watch --id "$RUN_ID" --since 0
 
 **主 agent 应对：** 看到 `llm_retry (rate_limit)` → 等待即可，子 agent 在自动处理。最终失败则报告给用户。
 
-### 子 agent 完成但守护进程不退出
+### 子 agent 完成但进程不退出
 
-`ai serve` 是守护进程，不会自动退出。需要手动 kill：
+`ai serve` 是长驻进程。agent_end 只代表当前 prompt 处理完，不代表进程退出。
 
-- **默认 watch**：agent_end 时退出，拿到结果，守护进程继续运行
-- **必须 cleanup**：用 `ai kill` 清理守护进程
+- **默认 watch**：agent_end 时退出，拿到结果，不需要管进程
+- **必须 cleanup**：watch 返回后用 `ai kill` + `tmux kill-session` 清理进程
 
 ### 孤儿清理
 
@@ -184,11 +190,10 @@ ai kill --id <orphan>    # 清理
 
 | ❌ Wrong | ✅ Right |
 |----------|----------|
-| `ai serve --input "..."` | `ai serve --id "$RUN_ID" --input "..."` |
-| 等待 `ai serve` 返回 ID | 调用者自己生成 ID |
-| `ai serve ... &` | `ai serve --id "$RUN_ID" ...` (自动后台) |
-| watch 后不 kill | watch 返回后 `ai kill` |
-| tmux 启动 subagent | 直接 `ai serve --id "$RUN_ID"` |
+| `ai serve --input "..." && echo done` | `tmux new-session -d -s X "ai serve ..."` |
+| `ai serve ... \| head -1` | `tmux capture-pane -t SESSION -p \| head -1` |
+| watch 后不 kill | watch 返回后 `ai kill` + `tmux kill-session` |
+| tmux session 已存在 | `tmux kill-session -t NAME 2>/dev/null; tmux new-session -d -s NAME ...` |
 
 ## Relationship to Other Skills
 

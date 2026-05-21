@@ -91,9 +91,9 @@ func (b *EventBroadcaster) Push(event []byte) {
 	}
 }
 
-// Subscribe creates a new consumer. If fromSeq > 0 and the ring still has
-// entries from that sequence, the consumer's channel will be pre-loaded
-// with replayed events. fromSeq=0 means "subscribe live from now" with no replay.
+// Subscribe creates a new consumer. If the ring still has entries from
+// the requested sequence, the consumer's channel will be pre-loaded
+// with replayed events. fromSeq=0 means "replay everything from the beginning".
 func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -106,8 +106,10 @@ func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 	id := b.nextID
 	ch := make(chan []byte, ConsumerChanSize)
 
-	// Replay from ring if possible.
-	if fromSeq > 0 && fromSeq <= b.seq {
+		// Replay from ring if possible.
+	// fromSeq=0 means "replay everything from the beginning".
+	// fromSeq>0 means "I've seen up to fromSeq, give me everything after".
+	if fromSeq < b.seq {
 		// Check if the oldest entry in the ring is still available.
 		var oldest uint64
 		if b.seq >= RingSize {

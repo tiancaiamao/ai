@@ -9,10 +9,10 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 ## ⚠️ MANDATORY: 必须使用子 agent 执行
 
-**当用户触发 explore 技能时，你（调度 agent）必须通过 `ai serve --id` 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
+**当用户触发 explore 技能时，你（调度 agent）必须通过 `ai serve` + tmux 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
 
 原因：
-- 子 agent 作为独立守护进程运行，不阻塞主对话
+- 子 agent 作为独立进程运行，不阻塞主对话
 - 每个 agent 有独立的上下文窗口（context firewall），不污染主 agent 的对话历史
 - 可以并行派生多个子 agent 同时探索不同目标
 - explorer.md persona 指导子 agent 按标准格式输出
@@ -27,7 +27,7 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 **规则**：
 - 单次 spawn 上限：2 个子 agent
-- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → watch → cleanup → 再 spawn 下一批
+- 需要探索 3+ 个目标时，必须分批：先 spawn 2 个 → wait → cleanup → 再 spawn 下一批
 
 **你的角色（调度 agent）**：解析用户意图 → 构造 input → 派生子 agent → 等待 → 汇总结果
 **子 agent 角色（explorer）**：按 `explorer.md` persona 执行实际探索，写入文件
@@ -46,41 +46,43 @@ mkdir -p "$TARGET_PROJECT/explorer"
 
 ### Step 2: 派生子 agent
 
-`ai serve --id` 是**后台守护进程**，启动后立即返回，无需 tmux。
+⚠️ **`ai serve` 是阻塞命令，必须用 tmux 后台运行。**
 
 ```bash
 # 单目标探索
 TARGET_PROJECT="/path/to/project"
-EXPLORE_ID="explore-auth-$(date +%Y%m%d_%H%M%S)_$$"
 
-ai serve --id "$EXPLORE_ID" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the authentication module. Focus on: how auth works, middleware chain, token handling. Write findings to: /path/to/project/explorer/auth.md' \
-  --name 'explore-auth' \
-  --timeout 15m
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the authentication module. Focus on: how auth works, middleware chain, token handling. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' \
+   --timeout 15m"
 
-# 进程在后台运行，调用者立即返回
+sleep 2
+EXPLORE_ID=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
 ```
 
 ```bash
 # 多目标并行探索（最多 2 个 agent 同时）
 TARGET_PROJECT="/path/to/project"
-ID_AUTH="explore-auth-$(date +%Y%m%d_%H%M%S)_$$"
-ID_RPC="explore-rpc-$(date +%Y%m%d_%H%M%S)_$$"
 
 # Agent 1
-ai serve --id "$ID_AUTH" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the authentication module. Write findings to: '"$TARGET_PROJECT"'/explorer/auth.md' \
-  --name 'explore-auth' \
-  --timeout 15m
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' \
+   --timeout 15m"
 
 # Agent 2
-ai serve --id "$ID_RPC" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the RPC handling layer. Write findings to: '"$TARGET_PROJECT"'/explorer/rpc.md' \
-  --name 'explore-rpc' \
-  --timeout 15m
+tmux new-session -d -s "explore-rpc" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md' \
+   --name 'explore-rpc' \
+   --timeout 15m"
+
+sleep 2
+ID_AUTH=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
+ID_RPC=$(tmux capture-pane -t "explore-rpc" -p | head -1 | tr -d '[:space:]')
 ```
 
 ### Step 3: 等待并收集
@@ -100,6 +102,8 @@ ai watch --id "$ID_RPC" --follow --pretty
 ```bash
 ai kill --id "$ID_AUTH" 2>/dev/null
 ai kill --id "$ID_RPC" 2>/dev/null
+tmux kill-session -t "explore-auth" 2>/dev/null
+tmux kill-session -t "explore-rpc" 2>/dev/null
 ```
 
 ### Step 5: 汇总
@@ -145,46 +149,40 @@ Output an "Architecture Constraints" section with a checklist.
 TARGET_PROJECT="/path/to/large/repo"
 
 # === Batch 1: spawn up to 2 agents ===
-ID1="explore-auth-$(date +%Y%m%d_%H%M%S)_$$"
-ID2="explore-api-$(date +%Y%m%d_%H%M%S)_$$"
+tmux new-session -d -s "explore-auth" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
+   --name 'explore-auth' --timeout 15m"
 
-ai serve --id "$ID1" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the auth module under src/auth/. Write findings to: '"$TARGET_PROJECT"'/explorer/auth.md' \
-  --name 'explore-auth' --timeout 15m
+tmux new-session -d -s "explore-api" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md' \
+   --name 'explore-api' --timeout 15m"
 
-ai serve --id "$ID2" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the API layer under src/api/. Write findings to: '"$TARGET_PROJECT"'/explorer/api.md' \
-  --name 'explore-api' --timeout 15m
+sleep 2
+ID1=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
+ID2=$(tmux capture-pane -t "explore-api" -p | head -1 | tr -d '[:space:]')
 
 # Wait for batch 1
 ai watch --id "$ID1" --follow --pretty
 ai watch --id "$ID2" --follow --pretty
 
 # Cleanup batch 1
-ai kill --id "$ID1" 2>/dev/null
-ai kill --id "$ID2" 2>/dev/null
+ai kill --id "$ID1" 2>/dev/null; ai kill --id "$ID2" 2>/dev/null
+tmux kill-session -t "explore-auth" 2>/dev/null; tmux kill-session -t "explore-api" 2>/dev/null
 
 # === Batch 2: spawn next 2 agents ===
-ID3="explore-storage-$(date +%Y%m%d_%H%M%S)_$$"
-ID4="explore-infra-$(date +%Y%m%d_%H%M%S)_$$"
+tmux new-session -d -s "explore-storage" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md' \
+   --name 'explore-storage' --timeout 15m"
 
-ai serve --id "$ID3" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the storage module under src/storage/. Write findings to: '"$TARGET_PROJECT"'/explorer/storage.md' \
-  --name 'explore-storage' --timeout 15m
-
-ai serve --id "$ID4" \
-  --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-  --input 'Explore the infrastructure layer. Write findings to: '"$TARGET_PROJECT"'/explorer/infra.md' \
-  --name 'explore-infra' --timeout 15m
+tmux new-session -d -s "explore-infra" \
+  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
+   --input 'Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md' \
+   --name 'explore-infra' --timeout 15m"
 
 # Wait and cleanup batch 2...
-ai watch --id "$ID3" --follow --pretty
-ai watch --id "$ID4" --follow --pretty
-ai kill --id "$ID3" 2>/dev/null
-ai kill --id "$ID4" 2>/dev/null
 ```
 
 ## 输出约定
@@ -216,7 +214,7 @@ ai kill --id "$ID4" 2>/dev/null
 用户需求
     ↓
 ┌─────────────────────┐
-│  explore 技能        │  ← 你在这里：用 ai serve --id 派生子 agent
+│  explore 技能        │  ← 你在这里：用 ai serve 派生子 agent
 └──────────┬──────────┘
            ↓
 explorer/*.md

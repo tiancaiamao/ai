@@ -24,21 +24,6 @@ Instead of implementing complex background task management in your application:
 - Persistence - detach and reattach later
 - Isolation - each task in its own session
 
-## ⚠️ Important: Not for Subagents
-
-**tmux is NOT for managing subagents.** Use `ai serve --id <RUN_ID>` for subagent management (see `subagent` skill).
-
-tmux is for:
-- **Debugging** - Run program and debugger side-by-side
-- **TUI Testing** - Automate terminal application tests
-- **Development Layouts** - Multi-pane setups for coding
-- **Manual background jobs** - Long-running builds/tests you want to observe interactively
-
-Use `ai serve` when:
-- You need to delegate work to an AI agent
-- You want the agent to run as a daemon
-- You need to control it programmatically (watch/send/kill)
-
 ## Quick Reference
 
 ### Session Management
