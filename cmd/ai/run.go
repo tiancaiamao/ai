@@ -67,9 +67,12 @@ func runSubcommand(binPath string) {
 		binPath = "/proc/self/exe"
 	}
 
-	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
+			cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
+
+	// Propagate AI_RUN_ID to the RPC subprocess so tools know their own run identity.
+	cmd.Env = append(os.Environ(), "AI_RUN_ID="+id)
 
 	// Redirect subprocess stderr to log file (not terminal — TUI owns the terminal).
 	logPath := filepath.Join(runDir, "rpc.log")
@@ -238,9 +241,15 @@ func serveSubcommand(binPath string) {
 		binPath = "/proc/self/exe"
 	}
 
-	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
+			cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
+
+	// Propagate AI_RUN_ID and AI_PARENT_RUN_ID to the RPC subprocess.
+	// AI_RUN_ID: this agent's run ID, so tools and the agent loop know their own identity.
+	// AI_PARENT_RUN_ID: if this agent was spawned as a subagent, the parent's run ID
+	// is inherited from the environment. The RPC subprocess needs it for notification.
+	cmd.Env = append(os.Environ(), "AI_RUN_ID="+id)
 
 	// Detach from terminal: new process group so signals don't propagate.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -362,9 +371,51 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	meta.Status = status
+			meta.Status = status
 	meta.FinishedAt = time.Now().Unix()
 	run.SaveRunMeta(meta, metaPath)
+
+	// Notify parent agent if this was spawned as a subagent.
+	// The parent's run ID was passed via AI_PARENT_RUN_ID environment variable.
+	notifyParentAgent(id, status, *nameFlag)
+}
+
+// notifyParentAgent sends a completion notification to the parent agent
+// when this agent was spawned as a subagent. This is the core of the
+// background task notification mechanism: subagent's ai serve wrapper
+// automatically notifies the parent upon exit, requiring no polling.
+//
+// The notification is sent via `ai send` which delivers it as a user-role
+// message to the parent agent's conversation, triggering the parent to
+// process it in its next turn.
+func notifyParentAgent(runID, status, name string) {
+	parentID := os.Getenv("AI_PARENT_RUN_ID")
+	if parentID == "" {
+		return // Not a subagent, nothing to notify.
+	}
+
+	notification := formatAgentNotification(runID, status, name)
+
+	// Use ai send to deliver the notification to the parent agent's socket.
+	// Best-effort: if the parent is gone, we silently skip.
+	notifyCmd := exec.Command("ai", "send", "--id", parentID, notification)
+	if output, err := notifyCmd.CombinedOutput(); err != nil {
+		// Log but don't fail — the parent may have already exited.
+		fmt.Fprintf(os.Stderr, "warn: failed to notify parent agent %s: %v (%s)\n", parentID, err, string(output))
+	}
+}
+
+// formatAgentNotification builds the XML notification payload for subagent completion.
+// Separated from notifyParentAgent for testability.
+func formatAgentNotification(runID, status, name string) string {
+	displayName := name
+	if displayName == "" {
+		displayName = runID[:8]
+	}
+	return fmt.Sprintf(
+		"<agent:notification>\n<status>%s</status>\n<run_id>%s</run_id>\n<name>%s</name>\n</agent:notification>",
+		status, runID, displayName,
+	)
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
