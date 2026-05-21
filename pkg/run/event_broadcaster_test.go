@@ -78,19 +78,22 @@ func TestEventBroadcaster_ReplayFromRing(t *testing.T) {
 		b.Push(data)
 	}
 
-	// Subscribe with fromSeq=0 means live-only (no replay).
-	// Test that live events after subscription still work.
+	// Subscribe with fromSeq=0 means "replay everything from the beginning".
+	// Should replay all 10 existing events.
 	c := b.Subscribe(0)
 	defer b.Unsubscribe(c)
 
+	// Expect 10 replayed events + 5 live events = 15 total.
+	expectedReplay := 10
 	for i := 10; i < 15; i++ {
 		data, _ := json.Marshal(map[string]any{"type": "test", "seq": i})
 		b.Push(data)
 	}
 
+	total := expectedReplay + 5
 	count := 0
 	timeout := time.After(2 * time.Second)
-	for count < 5 {
+	for count < total {
 		select {
 		case <-c.Events():
 			count++

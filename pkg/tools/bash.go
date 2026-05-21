@@ -160,17 +160,17 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Setpgid: true,
 	}
 
-		// Setup pipes for stdout and stderr using os.Pipe() instead of
+	// Setup pipes for stdout and stderr using os.Pipe() instead of
 	// cmd.StdoutPipe()/StderrPipe() to avoid a race condition:
 	// cmd.Wait() closes pipes returned by StdoutPipe()/StderrPipe(),
 	// which can race with our streaming goroutines that are still reading
 	// from them, causing "file already closed" errors.
-		stdoutRead, stdoutWrite, err := os.Pipe()
+	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-		stderrRead, stderrWrite, err := os.Pipe()
+	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
 		stdoutRead.Close()
 		stdoutWrite.Close()
@@ -242,7 +242,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	// cmd.Wait() will NOT close our pipes — we control the lifecycle.
 	err = cmd.Wait()
 
-		// Wait for output streaming to complete (goroutines get EOF after
+	// Wait for output streaming to complete (goroutines get EOF after
 	// child's write ends are closed on process exit).
 	outputWG.Wait()
 

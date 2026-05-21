@@ -117,11 +117,20 @@ func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 		} else {
 			oldest = 1
 		}
+
+		replayAll := fromSeq == 0
 		if fromSeq < oldest {
 			// Client is too far behind — start from oldest available.
 			fromSeq = oldest
 		}
-		for seq := fromSeq + 1; seq <= b.seq; seq++ {
+
+		// fromSeq>0 means "I've seen up to fromSeq", so start from fromSeq+1.
+		// fromSeq=0 means "replay from beginning", so include the oldest entry.
+		startSeq := fromSeq + 1
+		if replayAll {
+			startSeq = oldest
+		}
+		for seq := startSeq; seq <= b.seq; seq++ {
 			idx := seq % RingSize
 			if b.ring[idx].seq == seq {
 				select {

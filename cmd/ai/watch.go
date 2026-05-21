@@ -204,9 +204,9 @@ func newWatchModelFromBroadcaster(b *run.EventBroadcaster, runID string) watchMo
 		m.appendInline(text)
 	})
 
-	// Subscribe to broadcaster for live events.
+	// Subscribe to broadcaster for live events only (no replay).
 	if b != nil {
-		m.broadcasterSub = b.Subscribe(0)
+		m.broadcasterSub = b.Subscribe(b.Seq())
 	}
 
 	return m
