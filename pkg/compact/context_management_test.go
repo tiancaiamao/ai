@@ -89,14 +89,8 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 	history := msgs[0].Content
 	state := msgs[1].Content
 
-	if !strings.Contains(history, "NON_TRUNCATABLE:NO_ID") {
+	if !strings.Contains(history, "NON_TRUNCATABLE") {
 		t.Fatalf("expected NON_TRUNCATABLE marker in history message, got: %s", history)
-	}
-	if !strings.Contains(state, "Estimated savings if truncating selectable outputs:") {
-		t.Fatalf("expected estimated savings in state message, got: %s", state)
-	}
-	if !strings.Contains(state, "force_truncate_recommended=true") {
-		t.Fatalf("expected force_truncate_recommended=true, got: %s", state)
 	}
 	if !strings.Contains(state, "Truncatable tool outputs (selectable): 3") {
 		t.Fatalf("expected selectable truncatable count in state message, got: %s", state)

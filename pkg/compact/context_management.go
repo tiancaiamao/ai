@@ -387,6 +387,21 @@ type truncationCandidate struct {
 	SavingsToken int
 }
 
+// messageMeta represents lightweight metadata for a message.
+// Used in Phase 1 of two-phase context management to avoid sending full content.
+type messageMeta struct {
+	Index          int    // Position in conversation
+	Role           string // "user", "assistant", "toolResult"
+	Size           int    // Character count
+	ToolName       string // For tool results
+	ToolCallID     string // For tool results (empty if not available)
+	IsTruncated    bool   // Already truncated
+	IsProtected    bool   // In protected region (recent messages)
+	IsSelectable   bool   // Can be targeted by truncate_messages
+	ContentPreview string // First 200 chars (or first + last for large messages)
+	ToolCalls      int    // Number of tool calls for assistant messages
+}
+
 func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart int) ([]truncationCandidate, int, int) {
 	if protectedStart > len(agentCtx.RecentMessages) {
 		protectedStart = len(agentCtx.RecentMessages)
@@ -443,6 +458,104 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 	return candidates, truncatedCount, nonSelectableCount
 }
 
+// collectMessageMetadata collects lightweight metadata for all agent-visible messages.
+// Used in Phase 1 of two-phase context management to avoid sending full content.
+func collectMessageMetadata(agentCtx *agentctx.AgentContext) []messageMeta {
+	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
+	if protectedStart < 0 {
+		protectedStart = 0
+	}
+
+	metadata := make([]messageMeta, 0)
+
+	for idx, msg := range agentCtx.RecentMessages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+
+		meta := messageMeta{
+			Index:        idx,
+			Role:         msg.Role,
+			Size:         len(msg.ExtractText()),
+			IsTruncated:  msg.Truncated,
+			IsProtected:  idx >= protectedStart,
+			IsSelectable: false, // Will be set for tool results below
+		}
+
+		// Extract role-specific metadata
+		switch msg.Role {
+		case "user":
+			text := msg.ExtractText()
+			meta.ContentPreview = truncatePreview(text, 100) // Reduced from 200
+		case "assistant":
+			toolCalls := msg.ExtractToolCalls()
+			meta.ToolCalls = len(toolCalls)
+			if len(toolCalls) > 0 {
+				// Show tool call names as preview
+				var preview strings.Builder
+				for i, tc := range toolCalls {
+					if i > 0 {
+						preview.WriteString(", ")
+					}
+					preview.WriteString(tc.Name)
+					if i >= 2 {
+						preview.WriteString(fmt.Sprintf(" (+%d more)", len(toolCalls)-i-1))
+						break
+					}
+				}
+				meta.ContentPreview = preview.String()
+			} else {
+				text := msg.ExtractText()
+				meta.ContentPreview = truncatePreview(text, 200)
+			}
+		case "toolResult":
+			meta.ToolName = msg.ToolName
+			meta.ToolCallID = strings.TrimSpace(msg.ToolCallID)
+			text := msg.ExtractText()
+
+			// Check if selectable (has tool_call_id, not truncated, not protected, and >=500 chars)
+			meta.IsSelectable = !meta.IsProtected &&
+				!meta.IsTruncated &&
+				meta.ToolCallID != "" &&
+				len(text) >= 500
+
+			// Generate preview (head + tail for large outputs)
+			meta.ContentPreview = buildContentPreview(text)
+		}
+
+		metadata = append(metadata, meta)
+	}
+
+	return metadata
+}
+
+// truncatePreview returns a truncated preview string with ellipsis if needed.
+func truncatePreview(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
+}
+
+// buildContentPreview builds a preview string for tool output content.
+// For large outputs, includes both head and tail to give context.
+func buildContentPreview(text string) string {
+	const maxPreview = 100 // Reduced from 200 to save tokens
+
+	if len(text) <= maxPreview {
+		return text
+	}
+
+	// For very large outputs, show head and tail
+	if len(text) > maxPreview*2 {
+		head := text[:maxPreview/2]
+		tail := text[len(text)-maxPreview/2:]
+		return head + "..." + tail
+	}
+
+	return text[:maxPreview] + "..."
+}
+
 // buildContextMgmtMessages builds the message sequence for context management.
 // Sends the FULL conversation with annotations so the LLM can judge
 // whether each tool output is still useful.
@@ -454,10 +567,8 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 
 	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
 	truncatableCount := len(candidates)
-	estimatedSavingsTokens := 0
 	largeMessageCount := 0
 	for _, candidate := range candidates {
-		estimatedSavingsTokens += candidate.SavingsToken
 		if candidate.Chars > mgmtLargeMessageThreshold {
 			largeMessageCount++
 		}
@@ -473,54 +584,41 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 		conv.WriteString("\n\n")
 	}
 
-	conv.WriteString("## Conversation History\n\n")
+	conv.WriteString("## Conversation Metadata\n\n")
 
-	for msgIdx, msg := range agentCtx.RecentMessages {
-		if !msg.IsAgentVisible() {
+	// Use metadata approach for token efficiency
+	metadata := collectMessageMetadata(agentCtx)
+	for _, meta := range metadata {
+		if meta.IsTruncated {
+			conv.WriteString(fmt.Sprintf("[%d] role=%s, size=%d, (already truncated), preview=%q\n",
+				meta.Index, meta.Role, meta.Size, meta.ContentPreview))
 			continue
 		}
-		if msg.Truncated {
-			conv.WriteString(fmt.Sprintf("[%s] (already truncated)\n%s\n\n", msg.Role, msg.ExtractText()))
-			continue
-		}
 
-		switch msg.Role {
+		switch meta.Role {
 		case "user":
-			conv.WriteString("[user]\n")
-			conv.WriteString(msg.ExtractText())
-			conv.WriteString("\n\n")
+			conv.WriteString(fmt.Sprintf("[%d] role=user, size=%d, preview=%q\n",
+				meta.Index, meta.Size, meta.ContentPreview))
+
 		case "assistant":
-			content := msg.ExtractText()
-			toolCalls := msg.ExtractToolCalls()
-			if len(toolCalls) > 0 {
-				conv.WriteString("[assistant] (tool calls)\n")
-				for _, tc := range toolCalls {
-					conv.WriteString(fmt.Sprintf("  -> %s(%s)\n", tc.Name, compactArgsStr(tc.Arguments)))
-				}
-			} else if content != "" {
-				conv.WriteString("[assistant]\n")
-				conv.WriteString(content)
-			}
-			conv.WriteString("\n\n")
-		case "toolResult":
-			content := msg.ExtractText()
-			if len(content) > mgmtPreviewMax {
-				head := content[:mgmtPreviewHead]
-				tail := content[len(content)-mgmtPreviewTail:]
-				omitted := len(content) - mgmtPreviewHead - mgmtPreviewTail
-				content = fmt.Sprintf("%s\n... (%d chars omitted) ...\n%s", head, omitted, tail)
-			}
-			if msgIdx >= protectedStart {
-				// Protected: show content but hide ID so LLM can't select it
-				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d PROTECTED]\n%s\n\n",
-					msg.ToolName, len(msg.ExtractText()), content))
-			} else if strings.TrimSpace(msg.ToolCallID) == "" {
-				// Older events may not carry tool_call_id and cannot be targeted by truncate_messages.
-				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
-					msg.ToolName, len(msg.ExtractText()), content))
+			if meta.ToolCalls > 0 {
+				conv.WriteString(fmt.Sprintf("[%d] role=assistant, size=%d, tool_calls=%d, preview=%q\n",
+					meta.Index, meta.Size, meta.ToolCalls, meta.ContentPreview))
 			} else {
-				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d] id=%s\n%s\n\n",
-					msg.ToolName, len(msg.ExtractText()), msg.ToolCallID, content))
+				conv.WriteString(fmt.Sprintf("[%d] role=assistant, size=%d, preview=%q\n",
+					meta.Index, meta.Size, meta.ContentPreview))
+			}
+
+		case "toolResult":
+			if meta.IsProtected {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, PROTECTED, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ContentPreview))
+			} else if !meta.IsSelectable {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, NON_TRUNCATABLE, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ContentPreview))
+			} else {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, id=%q, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ToolCallID, meta.ContentPreview))
 			}
 		}
 	}
@@ -535,21 +633,15 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 
 	// State message as the final user message
 	tokenPercent := c.estimateTokenPercent(agentCtx)
-	recommendedTruncate := estimatedSavingsTokens >= mgmtForceTruncateSavingsTokens
 	llmContextEmpty := agentCtx.LLMContext == ""
 
 	stateMsg := fmt.Sprintf(`<current_state>
 Truncatable tool outputs (selectable): %d (protected region: last %d messages)
-Estimated savings if truncating selectable outputs: ~%d tokens
 Large outputs (>2000 chars): %d
 Non-truncatable old tool outputs (missing ID or too small): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
-Total turns: %d
-Total truncations so far: %d
-Total compactions so far: %d
-Last compact turn: %d
 Current LLM Context exists: %t
 </current_state>
 
@@ -557,19 +649,18 @@ Current LLM Context exists: %t
 %s
 </latest_user_request>
 
-Review the conversation above and decide the best action.
+Review the conversation metadata above and decide the best action.
 
 Decision rules:
 1. If truncatable output count is 0, do NOT call truncate_messages.
-2. If estimated savings is >= %d tokens, you MUST call truncate_messages first, then update_llm_context.
-3. If large outputs (%d) exist, consider truncating them even if total savings is modest.
-4. ALWAYS prefer truncate over no_action when large old outputs are present.
-5. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
-6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task. ALWAYS include the latest user request verbatim in your LLM Context.
-7. ⚠️ CRITICAL: If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate. The agent cannot continue without a valid LLM Context.
-8. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
-9. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
-10. Your top priority is TASK CONTINUITY — ensure the agent can understand what it's working on after your action.
+2. If large outputs (%d) exist, consider truncating them even if total savings is modest.
+3. ALWAYS prefer truncate over no_action when large old outputs are present.
+4. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
+5. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task. ALWAYS include the latest user request verbatim in your LLM Context.
+6. ⚠️ CRITICAL: If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate. The agent cannot continue without a valid LLM Context.
+7. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
+8. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
+9. Your top priority is TASK CONTINUITY — ensure the agent can understand what it's working on after your action.
 
 CRITICAL REMINDER: The update_llm_context call is NOT optional when:
 - You are truncating any messages (MUST pair with update_llm_context)
@@ -585,42 +676,146 @@ If "Current LLM Context exists: false" above, you MUST call update_llm_context N
 Failure to initialize LLM Context when it's empty will cause task continuity failures.
 
 Messages marked [PROTECTED] are in the protected region and cannot be truncated.
-Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
+Messages marked [NON_TRUNCATABLE] cannot be truncated because they have no tool call ID or are <500 chars.
 Only tool outputs with an explicit "id=" field are selectable for truncate_messages.
 
 Available actions:
 - **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed).
 - **update_llm_context** - Rewrite the LLM Context to reflect current state
 - **compact** - Perform full context compaction by summarizing and removing old messages. Use this when many truncations have occurred and context is still under pressure, or a topic shift/task phase has been completed.
-- **no_action** - Context is healthy, no action needed. DO NOT use no_action if LLM Context is empty.
-
-Policy hint:
-- force_truncate_recommended=%t
-- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.
-- Consider using compact if total_compactions is 0 but total_truncations is high (>5) and tokens used is still above 40%%.`,
+- **no_action** - Context is healthy, no action needed. DO NOT use no_action if LLM Context is empty.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
-		estimatedSavingsTokens,
 		largeMessageCount,
 		nonSelectableCount,
 		truncatedCount,
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
-		agentCtx.AgentState.TotalTurns,
-		agentCtx.AgentState.TotalTruncations,
-		agentCtx.AgentState.TotalCompactions,
-		agentCtx.AgentState.LastCompactTurn,
 		!llmContextEmpty,
 		latestUserRequest,
-		mgmtForceTruncateSavingsTokens,
 		largeMessageCount,
-		recommendedTruncate,
 	)
 
 	messages = append(messages, llm.LLMMessage{
 		Role:    "user",
 		Content: stateMsg,
 	})
+
+	return messages
+}
+
+// buildPhase1Messages builds metadata-only messages for Phase 1 of two-phase context management.
+// This is a lightweight approach that sends only message metadata instead of full content.
+func (c *ContextManager) buildPhase1Messages(agentCtx *agentctx.AgentContext, metadata []messageMeta) []llm.LLMMessage {
+	metadata = collectMessageMetadata(agentCtx)
+
+	var conv strings.Builder
+	conv.WriteString("## Conversation Metadata\n\n")
+
+	for _, meta := range metadata {
+		if meta.IsTruncated {
+			conv.WriteString(fmt.Sprintf("[%d] role=%s, size=%d, (already truncated), preview=%q\n",
+				meta.Index, meta.Role, meta.Size, meta.ContentPreview))
+			continue
+		}
+
+		switch meta.Role {
+		case "user":
+			conv.WriteString(fmt.Sprintf("[%d] role=user, size=%d, preview=%q\n",
+				meta.Index, meta.Size, meta.ContentPreview))
+
+		case "assistant":
+			if meta.ToolCalls > 0 {
+				conv.WriteString(fmt.Sprintf("[%d] role=assistant, size=%d, tool_calls=%d, preview=%q\n",
+					meta.Index, meta.Size, meta.ToolCalls, meta.ContentPreview))
+			} else {
+				conv.WriteString(fmt.Sprintf("[%d] role=assistant, size=%d, preview=%q\n",
+					meta.Index, meta.Size, meta.ContentPreview))
+			}
+
+		case "toolResult":
+			if meta.IsProtected {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, PROTECTED, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ContentPreview))
+			} else if !meta.IsSelectable {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, NON_TRUNCATABLE, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ContentPreview))
+			} else {
+				conv.WriteString(fmt.Sprintf("[%d] role=toolResult, tool=%s, size=%d, id=%q, preview=%q\n",
+					meta.Index, meta.ToolName, meta.Size, meta.ToolCallID, meta.ContentPreview))
+			}
+		}
+	}
+
+	// Calculate statistics
+	totalChars := 0
+	truncatableCount := 0
+	largeMessageCount := 0
+	for _, meta := range metadata {
+		totalChars += meta.Size
+		if meta.Role == "toolResult" && meta.IsSelectable && !meta.IsProtected {
+			truncatableCount++
+			if meta.Size >= mgmtLargeMessageThreshold {
+				largeMessageCount++
+			}
+		}
+	}
+
+	// Extract latest user request for task grounding
+	latestUserRequest := extractLatestUserRequest(agentCtx.RecentMessages)
+
+	// State message as the final user message
+	tokenPercent := c.estimateTokenPercent(agentCtx)
+	llmContextEmpty := agentCtx.LLMContext == ""
+
+	stateMsg := fmt.Sprintf(`<current_state>
+Current task: %s
+Total messages: %d
+Truncatable tool outputs: %d
+Large outputs (>2000 chars): %d
+Protected messages (last %d): cannot truncate
+Tokens used: %.1f%%
+Tool calls since last management: %d
+Current LLM Context exists: %t
+</current_state>
+
+<conversation_metadata>
+%s
+</conversation_metadata>
+
+Review the conversation metadata above and identify which tool outputs should be truncated.
+
+Instructions:
+1. Identify tool outputs (role=toolResult with id=) that are NO LONGER needed for the current task
+2. Look for:
+   - Large outputs (>2000 chars) that were already processed
+   - Test/debug output not related to current task
+   - Completed tool calls with results already used
+3. DO NOT select:
+   - Recent outputs (PROTECTED)
+   - Small outputs (<500 chars) - NON_TRUNCATABLE
+   - Outputs marked NON_TRUNCATABLE (missing tool_call_id)
+   - Outputs related to the current task shown in <current_state>
+
+Output format: Return a JSON array of tool_call_id strings to truncate.
+Example: ["call_a_1", "call_b_2"]
+
+If no outputs should be truncated, return an empty array: []`,
+		latestUserRequest,
+		len(metadata),
+		truncatableCount,
+		largeMessageCount,
+		agentctx.RecentMessagesKeep,
+		tokenPercent*100,
+		agentCtx.AgentState.ToolCallsSinceLastTrigger,
+		!llmContextEmpty,
+		conv.String(),
+	)
+
+	messages := []llm.LLMMessage{{
+		Role:    "user",
+		Content: stateMsg,
+	}}
 
 	return messages
 }
