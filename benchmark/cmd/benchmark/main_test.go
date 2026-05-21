@@ -9,14 +9,24 @@ import (
 	"testing"
 )
 
+// rpcToolStart builds a tool_execution_start JSON line as produced by ai --mode rpc.
+func rpcToolStart(tool string, args map[string]any) string {
+	envelope := map[string]any{
+		"type":     "tool_execution_start",
+		"toolName": tool,
+		"args":     args,
+	}
+	b, _ := json.Marshal(envelope)
+	return string(b)
+}
+
 func TestAnalyzeAgentOutput(t *testing.T) {
-	output := `=== Turn 1 ===
-Tool calls:
-  • bash: [command=grep -n BUG app.py]
-  • read: [path=setup/app.py]
-  • edit: [file=setup/app.py]
-  • bash: [command=python3 -m pytest tests/test_app.py -v]
-`
+	output := strings.Join([]string{
+		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		rpcToolStart("read", map[string]any{"path": "setup/app.py"}),
+		rpcToolStart("edit", map[string]any{"file": "setup/app.py"}),
+		rpcToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
+	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
 
@@ -55,12 +65,12 @@ func TestEvaluateTaskConstraints(t *testing.T) {
 		t.Fatalf("write constraints: %v", err)
 	}
 
-	output := `Tool calls:
-  • grep: [pattern=BUG path=app.py]
-  • read: [path=app.py]
-  • edit: [file=app.py]
-  • test: [command=pytest]
-`
+	output := strings.Join([]string{
+		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		rpcToolStart("read", map[string]any{"path": "app.py"}),
+		rpcToolStart("edit", map[string]any{"file": "app.py"}),
+		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+	}, "\n")
 	metrics := analyzeAgentOutput(output)
 
 	bench := &Benchmark{MaxStepsMode: "hard"}
@@ -82,9 +92,11 @@ func TestEvaluateTaskConstraints(t *testing.T) {
 	}
 }
 
-func TestAnalyzeAgentOutputWithCodexJSON(t *testing.T) {
-	output := `{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'grep -n BUG app.py'","status":"in_progress"}}
-{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc 'python3 -m pytest tests/test_app.py -v'","status":"in_progress"}}`
+func TestAnalyzeAgentOutputWithBashToolEvents(t *testing.T) {
+	output := strings.Join([]string{
+		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		rpcToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
+	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
 	if metrics.TotalToolCalls != 2 {
@@ -101,17 +113,19 @@ func TestAnalyzeAgentOutputWithCodexJSON(t *testing.T) {
 	}
 }
 
-func TestAnalyzeAgentOutputWithCodexFileChangeAndReadSignals(t *testing.T) {
-	output := `{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'nl -ba stage1_load.py'","status":"in_progress"}}
-{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'bash ../verify.sh'","status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"/tmp/task/setup/stage5_save.py","kind":"update"}],"status":"completed"}}`
+func TestAnalyzeAgentOutputWithFileChangeAndReadSignals(t *testing.T) {
+	output := strings.Join([]string{
+		rpcToolStart("bash", map[string]any{"command": "nl -ba stage1_load.py"}),
+		rpcToolStart("bash", map[string]any{"command": "bash ../verify.sh"}),
+		rpcToolStart("edit", map[string]any{"file": "/tmp/task/setup/stage5_save.py"}),
+	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
 	if metrics.ReadCalls < 1 {
 		t.Fatalf("expected read call inferred from bash command, got %d", metrics.ReadCalls)
 	}
 	if metrics.EditCalls < 1 {
-		t.Fatalf("expected edit call inferred from file_change, got %d", metrics.EditCalls)
+		t.Fatalf("expected edit call, got %d", metrics.EditCalls)
 	}
 	if !metrics.ReadStage1 {
 		t.Fatalf("expected stage1 read signal")
@@ -143,7 +157,7 @@ func TestEvaluateTaskConstraintsReadRequirementWithBashCommands(t *testing.T) {
 		t.Fatalf("write constraints: %v", err)
 	}
 
-	output := `{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'cat app.py'","status":"in_progress"}}`
+	output := rpcToolStart("bash", map[string]any{"command": "cat app.py"})
 	metrics := analyzeAgentOutput(output)
 
 	bench := &Benchmark{MaxStepsMode: "soft"}
@@ -181,12 +195,12 @@ func TestEvaluateTaskConstraintsSoftMaxSteps(t *testing.T) {
 		t.Fatalf("write constraints: %v", err)
 	}
 
-	output := `Tool calls:
-  • read: [path=app.py]
-  • edit: [file=app.py]
-  • test: [command=pytest]
-  • test: [command=pytest]
-`
+	output := strings.Join([]string{
+		rpcToolStart("read", map[string]any{"path": "app.py"}),
+		rpcToolStart("edit", map[string]any{"file": "app.py"}),
+		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+	}, "\n")
 	metrics := analyzeAgentOutput(output)
 	bench := &Benchmark{MaxStepsMode: "soft"}
 	violations, softViolations, score, checked, err := bench.evaluateTaskConstraints(Task{Dir: taskDir}, metrics, true)
@@ -224,12 +238,12 @@ func TestEvaluateTaskConstraintsTaskHardOverride(t *testing.T) {
 		t.Fatalf("write constraints: %v", err)
 	}
 
-	output := `Tool calls:
-  • read: [path=app.py]
-  • edit: [file=app.py]
-  • test: [command=pytest]
-  • test: [command=pytest]
-`
+	output := strings.Join([]string{
+		rpcToolStart("read", map[string]any{"path": "app.py"}),
+		rpcToolStart("edit", map[string]any{"file": "app.py"}),
+		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+	}, "\n")
 	metrics := analyzeAgentOutput(output)
 	bench := &Benchmark{MaxStepsMode: "soft"}
 	violations, softViolations, _, checked, err := bench.evaluateTaskConstraints(Task{Dir: taskDir}, metrics, true)

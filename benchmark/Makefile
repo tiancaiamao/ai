@@ -40,11 +40,11 @@ help:
 	@echo "  make ab-report           输出历史 A/B 报告"
 	@echo ""
 	@echo "Options:"
-	@echo "  AGENT=ai                 指定 agent 二进制 (默认: /Users/genius/go/bin/ai)"
+			@echo "  AGENT=ai                 指定 agent 二进制 (默认: /Users/genius/go/bin/ai)"
 	@echo "  AGENTS=\"a b\"            A/B 对比的 agent 列表"
 	@echo "  MODEL=minimax            A/B 运行模型名（会透传到 ab_test.py）"
 	@echo "  TASK=task_id             A/B 或 bench 运行单任务"
-	@echo "  TIMEOUT=0                单任务超时 (默认: 0=不限制)"
+		@echo "  TIMEOUT=0                单任务超时 (默认: 10m)"
 	@echo "  MAX_STEPS_MODE=soft      max_steps 判分模式: soft|hard (可选，不传则使用 runner/manifest 默认)"
 	@echo "  MANIFEST=tasks/xxx.json  指定 manifest (默认: tasks/fast-manifest.json, 63个快任务)"
 	@echo "                          使用 MANIFEST=tasks/all.json 可运行全部任务"
@@ -82,19 +82,19 @@ bench: bench-run
 bench-run: bench-build
 	@if [ -n "$(TASK)" ]; then \
 		echo "Running task: $(TASK)"; \
-				../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
+				../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),10m) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG); \
 	else \
-		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),10m) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) $(ASSERT_INIT_FAIL_FLAG) --clean; \
 	fi
 
 # Verify all selected tasks fail before agent modifications
 bench-precheck: bench-build
 	@echo "Precheck manifest: $(PRECHECK_MANIFEST)"
-	../../bin/benchmark --precheck-only --ag $(or $(AG),/Users/genius/go/bin/ag) $(PRECHECK_MANIFEST_FLAG)
+	../../bin/benchmark --precheck-only $(PRECHECK_MANIFEST_FLAG)
 
 # Resume from previous progress
 bench-resume: bench-build
-		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
+		../../bin/benchmark --agent $(or $(AGENT),/Users/genius/go/bin/ai) --timeout $(or $(TIMEOUT),10m) $(MAX_STEPS_MODE_FLAG) $(MANIFEST_FLAG) --resume $(or $(RESUME),results/progress.json)
 
 # List available benchmark tasks
 bench-list: bench-build
@@ -104,7 +104,7 @@ bench-list: bench-build
 bench-task: bench-build
 	@echo "Usage: make bench-task TASK=tbench/chess-best-move"
 	@echo "Or use: make bench-run TASK=tbench/chess-best-move"
-		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),../../bin/ai) --ag $(or $(AG),/Users/genius/go/bin/ag) --timeout $(or $(TIMEOUT),0) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG)
+		../../bin/benchmark --task $(TASK) --agent $(or $(AGENT),../../bin/ai) --timeout $(or $(TIMEOUT),10m) $(MAX_STEPS_MODE_FLAG) $(ASSERT_INIT_FAIL_FLAG)
 
 # Import Terminal Bench 2.0 tasks
 bench-import:
