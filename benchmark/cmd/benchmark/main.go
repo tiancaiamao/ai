@@ -7,8 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-		"io"
-	"io/fs"
+			"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,10 +169,9 @@ type AgentRunner interface {
 	Name() string
 }
 
-// AIAgentRunner runs the ai agent via rpc mode with ag conv for output
+// AIAgentRunner runs the ai agent via rpc mode, parsing JSON events directly
 type AIAgentRunner struct {
 	BinaryPath string
-	AgBinary   string
 	MaxTurns   int
 	Timeout    time.Duration
 }
@@ -183,7 +181,7 @@ func (r *AIAgentRunner) Name() string {
 }
 
 func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
-	var ctx context.Context
+		var ctx context.Context
 	var cancel context.CancelFunc
 
 	// Only set timeout if Timeout > 0
@@ -194,12 +192,8 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		ctx = context.Background()
 	}
 
-			// Build the RPC prompt as JSON
+	// Build the RPC prompt as JSON
 	rpcPrompt := fmt.Sprintf(`{"type":"prompt","message":%q}`, prompt)
-
-	// Use ai --mode rpc piped through ag conv for full event output.
-	// NOTE: Do NOT use --only text here — analyzeAgentOutput() needs tool
-	// execution events to evaluate must_use_capabilities and success_criteria.
 
 	// Build RPC command with optional --max-turns and --timeout
 	aiArgs := []string{r.BinaryPath, "--mode", "rpc"}
@@ -209,56 +203,24 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	if r.Timeout > 0 {
 		aiArgs = append(aiArgs, "--timeout", r.Timeout.String())
 	}
-	agArgs := []string{r.AgBinary, "conv"}
 
-		// Build a three-process pipeline: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
-	// We use direct exec.Command pipe instead of sh -c to avoid shell interpreting
-	// backticks and other special characters in the JSON payload.
+	// Run ai --mode rpc directly, capturing its JSON event stream on stdout.
+	// No longer pipes through ag conv — analyzeAgentOutput() parses raw JSON events.
 	aiCmd := exec.CommandContext(ctx, aiArgs[0], aiArgs[1:]...)
-	agCmd := exec.CommandContext(ctx, agArgs[0], agArgs[1:]...)
 
-	// Wire: stdin(rpcPrompt) -> ai -> ag -> stdout+stderr
 	var stdout, stderr bytes.Buffer
 	aiCmd.Stdin = bytes.NewBufferString(rpcPrompt)
-	agCmd.Stdout = &stdout
-	agCmd.Stderr = &stderr
+	aiCmd.Stdout = &stdout
+	aiCmd.Stderr = &stderr
 
-	// Pipe ai stdout -> ag stdin.
-	// When ag exits (error or otherwise), reads from aiAgPipe will fail,
-	// causing ai's stdout writes to fail. The goroutine below detects this
-	// and closes aiAgWriter so aiCmd.Wait() can complete.
-	aiAgPipe, aiAgWriter := io.Pipe()
-	aiCmd.Stdout = aiAgWriter
-	agCmd.Stdin = aiAgPipe
-
-	// Set working directory to task dir
 	aiCmd.Dir = taskDir
-	agCmd.Dir = taskDir
 	aiCmd.Env = nonInteractiveCommandEnv()
-	agCmd.Env = nonInteractiveCommandEnv()
 
-	// Start all processes
 	if err := aiCmd.Start(); err != nil {
 		return "", fmt.Errorf("failed to start ai: %w", err)
 	}
-	if err := agCmd.Start(); err != nil {
-		aiCmd.Process.Kill()
-		return "", fmt.Errorf("failed to start ag: %w", err)
-	}
 
-			// Wait for ai to finish, then close pipe writer
-	aiDone := make(chan error, 1)
-	go func() {
-		aiDone <- aiCmd.Wait()
-		aiAgWriter.Close()
-	}()
-
-	// Wait for ag to finish, then close pipe reader so ai doesn't
-	// block on stdout writes to a pipe nobody is reading.
-	agErr := agCmd.Wait()
-	aiAgPipe.Close()
-
-	aiErr := <-aiDone
+		aiErr := aiCmd.Wait()
 
 	output := stdout.String()
 	if stderr.Len() > 0 {
@@ -267,9 +229,6 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 
 	if aiErr != nil {
 		return output, aiErr
-	}
-	if agErr != nil {
-		return output, agErr
 	}
 	return output, nil
 }
@@ -714,29 +673,10 @@ func analyzeAgentOutput(output string) ProcessMetrics {
 
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
-		if events := parseCodexEvents(line); len(events) > 0 {
-			for _, ev := range events {
-				applyEventSignals(&metrics, ev, seenTools, seenCapabilities, logFiles)
-			}
-			continue
+		events := parseRPCEvents(line)
+		for _, ev := range events {
+			applyEventSignals(&metrics, ev, seenTools, seenCapabilities, logFiles)
 		}
-
-		tool, payload, ok := parseToolLine(line)
-		if !ok {
-			continue
-		}
-
-		event := toolEvent{
-			Tool:    tool,
-			Payload: payload,
-			Command: extractArgValue(payload, "command"),
-		}
-		event.File = extractArgValue(payload, "file")
-		if event.File == "" {
-			event.File = extractArgValue(payload, "path")
-		}
-
-		applyEventSignals(&metrics, event, seenTools, seenCapabilities, logFiles)
 	}
 
 	if metrics.FirstEditIndex > 0 {
@@ -852,40 +792,14 @@ func eventHasReadSignal(event toolEvent) bool {
 	return tool == "bash" && isReadCommand(strings.ToLower(event.Command))
 }
 
-func parseToolLine(line string) (string, string, bool) {
-	// Format 1: ag conv output — "🔧 toolName key=val key2=val2"
-	if strings.Contains(line, "🔧") {
-		rest := strings.TrimSpace(strings.SplitN(line, "🔧", 2)[1])
-		parts := strings.SplitN(rest, " ", 2)
-		tool := parts[0]
-		payload := ""
-		if len(parts) > 1 {
-			payload = parts[1]
-		}
-		if tool != "" {
-			return tool, payload, true
-		}
-	}
-
-	// Format 2: legacy "• tool: payload"
-	bulletPos := strings.Index(line, "•")
-	if bulletPos == -1 {
-		return "", "", false
-	}
-	rest := strings.TrimSpace(line[bulletPos+len("•"):])
-	parts := strings.SplitN(rest, ":", 2)
-	if len(parts) != 2 {
-		return "", "", false
-	}
-
-	tool := strings.TrimSpace(parts[0])
-	if tool == "" {
-		return "", "", false
-	}
-	return tool, strings.TrimSpace(parts[1]), true
-}
-
-func parseCodexEvents(line string) []toolEvent {
+// parseRPCEvents parses a single line from ai --mode rpc JSON event stream.
+// It extracts tool calls from tool_execution_start and tool_execution_end events.
+//
+// Event formats produced by ai rpc:
+//
+//	{"type":"tool_execution_start","toolName":"read","args":{"path":"/foo/bar.go"},...}
+//	{"type":"tool_execution_end","toolName":"bash","result":{...},...}
+func parseRPCEvents(line string) []toolEvent {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "{") {
 		return nil
@@ -897,66 +811,48 @@ func parseCodexEvents(line string) []toolEvent {
 	}
 
 	typ, _ := envelope["type"].(string)
-	item, ok := envelope["item"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	itemType, _ := item["type"].(string)
 
-	if typ == "item.started" && itemType == "command_execution" {
-		command, _ := item["command"].(string)
-		if command == "" {
+	switch typ {
+	case "tool_execution_start":
+		toolName, _ := envelope["toolName"].(string)
+		if toolName == "" {
 			return nil
 		}
-		return []toolEvent{{
-			Tool:    "bash",
-			Payload: command,
-			Command: command,
-		}}
-	}
+		args, _ := envelope["args"].(map[string]any)
 
-	if typ == "item.completed" && itemType == "file_change" {
-		rawChanges, ok := item["changes"].([]any)
-		if !ok || len(rawChanges) == 0 {
-			return nil
+		event := toolEvent{Tool: toolName}
+
+		// Extract file path from args
+		if path, ok := args["path"].(string); ok {
+			event.File = path
+		} else if file, ok := args["file"].(string); ok {
+			event.File = file
 		}
 
-		events := make([]toolEvent, 0, len(rawChanges))
-		for _, raw := range rawChanges {
-			change, ok := raw.(map[string]any)
-			if !ok {
-				continue
+		// Extract command for bash tool
+		if cmd, ok := args["command"].(string); ok {
+			event.Command = cmd
+			event.Payload = cmd
+		}
+
+		// For tools with structured args, store a compact representation
+		if event.Payload == "" && len(args) > 0 {
+			if bs, err := json.Marshal(args); err == nil {
+				event.Payload = string(bs)
 			}
-			path, _ := change["path"].(string)
-			events = append(events, toolEvent{
-				Tool: "edit",
-				File: path,
-			})
 		}
-		if len(events) == 0 {
-			return nil
-		}
-		return events
+
+		return []toolEvent{event}
+
+		case "tool_execution_end":
+		// tool_execution_end events don't add new tool calls —
+		// tool_execution_start already captured the invocation.
+		// We may want to extract result text here in the future for
+		// detecting test output patterns.
+		return nil
 	}
 
 	return nil
-}
-
-func extractArgValue(payload, key string) string {
-	pat := key + "="
-	idx := strings.Index(payload, pat)
-	if idx == -1 {
-		return ""
-	}
-	s := payload[idx+len(pat):]
-	end := len(s)
-	for _, sep := range []string{",", "]"} {
-		if i := strings.Index(s, sep); i >= 0 && i < end {
-			end = i
-		}
-	}
-	value := strings.TrimSpace(s[:end])
-	return strings.Trim(value, `"'`)
 }
 
 func isSearchCommand(cmd string) bool {
@@ -1616,8 +1512,7 @@ func main() {
 	var (
 				tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
 		resultsDir        = flag.String("results", "results", "Results directory")
-		agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path (ai)")
-		agBinary          = flag.String("ag", "ag", "ag CLI binary path (for ag conv)")
+				agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path (ai)")
 		maxTurns          = flag.Int("max-turns", 50, "Maximum agent turns")
 		timeout           = flag.Duration("timeout", 10*time.Minute, "Per-task timeout")
 		manifestPath      = flag.String("manifest", "", "Task manifest path (JSON)")
@@ -1644,14 +1539,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error resolving results dir: %v\n", err)
 		os.Exit(1)
 	}
-		absAgentBinary, err := filepath.Abs(*agentBinary)
+			absAgentBinary, err := filepath.Abs(*agentBinary)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving agent binary: %v\n", err)
-		os.Exit(1)
-	}
-	absAgBinary, err := filepath.Abs(*agBinary)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving ag binary: %v\n", err)
 		os.Exit(1)
 	}
 	absManifestPath := ""
@@ -1664,9 +1554,8 @@ func main() {
 	}
 
 	// Create agent runner
-		agent := &AIAgentRunner{
+			agent := &AIAgentRunner{
 		BinaryPath: absAgentBinary,
-		AgBinary:   absAgBinary,
 		MaxTurns:   *maxTurns,
 		Timeout:    *timeout,
 	}
