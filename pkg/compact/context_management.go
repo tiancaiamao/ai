@@ -171,7 +171,19 @@ func (c *ContextManager) Compact(agentCtx *agentctx.AgentContext) (*agentctx.Com
 	return c.CompactWithCtx(context.Background(), agentCtx)
 }
 
-// CompactWithCtx runs the LLM-driven context management cycle with context support.
+// CompactWithCtx runs the two-phase LLM-driven context management cycle.
+//
+// Phase 1: Metadata-only filtering — the LLM sees lightweight message metadata
+// (role, size, tool name, short preview) and returns a JSON array of candidate
+// tool_call_ids that MIGHT be truncated. This call is cheap (~2-4K tokens).
+//
+// Phase 2: Content verification — only the FULL content of candidates identified
+// by Phase 1 is sent to the LLM, along with conversation overview. The LLM makes
+// final truncation decisions and optionally updates LLM Context. This call is
+// larger but limited to only the candidate subset (~5-10K tokens).
+//
+// If Phase 1 returns no candidates, Phase 2 is skipped unless LLM Context is
+// empty (in which case a context-only update is performed).
 func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	span := traceevent.StartSpan(parent, "context_mgmt", traceevent.CategoryEvent,
 		traceevent.Field{Key: "messages_before", Value: len(agentCtx.RecentMessages)},
@@ -183,151 +195,113 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 	start := time.Now()
 	tokensBefore := agentCtx.EstimateTokens()
 
-	slog.Info("[CtxMgmt] Starting compact",
+	slog.Info("[CtxMgmt] Starting two-phase compact",
 		"messages", len(agentCtx.RecentMessages),
 		"token_pct", fmt.Sprintf("%.1f%%", c.estimateTokenPercent(agentCtx)*100),
 	)
 
-	// 1. Build context management messages (full conversation with annotations)
-	messages := c.buildContextMgmtMessages(agentCtx)
-
-	// 2. Get context management tools
-	var tools []context_mgmt.Tool
-	if c.compactor != nil {
-		tools = context_mgmt.GetContextManagementTools(agentCtx)
-		// Add compact tool manually to avoid circular import
-		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
-	} else {
-		tools = context_mgmt.GetContextManagementTools(agentCtx)
-	}
-
-	// 3. Call LLM with retry for transient errors
+	// ── Phase 1: Metadata-based candidate filtering ──────────────────────────
+	phase1Messages := c.buildPhase1Messages(agentCtx, nil)
 	llmMessages := append([]llm.LLMMessage{{
 		Role:    "system",
 		Content: c.systemPrompt,
-	}}, messages...)
+	}}, phase1Messages...)
 
-	const maxRetries = 3
+	// Phase 1: text-only LLM call (no tools)
+	phase1Text, err := c.callLLMTextWithRetry(parent, llmMessages, "phase1")
+	if err != nil {
+		return nil, err
+	}
+
+	candidateIDs := parsePhase1Response(phase1Text)
+	slog.Info("[CtxMgmt] Phase 1 complete",
+		"candidates", len(candidateIDs),
+		"raw_response_len", len(phase1Text),
+	)
+	span.AddField("phase1_candidates", len(candidateIDs))
+
+	traceevent.Log(parent, traceevent.CategoryEvent, "phase1_complete",
+		traceevent.Field{Key: "candidates", Value: len(candidateIDs)},
+		traceevent.Field{Key: "candidate_ids", Value: fmt.Sprintf("%v", candidateIDs)},
+	)
+
+	// ── Phase 2: Content-based verification (or context-only update) ─────────
+	var tools []context_mgmt.Tool
 	var toolCalls []llm.ToolCall
-	var lastErr error
+	var truncatedCount int
+	var llmContextUpdated bool
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Respect context cancellation between retries.
-		if err := parent.Err(); err != nil {
-			slog.Error("[CtxMgmt] Context cancelled before LLM attempt", "attempt", attempt, "error", err)
-			return nil, fmt.Errorf("context management LLM call failed: %w", err)
+	if len(candidateIDs) > 0 {
+		// Phase 2a: Candidates found — verify with full content
+		phase2Messages := c.buildPhase2Messages(agentCtx, candidateIDs)
+		phase2LLMMessages := append([]llm.LLMMessage{{
+			Role:    "system",
+			Content: c.systemPrompt,
+		}}, phase2Messages...)
+
+		tools = c.getContextMgmtTools(agentCtx)
+
+		// Phase 2: LLM call with tools (truncate_messages, update_llm_context, no_action)
+		var phase2Err error
+		toolCalls, phase2Err = c.callLLMToolsWithRetry(parent, phase2LLMMessages, tools, "phase2")
+		if phase2Err != nil {
+			return nil, phase2Err
 		}
 
-		llmSpan := traceevent.StartSpan(parent, "llm_call", traceevent.CategoryLLM,
-			traceevent.Field{Key: "model", Value: c.model.ID},
-			traceevent.Field{Key: "provider", Value: c.model.Provider},
-			traceevent.Field{Key: "api", Value: c.model.API},
-			traceevent.Field{Key: "attempt", Value: attempt},
-			traceevent.Field{Key: "caller", Value: "context_management"},
+		// Execute Phase 2 tool calls
+		truncatedCount, llmContextUpdated = c.executeToolCalls(parent, toolCalls, tools)
+
+		slog.Info("[CtxMgmt] Phase 2 complete",
+			"tool_calls", len(toolCalls),
+			"truncated", truncatedCount,
+			"llm_context_updated", llmContextUpdated,
 		)
-		llmCallStart := time.Now()
+		span.AddField("phase2_tool_calls", len(toolCalls))
+		span.AddField("phase2_truncated", truncatedCount)
 
-		stream := llm.StreamLLM(
-			parent,
-			c.model,
-			llm.LLMContext{
-				Messages: llmMessages,
-				Tools:    c.convertToolsToLLM(tools),
-			},
-			c.apiKey,
-			2*time.Minute,
-		)
+	} else {
+		// No candidates — check if LLM context needs initialization
+		if agentCtx.LLMContext == "" {
+			slog.Info("[CtxMgmt] No candidates but LLM context is empty — running context-only update")
 
-		// 4. Extract tool calls from stream
-		var err error
-		var usage llm.Usage
-		var firstTokenLatency time.Duration
-		toolCalls, usage, firstTokenLatency, err = c.extractToolCalls(parent, stream)
+			tools = c.getContextMgmtTools(agentCtx)
+			contextOnlyMessages := c.buildContextOnlyUpdateMessages(agentCtx)
+			contextLLMMessages := append([]llm.LLMMessage{{
+				Role:    "system",
+				Content: c.systemPrompt,
+			}}, contextOnlyMessages...)
 
-		// Add token usage metrics to span
-		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-			llmSpan.AddField("input_tokens", usage.InputTokens)
-			llmSpan.AddField("output_tokens", usage.OutputTokens)
-			llmSpan.AddField("total_tokens", usage.TotalTokens)
-			duration := time.Since(llmCallStart)
-			if duration.Seconds() > 0 {
-				llmSpan.AddField("input_tokens_per_sec", float64(usage.InputTokens)/duration.Seconds())
-				llmSpan.AddField("output_tokens_per_sec", float64(usage.OutputTokens)/duration.Seconds())
+			var ctxErr error
+			toolCalls, ctxErr = c.callLLMToolsWithRetry(parent, contextLLMMessages, tools, "context_init")
+			if ctxErr != nil {
+				return nil, ctxErr
 			}
-		}
-		if firstTokenLatency > 0 {
-			llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
-		}
 
-		if err != nil {
-			llmSpan.AddField("error", err.Error())
-			llmSpan.AddField("retryable", llm.IsRetryableError(err))
-			traceevent.Log(parent, traceevent.CategoryLLM, "llm_call_error",
-				traceevent.Field{Key: "caller", Value: "context_management"},
-				traceevent.Field{Key: "attempt", Value: attempt},
-				traceevent.Field{Key: "error", Value: err.Error()},
-				traceevent.Field{Key: "retryable", Value: llm.IsRetryableError(err)},
-			)
-		}
-		llmSpan.End()
-
-		if err == nil {
-			lastErr = nil
-			break
-		}
-
-		lastErr = err
-		if !llm.IsRetryableError(err) {
-			slog.Error("[CtxMgmt] LLM call failed (non-retryable)", "attempt", attempt, "error", err)
-			return nil, fmt.Errorf("context management LLM call failed: %w", err)
-		}
-
-		if attempt < maxRetries {
-			backoff := time.Duration(attempt) * 2 * time.Second
-			slog.Warn("[CtxMgmt] LLM call failed (retryable), retrying",
-				"attempt", attempt,
-				"max_retries", maxRetries,
-				"backoff", backoff,
-				"error", err,
-			)
-			select {
-			case <-parent.Done():
-				return nil, fmt.Errorf("context management LLM call failed: %w", parent.Err())
-			case <-time.After(backoff):
-			}
+			truncatedCount, llmContextUpdated = c.executeToolCalls(parent, toolCalls, tools)
+			span.AddField("context_init_tool_calls", len(toolCalls))
 		}
 	}
 
-	if lastErr != nil {
-		slog.Error("[CtxMgmt] LLM call failed after all retries", "attempts", maxRetries, "error", lastErr)
-		return nil, fmt.Errorf("context management LLM call failed: %w", lastErr)
-	}
-
-	// 5. Execute tool calls and track results
-	truncatedCount, llmContextUpdated := c.executeToolCalls(parent, toolCalls, tools)
-
-	// 6. Validate that required tool pairings were followed
+	// ── Validation & cleanup ─────────────────────────────────────────────────
 	if truncatedCount > 0 && !llmContextUpdated {
-		slog.Warn("[CtxMgmt] TRUNCATE WITHOUT UPDATE: truncate_messages was called but update_llm_context was not - this breaks task continuity",
+		slog.Warn("[CtxMgmt] TRUNCATE WITHOUT UPDATE: truncate_messages was called but update_llm_context was not",
 			"truncated_count", truncatedCount,
 		)
-		// Add a trace event to highlight this failure
 		traceevent.Log(parent, traceevent.CategoryEvent, "context_mgmt_validation_failed",
 			traceevent.Field{Key: "reason", Value: "truncate_without_update"},
 			traceevent.Field{Key: "truncated_count", Value: truncatedCount},
 		)
 	} else if !llmContextUpdated && agentCtx.LLMContext == "" {
-		slog.Error("[CtxMgmt] EMPTY LLM CONTEXT: context management ran without updating LLM Context - agent cannot continue",
+		slog.Error("[CtxMgmt] EMPTY LLM CONTEXT: context management ran without updating LLM Context",
 			"tool_calls", len(toolCalls),
 		)
-		// Add a trace event to highlight this failure
 		traceevent.Log(parent, traceevent.CategoryEvent, "context_mgmt_validation_failed",
 			traceevent.Field{Key: "reason", Value: "empty_llm_context"},
 			traceevent.Field{Key: "tool_calls", Value: len(toolCalls)},
 		)
 	}
 
-	// 7. Reset trigger counters
+	// Reset trigger counters
 	agentCtx.AgentState.LastTriggerTurn = agentCtx.AgentState.TotalTurns
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 	agentCtx.AgentState.UpdatedAt = time.Now()
@@ -344,6 +318,7 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 	span.AddField("llm_context_updated", llmContextUpdated)
 
 	slog.Info("[CtxMgmt] Compact complete",
+		"phase", "two-phase",
 		"tokens_before", tokensBefore,
 		"tokens_after", tokensAfter,
 		"saved", tokensBefore-tokensAfter,
@@ -354,13 +329,221 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 	)
 
 	return &agentctx.CompactionResult{
-		Summary:           fmt.Sprintf("LLM context management: %d tool calls executed", len(toolCalls)),
+		Summary:           fmt.Sprintf("Two-phase context management: %d candidates, %d tool calls executed", len(candidateIDs), len(toolCalls)),
 		TokensBefore:      tokensBefore,
 		TokensAfter:       tokensAfter,
 		Type:              "mini",
 		TruncatedCount:    truncatedCount,
 		LLMContextUpdated: llmContextUpdated,
 	}, nil
+}
+
+// getContextMgmtTools returns the available context management tools.
+func (c *ContextManager) getContextMgmtTools(agentCtx *agentctx.AgentContext) []context_mgmt.Tool {
+	var tools []context_mgmt.Tool
+	if c.compactor != nil {
+		tools = context_mgmt.GetContextManagementTools(agentCtx)
+		tools = append(tools, NewCompactTool(agentCtx, c.compactor))
+	} else {
+		tools = context_mgmt.GetContextManagementTools(agentCtx)
+	}
+	return tools
+}
+
+// callLLMTextWithRetry calls the LLM expecting a text response (no tool calls).
+// Retries up to maxRetries times on transient errors.
+func (c *ContextManager) callLLMTextWithRetry(parent context.Context, llmMessages []llm.LLMMessage, caller string) (string, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := parent.Err(); err != nil {
+			return "", fmt.Errorf("context management LLM call failed: %w", err)
+		}
+
+		llmSpan := traceevent.StartSpan(parent, "llm_call", traceevent.CategoryLLM,
+			traceevent.Field{Key: "model", Value: c.model.ID},
+			traceevent.Field{Key: "provider", Value: c.model.Provider},
+			traceevent.Field{Key: "api", Value: c.model.API},
+			traceevent.Field{Key: "attempt", Value: attempt},
+			traceevent.Field{Key: "caller", Value: caller},
+			traceevent.Field{Key: "response_type", Value: "text"},
+		)
+
+		stream := llm.StreamLLM(
+			parent,
+			c.model,
+			llm.LLMContext{
+				Messages: llmMessages,
+				Tools:    nil, // No tools — text-only response
+			},
+			c.apiKey,
+			2*time.Minute,
+		)
+
+		text, usage, latency, err := c.extractTextResponse(parent, stream)
+
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			llmSpan.AddField("input_tokens", usage.InputTokens)
+			llmSpan.AddField("output_tokens", usage.OutputTokens)
+			llmSpan.AddField("total_tokens", usage.TotalTokens)
+		}
+		if latency > 0 {
+			llmSpan.AddField("first_token_ms", latency.Milliseconds())
+		}
+
+		if err != nil {
+			llmSpan.AddField("error", err.Error())
+			llmSpan.End()
+			lastErr = err
+			if !llm.IsRetryableError(err) {
+				return "", fmt.Errorf("context management %s LLM call failed: %w", caller, err)
+			}
+			if attempt < maxRetries {
+				backoff := time.Duration(attempt) * 2 * time.Second
+				slog.Warn("[CtxMgmt] LLM call failed (retryable), retrying",
+					"caller", caller, "attempt", attempt, "backoff", backoff, "error", err)
+				select {
+				case <-parent.Done():
+					return "", fmt.Errorf("context management LLM call failed: %w", parent.Err())
+				case <-time.After(backoff):
+				}
+			}
+			continue
+		}
+
+		llmSpan.End()
+		return text, nil
+	}
+
+	return "", fmt.Errorf("context management %s LLM call failed after %d retries: %w", caller, maxRetries, lastErr)
+}
+
+// callLLMToolsWithRetry calls the LLM with tools and returns parsed tool calls.
+// Retries up to maxRetries times on transient errors.
+func (c *ContextManager) callLLMToolsWithRetry(parent context.Context, llmMessages []llm.LLMMessage, tools []context_mgmt.Tool, caller string) ([]llm.ToolCall, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := parent.Err(); err != nil {
+			return nil, fmt.Errorf("context management LLM call failed: %w", err)
+		}
+
+		llmSpan := traceevent.StartSpan(parent, "llm_call", traceevent.CategoryLLM,
+			traceevent.Field{Key: "model", Value: c.model.ID},
+			traceevent.Field{Key: "provider", Value: c.model.Provider},
+			traceevent.Field{Key: "api", Value: c.model.API},
+			traceevent.Field{Key: "attempt", Value: attempt},
+			traceevent.Field{Key: "caller", Value: caller},
+			traceevent.Field{Key: "response_type", Value: "tools"},
+		)
+		llmCallStart := time.Now()
+
+		stream := llm.StreamLLM(
+			parent,
+			c.model,
+			llm.LLMContext{
+				Messages: llmMessages,
+				Tools:    c.convertToolsToLLM(tools),
+			},
+			c.apiKey,
+			2*time.Minute,
+		)
+
+		toolCalls, usage, latency, err := c.extractToolCalls(parent, stream)
+
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			llmSpan.AddField("input_tokens", usage.InputTokens)
+			llmSpan.AddField("output_tokens", usage.OutputTokens)
+			llmSpan.AddField("total_tokens", usage.TotalTokens)
+			duration := time.Since(llmCallStart)
+			if duration.Seconds() > 0 {
+				llmSpan.AddField("input_tokens_per_sec", float64(usage.InputTokens)/duration.Seconds())
+				llmSpan.AddField("output_tokens_per_sec", float64(usage.OutputTokens)/duration.Seconds())
+			}
+		}
+		if latency > 0 {
+			llmSpan.AddField("first_token_ms", latency.Milliseconds())
+		}
+
+		if err != nil {
+			llmSpan.AddField("error", err.Error())
+			llmSpan.AddField("retryable", llm.IsRetryableError(err))
+			llmSpan.End()
+			lastErr = err
+			if !llm.IsRetryableError(err) {
+				return nil, fmt.Errorf("context management %s LLM call failed: %w", caller, err)
+			}
+			if attempt < maxRetries {
+				backoff := time.Duration(attempt) * 2 * time.Second
+				slog.Warn("[CtxMgmt] LLM call failed (retryable), retrying",
+					"caller", caller, "attempt", attempt, "backoff", backoff, "error", err)
+				select {
+				case <-parent.Done():
+					return nil, fmt.Errorf("context management LLM call failed: %w", parent.Err())
+				case <-time.After(backoff):
+				}
+			}
+			continue
+		}
+
+		llmSpan.End()
+		return toolCalls, nil
+	}
+
+	return nil, fmt.Errorf("context management %s LLM call failed after %d retries: %w", caller, maxRetries, lastErr)
+}
+
+// buildContextOnlyUpdateMessages builds a minimal prompt that asks the LLM
+// to initialize the LLM Context when Phase 1 found no truncation candidates
+// but the context is still empty.
+func (c *ContextManager) buildContextOnlyUpdateMessages(agentCtx *agentctx.AgentContext) []llm.LLMMessage {
+	latestRequest := extractLatestUserRequest(agentCtx.RecentMessages)
+
+	// Provide minimal conversation overview
+	var conv strings.Builder
+	conv.WriteString("## Conversation Overview\n\n")
+	metadata := collectMessageMetadata(agentCtx)
+	for _, meta := range metadata {
+		switch meta.Role {
+		case "user":
+			conv.WriteString(fmt.Sprintf("[%d] user: %s\n", meta.Index, meta.ContentPreview))
+		case "assistant":
+			if meta.ToolCalls > 0 {
+				conv.WriteString(fmt.Sprintf("[%d] assistant: %s\n", meta.Index, meta.ContentPreview))
+			} else {
+				conv.WriteString(fmt.Sprintf("[%d] assistant: %s\n", meta.Index, meta.ContentPreview))
+			}
+		case "toolResult":
+			conv.WriteString(fmt.Sprintf("[%d] toolResult (%s): size=%d\n", meta.Index, meta.ToolName, meta.Size))
+		}
+	}
+
+	stateMsg := fmt.Sprintf(`⚠️ CRITICAL: LLM Context is empty. You MUST call update_llm_context to initialize it.
+
+Current task: %s
+Tokens used: %.1f%%
+Total messages: %d
+
+%s
+
+Create an LLM Context that captures:
+- Current Task: the user's request
+- Key Information: important findings, file paths, decisions made
+- Next Steps: what the agent should work on next
+
+Call update_llm_context with this information.`,
+		latestRequest,
+		c.estimateTokenPercent(agentCtx)*100,
+		len(metadata),
+		conv.String(),
+	)
+
+	return []llm.LLMMessage{{
+		Role:    "user",
+		Content: stateMsg,
+	}}
 }
 
 // CalculateDynamicThreshold returns the token threshold for compaction.
@@ -557,8 +740,10 @@ func buildContentPreview(text string) string {
 }
 
 // buildContextMgmtMessages builds the message sequence for context management.
-// Sends the FULL conversation with annotations so the LLM can judge
-// whether each tool output is still useful.
+// NOTE: This is the LEGACY single-phase path, retained for test compatibility.
+// The production path now uses buildPhase1Messages + buildPhase2Messages (two-phase).
+// Sends message metadata (not full content) so the LLM can judge whether each
+// tool output is still useful.
 func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContext) []llm.LLMMessage {
 	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
 	if protectedStart < 0 {
@@ -817,6 +1002,147 @@ If no outputs should be truncated, return an empty array: []`,
 		Content: stateMsg,
 	}}
 
+		return messages
+}
+
+// buildPhase2Messages builds messages with FULL content of candidate tool outputs
+// for Phase 2 of two-phase context management.
+// The LLM reviews the actual content to make final truncation decisions.
+func (c *ContextManager) buildPhase2Messages(agentCtx *agentctx.AgentContext, candidateIDs []string) []llm.LLMMessage {
+	// Build a set for fast lookup
+	candidateSet := make(map[string]bool, len(candidateIDs))
+	for _, id := range candidateIDs {
+		candidateSet[id] = true
+	}
+
+	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
+	if protectedStart < 0 {
+		protectedStart = 0
+	}
+
+	// Collect full content for each candidate
+	type candidateContent struct {
+		ID        string
+		ToolName  string
+		Index     int
+		Content   string
+		CharCount int
+	}
+	candidates := make([]candidateContent, 0, len(candidateIDs))
+
+	for idx, msg := range agentCtx.RecentMessages {
+		if msg.Role != "toolResult" {
+			continue
+		}
+		id := strings.TrimSpace(msg.ToolCallID)
+		if !candidateSet[id] {
+			continue
+		}
+		text := msg.ExtractText()
+		candidates = append(candidates, candidateContent{
+			ID:        id,
+			ToolName:  msg.ToolName,
+			Index:     idx,
+			Content:   text,
+			CharCount: len(text),
+		})
+	}
+
+	var conv strings.Builder
+
+	// LLM context first (if exists)
+	if agentCtx.LLMContext != "" {
+		conv.WriteString("## Current LLM Context\n")
+		conv.WriteString(agentCtx.LLMContext)
+		conv.WriteString("\n\n")
+	}
+
+	// Current state
+	latestRequest := extractLatestUserRequest(agentCtx.RecentMessages)
+	tokenPercent := c.estimateTokenPercent(agentCtx)
+	llmContextEmpty := agentCtx.LLMContext == ""
+
+	conv.WriteString(fmt.Sprintf(`<current_state>
+Current task: %s
+Total messages in conversation: %d
+Candidates to review: %d
+Protected messages (last %d): cannot truncate
+Tokens used: %.1f%%
+LLM Context exists: %t
+</current_state>
+
+`, latestRequest, len(agentCtx.RecentMessages), len(candidates),
+		agentctx.RecentMessagesKeep, tokenPercent*100, !llmContextEmpty))
+
+	// Provide conversation summary from metadata for context
+	conv.WriteString("## Conversation Overview\n\n")
+	metadata := collectMessageMetadata(agentCtx)
+	for _, meta := range metadata {
+		// Only show overview, not full content
+		switch meta.Role {
+		case "user":
+			conv.WriteString(fmt.Sprintf("[%d] user: %s\n", meta.Index, meta.ContentPreview))
+		case "assistant":
+			if meta.ToolCalls > 0 {
+				conv.WriteString(fmt.Sprintf("[%d] assistant: tool_calls=%d (%s)\n", meta.Index, meta.ToolCalls, meta.ContentPreview))
+			} else {
+				conv.WriteString(fmt.Sprintf("[%d] assistant: %s\n", meta.Index, meta.ContentPreview))
+			}
+		case "toolResult":
+			if candidateSet[meta.ToolCallID] {
+				conv.WriteString(fmt.Sprintf("[%d] toolResult (%s): CANDIDATE - full content below\n", meta.Index, meta.ToolName))
+			} else if meta.IsProtected {
+				conv.WriteString(fmt.Sprintf("[%d] toolResult (%s): PROTECTED\n", meta.Index, meta.ToolName))
+			} else if meta.IsTruncated {
+				conv.WriteString(fmt.Sprintf("[%d] toolResult (%s): already truncated\n", meta.Index, meta.ToolName))
+			}
+		}
+	}
+
+	// Full content of each candidate
+	conv.WriteString("\n## Candidate Tool Output Content\n\n")
+	conv.WriteString("Review the FULL content below for each candidate marked for potential truncation.\n\n")
+
+	for _, cand := range candidates {
+		isProtected := cand.Index >= protectedStart
+		conv.WriteString(fmt.Sprintf("### [id=%q tool=%s size=%d chars protected=%v]\n",
+			cand.ID, cand.ToolName, cand.CharCount, isProtected))
+		conv.WriteString(cand.Content)
+		conv.WriteString("\n\n")
+	}
+
+	// State and decision prompt
+	stateMsg := fmt.Sprintf(`<decision_prompt>
+You are in Phase 2 of two-phase context management. Phase 1 identified %d candidate tool outputs for truncation.
+You now have their FULL content to make final decisions.
+
+Decision rules:
+1. Review each candidate's FULL content against the current task: "%s"
+2. TRUNCATE outputs that are:
+   - Debug/test output no longer relevant to current task
+   - Large outputs whose information has already been processed
+   - Content not needed for task continuity
+3. KEEP outputs that contain:
+   - Code or data needed for the current task
+   - Important context about what has been done so far
+   - Error messages or results that inform next steps
+4. If you truncate ANY output, you MUST also call update_llm_context to preserve key information.
+5. Your update_llm_context MUST include the current task and any critical details from truncated outputs.
+6. If LLM Context does not exist, you MUST call update_llm_context even if you don't truncate.
+7. If all candidates should be kept, call no_action.
+
+Available actions:
+- **truncate_messages** - Remove tool outputs by specifying their IDs.
+- **update_llm_context** - Rewrite the LLM Context to reflect current state.
+- **no_action** - All candidates should be kept, context is healthy.
+</decision_prompt>`,
+		len(candidates), latestRequest)
+
+	messages := []llm.LLMMessage{{
+		Role:    "user",
+		Content: conv.String() + stateMsg,
+	}}
+
 	return messages
 }
 
@@ -867,8 +1193,66 @@ func (c *ContextManager) extractToolCalls(ctx context.Context, stream *llm.Event
 		case llm.LLMErrorEvent:
 			return nil, usage, firstTokenLatency, e.Error
 		}
-	}
+		}
 	return toolCalls, usage, firstTokenLatency, nil
+}
+
+// extractTextResponse reads the text response from an LLM stream (no tool calls).
+// Used in Phase 1 where the LLM returns a plain text JSON response.
+func (c *ContextManager) extractTextResponse(ctx context.Context, stream *llm.EventStream[llm.LLMEvent, llm.LLMMessage]) (string, llm.Usage, time.Duration, error) {
+	var text strings.Builder
+	var usage llm.Usage
+	var firstTokenLatency time.Duration
+	llmStart := time.Now()
+	firstToken := true
+
+	for event := range stream.Iterator(ctx) {
+		if event.Done {
+			break
+		}
+		switch e := event.Value.(type) {
+		case llm.LLMDoneEvent:
+			usage = e.Usage
+		case llm.LLMTextDeltaEvent:
+			if firstToken {
+				firstTokenLatency = time.Since(llmStart)
+				firstToken = false
+			}
+						text.WriteString(e.Delta)
+		case llm.LLMThinkingDeltaEvent:
+			if firstToken {
+				firstTokenLatency = time.Since(llmStart)
+				firstToken = false
+			}
+		case llm.LLMErrorEvent:
+			return "", usage, firstTokenLatency, e.Error
+		}
+	}
+	return text.String(), usage, firstTokenLatency, nil
+}
+
+// parsePhase1Response extracts candidate tool_call_ids from the Phase 1 LLM text response.
+// Expected format: JSON array of strings, e.g. ["call_a_1", "call_b_2"]
+// Also handles markdown-wrapped JSON and plain text with a JSON array embedded.
+func parsePhase1Response(text string) []string {
+	text = strings.TrimSpace(text)
+
+	// Try direct JSON parse
+	var ids []string
+	if err := json.Unmarshal([]byte(text), &ids); err == nil {
+		return ids
+	}
+
+	// Try to find JSON array in the response (may be wrapped in markdown or text)
+	start := strings.Index(text, "[")
+	end := strings.LastIndex(text, "]")
+	if start != -1 && end > start {
+		if err := json.Unmarshal([]byte(text[start:end+1]), &ids); err == nil {
+			return ids
+		}
+	}
+
+	return nil
 }
 
 // executeToolCalls runs each tool call and logs the result.

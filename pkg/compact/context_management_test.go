@@ -1,9 +1,10 @@
 package compact
 
 import (
-	"context"
+		"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -292,15 +293,30 @@ func TestCompactWithCtx_RetriesOn500ThenSucceeds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&attempts, 1)
 		if n == 1 {
-			// First attempt: return 500
+			// First attempt: return 500 (Phase 1 retry)
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, `{"error":{"message":"Operation failed"}}`)
 			return
 		}
-		// Second attempt: return success with no_action tool call
+		// Second attempt onwards: return success.
+		// Phase 1 expects text response (no tools), Phase 2 expects tool calls.
+		// Detect by checking if request asks for tools.
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		hasTools := strings.Contains(string(body), `"tools"`)
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseNoActionResponse())
+
+		if hasTools {
+			// Phase 2 / context-only update: return no_action tool call
+			fmt.Fprint(w, sseNoActionResponse())
+		} else {
+			// Phase 1: return empty JSON array (no candidates)
+			fmt.Fprintf(w, `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"[]"},"finish_reason":null}]}\n\n`)
+			fmt.Fprintf(w, `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n`)
+			fmt.Fprintf(w, `data: [DONE]\n\n`)
+		}
 	}))
 	defer server.Close()
 
@@ -328,8 +344,13 @@ func TestCompactWithCtx_RetriesOn500ThenSucceeds(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if atomic.LoadInt32(&attempts) != 2 {
-		t.Fatalf("expected 2 attempts (1 fail + 1 success), got %d", atomic.LoadInt32(&attempts))
+		// Two-phase flow:
+	//   Attempt 1: Phase 1 → 500 error
+	//   Attempt 2: Phase 1 retry → success (returns "[]")
+	//   Attempt 3: Context-only update (LLM context is empty) → no_action
+	// Total: 3 HTTP calls
+	if n := atomic.LoadInt32(&attempts); n != 3 {
+		t.Fatalf("expected 3 attempts (1 fail + phase1 success + context update), got %d", n)
 	}
 }
 
@@ -366,7 +387,7 @@ func TestCompactWithCtx_AllRetriesExhausted(t *testing.T) {
 	if result != nil {
 		t.Fatal("expected nil result on failure")
 	}
-	if !strings.Contains(err.Error(), "context management LLM call failed") {
+		if !strings.Contains(err.Error(), "context management") {
 		t.Fatalf("error should wrap with context management prefix, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "500") {
