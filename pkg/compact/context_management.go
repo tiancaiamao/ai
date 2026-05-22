@@ -385,6 +385,8 @@ type truncationCandidate struct {
 	ToolName     string
 	Chars        int
 	SavingsToken int
+	LikelyStale  bool // heuristic: tool output is probably no longer needed
+	Age          int  // number of messages between this output and the protected region
 }
 
 func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart int) ([]truncationCandidate, int, int) {
@@ -425,11 +427,15 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 			savedChars = 0
 		}
 
+		age := protectedStart - i
+
 		candidates = append(candidates, truncationCandidate{
 			ID:           id,
 			ToolName:     msg.ToolName,
 			Chars:        len(text),
 			SavingsToken: savedChars / 4,
+			Age:          age,
+			LikelyStale:  isLikelyStale(msg.ToolName, age),
 		})
 	}
 
@@ -441,6 +447,27 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 	})
 
 	return candidates, truncatedCount, nonSelectableCount
+}
+
+// isLikelyStale returns true when a tool output is heuristically judged as
+// probably no longer needed. This is a conservative signal — the LLM can
+// override it when the output contains content relevant to the current task.
+//
+// Rules:
+//   - bash/read/grep/find outputs older than 20 messages: typically one-shot
+//     investigative results whose findings are already captured.
+//   - edit/write outputs older than 30 messages: confirm modifications, but
+//     the change is usually already reflected in later work.
+//   - Other tool types: not marked stale (insufficient signal).
+func isLikelyStale(toolName string, age int) bool {
+	switch toolName {
+	case "bash", "read", "grep", "find":
+		return age > 20
+	case "edit", "write":
+		return age > 30
+	default:
+		return false
+	}
 }
 
 // buildContextMgmtMessages builds the message sequence for context management.
@@ -519,8 +546,15 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
 			} else {
-				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d] id=%s\n%s\n\n",
-					msg.ToolName, len(msg.ExtractText()), msg.ToolCallID, content))
+				// Check likely_stale status
+				age := protectedStart - msgIdx
+				stale := isLikelyStale(msg.ToolName, age)
+				staleTag := ""
+				if stale {
+					staleTag = " likely_stale=true"
+				}
+				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d age=%d%s] id=%s\n%s\n\n",
+					msg.ToolName, len(msg.ExtractText()), age, staleTag, msg.ToolCallID, content))
 			}
 		}
 	}
@@ -546,58 +580,20 @@ Non-truncatable old tool outputs (missing ID or too small): %d
 Already truncated outputs: %d
 Tokens used: %.1f%%
 Tool calls since last management: %d
-Total turns: %d
 Total truncations so far: %d
 Total compactions so far: %d
-Last compact turn: %d
 Current LLM Context exists: %t
+force_truncate_recommended=%t
 </current_state>
 
 <latest_user_request>
 %s
 </latest_user_request>
 
-Review the conversation above and decide the best action.
-
-Decision rules:
-1. If truncatable output count is 0, do NOT call truncate_messages.
-2. If estimated savings is >= %d tokens, you MUST call truncate_messages first, then update_llm_context.
-3. If large outputs (%d) exist, consider truncating them even if total savings is modest.
-4. ALWAYS prefer truncate over no_action when large old outputs are present.
-5. When you truncate, you MUST also call update_llm_context to preserve key information from truncated outputs.
-6. Your update_llm_context MUST reflect the task shown in <latest_user_request> — do NOT fabricate a different task. ALWAYS include the latest user request verbatim in your LLM Context.
-7. ⚠️ CRITICAL: If Current LLM Context exists is false, you MUST call update_llm_context even if you don't truncate. The agent cannot continue without a valid LLM Context.
-8. DO NOT truncate outputs that contain content needed for <latest_user_request> — check each ID against the task first.
-9. DO NOT truncate small outputs (<500 chars) — negligible savings, high risk of losing critical details.
-10. Your top priority is TASK CONTINUITY — ensure the agent can understand what it's working on after your action.
-
-CRITICAL REMINDER: The update_llm_context call is NOT optional when:
-- You are truncating any messages (MUST pair with update_llm_context)
-- LLM Context is empty or missing (MUST call update_llm_context to initialize it)
-- Task state has changed (MUST call update_llm_context to keep it current)
-
-⚠️ IMMEDIATE ACTION REQUIRED:
-If "Current LLM Context exists: false" above, you MUST call update_llm_context NOW with a minimal LLM Context containing:
-- Current Task: [the latest user request from above]
-- Files Involved: [any files mentioned in recent messages]
-- Next Steps: [what the agent should work on next]
-
-Failure to initialize LLM Context when it's empty will cause task continuity failures.
-
-Messages marked [PROTECTED] are in the protected region and cannot be truncated.
-Messages marked [NON_TRUNCATABLE:NO_ID] cannot be truncated because they have no tool call ID.
-Only tool outputs with an explicit "id=" field are selectable for truncate_messages.
-
-Available actions:
-- **truncate_messages** - Remove old tool outputs to save space (specify IDs of outputs no longer needed).
-- **update_llm_context** - Rewrite the LLM Context to reflect current state
-- **compact** - Perform full context compaction by summarizing and removing old messages. Use this when many truncations have occurred and context is still under pressure, or a topic shift/task phase has been completed.
-- **no_action** - Context is healthy, no action needed. DO NOT use no_action if LLM Context is empty.
-
-Policy hint:
-- force_truncate_recommended=%t
-- If force_truncate_recommended is true, you SHOULD truncate_messages unless there's a strong reason not to.
-- Consider using compact if total_compactions is 0 but total_truncations is high (>5) and tokens used is still above 40%%.`,
+Review the conversation and decide: truncate old outputs, update LLM Context, compact, or no_action.
+Outputs marked "likely_stale=true" are strong truncation candidates.
+If force_truncate_recommended is true, you SHOULD truncate unless there's a strong reason not to.
+If LLM Context does not exist, you MUST call update_llm_context.`,
 		truncatableCount,
 		agentctx.RecentMessagesKeep,
 		estimatedSavingsTokens,
@@ -606,15 +602,11 @@ Policy hint:
 		truncatedCount,
 		tokenPercent*100,
 		agentCtx.AgentState.ToolCallsSinceLastTrigger,
-		agentCtx.AgentState.TotalTurns,
 		agentCtx.AgentState.TotalTruncations,
 		agentCtx.AgentState.TotalCompactions,
-		agentCtx.AgentState.LastCompactTurn,
 		!llmContextEmpty,
-		latestUserRequest,
-		mgmtForceTruncateSavingsTokens,
-		largeMessageCount,
 		recommendedTruncate,
+		latestUserRequest,
 	)
 
 	messages = append(messages, llm.LLMMessage{

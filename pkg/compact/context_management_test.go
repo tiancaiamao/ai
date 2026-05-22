@@ -463,8 +463,84 @@ func TestCompactWithCtx_ContextCancellationStopsRetry(t *testing.T) {
 		t.Fatal("expected nil result on cancellation")
 	}
 	// Should have made at most 2 attempts (first fail, then cancelled during backoff)
-	n := atomic.LoadInt32(&attempts)
+		n := atomic.LoadInt32(&attempts)
 	if n > 2 {
 		t.Fatalf("expected at most 2 attempts before cancellation, got %d", n)
+	}
+}
+
+func TestIsLikelyStale(t *testing.T) {
+	tests := []struct {
+		toolName string
+		age      int
+		want     bool
+	}{
+		{"bash", 5, false},
+		{"bash", 21, true},
+		{"bash", 20, false},
+		{"read", 21, true},
+		{"grep", 21, true},
+		{"find", 21, true},
+		{"edit", 25, false},
+		{"edit", 31, true},
+		{"write", 31, true},
+		{"write", 30, false},
+		{"update_llm_context", 50, false},
+		{"unknown_tool", 100, false},
+	}
+
+	for _, tt := range tests {
+		got := isLikelyStale(tt.toolName, tt.age)
+		if got != tt.want {
+			t.Errorf("isLikelyStale(%q, %d) = %v, want %v", tt.toolName, tt.age, got, tt.want)
+		}
+	}
+}
+
+func TestBuildContextMgmtMessagesAnnotatesLikelyStale(t *testing.T) {
+	// Create a conversation with enough messages for some to be "stale"
+	agentCtx := agentctx.NewAgentContext("system")
+	agentCtx.LLMContext = "existing context"
+
+	// Add 25 tool results + 5 protected user messages = 30 total
+	// protectedStart = 30 - 5 = 25, so tool results at index 0..24 are truncatable
+	// A tool result at index 0 has age = 25-0 = 25, which is > 20 for bash
+	for i := 0; i < 25; i++ {
+		id := fmt.Sprintf("call-%02d", i)
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages,
+					agentctx.NewToolResultMessage(id, "bash", []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: strings.Repeat("x", 1000)},
+			}, false),
+		)
+	}
+	for i := 0; i < 5; i++ {
+		agentCtx.RecentMessages = append(agentCtx.RecentMessages,
+			agentctx.NewUserMessage(fmt.Sprintf("user-msg-%d", i)),
+		)
+	}
+
+	compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
+	msgs := compactor.buildContextMgmtMessages(agentCtx)
+
+	history := msgs[0].Content
+
+	// Tool outputs near the protected region (age < 20) should NOT have likely_stale
+	// Tool outputs far from protected (age > 20) should have likely_stale=true
+	if !strings.Contains(history, "likely_stale=true") {
+		t.Error("expected likely_stale=true annotation for old bash outputs")
+	}
+	if !strings.Contains(history, "age=") {
+		t.Error("expected age= annotation on tool outputs")
+	}
+
+	// Verify that not ALL outputs are marked stale — recent ones shouldn't be
+	// Count likely_stale occurrences
+	staleCount := strings.Count(history, "likely_stale=true")
+	totalSelectable := strings.Count(history, "] id=call-")
+	if staleCount == 0 {
+		t.Error("expected some outputs to be marked likely_stale=true")
+	}
+	if staleCount == totalSelectable {
+		t.Error("expected some outputs NOT to be marked likely_stale (recent ones)")
 	}
 }
