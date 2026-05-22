@@ -152,11 +152,16 @@ func TestBuildPhase2MessagesTokenUsage(t *testing.T) {
 		} else if i%3 == 1 {
 			agentCtx.RecentMessages = append(agentCtx.RecentMessages,
 				agentctx.NewAssistantMessage())
-		} else {
+				} else {
 			toolCallID := ""
-			// Make some selectable
-			if i == 2 || i == 20 || i == 50 {
-				toolCallID = "call_candidate_" + strings.Repeat("0", 10-len(strings.Repeat("", i)))
+			// Make some selectable with distinct, matching IDs
+			switch i {
+			case 2:
+				toolCallID = "call_candidate_1"
+			case 20:
+				toolCallID = "call_candidate_2"
+			case 50:
+				toolCallID = "call_candidate_3"
 			}
 			output := strings.Repeat("x", 3000)
 			agentCtx.RecentMessages = append(agentCtx.RecentMessages,
