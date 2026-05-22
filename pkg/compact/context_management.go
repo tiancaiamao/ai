@@ -500,6 +500,12 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 		conv.WriteString("\n\n")
 	}
 
+		// Build candidate lookup by ID for reuse in annotations
+	candidateByID := make(map[string]truncationCandidate, len(candidates))
+	for _, cand := range candidates {
+		candidateByID[cand.ID] = cand
+	}
+
 	conv.WriteString("## Conversation History\n\n")
 
 	for msgIdx, msg := range agentCtx.RecentMessages {
@@ -545,19 +551,18 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 				// Older events may not carry tool_call_id and cannot be targeted by truncate_messages.
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
-			} else {
-				// Check likely_stale status
+						} else {
+				// Lookup pre-computed stale status from candidates
 				age := protectedStart - msgIdx
-				stale := isLikelyStale(msg.ToolName, age)
 				staleTag := ""
-				if stale {
+				if cand, ok := candidateByID[msg.ToolCallID]; ok && cand.LikelyStale {
 					staleTag = " likely_stale=true"
 				}
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d age=%d%s] id=%s\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), age, staleTag, msg.ToolCallID, content))
 			}
 		}
-	}
+		}
 
 	messages := []llm.LLMMessage{{
 		Role:    "user",
