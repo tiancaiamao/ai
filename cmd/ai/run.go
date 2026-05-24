@@ -338,14 +338,19 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
+	// Watch for subprocess exit and close stdinWriter so cmd.Wait() can return.
+	// Without this, Go's internal pipe-reader goroutine blocks forever when
+	// the subprocess exits (e.g. on --timeout), preventing cmd.Wait() from
+	// returning and leaving a zombie ai serve process.
+	go func() {
+		cmd.Process.Wait() // blocks until subprocess exits
+		stdinWriter.Close()
+	}()
+
 	// Print run ID to stdout — caller can capture this.
 	fmt.Println(id)
 
 	// Wait for subprocess to exit.
-	// Note: we do NOT close stdin on agent_end — ai serve should remain alive
-	// to accept further ai send commands. The subprocess exits when:
-	// - stdin is explicitly closed (ai kill, or socket shutdown command)
-	// - the subprocess crashes
 	waitErr := cmd.Wait()
 
 	// Determine final status.
