@@ -9,6 +9,10 @@ description: Orchestrate a real-time alternating debate between two subagents us
 
 Run a structured debate between two agents (proposer FOR, opposer AGAINST). You are the judge — you control rounds by prompting each agent in turn. Agents write to a shared file and you read their output.
 
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。辩论结束后必须 `ai kill` + `tmux kill-session` 清理双方 agent。
+
+**⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
+
 **Key optimization:** R1 gives full context (working directory, file paths, reference links) so the agent doesn't waste time discovering what you already know. R2+ inlines the opponent's argument in the prompt so the agent doesn't re-read the debate file.
 
 ## Setup
