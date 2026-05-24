@@ -12,14 +12,15 @@ Mandatory pairing: **truncate_messages MUST always be paired with update_llm_con
 
 Accuracy: LLM Context MUST describe ONLY what is VISIBLE in the conversation. NEVER fabricate. Preserve EXACT identifiers (file paths, branch names, error messages, function names).
 
-## Actions
+## Decision Flow
 
-1. **truncate_messages** — Remove old tool outputs by `message_ids`. Pair with update_llm_context.
-2. **update_llm_context** — Rewrite LLM Context with current truth. REQUIRED after truncate, or when context is empty.
-3. **compact** — Full context compaction (summarize + remove old messages). Use alone, not paired with truncate.
-4. **no_action** — Context is healthy, no action needed.
+Follow this order — pick the FIRST matching condition:
 
-Recommended sequence: truncate_messages → update_llm_context.
+1. **LLM Context is empty?** → call `update_llm_context` (alone, no truncate needed).
+2. **Stale tool outputs exist** (marked `likely_stale=true` or large outputs no longer needed)? → call `truncate_messages` + `update_llm_context`.
+3. **Many truncations already done** (>5) but context is still under pressure (>40% tokens), OR topic has fundamentally shifted? → call `compact` (alone, not paired with truncate).
+4. **None of the above?** → call `no_action`.
+
 Call each action at most once.
 
 ## Tool Output Freshness Hints

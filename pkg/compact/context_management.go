@@ -40,6 +40,12 @@ const (
 	// If there are any messages with char count above this threshold,
 	// the compactor should consider truncating them even if total savings is low.
 	mgmtLargeMessageThreshold = 2000 // Reduced from 3000 to be more aggressive
+
+	// Heuristic age thresholds for marking tool outputs as likely stale.
+	// bash/read/grep/find are typically one-shot investigative results.
+	mgmtStaleAgeInvestigative = 20
+	// edit/write confirm modifications usually already reflected in later work.
+	mgmtStaleAgeModification = 30
 )
 
 // ContextManagerConfig holds configuration.
@@ -53,6 +59,23 @@ type ContextManagerConfig struct {
 	IntervalHigh   int
 
 	AutoCompact bool
+
+	// StaleAnnotation controls whether tool outputs are annotated with
+	// age and likely_stale markers in context management messages.
+	// When false (default), the behavior matches the main branch (no annotation).
+	StaleAnnotation bool
+
+	// StaleAgeInvestigative is the age threshold for investigative tools
+	// (bash/read/grep/find). Default 20 if not set.
+	StaleAgeInvestigative int
+
+	// StaleAgeModification is the age threshold for modification tools
+	// (edit/write). Default 30 if not set.
+	StaleAgeModification int
+
+	// ContextMgmtPrompt overrides the built-in context management system prompt.
+	// If empty, the default from pkg/prompt is used.
+	ContextMgmtPrompt string
 }
 
 // DefaultContextManagerConfig returns defaults.
@@ -68,6 +91,24 @@ func DefaultContextManagerConfig() *ContextManagerConfig {
 
 		AutoCompact: true,
 	}
+}
+
+// staleAgeInvestigative returns the configured investigative stale threshold,
+// defaulting to mgmtStaleAgeInvestigative if not set.
+func (c *ContextManagerConfig) staleAgeInvestigative() int {
+	if c.StaleAgeInvestigative <= 0 {
+		return mgmtStaleAgeInvestigative
+	}
+	return c.StaleAgeInvestigative
+}
+
+// staleAgeModification returns the configured modification stale threshold,
+// defaulting to mgmtStaleAgeModification if not set.
+func (c *ContextManagerConfig) staleAgeModification() int {
+	if c.StaleAgeModification <= 0 {
+		return mgmtStaleAgeModification
+	}
+	return c.StaleAgeModification
 }
 
 // ContextManager performs lightweight LLM-driven context management.
@@ -95,12 +136,17 @@ func NewContextManager(
 	if config == nil {
 		config = DefaultContextManagerConfig()
 	}
-	return &ContextManager{
+	// Use custom prompt if provided via config, otherwise use the passed-in default.
+	effectivePrompt := systemPrompt
+	if config.ContextMgmtPrompt != "" {
+		effectivePrompt = config.ContextMgmtPrompt
+	}
+		return &ContextManager{
 		config:        config,
 		model:         model,
 		apiKey:        apiKey,
 		contextWindow: contextWindow,
-		systemPrompt:  systemPrompt,
+		systemPrompt:  effectivePrompt,
 		compactor:     compactor,
 	}
 }
@@ -389,7 +435,7 @@ type truncationCandidate struct {
 	Age          int  // number of messages between this output and the protected region
 }
 
-func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart int) ([]truncationCandidate, int, int) {
+func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart int, staleAnnotation bool, staleAgeInvestigative int, staleAgeModification int) ([]truncationCandidate, int, int) {
 	if protectedStart > len(agentCtx.RecentMessages) {
 		protectedStart = len(agentCtx.RecentMessages)
 	}
@@ -429,13 +475,13 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 
 		age := protectedStart - i
 
-		candidates = append(candidates, truncationCandidate{
+				candidates = append(candidates, truncationCandidate{
 			ID:           id,
 			ToolName:     msg.ToolName,
 			Chars:        len(text),
 			SavingsToken: savedChars / 4,
 			Age:          age,
-			LikelyStale:  isLikelyStale(msg.ToolName, age),
+			LikelyStale:  staleAnnotation && isLikelyStale(msg.ToolName, age, staleAgeInvestigative, staleAgeModification),
 		})
 	}
 
@@ -454,17 +500,17 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 // override it when the output contains content relevant to the current task.
 //
 // Rules:
-//   - bash/read/grep/find outputs older than 20 messages: typically one-shot
+//   - bash/read/grep/find outputs older than staleAgeInvestigative: typically one-shot
 //     investigative results whose findings are already captured.
-//   - edit/write outputs older than 30 messages: confirm modifications, but
+//   - edit/write outputs older than staleAgeModification: confirm modifications, but
 //     the change is usually already reflected in later work.
 //   - Other tool types: not marked stale (insufficient signal).
-func isLikelyStale(toolName string, age int) bool {
+func isLikelyStale(toolName string, age int, staleAgeInvestigative int, staleAgeModification int) bool {
 	switch toolName {
 	case "bash", "read", "grep", "find":
-		return age > 20
+		return age > staleAgeInvestigative
 	case "edit", "write":
-		return age > 30
+		return age > staleAgeModification
 	default:
 		return false
 	}
@@ -479,7 +525,12 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 		protectedStart = 0
 	}
 
-	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
+		candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(
+		agentCtx, protectedStart,
+		c.config.StaleAnnotation,
+		c.config.staleAgeInvestigative(),
+		c.config.staleAgeModification(),
+	)
 	truncatableCount := len(candidates)
 	estimatedSavingsTokens := 0
 	largeMessageCount := 0
@@ -500,7 +551,7 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 		conv.WriteString("\n\n")
 	}
 
-		// Build candidate lookup by ID for reuse in annotations
+	// Build candidate lookup by ID for reuse in annotations
 	candidateByID := make(map[string]truncationCandidate, len(candidates))
 	for _, cand := range candidates {
 		candidateByID[cand.ID] = cand
@@ -547,22 +598,29 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 				// Protected: show content but hide ID so LLM can't select it
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d PROTECTED]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
-			} else if strings.TrimSpace(msg.ToolCallID) == "" {
+						} else if strings.TrimSpace(msg.ToolCallID) == "" {
 				// Older events may not carry tool_call_id and cannot be targeted by truncate_messages.
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
-						} else {
-				// Lookup pre-computed stale status from candidates
-				age := protectedStart - msgIdx
-				staleTag := ""
-				if cand, ok := candidateByID[msg.ToolCallID]; ok && cand.LikelyStale {
-					staleTag = " likely_stale=true"
+			} else {
+				if c.config.StaleAnnotation {
+					// Annotate with age and likely_stale when enabled
+					age := protectedStart - msgIdx
+					staleTag := ""
+					if cand, ok := candidateByID[msg.ToolCallID]; ok && cand.LikelyStale {
+						age = cand.Age
+						staleTag = " likely_stale=true"
+					}
+					conv.WriteString(fmt.Sprintf("[tool:%s chars=%d age=%d%s] id=%s\n%s\n\n",
+						msg.ToolName, len(msg.ExtractText()), age, staleTag, msg.ToolCallID, content))
+				} else {
+					// Default behavior: no age/stale annotation
+					conv.WriteString(fmt.Sprintf("[tool:%s chars=%d] id=%s\n%s\n\n",
+						msg.ToolName, len(msg.ExtractText()), msg.ToolCallID, content))
 				}
-				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d age=%d%s] id=%s\n%s\n\n",
-					msg.ToolName, len(msg.ExtractText()), age, staleTag, msg.ToolCallID, content))
 			}
 		}
-		}
+	}
 
 	messages := []llm.LLMMessage{{
 		Role:    "user",

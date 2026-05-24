@@ -49,7 +49,7 @@ func TestCollectTruncationCandidatesFiltersBySelectability(t *testing.T) {
 	}
 
 	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
-	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart)
+		candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart, true, mgmtStaleAgeInvestigative, mgmtStaleAgeModification)
 
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 truncation candidate, got %d", len(candidates))
@@ -80,7 +80,7 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 		agentctx.NewUserMessage("recent-5"),
 	}
 
-	compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
+			compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
 	msgs := compactor.buildContextMgmtMessages(agentCtx)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 context management messages, got %d", len(msgs))
@@ -489,8 +489,8 @@ func TestIsLikelyStale(t *testing.T) {
 		{"unknown_tool", 100, false},
 	}
 
-	for _, tt := range tests {
-		got := isLikelyStale(tt.toolName, tt.age)
+		for _, tt := range tests {
+		got := isLikelyStale(tt.toolName, tt.age, mgmtStaleAgeInvestigative, mgmtStaleAgeModification)
 		if got != tt.want {
 			t.Errorf("isLikelyStale(%q, %d) = %v, want %v", tt.toolName, tt.age, got, tt.want)
 		}
@@ -517,9 +517,18 @@ func TestBuildContextMgmtMessagesAnnotatesLikelyStale(t *testing.T) {
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages,
 			agentctx.NewUserMessage(fmt.Sprintf("user-msg-%d", i)),
 		)
-	}
+		}
 
-	compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
+	compactor := NewContextManager(&ContextManagerConfig{
+		TokenLow:        MgmtTokenLow,
+		TokenMedium:     MgmtTokenMedium,
+		TokenHigh:       MgmtTokenHigh,
+		IntervalLow:     MgmtIntervalLow,
+		IntervalMedium:  MgmtIntervalMedium,
+		IntervalHigh:    MgmtIntervalHigh,
+		AutoCompact:     true,
+		StaleAnnotation: true,
+	}, llmModelStub(), "", 200000, "system", nil)
 	msgs := compactor.buildContextMgmtMessages(agentCtx)
 
 	history := msgs[0].Content

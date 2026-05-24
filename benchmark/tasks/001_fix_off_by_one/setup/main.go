@@ -6,7 +6,7 @@ import "fmt"
 // BUG: This has an off-by-one error
 func SumRange(n int) int {
 	sum := 0
-	for i := 1; i < n; i++ { // BUG: should be i <= n
+		for i := 1; i <= n; i++ {
 		sum += i
 	}
 	return sum

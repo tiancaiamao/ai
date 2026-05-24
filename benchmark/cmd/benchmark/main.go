@@ -169,7 +169,8 @@ type AgentRunner interface {
 	Name() string
 }
 
-// AIAgentRunner runs the ai agent via rpc mode, parsing JSON events directly
+// AIAgentRunner runs the ai agent via serve+watch mode with --follow --pretty,
+// producing compact readable output instead of the full streaming JSON event dump.
 type AIAgentRunner struct {
 	BinaryPath string
 	MaxTurns   int
@@ -181,54 +182,103 @@ func (r *AIAgentRunner) Name() string {
 }
 
 func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
-		var ctx context.Context
+	var ctx context.Context
 	var cancel context.CancelFunc
 
-	// Only set timeout if Timeout > 0
 	if r.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(context.Background(), r.Timeout)
 		defer cancel()
 	} else {
-		ctx = context.Background()
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
 	}
 
-	// Build the RPC prompt as JSON
-	rpcPrompt := fmt.Sprintf(`{"type":"prompt","message":%q}`, prompt)
+	// 1. Write prompt to a temp file (avoids OS ARG_MAX limits on long prompts).
+	promptFile, err := os.CreateTemp("", "benchmark-prompt-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("failed to create prompt temp file: %w", err)
+	}
+	promptPath := promptFile.Name()
+	defer os.Remove(promptPath)
+	if _, err := promptFile.WriteString(prompt); err != nil {
+		promptFile.Close()
+		return "", fmt.Errorf("failed to write prompt temp file: %w", err)
+	}
+	promptFile.Close()
 
-	// Build RPC command with optional --max-turns and --timeout
-	aiArgs := []string{r.BinaryPath, "--mode", "rpc"}
+	// 2. Start "ai serve" with the prompt as initial input.
+	serveArgs := []string{r.BinaryPath, "serve", "--input-file", promptPath}
 	if r.MaxTurns > 0 {
-		aiArgs = append(aiArgs, "--max-turns", fmt.Sprintf("%d", r.MaxTurns))
+		serveArgs = append(serveArgs, "--max-turns", fmt.Sprintf("%d", r.MaxTurns))
 	}
 	if r.Timeout > 0 {
-		aiArgs = append(aiArgs, "--timeout", r.Timeout.String())
+		serveArgs = append(serveArgs, "--timeout", r.Timeout.String())
 	}
 
-	// Run ai --mode rpc directly, capturing its JSON event stream on stdout.
-	// No longer pipes through ag conv — analyzeAgentOutput() parses raw JSON events.
-	aiCmd := exec.CommandContext(ctx, aiArgs[0], aiArgs[1:]...)
+	serveCmd := exec.CommandContext(ctx, serveArgs[0], serveArgs[1:]...)
+	serveCmd.Dir = taskDir
+	serveCmd.Env = nonInteractiveCommandEnv()
 
-	var stdout, stderr bytes.Buffer
-	aiCmd.Stdin = bytes.NewBufferString(rpcPrompt)
-	aiCmd.Stdout = &stdout
-	aiCmd.Stderr = &stderr
+	// Capture run ID from serve's stdout (first line).
+	var serveStdout bytes.Buffer
+	serveCmd.Stdout = &serveStdout
+	var serveStderr bytes.Buffer
+	serveCmd.Stderr = &serveStderr
 
-	aiCmd.Dir = taskDir
-	aiCmd.Env = nonInteractiveCommandEnv()
-
-	if err := aiCmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start ai: %w", err)
+	if err := serveCmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start ai serve: %w", err)
 	}
 
-		aiErr := aiCmd.Wait()
-
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n[stderr]\n" + stderr.String()
+	// Wait briefly for serve to print the run ID.
+	runID := ""
+	for i := 0; i < 100; i++ {
+		time.Sleep(50 * time.Millisecond)
+		line := strings.TrimSpace(serveStdout.String())
+		if line != "" {
+			// Take first line as run ID.
+			if idx := strings.Index(line, "\n"); idx >= 0 {
+				runID = line[:idx]
+			} else {
+				runID = line
+			}
+			break
+		}
+	}
+	if runID == "" {
+		serveCmd.Process.Kill()
+		serveCmd.Wait()
+		return "", fmt.Errorf("ai serve did not output run ID")
 	}
 
-	if aiErr != nil {
-		return output, aiErr
+	// 3. Run "ai watch --follow --pretty --id <runID>" to capture compact output.
+	watchArgs := []string{r.BinaryPath, "watch", "--follow", "--pretty", "--id", runID}
+	if r.Timeout > 0 {
+		watchArgs = append(watchArgs, "--timeout", "0") // wait until agent exits
+	}
+
+	watchCmd := exec.CommandContext(ctx, watchArgs[0], watchArgs[1:]...)
+	watchCmd.Env = nonInteractiveCommandEnv()
+
+	var watchStdout, watchStderr bytes.Buffer
+	watchCmd.Stdout = &watchStdout
+	watchCmd.Stderr = &watchStderr
+
+	watchErr := watchCmd.Run()
+
+	// 4. Kill the serve process (it stays alive after agent ends).
+	serveCmd.Process.Kill()
+	serveCmd.Wait()
+
+	output := watchStdout.String()
+	if watchStderr.Len() > 0 {
+		output += "\n[watch-stderr]\n" + watchStderr.String()
+	}
+	if serveStderr.Len() > 0 {
+		output += "\n[serve-stderr]\n" + serveStderr.String()
+	}
+
+	if watchErr != nil {
+		return output, watchErr
 	}
 	return output, nil
 }
@@ -671,9 +721,9 @@ func analyzeAgentOutput(output string) ProcessMetrics {
 	seenCapabilities := make(map[string]struct{})
 	logFiles := make(map[string]struct{})
 
-	lines := strings.Split(output, "\n")
+		lines := strings.Split(output, "\n")
 	for _, line := range lines {
-		events := parseRPCEvents(line)
+		events := parsePrettyToolEvents(line)
 		for _, ev := range events {
 			applyEventSignals(&metrics, ev, seenTools, seenCapabilities, logFiles)
 		}
@@ -792,67 +842,69 @@ func eventHasReadSignal(event toolEvent) bool {
 	return tool == "bash" && isReadCommand(strings.ToLower(event.Command))
 }
 
-// parseRPCEvents parses a single line from ai --mode rpc JSON event stream.
-// It extracts tool calls from tool_execution_start and tool_execution_end events.
+// parsePrettyToolEvents parses a single line from "ai watch --follow --pretty" output.
+// Pretty format tool lines look like:
 //
-// Event formats produced by ai rpc:
-//
-//	{"type":"tool_execution_start","toolName":"read","args":{"path":"/foo/bar.go"},...}
-//	{"type":"tool_execution_end","toolName":"bash","result":{...},...}
-func parseRPCEvents(line string) []toolEvent {
-	line = strings.TrimSpace(line)
-	if !strings.HasPrefix(line, "{") {
+//	  tool: tool read start (path=/foo/bar.go)
+//	  tool: tool read done
+//	  tool: tool bash start (command=go test ./...)
+//	  tool: tool bash done
+//	  tool: tool grep start (pattern=TODO query=...)
+var prettyToolStartRe = regexp.MustCompile(
+	`^\s*tool:\s+tool\s+(\S+)\s+start(?:\s*\((.+)\))?\s*$`)
+
+func parsePrettyToolEvents(line string) []toolEvent {
+	m := prettyToolStartRe.FindStringSubmatch(line)
+	if m == nil {
 		return nil
 	}
 
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(line), &envelope); err != nil {
-		return nil
+	toolName := m[1]
+	detail := m[2] // may be empty
+
+	event := toolEvent{Tool: toolName}
+
+	if detail != "" {
+		// formatToolDetail outputs space-separated key=value pairs.
+		// The last key's value may contain spaces (e.g., "command=go test ./...").
+		// Parse by finding keys (= preceded by a word character).
+		// Known keys from formatToolDetail: path, file, command, pattern, query, url.
+		event.Command = extractDetailField(detail, "command")
+		event.File = extractDetailField(detail, "path")
+		if event.File == "" {
+			event.File = extractDetailField(detail, "file")
+		}
+		if event.Command != "" {
+			event.Payload = event.Command
+		} else if event.File != "" {
+			event.Payload = event.File
+		} else {
+			event.Payload = detail
+		}
 	}
 
-	typ, _ := envelope["type"].(string)
+	return []toolEvent{event}
+}
 
-	switch typ {
-	case "tool_execution_start":
-		toolName, _ := envelope["toolName"].(string)
-		if toolName == "" {
-			return nil
-		}
-		args, _ := envelope["args"].(map[string]any)
-
-		event := toolEvent{Tool: toolName}
-
-		// Extract file path from args
-		if path, ok := args["path"].(string); ok {
-			event.File = path
-		} else if file, ok := args["file"].(string); ok {
-			event.File = file
-		}
-
-		// Extract command for bash tool
-		if cmd, ok := args["command"].(string); ok {
-			event.Command = cmd
-			event.Payload = cmd
-		}
-
-		// For tools with structured args, store a compact representation
-		if event.Payload == "" && len(args) > 0 {
-			if bs, err := json.Marshal(args); err == nil {
-				event.Payload = string(bs)
-			}
-		}
-
-		return []toolEvent{event}
-
-		case "tool_execution_end":
-		// tool_execution_end events don't add new tool calls —
-		// tool_execution_start already captured the invocation.
-		// We may want to extract result text here in the future for
-		// detecting test output patterns.
-		return nil
+// extractDetailField extracts the value for a given key from a detail string
+// like "path=/foo command=go test ./...". The last key's value extends to end of string.
+func extractDetailField(detail, key string) string {
+	prefix := key + "="
+	idx := strings.Index(detail, prefix)
+	if idx < 0 {
+		return ""
 	}
-
-	return nil
+	val := detail[idx+len(prefix):]
+	// Find the next " key=" boundary to truncate.
+	for _, k := range []string{"path=", "file=", "command=", "pattern=", "query=", "url="} {
+		if k == prefix {
+			continue
+		}
+		if ki := strings.Index(val, " "+k); ki >= 0 {
+			val = val[:ki]
+		}
+	}
+	return strings.Trim(val, "\"")
 }
 
 func isSearchCommand(cmd string) bool {

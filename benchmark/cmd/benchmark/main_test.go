@@ -3,29 +3,34 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// rpcToolStart builds a tool_execution_start JSON line as produced by ai --mode rpc.
-func rpcToolStart(tool string, args map[string]any) string {
-	envelope := map[string]any{
-		"type":     "tool_execution_start",
-		"toolName": tool,
-		"args":     args,
+// prettyToolStart builds a pretty-format tool start line as produced by "ai watch --follow --pretty".
+func prettyToolStart(tool string, args map[string]any) string {
+	detailParts := make([]string, 0)
+	for _, key := range []string{"path", "file", "command", "pattern", "query"} {
+		if v, ok := args[key]; ok {
+			detailParts = append(detailParts, fmt.Sprintf("%s=%v", key, v))
+		}
 	}
-	b, _ := json.Marshal(envelope)
-	return string(b)
+	detail := ""
+	if len(detailParts) > 0 {
+		detail = " (" + strings.Join(detailParts, " ") + ")"
+	}
+	return fmt.Sprintf("  tool: tool %s start%s", tool, detail)
 }
 
 func TestAnalyzeAgentOutput(t *testing.T) {
 	output := strings.Join([]string{
-		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
-		rpcToolStart("read", map[string]any{"path": "setup/app.py"}),
-		rpcToolStart("edit", map[string]any{"file": "setup/app.py"}),
-		rpcToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
+		prettyToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		prettyToolStart("read", map[string]any{"path": "setup/app.py"}),
+		prettyToolStart("edit", map[string]any{"file": "setup/app.py"}),
+		prettyToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
 	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
@@ -66,10 +71,10 @@ func TestEvaluateTaskConstraints(t *testing.T) {
 	}
 
 	output := strings.Join([]string{
-		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
-		rpcToolStart("read", map[string]any{"path": "app.py"}),
-		rpcToolStart("edit", map[string]any{"file": "app.py"}),
-		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+		prettyToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		prettyToolStart("read", map[string]any{"path": "app.py"}),
+		prettyToolStart("edit", map[string]any{"file": "app.py"}),
+		prettyToolStart("bash", map[string]any{"command": "pytest"}),
 	}, "\n")
 	metrics := analyzeAgentOutput(output)
 
@@ -94,8 +99,8 @@ func TestEvaluateTaskConstraints(t *testing.T) {
 
 func TestAnalyzeAgentOutputWithBashToolEvents(t *testing.T) {
 	output := strings.Join([]string{
-		rpcToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
-		rpcToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
+		prettyToolStart("bash", map[string]any{"command": "grep -n BUG app.py"}),
+		prettyToolStart("bash", map[string]any{"command": "python3 -m pytest tests/test_app.py -v"}),
 	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
@@ -115,9 +120,9 @@ func TestAnalyzeAgentOutputWithBashToolEvents(t *testing.T) {
 
 func TestAnalyzeAgentOutputWithFileChangeAndReadSignals(t *testing.T) {
 	output := strings.Join([]string{
-		rpcToolStart("bash", map[string]any{"command": "nl -ba stage1_load.py"}),
-		rpcToolStart("bash", map[string]any{"command": "bash ../verify.sh"}),
-		rpcToolStart("edit", map[string]any{"file": "/tmp/task/setup/stage5_save.py"}),
+		prettyToolStart("bash", map[string]any{"command": "nl -ba stage1_load.py"}),
+		prettyToolStart("bash", map[string]any{"command": "bash ../verify.sh"}),
+		prettyToolStart("edit", map[string]any{"file": "/tmp/task/setup/stage5_save.py"}),
 	}, "\n")
 
 	metrics := analyzeAgentOutput(output)
@@ -157,7 +162,7 @@ func TestEvaluateTaskConstraintsReadRequirementWithBashCommands(t *testing.T) {
 		t.Fatalf("write constraints: %v", err)
 	}
 
-	output := rpcToolStart("bash", map[string]any{"command": "cat app.py"})
+	output := prettyToolStart("bash", map[string]any{"command": "cat app.py"})
 	metrics := analyzeAgentOutput(output)
 
 	bench := &Benchmark{MaxStepsMode: "soft"}
@@ -196,10 +201,10 @@ func TestEvaluateTaskConstraintsSoftMaxSteps(t *testing.T) {
 	}
 
 	output := strings.Join([]string{
-		rpcToolStart("read", map[string]any{"path": "app.py"}),
-		rpcToolStart("edit", map[string]any{"file": "app.py"}),
-		rpcToolStart("bash", map[string]any{"command": "pytest"}),
-		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+		prettyToolStart("read", map[string]any{"path": "app.py"}),
+		prettyToolStart("edit", map[string]any{"file": "app.py"}),
+		prettyToolStart("bash", map[string]any{"command": "pytest"}),
+		prettyToolStart("bash", map[string]any{"command": "pytest"}),
 	}, "\n")
 	metrics := analyzeAgentOutput(output)
 	bench := &Benchmark{MaxStepsMode: "soft"}
@@ -239,10 +244,10 @@ func TestEvaluateTaskConstraintsTaskHardOverride(t *testing.T) {
 	}
 
 	output := strings.Join([]string{
-		rpcToolStart("read", map[string]any{"path": "app.py"}),
-		rpcToolStart("edit", map[string]any{"file": "app.py"}),
-		rpcToolStart("bash", map[string]any{"command": "pytest"}),
-		rpcToolStart("bash", map[string]any{"command": "pytest"}),
+		prettyToolStart("read", map[string]any{"path": "app.py"}),
+		prettyToolStart("edit", map[string]any{"file": "app.py"}),
+		prettyToolStart("bash", map[string]any{"command": "pytest"}),
+		prettyToolStart("bash", map[string]any{"command": "pytest"}),
 	}, "\n")
 	metrics := analyzeAgentOutput(output)
 	bench := &Benchmark{MaxStepsMode: "soft"}

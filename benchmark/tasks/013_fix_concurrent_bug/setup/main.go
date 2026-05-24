@@ -3,21 +3,22 @@ package main
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Counter is a simple counter that should be thread-safe
 type Counter struct {
-	value int
+	value int64
 }
 
 // Increment increases the counter by 1
 func (c *Counter) Increment() {
-	c.value++
+	atomic.AddInt64(&c.value, 1)
 }
 
 // Value returns the current counter value
 func (c *Counter) Value() int {
-	return c.value
+	return int(atomic.LoadInt64(&c.value))
 }
 
 func main() {
