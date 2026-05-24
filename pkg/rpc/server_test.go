@@ -147,7 +147,7 @@ func TestMissingHandler(t *testing.T) {
 	if resp.Success {
 		t.Error("Expected error when handler not registered")
 	}
-		if !strings.Contains(strings.ToLower(resp.Error), "handler registered") {
+	if !strings.Contains(strings.ToLower(resp.Error), "handler registered") {
 		t.Errorf("Expected error about missing handler, got '%s'", resp.Error)
 	}
 }
@@ -296,7 +296,7 @@ func TestCommandWithDataField(t *testing.T) {
 func TestHandlerReturnTypes(t *testing.T) {
 	server := NewServer()
 
-		// Handler that returns a struct
+	// Handler that returns a struct
 	server.Register("get_state", func(cmd RPCCommand) (any, error) {
 		return &SessionState{
 			MessageCount: 42,
@@ -336,6 +336,7 @@ var (
 	_ io.Reader
 	_ context.Context
 )
+
 func TestContextReader_Cancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -62,7 +62,7 @@ func TestChangeWorkspaceTool_AbsolutePath(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-		text := result[0].(agentctx.TextContent).Text
+	text := result[0].(agentctx.TextContent).Text
 	if !strings.Contains(text, "Workspace changed to") {
 		t.Errorf("result = %q, should contain 'Workspace changed to'", text)
 	}

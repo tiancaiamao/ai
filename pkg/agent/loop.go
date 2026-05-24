@@ -67,7 +67,7 @@ type LoopConfig struct {
 	LLMFirstResponseTimeout time.Duration
 	// EnableCheckpoint enables automatic checkpoint creation (default true).
 	EnableCheckpoint bool
-		// MaxLoopGuardFeedback is the number of feedback rounds the loop guard gives
+	// MaxLoopGuardFeedback is the number of feedback rounds the loop guard gives
 	// the LLM before escalating to a hard abort (0=default=2).
 	MaxLoopGuardFeedback int
 	// Hooks is the hook registry for BeforeModel/AfterTool/AfterAgent hooks.
@@ -188,7 +188,7 @@ func runInnerLoop(
 			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
 		}
 
-				// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
+		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
 		config.Hooks.RunBeforeModel(HookContext{
 			Ctx:      ctx,
 			AgentCtx: agentCtx,
@@ -283,7 +283,7 @@ func runInnerLoop(
 		}
 	}
 
-		// Run AfterAgent hooks: sequential, no data passing, before AgentEndEvent.
+	// Run AfterAgent hooks: sequential, no data passing, before AgentEndEvent.
 	config.Hooks.RunAfterAgent(HookContext{
 		Ctx:      ctx,
 		AgentCtx: agentCtx,

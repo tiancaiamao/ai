@@ -17,9 +17,9 @@ import (
 // ---------------------------------------------------------------------------
 func makeToolResult(toolName, text string) agentctx.AgentMessage {
 	return agentctx.AgentMessage{
-		Role:      "toolResult",
-		ToolName:  toolName,
-		Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: text}},
+		Role:     "toolResult",
+		ToolName: toolName,
+		Content:  []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: text}},
 	}
 }
 
@@ -421,9 +421,9 @@ func TestBashEmptyOutput(t *testing.T) {
 	}
 
 	result := agentctx.AgentMessage{
-		Role:    "toolResult",
+		Role:     "toolResult",
 		ToolName: "bash",
-		Content: []agentctx.ContentBlock{},
+		Content:  []agentctx.ContentBlock{},
 	}
 	modified, err := guard.afterTool(makeHookContext(), "bash", result)
 	if err != nil {
@@ -438,7 +438,7 @@ func TestBashEmptyOutput(t *testing.T) {
 func TestRegisterDuplicatePanics(t *testing.T) {
 	name := "test_duplicate_panic"
 	spec := MiddlewareSpec{
-		Name:      name,
+		Name: name,
 		AfterTool: func(params map[string]any) (agent.AfterToolHook, error) {
 			return func(hctx agent.HookContext, toolName string, result agentctx.AgentMessage) (agentctx.AgentMessage, error) {
 				return result, nil
@@ -491,7 +491,7 @@ func TestDefaultPatternsCoverage(t *testing.T) {
 		input   string
 		matches bool
 	}{
-				{"rm -rf /", true},
+		{"rm -rf /", true},
 		{"rm -fr /home", true},
 		{"rm -r /something ", true},
 		{"kill -9 1234", true},

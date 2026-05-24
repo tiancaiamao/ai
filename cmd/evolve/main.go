@@ -38,17 +38,17 @@ type TestCase struct {
 
 // StructuralCheck defines a pattern to look for in subagent output.
 type StructuralCheck struct {
-	ID       string `json:"id"`
-	Pattern  string `json:"pattern"`  // regex or text to find in output
-	Negate   bool   `json:"negate"`   // if true, pattern must NOT appear
-	Weight   float64 `json:"weight"`  // weight for this check (0-1)
+	ID      string  `json:"id"`
+	Pattern string  `json:"pattern"` // regex or text to find in output
+	Negate  bool    `json:"negate"`  // if true, pattern must NOT appear
+	Weight  float64 `json:"weight"`  // weight for this check (0-1)
 }
 
 // TestSuite is a collection of test cases.
 type TestSuite struct {
-	Name      string     `json:"name"`
-	TargetPrompt string  `json:"target_prompt"`
-	TestCases []TestCase `json:"test_cases"`
+	Name         string     `json:"name"`
+	TargetPrompt string     `json:"target_prompt"`
+	TestCases    []TestCase `json:"test_cases"`
 }
 
 // TestResult is the result of running a single test case.
@@ -197,10 +197,10 @@ func initWorkspace(workDir string) error {
 			},
 			// --- Behavioral / Structural Tests ---
 			{
-				ID:       "s1",
-				Category: "behavior",
-				Type:     "structural",
-				Question: "You are an AI agent. You just read a file at /tmp/test.txt and got its contents. The file content is no longer needed. Your current task is to list directory contents. Read /tmp/test.txt then list /tmp directory.",
+				ID:               "s1",
+				Category:         "behavior",
+				Type:             "structural",
+				Question:         "You are an AI agent. You just read a file at /tmp/test.txt and got its contents. The file content is no longer needed. Your current task is to list directory contents. Read /tmp/test.txt then list /tmp directory.",
 				ExpectedBehavior: "Agent should truncate the file read output after using it, before or after doing the next task.",
 				StructuralChecks: []StructuralCheck{
 					{ID: "s1_truncate", Pattern: "truncate", Weight: 0.8},
@@ -221,10 +221,10 @@ func initWorkspace(workDir string) error {
 
 	// Create default config
 	config := EvolutionConfig{
-		PromptFile:        "pkg/prompt/context_management.md",
-		TestSuiteFile:     "test_suite.json",
-		WorkDir:           workDir,
-		MaxIterations:     5,
+		PromptFile:         "pkg/prompt/context_management.md",
+		TestSuiteFile:      "test_suite.json",
+		WorkDir:            workDir,
+		MaxIterations:      5,
 		PromptLengthWeight: 0.1,
 	}
 	configPath := filepath.Join(workDir, "config.json")

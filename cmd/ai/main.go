@@ -96,7 +96,7 @@ func deprecatedModeDispatch() {
 
 	fmt.Fprintf(os.Stderr, "warning: running without subcommand is deprecated, use 'ai serve' instead\n")
 
-		mode := flag.String("mode", "rpc", "Run mode (rpc). Default: rpc")
+	mode := flag.String("mode", "rpc", "Run mode (rpc). Default: rpc")
 	sessionPathFlag := flag.String("session", "", "Session file path")
 	maxTurnsFlag := flag.Int("max-turns", 0, "Maximum conversation turns (0 = unlimited)")
 	timeoutFlag := flag.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")

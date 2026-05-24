@@ -157,6 +157,9 @@ func TestFindSkill_LoadNonexistentReturnsError(t *testing.T) {
 
 func TestFindSkill_CaseInsensitiveSearch(t *testing.T) {
 	tool := NewFindSkillTool(testSkills(), nil)
+	// Avoid loading the real user's skill-index.json which can inject
+	// unrelated matches and push expected results out of the top-5 limit.
+	tool.SetIndexPath(filepath.Join(t.TempDir(), "nonexistent-skill-index.json"))
 
 	// Search with uppercase should find lowercase skill names
 	result, err := tool.Execute(context.Background(), map[string]any{

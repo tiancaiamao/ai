@@ -44,7 +44,7 @@ func (cc *CompactionController) MaybeCompact(trigger string, sess *session.Sessi
 		return
 	}
 
-		if !cc.deps.Compactor.ShouldCompact(context.Background(), cc.deps.Agent.GetContext()) {
+	if !cc.deps.Compactor.ShouldCompact(context.Background(), cc.deps.Agent.GetContext()) {
 		return
 	}
 	if !sess.CanCompact(cc.deps.Compactor) {
@@ -56,7 +56,7 @@ func (cc *CompactionController) MaybeCompact(trigger string, sess *session.Sessi
 		return
 	}
 
-		beforeCount := len(cc.deps.Agent.GetMessages())
+	beforeCount := len(cc.deps.Agent.GetMessages())
 	compactionInfo := CompactionInfo{
 		Auto:    true,
 		Before:  beforeCount,

@@ -72,7 +72,6 @@ func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) stri
 	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
 }
 
-
 func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []agentctx.AgentMessage {
 	if len(messages) == 0 {
 		return messages

@@ -21,8 +21,10 @@ type characterizationTestTool struct {
 	name string
 }
 
-func (t *characterizationTestTool) Name() string        { return t.name }
-func (t *characterizationTestTool) Description() string  { return t.name + " tool for characterization tests" }
+func (t *characterizationTestTool) Name() string { return t.name }
+func (t *characterizationTestTool) Description() string {
+	return t.name + " tool for characterization tests"
+}
 func (t *characterizationTestTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"input": map[string]any{"type": "string"}}}
 }
@@ -351,8 +353,8 @@ func (c *characterizationTriggerCompactor) Compact(ctx *agentctx.AgentContext) (
 		agentctx.NewUserMessage("latest request"),
 	}
 	return &agentctx.CompactionResult{
-		Summary:  "[compacted]",
-		Type:     "major",
+		Summary:      "[compacted]",
+		Type:         "major",
 		TokensBefore: 10000,
 		TokensAfter:  1000,
 	}, nil

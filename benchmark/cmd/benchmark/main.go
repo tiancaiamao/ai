@@ -7,7 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-			"io/fs"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +181,7 @@ func (r *AIAgentRunner) Name() string {
 }
 
 func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
-		var ctx context.Context
+	var ctx context.Context
 	var cancel context.CancelFunc
 
 	// Only set timeout if Timeout > 0
@@ -220,7 +220,7 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to start ai: %w", err)
 	}
 
-		aiErr := aiCmd.Wait()
+	aiErr := aiCmd.Wait()
 
 	output := stdout.String()
 	if stderr.Len() > 0 {
@@ -844,7 +844,7 @@ func parseRPCEvents(line string) []toolEvent {
 
 		return []toolEvent{event}
 
-		case "tool_execution_end":
+	case "tool_execution_end":
 		// tool_execution_end events don't add new tool calls —
 		// tool_execution_start already captured the invocation.
 		// We may want to extract result text here in the future for
@@ -1510,9 +1510,9 @@ func isFlagExplicitlySet(name string) bool {
 func main() {
 	// Parse flags
 	var (
-				tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
+		tasksDir          = flag.String("tasks", "tasks", "Tasks directory")
 		resultsDir        = flag.String("results", "results", "Results directory")
-				agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path (ai)")
+		agentBinary       = flag.String("agent", "/Users/genius/go/bin/ai", "Agent binary path (ai)")
 		maxTurns          = flag.Int("max-turns", 50, "Maximum agent turns")
 		timeout           = flag.Duration("timeout", 10*time.Minute, "Per-task timeout")
 		manifestPath      = flag.String("manifest", "", "Task manifest path (JSON)")
@@ -1539,7 +1539,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error resolving results dir: %v\n", err)
 		os.Exit(1)
 	}
-			absAgentBinary, err := filepath.Abs(*agentBinary)
+	absAgentBinary, err := filepath.Abs(*agentBinary)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving agent binary: %v\n", err)
 		os.Exit(1)
@@ -1554,7 +1554,7 @@ func main() {
 	}
 
 	// Create agent runner
-			agent := &AIAgentRunner{
+	agent := &AIAgentRunner{
 		BinaryPath: absAgentBinary,
 		MaxTurns:   *maxTurns,
 		Timeout:    *timeout,

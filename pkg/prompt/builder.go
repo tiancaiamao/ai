@@ -14,8 +14,6 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-
-
 //go:embed "compact_system.md"
 var compactSystemPrompt string
 
@@ -38,8 +36,6 @@ var validatorTemplate string
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }
-
-
 
 // CompactSystemPrompt returns the system prompt for compaction.
 func CompactSystemPrompt() string {
@@ -80,13 +76,13 @@ type Builder struct {
 	// Available tools (for Tooling section)
 	tools []ToolInfo
 
-		// Skills (for Skills section)
+	// Skills (for Skills section)
 	skills []skill.Skill
 
 	// Skill usage stats (optional, for progressive disclosure)
 	skillStats *skill.SkillStatsFile
 
-		// Custom template (if empty, uses embedded promptTemplate)
+	// Custom template (if empty, uses embedded promptTemplate)
 	template string
 
 	// Context meta (for runtime_state telemetry, set by agent loop)
@@ -212,7 +208,7 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 	// Replace skills (optional section)
 	skills := ""
 	if !b.minimal && len(b.skills) > 0 {
-						if skillsText := skill.FormatForPrompt(b.skills, b.skillStats); skillsText != "" {
+		if skillsText := skill.FormatForPrompt(b.skills, b.skillStats); skillsText != "" {
 			skills = skillsText
 		}
 	}
@@ -226,7 +222,7 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
 
 	// Remove empty sections (optional sections that were not enabled)
-		result = b.cleanupEmptySections(result)
+	result = b.cleanupEmptySections(result)
 
 	return result
 }

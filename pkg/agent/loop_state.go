@@ -16,16 +16,16 @@ const maxCompactionRecoveries = 1
 // It replaces multiple local variables and repeated parameter passing
 // between the loop body and its extracted helper functions.
 type loopState struct {
-	config        *LoopConfig
-	agentCtx      *agentctx.AgentContext
-	stream        *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
+	config         *LoopConfig
+	agentCtx       *agentctx.AgentContext
+	stream         *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	compactionRecs int
-	turnCount     int
-	loopGuard     *toolLoopGuard
-	checkpointMgr *AgentContextCheckpointManager
-	emptyRetries  int
-	malformedRecs int
-	newMessages   []agentctx.AgentMessage
+	turnCount      int
+	loopGuard      *toolLoopGuard
+	checkpointMgr  *AgentContextCheckpointManager
+	emptyRetries   int
+	malformedRecs  int
+	newMessages    []agentctx.AgentMessage
 }
 
 func newLoopState(
@@ -265,7 +265,7 @@ func (s *loopState) processToolCalls(
 		return hasMore, nil
 	}
 
-		// Dispatch tool calls to the executor.
+	// Dispatch tool calls to the executor.
 	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.Metrics, s.config.ToolOutput)
 
 	// Run AfterTool hooks: chain-style, each hook's output feeds the next.

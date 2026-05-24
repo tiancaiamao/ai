@@ -49,7 +49,7 @@ func TestCollectTruncationCandidatesFiltersBySelectability(t *testing.T) {
 	}
 
 	protectedStart := len(agentCtx.RecentMessages) - agentctx.RecentMessagesKeep
-		candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart, true, mgmtStaleAgeInvestigative, mgmtStaleAgeModification)
+	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(agentCtx, protectedStart, true, mgmtStaleAgeInvestigative, mgmtStaleAgeModification)
 
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 truncation candidate, got %d", len(candidates))
@@ -80,7 +80,7 @@ func TestBuildContextMgmtMessagesExposesSavingsAndGuidance(t *testing.T) {
 		agentctx.NewUserMessage("recent-5"),
 	}
 
-			compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
+	compactor := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "", 200000, "system", nil)
 	msgs := compactor.buildContextMgmtMessages(agentCtx)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 context management messages, got %d", len(msgs))
@@ -117,7 +117,7 @@ func TestContextManagerCompactToolUpdatesLLMContext(t *testing.T) {
 
 	compactor := NewCompactor(&Config{
 		MaxMessages: 5,
-		AutoCompact:  true,
+		AutoCompact: true,
 	}, llmModelStub(), "test-key", "test", 200000)
 
 	ctxManager := NewContextManager(DefaultContextManagerConfig(), llmModelStub(), "test-key", 200000, "system", compactor)
@@ -135,7 +135,7 @@ func TestContextManagerCompactToolUpdatesLLMContext(t *testing.T) {
 	})
 	toolCalls := []llm.ToolCall{
 		{
-			ID: "test-call-1",
+			ID:   "test-call-1",
 			Type: "function",
 			Function: llm.FunctionCall{
 				Name:      "compact",
@@ -463,7 +463,7 @@ func TestCompactWithCtx_ContextCancellationStopsRetry(t *testing.T) {
 		t.Fatal("expected nil result on cancellation")
 	}
 	// Should have made at most 2 attempts (first fail, then cancelled during backoff)
-		n := atomic.LoadInt32(&attempts)
+	n := atomic.LoadInt32(&attempts)
 	if n > 2 {
 		t.Fatalf("expected at most 2 attempts before cancellation, got %d", n)
 	}
@@ -489,7 +489,7 @@ func TestIsLikelyStale(t *testing.T) {
 		{"unknown_tool", 100, false},
 	}
 
-		for _, tt := range tests {
+	for _, tt := range tests {
 		got := isLikelyStale(tt.toolName, tt.age, mgmtStaleAgeInvestigative, mgmtStaleAgeModification)
 		if got != tt.want {
 			t.Errorf("isLikelyStale(%q, %d) = %v, want %v", tt.toolName, tt.age, got, tt.want)
@@ -508,7 +508,7 @@ func TestBuildContextMgmtMessagesAnnotatesLikelyStale(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		id := fmt.Sprintf("call-%02d", i)
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages,
-					agentctx.NewToolResultMessage(id, "bash", []agentctx.ContentBlock{
+			agentctx.NewToolResultMessage(id, "bash", []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: strings.Repeat("x", 1000)},
 			}, false),
 		)
@@ -517,7 +517,7 @@ func TestBuildContextMgmtMessagesAnnotatesLikelyStale(t *testing.T) {
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages,
 			agentctx.NewUserMessage(fmt.Sprintf("user-msg-%d", i)),
 		)
-		}
+	}
 
 	compactor := NewContextManager(&ContextManagerConfig{
 		TokenLow:        MgmtTokenLow,

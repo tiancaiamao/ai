@@ -44,7 +44,7 @@ func streamAssistantResponse(
 		}
 	}
 
-		// Build runtime appendix (llm context + context meta) as a user message
+	// Build runtime appendix (llm context + context meta) as a user message
 	// injected BEFORE the last user message for better LLM attention.
 	// Placing runtime_state close to the decision point improves context management.
 	//
@@ -85,7 +85,7 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-		llmStream := llm.StreamLLM(
+	llmStream := llm.StreamLLM(
 		llmCtx,
 		model,
 		llmCtxParams,

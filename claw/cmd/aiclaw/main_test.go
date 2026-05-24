@@ -9,13 +9,13 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
-		name           string
-		configJSON     string
-		expectError    bool
-		expectedID     string
+		name             string
+		configJSON       string
+		expectError      bool
+		expectedID       string
 		expectedProvider string
-		expectedBaseURL string
-		expectedAPI    string
+		expectedBaseURL  string
+		expectedAPI      string
 	}{
 		{
 			name: "empty model section - should error",
@@ -64,11 +64,11 @@ func TestConfigValidate(t *testing.T) {
 					"api": "my-api"
 				}
 			}`,
-			expectError: false,
-			expectedID:     "my-model",
+			expectError:      false,
+			expectedID:       "my-model",
 			expectedProvider: "my-provider",
-			expectedBaseURL: "https://my.api.com",
-			expectedAPI:    "my-api",
+			expectedBaseURL:  "https://my.api.com",
+			expectedAPI:      "my-api",
 		},
 		{
 			name: "full model section without api - should default api",
@@ -79,11 +79,11 @@ func TestConfigValidate(t *testing.T) {
 					"baseUrl": "https://my.api.com"
 				}
 			}`,
-			expectError: false,
-			expectedID:     "my-model",
+			expectError:      false,
+			expectedID:       "my-model",
 			expectedProvider: "my-provider",
-			expectedBaseURL: "https://my.api.com",
-			expectedAPI:    "openai-completions",
+			expectedBaseURL:  "https://my.api.com",
+			expectedAPI:      "openai-completions",
 		},
 	}
 

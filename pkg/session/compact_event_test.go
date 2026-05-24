@@ -12,7 +12,6 @@ import (
 func TestAppendCompactEvent_AppendsNotOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	sess := NewSession(dir)
-	
 
 	// Append 3 messages
 	for i := 0; i < 3; i++ {
@@ -68,7 +67,6 @@ func TestAppendCompactEvent_AppendsNotOverwrites(t *testing.T) {
 func TestAppendCompactEvent_DoesNotModifyExistingEntries(t *testing.T) {
 	dir := t.TempDir()
 	sess := NewSession(dir)
-	
 
 	// Append a message
 	_, err := sess.AppendMessage(agentctx.AgentMessage{
@@ -105,7 +103,6 @@ func TestAppendCompactEvent_DoesNotModifyExistingEntries(t *testing.T) {
 func TestGetMessages_AppliesCompactEvents(t *testing.T) {
 	dir := t.TempDir()
 	sess := NewSession(dir)
-	
 
 	// Append a toolResult with long content
 	longContent := "This is a very long tool output that should be truncated. " +

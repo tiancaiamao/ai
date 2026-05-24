@@ -6,8 +6,8 @@ import (
 
 func TestComputeLineHash(t *testing.T) {
 	tests := []struct {
-		line     string
-		wantLen  int
+		line    string
+		wantLen int
 	}{
 		{"hello world", 4},
 		{"", 4},
@@ -184,10 +184,10 @@ func TestApplyHashlineEdits(t *testing.T) {
 		hash3 := computeLineHash("line3")
 
 		edits := []HashlineEdit{{
-			Type:         HashlineEditReplaceLines,
-			StartAnchor:  "2:" + hash2,
-			EndAnchor:    "3:" + hash3,
-			NewText:      "replaced",
+			Type:        HashlineEditReplaceLines,
+			StartAnchor: "2:" + hash2,
+			EndAnchor:   "3:" + hash3,
+			NewText:     "replaced",
 		}}
 
 		result, err := ApplyHashlineEdits(edits, content)

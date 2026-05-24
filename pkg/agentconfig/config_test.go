@@ -121,8 +121,8 @@ func TestRelativePath(t *testing.T) {
 
 	// Put files in a sibling dir (not the YAML dir) to prove relative resolution
 	cfgPath := filepath.Join(subdir, "agent.yaml")
-	spPath := filepath.Join(subdir, "prompt.md")  // relative: prompt.md → subdir/prompt.md
-	memPath := filepath.Join(subdir, "notes.md")   // relative: notes.md → subdir/notes.md
+	spPath := filepath.Join(subdir, "prompt.md") // relative: prompt.md → subdir/prompt.md
+	memPath := filepath.Join(subdir, "notes.md") // relative: notes.md → subdir/notes.md
 
 	err = os.WriteFile(spPath, []byte("hello from subdir"), 0644)
 	if err != nil {

@@ -12,15 +12,15 @@ import (
 func TestEnsureToolCallPairing_Bug(t *testing.T) {
 	// Scenario: tool_call in oldMessages, tool_result in recentMessages
 	// The tool_call will be summarized (not visible), so tool_result should also be hidden
-	
+
 	oldMessages := []agentctx.AgentMessage{
 		{
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-123",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-123",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/test.txt"},
 				},
 			},
@@ -43,7 +43,7 @@ func TestEnsureToolCallPairing_Bug(t *testing.T) {
 
 	// After fix: tool_result should be hidden because its tool_call is in oldMessages (will be summarized)
 	// The bug was that tool_result remained visible, causing "tool call and result not match"
-	
+
 	// Check that tool_result is hidden
 	toolResultFound := false
 	for _, msg := range result {
@@ -54,7 +54,7 @@ func TestEnsureToolCallPairing_Bug(t *testing.T) {
 			}
 		}
 	}
-	
+
 	if !toolResultFound {
 		t.Error("tool_result should still be present in messages (just hidden)")
 	}
@@ -68,9 +68,9 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-456",
-					Type: "toolCall",
-					Name: "write",
+					ID:        "call-456",
+					Type:      "toolCall",
+					Name:      "write",
 					Arguments: map[string]any{"path": "/test.txt", "content": "hello"},
 				},
 			},
@@ -87,14 +87,14 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 
 	// Empty oldMessages - no tool_calls to be summarized
 	oldMessages := []agentctx.AgentMessage{}
-	
+
 	result := ensureToolCallPairing(oldMessages, recentMessages)
 
 	// Both should remain visible
 	if len(result) != 2 {
 		t.Errorf("expected 2 messages, got %d", len(result))
 	}
-	
+
 	for _, msg := range result {
 		if !msg.IsAgentVisible() {
 			t.Error("messages with tool_call in recentMessages should stay visible")
@@ -122,12 +122,12 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 
 	result := ensureToolCallPairing(oldMessages, recentMessages)
 
-	// Tool_result should stay visible (its call might be in an even older message, 
+	// Tool_result should stay visible (its call might be in an even older message,
 	// or it's orphaned - either way it's not being summarized)
 	if len(result) != 1 {
 		t.Errorf("expected 1 message, got %d", len(result))
 	}
-	
+
 	if !result[0].IsAgentVisible() {
 		t.Error("tool_result should stay visible when oldMessages has no tool_calls")
 	}
@@ -144,9 +144,9 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-old-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-old-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/old.txt"},
 				},
 			},
@@ -159,9 +159,9 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "Here's what I found:"},
 				agentctx.ToolCallContent{
-					ID:   "call-old-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-old-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/old.txt"},
 				},
 			},
@@ -242,9 +242,9 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:       "call-full-1",
-					Type:     "toolCall",
-					Name:     "bash",
+					ID:        "call-full-1",
+					Type:      "toolCall",
+					Name:      "bash",
 					Arguments: map[string]any{"command": "ls"},
 				},
 			},
@@ -306,9 +306,9 @@ func TestEnsureToolCallPairingWithGrace_ProtectsRecentToolResults(t *testing.T) 
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-123",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-123",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/test.txt"},
 				},
 			},
@@ -360,9 +360,9 @@ func TestEnsureToolCallPairingWithGrace_OlderResultsArchived(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-old",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-old",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/old.txt"},
 				},
 			},
@@ -371,9 +371,9 @@ func TestEnsureToolCallPairingWithGrace_OlderResultsArchived(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-newer",
-					Type: "toolCall",
-					Name: "bash",
+					ID:        "call-newer",
+					Type:      "toolCall",
+					Name:      "bash",
 					Arguments: map[string]any{"command": "ls"},
 				},
 			},
@@ -438,9 +438,9 @@ func TestEnsureToolCallPairingWithGrace_GracePeriodZeroFallsBack(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-123",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-123",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/test.txt"},
 				},
 			},
@@ -491,9 +491,9 @@ func TestEnsureToolCallPairingWithGrace_LargerGracePeriod(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/1.txt"},
 				},
 			},
@@ -502,9 +502,9 @@ func TestEnsureToolCallPairingWithGrace_LargerGracePeriod(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-2",
-					Type: "toolCall",
-					Name: "bash",
+					ID:        "call-2",
+					Type:      "toolCall",
+					Name:      "bash",
 					Arguments: map[string]any{"command": "ls"},
 				},
 			},
@@ -513,9 +513,9 @@ func TestEnsureToolCallPairingWithGrace_LargerGracePeriod(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-3",
-					Type: "toolCall",
-					Name: "grep",
+					ID:        "call-3",
+					Type:      "toolCall",
+					Name:      "grep",
 					Arguments: map[string]any{"pattern": "test"},
 				},
 			},

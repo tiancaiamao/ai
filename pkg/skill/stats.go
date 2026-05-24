@@ -21,7 +21,7 @@ type SkillUsageEntry struct {
 
 // SkillStatsFile holds persisted skill usage statistics.
 type SkillStatsFile struct {
-	mu       sync.Mutex                   `json:"-"`
+	mu       sync.Mutex                  `json:"-"`
 	Version  int                         `json:"version"`
 	TopN     int                         `json:"topN"`
 	Entries  map[string]*SkillUsageEntry `json:"entries"`
@@ -72,7 +72,7 @@ func LoadStats(path string) *SkillStatsFile {
 		return s
 	}
 
-		s.Version = file.Version
+	s.Version = file.Version
 	if file.TopN > 0 {
 		s.TopN = file.TopN
 	}

@@ -28,8 +28,8 @@ type Token struct {
 
 // Line represents a single line of BASIC program
 type Line struct {
-	Number  int
-	Stmts   []Statement
+	Number int
+	Stmts  []Statement
 }
 
 // Statement types
@@ -37,7 +37,7 @@ type Statement interface{}
 
 // PrintStatement represents PRINT
 type PrintStatement struct {
-	Exprs     []Expression
+	Exprs    []Expression
 	Suppress bool // semicolon suppresses newline
 }
 
@@ -292,8 +292,8 @@ func (p *Parser) parseProgram() []Line {
 
 		if len(stmts) > 0 {
 			lines = append(lines, Line{
-				Number:  lineNum,
-				Stmts:   stmts,
+				Number: lineNum,
+				Stmts:  stmts,
 			})
 		}
 
@@ -382,8 +382,8 @@ func (p *Parser) parsePrint() Statement {
 	}
 
 	return &PrintStatement{
-		Exprs:     exprs,
-		Suppress:  suppress,
+		Exprs:    exprs,
+		Suppress: suppress,
 	}
 }
 
@@ -459,8 +459,8 @@ func (p *Parser) parseFor() Statement {
 
 	return &ForStatement{
 		Variable: strings.ToUpper(varName),
-		Start:     start,
-		End:       end,
+		Start:    start,
+		End:      end,
 	}
 }
 
@@ -496,7 +496,7 @@ func (p *Parser) parseIf() Statement {
 
 	return &IfStatement{
 		Condition: condition,
-		ThenStmts:  thenStmts,
+		ThenStmts: thenStmts,
 	}
 }
 
@@ -623,9 +623,9 @@ func (p *Parser) parsePrimary() Expression {
 
 // Interpreter
 type Interpreter struct {
-	program   []Line
-	lineIndex int
-	variables map[string]float64
+	program    []Line
+	lineIndex  int
+	variables  map[string]float64
 	stringVars map[string]string
 	forLoops   map[string]*ForLoopState
 	lineMap    map[int]int // line number to index

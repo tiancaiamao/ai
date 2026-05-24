@@ -67,7 +67,7 @@ func TestHarness_RetryAfterTransientError(t *testing.T) {
 	unsub := collector.Subscribe(a.Events())
 	defer unsub()
 
-		if err := a.Prompt("test"); err != nil {
+	if err := a.Prompt("test"); err != nil {
 		t.Fatalf("Prompt failed: %v", err)
 	}
 	a.Wait()
@@ -189,7 +189,7 @@ func TestHarness_AbortDuringStreaming(t *testing.T) {
 
 	// Abort after a small delay
 	time.Sleep(20 * time.Millisecond)
-		a.Abort()
+	a.Abort()
 
 	a.Wait()
 	// Yield to let event subscriber drain the final events.
@@ -310,7 +310,7 @@ func TestHarness_LLMRetryEvent(t *testing.T) {
 	if err := a.Prompt("test"); err != nil {
 		t.Fatalf("Prompt failed: %v", err)
 	}
-		a.Wait()
+	a.Wait()
 	// Yield to let event subscriber drain the final events.
 	time.Sleep(10 * time.Millisecond)
 
@@ -339,7 +339,7 @@ func TestHarness_ContextCancellation(t *testing.T) {
 	}
 
 	// Abort after a short delay (simulates context cancellation)
-		time.Sleep(30 * time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 	a.Abort()
 	a.Wait()
 	// Yield to let event subscriber drain the final events.
@@ -473,7 +473,7 @@ func TestHarness_SteerDuringStreaming(t *testing.T) {
 		t.Error("expected agent_end after steer")
 	}
 
-		// There should be at least one text_delta containing the steered response.
+	// There should be at least one text_delta containing the steered response.
 	textDeltas := collectTextDeltas(collector)
 	found := false
 	for _, d := range textDeltas {
@@ -519,7 +519,7 @@ func TestHarness_FollowUpDuringStreaming(t *testing.T) {
 	// Wait for both the initial and follow-up turns to complete.
 	waitWithTimeout(t, a, 5*time.Second)
 
-		// Must have processed the follow-up — look for its text output.
+	// Must have processed the follow-up — look for its text output.
 	textDeltas := collectTextDeltas(collector)
 	found := false
 	for _, d := range textDeltas {
@@ -552,7 +552,7 @@ func TestHarness_MultipleFollowUps(t *testing.T) {
 
 	h.Wait(5 * time.Second)
 
-		textDeltas := collectTextDeltas(h.Events)
+	textDeltas := collectTextDeltas(h.Events)
 	var texts []string
 	for _, d := range textDeltas {
 		texts = append(texts, d)

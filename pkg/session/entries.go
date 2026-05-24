@@ -1,8 +1,8 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/version"
@@ -168,7 +168,7 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		}
 	}
 
-if compaction != nil {
+	if compaction != nil {
 		msg := compactionSummaryMessage(compaction)
 		if msg.Role != "" {
 			messages = append(messages, msg)

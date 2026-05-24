@@ -14,9 +14,9 @@ type mockTool struct {
 	parameters  map[string]any
 }
 
-func (t *mockTool) Name() string                                       { return t.name }
-func (t *mockTool) Description() string                                 { return t.description }
-func (t *mockTool) Parameters() map[string]any                          { return t.parameters }
+func (t *mockTool) Name() string               { return t.name }
+func (t *mockTool) Description() string        { return t.description }
+func (t *mockTool) Parameters() map[string]any { return t.parameters }
 func (t *mockTool) Execute(_ context.Context, _ map[string]any) ([]agentctx.ContentBlock, error) {
 	return nil, nil
 }

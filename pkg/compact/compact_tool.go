@@ -47,8 +47,8 @@ func (t *CompactTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"strategy": map[string]any{
-				"type":        "string",
-				"enum":        []string{"conservative", "balanced", "aggressive"},
+				"type": "string",
+				"enum": []string{"conservative", "balanced", "aggressive"},
 				"description": `Compaction strategy:
   - "conservative": Keep more recent history (50% more tokens), minimal deletion
   - "balanced": Standard compaction (default)

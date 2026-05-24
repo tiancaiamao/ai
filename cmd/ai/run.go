@@ -19,7 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-		"github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
@@ -49,7 +49,7 @@ func runSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-					// Resolve system prompt: --system-prompt overrides --role.
+	// Resolve system prompt: --system-prompt overrides --role.
 	sysPrompt := *systemPromptFlag
 	if sysPrompt == "" && *roleFlag != "coder" {
 		tmpl, err := prompt.TemplateForRole(*roleFlag)
@@ -200,7 +200,7 @@ func serveSubcommand(binPath string) {
 	maxTurnsFlag := fs.Int("max-turns", 0, "Maximum conversation turns (forwarded to ai rpc)")
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (forwarded to ai rpc)")
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
-		inputFlag := fs.String("input", "", "Initial prompt to send after startup")
+	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
@@ -220,7 +220,7 @@ func serveSubcommand(binPath string) {
 		os.Exit(1)
 	}
 
-		// Resolve system prompt: --system-prompt overrides --role.
+	// Resolve system prompt: --system-prompt overrides --role.
 	sysPrompt := *systemPromptFlag
 	if sysPrompt == "" && *roleFlag != "coder" {
 		tmpl, err := prompt.TemplateForRole(*roleFlag)
@@ -320,7 +320,7 @@ func serveSubcommand(binPath string) {
 		os.Remove(sockPath)
 	}()
 
-		// Send initial input if provided.
+	// Send initial input if provided.
 	inputText := *inputFlag
 	if *inputFileFlag != "" {
 		data, err := os.ReadFile(*inputFileFlag)
@@ -330,7 +330,7 @@ func serveSubcommand(binPath string) {
 			os.Exit(1)
 		}
 		inputText = string(data)
-		}
+	}
 
 	if inputText != "" {
 		if err := sendRPCCommand(stdinWriter, "prompt", inputText); err != nil {

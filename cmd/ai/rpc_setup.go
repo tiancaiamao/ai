@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-			"github.com/tiancaiamao/ai/pkg/compact"
+	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
@@ -81,7 +81,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	}
 
 	// --- Compactors ---
-		compactor, ctxManager, compactorConfig := createCompactors(cfg, model, apiKey, currentContextWindow, agentCfg)
+	compactor, ctxManager, compactorConfig := createCompactors(cfg, model, apiKey, currentContextWindow, agentCfg)
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -129,7 +129,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		traceOutputPath:       traceOutputPath,
 		skillResult:           skillResult,
 		skillStats:            skillStats,
-				autoCompactionEnabled: compactorConfig.AutoCompact,
+		autoCompactionEnabled: compactorConfig.AutoCompact,
 		agentConfig:           agentCfg,
 		steeringMode:          "all",
 		followUpMode:          "one-at-a-time",

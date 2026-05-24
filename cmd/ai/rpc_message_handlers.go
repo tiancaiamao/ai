@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/agent"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -25,7 +25,7 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 	slog.Info("Received compact")
 	beforeCount := len(app.ag.GetMessages())
 
-		estimatedTokens := app.compactor.EstimateTokens(app.ag.GetMessages())
+	estimatedTokens := app.compactor.EstimateTokens(app.ag.GetMessages())
 	keepTokens := app.compactor.KeepRecentTokens()
 
 	if !app.sess.CanCompact(app.compactor) {
@@ -101,7 +101,6 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 	return response, nil
 }
 
-
 func (app *rpcApp) handleGetMessages(args string) (any, error) {
 	slog.Info("Received get_messages", "args", args)
 	const defaultCount = 20
@@ -119,7 +118,6 @@ func (app *rpcApp) handleGetMessages(args string) (any, error) {
 	return formatMessagesForDisplay(messages, count, maxPreviewLen), nil
 }
 
-
 func (app *rpcApp) handleGetLastAssistantText(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_last_assistant_text")
@@ -132,12 +130,10 @@ func (app *rpcApp) handleGetLastAssistantText(args string) (any, error) {
 	return "", nil
 }
 
-
 func (app *rpcApp) handleExportHTML(args string) (any, error) {
 	slog.Info("Received export_html", "outputPath", args)
 	return "", fmt.Errorf("export_html is not supported")
 }
-
 
 func (app *rpcApp) handleGetWorkflowStatus(args string) (any, error) {
 	_ = args
@@ -307,7 +303,6 @@ func formatMessagesForDisplay(messages []agentctx.AgentMessage, count int, maxPr
 		Messages: formatted,
 	}
 }
-
 
 // registerMessageHandlers registers message-related slash commands.
 func (app *rpcApp) registerMessageHandlers() {

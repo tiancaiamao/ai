@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-		"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/rpc"
@@ -23,10 +23,10 @@ func newTestApp(t *testing.T) *rpcApp {
 	})
 
 	return &rpcApp{
-		ag:                ag,
-		steeringMode:      "all",
-		followUpMode:      "all",
-		expandSkillCommands: func(text string) string { return text },
+		ag:                   ag,
+		steeringMode:         "all",
+		followUpMode:         "all",
+		expandSkillCommands:  func(text string) string { return text },
 		compactBeforeRequest: func(trigger string) {},
 	}
 }

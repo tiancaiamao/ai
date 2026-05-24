@@ -19,7 +19,7 @@ func TestStatsLoadNonexistentFile(t *testing.T) {
 	}
 	if s.Version != statsVersion {
 		t.Errorf("expected Version=%d, got %d", statsVersion, s.Version)
-		}
+	}
 }
 
 func TestStatsConcurrentRecordUsage(t *testing.T) {

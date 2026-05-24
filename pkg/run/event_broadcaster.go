@@ -106,7 +106,7 @@ func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 	id := b.nextID
 	ch := make(chan []byte, ConsumerChanSize)
 
-		// Replay from ring if possible.
+	// Replay from ring if possible.
 	// fromSeq=0 means "replay everything from the beginning".
 	// fromSeq>0 means "I've seen up to fromSeq, give me everything after".
 	if fromSeq < b.seq {

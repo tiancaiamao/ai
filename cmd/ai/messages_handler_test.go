@@ -233,9 +233,9 @@ func TestFormatMessagesForDisplay_MixedMessages(t *testing.T) {
 	assistantMsg := agentctx.NewAssistantMessage()
 	assistantMsg.Content = []agentctx.ContentBlock{
 		agentctx.ToolCallContent{
-			ID:   "call_1",
-			Type: "toolCall",
-			Name: "bash",
+			ID:        "call_1",
+			Type:      "toolCall",
+			Name:      "bash",
 			Arguments: map[string]any{"command": "go test ./..."},
 		},
 	}

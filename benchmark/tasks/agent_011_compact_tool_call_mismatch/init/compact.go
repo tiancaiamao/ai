@@ -15,11 +15,11 @@ type ContentBlock struct {
 }
 
 type Message struct {
-	Role        string         `json:"role"`
-	ToolCallID  string         `json:"toolCallId,omitempty"`
-	ToolName    string         `json:"toolName,omitempty"`
-	Content     []ContentBlock `json:"content,omitempty"`
-	AgentVisible bool          `json:"agentVisible"`
+	Role         string         `json:"role"`
+	ToolCallID   string         `json:"toolCallId,omitempty"`
+	ToolName     string         `json:"toolName,omitempty"`
+	Content      []ContentBlock `json:"content,omitempty"`
+	AgentVisible bool           `json:"agentVisible"`
 }
 
 func NewAssistantMessage(blocks ...ContentBlock) Message {
@@ -28,10 +28,10 @@ func NewAssistantMessage(blocks ...ContentBlock) Message {
 
 func NewToolResultMessage(toolCallID, toolName, text string) Message {
 	return Message{
-		Role:        "toolResult",
-		ToolCallID:  toolCallID,
-		ToolName:    toolName,
-		Content:     []ContentBlock{{Type: "text", Text: text}},
+		Role:         "toolResult",
+		ToolCallID:   toolCallID,
+		ToolName:     toolName,
+		Content:      []ContentBlock{{Type: "text", Text: text}},
 		AgentVisible: true,
 	}
 }

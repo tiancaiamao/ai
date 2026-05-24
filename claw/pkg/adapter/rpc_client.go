@@ -25,12 +25,12 @@ import (
 // RPCConn manages a single `ai --mode rpc` subprocess, providing a client-side
 // interface to the stdin/stdout JSON-RPC protocol.
 type RPCConn struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	cancel  context.CancelFunc
-	done    chan struct{} // closed when the reader goroutine exits
-	alive   atomic.Bool
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	cancel context.CancelFunc
+	done   chan struct{} // closed when the reader goroutine exits
+	alive  atomic.Bool
 
 	mu       sync.Mutex // protects stdin writes
 	promptMu sync.Mutex // serializes Prompt calls to prevent event mixing
@@ -58,7 +58,7 @@ func StartRPC(sessionKey, sessionsDir, systemPromptFile, workingDir string) (*RP
 	sessionPath := sessionsDir + "/" + sessionKey
 	systemPromptArg := "@" + systemPromptFile
 
-		cmd := exec.Command("ai", "rpc",
+	cmd := exec.Command("ai", "rpc",
 		"--session", sessionPath,
 		"--system-prompt", systemPromptArg,
 	)
@@ -84,14 +84,14 @@ func StartRPC(sessionKey, sessionsDir, systemPromptFile, workingDir string) (*RP
 		return nil, fmt.Errorf("rpc_client: start subprocess: %w", err)
 	}
 
-		_, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	c := &RPCConn{
-		cmd:     cmd,
-		stdin:   stdinPipe,
-		stdout:  stdoutPipe,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		pending: make(map[string]chan *rpcResponseOrEvent),
+		cmd:      cmd,
+		stdin:    stdinPipe,
+		stdout:   stdoutPipe,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		pending:  make(map[string]chan *rpcResponseOrEvent),
 		eventsCh: make(chan json.RawMessage, 256),
 	}
 	c.alive.Store(true)
@@ -236,7 +236,7 @@ func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
 		return "", err
 	}
 
-		// Wait for the initial response (acknowledgement).
+	// Wait for the initial response (acknowledgement).
 	select {
 	case msg := <-ch:
 		if msg.resp == nil {
@@ -245,10 +245,10 @@ func (c *RPCConn) Prompt(ctx context.Context, message string) (string, error) {
 		if !msg.resp.Success {
 			return "", fmt.Errorf("rpc_client: prompt rejected: %s", msg.resp.Error)
 		}
-				// Slash commands (e.g. /model, /clear) return their result directly
+		// Slash commands (e.g. /model, /clear) return their result directly
 		// in the response data without triggering the agent loop.
 		// No turn_end/agent_end events will follow.
-				if msg.resp.Data != nil {
+		if msg.resp.Data != nil {
 			return run.FormatResponseData(msg.resp.Data), nil
 		}
 	case <-ctx.Done():
@@ -424,7 +424,7 @@ func (m *ConnManager) Prompt(ctx context.Context, sessionKey, message string) (s
 		return "", fmt.Errorf("conn_manager: failed to get connection for %q: %w", sessionKey, err)
 	}
 
-		result, err := conn.Prompt(ctx, message)
+	result, err := conn.Prompt(ctx, message)
 	if err == nil {
 		return result, nil
 	}
@@ -465,7 +465,7 @@ func (m *ConnManager) CloseAll() error {
 		slog.Info("conn_manager: closed connection", "sessionKey", key)
 		delete(m.conns, key)
 	}
-		return firstErr
+	return firstErr
 }
 
 // ListConnections returns all active session keys.
@@ -507,7 +507,7 @@ func (m *ConnManager) getOrCreateConn(sessionKey string) (*RPCConn, error) {
 		return nil, fmt.Errorf("conn_manager: create session dir %q: %w", sessionDir, err)
 	}
 
-		// Clean up stale system prompt temp files from previous connections.
+	// Clean up stale system prompt temp files from previous connections.
 	if oldFiles, _ := filepath.Glob(filepath.Join(sessionDir, "sysprompt-*.txt")); len(oldFiles) > 0 {
 		for _, f := range oldFiles {
 			os.Remove(f)
@@ -551,7 +551,6 @@ func (m *ConnManager) restartConn(sessionKey string) {
 		slog.Warn("conn_manager: error closing connection during restart",
 			"sessionKey", sessionKey, "err", err)
 	}
-		delete(m.conns, sessionKey)
+	delete(m.conns, sessionKey)
 	slog.Info("conn_manager: removed connection for restart", "sessionKey", sessionKey)
 }
-

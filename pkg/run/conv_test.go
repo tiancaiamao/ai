@@ -102,7 +102,7 @@ func TestParseEvent_ToolExecutionStart(t *testing.T) {
 	if !strings.Contains(evt.Detail, "path=main.go") {
 		t.Fatalf("expected detail to contain 'path=main.go', got %q", evt.Detail)
 	}
-		if !strings.Contains(evt.Text, "tool read") {
+	if !strings.Contains(evt.Text, "tool read") {
 		t.Fatalf("expected text to contain 'tool read', got %q", evt.Text)
 	}
 }
@@ -150,7 +150,7 @@ func TestParseEvent_AgentStart(t *testing.T) {
 	if evt.Kind != KindMeta {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
-		if evt.Text != "ai: agent started" {
+	if evt.Text != "ai: agent started" {
 		t.Fatalf("unexpected text: %s", evt.Text)
 	}
 }
@@ -471,7 +471,7 @@ func TestParseEvent_Response_SessionsEmpty(t *testing.T) {
 	}
 	if evt.Text != "No sessions found" {
 		t.Fatalf("expected 'No sessions found', got %q", evt.Text)
-		}
+	}
 }
 
 // --- message_start / message_end (user messages) ---
@@ -528,6 +528,7 @@ func TestParseEvent_WhitespaceAroundJSON(t *testing.T) {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
 }
+
 // --- Tests for thinking content filtering ---
 
 func TestParseEvent_ThinkingDelta_EmptyString(t *testing.T) {

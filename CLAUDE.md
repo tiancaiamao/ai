@@ -37,6 +37,9 @@ IMPORTANT: Different rules apply to different contexts!
 ## Most Used Commands
 
 ```bash
+# format code (must be clean before commit)
+make fmt
+
 # install (recommended - ensures fresh binary)
 go install ./cmd/ai
 
@@ -51,7 +54,11 @@ go test ./pkg/agent -v
 go test ./pkg/rpc -v
 ```
 
-No `Makefile` is used in this repo.
+### Formatting Rules
+
+- All Go code **must** pass `make fmt-check` before commit.
+- CI will reject PRs with unformatted code.
+- Always run `make fmt` after editing `.go` files.
 
 ## High-Value Code Paths
 
