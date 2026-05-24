@@ -550,7 +550,7 @@ func connectSocketStream(sockPath string) tea.Cmd {
 		// Store connection in a temporary that will be picked up by the model.
 		// We need to thread the scanner back. Use a channel-based approach instead.
 		// Actually, we'll return the scanner through the message and the model will store it.
-		// But we can't modify the model in a Cmd... 
+		// But we can't modify the model in a Cmd...
 		// Let's use a different approach: store conn and scanner in a package-level var.
 		socketStreamMu.Lock()
 		socketStreamConn = conn
@@ -565,9 +565,9 @@ func connectSocketStream(sockPath string) tea.Cmd {
 // Package-level state for socket stream (set by connectSocketStream, consumed by readSocketEvent).
 // This is a pragmatic approach since tea.Cmd can't modify the model directly.
 var (
-	socketStreamMu       sync.Mutex
-	socketStreamConn     net.Conn
-	socketStreamScanner  *bufio.Scanner
+	socketStreamMu      sync.Mutex
+	socketStreamConn    net.Conn
+	socketStreamScanner *bufio.Scanner
 )
 
 // readSocketEvent reads one event from the socket scanner.
@@ -667,7 +667,7 @@ func watchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
-				followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
+	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
 	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until agent process exits; default without this flag: exit on agent_end)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
 	summaryFlag := fs.Bool("summary", false, "with --follow --pretty: only show final assistant text (no intermediate thinking/tools)")
@@ -698,7 +698,7 @@ func watchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-																followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
+		followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
 		return
 	}
 
@@ -756,7 +756,7 @@ func machineWatch(eventsPath string, offset int64) {
 			break
 		}
 	}
-		// Print final offset as last line.
+	// Print final offset as last line.
 	fmt.Printf("__offset:%d\n", lastOffset)
 }
 
@@ -844,7 +844,7 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			lastKind = evt.Kind
 		}
 
-										// On agent_end: always exit — the task is complete.
+		// On agent_end: always exit — the task is complete.
 		// The --timeout flag controls maximum wait time for the agent to finish,
 		// not how long to wait after it finishes.
 		if strings.Contains(line, `"agent_end"`) {
@@ -872,7 +872,7 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 		}
 		seq++
 
-				// Check for agent_end — always exit when task is complete.
+		// Check for agent_end — always exit when task is complete.
 		if strings.Contains(line, `"agent_end"`) {
 			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
@@ -991,7 +991,7 @@ func prettyPrintAgentEnd(line string) {
 		return
 	}
 
-				for _, msg := range event.Messages {
+	for _, msg := range event.Messages {
 		// Skip tool result messages — output is too verbose.
 		if msg.Role == "toolResult" {
 			continue
@@ -1091,7 +1091,7 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		}
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
-		return &alive[0], nil
+	return &alive[0], nil
 }
 
 // resolveRunForMachineWatch resolves a run without requiring it to be running.
@@ -1143,7 +1143,7 @@ func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
 		return nil, fmt.Errorf("multiple running instances in %s: %v (use --id to select)", cwd, ids)
 	}
 
-		return nil, fmt.Errorf("no running instances in %s (use --id to select a specific run)", cwd)
+	return nil, fmt.Errorf("no running instances in %s (use --id to select a specific run)", cwd)
 }
 
 // processEvent handles a single parsed event with role-aware streaming.

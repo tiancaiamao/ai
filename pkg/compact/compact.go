@@ -1072,12 +1072,12 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	slog.Info("[Compact] Compressed context", "messages", messagesAfter)
 
 	return &agentctx.CompactionResult{
-		Summary:      summary,
-		TokensBefore: tokensBefore,
-		TokensAfter:  tokensAfter,
+		Summary:        summary,
+		TokensBefore:   tokensBefore,
+		TokensAfter:    tokensAfter,
 		MessagesBefore: messagesBefore,
-		MessagesAfter: messagesAfter,
-		Type:         "major",
+		MessagesAfter:  messagesAfter,
+		Type:           "major",
 	}, nil
 }
 

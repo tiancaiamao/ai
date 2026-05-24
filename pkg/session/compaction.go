@@ -1,8 +1,8 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"errors"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
@@ -112,7 +112,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	messages := refsToMessages(refs)
-		tokensBefore := compactor.EstimateTokens(messages)
+	tokensBefore := compactor.EstimateTokens(messages)
 
 	firstKeptIndex := findFirstKeptIndex(refs, compactor)
 	if firstKeptIndex <= 0 {
@@ -148,7 +148,7 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 	}
 
 	updatedContext := buildSessionContext(s.entries, s.leafID, s.byID)
-		tokensAfter := compactor.EstimateTokens(updatedContext)
+	tokensAfter := compactor.EstimateTokens(updatedContext)
 
 	return &CompactionResult{
 		Summary:          summary,

@@ -103,7 +103,7 @@ func TestBuilderMinimalMode(t *testing.T) {
 
 	// In minimal mode, skills should be excluded
 	if contains(result, "## Skills") {
-				t.Error("Skills section should not appear in minimal mode")
+		t.Error("Skills section should not appear in minimal mode")
 	}
 
 	// But tools and workspace should still be there

@@ -21,15 +21,15 @@ func TestEnsureToolCallPairingWithGrace_EmptyShell(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file1.txt"},
 				},
 				agentctx.ToolCallContent{
-					ID:   "call-2",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-2",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file2.txt"},
 				},
 			},
@@ -43,9 +43,9 @@ func TestEnsureToolCallPairingWithGrace_EmptyShell(t *testing.T) {
 			Content: []agentctx.ContentBlock{
 				// Only tool calls, no text content - becomes empty shell
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file1.txt"},
 				},
 			},
@@ -105,9 +105,9 @@ func TestEnsureToolCallPairingWithGrace_EmptyShellWithGraceProtected(t *testing.
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file1.txt"},
 				},
 			},

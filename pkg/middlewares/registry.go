@@ -21,7 +21,7 @@ type AfterAgentFactory func(params map[string]any) (agent.AfterAgentHook, error)
 // Any combination of the three factory fields may be set;
 // unset factories are ignored during hook construction.
 type MiddlewareSpec struct {
-	Name       string
+	Name        string
 	BeforeModel BeforeModelFactory
 	AfterTool   AfterToolFactory
 	AfterAgent  AfterAgentFactory

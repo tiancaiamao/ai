@@ -16,12 +16,12 @@ import (
 type HarnessOption func(*harnessConfig)
 
 type harnessConfig struct {
-	model       llm.Model
-	maxTurns    int
-	tools       []agentctx.Tool
-	compactors  []agentctx.Compactor
+	model        llm.Model
+	maxTurns     int
+	tools        []agentctx.Tool
+	compactors   []agentctx.Compactor
 	systemPrompt string
-	apiKey      string
+	apiKey       string
 	// Advanced options
 	maxConsecutiveToolCalls int
 	contextWindow           int
@@ -85,11 +85,11 @@ func WithContextWindow(tokens int) HarnessOption {
 //	h.PromptAndWait("say hello", 10*time.Second)
 //	assert.True(t, h.Events.HasEvent(agent.EventAgentEnd))
 type AgentHarness struct {
-		Agent    *agent.Agent
-	AgentCtx *agentctx.AgentContext
-	Server   *httptest.Server // mock LLM server
-	Events   *EventCollector
-	CallCount int              // number of LLM calls made
+	Agent     *agent.Agent
+	AgentCtx  *agentctx.AgentContext
+	Server    *httptest.Server // mock LLM server
+	Events    *EventCollector
+	CallCount int // number of LLM calls made
 
 	t       *testing.T
 	stopSub func()
@@ -112,8 +112,8 @@ func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *A
 			Provider: "test",
 			API:      "openai-completions",
 		},
-		apiKey:         "test-key",
-		systemPrompt:   "You are a test assistant.",
+		apiKey:       "test-key",
+		systemPrompt: "You are a test assistant.",
 	}
 	for _, opt := range opts {
 		opt(cfg)

@@ -137,7 +137,7 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithTimeout(t *testing.T) {
 	// regardless of the watchTimeout value.
 	// Previously, a positive watchTimeout caused it to skip agent_end
 	// and keep waiting (wasting the full timeout duration).
-		events := strings.Join([]string{
+	events := strings.Join([]string{
 		`{"type":"text_delta","delta":"hello "}`,
 		`{"type":"text_delta","delta":"world"}`,
 		`{"type":"agent_end"}`,
@@ -156,7 +156,7 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithTimeout(t *testing.T) {
 	os.Stderr = wErr
 
 	// Read captured output in background.
-		var stdout, stderrBuf bytes.Buffer
+	var stdout, stderrBuf bytes.Buffer
 	outDone := make(chan struct{})
 	go func() {
 		io.Copy(&stdout, rOut)
@@ -207,7 +207,7 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithTimeout(t *testing.T) {
 
 func TestFollowWatchSummary_ExitsOnAgentEnd_WithoutTimeout(t *testing.T) {
 	// When watchTimeout is -1 (not set), should also exit on agent_end.
-		events := strings.Join([]string{
+	events := strings.Join([]string{
 		`{"type":"text_delta","delta":"done"}`,
 		`{"type":"agent_end"}`,
 	}, "\n")
@@ -256,7 +256,7 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithoutTimeout(t *testing.T) {
 
 func TestFollowWatchSummary_StreamEndsWithoutAgentEnd(t *testing.T) {
 	// If stream ends without agent_end, should print whatever text was accumulated.
-		events := strings.Join([]string{
+	events := strings.Join([]string{
 		`{"type":"text_delta","delta":"partial"}`,
 	}, "\n")
 

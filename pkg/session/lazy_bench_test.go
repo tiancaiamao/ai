@@ -1,12 +1,11 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"testing"
-
 )
 
 // BenchmarkLoadSession compares lazy vs full loading performance

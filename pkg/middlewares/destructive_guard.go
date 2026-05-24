@@ -15,11 +15,11 @@ const middlewareName = "destructive_guard"
 var defaultProtectedPatterns = []string{
 	`rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*`, // rm -rf, rm -fr, rm -Rf, etc.
 	`rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*`, // rm -fr variant
-	`rm\s+-r\s`,                            // rm -r
-	`kill\s+-9`,                            // kill -9
-	`mkfs`,                                 // mkfs
-	`dd\s+if=`,                             // dd if=
-	`\:\(\)\{\s*\:\|\:\&\s*\}`,             // fork bomb
+	`rm\s+-r\s`,                           // rm -r
+	`kill\s+-9`,                           // kill -9
+	`mkfs`,                                // mkfs
+	`dd\s+if=`,                            // dd if=
+	`\:\(\)\{\s*\:\|\:\&\s*\}`,            // fork bomb
 }
 
 // destructiveGuard implements AfterToolHook to detect destructive commands

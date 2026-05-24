@@ -6,14 +6,14 @@ import (
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
-		"log/slog"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-		"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
@@ -43,15 +43,15 @@ type rpcApp struct {
 	configPath string
 
 	// --- Model ---
-	model              llm.Model
-	apiKey             string
-	activeSpec         config.ModelSpec
-	currentModelInfo   rpc.ModelInfo
+	model                llm.Model
+	apiKey               string
+	activeSpec           config.ModelSpec
+	currentModelInfo     rpc.ModelInfo
 	currentContextWindow int
 
 	// --- Paths ---
-	cwd       string
-	agentDir  string
+	cwd      string
+	agentDir string
 
 	// --- Session ---
 	sessionPath string
@@ -65,50 +65,50 @@ type rpcApp struct {
 	registry *tools.Registry
 
 	// --- Compaction ---
-	compactor      *compact.Compactor
-	ctxManager     *compact.ContextManager
+	compactor       *compact.Compactor
+	ctxManager      *compact.ContextManager
 	compactorConfig *compact.Config
 
 	// --- Tracing ---
 	traceOutputPath string
 
 	// --- Skills ---
-	skillResult *skill.LoadResult
-	skillStats  *skill.SkillStatsFile
+	skillResult   *skill.LoadResult
+	skillStats    *skill.SkillStatsFile
 	skillCommands []rpc.SlashCommand
 
-		// --- Agent ---
-	ag           *agent.Agent
-	agentCtx     *agentctx.AgentContext
-	agentConfig  *agentconfig.AgentConfig
-		loopCfg      *agent.LoopConfig
-	executor     agent.ToolExecutor
+	// --- Agent ---
+	ag               *agent.Agent
+	agentCtx         *agentctx.AgentContext
+	agentConfig      *agentconfig.AgentConfig
+	loopCfg          *agent.LoopConfig
+	executor         agent.ToolExecutor
 	toolOutputConfig *config.ToolOutputConfig
-	checkpointMgr *agent.AgentContextCheckpointManager
+	checkpointMgr    *agent.AgentContextCheckpointManager
 
 	// --- Session I/O ---
 	sessionWriter *sessionWriter
 	sessionComp   *sessionCompactor
 
-			// --- System prompt ---
+	// --- System prompt ---
 	systemPrompt string
 
 	// --- RPC Server ---
 	server *rpc.Server
 
 	// --- Mutable state protected by stateMu ---
-	stateMu           sync.Mutex
-	isStreaming        bool
-	isCompacting       bool
-	currentThinkingLevel string
-	autoCompactionEnabled bool
-	steeringMode       string
-	followUpMode       string
-	pendingSteer       bool
-	showThinking       bool
-	showTools          bool
-	showPrefix         bool
-	busyMode           string
+	stateMu                       sync.Mutex
+	isStreaming                   bool
+	isCompacting                  bool
+	currentThinkingLevel          string
+	autoCompactionEnabled         bool
+	steeringMode                  string
+	followUpMode                  string
+	pendingSteer                  bool
+	showThinking                  bool
+	showTools                     bool
+	showPrefix                    bool
+	busyMode                      string
 	consecutiveCompactionFailures int
 
 	// --- Internal helper functions ---
@@ -175,8 +175,8 @@ func (app *rpcApp) nuclearTruncate() {
 // Must be called after all fields are populated.
 
 func (app *rpcApp) initHelpers() {
-		// buildSystemPrompt builds the full system prompt for the given session.
-		app.buildSystemPrompt = func(currentSess *session.Session) string {
+	// buildSystemPrompt builds the full system prompt for the given session.
+	app.buildSystemPrompt = func(currentSess *session.Session) string {
 		// Agent config overrides the default system prompt.
 		if app.agentConfig != nil {
 			sp, err := app.agentConfig.ResolveSystemPrompt()
@@ -192,7 +192,7 @@ func (app *rpcApp) initHelpers() {
 			slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
 			return app.customSystemPrompt
 		}
-				promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
+		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 		promptBuilder.SetTools(app.registry.All()).SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
 
 		if currentSess != nil {
@@ -318,7 +318,7 @@ func (app *rpcApp) initHelpers() {
 			return
 		}
 
-				if !app.compactor.ShouldCompact(context.Background(), app.ag.GetContext()) {
+		if !app.compactor.ShouldCompact(context.Background(), app.ag.GetContext()) {
 			return
 		}
 		if !app.sess.CanCompact(app.compactor) {
@@ -330,7 +330,7 @@ func (app *rpcApp) initHelpers() {
 			return
 		}
 
-				beforeCount := len(app.ag.GetMessages())
+		beforeCount := len(app.ag.GetMessages())
 		compactionInfo := agent.CompactionInfo{
 			Auto:    true,
 			Before:  beforeCount,
@@ -440,7 +440,7 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
 
-		processEvent := func(event agent.AgentEvent) {
+	processEvent := func(event agent.AgentEvent) {
 		if event.Type == "agent_start" {
 			app.stateMu.Lock()
 			app.isStreaming = true
@@ -513,7 +513,6 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 	return shutdownEmitter, eventEmitterDone
 }
 
-
 func (app *rpcApp) startDebugServer() {
 	if app.debugAddr == "" {
 		return
@@ -567,7 +566,6 @@ func (app *rpcApp) emitStartEvent() {
 
 // --- Slash command aliases (registration helpers) ---
 
-
 func (app *rpcApp) registerHiddenAlias(alias, desc, canonical string) {
 	app.server.RegisterHiddenSlash(alias, desc, func(args string) (any, error) {
 		h, ok := app.server.GetSlashHandler(canonical)
@@ -577,7 +575,6 @@ func (app *rpcApp) registerHiddenAlias(alias, desc, canonical string) {
 		return h(args)
 	})
 }
-
 
 func (app *rpcApp) forwardToSet(subcmd string) func(string) (any, error) {
 	return func(args string) (any, error) {
@@ -686,7 +683,6 @@ func (app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error) {
 	return nil, app.ag.Prompt(message)
 }
 
-
 func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
 	message := cmd.Message
 	if message == "" && len(cmd.Data) > 0 {
@@ -728,7 +724,6 @@ func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
 	return nil, nil
 }
 
-
 func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
 	message := cmd.Message
 	if message == "" && len(cmd.Data) > 0 {
@@ -760,15 +755,12 @@ func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
 	return nil, app.ag.FollowUp(expandedMessage)
 }
 
-
 func (app *rpcApp) handleAbort(cmd rpc.RPCCommand) (any, error) {
 	_ = cmd
 	slog.Info("Received abort")
 	app.ag.Abort()
 	return nil, nil
 }
-
-
 
 // registerHandlers registers all RPC command handlers and slash commands.
 // Handler methods are distributed across topic-specific files; this method

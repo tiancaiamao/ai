@@ -11,8 +11,8 @@ func newTestAgentContext(messages []agentctx.AgentMessage) *agentctx.AgentContex
 	return &agentctx.AgentContext{
 		RecentMessages: messages,
 		AgentState: &agentctx.AgentState{
-			TotalTurns:    10,
-			TokensLimit:   200000,
+			TotalTurns:  10,
+			TokensLimit: 200000,
 		},
 	}
 }

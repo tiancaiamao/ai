@@ -66,8 +66,8 @@ func (sm *SessionManager) ListSessions() ([]SessionMeta, error) {
 			continue
 		}
 		sessions = append(sessions, *meta)
-		}
-	
+	}
+
 	// Sort sessions by UpdatedAt time (oldest first)
 	// so that display index 0 = oldest (top), newest at bottom.
 	sort.Slice(sessions, func(i, j int) bool {
@@ -178,7 +178,6 @@ func (sm *SessionManager) ForkSessionFrom(source *Session, leafID *string, name,
 	if err := sm.saveMeta(id, meta); err != nil {
 		return nil, fmt.Errorf("failed to save metadata: %w", err)
 	}
-
 
 	return newSess, nil
 }

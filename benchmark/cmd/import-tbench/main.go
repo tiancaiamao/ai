@@ -171,7 +171,7 @@ func fixAppPaths(content string) string {
 	}
 
 	result := strings.Join(newLines, "\n")
-	
+
 	// First handle Path("/app/file") -> WORK_DIR / "file"
 	for {
 		idx := strings.Index(result, `Path("/app/`)
@@ -190,7 +190,7 @@ func fixAppPaths(content string) string {
 		replacement := fmt.Sprintf(`WORK_DIR / "%s"`, filename)
 		result = result[:idx] + replacement + rest[endIdx+2:]
 	}
-	
+
 	// Then handle remaining "/app/file" -> str(WORK_DIR / "file")
 	for {
 		idx := strings.Index(result, `"/app/`)

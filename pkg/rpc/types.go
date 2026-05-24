@@ -52,7 +52,7 @@ type SessionState struct {
 	SessionName           string           `json:"sessionName,omitempty"`
 	AIPid                 int              `json:"aiPid,omitempty"`
 	AILogPath             string           `json:"aiLogPath,omitempty"`
-	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"` // Current working directory
+	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"`  // Current working directory
 	AIStartupPath         string           `json:"aiStartupPath,omitempty"` // Git repository root (where session started)
 	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
 	MessageCount          int              `json:"messageCount"`
@@ -188,8 +188,8 @@ type FormattedMessage struct {
 
 // MessagesResult represents the result of the /messages slash command.
 type MessagesResult struct {
-	Total    int               `json:"total"`
-	Showing  int               `json:"showing"`
+	Total    int                `json:"total"`
+	Showing  int                `json:"showing"`
 	Messages []FormattedMessage `json:"messages"`
 }
 
@@ -216,14 +216,14 @@ type WorkflowTask struct {
 
 // WorkflowState represents the current workflow execution state.
 type WorkflowState struct {
-	Phase          string          `json:"phase"`           // init, worker, completed, error
-	TasksFile      string          `json:"tasksFile,omitempty"`
-	TotalTasks     int             `json:"totalTasks"`
-	PendingTasks   int             `json:"pendingTasks"`
-	DoneTasks      int             `json:"doneTasks"`
-	FailedTasks    int             `json:"failedTasks"`
-	InProgressTask *WorkflowTask   `json:"inProgressTask,omitempty"`
-	StartedAt      string          `json:"startedAt,omitempty"`
-	LastUpdate     string          `json:"lastUpdate,omitempty"`
-	Error          string          `json:"error,omitempty"`
+	Phase          string        `json:"phase"` // init, worker, completed, error
+	TasksFile      string        `json:"tasksFile,omitempty"`
+	TotalTasks     int           `json:"totalTasks"`
+	PendingTasks   int           `json:"pendingTasks"`
+	DoneTasks      int           `json:"doneTasks"`
+	FailedTasks    int           `json:"failedTasks"`
+	InProgressTask *WorkflowTask `json:"inProgressTask,omitempty"`
+	StartedAt      string        `json:"startedAt,omitempty"`
+	LastUpdate     string        `json:"lastUpdate,omitempty"`
+	Error          string        `json:"error,omitempty"`
 }

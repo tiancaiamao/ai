@@ -49,7 +49,7 @@ func ParseEvent(line string) *FormattedEvent {
 	eventType, _ := evt["type"].(string)
 
 	switch eventType {
-		case "message_start":
+	case "message_start":
 		return parseMessageStart(evt)
 	case "message_end":
 		return parseMessageEnd(evt)
@@ -85,7 +85,7 @@ func ParseEvent(line string) *FormattedEvent {
 		return parseResponseEvent(evt)
 	case "session_switch":
 		return parseSessionSwitch(evt)
-		case "llm_retry":
+	case "llm_retry":
 		return parseLLMRetry(evt)
 	case "loop_guard_triggered":
 		return parseLoopGuard(evt)
@@ -151,7 +151,7 @@ func parseMessageUpdate(evt map[string]any) *FormattedEvent {
 				Text: delta,
 				Raw:  delta,
 			}
-				case "thinking_delta":
+		case "thinking_delta":
 			if strings.TrimSpace(delta) == "" {
 				return nil
 			}
@@ -420,7 +420,7 @@ func parseToolCallRecovery(evt map[string]any) *FormattedEvent {
 	if attempt > 0 {
 		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: recovered malformed tool call (attempt %d): %s", attempt, truncate(reason, 220))}
 	}
-		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncate(reason, 220)}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncate(reason, 220)}
 }
 
 // parseLLMRetry handles llm_retry events, making rate-limit and other
@@ -460,7 +460,6 @@ func parseLLMRetry(evt map[string]any) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: text}
 }
 
-
 // formatToolDetail tries to extract a short summary of tool arguments.
 func formatToolDetail(evt map[string]any, toolName string) string {
 	// Try data.args or top-level args
@@ -485,7 +484,7 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 	if len(parts) > 0 {
 		return " " + strings.Join(parts, " ")
 	}
-		return ""
+	return ""
 }
 
 // intFromMap safely extracts an int from a map[string]any.
@@ -539,7 +538,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return &FormattedEvent{Kind: KindMeta, Text: fmt.Sprintf("%v", dataRaw)}
 	}
 
-		// Detect response type and render accordingly.
+	// Detect response type and render accordingly.
 	// Order matters: most specific detections first.
 
 	// /show settings → {type: "settings", data: {...}}
@@ -575,7 +574,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderMessages(dataJSON)
 	}
 
-		// /sessions → {sessions: [...]}
+	// /sessions → {sessions: [...]}
 	if _, hasSessions := dataRaw["sessions"]; hasSessions {
 		return renderSessions(dataJSON)
 	}
@@ -615,7 +614,7 @@ func parseResponseEvent(evt map[string]any) *FormattedEvent {
 		return renderTree(dataJSON)
 	}
 
-		// Fallback: pretty-print JSON.
+	// Fallback: pretty-print JSON.
 	pretty, _ := json.MarshalIndent(dataRaw, "", "  ")
 	text := string(pretty)
 	if len(text) > 500 {
@@ -708,7 +707,7 @@ func renderSkills(dataJSON []byte) *FormattedEvent {
 		return commands[i].Source < commands[j].Source
 	})
 
-		var b strings.Builder
+	var b strings.Builder
 	b.WriteString("Commands:\n")
 	for _, cmd := range commands {
 		desc := strings.TrimSpace(cmd.Description)

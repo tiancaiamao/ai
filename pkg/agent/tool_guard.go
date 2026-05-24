@@ -47,7 +47,7 @@ func newToolLoopGuard(config *LoopConfig) *toolLoopGuard {
 		maxFeedback = config.MaxLoopGuardFeedback
 	}
 	return &toolLoopGuard{
-		maxConsecutive:     maxConsecutive,
+		maxConsecutive:      maxConsecutive,
 		maxFeedbackAttempts: maxFeedback,
 	}
 }

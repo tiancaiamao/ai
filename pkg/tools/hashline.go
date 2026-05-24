@@ -79,7 +79,7 @@ func FormatHashLines(content string, startLine int) string {
 	if content == "" {
 		return ""
 	}
-	
+
 	if startLine == 0 {
 		startLine = 1
 	}
@@ -200,8 +200,8 @@ type HashlineEditResult struct {
 
 // NoopEdit represents an edit that produced no changes
 type NoopEdit struct {
-	EditIndex     int
-	Location      string
+	EditIndex      int
+	Location       string
 	CurrentContent string
 }
 
@@ -221,12 +221,12 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 
 	// First pass: validate all hashes and parse edits
 	type parsedEdit struct {
-		idx        int
-		spec       *parsedSpec
-		dst        string
-		dstLines   []string
+		idx      int
+		spec     *parsedSpec
+		dst      string
+		dstLines []string
 	}
-	
+
 	var parsedEdits []parsedEdit
 	var mismatches []HashMismatch
 	remaps := make(map[int]string)
@@ -313,8 +313,8 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 			// Check if this is a no-op
 			if strings.Join(newLines, "\n") == origLine {
 				noopEdits = append(noopEdits, NoopEdit{
-					EditIndex:     pe.idx,
-					Location:      fmt.Sprintf("%d:%s", pe.spec.ref.Line, pe.spec.ref.Hash),
+					EditIndex:      pe.idx,
+					Location:       fmt.Sprintf("%d:%s", pe.spec.ref.Line, pe.spec.ref.Hash),
 					CurrentContent: origLine,
 				})
 				continue
@@ -340,8 +340,8 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 			// Check if this is a no-op
 			if strings.Join(newLines, "\n") == strings.Join(origLines, "\n") {
 				noopEdits = append(noopEdits, NoopEdit{
-					EditIndex:     pe.idx,
-					Location:      fmt.Sprintf("%d:%s", pe.spec.start.Line, pe.spec.start.Hash),
+					EditIndex:      pe.idx,
+					Location:       fmt.Sprintf("%d:%s", pe.spec.start.Line, pe.spec.start.Hash),
 					CurrentContent: strings.Join(origLines, "\n"),
 				})
 				continue
@@ -356,8 +356,8 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 
 			if len(inserted) == 0 {
 				noopEdits = append(noopEdits, NoopEdit{
-					EditIndex:     pe.idx,
-					Location:      fmt.Sprintf("%d:%s", pe.spec.after.Line, pe.spec.after.Hash),
+					EditIndex:      pe.idx,
+					Location:       fmt.Sprintf("%d:%s", pe.spec.after.Line, pe.spec.after.Hash),
 					CurrentContent: originalFileLines[pe.spec.after.Line-1],
 				})
 				continue
@@ -372,24 +372,24 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 				oldText := pe.dstLines[0]
 				newText := pe.dstLines[1]
 				fileContent := strings.Join(fileLines, "\n")
-				
+
 				// Check if this is a no-op
 				if !strings.Contains(fileContent, oldText) {
 					noopEdits = append(noopEdits, NoopEdit{
-						EditIndex:     pe.idx,
-						Location:      "replace",
+						EditIndex:      pe.idx,
+						Location:       "replace",
 						CurrentContent: oldText,
 					})
 					continue
 				}
-				
+
 				// Apply the replacement
 				if edit, ok := findEditByIndex(edits, pe.idx); ok && edit.All {
 					fileContent = strings.ReplaceAll(fileContent, oldText, newText)
 				} else {
 					fileContent = strings.Replace(fileContent, oldText, newText, 1)
 				}
-				
+
 				fileLines = strings.Split(fileContent, "\n")
 				trackFirstChanged(&firstChangedLine, 1)
 			}
@@ -404,8 +404,8 @@ func ApplyHashlineEdits(edits []HashlineEdit, content string) (*HashlineEditResu
 		}
 	}
 	if diffLineCount > len(edits)*4 {
-		warnings = append(warnings, 
-			fmt.Sprintf("Edit changed %d lines across %d operations — verify no unintended reformatting.", 
+		warnings = append(warnings,
+			fmt.Sprintf("Edit changed %d lines across %d operations — verify no unintended reformatting.",
 				diffLineCount, len(edits)))
 	}
 

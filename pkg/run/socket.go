@@ -12,16 +12,16 @@ import (
 
 // Command represents a command sent over the Unix domain socket.
 type Command struct {
-	Type     string `json:"type"`
-	Message  string `json:"message"`
-	FromSeq  uint64 `json:"from_seq,omitempty"`  // for "stream" command: replay from this seq
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	FromSeq uint64 `json:"from_seq,omitempty"` // for "stream" command: replay from this seq
 }
 
 // Response represents the server's reply to a Command.
 type Response struct {
-	OK    bool `json:"ok"`
+	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
-	Data  any   `json:"data,omitempty"`
+	Data  any    `json:"data,omitempty"`
 }
 
 // CommandHandler processes a Command and returns a Response.
@@ -191,7 +191,7 @@ func (s *SocketServer) handleStream(conn net.Conn, cmd Command) {
 
 	// Send initial OK response.
 	s.writeResponse(conn, Response{OK: true, Data: map[string]any{
-		"from_seq": cmd.FromSeq,
+		"from_seq":    cmd.FromSeq,
 		"current_seq": s.broadcaster.Seq(),
 	}})
 

@@ -1,10 +1,10 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,14 +18,14 @@ import (
 
 // Session represents a conversation session backed by an append-only JSONL file.
 type Session struct {
-	mu            sync.Mutex
-	sessionDir    string // session directory path
-	header        SessionHeader
-	entries       []*SessionEntry
-	byID          map[string]*SessionEntry
-	leafID        *string
-	flushed       bool
-	persist       bool
+	mu         sync.Mutex
+	sessionDir string // session directory path
+	header     SessionHeader
+	entries    []*SessionEntry
+	byID       map[string]*SessionEntry
+	leafID     *string
+	flushed    bool
+	persist    bool
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -37,10 +37,10 @@ type ForkMessage struct {
 // NewSession creates a new session with the given directory path.
 func NewSession(sessionDir string) *Session {
 	sess := &Session{
-		sessionDir:    sessionDir,
-		entries:       make([]*SessionEntry, 0),
-		byID:          make(map[string]*SessionEntry),
-		persist:       sessionDir != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
 	id := sessionIDFromDirPath(sessionDir)
@@ -52,10 +52,10 @@ func NewSession(sessionDir string) *Session {
 // LoadSession loads a session from the given directory path.
 func LoadSession(sessionDir string) (*Session, error) {
 	sess := &Session{
-		sessionDir:    sessionDir,
-		entries:       make([]*SessionEntry, 0),
-		byID:          make(map[string]*SessionEntry),
-		persist:       sessionDir != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
 	if sessionDir == "" {

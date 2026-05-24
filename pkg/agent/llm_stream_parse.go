@@ -107,7 +107,7 @@ func processStreamChunk(state *StreamChunkState, event llm.LLMEvent, thinkingLev
 			Content:      content,
 		}
 
-		case llm.LLMThinkingDeltaEvent:
+	case llm.LLMThinkingDeltaEvent:
 		return processThinkingDelta(state, e.Delta, e.Index, thinkingLevel)
 
 	case llm.LLMToolCallDeltaEvent:
@@ -157,7 +157,7 @@ func processStreamChunk(state *StreamChunkState, event llm.LLMEvent, thinkingLev
 
 	default:
 		return StreamChunkResult{EventType: ChunkIgnored}
-		}
+	}
 }
 
 // processThinkingDelta handles a thinking/reasoning stream delta.

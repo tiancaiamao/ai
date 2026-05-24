@@ -1,9 +1,9 @@
 package tools
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +13,8 @@ import (
 type EditMode int
 
 const (
-	EditModeReplace EditMode = iota // Default: oldText/newText replacement
-	EditModeHashline               // Hashline mode: line-addressed edits using content hashes
+	EditModeReplace  EditMode = iota // Default: oldText/newText replacement
+	EditModeHashline                 // Hashline mode: line-addressed edits using content hashes
 )
 
 // EditTool edits a file by replacing old text with new text with dynamic workspace support.

@@ -1,15 +1,14 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 )
 
 func TestDefaultLoadOptions(t *testing.T) {
@@ -299,7 +298,7 @@ func TestLoadSessionLazyMessageChain(t *testing.T) {
 	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
 		MaxMessages:    10,
 		IncludeSummary: false,
-		Lazy:          true,
+		Lazy:           true,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
@@ -368,7 +367,7 @@ func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
 	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
 		MaxMessages:    10,
 		IncludeSummary: true,
-		Lazy:          true,
+		Lazy:           true,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, loaded)

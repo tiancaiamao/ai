@@ -23,15 +23,15 @@ func TestEnsureToolCallPairing_EmptyShell(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file1.txt"},
 				},
 				agentctx.ToolCallContent{
-					ID:   "call-2",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-2",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file2.txt"},
 				},
 			},
@@ -46,15 +46,15 @@ func TestEnsureToolCallPairing_EmptyShell(t *testing.T) {
 			Content: []agentctx.ContentBlock{
 				// Only tool calls, no text content - becomes empty shell
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file1.txt"},
 				},
 				agentctx.ToolCallContent{
-					ID:   "call-2",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-2",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file2.txt"},
 				},
 			},
@@ -133,9 +133,9 @@ func TestEnsureToolCallPairing_EmptyShellWithMixedContent(t *testing.T) {
 			Role: "assistant",
 			Content: []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file.txt"},
 				},
 			},
@@ -148,9 +148,9 @@ func TestEnsureToolCallPairing_EmptyShellWithMixedContent(t *testing.T) {
 			Content: []agentctx.ContentBlock{
 				agentctx.TextContent{Type: "text", Text: "Here's what I found:"},
 				agentctx.ToolCallContent{
-					ID:   "call-1",
-					Type: "toolCall",
-					Name: "read",
+					ID:        "call-1",
+					Type:      "toolCall",
+					Name:      "read",
 					Arguments: map[string]any{"path": "/file.txt"},
 				},
 			},

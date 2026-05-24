@@ -3,8 +3,8 @@ package run
 import (
 	"os"
 	"path/filepath"
-	"testing"
 	"syscall"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

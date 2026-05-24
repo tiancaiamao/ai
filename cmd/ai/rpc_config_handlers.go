@@ -20,7 +20,6 @@ func (app *rpcApp) collectSessionUsageFromAgent() (int, int, int, int, rpc.Sessi
 	return collectSessionUsage(app.ag.GetMessages())
 }
 
-
 func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
 	userCount, assistantCount, toolCalls, toolResults, tokens, cost := app.collectSessionUsageFromAgent()
 
@@ -44,7 +43,7 @@ func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
 			LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
 			LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
 			RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
-						RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
+			RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
 			RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
 			RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
 		}
@@ -66,7 +65,6 @@ func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
 	}, nil
 }
 
-
 func (app *rpcApp) getCurrentAILogPath() string {
 	aiLogPath := app.traceOutputPath
 	if handler := traceevent.GetHandler(); handler != nil {
@@ -76,7 +74,6 @@ func (app *rpcApp) getCurrentAILogPath() string {
 	}
 	return aiLogPath
 }
-
 
 func (app *rpcApp) handleModelSet(args string) (any, error) {
 	var provider, modelID string
@@ -158,7 +155,6 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	return &info, nil
 }
 
-
 func (app *rpcApp) handleModelList() (any, error) {
 	specs, modelsPath, err := loadModelSpecs(app.cfg)
 	if err != nil {
@@ -189,7 +185,6 @@ func (app *rpcApp) handleModelList() (any, error) {
 	}, nil
 }
 
-
 func (app *rpcApp) handleSetAutoCompaction(value string) (any, error) {
 	enabled := strings.TrimSpace(strings.ToLower(value))
 	var jsonData struct {
@@ -212,7 +207,6 @@ func (app *rpcApp) handleSetAutoCompaction(value string) (any, error) {
 	return map[string]any{"setting": "auto-compaction", "value": val}, nil
 }
 
-
 func (app *rpcApp) handleSetThinkingLevel(value string, validLevels map[string]bool) (any, error) {
 	level := strings.ToLower(strings.TrimSpace(value))
 	var jsonData struct {
@@ -231,7 +225,6 @@ func (app *rpcApp) handleSetThinkingLevel(value string, validLevels map[string]b
 	return map[string]any{"setting": "thinking-level", "value": level}, nil
 }
 
-
 func (app *rpcApp) handleSetFollowUpMode(value string, validModes map[string]bool) (any, error) {
 	mode := strings.ToLower(strings.TrimSpace(value))
 	var jsonData struct {
@@ -249,7 +242,6 @@ func (app *rpcApp) handleSetFollowUpMode(value string, validModes map[string]boo
 	return map[string]any{"setting": "follow-up-mode", "value": mode}, nil
 }
 
-
 func (app *rpcApp) handleSetSteeringMode(value string, validModes map[string]bool) (any, error) {
 	mode := strings.ToLower(strings.TrimSpace(value))
 	var jsonData struct {
@@ -266,7 +258,6 @@ func (app *rpcApp) handleSetSteeringMode(value string, validModes map[string]boo
 	app.stateMu.Unlock()
 	return map[string]any{"setting": "steering-mode", "value": mode}, nil
 }
-
 
 func (app *rpcApp) handleSetToolCallCutoff(value string) (any, error) {
 	var cutoff int
@@ -293,7 +284,6 @@ func (app *rpcApp) handleSetToolCallCutoff(value string) (any, error) {
 	return map[string]any{"setting": "tool-call-cutoff", "value": cutoff}, nil
 }
 
-
 func (app *rpcApp) handleSetToolSummaryAutomation(value string, validModes map[string]bool) (any, error) {
 	var jsonData struct {
 		Mode string `json:"mode"`
@@ -312,7 +302,6 @@ func (app *rpcApp) handleSetToolSummaryAutomation(value string, validModes map[s
 	return map[string]any{"setting": "tool-summary-automation", "value": mode}, nil
 }
 
-
 func (app *rpcApp) handleSetToolSummaryStrategy(value string, validStrategies map[string]bool) (any, error) {
 	var jsonData struct {
 		Strategy string `json:"strategy"`
@@ -330,7 +319,6 @@ func (app *rpcApp) handleSetToolSummaryStrategy(value string, validStrategies ma
 	}
 	return map[string]any{"setting": "tool-summary-strategy", "value": strategy}, nil
 }
-
 
 func (app *rpcApp) handleSetSessionName(value string) (any, error) {
 	name := strings.TrimSpace(value)
@@ -358,7 +346,6 @@ func (app *rpcApp) handleSetSessionName(value string) (any, error) {
 	app.stateMu.Unlock()
 	return map[string]any{"setting": "session-name", "value": name}, nil
 }
-
 
 func (app *rpcApp) handleSetTraceEvents(value string) (any, error) {
 	if strings.TrimSpace(value) == "" {
@@ -438,7 +425,6 @@ func (app *rpcApp) handleSetTraceEvents(value string) (any, error) {
 	}
 }
 
-
 func (app *rpcApp) handleShowSettings() (any, error) {
 	compaction := buildCompactionState(app.compactorConfig, app.compactor)
 
@@ -503,7 +489,6 @@ func (app *rpcApp) handleShowSettings() (any, error) {
 	}, nil
 }
 
-
 func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
 	enabled := strings.TrimSpace(strings.ToLower(value))
 	var jsonData struct {
@@ -519,7 +504,6 @@ func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
 	slog.Info("set auto-retry", "enabled", val)
 	return map[string]any{"setting": "auto-retry", "value": val}, nil
 }
-
 
 func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
 	parts := strings.Fields(args)
@@ -636,7 +620,6 @@ func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolS
 	}
 }
 
-
 func (app *rpcApp) handleModel(args string) (any, error) {
 	arg := strings.TrimSpace(args)
 	if arg == "" {
@@ -674,7 +657,6 @@ func (app *rpcApp) handleModel(args string) (any, error) {
 	return h(arg)
 }
 
-
 func (app *rpcApp) handleToggle(args string) (any, error) {
 	kind := strings.TrimSpace(args)
 	switch kind {
@@ -692,14 +674,13 @@ func (app *rpcApp) handleToggle(args string) (any, error) {
 	}
 }
 
-
 // handleShow handles the /show slash command.
 func (app *rpcApp) handleShow(args string) (any, error) {
 	subCmd := strings.TrimSpace(args)
 	switch subCmd {
 	case "settings", "":
 		return app.handleShowSettings()
-			default:
+	default:
 		return nil, fmt.Errorf("usage: /show settings")
 	}
 }
@@ -762,11 +743,11 @@ func (app *rpcApp) registerConfigHandlers(validToolSummaryStrategies, validToolS
 		}, nil
 	})
 
-			// get_session_stats
+	// get_session_stats
 	app.server.RegisterHiddenSlash("get_session_stats", "Get session stats (internal)", func(args string) (any, error) {
 		return app.getSessionStats()
 	})
-		// set_* backward-compatible forwarders
+	// set_* backward-compatible forwarders
 	app.server.RegisterHiddenSlash("set_auto_compaction", "Set auto-compaction (internal)", app.forwardToSet("auto-compaction"))
 	app.server.RegisterHiddenSlash("set_thinking_level", "Set thinking level (internal)", app.forwardToSet("thinking-level"))
 	app.server.RegisterHiddenSlash("set_trace_events", "Set trace events (internal)", app.forwardToSet("trace-events"))

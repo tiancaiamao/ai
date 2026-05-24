@@ -25,14 +25,14 @@ const (
 
 // RunMeta holds metadata for a single run (an ai rpc subprocess invocation).
 type RunMeta struct {
-	ID           string `json:"id"`            // 6-char hex ID
-	PID          int    `json:"pid"`           // process ID of the ai rpc subprocess
-	CWD          string `json:"cwd"`           // working directory where ai run was invoked
-	Status       string `json:"status"`        // running, done, failed, killed
-	StartedAt    int64  `json:"started_at"`    // unix timestamp
-	FinishedAt   int64  `json:"finished_at"`   // unix timestamp, 0 if still running
-	Name         string `json:"name"`          // optional human-readable name
-	ParentRun    string `json:"parent_run"`    // optional parent run ID for subagents
+	ID           string `json:"id"`             // 6-char hex ID
+	PID          int    `json:"pid"`            // process ID of the ai rpc subprocess
+	CWD          string `json:"cwd"`            // working directory where ai run was invoked
+	Status       string `json:"status"`         // running, done, failed, killed
+	StartedAt    int64  `json:"started_at"`     // unix timestamp
+	FinishedAt   int64  `json:"finished_at"`    // unix timestamp, 0 if still running
+	Name         string `json:"name"`           // optional human-readable name
+	ParentRun    string `json:"parent_run"`     // optional parent run ID for subagents
 	PidStartTime int64  `json:"pid_start_time"` // epoch seconds of process start (for PID reuse detection)
 }
 

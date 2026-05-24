@@ -33,7 +33,7 @@ func DefaultLoadOptions() LoadOptions {
 // FullLoadOptions returns options for loading everything (non-lazy).
 func FullLoadOptions() LoadOptions {
 	return LoadOptions{
-		MaxMessages:    -1,  // all
+		MaxMessages:    -1, // all
 		IncludeSummary: true,
 		Lazy:           false,
 	}
@@ -45,8 +45,8 @@ func FullLoadOptions() LoadOptions {
 func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
-			entries:    make([]*SessionEntry, 0),
-			byID:       make(map[string]*SessionEntry),
+			entries: make([]*SessionEntry, 0),
+			byID:    make(map[string]*SessionEntry),
 		}
 		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil

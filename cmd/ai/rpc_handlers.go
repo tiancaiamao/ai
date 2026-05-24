@@ -14,7 +14,7 @@ import (
 
 func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
-		app, err := newRPCApp(sessionPath, rpcAppSetupParams{
+	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
 		maxTurns:           maxTurns,
 		debugAddr:          debugAddr,
@@ -76,7 +76,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return ""
 	}
 
-		// Set max turns limit if specified
+	// Set max turns limit if specified
 	if maxTurns > 0 {
 		loopCfg.MaxTurns = maxTurns
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
@@ -89,7 +89,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	app.loopCfg = loopCfg
 
-		// Create agent with LoopConfig
+	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
 	ag.SetThinkingLevel("high")
@@ -115,7 +115,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
-		// --- Create RPC server ---
+	// --- Create RPC server ---
 	server := rpc.NewServer()
 	server.SetOutput(output)
 	app.server = server
@@ -134,7 +134,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// --- Register all handlers ---
-		validToolSummaryStrategies := map[string]bool{"llm": true, "heuristic": true, "off": true}
+	validToolSummaryStrategies := map[string]bool{"llm": true, "heuristic": true, "off": true}
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
 	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
 	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}

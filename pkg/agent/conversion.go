@@ -30,7 +30,7 @@ func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage)
 			Role: role,
 		}
 
-				// Extract content and thinking
+		// Extract content and thinking
 		for _, block := range msg.Content {
 			switch b := block.(type) {
 			case agentctx.TextContent:

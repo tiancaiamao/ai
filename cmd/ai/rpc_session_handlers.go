@@ -38,7 +38,6 @@ func (app *rpcApp) setSession(newSess *session.Session, newID, newName string) {
 	app.stateMu.Unlock()
 }
 
-
 func (app *rpcApp) handleNewSession(args string) (any, error) {
 	var name, title string
 	var jsonData struct {
@@ -81,7 +80,6 @@ func (app *rpcApp) handleNewSession(args string) (any, error) {
 	app.server.EmitEvent(map[string]any{"type": "session_switch", "session": newSessionID, "sessionName": name})
 	return map[string]any{"sessionId": newSessionID, "cancelled": false}, nil
 }
-
 
 func (app *rpcApp) handleResume(args string) (any, error) {
 	arg := strings.TrimSpace(args)
@@ -144,7 +142,6 @@ func (app *rpcApp) handleResume(args string) (any, error) {
 	return map[string]any{"sessionId": targetID, "sessionName": newSessionName}, nil
 }
 
-
 func (app *rpcApp) handleRewind(args string) (any, error) {
 	var jsonData struct {
 		EntryID string `json:"entryId"`
@@ -182,7 +179,6 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	return map[string]any{"switched": true}, nil
 }
 
-
 func (app *rpcApp) handleFork(args string) (any, error) {
 	var jsonData struct {
 		EntryID string `json:"entryId"`
@@ -219,7 +215,6 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 	slog.Info("Forked to new session", "name", name, "id", newSessionID)
 	return &rpc.ForkResult{Cancelled: false, Text: text}, nil
 }
-
 
 func (app *rpcApp) handleSessionGetState() (any, error) {
 	slog.Info("Received get_state")
@@ -259,7 +254,6 @@ func (app *rpcApp) handleSessionGetState() (any, error) {
 	}, nil
 }
 
-
 func (app *rpcApp) handleGetForkMessages(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_fork_messages")
@@ -274,7 +268,6 @@ func (app *rpcApp) handleGetForkMessages(args string) (any, error) {
 	return map[string]any{"messages": result}, nil
 }
 
-
 func (app *rpcApp) handleGetTree(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_tree")
@@ -282,8 +275,6 @@ func (app *rpcApp) handleGetTree(args string) (any, error) {
 	tree := buildTreeEntries(entries, app.sess.GetLeafID())
 	return map[string]any{"entries": tree}, nil
 }
-
-
 
 // registerSessionHandlers registers session-related slash commands.
 func (app *rpcApp) registerSessionHandlers() {
@@ -299,7 +290,7 @@ func (app *rpcApp) registerSessionHandlers() {
 		return app.handleRewind(args)
 	})
 
-		app.server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
+	app.server.RegisterSlash("fork", "Fork the conversation at a specific entry point", func(args string) (any, error) {
 		return app.handleFork(args)
 	})
 

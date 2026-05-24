@@ -141,7 +141,7 @@ func NewContextManager(
 	if config.ContextMgmtPrompt != "" {
 		effectivePrompt = config.ContextMgmtPrompt
 	}
-		return &ContextManager{
+	return &ContextManager{
 		config:        config,
 		model:         model,
 		apiKey:        apiKey,
@@ -475,7 +475,7 @@ func collectTruncationCandidates(agentCtx *agentctx.AgentContext, protectedStart
 
 		age := protectedStart - i
 
-				candidates = append(candidates, truncationCandidate{
+		candidates = append(candidates, truncationCandidate{
 			ID:           id,
 			ToolName:     msg.ToolName,
 			Chars:        len(text),
@@ -525,7 +525,7 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 		protectedStart = 0
 	}
 
-		candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(
+	candidates, truncatedCount, nonSelectableCount := collectTruncationCandidates(
 		agentCtx, protectedStart,
 		c.config.StaleAnnotation,
 		c.config.staleAgeInvestigative(),
@@ -598,7 +598,7 @@ func (c *ContextManager) buildContextMgmtMessages(agentCtx *agentctx.AgentContex
 				// Protected: show content but hide ID so LLM can't select it
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d PROTECTED]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))
-						} else if strings.TrimSpace(msg.ToolCallID) == "" {
+			} else if strings.TrimSpace(msg.ToolCallID) == "" {
 				// Older events may not carry tool_call_id and cannot be targeted by truncate_messages.
 				conv.WriteString(fmt.Sprintf("[tool:%s chars=%d NON_TRUNCATABLE:NO_ID]\n%s\n\n",
 					msg.ToolName, len(msg.ExtractText()), content))

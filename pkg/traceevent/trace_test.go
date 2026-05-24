@@ -823,7 +823,7 @@ func TestBuildTraceEventJSONToolCallTidStableForSpanPair(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected end tid to be int, got %T", endJSON["tid"])
 	}
-		if beginTid != endTid {
+	if beginTid != endTid {
 		t.Fatalf("expected same tid for span pair, got begin=%d end=%d", beginTid, endTid)
 	}
 }

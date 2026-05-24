@@ -82,9 +82,9 @@ func lsSubcommand() {
 // lsRunEntry is the JSON output structure with added fields.
 type lsRunEntry struct {
 	run.RunMeta
-	Age    string             `json:"age"`
-	Status string             `json:"status"` // overridden: includes "idle" for completed-prompt agents
-	End    *run.AgentEndInfo  `json:"end,omitempty"`
+	Age    string            `json:"age"`
+	Status string            `json:"status"` // overridden: includes "idle" for completed-prompt agents
+	End    *run.AgentEndInfo `json:"end,omitempty"`
 }
 
 func emitJSON(runs []run.RunMeta) {

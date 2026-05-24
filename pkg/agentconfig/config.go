@@ -13,10 +13,10 @@ import (
 // ContextManagementConfig holds configuration for context management features.
 // All fields have zero-value defaults that disable the features.
 type ContextManagementConfig struct {
-	StaleAnnotation          bool   `yaml:"stale_annotation"`
-	StaleAgeInvestigative    int    `yaml:"stale_age_investigative"`
-	StaleAgeModification     int    `yaml:"stale_age_modification"`
-	PromptFile               string `yaml:"prompt_file,omitempty"`
+	StaleAnnotation       bool   `yaml:"stale_annotation"`
+	StaleAgeInvestigative int    `yaml:"stale_age_investigative"`
+	StaleAgeModification  int    `yaml:"stale_age_modification"`
+	PromptFile            string `yaml:"prompt_file,omitempty"`
 }
 
 // AgentConfig represents the parsed agent.yaml configuration.
@@ -24,8 +24,8 @@ type AgentConfig struct {
 	Version           int                      `yaml:"version"`
 	SystemPrompt      string                   `yaml:"system_prompt"`
 	Memory            string                   `yaml:"memory"`
-	Middlewares       []MiddlewareEntry         `yaml:"middlewares"`
-	ContextManagement *ContextManagementConfig  `yaml:"context_management,omitempty"`
+	Middlewares       []MiddlewareEntry        `yaml:"middlewares"`
+	ContextManagement *ContextManagementConfig `yaml:"context_management,omitempty"`
 
 	// dir is the directory of the YAML file, used for resolving relative paths.
 	dir string
