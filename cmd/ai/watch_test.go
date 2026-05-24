@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tiancaiamao/ai/pkg/run"
 )
@@ -124,6 +129,174 @@ func TestProcessEvent_LiveThinkingDelta_RendersImmediately(t *testing.T) {
 	}
 	if !strings.Contains(out, "abc") {
 		t.Fatalf("expected delta content rendered immediately, got %q", out)
+	}
+}
+
+func TestFollowWatchSummary_ExitsOnAgentEnd_WithTimeout(t *testing.T) {
+	// Regression test: followWatchSummary must exit on agent_end
+	// regardless of the watchTimeout value.
+	// Previously, a positive watchTimeout caused it to skip agent_end
+	// and keep waiting (wasting the full timeout duration).
+		events := strings.Join([]string{
+		`{"type":"text_delta","delta":"hello "}`,
+		`{"type":"text_delta","delta":"world"}`,
+		`{"type":"agent_end"}`,
+		// Extra lines after agent_end — should never be reached.
+		`{"type":"text_delta","delta":"should not appear"}`,
+	}, "\n")
+
+	scanner := bufio.NewScanner(strings.NewReader(events))
+
+	// Capture stdout and stderr via pipes.
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	// Read captured output in background.
+		var stdout, stderrBuf bytes.Buffer
+	outDone := make(chan struct{})
+	go func() {
+		io.Copy(&stdout, rOut)
+		close(outDone)
+	}()
+	errDone := make(chan struct{})
+	go func() {
+		io.Copy(&stderrBuf, rErr)
+		close(errDone)
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		// Use a positive timeout — the bug was that this prevented exit on agent_end.
+		followWatchSummary(scanner, 0, 15*time.Minute)
+		close(done)
+	}()
+
+	// Should exit quickly, not wait 15 minutes.
+	select {
+	case <-done:
+		// Good — exited on agent_end.
+	case <-time.After(5 * time.Second):
+		t.Fatal("followWatchSummary did not exit on agent_end within 5s (would have waited full timeout)")
+	}
+
+	// Close write ends and restore before reading.
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	<-outDone
+	<-errDone
+
+	// Should have printed the accumulated assistant text.
+	if !strings.Contains(stdout.String(), "hello world") {
+		t.Errorf("expected stdout to contain 'hello world', got %q", stdout.String())
+	}
+	// Should NOT contain text that comes after agent_end.
+	if strings.Contains(stdout.String(), "should not appear") {
+		t.Error("should not have processed events after agent_end")
+	}
+	// Stderr should contain __seq marker.
+	if !strings.Contains(stderrBuf.String(), "__seq:3") {
+		t.Errorf("expected stderr to contain '__seq:3', got %q", stderrBuf.String())
+	}
+}
+
+func TestFollowWatchSummary_ExitsOnAgentEnd_WithoutTimeout(t *testing.T) {
+	// When watchTimeout is -1 (not set), should also exit on agent_end.
+		events := strings.Join([]string{
+		`{"type":"text_delta","delta":"done"}`,
+		`{"type":"agent_end"}`,
+	}, "\n")
+
+	scanner := bufio.NewScanner(strings.NewReader(events))
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	var stdout, stderrBuf bytes.Buffer
+	outDone := make(chan struct{})
+	go func() { io.Copy(&stdout, rOut); close(outDone) }()
+	errDone := make(chan struct{})
+	go func() { io.Copy(&stderrBuf, rErr); close(errDone) }()
+
+	done := make(chan struct{})
+	go func() {
+		followWatchSummary(scanner, 0, -1)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("followWatchSummary did not exit on agent_end")
+	}
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	<-outDone
+	<-errDone
+
+	if !strings.Contains(stdout.String(), "done") {
+		t.Errorf("expected stdout to contain 'done', got %q", stdout.String())
+	}
+	if !strings.Contains(stderrBuf.String(), "__seq:2") {
+		t.Errorf("expected stderr to contain '__seq:2', got %q", stderrBuf.String())
+	}
+}
+
+func TestFollowWatchSummary_StreamEndsWithoutAgentEnd(t *testing.T) {
+	// If stream ends without agent_end, should print whatever text was accumulated.
+		events := strings.Join([]string{
+		`{"type":"text_delta","delta":"partial"}`,
+	}, "\n")
+
+	scanner := bufio.NewScanner(strings.NewReader(events))
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	var stdout bytes.Buffer
+	outDone := make(chan struct{})
+	go func() { io.Copy(&stdout, rOut); close(outDone) }()
+	errDone := make(chan struct{})
+	var stderrBuf bytes.Buffer
+	go func() { io.Copy(&stderrBuf, rErr); close(errDone) }()
+
+	done := make(chan struct{})
+	go func() {
+		followWatchSummary(scanner, 0, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("followWatchSummary did not exit when stream ended")
+	}
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+	<-outDone
+	<-errDone
+
+	if !strings.Contains(stdout.String(), "partial") {
+		t.Errorf("expected stdout to contain 'partial', got %q", stdout.String())
 	}
 }
 
