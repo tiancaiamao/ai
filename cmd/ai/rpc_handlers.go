@@ -12,12 +12,13 @@ import (
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
-	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
+		app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
 		maxTurns:           maxTurns,
 		debugAddr:          debugAddr,
+		agentConfigPath:    agentConfigPath,
 	})
 	if err != nil {
 		return err
@@ -75,11 +76,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return ""
 	}
 
-	// Set max turns limit if specified
+		// Set max turns limit if specified
 	if maxTurns > 0 {
 		loopCfg.MaxTurns = maxTurns
 		slog.Info("Max turns limit set", "max_turns", maxTurns)
 	}
+
+	// Apply agent config hooks if available
+	if app.agentConfig != nil {
+		loopCfg.Hooks = app.agentConfig.BuildHooks()
+	}
+
 	app.loopCfg = loopCfg
 
 		// Create agent with LoopConfig

@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/compact"
+		"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 		"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
+
+	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
 // rpcAppSetupParams holds the parameters needed to construct an rpcApp.
@@ -21,12 +23,24 @@ type rpcAppSetupParams struct {
 	customSystemPrompt string
 	maxTurns           int
 	debugAddr          string
+	agentConfigPath    string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
 // config loading, model resolution, session loading/creation, tool registration,
 // compactor creation, and skill loading.
 func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
+	// --- Agent config (optional) ---
+	var agentCfg *agentconfig.AgentConfig
+	if params.agentConfigPath != "" {
+		var err error
+		agentCfg, err = agentconfig.Load(params.agentConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load agent config: %w", err)
+		}
+		slog.Info("Loaded agent config", "path", params.agentConfigPath)
+	}
+
 	// --- Config + Logger ---
 	cfg, configPath, err := loadConfigWithLogger()
 	if err != nil {
@@ -115,7 +129,8 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		traceOutputPath:       traceOutputPath,
 		skillResult:           skillResult,
 		skillStats:            skillStats,
-		autoCompactionEnabled: compactorConfig.AutoCompact,
+				autoCompactionEnabled: compactorConfig.AutoCompact,
+		agentConfig:           agentCfg,
 		steeringMode:          "all",
 		followUpMode:          "one-at-a-time",
 		currentThinkingLevel:  "high",

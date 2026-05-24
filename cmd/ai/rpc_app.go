@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
+		"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
@@ -24,6 +24,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
+
+	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
 // rpcApp holds all state that was previously captured by closure variables in runRPC.
@@ -75,9 +77,10 @@ type rpcApp struct {
 	skillStats  *skill.SkillStatsFile
 	skillCommands []rpc.SlashCommand
 
-	// --- Agent ---
+		// --- Agent ---
 	ag           *agent.Agent
 	agentCtx     *agentctx.AgentContext
+	agentConfig  *agentconfig.AgentConfig
 		loopCfg      *agent.LoopConfig
 	executor     agent.ToolExecutor
 	toolOutputConfig *config.ToolOutputConfig
@@ -173,7 +176,18 @@ func (app *rpcApp) nuclearTruncate() {
 
 func (app *rpcApp) initHelpers() {
 		// buildSystemPrompt builds the full system prompt for the given session.
-	app.buildSystemPrompt = func(currentSess *session.Session) string {
+		app.buildSystemPrompt = func(currentSess *session.Session) string {
+		// Agent config overrides the default system prompt.
+		if app.agentConfig != nil {
+			sp, err := app.agentConfig.ResolveSystemPrompt()
+			if err != nil {
+				slog.Error("Failed to resolve agent config system prompt", "error", err)
+				// Fall through to default logic
+			} else {
+				slog.Info("Using agent config system prompt", "length", len(sp))
+				return sp
+			}
+		}
 		if app.customSystemPrompt != "" {
 			slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
 			return app.customSystemPrompt
