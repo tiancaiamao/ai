@@ -10,12 +10,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ContextManagementConfig holds configuration for context management features.
+// All fields have zero-value defaults that disable the features.
+type ContextManagementConfig struct {
+	StaleAnnotation          bool   `yaml:"stale_annotation"`
+	StaleAgeInvestigative    int    `yaml:"stale_age_investigative"`
+	StaleAgeModification     int    `yaml:"stale_age_modification"`
+	PromptFile               string `yaml:"prompt_file,omitempty"`
+}
+
 // AgentConfig represents the parsed agent.yaml configuration.
 type AgentConfig struct {
-	Version      int               `yaml:"version"`
-	SystemPrompt string            `yaml:"system_prompt"`
-	Memory       string            `yaml:"memory"`
-	Middlewares  []MiddlewareEntry `yaml:"middlewares"`
+	Version           int                      `yaml:"version"`
+	SystemPrompt      string                   `yaml:"system_prompt"`
+	Memory            string                   `yaml:"memory"`
+	Middlewares       []MiddlewareEntry         `yaml:"middlewares"`
+	ContextManagement *ContextManagementConfig  `yaml:"context_management,omitempty"`
 
 	// dir is the directory of the YAML file, used for resolving relative paths.
 	dir string
@@ -85,4 +95,28 @@ func (c *AgentConfig) resolvePath(p string) string {
 		return p
 	}
 	return filepath.Join(c.dir, p)
+}
+
+// ResolveContextManagementConfig resolves the optional context_management
+// section into a form suitable for consumption by the compact package.
+// Returns nil if context_management is not configured.
+func (c *AgentConfig) ResolveContextManagementConfig() *ContextManagementConfig {
+	if c.ContextManagement == nil {
+		return nil
+	}
+	return c.ContextManagement
+}
+
+// LoadContextManagementPrompt reads the external prompt file if configured.
+// Returns empty string if no prompt_file is set or if the file cannot be read.
+func (c *AgentConfig) LoadContextManagementPrompt() string {
+	if c.ContextManagement == nil || c.ContextManagement.PromptFile == "" {
+		return ""
+	}
+	path := c.resolvePath(c.ContextManagement.PromptFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
