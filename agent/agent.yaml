@@ -1,0 +1,13 @@
+version: 1
+system_prompt: ./system_prompt.md
+memory: ./memory.md
+middlewares:
+  - name: destructive_command_guard
+    enabled: true
+    params:
+      protected_patterns:
+        - "rm -rf"
+        - "rm -r"
+        - "kill -9"
+        - "mkfs"
+        - "dd if="

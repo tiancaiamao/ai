@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "tasks": [
+    "001_fix_off_by_one",
+    "002_add_error_handling",
+    "003_refactor_duplicated_code",
+    "004_add_json_parsing",
+    "013_fix_concurrent_bug",
+    "015_refactor_with_tests",
+    "agent_001_forced_exploration",
+    "agent_002_rollback",
+    "agent_003_hidden_dep",
+    "agent_004_context_overflow",
+    "agent_005_delayed_signal",
+    "agent_006_tool_trap",
+    "agent_007_misleading",
+    "agent_008_budget",
+    "tbench/vulnerable-secret",
+    "tbench/prove-plus-comm",
+    "tbench/db-wal-recovery",
+    "tbench/kv-store-grpc"
+  ]
+}

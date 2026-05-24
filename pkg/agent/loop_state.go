@@ -265,8 +265,18 @@ func (s *loopState) processToolCalls(
 		return hasMore, nil
 	}
 
-	// Dispatch tool calls to the executor.
+		// Dispatch tool calls to the executor.
 	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.Metrics, s.config.ToolOutput)
+
+	// Run AfterTool hooks: chain-style, each hook's output feeds the next.
+	hookCtx := HookContext{
+		Ctx:      ctx,
+		AgentCtx: s.agentCtx,
+		Config:   s.config,
+	}
+	for i := range toolResults {
+		toolResults[i] = s.config.Hooks.RunAfterTool(hookCtx, toolResults[i].ToolName, toolResults[i])
+	}
 
 	// Append results to conversation state.
 	for _, result := range toolResults {
