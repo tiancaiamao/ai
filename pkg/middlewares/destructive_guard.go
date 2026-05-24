@@ -132,7 +132,7 @@ func init() {
 }
 
 // ensure defaultProtectedPatterns strings compile at init time.
-var _ = func() {
+func init() {
 	for _, p := range defaultProtectedPatterns {
 		regexp.MustCompile(p)
 	}
