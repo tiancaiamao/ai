@@ -9,6 +9,10 @@ Worker 产出，Judge 独立审查，循环迭代直到通过。
 
 **灵感来源：** GAN（生成对抗网络）的 Generator-Discriminator 竞争反馈循环。Worker 是 Generator，Judge 是 Discriminator。两者的独立性是质量保证的关键。
 
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。Worker 和 Judge 完成后都必须 `ai kill` + `tmux kill-session`。
+
+**⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
+
 ## When to Use
 
 - 需要独立验证质量的任务（规划审查、代码审查、设计评审）

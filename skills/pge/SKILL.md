@@ -64,10 +64,12 @@ ai serve --role orchestrator --name "my-orchestrator"
 
 ## Prerequisite Skills
 
-- **`subagent`** — ai serve/send/watch/kill 的 spawn-monitor-control 模式详解
+- **`subagent`** — 子 agent 完整生命周期（spawn → watch → cleanup）。PGE 中的所有子 agent 操作遵循 `subagent` 技能定义的生命周期模型，此处不重复。
 - **`worker-judge`** — Generator-Evaluator 循环的通用框架
 
-本技能聚焦于 PGE 的编排逻辑。子 agent 的具体操作参考 `subagent` 技能。
+**⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。未加载时不要凭猜测操作子 agent。**
+
+本技能聚焦于 PGE 的编排逻辑。子 agent 的 spawn/watch/kill 操作详见 `subagent` 技能。
 
 ## ⚠️ Concurrency Limit
 
@@ -202,15 +204,27 @@ backfill
 For each task in the decomposition:
 
 1. **Spawn Generator** (via tmux) with the task file + spec.md + state.md
-2. **Poll Generator** — Every 60s, check:
+   - 遵循 `subagent` 技能的 Spawn 阶段
+2. **Watch Generator** — poll output, wait for DONE/BLOCKED
+   - 遵循 `subagent` 技能的 Watch 阶段
+3. **Collect Result** — 检查:
    - Has the Generator output `DONE: <file list>`?
    - Do the listed files exist?
    - Does `go build ./...` (or equivalent) pass?
-   - If yes to all → kill Generator, proceed to validation
-   - If Generator is still working → continue polling
-3. **Spawn Validator** (independent Evaluator agent) — **MANDATORY, not optional**
-4. **Interpret Validator feedback** — update progress.md with VALIDATED or issues
-5. **Loop if needed** — create fix tasks for any failed criteria (max 3 rounds per task)
+   - If yes to all → proceed to cleanup + validation
+   - If Generator is still working → continue watching
+4. **Cleanup Generator** — **拿到结果后立即 kill**
+   - `ai kill --id <generator-id>`
+   - `tmux kill-session -t <generator-session>`
+   - 详见 `subagent` 技能 Cleanup 阶段
+5. **Spawn Validator** (independent Evaluator agent) — **MANDATORY, not optional**
+   - 同样遵循 `subagent` 生命周期
+6. **Collect Validator feedback** — update progress.md with VALIDATED or issues
+7. **Cleanup Validator** — **立即 kill**
+   - `ai kill --id <validator-id>`
+   - `tmux kill-session -t <validator-session>`
+8. **Loop if needed** — create fix tasks for any failed criteria (max 3 rounds per task)
+   - 每轮 spawn 新 Generator/Evaluator，每轮完成后都立即 cleanup
 
 #### Validation Gate Per Task
 
@@ -252,27 +266,31 @@ GENERATOR RULES (mandatory):
 
 ### Orchestrator Polling Protocol
 
-After spawning a Generator, the Orchestrator polls every 60s:
+After spawning a Generator, the Orchestrator watches:
 
 ```
-Polling loop:
+Watch loop:
 1. Check Generator output for "DONE:" or "BLOCKED:"
 2. If DONE:
    a. Verify listed files exist (ls <each file>)
    b. Run build (go build ./...)
-   c. If both pass → kill Generator, mark task SELF-CHECKED
-   d. Spawn Validator → mark VALIDATED when passed
+   c. Cleanup Generator: ai kill + tmux kill-session
+   d. Mark task SELF-CHECKED
+   e. Spawn Validator → mark VALIDATED when passed
+   f. Cleanup Validator: ai kill + tmux kill-session
 3. If BLOCKED:
    a. Read reason from Generator output
-   b. Kill Generator
+   b. Cleanup Generator: ai kill + tmux kill-session
    c. If reason is API confusion → provide guidance, respawn
    d. If reason is spec ambiguity → clarify spec, respawn
 4. If timeout (600s) reached:
-   a. Kill Generator
+   a. Cleanup Generator: ai kill + tmux kill-session
    b. Check if any files were created
    c. If files exist + build passes → mark SELF-CHECKED, spawn Validator
    d. If no files or build fails → mark FAILED, report to user
 ```
+
+**每个分支都必须 cleanup Generator，无一例外。** 即使超时、失败、BLOCKED，也要先 kill 再做后续处理。
 
 ### Test Policy
 
@@ -388,6 +406,9 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 10. **Phase validation gates are mandatory** — no building on broken foundations
 11. **Generator MUST read existing API before using it** — no hallucinated function calls
 12. **Build MUST pass before DONE** — build failure = task incomplete
+13. **每个子 agent 完成后必须立即 cleanup** — `ai kill` + `tmux kill-session`，遵循 `subagent` 技能生命周期。不得累积已完成的 agent
+14. **PGE 开始前检查孤儿** — `ai ls` 查看是否有前次运行遗留的 agent，确认或清理
+15. **异常退出也要 cleanup** — BLOCKED、超时、失败等所有路径都必须 kill 子 agent
 
 ## ⛔ Mandatory Self-Check
 
@@ -410,6 +431,8 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 | Generator used hallucinated API | `grep` shows function doesn't exist | Kill Generator, provide correct API info |
 | No phase validation gate | Completed phase without L1/L2 check | Run validation gate before next phase |
 | Generator output has no DONE marker | Generator completed without DONE/BLOCKED output | Check output manually, add to error handling |
+| 子 agent 未 cleanup | `ai ls` 显示已完成的 agent 仍在 running | 每个子 agent 完成后立即 `ai kill` + `tmux kill-session` |
+| PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：`ai ls` 检查并清理所有本 PGE 产生的 agent |
 
 ## Difference from Old Plan/Implement Workflow
 
