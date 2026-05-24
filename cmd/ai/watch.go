@@ -844,18 +844,13 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			lastKind = evt.Kind
 		}
 
-								// On agent_end:
-		// - Default (no --timeout flag): exit immediately. One-shot task complete.
-		// - With --timeout 0 or --timeout N: continue waiting for more events.
+										// On agent_end: always exit — the task is complete.
+		// The --timeout flag controls maximum wait time for the agent to finish,
+		// not how long to wait after it finishes.
 		if strings.Contains(line, `"agent_end"`) {
 			fmt.Println()
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-			if watchTimeout < 0 {
-				// No --timeout flag set → one-shot mode, exit.
-				return
-			}
-			// --timeout set (0 or positive) → keep going.
-			continue
+			return
 		}
 	}
 	fmt.Fprintf(os.Stderr, "--- agent stream ended without agent_end event ---\n")
@@ -877,7 +872,7 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 		}
 		seq++
 
-		// Check for agent_end
+				// Check for agent_end — always exit when task is complete.
 		if strings.Contains(line, `"agent_end"`) {
 			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
@@ -887,16 +882,12 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 			}
 
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-			if watchTimeout < 0 {
-				// One-shot mode: print the final assistant text and exit.
-				text := strings.TrimSpace(lastAssistantText.String())
-				if text != "" {
-					fmt.Println(text)
-				}
-				return
+			// Print the final assistant text and exit.
+			text := strings.TrimSpace(lastAssistantText.String())
+			if text != "" {
+				fmt.Println(text)
 			}
-			// With --timeout: keep accumulating for next prompt cycle.
-			continue
+			return
 		}
 
 		// Parse and accumulate assistant text only.
