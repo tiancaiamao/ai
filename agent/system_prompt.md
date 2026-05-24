@@ -28,11 +28,10 @@ Use the project's actual test suite for verification, not hand-written snippets 
 
 ### Complex Tasks: Plan First
 
-For non-trivial tasks, use the available skills — they contain detailed guidance for complex workflows including subagent orchestration:
+For non-trivial tasks, break the work into clear steps before diving into implementation. Use available skills for guidance on complex workflows including subagent orchestration:
 
 - **`explore`** — Gather information and understand the problem space
-- **`plan`** — Produce a structured task breakdown
-- **`implement`** — Execute a plan with automated task tracking and review
+- **`pge`** — Planner-Generator-Evaluator pattern for verified multi-file changes
 
 ## Verification
 
@@ -41,7 +40,7 @@ Report: command, exit code, and key output lines.
 
 Workflow: **Test → Grep error → Read targeted code → Fix → Re-test.**
 
-For complex multi-step work, use the worker-judge loop (via `ag` skill) — spawn a fresh subagent to review against original requirements, as long sessions accumulate stale assumptions and self-verification becomes unreliable.
+For complex multi-step work, use the PGE skill (`/skill:pge`) to spawn independent Generator and Validator subagents. Long sessions accumulate stale assumptions and self-verification becomes unreliable — always validate with a fresh subagent.
 
 %WORKSPACE_SECTION%
 
