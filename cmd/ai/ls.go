@@ -79,19 +79,37 @@ func lsSubcommand() {
 	}
 }
 
-// lsRunEntry is the JSON output structure with an added Age field.
+// lsRunEntry is the JSON output structure with added fields.
 type lsRunEntry struct {
 	run.RunMeta
-	Age string `json:"age"`
+	Age    string             `json:"age"`
+	Status string             `json:"status"` // overridden: includes "idle" for completed-prompt agents
+	End    *run.AgentEndInfo  `json:"end,omitempty"`
 }
 
 func emitJSON(runs []run.RunMeta) {
 	entries := make([]lsRunEntry, len(runs))
 	for i, r := range runs {
-		entries[i] = lsRunEntry{
+		entry := lsRunEntry{
 			RunMeta: r,
 			Age:     formatAge(r.StartedAt),
+			Status:  r.Status,
 		}
+
+		// For running agents, check if they've completed at least one prompt.
+		if r.Status == run.StatusRunning && run.IsRunning(&r) {
+			eventsPath := run.EventsPath("", r.ID)
+			if endInfo := run.FindLastAgentEndFast(eventsPath); endInfo != nil {
+				entry.End = endInfo
+				if endInfo.Success {
+					entry.Status = "idle"
+				} else if endInfo.Error != "" {
+					entry.Status = "error"
+				}
+			}
+		}
+
+		entries[i] = entry
 	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
@@ -107,7 +125,7 @@ func emitTable(runs []run.RunMeta) {
 	}
 
 	// Header
-	fmt.Printf("%-6s  %-10s  %-30s  %s\n", "ID", "STATUS", "CWD", "AGE")
+	fmt.Printf("%-10s  %-12s  %-30s  %s\n", "ID", "STATUS", "NAME", "AGE")
 
 	for _, r := range runs {
 		id := r.ID
@@ -115,17 +133,27 @@ func emitTable(runs []run.RunMeta) {
 			id = id[:6]
 		}
 
-		status := r.Status
+		displayStatus := r.Status
 		// Re-check actual liveness for display accuracy.
 		if r.Status == run.StatusRunning && !run.IsRunning(&r) {
-			status = "dead"
+			displayStatus = "dead"
+		} else if r.Status == run.StatusRunning {
+			// Check if agent has completed a prompt (idle) vs still processing.
+			eventsPath := run.EventsPath("", r.ID)
+			if endInfo := run.FindLastAgentEndFast(eventsPath); endInfo != nil && endInfo.Success {
+				displayStatus = "idle"
+			}
 		}
-		coloredStatus := colorizeStatus(status)
+		coloredStatus := colorizeStatus(displayStatus)
 
-		cwd := truncateStr(r.CWD, 30)
+		name := r.Name
+		if name == "" {
+			name = truncateStr(r.CWD, 30)
+		}
+
 		age := formatAge(r.StartedAt)
 
-		fmt.Printf("%-6s  %-10s  %-30s  %s\n", id, coloredStatus, cwd, age)
+		fmt.Printf("%-10s  %-12s  %-30s  %s\n", id, coloredStatus, name, age)
 	}
 }
 
@@ -134,12 +162,16 @@ func colorizeStatus(status string) string {
 	switch status {
 	case run.StatusRunning:
 		return "\x1b[32m" + status + "\x1b[0m" // green
+	case "idle":
+		return "\x1b[36m" + status + "\x1b[0m" // cyan
 	case run.StatusDone:
 		return "\x1b[90m" + status + "\x1b[0m" // gray
 	case run.StatusFailed:
 		return "\x1b[31m" + status + "\x1b[0m" // red
 	case run.StatusKilled:
 		return "\x1b[33m" + status + "\x1b[0m" // yellow
+	case "dead":
+		return "\x1b[31m" + status + "\x1b[0m" // red
 	default:
 		return status
 	}

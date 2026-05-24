@@ -158,6 +158,9 @@ Flags for 'watch':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)
   --since <offset>         Start reading from byte offset (machine-readable)
   --follow                 Continuously stream events until agent exits
+  --follow --pretty        Stream formatted output (readable conversation)
+  --follow --summary       Stream final assistant text only (no intermediate output)
+  --follow --timeout 2m    Timeout after duration (use with --pretty/--summary for polling)
 
 Flags for 'send':
   --id <run-id>            Run ID or prefix (auto-selects by cwd if omitted)

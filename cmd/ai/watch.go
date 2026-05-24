@@ -670,6 +670,7 @@ func watchSubcommand() {
 				followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
 	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until agent process exits; default without this flag: exit on agent_end)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
+	summaryFlag := fs.Bool("summary", false, "with --follow --pretty: only show final assistant text (no intermediate thinking/tools)")
 	fs.Parse(os.Args[1:])
 
 	machineMode := *followFlag || *sinceFlag >= 0
@@ -697,7 +698,7 @@ func watchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-								followWatch(meta, 0, *prettyFlag, *watchTimeoutFlag)
+																followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
 		return
 	}
 
@@ -762,7 +763,7 @@ func machineWatch(eventsPath string, offset int64) {
 // followWatch continuously streams events from the agent via socket.
 // It connects to the Unix domain socket and subscribes to the event stream,
 // printing each event line to stdout until the connection closes (agent exits).
-func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, watchTimeout time.Duration) {
+func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) {
 	sockPath := run.SocketPath("", meta.ID)
 
 	client := run.NewSocketClient(sockPath)
@@ -795,6 +796,12 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, watchTimeout ti
 			seq++
 		}
 		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+		return
+	}
+
+	// Summary mode: accumulate only the last assistant text, suppress intermediate output.
+	if summary {
+		followWatchSummary(scanner, fromSeq, watchTimeout)
 		return
 	}
 
@@ -844,7 +851,7 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, watchTimeout ti
 			fmt.Println()
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 			if watchTimeout < 0 {
-				// No --timeout flag → one-shot mode, exit.
+				// No --timeout flag set → one-shot mode, exit.
 				return
 			}
 			// --timeout set (0 or positive) → keep going.
@@ -852,6 +859,66 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, watchTimeout ti
 		}
 	}
 	fmt.Fprintf(os.Stderr, "--- agent stream ended without agent_end event ---\n")
+	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+}
+
+// followWatchSummary accumulates events and only prints the final assistant text
+// when agent_end is reached. This avoids flooding tool output with intermediate
+// thinking, tool calls, and tool results.
+func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout time.Duration) {
+	var lastAssistantText strings.Builder
+	var currentAssistantText strings.Builder
+	seq := fromSeq
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		seq++
+
+		// Check for agent_end
+		if strings.Contains(line, `"agent_end"`) {
+			// Save current assistant text as the "last" one.
+			if currentAssistantText.Len() > 0 {
+				lastAssistantText.Reset()
+				lastAssistantText.WriteString(currentAssistantText.String())
+				currentAssistantText.Reset()
+			}
+
+			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+			if watchTimeout < 0 {
+				// One-shot mode: print the final assistant text and exit.
+				text := strings.TrimSpace(lastAssistantText.String())
+				if text != "" {
+					fmt.Println(text)
+				}
+				return
+			}
+			// With --timeout: keep accumulating for next prompt cycle.
+			continue
+		}
+
+		// Parse and accumulate assistant text only.
+		evt := run.ParseEvent(line)
+		if evt == nil {
+			continue
+		}
+		if evt.Kind == run.KindText {
+			currentAssistantText.WriteString(evt.Text)
+		}
+	}
+
+	// Stream ended without agent_end — print whatever we have.
+	text := strings.TrimSpace(currentAssistantText.String())
+	if text != "" {
+		fmt.Println(text)
+	} else {
+		text = strings.TrimSpace(lastAssistantText.String())
+		if text != "" {
+			fmt.Println(text)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
