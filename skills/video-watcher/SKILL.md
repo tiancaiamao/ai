@@ -60,7 +60,7 @@ python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --
 ### With Proxy (for accessing restricted platforms)
 ```bash
 # Use SOCKS5 proxy for YouTube
-python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1080
+python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1180
 
 # Use HTTP proxy
 python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --proxy http://127.0.0.1:7890
@@ -72,7 +72,7 @@ python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --proxy http://127.0.0.1
 python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --cookies-from-browser chrome
 
 # Full example with proxy + cookies
-python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1080 --cookies-from-browser chrome
+python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1180 --cookies-from-browser chrome
 ```
 
 ## Default Languages
