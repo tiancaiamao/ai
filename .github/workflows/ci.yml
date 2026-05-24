@@ -30,6 +30,9 @@ jobs:
       - name: Run vet
         run: make vet
 
+      - name: Check formatting
+        run: make fmt-check
+
       - name: Run tests
         run: make test
 

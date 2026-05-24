@@ -1,4 +1,4 @@
-.PHONY: build install test clean vet coverage
+.PHONY: build install test clean vet coverage fmt fmt-check
 
 # Default target
 all: build
@@ -37,3 +37,16 @@ clean:
 # Coverage report
 coverage: test
 	go tool cover -html=coverage.out -o coverage.html
+
+# Format code
+fmt:
+	gofmt -w .
+
+# Check that code is formatted (fails if any file needs formatting)
+fmt-check:
+	@output=$$(gofmt -l .); \
+	if [ -n "$$output" ]; then \
+		echo "ERROR: the following files need formatting (run 'make fmt'):"; \
+		echo "$$output"; \
+		exit 1; \
+	fi

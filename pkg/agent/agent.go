@@ -309,16 +309,22 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		if event.Value.Type == EventMessageEnd {
 			msg := event.Value.Message
 			if msg != nil && msg.Role == "user" {
+				a.ctxMu.Lock()
 				a.context.AddMessage(*msg)
+				a.ctxMu.Unlock()
 			}
 		}
 		if event.Value.Type == EventTurnEnd {
 			msg := event.Value.Message
 			if msg != nil {
+				a.ctxMu.Lock()
 				a.context.AddMessage(*msg)
+				a.ctxMu.Unlock()
 			}
 			for _, tr := range event.Value.ToolResults {
+				a.ctxMu.Lock()
 				a.context.AddMessage(tr)
+				a.ctxMu.Unlock()
 			}
 			// Auto-compaction is owned by runInnerLoop pre-LLM checks.
 			// Keeping a second trigger here causes duplicate context management runs.
@@ -725,8 +731,11 @@ func (a *Agent) abortCurrentStream() bool {
 		return false
 	}
 	// Force an agent_end event so UI state can reset even if the iterator stops on ctx cancel.
-	stream.Push(NewAgentEndEvent(a.context.RecentMessages))
-	a.emitEvent(NewAgentEndEvent(a.context.RecentMessages))
+	a.ctxMu.RLock()
+	recent := append([]agentctx.AgentMessage(nil), a.context.RecentMessages...)
+	a.ctxMu.RUnlock()
+	stream.Push(NewAgentEndEvent(recent))
+	a.emitEvent(NewAgentEndEvent(recent))
 	return true
 }
 
