@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
-		"github.com/tiancaiamao/ai/pkg/compact"
+			"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
-		"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 
 	"github.com/tiancaiamao/ai/pkg/agentconfig"

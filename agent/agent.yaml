@@ -15,3 +15,4 @@ context_management:
   stale_annotation: false
   stale_age_investigative: 20
   stale_age_modification: 30
+  prompt_file: ./context_management.md
