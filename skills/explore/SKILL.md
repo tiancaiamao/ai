@@ -19,6 +19,8 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 **子 agent 操作详见 `subagent` 技能。**
 
+**⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。未加载时不要凭猜测操作子 agent。**
+
 ## ⛔ CONCURRENCY LIMIT: 最多 2 个子 agent 同时运行
 
 **主 agent + 子 agent 同时运行总数不得超过 3**（即最多 2 个子 agent）。
