@@ -65,9 +65,9 @@ tmux new-session -d -s "$SESSION" \
    --name 'long-task'"
 ```
 
-### 阶段 2: Watch
+### 阶段 2: Watch（--input 初始任务）
 
-等待子 agent 完成任务。`ai watch --follow` 默认在 `agent_end` 事件时返回。
+spawn 时通过 `--input` 传入的任务，用 `watch --follow --pretty` 等待完成：
 
 ```bash
 # 默认：agent_end 时返回
@@ -77,13 +77,11 @@ ai watch --id "$RUN_ID" --follow --pretty
 ai watch --id "$RUN_ID" --follow --pretty --timeout 20m
 ```
 
+**后续轮次用 `ai send --wait`**（见 Multi-Turn 模式），一步完成发送+等待，不需要单独 watch。
+
 ### 阶段 3: Collect Result
 
-watch 返回后，子 agent 的输出已通过 watch 获得。如需回看完整输出：
-
-```bash
-ai watch --id "$RUN_ID" --since 0
-```
+watch 或 `send --wait` 返回后，子 agent 的输出已直接获得。
 
 ### 阶段 4: Cleanup（⚠️ 必须执行）
 
@@ -127,24 +125,27 @@ ai kill --id "$RUN_ID" 2>/dev/null
 tmux kill-session -t "$SESSION" 2>/dev/null
 ```
 
-## Pattern: Multi-Turn（send + watch 交替）
+## Pattern: Multi-Turn（send --wait）
 
-需要多轮交互时，用 `--timeout 0` 让 watch 跨越多个 agent_end：
+需要多轮交互时，用 `ai send --wait` 一步完成发送+等待回复：
 
 ```bash
 tmux kill-session -t "worker" 2>/dev/null
 tmux new-session -d -s "worker" \
-  "ai serve --system-prompt 'You are a coder.'"
+  "ai serve --system-prompt 'You are a coder.' \
+   --input 'Read auth.go and identify the bug' \
+   --name 'fix-auth'"
 sleep 2
 RUN_ID=$(tmux capture-pane -t "worker" -p | head -1 | tr -d '[:space:]')
 
-# 第一轮
-ai send --id "$RUN_ID" "Read auth.go and identify the bug"
+# 第一轮：watch 初始任务结果
 ai watch --id "$RUN_ID" --follow --pretty
 
-# 第二轮
-ai send --id "$RUN_ID" "Now fix it and write tests"
-ai watch --id "$RUN_ID" --follow --pretty
+# 第二轮：send --wait 一步发送+等待
+ai send --id "$RUN_ID" --wait "Now fix it and write tests"
+
+# 第三轮（如果需要）
+ai send --id "$RUN_ID" --wait --summary "Brief summary of what you changed"
 
 # 收工 — 必须清理
 ai kill --id "$RUN_ID"
@@ -188,17 +189,12 @@ tmux kill-session -t "agent-a" 2>/dev/null; tmux kill-session -t "agent-b" 2>/de
 
 ### 并行进度观察（Parallel Progress Check）
 
-当子 agent 长时间运行时，用 `ai send` 询问进度，用 `ai watch --since` 查看回复：
+当子 agent 长时间运行时，用 `ai send --wait --timeout` 询问进度并等待回复：
 
 ```bash
-# 向两个 agent 同时发消息询问进度
-ai send --id "$ID_A" 'Progress check: what have you done so far? Reply with a brief status.'
-ai send --id "$ID_B" 'Progress check: what have you done so far? Reply with a brief status.'
-
-# 短等待后读取回复
-sleep 10
-ai watch --id "$ID_A" --follow --pretty --timeout 30s
-ai watch --id "$ID_B" --follow --pretty --timeout 30s
+# 向两个 agent 发送进度查询并等待回复
+ai send --id "$ID_A" --wait --summary --timeout 30s 'Progress check: brief status.'
+ai send --id "$ID_B" --wait --summary --timeout 30s 'Progress check: brief status.'
 ```
 
 ## Watch Timeout 详解
@@ -242,12 +238,16 @@ ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill 
 | `--session <path>` | Resume from existing session file |
 | `--max-turns <int>` | Max conversation turns |
 
-## ai watch --follow Flags
+## ai send --wait Flags
 
 | Flag | Description |
 |------|-------------|
-| `--pretty` | Format output as readable conversation |
-| `--timeout <duration>` | Max wait time. 不设 = agent_end 退出; `0` = 永远等; `20m` = 最多 20 分钟 |
+| `--wait` | 发送消息后阻塞等待 agent 处理完成，实时流式输出回复 |
+| `--summary` | 只输出最终文本，不显示 tool calls/thinking |
+| `--timeout <duration>` | 最多等待时间（`0` = 无限等待；`5m` = 最多 5 分钟） |
+| `--id <string>` | 目标 agent 的 run ID |
+
+**`send --wait` vs `send` + `watch`：** `send --wait` 内部先订阅事件流再发送消息，消除了 send→watch 之间的 race condition。一步到位，不需要 tmux 来同时跑 watch。
 
 ## Edge Cases
 
@@ -274,7 +274,7 @@ ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill 
 ## Error Handling
 
 1. **报告给用户** — 不要静默重试
-2. 用 `ai watch --id "$RUN_ID" --since 0` 查看输出
+2. 用 `ai send --id "$RUN_ID" --wait` 查看输出和获取回复
 3. 让用户决定下一步
 4. **无论成功或失败，都必须 cleanup** — 失败的 agent 也不会自动退出
 
@@ -289,10 +289,9 @@ ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill 
 | 只 kill tmux 不 kill ai | 先 `ai kill`，再 `tmux kill-session`（顺序重要） |
 | spawn 前不清理同名 session | 先 `tmux kill-session -t NAME 2>/dev/null` 再 spawn |
 | spawn 空壳（不带 `--input`）再想 send | **spawn 时必须 `--input` 传任务**，避免遗忘 |
-| 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `ai watch` 判断 |
-| 串行 watch 两个子 agent（第一个阻塞） | 用 `--timeout` 短轮询交替检查 |
-| `ai watch --follow > file &` 后台重定向 | 前台 `ai watch --follow --pretty --timeout`，能看到输出 |
-| kill 子 agent 后自己做它的活 | 用 `ai send` 询问进度，让子 agent 自己汇报 |
+| 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `ai send --wait` 判断 |
+| `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
+| kill 子 agent 后自己做它的活 | 用 `ai send --wait --summary` 询问进度，让子 agent 自己汇报 |
 
 ## Relationship to Other Skills
 

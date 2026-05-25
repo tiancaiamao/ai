@@ -18,6 +18,9 @@ import (
 func sendSubcommand() {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
+	waitFlag := fs.Bool("wait", false, "wait for agent to finish processing and stream the response")
+	summaryFlag := fs.Bool("summary", false, "with --wait: only show final assistant text (suppress tool output)")
+	timeoutFlag := fs.Duration("timeout", 0, "with --wait: max wait time (0 = unlimited)")
 	fs.Parse(os.Args[1:])
 
 	// Determine the message to send.
@@ -65,6 +68,13 @@ func sendSubcommand() {
 	}
 
 	sockPath := run.SocketPath(baseDir, meta.ID)
+
+	if *waitFlag {
+		sendAndWait(sockPath, message, meta.ID, *summaryFlag, *timeoutFlag)
+		return
+	}
+
+	// Fire-and-forget: send message and exit immediately.
 	resp, err := sendMessage(sockPath, message)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error sending message: %v\n", err)
@@ -77,6 +87,135 @@ func sendSubcommand() {
 	}
 
 	fmt.Println("message sent to run", meta.ID)
+}
+
+// sendAndWait sends a message and blocks until the agent finishes processing it,
+// streaming the response in real-time. This eliminates the race between send+watch.
+func sendAndWait(sockPath, message, runID string, summary bool, timeout time.Duration) {
+	// Step 1: Subscribe to the event stream BEFORE sending.
+	// Use a fromSeq that exceeds any realistic sequence number to skip replay
+	// and only receive events produced after this point.
+	const noReplaySeq = uint64(1) << 60
+	client := run.NewSocketClient(sockPath)
+	streamConn, _, err := client.Stream(noReplaySeq)
+	if err != nil {
+		// Stream unavailable (e.g. no broadcaster) — fall back to fire-and-forget.
+		fmt.Fprintf(os.Stderr, "warning: cannot subscribe to stream: %v\n", err)
+		resp, sendErr := sendMessage(sockPath, message)
+		if sendErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", sendErr)
+			os.Exit(1)
+		}
+		if !resp.OK {
+			fmt.Fprintf(os.Stderr, "error: %s\n", resp.Error)
+			os.Exit(1)
+		}
+		fmt.Println("message sent to run", runID)
+		return
+	}
+	defer streamConn.Close()
+
+	if timeout > 0 {
+		streamConn.SetDeadline(time.Now().Add(timeout))
+	}
+
+	// Step 2: Send the message on a separate connection.
+	resp, err := sendMessage(sockPath, message)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if !resp.OK {
+		fmt.Fprintf(os.Stderr, "error: %s\n", resp.Error)
+		os.Exit(1)
+	}
+
+	// Step 3: Read events from the stream until agent_end.
+	scanner := bufio.NewScanner(streamConn)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	if summary {
+		waitStreamSummary(scanner)
+	} else {
+		waitStreamPretty(scanner)
+	}
+}
+
+// waitStreamPretty prints formatted agent events in real-time, exiting when
+// the agent finishes (agent_end event). Output mirrors watch --follow --pretty.
+func waitStreamPretty(scanner *bufio.Scanner) {
+	lastKind := run.EventKind("")
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		evt := run.ParseEvent(line)
+		if evt == nil {
+			continue
+		}
+
+		// Add line break on kind transitions for readability.
+		if evt.Kind != lastKind && lastKind != "" && lastKind != run.KindTool {
+			fmt.Println()
+		}
+
+		switch evt.Kind {
+		case run.KindText:
+			fmt.Print(evt.Text)
+		case run.KindThinking:
+			fmt.Print(evt.Text)
+		case run.KindTool:
+			fmt.Printf("  %s\n", evt.Text)
+		case run.KindMeta:
+			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
+		case run.KindResponse:
+			fmt.Print(evt.Text)
+		}
+
+		if evt.Kind != run.KindMeta {
+			lastKind = evt.Kind
+		}
+
+		// On agent_end: the task is complete — exit.
+		if strings.Contains(line, `"agent_end"`) {
+			fmt.Println()
+			return
+		}
+	}
+	// Stream closed without agent_end (e.g. agent process exited).
+	fmt.Fprintln(os.Stderr, "--- agent stream ended ---")
+}
+
+// waitStreamSummary accumulates only the final assistant text and prints it
+// on agent_end. Tool output, thinking, and intermediate text are suppressed.
+func waitStreamSummary(scanner *bufio.Scanner) {
+	var currentText strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		if strings.Contains(line, `"agent_end"`) {
+			text := strings.TrimSpace(currentText.String())
+			if text != "" {
+				fmt.Println(text)
+			}
+			return
+		}
+
+		evt := run.ParseEvent(line)
+		if evt != nil && evt.Kind == run.KindText {
+			currentText.WriteString(evt.Text)
+		}
+	}
+	// Stream closed without agent_end — print whatever we have.
+	text := strings.TrimSpace(currentText.String())
+	if text != "" {
+		fmt.Println(text)
+	}
 }
 
 // resolveRunID resolves the target run given an optional ID flag.
