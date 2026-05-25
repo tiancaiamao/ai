@@ -259,14 +259,13 @@ func (s *Session) EnsureFullyLoaded() error {
 		return fmt.Errorf("failed to fully load session: %w", err)
 	}
 
-	// Replace in-memory state with full data
-	full.mu.Lock()
+	// Replace in-memory state with full data.
+	// No lock needed on full — it's a local variable not shared with other goroutines.
 	s.entries = full.entries
 	s.byID = full.byID
-	// Preserve leafID — it may have been changed by the caller
-	// Preserve header — should be the same
+	// Preserve leafID — it may have been changed by the caller.
+	// Preserve header — should be the same.
 	s.flushed = true
-	full.mu.Unlock()
 
 	return nil
 }
