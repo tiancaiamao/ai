@@ -284,7 +284,7 @@ func (l *Loader) loadFromFile(filePath string, source string) *fileLoadResult {
 		})
 	}
 
-	// Validate description
+	// Validate description (informational only — not a gate for loading)
 	for _, err := range validateDescription(frontmatter.Description) {
 		diagnostics = append(diagnostics, Diagnostic{
 			Type:    "warning",
@@ -293,14 +293,18 @@ func (l *Loader) loadFromFile(filePath string, source string) *fileLoadResult {
 		})
 	}
 
-	// Don't load if description is completely missing
-	if frontmatter.Description == "" {
-		return &fileLoadResult{Diagnostics: diagnostics}
+	// Determine description: frontmatter → first non-heading line → directory name
+	description := frontmatter.Description
+	if description == "" {
+		description = extractDescriptionFromBody(string(bodyContent))
+	}
+	if description == "" {
+		description = parentDirName
 	}
 
 	skill := &Skill{
 		Name:                   name,
-		Description:            frontmatter.Description,
+		Description:            description,
 		FilePath:               filePath,
 		BaseDir:                skillDir,
 		Source:                 source,
@@ -310,6 +314,24 @@ func (l *Loader) loadFromFile(filePath string, source string) *fileLoadResult {
 	}
 
 	return &fileLoadResult{Skill: skill, Diagnostics: diagnostics}
+}
+
+// extractDescriptionFromBody extracts the first non-heading, non-empty line
+// from markdown body content to use as a fallback description.
+func extractDescriptionFromBody(body string) string {
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Skip markdown headings
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		return trimmed
+	}
+	return ""
 }
 
 // resolvePath resolves a path relative to cwd, supporting ~ expansion.
