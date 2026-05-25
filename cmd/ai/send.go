@@ -95,7 +95,7 @@ func sendAndWait(sockPath, message, runID string, summary bool, timeout time.Dur
 	// Step 1: Subscribe to the event stream BEFORE sending.
 	// Use a fromSeq that exceeds any realistic sequence number to skip replay
 	// and only receive events produced after this point.
-	const noReplaySeq = uint64(1)<<60
+	const noReplaySeq = uint64(1) << 60
 	client := run.NewSocketClient(sockPath)
 	streamConn, _, err := client.Stream(noReplaySeq)
 	if err != nil {
