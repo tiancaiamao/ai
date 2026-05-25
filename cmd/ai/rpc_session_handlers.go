@@ -150,6 +150,10 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if app.parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 		entryID = jsonData.EntryID
 	}
+		if entryID == "" {
+		return nil, fmt.Errorf("usage: /rewind <index|entryId|root>  (use /messages to see indices)")
+	}
+
 	slog.Info("Received rewind", "entryId", entryID)
 	app.stateMu.Lock()
 	streaming := app.isStreaming
@@ -158,8 +162,11 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 		return nil, fmt.Errorf("agent is busy")
 	}
 
-	if entryID == "" {
-		return nil, fmt.Errorf("entryId is required")
+	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in /messages).
+	if entryID != "root" {
+		if resolved, ok := resolveMessageIndex(app.sess, entryID); ok {
+			entryID = resolved
+		}
 	}
 
 	if entryID == "root" {
@@ -181,7 +188,31 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if err := app.sessionMgr.SaveCurrent(); err != nil {
 		slog.Info("Failed to update session metadata:", "value", err)
 	}
-	return map[string]any{"switched": true}, nil
+		return map[string]any{"switched": true, "entryId": entryID}, nil
+}
+
+// resolveMessageIndex maps a numeric string (from /messages index) to the corresponding
+// session entry ID. Uses GetBranch (same path as /messages) and counts only EntryTypeMessage
+// entries, which is the same set /messages shows (compaction/branch_summary messages are
+// generated dynamically and have no rewind target).
+func resolveMessageIndex(sess *session.Session, arg string) (string, bool) {
+	idx, err := strconv.Atoi(arg)
+	if err != nil {
+		return "", false // not a number — caller should treat as entryId string
+	}
+	branch := sess.GetBranch("")
+	msgIdx := 0
+	for _, entry := range branch {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		if msgIdx == idx {
+			return entry.ID, true
+		}
+		msgIdx++
+	}
+	// Index out of range — return empty so caller falls through to entryId lookup.
+	return "", false
 }
 
 func (app *rpcApp) handleFork(args string) (any, error) {
