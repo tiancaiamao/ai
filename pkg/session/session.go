@@ -241,6 +241,36 @@ func (s *Session) ResetLeaf() {
 	s.leafID = nil
 }
 
+// EnsureFullyLoaded reloads all entries from disk, replacing in-memory state.
+// This is needed when operations (like rewind or fork) need access to entries
+// that were not loaded during lazy loading (e.g., pre-compaction entries).
+// If the session is not persisted or has no directory, this is a no-op.
+func (s *Session) EnsureFullyLoaded() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.persist || s.sessionDir == "" {
+		return nil
+	}
+
+	// Load full session from disk
+	full, err := LoadSession(s.sessionDir)
+	if err != nil {
+		return fmt.Errorf("failed to fully load session: %w", err)
+	}
+
+	// Replace in-memory state with full data
+	full.mu.Lock()
+	s.entries = full.entries
+	s.byID = full.byID
+	// Preserve leafID — it may have been changed by the caller
+	// Preserve header — should be the same
+	s.flushed = true
+	full.mu.Unlock()
+
+	return nil
+}
+
 // AppendMessage appends a message entry and persists it.
 func (s *Session) AppendMessage(message agentctx.AgentMessage) (string, error) {
 	s.mu.Lock()

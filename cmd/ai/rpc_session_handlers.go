@@ -165,6 +165,11 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if entryID == "root" {
 		app.sess.ResetLeaf()
 	} else {
+		// Lazy loading may not have all entries in byID (e.g., pre-compaction).
+		// Ensure the full session is loaded so Branch can find the entry.
+		if err := app.sess.EnsureFullyLoaded(); err != nil {
+			return nil, err
+		}
 		if err := app.sess.Branch(entryID); err != nil {
 			return nil, err
 		}
@@ -188,6 +193,11 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 		entryID = jsonData.EntryID
 	}
 	slog.Info("Received fork: entryId=", "value", entryID)
+	// Lazy loading may not have all entries in byID (e.g., pre-compaction).
+	// Ensure the full session is loaded so GetEntry can find the entry.
+	if err := app.sess.EnsureFullyLoaded(); err != nil {
+		return nil, err
+	}
 	entry, ok := app.sess.GetEntry(entryID)
 	if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
 		return nil, fmt.Errorf("invalid entryId: %s", entryID)
