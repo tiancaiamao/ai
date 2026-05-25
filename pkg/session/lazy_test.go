@@ -377,6 +377,201 @@ func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
 	assert.Len(t, messages, 11, "Should return compaction summary + 10 recent messages")
 }
 
+// TestRewindPreCompactionEntry tests that rewind works for pre-compaction entries
+// after lazy loading via EnsureFullyLoaded.
+func TestRewindPreCompactionEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+
+	sess := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	sess.header = newSessionHeader("test-session", "/test", "")
+
+	// Add 10 old messages (pre-compaction)
+	for i := 0; i < 10; i++ {
+		msg := agentctx.AgentMessage{
+			Role: "user",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "old message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Record the ID of the 5th entry (a pre-compaction entry)
+	preCompactionID := sess.entries[4].ID
+	require.NotEmpty(t, preCompactionID)
+
+	// Add compaction entry
+	compaction := &SessionEntry{
+		Type:      EntryTypeCompaction,
+		ID:        "compaction-1",
+		Timestamp: "2024-01-01T00:00:00Z",
+		Summary:   "Previous conversation summary",
+	}
+	sess.addEntry(compaction)
+
+	// Add 10 recent messages (post-compaction)
+	for i := 0; i < 10; i++ {
+		msg := agentctx.AgentMessage{
+			Role: "user",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "recent message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	data := serializeSessionForTest(sess)
+	err = os.WriteFile(filePath, data, 0644)
+	require.NoError(t, err)
+
+	// Load lazily — pre-compaction entries should NOT be in byID
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Confirm the pre-compaction entry is NOT directly accessible via GetEntry
+	// (this is the bug: lazy load doesn't include it)
+	_, found := loaded.GetEntry(preCompactionID)
+	assert.False(t, found, "Pre-compaction entry should not be in byID after lazy load")
+
+	// Now call EnsureFullyLoaded (what the rewind handler will do)
+	err = loaded.EnsureFullyLoaded()
+	require.NoError(t, err)
+
+	// After full load, the pre-compaction entry should be accessible
+	entry, found := loaded.GetEntry(preCompactionID)
+	require.True(t, found, "Pre-compaction entry should be found after EnsureFullyLoaded")
+	require.NotNil(t, entry)
+	assert.Equal(t, preCompactionID, entry.ID)
+
+	// Branch (rewind) to the pre-compaction entry should succeed
+	err = loaded.Branch(preCompactionID)
+	require.NoError(t, err, "Branch to pre-compaction entry should succeed")
+}
+
+// TestRewindPostCompactionEntry tests that rewind still works for post-compaction entries.
+func TestRewindPostCompactionEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+
+	sess := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	sess.header = newSessionHeader("test-session", "/test", "")
+
+	// Add old messages
+	for i := 0; i < 10; i++ {
+		msg := agentctx.AgentMessage{
+			Role: "user",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "old message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Add compaction entry
+	compaction := &SessionEntry{
+		Type:      EntryTypeCompaction,
+		ID:        "compaction-1",
+		Timestamp: "2024-01-01T00:00:00Z",
+		Summary:   "Previous conversation summary",
+	}
+	sess.addEntry(compaction)
+
+	// Add recent messages
+	for i := 0; i < 10; i++ {
+		msg := agentctx.AgentMessage{
+			Role: "user",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "recent message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Record the ID of the 5th post-compaction entry
+	postCompactionID := sess.entries[12].ID
+	require.NotEmpty(t, postCompactionID)
+
+	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	data := serializeSessionForTest(sess)
+	err = os.WriteFile(filePath, data, 0644)
+	require.NoError(t, err)
+
+	// Load lazily
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	require.NoError(t, err)
+
+	// EnsureFullyLoaded + Branch should work for post-compaction too
+	err = loaded.EnsureFullyLoaded()
+	require.NoError(t, err)
+	err = loaded.Branch(postCompactionID)
+	require.NoError(t, err, "Branch to post-compaction entry should succeed")
+}
+
+// TestRewindRoot tests that rewind "root" (ResetLeaf) still works.
+func TestRewindRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	err := os.MkdirAll(sessionDir, 0755)
+	require.NoError(t, err)
+
+	sess := &Session{
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    true,
+	}
+	sess.header = newSessionHeader("test-session", "/test", "")
+
+	// Add some messages
+	for i := 0; i < 5; i++ {
+		msg := agentctx.AgentMessage{
+			Role: "user",
+			Content: []agentctx.ContentBlock{
+				agentctx.TextContent{Type: "text", Text: "message"},
+			},
+		}
+		err := sess.AddMessages(msg)
+		require.NoError(t, err)
+	}
+
+	// Persist to file
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	data := serializeSessionForTest(sess)
+	err = os.WriteFile(filePath, data, 0644)
+	require.NoError(t, err)
+
+	// Load lazily
+	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	require.NoError(t, err)
+
+	// ResetLeaf should work (this is what "root" rewind does)
+	loaded.ResetLeaf()
+	assert.Nil(t, loaded.leafID)
+}
+
 // Helper to serialize session to bytes (matches actual file format)
 func serializeSessionForTest(s *Session) []byte {
 	var data []byte
