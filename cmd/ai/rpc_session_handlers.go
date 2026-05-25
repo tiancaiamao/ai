@@ -150,7 +150,7 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if app.parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 		entryID = jsonData.EntryID
 	}
-		if entryID == "" {
+	if entryID == "" {
 		return nil, fmt.Errorf("usage: /rewind <index|entryId|root>  (use /messages to see indices)")
 	}
 
@@ -188,7 +188,7 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if err := app.sessionMgr.SaveCurrent(); err != nil {
 		slog.Info("Failed to update session metadata:", "value", err)
 	}
-		return map[string]any{"switched": true, "entryId": entryID}, nil
+	return map[string]any{"switched": true, "entryId": entryID}, nil
 }
 
 // resolveMessageIndex maps a numeric string (from /messages index) to the corresponding
