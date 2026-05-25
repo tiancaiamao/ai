@@ -273,7 +273,9 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
+	bridgeDone := make(chan struct{})
 	go func() {
+		defer close(bridgeDone)
 		defer pipeReader.Close()
 		scanner := bufio.NewScanner(pipeReader)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -338,12 +340,13 @@ func serveSubcommand(binPath string) {
 		}
 	}
 
-	// Watch for subprocess exit and close stdinWriter so cmd.Wait() can return.
-	// Without this, Go's internal pipe-reader goroutine blocks forever when
-	// the subprocess exits (e.g. on --timeout), preventing cmd.Wait() from
-	// returning and leaving a zombie ai serve process.
+	// Capture process exit state to avoid the double-wait race with cmd.Wait().
+	// When the subprocess exits, close stdinWriter to unblock Go's internal
+	// stdin-copy goroutine, allowing cmd.Wait() to return.
+	processStateCh := make(chan *os.ProcessState, 1)
 	go func() {
-		cmd.Process.Wait() // blocks until subprocess exits
+		state, _ := cmd.Process.Wait()
+		processStateCh <- state
 		stdinWriter.Close()
 	}()
 
@@ -351,18 +354,24 @@ func serveSubcommand(binPath string) {
 	fmt.Println(id)
 
 	// Wait for subprocess to exit.
-	waitErr := cmd.Wait()
+	// cmd.Wait() may return an error due to the double Process.Wait() call,
+	// but goroutines are still properly cleaned up.
+	_ = cmd.Wait()
 
-	// Determine final status.
+	// Close pipeWriter so the bridge goroutine can finish.
+	pipeWriter.Close()
+	<-bridgeDone
+
+	// Determine final status using the captured process state (not cmd.Wait()
+	// error, which is unreliable due to the double-wait).
+	processState := <-processStateCh
 	status := run.StatusFailed
-	if waitErr == nil {
+	if processState.Success() {
 		status = run.StatusDone
 	} else {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			if state, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok {
-				if state.Signaled() {
-					status = run.StatusKilled
-				}
+		if ws, ok := processState.Sys().(syscall.WaitStatus); ok {
+			if ws.Signaled() {
+				status = run.StatusKilled
 			}
 		}
 	}
