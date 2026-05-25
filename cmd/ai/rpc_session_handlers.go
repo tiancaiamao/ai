@@ -150,6 +150,7 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if app.parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 		entryID = jsonData.EntryID
 	}
+
 	if entryID == "" {
 		return nil, fmt.Errorf("usage: /rewind <index|entryId|root>  (use /messages to see indices)")
 	}
