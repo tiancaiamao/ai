@@ -73,6 +73,9 @@ type LoopConfig struct {
 	// Hooks is the hook registry for BeforeModel/AfterTool/AfterAgent hooks.
 	// Nil is safe — all Run* methods are no-ops.
 	Hooks *HookRegistry
+	// CacheMode controls how runtime_state telemetry is managed.
+	// CacheModeAuto (default) auto-detects from model name.
+	CacheMode CacheMode
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
