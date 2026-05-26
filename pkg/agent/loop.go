@@ -185,10 +185,25 @@ func runInnerLoop(
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		// Save checkpoint BEFORE compaction so progress is preserved if the
 		// compaction LLM call crashes the process.
-		state.savePreCompactionCheckpoint("pre_llm_threshold")
-		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
-		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
+		//
+		// In cache-first mode, skip proactive compaction to preserve the
+		// stable message prefix that enables cache hits. The hard-limit
+		// recovery path (context_limit_recovery below) remains active as a
+		// safety net: when the LLM returns context_length_exceeded, it will
+		// force a one-time compaction.
+		effectiveModel := getEffectiveModel(config)
+		cacheMode := ResolveCacheMode(config.CacheMode, effectiveModel.ID)
+		if cacheMode == CacheModeCache {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "compact_skipped_cache_first",
+				traceevent.Field{Key: "reason", Value: "cache_first_mode_preserves_prefix"},
+				traceevent.Field{Key: "model", Value: effectiveModel.ID},
+			)
+		} else {
+			state.savePreCompactionCheckpoint("pre_llm_threshold")
+			compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
+			if compacted != nil {
+				saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
+			}
 		}
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
