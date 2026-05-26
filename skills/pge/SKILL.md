@@ -71,10 +71,6 @@ ai serve --role orchestrator --name "my-orchestrator"
 
 本技能聚焦于 PGE 的编排逻辑。子 agent 的 spawn/watch/kill 操作详见 `subagent` 技能。
 
-## ⚠️ Concurrency Limit
-
-主 agent + 子 agent 同时运行数**不得超过 3**（即最多 2 个子 agent 同时运行）。
-
 ## Execution Flow
 
 ### Phase 1: Spec Alignment
@@ -407,8 +403,9 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 11. **Generator MUST read existing API before using it** — no hallucinated function calls
 12. **Build MUST pass before DONE** — build failure = task incomplete
 13. **每个子 agent 完成后必须立即 cleanup** — `ai kill` + `tmux kill-session`，遵循 `subagent` 技能生命周期。不得累积已完成的 agent
-14. **PGE 开始前检查孤儿** — `ai ls` 查看是否有前次运行遗留的 agent，确认或清理
+14. **PGE 开始前只观察不操作** — `ai ls` 查看环境状态，但**绝对不 kill 不是自己 spawn 的 agent**。如需清理孤儿报告给用户
 15. **异常退出也要 cleanup** — BLOCKED、超时、失败等所有路径都必须 kill 子 agent
+16. **只 kill 自己 spawn 的 agent** — 维护 `SPAWNED_IDS` 列表，cleanup 只针对列表中的 ID。`ai ls` 中看到的其他 agent 可能是你自己（orchestrator）、用户手动启动的、或其他流程的，严禁批量 kill
 
 ## ⛔ Mandatory Self-Check
 
@@ -431,34 +428,10 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 | Generator used hallucinated API | `grep` shows function doesn't exist | Kill Generator, provide correct API info |
 | No phase validation gate | Completed phase without L1/L2 check | Run validation gate before next phase |
 | Generator output has no DONE marker | Generator completed without DONE/BLOCKED output | Check output manually, add to error handling |
-| 子 agent 未 cleanup | `ai ls` 显示已完成的 agent 仍在 running | 每个子 agent 完成后立即 `ai kill` + `tmux kill-session` |
-| PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：`ai ls` 检查并清理所有本 PGE 产生的 agent |
-
-## Difference from Old Plan/Implement Workflow
-
-| | plan + implement (old) | PGE (new) |
-|---|---|---|
-| Infrastructure | `ag` CLI + Go binary | `ai` CLI (native) |
-| Task scheduling | Static DAG (all tasks predefined) | Dynamic (orchestrator decides on-the-fly) |
-| Validation | Per-task review in same agent | Independent Evaluator agent (GAN pattern) |
-| Failure recovery | Retry ×3, manual after | Orchestrator adjusts plan dynamically |
-| Context management | Compaction | Structured state.md handoff |
-| Human involvement | Setup only | Spec approval + error escalation |
-| Knowledge passing | Agent reads tasks.md | Generator reads spec.md + state.md + task |
-| Spec quality | Best-effort | Mandatory Spec Checklist with verification commands |
-| Acceptance levels | Single level | L1 (structural) + L2 (behavioral) |
-| Phase gates | None | Validation gate between phases, backfill tasks |
+| 子 agent 未 cleanup | `ai ls` 显示已完成的 agent 仍在 running | 每个子 agent 完成后立即 `ai kill` + `tmux kill-session`（只 kill 自己 spawn 的） |
+| PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：检查 `SPAWNED_IDS` 列表，逐个 cleanup |
+| kill 了非自己 spawn 的 agent | `ai kill` 了 `ai ls` 中的非本流程 agent | ⛔ **严禁**。只 kill `SPAWNED_IDS` 中的 ID |
 
 ## Reference Prompts
 
-PGE 可以参考以下 prompt 模板（位于旧技能目录，作为参考资源保留）：
-
-| Purpose | File |
-|---------|------|
-| Task breakdown | `plan/prompts/planner.md` |
-| Plan review | `plan/prompts/reviewer.md` |
-| Implementation | `implement/prompts/implementer.md` |
-| Spec compliance check | `implement/prompts/spec-reviewer.md` |
-| Code quality check | `implement/prompts/quality-reviewer.md` |
-
-这些 prompt 不是 PGE 直接使用的模板，而是编写 Generator/Evaluator 的 system prompt 时的参考。根据具体项目需求调整。
+PGE 编写 Generator/Evaluator 的 system prompt 时，参考 `brainstorm` 技能产出的 design.md 结构来确保 handoff 信息完整。

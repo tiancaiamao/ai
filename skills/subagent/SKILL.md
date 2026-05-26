@@ -126,6 +126,39 @@ tmux kill-server
 for s in $(tmux list-sessions | grep ...); do tmux kill-session -t "$s"; done
 ```
 
+### ⛔ Kill Ownership Rule（最关键的安全规则）
+
+> **你只能 kill 你自己 spawn 的 agent。`ai ls` 看到的其他 agent 可能是用户、其他 PGE 流程、或其他工具启动的。**
+
+**PGE 开始前检查孤儿的正确做法**：
+- `ai ls` 只是**观察**，了解环境状态
+- 如果发现可能有前次 PGE 遗留的孤儿（通过 agent name 或 session name 匹配），**报告给用户让用户决定**，不要自行 kill
+- 你只维护一个 `SPAWNED_IDS` 列表，cleanup 时只 kill 列表中的 ID
+
+```bash
+# ✅ 正确：跟踪自己 spawn 的 agent
+SPAWNED_IDS=()
+SPAWNED_SESSIONS=()
+
+# spawn 时记录
+tmux new-session -d -s "gen-001" "ai serve ..."
+RUN_ID=$(tmux capture-pane -t "gen-001" -p | head -1 | tr -d '[:space:]')
+SPAWNED_IDS+=("$RUN_ID")
+SPAWNED_SESSIONS+=("gen-001")
+
+# cleanup 时只清理自己记录的
+for id in "${SPAWNED_IDS[@]}"; do ai kill --id "$id" 2>/dev/null; done
+for sess in "${SPAWNED_SESSIONS[@]}"; do tmux kill-session -t "$sess" 2>/dev/null; done
+
+# ❌ 致命错误：看到 ai ls 有 agent 就 kill
+ai ls | awk '{print $2}' | while read name; do ai kill --id "$name"; done
+# ↑ 这会杀掉用户正在使用的其他 agent！包括可能杀掉你自己！
+
+# ❌ 致命错误：PGE 开始前 "清理环境"
+ai ls --json | jq -r '.[].id' | while read id; do ai kill --id "$id"; done
+# ↑ 这会杀掉所有 agent，包括你自己（orchestrator）！
+```
+
 ## Pattern: One-Shot（最常用）
 
 ```bash
@@ -237,16 +270,15 @@ ai send --id "$ID_B" --wait --summary --timeout 30s 'Progress check: brief statu
 如果主 agent 中断或崩溃，遗留运行中的子 agent：
 
 ```bash
-ai ls                    # 列出所有运行中的 agent
-ai kill --id <orphan>    # 逐个清理
+ai ls                    # 列出所有运行中的 agent（仅观察）
 ```
 
-批量清理（**跳过你确定要保留的**）：
+**⚠️ 绝对禁止批量 kill `ai ls` 看到的 agent。** 你只能 kill 你自己 spawn 的 agent（通过 `SPAWNED_IDS` 列表跟踪）。`ai ls` 中的 agent 可能是用户、其他 PGE 流程、或当前 agent 自己启动的。
 
-```bash
-# 清理所有 agent（谨慎！）
-ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill --id "$id"; done
-```
+**正确的孤儿处理**：
+1. `ai ls` 查看，识别可能的孤儿（通过 name 匹配你之前的 session 命名模式）
+2. **报告给用户**，让用户决定是否清理
+3. 如果用户确认清理特定 agent，才执行 `ai kill --id <that-specific-id>`
 
 ## ai serve Flags
 
@@ -316,6 +348,7 @@ ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill 
 | `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
 | kill 子 agent 后自己做它的活 | 用 `ai send --wait --summary` 询问进度，让子 agent 自己汇报 |
 | `tmux kill-server` 清理环境 | ⛔ **绝对禁止**，只允许 `kill-session -t <你的session名>` |
+| `ai ls` 看到就 kill | ⛔ **绝对禁止**，只 kill 自己 spawn 的 agent |
 
 ## Relationship to Other Skills
 

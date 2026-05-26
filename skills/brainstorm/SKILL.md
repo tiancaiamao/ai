@@ -99,7 +99,7 @@ NO IMPLEMENTATION until design.md is approved by the user.
 5. Context cancelled mid-stream → agent stops and emits AgentEnd
 ```
 
-**为什么这很重要：** plan 阶段会把这些场景转化为 task 的 done-when。如果 design 没有定义具体场景，plan 就只能写 "go test passes" 这种不可靠的验证标准。
+**为什么这很重要：** 验收场景是实现和验证的基准。如果 design 没有定义具体场景，实现时就只能靠 "go test passes" 这种不可靠的验证标准。
 
 **6. 边界条件和特殊情况**
 - corner cases：错误处理、并发、大数据量、兼容性
@@ -122,7 +122,7 @@ NO IMPLEMENTATION until design.md is approved by the user.
 
 1. 向用户展示 design.md 摘要（分段展示，不要一次贴一整篇）
 2. **等用户明确确认**（例如 "可以"、"没问题"、"LGTM"）才算 gate 通过
-3. 确认后提示用户下一步：plan skill
+3. 确认后，用户可自行选择下一步实现方式。
 
 Gate 规则：
 - 用户没说 OK 就不算通过，不能进入下一步
@@ -147,7 +147,7 @@ Gate 规则：
 brainstorm (this skill) → design.md
     ↓ (user approved)
     ↓
-plan → implement
+用户选择实现方式：直接实现、pge 编排、或其他
 ```
 
 也可以直接跳入：
