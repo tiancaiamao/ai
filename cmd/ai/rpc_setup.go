@@ -15,6 +15,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
@@ -139,6 +140,12 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		showPrefix:            true,
 		busyMode:              "steer",
 	}
+
+	// Skip context management (proactive LLM-driven cycle) in cache-first mode.
+	// Full compaction (75% threshold) is still active.
+	ctxManager.SetSkipCondition(func() bool {
+		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
+	})
 
 	app.initHelpers()
 	return app, nil
