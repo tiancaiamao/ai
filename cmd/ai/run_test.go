@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -114,6 +116,153 @@ func TestRunSocketHandler_PromptBlockedByDeadPipe(t *testing.T) {
 		t.Fatalf("response took %v, should have timed out within ~10s", elapsed)
 	}
 	t.Logf("got error after %v (expected): %s", elapsed, resp.Error)
+}
+
+// --- os.Pipe subprocess integration test ---
+
+// TestSubprocessPipeIntegration verifies that os.Pipe-based stdin/stdout wiring
+// correctly passes data between the parent process and the "ai rpc" subprocess.
+// This is the exact pipe configuration used by serveSubcommand/runSubcommand.
+//
+// Regression test for the bug where io.Pipe was used instead of os.Pipe:
+// io.Pipe requires Go's os/exec to spawn internal goroutines for copying data
+// between the pipe and the child's file descriptors. This is unreliable — data
+// written to the PipeWriter may never reach the subprocess. os.Pipe provides
+// kernel-buffered OS-level pipes that the child reads directly.
+func TestSubprocessPipeIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("skipping on non-unix")
+	}
+
+	// Build the binary.
+	bin := filepath.Join(t.TempDir(), "ai-pipe-test")
+	cmd := exec.Command("go", "build", "-o", bin, "github.com/tiancaiamao/ai/cmd/ai")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	// Create OS-level pipes for stdin and stdout, mirroring the
+	// serveSubcommand pipe wiring exactly.
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin os.Pipe: %v", err)
+	}
+	pipeReader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout os.Pipe: %v", err)
+	}
+
+	subCmd := exec.Command(bin, "rpc")
+	subCmd.Stdin = stdinReader
+	subCmd.Stdout = pipeWriter
+	subCmd.Stderr = os.Stderr // forward for debug visibility
+
+	if err := subCmd.Start(); err != nil {
+		t.Fatalf("start subprocess: %v", err)
+	}
+
+	// Close parent's copies of child-side FDs — same as serveSubcommand.
+	// The child has inherited these FDs via fork/exec; keeping them open
+	// in the parent would prevent EOF detection.
+	stdinReader.Close()
+	pipeWriter.Close()
+
+	// Read subprocess stdout events in background.
+	type jsonLine struct {
+		line string
+		err  error
+	}
+	lines := make(chan jsonLine, 32)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(pipeReader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			lines <- jsonLine{line: scanner.Text()}
+		}
+		if err := scanner.Err(); err != nil {
+			lines <- jsonLine{err: err}
+		}
+	}()
+
+	// Wait for server_start event (proves the subprocess is alive and
+	// writing to the os.Pipe stdout).
+	gotServerStart := false
+	select {
+	case jl := <-lines:
+		if jl.err != nil {
+			t.Fatalf("error reading server_start: %v", jl.err)
+		}
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(jl.line), &evt); err != nil {
+			t.Fatalf("parse server_start: %v\nline: %s", err, jl.line)
+		}
+		if evt["type"] != "server_start" {
+			t.Fatalf("expected server_start, got: %v", evt["type"])
+		}
+		gotServerStart = true
+		t.Logf("server_start OK: model=%v, tools=%d", evt["model"], len(evt["tools"].([]any)))
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for server_start event — os.Pipe data flow broken?")
+	}
+	if !gotServerStart {
+		t.Fatal("no server_start received")
+	}
+
+	// Send a prompt command through the stdin pipe.
+	if err := sendRPCCommand(stdinWriter, "prompt", "Say hello in exactly 3 words"); err != nil {
+		t.Fatalf("sendRPCCommand: %v", err)
+	}
+
+	// Read events until we see agent_end — proves the full round-trip:
+	// stdinWriter → os.Pipe → subprocess reads stdin → subprocess writes
+	// response → os.Pipe → parent reads stdout.
+	gotResponse := false
+	gotAgentEnd := false
+	timeout := time.After(30 * time.Second)
+	for !gotAgentEnd {
+		select {
+		case jl, ok := <-lines:
+			if !ok {
+				if !gotAgentEnd {
+					t.Fatal("stdout pipe closed before agent_end")
+				}
+				return
+			}
+			if jl.err != nil {
+				t.Fatalf("read error: %v", jl.err)
+			}
+			var evt map[string]any
+			if err := json.Unmarshal([]byte(jl.line), &evt); err != nil {
+				t.Logf("skipping non-json line: %s", jl.line)
+				continue
+			}
+			switch evt["type"] {
+			case "response":
+				gotResponse = true
+				t.Logf("response event: success=%v", evt["success"])
+			case "agent_end":
+				gotAgentEnd = true
+				msgs, _ := evt["messages"].([]any)
+				t.Logf("agent_end: %d messages", len(msgs))
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for agent_end (response=%v)", gotResponse)
+		}
+	}
+
+	if !gotResponse {
+		t.Error("never received 'response' event — prompt may not have reached subprocess")
+	}
+
+	// Cleanup.
+	stdinWriter.Close()
+	pipeReader.Close()
+	subCmd.Process.Kill()
+	subCmd.Wait()
 }
 
 // --- acceptLoop concurrency test ---

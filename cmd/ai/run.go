@@ -82,7 +82,17 @@ func runSubcommand(binPath string) {
 	cmd.Stderr = logFile
 
 	// Stdin pipe for sending commands.
-	stdinReader, stdinWriter := io.Pipe()
+	// Use os.Pipe instead of io.Pipe: io.Pipe is a synchronous in-memory
+	// pipe that requires Go's os/exec to spawn internal goroutines for copying
+	// between the pipe and the child's file descriptors. This is unreliable —
+	// data written to the io.PipeWriter may never reach the subprocess.
+	// os.Pipe provides kernel-buffered OS-level pipes that the child reads
+	// directly, with no intermediate goroutines.
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		slog.Error("failed to create stdin pipe", "error", err)
+		os.Exit(1)
+	}
 	cmd.Stdin = stdinReader
 
 	// Stdout goes to event broadcaster instead of events.jsonl.
@@ -90,7 +100,11 @@ func runSubcommand(binPath string) {
 	broadcaster := run.NewEventBroadcaster()
 	defer broadcaster.Close()
 
-	pipeReader, pipeWriter := io.Pipe()
+	pipeReader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		slog.Error("failed to create stdout pipe", "error", err)
+		os.Exit(1)
+	}
 	cmd.Stdout = pipeWriter
 
 	// Start the subprocess.
@@ -98,6 +112,12 @@ func runSubcommand(binPath string) {
 		slog.Error("failed to start rpc subprocess", "error", err)
 		os.Exit(1)
 	}
+
+	// Close parent's copies of child-side file descriptors.
+	// After cmd.Start(), the child has inherited these FDs via fork/exec.
+	// Keeping them open in the parent would prevent EOF detection.
+	stdinReader.Close()
+	pipeWriter.Close()
 
 	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
 	go func() {
@@ -164,8 +184,7 @@ func runSubcommand(binPath string) {
 	}
 
 	// TUI exited — clean up subprocess.
-	// Close stdin pipe first so the internal goroutine in cmd.Wait() can exit.
-	// Without this, cmd.Wait() blocks forever on the pipe reader goroutine.
+	// Close stdin pipe so the child sees EOF on stdin.
 	stdinWriter.Close()
 
 	cmd.Process.Signal(syscall.SIGINT)
@@ -256,14 +275,28 @@ func serveSubcommand(binPath string) {
 	cmd.Stderr = logFile
 
 	// Stdin pipe for sending commands.
-	stdinReader, stdinWriter := io.Pipe()
+	// Use os.Pipe instead of io.Pipe: io.Pipe is a synchronous in-memory
+	// pipe that requires Go's os/exec to spawn internal goroutines for copying
+	// between the pipe and the child's file descriptors. This is unreliable —
+	// data written to the io.PipeWriter may never reach the subprocess.
+	// os.Pipe provides kernel-buffered OS-level pipes that the child reads
+	// directly, with no intermediate goroutines.
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create stdin pipe: %v\n", err)
+		os.Exit(1)
+	}
 	cmd.Stdin = stdinReader
 
 	// Stdout goes to event broadcaster instead of events.jsonl.
 	broadcaster := run.NewEventBroadcaster()
 	defer broadcaster.Close()
 
-	pipeReader, pipeWriter := io.Pipe()
+	pipeReader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to create stdout pipe: %v\n", err)
+		os.Exit(1)
+	}
 	cmd.Stdout = pipeWriter
 
 	// Start the subprocess.
@@ -271,6 +304,12 @@ func serveSubcommand(binPath string) {
 		fmt.Fprintf(os.Stderr, "error: failed to start rpc subprocess: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Close parent's copies of child-side file descriptors.
+	// After cmd.Start(), the child has inherited these FDs via fork/exec.
+	// Keeping them open in the parent would prevent EOF detection on pipeReader.
+	stdinReader.Close()
+	pipeWriter.Close()
 
 	// Bridge goroutine: read stdout lines from pipe → push to broadcaster.
 	bridgeDone := make(chan struct{})
@@ -341,8 +380,8 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Capture process exit state to avoid the double-wait race with cmd.Wait().
-	// When the subprocess exits, close stdinWriter to unblock Go's internal
-	// stdin-copy goroutine, allowing cmd.Wait() to return.
+	// Close stdinWriter when the subprocess exits so the child sees EOF on stdin
+	// and the pipe is properly cleaned up.
 	processStateCh := make(chan *os.ProcessState, 1)
 	go func() {
 		state, _ := cmd.Process.Wait()
@@ -354,12 +393,11 @@ func serveSubcommand(binPath string) {
 	fmt.Println(id)
 
 	// Wait for subprocess to exit.
-	// cmd.Wait() may return an error due to the double Process.Wait() call,
-	// but goroutines are still properly cleaned up.
 	_ = cmd.Wait()
 
-	// Close pipeWriter so the bridge goroutine can finish.
-	pipeWriter.Close()
+	// Wait for the bridge goroutine to finish reading remaining stdout.
+	// pipeWriter was already closed after cmd.Start(), so the bridge goroutine
+	// will see EOF once the child exits and its stdout is closed.
 	<-bridgeDone
 
 	// Determine final status using the captured process state (not cmd.Wait()
@@ -418,10 +456,10 @@ func sendRPCCommand(w io.Writer, cmdType, message string) error {
 }
 
 // sendRPCCommandWithTimeout is like sendRPCCommand but aborts the write
-// after the given deadline.  This is necessary because io.PipeWriter.Write
-// blocks until the reader consumes the data; if the subprocess (reader)
-// has exited the write would hang forever.
-func sendRPCCommandWithTimeout(w *io.PipeWriter, cmdType, message string, timeout time.Duration) error {
+// after the given deadline. This is a safety measure for cases where the
+// subprocess is dead or unresponsive — with os.Pipe, writes return quickly
+// (kernel buffer) or fail with EPIPE, so the timeout rarely triggers.
+func sendRPCCommandWithTimeout(w io.Writer, cmdType, message string, timeout time.Duration) error {
 	type result struct {
 		n   int
 		err error
@@ -437,12 +475,6 @@ func sendRPCCommandWithTimeout(w *io.PipeWriter, cmdType, message string, timeou
 	case r := <-done:
 		return r.err
 	case <-time.After(timeout):
-		// Close the pipe to unblock the goroutine's Write.
-		// The pipe is now permanently broken — but the subprocess is
-		// already dead (or unresponsive), so no further commands can
-		// succeed anyway.
-		w.Close()
-		<-done // let the goroutine finish
 		return fmt.Errorf("write timed out after %v (subprocess likely dead)", timeout)
 	}
 }
@@ -479,7 +511,7 @@ func hasAgentEndEvent(data []byte) bool {
 
 // runSocketHandler returns a CommandHandler that processes socket commands
 // by translating them to actions on the running subprocess.
-func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdinWriter *io.PipeWriter) run.CommandHandler {
+func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdinWriter io.Writer) run.CommandHandler {
 	var mu sync.Mutex
 
 	// isAlive checks whether the RPC subprocess is still running.
@@ -541,7 +573,7 @@ type runModel struct {
 	watchModel
 	sockPath    string
 	proc        *os.Process
-	stdinPipe   *io.PipeWriter
+	stdinPipe   io.Writer
 	meta        *run.RunMeta
 	metaPath    string
 	inputMode   bool // true when user is typing a message
@@ -552,7 +584,7 @@ type runModel struct {
 func newRunModel(
 	broadcaster *run.EventBroadcaster, runID, sockPath string,
 	proc *os.Process,
-	stdinPipe *io.PipeWriter,
+	stdinPipe io.Writer,
 	meta *run.RunMeta,
 	metaPath string,
 ) runModel {

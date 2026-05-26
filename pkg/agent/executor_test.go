@@ -81,8 +81,9 @@ func TestToolExecutorConcurrency(t *testing.T) {
 func TestToolExecutorQueueTimeout(t *testing.T) {
 	executor := NewToolExecutor(1, 1) // Max 1 concurrent, 1s queue timeout
 
-	// Start a slow tool that will occupy the slot
-	slowTool := &slowTool{delay: 5 * time.Second}
+		// Start a slow tool that will occupy the slot
+	// Delay must exceed queue timeout (1s) so the second tool times out waiting
+	slowTool := &slowTool{delay: 1500 * time.Millisecond} // was 5s; reduced for CI timeout budget
 
 	ctx := context.Background()
 	resultCh := make(chan error, 1)
