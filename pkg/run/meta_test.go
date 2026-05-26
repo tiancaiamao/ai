@@ -20,8 +20,10 @@ func TestGenerateID_LengthAndFormat(t *testing.T) {
 }
 
 func TestGenerateID_Unique(t *testing.T) {
+	// 100 iterations keeps collision probability at ~0.03% (birthday problem
+	// with 2^24 space). 1000 iterations would raise it to ~3%, causing flaky CI.
 	seen := make(map[string]bool)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		id := GenerateID()
 		assert.False(t, seen[id], "duplicate ID generated: %s", id)
 		seen[id] = true

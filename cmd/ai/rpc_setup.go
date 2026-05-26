@@ -24,6 +24,7 @@ type rpcAppSetupParams struct {
 	maxTurns           int
 	debugAddr          string
 	agentConfigPath    string
+	modelOverride      string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -45,6 +46,11 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	cfg, configPath, err := loadConfigWithLogger()
 	if err != nil {
 		return nil, err
+	}
+
+	// --- Model override from CLI ---
+	if params.modelOverride != "" {
+		applyModelOverride(cfg, params.modelOverride)
 	}
 
 	// --- Model + API Key ---

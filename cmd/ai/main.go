@@ -103,13 +103,14 @@ func deprecatedModeDispatch() {
 	systemPromptFlag := flag.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := flag.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	agentConfigFlag := flag.String("agent-config", "", "Path to agent.yaml configuration file")
+	modelFlag := flag.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	flag.Parse()
 
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
 	case "rpc", "":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag); err != nil {
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
@@ -140,6 +141,7 @@ Flags for 'run':
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --input <text>           Initial prompt to send after startup
+  --model <id>             Override LLM model ID (e.g. claude-sonnet-4-20250514)
 
 Flags for 'serve':
   --session <path>         Session file path
@@ -150,6 +152,7 @@ Flags for 'serve':
   --input <text>           Initial prompt to send after startup (serve only)
   --input-file <path>      Read initial prompt from file (serve only)
   --name <text>            Human-readable name for the run (serve only)
+  --model <id>             Override LLM model ID (e.g. claude-sonnet-4-20250514)
 
 Flags for 'ls':
   --all                    Include finished runs
@@ -194,11 +197,12 @@ func rpcSubcommand() {
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
+	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
-	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag); err != nil {
+	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag); err != nil {
 		slog.Error("rpc error", "error", err)
 		os.Exit(1)
 	}

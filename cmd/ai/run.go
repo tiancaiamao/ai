@@ -33,6 +33,7 @@ func runSubcommand(binPath string) {
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
+	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -61,7 +62,7 @@ func runSubcommand(binPath string) {
 	}
 
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -223,6 +224,7 @@ func serveSubcommand(binPath string) {
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
+	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
 	// Generate run ID and create directory.
@@ -251,7 +253,7 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -420,7 +422,7 @@ func serveSubcommand(binPath string) {
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http string) []string {
+func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model string) []string {
 	var flags []string
 	if session != "" {
 		flags = append(flags, "--session", session)
@@ -436,6 +438,9 @@ func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Dura
 	}
 	if http != "" {
 		flags = append(flags, "--http", http)
+	}
+	if model != "" {
+		flags = append(flags, "--model", model)
 	}
 	return flags
 }
