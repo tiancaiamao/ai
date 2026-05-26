@@ -85,6 +85,13 @@ func (s *loopState) savePreCompactionCheckpoint(trigger string) {
 	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
 		return
 	}
+	// Guard: skip checkpoint when LLMContext is empty (e.g. after truncate
+	// without update_llm_context). Writing an empty checkpoint would
+	// overwrite the previous checkpoint that had content.
+	if s.agentCtx.LLMContext == "" {
+		slog.Info("[Loop] Skipping pre-compaction checkpoint (LLMContext is empty)", "trigger", trigger, "turn", s.turnCount)
+		return
+	}
 	// Check if any compactor would trigger before saving checkpoint.
 	shouldCompact := false
 	for _, c := range s.config.Compactors {

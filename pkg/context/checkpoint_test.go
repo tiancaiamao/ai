@@ -490,3 +490,62 @@ func TestTruncateWithHeadTail_Long(t *testing.T) {
 	assert.Contains(t, result, "chars truncated")
 	assert.True(t, len(result) < len(longText))
 }
+
+// --- Empty LLMContext defense tests ---
+
+func TestCheckpoint_EmptyLLMContext_WritesEmptyFile(t *testing.T) {
+	// This test documents that SaveCheckpoint writes an empty llm_context.txt
+	// when snapshot.LLMContext is "". The defense against this is at the
+	// caller level (CreateSnapshot carry-forward) and loop_state guard.
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	require.NoError(t, os.MkdirAll(sessionDir, 0755))
+
+	snapshot := &ContextSnapshot{
+		LLMContext:     "",
+		RecentMessages: []AgentMessage{},
+		AgentState:     &AgentState{TotalTurns: 0},
+	}
+
+	info, err := SaveCheckpoint(sessionDir, snapshot, 0, 0)
+	require.NoError(t, err)
+
+	// Verify empty file is written (documenting current behavior)
+	llmContextPath := filepath.Join(sessionDir, info.Path, "llm_context.txt")
+	data, err := os.ReadFile(llmContextPath)
+	require.NoError(t, err)
+	assert.Equal(t, "", string(data))
+}
+
+func TestCheckpoint_SecondSaveWithEmptyContext_OverwritesPrevious(t *testing.T) {
+	// Documents the bug scenario: a second SaveCheckpoint with empty context
+	// overwrites the good data from the first save. This is why the defense
+	// layers in CreateSnapshot and savePreCompactionCheckpoint are needed.
+	tmpDir := t.TempDir()
+	sessionDir := filepath.Join(tmpDir, "session")
+	require.NoError(t, os.MkdirAll(sessionDir, 0755))
+
+	// First save: good content
+	snapshot1 := &ContextSnapshot{
+		LLMContext:     "Important context that should be preserved",
+		RecentMessages: []AgentMessage{},
+		AgentState:     &AgentState{TotalTurns: 1},
+	}
+	_, err := SaveCheckpoint(sessionDir, snapshot1, 1, 0)
+	require.NoError(t, err)
+
+	// Second save: empty content (the bug scenario)
+	snapshot2 := &ContextSnapshot{
+		LLMContext:     "",
+		RecentMessages: []AgentMessage{},
+		AgentState:     &AgentState{TotalTurns: 2},
+	}
+	info2, err := SaveCheckpoint(sessionDir, snapshot2, 2, 0)
+	require.NoError(t, err)
+
+	// Verify the latest checkpoint has empty context (bug behavior documented)
+	llmContextPath := filepath.Join(sessionDir, info2.Path, "llm_context.txt")
+	data, err := os.ReadFile(llmContextPath)
+	require.NoError(t, err)
+	assert.Equal(t, "", string(data), "Second checkpoint with empty context writes empty file (expected — defense is at caller level)")
+}
