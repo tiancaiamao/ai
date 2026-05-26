@@ -93,6 +93,22 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
 	}
 
+	// Block dangerous tmux commands that can destroy the entire tmux server.
+	// The agent itself runs inside tmux, so kill-server kills the agent too.
+	if isDangerousTmuxKill(command) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: `tmux kill-server` is forbidden. It destroys the ENTIRE tmux server, killing all sessions including your own.\n\n" +
+					"You may only kill sessions you created yourself:\n" +
+					"  ✅ tmux kill-session -t <your-session-name>\n" +
+					"  ❌ tmux kill-server\n" +
+					"  ❌ looping over all sessions and killing them\n\n" +
+					"If you need to clean up, kill only the specific named sessions you spawned.",
+			},
+		}, nil
+	}
+
 	// Detect sleep commands with duration >= 30 seconds
 	if sleepDuration, hasSleep := detectSleepCommand(command); hasSleep && sleepDuration >= 30 {
 		return []agentctx.ContentBlock{
@@ -399,4 +415,10 @@ func detectSleepCommand(command string) (int, bool) {
 	}
 
 	return duration, true
+}
+
+// isDangerousTmuxKill checks if the command contains tmux kill-server,
+// which destroys the entire tmux server and all sessions (including the agent's own).
+func isDangerousTmuxKill(command string) bool {
+	return regexp.MustCompile(`\btmux\s+kill-server\b`).MatchString(command)
 }

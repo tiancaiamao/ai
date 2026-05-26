@@ -138,3 +138,48 @@ func TestBashToolAllowsCommandLocalCD(t *testing.T) {
 	result := blocks[0].(agentctx.TextContent)
 	assert.Contains(t, result.Text, "/tmp")
 }
+
+func TestBashToolBlocksTmuxKillServer(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"kill-server basic", "tmux kill-server", true},
+		{"kill-server with flags", "tmux kill-server 2>/dev/null || true", true},
+		{"kill-server with comment", "# Kill any remaining tmux sessions\ntmux kill-server 2>/dev/null || true", true},
+		{"kill-server with semicolon", "echo hi; tmux kill-server", true},
+		{"kill-server with &&", "echo hi && tmux kill-server", true},
+		{"kill-session specific", "tmux kill-session -t gen-001", false},
+		{"kill-session multi", "tmux kill-session -t gen-001\ntmux kill-session -t gen-002", false},
+		{"normal tmux", "tmux list-sessions", false},
+		{"no tmux", "echo hello", false},
+		{"kill-server in grep", "grep -r 'kill-server' file.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocks, err := tool.Execute(ctx, map[string]any{"command": tt.command})
+			if tt.blocked {
+				assert.NoError(t, err)
+				assert.NotEmpty(t, blocks)
+				result := blocks[0].(agentctx.TextContent)
+				assert.Contains(t, result.Text, "⛔ Blocked")
+				assert.Contains(t, result.Text, "kill-server")
+			} else if err == nil {
+				// Either got a normal result or was allowed through
+				for _, b := range blocks {
+					if tc, ok := b.(agentctx.TextContent); ok {
+						assert.NotContains(t, tc.Text, "⛔ Blocked")
+					}
+				}
+			}
+		})
+	}
+}
