@@ -114,6 +114,32 @@ func modelInfoFromSpec(spec config.ModelSpec) rpc.ModelInfo {
 	}
 }
 
+// applyModelOverride sets the model ID from the CLI --model flag.
+// If the model ID is found in models.json, Provider/BaseURL/API are auto-filled.
+// If not found, a warning is logged and the raw ID is used with existing config.
+func applyModelOverride(cfg *config.Config, modelOverride string) {
+	cfg.Model.ID = modelOverride
+	specs, _, specErr := loadModelSpecs(cfg)
+	if specErr == nil {
+		found := false
+		for _, spec := range specs {
+			if spec.ID == modelOverride {
+				cfg.Model.Provider = spec.Provider
+				cfg.Model.BaseURL = spec.BaseURL
+				cfg.Model.API = spec.API
+				slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
+				found = true
+				break
+			}
+		}
+		if !found {
+			slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", modelOverride)
+		}
+	} else {
+		slog.Warn("Model override: could not load model specs, using raw ID", "id", modelOverride, "error", specErr)
+	}
+}
+
 func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
 	return config.ModelSpec{
 		ID:        cfg.Model.ID,
