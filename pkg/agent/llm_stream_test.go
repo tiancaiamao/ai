@@ -5,9 +5,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/stretchr/testify/assert"
 )
 
 // TestCacheFirstRuntimeStatePersist verifies AS-1: In cache-first mode,
@@ -31,7 +31,7 @@ func TestCacheFirstRuntimeStatePersist(t *testing.T) {
 		// Simulate appending a runtime_state message (cache-first path).
 		runtimeMsg := agentctx.AgentMessage{
 			Role:      "user",
-					Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "runtime_state_turn_" + string(rune('0'+turn))}},
+			Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "runtime_state_turn_" + string(rune('0'+turn))}},
 			Timestamp: int64(turn),
 			Metadata:  &agentctx.MessageMetadata{Kind: "runtime_state"},
 		}

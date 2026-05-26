@@ -1055,7 +1055,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		agentctx.NewCompactionSummaryMessage(summary),
 	}
 
-				recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
+	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
 	recentMessages = cleanOldRuntimeState(recentMessages)
 	newRecentMessages = append(newRecentMessages, recentMessages...)
 	messagesBefore := len(ctx.RecentMessages)

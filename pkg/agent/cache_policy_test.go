@@ -96,9 +96,9 @@ func TestResolveCacheMode(t *testing.T) {
 // RuntimeStateStrategy for each CacheMode.
 func TestDefaultMutationPolicy(t *testing.T) {
 	tests := []struct {
-		name              string
-		mode              CacheMode
-		expectedStrategy  RuntimeStateStrategy
+		name             string
+		mode             CacheMode
+		expectedStrategy RuntimeStateStrategy
 	}{
 		{
 			name:             "CacheModeCache returns RuntimeStatePersist",

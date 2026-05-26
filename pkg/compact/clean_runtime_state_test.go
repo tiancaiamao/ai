@@ -3,8 +3,8 @@ package compact
 import (
 	"testing"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/stretchr/testify/assert"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 // TestCompactionCleansRuntimeState verifies AS-4: cleanOldRuntimeState removes
@@ -14,8 +14,8 @@ func TestCompactionCleansRuntimeState(t *testing.T) {
 
 	makeRuntimeMsg := func(content string) agentctx.AgentMessage {
 		return agentctx.AgentMessage{
-			Role:    "user",
-			Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: content}},
+			Role:     "user",
+			Content:  []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: content}},
 			Metadata: &agentctx.MessageMetadata{Kind: runtimeStateKind},
 		}
 	}
