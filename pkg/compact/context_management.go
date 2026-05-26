@@ -76,6 +76,12 @@ type ContextManagerConfig struct {
 	// ContextMgmtPrompt overrides the built-in context management system prompt.
 	// If empty, the default from pkg/prompt is used.
 	ContextMgmtPrompt string
+
+	// SkipCondition, when set and returns true, causes ShouldCompact to return false.
+	// This is used to skip proactive LLM-driven context management in cache-first mode,
+	// where preserving the stable message prefix is more important.
+	// Full compaction (75% threshold) remains active regardless.
+	SkipCondition func() bool
 }
 
 // DefaultContextManagerConfig returns defaults.
@@ -156,9 +162,24 @@ func (c *ContextManager) SetCompactor(compactor *Compactor) {
 	c.compactor = compactor
 }
 
+// SetSkipCondition sets a function that, when returning true, causes ShouldCompact
+// to skip proactive LLM-driven context management. This allows callers (e.g. rpcApp)
+// to inject a model-aware skip condition without creating import cycles.
+func (c *ContextManager) SetSkipCondition(fn func() bool) {
+	c.config.SkipCondition = fn
+}
+
 // ShouldCompact checks if the compactor should run.
 // It uses token percentage and tool-call interval to decide.
 func (c *ContextManager) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
+	if c.config.SkipCondition != nil && c.config.SkipCondition() {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_check",
+			traceevent.Field{Key: "decision", Value: false},
+			traceevent.Field{Key: "reason", Value: "skipped_cache_first_mode"},
+		)
+		return false
+	}
+
 	if !c.config.AutoCompact {
 		traceevent.Log(ctx, traceevent.CategoryEvent, "context_mgmt_check",
 			traceevent.Field{Key: "decision", Value: false},

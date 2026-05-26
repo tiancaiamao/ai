@@ -246,6 +246,7 @@ var eventNameToBit = map[string]int{
 	"context_mgmt_messages_truncated":     54,
 	"context_mgmt_llm_context_updated":    55,
 	"context_mgmt":                        56,
+	"compact_skipped_cache_first":         57,
 }
 
 var defaultEnabledEvents = []string{
@@ -291,6 +292,7 @@ var defaultEnabledEvents = []string{
 	"context_mgmt_check",
 	"context_mgmt_messages_truncated",
 	"context_mgmt_llm_context_updated",
+	"compact_skipped_cache_first",
 	// Default log events
 	"log:info",
 	"log:warn",

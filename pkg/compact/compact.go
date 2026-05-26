@@ -1056,6 +1056,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	}
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
+	recentMessages = cleanOldRuntimeState(recentMessages)
 	newRecentMessages = append(newRecentMessages, recentMessages...)
 	messagesBefore := len(ctx.RecentMessages)
 
@@ -1079,6 +1080,33 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		MessagesAfter:  messagesAfter,
 		Type:           "major",
 	}, nil
+}
+
+// cleanOldRuntimeState removes all but the last runtime_state message from the
+// given slice. During compaction, older runtime_state snapshots are stale — only
+// the most recent one carries useful telemetry. Cleaning them unconditionally
+// keeps pkg/compact independent of cache mode logic.
+func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	lastIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Metadata != nil && messages[i].Metadata.Kind == "runtime_state" {
+			lastIdx = i
+			break
+		}
+	}
+
+	if lastIdx == -1 {
+		return messages
+	}
+
+	var result []agentctx.AgentMessage
+	for i, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == "runtime_state" && i != lastIdx {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
 }
 
 // ShouldCompact determines if context should be compressed using AgentContext.
