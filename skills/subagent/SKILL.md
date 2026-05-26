@@ -103,6 +103,29 @@ tmux kill-session -t "$SESSION" 2>/dev/null
 | **异常路径也要 kill** | 主 agent 崩溃会留下孤儿进程 |
 | **kill 顺序：先 `ai kill`，再 `tmux kill-session`** | 反过来可能导致僵尸 tmux session |
 
+### ⛔ Tmux Cleanup Safety
+
+> **Agent 误操作 `tmux kill-server` 曾导致用户丢失全部 tmux session。**
+
+| 禁令 | 原因 |
+|------|------|
+| **禁止 `tmux kill-server`** | 销毁整个 tmux 服务器，用户所有 session 全灭 |
+| **禁止遍历所有 session 并批量 kill** | 通配符可能命中用户 session；最后一个 session 被杀后 server 自动退出 |
+| **禁止 kill 非本 agent 创建的 session** | 你不知道其他 session 的用途 |
+| **禁止向唯一 pane 发送 `exit` / `C-d`** | pane → window → session 连锁退出 |
+
+```bash
+# ✅ 正确：只清理你自己创建的 session（用你起的名字）
+ai kill --id "$RUN_ID" 2>/dev/null
+tmux kill-session -t "$SESSION" 2>/dev/null
+
+# ❌ 致命错误：kill-server 会毁掉用户的全部工作环境
+tmux kill-server
+
+# ❌ 高风险：遍历+通配符 kill 可能误杀用户 session
+for s in $(tmux list-sessions | grep ...); do tmux kill-session -t "$s"; done
+```
+
 ## Pattern: One-Shot（最常用）
 
 ```bash
@@ -292,6 +315,7 @@ ai ls | awk '{print $1}' | grep -v '<keep-this-id>' | while read id; do ai kill 
 | 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `ai send --wait` 判断 |
 | `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
 | kill 子 agent 后自己做它的活 | 用 `ai send --wait --summary` 询问进度，让子 agent 自己汇报 |
+| `tmux kill-server` 清理环境 | ⛔ **绝对禁止**，只允许 `kill-session -t <你的session名>` |
 
 ## Relationship to Other Skills
 
