@@ -54,14 +54,19 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		// Try to find matching spec in models.json to fill Provider/BaseURL/API.
 		specs, _, specErr := loadModelSpecs(cfg)
 		if specErr == nil {
+			found := false
 			for _, spec := range specs {
 				if spec.ID == params.modelOverride {
 					cfg.Model.Provider = spec.Provider
 					cfg.Model.BaseURL = spec.BaseURL
 					cfg.Model.API = spec.API
 					slog.Info("Model override applied", "id", params.modelOverride, "provider", spec.Provider)
+					found = true
 					break
 				}
+			}
+			if !found {
+				slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", params.modelOverride)
 			}
 		} else {
 			slog.Warn("Model override: could not load model specs, using raw ID", "id", params.modelOverride, "error", specErr)
