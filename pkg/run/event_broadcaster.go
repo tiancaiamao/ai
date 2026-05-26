@@ -12,7 +12,9 @@ const (
 	RingSize = 4096
 
 	// ConsumerChanSize is the buffered channel size for each consumer.
-	ConsumerChanSize = 256
+	// Larger buffer absorbs burst events when the TUI event loop is busy
+	// (e.g. wrapping large content), preventing slow-consumer disconnect.
+	ConsumerChanSize = 2048
 )
 
 // ringEntry holds a single event in the ring buffer.

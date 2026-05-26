@@ -624,6 +624,7 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if text != "" {
 					if err := m.sendMessage(text); err != nil {
 						m.appendContent(errStyle.Render("ai: send failed: " + err.Error()))
+						m.syncIfDirty()
 					}
 				}
 				return m, nil
