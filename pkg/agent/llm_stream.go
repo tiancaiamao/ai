@@ -56,7 +56,7 @@ func streamAssistantResponse(
 		cacheMode := ResolveCacheMode(config.CacheMode, model.ID)
 		policy := DefaultMutationPolicy(cacheMode)
 
-				switch policy.RuntimeStateStrategy() {
+		switch policy.RuntimeStateStrategy() {
 		case RuntimeStatePersist:
 			// Cache-first: create a persistent AgentMessage and append to RecentMessages,
 			// then rebuild LLM messages so the new runtime_state is included.
