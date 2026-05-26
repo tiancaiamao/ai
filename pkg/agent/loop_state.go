@@ -26,6 +26,10 @@ type loopState struct {
 	emptyRetries   int
 	malformedRecs  int
 	newMessages    []agentctx.AgentMessage
+	// guardAbortRecovery tracks whether we've already given the LLM a
+	// recovery turn after a loop guard hard abort. Prevents re-triggering
+	// if the LLM continues the loop.
+	guardAbortRecovery bool
 }
 
 func newLoopState(
@@ -289,6 +293,17 @@ func (s *loopState) processToolCalls(
 	for _, result := range toolResults {
 		s.agentCtx.RecentMessages = append(s.agentCtx.RecentMessages, result)
 		s.newMessages = append(s.newMessages, result)
+	}
+
+	// Notify loop guard of tool output so it can detect polling patterns
+	// (same tool+args but changing output = legitimate polling, not stuck loop).
+	if s.loopGuard != nil {
+		for _, result := range toolResults {
+			outputHash := result.OutputHash()
+			if outputHash != "" {
+				s.loopGuard.NotifyToolOutput(outputHash)
+			}
+		}
 	}
 
 	// Increment tool call counter for compactor trigger intervals.

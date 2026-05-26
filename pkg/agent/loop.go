@@ -267,6 +267,17 @@ func runInnerLoop(
 				continue
 			}
 
+			// Loop guard hard-abort recovery: give the LLM one final turn
+			// to produce a text response to the user instead of silently
+			// terminating. The sanitizeMessageForToolLoopGuard has already
+			// replaced tool calls with a textual explanation of the abort,
+			// so the LLM will see it and can respond accordingly.
+			if msg.StopReason == "aborted" && !state.guardAbortRecovery {
+				state.guardAbortRecovery = true
+				slog.Info("[Loop] loop guard hard abort — giving LLM one recovery turn")
+				continue
+			}
+
 			// Check for empty response: stop_reason=stop but no actionable content.
 			if msg.StopReason == "stop" && isEmptyActionableResponse(msg) && state.emptyRetries < defaultEmptyResponseMaxRetries {
 				state.emptyRetries++

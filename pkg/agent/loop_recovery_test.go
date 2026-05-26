@@ -183,13 +183,14 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 		MaxToolCallsPerName:     100,
 	}, stream)
 
-	// With the feedback-to-LLM strategy:
+	// With the feedback-to-LLM strategy + abort recovery:
 	//   call 1-2: normal execution
 	//   call 3: guard triggers → feedback #1 → LLM retries
 	//   call 4: guard triggers → feedback #2 → LLM retries
-	//   call 5: guard triggers → hard abort (feedback limit exhausted)
-	if callCount != 5 {
-		t.Fatalf("expected loop guard to hard-abort after 5 calls (2 normal + 2 feedback + 1 abort), got %d calls", callCount)
+	//   call 5: guard triggers → hard abort → recovery turn
+	//   call 6: LLM retries same call → hard abort again (no more recovery) → terminate
+	if callCount != 6 {
+		t.Fatalf("expected loop guard to hard-abort after 6 calls (2 normal + 2 feedback + 2 abort with recovery), got %d calls", callCount)
 	}
 
 	var sawGuardedTurn bool
@@ -218,9 +219,9 @@ func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	if !sawGuardEvent {
 		t.Fatal("expected loop_guard_triggered event")
 	}
-	// Guard should trigger 3 times: 2 feedback + 1 hard abort
-	if guardEventCount != 3 {
-		t.Fatalf("expected 3 loop guard events (2 feedback + 1 hard abort), got %d", guardEventCount)
+	// Guard should trigger 4 times: 2 feedback + 2 hard abort (with recovery)
+	if guardEventCount != 4 {
+		t.Fatalf("expected 4 loop guard events (2 feedback + 2 hard abort), got %d", guardEventCount)
 	}
 }
 
@@ -255,13 +256,14 @@ func TestRunInnerLoopStopsRepeatedToolCallsByDefaultGuard(t *testing.T) {
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{}, stream)
 
 	// defaultLoopMaxConsecutiveToolCalls = 6, so guard triggers on the 7th call.
-	// With feedback-to-LLM strategy (defaultLoopGuardMaxFeedback = 2):
+	// With feedback-to-LLM strategy (defaultLoopGuardMaxFeedback = 2) + abort recovery:
 	//   call 1-6: normal execution
 	//   call 7: guard triggers → feedback #1 → LLM retries
 	//   call 8: guard triggers → feedback #2 → LLM retries
-	//   call 9: guard triggers → hard abort (feedback limit exhausted)
-	if callCount != 9 {
-		t.Fatalf("expected default loop guard to hard-abort after 9 calls (6 normal + 2 feedback + 1 abort), got %d calls", callCount)
+	//   call 9: guard triggers → hard abort → recovery turn
+	//   call 10: LLM retries → hard abort again (no more recovery) → terminate
+	if callCount != 10 {
+		t.Fatalf("expected default loop guard to hard-abort after 10 calls (6 normal + 2 feedback + 2 abort with recovery), got %d calls", callCount)
 	}
 }
 
@@ -1129,5 +1131,197 @@ func TestRunInnerLoopCompactionRecoveryOnContextLimitStopReason(t *testing.T) {
 	// Verify the agent recovered and returned the second response
 	if len(finalMessages) == 0 {
 		t.Fatal("expected final messages after recovery")
+	}
+}
+
+// TestLoopGuardHardAbortRecovery verifies that after a loop guard hard abort,
+// the LLM gets one recovery turn to produce a text response instead of
+// silently terminating. On the recovery turn, if the LLM produces text
+// (stopReason=stop), the agent terminates normally.
+func TestLoopGuardHardAbortRecovery(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	callCount := 0
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		_ *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+		msg := agentctx.NewAssistantMessage()
+
+		if callCount <= 5 {
+			// Calls 1-2: normal execution (maxConsecutive=2)
+			// Call 3: triggers soft feedback #1 (consecutive=3 > 2)
+			// Call 4: triggers soft feedback #2 (consecutive=4)
+			// Call 5: triggers hard abort (consecutive=5, feedback exhausted)
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        fmt.Sprintf("call-%d", callCount),
+					Type:      "toolCall",
+					Name:      "read",
+					Arguments: map[string]any{"path": "/tmp/a.txt"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		// Call 6: recovery turn — LLM responds with text instead of tool call
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "I was stuck in a loop. Here's my final answer."},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("start"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
+		MaxConsecutiveToolCalls: 2,
+		MaxToolCallsPerName:     100,
+	}, stream)
+
+	// call 1: read (consecutive=1) — executed
+	// call 2: read (consecutive=2) — executed
+	// call 3: read (consecutive=3) → soft feedback #1, guard blocks
+	// call 4: read (consecutive=4) → soft feedback #2, guard blocks
+	// call 5: read (consecutive=5) → hard abort → sanitize → recovery turn → continue
+	// call 6: LLM responds with text → stop
+	if callCount != 6 {
+		t.Fatalf("expected 6 calls (2 normal + 2 feedback + 1 hard abort + 1 recovery text), got %d", callCount)
+	}
+
+	// Verify we got agent_end (normal termination after recovery)
+	var sawAgentEnd bool
+	var sawAbortedTurnEnd int
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventAgentEnd {
+			sawAgentEnd = true
+		}
+		if item.Value.Type == EventTurnEnd && item.Value.Message != nil && item.Value.Message.StopReason == "aborted" {
+			sawAbortedTurnEnd++
+		}
+	}
+
+	if !sawAgentEnd {
+		t.Error("expected EventAgentEnd after recovery turn")
+	}
+	// Should see exactly one aborted turn (the hard abort that triggered recovery)
+	if sawAbortedTurnEnd != 1 {
+		t.Errorf("expected 1 aborted turn_end, got %d", sawAbortedTurnEnd)
+	}
+}
+
+// variableOutputTool is a test tool that returns incrementing output each call.
+type variableOutputTool struct {
+	counter int
+}
+
+func (v *variableOutputTool) Name() string               { return "poll" }
+func (v *variableOutputTool) Description() string        { return "poll for status" }
+func (v *variableOutputTool) Parameters() map[string]any { return nil }
+func (v *variableOutputTool) Execute(_ context.Context, _ map[string]any) ([]agentctx.ContentBlock, error) {
+	v.counter++
+	return []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: fmt.Sprintf("status: iteration %d complete", v.counter)},
+	}, nil
+}
+
+// TestLoopGuardPollingDetection verifies that when tool output keeps changing
+// despite identical tool calls (polling pattern), the guard suppresses hard
+// abort and only issues soft feedback. This prevents killing legitimate
+// polling behavior like waiting for a benchmark to complete.
+func TestLoopGuardPollingDetection(t *testing.T) {
+	orig := streamAssistantResponseFn
+	defer func() { streamAssistantResponseFn = orig }()
+
+	var callCount int
+	pollTool := &variableOutputTool{}
+
+	streamAssistantResponseFn = func(
+		_ context.Context,
+		agentCtx *agentctx.AgentContext,
+		_ *LoopConfig,
+		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
+	) (*agentctx.AgentMessage, error) {
+		callCount++
+
+		// Register the variable-output tool on first call
+		if callCount == 1 {
+			agentCtx.Tools = []agentctx.Tool{pollTool}
+		}
+
+		msg := agentctx.NewAssistantMessage()
+
+		if callCount <= 8 {
+			// Repeated tool calls with identical arguments but changing output
+			msg.Content = []agentctx.ContentBlock{
+				agentctx.ToolCallContent{
+					ID:        fmt.Sprintf("call-%d", callCount),
+					Type:      "toolCall",
+					Name:      "poll",
+					Arguments: map[string]any{"query": "status"},
+				},
+			}
+			msg.StopReason = "tool_calls"
+			return &msg, nil
+		}
+
+		// After enough polling, LLM produces final answer
+		msg.Content = []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: "Polling complete. All iterations done."},
+		}
+		msg.StopReason = "stop"
+		return &msg, nil
+	}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("poll for status"))
+	stream := newTestAgentEventStream()
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
+		MaxConsecutiveToolCalls: 3, // trigger after 3 consecutive identical calls
+		MaxToolCallsPerName:     100,
+		EnableCheckpoint:        false,
+	}, stream)
+
+	// With polling detection:
+	// call 1-3: normal execution (consecutive 1→3), tool runs, output changes
+	// call 4: guard triggers soft feedback #1 (consecutive=4), output changed → suppress hard abort
+	// call 5: guard triggers soft feedback #2 (consecutive=5), output changed → suppress hard abort
+	// call 6: guard triggers soft feedback #3 (consecutive=6), still changing → would be hard abort but suppressed
+	// call 7: soft feedback #4...
+	// Eventually LLM self-corrects and returns text
+	//
+	// Key assertion: no hard abort despite exceeding maxFeedbackAttempts,
+	// because output keeps changing (polling).
+	var sawHardAbort bool
+	var feedbackCount int
+	for item := range stream.Iterator(context.Background()) {
+		if item.Done {
+			break
+		}
+		if item.Value.Type == EventTurnEnd && item.Value.Message != nil && item.Value.Message.StopReason == "aborted" {
+			sawHardAbort = true
+		}
+		if item.Value.Type == EventLoopGuardTriggered {
+			feedbackCount++
+		}
+	}
+
+	if sawHardAbort {
+		t.Error("expected NO hard abort when output is changing (polling pattern), but got one")
+	}
+	if feedbackCount == 0 {
+		t.Error("expected some loop guard feedback events even with polling")
+	}
+	if callCount < 5 {
+		t.Errorf("expected at least 5 calls (polling should be allowed to continue), got %d", callCount)
 	}
 }
