@@ -56,10 +56,12 @@ func streamAssistantResponse(
 		cacheMode := ResolveCacheMode(config.CacheMode, model.ID)
 		policy := DefaultMutationPolicy(cacheMode)
 
-		switch policy.RuntimeStateStrategy() {
+				switch policy.RuntimeStateStrategy() {
 		case RuntimeStatePersist:
 			// Cache-first: create a persistent AgentMessage and append to RecentMessages,
 			// then rebuild LLM messages so the new runtime_state is included.
+			// Remove any stale runtime_state left by a previous retry attempt of this turn.
+			agentCtx.RecentMessages = removeRuntimeStateMessages(agentCtx.RecentMessages)
 			runtimeAgentMsg := agentctx.AgentMessage{
 				Role:      "user",
 				Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: runtimeAppendix}},
@@ -408,6 +410,20 @@ compact_decision_signals:
 	agentCtx.AgentState.RuntimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+// removeRuntimeStateMessages removes all runtime_state messages from the slice.
+// This prevents duplicate runtime_state messages from accumulating when
+// streamAssistantResponse is retried (each retry appends a fresh one).
+func removeRuntimeStateMessages(msgs []agentctx.AgentMessage) []agentctx.AgentMessage {
+	filtered := msgs[:0]
+	for _, msg := range msgs {
+		if msg.Metadata != nil && msg.Metadata.Kind == "runtime_state" {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
 }
 
 func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
