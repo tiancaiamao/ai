@@ -153,6 +153,7 @@ type watchModel struct {
 	// Role prefix printed once when role changes, then text appended inline
 	currentRole  string // "", "assistant", "thinking", "tool", "ai"
 	inlineActive bool   // true when we're in the middle of an inline stream
+	dirty        bool   // true when content has changed but viewport not yet updated
 	showPrefixes bool   // whether to show "role: " prefixes (default true)
 	showThinking bool   // whether to show thinking content
 	showTools    bool   // whether to show tool content
@@ -271,12 +272,21 @@ func (m *watchModel) appendContent(text string) {
 	m.content.WriteString(text)
 	m.content.WriteString("\n")
 	m.lines++
-	m.syncContent()
+	m.dirty = true
 }
 
 func (m *watchModel) appendInline(text string) {
 	m.content.WriteString(text)
-	m.syncContent()
+	m.dirty = true
+}
+
+// syncIfDirty flushes pending content changes to the viewport.
+// Call this at the end of processing a batch of events (e.g. after processEvent).
+func (m *watchModel) syncIfDirty() {
+	if m.dirty {
+		m.dirty = false
+		m.syncContent()
+	}
 }
 
 // ensureRole transitions the streaming role.
@@ -333,7 +343,7 @@ func (m *watchModel) endInline() {
 		m.lines++
 		m.inlineActive = false
 		m.currentRole = ""
-		m.syncContent()
+		m.dirty = true
 	}
 }
 
@@ -396,6 +406,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, pollBroadcaster(m.broadcasterSub)
 		}
 		m.processEvent(formatted)
+		m.syncIfDirty()
 		m.updateStatus()
 		return m, pollBroadcaster(m.broadcasterSub)
 
@@ -414,6 +425,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case socketConnectFailed:
 		m.appendContent(errStyle.Render(fmt.Sprintf("connection failed: %v", msg.err)))
+		m.syncIfDirty()
 		return m, tea.Quit
 
 	case socketEvent:
@@ -423,6 +435,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, readSocketEvent(m.sockScanner)
 		}
 		m.processEvent(formatted)
+		m.syncIfDirty()
 		m.updateStatus()
 		return m, readSocketEvent(m.sockScanner)
 
@@ -434,6 +447,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateStatus()
 		// Flush any remaining buffered text.
 		m.sentBuf.flush()
+		m.syncIfDirty()
 		return m, waitForFile(m.eventsPath, m.offset)
 
 	case replayBatch:
@@ -443,6 +457,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.processEvent(run.ParseEvent(line))
 		}
 		m.endInline()
+		m.syncIfDirty()
 		m.updateStatus()
 		return m, m.nextCmd()
 
@@ -454,6 +469,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.processEvent(formatted)
+		m.syncIfDirty()
 		m.updateStatus()
 		return m, m.nextCmd()
 
