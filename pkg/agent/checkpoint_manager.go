@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
@@ -60,6 +61,22 @@ func (m *AgentContextCheckpointManager) CreateSnapshot(
 ) (int, error) {
 	if !m.enabled {
 		return totalTurns, nil
+	}
+
+	// Defense in depth: if the new LLMContext is empty, carry forward the
+	// content from the previous checkpoint. This prevents data loss when
+	// the caller passes an empty string (e.g. after truncate without
+	// update_llm_context).
+	if llmContext == "" {
+		if prev, err := agentctx.LoadLatestCheckpoint(m.sessionDir); err == nil {
+			if prevCtx, err := agentctx.LoadCheckpointLLMContext(
+				filepath.Join(m.sessionDir, prev.Path),
+			); err == nil && prevCtx != "" {
+				slog.Info("[Checkpoint] Carrying forward previous LLMContext (new context is empty)",
+					"previousTurn", prev.Turn, "previousChars", len(prevCtx))
+				llmContext = prevCtx
+			}
+		}
 	}
 
 	// Capture the full AgentState from the running context.
