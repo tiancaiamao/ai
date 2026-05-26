@@ -30,7 +30,7 @@ func TestStressConcurrentRequests(t *testing.T) {
 			name:        fmt.Sprintf("tool-%d", i),
 			maxFailures: 0,
 			failMessage: "success",
-			execDelayMs: 500 + (i%5)*200, // Varying delays: 500-1500ms
+			execDelayMs: 50 + (i%5)*20, // Varying delays: 50-130ms (was 500-1300ms)
 		})
 	}
 
@@ -88,14 +88,14 @@ func TestStressConcurrentRequests(t *testing.T) {
 	}
 
 	// Estimate minimum time: tools with max 10 concurrency
-	// Fastest tools (500ms) should complete quickly
-	minExpectedTime := 5 * time.Second
+	// Fastest tools (50ms) should complete quickly
+	minExpectedTime := 500 * time.Millisecond
 	if elapsed < minExpectedTime {
 		t.Logf("Warning: Completed faster than expected (< %v)", minExpectedTime)
 	}
 
 	// Should not take too long
-	maxExpectedTime := 30 * time.Second
+	maxExpectedTime := 5 * time.Second
 	if elapsed > maxExpectedTime {
 		t.Errorf("Stress test took too long: %v (expected < %v)", elapsed, maxExpectedTime)
 	}
@@ -113,11 +113,11 @@ func TestStressLongRunningCommands(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create tools with varying execution times (2-8 seconds)
+	// Create tools with varying execution times (200-800ms)
 	numTools := 5
 	tools := []*MockTool{}
 	for i := 0; i < numTools; i++ {
-		delay := 2000 + i*1500 // 2s, 3.5s, 5s, 6.5s, 8s
+		delay := 200 + i*150 // 200, 350, 500, 650, 800ms (was 2-8s)
 		tools = append(tools, &MockTool{
 			name:        fmt.Sprintf("long-tool-%d", i),
 			maxFailures: 0,
@@ -162,11 +162,11 @@ func TestStressLongRunningCommands(t *testing.T) {
 	}
 
 	// With 3 concurrent slots and 5 tools:
-	// First 3: 0-2s, 0-3.5s, 0-5s
-	// Second 2: 2s-5.5s, 3.5s-6.5s
-	// Total: ~6.5s
-	minExpected := 6 * time.Second
-	maxExpected := 15 * time.Second
+	// First 3: 0-200ms, 0-350ms, 0-500ms
+	// Second 2: 200ms-850ms, 350ms-1150ms
+	// Total: ~1.15s
+	minExpected := 800 * time.Millisecond
+	maxExpected := 2 * time.Second
 
 	if elapsed < minExpected {
 		t.Errorf("Test completed too quickly: %v (expected >= %v)", elapsed, minExpected)
@@ -299,14 +299,14 @@ func TestStressQueueFull(t *testing.T) {
 	ctx := context.Background()
 
 	// Create slow tools with reduced execution time
-	numTools := 6 // Reduced from 10
+	numTools := 6
 	tools := []*MockTool{}
 	for i := 0; i < numTools; i++ {
 		tools = append(tools, &MockTool{
 			name:        fmt.Sprintf("slow-tool-%d", i),
 			maxFailures: 0,
 			failMessage: "success",
-			execDelayMs: 2000, // Reduced from 5000 to 2000 (2 seconds)
+			execDelayMs: 200, // 200ms (was 2000ms); test verifies queue timeout, not duration
 		})
 	}
 
@@ -354,10 +354,10 @@ func TestStressQueueFull(t *testing.T) {
 	}
 
 	// Should complete in reasonable time
-	// First 2 tools: 2s each, running concurrently = ~2s
+	// First 2 tools: 200ms each, running concurrently = ~200ms
 	// Remaining tools timeout in queue after 1s
-	// Total: ~3-4s
-	if elapsed > 6*time.Second {
-		t.Errorf("Test took too long: %v (expected <= 6s)", elapsed)
+	// Total: ~1-2s
+	if elapsed > 3*time.Second {
+		t.Errorf("Test took too long: %v (expected <= 3s)", elapsed)
 	}
 }
