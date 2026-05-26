@@ -44,21 +44,42 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Build runtime appendix (llm context + context meta) as a user message
-	// injected BEFORE the last user message for better LLM attention.
-	// Placing runtime_state close to the decision point improves context management.
-	//
-	// LLMContext content is always injected when non-empty.
-	// runtime_state telemetry is ALWAYS injected from turn 1 so path info is available immediately.
-	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
+	// Resolve model early — needed for cache mode detection before runtime_state injection.
+	model := getEffectiveModel(config)
 
-	// Insert runtime_state before the last user message for better attention.
+	// Resolve cache mode and determine runtime_state injection strategy.
+	// Cache-first (e.g. DeepSeek): persist runtime_state as AgentMessage in RecentMessages
+	//   for higher prefix cache hit rates across turns.
+	// Context-first (default): ephemeral injection before last user message, current behavior.
+	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
 	if runtimeAppendix != "" {
-		runtimeMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: runtimeAppendix,
+		cacheMode := ResolveCacheMode(config.CacheMode, model.ID)
+		policy := DefaultMutationPolicy(cacheMode)
+
+		switch policy.RuntimeStateStrategy() {
+		case RuntimeStatePersist:
+			// Cache-first: create a persistent AgentMessage and append to RecentMessages,
+			// then rebuild LLM messages so the new runtime_state is included.
+			// Remove any stale runtime_state left by a previous retry attempt of this turn.
+			agentCtx.RecentMessages = removeRuntimeStateMessages(agentCtx.RecentMessages)
+			runtimeAgentMsg := agentctx.AgentMessage{
+				Role:      "user",
+				Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: runtimeAppendix}},
+				Timestamp: time.Now().UnixMilli(),
+				Metadata:  &agentctx.MessageMetadata{Kind: "runtime_state"},
+			}
+			agentCtx.RecentMessages = append(agentCtx.RecentMessages, runtimeAgentMsg)
+			selectedMessages, _ = selectMessagesForLLM(agentCtx)
+			llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
+
+		case RuntimeStateEphemeral:
+			// Context-first: current behavior unchanged — temporary injection.
+			runtimeMsg := llm.LLMMessage{
+				Role:    "user",
+				Content: runtimeAppendix,
+			}
+			llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
 		}
-		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
 	}
 
 	// Convert tools to LLM format
@@ -73,7 +94,6 @@ func streamAssistantResponse(
 
 	// Stream LLM response
 	llmStart := time.Now()
-	model := getEffectiveModel(config)
 	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
 		traceevent.Field{Key: "model", Value: model.ID},
 		traceevent.Field{Key: "provider", Value: model.Provider},
@@ -390,6 +410,20 @@ compact_decision_signals:
 	agentCtx.AgentState.RuntimeMetaTurns = 0
 
 	return snapshot, true
+}
+
+// removeRuntimeStateMessages removes all runtime_state messages from the slice.
+// This prevents duplicate runtime_state messages from accumulating when
+// streamAssistantResponse is retried (each retry appends a fresh one).
+func removeRuntimeStateMessages(msgs []agentctx.AgentMessage) []agentctx.AgentMessage {
+	filtered := msgs[:0]
+	for _, msg := range msgs {
+		if msg.Metadata != nil && msg.Metadata.Kind == "runtime_state" {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
 }
 
 func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
