@@ -162,6 +162,31 @@ func (m *AgentMessage) ExtractText() string {
 	return b.String()
 }
 
+// OutputHash returns a short hash of the tool result text content.
+// Used by the loop guard to detect whether repeated tool calls are
+// producing different output (polling) vs. identical output (stuck loop).
+// Returns empty string for non-toolResult messages.
+func (m AgentMessage) OutputHash() string {
+	if m.Role != "toolResult" {
+		return ""
+	}
+	text := m.ExtractText()
+	if text == "" {
+		return ""
+	}
+	// FNV-1a 32-bit: fast, no crypto import needed.
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for _, b := range text {
+		h ^= uint32(b)
+		h *= prime32
+	}
+	return fmt.Sprintf("%08x", h)
+}
+
 // ExtractThinking extracts all thinking content from a message.
 func (m *AgentMessage) ExtractThinking() string {
 	var b strings.Builder

@@ -13,11 +13,17 @@ import (
 
 // toolLoopGuard detects and prevents infinite tool call loops.
 // It only counts consecutive calls with the same signature (name + arguments hash).
-// When the tool or arguments change, the counter resets to 1.
+// When the tool or arguments change, the counter resets.
+//
+// The guard also tracks tool output changes: if the output keeps changing despite
+// identical tool calls, this indicates legitimate polling rather than a stuck loop.
+// In that case the guard softens its response — soft feedback is still issued to
+// encourage the LLM to change approach, but hard abort is suppressed until the
+// output stops changing.
 //
 // Strategy: instead of aborting immediately, the guard returns a ToolResult
 // with actionable feedback so the LLM can self-correct. After maxFeedbackAttempts
-// the guard escalates to a hard abort.
+// the guard escalates to a hard abort (unless output is still changing).
 type toolLoopGuard struct {
 	maxConsecutive int
 
@@ -30,6 +36,15 @@ type toolLoopGuard struct {
 	// maxFeedbackAttempts is the number of feedback rounds before hard abort.
 	// 0 means use the default (defaultLoopGuardMaxFeedback).
 	maxFeedbackAttempts int
+
+	// lastOutputHash is a hash of the last tool output for the current signature.
+	// Used to detect whether a repeated tool call is producing different results
+	// (legitimate polling) vs. identical results (stuck loop).
+	lastOutputHash string
+	// outputChangedSinceBlock is true when tool output has changed since the
+	// guard first started blocking this signature. When true, hard abort is
+	// suppressed — the guard only issues soft feedback.
+	outputChangedSinceBlock bool
 }
 
 const defaultLoopGuardMaxFeedback = 2
@@ -75,9 +90,23 @@ type ObserveResult struct {
 	FeedbackAttempt int
 }
 
+// NotifyToolOutput records the output of a tool execution so the guard can
+// detect polling patterns (same tool+args but changing output).
+// Call this after tool execution completes with a hash of the output content.
+func (g *toolLoopGuard) NotifyToolOutput(outputHash string) {
+	if g.lastOutputHash != "" && g.lastOutputHash != outputHash {
+		g.outputChangedSinceBlock = true
+	}
+	g.lastOutputHash = outputHash
+}
+
 // Observe checks tool calls for loop patterns.
 // It only counts consecutive calls with the same signature (name + arguments hash).
 // When the signature changes, the counter resets.
+//
+// If tool output has been changing (detected via NotifyToolOutput), the guard
+// suppresses hard abort and only issues soft feedback — the LLM may be
+// legitimately polling for progress.
 //
 // Returns an ObserveResult indicating whether a loop was detected and whether
 // the guard should return feedback to the LLM (soft) or abort (hard).
@@ -95,13 +124,19 @@ func (g *toolLoopGuard) Observe(toolCalls []agentctx.ToolCallContent) ObserveRes
 			g.lastSignature = signature
 			g.consecutiveRun = 1
 			g.feedbackCount = 0
+			g.lastOutputHash = ""
+			g.outputChangedSinceBlock = false
 		}
 
 		if g.maxConsecutive > 0 && g.consecutiveRun > g.maxConsecutive {
 			reason := fmt.Sprintf("detected %d consecutive identical tool calls (%s)", g.consecutiveRun, name)
+			if g.outputChangedSinceBlock {
+				reason += " (output is changing — likely polling, not stuck)"
+			}
 
 			// Check if we've exhausted feedback attempts.
-			if g.feedbackCount >= g.maxFeedbackAttempts {
+			// Suppress hard abort if output is still changing (legitimate polling).
+			if g.feedbackCount >= g.maxFeedbackAttempts && !g.outputChangedSinceBlock {
 				return ObserveResult{
 					Blocked:   true,
 					Reason:    reason,

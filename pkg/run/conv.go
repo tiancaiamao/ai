@@ -403,7 +403,13 @@ func parseCompactionEnd(evt map[string]any) *FormattedEvent {
 
 // parseLoopGuard handles loop_guard_triggered events.
 func parseLoopGuard(evt map[string]any) *FormattedEvent {
-	reason, _ := evt["reason"].(string)
+	reason := ""
+	if lg, ok := evt["loopGuard"].(map[string]any); ok {
+		reason, _ = lg["reason"].(string)
+	}
+	if reason == "" {
+		reason, _ = evt["reason"].(string)
+	}
 	if reason == "" {
 		reason = "unknown"
 	}

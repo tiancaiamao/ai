@@ -252,13 +252,13 @@ func TestCharacterization_ToolLoopGuard(t *testing.T) {
 
 	// LLM should be called MaxConsecutiveToolCalls + 1 + defaultLoopGuardMaxFeedback times
 	// (3 identical calls allowed, then guard triggers → feedback #1 → LLM retries,
-	//  feedback #2 → LLM retries, then hard abort)
-	// Total: 3 normal + 2 feedback + 1 abort = 6
+	//  feedback #2 → LLM retries, then hard abort → recovery turn → hard abort again)
+	// Total: 3 normal + 2 feedback + 1 hard abort + 1 recovery turn = 7
 	mu.Lock()
 	count := llmCallCount
 	mu.Unlock()
-	if count != 6 { // 3 allowed + 2 feedback + 1 hard abort trigger
-		t.Errorf("expected 6 LLM calls (3 allowed + 2 feedback + 1 hard abort), got %d", count)
+	if count != 7 { // 3 allowed + 2 feedback + 1 hard abort + 1 recovery turn
+		t.Errorf("expected 7 LLM calls (3 allowed + 2 feedback + 1 hard abort + 1 recovery turn), got %d", count)
 	}
 
 	// Must end with agent_end
