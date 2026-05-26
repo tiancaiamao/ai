@@ -24,6 +24,7 @@ type rpcAppSetupParams struct {
 	maxTurns           int
 	debugAddr          string
 	agentConfigPath    string
+	modelOverride      string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -45,6 +46,26 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	cfg, configPath, err := loadConfigWithLogger()
 	if err != nil {
 		return nil, err
+	}
+
+	// --- Model override from CLI ---
+	if params.modelOverride != "" {
+		cfg.Model.ID = params.modelOverride
+		// Try to find matching spec in models.json to fill Provider/BaseURL/API.
+		specs, _, specErr := loadModelSpecs(cfg)
+		if specErr == nil {
+			for _, spec := range specs {
+				if spec.ID == params.modelOverride {
+					cfg.Model.Provider = spec.Provider
+					cfg.Model.BaseURL = spec.BaseURL
+					cfg.Model.API = spec.API
+					slog.Info("Model override applied", "id", params.modelOverride, "provider", spec.Provider)
+					break
+				}
+			}
+		} else {
+			slog.Warn("Model override: could not load model specs, using raw ID", "id", params.modelOverride, "error", specErr)
+		}
 	}
 
 	// --- Model + API Key ---
