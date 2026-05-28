@@ -244,13 +244,13 @@ Ready to implement auth feature
 
 ## Agent Worktrees
 
-Combine git worktrees with `ai serve` + tmux for persistent, observable task execution in isolated environments.
+Combine git worktrees with `subagent` 技能 for persistent, observable task execution in isolated environments.
 
 ### When to Use
 
 | Scenario | Approach | Why |
 |----------|----------|-----|
-| Long-running analysis | Worktree + ai serve | Results persist in worktree after completion |
+| Long-running analysis | Worktree + subagent | Results persist in worktree after completion |
 | Parallel feature work | Multiple worktrees | Isolated branches, no conflicts |
 | Code review before merge | Worktree + review agent | Read-only review in isolated environment |
 | Experimental changes | Worktree + coder agent | Safely iterate without affecting main branch |
@@ -260,80 +260,53 @@ Combine git worktrees with `ai serve` + tmux for persistent, observable task exe
 ```bash
 # 1. Create worktree for the task
 git worktree add .worktrees/review-auth -b review/auth
-
-# 2. Spawn agent in worktree using ai serve + tmux
-tmux new-session -d -s "review-auth" \
-  "ai serve --system-prompt '@/path/to/reviewer.md' \
-   --input 'Review auth changes for security issues' \
-   --name 'review-auth' \
-   --timeout 15m"
-
-sleep 2
-AGENT_ID=$(tmux capture-pane -t "review-auth" -p | head -1 | tr -d '[:space:]')
-ai watch --id "$AGENT_ID" --follow --pretty
-
-# 3. Cleanup agent (results remain in worktree)
-ai kill --id "$AGENT_ID"
-tmux kill-session -t "review-auth" 2>/dev/null
-
-# 4. Results remain in worktree for inspection
-# Original worktree remains untouched
 ```
+
+2. 用 `subagent` 技能 spawn 子 agent，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@/path/to/reviewer.md` |
+| input | `'Review auth changes for security issues'` |
+| name | `review-auth` |
+| timeout | `15m` |
+
+3. 用 `subagent` 技能 Watch 等待完成
+4. 用 `subagent` 技能 Cleanup 清理 agent
+5. 结果保留在 worktree 中供检查
 
 ### Pattern: Persistent Review Session
 
 ```bash
-# Create a persistent review worktree
 git worktree add .worktrees/review-feature-x -b review/feature-x
-
-# Run reviewer agent in worktree
-tmux new-session -d -s "review-feature-x" \
-  "ai serve --system-prompt '@/path/to/reviewer.md' \
-   --input 'Review changes against main: security, correctness, style' \
-   --name 'review-feature-x' \
-   --timeout 15m"
-
-sleep 2
-AGENT_ID=$(tmux capture-pane -t "review-feature-x" -p | head -1 | tr -d '[:space:]')
-ai watch --id "$AGENT_ID" --follow --pretty
-
-ai kill --id "$AGENT_ID"
-tmux kill-session -t "review-feature-x" 2>/dev/null
-
-# Worktree stays available for:
-# - Manual inspection of changes
-# - Additional review passes
-# - Testing in isolated environment
 ```
+
+用 `subagent` 技能 spawn + watch，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@/path/to/reviewer.md` |
+| input | `'Review changes against main: security, correctness, style'` |
+| name | `review-feature-x` |
+| timeout | `15m` |
+
+完成后 Cleanup。Worktree 保留，可用于手动检查、追加 review、测试。
 
 ### Pattern: Parallel Feature Branches
 
 ```bash
-# Create multiple worktrees for parallel work
 git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
-
-# Spawn agents in parallel (max 2 concurrent)
-tmux new-session -d -s "build-auth" \
-  "ai serve --system-prompt '@/path/to/builder.md' \
-   --input 'Implement auth feature in current worktree' \
-   --name 'build-auth' --timeout 15m"
-
-tmux new-session -d -s "build-api" \
-  "ai serve --system-prompt '@/path/to/builder.md' \
-   --input 'Implement API feature in current worktree' \
-   --name 'build-api' --timeout 15m"
-
-sleep 2
-ID_AUTH=$(tmux capture-pane -t "build-auth" -p | head -1 | tr -d '[:space:]')
-ID_API=$(tmux capture-pane -t "build-api" -p | head -1 | tr -d '[:space:]')
-
-ai watch --id "$ID_AUTH" --follow --pretty
-ai watch --id "$ID_API" --follow --pretty
-
-# Both worktrees have isolated changes
-# Merge independently when ready
 ```
+
+用 `subagent` 技能并行 spawn 2 个 agent（注意并发上限），参数：
+
+| Agent | system-prompt | input | name | timeout |
+|-------|---------------|-------|------|---------|
+| Auth | `@/path/to/builder.md` | `'Implement auth feature in current worktree'` | `build-auth` | `15m` |
+| API | `@/path/to/builder.md` | `'Implement API feature in current worktree'` | `build-api` | `15m` |
+
+> 完整 spawn/watch/cleanup 代码见 `subagent` 技能。每个 worktree 中的改动互不干扰，可独立 merge。
 
 ### Benefits Over Temporary Agents
 

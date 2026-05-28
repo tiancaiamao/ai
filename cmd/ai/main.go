@@ -110,7 +110,7 @@ func deprecatedModeDispatch() {
 
 	switch *mode {
 	case "rpc", "":
-		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag); err != nil {
+		if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, ""); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
@@ -198,11 +198,12 @@ func rpcSubcommand() {
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
+	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
 	fs.Parse(os.Args[1:])
 
 	systemPrompt := parseSystemPrompt(*systemPromptFlag)
 
-	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag); err != nil {
+	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
 		slog.Error("rpc error", "error", err)
 		os.Exit(1)
 	}

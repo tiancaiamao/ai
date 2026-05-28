@@ -37,6 +37,7 @@ type rpcApp struct {
 	maxTurns           int
 	output             io.Writer
 	debugAddr          string
+	runID              string // run ID from parent ai serve (empty for standalone rpc)
 
 	// --- Config ---
 	cfg        *config.Config

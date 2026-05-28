@@ -51,7 +51,8 @@ func runSubcommand(binPath string) {
 	}
 
 	// Resolve system prompt: --system-prompt overrides --role.
-	sysPrompt := *systemPromptFlag
+	// Parse @file syntax before role fallback.
+	sysPrompt := parseSystemPrompt(*systemPromptFlag)
 	if sysPrompt == "" && *roleFlag != "coder" {
 		tmpl, err := prompt.TemplateForRole(*roleFlag)
 		if err != nil {
@@ -62,7 +63,7 @@ func runSubcommand(binPath string) {
 	}
 
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag, id)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -224,6 +225,7 @@ func serveSubcommand(binPath string) {
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
+	idFileFlag := fs.String("id-file", "", "Write run ID to this file after startup (useful for background mode)")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
@@ -242,7 +244,8 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Resolve system prompt: --system-prompt overrides --role.
-	sysPrompt := *systemPromptFlag
+	// Parse @file syntax before role fallback.
+	sysPrompt := parseSystemPrompt(*systemPromptFlag)
 	if sysPrompt == "" && *roleFlag != "coder" {
 		tmpl, err := prompt.TemplateForRole(*roleFlag)
 		if err != nil {
@@ -253,7 +256,7 @@ func serveSubcommand(binPath string) {
 	}
 
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag)
+	rpcFlags := buildRPCFlags(*sessionFlag, sysPrompt, *maxTurnsFlag, *timeoutFlag, *httpFlag, *modelFlag, id)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -391,8 +394,13 @@ func serveSubcommand(binPath string) {
 		stdinWriter.Close()
 	}()
 
-	// Print run ID to stdout — caller can capture this.
-	fmt.Println(id)
+	// Write run ID to file if requested (caller can poll this file instead of
+	// capturing stdout — useful when running in background via "&").
+	if *idFileFlag != "" {
+		if err := os.WriteFile(*idFileFlag, []byte(id+"\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: failed to write id-file: %v\n", err)
+		}
+	}
 
 	// Wait for subprocess to exit.
 	_ = cmd.Wait()
@@ -406,7 +414,9 @@ func serveSubcommand(binPath string) {
 	// error, which is unreliable due to the double-wait).
 	processState := <-processStateCh
 	status := run.StatusFailed
-	if processState.Success() {
+	if processState == nil {
+		status = run.StatusKilled
+	} else if processState.Success() {
 		status = run.StatusDone
 	} else {
 		if ws, ok := processState.Sys().(syscall.WaitStatus); ok {
@@ -422,7 +432,7 @@ func serveSubcommand(binPath string) {
 }
 
 // buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model string) []string {
+func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, runid string) []string {
 	var flags []string
 	if session != "" {
 		flags = append(flags, "--session", session)
@@ -441,6 +451,9 @@ func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Dura
 	}
 	if model != "" {
 		flags = append(flags, "--model", model)
+	}
+	if runid != "" {
+		flags = append(flags, "--runid", runid)
 	}
 	return flags
 }

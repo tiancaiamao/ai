@@ -68,7 +68,7 @@ func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) stri
 		LLMContextSize:    len(agentCtx.LLMContext),
 	}
 
-	runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath)
+	runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath, config.RunID)
 	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
 }
 

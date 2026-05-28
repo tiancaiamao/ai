@@ -8,7 +8,7 @@ tools: [bash]
 
 使用 codex-rs 的 review 方法论执行代码审查。通过 `ai serve` + `ai send` + `ai watch` 运行独立的 review agent。
 
-**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup（`ai kill` + `tmux kill-session`）。本技能不重复定义 spawn/watch/kill 流程。
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup（`ai kill`）。本技能不重复定义 spawn/watch/kill 流程。
 
 **⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
 
@@ -33,7 +33,7 @@ tools: [bash]
 
 1. **解析用户输入** - 识别 review 模式（PR/commit/uncommitted）
 2. **确定项目目录和变更范围** - 解析出项目路径和需要 review 的变更描述
-3. **启动 review agent** - 用 `tmux` + `ai serve` 启动独立 agent，传入 reviewer system prompt 和任务
+3. **启动 review agent** - 用 `ai serve --id-file`（tmux）启动独立 agent，传入 reviewer system prompt 和任务
 4. **发送任务** - 用 `ai send` 发送 review 指令
 5. **等待完成** - 用 `ai watch --follow --pretty` 实时观察直到 agent_end
 6. **读取结果** - agent 将 JSON 输出写到指定文件，读取并格式化展示
@@ -151,82 +151,65 @@ git diff <base-sha>..FETCH_HEAD -- <specific-file>
 
 ```bash
 PR_NUM=42
-REVIEW_ID="reviewer-$PR_NUM"
 REVIEW_OUT="/tmp/review-${PR_NUM}.json"
-SESSION="rev-$PR_NUM"
-
-# 1. 在 tmux 里启动独立 agent，加载 reviewer system prompt
-tmux new-session -d -s "$SESSION" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/review/reviewer.md' --input 'You are in the project directory. Review PR #${PR_NUM}. Steps: 1) Run gh pr diff ${PR_NUM} to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to ${REVIEW_OUT} following the output format in your system prompt.'"
-
-# 2. 等待完成 — 用 watch --follow --pretty 观察输出
-timeout 600 ai watch --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')" --follow --pretty
-
-# 3. 读取结果
-cat "$REVIEW_OUT"
-
-# 4. 清理
-ai kill --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')"
-tmux kill-session -t "$SESSION"
 ```
+
+用 `subagent` 技能 Single Task 模式 spawn 子 agent，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@$HOME/.ai/skills/review/reviewer.md` |
+| input | `'You are in the project directory. Review PR #'"${PR_NUM}"'. Steps: 1) Run gh pr diff '"${PR_NUM}"' to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to '"${REVIEW_OUT}"' following the output format in your system prompt.'` |
+| name | `reviewer-$PR_NUM` |
+| timeout | `10m` |
+
+完成后读取 `$REVIEW_OUT`，然后遵循 `subagent` 技能 Cleanup 阶段清理。
 
 ### Review uncommitted changes
 
 ```bash
-SESSION="rev-local"
 REVIEW_OUT="/tmp/review-local.json"
-
-tmux new-session -d -s "$SESSION" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/review/reviewer.md' --input 'You are in the project directory. Review the current uncommitted changes. Steps: 1) Run git diff and/or git diff --cached to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to ${REVIEW_OUT} following the output format in your system prompt.'"
-
-timeout 600 ai watch --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')" --follow --pretty
-cat "$REVIEW_OUT"
-ai kill --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')"
-tmux kill-session -t "$SESSION"
 ```
+
+用 `subagent` 技能 Single Task 模式 spawn 子 agent，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@$HOME/.ai/skills/review/reviewer.md` |
+| input | `'You are in the project directory. Review the current uncommitted changes. Steps: 1) Run git diff and/or git diff --cached to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to '"${REVIEW_OUT}"' following the output format in your system prompt.'` |
+| name | `rev-local` |
+| timeout | `10m` |
 
 ### Review a specific commit
 
 ```bash
 COMMIT=abc123
-SESSION="rev-$COMMIT"
 REVIEW_OUT="/tmp/review-${COMMIT}.json"
-
-tmux new-session -d -s "$SESSION" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/review/reviewer.md' --input 'You are in the project directory. Review commit ${COMMIT}. Steps: 1) Run git show ${COMMIT} to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to ${REVIEW_OUT} following the output format in your system prompt.'"
-
-timeout 600 ai watch --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')" --follow --pretty
-cat "$REVIEW_OUT"
-ai kill --id "$(tmux capture-pane -t "$SESSION" -p | tr -d ' ')"
-tmux kill-session -t "$SESSION"
 ```
+
+用 `subagent` 技能 Single Task 模式 spawn 子 agent，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@$HOME/.ai/skills/review/reviewer.md` |
+| input | `'You are in the project directory. Review commit '"${COMMIT}"'. Steps: 1) Run git show '"${COMMIT}"' to see the changes. 2) Read relevant source files for context. 3) Write your review findings as JSON to '"${REVIEW_OUT}"' following the output format in your system prompt.'` |
+| name | `rev-${COMMIT}` |
+| timeout | `10m` |
 
 ## ⚠️ 常见错误
 
-```bash
-# ai serve 是阻塞的，必须用 tmux
-❌ ai serve --input "..." && echo done     # 永远不会到 echo
-✅ tmux new-session -d -s rev "ai serve --input '...'"
+Spawn/watch/kill 的常见陷阱详见 `subagent` 技能 Common Pitfalls 章节。Review 特有的错误：
 
-# 获取 run ID — ai serve 输出的第一行就是 ID
-❌ ai serve --input "..." | head -1        # 会断开 serve 的 stdin
-✅ tmux capture-pane -t SESSION -p | tr -d ' '  # 从 tmux pane 读取
-
-# 必须等 serve 启动后再 send
-❌ ai serve ... & ai send --id xxx "..."   # 竞态，serve 还没启动
-✅ tmux new-session -d ... && sleep 2 && ai send --id $ID "..."  # 等 serve 就绪
-
-# agent 失败后不能自己代做
-❌ agent 失败后自己手动执行检查命令（严格禁止）
-✅ 停下来向用户汇报，等待指示
-```
+| 错误 | 说明 |
+|------|------|
+| agent 失败后自己代做 | ⛔ 严格禁止。停下来向用户汇报，等待指示 |
+| 传递 diff 文件路径 | ❌ 应传递项目目录，让 agent 自己 `git diff` |
+| JSON 解析失败 | 尝试修复 JSON 或要求 agent 重试 |
+| id 文件为空 | 增加 sleep 等待时间或检查 serve 是否启动失败 |
 
 ## 关键规则
 
-- **用 `ai serve` 启动独立 agent** — 配合 tmux，不用 ag 基础设施
-- **用 `ai send` 发送任务** — 不需要 spawn 子命令
-- **用 `ai watch --follow --pretty` 观察结果** — 实时流式输出
-- **用 `ai kill` 清理** — review 完成后杀掉 agent
+- **所有子 agent 操作遵循 `subagent` 技能** — spawn、watch、kill 的具体代码见 `subagent` 技能
 - **传递项目目录而非 diff 文件** — 让 agent 自己 `git diff` 和读取源文件
 - **解析 JSON 格式输出** — 从指定文件读取 JSON 结果
 - **如果没有 findings** — 输出 "No issues found"
@@ -240,7 +223,7 @@ tmux kill-session -t "$SESSION"
 | 无变更 | 输出 "No changes to review" |
 | Agent 超时 | 增加 `timeout` 值或简化 review 范围 |
 | JSON 解析失败 | 尝试修复 JSON 或要求 agent 重试 |
-| tmux session 已存在 | 先 `tmux kill-session -t NAME` 再重试 |
+| id 文件为空 | 增加 sleep 等待时间或检查 serve 是否启动失败 |
 
 ## 参考文档
 

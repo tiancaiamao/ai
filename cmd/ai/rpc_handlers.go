@@ -12,7 +12,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string) error {
+func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
@@ -20,6 +20,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		debugAddr:          debugAddr,
 		agentConfigPath:    agentConfigPath,
 		modelOverride:      modelOverride,
+		runID:              runID,
 	})
 	if err != nil {
 		return err
@@ -70,6 +71,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.APIKey = app.apiKey
 	loopCfg.GetWorkingDir = app.ws.GetCWD
 	loopCfg.GetStartupPath = app.ws.GetInitialCWD
+	loopCfg.RunID = app.runID
 	loopCfg.GetSessionDir = func() string {
 		if app.sess != nil {
 			return app.sess.GetDir()
