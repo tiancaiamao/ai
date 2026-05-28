@@ -178,7 +178,7 @@ func TestApplyModelOverride_NoModelsFile(t *testing.T) {
 // TestBuildRPCFlags_ModelIncluded verifies that --model is included in the
 // flags when a non-empty model string is provided.
 func TestBuildRPCFlags_ModelIncluded(t *testing.T) {
-	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "claude-sonnet-4-20250514")
+	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "claude-sonnet-4-20250514", "")
 
 	found := false
 	for i, f := range flags {
@@ -194,7 +194,7 @@ func TestBuildRPCFlags_ModelIncluded(t *testing.T) {
 
 // TestBuildRPCFlags_ModelEmpty verifies that --model is NOT included when empty.
 func TestBuildRPCFlags_ModelEmpty(t *testing.T) {
-	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "")
+	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "", "")
 
 	for _, f := range flags {
 		if f == "--model" {
@@ -212,6 +212,7 @@ func TestBuildRPCFlags_AllFlags(t *testing.T) {
 		5*time.Minute,
 		":6060",
 		"test-model",
+		"abc123",
 	)
 
 	expected := map[string]string{
@@ -221,6 +222,7 @@ func TestBuildRPCFlags_AllFlags(t *testing.T) {
 		"--timeout":       "5m0s",
 		"--http":          ":6060",
 		"--model":         "test-model",
+		"--runid":         "abc123",
 	}
 
 	for key, want := range expected {

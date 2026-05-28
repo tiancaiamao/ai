@@ -345,6 +345,7 @@ func updateRuntimeMetaSnapshot(
 	heartbeatTurns int,
 	currentWorkdir string,
 	startupPath string,
+	runID string,
 ) (string, bool) {
 	if agentCtx == nil {
 		return "", false
@@ -369,13 +370,18 @@ func updateRuntimeMetaSnapshot(
 	toolOutputsSummary := buildToolOutputsSummary(agentCtx.RecentMessages)
 
 	// runtime_state is purely informational - no directives or commands
+	// Build run_id line only when available (subagent spawned via ai serve).
+	var runIDLine string
+	if runID != "" {
+		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
+	}
 	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
 context_meta:
   tokens_band: %s
   tokens_used_approx: %d
   tokens_max: %d
   messages_in_history_bucket: %s
-  llm_context_size_bucket: %s
+  llm_context_size_bucket: %s%s
 workspace:
   current_workdir: %s
   startup_path: %s
@@ -395,6 +401,7 @@ compact_decision_signals:
 		meta.TokensMax,
 		runtimeMessageBucket(meta.MessagesInHistory),
 		runtimeSizeBucket(meta.LLMContextSize),
+		runIDLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
 		toolPressure.StaleCount,

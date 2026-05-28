@@ -9,7 +9,7 @@ description: Orchestrate a real-time alternating debate between two subagents us
 
 Run a structured debate between two agents (proposer FOR, opposer AGAINST). You are the judge — you control rounds by prompting each agent in turn. Agents write to a shared file and you read their output.
 
-**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。辩论结束后必须 `ai kill` + `tmux kill-session` 清理双方 agent。
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。辩论结束后必须 `ai kill` 清理双方 agent。
 
 **⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
 
@@ -28,80 +28,69 @@ SYSTEM_DIR="/Users/genius/.ai/skills/debate/references"
 
 # Create empty debate file
 touch "$DEBATE_FILE"
-
-# Spawn proposer agent
-tmux new-session -d -s "proposer" \
-  "ai serve --system-prompt '@$SYSTEM_DIR/proposer-system.md' \
-   --name 'proposer' --timeout 30m"
-sleep 2
-PROPOSER_ID=$(tmux capture-pane -t "proposer" -p | head -1 | tr -d '[:space:]')
-
-# Spawn opposer agent
-tmux new-session -d -s "opposer" \
-  "ai serve --system-prompt '@$SYSTEM_DIR/opposer-system.md' \
-   --name 'opposer' --timeout 30m"
-sleep 2
-OPPOSER_ID=$(tmux capture-pane -t "opposer" -p | head -1 | tr -d '[:space:]')
 ```
+
+用 `subagent` 技能 spawn 2 个子 agent（并行），参数：
+
+| Agent | system-prompt | name | timeout |
+|-------|---------------|------|---------|
+| Proposer | `@$SYSTEM_DIR/proposer-system.md` | `proposer` | `30m` |
+| Opposer | `@$SYSTEM_DIR/opposer-system.md` | `opposer` | `30m` |
+
+> 完整 spawn 代码（tmux + `--id-file`）见 `subagent` 技能 Spawn 阶段。
 
 ## Debate Loop
 
-```bash
-for round in $(seq 1 "$ROUNDS"); do
-  echo "=== Round $round ==="
+遵循 `subagent` 技能 Multi-Turn 模式（`ai send` + `ai watch` 循环）。
 
-  # --- Proposer ---
-  if [ "$round" -eq 1 ]; then
-    PROPROMPT="Topic: $DEBATE_TOPIC
+每轮的 prompt 构造逻辑：
+
+**Proposer prompt（R1）：**
+```
+Topic: $DEBATE_TOPIC
 
 $DEBATE_CONTEXT
 
 Write your R1 arguments to: $DEBATE_FILE
-Ground every claim in specific code. When done, just stop — the judge will read your output."
-  else
-    # Inline opponent's last round from debate file
-    OPPONENT_ARGS=$(tail -100 "$DEBATE_FILE")
-    PROPROMPT="Round $round. Rebut the opponent's arguments:
+Ground every claim in specific code. When done, just stop — the judge will read your output.
+```
 
-$OPPONENT_ARGS
+**Proposer prompt（R2+）：**
+```
+Round $round. Rebut the opponent's arguments:
+
+$(tail -100 "$DEBATE_FILE")
 
 Append your R${round} rebuttal to: $DEBATE_FILE
-Ground every claim in specific code."
-  fi
-  ai send --id "$PROPOSER_ID" "$PROPROMPT"
-  ai watch --id "$PROPOSER_ID" --follow --pretty
+Ground every claim in specific code.
+```
 
-  # --- Opposer ---
-  if [ "$round" -eq 1 ]; then
-    OPPPROMPT="Topic: $DEBATE_TOPIC
+**Opposer prompt（R1）：**
+```
+Topic: $DEBATE_TOPIC
 
 $DEBATE_CONTEXT
 
 Read the proposer's R1 arguments from: $DEBATE_FILE
 Append your R1 rebuttal to: $DEBATE_FILE
-Ground every claim in specific code."
-  else
-    PROPONENT_ARGS=$(tail -100 "$DEBATE_FILE")
-    OPPPROMPT="Round $round. Rebut the proposer's arguments:
+Ground every claim in specific code.
+```
 
-$PROPONENT_ARGS
+**Opposer prompt（R2+）：**
+```
+Round $round. Rebut the proposer's arguments:
+
+$(tail -100 "$DEBATE_FILE")
 
 Append your R${round} rebuttal to: $DEBATE_FILE
-Ground every claim in specific code."
-  fi
-  ai send --id "$OPPOSER_ID" "$OPPPROMPT"
-  ai watch --id "$OPPOSER_ID" --follow --pretty
-done
+Ground every claim in specific code.
 ```
+
+每轮顺序：`ai send` 给 Proposer → `ai send --wait` 等待完成 → `ai send` 给 Opposer → `ai send --wait` 等待完成。
 
 ## Cleanup
 
-```bash
-ai kill --id "$PROPOSER_ID" 2>/dev/null
-ai kill --id "$OPPOSER_ID" 2>/dev/null
-tmux kill-session -t "proposer" 2>/dev/null
-tmux kill-session -t "opposer" 2>/dev/null
-```
+遵循 `subagent` 技能 Cleanup 阶段（`ai kill` + `rm -f $ID_FILE`），清理 Proposer 和 Opposer。
 
 ## Flow Diagram
 
@@ -156,7 +145,7 @@ After the debate, read the transcript and synthesize:
 
 | ❌ Wrong | ✅ Right |
 |----------|----------|
-| `ai serve` without tmux | Always wrap in `tmux new-session -d` |
-| Send before serve is ready | `sleep 2` after tmux spawn |
+| `ai serve` in foreground | 遵循 `subagent` 技能 spawn 模式 |
+| Send before serve is ready | `sleep 1` after spawn, then `cat $ID_FILE` |
 | Both agents write same file simultaneously | Alternate: proposer first, then opposer |
 | Agent re-reads debate file every round | Inline opponent arguments in prompt (R2+) |

@@ -199,7 +199,7 @@ backfill
 
 For each task in the decomposition:
 
-1. **Spawn Generator** (via tmux) with the task file + spec.md + state.md
+1. **Spawn Generator** (via `subagent` 技能 Spawn 阶段) with the task file + spec.md + state.md
    - 遵循 `subagent` 技能的 Spawn 阶段
 2. **Watch Generator** — poll output, wait for DONE/BLOCKED
    - 遵循 `subagent` 技能的 Watch 阶段
@@ -209,16 +209,11 @@ For each task in the decomposition:
    - Does `go build ./...` (or equivalent) pass?
    - If yes to all → proceed to cleanup + validation
    - If Generator is still working → continue watching
-4. **Cleanup Generator** — **拿到结果后立即 kill**
-   - `ai kill --id <generator-id>`
-   - `tmux kill-session -t <generator-session>`
-   - 详见 `subagent` 技能 Cleanup 阶段
+4. **Cleanup Generator** — **拿到结果后立即 kill**（遵循 `subagent` 技能 Cleanup 阶段）
 5. **Spawn Validator** (independent Evaluator agent) — **MANDATORY, not optional**
    - 同样遵循 `subagent` 生命周期
 6. **Collect Validator feedback** — update progress.md with VALIDATED or issues
-7. **Cleanup Validator** — **立即 kill**
-   - `ai kill --id <validator-id>`
-   - `tmux kill-session -t <validator-session>`
+7. **Cleanup Validator** — **立即 kill**（遵循 `subagent` 技能 Cleanup 阶段）
 8. **Loop if needed** — create fix tasks for any failed criteria (max 3 rounds per task)
    - 每轮 spawn 新 Generator/Evaluator，每轮完成后都立即 cleanup
 
@@ -270,17 +265,17 @@ Watch loop:
 2. If DONE:
    a. Verify listed files exist (ls <each file>)
    b. Run build (go build ./...)
-   c. Cleanup Generator: ai kill + tmux kill-session
+         c. Cleanup Generator: subagent Cleanup
    d. Mark task SELF-CHECKED
    e. Spawn Validator → mark VALIDATED when passed
-   f. Cleanup Validator: ai kill + tmux kill-session
+         f. Cleanup Validator: subagent Cleanup
 3. If BLOCKED:
    a. Read reason from Generator output
-   b. Cleanup Generator: ai kill + tmux kill-session
+         b. Cleanup Generator: subagent Cleanup
    c. If reason is API confusion → provide guidance, respawn
    d. If reason is spec ambiguity → clarify spec, respawn
 4. If timeout (600s) reached:
-   a. Cleanup Generator: ai kill + tmux kill-session
+         a. Cleanup Generator: subagent Cleanup
    b. Check if any files were created
    c. If files exist + build passes → mark SELF-CHECKED, spawn Validator
    d. If no files or build fails → mark FAILED, report to user
@@ -348,25 +343,25 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 - Acceptance criteria: L1: 3, L2: 4
 
 ## 14:35 — Task 001: Create theme tokens
-- Generator: a1b2c3 (tmux: gen-001)
+- Generator: a1b2c3 (id-file: /tmp/gen-001.id)
 - Status: DONE: src/theme.ts, src/tokens.css
 - Build: PASS
-- Validator: spawned (c4d5e6, tmux: val-001)
+- Validator: spawned (c4d5e6, id-file: /tmp/val-001.id)
 - Validation: VALIDATED — all L1 + L2 criteria pass
 
 ## 14:42 — Task 002: Toggle component
-- Generator: e7f8g9 (tmux: gen-002)
+- Generator: e7f8g9 (id-file: /tmp/gen-002.id)
 - Status: DONE: src/components/Toggle.tsx
 - Build: PASS
-- Validator: spawned (h0i1j2, tmux: val-002)
+- Validator: spawned (h0i1j2, id-file: /tmp/val-002.id)
 - Validation: FAILED — L2.2 (toggle persistence) broken
 - Fix task created: 003-fix-toggle-persist.md
 
 ## 14:50 — Task 003 (BACKFILL): Fix toggle persistence
-- Generator: k3l4m5 (tmux: gen-003)
+- Generator: k3l4m5 (id-file: /tmp/gen-003.id)
 - Status: DONE: src/components/Toggle.tsx, src/hooks/usePersist.ts
 - Build: PASS
-- Validator: spawned (n6o7p8, tmux: val-003)
+- Validator: spawned (n6o7p8, id-file: /tmp/val-003.id)
 - Validation: VALIDATED — L2.2 restored
 
 ## 15:00 — All criteria VALIDATED
@@ -386,7 +381,7 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 | Evaluator says not done | Criteria not all ✅ | Create specific fix tasks (backfill if in later phase) |
 | Validator not spawned | Task marked SELF-CHECKED but no Validator | **MUST spawn Validator before committing** |
 | Build fails after Generator | `go build` returns non-zero | Mark FAILED → fix task or respawn Generator |
-| tmux session died | `tmux has-session` fails | Check `ai ls` for status, may need cleanup |
+| Background process died | `ai ls` shows agent gone | 遵循 `subagent` 技能错误处理 |
 
 ## Key Constraints
 
@@ -396,22 +391,22 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 4. **Generator and Evaluator are separate agents** — self-evaluation is unreliable
 5. **Stop on repeated failure** — don't burn tokens retrying forever
 6. **Commit after each VALIDATED task** — not SELF-CHECKED, only VALIDATED
-7. **Always use tmux to spawn** — `ai serve` is blocking, direct call freezes orchestrator
+7. **所有子 agent 操作遵循 `subagent` 技能** — spawn、watch、cleanup 的具体代码见 `subagent` 技能，本技能只定义参数
 8. **Structured handoff between generators** — state.md, not compaction
 9. **Every acceptance criterion must have an executable verification command** — unverifiable = invalid
 10. **Phase validation gates are mandatory** — no building on broken foundations
 11. **Generator MUST read existing API before using it** — no hallucinated function calls
 12. **Build MUST pass before DONE** — build failure = task incomplete
-13. **每个子 agent 完成后必须立即 cleanup** — `ai kill` + `tmux kill-session`，遵循 `subagent` 技能生命周期。不得累积已完成的 agent
+13. **每个子 agent 完成后必须立即 cleanup** — 遵循 `subagent` 技能 Cleanup 阶段。不得累积已完成的 agent
 14. **PGE 开始前只观察不操作** — `ai ls` 查看环境状态，但**绝对不 kill 不是自己 spawn 的 agent**。如需清理孤儿报告给用户
 15. **异常退出也要 cleanup** — BLOCKED、超时、失败等所有路径都必须 kill 子 agent
-16. **只 kill 自己 spawn 的 agent** — 维护 `SPAWNED_IDS` 列表，cleanup 只针对列表中的 ID。`ai ls` 中看到的其他 agent 可能是你自己（orchestrator）、用户手动启动的、或其他流程的，严禁批量 kill
+16. **只 kill 自己 spawn 的 agent** — 遵循 `subagent` 技能安全规则，维护 spawn 列表，严禁批量 kill
 
 ## ⛔ Mandatory Self-Check
 
 | Assertion | Trigger | Fix |
 |-----------|---------|-----|
-| Direct `ai serve` call | Using `ai serve` without tmux | Wrap in tmux |
+| 直接调 `ai serve` | 本技能写了 spawn 代码 | 遵循 `subagent` 技能，本技能只定义参数 |
 | No spec written | Starting execution without .pge/spec.md | Write spec first |
 | No user confirmation | Executing without user approval | Show spec, wait for ok |
 | Generator task too vague | Task description < 2 sentences | Add more context |
@@ -428,10 +423,16 @@ After each Generator completes a task, the Orchestrator writes `.pge/state.md`:
 | Generator used hallucinated API | `grep` shows function doesn't exist | Kill Generator, provide correct API info |
 | No phase validation gate | Completed phase without L1/L2 check | Run validation gate before next phase |
 | Generator output has no DONE marker | Generator completed without DONE/BLOCKED output | Check output manually, add to error handling |
-| 子 agent 未 cleanup | `ai ls` 显示已完成的 agent 仍在 running | 每个子 agent 完成后立即 `ai kill` + `tmux kill-session`（只 kill 自己 spawn 的） |
-| PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：检查 `SPAWNED_IDS` 列表，逐个 cleanup |
-| kill 了非自己 spawn 的 agent | `ai kill` 了 `ai ls` 中的非本流程 agent | ⛔ **严禁**。只 kill `SPAWNED_IDS` 中的 ID |
+| 子 agent 未 cleanup | `ai ls` 显示已完成的 agent 仍在 running | 遵循 `subagent` 技能 Cleanup 阶段 |
+| PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：检查 spawn 列表，逐个 cleanup |
+| kill 了非自己 spawn 的 agent | `ai kill` 了 `ai ls` 中的非本流程 agent | ⛔ **严禁**。遵循 `subagent` 技能安全规则 |
 
 ## Reference Prompts
 
-PGE 编写 Generator/Evaluator 的 system prompt 时，参考 `brainstorm` 技能产出的 design.md 结构来确保 handoff 信息完整。
+PGE spawn 子 agent 时，使用 `--role` 选项而非自定义 `--system-prompt`：
+
+- **Generator**: `ai serve --role coder --name "gen-001" --input-file /tmp/task.md --id-file /tmp/gen-001.id`（用 tmux 后台，见 subagent 技能）
+- **Evaluator/Validator**: `ai serve --role validator --name "val-001" --input-file /tmp/eval.md --id-file /tmp/val-001.id`（用 tmux 后台，见 subagent 技能）
+- **Orchestrator**: `ai serve --role orchestrator --name "orch" ...`（通常就是你自己）
+
+仅在需要高度定制化的 system prompt（如引用 brainstorm 技能产出的 design.md 结构）时才用 `--system-prompt`。具体 spawn/watch/kill 代码见 `subagent` 技能。

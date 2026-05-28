@@ -9,7 +9,7 @@ Worker 产出，Judge 独立审查，循环迭代直到通过。
 
 **灵感来源：** GAN（生成对抗网络）的 Generator-Discriminator 竞争反馈循环。Worker 是 Generator，Judge 是 Discriminator。两者的独立性是质量保证的关键。
 
-**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。Worker 和 Judge 完成后都必须 `ai kill` + `tmux kill-session`。
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。Worker 和 Judge 完成后都必须 `ai kill`。
 
 **⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
 
@@ -48,65 +48,47 @@ Worker 产出，Judge 独立审查，循环迭代直到通过。
 
 ## Implementation with ai CLI
 
-```bash
-SESSION="wjl-$$"
-WORKER_SYSTEM="@$HOME/.ai/skills/plan/prompts/planner.md"
-JUDGE_SYSTEM="@$HOME/.ai/skills/plan/prompts/reviewer.md"
-INPUT="Read design.md at /path/to/design.md and produce tasks.md"
-MAX_ROUNDS=3
+所有子 agent 操作遵循 `subagent` 技能。本节只描述 worker-judge 特有的循环逻辑。
 
-# --- Round 1: Spawn Worker ---
-tmux new-session -d -s "${SESSION}-w" \
-  "ai serve --system-prompt '${WORKER_SYSTEM}' \
-   --input '${INPUT}' \
-   --name 'worker-r1' \
-   --timeout 10m"
+### Worker 参数
 
-sleep 2
-WORKER_ID=$(tmux capture-pane -t "${SESSION}-w" -p | head -1 | tr -d '[:space:]')
+| 参数 | 值（示例） |
+|------|------------|
+| system-prompt | `@$HOME/.ai/skills/plan/prompts/planner.md` |
+| input | `'Read design.md at /path/to/design.md and produce tasks.md'` |
+| name | `worker-r1` |
+| timeout | `10m` |
 
-# Wait for worker to finish round 1
-ai watch --id "$WORKER_ID" --follow --pretty
+Worker **跨轮次保持存活**（spawn 一次，后续用 `ai send` 发送反馈），保留完整上下文迭代改进。
 
-# --- Get Worker Output ---
-# Worker should write output to a known file (e.g., /tmp/worker-output.md)
-# If not, the output is in the watch stream
+### Judge 参数（每轮重新 spawn）
 
-for round in $(seq 2 "$MAX_ROUNDS"); do
-  # --- Spawn Judge (fresh each round) ---
-  JUDGE_INPUT="Review the following plan:\n\n$(cat /tmp/worker-output.md)"
-  tmux new-session -d -s "${SESSION}-j-r${round}" \
-    "ai serve --system-prompt '${JUDGE_SYSTEM}' \
-     --input '${JUDGE_INPUT}' \
-     --name 'judge-r${round}' \
-     --timeout 5m"
+| 参数 | 值（示例） |
+|------|------------|
+| system-prompt | `@$HOME/.ai/skills/plan/prompts/reviewer.md` |
+| input | `'Review the following plan:\n\n$(cat /tmp/worker-output.md)'` |
+| name | `judge-r${round}` |
+| timeout | `5m` |
 
-  sleep 2
-  JUDGE_ID=$(tmux capture-pane -t "${SESSION}-j-r${round}" -p | head -1 | tr -d '[:space:]')
-  ai watch --id "$JUDGE_ID" --follow --pretty
+Judge 每轮 spawn 新 agent，保持独立性。
 
-  # --- Check verdict ---
-  # Judge should write verdict to a known file
-  if grep -qi "APPROVED\|PASS\|ACCEPT" /tmp/judge-verdict.md; then
-    echo "✅ Approved in round $round"
-    ai kill --id "$WORKER_ID" 2>/dev/null
-    ai kill --id "$JUDGE_ID" 2>/dev/null
-    exit 0
-  fi
+### 循环逻辑（伪代码）
 
-  # --- Send feedback to Worker (not respawn) ---
-  FEEDBACK="Judge feedback from round $round:\n\n$(cat /tmp/judge-verdict.md)\n\nAddress the feedback and produce an improved version."
-  ai send --id "$WORKER_ID" "$FEEDBACK"
-  ai watch --id "$WORKER_ID" --follow --pretty
-
-  # Cleanup judge
-  ai kill --id "$JUDGE_ID" 2>/dev/null
-  tmux kill-session -t "${SESSION}-j-r${round}" 2>/dev/null
-done
-
-echo "❌ Max rounds ($MAX_ROUNDS) reached without approval"
-ai kill --id "$WORKER_ID" 2>/dev/null
 ```
+1. 用 subagent 技能 Spawn Worker（带 --input）
+2. 用 subagent 技能 Watch 等待 Worker 完成
+3. for round = 2..MAX_ROUNDS:
+   a. 用 subagent 技能 Spawn Judge（输入 = Worker 产出）
+   b. 用 subagent 技能 Watch 等待 Judge 完成
+   c. 读取 Judge 判定（APPROVED / CHANGES_REQUESTED）
+   d. 如果 APPROVED → Cleanup Worker + Judge → 结束
+   e. 用 subagent 技能 Multi-Turn 模式 ai send 反馈给 Worker
+   f. 用 subagent 技能 Watch 等待 Worker 改进
+   g. Cleanup Judge（本轮 Judge 结束）
+4. 达到 MAX_ROUNDS → 报告用户，Cleanup Worker
+```
+
+> 完整 spawn/watch/send/kill 代码见 `subagent` 技能各阶段。
 
 ## Worker-Judge Prompt Guidelines
 

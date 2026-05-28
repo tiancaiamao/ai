@@ -26,6 +26,7 @@ type rpcAppSetupParams struct {
 	debugAddr          string
 	agentConfigPath    string
 	modelOverride      string
+	runID              string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -145,6 +146,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		showTools:             true,
 		showPrefix:            true,
 		busyMode:              "steer",
+		runID:                 params.runID,
 	}
 
 	// Skip context management (proactive LLM-driven cycle) in cache-first mode.

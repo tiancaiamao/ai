@@ -174,8 +174,10 @@ tail -200 "<path>/messages.jsonl"
 # 1. 从主 session 中找到 subagent 调用
 grep "subagent-" ~/.ai/sessions/--<cwd>--/<session-id>/messages.jsonl
 
-# 2. 通过 tmux session 找到对应的 AI session
-tmux capture-pane -t subagent-<timestamp>-<random> -p -S - | grep "Session ID:"
+# 2. 通过 ai ls 找到对应的 AI session（或从 ~/.ai/sessions/ 目录查找）
+ai ls | grep "subagent"
+# 或直接从 sessions 目录查找
+ls ~/.ai/sessions/--<cwd>--/ | grep <partial-id>
 
 # 3. 读取 subagent 的 messages.jsonl
 cat ~/.ai/sessions/--<cwd>--/<subagent-session-id>/messages.jsonl

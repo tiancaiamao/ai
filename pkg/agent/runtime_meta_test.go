@@ -17,7 +17,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		LLMContextSize:    3000,
 	}
 
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !refreshed {
 		t.Fatal("expected initial snapshot refresh")
 	}
@@ -29,7 +29,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	}
 	// action_hint field has been removed
 
-	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if refreshed2 {
 		t.Fatal("did not expect refresh before heartbeat")
 	}
@@ -37,12 +37,12 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		t.Fatal("expected snapshot to stay stable before refresh")
 	}
 
-	_, refreshed3 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	_, refreshed3 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if refreshed3 {
 		t.Fatal("did not expect refresh on second non-heartbeat turn")
 	}
 
-	snapshot4, refreshed4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	snapshot4, refreshed4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !refreshed4 {
 		t.Fatal("expected heartbeat refresh")
 	}
@@ -51,7 +51,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	}
 
 	meta.TokensPercent = 61.0
-	snapshot5, refreshed5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	snapshot5, refreshed5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !refreshed5 {
 		t.Fatal("expected refresh on band change")
 	}
@@ -201,7 +201,7 @@ func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 		LLMContextSize:    1200,
 	}
 
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}
@@ -231,7 +231,7 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 		LLMContextSize:    1000,
 	}
 
-	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "")
+	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !refreshed {
 		t.Fatal("expected refreshed snapshot")
 	}

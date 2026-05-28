@@ -9,7 +9,7 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 ## ⚠️ MANDATORY: 必须使用子 agent 执行
 
-**当用户触发 explore 技能时，你（调度 agent）必须通过 `ai serve` + tmux 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
+**当用户触发 explore 技能时，你（调度 agent）必须通过 `ai serve` 派生子 agent 执行探索。禁止你自己直接用 bash/read/grep 探索。**
 
 原因：
 - 子 agent 作为独立进程运行，不阻塞主对话
@@ -48,65 +48,35 @@ mkdir -p "$TARGET_PROJECT/explorer"
 
 ### Step 2: 派生子 agent
 
-⚠️ **`ai serve` 是阻塞命令，必须用 tmux 后台运行。**
+遵循 `subagent` 技能 Spawn 阶段。参数：
 
-```bash
-# 单目标探索
-TARGET_PROJECT="/path/to/project"
+**单目标探索：**
 
-tmux new-session -d -s "explore-auth" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the authentication module. Focus on: how auth works, middleware chain, token handling. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
-   --name 'explore-auth' \
-   --timeout 15m"
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@$HOME/.ai/skills/explore/explorer.md` |
+| input | `'Explore the authentication module. Focus on: how auth works, middleware chain, token handling. Write findings to: $TARGET_PROJECT/explorer/auth.md'` |
+| name | `explore-auth` |
+| timeout | `15m` |
 
-sleep 2
-EXPLORE_ID=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
-```
+**多目标并行探索（最多 2 个 agent 同时）：**
 
-```bash
-# 多目标并行探索（最多 2 个 agent 同时）
-TARGET_PROJECT="/path/to/project"
+| Agent | system-prompt | input | name | timeout |
+|-------|---------------|-------|------|---------|
+| 1 | `@$HOME/.ai/skills/explore/explorer.md` | `'Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md'` | `explore-auth` | `15m` |
+| 2 | `@$HOME/.ai/skills/explore/explorer.md` | `'Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md'` | `explore-rpc` | `15m` |
 
-# Agent 1
-tmux new-session -d -s "explore-auth" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the authentication module. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
-   --name 'explore-auth' \
-   --timeout 15m"
-
-# Agent 2
-tmux new-session -d -s "explore-rpc" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the RPC handling layer. Write findings to: $TARGET_PROJECT/explorer/rpc.md' \
-   --name 'explore-rpc' \
-   --timeout 15m"
-
-sleep 2
-ID_AUTH=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
-ID_RPC=$(tmux capture-pane -t "explore-rpc" -p | head -1 | tr -d '[:space:]')
-```
+> spawn、等待 ID、watch 的完整代码见 `subagent` 技能 Spawn/Watch 阶段。本技能只定义参数。
 
 ### Step 3: 等待并收集
 
-```bash
-# Watch agent output (blocks until agent finishes or timeout)
-ai watch --id "$ID_AUTH" --follow --pretty
+遵循 `subagent` 技能 Watch 阶段，等待所有子 agent 完成。
 
-# If parallel, wait for the second one too
-ai watch --id "$ID_RPC" --follow --pretty
-
-# Results are written by the explorer agent to $TARGET_PROJECT/explorer/<target>.md
-```
+结果由 explorer agent 写入 `$TARGET_PROJECT/explorer/<target>.md`。
 
 ### Step 4: 清理
 
-```bash
-ai kill --id "$ID_AUTH" 2>/dev/null
-ai kill --id "$ID_RPC" 2>/dev/null
-tmux kill-session -t "explore-auth" 2>/dev/null
-tmux kill-session -t "explore-rpc" 2>/dev/null
-```
+遵循 `subagent` 技能 Cleanup 阶段（`ai kill` + `rm -f $ID_FILE`）。
 
 ### Step 5: 汇总
 
@@ -145,47 +115,18 @@ Output an "Architecture Constraints" section with a checklist.
 
 ### 大型仓库
 
-对大型仓库，按模块拆分为多批探索（每批最多 2 个 agent）：
+对大型仓库，按模块拆分为多批探索（每批最多 2 个 agent）。每批遵循 `subagent` 技能完整生命周期（Spawn → Watch → Cleanup），然后再 spawn 下一批。
 
-```bash
-TARGET_PROJECT="/path/to/large/repo"
+**Batch 示例参数：**
 
-# === Batch 1: spawn up to 2 agents ===
-tmux new-session -d -s "explore-auth" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md' \
-   --name 'explore-auth' --timeout 15m"
+| Batch | Agent | system-prompt | input | name |
+|-------|-------|---------------|-------|------|
+| 1 | 1 | `explorer.md` | `'Explore the auth module under src/auth/. Write findings to: $TARGET_PROJECT/explorer/auth.md'` | `explore-auth` |
+| 1 | 2 | `explorer.md` | `'Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md'` | `explore-api` |
+| 2 | 3 | `explorer.md` | `'Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md'` | `explore-storage` |
+| 2 | 4 | `explorer.md` | `'Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md'` | `explore-infra` |
 
-tmux new-session -d -s "explore-api" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the API layer under src/api/. Write findings to: $TARGET_PROJECT/explorer/api.md' \
-   --name 'explore-api' --timeout 15m"
-
-sleep 2
-ID1=$(tmux capture-pane -t "explore-auth" -p | head -1 | tr -d '[:space:]')
-ID2=$(tmux capture-pane -t "explore-api" -p | head -1 | tr -d '[:space:]')
-
-# Wait for batch 1
-ai watch --id "$ID1" --follow --pretty
-ai watch --id "$ID2" --follow --pretty
-
-# Cleanup batch 1
-ai kill --id "$ID1" 2>/dev/null; ai kill --id "$ID2" 2>/dev/null
-tmux kill-session -t "explore-auth" 2>/dev/null; tmux kill-session -t "explore-api" 2>/dev/null
-
-# === Batch 2: spawn next 2 agents ===
-tmux new-session -d -s "explore-storage" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the storage module under src/storage/. Write findings to: $TARGET_PROJECT/explorer/storage.md' \
-   --name 'explore-storage' --timeout 15m"
-
-tmux new-session -d -s "explore-infra" \
-  "ai serve --system-prompt '@$HOME/.ai/skills/explore/explorer.md' \
-   --input 'Explore the infrastructure layer. Write findings to: $TARGET_PROJECT/explorer/infra.md' \
-   --name 'explore-infra' --timeout 15m"
-
-# Wait and cleanup batch 2...
-```
+> 每批的完整 spawn/watch/cleanup 代码见 `subagent` 技能。
 
 ## 输出约定
 
