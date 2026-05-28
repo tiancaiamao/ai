@@ -161,8 +161,12 @@ func (s *loopState) performCompaction(
 
 		slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
 		compacted, compactErr = c.Compact(s.agentCtx)
-		if compactErr == nil {
-			break // First successful compaction wins
+		if compactErr == nil && compacted != nil {
+			break // Compactor performed work; first real result wins
+		}
+		if compactErr == nil && compacted == nil {
+			slog.Info("[Loop] Compactor returned nil result, trying next", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
+			continue // No-op: try the next compactor
 		}
 		slog.Warn("[Loop] Compaction failed", "trigger", trigger, "compactor", fmt.Sprintf("%T", c), "error", compactErr)
 	}
