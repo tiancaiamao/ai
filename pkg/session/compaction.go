@@ -2,10 +2,11 @@ package session
 
 import (
 	"errors"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"log/slog"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 var (
@@ -48,9 +49,13 @@ func (s *Session) CanCompact(compactor *compact.Compactor) bool {
 func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
 	path := s.getBranchLocked("")
 	if len(path) == 0 {
+		slog.Debug("[CanCompact] no entries in branch path")
 		return false
 	}
 	if path[len(path)-1].Type == EntryTypeCompaction {
+		slog.Debug("[CanCompact] last entry is a compaction, cannot compact",
+			"total_entries", len(path),
+			"last_type", path[len(path)-1].Type)
 		return false
 	}
 
@@ -65,10 +70,19 @@ func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
 	boundaryStart := prevCompactionIndex + 1
 	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
+		slog.Debug("[CanCompact] no message refs after compaction boundary",
+			"total_entries", len(path),
+			"prev_compaction_idx", prevCompactionIndex)
 		return false
 	}
 
 	firstKeptIndex := findFirstKeptIndex(refs, compactor)
+	slog.Debug("[CanCompact] result",
+		"total_entries", len(path),
+		"refs_count", len(refs),
+		"prev_compaction_idx", prevCompactionIndex,
+		"first_kept_index", firstKeptIndex,
+		"can_compact", firstKeptIndex > 0)
 	return firstKeptIndex > 0
 }
 
@@ -214,9 +228,14 @@ func findFirstKeptIndex(refs []messageRef, compactor *compact.Compactor) int {
 
 	if keepTokens <= 0 {
 		if keepMessages <= 0 {
+			slog.Debug("[findFirstKeptIndex] both keepTokens and keepMessages are 0",
+				"refs_count", len(refs))
 			return 0
 		}
 		if len(refs) <= keepMessages {
+			slog.Debug("[findFirstKeptIndex] refs within keepMessages budget",
+				"refs_count", len(refs),
+				"keep_messages", keepMessages)
 			return 0
 		}
 		idx := len(refs) - keepMessages
@@ -225,6 +244,10 @@ func findFirstKeptIndex(refs []messageRef, compactor *compact.Compactor) int {
 
 	used := 0
 	cutIndex := len(refs)
+	totalTokens := 0
+	for _, ref := range refs {
+		totalTokens += compact.EstimateMessageTokens(ref.Message)
+	}
 	for i := len(refs) - 1; i >= 0; i-- {
 		used += compact.EstimateMessageTokens(refs[i].Message)
 		cutIndex = i
@@ -234,10 +257,24 @@ func findFirstKeptIndex(refs []messageRef, compactor *compact.Compactor) int {
 	}
 
 	if cutIndex <= 0 || cutIndex >= len(refs) {
+		slog.Debug("[findFirstKeptIndex] cutIndex out of range",
+			"refs_count", len(refs),
+			"total_tokens", totalTokens,
+			"keep_tokens", keepTokens,
+			"accumulated_tokens", used,
+			"cut_index", cutIndex)
 		return 0
 	}
 
-	return adjustToCuttable(refs, cutIndex)
+	result := adjustToCuttable(refs, cutIndex)
+	slog.Debug("[findFirstKeptIndex] result",
+		"refs_count", len(refs),
+		"total_tokens", totalTokens,
+		"keep_tokens", keepTokens,
+		"accumulated_tokens", used,
+		"cut_index", cutIndex,
+		"adjusted_index", result)
+	return result
 }
 
 func adjustToCuttable(refs []messageRef, idx int) int {

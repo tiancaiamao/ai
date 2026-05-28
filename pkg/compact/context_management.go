@@ -420,6 +420,13 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 		"duration", duration,
 	)
 
+	// Return nil when no actual work was performed so the compaction loop can
+	// fall through to the next compactor (e.g. full session compaction).
+	if truncatedCount == 0 && !llmContextUpdated && len(toolCalls) == 0 {
+		slog.Info("[CtxMgmt] No action taken, returning nil to allow fallback compactor")
+		return nil, nil
+	}
+
 	return &agentctx.CompactionResult{
 		Summary:           fmt.Sprintf("LLM context management: %d tool calls executed", len(toolCalls)),
 		TokensBefore:      tokensBefore,

@@ -62,13 +62,13 @@ func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.Compa
 	writer := sc.writer
 	sc.mu.Unlock()
 	if sess == nil || comp == nil {
-		return &agentctx.CompactionResult{}, nil
+		return nil, nil
 	}
 	if writer != nil {
 		compacted, err := writer.Compact(sess, comp)
 		if err != nil {
 			if session.IsNonActionableCompactionError(err) {
-				return &agentctx.CompactionResult{}, nil
+				return nil, nil
 			}
 			return nil, err
 		}
@@ -87,7 +87,7 @@ func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.Compa
 	sessionResult, err := sess.Compact(comp)
 	if err != nil {
 		if session.IsNonActionableCompactionError(err) {
-			return &agentctx.CompactionResult{}, nil
+			return nil, nil
 		}
 		return nil, err
 	}
