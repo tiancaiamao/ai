@@ -45,10 +45,10 @@ RUN_ID=<your run_id from runtime_state>
 每个子 agent 必须经历完整的生命周期，不得跳过任何阶段：
 
 ```
-┌─────────┐     ┌─────────┐     ┌─────────┐     ┌──────────┐
-│  Spawn  │────►│  Watch  │────►│Collect   │────►│ Cleanup  │
-│ (tmux)  │     │(follow) │     │Result    │     │(kill)    │
-└─────────┘     └─────────┘     └─────────┘     └──────────┘
+┌─────────┐     ┌──────────────┐     ┌─────────┐     ┌──────────┐
+│  Spawn  │────►│Collect Reply │────►│  Multi  │────►│ Cleanup  │
+│ (tmux)  │     │(send --wait) │     │ (send)  │     │(kill)    │
+└─────────┘     └──────────────┘     └─────────┘     └──────────┘
 ```
 
 ### 阶段 1: Spawn
@@ -128,23 +128,41 @@ echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 **⚠️ tmux session 命名规则：** 必须包含 `$RUN_ID` 前缀（如 `agent-$RUN_ID-xxx`），避免与其他 agent 的 tmux session 冲突。
 
-### 阶段 2: Watch（--input 初始任务）
+### 阶段 2: 收集初始回复
 
-spawn 时通过 `--input` 传入的任务，用 `watch --follow --pretty` 等待完成：
+spawn 时通过 `--input` 传入任务后，子 agent 会立即开始处理。收集回复有两种方式：
+
+**方式 A（推荐）: `ai send --wait`**
 
 ```bash
-# 默认：agent_end 时返回
-ai watch --id "$CHILD_ID" --follow --pretty
+# ⚠️ ai send 必须带消息参数，即使是等待 --input 的回复
+ai send --id "$CHILD_ID" --wait --summary --timeout 20m "请给出你的完整结果"
+```
 
-# 或设超时
+**方式 B: `ai watch --follow`**
+
+```bash
 ai watch --id "$CHILD_ID" --follow --pretty --timeout 20m
 ```
 
-**后续轮次用 `ai send --wait`**（见 Multi-Turn 模式），一步完成发送+等待，不需要单独 watch。
+> **为什么推荐方式 A：** `send --wait` 先订阅事件流再发送，消除了 race condition。且 `--summary` 只输出最终结论，不刷屏中间 tool calls。
+> **但注意：** 方式 A 会给子 agent 发送一条额外消息，子 agent 会把它当作追问来处理。
 
-### 阶段 3: Collect Result
+**⚠️ `ai send` 必须带消息参数。** 即使子 agent 已经通过 `--input` 收到了任务，`ai send` 也不支持无消息调用（会报错 `error: no message provided`）。消息内容可以是简单的追问，比如 `"请给出你的分析结果"` 或 `"继续"`。
 
-watch 或 `send --wait` 返回后，子 agent 的输出已直接获得。
+### 阶段 3: Multi-Turn（可选）
+
+如果需要多轮交互（如追加反馈），继续用 `ai send --wait`：
+
+```bash
+ai send --id "$CHILD_ID" --wait 'Please also handle the error case where input is nil'
+```
+
+只需最终文本，不需要看中间 tool calls：
+
+```bash
+ai send --id "$CHILD_ID" --wait --summary 'Summarize what you found about the auth module'
+```
 
 ### 阶段 4: Cleanup（⚠️ 必须执行）
 
@@ -181,25 +199,6 @@ rm -f ~/.ai/runs/$RUN_ID/subagent
 | **异常路径也要 kill** | 主 agent 崩溃会留下孤儿进程 |
 | **spawn 后必须写入 subagent 文件** | 无法追踪子 agent，可能忘记 cleanup |
 | **tmux session 名必须含 `$RUN_ID`** | 与其他 agent 的 session 冲突 |
-
-## Multi-Turn Pattern（多轮对话）
-
-某些场景需要多轮交互（如 worker-judge 循环中的反馈）：
-
-```bash
-# 子 agent 已完成初始任务（watch 已返回），需要追加反馈
-ai send --id "$CHILD_ID" --wait 'Please also handle the error case where input is nil'
-```
-
-**`send --wait` = 发送 + 等待回复，一步到位。**
-
-### Multi-Turn with --summary
-
-只需最终文本，不需要看中间 tool calls：
-
-```bash
-ai send --id "$CHILD_ID" --wait --summary 'Summarize what you found about the auth module'
-```
 
 ## ⚠️ Kill Safety（防误杀）
 
@@ -338,6 +337,7 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | spawn 空壳不带 `--input` | 推荐带 `--input`；如不带，务必安排后续 `ai send`，避免遗忘空跑 |
 | 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `ai send --wait` 判断 |
 | `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
+| `ai send --wait` 不带消息参数 | ⛔ **必须带消息**，否则报错 `no message provided`。写 `"请给出结果"` 即可 |
 | kill 子 agent 后自己做它的活 | 用 `ai send --wait --summary` 询问进度，让子 agent 自己汇报 |
 | `tmux kill-server` 清理环境 | ⛔ **绝对禁止**，会杀掉所有 tmux session |
 | `ai ls` 看到就 kill | ⛔ **绝对禁止**，只 kill subagent 文件中记录的 ID |
