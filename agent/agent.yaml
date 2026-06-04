@@ -1,6 +1,21 @@
 version: 1
 system_prompt: ./system_prompt.md
 memory: ./memory.md
+tools:
+  - name: read
+    enabled: true
+  - name: bash
+    enabled: true
+  - name: write
+    enabled: true
+  - name: grep
+    enabled: true
+  - name: edit
+    enabled: true
+  - name: change_workspace
+    enabled: true
+  - name: find_skill
+    enabled: true
 middlewares:
   - name: destructive_guard
     enabled: true

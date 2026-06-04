@@ -29,6 +29,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// --- Create agent context ---
 	agentCtx := app.createBaseContext()
 
+	// Apply tool filtering from agent.yaml (after skills are loaded & registered).
+	if app.agentConfig != nil {
+		if enabled := app.agentConfig.GetEnabledTools(); enabled != nil {
+			agentCtx.SetAllowedTools(enabled)
+			slog.Info("Applied tool whitelist from agent config", "tools", enabled)
+		}
+	}
+
 	// --- Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig ---
 	sessionWriter := newSessionWriter(256)
 	defer sessionWriter.Close()
