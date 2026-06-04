@@ -171,9 +171,10 @@ type AgentRunner interface {
 
 // AIAgentRunner runs the ai agent via rpc mode, parsing JSON events directly
 type AIAgentRunner struct {
-	BinaryPath string
-	MaxTurns   int
-	Timeout    time.Duration
+	BinaryPath  string
+	MaxTurns    int
+	Timeout     time.Duration
+	AgentConfig string // path to agent.yaml, passed as --agent-config
 }
 
 func (r *AIAgentRunner) Name() string {
@@ -200,8 +201,11 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	if r.MaxTurns > 0 {
 		aiArgs = append(aiArgs, "--max-turns", fmt.Sprintf("%d", r.MaxTurns))
 	}
-	if r.Timeout > 0 {
+		if r.Timeout > 0 {
 		aiArgs = append(aiArgs, "--timeout", r.Timeout.String())
+	}
+	if r.AgentConfig != "" {
+		aiArgs = append(aiArgs, "--agent-config", r.AgentConfig)
 	}
 
 	// Run ai --mode rpc directly, capturing its JSON event stream on stdout.
@@ -1523,7 +1527,8 @@ func main() {
 		list              = flag.Bool("list", false, "List available tasks")
 		maxStepsMode      = flag.String("max-steps-mode", "soft", "How to treat max_steps constraint: soft|hard")
 		assertInitialFail = flag.Bool("assert-initial-fail", false, "Assert that selected tasks fail in initial state before running agent")
-		precheckOnly      = flag.Bool("precheck-only", false, "Run only initial-state failure precheck, then exit")
+				precheckOnly      = flag.Bool("precheck-only", false, "Run only initial-state failure precheck, then exit")
+		agentConfigFlag   = flag.String("agent-config", "", "Path to agent.yaml configuration file")
 	)
 	flag.Parse()
 	maxStepsFlagSet := isFlagExplicitlySet("max-steps-mode")
@@ -1551,13 +1556,23 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error resolving manifest path: %v\n", err)
 			os.Exit(1)
 		}
+		}
+
+	absAgentConfig := ""
+	if *agentConfigFlag != "" {
+		absAgentConfig, err = filepath.Abs(*agentConfigFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving agent config path: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Create agent runner
 	agent := &AIAgentRunner{
-		BinaryPath: absAgentBinary,
-		MaxTurns:   *maxTurns,
-		Timeout:    *timeout,
+		BinaryPath:  absAgentBinary,
+		MaxTurns:    *maxTurns,
+		Timeout:     *timeout,
+		AgentConfig: absAgentConfig,
 	}
 
 	// Create benchmark

@@ -19,6 +19,13 @@ type ContextManagementConfig struct {
 	PromptFile            string `yaml:"prompt_file,omitempty"`
 }
 
+// ToolEntry represents a single tool reference in the config.
+type ToolEntry struct {
+	Name    string         `yaml:"name"`
+	Enabled bool           `yaml:"enabled"`
+	Params  map[string]any `yaml:"params,omitempty"`
+}
+
 // AgentConfig represents the parsed agent.yaml configuration.
 type AgentConfig struct {
 	Version           int                      `yaml:"version"`
@@ -26,9 +33,25 @@ type AgentConfig struct {
 	Memory            string                   `yaml:"memory"`
 	Middlewares       []MiddlewareEntry        `yaml:"middlewares"`
 	ContextManagement *ContextManagementConfig `yaml:"context_management,omitempty"`
+	Tools             []ToolEntry              `yaml:"tools,omitempty"`
 
-	// dir is the directory of the YAML file, used for resolving relative paths.
+		// dir is the directory of the YAML file, used for resolving relative paths.
 	dir string
+}
+
+// GetEnabledTools returns a list of tool names that should be enabled.
+// Returns nil if no tools config is set (meaning all tools are enabled).
+func (c *AgentConfig) GetEnabledTools() []string {
+	if c.Tools == nil {
+		return nil
+	}
+	result := make([]string, 0, len(c.Tools))
+	for _, t := range c.Tools {
+		if t.Enabled {
+			result = append(result, t.Name)
+		}
+	}
+	return result
 }
 
 // MiddlewareEntry represents a single middleware reference in the config.
