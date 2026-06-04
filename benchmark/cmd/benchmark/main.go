@@ -201,7 +201,7 @@ func (r *AIAgentRunner) Run(taskDir string, prompt string) (string, error) {
 	if r.MaxTurns > 0 {
 		aiArgs = append(aiArgs, "--max-turns", fmt.Sprintf("%d", r.MaxTurns))
 	}
-		if r.Timeout > 0 {
+	if r.Timeout > 0 {
 		aiArgs = append(aiArgs, "--timeout", r.Timeout.String())
 	}
 	if r.AgentConfig != "" {
@@ -1527,7 +1527,7 @@ func main() {
 		list              = flag.Bool("list", false, "List available tasks")
 		maxStepsMode      = flag.String("max-steps-mode", "soft", "How to treat max_steps constraint: soft|hard")
 		assertInitialFail = flag.Bool("assert-initial-fail", false, "Assert that selected tasks fail in initial state before running agent")
-				precheckOnly      = flag.Bool("precheck-only", false, "Run only initial-state failure precheck, then exit")
+		precheckOnly      = flag.Bool("precheck-only", false, "Run only initial-state failure precheck, then exit")
 		agentConfigFlag   = flag.String("agent-config", "", "Path to agent.yaml configuration file")
 	)
 	flag.Parse()
@@ -1556,7 +1556,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error resolving manifest path: %v\n", err)
 			os.Exit(1)
 		}
-		}
+	}
 
 	absAgentConfig := ""
 	if *agentConfigFlag != "" {

@@ -26,7 +26,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return err
 	}
 
-		// --- Create agent context ---
+	// --- Create agent context ---
 	agentCtx := app.createBaseContext()
 
 	// Apply tool filtering from agent.yaml (after skills are loaded & registered).

@@ -35,7 +35,7 @@ type AgentConfig struct {
 	ContextManagement *ContextManagementConfig `yaml:"context_management,omitempty"`
 	Tools             []ToolEntry              `yaml:"tools,omitempty"`
 
-		// dir is the directory of the YAML file, used for resolving relative paths.
+	// dir is the directory of the YAML file, used for resolving relative paths.
 	dir string
 }
 
