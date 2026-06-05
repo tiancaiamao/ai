@@ -925,72 +925,285 @@ class DebuggerAgent:
             },
         }
 
-    def check(self, traces: List[str]) -> Dict[str, Any]:
-        """
-        Automatically detect issues in traces using rule engine + LLM summary.
+    def check(self, traces: List[str], benchmark_result_path: str = None) -> Dict[str, Any]:
+        """Analyze failed tasks by combining benchmark ground-truth signals with
+        LLM-based root cause synthesis.
 
         Args:
-            traces: List of trace file paths
+            traces: List of normalized trace file paths (one per failed task).
+            benchmark_result_path: Optional path to iteration-N.json. When
+                provided, each task gets benchmark_signal + root_cause analysis.
 
         Returns:
-            JSON result with "issues" list
+            JSON result with "task_analyses" list (one per failed task).
         """
         start_time = time.time()
-        issues = []
+
+        # Load benchmark ground-truth (if available)
+        benchmark_map = {}  # task_id -> result_dict
+        if benchmark_result_path and os.path.exists(benchmark_result_path):
+            try:
+                with open(benchmark_result_path) as f:
+                    bench_data = json.load(f)
+                for r in bench_data.get("results", []):
+                    benchmark_map[r.get("task_id", "")] = r
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"WARN: Failed to load benchmark result: {e}", file=sys.stderr)
+
+        task_analyses = []
 
         for trace_path in traces:
-            with open(trace_path, "r") as f:
-                trace_data = json.load(f)
+            try:
+                with open(trace_path, "r") as f:
+                    trace_data = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"WARN: Failed to load trace {trace_path}: {e}", file=sys.stderr)
+                continue
 
             trace_id = trace_data.get("trace_id", Path(trace_path).stem)
+            task_id = trace_data.get("task_id", trace_id.replace("-rollout-0", ""))
             messages = trace_data.get("messages", [])
+            passed = trace_data.get("passed", False)
 
-            # Detect issues using rule engine
-            detected_issues = self._detect_issues(messages, trace_id)
-            issues.extend(detected_issues)
+            # Get benchmark signal for this task
+            bench_r = benchmark_map.get(task_id, {})
 
-        # Use LLM to generate a summary of the detected issues
-        if issues:
-            issue_descriptions = []
-            for issue in issues:
-                issue_descriptions.append(
-                    f"- [{issue['issue_type']}] {issue['summary']} "
-                    f"(trace: {issue['trace_id']}, msg #{issue['message_index']})"
+            # Extract structured benchmark signals
+            benchmark_signal = self._extract_benchmark_signal(bench_r)
+
+            # Determine failure type
+            if passed:
+                failure_type = "passed"
+            elif not bench_r.get("functional_passed", True):
+                failure_type = "functional_failure"
+            elif not bench_r.get("agentic_passed", True):
+                failure_type = "agentic_violation"
+            else:
+                failure_type = "unknown"
+
+            # Build evidence chain from trace (structured, no LLM)
+            evidence_chain = self._build_evidence_chain(messages)
+
+            # Skip LLM root-cause for tasks that passed
+            if passed:
+                root_cause = ""
+                suggested_focus = ""
+            else:
+                # LLM synthesis: combine benchmark signal + evidence chain + trace
+                root_cause, suggested_focus = self._llm_root_cause(
+                    task_id, benchmark_signal, evidence_chain, messages
                 )
-            summary_prompt = (
-                f"以下是自动检测出的 {len(issues)} 个问题：\n\n"
-                + "\n".join(issue_descriptions)
-                + "\n\n请用一段话总结这些问题的整体情况和严重程度（100字以内）。"
-            )
-            try:
-                llm_result = self._call_llm([{"role": "user", "content": summary_prompt}])
-                llm_summary = llm_result.get("content", f"发现 {len(issues)} 个问题")
-            except Exception:
-                llm_summary = f"发现 {len(issues)} 个问题（LLM 总结失败）"
-        else:
-            llm_summary = "未发现问题。"
+
+            task_analyses.append({
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "passed": passed,
+                "failure_type": failure_type,
+                "benchmark_signal": benchmark_signal,
+                "root_cause": root_cause,
+                "evidence_chain": evidence_chain,
+                "suggested_focus": suggested_focus,
+            })
 
         duration = time.time() - start_time
 
-        # De-duplicate issue types for counting
-        issue_types = set(i["issue_type"] for i in issues)
-
         return {
-            "risks": None,
             "status": "success",
             "command": "check",
+            "benchmark_result": benchmark_result_path,
             "trace_ids": [Path(t).stem for t in traces],
-            "issues_count": len(issues),
-            "issue_types_detected": sorted(issue_types),
-            "issues": issues,
-            "response": llm_summary,
-            "request_id": self.request_id,
+            "task_analyses": task_analyses,
+            "analyses_count": len(task_analyses),
+            "failed_count": sum(1 for a in task_analyses if not a["passed"]),
             "metadata": {
                 "llm_model": self.model,
                 "backend": "openai" if self._use_openai else "ai_binary",
                 "duration": round(duration, 2),
             },
         }
+
+    def _extract_benchmark_signal(self, bench_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured ground-truth signals from a benchmark task result."""
+        if not bench_result:
+            return {}
+
+        error = bench_result.get("error", "")
+        constraint_violations = []
+        missing_capabilities = []
+
+        # Parse constraint violations from error string
+        if "constraint violations:" in error:
+            parts = error.split("constraint violations:")[-1].strip()
+            # Split by semicolons or " and "
+            for part in parts.replace(" and ", ";").split(";"):
+                part = part.strip()
+                if not part:
+                    continue
+                if part.startswith("forbidden pattern detected:"):
+                    constraint_violations.append(part.replace("forbidden pattern detected:", "").strip())
+                elif part.startswith("required capability not used:"):
+                    missing_capabilities.append(part.replace("required capability not used:", "").strip())
+                elif part:
+                    constraint_violations.append(part)
+
+        return {
+            "passed": bench_result.get("passed", False),
+            "functional_passed": bench_result.get("functional_passed"),
+            "agentic_passed": bench_result.get("agentic_passed"),
+            "agentic_score": bench_result.get("agentic_score"),
+            "constraint_violations": constraint_violations,
+            "missing_capabilities": missing_capabilities,
+            "capabilities_used": bench_result.get("capabilities_used", []),
+            "capability_counts": bench_result.get("capability_counts", {}),
+            "duration_seconds": bench_result.get("duration_seconds", 0),
+            "verifier_output_snippet": (bench_result.get("output", "") or "")[:500],
+        }
+
+    def _build_evidence_chain(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Build structured evidence chain from trace messages.
+
+        Extracts key events: tool calls, tool outputs containing errors,
+        assistant decisions, first edit, first test, etc.
+        """
+        chain = []
+        first_edit_idx = None
+        first_test_idx = None
+        test_pattern = re.compile(r"\b(pytest|go test|npm test|cargo test|unittest|verify\.sh)\b", re.IGNORECASE)
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "assistant":
+                # Check for tool_calls
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    tool_name = fn.get("name", "")
+                    args_str = fn.get("arguments", "")
+
+                    event = {
+                        "msg_idx": i,
+                        "event": f"tool_call: {tool_name}",
+                        "detail": args_str[:200] if isinstance(args_str, str) else str(args_str)[:200],
+                    }
+
+                    if tool_name == "edit" and first_edit_idx is None:
+                        first_edit_idx = i
+                        event["milestone"] = "FIRST_EDIT"
+                    if tool_name in ("bash", "shell"):
+                        if test_pattern.search(args_str):
+                            if first_test_idx is None:
+                                first_test_idx = i
+                                event["milestone"] = "FIRST_TEST"
+
+                    chain.append(event)
+
+            elif role == "tool":
+                # Check for error indicators in output (require strong signal)
+                if isinstance(content, str) and (
+                    "traceback" in content.lower()
+                    or re.search(r"\berror:\s", content, re.IGNORECASE)
+                    or re.search(r"\bfailed\b", content, re.IGNORECASE)
+                ):
+                    chain.append({
+                        "msg_idx": i,
+                        "event": "tool_error",
+                        "detail": content[:200],
+                    })
+
+        # Add milestone summary at the start
+        milestones = []
+        if first_edit_idx is not None:
+            milestones.append({"milestone": "FIRST_EDIT", "msg_idx": first_edit_idx})
+        if first_test_idx is not None:
+            milestones.append({"milestone": "FIRST_TEST", "msg_idx": first_test_idx})
+        else:
+            milestones.append({"milestone": "NO_TEST_RUN", "msg_idx": -1})
+
+        return milestones + chain[-20:]  # keep last 20 events to avoid bloat
+
+    def _llm_root_cause(
+        self,
+        task_id: str,
+        benchmark_signal: Dict[str, Any],
+        evidence_chain: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+    ) -> tuple:
+        """Use LLM to synthesize root cause analysis from benchmark + trace data.
+
+        Returns:
+            (root_cause_str, suggested_focus_str)
+        """
+        violations = benchmark_signal.get("constraint_violations", [])
+        missing = benchmark_signal.get("missing_capabilities", [])
+        caps = benchmark_signal.get("capability_counts", {})
+        score = benchmark_signal.get("agentic_score")
+
+        # Compose a focused prompt
+        parts = [
+            f"Task: {task_id}",
+            f"Agentic Score: {score}",
+            f"Constraint Violations: {', '.join(violations) or 'none'}",
+            f"Missing Capabilities: {', '.join(missing) or 'none'}",
+            f"Capability Counts: {caps}",
+            "",
+            "Key events from trace:",
+        ]
+        for ev in evidence_chain[:15]:
+            milestone = ev.get("milestone", "")
+            ms_tag = f" [{milestone}]" if milestone else ""
+            parts.append(
+                f"  msg#{ev.get('msg_idx', '?')}: {ev.get('event', '')}{ms_tag} — {ev.get('detail', '')[:100]}"
+            )
+
+        # Add a few representative messages from the trace (first, middle, last)
+        if messages:
+            sample_idxs = []
+            if len(messages) > 0:
+                sample_idxs.append(0)
+            if len(messages) > 4:
+                sample_idxs.append(len(messages) // 2)
+            if len(messages) > 1:
+                sample_idxs.append(len(messages) - 1)
+            parts.append("")
+            parts.append("Representative trace messages:")
+            for idx in set(sample_idxs):
+                msg = messages[idx]
+                role = msg.get("role", "?")
+                content = str(msg.get("content", ""))[:300]
+                parts.append(f"  [msg#{idx} {role}]: {content}")
+
+        prompt_text = "\n".join(parts)
+        prompt = (
+            f"You are analyzing why an AI agent failed a benchmark task.\n"
+            f"Below is structured data from the benchmark's ground-truth evaluation "
+            f"and the agent's trace. Synthesize:\n\n"
+            f"1. **root_cause**: WHY did the agent trigger the constraint violations? "
+            f"Be specific — reference message indices and the chain of decisions.\n"
+            f"2. **suggested_focus**: WHAT aspect of the agent's system prompt / memory "
+            f"should be changed to prevent this class of failure? (one sentence)\n\n"
+            f"Data:\n{prompt_text}\n\n"
+            f"Respond in JSON: {{\"root_cause\": \"...\", \"suggested_focus\": \"...\"}}"
+        )
+
+        try:
+            result = self._call_llm([{"role": "user", "content": prompt}])
+            content = result.get("content", "")
+            # Try to parse JSON from response
+            import json as _json
+            # Strip markdown code fences if present
+            clean = content.strip()
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0]
+            parsed = _json.loads(clean)
+            return (
+                parsed.get("root_cause", content),
+                parsed.get("suggested_focus", ""),
+            )
+        except Exception as e:
+            # Fallback: return raw content as root_cause
+            return (f"(LLM analysis failed: {e})", "")
 
     # ------------------------------------------------------------------
     # Prompt builders
@@ -1101,13 +1314,19 @@ def main():
         help="Config YAML file path",
     )
 
-    # check subcommand
+        # check subcommand
     check_parser = subparsers.add_parser("check", help="Auto-detect issues in traces")
     check_parser.add_argument(
         "--traces",
         nargs="+",
         required=True,
         help="Trace file paths",
+    )
+    check_parser.add_argument(
+        "--benchmark-result",
+        default=None,
+        help="Path to iteration-N.json (benchmark ground-truth results). "
+             "When provided, check() produces per-task root cause analysis.",
     )
     check_parser.add_argument(
         "--output",
@@ -1146,7 +1365,8 @@ def main():
     if args.command == "ask":
         result = debugger.ask(args.traces, args.question or "")
     elif args.command == "check":
-        result = debugger.check(args.traces)
+        benchmark_path = getattr(args, "benchmark_result", None)
+        result = debugger.check(args.traces, benchmark_result_path=benchmark_path)
     else:
         parser.print_help()
         sys.exit(1)

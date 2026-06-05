@@ -69,6 +69,14 @@ AGENT_CONFIG="$(cd "$(dirname "$AGENT_CONFIG")" && pwd)/$(basename "$AGENT_CONFI
 EVOLVE_DIR="$(cd "$(dirname "$EVOLVE_DIR")" && pwd)/$(basename "$EVOLVE_DIR")"
 
 # ─── Pre-flight checks ────────────────────────────────────────────────────────
+
+# Hard-stop on any unrecoverable issue. Use die "..." for explicit failures.
+function die() {
+    echo "❌ FATAL [${BASH_SOURCE[0]}:L${BASH_LINENO[0]}]: $*" >&2
+    echo "   Iteration artifacts: see ${ARTIFACTS_DIR:-<not-set>}" >&2
+    exit 1
+}
+
 echo "=== Evolve Loop — Pre-flight Checks ==="
 
 for tool in "${AI_BIN}" "${BENCHMARK_BIN}"; do
@@ -232,6 +240,15 @@ for entry in state.get('history', []):
             entry['target'] = attr.get('target', 'unknown')
             entry['change_description'] = attr.get('change_description', '')
             entry['predicted_fixes'] = attr.get('predicted_fixes', [])
+        # Save attribution-eval verdict so next planner iteration can see it
+        eval_file = os.path.join(evolve_dir, f'attribution-eval-{current_iter}.json')
+        if os.path.exists(eval_file):
+            with open(eval_file) as f:
+                ev = json.load(f)
+            entry['verdict'] = ev.get('verdict', 'UNKNOWN')
+            entry['fix_rate'] = ev.get('fix_rate', 'N/A')
+            entry['actually_fixed'] = ev.get('actually_fixed', [])
+            entry['actual_regressions'] = ev.get('actual_regressions', [])
         break
 
 with open(state_file, 'w') as f:
@@ -329,12 +346,18 @@ function run_iteration() {
     local ARTIFACTS_DIR="${EVOLVE_DIR}/iter-${ITER}-artifacts"
     mkdir -p "${ARTIFACTS_DIR}/traces"
 
-        # 1. Backup current config and harness files (for rollback)
-    cp "${AGENT_CONFIG}" "${ARTIFACTS_DIR}/config-backup.yaml"
-    echo "  [1/7] Config backed up -> ${ARTIFACTS_DIR}/config-backup.yaml"
-    # Also backup harness files that planner may edit via tools
+            # 1. Snapshot entire agent/ dir (for full reproducibility / retroactive analysis)
     local AGENT_DIR
     AGENT_DIR=$(dirname "${AGENT_CONFIG}")
+    local SNAPSHOT_DIR="${ARTIFACTS_DIR}/agent-snapshot"
+    mkdir -p "${SNAPSHOT_DIR}"
+    cp -a "${AGENT_DIR}/." "${SNAPSHOT_DIR}/" \
+        || die "Failed to snapshot agent/ directory to ${SNAPSHOT_DIR}"
+    echo "  [1/7] Agent snapshot -> ${SNAPSHOT_DIR}"
+
+    # Keep individual config-backup for quick diffing and rollback
+    cp "${AGENT_CONFIG}" "${ARTIFACTS_DIR}/config-backup.yaml" \
+        || die "Failed to back up agent config"
     for hf in system_prompt.md memory.md context_management.md; do
         if [[ -f "${AGENT_DIR}/${hf}" ]]; then
             cp "${AGENT_DIR}/${hf}" "${ARTIFACTS_DIR}/${hf}.backup"
@@ -357,24 +380,21 @@ function run_iteration() {
             --clean
     )
 
-    local BENCH_EXIT=$?
+        local BENCH_EXIT=$?
     local BENCH_END
     BENCH_END=$(date +%s)
     local BENCH_DURATION=$((BENCH_END - BENCH_START))
 
     if [[ $BENCH_EXIT -ne 0 ]]; then
-        echo "  [2/7] ERROR: Benchmark failed (exit=${BENCH_EXIT}, duration=${BENCH_DURATION}s)" >&2
-        echo "{\"action\": \"error\", \"step\": \"benchmark\", \"exit_code\": ${BENCH_EXIT}}" > "${ARTIFACTS_DIR}/decision.json"
-        exit 1
+        die "Benchmark failed (exit=${BENCH_EXIT}, duration=${BENCH_DURATION}s). See results/ for partial output."
     fi
     echo "  [2/7] Benchmark completed in ${BENCH_DURATION}s"
 
     # Find latest result file
-        local RESULT_FILE
+    local RESULT_FILE
     RESULT_FILE=$(find "${PROJECT_ROOT}/results" -name 'result_*.json' -maxdepth 1 -type f -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)
     if [[ -z "$RESULT_FILE" ]]; then
-        echo "  [2/7] ERROR: No result file found in results/" >&2
-        exit 1
+        die "No benchmark result file found in ${PROJECT_ROOT}/results/. Benchmark may have crashed before writing output."
     fi
 
     # Save as iteration-N.json
@@ -387,20 +407,23 @@ function run_iteration() {
     TOTAL=$(jq '.total_tasks' "${EVOLVE_DIR}/iteration-${ITER}.json")
     echo "  [2/7] Results: ${PASSED}/${TOTAL} passed (${PASS_RATE}%)"
 
-        # 3. Extract trajectories
+            # 3. Extract trajectories
     echo "  [3/7] Normalizing traces..."
     if ! python3 "${SCRIPTS_DIR}/trace_normalizer.py" \
         --input "${EVOLVE_DIR}/iteration-${ITER}.json" \
         --output-dir "${ARTIFACTS_DIR}/traces" \
         --all; then
-        echo "  [3/7] WARN: Trace normalization had errors (continuing)"
+        die "Trace normalization failed. Check iteration-${ITER}.json for malformed data."
     fi
 
     local TRACE_COUNT
     TRACE_COUNT=$(find "${ARTIFACTS_DIR}/traces" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "${TRACE_COUNT}" -eq 0 ]]; then
+        die "No trace files generated. trace_normalizer.py may have a bug."
+    fi
     echo "  [3/7] Generated ${TRACE_COUNT} trace files"
 
-    # 4. Debugger analysis (failed tasks only)
+        # 4. Debugger analysis (failed tasks only)
     echo "  [4/7] Running debugger analysis on failed tasks..."
     local DEBUGGER_START
     DEBUGGER_START=$(date +%s)
@@ -418,18 +441,19 @@ function run_iteration() {
     local DEBUGGER_CONFIG
     DEBUGGER_CONFIG=$(create_debugger_config)
 
-        if [[ -n "${FAILED_TRACES// /}" ]]; then
+    if [[ -n "${FAILED_TRACES// /}" ]]; then
         # shellcheck disable=SC2086
         python3 "${SCRIPTS_DIR}/agent_debugger.py" check \
             --traces ${FAILED_TRACES} \
+            --benchmark-result "${EVOLVE_DIR}/iteration-${ITER}.json" \
             --config "${DEBUGGER_CONFIG}" \
             --output "${ARTIFACTS_DIR}/debugger-analysis.json" \
             --format json \
             2>"${ARTIFACTS_DIR}/debugger-stderr.log" \
-            || echo "  [4/7] WARN: Debugger analysis failed (see debugger-stderr.log)"
+            || die "Debugger analysis failed (see ${ARTIFACTS_DIR}/debugger-stderr.log)"
     else
         echo "  [4/7] No failed tasks — skipping debugger"
-        echo '{"analysis": "no_failed_tasks"}' > "${ARTIFACTS_DIR}/debugger-analysis.json"
+        echo '{"analysis": "no_failed_tasks", "issues": []}' > "${ARTIFACTS_DIR}/debugger-analysis.json"
     fi
 
     local DEBUGGER_END
@@ -477,7 +501,7 @@ PYEOF
             CONTEXT_EXTRA_ARGS="${CONTEXT_EXTRA_ARGS} --attribution-eval ${EVOLVE_DIR}/attribution-eval-${PREV_ITER}.json"
         fi
 
-        if ! python3 "${SCRIPTS_DIR}/build_planner_context.py" \
+            if ! python3 "${SCRIPTS_DIR}/build_planner_context.py" \
         --baseline "${EVOLVE_DIR}/iteration-0.json" \
         --current-result "${EVOLVE_DIR}/iteration-${ITER}.json" \
         --config-yaml "${AGENT_CONFIG}" \
@@ -487,10 +511,14 @@ PYEOF
         --template "${TEMPLATE}" \
         --output "${ARTIFACTS_DIR}/planner-input.md" \
         $CONTEXT_EXTRA_ARGS; then
-        echo "  [5/7] ERROR: Failed to build planner context" >&2
-        exit 1
+        die "Failed to build planner context"
     fi
     echo "  [5/7] Planner context written to ${ARTIFACTS_DIR}/planner-input.md"
+
+    # Fail-loud: check for unfilled template placeholders
+    if grep -q '{{[A-Z_]}}' "${ARTIFACTS_DIR}/planner-input.md"; then
+        die "Planner input has unfilled template placeholders: $(grep -o '{{[A-Z_]*}}' "${ARTIFACTS_DIR}/planner-input.md" | sort -u | tr '\n' ' ')"
+    fi
 
             # 6. Call Planner Agent via ai rpc, pipe through filter
     echo "  [6/7] Calling planner agent..."
@@ -512,19 +540,23 @@ print(rpc_msg)
         --summary-output "${ARTIFACTS_DIR}/planner-summary.md" \
         --result-output "${ARTIFACTS_DIR}/planner-result.json"
 
-    local PLANNER_EXIT=${PIPESTATUS[1]}
+        local PLANNER_EXIT=${PIPESTATUS[1]}
     local PLANNER_END
     PLANNER_END=$(date +%s)
 
     if [[ $PLANNER_EXIT -ne 0 ]]; then
-        echo "  [6/7] WARN: Planner agent exited with code ${PLANNER_EXIT} (see planner-stderr.log)"
-    else
-                echo "  [6/7] Planner completed in $((PLANNER_END - PLANNER_START))s"
+        die "Planner agent exited with code ${PLANNER_EXIT} (see ${ARTIFACTS_DIR}/planner-stderr.log)"
+    fi
+    echo "  [6/7] Planner completed in $((PLANNER_END - PLANNER_START))s"
+
+    # Fail-loud: planner must produce a result file
+    if [[ ! -s "${ARTIFACTS_DIR}/planner-result.json" ]]; then
+        die "Planner produced no result file (planner-result.json missing or empty). See ${ARTIFACTS_DIR}/planner-stderr.log"
     fi
 
         # --- Step 6.5: Extract attribution from planner result ---
     if [[ -f "${ARTIFACTS_DIR}/planner-result.json" ]]; then
-        ARTIFACTS_DIR="${ARTIFACTS_DIR}" EVOLVE_DIR="${EVOLVE_DIR}" ITER="${ITER}" \
+                ARTIFACTS_DIR="${ARTIFACTS_DIR}" EVOLVE_DIR="${EVOLVE_DIR}" ITER="${ITER}" \
         python3 << 'ATTR_EXTRACT_EOF'
 import json, sys, os
 
@@ -546,18 +578,18 @@ if cp:
         json.dump(cp, f, indent=2)
     print(f'  [6.5/7] Attribution saved: {attr_path}')
 else:
-    print('  [6.5/7] WARN: No Change Plan found in planner output')
-    attr_path = os.path.join(evolve_dir, f'attribution-{iter_num}.json')
-    with open(attr_path, 'w') as f:
-        json.dump({
-            'iteration': iter_num,
-            'target': 'unknown',
-            'predicted_fixes': [],
-            'predicted_risks': [],
-            'rationale': 'No change plan provided by planner',
-            'change_description': 'unknown'
-        }, f, indent=2)
+    # Fail-loud: planner did not output formal Change Plan.
+    # The attribution feedback loop depends on this; continuing with empty
+    # attribution would degrade future iterations silently.
+    print('❌ PLANNER_PROTOCOL_VIOLATION: planner did not output a formal Change Plan.', file=sys.stderr)
+    print('   This breaks the attribution feedback loop.', file=sys.stderr)
+    print(f'   See {os.path.join(artifacts_dir, "planner-summary.md")} for planner output.', file=sys.stderr)
+    sys.exit(1)
 ATTR_EXTRACT_EOF
+        local ATTR_EXTRACT_EXIT=$?
+        if [[ $ATTR_EXTRACT_EXIT -ne 0 ]]; then
+            die "Attribution extraction failed (planner protocol violation)"
+        fi
     fi
 
     # 7. Extract config from planner result

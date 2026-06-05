@@ -18,42 +18,147 @@ DROP_EVENTS = frozenset({
 })
 
 
-def extract_change_plan(assistant_texts: list) -> dict | None:
-    """Extract Change Plan from planner's assistant messages."""
-    full_text = "\n".join(assistant_texts)
+def _parse_field(line: str, field: str) -> str | None:
+    """Extract value from a '**Field**: value' line.
 
-    # Match the Change Plan block: from "## Change Plan" to the next ## heading or end
-    pattern = r'## Change Plan\s*\n((?:[-*]\s*\*\*\w+[^)]*\*\*:.*\n?)+)'
-    match = re.search(pattern, full_text)
-    if not match:
+    Handles bullet-point lines like '- **Field**: value' or '* **Field**: value'
+    by stripping the leading bullet (but not bold markers).
+    """
+    line = line.strip()
+    # Strip a single leading bullet ('-', '*', or '+') followed by whitespace.
+    # Do NOT use lstrip('-*') — that would eat the bold markers too.
+    if line and line[0] in '-*+' and len(line) > 1 and line[1] in ' \t':
+        line = line[1:].lstrip()
+    marker = f'**{field}**:'
+    if line.startswith(marker):
+        return line[len(marker):].strip()
+    return None
+
+
+def _parse_task_list(val: str) -> list:
+    """Parse a comma-separated or newline-separated list of task IDs.
+
+    Rejects anything that doesn't look like a task ID (markdown headings,
+    sentences, bullet points, etc.)."""
+    val_clean = val.strip().lower()
+    if val_clean in ('none expected', 'none', 'n/a', 'na', '', '(none)', '-') or val_clean.startswith('(') and val_clean.endswith(')'):
+        return []
+    items = []
+    for chunk in re.split(r'[,\n]', val):
+        chunk = chunk.strip().lstrip('-*').strip()
+        # strip surrounding backticks / quotes
+        chunk = chunk.strip('`"\'')
+        if not chunk:
+            continue
+        # Reject obvious prose / markdown that isn't a task ID.
+        # Task IDs look like: 003_refactor_duplicated_code, agent_001_forced_exploration,
+        # tbench/kv-store-grpc, tbench_pypi-server, etc.
+        if chunk.startswith('#'):  # markdown heading
+            continue
+        if chunk.startswith('**'):  # bold markdown label
+            continue
+        if len(chunk) > 80:  # task IDs are short
+            continue
+        if ' ' in chunk and not any(c in chunk for c in '/_'):
+            # Prose sentence — real task IDs are underscored or slashed identifiers
+            continue
+        # Looks like a task ID
+        items.append(chunk)
+    return items
+
+
+def extract_change_plan(assistant_texts: list) -> dict | None:
+    """Extract Change Plan from planner's assistant messages.
+
+    Tries (in order):
+      1. Formal `## Change Plan` heading + bold-field lines (canonical format).
+      2. `### Summary of changes` / `### Why these changes should work` /
+         `### Expected Impact` (post-hoc summary blocks planner may write
+         after tool edits).
+      3. Bare bold-field lines anywhere in text (e.g. **Target**: ...).
+      4. A `Target: ...` line (no bold).
+    Returns None only if no Target-like line can be found.
+    """
+    full_text = "\n".join(assistant_texts)
+    if not full_text.strip():
         return None
 
-    block = match.group(1)
-    result = {}
+    # Strategy 1: formal `## Change Plan` section
+    cp_match = re.search(
+        r'^##\s+Change Plan\s*\n(.*?)(?=^##\s|\Z)',
+        full_text, re.MULTILINE | re.DOTALL
+    )
 
-    # Parse each line
-    for line in block.strip().split('\n'):
-        line = line.strip().lstrip('-*').strip()
-        if line.startswith('**Target**:'):
-            result['target'] = line.split('**Target**:')[1].strip()
-        elif line.startswith('**Predicted fixes**:'):
-            val = line.split('**Predicted fixes**:')[1].strip()
-            if val.lower() in ('none expected', 'none', ''):
-                result['predicted_fixes'] = []
-            else:
-                result['predicted_fixes'] = [t.strip() for t in val.split(',') if t.strip()]
-        elif line.startswith('**Predicted risks**:'):
-            val = line.split('**Predicted risks**:')[1].strip()
-            if val.lower() in ('none expected', 'none', ''):
-                result['predicted_risks'] = []
-            else:
-                result['predicted_risks'] = [t.strip() for t in val.split(',') if t.strip()]
-        elif line.startswith('**Rationale**:'):
-            result['rationale'] = line.split('**Rationale**:')[1].strip()
-        elif line.startswith('**Change description**:'):
-            result['change_description'] = line.split('**Change description**:')[1].strip()
+    if cp_match:
+        block = cp_match.group(1)
+        result = _parse_block_fields(block)
+        if result and result.get('target'):
+            return result
 
-    return result if result else None
+    # Strategy 2: post-hoc summary blocks (after edits)
+    summary_match = re.search(
+        r'^###\s+(?:Summary of changes|Change Summary|Why these changes should work|Expected Impact)\s*\n(.*?)(?=^##\s|^###\s|\Z)',
+        full_text, re.MULTILINE | re.DOTALL
+    )
+    if summary_match:
+        block = summary_match.group(1)
+        result = _parse_block_fields(block)
+        if result and result.get('target'):
+            return result
+
+    # Strategy 3 + 4: scan full text for any field marker.
+    result = _parse_block_fields(full_text)
+    if result and result.get('target'):
+        return result
+
+    return None
+
+
+def _parse_block_fields(block: str) -> dict | None:
+    """Parse a block of text for Target / Predicted fixes / Rationale / etc."""
+    target = None
+    predicted_fixes_raw = None
+    predicted_risks_raw = None
+    rationale = None
+    change_description = None
+
+    for line in block.split('\n'):
+        if target is None:
+            v = _parse_field(line, 'Target')
+            if v is not None:
+                target = v
+                continue
+        if predicted_fixes_raw is None:
+            v = _parse_field(line, 'Predicted fixes')
+            if v is not None:
+                predicted_fixes_raw = v
+                continue
+        if predicted_risks_raw is None:
+            v = _parse_field(line, 'Predicted risks')
+            if v is not None:
+                predicted_risks_raw = v
+                continue
+        if rationale is None:
+            v = _parse_field(line, 'Rationale')
+            if v is not None:
+                rationale = v
+                continue
+        if change_description is None:
+            v = _parse_field(line, 'Change description')
+            if v is not None:
+                change_description = v
+                continue
+
+    if target is None:
+        return None
+
+    return {
+        'target': target,
+        'predicted_fixes': _parse_task_list(predicted_fixes_raw or ''),
+        'predicted_risks': _parse_task_list(predicted_risks_raw or ''),
+        'rationale': rationale or '(no rationale provided)',
+        'change_description': change_description or '(no description provided)',
+    }
 
 
 def main():
@@ -163,23 +268,13 @@ def main():
                 'change_description': 'No changes'
             }
 
-        # Fallback 2: if planner made actual changes (tool_edits non-empty) but didn't use
-    # the formal Change Plan format, synthesize one from tool_edits + text analysis
+            # Fallback 2: if planner made actual changes (tool_edits non-empty) but didn't use
+    # the formal Change Plan format, synthesize a minimal change plan. We DO NOT try
+    # to guess predicted_fixes/risks from free text — that produces garbage that
+    # pollutes the attribution eval. Leave them empty and flag it.
     if change_plan is None and edited_files:
-        # Try to extract predictions from text
-        predicted_fixes = []
-        predicted_risks = []
-        rationale = f'Planner edited: {", ".join(sorted(edited_files))}'
-
-        # Look for prediction/expectation patterns in text
-        for line in all_text.split('\n'):
-            line = line.strip()
-            if 'expected' in line.lower() or 'prediction' in line.lower() or 'should pass' in line.lower():
-                predicted_fixes.append(line[:100])
-            if 'risk' in line.lower() or 'regression' in line.lower():
-                predicted_risks.append(line[:100])
-
-        # Use first meaningful text line as rationale
+        rationale = f'Planner edited: {", ".join(sorted(edited_files))} (no formal Change Plan block found)'
+        # Use first substantive line of text (if any) as a hint, but not as task IDs
         for line in all_text.split('\n'):
             line = line.strip()
             if line and len(line) > 30 and not line.startswith('#') and not line.startswith('['):
@@ -188,10 +283,11 @@ def main():
 
         change_plan = {
             'target': sorted(edited_files)[0] if len(edited_files) == 1 else 'multiple',
-            'predicted_fixes': predicted_fixes[:5],
-            'predicted_risks': predicted_risks[:5],
+            'predicted_fixes': [],  # empty — we don't guess from prose
+            'predicted_risks': [],  # empty — we don't guess from prose
             'rationale': rationale,
-            'change_description': f'Edited {", ".join(sorted(edited_files))}'
+            'change_description': f'Edited {", ".join(sorted(edited_files))}',
+            'extraction_warning': 'planner did not output formal Change Plan; predictions unavailable'
         }
 
     # ─── Build result JSON ───

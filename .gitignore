@@ -29,3 +29,10 @@ cover.out
 
 # Benchmark results
 benchmark/results/result_*.json
+
+
+# Evolve artifacts (large benchmark data)
+results/
+agent/benchmarks/evolve/iteration-*.json
+agent/benchmarks/evolve/iter-*-artifacts/traces/
+agent/benchmarks/evolve/iter-*-artifacts/agent-snapshot/

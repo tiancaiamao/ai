@@ -64,6 +64,113 @@ def build_current_overview(result_data):
             f"- **Pass**: {n_pass} tasks",
             f"- **Fail**: {n_total - n_pass} tasks",
         ]
+        return "\n".join(lines)
+
+
+def build_cross_iteration_table(state_data, evolve_dir):
+    """Build a table comparing each task's pass/fail status across iterations.
+
+    Reads all iteration-N.json files in evolve_dir, aligns by task_id,
+    and shows the verdict history + any constraint_violations or missing
+    capabilities from the most recent iteration.
+
+    This is the real attribution signal — it comes from benchmark ground
+    truth, not from planner self-prediction.
+    """
+    if state_data is None:
+        return "(No state data — first iteration.)"
+
+    history = state_data.get("history", [])
+    if not history:
+        return "(No iteration history yet.)"
+
+    # Find all iteration result files
+    import glob
+    result_files = {}
+    for f in sorted(glob.glob(os.path.join(evolve_dir, "iteration-*.json"))):
+        basename = os.path.basename(f)
+        try:
+            iter_num = int(basename.replace("iteration-", "").replace(".json", ""))
+            result_files[iter_num] = f
+        except ValueError:
+            continue
+
+    if not result_files:
+        return "(No iteration result files found.)"
+
+    # Load per-iteration task results
+    iter_task_data = {}  # iter_num -> {task_id: result_dict}
+    all_task_ids = set()
+    for iter_num, fpath in result_files.items():
+        try:
+            with open(fpath) as fh:
+                data = json.load(fh)
+            task_map = {}
+            for r in data.get("results", []):
+                tid = r.get("task_id", "unknown")
+                task_map[tid] = r
+                all_task_ids.add(tid)
+            iter_task_data[iter_num] = task_map
+        except (json.JSONDecodeError, FileNotFoundError):
+            continue
+
+    # Build the table
+    sorted_iters = sorted(iter_task_data.keys())
+    sorted_tasks = sorted(all_task_ids)
+
+        # Header
+    iter_cols = " | ".join(f"Iter {i}" for i in sorted_iters)
+    n_cols = len(sorted_iters) + 2  # task + iter cols + violations
+    sep_cells = ["------"] * n_cols
+    lines = [
+        f"| Task | {iter_cols} | Latest Constraint Violations / Missing Capabilities |",
+        f"| {' | '.join(sep_cells)} |",
+    ]
+
+    for tid in sorted_tasks:
+        row_cells = []
+        latest_violations = ""
+        latest_caps = ""
+        for i in sorted_iters:
+            r = iter_task_data[i].get(tid)
+            if r is None:
+                row_cells.append("?")
+            elif r.get("passed"):
+                row_cells.append("✅")
+            else:
+                # Distinguish functional vs agentic failure
+                if not r.get("functional_passed"):
+                    row_cells.append("❌F")
+                elif not r.get("agentic_passed"):
+                    row_cells.append("❌A")
+                else:
+                    row_cells.append("❌")
+
+        # Get latest iteration's constraint info
+        latest_iter = sorted_iters[-1]
+        latest_r = iter_task_data[latest_iter].get(tid, {})
+        error = latest_r.get("error", "")
+        if "constraint violations:" in error:
+            # Extract constraint details
+            parts = error.split("constraint violations:")[-1].strip()
+            latest_violations = parts[:200]
+
+        if not latest_r.get("passed"):
+            caps_used = latest_r.get("capabilities_used", [])
+            # Show what was missing — inferred from error
+            if "required capability not used:" in error:
+                missing_caps = error.split("required capability not used:")[-1].strip()
+                if latest_violations:
+                    latest_violations += f"; missing: {missing_caps}"
+                else:
+                    latest_violations = f"missing: {missing_caps}"
+
+        # Cap row length
+        if len(latest_violations) > 200:
+            latest_violations = latest_violations[:197] + "..."
+
+        lines.append(f"| {tid} | {' | '.join(row_cells)} | {latest_violations} |")
+
     return "\n".join(lines)
 
 
@@ -143,6 +250,32 @@ def build_failure_details(result_data, rollout_data=None):
                 if tool_err:
                     lines.append(f"    ⚠️ Error: {tool_err[:300]}")
 
+                # Benchmark ground-truth signals
+        agentic_passed = r.get("agentic_passed")
+        functional_passed = r.get("functional_passed")
+        agentic_score = r.get("agentic_score")
+        capabilities_used = r.get("capabilities_used", [])
+        capability_counts = r.get("capability_counts", {})
+
+        if agentic_passed is not None or functional_passed is not None:
+            lines.append("")
+            sig_parts = []
+            if functional_passed is False:
+                sig_parts.append("functional FAILED")
+            elif functional_passed is True:
+                sig_parts.append("functional OK")
+            if agentic_passed is False:
+                sig_parts.append("agentic FAILED")
+            elif agentic_passed is True:
+                sig_parts.append("agentic OK")
+            if agentic_score is not None:
+                sig_parts.append(f"score={agentic_score}")
+            lines.append(f"**Benchmark signal**: {' | '.join(sig_parts)}")
+
+        if capabilities_used:
+            caps_str = ", ".join(f"{k}={v}" for k, v in sorted(capability_counts.items())) if capability_counts else ", ".join(capabilities_used)
+            lines.append(f"**Capabilities**: {caps_str}")
+
         # Error
         if error:
             lines.append("")
@@ -160,8 +293,51 @@ def build_failure_details(result_data, rollout_data=None):
     return "\n".join(lines)
 
 
+def build_prompt_length_report(system_prompt_path, memory_path):
+    """Build 'Prompt Length Budget' section showing current file sizes vs budget."""
+    budget = 8192  # 8 KB
+    lines = []
+
+    def _size(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    sp_size = _size(system_prompt_path)
+    mem_size = _size(memory_path)
+    total = sp_size + mem_size
+    pct = total / budget * 100
+
+    lines.append(f"- `system_prompt.md`: {sp_size} bytes")
+    lines.append(f"- `memory.md`: {mem_size} bytes")
+    lines.append(f"- **Total**: {total} bytes ({pct:.1f}% of {budget}-byte budget)")
+
+    if total > budget:
+        over = total - budget
+        lines.append("")
+        lines.append(
+            f"⚠️  **OVER BUDGET by {over} bytes.** You MUST trim before adding "
+            f"new content. Consider consolidating rules or removing redundant "
+            f"guidance from memory.md."
+        )
+    elif total > budget * 0.8:
+        lines.append("")
+        lines.append(
+            f"⚠️  **Near budget limit.** Add new rules only if they replace "
+            f"existing weaker ones."
+        )
+
+    return "\n".join(lines)
+
+
 def build_debugger_analysis(debugger_data):
-    """Build 'AI Debugger Analysis' section from pre-computed debugger output.
+    """Build 'AI Debugger Analysis' section from debugger output.
+
+    Supports two schemas:
+    - New (check mode with --benchmark-result): task_analyses list with
+      root_cause, evidence_chain, suggested_focus per failed task.
+    - Legacy: issues list (kept for backward compat).
 
     Args:
         debugger_data: dict loaded from debugger-analysis-*.json, or None.
@@ -172,89 +348,89 @@ def build_debugger_analysis(debugger_data):
     if debugger_data is None:
         return "(No debugger analysis available — first iteration or no failed tasks.)"
 
+    # Handle "no failed tasks" sentinel
+    if debugger_data.get("analyses_count", -1) == 0 and not debugger_data.get("task_analyses"):
+        return "No failed tasks — all tasks passed. ✅"
+
     lines = []
 
-    # Top-level summary
-    summary = debugger_data.get("summary", "")
-    if summary:
-        lines.append(f"**Summary:** {summary}")
+    # NEW SCHEMA: task_analyses (per-task root-cause analysis)
+    task_analyses = debugger_data.get("task_analyses", [])
+    if task_analyses:
+        failed_analyses = [a for a in task_analyses if not a.get("passed", False)]
+        if not failed_analyses:
+            return "No failed tasks — all tasks passed. ✅"
+
+        lines.append(f"### Root Cause Analysis ({len(failed_analyses)} failed tasks)")
         lines.append("")
 
-    # Risk prediction (if available)
-    risks = debugger_data.get("risks")
-    if risks:
-        lines.append("### 🚨 Predicted Risks")
-        lines.append("")
-        description = risks.get("description", "")
-        if description:
-            lines.append(f"**Risk Description:** {description}")
-            lines.append("")
-        
-        affected_tasks = risks.get("affected_tasks", [])
-        if affected_tasks:
-            lines.append(f"**Affected Tasks:**")
-            for task in affected_tasks:
-                lines.append(f"- {task}")
-            lines.append("")
-        
-        confidence = risks.get("confidence", "")
-        if confidence:
-            lines.append(f"**Confidence:** {confidence}")
-            lines.append("")
-    elif risks is None:
-        lines.append("### 🚨 Risk Analysis")
-        lines.append("")
-        lines.append("*(Debugger did not identify specific risks)*")
-        lines.append("")
-    else:
-        lines.append("### 🚨 Risk Analysis")
-        lines.append("")
-        lines.append("*(No risks identified)*")
-        lines.append("")
+        for a in failed_analyses:
+            task_id = a.get("task_id", "unknown")
+            ftype = a.get("failure_type", "unknown")
+            bs = a.get("benchmark_signal", {})
+            root_cause = a.get("root_cause", "")
+            suggested = a.get("suggested_focus", "")
+            evidence = a.get("evidence_chain", [])
 
-    # Per-task analysis (from agent_debugger.py "ask" output)
-    answer = debugger_data.get("answer", "")
-    if answer:
-        lines.append("### Detailed Analysis")
-        lines.append("")
-        # answer may be multi-line markdown from the LLM
-        lines.append(str(answer))
-        lines.append("")
+            lines.append(f"#### ❌ {task_id} [{ftype}]")
 
-    # Structured analysis (from agent_debugger.py "check" output)
+            # Benchmark ground-truth signals
+            violations = bs.get("constraint_violations", [])
+            missing = bs.get("missing_capabilities", [])
+            caps = bs.get("capability_counts", {})
+            score = bs.get("agentic_score")
+
+            if score is not None:
+                lines.append(f"**Agentic score**: {score}")
+            if violations:
+                lines.append(f"**Constraint violations**: {', '.join(violations)}")
+            if missing:
+                lines.append(f"**Missing capabilities**: {', '.join(missing)}")
+            if caps:
+                caps_str = ", ".join(f"{k}={v}" for k, v in sorted(caps.items()))
+                lines.append(f"**Capability counts**: {caps_str}")
+
+            # Evidence chain (key milestones only, to avoid bloat)
+            milestones = [e for e in evidence if e.get("milestone")]
+            if milestones:
+                ms_parts = []
+                for m in milestones:
+                    ms_parts.append(f"{m['milestone']}@msg#{m['msg_idx']}")
+                lines.append(f"**Key events**: {' | '.join(ms_parts)}")
+
+            # LLM root-cause
+            if root_cause:
+                lines.append("")
+                lines.append(f"**Root cause**: {root_cause}")
+
+            if suggested:
+                lines.append(f"**Suggested focus**: {suggested}")
+
+            lines.append("")
+
+        # Metadata
+        metadata = debugger_data.get("metadata", {})
+        if metadata:
+            model = metadata.get("llm_model", "")
+            duration = metadata.get("duration", 0)
+            if model:
+                lines.append(f"_Analysis model: {model} | Duration: {duration}s_")
+
+        return "\n".join(lines)
+
+    # LEGACY SCHEMA: issues (kept for backward compat with old debugger runs)
     issues = debugger_data.get("issues", [])
     if issues:
         lines.append(f"### Detected Issues ({len(issues)})")
         lines.append("")
         for i, issue in enumerate(issues, 1):
-            # Support both check mode (issue_type/summary/trace_id) and ask mode (root_cause/suggestion)
             trace_id = issue.get("trace_id", issue.get("task_id", "unknown"))
-            # Strip rollout suffix for cleaner display
-            task_name = trace_id.replace("-rollout-0", "").replace("-rollout-", "/")
+            task_name = trace_id.replace("-rollout-0", "")
             issue_type = issue.get("issue_type", "")
             summary = issue.get("summary", "")
-            root_cause = issue.get("root_cause", "")
-            pattern = issue.get("pattern", "")
-            suggestion = issue.get("suggestion", "")
-            confidence = issue.get("confidence", "")
 
-            # Build display: prefer root_cause (ask mode), then summary (check mode)
-            display = root_cause or summary or pattern or "(no detail)"
-
-            lines.append(f"{i}. **{task_name}** [{issue_type or 'issue'}]: {display}")
-            if suggestion:
-                lines.append(f"   - Suggestion: {suggestion}")
-            if confidence:
-                lines.append(f"   - Confidence: {confidence}")
+            lines.append(f"{i}. **{task_name}** [{issue_type}]: {summary}")
         lines.append("")
-
-    # Metadata
-    metadata = debugger_data.get("metadata", {})
-    if metadata:
-        model = metadata.get("model", "")
-        n_traces = metadata.get("n_traces", "")
-        if model or n_traces:
-            lines.append(f"_Analysis model: {model} | Traces analyzed: {n_traces}_")
 
     if not lines:
         return "(Debugger analysis produced no output.)"
@@ -634,7 +810,7 @@ def main():
         if not os.path.isdir(agent_dir):
             agent_dir = config_dir
 
-        system_prompt_path = os.path.join(config_dir, "system_prompt.md")
+            system_prompt_path = os.path.join(config_dir, "system_prompt.md")
     memory_path = os.path.join(config_dir, "memory.md")
     context_mgmt_path = os.path.join(config_dir, "context_management.md")
 
@@ -648,18 +824,27 @@ def main():
     memory_ref = _file_ref("memory.md", memory_path)
     context_mgmt_ref = _file_ref("context_management.md", context_mgmt_path)
 
+        # Build prompt length report for the planner's length budget awareness.
+    prompt_length_report = build_prompt_length_report(
+        system_prompt_path, memory_path
+    )
+
     with open(args.template) as f:
         template = f.read()
 
     # Build all sections
     # Extract rollout data from current results for enhanced stability/failure reporting.
-        rollout_data = None
+    rollout_data = None
     if current_data and "per_task_rollouts" in current_data:
         rollout_data = current_data.get("per_task_rollouts", {})
 
     current_overview = build_current_overview(current_data)
     task_classification = build_task_classification(current_data or baseline_data)
     failure_details = build_failure_details(current_data or baseline_data, rollout_data=rollout_data)
+    cross_iter_table = build_cross_iteration_table(
+        state_data,
+        os.path.dirname(os.path.abspath(args.state)) if args.state else os.path.dirname(os.path.abspath(args.output))
+    )
     cross_changes = build_cross_iteration_changes(baseline_data, current_data)
     trends = build_historical_trends(state_data)
     stability = build_task_stability(task_history, rollout_data=rollout_data)
@@ -688,23 +873,27 @@ def main():
                 actual = "✅ FIXED" if t in actually_fixed else "❌ STILL FAIL"
                 lines.append(f"| {t} | Yes | {actual} |")
             lines.append("")
+
         attribution_verdict = "\n".join(lines)
 
-        # Fill template
+    # Fill template
     template = template.replace("{{CURRENT_OVERVIEW}}", current_overview)
     template = template.replace("{{TASK_CLASSIFICATION}}", task_classification)
     template = template.replace("{{FAILURE_DETAILS}}", failure_details)
     template = template.replace("{{DEBUGGER_ANALYSIS}}", debugger_section)
+    template = template.replace("{{CROSS_ITERATION_TABLE}}", cross_iter_table)
     template = template.replace("{{CROSS_ITERATION_CHANGES}}", cross_changes)
     template = template.replace("{{HISTORICAL_TRENDS}}", trends)
     template = template.replace("{{TASK_STABILITY}}", stability)
     template = template.replace("{{PREVIOUS_ATTRIBUTION}}", attribution_report)
     template = template.replace("{{ATTRIBUTION_VERDICT}}", attribution_verdict)
     template = template.replace("{{STRATEGY_HISTORY}}", strategy_history)
-    template = template.replace("{{CURRENT_CONFIG_YAML}}", config_yaml)
-    template = template.replace("{{SYSTEM_PROMPT}}", system_prompt_ref)
-    template = template.replace("{{MEMORY}}", memory_ref)
-    template = template.replace("{{CONTEXT_MANAGEMENT}}", context_mgmt_ref)
+    template = template.replace("{{PROMPT_LENGTH_REPORT}}", prompt_length_report)
+    # New file-path placeholders (planner reads files directly)
+    template = template.replace("{{AGENT_CONFIG_PATH}}", args.config_yaml)
+    template = template.replace("{{SYSTEM_PROMPT_PATH}}", system_prompt_path)
+    template = template.replace("{{MEMORY_PATH}}", memory_path)
+    template = template.replace("{{CONTEXT_MANAGEMENT_PATH}}", context_mgmt_path)
 
     with open(args.output, "w") as f:
         f.write(template)
