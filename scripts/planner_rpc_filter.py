@@ -129,8 +129,8 @@ def _extract_not_changing_tasks(text: str) -> set:
     # The pattern: a heading or bold marker with keywords, followed by prose
     # containing task IDs.
     patterns = [
-        r'(?:#{0,6}\s*)?(?:What I deliberately did NOT change|Did not change|Left unchanged|Leave(?:d)? alone|Not changing|Out of scope)[^\n]*\n(.*?)(?=\n#{1,6}\s|\Z)',
-        r'\*\*(?:What I did not change|Not changed|Skipped|Out of scope)\*\*:?\s*(.*?)(?=\n\*\*[^*\n]+\*\*:?\s|\Z)',
+    r"(?:#{0,6}\s*)?(?:What I deliberately did NOT change|Did not change|Left unchanged|Leave(?:d)? alone|Not changing|Out of scope|Not addressed|Will not (?:be )?(?:fix|address|chang)(?:ed)?|Won't fix|Skipped|Excluded|Not included)[^\n]*\n(.*?)(?=\n#{1,6}\s|\Z)",
+    r"\*\*(?:What I did not change|Not changed|Skipped|Out of scope|Not addressed|Excluded)\*\*:?\s*(.*?)(?=\n\*\*[^*\n]+\*\*:?\s|\Z)",
     ]
     for pat in patterns:
         for m in re.finditer(pat, text, re.IGNORECASE | re.DOTALL):

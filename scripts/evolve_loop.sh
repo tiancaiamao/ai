@@ -806,6 +806,13 @@ fi
 CONSECUTIVE_REJECTS=0
 LAST_ITER=$((FIRST_ITER + MAX_ITERATIONS - 1))
 
+# BSD seq(1) counts down for `seq 1 0` (outputs "1 0"); guard so we never run
+# extra iterations when MAX_ITERATIONS == 0 or other zero/negative range cases.
+if [[ "$LAST_ITER" -lt "$FIRST_ITER" ]]; then
+    echo "[main] MAX_ITERATIONS=${MAX_ITERATIONS} → no scheduled iterations; exiting."
+    exit 0
+fi
+
 for ITER in $(seq "$FIRST_ITER" "$LAST_ITER"); do
     run_iteration "$ITER"
 
