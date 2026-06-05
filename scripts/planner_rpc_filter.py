@@ -67,7 +67,124 @@ def _parse_task_list(val: str) -> list:
     return items
 
 
-def extract_change_plan(assistant_texts: list) -> dict | None:
+# Known harness files — used to recognize "Target" in prose like "Edited system_prompt.md"
+_HARNESS_FILES = ('system_prompt.md', 'memory.md', 'context_management.md', 'agent.yaml')
+
+# Task-ID shape: starts with letter/digit, contains _ or /, no spaces.
+# Matches: agent_001_forced_exploration, tbench/code-from-image, 003_refactor_duplicated_code
+_TASK_ID_RE = re.compile(r'`?([A-Za-z0-9][\w]*(?:/[\w-]+|_[\w]+)+)`?')
+
+
+def _extract_task_ids_from_text(text: str) -> list:
+    """Extract task-ID-like tokens from free text.
+
+    Scans for backtick-quoted IDs first, then unquoted underscored/slashed
+    identifiers. Filters against a small stopword list so prose like
+    'system_prompt' or 'root_cause' doesn't get captured as a task ID.
+    """
+    stopwords = {
+        'system_prompt', 'memory_md', 'context_management', 'agent_yaml',
+        'root_cause', 'suggested_focus', 'change_plan', 'predicted_fixes',
+        'predicted_risks', 'change_description', 'rationale', 'pass_rate',
+        'agentic_score', 'constraint_violations', 'capability_counts',
+        'failure_analysis', 'cross_iteration', 'task_history',
+    }
+    found = []
+    seen = set()
+    # 1. Backtick-quoted tokens (highest confidence)
+    for m in re.finditer(r'`([A-Za-z0-9][\w\-/]*?)`', text):
+        tok = m.group(1)
+        if (tok not in seen
+                and tok not in _HARNESS_FILES
+                and tok not in stopwords
+                and ('_' in tok or '/' in tok)
+                and len(tok) < 80):
+            found.append(tok)
+            seen.add(tok)
+    # 2. Unquoted IDs (lower confidence — only if we found none in backticks)
+    if not found:
+        for m in _TASK_ID_RE.finditer(text):
+            tok = m.group(1)
+            if (tok not in seen
+                    and tok not in _HARNESS_FILES
+                    and tok not in stopwords
+                    and len(tok) < 80):
+                found.append(tok)
+                seen.add(tok)
+    return found
+
+
+def _split_bold_field_block(text: str, field_names: list) -> dict:
+    """Split text into segments by '**FieldName**:' markers.
+
+    Handles two common markdown styles:
+      - `**Field:** value` (colon inside bold — what planners actually emit)
+      - `**Field**: value` (colon outside bold)
+
+    Returns {canonical_field_name: segment_text} for each field found.
+    A segment runs from its marker until the next field marker or EOL.
+        """
+    alt = '|'.join(re.escape(f) for f in field_names)
+    # Allow colon either inside the bold (`**Field:**`) or outside (`**Field**:`).
+    # Lookahead: end segment at the next bold marker (any `**...**` at line start).
+    pat = re.compile(
+        rf'\*\*({alt}):\*\*\s*(.*?)(?=\n\*\*[^*\n]+:?\*\*:?\s|\Z)',
+        re.DOTALL,
+    )
+    out = {}
+    for m in pat.finditer(text):
+        field = m.group(1)
+        # Normalize field names to canonical (Targeted fixes → Predicted fixes, etc.)
+        canonical = field
+        lower = field.lower()
+        if lower in ('targeted fixes', 'addresses', 'fixes', 'will fix', 'targets'):
+            canonical = 'Predicted fixes'
+        elif lower in ('risk', 'risks', 'regressions', 'predicted risks', 'may break'):
+            canonical = 'Predicted risks'
+        elif lower in ('change', 'proposed change', 'modification', 'edit'):
+            canonical = 'Change description'
+        elif lower in ('rationale', 'why', 'diagnosis', 'reasoning'):
+            canonical = 'Rationale'
+        elif lower in ('target', 'target file', 'file'):
+            canonical = 'Target'
+        # First occurrence wins (segments end at the next marker).
+        if canonical not in out:
+            out[canonical] = m.group(2).strip()
+    return out
+
+
+def _expand_task_ids(short_ids: list, known_ids: list) -> list:
+    """Expand short task IDs to full IDs using the manifest's known IDs.
+
+    E.g. ['agent_011', 'tbench/db-wal'] →
+         ['agent_011_compact_tool_call_mismatch', 'tbench/db-wal-recovery']
+
+    Matching rules:
+      - Exact match → keep as-is
+      - Known ID startswith short_id (with delimiter after) → expand
+      - Ambiguous (multiple matches) → keep original short id (safer)
+      - No match → keep original short id (will be filtered by attribution
+        eval when no full ID matches; at least it stays visible)
+    """
+    if not short_ids or not known_ids:
+        return short_ids
+    out = []
+    for sid in short_ids:
+        if sid in known_ids:
+            out.append(sid)
+            continue
+        candidates = [k for k in known_ids if k.startswith(sid)
+                      and (len(sid) == len(k) or k[len(sid)] in ('_', '-', '/'))]
+        if len(candidates) == 1:
+            out.append(candidates[0])
+        else:
+            # Ambiguous or none — keep original
+            out.append(sid)
+    return out
+
+
+def extract_change_plan(assistant_texts: list, tool_edits: list = None,
+                        known_task_ids: list = None) -> dict | None:
     """Extract Change Plan from planner's assistant messages.
 
     Tries (in order):
@@ -75,20 +192,33 @@ def extract_change_plan(assistant_texts: list) -> dict | None:
       2. `### Summary of changes` / `### Why these changes should work` /
          `### Expected Impact` (post-hoc summary blocks planner may write
          after tool edits).
-      3. Bare bold-field lines anywhere in text (e.g. **Target**: ...).
-      4. A `Target: ...` line (no bold).
-    Returns None only if no Target-like line can be found.
+      3. `## Summary` block with natural-language fields like
+         `**Change:**`, `**Targeted fixes:**`, `**Risk:**` — handles prose
+         planners that ignore the canonical format but still structure
+         their conclusion.
+      4. Bare bold-field lines anywhere in text (e.g. **Target**: ...).
+      5. A `Target: ...` line (no bold).
+
+    Args:
+        assistant_texts: list of planner text outputs.
+        tool_edits: list of harness files actually edited (e.g.
+            ['system_prompt.md']). Used as fallback for the Target field
+            and to validate Target parsed from text.
+
+    Returns None only if no target can be inferred from text AND no
+    tool_edits were made.
     """
     full_text = "\n".join(assistant_texts)
     if not full_text.strip():
         return None
+
+    tool_edits = tool_edits or []
 
     # Strategy 1: formal `## Change Plan` section
     cp_match = re.search(
         r'^##\s+Change Plan\s*\n(.*?)(?=^##\s|\Z)',
         full_text, re.MULTILINE | re.DOTALL
     )
-
     if cp_match:
         block = cp_match.group(1)
         result = _parse_block_fields(block)
@@ -106,12 +236,75 @@ def extract_change_plan(assistant_texts: list) -> dict | None:
         if result and result.get('target'):
             return result
 
-    # Strategy 3 + 4: scan full text for any field marker.
+        # Strategy 3: natural-language summary in prose (no `## Summary` heading
+    # required). Planner often writes prose with bold-field markers like
+    # `**Proposed change:**` followed by a markdown table whose "Targets"
+    # column lists task IDs. We extract from these patterns anywhere in text.
+    fields = _split_bold_field_block(full_text, [
+        'Target', 'Target file', 'File',
+        'Change', 'Proposed change', 'Modification', 'Edit',
+        'Targeted fixes', 'Addresses', 'Fixes', 'Will fix', 'Targets',
+        'Predicted fixes',
+        'Risk', 'Risks', 'Regressions', 'Predicted risks', 'May break',
+        'Rationale', 'Why', 'Diagnosis', 'Reasoning',
+    ])
+    # Resolve Target — prefer text, fall back to tool_edits
+    target = fields.get('Target')
+    if not target and tool_edits:
+        target = tool_edits[0] if len(tool_edits) == 1 else 'multiple'
+            # Also check the Change description for a harness file mention
+    if not target and fields.get('Change description'):
+        for hf in _HARNESS_FILES:
+            if hf in fields['Change description']:
+                target = hf
+                break
+    if target:
+        fixes_text = fields.get('Predicted fixes', '')
+        risks_text = fields.get('Predicted risks', '')
+        change_text = fields.get('Change description', '')
+        predicted_fixes = _extract_task_ids_from_text(fixes_text) if fixes_text else []
+        # Planners often embed task IDs in the Change description (e.g. as a
+        # "Targets" column in a markdown table). Fall back to that.
+        if not predicted_fixes and change_text:
+            predicted_fixes = _extract_task_ids_from_text(change_text)
+        predicted_risks = _extract_task_ids_from_text(risks_text) if risks_text else []
+        if predicted_fixes or change_text:
+            return _with_expanded_ids({
+                'target': target,
+                'predicted_fixes': predicted_fixes,
+                'predicted_risks': predicted_risks,
+                'rationale': fields.get('Rationale', change_text or '(from prose)'),
+                'change_description': change_text or f'Edited {target}',
+                'extraction_method': 'strategy_3_prose_summary',
+            }, known_task_ids)
+
+    # Strategy 4 + 5: scan full text for any field marker.
     result = _parse_block_fields(full_text)
     if result and result.get('target'):
-        return result
+        return _with_expanded_ids(result, known_task_ids)
+
+    # Final fallback: if tool_edits exist, synthesize minimal plan
+    if tool_edits:
+        return _with_expanded_ids({
+            'target': tool_edits[0] if len(tool_edits) == 1 else 'multiple',
+            'predicted_fixes': [],
+            'predicted_risks': [],
+            'rationale': '(no formal Change Plan block; target inferred from tool edits)',
+            'change_description': f'Edited {", ".join(tool_edits)}',
+            'extraction_warning': 'planner did not output formal Change Plan; predictions unavailable',
+        }, known_task_ids)
 
     return None
+
+
+def _with_expanded_ids(plan: dict, known_task_ids: list) -> dict:
+    """Expand short task IDs to full IDs (in-place + return)."""
+    if known_task_ids and plan:
+        if plan.get('predicted_fixes'):
+            plan['predicted_fixes'] = _expand_task_ids(plan['predicted_fixes'], known_task_ids)
+        if plan.get('predicted_risks'):
+            plan['predicted_risks'] = _expand_task_ids(plan['predicted_risks'], known_task_ids)
+    return plan
 
 
 def _parse_block_fields(block: str) -> dict | None:
@@ -166,6 +359,9 @@ def main():
     parser.add_argument('--iteration', default='?', help='Iteration number for summary header')
     parser.add_argument('--summary-output', required=True, help='Path for planner-summary.md')
     parser.add_argument('--result-output', required=True, help='Path for planner-result.json')
+    parser.add_argument('--manifest', default=None,
+                        help='Path to evolve-manifest.json — used to expand short task IDs '
+                             '(e.g. agent_011 → agent_011_compact_tool_call_mismatch)')
     args = parser.parse_args()
 
     text_parts = []
@@ -242,8 +438,18 @@ def main():
             if ':' in content and '\n' in content:
                 yaml_config = content
 
-                # ─── Extract Change Plan from text output ───
-    change_plan = extract_change_plan(text_parts)
+                                    # ─── Extract Change Plan from text output ───
+    # Load manifest task IDs (for short-form → full ID expansion)
+    known_task_ids = []
+    if args.manifest and os.path.exists(args.manifest):
+        try:
+            with open(args.manifest) as f:
+                manifest = json.load(f)
+            known_task_ids = manifest.get('tasks', [])
+        except Exception as e:
+            print(f'[planner-filter] WARN: could not read manifest {args.manifest}: {e}', file=sys.stderr)
+    change_plan = extract_change_plan(text_parts, tool_edits=sorted(edited_files),
+                                      known_task_ids=known_task_ids)
 
     # Fallback: if planner didn't use the formal format but clearly decided no changes,
     # synthesize a no-change plan from the text
@@ -267,28 +473,6 @@ def main():
                 'rationale': rationale,
                 'change_description': 'No changes'
             }
-
-            # Fallback 2: if planner made actual changes (tool_edits non-empty) but didn't use
-    # the formal Change Plan format, synthesize a minimal change plan. We DO NOT try
-    # to guess predicted_fixes/risks from free text — that produces garbage that
-    # pollutes the attribution eval. Leave them empty and flag it.
-    if change_plan is None and edited_files:
-        rationale = f'Planner edited: {", ".join(sorted(edited_files))} (no formal Change Plan block found)'
-        # Use first substantive line of text (if any) as a hint, but not as task IDs
-        for line in all_text.split('\n'):
-            line = line.strip()
-            if line and len(line) > 30 and not line.startswith('#') and not line.startswith('['):
-                rationale = line[:200]
-                break
-
-        change_plan = {
-            'target': sorted(edited_files)[0] if len(edited_files) == 1 else 'multiple',
-            'predicted_fixes': [],  # empty — we don't guess from prose
-            'predicted_risks': [],  # empty — we don't guess from prose
-            'rationale': rationale,
-            'change_description': f'Edited {", ".join(sorted(edited_files))}',
-            'extraction_warning': 'planner did not output formal Change Plan; predictions unavailable'
-        }
 
     # ─── Build result JSON ───
     result = {

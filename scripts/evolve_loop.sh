@@ -346,12 +346,17 @@ function run_iteration() {
     local ARTIFACTS_DIR="${EVOLVE_DIR}/iter-${ITER}-artifacts"
     mkdir -p "${ARTIFACTS_DIR}/traces"
 
-            # 1. Snapshot entire agent/ dir (for full reproducibility / retroactive analysis)
+                # 1. Snapshot entire agent/ dir (for full reproducibility / retroactive analysis)
+    #
+    # NOTE: AGENT_DIR (agent/) is a *parent* of SNAPSHOT_DIR
+    # (agent/benchmarks/evolve/iter-N/agent-snapshot/), so a naive `cp -a`
+    # would recurse into itself and explode the path. Use rsync with
+    # --exclude='benchmarks' to break the cycle.
     local AGENT_DIR
     AGENT_DIR=$(dirname "${AGENT_CONFIG}")
     local SNAPSHOT_DIR="${ARTIFACTS_DIR}/agent-snapshot"
     mkdir -p "${SNAPSHOT_DIR}"
-    cp -a "${AGENT_DIR}/." "${SNAPSHOT_DIR}/" \
+    rsync -a --exclude='benchmarks' "${AGENT_DIR}/" "${SNAPSHOT_DIR}/" \
         || die "Failed to snapshot agent/ directory to ${SNAPSHOT_DIR}"
     echo "  [1/7] Agent snapshot -> ${SNAPSHOT_DIR}"
 
@@ -535,8 +540,9 @@ print(rpc_msg)
         --agent-config "${AGENT_CONFIG}" \
         --system-prompt "@${PROJECT_ROOT}/docs/design/planner-system-prompt.md" \
         2>"${ARTIFACTS_DIR}/planner-stderr.log" \
-        | python3 "${PROJECT_ROOT}/scripts/planner_rpc_filter.py" \
+                | python3 "${PROJECT_ROOT}/scripts/planner_rpc_filter.py" \
         --iteration "${ITER}" \
+        --manifest "${MANIFEST}" \
         --summary-output "${ARTIFACTS_DIR}/planner-summary.md" \
         --result-output "${ARTIFACTS_DIR}/planner-result.json"
 
