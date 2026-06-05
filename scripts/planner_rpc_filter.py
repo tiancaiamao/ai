@@ -81,9 +81,10 @@ _TASK_ID_RE = re.compile(r'`?([A-Za-z0-9][\w]*(?:/[\w-]+|_[\w]+)+)`?')
 def _extract_task_ids_from_text(text: str) -> list:
     """Extract task-ID-like tokens from free text.
 
-    Scans for backtick-quoted IDs first, then unquoted underscored/slashed
-    identifiers. Filters against a small stopword list so prose like
-    'system_prompt' or 'root_cause' doesn't get captured as a task ID.
+    Scans for backtick-quoted IDs first, then ALSO unquoted underscored/slashed
+    identifiers (cumulative — both scans run, dedup'd). Filters against a
+    small stopword list so prose like 'system_prompt' or 'root_cause' doesn't
+    get captured as a task ID.
     """
     stopwords = {
         'system_prompt', 'memory_md', 'context_management', 'agent_yaml',
@@ -104,16 +105,17 @@ def _extract_task_ids_from_text(text: str) -> list:
                 and len(tok) < 80):
             found.append(tok)
             seen.add(tok)
-    # 2. Unquoted IDs (lower confidence — only if we found none in backticks)
-    if not found:
-        for m in _TASK_ID_RE.finditer(text):
-            tok = m.group(1)
-            if (tok not in seen
-                    and tok not in _HARNESS_FILES
-                    and tok not in stopwords
-                                    and len(tok) < 80):
-                found.append(tok)
-                seen.add(tok)
+    # 2. Unquoted IDs — also scan, but only accept if it looks like a task ID
+    # (has digits OR matches manifest pattern). We no longer gate this on
+    # "no backtick IDs found" — table cells often mix quoted + unquoted.
+    for m in _TASK_ID_RE.finditer(text):
+        tok = m.group(1)
+        if (tok not in seen
+                and tok not in _HARNESS_FILES
+                and tok not in stopwords
+                and len(tok) < 80):
+            found.append(tok)
+            seen.add(tok)
     return found
 
 
@@ -154,6 +156,74 @@ def _extract_not_changing_tasks(text: str) -> set:
     for m in re.finditer(r'(?:^|\n)\s*[-*]\s*Watch(?:\s+only)?:\s*`([A-Za-z0-9][\w\-/]*?)`', text, re.IGNORECASE):
         not_changing.add(m.group(1))
     return not_changing
+
+
+def _extract_md_section(text: str, heading_pat: str) -> str:
+    """Extract the body following a markdown heading matched by `heading_pat`.
+
+    `heading_pat` is the regex for the heading TITLE (without `###` prefix).
+    Heading may be H1-H4. The body extends until the next heading of equal
+    or shallower depth (i.e. a `## ...` line ends a `### ...` section).
+    """
+    full_pat = (
+        r'(?:^|\n)#{1,4}\s+' + heading_pat +
+        r'[^\n]*\n(.*?)(?=\n#{1,4}\s|\Z)'
+    )
+    m = re.search(full_pat, text, re.IGNORECASE | re.DOTALL)
+    return m.group(1) if m else ''
+
+
+def _parse_predicted_table(text: str) -> tuple[list, list]:
+    """Parse `### Predicted effects` / `### Predicted risks` markdown tables.
+
+    Returns (predicted_fixes, predicted_risks). Recognises headings like:
+      - `### Predicted effects`, `### Predicted fixes`
+      - `### Predicted risks`, `### Risks`
+    Then parses the markdown table that follows. Each data row's first cell
+    is one or more task IDs (backtick-quoted or bare); for `effects/fixes`
+    rows we only include rows where the second column contains "fix".
+    For risks we include all listed tasks.
+        """
+    fixes: list[str] = []
+    risks: list[str] = []
+
+        # Predicted fixes / effects
+    fix_section = _extract_md_section(
+        text,
+        r'(?:Predicted\s+effects|Predicted\s+fixes|Expected\s+fixes)',
+    )
+    if fix_section:
+        for line in fix_section.split('\n'):
+            if not line.startswith('|') or '---' in line:
+                continue
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            if len(cells) < 2 or cells[0].lower() == 'task':
+                continue
+            second = cells[1].lower()
+            # Only count rows marked as "fix" (not "no change" / "neutral")
+            if 'fix' not in second and '✓' not in cells[1] and '✅' not in cells[1]:
+                continue
+            for tid in _extract_task_ids_from_text(cells[0]):
+                if tid not in fixes:
+                    fixes.append(tid)
+
+            # Predicted risks
+    risk_section = _extract_md_section(
+        text,
+        r'(?:Predicted\s+risks|Risks\s+table|Risk\s+assessment)',
+    )
+    if risk_section:
+        for line in risk_section.split('\n'):
+            if not line.startswith('|') or '---' in line:
+                continue
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            if len(cells) < 2 or cells[0].lower() in ('task', 'all passing tasks', 'all tasks'):
+                continue
+            for tid in _extract_task_ids_from_text(cells[0]):
+                if tid not in risks:
+                    risks.append(tid)
+
+    return fixes, risks
 
 
 def _split_bold_field_block(text: str, field_names: list) -> dict:
@@ -220,8 +290,13 @@ def _expand_task_ids(short_ids: list, known_ids: list) -> list:
         if sid in known_ids:
             out.append(sid)
             continue
+        # Try prefix match first (e.g. "agent_011" → "agent_011_...")
         candidates = [k for k in known_ids if k.startswith(sid)
                       and (len(sid) == len(k) or k[len(sid)] in ('_', '-', '/'))]
+        # Then try suffix match (e.g. "009_partial_info" → "agent_009_partial_info")
+        if not candidates:
+            candidates = [k for k in known_ids if k.endswith(sid)
+                          and (len(sid) == len(k) or k[-len(sid)-1] in ('_', '-', '/'))]
         if len(candidates) == 1:
             out.append(candidates[0])
         else:
@@ -299,8 +374,11 @@ def extract_change_plan(assistant_texts: list, tool_edits: list = None,
         'Expected impact', 'Impact',
         'Plan', 'Budget check',
     ])
-    # Strategy 3 only makes sense if at least one bold field was found.
-    if fields:
+        # Strategy 3 only makes sense if at least one bold field was found OR
+    # the planner used a `### Predicted effects` / `### Predicted risks`
+    # markdown table (iter-2 planner style — no bold fields at all).
+    table_fixes_peek, _ = _parse_predicted_table(full_text)
+    if fields or table_fixes_peek:
         # Resolve Target — prefer text, fall back to tool_edits
         target = fields.get('Target')
         if not target and tool_edits:
@@ -315,43 +393,52 @@ def extract_change_plan(assistant_texts: list, tool_edits: list = None,
             fixes_text = fields.get('Predicted fixes', '')
             risks_text = fields.get('Predicted risks', '')
             change_text = fields.get('Change description', '')
-            predicted_fixes = _extract_task_ids_from_text(fixes_text) if fixes_text else []
-            # Planners often embed task IDs in the Change description (e.g. as a
-            # "Targets" column in a markdown table). Fall back to that.
-            if not predicted_fixes and change_text:
-                predicted_fixes = _extract_task_ids_from_text(change_text)
-            # Still no task IDs? Scan the ENTIRE prose. The planner may list
-            # failures with task IDs in tables or "Expected impact" prose
-            # without putting them in any formal field.
-            if not predicted_fixes:
-                predicted_fixes = _extract_task_ids_from_text(full_text)
+
+            # Prefer markdown tables (`### Predicted effects` / `### Predicted risks`)
+            # over bold-field lists when both are present — tables are more structured.
+            table_fixes, table_risks = _parse_predicted_table(full_text)
+
+            if table_fixes:
+                predicted_fixes = table_fixes
+            else:
+                predicted_fixes = _extract_task_ids_from_text(fixes_text) if fixes_text else []
+                # Planners often embed task IDs in the Change description (e.g. as a
+                # "Targets" column in a markdown table). Fall back to that.
+                if not predicted_fixes and change_text:
+                    predicted_fixes = _extract_task_ids_from_text(change_text)
+                # Still no task IDs? Scan the ENTIRE prose.
+                if not predicted_fixes:
+                    predicted_fixes = _extract_task_ids_from_text(full_text)
+
             # Exclude tasks the planner explicitly said are NOT being changed.
             not_changing_raw = _extract_not_changing_tasks(full_text)
-            # Expand not_changing to full IDs so prefix forms match too.
             not_changing_expanded = set(_expand_task_ids(list(not_changing_raw), known_task_ids or []))
             not_changing_expanded.update(not_changing_raw)
-            # Expand predicted_fixes too (so short form matches full form)
             predicted_fixes = _expand_task_ids(predicted_fixes, known_task_ids or [])
             predicted_fixes = [t for t in predicted_fixes if t not in not_changing_expanded]
-            # Dedup while preserving order.
             seen = set()
             predicted_fixes = [t for t in predicted_fixes if not (t in seen or seen.add(t))]
-            # Filter out constraint names that aren't task IDs.
             constraint_names = {
                 'fix_first_error_seen', 'investigated_root_cause',
                 'test_capability', 'close_loop', 'no_test_run',
                 'over_broad_fix', 'reproduced_failure',
             }
             predicted_fixes = [t for t in predicted_fixes if t not in constraint_names]
-            # Trim target value (drop trailing headings/whitespace + markdown)
+
+            # Trim target value
             target = re.split(r'\n+#{1,6}\s', target)[0].strip()
             target = re.sub(r'^`([^`]+)`.*$', r'\1', target)
-            predicted_risks = _extract_task_ids_from_text(risks_text) if risks_text else []
-            # Filter out obvious non-task tokens (constraint names, prose
-            # fragments). predicted_risks should be a subset of known tasks
-            # the planner expects to regress, not free-form text.
+
+                        # Predicted risks: prefer table, fall back to bold-field
+            if table_risks:
+                predicted_risks = table_risks
+            else:
+                predicted_risks = _extract_task_ids_from_text(risks_text) if risks_text else []
+            # Expand short task IDs then filter to known tasks.
+            predicted_risks = _expand_task_ids(predicted_risks, known_task_ids or [])
             if known_task_ids:
                 predicted_risks = [t for t in predicted_risks if t in known_task_ids]
+
             rationale = (fields.get('Rationale')
                          or fields.get('Plan')
                          or change_text
