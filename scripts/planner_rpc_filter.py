@@ -129,8 +129,12 @@ def _extract_not_changing_tasks(text: str) -> set:
     # The pattern: a heading or bold marker with keywords, followed by prose
     # containing task IDs.
     patterns = [
-    r"(?:#{0,6}\s*)?(?:What I deliberately did NOT change|Did not change|Left unchanged|Leave(?:d)? alone|Not changing|Out of scope|Not addressed|Will not (?:be )?(?:fix|address|chang)(?:ed)?|Won't fix|Skipped|Excluded|Not included)[^\n]*\n(.*?)(?=\n#{1,6}\s|\Z)",
-    r"\*\*(?:What I did not change|Not changed|Skipped|Out of scope|Not addressed|Excluded)\*\*:?\s*(.*?)(?=\n\*\*[^*\n]+\*\*:?\s|\Z)",
+        # Section heading style — anchor to line start (with optional `#`s).
+        # The anchor prevents mid-line matches like markdown table cells that
+        # happen to contain the keyword.
+        r"(?:^|\n)(?:#{0,6}\s*)(?:What I deliberately did NOT change|Did not change|Left unchanged|Leave(?:d)? alone|Not changing|Out of scope|Not addressed|Will not (?:be )?(?:fix|address|chang)(?:ed)?|Won't fix|Skipped|Excluded|Not included)[^\n]*\n(.*?)(?=\n#{1,6}\s|\Z)",
+        # Bold marker style — `**Not addressed:** ...`
+        r"\*\*(?:What I did not change|Not changed|Skipped|Out of scope|Not addressed|Excluded)\*\*:?\s*(.*?)(?=\n\*\*[^*\n]+\*\*:?\s|\Z)",
     ]
     for pat in patterns:
         for m in re.finditer(pat, text, re.IGNORECASE | re.DOTALL):
@@ -140,8 +144,14 @@ def _extract_not_changing_tasks(text: str) -> set:
             for tid in _extract_task_ids_from_text(seg):
                 not_changing.add(tid)
     # Also: any task ID mentioned alongside "no prompt change" or
-    # "no task-specific" or "unrelated to prompt".
-    for m in re.finditer(r'`([A-Za-z0-9][\w\-/]*?)`[^\n.]{0,120}?(?:no prompt change|unrelated to prompt|no change warranted|leave[^\n]*alone|not warranted)', text, re.IGNORECASE):
+    # "unrelated to prompt" / "Watch only:" prefix / "won't speculate".
+    for m in re.finditer(
+        r"`([A-Za-z0-9][\w\-/]*?)`[^\n.]{0,120}?(?:no prompt change|unrelated to prompt|no change warranted|leave[^\n]*alone|not warranted|need more data|won['\"]t (?:speculate|address|fix)|not (?:worth|warranted|addressing))",
+        text, re.IGNORECASE,
+    ):
+        not_changing.add(m.group(1))
+    # Also: "Watch only: `<task>`" list items
+    for m in re.finditer(r'(?:^|\n)\s*[-*]\s*Watch(?:\s+only)?:\s*`([A-Za-z0-9][\w\-/]*?)`', text, re.IGNORECASE):
         not_changing.add(m.group(1))
     return not_changing
 
@@ -336,6 +346,11 @@ def extract_change_plan(assistant_texts: list, tool_edits: list = None,
             target = re.split(r'\n+#{1,6}\s', target)[0].strip()
             target = re.sub(r'^`([^`]+)`.*$', r'\1', target)
             predicted_risks = _extract_task_ids_from_text(risks_text) if risks_text else []
+            # Filter out obvious non-task tokens (constraint names, prose
+            # fragments). predicted_risks should be a subset of known tasks
+            # the planner expects to regress, not free-form text.
+            if known_task_ids:
+                predicted_risks = [t for t in predicted_risks if t in known_task_ids]
             rationale = (fields.get('Rationale')
                          or fields.get('Plan')
                          or change_text
