@@ -168,10 +168,11 @@ def _split_bold_field_block(text: str, field_names: list) -> dict:
     """
     alt = '|'.join(re.escape(f) for f in field_names)
     # Allow colon either inside the bold (`**Field:**`) or outside (`**Field**:`).
-    # Lookahead: end segment at the next bold marker (any `**...**` at line start).
+    # Marker may appear at line start OR after a list bullet (-, *, +).
+    # Lookahead: end segment at the next list-or-line-start bold marker.
     pat = re.compile(
-        rf'\*\*({alt}):?\*\*:?\s*(.*?)(?=\n\*\*[^*\n]+\*\*:?\s|\Z)',
-                re.DOTALL,
+        rf'\*\*({alt}):?\*\*:?\s*(.*?)(?=\n(?:\s*[-*+]\s+)?\*\*[^*\n]+\*\*:?\s|\Z)',
+        re.DOTALL,
     )
     out = {}
     for m in pat.finditer(text):

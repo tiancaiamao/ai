@@ -46,8 +46,10 @@ while [[ $# -gt 0 ]]; do
             AGENT_CONFIG="$2"; shift 2 ;;
         --max-iterations)
             MAX_ITERATIONS="$2"; shift 2 ;;
-        --timeout)
+                --timeout)
             TIMEOUT="$2"; shift 2 ;;
+        --timeout-seconds)
+            TIMEOUT="${2}s"; shift 2 ;;
         --evolve-dir)
             EVOLVE_DIR="$2"; shift 2 ;;
         --start-iteration)
@@ -634,7 +636,9 @@ try:
         data = json.load(f)
     targets = set()
     for edit in data.get('tool_edits', []):
-        path = edit.get('file_path', '')
+        # tool_edits is a list of file-path strings (canonical form).
+        # Older planners may have emitted dicts with `file_path` — accept both.
+        path = edit.get('file_path', '') if isinstance(edit, dict) else str(edit or '')
         if 'system_prompt.md' in path:
             targets.add('system_prompt.md')
         elif 'memory.md' in path:
@@ -663,8 +667,12 @@ MULTI_TARGET_EOF
         fi
     fi
 
-    # --- Generate attribution evaluation (benchmark results available) ---
-    if [[ -f "${EVOLVE_DIR}/attribution-${ITER}.json" ]]; then
+        # --- Generate attribution evaluation (benchmark results available) ---
+    # We evaluate the PREVIOUS iteration's attribution (planner's predicted
+    # fixes/risks for THIS iteration). For iter-N, we load attribution-(N-1)
+    # and compare iteration-(N-1) → iteration-N transitions.
+    # Special case: iter-0 has no prior attribution to evaluate.
+    if [[ "${ITER}" -gt 0 ]] && [[ -f "${EVOLVE_DIR}/attribution-$((ITER - 1)).json" ]]; then
         ITER="${ITER}" EVOLVE_DIR="${EVOLVE_DIR}" ARTIFACTS_DIR="${ARTIFACTS_DIR}" \
         python3 << 'ATTR_EVAL_EOF'
 import json, sys, os
@@ -673,17 +681,18 @@ iter_num = int(os.environ.get('ITER', '0'))
 evolve_dir = os.environ.get('EVOLVE_DIR', '')
 artifacts_dir = os.environ.get('ARTIFACTS_DIR', '')
 
-# Load attribution
-with open(os.path.join(evolve_dir, f'attribution-{iter_num}.json')) as f:
+# Evaluate PREVIOUS iteration's attribution (their predictions were about
+# THIS iteration's benchmark outcome).
+prev_iter = iter_num - 1
+with open(os.path.join(evolve_dir, f'attribution-{prev_iter}.json')) as f:
     attr = json.load(f)
 
 predicted_fixes = attr.get('predicted_fixes', [])
 predicted_risks = attr.get('predicted_risks', [])
 
-# Load current and previous results
+# Compare prev_iter (the baseline we predicted FROM) to iter_num (where we landed).
 cur_file = os.path.join(evolve_dir, f'iteration-{iter_num}.json')
-prev_iter = iter_num - 1
-prev_file = os.path.join(evolve_dir, f'iteration-{prev_iter}.json') if prev_iter >= 0 else None
+prev_file = os.path.join(evolve_dir, f'iteration-{prev_iter}.json')
 
 def get_task_results(filepath):
     if not filepath or not os.path.exists(filepath):
@@ -720,14 +729,31 @@ for task, status in prev_results.items():
     if status == 'pass' and cur_results.get(task) != 'pass' and task not in predicted_risks:
         unexpected.append(task)
 
-# Verdict
+# Verdict — net-impact aware:
+#   SUCCESS    : all predicted fixed, no regressions
+#   PARTIAL    : some predicted fixed, no regressions
+#   MIXED      : some predicted fixed AND unexpected regressions (net positive
+#                or neutral — i.e. fixes outweigh regressions)
+#   HARMFUL    : regressions exceed fixes (net negative), OR all predicted
+#                fixes failed AND any regression occurred
+#   INEFFECTIVE: nothing changed in either direction
+#   NO_PLAN    : planner produced no predictions
 if not predicted_fixes:
     verdict = "NO_PLAN"
 elif len(actually_fixed) == len(predicted_fixes) and not actual_regressions and not unexpected:
     verdict = "SUCCESS"
 elif actually_fixed and not actual_regressions and not unexpected:
     verdict = "PARTIAL"
-elif actual_regressions or unexpected:
+elif actually_fixed and (actual_regressions or unexpected):
+    # Net-positive: more fixes than regressions
+    total_reg = len(actual_regressions) + len(unexpected)
+    if len(actually_fixed) > total_reg:
+        verdict = "MIXED"
+    elif len(actually_fixed) == total_reg:
+        verdict = "MIXED"  # neutral — let decision pass through
+    else:
+        verdict = "HARMFUL"  # net negative
+elif (actual_regressions or unexpected) and not actually_fixed:
     verdict = "HARMFUL"
 else:
     verdict = "INEFFECTIVE"
