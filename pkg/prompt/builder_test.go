@@ -130,10 +130,10 @@ func TestBuilderSkillsRendering(t *testing.T) {
 	if !contains(result, "## Skills") {
 		t.Error("skills header missing")
 	}
-	if !contains(result, "- **wf-issue**: issue workflow (/tmp/wf-issue/SKILL.md)") {
+	if !contains(result, "- **wf-issue**: issue workflow") {
 		t.Error("full skill entry missing")
 	}
-	if !contains(result, "- **subagent**: subagent workflow (/tmp/subagent/SKILL.md)") {
+	if !contains(result, "- **subagent**: subagent workflow") {
 		t.Error("full skill entry missing")
 	}
 }
