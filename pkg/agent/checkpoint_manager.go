@@ -90,7 +90,20 @@ func (m *AgentContextCheckpointManager) CreateSnapshot(
 		AgentState:     agentState,
 	}
 
-	info, err := agentctx.SaveCheckpoint(m.sessionDir, snapshot, totalTurns, m.messageIndex)
+	// Persist MessageIndex = current journal length, so that future
+	// Reconstruct() calls replay only entries written AFTER this checkpoint.
+	// The legacy m.messageIndex counter (incremented by AppendMessage) is
+	// unreliable in production: the Session write path bypasses AppendMessage,
+	// leaving the counter at 0 forever. Reading the on-disk journal length
+	// gives the correct value regardless of which writer produced the entries.
+	messageIndex := m.messageIndex
+	if m.journal != nil {
+		if n := m.journal.GetLength(); n > messageIndex {
+			messageIndex = n
+		}
+	}
+
+	info, err := agentctx.SaveCheckpoint(m.sessionDir, snapshot, totalTurns, messageIndex)
 	if err != nil {
 		return 0, fmt.Errorf("failed to save checkpoint: %w", err)
 	}

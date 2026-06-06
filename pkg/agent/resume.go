@@ -19,7 +19,8 @@ import (
 //     sess.GetMessages()).
 //
 // Returns:
-//   - messages: reconstructed RecentMessages (checkpoint + replayed post-checkpoint entries)
+//   - messages: reconstructed RecentMessages (checkpoint snapshot + replayed
+//     post-checkpoint journal entries)
 //   - llmContext: LLM context from the checkpoint ("" if no checkpoint)
 //   - agentState: agent state from the checkpoint (nil if no checkpoint)
 //   - err: any I/O or parsing error
@@ -35,7 +36,7 @@ func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage
 		return fallbackMessages, "", nil, nil
 	}
 
-		cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir)
+	cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir)
 	if err != nil {
 		// "no checkpoints found" or missing index file → fallback path.
 		// We treat any load error as "no checkpoint available" rather than
@@ -47,17 +48,26 @@ func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage
 		return fallbackMessages, "", nil, nil
 	}
 
-	snapshot, err := agentctx.LoadCheckpoint(sessionDir, cpInfo)
+	// Read the journal (session-format messages.jsonl) and replay entries
+	// after cpInfo.MessageIndex on top of the checkpoint snapshot. This is
+	// the path that was missing in the original rpcApp.createBaseContext
+	// implementation: that code used snapshot.RecentMessages directly,
+	// silently dropping any messages written after the checkpoint.
+	journal, err := agentctx.OpenJournal(sessionDir)
 	if err != nil {
-		return fallbackMessages, "", nil, fmt.Errorf("load checkpoint: %w", err)
+		return fallbackMessages, "", nil, fmt.Errorf("open journal: %w", err)
+	}
+	defer journal.Close()
+
+	entries, err := journal.ReadAll()
+	if err != nil {
+		return fallbackMessages, "", nil, fmt.Errorf("read journal: %w", err)
 	}
 
-	// TEMPORARY (buggy) implementation — matches current rpc_app.createBaseContext
-	// behavior. Will be replaced by proper Reconstruct() in the fix.
-	if len(snapshot.RecentMessages) > 0 {
-		return snapshot.RecentMessages, snapshot.LLMContext, snapshot.AgentState, nil
+	snapshot, err := agentctx.ReconstructSnapshotWithCheckpoint(sessionDir, cpInfo, entries)
+	if err != nil {
+		return fallbackMessages, "", nil, fmt.Errorf("reconstruct snapshot: %w", err)
 	}
 
-	// No RecentMessages in checkpoint — use fallback.
-	return fallbackMessages, "", snapshot.AgentState, nil
+	return snapshot.RecentMessages, snapshot.LLMContext, snapshot.AgentState, nil
 }

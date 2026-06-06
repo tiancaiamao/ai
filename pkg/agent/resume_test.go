@@ -42,7 +42,7 @@ func TestResume_ReplaysPostCheckpointMessages(t *testing.T) {
 		}
 	}
 
-		// Step 2: snapshot current state and save as a checkpoint.
+	// Step 2: snapshot current state and save as a checkpoint.
 	// Use the production SaveCheckpoint path: recent messages come from the
 	// session, and MessageIndex must reflect the journal length AT THIS POINT
 	// so that replay can skip entries already represented in the snapshot.
@@ -89,7 +89,7 @@ func TestResume_ReplaysPostCheckpointMessages(t *testing.T) {
 	if gotLLMCtx != "# Current Task\npre-checkpoint work" {
 		t.Errorf("LLMContext = %q, want checkpoint's LLMContext", gotLLMCtx)
 	}
-		if gotState == nil {
+	if gotState == nil {
 		t.Error("AgentState = nil, want non-nil")
 	} else if gotState.TotalTurns != 7 {
 		t.Errorf("TotalTurns = %d, want 7 (preserved from checkpoint)", gotState.TotalTurns)
