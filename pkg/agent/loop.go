@@ -79,6 +79,12 @@ type LoopConfig struct {
 	// CacheMode controls how runtime_state telemetry is managed.
 	// CacheModeAuto (default) auto-detects from model name.
 	CacheMode CacheMode
+	// AgentInstructions is the project-level instructions (e.g. AGENTS.md content
+	// wrapped in <agent:instructions> tags) injected as a user message before the
+	// last user input on each LLM call. Empty means no injection.
+	// This mirrors the codex contextual_user_message pattern, keeping the system
+	// prompt stable for caching while still providing project context per turn.
+	AgentInstructions string
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.

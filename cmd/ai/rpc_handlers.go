@@ -80,6 +80,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	loopCfg.GetWorkingDir = app.ws.GetCWD
 	loopCfg.GetStartupPath = app.ws.GetInitialCWD
 	loopCfg.RunID = app.runID
+	loopCfg.AgentInstructions = app.agentInstructions
 	loopCfg.GetSessionDir = func() string {
 		if app.sess != nil {
 			return app.sess.GetDir()

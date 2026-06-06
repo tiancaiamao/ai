@@ -82,6 +82,24 @@ func streamAssistantResponse(
 		}
 	}
 
+	// Inject project-level agent instructions (e.g. AGENTS.md) as an ephemeral
+	// user message just before the last user input. This content is NOT persisted
+	// to RecentMessages — it is re-injected on every LLM call so the LLM always
+	// sees fresh instructions without bloating session history.
+	//
+	// Ordering rationale (after runtime_state handling):
+	//   - ephemeral mode:   [..., <agent:instructions>, <agent:runtime_state>, user_input]
+	//     (instructions placed first because it is the most stable context)
+	//   - persist mode:     [..., user_input, <agent:instructions>, <agent:runtime_state>]
+	//     (suboptimal but functionally correct; cache-first is a niche optimization)
+	if strings.TrimSpace(config.AgentInstructions) != "" {
+		instrMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: config.AgentInstructions,
+		}
+		llmMessages = insertBeforeLastUserMessage(llmMessages, instrMsg)
+	}
+
 	// Convert tools to LLM format
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
 
