@@ -302,10 +302,6 @@ func (b *Builder) cleanupEmptySections(prompt string) string {
 	return strings.Join(cleaned, "\n")
 }
 
-func joinLines(lines []string) string {
-	return strings.Join(lines, "\n")
-}
-
 // ThinkingInstruction returns the thinking instruction for the given level.
 func ThinkingInstruction(level string) string {
 	level = NormalizeThinkingLevel(level)
