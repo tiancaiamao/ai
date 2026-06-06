@@ -244,6 +244,7 @@ func TestFindSkill_NilStatsDoesNotCrash(t *testing.T) {
 
 func TestFindSkill_EmptySkillsList(t *testing.T) {
 	tool := NewFindSkillTool([]skill.Skill{}, nil)
+	tool.SetIndexPath("") // disable index loading to avoid picking up real ~/.ai/skill-index.json
 
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"query": "anything",

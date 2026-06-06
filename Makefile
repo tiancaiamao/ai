@@ -14,7 +14,7 @@ install:
 
 # Run tests with coverage
 test:
-	go test ./... -timeout 30s
+	go test ./... -timeout 30s -coverprofile=coverage.out -covermode=atomic
 
 # Run tests with race detector and coverage (may fail with "text file busy" on CI)
 test-ci:
