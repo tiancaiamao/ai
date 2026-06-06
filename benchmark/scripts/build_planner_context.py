@@ -812,7 +812,10 @@ def main():
         if not os.path.isdir(agent_dir):
             agent_dir = config_dir
 
-            system_prompt_path = os.path.join(config_dir, "system_prompt.md")
+    # NOTE: these paths must be UNCONDITIONAL (not nested inside the if/else
+    # above). Edit-tool regression previously indented them into the else-branch,
+    # causing NameError when --agent-dir <existing> was used (Path 1).
+    system_prompt_path = os.path.join(config_dir, "system_prompt.md")
     memory_path = os.path.join(config_dir, "memory.md")
     context_mgmt_path = os.path.join(config_dir, "context_management.md")
 

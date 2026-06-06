@@ -563,10 +563,14 @@ print(rpc_msg)
         die "Planner produced no result file (planner-result.json missing or empty). See ${ARTIFACTS_DIR}/planner-stderr.log"
     fi
 
-        # --- Step 6.5: Extract attribution from planner result ---
+                # --- Step 6.5: Extract attribution from planner result ---
     if [[ -f "${ARTIFACTS_DIR}/planner-result.json" ]]; then
                 ARTIFACTS_DIR="${ARTIFACTS_DIR}" EVOLVE_DIR="${EVOLVE_DIR}" ITER="${ITER}" \
-        python3 << 'ATTR_EXTRACT_EOF'
+        # Use `|| ATTR_EXTRACT_EXIT=$?` pattern so set -e doesn't kill the
+        # script before we can call die() ourselves. The previous pattern
+        # (capture $? after the heredoc) was dead code under set -euo pipefail.
+        local ATTR_EXTRACT_EXIT=0
+        python3 << 'ATTR_EXTRACT_EOF' || ATTR_EXTRACT_EXIT=$?
 import json, sys, os
 
 artifacts_dir = os.environ.get('ARTIFACTS_DIR', '')
@@ -595,7 +599,6 @@ else:
     print(f'   See {os.path.join(artifacts_dir, "planner-summary.md")} for planner output.', file=sys.stderr)
     sys.exit(1)
 ATTR_EXTRACT_EOF
-        local ATTR_EXTRACT_EXIT=$?
         if [[ $ATTR_EXTRACT_EXIT -ne 0 ]]; then
             die "Attribution extraction failed (planner protocol violation)"
         fi
@@ -648,7 +651,10 @@ try:
             targets.add('context_management.md')
         elif 'agent.yaml' in path or path.endswith('config.yaml'):
             targets.add('agent.yaml')
-            if len(targets) > 1:
+    # NOTE: this block must be at the same indent as the `for` loop above,
+    # NOT inside the `elif`. Edit-tool indentation regression previously put
+    # this inside the elif, causing IndentationError → silently no-op.
+    if len(targets) > 1:
         print(f'WARN: Planner edited {len(targets)} targets: {targets}')
         # Don't sys.exit(1) — under `set -euo pipefail`, command substitution
         # exiting non-zero kills the whole evolve script before accept_or_reject
