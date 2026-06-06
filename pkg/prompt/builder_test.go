@@ -3,6 +3,7 @@ package prompt
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -229,7 +230,7 @@ func TestConvertToolsNonSlice(t *testing.T) {
 	}
 }
 
-func TestProjectContextEmbedsAgentsMd(t *testing.T) {
+func TestProjectContextExcludesAgentsMd(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
@@ -241,15 +242,72 @@ func TestProjectContextEmbedsAgentsMd(t *testing.T) {
 	b := NewBuilder("", cwd)
 	result := b.Build()
 
-	if contains(result, "## AGENTS.md Convention") {
-		t.Fatalf("AGENTS.md Convention section should not be embedded in prompt")
-	}
-	if !contains(result, "agents instructions") {
-		t.Fatalf("AGENTS.md file content should be embedded in prompt")
+	// AGENTS.md must NOT appear in the system prompt — it is injected separately
+	// as a user message via BuildInstructionsMessage().
+	if contains(result, "agents instructions") {
+		t.Fatalf("AGENTS.md file content should NOT be embedded in system prompt (it's injected as a user message now)")
 	}
 	if contains(result, "claude instructions") {
 		t.Fatalf("CLAUDE.md file content should not be embedded in prompt")
 	}
+}
+
+func TestBuildInstructionsMessage(t *testing.T) {
+	t.Run("loads AGENTS.md from workspace root", func(t *testing.T) {
+		cwd := t.TempDir()
+		if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("# My Project\n\nSome rules."), 0644); err != nil {
+			t.Fatalf("write AGENTS.md: %v", err)
+		}
+
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
+
+		if !strings.HasPrefix(got, "<agent:instructions>\n") {
+			t.Fatalf("expected <agent:instructions> open tag, got: %q", got)
+		}
+		if !strings.HasSuffix(got, "\n</agent:instructions>") {
+			t.Fatalf("expected </agent:instructions> close tag, got: %q", got)
+		}
+		if !contains(got, "# My Project") || !contains(got, "Some rules.") {
+			t.Fatalf("AGENTS.md content missing from instructions message: %q", got)
+		}
+		// Sanity: the wrapped content must NOT leak into Build().
+		if contains(b.Build(), "<agent:instructions>") {
+			t.Fatalf("Build() should not contain <agent:instructions> tag")
+		}
+	})
+
+	t.Run("prefers .ai/AGENTS.md over root", func(t *testing.T) {
+		cwd := t.TempDir()
+		if err := os.Mkdir(filepath.Join(cwd, ".ai"), 0755); err != nil {
+			t.Fatalf("mkdir .ai: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cwd, ".ai", "AGENTS.md"), []byte("local override"), 0644); err != nil {
+			t.Fatalf("write .ai/AGENTS.md: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("root content"), 0644); err != nil {
+			t.Fatalf("write AGENTS.md: %v", err)
+		}
+
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
+
+		if !contains(got, "local override") {
+			t.Fatalf("expected .ai/AGENTS.md content; got: %q", got)
+		}
+		if contains(got, "root content") {
+			t.Fatalf("root AGENTS.md should be shadowed by .ai/AGENTS.md; got: %q", got)
+		}
+	})
+
+	t.Run("returns empty when no AGENTS.md exists", func(t *testing.T) {
+		cwd := t.TempDir()
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
+		if got != "" {
+			t.Fatalf("expected empty string, got: %q", got)
+		}
+	})
 }
 
 func TestNoWorkspaceMode(t *testing.T) {

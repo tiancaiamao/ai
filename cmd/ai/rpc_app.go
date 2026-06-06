@@ -94,6 +94,11 @@ type rpcApp struct {
 	// --- System prompt ---
 	systemPrompt string
 
+	// Agent instructions (project-level, e.g. AGENTS.md) injected as a user
+	// message before the last user input on each LLM call. Empty when no
+	// AGENTS.md is present. Mirrors the codex contextual_user_message pattern.
+	agentInstructions string
+
 	// --- RPC Server ---
 	server *rpc.Server
 
@@ -115,6 +120,7 @@ type rpcApp struct {
 	// --- Internal helper functions ---
 	// These are assigned in initHelpers and used by handler closures.
 	buildSystemPrompt               func(currentSess *session.Session) string
+	buildAgentInstructions          func() string
 	restoreLLMContextFromCompaction func(sess *session.Session)
 	createBaseContext               func() *agentctx.AgentContext
 	setAgentContext                 func(ctx *agentctx.AgentContext)
@@ -207,6 +213,23 @@ func (app *rpcApp) initHelpers() {
 		return promptBuilder.Build()
 	}
 
+	// buildAgentInstructions loads AGENTS.md from the workspace and wraps it
+	// in <agent:instructions> tags. Returns empty when no AGENTS.md is present
+	// or when a custom/agent-config system prompt is in use (those branches
+	// are responsible for providing their own instructions if needed).
+	app.buildAgentInstructions = func() string {
+		if app.agentConfig != nil {
+			if sp, err := app.agentConfig.ResolveSystemPrompt(); err == nil && sp != "" {
+				return ""
+			}
+		}
+		if app.customSystemPrompt != "" {
+			return ""
+		}
+		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
+		return promptBuilder.BuildInstructionsMessage()
+	}
+
 	// restoreLLMContextFromCompaction restores the llm context overview.md
 	// from the latest compaction summary on the current session branch.
 	app.restoreLLMContextFromCompaction = func(sess *session.Session) {
@@ -233,6 +256,12 @@ func (app *rpcApp) initHelpers() {
 	// createBaseContext creates a new agent context from the current session.
 	app.createBaseContext = func() *agentctx.AgentContext {
 		app.systemPrompt = app.buildSystemPrompt(app.sess)
+		app.agentInstructions = app.buildAgentInstructions()
+		// Keep loopCfg in sync if it has been constructed (createBaseContext
+		// may be re-invoked on session resume while loopCfg already exists).
+		if app.loopCfg != nil {
+			app.loopCfg.AgentInstructions = app.agentInstructions
+		}
 		ctx := agentctx.NewAgentContext(app.systemPrompt)
 		for _, tool := range app.registry.All() {
 			ctx.AddTool(tool)

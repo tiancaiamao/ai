@@ -231,7 +231,8 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 var bootstrapFiles = []string{
 	"TOOLS.md",    // Tool usage instructions
 	"IDENTITY.md", // User/owner identity
-	"AGENTS.md",   // Project-level agent instructions
+	// AGENTS.md is intentionally NOT loaded into the system prompt.
+	// It is loaded separately and injected as a user message via BuildInstructionsMessage().
 }
 
 func (b *Builder) buildProjectContext() string {
@@ -267,6 +268,28 @@ func (b *Builder) loadBootstrapFile(filename string) string {
 	}
 
 	return ""
+}
+
+// loadAgentInstructions reads AGENTS.md content from the workspace.
+// Lookup order: .ai/AGENTS.md (project-local) → AGENTS.md (workspace root).
+// Returns empty string if not found.
+func (b *Builder) loadAgentInstructions() string {
+	return b.loadBootstrapFile("AGENTS.md")
+}
+
+// BuildInstructionsMessage returns the AGENTS.md content wrapped in
+// <agent:instructions> tags, ready for injection as a user message.
+// Returns empty string when no AGENTS.md is present.
+//
+// Unlike Build() output (which becomes the static system prompt), this content
+// is injected per-LLM-call as a user-role message placed before the user's
+// actual input — matching the codex contextual_user_message pattern.
+func (b *Builder) BuildInstructionsMessage() string {
+	content := b.loadAgentInstructions()
+	if content == "" {
+		return ""
+	}
+	return fmt.Sprintf("<agent:instructions>\n%s\n</agent:instructions>", content)
 }
 
 func (b *Builder) cleanupEmptySections(prompt string) string {
