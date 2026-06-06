@@ -348,9 +348,13 @@ def extract_change_plan(assistant_texts: list, tool_edits: list = None,
             result['extraction_method'] = 'strategy_1_change_plan_heading'
             return _with_expanded_ids(result, known_task_ids)
 
-    # Strategy 2: post-hoc summary blocks (after edits) — supports both H2 and H3
+        # Strategy 2: post-hoc summary blocks (after edits) — supports both H2 and H3.
+    # NOTE: `^#{2,3}\s+` (NOT `^##{2,3}\s+`) — the latter would be "1 literal #
+    # plus 2-3 more" = H3/H4, not H2/H3 as the docstring claims. Planner output
+    # in the archive uses H2 (`## Summary of changes`), so `##{2,3}` would
+    # silently never match and fall through to Strategy 3.
     summary_match = re.search(
-        r'^##{2,3}\s+(?:Summary of changes|Change Summary|Why these changes should work|Expected Impact|What changed|What I changed|Impact)\s*\n(.*?)(?=^##\s|^###\s|\Z)',
+        r'^#{2,3}\s+(?:Summary of changes|Change Summary|Why these changes should work|Expected Impact|What changed|What I changed|Impact)\s*\n(.*?)(?=^##\s|^###\s|\Z)',
         full_text, re.MULTILINE | re.DOTALL
     )
     if summary_match:
