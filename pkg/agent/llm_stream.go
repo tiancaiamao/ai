@@ -328,8 +328,7 @@ func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) str
 	if len(sections) == 0 {
 		return ""
 	}
-	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
-Path authority: use LLM Context Path/Detail dir from system prompt; ignore cwd-relative examples.`)
+	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.`)
 	return strings.Join(sections, "\n\n")
 }
 
@@ -392,10 +391,7 @@ tool_output_pressure:
   largest_tool_output_bucket: %s
 compact_decision_signals:
   tokens_percent: %.1f
-  context_usage_percent: %.1f
-  topic_shift_since_last_user: llm_judge
-  phase_completed_recently: llm_judge
-  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.`,
+  context_usage_percent: %.1f`,
 		band,
 		tokensUsedApprox,
 		meta.TokensMax,

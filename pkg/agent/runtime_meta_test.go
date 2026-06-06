@@ -208,14 +208,11 @@ func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
 	if !containsString(snapshot, "compact_decision_signals:") {
 		t.Fatalf("expected compact_decision_signals section, got: %s", snapshot)
 	}
-	if !containsString(snapshot, "topic_shift_since_last_user: llm_judge") {
-		t.Fatalf("expected llm_judge topic shift signal, got: %s", snapshot)
+	if !containsString(snapshot, "tokens_percent: 50.0") {
+		t.Fatalf("expected tokens_percent field, got: %s", snapshot)
 	}
-	if !containsString(snapshot, "phase_completed_recently: llm_judge") {
-		t.Fatalf("expected llm_judge phase completion signal, got: %s", snapshot)
-	}
-	if !containsString(snapshot, "llm_judge_hint: Compare the latest user intent") {
-		t.Fatalf("expected llm_judge_hint, got: %s", snapshot)
+	if containsString(snapshot, "llm_judge") {
+		t.Fatalf("did not expect llm_judge placeholder fields, got: %s", snapshot)
 	}
 }
 
