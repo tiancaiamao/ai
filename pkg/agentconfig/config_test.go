@@ -185,3 +185,142 @@ func TestVersion1Accepted(t *testing.T) {
 		t.Fatalf("version=1 should be accepted, got: %v", err)
 	}
 }
+
+func TestGetEnabledTools(t *testing.T) {
+	// nil map -> nil result
+	c := &AgentConfig{}
+	if got := c.GetEnabledTools(); got != nil {
+		t.Errorf("GetEnabledTools with nil Tools = %v, want nil", got)
+	}
+
+	// Mixed enabled/disabled
+	c.Tools = []ToolEntry{
+		{Name: "bash", Enabled: true},
+		{Name: "edit", Enabled: false},
+		{Name: "grep", Enabled: true},
+		{Name: "read", Enabled: false},
+		{Name: "write", Enabled: true},
+		{Name: "global", Enabled: true},
+	}
+	got := c.GetEnabledTools()
+	if len(got) != 4 {
+		t.Fatalf("expected 4 enabled tools, got %d: %v", len(got), got)
+	}
+
+	// All disabled -> empty (not nil)
+	c2 := &AgentConfig{Tools: []ToolEntry{{Name: "x", Enabled: false}}}
+	if got := c2.GetEnabledTools(); len(got) != 0 {
+		t.Errorf("expected empty slice for all-disabled, got %v", got)
+	}
+}
+
+func TestResolveContextManagementConfig(t *testing.T) {
+	c := &AgentConfig{}
+	if got := c.ResolveContextManagementConfig(); got != nil {
+		t.Errorf("expected nil when ContextManagement is nil, got %+v", got)
+	}
+
+	cm := &ContextManagementConfig{StaleAnnotation: true}
+	c.ContextManagement = cm
+	if got := c.ResolveContextManagementConfig(); got != cm {
+		t.Errorf("expected same pointer, got %v", got)
+	}
+}
+
+func TestLoadContextManagementPrompt(t *testing.T) {
+	// Case 1: no ContextManagement -> empty string
+	c := &AgentConfig{}
+	if got := c.LoadContextManagementPrompt(); got != "" {
+		t.Errorf("expected empty when no ContextManagement, got %q", got)
+	}
+
+	// Case 2: ContextManagement but no PromptFile -> empty
+	c.ContextManagement = &ContextManagementConfig{}
+	if got := c.LoadContextManagementPrompt(); got != "" {
+		t.Errorf("expected empty when no PromptFile, got %q", got)
+	}
+
+	// Case 3: PromptFile pointing to a real file
+	dir := t.TempDir()
+	content := "this is a context mgmt prompt"
+	path := filepath.Join(dir, "prompt.md")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c.ContextManagement = &ContextManagementConfig{PromptFile: path}
+	if got := c.LoadContextManagementPrompt(); got != content {
+		t.Errorf("expected prompt content %q, got %q", content, got)
+	}
+
+	// Case 4: PromptFile pointing to a missing file -> empty (silent fallback)
+	c.ContextManagement = &ContextManagementConfig{PromptFile: filepath.Join(dir, "no-such.md")}
+	if got := c.LoadContextManagementPrompt(); got != "" {
+		t.Errorf("expected empty for missing file, got %q", got)
+	}
+}
+
+func TestResolveSystemPrompt_MemoryFallback(t *testing.T) {
+	// Cover the "memory file missing -> skip" branch in ResolveSystemPrompt.
+	dir := t.TempDir()
+	sp := "system prompt body"
+	spPath := filepath.Join(dir, "sp.txt")
+	if err := os.WriteFile(spPath, []byte(sp), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &AgentConfig{
+		SystemPrompt: spPath,
+		Memory:       filepath.Join(dir, "missing-memory.md"), // does not exist
+	}
+	got, err := c.ResolveSystemPrompt()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != sp {
+		t.Errorf("expected just system prompt when memory missing, got %q", got)
+	}
+
+	// With memory present -> concatenated
+	memPath := filepath.Join(dir, "mem.txt")
+	if err := os.WriteFile(memPath, []byte("memory content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c.Memory = memPath
+	got, err = c.ResolveSystemPrompt()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "system prompt body") || !strings.Contains(got, "memory content") {
+		t.Errorf("expected both prompts concatenated, got %q", got)
+	}
+}
+
+func TestLoadErrors(t *testing.T) {
+	// Nonexistent file
+	_, err := Load("/no/such/file.yaml")
+	if err == nil {
+		t.Error("expected error for missing file, got nil")
+	}
+
+	// Invalid YAML
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("::: not valid yaml :::\n  - foo: [unclosed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(bad)
+	if err == nil {
+		t.Error("expected error for invalid YAML, got nil")
+	}
+
+	// Wrong version
+	dir2 := t.TempDir()
+	v0 := filepath.Join(dir2, "v0.yaml")
+	if err := os.WriteFile(v0, []byte("version: 0\nsystem_prompt: none\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Load(v0)
+	if err == nil {
+		t.Error("expected error for version != 1, got nil")
+	}
+}

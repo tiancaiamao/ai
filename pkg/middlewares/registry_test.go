@@ -514,3 +514,227 @@ func TestDefaultPatternsCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildAfterToolHooks(t *testing.T) {
+	// Register a temporary middleware for the test.
+	const name = "test-after-tool"
+	Register(MiddlewareSpec{
+		Name: name,
+		AfterTool: func(params map[string]any) (agent.AfterToolHook, error) {
+			if v, _ := params["fail"].(bool); v {
+				return nil, fmt.Errorf("injected failure at construction")
+			}
+			return func(_ agent.HookContext, _ string, _ agentctx.AgentMessage) (agentctx.AgentMessage, error) {
+				return agentctx.AgentMessage{}, nil
+			}, nil
+		},
+	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
+
+	// Success + error mix
+	hooks, err := buildAfterToolHooks([]MiddlewareEntry{
+		{Name: "unknown"},                                  // skipped
+		{Name: name, Params: map[string]any{}},             // ok
+		{Name: name, Params: map[string]any{"fail": true}}, // factory error
+	})
+	if err == nil {
+		t.Errorf("expected error from fail=true, got hooks=%v", hooks)
+	}
+
+	// Pure success path
+	hooks, err = buildAfterToolHooks([]MiddlewareEntry{
+		{Name: name, Params: map[string]any{}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("expected 1 hook, got %d", len(hooks))
+	}
+
+	// Empty entries -> nil/empty
+	hooks, err = buildAfterToolHooks(nil)
+	if err != nil {
+		t.Fatalf("unexpected error on nil entries: %v", err)
+	}
+	if hooks != nil {
+		t.Errorf("expected nil hooks for nil entries, got %v", hooks)
+	}
+}
+
+func TestBuildBeforeModelHooks(t *testing.T) {
+	const name = "test-before-model"
+	Register(MiddlewareSpec{
+		Name: name,
+		BeforeModel: func(params map[string]any) (agent.BeforeModelHook, error) {
+			if v, _ := params["fail"].(bool); v {
+				return nil, fmt.Errorf("injected failure")
+			}
+			return func(_ agent.HookContext, _ []agentctx.AgentMessage) ([]agentctx.AgentMessage, error) {
+				return nil, nil
+			}, nil
+		},
+	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
+
+	hooks, err := buildBeforeModelHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{}}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("expected 1 hook, got %d", len(hooks))
+	}
+
+	_, err = buildBeforeModelHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{"fail": true}}})
+	if err == nil {
+		t.Error("expected error from fail=true, got nil")
+	}
+
+	// Unknown middleware -> empty
+	hooks, err = buildBeforeModelHooks([]MiddlewareEntry{{Name: "does-not-exist"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hooks) != 0 {
+		t.Errorf("expected 0 hooks for unknown, got %d", len(hooks))
+	}
+}
+
+func TestBuildAfterAgentHooks(t *testing.T) {
+	const name = "test-after-agent"
+	Register(MiddlewareSpec{
+		Name: name,
+		AfterAgent: func(params map[string]any) (agent.AfterAgentHook, error) {
+			if v, _ := params["fail"].(bool); v {
+				return nil, fmt.Errorf("injected failure")
+			}
+			return func(_ agent.HookContext) {}, nil
+		},
+	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
+
+	hooks, err := buildAfterAgentHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{}}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hooks) != 1 {
+		t.Fatalf("expected 1 hook, got %d", len(hooks))
+	}
+
+	_, err = buildAfterAgentHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{"fail": true}}})
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+func TestBuildHooks(t *testing.T) {
+	// BuildHooks combines all three. Register private middlewares so the
+	// test does not depend on execution order of other tests.
+	const (
+		toolName  = "test-buildhooks-tool"
+		modelName = "test-buildhooks-model"
+		agentName = "test-buildhooks-agent"
+	)
+	Register(MiddlewareSpec{
+		Name: toolName,
+		AfterTool: func(params map[string]any) (agent.AfterToolHook, error) {
+			return func(_ agent.HookContext, _ string, _ agentctx.AgentMessage) (agentctx.AgentMessage, error) {
+				return agentctx.AgentMessage{}, nil
+			}, nil
+		},
+	})
+	Register(MiddlewareSpec{
+		Name: modelName,
+		BeforeModel: func(params map[string]any) (agent.BeforeModelHook, error) {
+			return func(_ agent.HookContext, _ []agentctx.AgentMessage) ([]agentctx.AgentMessage, error) {
+				return nil, nil
+			}, nil
+		},
+	})
+	Register(MiddlewareSpec{
+		Name: agentName,
+		AfterAgent: func(params map[string]any) (agent.AfterAgentHook, error) {
+			return func(_ agent.HookContext) {}, nil
+		},
+	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, toolName)
+		delete(registry, modelName)
+		delete(registry, agentName)
+		registryMu.Unlock()
+	}()
+
+	entries := []MiddlewareEntry{
+		{Name: toolName, Params: map[string]any{}},
+		{Name: modelName, Params: map[string]any{}},
+		{Name: agentName, Params: map[string]any{}},
+	}
+	reg, err := BuildHooks(entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reg == nil {
+		t.Fatal("expected non-nil registry")
+	}
+	if len(reg.BeforeModelHooks) != 1 || len(reg.AfterToolHooks) != 1 || len(reg.AfterAgentHooks) != 1 {
+		t.Errorf("unexpected counts: bm=%d at=%d aa=%d",
+			len(reg.BeforeModelHooks), len(reg.AfterToolHooks), len(reg.AfterAgentHooks))
+	}
+
+	// Empty entries -> empty registry
+	reg, err = BuildHooks(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reg == nil {
+		t.Fatal("expected non-nil registry even for empty entries")
+	}
+}
+
+func TestEnsureContentSlice(t *testing.T) {
+	msg := &agentctx.AgentMessage{}
+	ensureContentSlice(msg)
+	if msg.Content == nil {
+		t.Error("expected non-nil Content after ensureContentSlice")
+	}
+
+	// Already-set content should not be replaced.
+	pre := []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "pre"}}
+	msg2 := &agentctx.AgentMessage{Content: pre}
+	ensureContentSlice(msg2)
+	if len(msg2.Content) != 1 {
+		t.Errorf("expected preserved 1-element content, got %d", len(msg2.Content))
+	}
+}
+
+func TestExtractStringSlice(t *testing.T) {
+	// Key missing
+	if got := extractStringSlice(map[string]any{}, "k"); got != nil {
+		t.Errorf("expected nil for missing key, got %v", got)
+	}
+	// []string passthrough
+	if got := extractStringSlice(map[string]any{"k": []string{"a", "b"}}, "k"); len(got) != 2 || got[0] != "a" {
+		t.Errorf("[]string passthrough wrong: %v", got)
+	}
+	// []any with mixed types (strings filtered through)
+	if got := extractStringSlice(map[string]any{"k": []any{"x", 42, "y"}}, "k"); len(got) != 2 || got[0] != "x" || got[1] != "y" {
+		t.Errorf("[]any filter wrong: %v", got)
+	}
+	// Other type -> nil
+	if got := extractStringSlice(map[string]any{"k": 123}, "k"); got != nil {
+		t.Errorf("expected nil for int value, got %v", got)
+	}
+}

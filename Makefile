@@ -1,4 +1,4 @@
-.PHONY: build install test clean vet coverage fmt fmt-check
+.PHONY: build install test clean vet coverage fmt fmt-check coverage-check
 
 # Default target
 all: build
@@ -14,7 +14,7 @@ install:
 
 # Run tests with coverage
 test:
-	go test ./... -timeout 30s
+	go test ./... -timeout 30s -coverprofile=coverage.out -covermode=atomic
 
 # Run tests with race detector and coverage (may fail with "text file busy" on CI)
 test-ci:
@@ -37,6 +37,24 @@ clean:
 # Coverage report
 coverage: test
 	go tool cover -html=coverage.out -o coverage.html
+
+# Check that pkg/ coverage meets the 80% threshold.
+# Used by CI to gate merges on coverage regressions.
+# Run `make test` first to generate coverage.out.
+COVERAGE_THRESHOLD := 80
+coverage-check:
+	@test -f coverage.out || { echo "ERROR: coverage.out not found. Run 'make test' first."; exit 1; }
+	@head -1 coverage.out > /tmp/pkg-cov.out
+	@grep '/pkg/' coverage.out >> /tmp/pkg-cov.out
+	@pct=$$(go tool cover -func=/tmp/pkg-cov.out | tail -1 | awk '{print $$NF}' | tr -d '%'); \
+	rm -f /tmp/pkg-cov.out; \
+	echo "pkg/ coverage: $$pct% (threshold: $(COVERAGE_THRESHOLD)%)"; \
+	if awk -v p="$$pct" 'BEGIN { exit (p+0 < $(COVERAGE_THRESHOLD)) ? 1 : 0 }'; then \
+		echo "✅ Coverage check passed"; \
+	else \
+		echo "❌ Coverage $$pct% is below $(COVERAGE_THRESHOLD)% threshold"; \
+		exit 1; \
+	fi
 
 # Format code
 fmt:
