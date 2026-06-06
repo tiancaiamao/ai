@@ -57,8 +57,9 @@ Use a single-source instruction model with explicit boundaries:
    for injection as a user-role message.
 3. The orchestrator (`cmd/ai/rpc_app.go::buildAgentInstructions`) calls
    `BuildInstructionsMessage()` and prepends it to the user message on each
-   LLM call (unless a custom/agent-config system prompt is in use — those
-   branches own their own instruction delivery).
+   LLM call, regardless of system prompt source (default / role template /
+   custom / agent-config). AGENTS.md carries project facts orthogonal to
+   system-prompt-defined role behavior.
 4. `pkg/prompt/prompt.md` has no `%PROJECT_CONTEXT%` placeholder.
 5. `pkg/prompt/builder.go` no longer contains `buildProjectContext` or
    `bootstrapFiles`; the system prompt is independent of workspace fact files.

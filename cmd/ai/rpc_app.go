@@ -214,18 +214,15 @@ func (app *rpcApp) initHelpers() {
 	}
 
 	// buildAgentInstructions loads AGENTS.md from the workspace and wraps it
-	// in <agent:instructions> tags. Returns empty when no AGENTS.md is present
-	// or when a custom/agent-config system prompt is in use (those branches
-	// are responsible for providing their own instructions if needed).
+	// in <agent:instructions> tags. Returns empty when no AGENTS.md is present.
+	//
+	// AGENTS.md is injected as a user message (see llm_stream.go), independent
+	// of the system prompt source. Custom system prompts (including role
+	// templates like orchestrator.md) and agent configs define role behavior,
+	// not project facts — so AGENTS.md is still relevant and is injected in
+	// all modes. If a workspace really wants to suppress AGENTS.md injection,
+	// delete/rename the AGENTS.md file.
 	app.buildAgentInstructions = func() string {
-		if app.agentConfig != nil {
-			if sp, err := app.agentConfig.ResolveSystemPrompt(); err == nil && sp != "" {
-				return ""
-			}
-		}
-		if app.customSystemPrompt != "" {
-			return ""
-		}
 		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 		return promptBuilder.BuildInstructionsMessage()
 	}
