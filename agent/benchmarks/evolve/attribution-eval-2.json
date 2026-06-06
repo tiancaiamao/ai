@@ -1,0 +1,23 @@
+{
+  "iteration": 2,
+  "verdict": "PARTIAL",
+  "predicted_fixes": [
+    "003_refactor_duplicated_code",
+    "agent_001_forced_exploration",
+    "tbench/cancel-async-tasks"
+  ],
+  "actually_fixed": [
+    "tbench/cancel-async-tasks"
+  ],
+  "failed_to_fix": [
+    "003_refactor_duplicated_code",
+    "agent_001_forced_exploration"
+  ],
+  "predicted_risks": [
+    "agent_007_misleading",
+    "agent_009_partial_info"
+  ],
+  "actual_regressions": [],
+  "unexpected_regressions": [],
+  "fix_rate": "1/3"
+}

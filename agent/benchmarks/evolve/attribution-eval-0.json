@@ -1,0 +1,25 @@
+{
+  "iteration": 0,
+  "verdict": "INEFFECTIVE",
+  "predicted_fixes": [
+    "agent_011_compact_tool_call_mismatch",
+    "agent_005_delayed_signal",
+    "agent_001_forced_exploration",
+    "agent_007_misleading",
+    "agent_002_rollback"
+  ],
+  "actually_fixed": [],
+  "failed_to_fix": [
+    "agent_011_compact_tool_call_mismatch",
+    "agent_005_delayed_signal",
+    "agent_001_forced_exploration",
+    "agent_007_misleading",
+    "agent_002_rollback"
+  ],
+  "predicted_risks": [
+    "investigation/debugging"
+  ],
+  "actual_regressions": [],
+  "unexpected_regressions": [],
+  "fix_rate": "0/5"
+}
