@@ -214,42 +214,10 @@ Use change_workspace for persistent directory switches; "cd <dir> && <command>" 
 	}
 	result = strings.ReplaceAll(result, "%SKILLS%", skills)
 
-	// Replace project context (optional section)
-	projectContext := ""
-	if !b.minimal && !b.noWorkspace {
-		projectContext = b.buildProjectContext()
-	}
-	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
-
 	// Remove empty sections (optional sections that were not enabled)
 	result = b.cleanupEmptySections(result)
 
 	return result
-}
-
-// Bootstrap files to search for in workspace.
-var bootstrapFiles = []string{
-	"TOOLS.md",    // Tool usage instructions
-	"IDENTITY.md", // User/owner identity
-	// AGENTS.md is intentionally NOT loaded into the system prompt.
-	// It is loaded separately and injected as a user message via BuildInstructionsMessage().
-}
-
-func (b *Builder) buildProjectContext() string {
-	contexts := []string{}
-
-	for _, filename := range bootstrapFiles {
-		content := b.loadBootstrapFile(filename)
-		if content != "" {
-			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
-		}
-	}
-
-	if len(contexts) == 0 {
-		return ""
-	}
-
-	return "## Project Context\n" + joinLines(contexts)
 }
 
 func (b *Builder) loadBootstrapFile(filename string) string {
