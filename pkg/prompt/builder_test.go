@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 // mockTool implements ToolInfo for testing
@@ -363,4 +364,96 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestCompactAndTemplateAccessors(t *testing.T) {
+	// Simple accessor coverage for the compact/role template helpers.
+	if got := CompactSystemPrompt(); got == "" {
+		t.Error("CompactSystemPrompt returned empty string")
+	}
+	if got := CompactSummarizePrompt(); got == "" {
+		t.Error("CompactSummarizePrompt returned empty string")
+	}
+	if got := CompactUpdatePrompt(); got == "" {
+		t.Error("CompactUpdatePrompt returned empty string")
+	}
+	if got := ContextManagementSystemPrompt(); got == "" {
+		t.Error("ContextManagementSystemPrompt returned empty string")
+	}
+	if got := OrchestratorTemplate(); got == "" {
+		t.Error("OrchestratorTemplate returned empty string")
+	}
+	if got := ValidatorTemplate(); got == "" {
+		t.Error("ValidatorTemplate returned empty string")
+	}
+}
+
+func TestTemplateForRole(t *testing.T) {
+	cases := []struct {
+		role    string
+		wantErr bool
+	}{
+		{"", false},
+		{"coder", false},
+		{"orchestrator", false},
+		{"validator", false},
+		{"unknown", true},
+	}
+	for _, c := range cases {
+		got, err := TemplateForRole(c.role)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("role %q: expected error, got nil", c.role)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("role %q: unexpected error: %v", c.role, err)
+		}
+		if got == "" {
+			t.Errorf("role %q: got empty template", c.role)
+		}
+	}
+}
+
+func TestBuilderSetters(t *testing.T) {
+	// Coverage for the simple setter chain + minimal-build path.
+	b := NewBuilder("", "")
+
+	// All Set* methods should return the builder for chaining.
+	if got := b.SetMinimal(true); got != b {
+		t.Error("SetMinimal did not return builder")
+	}
+	if got := b.SetWorkspaceNotes("notes"); got != b {
+		t.Error("SetWorkspaceNotes did not return builder")
+	}
+	if got := b.SetTemplate("custom template {{workspace_section}} {{tool_descriptions}}"); got != b {
+		t.Error("SetTemplate did not return builder")
+	}
+	if got := b.SetContextMeta("meta"); got != b {
+		t.Error("SetContextMeta did not return builder")
+	}
+	if got := b.SetTokensPercent(42.5); got != b {
+		t.Error("SetTokensPercent did not return builder")
+	}
+
+	// Build with custom template should still produce a non-empty string.
+	if out := b.Build(); out == "" {
+		t.Error("Build returned empty string with custom template")
+	}
+}
+
+func TestNewBuilderWithWorkspaceAndGetCWD(t *testing.T) {
+	// With workspace: GetCWD should delegate to workspace.GetCWD()
+	ws := tools.MustNewWorkspace("/custom/cwd")
+	b := NewBuilderWithWorkspace("ignored", ws)
+	if got := b.GetCWD(); got != "/custom/cwd" {
+		t.Errorf("GetCWD with workspace = %q, want %q", got, "/custom/cwd")
+	}
+
+	// Without workspace: GetCWD should fall back to b.cwd
+	b2 := NewBuilder("", "/fallback/cwd")
+	if got := b2.GetCWD(); got != "/fallback/cwd" {
+		t.Errorf("GetCWD without workspace = %q, want %q", got, "/fallback/cwd")
+	}
 }
