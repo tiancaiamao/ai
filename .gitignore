@@ -36,3 +36,7 @@ results/
 agent/benchmarks/evolve/iteration-*.json
 agent/benchmarks/evolve/iter-*-artifacts/traces/
 agent/benchmarks/evolve/iter-*-artifacts/agent-snapshot/
+
+# Evolve iteration-*.json files contain full agent traces (100-500MB each).
+# Too large for git. The structured summaries live in iter-*-artifacts/.
+agent/benchmarks/evolve/iteration-*.json
