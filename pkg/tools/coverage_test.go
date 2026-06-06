@@ -4,12 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 // ----- BashTool metadata + SetTimeout ---------------------------------------
@@ -794,11 +791,3 @@ func TestEditTool_ExecuteHashlineEdits_Success(t *testing.T) {
 
 // These are in a separate package, so we use a small _test.go in that subpackage
 // (created separately).
-
-// ----- Helpers / sanity -----------------------------------------------------
-
-// Ensure we don't have unused imports on platforms where runtime is not directly referenced.
-var _ = runtime.GOOS
-
-// dummyCtxValue to keep agentctx import alive even when not directly used elsewhere.
-var _ = agentctx.TextContent{}

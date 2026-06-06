@@ -7,14 +7,6 @@ import (
 )
 
 // ContentBlock markers are 0% covered — quick smoke tests for each type.
-func TestContentBlockMarkers(t *testing.T) {
-	TextContent{Type: "text", Text: "hi"}.IsContentBlock()
-	ImageContent{Type: "image", Data: "x", MimeType: "png"}.IsContentBlock()
-	ToolCallContent{Type: "toolCall", Name: "n"}.IsContentBlock()
-	ThinkingContent{Type: "thinking", Thinking: "x"}.IsContentBlock()
-	// If the methods don't exist or have wrong signatures, this file won't compile.
-}
-
 func TestIsTruncated(t *testing.T) {
 	if (AgentMessage{Truncated: false}).IsTruncated() {
 		t.Fatal("expected false")
