@@ -70,5 +70,3 @@ When a generator's output fails validation or a sub-agent returns an error:
 - **Blind file reads:** Never `read` an entire file blindly. Use `grep` to locate relevant sections first, then `read` with `offset`/`limit`.
 
 %SKILLS%
-
-%PROJECT_CONTEXT%

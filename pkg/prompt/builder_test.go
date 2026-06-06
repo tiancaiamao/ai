@@ -230,28 +230,6 @@ func TestConvertToolsNonSlice(t *testing.T) {
 	}
 }
 
-func TestProjectContextExcludesAgentsMd(t *testing.T) {
-	cwd := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
-		t.Fatalf("write AGENTS.md: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
-		t.Fatalf("write CLAUDE.md: %v", err)
-	}
-
-	b := NewBuilder("", cwd)
-	result := b.Build()
-
-	// AGENTS.md must NOT appear in the system prompt — it is injected separately
-	// as a user message via BuildInstructionsMessage().
-	if contains(result, "agents instructions") {
-		t.Fatalf("AGENTS.md file content should NOT be embedded in system prompt (it's injected as a user message now)")
-	}
-	if contains(result, "claude instructions") {
-		t.Fatalf("CLAUDE.md file content should not be embedded in prompt")
-	}
-}
-
 func TestBuildInstructionsMessage(t *testing.T) {
 	t.Run("loads AGENTS.md from workspace root", func(t *testing.T) {
 		cwd := t.TempDir()

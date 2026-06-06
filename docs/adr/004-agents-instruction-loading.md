@@ -1,17 +1,20 @@
 # ADR 004: AGENTS.md Instruction Loading and Prompt Boundary
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-05-08
 
 ## Context
 
-The system prompt currently includes a static protocol section for AGENTS.md behavior.
-At the same time, project context may also inject project-local instruction files.
-This creates a risk of duplicated policy in multiple channels, increasing token usage
-and conflict probability when wording drifts.
+The system prompt should contain only platform-global, stable behavior. Project
+instructions and per-project facts must be loaded through a separate channel so
+policy stays in one editable place and the system prompt does not drift as
+projects accumulate conventions.
 
-We want a deterministic and low-duplication model aligned with coding-agent behavior
-commonly used by Codex-style runtimes.
+Previously the prompt builder also inlined project fact files (`TOOLS.md`,
+`IDENTITY.md`, ...) into the system prompt via a `%PROJECT_CONTEXT%` placeholder.
+That path was removed: it created a second policy surface, increased steady-state
+token usage, and offered no mechanism for the orchestrator to refresh or scope
+the content between turns.
 
 ## Decision
 
@@ -19,56 +22,69 @@ Use a single-source instruction model with explicit boundaries:
 
 1. `system prompt` contains only platform-global, stable behavior.
 2. `AGENTS.md` is the authoritative project instruction source.
-3. `PROJECT_CONTEXT` is reserved for project facts (e.g. tool hints, identity hints),
-   not policy that duplicates AGENTS instructions.
-4. Precedence is strict and explicit: `system > AGENTS.md > user`.
-
-## Codex-Style Behavior Reference
-
-In Codex-style runtimes, AGENTS instructions are injected by the orchestrator at
-session/runtime level so the model receives scoped project rules before execution,
-instead of relying on the model to remember to read files first.
-
-Implication:
-
-- Do not depend on “model may read AGENTS.md later”.
-- Ensure AGENTS instructions are available before first actionable response.
+3. `AGENTS.md` is injected by the orchestrator as a **user-role message** placed
+   before the user's actual input on each LLM call — matching the codex
+   `contextual_user_message` pattern. It is **not** inlined into the system prompt.
+4. The `%PROJECT_CONTEXT%` placeholder and its loader (`buildProjectContext`,
+   `bootstrapFiles`) are removed. The prompt builder no longer reads or inlines
+   `TOOLS.md`, `IDENTITY.md`, or any other workspace fact file. Per-project
+   tool/identity hints, if needed, should live in `AGENTS.md`.
+5. Precedence is strict and explicit: `system > AGENTS.md > user`.
 
 ## Why
 
-- Determinism: first turn already has project rules.
-- Lower risk: avoids early-turn non-compliance.
-- Lower prompt entropy: avoids duplicated policy text in multiple sections.
-- Better maintainability: AGENTS policy is edited in one place.
+- **Determinism**: first turn already has project rules.
+- **Lower risk**: avoids early-turn non-compliance.
+- **Lower prompt entropy**: no duplicated policy text across system prompt and
+  injected instructions.
+- **Better maintainability**: AGENTS policy is edited in one place; the system
+  prompt no longer carries project-specific content that drifts between
+  workspaces.
+- **Token stability**: the system prompt is now workspace-independent, so its
+  length does not grow with the number of `TOOLS.md` / `IDENTITY.md` files in a
+  workspace.
 
 ## Non-Goals
 
 - This ADR does not define the full nested-scope AGENTS resolution algorithm.
 - This ADR does not change context compaction strategy.
 
-## Implementation Plan (Minimal)
+## Implementation
 
-1. Remove AGENTS protocol text from static `pkg/prompt/prompt.md`.
-2. Keep AGENTS content injection as a runtime/orchestrator responsibility.
-3. Keep `PROJECT_CONTEXT` for fact files only (`TOOLS.md`, `IDENTITY.md`, etc.).
-4. Add/adjust tests:
-   - Prompt template does not include AGENTS convention prose.
-   - AGENTS instructions still appear in the final effective instruction set.
+1. `loadAgentInstructions()` reads `AGENTS.md` from `.ai/AGENTS.md` (preferred)
+   or `AGENTS.md` (workspace root).
+2. `BuildInstructionsMessage()` wraps the content in `<agent:instructions>...</agent:instructions>`
+   for injection as a user-role message.
+3. The orchestrator (`cmd/ai/rpc_app.go::buildAgentInstructions`) calls
+   `BuildInstructionsMessage()` and prepends it to the user message on each
+   LLM call, regardless of system prompt source (default / role template /
+   custom / agent-config). AGENTS.md carries project facts orthogonal to
+   system-prompt-defined role behavior.
+4. `pkg/prompt/prompt.md` has no `%PROJECT_CONTEXT%` placeholder.
+5. `pkg/prompt/builder.go` no longer contains `buildProjectContext` or
+   `bootstrapFiles`; the system prompt is independent of workspace fact files.
 
 ## Consequences
 
 Positive:
 
-- Clear ownership: policy in AGENTS, platform rules in system prompt.
+- Clear ownership: policy in `AGENTS.md`, platform rules in system prompt.
 - Fewer duplicate tokens in steady-state turns.
+- The system prompt is byte-identical across workspaces with the same config.
 
 Trade-offs:
 
-- Runtime/orchestrator path must be reliable; failures to load AGENTS become
-  critical and should be surfaced.
+- The orchestrator's instruction-injection path is now critical. Failures to
+  load `AGENTS.md` must be surfaced (currently: silent fallback to "no
+  instructions", which is observably correct when no `AGENTS.md` is present).
+- Workspaces that previously relied on `TOOLS.md` / `IDENTITY.md` being inlined
+  into the system prompt must migrate that content into `AGENTS.md`.
 
 ## Validation
 
-- Unit tests for prompt builder/template behavior.
-- Integration test proving AGENTS instructions are present before first tool call.
-- Regression check that `PROJECT_CONTEXT` still loads fact files correctly.
+- Unit tests for prompt builder: `pkg/prompt/builder_test.go`
+  - `TestBuildInstructionsMessage` covers loading, `.ai/` shadowing, and
+    empty-workspace fallback.
+  - No `buildProjectContext` / `bootstrapFiles` symbols remain.
+- Integration: `cmd/ai/rpc_app.go::buildAgentInstructions` is the single
+  call-site that turns the file into an injected message.

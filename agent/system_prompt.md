@@ -87,4 +87,3 @@ For complex multi-step work, use the PGE skill (`/skill:pge`) to spawn independe
 
 %SKILLS%
 
-%PROJECT_CONTEXT%
