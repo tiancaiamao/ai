@@ -528,7 +528,9 @@ def build_historical_trends(state_data):
         best_pct = best * 100
     else:
         best_pct = best
-    best_iter = state_data.get("best_iter")
+        best_iter = state_data.get("best_iteration")
+    if best_iter is None:
+        best_iter = state_data.get("best_iter")
     if best_iter is None:
         best_iter = state_data.get("iteration", "?")
     lines.append(f"\n**Best ever**: {best_pct:.1f}% (iteration {best_iter})")

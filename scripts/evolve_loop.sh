@@ -471,8 +471,9 @@ function run_iteration() {
     echo "  [5/7] Building planner context..."
     update_state "$ITER"
 
-    # Build task_history.json from all existing iteration results
-    python3 << 'PYEOF'
+        # Build task_history.json from all existing iteration results
+    # NOTE: EVOLVE_DIR is a shell local var, not exported — must pass inline.
+    EVOLVE_DIR="${EVOLVE_DIR}" python3 << 'PYEOF'
 import json, glob, os
 
 evolve_dir = os.environ.get('EVOLVE_DIR', '.')
@@ -647,9 +648,12 @@ try:
             targets.add('context_management.md')
         elif 'agent.yaml' in path or path.endswith('config.yaml'):
             targets.add('agent.yaml')
-    if len(targets) > 1:
+            if len(targets) > 1:
         print(f'WARN: Planner edited {len(targets)} targets: {targets}')
-        sys.exit(1)
+        # Don't sys.exit(1) — under `set -euo pipefail`, command substitution
+        # exiting non-zero kills the whole evolve script before accept_or_reject
+        # runs. Use exit(0) + let the bash side WARN based on message content.
+        sys.exit(0)
     else:
         single = list(targets)[0] if targets else 'none'
         print(f'OK: Single target: {single}')
@@ -659,8 +663,8 @@ except Exception as e:
     sys.exit(0)
 MULTI_TARGET_EOF
         )
-        if [[ $? -ne 0 ]]; then
-            echo "  [7.5/7] WARNING: ${MULTI_TARGET_CHECK}"
+                        if [[ "${MULTI_TARGET_CHECK}" == WARN* ]]; then
+            echo "  [7.5/7] ${MULTI_TARGET_CHECK}"
             echo "  [7.5/7] Multi-target changes detected — consider constraining planner"
         else
             echo "  [7.5/7] ${MULTI_TARGET_CHECK}"
