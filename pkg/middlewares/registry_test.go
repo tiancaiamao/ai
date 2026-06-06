@@ -529,6 +529,11 @@ func TestBuildAfterToolHooks(t *testing.T) {
 			}, nil
 		},
 	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
 
 	// Success + error mix
 	hooks, err := buildAfterToolHooks([]MiddlewareEntry{
@@ -574,6 +579,11 @@ func TestBuildBeforeModelHooks(t *testing.T) {
 			}, nil
 		},
 	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
 
 	hooks, err := buildBeforeModelHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{}}})
 	if err != nil {
@@ -609,6 +619,11 @@ func TestBuildAfterAgentHooks(t *testing.T) {
 			return func(_ agent.HookContext) {}, nil
 		},
 	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	}()
 
 	hooks, err := buildAfterAgentHooks([]MiddlewareEntry{{Name: name, Params: map[string]any{}}})
 	if err != nil {
@@ -625,12 +640,47 @@ func TestBuildAfterAgentHooks(t *testing.T) {
 }
 
 func TestBuildHooks(t *testing.T) {
-	// BuildHooks combines all three; we use already-registered middlewares
-	// from the test functions above.
+	// BuildHooks combines all three. Register private middlewares so the
+	// test does not depend on execution order of other tests.
+	const (
+		toolName  = "test-buildhooks-tool"
+		modelName = "test-buildhooks-model"
+		agentName = "test-buildhooks-agent"
+	)
+	Register(MiddlewareSpec{
+		Name: toolName,
+		AfterTool: func(params map[string]any) (agent.AfterToolHook, error) {
+			return func(_ agent.HookContext, _ string, _ agentctx.AgentMessage) (agentctx.AgentMessage, error) {
+				return agentctx.AgentMessage{}, nil
+			}, nil
+		},
+	})
+	Register(MiddlewareSpec{
+		Name: modelName,
+		BeforeModel: func(params map[string]any) (agent.BeforeModelHook, error) {
+			return func(_ agent.HookContext, _ []agentctx.AgentMessage) ([]agentctx.AgentMessage, error) {
+				return nil, nil
+			}, nil
+		},
+	})
+	Register(MiddlewareSpec{
+		Name: agentName,
+		AfterAgent: func(params map[string]any) (agent.AfterAgentHook, error) {
+			return func(_ agent.HookContext) {}, nil
+		},
+	})
+	defer func() {
+		registryMu.Lock()
+		delete(registry, toolName)
+		delete(registry, modelName)
+		delete(registry, agentName)
+		registryMu.Unlock()
+	}()
+
 	entries := []MiddlewareEntry{
-		{Name: "test-after-tool", Params: map[string]any{}},
-		{Name: "test-before-model", Params: map[string]any{}},
-		{Name: "test-after-agent", Params: map[string]any{}},
+		{Name: toolName, Params: map[string]any{}},
+		{Name: modelName, Params: map[string]any{}},
+		{Name: agentName, Params: map[string]any{}},
 	}
 	reg, err := BuildHooks(entries)
 	if err != nil {
