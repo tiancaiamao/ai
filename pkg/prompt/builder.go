@@ -67,12 +67,6 @@ type Builder struct {
 	// Minimal mode (excludes optional sections like skills, project context)
 	minimal bool
 
-	// No workspace mode (excludes workspace section, for chat bots like claw)
-	noWorkspace bool
-
-	// Workspace notes (optional reminders)
-	workspaceNotes string
-
 	// Available tools (for Tooling section)
 	tools []ToolInfo
 
@@ -119,18 +113,6 @@ func (b *Builder) GetCWD() string {
 // SetMinimal enables/disables minimal mode.
 func (b *Builder) SetMinimal(minimal bool) *Builder {
 	b.minimal = minimal
-	return b
-}
-
-// SetNoWorkspace enables/disables no-workspace mode.
-func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
-	b.noWorkspace = noWorkspace
-	return b
-}
-
-// SetWorkspaceNotes sets optional workspace notes.
-func (b *Builder) SetWorkspaceNotes(notes string) *Builder {
-	b.workspaceNotes = notes
 	return b
 }
 
@@ -191,19 +173,6 @@ func (b *Builder) Build() string {
 	if b.template != "" {
 		result = b.template
 	}
-
-	// Replace workspace section (optional - empty when noWorkspace is true)
-	workspaceSection := ""
-	if !b.noWorkspace {
-		workspaceNotes := ""
-		if b.workspaceNotes != "" {
-			workspaceNotes = "\n" + b.workspaceNotes
-		}
-		workspaceSection = fmt.Sprintf(`## Workspace
-Use current_workdir from runtime_state, not a hardcoded path.
-Use change_workspace for persistent directory switches; "cd <dir> && <command>" for one-off commands.%s`, workspaceNotes)
-	}
-	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
 
 	// Replace skills (optional section)
 	skills := ""

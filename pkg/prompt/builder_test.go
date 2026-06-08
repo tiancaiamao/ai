@@ -288,34 +288,24 @@ func TestBuildInstructionsMessage(t *testing.T) {
 	})
 }
 
-func TestNoWorkspaceMode(t *testing.T) {
+func TestWorkspaceSectionPresent(t *testing.T) {
 	cwd := t.TempDir()
 
-	// Add minimal tools for both builders
+	// Add minimal tools
 	tools := []ToolInfo{mockTool{name: "read", description: "Read files"}}
 
-	// Test with workspace (default)
-	builderWithWorkspace := NewBuilder("", cwd)
-	builderWithWorkspace.SetTools(tools)
-	resultWith := builderWithWorkspace.Build()
-	if !contains(resultWith, "## Workspace") {
-		t.Error("expected Workspace section when noWorkspace is false")
+	// The Workspace section is hardcoded in the prompt template.
+	builder := NewBuilder("", cwd)
+	builder.SetTools(tools)
+	result := builder.Build()
+	if !contains(result, "## Workspace") {
+		t.Error("expected Workspace section in default build")
 	}
-
-	// Test without workspace (noWorkspace mode)
-	builderNoWorkspace := NewBuilder("", cwd).SetNoWorkspace(true)
-	builderNoWorkspace.SetTools(tools)
-	resultWithout := builderNoWorkspace.Build()
-	if contains(resultWithout, "## Workspace") {
-		t.Error("expected no Workspace section when noWorkspace is true")
+	if !contains(result, "current_workdir") {
+		t.Error("expected current_workdir guidance in Workspace section")
 	}
-	if contains(resultWithout, "Your working directory is:") {
-		t.Error("expected no working directory mention when noWorkspace is true")
-	}
-
-	// Ensure the prompt still has content (it will have Tooling section)
-	if resultWithout == "" {
-		t.Error("expected non-empty prompt even in noWorkspace mode")
+	if result == "" {
+		t.Error("expected non-empty prompt")
 	}
 }
 
@@ -459,9 +449,6 @@ func TestBuilderSetters(t *testing.T) {
 	// All Set* methods should return the builder for chaining.
 	if got := b.SetMinimal(true); got != b {
 		t.Error("SetMinimal did not return builder")
-	}
-	if got := b.SetWorkspaceNotes("notes"); got != b {
-		t.Error("SetWorkspaceNotes did not return builder")
 	}
 	if got := b.SetTemplate("custom template {{workspace_section}} {{tool_descriptions}}"); got != b {
 		t.Error("SetTemplate did not return builder")

@@ -16,6 +16,7 @@ When instructions conflict, follow this order:
 
 - Your reply MUST begin with [ready]
 - If you forget, it means you are losing track of context
+- This is a cheap way to detect context rot
 
 ✅ Right: [ready] 关于这个问题，我来帮您分析一下...
 ❌ Wrong: 关于这个问题，我来帮您分析一下...
@@ -70,7 +71,10 @@ This is a hard constraint, not a style preference. For any task where thinking m
 
 This keeps the connection alive and gives the orchestrator a signal you're still on track.
 
-%WORKSPACE_SECTION%
+## Workspace
+
+Use current_workdir from runtime_state, not a hardcoded path.
+Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
 
 ## Tools
 
