@@ -264,6 +264,88 @@ func TestInsertBeforeLastUserMessage(t *testing.T) {
 	}
 }
 
+func TestInsertBeforeFirstUserMessage(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []llm.LLMMessage
+		insert   llm.LLMMessage
+		wantLen  int
+		check    func([]llm.LLMMessage) bool
+	}{
+		{
+			name:     "empty messages",
+			messages: nil,
+			insert:   llm.LLMMessage{Role: "user", Content: "skills"},
+			wantLen:  1,
+			check: func(msgs []llm.LLMMessage) bool {
+				return len(msgs) == 1 && msgs[0].Content == "skills"
+			},
+		},
+		{
+			name: "no user message - prepend to beginning",
+			messages: []llm.LLMMessage{
+				{Role: "assistant", Content: "hi"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "skills"},
+			wantLen: 2,
+			check: func(msgs []llm.LLMMessage) bool {
+				return msgs[0].Content == "skills" && msgs[1].Content == "hi"
+			},
+		},
+		{
+			name: "single user message - insert before",
+			messages: []llm.LLMMessage{
+				{Role: "user", Content: "hello"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "skills"},
+			wantLen: 2,
+			check: func(msgs []llm.LLMMessage) bool {
+				return msgs[0].Content == "skills" && msgs[1].Content == "hello"
+			},
+		},
+		{
+			name: "multiple messages - insert before first user",
+			messages: []llm.LLMMessage{
+				{Role: "user", Content: "first"},
+				{Role: "assistant", Content: "response"},
+				{Role: "user", Content: "last"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "skills"},
+			wantLen: 4,
+			check: func(msgs []llm.LLMMessage) bool {
+				// skills should be at index 0, before "first" at index 1
+				return msgs[0].Content == "skills" && msgs[1].Content == "first"
+			},
+		},
+		{
+			name: "tool results before user - insert before user",
+			messages: []llm.LLMMessage{
+				{Role: "assistant", Content: ""},
+				{Role: "toolResult", Content: "output"},
+				{Role: "user", Content: "request"},
+			},
+			insert:  llm.LLMMessage{Role: "user", Content: "skills"},
+			wantLen: 4,
+			check: func(msgs []llm.LLMMessage) bool {
+				// skills before "request"
+				return msgs[2].Content == "skills" && msgs[3].Content == "request"
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := insertBeforeFirstUserMessage(tc.messages, tc.insert)
+			if len(result) != tc.wantLen {
+				t.Fatalf("expected %d messages, got %d", tc.wantLen, len(result))
+			}
+			if !tc.check(result) {
+				t.Fatalf("check failed for messages: %+v", result)
+			}
+		})
+	}
+}
+
 func TestCollectStaleToolOutputStatsProtectsTaskTracking(t *testing.T) {
 	// Create messages with multiple task_tracking calls
 	msgs := []agentctx.AgentMessage{

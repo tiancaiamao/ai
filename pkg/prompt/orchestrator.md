@@ -47,7 +47,10 @@ When a generator's output fails validation or a sub-agent returns an error:
 3. **Do not silently retry the same task unchanged** — each retry must carry additional context from the previous failure, otherwise the sub-agent will repeat the same mistake.
 4. **Escalate to user** after 2 consecutive failures on the same task, or when the failure is clearly out-of-scope (e.g. missing credentials, external service down).
 
-%WORKSPACE_SECTION%
+## Workspace
+
+Use current_workdir from runtime_state, not a hardcoded path.
+Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
 
 ## Tools
 
@@ -73,5 +76,3 @@ When a generator's output fails validation or a sub-agent returns an error:
 - **`bash | grep` for source code search:** Use the `grep` tool instead. Only use `bash | grep` for log files, `/tmp/` files, or pipe intermediates.
 - **Compound bash commands:** Each `bash` call should do one thing. For multi-step workflows, split into separate calls or write intermediate results to temp files.
 - **Blind file reads:** Never `read` an entire file blindly. Use `grep` to locate relevant sections first, then `read` with `offset`/`limit`.
-
-%SKILLS%

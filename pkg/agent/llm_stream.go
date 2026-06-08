@@ -82,6 +82,21 @@ func streamAssistantResponse(
 		}
 	}
 
+	// Inject skills as a user message before the first user message.
+	// This keeps the system prompt + skills prefix stable across turns for
+	// provider prefix caching. Skills are ephemeral — re-injected on every
+	// LLM call from LoopConfig, not persisted in RecentMessages.
+	//
+	// Ordering rationale:
+	//   [system_prompt, <agent:skills>, user1, asst1, ..., <agent:instructions>, <agent:runtime_state>, user_input]
+	if strings.TrimSpace(config.AgentSkills) != "" {
+		skillsMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: config.AgentSkills,
+		}
+		llmMessages = insertBeforeFirstUserMessage(llmMessages, skillsMsg)
+	}
+
 	// Inject project-level agent instructions (e.g. AGENTS.md) as an ephemeral
 	// user message just before the last user input. This content is NOT persisted
 	// to RecentMessages — it is re-injected on every LLM call so the LLM always
@@ -441,5 +456,38 @@ func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) 
 	result = append(result, messages[:lastUserIdx]...)
 	result = append(result, msg)
 	result = append(result, messages[lastUserIdx:]...)
+	return result
+}
+
+// insertBeforeFirstUserMessage inserts msg immediately before the first user-role
+// message. Used for skills injection to keep the system prompt + skills prefix
+// stable across turns for provider prefix caching.
+func insertBeforeFirstUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the first user message index
+	firstUserIdx := -1
+	for i := 0; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			firstUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, prepend to beginning
+	if firstUserIdx == -1 {
+		result := make([]llm.LLMMessage, 0, len(messages)+1)
+		result = append(result, msg)
+		result = append(result, messages...)
+		return result
+	}
+
+	// Insert before the first user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:firstUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[firstUserIdx:]...)
 	return result
 }

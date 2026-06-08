@@ -78,14 +78,19 @@ func TestBuilderWithSkills(t *testing.T) {
 
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
-	result := b.Build()
 
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
+	// Skills are now in BuildSkillsMessage(), not Build()
+	result := b.Build()
+	if contains(result, "## Skills") {
+		t.Error("Skills section should not appear in Build() output (moved to BuildSkillsMessage)")
 	}
 
-	if !contains(result, "A test skill") {
-		t.Error("Skill description missing")
+	skillsMsg := b.BuildSkillsMessage()
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing from BuildSkillsMessage()")
+	}
+	if !contains(skillsMsg, "A test skill") {
+		t.Error("Skill description missing from BuildSkillsMessage()")
 	}
 }
 
@@ -103,9 +108,10 @@ func TestBuilderMinimalMode(t *testing.T) {
 	b.SetTools(tools).SetSkills(skills).SetMinimal(true)
 	result := b.Build()
 
-	// In minimal mode, skills should be excluded
-	if contains(result, "## Skills") {
-		t.Error("Skills section should not appear in minimal mode")
+	// In minimal mode, skills should be excluded from BuildSkillsMessage too
+	skillsMsg := b.BuildSkillsMessage()
+	if skillsMsg != "" {
+		t.Error("BuildSkillsMessage should return empty in minimal mode")
 	}
 
 	// But tools and workspace should still be there
@@ -127,15 +133,15 @@ func TestBuilderSkillsRendering(t *testing.T) {
 
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("skills header missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
-	if !contains(result, "- **wf-issue**: issue workflow") {
+	if !contains(skillsMsg, "- **wf-issue**: issue workflow") {
 		t.Error("full skill entry missing")
 	}
-	if !contains(result, "- **subagent**: subagent workflow") {
+	if !contains(skillsMsg, "- **subagent**: subagent workflow") {
 		t.Error("full skill entry missing")
 	}
 }
@@ -330,10 +336,10 @@ func TestBuilderWithSkillStats(t *testing.T) {
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	b.SetSkillStats(stats)
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
 
 	// With TopN=2 and "popular" ranked highest, "medium" should not appear
@@ -341,15 +347,15 @@ func TestBuilderWithSkillStats(t *testing.T) {
 	// Actually, let's check: popular (ranked), unpopular (ranked) → top 2 from stats.
 	// "medium" has no stats → it gets added as unranked supplement only if room.
 	// TopN=2, ranked=2 → selected has 2 → medium is excluded.
-	if !contains(result, "**popular**") {
+	if !contains(skillsMsg, "**popular**") {
 		t.Error("popular skill should appear")
 	}
-	if contains(result, "**medium**") {
+	if contains(skillsMsg, "**medium**") {
 		t.Error("medium skill should be filtered out (TopN=2, not in top entries)")
 	}
 
 	// Stats present → should include find_skill hint
-	if !contains(result, "find_skill") {
+	if !contains(skillsMsg, "find_skill") {
 		t.Error("find_skill hint should appear when stats are set")
 	}
 }
@@ -364,16 +370,16 @@ func TestBuilderWithSkillStatsNil(t *testing.T) {
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	// SetSkillStats not called → skillStats is nil → backward compat
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
-	if !contains(result, "A test skill") {
+	if !contains(skillsMsg, "A test skill") {
 		t.Error("Skill description missing")
 	}
 	// No stats → should NOT show find_skill hint
-	if contains(result, "find_skill") {
+	if contains(skillsMsg, "find_skill") {
 		t.Error("find_skill hint should not appear when stats are nil")
 	}
 }
