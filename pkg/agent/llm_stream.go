@@ -82,37 +82,25 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Inject skills as a user message before the first user message.
-	// This keeps the system prompt + skills prefix stable across turns for
-	// provider prefix caching. Skills are ephemeral — re-injected on every
-	// LLM call from LoopConfig, not persisted in RecentMessages.
+	// Inject skills + instructions as a single user message before the first
+	// user message. Both are stable within a session (skills rarely change,
+	// instructions are AGENTS.md content), so merging them into one message
+	// and placing them in the prefix maximizes provider prefix cache hits.
 	//
-	// Ordering rationale:
-	//   [system_prompt, <agent:skills>, user1, asst1, ..., <agent:instructions>, <agent:runtime_state>, user_input]
-	if strings.TrimSpace(config.AgentSkills) != "" {
-		skillsMsg := llm.LLMMessage{
-			Role:    "user",
-			Content: config.AgentSkills,
-		}
-		llmMessages = insertBeforeFirstUserMessage(llmMessages, skillsMsg)
-	}
-
-	// Inject project-level agent instructions (e.g. AGENTS.md) as an ephemeral
-	// user message just before the last user input. This content is NOT persisted
-	// to RecentMessages — it is re-injected on every LLM call so the LLM always
-	// sees fresh instructions without bloating session history.
+	// They are NOT persisted to RecentMessages — re-injected on every LLM call.
 	//
-	// Ordering rationale (after runtime_state handling):
-	//   - ephemeral mode:   [..., <agent:instructions>, <agent:runtime_state>, user_input]
-	//     (instructions placed first because it is the most stable context)
-	//   - persist mode:     [..., user_input, <agent:instructions>, <agent:runtime_state>]
-	//     (suboptimal but functionally correct; cache-first is a niche optimization)
-	if strings.TrimSpace(config.AgentInstructions) != "" {
-		instrMsg := llm.LLMMessage{
+	// Final ordering:
+	//   [system_prompt, <skills+instructions>, user1, asst1, ..., <runtime_state>, user_input]
+	//
+	// runtime_state is injected separately below (before last user) because it
+	// can change when the user calls change_workspace, and we don't want it to
+	// break the stable prefix cache.
+	if config.AgentContextPrefix != "" {
+		prefixMsg := llm.LLMMessage{
 			Role:    "user",
-			Content: config.AgentInstructions,
+			Content: config.AgentContextPrefix,
 		}
-		llmMessages = insertBeforeLastUserMessage(llmMessages, instrMsg)
+		llmMessages = insertBeforeFirstUserMessage(llmMessages, prefixMsg)
 	}
 
 	// Convert tools to LLM format

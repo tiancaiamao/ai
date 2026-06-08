@@ -94,15 +94,10 @@ type rpcApp struct {
 	// --- System prompt ---
 	systemPrompt string
 
-	// Agent instructions (project-level, e.g. AGENTS.md) injected as a user
-	// message before the last user input on each LLM call. Empty when no
-	// AGENTS.md is present. Mirrors the codex contextual_user_message pattern.
-	agentInstructions string
-
-	// Agent skills (loaded from ~/.ai/skills/ and .ai/skills/) injected as a
-	// user message before the first user message on each LLM call. Empty when
-	// no skills are loaded. Kept at the beginning for stable prefix caching.
-	agentSkills string
+	// Agent context prefix combines skills + AGENTS.md into a single user message
+	// injected before the first user message on each LLM call. Empty when neither
+	// is available. Merged into one message for maximum prefix cache stability.
+	agentContextPrefix string
 
 	// --- RPC Server ---
 	server *rpc.Server
@@ -125,8 +120,7 @@ type rpcApp struct {
 	// --- Internal helper functions ---
 	// These are assigned in initHelpers and used by handler closures.
 	buildSystemPrompt               func(currentSess *session.Session) string
-	buildAgentInstructions          func() string
-	buildAgentSkills                func() string
+	buildAgentContextPrefix         func() string
 	restoreLLMContextFromCompaction func(sess *session.Session)
 	createBaseContext               func() *agentctx.AgentContext
 	setAgentContext                 func(ctx *agentctx.AgentContext)
@@ -219,27 +213,31 @@ func (app *rpcApp) initHelpers() {
 		return promptBuilder.Build()
 	}
 
-	// buildAgentInstructions loads AGENTS.md from the workspace and wraps it
-	// in <agent:instructions> tags. Returns empty when no AGENTS.md is present.
-	//
-	// AGENTS.md is injected as a user message (see llm_stream.go), independent
-	// of the system prompt source. Custom system prompts (including role
-	// templates like orchestrator.md) and agent configs define role behavior,
-	// not project facts — so AGENTS.md is still relevant and is injected in
-	// all modes. If a workspace really wants to suppress AGENTS.md injection,
-	// delete/rename the AGENTS.md file.
-	app.buildAgentInstructions = func() string {
-		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
-		return promptBuilder.BuildInstructionsMessage()
-	}
+	// buildAgentContextPrefix combines skills and AGENTS.md into a single
+	// user message for prefix cache stability. Skills are wrapped in
+	// <agent:skills> tags, instructions in <agent:instructions> tags.
+	// Returns empty when neither is available.
+	app.buildAgentContextPrefix = func() string {
+		var parts []string
 
-	// buildAgentSkills formats the loaded skills list as a user message
-	// wrapped in <agent:skills> tags. Returns empty when no skills are
-	// available or minimal mode is enabled.
-	app.buildAgentSkills = func() string {
 		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
-		promptBuilder.SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
-		return promptBuilder.BuildSkillsMessage()
+
+		// Skills section
+		promptBuilderForSkills := prompt.NewBuilderWithWorkspace("", app.ws)
+		promptBuilderForSkills.SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
+		if skills := promptBuilderForSkills.BuildSkillsMessage(); skills != "" {
+			parts = append(parts, skills)
+		}
+
+		// Instructions section (AGENTS.md)
+		if instructions := promptBuilder.BuildInstructionsMessage(); instructions != "" {
+			parts = append(parts, instructions)
+		}
+
+		if len(parts) == 0 {
+			return ""
+		}
+		return strings.Join(parts, "\n\n")
 	}
 
 	// restoreLLMContextFromCompaction restores the llm context overview.md
@@ -268,13 +266,11 @@ func (app *rpcApp) initHelpers() {
 	// createBaseContext creates a new agent context from the current session.
 	app.createBaseContext = func() *agentctx.AgentContext {
 		app.systemPrompt = app.buildSystemPrompt(app.sess)
-		app.agentInstructions = app.buildAgentInstructions()
-		app.agentSkills = app.buildAgentSkills()
+		app.agentContextPrefix = app.buildAgentContextPrefix()
 		// Keep loopCfg in sync if it has been constructed (createBaseContext
 		// may be re-invoked on session resume while loopCfg already exists).
 		if app.loopCfg != nil {
-			app.loopCfg.AgentInstructions = app.agentInstructions
-			app.loopCfg.AgentSkills = app.agentSkills
+			app.loopCfg.AgentContextPrefix = app.agentContextPrefix
 		}
 		ctx := agentctx.NewAgentContext(app.systemPrompt)
 		for _, tool := range app.registry.All() {
