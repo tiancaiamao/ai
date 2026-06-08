@@ -99,6 +99,11 @@ type rpcApp struct {
 	// AGENTS.md is present. Mirrors the codex contextual_user_message pattern.
 	agentInstructions string
 
+	// Agent skills (loaded from ~/.ai/skills/ and .ai/skills/) injected as a
+	// user message before the first user message on each LLM call. Empty when
+	// no skills are loaded. Kept at the beginning for stable prefix caching.
+	agentSkills string
+
 	// --- RPC Server ---
 	server *rpc.Server
 
@@ -121,6 +126,7 @@ type rpcApp struct {
 	// These are assigned in initHelpers and used by handler closures.
 	buildSystemPrompt               func(currentSess *session.Session) string
 	buildAgentInstructions          func() string
+	buildAgentSkills                func() string
 	restoreLLMContextFromCompaction func(sess *session.Session)
 	createBaseContext               func() *agentctx.AgentContext
 	setAgentContext                 func(ctx *agentctx.AgentContext)
@@ -227,6 +233,15 @@ func (app *rpcApp) initHelpers() {
 		return promptBuilder.BuildInstructionsMessage()
 	}
 
+	// buildAgentSkills formats the loaded skills list as a user message
+	// wrapped in <agent:skills> tags. Returns empty when no skills are
+	// available or minimal mode is enabled.
+	app.buildAgentSkills = func() string {
+		promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
+		promptBuilder.SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
+		return promptBuilder.BuildSkillsMessage()
+	}
+
 	// restoreLLMContextFromCompaction restores the llm context overview.md
 	// from the latest compaction summary on the current session branch.
 	app.restoreLLMContextFromCompaction = func(sess *session.Session) {
@@ -254,10 +269,12 @@ func (app *rpcApp) initHelpers() {
 	app.createBaseContext = func() *agentctx.AgentContext {
 		app.systemPrompt = app.buildSystemPrompt(app.sess)
 		app.agentInstructions = app.buildAgentInstructions()
+		app.agentSkills = app.buildAgentSkills()
 		// Keep loopCfg in sync if it has been constructed (createBaseContext
 		// may be re-invoked on session resume while loopCfg already exists).
 		if app.loopCfg != nil {
 			app.loopCfg.AgentInstructions = app.agentInstructions
+			app.loopCfg.AgentSkills = app.agentSkills
 		}
 		ctx := agentctx.NewAgentContext(app.systemPrompt)
 		for _, tool := range app.registry.All() {

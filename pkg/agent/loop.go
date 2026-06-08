@@ -85,6 +85,11 @@ type LoopConfig struct {
 	// This mirrors the codex contextual_user_message pattern, keeping the system
 	// prompt stable for caching while still providing project context per turn.
 	AgentInstructions string
+	// AgentSkills is the skills list wrapped in <agent:skills> tags, injected as
+	// a user message before the first user message on each LLM call. Empty means
+	// no injection. Placing skills at the beginning of the conversation keeps the
+	// system prompt + skills prefix stable for provider prefix caching.
+	AgentSkills string
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.

@@ -66,7 +66,11 @@ func TestPromptABMetricsSmoke(t *testing.T) {
 	if oldTokens <= 0 || newTokens <= 0 {
 		t.Fatalf("expected positive token estimates, old=%d new=%d", oldTokens, newTokens)
 	}
-	if !strings.Contains(newPrompt, "- **skill-00**:") {
-		t.Fatalf("expected full skill entries in prompt, got: %s", newPrompt)
+	// Skills are no longer in Build() output — they are injected separately via
+	// BuildSkillsMessage() as a user message before the first user input.
+	// Verify skills are available via BuildSkillsMessage instead.
+	skillsMsg := NewBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).BuildSkillsMessage()
+	if !strings.Contains(skillsMsg, "- **skill-00**:") {
+		t.Fatalf("expected full skill entries in skills message, got: %s", skillsMsg)
 	}
 }

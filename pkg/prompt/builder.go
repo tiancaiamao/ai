@@ -167,21 +167,34 @@ func (b *Builder) SetTokensPercent(pct float64) *Builder {
 	return b
 }
 
-// Build builds final system prompt by replacing placeholders in the template.
+// BuildSkillsMessage formats the skills list as a user message wrapped in
+// <agent:skills> tags, ready for injection as a user message before the
+// last user input on each LLM call. Returns empty string when no skills
+// are available or minimal mode is enabled.
+//
+// This replaces the former %SKILLS% placeholder in the system prompt template.
+// Skills are now injected per-LLM-call as a user-role message (similar to
+// AgentInstructions), keeping the system prompt stable for caching while still
+// providing skill context on every turn.
+func (b *Builder) BuildSkillsMessage() string {
+	if b.minimal || len(b.skills) == 0 {
+		return ""
+	}
+	skillsText := skill.FormatForPrompt(b.skills, b.skillStats)
+	if skillsText == "" {
+		return ""
+	}
+	return fmt.Sprintf("<agent:skills>\n%s\n</agent:skills>", skillsText)
+}
+
+// Build builds final system prompt from the template.
+// Skills are no longer included here — use BuildSkillsMessage() to get the
+// skills content for per-LLM-call user message injection.
 func (b *Builder) Build() string {
 	result := promptTemplate
 	if b.template != "" {
 		result = b.template
 	}
-
-	// Replace skills (optional section)
-	skills := ""
-	if !b.minimal && len(b.skills) > 0 {
-		if skillsText := skill.FormatForPrompt(b.skills, b.skillStats); skillsText != "" {
-			skills = skillsText
-		}
-	}
-	result = strings.ReplaceAll(result, "%SKILLS%", skills)
 
 	// Remove empty sections (optional sections that were not enabled)
 	result = b.cleanupEmptySections(result)
