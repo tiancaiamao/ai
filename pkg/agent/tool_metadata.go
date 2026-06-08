@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -108,40 +106,4 @@ func findLatestToolCallID(messages []agentctx.AgentMessage, toolName string) str
 		}
 	}
 	return ""
-}
-
-func buildToolOutputsSummary(messages []agentctx.AgentMessage) string {
-	staleCount, byTool := collectStaleToolOutputStats(messages, recentToolResultsNoMetadata)
-	if staleCount == 0 || len(byTool) == 0 {
-		return "none"
-	}
-
-	type pair struct {
-		name  string
-		count int
-	}
-	pairs := make([]pair, 0, len(byTool))
-	for name, count := range byTool {
-		pairs = append(pairs, pair{name: name, count: count})
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].count == pairs[j].count {
-			return pairs[i].name < pairs[j].name
-		}
-		return pairs[i].count > pairs[j].count
-	})
-
-	limit := toolOutputSummaryTypeLimit
-	if len(pairs) < limit {
-		limit = len(pairs)
-	}
-	parts := make([]string, 0, limit)
-	for i := 0; i < limit; i++ {
-		parts = append(parts, fmt.Sprintf("%d %s", pairs[i].count, pairs[i].name))
-	}
-	if len(pairs) > limit {
-		parts = append(parts, "...")
-	}
-
-	return fmt.Sprintf("%d stale outputs (%s)", staleCount, strings.Join(parts, ", "))
 }

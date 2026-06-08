@@ -346,7 +346,6 @@ func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) str
 	if len(sections) == 0 {
 		return ""
 	}
-	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.`)
 	return strings.Join(sections, "\n\n")
 }
 
@@ -382,48 +381,19 @@ func updateRuntimeMetaSnapshot(
 		return agentCtx.AgentState.RuntimeMetaSnapshot, false
 	}
 
-	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
-	toolPressure := collectRuntimeToolPressure(agentCtx.RecentMessages)
-	toolOutputsSummary := buildToolOutputsSummary(agentCtx.RecentMessages)
-
 	// runtime_state is purely informational - no directives or commands
 	// Build run_id line only when available (subagent spawned via ai serve).
 	var runIDLine string
 	if runID != "" {
 		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
 	}
-	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
-context_meta:
-  tokens_band: %s
-  tokens_used_approx: %d
-  tokens_max: %d
-  messages_in_history_bucket: %s
-  llm_context_size_bucket: %s%s
-workspace:
+	snapshot := fmt.Sprintf(`<agent:runtime_state"/>
+%s
   current_workdir: %s
-  startup_path: %s
-tool_output_pressure:
-  stale_tool_outputs: %d
-  tool_outputs_summary: %s
-  large_tool_outputs: %d
-  largest_tool_output_bucket: %s
-compact_decision_signals:
-  tokens_percent: %.1f
-  context_usage_percent: %.1f`,
-		band,
-		tokensUsedApprox,
-		meta.TokensMax,
-		runtimeMessageBucket(meta.MessagesInHistory),
-		runtimeSizeBucket(meta.LLMContextSize),
+  startup_path: %s`,
 		runIDLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
-		toolPressure.StaleCount,
-		toolOutputsSummary,
-		toolPressure.LargeCount,
-		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
-		meta.TokensPercent,
-		meta.TokensPercent,
 	)
 
 	agentCtx.AgentState.RuntimeMetaSnapshot = snapshot

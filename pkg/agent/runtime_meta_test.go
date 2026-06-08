@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"testing"
@@ -24,8 +23,8 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	if snapshot == "" {
 		t.Fatal("expected non-empty snapshot")
 	}
-	if !containsString(snapshot, "tokens_band: 20-40") {
-		t.Fatalf("expected 20-40 band, got: %s", snapshot)
+	if !containsString(snapshot, "current_workdir:") {
+		t.Fatalf("expected current_workdir in snapshot, got: %s", snapshot)
 	}
 	// action_hint field has been removed
 
@@ -55,8 +54,8 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	if !refreshed5 {
 		t.Fatal("expected refresh on band change")
 	}
-	if !containsString(snapshot5, "tokens_band: 60-75") {
-		t.Fatalf("expected 60-75 band, got: %s", snapshot5)
+	if !containsString(snapshot5, "current_workdir:") {
+		t.Fatalf("expected current_workdir after band-change refresh, got: %s", snapshot5)
 	}
 	// action_hint field has been removed
 }
@@ -68,9 +67,6 @@ func TestBuildRuntimeSystemAppendix(t *testing.T) {
 	}
 	if !containsString(appendix, "<runtime_state>ok</runtime_state>") {
 		t.Fatalf("expected runtime_state section, got: %s", appendix)
-	}
-	if !containsString(appendix, "runtime_state is telemetry") {
-		t.Fatalf("expected telemetry reminder, got: %s", appendix)
 	}
 
 	empty := buildRuntimeSystemAppendix("", "")
@@ -146,73 +142,6 @@ func TestExtractRecentMessagesSkipsOrphanedToolResults(t *testing.T) {
 	// Should start with user or assistant
 	if active[0].Role != "user" && active[0].Role != "assistant" {
 		t.Fatalf("expected first message to be user or assistant, got %q", active[0].Role)
-	}
-}
-
-func TestBuildToolOutputsSummaryUsesStaleHistoryExcludingRecent10(t *testing.T) {
-	msgs := []agentctx.AgentMessage{agentctx.NewUserMessage("old")}
-	msgs = append(msgs, agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: "stale-1"},
-	}, false))
-	msgs = append(msgs, agentctx.NewToolResultMessage("call-2", "bash", []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: "stale-2"},
-	}, false))
-	for i := 3; i <= 12; i++ {
-		msgs = append(msgs, agentctx.NewToolResultMessage(
-			fmt.Sprintf("call-%d", i),
-			"grep",
-			[]agentctx.ContentBlock{
-				agentctx.TextContent{Type: "text", Text: fmt.Sprintf("recent-%d", i)},
-			},
-			false,
-		))
-	}
-	msgs = append(msgs, agentctx.NewUserMessage("latest"))
-
-	summary := buildToolOutputsSummary(msgs)
-	if !containsString(summary, "2 stale outputs") {
-		t.Fatalf("expected 2 stale outputs in summary, got: %s", summary)
-	}
-	if !containsString(summary, "1 bash, 1 read") {
-		t.Fatalf("expected grouped tool counts, got: %s", summary)
-	}
-	// Note: guidance is no longer included in buildToolOutputsSummary
-	// LLM decides based on runtime_state telemetry
-}
-
-func TestUpdateRuntimeMetaSnapshotIncludesCompactDecisionSignals(t *testing.T) {
-	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.RecentMessages = []agentctx.AgentMessage{
-		agentctx.NewUserMessage("修复 truncate compact 协议"),
-		func() agentctx.AgentMessage {
-			m := agentctx.NewAssistantMessage()
-			m.Content = []agentctx.ContentBlock{
-				agentctx.TextContent{Type: "text", Text: "阶段完成：truncate 已完成"},
-			}
-			return m
-		}(),
-		agentctx.NewUserMessage("顺便看看前端动画设计"),
-	}
-	meta := agentctx.ContextMeta{
-		TokensUsed:        64000,
-		TokensMax:         128000,
-		TokensPercent:     50.0,
-		MessagesInHistory: len(agentCtx.RecentMessages),
-		LLMContextSize:    1200,
-	}
-
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if !refreshed {
-		t.Fatal("expected refreshed snapshot")
-	}
-	if !containsString(snapshot, "compact_decision_signals:") {
-		t.Fatalf("expected compact_decision_signals section, got: %s", snapshot)
-	}
-	if !containsString(snapshot, "tokens_percent: 50.0") {
-		t.Fatalf("expected tokens_percent field, got: %s", snapshot)
-	}
-	if containsString(snapshot, "llm_judge") {
-		t.Fatalf("did not expect llm_judge placeholder fields, got: %s", snapshot)
 	}
 }
 
