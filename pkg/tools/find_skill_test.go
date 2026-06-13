@@ -617,3 +617,174 @@ func TestFindSkill_LoadFallbackToDiskReal(t *testing.T) {
 		t.Errorf("Expected loaded content to contain 'Session Analyzer', got: %s", text[:min(len(text), 200, len(text))])
 	}
 }
+
+// --- Tokenized query matching tests ---
+
+func TestFindSkill_TokenizedNameMatch(t *testing.T) {
+	tool := NewFindSkillTool([]skill.Skill{
+		{
+			Name:        "software-engineering-books",
+			Description: "Distilled decision rules from classic software engineering books",
+			FilePath:    "/home/user/.ai/skills/software-engineering-books/SKILL.md",
+		},
+	}, nil)
+	tool.SetIndexPath(filepath.Join(t.TempDir(), "nonexistent-index.json"))
+
+	// Multi-word query "software engineer book" should match "software-engineering-books"
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"query": "software engineer book",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text := firstText(result)
+	if !strings.Contains(text, "software-engineering-books") {
+		t.Errorf("Expected 'software-engineering-books' matched by tokens, got: %s", text)
+	}
+}
+
+func TestFindSkill_KeywordMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeTestIndex(t, dir, []SkillIndexEntry{
+		{
+			Name:        "software-engineering-books",
+			Description: "Decision rules from classic SE books",
+			Keywords:    []string{"software-engineering", "books", "clean-code", "refactoring", "DDD"},
+			Categories:  []string{"development"},
+		},
+	})
+
+	tool := newTestToolWithIndex([]skill.Skill{}, nil, dir)
+
+	// "refactor" should match keyword "refactoring" via substring
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"query": "refactor",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text := firstText(result)
+	if !strings.Contains(text, "software-engineering-books") {
+		t.Errorf("Expected match via keyword 'refactoring', got: %s", text)
+	}
+}
+
+func TestFindSkill_KeywordMatchAnyToken(t *testing.T) {
+	dir := t.TempDir()
+	writeTestIndex(t, dir, []SkillIndexEntry{
+		{
+			Name:        "software-engineering-books",
+			Description: "Decision rules from classic SE books",
+			Keywords:    []string{"software-engineering", "books", "clean-code"},
+			Categories:  []string{"development"},
+		},
+	})
+
+	tool := newTestToolWithIndex([]skill.Skill{}, nil, dir)
+
+	// "book" should match keyword "books" via substring
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"query": "book",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text := firstText(result)
+	if !strings.Contains(text, "software-engineering-books") {
+		t.Errorf("Expected match via keyword 'books' with token 'book', got: %s", text)
+	}
+}
+
+func TestFindSkill_KeywordRankBetweenAliasAndCategory(t *testing.T) {
+	dir := t.TempDir()
+	writeTestIndex(t, dir, []SkillIndexEntry{
+		{
+			Name:        "skill-alias",
+			Description: "Found via alias",
+			Aliases:     []string{"my-alias"},
+			Keywords:    []string{"my-keyword"},
+			Categories:  []string{"cat-a"},
+		},
+		{
+			Name:        "skill-keyword",
+			Description: "Found via keyword",
+			Keywords:    []string{"my-keyword"},
+			Categories:  []string{"cat-a"},
+		},
+		{
+			Name:        "skill-category",
+			Description: "Found via category",
+			Categories:  []string{"my-keyword"},
+		},
+	})
+
+	tool := newTestToolWithIndex([]skill.Skill{}, nil, dir)
+
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"query": "my-keyword",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text := firstText(result)
+
+	// All three should be found, sorted: alias < keyword < category
+	lines := strings.Split(text, "\n")
+	var order []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "- ") {
+			// Extract skill name
+			name := strings.TrimPrefix(l, "- ")
+			name = name[:strings.Index(name, ":")]
+			order = append(order, name)
+		}
+	}
+
+	if len(order) != 3 {
+		t.Fatalf("Expected 3 results, got %d: %v", len(order), order)
+	}
+	if order[0] != "skill-alias" {
+		t.Errorf("Expected skill-alias first (alias rank), got %s", order[0])
+	}
+	if order[1] != "skill-keyword" {
+		t.Errorf("Expected skill-keyword second (keyword rank), got %s", order[1])
+	}
+	if order[2] != "skill-category" {
+		t.Errorf("Expected skill-category third (category rank), got %s", order[2])
+	}
+}
+
+func TestFindSkill_MultiTokenDescMatch(t *testing.T) {
+	tool := NewFindSkillTool([]skill.Skill{
+		{
+			Name:        "video-watcher",
+			Description: "Fetch transcripts from YouTube and Bilibili videos",
+			FilePath:    "/home/user/.ai/skills/video-watcher/SKILL.md",
+		},
+	}, nil)
+	tool.SetIndexPath(filepath.Join(t.TempDir(), "nonexistent-index.json"))
+
+	// Both tokens must appear in description
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"query": "video transcript",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text := firstText(result)
+	if !strings.Contains(text, "video-watcher") {
+		t.Errorf("Expected 'video-watcher' matched by tokens in description, got: %s", text)
+	}
+
+	// Single token that doesn't fully match should not find it
+	result2, err := tool.Execute(context.Background(), map[string]any{
+		"query": "video nonexistentxyz",
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	text2 := firstText(result2)
+	if strings.Contains(text2, "video-watcher") {
+		t.Errorf("Should not match when not all tokens present, got: %s", text2)
+	}
+}
