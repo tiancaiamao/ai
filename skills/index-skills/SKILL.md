@@ -85,9 +85,10 @@ For each changed skill, produce one JSON object with these fields:
 - **name**: Must match the directory name under `~/.ai/skills/`
 - **description**: Concise, in English, derived from frontmatter + first heading
 - **aliases**: 5–12 entries (aim for breadth). Must include ALL of the following dimensions:
-  - **Synonyms & abbreviations**: Common alternative names and abbreviations (e.g. "TDD" for test-driven-development)
+    - **Synonyms & abbreviations**: Common alternative names and abbreviations (e.g. "TDD" for test-driven-development)
   - **Hypernyms (broader terms)**: What broader category would a user search for? (e.g. burner-phone → "mobile", "android", "device", "phone"; hardware → "embedded", "iot", "peripheral")
   - **Tech stack keywords**: Underlying tools/protocols/standards the skill uses (e.g. agent-browser → "chrome", "CDP", "chromium"; burner-phone → "adb", "screenshot", "UI automation")
+  - **Morphological variants**: Singular/plural and common word-form variants of key terms (e.g. "book"/"books", "engineer"/"engineering", "debug"/"debugging", "refactor"/"refactoring"). Users rarely type the exact form in the skill name.
   - **Chinese equivalents**: If the skill has Chinese content or is commonly used in Chinese context, include 1–2 Chinese translations
   - **Misspellings & variant spellings**: Include common misspellings only if the skill name is easily misspelled
   - Do NOT include the name itself (it's already matched)
