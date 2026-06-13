@@ -99,6 +99,9 @@ type AgentMessage struct {
 	Truncated    bool `json:"truncated,omitempty"`
 	TruncatedAt  int  `json:"truncated_at,omitempty"`
 	OriginalSize int  `json:"original_size,omitempty"`
+
+	// Session entry tracking (set by buildSessionContext)
+	EntryID string `json:"entryId,omitempty"`
 }
 
 // IsTruncated checks if a message is truncated.
