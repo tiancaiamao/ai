@@ -35,8 +35,6 @@ type Config struct {
 }
 
 // DefaultConfig returns default compression configuration.
-
-// DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
 		MaxMessages:           50,    // Compact after 50 messages
@@ -62,8 +60,6 @@ type Compactor struct {
 }
 
 // NewCompactor creates a new Compactor.
-
-// NewCompactor creates a new Compactor.
 func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int) *Compactor {
 	if config == nil {
 		config = DefaultConfig()
@@ -78,17 +74,9 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 }
 
 // GetConfig returns the compactor configuration.
-
-// GetConfig returns the compactor configuration.
 func (c *Compactor) GetConfig() *Config {
 	return c.config
 }
-
-// CalculateDynamicThreshold calculates the compaction threshold based on context window.
-// For models with large context windows (e.g., 128k), this allows much more context
-// before triggering compaction, rather than using a fixed 8000 token limit.
-// CalculateDynamicThreshold returns the dynamic compaction threshold based on context window.
-// Exported for use by context_management tool to provide feedback when compact is rejected.
 
 // CalculateDynamicThreshold calculates the compaction threshold based on context window.
 // For models with large context windows (e.g., 128k), this allows much more context
@@ -135,9 +123,6 @@ func (c *Compactor) CalculateDynamicThreshold() int {
 
 // calculateKeepRecentBudget calculates the token budget for keeping recent messages.
 // This scales with the context window rather than using a fixed value.
-
-// calculateKeepRecentBudget calculates the token budget for keeping recent messages.
-// This scales with the context window rather than using a fixed value.
 func (c *Compactor) calculateKeepRecentBudget() int {
 	// If a fixed budget is configured, respect it (but cap it)
 	if c.config.KeepRecentTokens > 0 {
@@ -166,8 +151,6 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 }
 
 // estimateStringTokens provides a rough token estimation for a string.
-
-// estimateStringTokens provides a rough token estimation for a string.
 func estimateStringTokens(s string) int {
 	if len(s) == 0 {
 		return 0
@@ -190,13 +173,9 @@ func (c *Compactor) ContextWindow() int {
 }
 
 // SetContextWindow updates the model context window used for compaction.
-
-// SetContextWindow updates the model context window used for compaction.
 func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window
 }
-
-// ReserveTokens returns the effective reserve tokens setting.
 
 // ReserveTokens returns the effective reserve tokens setting.
 func (c *Compactor) ReserveTokens() int {
@@ -207,13 +186,9 @@ func (c *Compactor) ReserveTokens() int {
 }
 
 // KeepRecentMessages returns the effective keep-recent message count.
-
-// KeepRecentMessages returns the effective keep-recent message count.
 func (c *Compactor) KeepRecentMessages() int {
 	return c.keepRecentMessages()
 }
-
-// KeepRecentTokens returns the effective keep-recent token budget.
 
 // KeepRecentTokens returns the effective keep-recent token budget.
 func (c *Compactor) KeepRecentTokens() int {
@@ -244,8 +219,6 @@ func (c *Compactor) effectiveKeepRecentTokens() int {
 }
 
 // EffectiveTokenLimit returns the token limit for compaction and its source.
-
-// EffectiveTokenLimit returns the token limit for compaction and its source.
 func (c *Compactor) EffectiveTokenLimit() (int, string) {
 	if c == nil {
 		return 0, "none"
@@ -262,8 +235,6 @@ func (c *Compactor) EffectiveTokenLimit() (int, string) {
 	}
 	return 0, "none"
 }
-
-// EstimateTokens provides a rough estimation of token count.
 
 // EstimateTokens provides a rough estimation of token count.
 func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
@@ -340,8 +311,6 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	}
 	return int(math.Ceil(float64(charCount) / 4.0))
 }
-
-// EstimateMessageTokens estimates token usage for a single message.
 
 // EstimateMessageTokens estimates token usage for a single message.
 func EstimateMessageTokens(msg agentctx.AgentMessage) int {
@@ -464,11 +433,6 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 // given slice. During compaction, older runtime_state snapshots are stale — only
 // the most recent one carries useful telemetry. Cleaning them unconditionally
 // keeps pkg/compact independent of cache mode logic.
-
-// cleanOldRuntimeState removes all but the last runtime_state message from the
-// given slice. During compaction, older runtime_state snapshots are stale — only
-// the most recent one carries useful telemetry. Cleaning them unconditionally
-// keeps pkg/compact independent of cache mode logic.
 func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	lastIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -491,8 +455,6 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 	}
 	return result
 }
-
-// ShouldCompact determines if context should be compressed using AgentContext.
 
 // ShouldCompact determines if context should be compressed using AgentContext.
 func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentContext) bool {
