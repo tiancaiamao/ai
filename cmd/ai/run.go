@@ -104,7 +104,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	}
 
 	// Redirect subprocess stderr to log file.
-	logPath := filepath.Join(runDir, "rpc.log")
+	logPath := filepath.Join(runDir, "error.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		slog.Error("failed to create log file", "path", logPath, "error", err)
