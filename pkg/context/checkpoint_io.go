@@ -156,7 +156,7 @@ func saveMessagesJSONL(filePath string, messages []AgentMessage) error {
 // loadMessagesJSONL reads messages from raw JSONL bytes.
 func loadMessagesJSONL(data []byte) ([]AgentMessage, error) {
 	var messages []AgentMessage
-	for _, line := range splitLines(data) {
+	for _, line := range SplitLines(data) {
 		if len(line) == 0 {
 			continue
 		}
@@ -169,8 +169,8 @@ func loadMessagesJSONL(data []byte) ([]AgentMessage, error) {
 	return messages, nil
 }
 
-// splitLines splits byte data into lines (without trailing newlines).
-func splitLines(data []byte) [][]byte {
+// SplitLines splits byte data by newline, skipping empty lines.
+func SplitLines(data []byte) [][]byte {
 	var lines [][]byte
 	for {
 		i := bytes.IndexByte(data, '\n')

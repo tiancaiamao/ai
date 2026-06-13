@@ -29,25 +29,6 @@ func TestEstimateStringTokens(t *testing.T) {
 	}
 }
 
-func TestTrimRunes(t *testing.T) {
-	if got := trimRunes("hello", 0); got != "hello" {
-		t.Errorf("trimRunes with limit=0 should return input unchanged, got %q", got)
-	}
-	if got := trimRunes("hello", -1); got != "hello" {
-		t.Errorf("trimRunes with negative limit should return input, got %q", got)
-	}
-	if got := trimRunes("hello", 10); got != "hello" {
-		t.Errorf("trimRunes with limit > runes should return input, got %q", got)
-	}
-	if got := trimRunes("héllo", 3); got != "hél" {
-		t.Errorf("trimRunes should respect unicode code points, got %q", got)
-	}
-	// Multi-byte unicode: trim to 1 rune
-	if got := trimRunes("世界abc", 2); got != "世界" {
-		t.Errorf("expected first 2 runes, got %q", got)
-	}
-}
-
 func TestTrimTextWithTail(t *testing.T) {
 	if got := trimTextWithTail("", 10); got != "" {
 		t.Errorf("empty input should return empty, got %q", got)
@@ -78,7 +59,7 @@ func TestExtractText(t *testing.T) {
 			agentctx.TextContent{Type: "text", Text: "world"},
 		},
 	}
-	if got := extractText(msg); got != "hello world" {
+	if got := msg.ExtractText(); got != "hello world" {
 		t.Errorf("expected 'hello world', got %q", got)
 	}
 
@@ -87,19 +68,8 @@ func TestExtractText(t *testing.T) {
 		Role:    "user",
 		Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "fallback"}},
 	}
-	if got := extractText(msg); got != "fallback" {
+	if got := msg.ExtractText(); got != "fallback" {
 		t.Errorf("expected 'fallback', got %q", got)
-	}
-}
-
-func TestBoolPtr(t *testing.T) {
-	p := boolPtr(true)
-	if p == nil || *p != true {
-		t.Error("boolPtr(true) should return pointer to true")
-	}
-	p2 := boolPtr(false)
-	if p2 == nil || *p2 != false {
-		t.Error("boolPtr(false) should return pointer to false")
 	}
 }
 

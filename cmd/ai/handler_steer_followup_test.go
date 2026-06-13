@@ -23,11 +23,9 @@ func newTestApp(t *testing.T) *rpcApp {
 	})
 
 	return &rpcApp{
-		ag:                   ag,
-		steeringMode:         "all",
-		followUpMode:         "all",
-		expandSkillCommands:  func(text string) string { return text },
-		compactBeforeRequest: func(trigger string) {},
+		ag:           ag,
+		steeringMode: "all",
+		followUpMode: "all",
 	}
 }
 

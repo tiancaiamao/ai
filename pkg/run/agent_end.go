@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 // AgentEndInfo holds summary information extracted from an agent_end event.
@@ -109,7 +111,7 @@ func parseAgentEndLine(line string) *AgentEndInfo {
 	}
 
 	if errMsg, ok := evt["error"].(string); ok && errMsg != "" {
-		info.Error = truncateString(errMsg, 100)
+		info.Error = truncate.TruncateString(errMsg, 100)
 	}
 
 	// Count turns by scanning events for turn_start — but we don't have
@@ -169,17 +171,6 @@ func FindLastAgentEndFast(eventsPath string) *AgentEndInfo {
 	return parseAgentEndLine(lastAgentEndLine)
 }
 
-// truncateString truncates s to maxLen, appending "..." if truncated.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
-
 // FormatAgentStatus returns a human-readable status string for ls output.
 func FormatAgentStatus(meta *RunMeta, endInfo *AgentEndInfo) string {
 	if !IsRunning(meta) {
@@ -191,7 +182,7 @@ func FormatAgentStatus(meta *RunMeta, endInfo *AgentEndInfo) string {
 		if endInfo.Success {
 			return "idle" // finished a prompt, waiting for next
 		}
-		return fmt.Sprintf("ended:%s", truncateString(endInfo.Error, 30))
+		return fmt.Sprintf("ended:%s", truncate.TruncateString(endInfo.Error, 30))
 	}
 	return "running"
 }

@@ -157,19 +157,3 @@ func TruncateWithHeadTail(text string) string {
 	truncatedChars := len(text) - headKeep - tailKeep
 	return fmt.Sprintf("%s\n.. [%d chars truncated] ..\n%s", head, truncatedChars, tail)
 }
-
-// ReconstructSnapshotMessages rebuilds RecentMessages from journal entries starting at startIndex.
-func ReconstructSnapshotMessages(snapshot *ContextSnapshot, journalEntries []JournalEntry, startIndex int) {
-	for i := startIndex; i < len(journalEntries); i++ {
-		entry := journalEntries[i]
-
-		if entry.Type == "message" && entry.Message != nil {
-			snapshot.RecentMessages = append(snapshot.RecentMessages, *entry.Message)
-		} else if entry.Type == "truncate" && entry.Truncate != nil {
-			ApplyTruncateToSnapshot(snapshot, *entry.Truncate)
-		} else if entry.Type == "compact" && entry.Compact != nil {
-			snapshot.LLMContext = entry.Compact.Summary
-			snapshot.RecentMessages = []AgentMessage{}
-		}
-	}
-}

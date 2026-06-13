@@ -192,7 +192,7 @@ func readTestJSONLLines(t *testing.T, path string) []string {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	rawLines := splitLines(data)
+	rawLines := agentctx.SplitLines(data)
 	var lines []string
 	for _, line := range rawLines {
 		s := string(line)

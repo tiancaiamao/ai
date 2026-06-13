@@ -298,3 +298,21 @@ func TestAssembleOutput(t *testing.T) {
 		t.Errorf("assembleOutput() = %q, want %q", result, expected)
 	}
 }
+
+func TestTrimRunes(t *testing.T) {
+	if got := TrimRunes("hello", 0); got != "hello" {
+		t.Errorf("TrimRunes with limit=0 should return input unchanged, got %q", got)
+	}
+	if got := TrimRunes("hello", -1); got != "hello" {
+		t.Errorf("TrimRunes with negative limit should return input, got %q", got)
+	}
+	if got := TrimRunes("hello", 10); got != "hello" {
+		t.Errorf("TrimRunes with limit > runes should return input, got %q", got)
+	}
+	if got := TrimRunes("héllo", 3); got != "hél" {
+		t.Errorf("TrimRunes should respect unicode code points, got %q", got)
+	}
+	if got := TrimRunes("世界abc", 2); got != "世界" {
+		t.Errorf("expected first 2 runes, got %q", got)
+	}
+}

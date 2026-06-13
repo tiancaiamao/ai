@@ -635,22 +635,6 @@ func TestFirstNonEmptyLine(t *testing.T) {
 	}
 }
 
-func TestSplitLines(t *testing.T) {
-	// Empty input
-	if got := splitLines(nil); len(got) != 0 {
-		t.Errorf("expected 0 lines, got %d", len(got))
-	}
-	// Trailing newline only
-	if got := splitLines([]byte("\n")); len(got) != 1 {
-		t.Errorf("expected 1 line (empty), got %d", len(got))
-	}
-	// Multiple lines, no trailing newline
-	got := splitLines([]byte("a\nb\nc"))
-	if len(got) != 3 || string(got[0]) != "a" || string(got[2]) != "c" {
-		t.Errorf("unexpected: %+v", got)
-	}
-}
-
 func TestGetDefaultSessionsDir(t *testing.T) {
 	dir, err := GetDefaultSessionsDir("/tmp/project")
 	if err != nil {

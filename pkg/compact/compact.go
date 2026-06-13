@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
-	"time"
-
-	"log/slog"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // Config contains configuration for context compression.
@@ -36,6 +33,8 @@ type Config struct {
 	GracePeriod int
 	AutoCompact bool // Whether to automatically compact
 }
+
+// DefaultConfig returns default compression configuration.
 
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
@@ -63,6 +62,8 @@ type Compactor struct {
 }
 
 // NewCompactor creates a new Compactor.
+
+// NewCompactor creates a new Compactor.
 func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int) *Compactor {
 	if config == nil {
 		config = DefaultConfig()
@@ -77,9 +78,17 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 }
 
 // GetConfig returns the compactor configuration.
+
+// GetConfig returns the compactor configuration.
 func (c *Compactor) GetConfig() *Config {
 	return c.config
 }
+
+// CalculateDynamicThreshold calculates the compaction threshold based on context window.
+// For models with large context windows (e.g., 128k), this allows much more context
+// before triggering compaction, rather than using a fixed 8000 token limit.
+// CalculateDynamicThreshold returns the dynamic compaction threshold based on context window.
+// Exported for use by context_management tool to provide feedback when compact is rejected.
 
 // CalculateDynamicThreshold calculates the compaction threshold based on context window.
 // For models with large context windows (e.g., 128k), this allows much more context
@@ -126,6 +135,9 @@ func (c *Compactor) CalculateDynamicThreshold() int {
 
 // calculateKeepRecentBudget calculates the token budget for keeping recent messages.
 // This scales with the context window rather than using a fixed value.
+
+// calculateKeepRecentBudget calculates the token budget for keeping recent messages.
+// This scales with the context window rather than using a fixed value.
 func (c *Compactor) calculateKeepRecentBudget() int {
 	// If a fixed budget is configured, respect it (but cap it)
 	if c.config.KeepRecentTokens > 0 {
@@ -154,6 +166,8 @@ func (c *Compactor) calculateKeepRecentBudget() int {
 }
 
 // estimateStringTokens provides a rough token estimation for a string.
+
+// estimateStringTokens provides a rough token estimation for a string.
 func estimateStringTokens(s string) int {
 	if len(s) == 0 {
 		return 0
@@ -169,124 +183,6 @@ var (
 )
 
 // GenerateSummary generates a structured summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(messages, "")
-}
-
-// GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
-// It includes retry logic for transient LLM errors and a total timeout to prevent
-// the compaction path from hanging indefinitely on network failures.
-func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, previousSummary string) (string, error) {
-	if len(messages) == 0 {
-		return "", fmt.Errorf("no messages to summarize")
-	}
-
-	projected := projectMessagesForSummary(messages)
-	if len(projected) == 0 {
-		if strings.TrimSpace(previousSummary) != "" {
-			return previousSummary, nil
-		}
-		return "", fmt.Errorf("no agent-visible messages to summarize")
-	}
-
-	conversationText := serializeConversation(projected)
-
-	// Guard against sending a conversation that exceeds the model's context
-	// window. For large sessions the serialized text can be many megabytes,
-	// which the summarization model cannot process. Truncate oldest messages
-	// until the conversation fits within ~40% of the model's context window
-	// (leaving room for the prompt, system prompt, and response).
-	const maxContextFraction = 0.4
-	if c.contextWindow > 0 {
-		maxTokens := int(float64(c.contextWindow) * maxContextFraction)
-		// Each char is roughly 0.25 tokens, so maxBytes ≈ maxTokens * 4
-		maxChars := maxTokens * 4
-		if len(conversationText) > maxChars {
-			truncated := truncateConversationToCharBudget(projected, maxChars)
-			conversationText = serializeConversation(truncated)
-			slog.Info("[Compact] Truncated conversation for summarization",
-				"original_messages", len(projected),
-				"truncated_messages", len(truncated),
-				"original_chars", len(serializeConversation(projected)),
-				"truncated_chars", len(conversationText),
-				"context_window", c.contextWindow,
-				"max_chars", maxChars)
-		}
-	}
-
-	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
-	basePrompt := summarizationPrompt
-	if previousSummary != "" {
-		promptText += fmt.Sprintf("<previous-summary>\\n%s\\n</previous-summary>\\n\\n", previousSummary)
-		basePrompt = updateSummarizationPrompt
-	}
-	promptText += basePrompt
-
-	llmMessages := []llm.LLMMessage{
-		{Role: "user", Content: promptText},
-	}
-
-	llmCtx := llm.LLMContext{
-		SystemPrompt: summarizationSystemPrompt,
-		Messages:     llmMessages,
-	}
-
-	const maxRetries = 3
-	const totalTimeout = 5 * time.Minute
-	const chunkTimeout = 2 * time.Minute
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Use a bounded context with timeout instead of context.Background().
-		ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
-
-		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
-
-		var summary strings.Builder
-		var streamErr error
-		for event := range llmStream.Iterator(ctx) {
-			if event.Done {
-				break
-			}
-
-			switch e := event.Value.(type) {
-			case llm.LLMTextDeltaEvent:
-				summary.WriteString(e.Delta)
-			case llm.LLMErrorEvent:
-				streamErr = e.Error
-			}
-		}
-		cancel()
-
-		if streamErr != nil {
-			lastErr = streamErr
-			if !llm.IsRetryableError(streamErr) {
-				slog.Error("[Compact] Summary generation failed (non-retryable)",
-					"attempt", attempt, "error", streamErr)
-				return "", fmt.Errorf("failed to generate summary: %w", streamErr)
-			}
-			if attempt < maxRetries {
-				backoff := time.Duration(attempt) * 2 * time.Second
-				slog.Warn("[Compact] Summary generation failed (retryable), retrying",
-					"attempt", attempt,
-					"max_retries", maxRetries,
-					"backoff", backoff,
-					"error", streamErr)
-				time.Sleep(backoff)
-			}
-			continue
-		}
-
-		result := summary.String()
-		if strings.TrimSpace(result) == "" {
-			return "", fmt.Errorf("empty summary generated")
-		}
-
-		return result, nil
-	}
-
-	return "", fmt.Errorf("failed to generate summary after %d retries: %w", maxRetries, lastErr)
-}
 
 // ContextWindow returns the configured model context window.
 func (c *Compactor) ContextWindow() int {
@@ -294,9 +190,13 @@ func (c *Compactor) ContextWindow() int {
 }
 
 // SetContextWindow updates the model context window used for compaction.
+
+// SetContextWindow updates the model context window used for compaction.
 func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window
 }
+
+// ReserveTokens returns the effective reserve tokens setting.
 
 // ReserveTokens returns the effective reserve tokens setting.
 func (c *Compactor) ReserveTokens() int {
@@ -307,9 +207,13 @@ func (c *Compactor) ReserveTokens() int {
 }
 
 // KeepRecentMessages returns the effective keep-recent message count.
+
+// KeepRecentMessages returns the effective keep-recent message count.
 func (c *Compactor) KeepRecentMessages() int {
 	return c.keepRecentMessages()
 }
+
+// KeepRecentTokens returns the effective keep-recent token budget.
 
 // KeepRecentTokens returns the effective keep-recent token budget.
 func (c *Compactor) KeepRecentTokens() int {
@@ -340,6 +244,8 @@ func (c *Compactor) effectiveKeepRecentTokens() int {
 }
 
 // EffectiveTokenLimit returns the token limit for compaction and its source.
+
+// EffectiveTokenLimit returns the token limit for compaction and its source.
 func (c *Compactor) EffectiveTokenLimit() (int, string) {
 	if c == nil {
 		return 0, "none"
@@ -356,6 +262,8 @@ func (c *Compactor) EffectiveTokenLimit() (int, string) {
 	}
 	return 0, "none"
 }
+
+// EstimateTokens provides a rough estimation of token count.
 
 // EstimateTokens provides a rough estimation of token count.
 func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
@@ -434,540 +342,10 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 }
 
 // EstimateMessageTokens estimates token usage for a single message.
+
+// EstimateMessageTokens estimates token usage for a single message.
 func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 	return estimateMessageTokens(msg)
-}
-
-func splitMessagesByTokenBudget(
-	messages []agentctx.AgentMessage,
-	tokenBudget int,
-) ([]agentctx.AgentMessage, []agentctx.AgentMessage) {
-	if len(messages) == 0 {
-		return messages, nil
-	}
-	if tokenBudget <= 0 {
-		return messages[:len(messages)-1], messages[len(messages)-1:]
-	}
-
-	// Compaction summary messages should always be in recent messages.
-	// We'll find them first and ensure they're included.
-	compactionSummaryIndices := make(map[int]struct{})
-	for i, msg := range messages {
-		if msg.Metadata != nil && msg.Metadata.Kind == "compactionSummary" {
-			compactionSummaryIndices[i] = struct{}{}
-		}
-	}
-
-	used := 0
-	start := len(messages)
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-
-		// Skip compaction summaries - they'll be handled specially
-		if _, isSummary := compactionSummaryIndices[i]; isSummary {
-			continue
-		}
-
-		msgTokens := estimateMessageTokens(msg)
-		if used+msgTokens > tokenBudget && start != len(messages) {
-			break
-		}
-		used += msgTokens
-		start = i
-	}
-
-	// Now ensure all compaction summaries are included in recent
-	// by moving start to the earliest summary index
-	minSummaryIndex := len(messages)
-	for i := range compactionSummaryIndices {
-		if i < minSummaryIndex {
-			minSummaryIndex = i
-		}
-	}
-	if minSummaryIndex < len(messages) && minSummaryIndex < start {
-		start = minSummaryIndex
-	}
-
-	if start <= 0 {
-		return nil, messages
-	}
-	if start >= len(messages) {
-		return messages[:len(messages)-1], messages[len(messages)-1:]
-	}
-	return messages[:start], messages[start:]
-}
-
-func serializeConversation(messages []agentctx.AgentMessage) string {
-	parts := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		switch msg.Role {
-		case "user":
-			if text := extractText(msg); text != "" {
-				parts = append(parts, "[User]: "+text)
-			}
-		case "assistant":
-			textParts := make([]string, 0)
-			thinkingParts := make([]string, 0)
-			toolCalls := make([]string, 0)
-			for _, block := range msg.Content {
-				switch b := block.(type) {
-				case agentctx.TextContent:
-					if b.Text != "" {
-						textParts = append(textParts, b.Text)
-					}
-				case agentctx.ThinkingContent:
-					if b.Thinking != "" {
-						thinkingParts = append(thinkingParts, b.Thinking)
-					}
-				case agentctx.ToolCallContent:
-					args := ""
-					if b.Arguments != nil {
-						if raw, err := json.Marshal(b.Arguments); err == nil {
-							args = string(raw)
-						}
-					}
-					if args != "" {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s(%s)", b.Name, args))
-					} else {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s()", b.Name))
-					}
-				}
-			}
-			if len(thinkingParts) > 0 {
-				parts = append(parts, "[Assistant thinking]: "+strings.Join(thinkingParts, "\n"))
-			}
-			if len(textParts) > 0 {
-				parts = append(parts, "[Assistant]: "+strings.Join(textParts, "\n"))
-			}
-			if len(toolCalls) > 0 {
-				parts = append(parts, "[Assistant tool calls]: "+strings.Join(toolCalls, "; "))
-			}
-		case "toolResult":
-			if text := extractText(msg); text != "" {
-				toolName := strings.TrimSpace(msg.ToolName)
-				if toolName == "" {
-					parts = append(parts, "[Tool result]: "+text)
-				} else {
-					parts = append(parts, "[Tool result "+toolName+"]: "+text)
-				}
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// truncateConversationToCharBudget keeps the most recent messages whose
-// serialized text fits within charBudget. It drops oldest messages first.
-func truncateConversationToCharBudget(messages []agentctx.AgentMessage, charBudget int) []agentctx.AgentMessage {
-	if len(messages) == 0 || charBudget <= 0 {
-		return messages
-	}
-
-	// Walk from the end backwards, accumulating size until we exceed the budget.
-	totalChars := 0
-	cutoff := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		msgText := serializeSingleMessage(messages[i])
-		totalChars += len(msgText)
-		if totalChars > charBudget {
-			cutoff = i + 1
-			break
-		}
-	}
-
-	if cutoff >= len(messages) {
-		return messages
-	}
-	return messages[cutoff:]
-}
-
-// serializeSingleMessage returns the serialized text of a single message.
-func serializeSingleMessage(msg agentctx.AgentMessage) string {
-	switch msg.Role {
-	case "user":
-		if text := extractText(msg); text != "" {
-			return "[User]: " + text
-		}
-	case "assistant":
-		parts := make([]string, 0)
-		for _, block := range msg.Content {
-			switch b := block.(type) {
-			case agentctx.TextContent:
-				if b.Text != "" {
-					parts = append(parts, b.Text)
-				}
-			case agentctx.ToolCallContent:
-				args := ""
-				if b.Arguments != nil {
-					if raw, err := json.Marshal(b.Arguments); err == nil {
-						args = string(raw)
-					}
-				}
-				if args != "" {
-					parts = append(parts, fmt.Sprintf("%s(%s)", b.Name, args))
-				} else {
-					parts = append(parts, fmt.Sprintf("%s()", b.Name))
-				}
-			}
-		}
-		if len(parts) > 0 {
-			return "[Assistant]: " + strings.Join(parts, "\n")
-		}
-	case "toolResult":
-		if text := extractText(msg); text != "" {
-			toolName := strings.TrimSpace(msg.ToolName)
-			if toolName == "" {
-				return "[Tool result]: " + text
-			}
-			return "[Tool result " + toolName + "]: " + text
-		}
-	}
-	return ""
-}
-
-func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	projected := make([]agentctx.AgentMessage, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		if msg.Role != "toolResult" {
-			projected = append(projected, msg)
-			continue
-		}
-
-		copyMsg := msg
-		toolText := strings.TrimSpace(extractText(msg))
-		if toolText == "" {
-			toolText = "(empty output)"
-		}
-		toolText = trimTextWithTail(toolText, 1800)
-		copyMsg.Content = []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: toolText},
-		}
-		projected = append(projected, copyMsg)
-	}
-	return projected
-}
-
-func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []agentctx.AgentMessage {
-	if cutoff <= 0 || len(messages) == 0 {
-		return messages
-	}
-
-	visibleToolIndexes := make([]int, 0)
-	for i, msg := range messages {
-		if msg.Role == "toolResult" && msg.IsAgentVisible() {
-			visibleToolIndexes = append(visibleToolIndexes, i)
-		}
-	}
-
-	excess := len(visibleToolIndexes) - cutoff
-	if excess <= 0 {
-		return messages
-	}
-	ctx := context.Background()
-	summarySpan := traceevent.StartSpan(ctx, "tool_summary_batch", traceevent.CategoryTool,
-		traceevent.Field{Key: "mode", Value: "compaction_digest"},
-		traceevent.Field{Key: "visible_tool_results", Value: len(visibleToolIndexes)},
-		traceevent.Field{Key: "cutoff", Value: cutoff},
-		traceevent.Field{Key: "archived_count", Value: excess},
-	)
-
-	compacted := append([]agentctx.AgentMessage{}, messages...)
-	archivedToolCallIDs := make(map[string]struct{}, excess)
-
-	// Hide excess tool_results from agent (but keep visible to user).
-	// We also remove corresponding tool_calls from assistant messages below,
-	// otherwise strict APIs reject unmatched assistant/tool sequences.
-	for i := 0; i < excess; i++ {
-		idx := visibleToolIndexes[i]
-		original := compacted[idx]
-		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
-		if strings.TrimSpace(original.ToolCallID) != "" {
-			archivedToolCallIDs[strings.TrimSpace(original.ToolCallID)] = struct{}{}
-		}
-	}
-
-	filteredToolCalls := 0
-	for i := range compacted {
-		if compacted[i].Role != "assistant" || len(archivedToolCallIDs) == 0 {
-			continue
-		}
-		filtered := make([]agentctx.ContentBlock, 0, len(compacted[i].Content))
-		removed := false
-		for _, block := range compacted[i].Content {
-			toolCall, ok := block.(agentctx.ToolCallContent)
-			if ok {
-				if _, drop := archivedToolCallIDs[strings.TrimSpace(toolCall.ID)]; drop {
-					removed = true
-					filteredToolCalls++
-					continue
-				}
-			}
-			filtered = append(filtered, block)
-		}
-		if removed {
-			compacted[i].Content = filtered
-		}
-	}
-
-	summarySpan.AddField("filtered_tool_calls", filteredToolCalls)
-	summarySpan.End()
-	return compacted
-}
-
-func boolPtr(v bool) *bool {
-	b := v
-	return &b
-}
-
-func trimRunes(input string, limit int) string {
-	if limit <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= limit {
-		return input
-	}
-	return string(runes[:limit])
-}
-
-func trimTextWithTail(input string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= maxRunes {
-		return input
-	}
-
-	head := maxRunes * 2 / 3
-	tail := maxRunes - head
-	if head < 1 {
-		head = 1
-	}
-	if tail < 1 {
-		tail = 1
-	}
-
-	return string(runes[:head]) + "\n... (truncated) ...\n" + string(runes[len(runes)-tail:])
-}
-
-func extractText(msg agentctx.AgentMessage) string {
-	var b strings.Builder
-	for _, block := range msg.Content {
-		if tc, ok := block.(agentctx.TextContent); ok && tc.Text != "" {
-			b.WriteString(tc.Text)
-		}
-	}
-	if b.Len() == 0 {
-		return msg.ExtractText()
-	}
-	return b.String()
-}
-
-// ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
-// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
-// Similarly, if an assistant message contains tool_calls that are in oldMessages,
-// those tool_calls must be removed from the assistant message.
-// This prevents "tool call and result not match" errors after compaction.
-func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(recentMessages) == 0 {
-		return recentMessages
-	}
-
-	// Collect all tool_call IDs from oldMessages
-	oldToolCallIDs := make(map[string]bool)
-	for _, msg := range oldMessages {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ExtractToolCalls() {
-				oldToolCallIDs[tc.ID] = true
-			}
-		}
-	}
-
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
-		return recentMessages
-	}
-
-	// Find tool_results in recentMessages whose tool_call is in oldMessages
-	// These need to be hidden (archived) because their tool_calls will be summarized
-	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedToolResultCount := 0
-	filteredToolCallCount := 0
-
-	for _, msg := range recentMessages {
-		if msg.Role == "toolResult" && msg.ToolCallID != "" {
-			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages - hide it to prevent mismatch
-				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				keptMessages = append(keptMessages, archivedMsg)
-				archivedToolResultCount++
-				continue
-			}
-		}
-
-		if msg.Role == "assistant" {
-			// Check if this assistant message contains tool_calls that are in oldMessages
-			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-			hasOldToolCalls := false
-
-			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok {
-					if oldToolCallIDs[tc.ID] {
-						// This tool_call is in oldMessages - skip it
-						hasOldToolCalls = true
-						filteredToolCallCount++
-						continue
-					}
-				}
-				filteredContent = append(filteredContent, block)
-			}
-
-			if hasOldToolCalls {
-				if len(filteredContent) == 0 {
-					// Empty shell! Hide the entire assistant message
-					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
-					continue
-				}
-				// Create a new message with filtered content
-				filteredMsg := msg
-				filteredMsg.Content = filteredContent
-				keptMessages = append(keptMessages, filteredMsg)
-				continue
-			}
-		}
-
-		keptMessages = append(keptMessages, msg)
-	}
-
-	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
-		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived_tool_results", archivedToolResultCount,
-			"filtered_tool_calls", filteredToolCallCount,
-			"kept", len(keptMessages))
-	}
-
-	return keptMessages
-}
-
-// ensureToolCallPairingWithGrace ensures tool call pairing with grace period protection.
-// The grace period protects the N most recent tool results from being archived,
-// allowing tool calls that span compaction boundaries to complete.
-func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(recentMessages) == 0 {
-		return recentMessages
-	}
-
-	// Collect all tool_call IDs from oldMessages
-	oldToolCallIDs := make(map[string]bool)
-	for _, msg := range oldMessages {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ExtractToolCalls() {
-				oldToolCallIDs[tc.ID] = true
-			}
-		}
-	}
-
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
-		return recentMessages
-	}
-
-	// Collect recent tool result indexes for grace period protection
-	gracePeriod := c.config.GracePeriod
-	if gracePeriod <= 0 {
-		gracePeriod = 1
-	}
-
-	// Find tool result indexes (from end to start) within grace period
-	gracePeriodIndexes := make(map[int]struct{})
-	toolResultCount := 0
-	for i := len(recentMessages) - 1; i >= 0; i-- {
-		msg := recentMessages[i]
-		if msg.Role == "toolResult" && msg.IsAgentVisible() {
-			toolResultCount++
-			if toolResultCount <= gracePeriod {
-				gracePeriodIndexes[i] = struct{}{}
-			}
-		}
-	}
-
-	// Process messages, applying grace period protection
-	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedToolResultCount := 0
-	filteredToolCallCount := 0
-
-	for i, msg := range recentMessages {
-		// Check if this tool result is within grace period
-		if _, inGracePeriod := gracePeriodIndexes[i]; inGracePeriod {
-			// Within grace period - keep it visible (don't archive)
-			keptMessages = append(keptMessages, msg)
-			continue
-		}
-
-		if msg.Role == "toolResult" && msg.ToolCallID != "" {
-			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages - hide it to prevent mismatch
-				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				keptMessages = append(keptMessages, archivedMsg)
-				archivedToolResultCount++
-				continue
-			}
-		}
-
-		if msg.Role == "assistant" {
-			// Check if this assistant message contains tool_calls that are in oldMessages
-			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-			hasOldToolCalls := false
-
-			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok {
-					if oldToolCallIDs[tc.ID] {
-						// This tool_call is in oldMessages - skip it
-						hasOldToolCalls = true
-						filteredToolCallCount++
-						continue
-					}
-				}
-				filteredContent = append(filteredContent, block)
-			}
-
-			if hasOldToolCalls {
-				if len(filteredContent) == 0 {
-					// Empty shell! Hide the entire assistant message
-					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
-					continue
-				}
-				// Create a new message with filtered content
-				filteredMsg := msg
-				filteredMsg.Content = filteredContent
-				keptMessages = append(keptMessages, filteredMsg)
-				continue
-			}
-		}
-
-		keptMessages = append(keptMessages, msg)
-	}
-
-	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
-		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived_tool_results", archivedToolResultCount,
-			"filtered_tool_calls", filteredToolCallCount,
-			"grace_period_protected", gracePeriod,
-			"kept", len(keptMessages))
-	}
-
-	return keptMessages
 }
 
 // Compact compacts context by summarizing old messages using AgentContext.
@@ -1086,6 +464,11 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 // given slice. During compaction, older runtime_state snapshots are stale — only
 // the most recent one carries useful telemetry. Cleaning them unconditionally
 // keeps pkg/compact independent of cache mode logic.
+
+// cleanOldRuntimeState removes all but the last runtime_state message from the
+// given slice. During compaction, older runtime_state snapshots are stale — only
+// the most recent one carries useful telemetry. Cleaning them unconditionally
+// keeps pkg/compact independent of cache mode logic.
 func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	lastIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -1108,6 +491,8 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 	}
 	return result
 }
+
+// ShouldCompact determines if context should be compressed using AgentContext.
 
 // ShouldCompact determines if context should be compressed using AgentContext.
 func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentContext) bool {

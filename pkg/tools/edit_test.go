@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+
+	"github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 // helper: create a temp dir with a workspace and edit tool
@@ -351,18 +353,18 @@ func TestGenerateDiff_Header(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// truncateString (unit tests)
+// truncate.TruncateString (unit tests)
 // ---------------------------------------------------------------------------
 
 func TestTruncateString_Short(t *testing.T) {
-	if s := truncateString("hi", 10); s != "hi" {
-		t.Errorf("truncateString(hi,10) = %q, want %q", s, "hi")
+	if s := truncate.TruncateString("hi", 10); s != "hi" {
+		t.Errorf("TruncateString(hi,10) = %q, want %q", s, "hi")
 	}
 }
 
 func TestTruncateString_Long(t *testing.T) {
-	if s := truncateString("hello world", 5); s != "hello..." {
-		t.Errorf("truncateString(hello world,5) = %q, want %q", s, "hello...")
+	if s := truncate.TruncateString("hello world", 8); s != "hello..." {
+		t.Errorf("TruncateString(hello world,8) = %q, want %q", s, "hello...")
 	}
 }
 
