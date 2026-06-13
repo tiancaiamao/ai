@@ -1,18 +1,3 @@
----
-name: video-watcher
-description: Fetch and read transcripts from YouTube and Bilibili videos. Use when you need to summarize a video, answer questions about its content, or extract information from it.
-author: adapted from youtube-watcher
-version: 1.1.0
-triggers:
-  - "watch video"
-  - "summarize video"
-  - "video transcript"
-  - "youtube summary"
-  - "bilibili summary"
-  - "analyze video"
-metadata: {"clawdbot":{"emoji":"📺","requires":{"bins":["yt-dlp"]},"install":[{"id":"brew","kind":"brew","formula":"yt-dlp","bins":["yt-dlp"],"label":"Install yt-dlp (brew)"},{"id":"pip","kind":"pip","package":"yt-dlp","bins":["yt-dlp"],"label":"Install yt-dlp (pip)"}]}}
----
-
 # Video Watcher
 
 Fetch transcripts from **YouTube** and **Bilibili** videos to enable summarization, QA, and content extraction.
@@ -22,57 +7,52 @@ Fetch transcripts from **YouTube** and **Bilibili** videos to enable summarizati
 - ✅ **YouTube** (youtube.com, youtu.be)
 - ✅ **Bilibili** (bilibili.com, b23.tv)
 
-## Usage
-
-### Get Transcript (Auto-detect Platform)
+## Quick Start
 
 ```bash
 python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL"
 ```
 
-### Specify Language
+**That's it.** For YouTube, proxy is auto-detected from common local ports (1180, 7890, 7891, 1080, 1087).
 
-```bash
-python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --lang zh-CN
-```
+## Proxy Behavior
+
+| Platform | Auto Proxy |
+|----------|-----------|
+| YouTube  | ✅ Automatically probes common SOCKS5/HTTP proxy ports |
+| Bilibili | Not needed (direct access) |
+
+- **YouTube 在国内必须走 proxy**，脚本会自动检测本地常见代理端口
+- 如果自动检测的不对，可手动指定：`--proxy socks5://127.0.0.1:1180`
+- 如果不需要代理（如海外环境）：`--no-auto-proxy`
 
 ## Examples
 
-### YouTube Video
+### YouTube (auto proxy)
 ```bash
 python3 {baseDir}/scripts/get_transcript.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 ```
 
-### Bilibili Video
+### YouTube with cookies (bypass bot detection)
+```bash
+python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --cookies-from-browser chrome
+```
+
+### Bilibili
 ```bash
 python3 {baseDir}/scripts/get_transcript.py "https://www.bilibili.com/video/BV1xx411c7mD"
 ```
 
-### With Custom Language
+### Specify language
 ```bash
-# Get English subtitles for a Bilibili video
-python3 {baseDir}/scripts/get_transcript.py "https://bilibili.com/video/..." --lang en
-
-# Get Chinese subtitles for a YouTube video
+# Chinese subtitles for YouTube
 python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --lang zh-CN
 ```
 
-### With Proxy (for accessing restricted platforms)
+### Manual proxy override
 ```bash
-# Use SOCKS5 proxy for YouTube
-python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1180
-
-# Use HTTP proxy
+python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --proxy socks5://127.0.0.1:1180
 python3 {baseDir}/scripts/get_transcript.py "VIDEO_URL" --proxy http://127.0.0.1:7890
-```
-
-### With Browser Cookies (for YouTube bot detection bypass)
-```bash
-# Use Chrome cookies (recommended for YouTube)
-python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --cookies-from-browser chrome
-
-# Full example with proxy + cookies
-python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --proxy socks5://127.0.0.1:1180 --cookies-from-browser chrome
 ```
 
 ## Default Languages
@@ -82,24 +62,8 @@ python3 {baseDir}/scripts/get_transcript.py "https://youtube.com/watch?v=..." --
 | YouTube  | `en` (English)  |
 | Bilibili | `zh-CN` (Chinese) |
 
-## Common Language Codes
-
-- `en` - English
-- `zh-CN` - Simplified Chinese (简体中文)
-- `zh-TW` - Traditional Chinese (繁體中文)
-- `ja` - Japanese
-- `ko` - Korean
-- `es` - Spanish
-- `fr` - French
-- `de` - German
-
 ## Notes
 
-- Requires `yt-dlp` to be installed and available in PATH
-- Works with videos that have closed captions (CC) or auto-generated subtitles
-- Automatically detects platform from URL
-- If no subtitles available, the script will fail with an error message
-- yt-dlp natively supports both YouTube and Bilibili
-- **YouTube**: May require `--cookies-from-browser chrome` (or safari/firefox) to bypass bot detection
-- **YouTube**: Script automatically uses `--remote-components ejs:github` to solve JS challenges
-- **Proxy**: Required for accessing YouTube from regions where it's blocked
+- Requires `yt-dlp` in PATH
+- YouTube: auto proxy + `--cookies-from-browser chrome` recommended for best results
+- If no subtitles available, the script will error with a clear message

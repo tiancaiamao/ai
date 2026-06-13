@@ -12,6 +12,25 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
+def detect_proxy() -> str | None:
+    """Auto-detect local proxy by probing common ports."""
+    import socket
+    common_proxies = [
+        (1180, 'socks5://127.0.0.1:1180'),
+        (7890, 'http://127.0.0.1:7890'),
+        (7891, 'http://127.0.0.1:7891'),
+        (1080, 'socks5://127.0.0.1:1080'),
+        (1087, 'http://127.0.0.1:1087'),
+    ]
+    for port, proxy_url in common_proxies:
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=0.5):
+                return proxy_url
+        except (ConnectionRefusedError, OSError, TimeoutError):
+            continue
+    return None
+
+
 def detect_platform(url: str) -> str:
     """Detect video platform from URL."""
     domain = urlparse(url).netloc.lower()
@@ -80,7 +99,7 @@ def clean_srt(content: str) -> str:
     return '\n'.join(text_lines)
 
 def get_transcript(url: str, language: str = None, proxy: str = None,
-                   cookies_from_browser: str = None):
+                   cookies_from_browser: str = None, no_auto_proxy: bool = False):
     platform = detect_platform(url)
     
     if platform == 'unknown':
@@ -90,6 +109,12 @@ def get_transcript(url: str, language: str = None, proxy: str = None,
     # Set default language based on platform
     if language is None:
         language = 'zh-CN' if platform == 'bilibili' else 'en'
+    
+    # Auto-detect proxy for YouTube if not specified
+    if platform == 'youtube' and proxy is None and not no_auto_proxy:
+        proxy = detect_proxy()
+        if proxy:
+            print(f"# Auto-detected proxy: {proxy}", file=sys.stderr)
     
     with tempfile.TemporaryDirectory() as temp_dir:
         cmd = [
@@ -182,8 +207,13 @@ def main():
         help="Browser to extract cookies from (e.g. chrome, safari, firefox)",
         default=None
     )
+    parser.add_argument(
+        "--no-auto-proxy",
+        action="store_true",
+        help="Disable automatic proxy detection for YouTube",
+    )
     args = parser.parse_args()
-    get_transcript(args.url, args.lang, args.proxy, args.cookies_from_browser)
+    get_transcript(args.url, args.lang, args.proxy, args.cookies_from_browser, args.no_auto_proxy)
 
 if __name__ == "__main__":
     main()
