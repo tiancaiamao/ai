@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -163,9 +164,17 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 		return nil, fmt.Errorf("agent is busy")
 	}
 
+	// Lazy loading may not have all entries in byID (e.g., pre-compaction).
+	// Ensure the full session is loaded before resolving indices.
+	if entryID != "root" {
+		if err := app.sess.EnsureFullyLoaded(); err != nil {
+			return nil, err
+		}
+	}
+
 	// Resolve index-based reference (e.g. "/rewind 5" → message at index 5 in /messages).
 	if entryID != "root" {
-		if resolved, ok := resolveMessageIndex(app.sess, entryID); ok {
+		if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
 			entryID = resolved
 		}
 	}
@@ -173,11 +182,6 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	if entryID == "root" {
 		app.sess.ResetLeaf()
 	} else {
-		// Lazy loading may not have all entries in byID (e.g., pre-compaction).
-		// Ensure the full session is loaded so Branch can find the entry.
-		if err := app.sess.EnsureFullyLoaded(); err != nil {
-			return nil, err
-		}
 		if err := app.sess.Branch(entryID); err != nil {
 			return nil, err
 		}
@@ -192,27 +196,40 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	return map[string]any{"switched": true, "entryId": entryID}, nil
 }
 
+// messageIndexResolver provides the messages needed for index resolution.
+type messageIndexResolver interface {
+	GetMessages() []agentctx.AgentMessage
+}
+
 // resolveMessageIndex maps a numeric string (from /messages index) to the corresponding
-// session entry ID. Uses GetBranch (same path as /messages) and counts only EntryTypeMessage
-// entries, which is the same set /messages shows (compaction/branch_summary messages are
-// generated dynamically and have no rewind target).
-func resolveMessageIndex(sess *session.Session, arg string) (string, bool) {
+// session entry ID. Uses the agent's message list (same source as /messages) so indices
+// are consistent regardless of compaction or resume state.
+func resolveMessageIndex(ag messageIndexResolver, sess *session.Session, arg string) (string, bool) {
 	idx, err := strconv.Atoi(arg)
 	if err != nil {
 		return "", false // not a number — caller should treat as entryId string
 	}
+	messages := ag.GetMessages()
+	if idx < 0 || idx >= len(messages) {
+		return "", false
+	}
+	msg := messages[idx]
+	// If the message has an entryId (from buildSessionContext), use it directly.
+	if msg.EntryID != "" {
+		return msg.EntryID, true
+	}
+	// Fallback: search session entries for a matching message by timestamp.
+	// This handles cases where the agent loaded messages from a checkpoint
+	// that doesn't carry entry IDs.
 	branch := sess.GetBranch("")
-	msgIdx := 0
 	for _, entry := range branch {
-		if entry.Type != session.EntryTypeMessage {
+		if entry.Type != session.EntryTypeMessage || entry.Message == nil {
 			continue
 		}
-		if msgIdx == idx {
+		if entry.Message.Role == msg.Role && entry.Message.Timestamp == msg.Timestamp && msg.Timestamp != 0 {
 			return entry.ID, true
 		}
-		msgIdx++
 	}
-	// Index out of range — return empty so caller falls through to entryId lookup.
 	return "", false
 }
 
@@ -224,12 +241,22 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 	if app.parseJSONArgs(args, &jsonData) && jsonData.EntryID != "" {
 		entryID = jsonData.EntryID
 	}
-	slog.Info("Received fork: entryId=", "value", entryID)
+
+	if entryID == "" {
+		return nil, fmt.Errorf("usage: /fork <index|entryId>  (use /messages to see indices)")
+	}
+
 	// Lazy loading may not have all entries in byID (e.g., pre-compaction).
-	// Ensure the full session is loaded so GetEntry can find the entry.
+	// Ensure the full session is loaded before resolving indices.
 	if err := app.sess.EnsureFullyLoaded(); err != nil {
 		return nil, err
 	}
+
+	// Resolve index-based reference (e.g. "/fork 5" → message at index 5 in /messages).
+	if resolved, ok := resolveMessageIndex(app.ag, app.sess, entryID); ok {
+		entryID = resolved
+	}
+
 	entry, ok := app.sess.GetEntry(entryID)
 	if !ok || entry.Type != session.EntryTypeMessage || entry.Message == nil || entry.Message.Role != "user" {
 		return nil, fmt.Errorf("invalid entryId: %s", entryID)

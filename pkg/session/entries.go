@@ -159,11 +159,15 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		switch entry.Type {
 		case EntryTypeMessage:
 			if entry.Message != nil {
-				messages = append(messages, *entry.Message)
+				msg := *entry.Message
+				msg.EntryID = entry.ID
+				messages = append(messages, msg)
 			}
 		case EntryTypeBranchSummary:
 			if entry.Summary != "" {
-				messages = append(messages, branchSummaryMessage(entry.Summary, entry.Timestamp))
+				msg := branchSummaryMessage(entry.Summary, entry.Timestamp)
+				msg.EntryID = entry.ID
+				messages = append(messages, msg)
 			}
 		}
 	}
