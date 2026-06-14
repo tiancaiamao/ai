@@ -209,6 +209,17 @@ func buildMessageRefs(entries []SessionEntry) []messageRef {
 					})
 				}
 			}
+		case EntryTypeDeltaCompact:
+			// A delta_compact entry's summary acts as a message ref, mirroring
+			// how EntryTypeCompaction is handled.
+			if entry.Summary != "" {
+				msg := deltaSummaryMessage(entry.Summary, entry.Timestamp)
+				refs = append(refs, messageRef{
+					EntryID:  entry.ID,
+					Message:  msg,
+					Cuttable: true,
+				})
+			}
 		}
 	}
 	return refs

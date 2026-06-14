@@ -17,6 +17,7 @@ const (
 	EntryTypeCompactEvent  = "compact_event"
 	EntryTypeBranchSummary = "branch_summary"
 	EntryTypeSessionInfo   = "session_info"
+	EntryTypeDeltaCompact  = "delta_compact"
 )
 
 const (
@@ -57,6 +58,10 @@ type SessionEntry struct {
 
 	FromID string `json:"fromId,omitempty"`
 
+	// ToEntryID is the end of a delta_compact interval (entry ID of the last
+	// message being compressed). Only meaningful for EntryTypeDeltaCompact.
+	ToEntryID string `json:"toEntryId,omitempty"`
+
 	Name  string `json:"name,omitempty"`
 	Title string `json:"title,omitempty"`
 
@@ -91,6 +96,21 @@ func compactionSummaryMessage(entry *SessionEntry) agentctx.AgentMessage {
 
 func branchSummaryMessage(summary, timestamp string) agentctx.AgentMessage {
 	return summaryMessage(BranchSummaryPrefix+summary+BranchSummarySuffix, timestamp)
+}
+
+// deltaSummaryMessage builds the delta_summary AgentMessage that replaces a
+// delta_compact interval during replay. Unlike the global compaction summary,
+// the delta summary carries the LLM-generated text verbatim and is tagged with
+// metadata.Kind = "delta_summary" so downstream code can distinguish it.
+func deltaSummaryMessage(summary, timestamp string) agentctx.AgentMessage {
+	return agentctx.AgentMessage{
+		Role: "user",
+		Content: []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: summary},
+		},
+		Timestamp: timestampToMillis(timestamp),
+		Metadata:  &agentctx.MessageMetadata{Kind: "delta_summary"},
+	}
 }
 
 func summaryMessage(text, timestamp string) agentctx.AgentMessage {
@@ -144,6 +164,10 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		path[i], path[j] = path[j], path[i]
 	}
 
+	// Old-format global compaction cut-point (if any). When present it acts as
+	// a single cut: everything before FirstKeptEntryID is dropped (except the
+	// compaction summary). Sessions without any EntryTypeCompaction are
+	// unaffected, so legacy sessions replay exactly as before.
 	var compaction *SessionEntry
 	compactionIndex := -1
 	for i := len(path) - 1; i >= 0; i-- {
@@ -152,6 +176,47 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 			compactionIndex = i
 			break
 		}
+	}
+
+	// Map entry ID → path position so delta_compact intervals ([FromID,ToEntryID])
+	// can be resolved to contiguous position ranges.
+	posByID := make(map[string]int, len(path))
+	for i, e := range path {
+		posByID[e.ID] = i
+	}
+
+	// Resolve every delta_compact interval into a coverage mask plus a
+	// delta_summary message anchored at the interval's ToEntryID position.
+	// Messages covered by ANY interval are excluded from replay and replaced by
+	// the corresponding delta_summary.
+	covered := make([]bool, len(path))
+	type deltaSummary struct {
+		summary   string
+		timestamp string
+		entryID   string
+	}
+	summariesAtPos := make(map[int][]deltaSummary)
+	for _, e := range path {
+		if e.Type != EntryTypeDeltaCompact {
+			continue
+		}
+		fromPos, ok1 := posByID[e.FromID]
+		toPos, ok2 := posByID[e.ToEntryID]
+		if !ok1 || !ok2 {
+			continue
+		}
+		lo, hi := fromPos, toPos
+		if hi < lo {
+			lo, hi = toPos, fromPos
+		}
+		for k := lo; k <= hi; k++ {
+			covered[k] = true
+		}
+		summariesAtPos[toPos] = append(summariesAtPos[toPos], deltaSummary{
+			summary:   e.Summary,
+			timestamp: e.Timestamp,
+			entryID:   e.ID,
+		})
 	}
 
 	messages := make([]agentctx.AgentMessage, 0)
@@ -172,33 +237,33 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		}
 	}
 
+	// Determine the first kept position. With an old-format compaction this is
+	// either FirstKeptEntryID (if it precedes the compaction entry) or the
+	// entry right after the compaction. Without compaction, start from the root.
+	keptStart := 0
 	if compaction != nil {
 		msg := compactionSummaryMessage(compaction)
 		if msg.Role != "" {
 			messages = append(messages, msg)
 		}
-
-		foundFirstKept := false
+		keptStart = compactionIndex + 1
 		if compaction.FirstKeptEntryID != "" {
-			for i := 0; i < compactionIndex; i++ {
-				entry := path[i]
-				if entry.ID == compaction.FirstKeptEntryID {
-					foundFirstKept = true
-				}
-				if foundFirstKept {
-					appendMessage(entry)
-				}
+			if fk, ok := posByID[compaction.FirstKeptEntryID]; ok && fk < compactionIndex {
+				keptStart = fk
 			}
 		}
-
-		for i := compactionIndex + 1; i < len(path); i++ {
-			appendMessage(path[i])
-		}
-		return applyContextManagementEvents(messages, path)
 	}
 
-	for _, entry := range path {
-		appendMessage(entry)
+	for i := keptStart; i < len(path); i++ {
+		if covered[i] {
+			for _, s := range summariesAtPos[i] {
+				msg := deltaSummaryMessage(s.summary, s.timestamp)
+				msg.EntryID = s.entryID
+				messages = append(messages, msg)
+			}
+			continue
+		}
+		appendMessage(path[i])
 	}
 
 	return applyContextManagementEvents(messages, path)

@@ -83,6 +83,7 @@ type CompactionInfo struct {
 	After   int    `json:"after,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
+	Source  string `json:"source,omitempty"` // "delta" or "heavyweight"
 
 	// Context management specific fields
 	TokensBefore      int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)

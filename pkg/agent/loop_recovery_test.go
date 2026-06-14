@@ -1432,3 +1432,37 @@ func TestPerformCompaction_AllNoOpsReturnsNil(t *testing.T) {
 		t.Fatalf("expected both compactors to be called, got noop1=%d noop2=%d", noop1.calls, noop2.calls)
 	}
 }
+
+// TestPerformCompaction_ResetsDeltaCounter verifies that heavyweight (full)
+// compaction resets the delta-compaction token counter to zero. The full
+// summary absorbs all prior delta summaries, so delta compaction must restart
+// its accumulation from the new compaction window.
+func TestPerformCompaction_ResetsDeltaCounter(t *testing.T) {
+	compactor := &recoveryCompactor{shouldCompact: true}
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	// Simulate accumulated delta tokens from prior delta compactions.
+	agentCtx.AgentState.TokensSinceLastDeltaCompaction = 4242
+
+	stream := newTestAgentEventStream()
+	ls := &loopState{
+		agentCtx: agentCtx,
+		config: &LoopConfig{
+			Compactors: []Compactor{compactor},
+		},
+		stream: stream,
+	}
+
+	result, err := ls.performCompaction(context.Background(), "pre_llm_threshold", true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil compaction result")
+	}
+	if agentCtx.AgentState.TokensSinceLastDeltaCompaction != 0 {
+		t.Errorf("TokensSinceLastDeltaCompaction = %d, want 0 after heavyweight compaction",
+			agentCtx.AgentState.TokensSinceLastDeltaCompaction)
+	}
+}

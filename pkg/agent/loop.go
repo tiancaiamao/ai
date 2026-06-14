@@ -48,6 +48,11 @@ type LoopConfig struct {
 	Metrics    *Metrics     // Metrics collector
 	ToolOutput ToolOutputLimits
 	Compactors []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
+	// PersistDeltaCompact records a delta_compact entry to the session journal.
+	// When nil, delta compaction still updates in-memory RecentMessages but
+	// skips journal persistence (e.g. in tests). summary is the LLM-generated
+	// text; fromEntryID/toEntryID identify the compressed message interval.
+	PersistDeltaCompact func(summary, fromEntryID, toEntryID string) error
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
 	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
@@ -269,6 +274,16 @@ func runInnerLoop(
 			state.newMessages[len(state.newMessages)-1] = *msg
 		}
 
+		// [Step 8] Delta compaction post-processing: if a compaction prompt
+		// was injected last turn, parse the LLM response and execute delta
+		// compaction when the decision is "yes" (or forced). This runs BEFORE
+		// processToolCalls so the compressed context is in place, but tool
+		// calls in the (protected) response are still processed normally.
+		if state.deltaPromptPending {
+			state.deltaPromptPending = false
+			state.processDeltaCompactionResponse(ctx, msg)
+		}
+
 		hasMore, toolResults := state.processToolCalls(ctx, msg)
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
@@ -304,6 +319,11 @@ func runInnerLoop(
 
 			break
 		}
+
+		// [Step 11] Delta compaction trigger check: estimate the current
+		// delta token count and, when a threshold + tool-call interval is
+		// met, inject a compaction prompt for the next LLM turn.
+		state.checkDeltaCompactionTrigger(ctx)
 	}
 
 	// Run AfterAgent hooks: sequential, no data passing, before AgentEndEvent.

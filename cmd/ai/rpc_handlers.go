@@ -87,6 +87,14 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		}
 		return ""
 	}
+	// Persist delta_compact entries to the session journal so incremental
+	// compaction survives process restarts.
+	loopCfg.PersistDeltaCompact = func(summary, fromEntryID, toEntryID string) error {
+		if app.sess == nil {
+			return nil
+		}
+		return app.sess.AppendDeltaCompact(summary, fromEntryID, toEntryID)
+	}
 
 	// Set max turns limit if specified
 	if maxTurns > 0 {

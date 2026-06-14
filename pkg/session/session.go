@@ -324,6 +324,29 @@ func (s *Session) AppendCompactEvent(detail *agentctx.CompactEventDetail) error 
 	return s.persistEntry(entry)
 }
 
+// AppendDeltaCompact records a delta_compact entry in the session journal.
+// Unlike Compact (which runs full summarization), the summary is already
+// provided by the caller (the LLM generated it inline in the agent loop).
+// fromEntryID and toEntryID identify the [from, to] interval of message
+// entries being compressed; summary is the LLM-generated summary text.
+func (s *Session) AppendDeltaCompact(summary, fromEntryID, toEntryID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry := &SessionEntry{
+		Type:      EntryTypeDeltaCompact,
+		ID:        generateEntryID(s.byID),
+		ParentID:  s.leafID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		FromID:    fromEntryID,
+		ToEntryID: toEntryID,
+		Summary:   summary,
+	}
+
+	s.addEntry(entry)
+	return s.persistEntry(entry)
+}
+
 // GetSessionName returns the latest session name if available.
 func (s *Session) GetSessionName() string {
 	s.mu.Lock()

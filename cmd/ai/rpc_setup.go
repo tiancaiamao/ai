@@ -150,7 +150,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	}
 
 	// Skip context management (proactive LLM-driven cycle) in cache-first mode.
-	// Full compaction (75% threshold) is still active.
+	// Full compaction (90% threshold) is still active as a safety net.
 	ctxManager.SetSkipCondition(func() bool {
 		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
 	})

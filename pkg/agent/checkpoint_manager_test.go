@@ -306,10 +306,12 @@ func TestHasToolResultNamed(t *testing.T) {
 	}
 }
 
-// TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint verifies
-// the first defense layer: savePreCompactionCheckpoint skips when LLMContext
-// is empty, preventing creation of checkpoints that would overwrite good data.
-func TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint(t *testing.T) {
+// TestSavePreCompactionCheckpoint_EmptyMessages_SkipsCheckpoint verifies
+// the first defense layer: savePreCompactionCheckpoint skips when there are
+// no messages to checkpoint, preventing creation of empty checkpoints. The
+// guard keys off message count, NOT LLMContext (which may legitimately be
+// empty in the delta-compaction design).
+func TestSavePreCompactionCheckpoint_EmptyMessages_SkipsCheckpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mgr, err := NewAgentContextCheckpointManager(tmpDir)
@@ -330,8 +332,8 @@ func TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint(t *testing.
 		t.Fatalf("Failed to create initial snapshot: %v", err)
 	}
 
-	// Now simulate the bug scenario: LLMContext is empty (truncate-without-update)
-	agentCtx.LLMContext = ""
+	// Simulate a state with no messages (nothing useful to checkpoint)
+	agentCtx.RecentMessages = nil
 
 	// Create a loopState with a compactor that would normally trigger
 	ls := &loopState{
@@ -345,7 +347,7 @@ func TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint(t *testing.
 		turnCount:     5,
 	}
 
-	// Call savePreCompactionCheckpoint — it should skip because LLMContext is empty
+	// Call savePreCompactionCheckpoint — it should skip because there are no messages
 	ls.savePreCompactionCheckpoint("pre_llm_threshold")
 
 	// Verify no new checkpoint was created by checking the count
@@ -356,14 +358,70 @@ func TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint(t *testing.
 	if len(idx.Checkpoints) != 1 {
 		t.Errorf("Expected 1 checkpoint (initial only), got %d", len(idx.Checkpoints))
 	}
+}
 
-	// Verify the current symlink still points to the good checkpoint
+// TestSavePreCompactionCheckpoint_EmptyLLMContext_NonEmptyMessages_CreatesCheckpoint
+// verifies the key behavior change from the checkpoint-guard fix: an empty
+// LLMContext no longer blocks checkpointing when there are messages. This is
+// essential in the delta-compaction design where LLMContext is not actively
+// written. CreateSnapshot carries forward any previous LLMContext.
+func TestSavePreCompactionCheckpoint_EmptyLLMContext_NonEmptyMessages_CreatesCheckpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mgr, err := NewAgentContextCheckpointManager(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create checkpoint manager: %v", err)
+	}
+	defer mgr.Close()
+
+	// Create an initial checkpoint with non-empty LLMContext (to be carried forward)
+	initialContext := "# Important context\nDo not lose this"
+	agentCtx := &agentctx.AgentContext{
+		LLMContext:     initialContext,
+		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("Hello")},
+		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
+	}
+	_, err = mgr.CreateSnapshot(agentCtx, initialContext, 1)
+	if err != nil {
+		t.Fatalf("Failed to create initial snapshot: %v", err)
+	}
+
+	// Empty LLMContext but non-empty messages — checkpoint MUST be created.
+	agentCtx.LLMContext = ""
+	agentCtx.RecentMessages = []agentctx.AgentMessage{
+		agentctx.NewUserMessage("Hello"),
+		agentctx.NewUserMessage("World"),
+	}
+
+	ls := &loopState{
+		config: &LoopConfig{
+			Compactors: []agentctx.Compactor{
+				&alwaysCompactCompactor{},
+			},
+		},
+		agentCtx:      agentCtx,
+		checkpointMgr: mgr,
+		turnCount:     5,
+	}
+
+	ls.savePreCompactionCheckpoint("pre_llm_threshold")
+
+	// A new checkpoint should have been created (2 total)
+	idx, err := agentctx.LoadCheckpointIndex(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to load checkpoint index: %v", err)
+	}
+	if len(idx.Checkpoints) != 2 {
+		t.Errorf("Expected 2 checkpoints (initial + new), got %d", len(idx.Checkpoints))
+	}
+
+	// The carried-forward LLMContext should be preserved by CreateSnapshot.
 	recoveredLLMContext, _, _, err := mgr.Reconstruct()
 	if err != nil {
 		t.Fatalf("Failed to reconstruct: %v", err)
 	}
 	if recoveredLLMContext != initialContext {
-		t.Errorf("LLMContext should still be the initial value.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
+		t.Errorf("LLMContext should be carried forward.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
 	}
 }
 

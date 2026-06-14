@@ -25,6 +25,9 @@ type AgentState struct {
 	TotalCompactions int // Total number of full compact operations
 	LastCompactTurn  int // Last turn when full compact was executed
 
+	// Delta compaction tracking
+	TokensSinceLastDeltaCompaction int // Token count accumulated since the last delta_compact
+
 	// Active tool calls (for pairing protection)
 	ActiveToolCalls []string
 
@@ -43,23 +46,24 @@ type AgentState struct {
 func NewAgentState(sessionID, cwd string) *AgentState {
 	now := time.Now()
 	return &AgentState{
-		WorkspaceRoot:             cwd,
-		CurrentWorkingDir:         cwd,
-		TotalTurns:                0,
-		TokensUsed:                0,
-		TokensLimit:               200000,
-		LastLLMContextUpdate:      0,
-		LastCheckpoint:            0,
-		LastTriggerTurn:           0,
-		TurnsSinceLastTrigger:     0,
-		ToolCallsSinceLastTrigger: 0,
-		ActiveToolCalls:           []string{},
-		RuntimeMetaTurns:          0,
-		RuntimeMetaSnapshot:       "",
-		RuntimeMetaBand:           "",
-		SessionID:                 sessionID,
-		CreatedAt:                 now,
-		UpdatedAt:                 now,
+		WorkspaceRoot:                  cwd,
+		CurrentWorkingDir:              cwd,
+		TotalTurns:                     0,
+		TokensUsed:                     0,
+		TokensLimit:                    200000,
+		LastLLMContextUpdate:           0,
+		LastCheckpoint:                 0,
+		LastTriggerTurn:                0,
+		TurnsSinceLastTrigger:          0,
+		ToolCallsSinceLastTrigger:      0,
+		TokensSinceLastDeltaCompaction: 0,
+		ActiveToolCalls:                []string{},
+		RuntimeMetaTurns:               0,
+		RuntimeMetaSnapshot:            "",
+		RuntimeMetaBand:                "",
+		SessionID:                      sessionID,
+		CreatedAt:                      now,
+		UpdatedAt:                      now,
 	}
 }
 
@@ -72,25 +76,26 @@ func (a *AgentState) Clone() *AgentState {
 	copy(activeToolCalls, a.ActiveToolCalls)
 
 	return &AgentState{
-		WorkspaceRoot:             a.WorkspaceRoot,
-		CurrentWorkingDir:         a.CurrentWorkingDir,
-		TotalTurns:                a.TotalTurns,
-		TokensUsed:                a.TokensUsed,
-		TokensLimit:               a.TokensLimit,
-		LastLLMContextUpdate:      a.LastLLMContextUpdate,
-		LastCheckpoint:            a.LastCheckpoint,
-		LastTriggerTurn:           a.LastTriggerTurn,
-		TurnsSinceLastTrigger:     a.TurnsSinceLastTrigger,
-		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
-		TotalTruncations:          a.TotalTruncations,
-		TotalCompactions:          a.TotalCompactions,
-		LastCompactTurn:           a.LastCompactTurn,
-		ActiveToolCalls:           activeToolCalls,
-		RuntimeMetaTurns:          a.RuntimeMetaTurns,
-		RuntimeMetaSnapshot:       a.RuntimeMetaSnapshot,
-		RuntimeMetaBand:           a.RuntimeMetaBand,
-		SessionID:                 a.SessionID,
-		CreatedAt:                 a.CreatedAt,
-		UpdatedAt:                 a.UpdatedAt,
+		WorkspaceRoot:                  a.WorkspaceRoot,
+		CurrentWorkingDir:              a.CurrentWorkingDir,
+		TotalTurns:                     a.TotalTurns,
+		TokensUsed:                     a.TokensUsed,
+		TokensLimit:                    a.TokensLimit,
+		LastLLMContextUpdate:           a.LastLLMContextUpdate,
+		LastCheckpoint:                 a.LastCheckpoint,
+		LastTriggerTurn:                a.LastTriggerTurn,
+		TurnsSinceLastTrigger:          a.TurnsSinceLastTrigger,
+		ToolCallsSinceLastTrigger:      a.ToolCallsSinceLastTrigger,
+		TotalTruncations:               a.TotalTruncations,
+		TotalCompactions:               a.TotalCompactions,
+		LastCompactTurn:                a.LastCompactTurn,
+		TokensSinceLastDeltaCompaction: a.TokensSinceLastDeltaCompaction,
+		ActiveToolCalls:                activeToolCalls,
+		RuntimeMetaTurns:               a.RuntimeMetaTurns,
+		RuntimeMetaSnapshot:            a.RuntimeMetaSnapshot,
+		RuntimeMetaBand:                a.RuntimeMetaBand,
+		SessionID:                      a.SessionID,
+		CreatedAt:                      a.CreatedAt,
+		UpdatedAt:                      a.UpdatedAt,
 	}
 }

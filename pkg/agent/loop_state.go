@@ -30,6 +30,12 @@ type loopState struct {
 	// recovery turn after a loop guard hard abort. Prevents re-triggering
 	// if the LLM continues the loop.
 	guardAbortRecovery bool
+	// deltaPromptPending indicates a compaction prompt was injected and the
+	// loop is awaiting the LLM's decision/summary response.
+	deltaPromptPending bool
+	// deltaPromptForced indicates the pending prompt was forced (no decision
+	// requested, only a summary).
+	deltaPromptForced bool
 }
 
 func newLoopState(
@@ -89,11 +95,12 @@ func (s *loopState) savePreCompactionCheckpoint(trigger string) {
 	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
 		return
 	}
-	// Guard: skip checkpoint when LLMContext is empty (e.g. after truncate
-	// without update_llm_context). Writing an empty checkpoint would
-	// overwrite the previous checkpoint that had content.
-	if s.agentCtx.LLMContext == "" {
-		slog.Info("[Loop] Skipping pre-compaction checkpoint (LLMContext is empty)", "trigger", trigger, "turn", s.turnCount)
+	// Guard: skip checkpoint when there are no messages to persist. An empty
+	// message list means there is nothing useful to checkpoint. (LLMContext
+	// may legitimately be empty in the delta-compaction design, so we must NOT
+	// gate on it — CreateSnapshot carries forward any previous LLMContext.)
+	if len(s.agentCtx.RecentMessages) == 0 {
+		slog.Info("[Loop] Skipping pre-compaction checkpoint (no messages)", "trigger", trigger, "turn", s.turnCount)
 		return
 	}
 	// Check if any compactor would trigger before saving checkpoint.
@@ -204,6 +211,10 @@ func (s *loopState) performCompaction(
 	}
 
 	s.agentCtx.LastCompactionSummary = compacted.Summary
+	// Heavyweight compaction absorbs all prior delta summaries into a single
+	// full summary. Reset the delta token counter so delta compaction restarts
+	// from zero for the new compaction window.
+	s.agentCtx.AgentState.TokensSinceLastDeltaCompaction = 0
 	after := len(s.agentCtx.RecentMessages)
 
 	compactionSpan.AddField("after_messages", after)
@@ -225,6 +236,159 @@ func (s *loopState) performCompaction(
 	}
 
 	return compacted, nil
+}
+
+// processDeltaCompactionResponse parses the LLM response to a previously
+// injected compaction prompt and executes delta compaction when warranted.
+// For decision mode: a "yes" with a summary triggers compaction; "no" or an
+// unparseable response (D7) resets the tool-call interval counter. For forced
+// mode: any valid summary triggers compaction.
+func (s *loopState) processDeltaCompactionResponse(ctx context.Context, msg *agentctx.AgentMessage) {
+	responseText := msg.ExtractText()
+
+	if s.deltaPromptForced {
+		s.deltaPromptForced = false
+		summary, ok := ParseForcedCompactionResponse(responseText)
+		if ok {
+			s.executeDeltaCompaction(ctx, summary)
+			return
+		}
+		// Unparseable forced response: treat as declined (D7).
+		s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+		slog.Warn("[Loop] Forced delta compaction response unparseable", "turn", s.turnCount)
+		return
+	}
+
+	decision := ParseCompactionResponse(responseText)
+	if decision.Parsed && decision.ShouldCompact && decision.Summary != "" {
+		s.executeDeltaCompaction(ctx, decision.Summary)
+		return
+	}
+	// Explicit "no" or unparseable (D7): reset the interval counter so the
+	// next ask waits a fresh tool-call interval.
+	s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+	slog.Info("[Loop] Delta compaction declined",
+		"parsed", decision.Parsed, "shouldCompact", decision.ShouldCompact, "turn", s.turnCount)
+}
+
+// executeDeltaCompaction performs an inline delta compaction using an
+// LLM-generated summary. It replaces the delta message range
+// [deltaStart, protected.StartIndex) with a single delta_summary message,
+// keeping the protected (recent) messages verbatim. It resets the delta
+// token and tool-call counters, persists a delta_compact entry (when a sink
+// is configured and entry IDs are available), and emits trace + stream events.
+func (s *loopState) executeDeltaCompaction(ctx context.Context, summary string) {
+	messages := s.agentCtx.RecentMessages
+	deltaStart := findDeltaStartIndex(messages)
+	protected := CalculateProtectedBoundary(messages, deltaStart)
+
+	// Nothing to compress (protected region covers the entire delta).
+	if protected.StartIndex <= deltaStart {
+		slog.Info("[Loop] Delta compaction skipped — nothing to compress",
+			"deltaStart", deltaStart, "protectedStart", protected.StartIndex, "turn", s.turnCount)
+		return
+	}
+
+	fromEntryID := ""
+	if deltaStart < len(messages) {
+		fromEntryID = messages[deltaStart].EntryID
+	}
+	toEntryID := ""
+	if protected.StartIndex > 0 {
+		toEntryID = messages[protected.StartIndex-1].EntryID
+	}
+
+	before := len(messages)
+
+	compactionSpan := traceevent.StartSpan(ctx, "delta_compaction", traceevent.CategoryEvent,
+		traceevent.Field{Key: "source", Value: "delta"},
+		traceevent.Field{Key: "before_messages", Value: before},
+		traceevent.Field{Key: "delta_start", Value: deltaStart},
+		traceevent.Field{Key: "protected_start", Value: protected.StartIndex},
+	)
+	s.stream.Push(NewCompactionStartEvent(CompactionInfo{
+		Auto:    true,
+		Before:  before,
+		Trigger: "delta",
+		Source:  "delta",
+	}))
+
+	// Rebuild RecentMessages: prefix + delta_summary + protected tail.
+	deltaSummaryMsg := newDeltaSummaryMessage(summary)
+	newMessages := make([]agentctx.AgentMessage, 0, deltaStart+1+(len(messages)-protected.StartIndex))
+	newMessages = append(newMessages, messages[:deltaStart]...)
+	newMessages = append(newMessages, deltaSummaryMsg)
+	newMessages = append(newMessages, messages[protected.StartIndex:]...)
+	s.agentCtx.RecentMessages = newMessages
+
+	// Reset counters.
+	s.agentCtx.AgentState.TokensSinceLastDeltaCompaction = 0
+	s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+
+	// Persist best-effort: skip when entry IDs are unavailable (current-run
+	// messages that haven't been assigned session entries yet).
+	if s.config.PersistDeltaCompact != nil && fromEntryID != "" && toEntryID != "" {
+		if err := s.config.PersistDeltaCompact(summary, fromEntryID, toEntryID); err != nil {
+			slog.Warn("[Loop] Failed to persist delta_compact entry", "error", err, "turn", s.turnCount)
+		}
+	}
+
+	after := len(s.agentCtx.RecentMessages)
+	compactionSpan.AddField("after_messages", after)
+	compactionSpan.End()
+
+	s.stream.Push(NewCompactionEndEvent(CompactionInfo{
+		Auto:    true,
+		Before:  before,
+		After:   after,
+		Trigger: "delta",
+		Source:  "delta",
+	}))
+
+	slog.Info("[Loop] Delta compaction completed",
+		"before", before, "after", after, "turn", s.turnCount)
+
+	// Save checkpoint so the compaction survives a crash.
+	saveCheckpointAfterCompaction(s.checkpointMgr, s.agentCtx, false, s.turnCount, "delta")
+}
+
+// checkDeltaCompactionTrigger estimates the current delta token count and,
+// when a threshold + tool-call interval is met, injects a compaction prompt
+// message into RecentMessages for the next LLM turn. It resets the tool-call
+// counter on injection so the interval restarts.
+func (s *loopState) checkDeltaCompactionTrigger(ctx context.Context) {
+	deltaTokens := EstimateDeltaTokens(s.agentCtx.RecentMessages)
+	s.agentCtx.AgentState.TokensSinceLastDeltaCompaction = deltaTokens
+
+	trigger := CheckDeltaCompactionTrigger(deltaTokens, s.agentCtx.AgentState.ToolCallsSinceLastTrigger)
+	switch trigger {
+	case TriggerNone:
+		return
+	case TriggerDecision:
+		s.agentCtx.RecentMessages = append(s.agentCtx.RecentMessages, BuildDecisionMessage())
+		s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+		s.deltaPromptPending = true
+		s.deltaPromptForced = false
+		traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+			traceevent.Field{Key: "type", Value: "decision"},
+			traceevent.Field{Key: "delta_tokens", Value: deltaTokens},
+			traceevent.Field{Key: "turn", Value: s.turnCount},
+		)
+		slog.Info("[Loop] Delta compaction decision prompt injected",
+			"delta_tokens", deltaTokens, "turn", s.turnCount)
+	case TriggerForced:
+		s.agentCtx.RecentMessages = append(s.agentCtx.RecentMessages, BuildForcedCompactionMessage())
+		s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+		s.deltaPromptPending = true
+		s.deltaPromptForced = true
+		traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+			traceevent.Field{Key: "type", Value: "forced"},
+			traceevent.Field{Key: "delta_tokens", Value: deltaTokens},
+			traceevent.Field{Key: "turn", Value: s.turnCount},
+		)
+		slog.Info("[Loop] Delta compaction forced prompt injected",
+			"delta_tokens", deltaTokens, "turn", s.turnCount)
+	}
 }
 
 // processToolCalls handles the full tool call lifecycle within a single turn:

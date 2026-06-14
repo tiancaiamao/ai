@@ -25,9 +25,19 @@ func TestAutoCacheModeDetection(t *testing.T) {
 			expected: CacheModeCache,
 		},
 		{
-			name:     "glm-4 returns CacheModeContext",
+			name:     "glm-4 returns CacheModeCache",
 			model:    "glm-4",
-			expected: CacheModeContext,
+			expected: CacheModeCache,
+		},
+		{
+			name:     "GLM5.2 returns CacheModeCache (case-insensitive)",
+			model:    "GLM5.2",
+			expected: CacheModeCache,
+		},
+		{
+			name:     "glm-4-flash returns CacheModeCache",
+			model:    "glm-4-flash",
+			expected: CacheModeCache,
 		},
 		{
 			name:     "empty string returns CacheModeContext",
@@ -65,10 +75,10 @@ func TestResolveCacheMode(t *testing.T) {
 			expected: CacheModeCache,
 		},
 		{
-			name:     "Auto with glm-4 resolves to Context",
+			name:     "Auto with glm-4 resolves to Cache",
 			mode:     CacheModeAuto,
 			model:    "glm-4",
-			expected: CacheModeContext,
+			expected: CacheModeCache,
 		},
 		{
 			name:     "Explicit Cache overrides model detection",

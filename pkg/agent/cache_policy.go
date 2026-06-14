@@ -60,9 +60,11 @@ func DefaultMutationPolicy(mode CacheMode) MessageMutationPolicy {
 
 // IsCacheMode detects the appropriate CacheMode from a model name.
 //   - model contains "deepseek" (case-insensitive) → CacheModeCache
+//   - model contains "glm" (case-insensitive) → CacheModeCache
 //   - empty or anything else → CacheModeContext
 func IsCacheMode(model string) CacheMode {
-	if strings.Contains(strings.ToLower(model), "deepseek") {
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "deepseek") || strings.Contains(lower, "glm") {
 		return CacheModeCache
 	}
 	return CacheModeContext
