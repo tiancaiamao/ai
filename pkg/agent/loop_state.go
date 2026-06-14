@@ -348,8 +348,17 @@ func (s *loopState) executeDeltaCompaction(ctx context.Context, summary string) 
 	slog.Info("[Loop] Delta compaction completed",
 		"before", before, "after", after, "turn", s.turnCount)
 
-	// Save checkpoint so the compaction survives a crash.
-	saveCheckpointAfterCompaction(s.checkpointMgr, s.agentCtx, false, s.turnCount, "delta")
+	// Save checkpoint so the compaction survives a crash. Delta compaction
+	// does not update LLMContext, so we cannot use saveCheckpointAfterCompaction
+	// (which gates on llmContextUpdated). CreateSnapshot carries forward any
+	// previous LLMContext automatically.
+	if s.checkpointMgr != nil && s.checkpointMgr.ShouldCheckpoint() {
+		if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.agentCtx.LLMContext, s.turnCount); err != nil {
+			slog.Warn("[Loop] Failed to create checkpoint after delta compaction", "error", err, "turn", s.turnCount)
+		} else {
+			slog.Info("[Loop] Checkpoint created after delta compaction", "turn", s.turnCount)
+		}
+	}
 }
 
 // checkDeltaCompactionTrigger estimates the current delta token count and,
