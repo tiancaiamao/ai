@@ -98,21 +98,6 @@ func LoadLatestCheckpoint(sessionDir string) (*CheckpointInfo, error) {
 	return &idx.Checkpoints[len(idx.Checkpoints)-1], nil
 }
 
-// LoadCheckpointAtTurn loads a checkpoint at a specific turn.
-func LoadCheckpointAtTurn(sessionDir string, turn int) (*CheckpointInfo, error) {
-	idx, err := LoadCheckpointIndex(sessionDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load checkpoint index: %w", err)
-	}
-
-	info, err := idx.GetCheckpointAtTurn(turn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get checkpoint at turn %d: %w", turn, err)
-	}
-
-	return info, nil
-}
-
 // GetCurrentCheckpointPath returns the absolute path the current/ symlink points to.
 func GetCurrentCheckpointPath(sessionDir string) (string, error) {
 	currentLinkPath := filepath.Join(sessionDir, CurrentLinkName)

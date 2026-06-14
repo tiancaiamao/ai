@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 // EditMode defines the edit mode
@@ -344,7 +346,7 @@ func findBestMatch(content, oldText string) (*matchResult, error) {
 	if bestMatch.score > 10 {
 		// Try to show what we found
 		matchedContent := content[bestMatch.start:bestMatch.end]
-		return bestMatch, fmt.Errorf("fuzzy match is poor (score %d), found: %q", bestMatch.score, truncateString(matchedContent, 50))
+		return bestMatch, fmt.Errorf("fuzzy match is poor (score %d), found: %q", bestMatch.score, truncate.TruncateString(matchedContent, 50))
 	}
 
 	return bestMatch, nil
@@ -481,12 +483,4 @@ func generateDiff(content string, start, end int, newText string) string {
 	}
 
 	return sb.String()
-}
-
-// truncateString truncates a string to a maximum length.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

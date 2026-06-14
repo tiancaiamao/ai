@@ -2,7 +2,6 @@ package middlewares
 
 import (
 	"regexp"
-	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -136,15 +135,4 @@ func init() {
 	for _, p := range defaultProtectedPatterns {
 		regexp.MustCompile(p)
 	}
-}
-
-// Helper to reconstruct full text from content blocks (used in tests).
-func extractText(result agentctx.AgentMessage) string {
-	var sb strings.Builder
-	for _, block := range result.Content {
-		if tc, ok := block.(agentctx.TextContent); ok {
-			sb.WriteString(tc.Text)
-		}
-	}
-	return sb.String()
 }

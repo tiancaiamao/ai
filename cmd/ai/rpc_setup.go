@@ -155,7 +155,6 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
 	})
 
-	app.initHelpers()
 	return app, nil
 }
 

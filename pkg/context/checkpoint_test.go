@@ -549,3 +549,24 @@ func TestCheckpoint_SecondSaveWithEmptyContext_OverwritesPrevious(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "", string(data), "Second checkpoint with empty context writes empty file (expected — defense is at caller level)")
 }
+
+func TestSplitLines(t *testing.T) {
+	// Empty input
+	if got := SplitLines(nil); len(got) != 0 {
+		t.Errorf("expected 0 lines, got %d", len(got))
+	}
+	// Trailing newline only → skipped (empty lines are dropped)
+	if got := SplitLines([]byte("\n")); len(got) != 0 {
+		t.Errorf("expected 0 lines for lone newline, got %d", len(got))
+	}
+	// Multiple lines, no trailing newline
+	got := SplitLines([]byte("a\nb\nc"))
+	if len(got) != 3 || string(got[0]) != "a" || string(got[2]) != "c" {
+		t.Errorf("unexpected: %+v", got)
+	}
+	// Blank lines in the middle are skipped
+	got = SplitLines([]byte("a\n\nb"))
+	if len(got) != 2 || string(got[0]) != "a" || string(got[1]) != "b" {
+		t.Errorf("expected blank lines skipped, got %+v", got)
+	}
+}

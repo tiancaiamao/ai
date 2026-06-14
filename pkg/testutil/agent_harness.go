@@ -27,11 +27,6 @@ type harnessConfig struct {
 	contextWindow           int
 }
 
-// WithModel sets a custom model for the harness.
-func WithModel(model llm.Model) HarnessOption {
-	return func(c *harnessConfig) { c.model = model }
-}
-
 // WithMaxTurns limits the number of agent loop turns.
 func WithMaxTurns(n int) HarnessOption {
 	return func(c *harnessConfig) { c.maxTurns = n }
@@ -45,21 +40,6 @@ func WithTools(tools ...agentctx.Tool) HarnessOption {
 // WithCompactors sets compaction strategies on the agent.
 func WithCompactors(c ...agentctx.Compactor) HarnessOption {
 	return func(cfg *harnessConfig) { cfg.compactors = append(cfg.compactors, c...) }
-}
-
-// WithSystemPrompt sets a custom system prompt.
-func WithSystemPrompt(prompt string) HarnessOption {
-	return func(c *harnessConfig) { c.systemPrompt = prompt }
-}
-
-// WithAPIKey sets the API key (default: "test-key").
-func WithAPIKey(key string) HarnessOption {
-	return func(c *harnessConfig) { c.apiKey = key }
-}
-
-// WithMaxConsecutiveToolCalls sets the loop guard threshold.
-func WithMaxConsecutiveToolCalls(n int) HarnessOption {
-	return func(c *harnessConfig) { c.maxConsecutiveToolCalls = n }
 }
 
 // WithContextWindow sets the context window size.

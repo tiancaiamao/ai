@@ -130,10 +130,3 @@ func CollectAll(t *testing.T, ch <-chan agent.AgentEvent, timeout time.Duration)
 		}
 	}
 }
-
-// CollectUntil reads events from the channel until a matching event type is
-// seen or the timeout fires. Returns all collected events.
-func CollectUntil(t *testing.T, ch <-chan agent.AgentEvent, eventType string, timeout time.Duration) []agent.AgentEvent {
-	t.Helper()
-	return CollectAll(t, ch, timeout) // drains until close; caller can filter
-}

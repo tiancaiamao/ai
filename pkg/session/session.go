@@ -75,7 +75,7 @@ func LoadSession(sessionDir string) (*Session, error) {
 		return nil, err
 	}
 
-	lines := splitLines(data)
+	lines := agentctx.SplitLines(data)
 	if len(lines) == 0 {
 		id := sessionIDFromDirPath(sessionDir)
 		cwd, _ := os.Getwd()
@@ -783,23 +783,4 @@ func sanitizeSessionPath(cwd string) string {
 		":", "-",
 	).Replace(trimmed)
 	return fmt.Sprintf("--%s--", replaced)
-}
-
-// splitLines splits data into lines.
-func splitLines(data []byte) [][]byte {
-	lines := make([][]byte, 0)
-	start := 0
-
-	for i, b := range data {
-		if b == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
-		}
-	}
-
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-
-	return lines
 }

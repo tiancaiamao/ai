@@ -157,7 +157,7 @@ func TestDestructiveGuardDetectsRmRf(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if !strings.Contains(text, "WARNING") && !strings.Contains(text, "Destructive") {
 		t.Errorf("expected warning in output, got: %q", text)
 	}
@@ -175,7 +175,7 @@ func TestDestructiveGuardDetectsKill9(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if !strings.Contains(text, "WARNING") {
 		t.Errorf("expected warning for kill -9, got: %q", text)
 	}
@@ -198,7 +198,7 @@ func TestDestructiveGuardOriginalPreserved(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 
 	// Original text must be preserved
 	if !strings.Contains(text, originalText) {
@@ -269,7 +269,7 @@ func TestDestructiveGuardPassthrough(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if strings.Contains(text, "WARNING") {
 		t.Errorf("non-bash tool should not trigger warning, got: %q", text)
 	}
@@ -292,7 +292,7 @@ func TestDestructiveGuardPassthroughWrite(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if strings.Contains(text, "WARNING") {
 		t.Errorf("write tool should not trigger warning, got: %q", text)
 	}
@@ -316,7 +316,7 @@ func TestCustomProtectedPatterns(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if !strings.Contains(text, "WARNING") {
 		t.Errorf("custom pattern should trigger warning, got: %q", text)
 	}
@@ -328,7 +328,7 @@ func TestCustomProtectedPatterns(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text2 := extractText(modified2)
+	text2 := modified2.ExtractText()
 	if strings.Contains(text2, "WARNING") {
 		t.Errorf("default patterns should not apply when custom patterns provided, got: %q", text2)
 	}
@@ -351,7 +351,7 @@ func TestCustomProtectedPatternsViaParams(t *testing.T) {
 		t.Fatalf("hook error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if !strings.Contains(text, "WARNING") {
 		t.Errorf("custom pattern via params should trigger warning, got: %q", text)
 	}
@@ -371,7 +371,7 @@ func TestCustomProtectedPatternsEmptyUsesDefault(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if !strings.Contains(text, "WARNING") {
 		t.Errorf("empty patterns should use defaults (rm -rf should be caught), got: %q", text)
 	}
@@ -393,7 +393,7 @@ func TestBashWithNoDestructiveCommand(t *testing.T) {
 		t.Fatalf("afterTool error: %v", err)
 	}
 
-	text := extractText(modified)
+	text := modified.ExtractText()
 	if strings.Contains(text, "WARNING") {
 		t.Errorf("benign bash command should not trigger warning, got: %q", text)
 	}

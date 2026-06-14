@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 // --- agent_end.go ---
@@ -85,23 +87,23 @@ func TestParseAgentEndLine_InvalidJSON(t *testing.T) {
 }
 
 func TestTruncateString(t *testing.T) {
-	if got := truncateString("hello", 10); got != "hello" {
+	if got := truncpkg.TruncateString("hello", 10); got != "hello" {
 		t.Errorf("expected unchanged, got %q", got)
 	}
-	if got := truncateString("hello", 5); got != "hello" {
+	if got := truncpkg.TruncateString("hello", 5); got != "hello" {
 		t.Errorf("expected unchanged when equal, got %q", got)
 	}
-	if got := truncateString("hello world", 8); got != "hello..." {
+	if got := truncpkg.TruncateString("hello world", 8); got != "hello..." {
 		t.Errorf("expected 'hello...', got %q", got)
 	}
-	if got := truncateString("abc", 3); got != "abc" {
+	if got := truncpkg.TruncateString("abc", 3); got != "abc" {
 		t.Errorf("expected unchanged for exact match, got %q", got)
 	}
 	// maxLen <= 3 → just slice
-	if got := truncateString("abcdef", 2); got != "ab" {
+	if got := truncpkg.TruncateString("abcdef", 2); got != "ab" {
 		t.Errorf("expected 'ab' for maxLen<=3, got %q", got)
 	}
-	if got := truncateString("abcdef", 0); got != "" {
+	if got := truncpkg.TruncateString("abcdef", 0); got != "" {
 		t.Errorf("expected '' for maxLen=0, got %q", got)
 	}
 }
@@ -647,15 +649,6 @@ func TestIntFromMap(t *testing.T) {
 	}
 	if got := intFromMap(map[string]any{"x": "not-a-number"}, "x"); got != 0 {
 		t.Errorf("expected 0 for non-number, got %d", got)
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	if got := truncate("hello", 10); got != "hello" {
-		t.Errorf("expected 'hello', got %q", got)
-	}
-	if got := truncate("hello world", 5); got != "hello..." {
-		t.Errorf("expected 'hello...', got %q", got)
 	}
 }
 
