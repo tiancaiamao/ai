@@ -279,9 +279,11 @@ func runInnerLoop(
 		// compaction when the decision is "yes" (or forced). This runs BEFORE
 		// processToolCalls so the compressed context is in place, but tool
 		// calls in the (protected) response are still processed normally.
+		deltaHandledThisTurn := false
 		if state.deltaPromptPending {
 			state.deltaPromptPending = false
 			state.processDeltaCompactionResponse(ctx, msg)
+			deltaHandledThisTurn = true
 		}
 
 		hasMore, toolResults := state.processToolCalls(ctx, msg)
@@ -290,6 +292,13 @@ func runInnerLoop(
 
 		// If no more tool calls, end the conversation.
 		if !hasMore {
+			// The LLM responded to a delta compaction prompt (not to the
+			// user's task). Resume the task in the next turn instead of
+			// ending — the compaction response naturally has no tool calls.
+			if deltaHandledThisTurn {
+				continue
+			}
+
 			if maybeRecoverMalformedToolCall(ctx, agentCtx, &state.newMessages, stream, msg, &state.malformedRecs) {
 				continue
 			}
