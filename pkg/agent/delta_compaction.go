@@ -1,12 +1,12 @@
 package agent
 
 import (
-	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 // Delta compaction is an incremental context-compression mechanism. Instead of
@@ -88,7 +88,7 @@ func EstimateDeltaTokens(messages []agentctx.AgentMessage) int {
 		if kind == kindRuntimeState || kind == kindCompactionDecision {
 			continue
 		}
-		total += estimateDeltaMessageTokens(messages[i])
+		total += agentctx.EstimateMessageTokens(messages[i])
 	}
 	return total
 }
@@ -158,7 +158,7 @@ func CalculateProtectedBoundary(messages []agentctx.AgentMessage, deltaStartInde
 	cut := deltaStartIndex
 	acc := 0
 	for i := n - 1; i >= deltaStartIndex; i-- {
-		acc += estimateDeltaMessageTokens(messages[i])
+		acc += agentctx.EstimateMessageTokens(messages[i])
 		if acc >= ProtectedTokenBudget {
 			cut = i
 			break
@@ -256,14 +256,14 @@ var compactionSummaryTagRe = regexp.MustCompile(`(?is)<summary>\s*(.*?)\s*</summ
 // message. This is a short instruction (~200 tokens) that does NOT repeat the
 // delta content — the delta messages are already in RecentMessages (cache hit).
 func BuildDecisionMessage() agentctx.AgentMessage {
-	return newCompactionPromptMessage(decisionMessageBody)
+	return newCompactionPromptMessage(prompt.DeltaCompactionDecisionPrompt())
 }
 
 // BuildForcedCompactionMessage creates the <agent:context_compaction> user
 // message, used when delta >= DeltaTierHardLimit. No decision is requested,
 // only a summary.
 func BuildForcedCompactionMessage() agentctx.AgentMessage {
-	return newCompactionPromptMessage(forcedCompactionMessageBody)
+	return newCompactionPromptMessage(prompt.DeltaCompactionForcedPrompt())
 }
 
 func newCompactionPromptMessage(body string) agentctx.AgentMessage {
@@ -277,67 +277,12 @@ func newCompactionPromptMessage(body string) agentctx.AgentMessage {
 	}
 }
 
-const decisionMessageBody = "<agent:context_compaction_decision>\n" +
-	"Your context has grown significantly. Please determine whether context compaction is needed.\n\n" +
-	"If yes, summarize the earlier conversation into a concise task state summary (1K-3K tokens).\n" +
-	"Preserve: user intent, files being edited, unresolved errors, key decisions, current plan.\n" +
-	"Recent messages are automatically retained and do not need to be summarized.\n\n" +
-	"Output format:\n" +
-	"<decision>yes or no</decision>\n" +
-	"<summary>summary content (if decision=yes)</summary>\n" +
-	"</agent:context_compaction_decision>"
-
-const forcedCompactionMessageBody = "<agent:context_compaction>\n" +
-	"Context compaction is required. Summarize the earlier conversation into a concise task state summary (1K-3K tokens).\n" +
-	"Preserve: user intent, files being edited, unresolved errors, key decisions, current plan.\n" +
-	"Recent messages are automatically retained and do not need to be summarized.\n\n" +
-	"Output format:\n" +
-	"<summary>summary content</summary>\n" +
-	"</agent:context_compaction>"
-
 // messageKind returns the metadata.Kind of a message, or "" when absent.
 func messageKind(m agentctx.AgentMessage) string {
 	if m.Metadata == nil {
 		return ""
 	}
 	return m.Metadata.Kind
-}
-
-// estimateDeltaMessageTokens applies the same chars/4 heuristic used elsewhere
-// in the codebase. Images are approximated as ~1200 tokens (4800 chars).
-func estimateDeltaMessageTokens(msg agentctx.AgentMessage) int {
-	charCount := 0
-	hasContent := false
-	for _, block := range msg.Content {
-		switch b := block.(type) {
-		case agentctx.TextContent:
-			charCount += len(b.Text)
-			hasContent = true
-		case agentctx.ThinkingContent:
-			charCount += len(b.Thinking)
-			hasContent = true
-		case agentctx.ToolCallContent:
-			charCount += len(b.Name)
-			if b.Arguments != nil {
-				if argBytes, err := json.Marshal(b.Arguments); err == nil {
-					charCount += len(argBytes)
-				}
-			}
-			hasContent = true
-		case agentctx.ImageContent:
-			// ~1200 tokens per image.
-			charCount += 4800
-			hasContent = true
-		}
-	}
-	if !hasContent {
-		charCount = len(msg.ExtractText())
-	}
-	if charCount == 0 {
-		return 0
-	}
-	// ceil(charCount / 4) via integer arithmetic.
-	return (charCount + 3) / 4
 }
 
 // findDeltaStartIndex returns the index immediately after the most recent

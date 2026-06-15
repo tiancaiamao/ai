@@ -46,7 +46,7 @@ func DefaultConfig() *Config {
 		ToolSummaryStrategy:   "off", // Tool summary strategy (llm, heuristic, off)
 		ToolSummaryAutomation: "off", // Automatic tool-output summary (off, fallback, always)
 		GracePeriod:           1,     // Protect 1 most recent tool result by default
-		AutoCompact:           true,  // Automatic context compression at 90% threshold
+		AutoCompact:           true,  // Automatic context compression at 75% threshold
 	}
 }
 
@@ -104,9 +104,9 @@ func (c *Compactor) CalculateDynamicThreshold() int {
 			return c.config.MaxTokens
 		}
 
-		// Use 90% of available as compaction threshold (safety net).
-		// This leaves 10% buffer before hitting context limit.
-		threshold := int(float64(available) * 0.90)
+		// Use 75% of available as compaction threshold (safety net).
+		// This leaves 25% buffer before hitting context limit.
+		threshold := int(float64(available) * 0.75)
 
 		// Ensure minimum threshold
 		minThreshold := 4000

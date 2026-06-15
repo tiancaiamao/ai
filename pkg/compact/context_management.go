@@ -80,7 +80,7 @@ type ContextManagerConfig struct {
 	// SkipCondition, when set and returns true, causes ShouldCompact to return false.
 	// This is used to skip proactive LLM-driven context management in cache-first mode,
 	// where preserving the stable message prefix is more important.
-	// Full compaction (90% threshold) remains active regardless.
+	// Full compaction (75% threshold) remains active regardless.
 	SkipCondition func() bool
 }
 

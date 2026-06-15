@@ -398,12 +398,12 @@ func TestEstimateDeltaMessageTokens(t *testing.T) {
 	}
 	for _, c := range cases {
 		m := textMsg("user", c.text)
-		if got := estimateDeltaMessageTokens(m); got != c.want {
+		if got := agentctx.EstimateMessageTokens(m); got != c.want {
 			t.Errorf("text=%q: got %d, want %d", c.text, got, c.want)
 		}
 	}
 	// Image is ~1200 tokens.
-	if got := estimateDeltaMessageTokens(imageMsg()); got != 1200 {
+	if got := agentctx.EstimateMessageTokens(imageMsg()); got != 1200 {
 		t.Errorf("image: got %d, want 1200", got)
 	}
 }
@@ -411,8 +411,8 @@ func TestEstimateDeltaMessageTokens(t *testing.T) {
 // Ensure tokensFor helper matches estimator for non-empty strings.
 func TestTokensForHelper(t *testing.T) {
 	for _, s := range []string{"a", "abcd", "abcde", strings.Repeat("x", 3999)} {
-		if tokensFor(s) != estimateDeltaMessageTokens(textMsg("user", s)) {
-			t.Errorf("mismatch for %q: tokensFor=%d estimator=%d", s, tokensFor(s), estimateDeltaMessageTokens(textMsg("user", s)))
+		if tokensFor(s) != agentctx.EstimateMessageTokens(textMsg("user", s)) {
+			t.Errorf("mismatch for %q: tokensFor=%d estimator=%d", s, tokensFor(s), agentctx.EstimateMessageTokens(textMsg("user", s)))
 		}
 	}
 }

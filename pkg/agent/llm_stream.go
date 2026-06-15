@@ -391,20 +391,13 @@ func updateRuntimeMetaSnapshot(
 		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
 	}
 
-	// Delta compaction telemetry: current delta token estimate and tier.
-	deltaTokens := EstimateDeltaTokens(agentCtx.RecentMessages)
-	deltaTier := DeltaTier(deltaTokens)
-	deltaLine := fmt.Sprintf("\n  delta_since_compact:\n    delta_tokens: %d\n    delta_tier: %s",
-		deltaTokens, deltaTier)
-
 	snapshot := fmt.Sprintf(`<agent:runtime_state"/>
 %s
   current_workdir: %s
-  startup_path: %s%s`,
+  startup_path: %s`,
 		runIDLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
-		deltaLine,
 	)
 
 	agentCtx.AgentState.RuntimeMetaSnapshot = snapshot

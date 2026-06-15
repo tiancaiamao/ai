@@ -32,6 +32,12 @@ var orchestratorTemplate string
 //go:embed "validator.md"
 var validatorTemplate string
 
+//go:embed "delta_compaction_decision.md"
+var deltaCompactionDecisionPrompt string
+
+//go:embed "delta_compaction_forced.md"
+var deltaCompactionForcedPrompt string
+
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
@@ -50,6 +56,18 @@ func CompactSummarizePrompt() string {
 // CompactUpdatePrompt returns the prompt for updating existing summary.
 func CompactUpdatePrompt() string {
 	return compactUpdatePrompt
+}
+
+// DeltaCompactionDecisionPrompt returns the body of the context compaction
+// decision message injected when delta compaction is being considered.
+func DeltaCompactionDecisionPrompt() string {
+	return deltaCompactionDecisionPrompt
+}
+
+// DeltaCompactionForcedPrompt returns the body of the forced context compaction
+// message injected when delta tokens reach the hard limit.
+func DeltaCompactionForcedPrompt() string {
+	return deltaCompactionForcedPrompt
 }
 
 // ToolInfo describes a tool for prompt generation.
