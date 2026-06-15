@@ -207,48 +207,8 @@ tasks:
       - [ ] find_skill tool appears in tool registry at startup (verify via log or manual test)
       - [ ] System prompt only contains top-N skills when stats file has entries
       - [ ] /skill:name expansion records usage to skill-stats.json
-    group: ai-integration
+        group: ai-integration
     dependencies: [T002, T004]
-
-  - id: T006
-    title: "Integrate stats and find_skill into aiclaw agent"
-    estimated_hours: 2
-    description: |
-      ## Goal
-      Wire up the same stats loading, find_skill tool registration, and shared `FormatForPrompt` into the `claw/cmd/aiclaw` agent, replacing its custom `buildSkillsSummary` function.
-
-      ## Key changes
-      - Modify `claw/cmd/aiclaw/main.go`:
-        - Change `clawDir` from `~/.aiclaw` to `~/.ai` (the `homeDir/.ai` pattern, same as ai agent). This is the directory unification step.
-        - In the skill loading block (~line 222):
-          1. After `skillLoader.Load()`, load stats: `skillStats := skill.LoadStats(filepath.Join(clawDir, "skill-stats.json"))`
-          2. Register find_skill tool into the agent's tool registry (if aiclaw has a tool registry; otherwise, the find_skill tool is available via the shared adapter layer)
-        - In `buildSystemPrompt` function (~line 642):
-          3. Replace the `buildSkillsSummary(skills)` call and surrounding `# Skills` block with `skill.FormatForPrompt(skills, skillStats)` which now produces the properly formatted skills section with top-N filtering and find_skill footer
-          4. Remove the `buildSkillsSummary` function entirely (it's replaced by the shared formatter)
-        - Update the `agentConfig` struct initialization to pass `skillStats` if the adapter needs it
-
-      ## Important context about existing code
-      - `buildSystemPrompt(clawDir string, skills []skill.Skill) string` at line 642 builds the full system prompt with identity, rules, and skills
-      - `buildSkillsSummary(skills []skill.Skill) string` at line 694 just does `- **name**: description` per skill — this is what gets replaced
-      - The function signature may need to accept stats: `buildSystemPrompt(clawDir string, skills []skill.Skill, skillStats *skill.SkillStatsFile) string`
-      - `clawDir` is currently set to `~/.aiclaw` — after change it should use `~/.ai`
-
-      ## Files
-      - MODIFY: claw/cmd/aiclaw/main.go
-
-      ## Edge cases
-      - clawDir change from ~/.aiclaw to ~/.ai: existing `~/.aiclaw/AGENTS.md` and other config files should still be checked. Consider falling back to `~/.aiclaw` for AGENTS.md loading if not found in `~/.ai`
-      - Skills may still physically live in `claw/skills/` directory — the loader should handle this via the AgentDir pointing to `~/.ai` (skills will need to be migrated there first, or symlinked)
-
-      ## Done when
-      - [ ] `go build ./claw/cmd/aiclaw/...` passes
-      - [ ] `go test ./claw/cmd/aiclaw/...` passes
-      - [ ] `buildSkillsSummary` function is removed
-      - [ ] `skill.FormatForPrompt` is used instead for skill listing
-      - [ ] Stats file is loaded from `~/.ai/skill-stats.json`
-    group: aiclaw-integration
-    dependencies: [T004, T005]
 
   - id: T007
     title: "Create index-skills SKILL.md for LLM-generated search index"
@@ -350,7 +310,7 @@ tasks:
       Update all callers of `skill.FormatForPrompt` that pass the old single-argument signature to pass the new two-argument signature `(skills, stats)`, ensuring the entire codebase compiles.
 
       ## Key changes
-      - Search all files that call `skill.FormatForPrompt` (other than those already updated in T004/T005/T006)
+            - Search all files that call `skill.FormatForPrompt` (other than those already updated in T004/T005)
       - Known callers to check and update:
         - `pkg/context/context.go` — `NewAgentContextWithSkills` function at ~line 261 calls `skill.FormatForPrompt(skills)` — update to `skill.FormatForPrompt(skills, nil)` (backward compat, no stats available in this context)
         - `pkg/prompt/system_test.go` — test code that calls FormatForPrompt indirectly via the builder
@@ -366,10 +326,10 @@ tasks:
 
       ## Done when
       - [ ] `go build ./...` passes with zero errors across entire repo
-      - [ ] `go test ./pkg/... ./cmd/... ./claw/...` passes
+            - [ ] `go test ./pkg/... ./cmd/...` passes
       - [ ] No remaining callers of the old single-argument `FormatForPrompt`
     group: compat-fixup
-    dependencies: [T003, T004, T005, T006]
+        dependencies: [T003, T004, T005]
 
 groups:
   - name: stats-tracking
@@ -400,14 +360,7 @@ groups:
     tasks: [T005]
     commit_message: "feat(ai): integrate skill stats and find_skill tool"
 
-  - name: aiclaw-integration
-    title: "Aiclaw Agent Integration & Directory Unification"
-    estimated_hours: 2
-    description: "Wire shared stats/tool logic into aiclaw, replace custom buildSkillsSummary, unify to ~/.ai directory."
-    tasks: [T006]
-    commit_message: "feat(aiclaw): unify skill directory to ~/.ai and use shared stats/formatting"
-
-  - name: search-index
+    - name: search-index
     title: "LLM-Generated Search Index"
     estimated_hours: 2
     description: "Skill for generating rich search index and enhanced find_skill with alias/category matching."
@@ -421,23 +374,15 @@ groups:
     tasks: [T009]
     commit_message: "fix(skill): update all FormatForPrompt callers for new stats parameter"
 
-group_order: [stats-tracking, discovery-tool, prompt-filtering, ai-integration, aiclaw-integration, search-index, compat-fixup]
+group_order: [stats-tracking, discovery-tool, prompt-filtering, ai-integration, search-index, compat-fixup]
 risks:
   - area: "Cold start experience"
     risk: "New users or clean installs have no stats file, so the system prompt may show too many or too few skills initially"
     mitigation: "FormatForPrompt falls back to current behavior (show all, capped at TopN=7) when stats is empty. After a few sessions, stats accumulate naturally."
 
-  - area: "Concurrent stats file writes"
+    - area: "Concurrent stats file writes"
     risk: "Two agent processes writing skill-stats.json simultaneously could lose data (last-write-wins)"
     mitigation: "Acceptable risk per design — losing a single +1 count is inconsequential for ranking. Keep writes small and fast."
-
-  - area: "Skill name collisions after merge"
-    risk: "Both ai and aiclaw skill trees have skills named 'github', 'tmux', 'skill-creator'. Merging into one directory causes file-level collision."
-    mitigation: "Loader already handles collisions (first-loaded wins, diagnostic logged). Manual audit needed before migration — this is a manual step outside the task plan."
-
-  - area: "aiclaw directory migration"
-    risk: "Changing clawDir from ~/.aiclaw to ~/.ai breaks existing aiclaw setups that have config, memory, and cron jobs in ~/.aiclaw"
-    mitigation: "Maintain backward compatibility by checking ~/.aiclaw as fallback for AGENTS.md and other config. Migration is gradual — skills can be copied, not moved initially."
 
   - area: "Search index staleness"
     risk: "skill-index.json drifts out of sync as skills are added/removed/updated"
