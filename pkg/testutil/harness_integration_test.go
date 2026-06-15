@@ -71,10 +71,8 @@ func TestHarness_RetryAfterTransientError(t *testing.T) {
 		t.Fatalf("Prompt failed: %v", err)
 	}
 	a.Wait()
-	// Yield to let event subscriber drain the final events.
-	time.Sleep(10 * time.Millisecond)
 
-	if !collector.HasEvent(agent.EventAgentEnd) {
+	if !collector.WaitForEvent(agent.EventAgentEnd, 2*time.Second) {
 		t.Error("expected agent_end event")
 	}
 	if callCount.Load() < 2 {
@@ -192,10 +190,8 @@ func TestHarness_AbortDuringStreaming(t *testing.T) {
 	a.Abort()
 
 	a.Wait()
-	// Yield to let event subscriber drain the final events.
-	time.Sleep(10 * time.Millisecond)
 
-	if !collector.HasEvent(agent.EventAgentEnd) {
+	if !collector.WaitForEvent(agent.EventAgentEnd, 2*time.Second) {
 		t.Error("expected agent_end after abort")
 	}
 }
@@ -311,10 +307,8 @@ func TestHarness_LLMRetryEvent(t *testing.T) {
 		t.Fatalf("Prompt failed: %v", err)
 	}
 	a.Wait()
-	// Yield to let event subscriber drain the final events.
-	time.Sleep(10 * time.Millisecond)
 
-	if !collector.HasEvent(agent.EventLLMRetry) {
+	if !collector.WaitForEvent(agent.EventLLMRetry, 2*time.Second) {
 		t.Error("expected llm_retry event")
 	}
 }
@@ -342,12 +336,10 @@ func TestHarness_ContextCancellation(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	a.Abort()
 	a.Wait()
-	// Yield to let event subscriber drain the final events.
-	time.Sleep(10 * time.Millisecond)
 
 	// Agent should have ended
-	if !collector.HasEvent(agent.EventAgentEnd) {
-		t.Error("expected agent_end after cancellation")
+	if !collector.WaitForEvent(agent.EventAgentEnd, 2*time.Second) {
+		t.Errorf("expected agent_end after cancellation, got events: %v", eventTypes(collector.All()))
 	}
 }
 
@@ -466,10 +458,9 @@ func TestHarness_SteerDuringStreaming(t *testing.T) {
 	a.Steer("go east")
 
 	a.Wait()
-	time.Sleep(10 * time.Millisecond)
 
 	// Agent must complete with an agent_end event.
-	if !collector.HasEvent(agent.EventAgentEnd) {
+	if !collector.WaitForEvent(agent.EventAgentEnd, 2*time.Second) {
 		t.Error("expected agent_end after steer")
 	}
 

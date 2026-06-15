@@ -1,6 +1,6 @@
 bin/*
 .worktrees/
-.aiclaw/
+
 coverage.out
 /ai
 
@@ -10,9 +10,6 @@ __pycache__/
 benchmark/results/progress.json
 benchmark/tasks/*/setup/
 benchmark/tasks/*/*/setup/
-
-claw/skills/self-improving-agent/.learnings/
-claw/skills/.*
 
 # Symphony workspace files (never commit these)
 WORKPAD.md
