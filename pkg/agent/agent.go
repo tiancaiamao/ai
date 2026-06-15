@@ -727,16 +727,20 @@ func (a *Agent) getCurrentStream() *llm.EventStream[AgentEvent, []agentctx.Agent
 
 func (a *Agent) abortCurrentStream() bool {
 	stream := a.getCurrentStream()
-	if stream == nil || stream.IsDone() {
-		return false
-	}
-	// Force an agent_end event so UI state can reset even if the iterator stops on ctx cancel.
 	a.ctxMu.RLock()
 	recent := append([]agentctx.AgentMessage(nil), a.context.RecentMessages...)
 	a.ctxMu.RUnlock()
-	stream.Push(NewAgentEndEvent(recent))
-	a.emitEvent(NewAgentEndEvent(recent))
-	return true
+
+	agentEnd := NewAgentEndEvent(recent)
+	if stream != nil && !stream.IsDone() {
+		stream.Push(agentEnd)
+	}
+	// Always emit directly to the event channel. When ctx is cancelled the
+	// iterator exits on ctx.Done() and processPrompt clears currentStream,
+	// so by the time we get here the stream may be nil or done. Subscribers
+	// (UI, event collectors) still need agent_end to reset their state.
+	a.emitEvent(agentEnd)
+	return stream != nil && !stream.IsDone()
 }
 
 func (a *Agent) clearFollowUps() {
