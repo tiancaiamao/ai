@@ -276,36 +276,6 @@ func TestCheckpointManager_CreateSnapshot_EmptyFirst_NoPrevious(t *testing.T) {
 	}
 }
 
-func TestHasToolResultNamed(t *testing.T) {
-	results := []agentctx.AgentMessage{
-		agentctx.NewToolResultMessage("id1", "bash", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "output"},
-		}, false),
-		agentctx.NewToolResultMessage("id2", "update_llm_context", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "LLM Context updated."},
-		}, false),
-		agentctx.NewToolResultMessage("id3", "read", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "file content"},
-		}, false),
-	}
-
-	if !hasToolResultNamed(results, "update_llm_context") {
-		t.Error("Expected to find update_llm_context")
-	}
-	if !hasToolResultNamed(results, "bash") {
-		t.Error("Expected to find bash")
-	}
-	if hasToolResultNamed(results, "write") {
-		t.Error("Should not find write")
-	}
-	if hasToolResultNamed(nil, "update_llm_context") {
-		t.Error("Should return false for nil results")
-	}
-	if hasToolResultNamed([]agentctx.AgentMessage{}, "update_llm_context") {
-		t.Error("Should return false for empty results")
-	}
-}
-
 // TestSavePreCompactionCheckpoint_EmptyMessages_SkipsCheckpoint verifies
 // the first defense layer: savePreCompactionCheckpoint skips when there are
 // no messages to checkpoint, preventing creation of empty checkpoints. The

@@ -486,11 +486,6 @@ func (s *loopState) processToolCalls(
 	// Increment tool call counter for compactor trigger intervals.
 	s.agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
 
-	// Create checkpoint after update_llm_context tool execution.
-	if hasToolResultNamed(toolResults, "update_llm_context") {
-		saveCheckpointAfterToolExecution(s.checkpointMgr, s.agentCtx, s.turnCount, "update_llm_context")
-	}
-
 	return hasMore, toolResults
 }
 

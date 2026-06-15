@@ -410,9 +410,10 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
 	ctx.LastCompactionSummary = summary
-	// Preserve LLMContext maintained by ContextManager; do not overwrite.
-	// The summary is already stored in ctx.LastCompactionSummary and injected
-	// as [Previous conversation summary] message in newRecentMessages above.
+	// LLMContext is retained for old session compatibility but is no longer
+	// populated by the compactor. The summary is stored in
+	// ctx.LastCompactionSummary and injected as [Previous conversation summary]
+	// message in newRecentMessages above.
 	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()

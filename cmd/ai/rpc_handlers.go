@@ -65,7 +65,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Build LoopConfig with all settings
 	loopCfg := app.cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{app.ctxManager, sessionComp}),
+		config.WithCompactors([]agent.Compactor{sessionComp}),
 		config.WithContextWindow(app.currentContextWindow),
 		config.WithToolCallCutoff(app.compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),

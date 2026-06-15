@@ -23,9 +23,6 @@ var compactSummarizePrompt string
 //go:embed "compact_update.md"
 var compactUpdatePrompt string
 
-//go:embed "context_management.md"
-var contextManagementSystemPrompt string
-
 //go:embed "orchestrator.md"
 var orchestratorTemplate string
 
@@ -333,11 +330,6 @@ func NormalizeThinkingLevel(level string) string {
 	default:
 		return "high"
 	}
-}
-
-// ContextManagementSystemPrompt returns system prompt for context management.
-func ContextManagementSystemPrompt() string {
-	return contextManagementSystemPrompt
 }
 
 // OrchestratorTemplate returns the PGE orchestrator prompt template.

@@ -409,9 +409,6 @@ func TestCompactAndTemplateAccessors(t *testing.T) {
 	if got := CompactUpdatePrompt(); got == "" {
 		t.Error("CompactUpdatePrompt returned empty string")
 	}
-	if got := ContextManagementSystemPrompt(); got == "" {
-		t.Error("ContextManagementSystemPrompt returned empty string")
-	}
 	if got := OrchestratorTemplate(); got == "" {
 		t.Error("OrchestratorTemplate returned empty string")
 	}

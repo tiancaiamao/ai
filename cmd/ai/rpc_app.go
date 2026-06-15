@@ -63,7 +63,6 @@ type rpcApp struct {
 
 	// --- Compaction ---
 	compactor       *compact.Compactor
-	ctxManager      *compact.ContextManager
 	compactorConfig *compact.Config
 
 	// --- Tracing ---

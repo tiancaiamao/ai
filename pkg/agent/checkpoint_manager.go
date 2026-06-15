@@ -192,17 +192,3 @@ func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx 
 		slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", trigger, "turn", turnCount)
 	}
 }
-
-// saveCheckpointAfterToolExecution creates a checkpoint after specific tool
-// executions that meaningfully update state (e.g. update_llm_context).
-func saveCheckpointAfterToolExecution(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, turnCount int, toolName string) {
-	if mgr == nil || !mgr.ShouldCheckpoint() {
-		return
-	}
-	llmContextContent := agentCtx.LLMContext
-	if _, err := mgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
-		slog.Warn("[Loop] Failed to create checkpoint after "+toolName, "error", err, "turn", turnCount)
-	} else {
-		slog.Info("[Loop] Checkpoint created after "+toolName, "turn", turnCount)
-	}
-}
