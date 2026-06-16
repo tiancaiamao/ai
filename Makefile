@@ -10,7 +10,6 @@ build:
 # Install all binaries to GOBIN (default: ~/go/bin)
 install:
 	go install ./cmd/ai
-	cd claw && go install ./cmd/aiclaw
 
 # Run tests with coverage
 test:

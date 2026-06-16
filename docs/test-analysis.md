@@ -38,7 +38,6 @@
 | `pkg/run` | 5 | 102 | 1,940 |
 | `pkg/tools` | 7 | 73 | 2,276 |
 | `cmd/ai` | 8 | 38 | 1,451 |
-| `claw` | 3 | 23 | 1,156 |
 | `benchmark` | 2 | 17 | 512 |
 | `pkg/session` | 6 | 33 | 1,408 |
 | `pkg/compact` | 4 | 29 | 1,409 |
@@ -94,8 +93,7 @@
 | `skills/ag/internal/task` | 27.2% |
 | `skills/ag/internal/agent` | 18.4% |
 | `skills/ag/cmd` | 5.4% |
-| `claw/cmd/aiclaw` | 5.3% |
-| `claw/pkg/adapter` | 19.7% |
+
 
 ---
 

@@ -89,6 +89,26 @@ func (c *EventCollector) Reset() {
 	c.events = c.events[:0]
 }
 
+// WaitForEvent blocks until an event of the given type is collected or the
+// timeout expires. Returns true if the event was found.
+//
+// Use this instead of time.Sleep + HasEvent to avoid timing flakes: the
+// event subscriber goroutine (see Subscribe) drains the channel
+// asynchronously and may need variable time to process the final events
+// after the agent has finished.
+func (c *EventCollector) WaitForEvent(typ string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if c.HasEvent(typ) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return c.HasEvent(typ)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // Subscribe drains the agent event channel into this collector.
 // Returns a stop function that should be called to end collection.
 // The caller must ensure the agent is running before calling Subscribe.

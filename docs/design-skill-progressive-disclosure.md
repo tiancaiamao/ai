@@ -1,8 +1,7 @@
-# Design: Skill Unification & Progressive Disclosure
+# Design: Skill Progressive Disclosure
 
 ## Goals
 
-- Unify skill directories: merge `~/.aiclaw/skills/` into `~/.ai/skills/`, single source of truth
 - Progressive disclosure: only top-N high-frequency skills in system prompt, rest discoverable via `find_skill` tool
 - Usage tracking with time decay to auto-rank skills by relevance
 - LLM-generated search index for semantic skill discovery (aliases, use-when, categories)
@@ -28,26 +27,17 @@
 - Tool registry in `pkg/tools/registry.go`, interface `Tool` in `pkg/context/context.go` L60: `Name()`, `Description()`, `Parameters()`, `Execute()`
 - `/skill:name` expansion in `pkg/skill/expander.go` — looks up skill by name, injects full content inline
 
-### aiclaw (general agent)
-
-- `~/.aiclaw/skills/` → symlink to `claw/skills/` (35 skills)
-- `claw/cmd/aiclaw/main.go` L223 — same `skill.NewLoader(clawDir)`, reads `~/.aiclaw/skills/`
-- `buildSkillsSummary()` in main.go — simpler format, just `- **name**: description` per skill
-- Has `find-skills` skill (ClawHub marketplace search, not local discovery)
-
 ### Token cost of current approach
 
 - 21 skill summaries in system prompt: ~4000 chars of name+description text
 - Plus the `## Skills` header block (~300 chars)
-- With 56 skills merged, that'd be ~12000 chars (~3000 tokens) just for skill listings
+- As the skill set grows, this balloons token usage just for skill listings
 
 ---
 
 ## 2. 为什么要改
 
-**Token waste**: Most skills are irrelevant for any given task. Loading 56 skill descriptions into every prompt burns ~3000 tokens per turn. A coding session uses `implement`, `plan`, `ag` repeatedly but never touches `weather` or `discord`.
-
-**Two divergent systems**: ai and aiclaw share `pkg/skill/` code but maintain separate directories. Adding a skill requires deciding which tree it belongs to, or duplicating it.
+**Token waste**: Most skills are irrelevant for any given task. Loading all skill descriptions into every prompt burns thousands of tokens per turn. A coding session uses `implement`, `plan`, `ag` repeatedly but never touches `weather` or `discord`.
 
 **No adaptivity**: Skills are listed alphabetically/by-load-order. A skill you use daily has the same prominence as one you've never touched.
 
@@ -294,23 +284,6 @@ After ExpandCommand(), call stats.RecordUsage(skillName)
 Add `skillStats *skill.SkillStatsFile` field to `Builder`.
 Pass it through to `FormatForPrompt(skills, skillStats)`.
 
-### 4.8 Changes to `claw/cmd/aiclaw/main.go`
-
-- Change `clawDir` from `~/.aiclaw` to `~/.ai`
-- `~/.aiclaw/skills/` symlink can be removed after migration
-- Same stats loading, same `find_skill` tool registration
-- `buildSkillsSummary()` replaced by `FormatForPrompt(skills, stats)`
-
-### 4.9 Migration
-
-```bash
-# Move aiclaw skills into ~/.ai/skills/
-cp -r claw/skills/* ~/.ai/skills/
-rm ~/.aiclaw/skills  # remove symlink
-# Optionally recreate symlink for backward compat:
-# ln -s ~/.ai/skills ~/.aiclaw/skills
-```
-
 ---
 
 ## 5. 边界条件
@@ -320,12 +293,6 @@ rm ~/.aiclaw/skills  # remove symlink
 - `TopSkills(7)` returns empty list
 - `FormatForPrompt` falls back to showing ALL skills (current behavior), capped at 7
 - After a few sessions, stats accumulate and auto-ranking kicks in
-
-### Skill name collision after merge
-- Both trees have a `github` skill and a `tmux` skill
-- Loader already handles collisions: first-loaded wins, diagnostic logged
-- After merge, both are in same directory → collision at directory level → needs manual resolution
-- **Action**: Audit collisions before merge, pick the better version
 
 ### Concurrent access to skill-stats.json
 - Two agent processes writing simultaneously → possible data loss (last-write-wins on the overwritten field)
@@ -371,10 +338,3 @@ rm ~/.aiclaw/skills  # remove symlink
 | `pkg/skill/formatter.go` | Accept stats param, use TopSkills for filtering |
 | `pkg/prompt/builder.go` | Add skillStats field, pass to FormatForPrompt |
 | `cmd/ai/rpc_handlers.go` | Load stats, register find_skill tool, record usage on /skill:name |
-| `claw/cmd/aiclaw/main.go` | Change agentDir to ~/.ai, use shared stats/tool logic |
-
-## Migration (manual)
-
-- Copy `claw/skills/*` → `~/.ai/skills/`
-- Remove `~/.aiclaw/skills` symlink
-- Resolve name collisions (github, tmux, skill-creator)
