@@ -251,10 +251,11 @@ func runSubcommand(binPath string) {
 	}
 
 	// TUI exited — clean up subprocess.
-	// Close stdin pipe so the child sees EOF on stdin.
+	// Close stdin pipe so the child sees EOF on stdin, allowing it to exit
+	// gracefully (and flush coverage data). Only escalate to signals if the
+	// child doesn't exit on its own within the grace period.
 	sp.stdinWriter.Close()
 
-	sp.cmd.Process.Signal(syscall.SIGINT)
 	done := make(chan error, 1)
 	go func() { done <- sp.cmd.Wait() }()
 	select {
