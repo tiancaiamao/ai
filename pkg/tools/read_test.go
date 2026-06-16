@@ -315,40 +315,6 @@ func TestReadTool_NoOffsetLimit(t *testing.T) {
 	}
 }
 
-func TestReadTool_HashlineWithOffset(t *testing.T) {
-	dir := t.TempDir()
-	filePath := filepath.Join(dir, "test.txt")
-	content := "line1\nline2\nline3\nline4\nline5\n"
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	ws, _ := NewWorkspace(dir)
-	tool := NewReadTool(ws)
-	tool.SetHashLines(true)
-
-	result, err := tool.Execute(context.Background(), map[string]any{
-		"path":   filePath,
-		"offset": float64(3),
-		"limit":  float64(2),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	text := result[0].(agentctx.TextContent).Text
-
-	// Hashline mode should use FormatHashLines with correct startLine
-	// Lines should be numbered starting from 3
-	if !strings.Contains(text, "3:") || !strings.Contains(text, "4:") {
-		t.Errorf("hashline output should contain line numbers 3 and 4, got: %s", text)
-	}
-	// Should NOT contain lines 1-2 or 5 in hashline format
-	if strings.Contains(text, "1:") || strings.Contains(text, "2:") || strings.Contains(text, "5:") {
-		t.Errorf("hashline output should not contain lines 1,2,5, got: %s", text)
-	}
-}
-
 func TestReadTool_TildeExpansion(t *testing.T) {
 	// Test that ~/path is expanded to home directory
 	dir := t.TempDir()

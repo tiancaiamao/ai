@@ -45,17 +45,11 @@ func getReadLimit() int {
 // ReadTool reads file contents with dynamic workspace support.
 type ReadTool struct {
 	workspace *Workspace
-	hashLines bool // Whether to output with hashline prefixes
 }
 
 // NewReadTool creates a new Read tool with dynamic workspace support.
 func NewReadTool(ws *Workspace) *ReadTool {
 	return &ReadTool{workspace: ws}
-}
-
-// SetHashLines enables or disables hashline output mode.
-func (t *ReadTool) SetHashLines(enabled bool) {
-	t.hashLines = enabled
 }
 
 // Name returns the tool name.
@@ -187,11 +181,6 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	output = header + output + footer
-
-	// Apply hashline formatting if enabled (overrides line range output format)
-	if t.hashLines {
-		output = FormatHashLines(strings.Join(selectedLines, "\n"), offset)
-	}
 
 	return []agentctx.ContentBlock{
 		agentctx.TextContent{

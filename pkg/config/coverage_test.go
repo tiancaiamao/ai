@@ -114,17 +114,6 @@ func TestResolveConcurrencyConfig_ZeroIgnored(t *testing.T) {
 	}
 }
 
-// TestDefaultEditConfig verifies the default edit config.
-func TestDefaultEditConfig(t *testing.T) {
-	cfg := DefaultEditConfig()
-	if cfg == nil {
-		t.Fatal("expected non-nil config")
-	}
-	if cfg.Mode != "replace" {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, "replace")
-	}
-}
-
 // TestResolveLogPath covers both the empty path and PID expansion paths.
 func TestResolveLogPath(t *testing.T) {
 	// Nil config -> default path is constructed from the user's home dir,
@@ -208,9 +197,9 @@ func TestNormalizeToolOutputConfig(t *testing.T) {
 	}
 
 	// Valid value -> preserved.
-	cfg = normalizeToolOutputConfig(&ToolOutputConfig{MaxChars: 5000, HashLines: true})
-	if cfg.MaxChars != 5000 || !cfg.HashLines {
-		t.Errorf("valid: expected preserved values, got %+v", cfg)
+	cfg = normalizeToolOutputConfig(&ToolOutputConfig{MaxChars: 5000})
+	if cfg.MaxChars != 5000 {
+		t.Errorf("valid: expected preserved MaxChars, got %+v", cfg)
 	}
 }
 
@@ -670,7 +659,7 @@ func TestToLoopConfig_WithConcurrency(t *testing.T) {
 // TestToLoopConfig_WithToolOutput verifies the ToolOutput branch.
 func TestToLoopConfig_WithToolOutput(t *testing.T) {
 	cfg := &Config{
-		ToolOutput: &ToolOutputConfig{MaxChars: 4321, HashLines: true},
+		ToolOutput: &ToolOutputConfig{MaxChars: 4321},
 	}
 	loop := cfg.ToLoopConfig()
 	if loop.ToolOutput.MaxChars != 4321 {
