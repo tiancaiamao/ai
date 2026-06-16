@@ -31,7 +31,6 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 | `grep` | `grep.go` | Search file contents with regex |
 | `find_skill` | `find_skill.go` | Search and load agent skills |
 | `change_workspace` | `change_workspace.go` | Change working directory |
-| `hashline` | `hashline.go` | Content-addressed line references for edit verification |
 | `workspace` | `workspace.go` | Workspace info and path resolution |
 
 ## Tool Output Processing
@@ -39,7 +38,6 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 Tool output is processed through the truncation pipeline before being stored:
 - `ToolOutputLimits` controls max character count
 - Long outputs are truncated with head/tail preservation
-- Hashlines may be appended for content verification
 
 ## Key Files
 
@@ -53,5 +51,4 @@ Tool output is processed through the truncation pipeline before being stored:
 | `grep.go` | Content search |
 | `find_skill.go` | Skill discovery |
 | `change_workspace.go` | Working directory management |
-| `hashline.go` | Content-addressed references |
 | `workspace.go` | Workspace utilities |
