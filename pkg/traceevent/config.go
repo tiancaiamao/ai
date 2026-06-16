@@ -247,6 +247,8 @@ var eventNameToBit = map[string]int{
 	"context_mgmt_llm_context_updated":    55,
 	"context_mgmt":                        56,
 	"compact_skipped_cache_first":         57,
+	"delta_compaction":                    58,
+	"delta_compaction_trigger":            59,
 }
 
 var defaultEnabledEvents = []string{
@@ -293,6 +295,8 @@ var defaultEnabledEvents = []string{
 	"context_mgmt_messages_truncated",
 	"context_mgmt_llm_context_updated",
 	"compact_skipped_cache_first",
+	"delta_compaction",
+	"delta_compaction_trigger",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -341,6 +345,8 @@ var eventSelectorGroups = map[string][]string{
 		"context_mgmt_check",
 		"context_mgmt_messages_truncated",
 		"context_mgmt_llm_context_updated",
+		"delta_compaction",
+		"delta_compaction_trigger",
 	},
 	"log": {
 		"log:info",

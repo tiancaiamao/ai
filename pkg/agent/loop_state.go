@@ -250,10 +250,20 @@ func (s *loopState) processDeltaCompactionResponse(ctx context.Context, msg *age
 		s.deltaPromptForced = false
 		summary, ok := ParseForcedCompactionResponse(responseText)
 		if ok {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+				traceevent.Field{Key: "mode", Value: "forced"},
+				traceevent.Field{Key: "decision", Value: "accepted"},
+				traceevent.Field{Key: "turn", Value: s.turnCount},
+			)
 			s.executeDeltaCompaction(ctx, summary)
 			return
 		}
 		// Unparseable forced response: treat as declined (D7).
+		traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+			traceevent.Field{Key: "mode", Value: "forced"},
+			traceevent.Field{Key: "decision", Value: "unparseable"},
+			traceevent.Field{Key: "turn", Value: s.turnCount},
+		)
 		s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 		slog.Warn("[Loop] Forced delta compaction response unparseable", "turn", s.turnCount)
 		return
@@ -261,11 +271,23 @@ func (s *loopState) processDeltaCompactionResponse(ctx context.Context, msg *age
 
 	decision := ParseCompactionResponse(responseText)
 	if decision.Parsed && decision.ShouldCompact && decision.Summary != "" {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+			traceevent.Field{Key: "mode", Value: "decision"},
+			traceevent.Field{Key: "decision", Value: "accepted"},
+			traceevent.Field{Key: "turn", Value: s.turnCount},
+		)
 		s.executeDeltaCompaction(ctx, decision.Summary)
 		return
 	}
 	// Explicit "no" or unparseable (D7): reset the interval counter so the
 	// next ask waits a fresh tool-call interval.
+	traceevent.Log(ctx, traceevent.CategoryEvent, "delta_compaction_trigger",
+		traceevent.Field{Key: "mode", Value: "decision"},
+		traceevent.Field{Key: "decision", Value: "declined"},
+		traceevent.Field{Key: "parsed", Value: decision.Parsed},
+		traceevent.Field{Key: "should_compact", Value: decision.ShouldCompact},
+		traceevent.Field{Key: "turn", Value: s.turnCount},
+	)
 	s.agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 	slog.Info("[Loop] Delta compaction declined",
 		"parsed", decision.Parsed, "shouldCompact", decision.ShouldCompact, "turn", s.turnCount)
@@ -300,11 +322,14 @@ func (s *loopState) executeDeltaCompaction(ctx context.Context, summary string) 
 
 	before := len(messages)
 
+	deltaTokens := s.agentCtx.AgentState.TokensSinceLastDeltaCompaction
 	compactionSpan := traceevent.StartSpan(ctx, "delta_compaction", traceevent.CategoryEvent,
 		traceevent.Field{Key: "source", Value: "delta"},
 		traceevent.Field{Key: "before_messages", Value: before},
 		traceevent.Field{Key: "delta_start", Value: deltaStart},
 		traceevent.Field{Key: "protected_start", Value: protected.StartIndex},
+		traceevent.Field{Key: "delta_tokens", Value: deltaTokens},
+		traceevent.Field{Key: "tier", Value: DeltaTier(deltaTokens)},
 	)
 	s.stream.Push(NewCompactionStartEvent(CompactionInfo{
 		Auto:    true,
