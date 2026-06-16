@@ -164,6 +164,14 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 		return nil, fmt.Errorf("agent is busy")
 	}
 
+	// In handoff mode, rewind operates on the root journal which contains ALL
+	// messages (pre and post handoff). Cross-checkpoint rewind is not supported.
+	// Returning an error is the safest correct behavior — users should use /fork
+	// to branch from a specific point instead.
+	if session.IsHandoffSession(app.sess.GetDir()) {
+		return nil, fmt.Errorf("rewind is not supported in handoff mode; use /fork to branch from a specific checkpoint point")
+	}
+
 	// Lazy loading may not have all entries in byID (e.g., pre-compaction).
 	// Ensure the full session is loaded before resolving indices.
 	if entryID != "root" {
@@ -242,6 +250,31 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 		entryID = jsonData.EntryID
 	}
 
+	name := fmt.Sprintf("fork-%s", time.Now().Format("20060102-150405"))
+	title := "Forked Session"
+
+	// Handoff mode: fork copies the entire session directory (all checkpoints,
+	// current.txt, meta.json). Entry-level branching is not needed.
+	sessionDir := app.sess.GetDir()
+	if session.IsHandoffSession(sessionDir) {
+		slog.Info("Forking handoff session (directory copy)", "sourceDir", sessionDir)
+		newSess, err := app.sessionMgr.ForkHandoffSession(app.sess, name, title)
+		if err != nil {
+			return nil, err
+		}
+		newSessionID := newSess.GetID()
+		if err := app.sessionMgr.SetCurrent(newSessionID); err != nil {
+			return nil, err
+		}
+		if err := app.sessionMgr.SaveCurrent(); err != nil {
+			slog.Info("Failed to update session metadata:", "value", err)
+		}
+		app.setSession(newSess, newSessionID, name)
+		slog.Info("Forked handoff session to new session", "name", name, "id", newSessionID)
+		return &rpc.ForkResult{Cancelled: false}, nil
+	}
+
+	// Legacy mode: entry-level branching via ForkSessionFrom.
 	if entryID == "" {
 		return nil, fmt.Errorf("usage: /fork <index|entryId>  (use /messages to see indices)")
 	}
@@ -263,8 +296,6 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 	}
 
 	text := entry.Message.ExtractText()
-	name := fmt.Sprintf("fork-%s", time.Now().Format("20060102-150405"))
-	title := "Forked Session"
 	newSess, err := app.sessionMgr.ForkSessionFrom(app.sess, entry.ParentID, name, title)
 	if err != nil {
 		return nil, err

@@ -37,6 +37,10 @@ type SessionHeader struct {
 	// Resume optimization fields
 	LastCompactionID string `json:"lastCompactionId,omitempty"` // Most recent compaction entry ID
 
+	// ParentCheckpoint points to the parent checkpoint directory (e.g., "cp_002").
+	// Only used in handoff mode. Empty for the first checkpoint.
+	ParentCheckpoint string `json:"parentCheckpoint,omitempty"`
+
 	// Git commit hash of the ai binary that created this session
 	GitCommit string `json:"gitCommit,omitempty"`
 	// Git version/tag of the ai binary

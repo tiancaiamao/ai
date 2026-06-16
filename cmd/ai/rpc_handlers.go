@@ -63,9 +63,17 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 	app.toolOutputConfig = toolOutputConfig
 
+	// Build compactors list, filtering out nil entries (e.g. ctxManager in handoff mode).
+	var compactors []agent.Compactor
+	for _, c := range []agent.Compactor{app.ctxManager, sessionComp} {
+		if c != nil {
+			compactors = append(compactors, c)
+		}
+	}
+
 	// Build LoopConfig with all settings
 	loopCfg := app.cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{app.ctxManager, sessionComp}),
+		config.WithCompactors(compactors),
 		config.WithContextWindow(app.currentContextWindow),
 		config.WithToolCallCutoff(app.compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),
@@ -77,6 +85,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Set model and apiKey
 	loopCfg.Model = app.model
 	loopCfg.APIKey = app.apiKey
+	loopCfg.ContextManagementMode = app.cfg.ContextManagementMode()
 	loopCfg.GetWorkingDir = app.ws.GetCWD
 	loopCfg.GetStartupPath = app.ws.GetInitialCWD
 	loopCfg.RunID = app.runID

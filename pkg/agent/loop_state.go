@@ -30,6 +30,13 @@ type loopState struct {
 	// recovery turn after a loop guard hard abort. Prevents re-triggering
 	// if the LLM continues the loop.
 	guardAbortRecovery bool
+
+	// hardFloorCrossed is true once the hard threshold is crossed in handoff mode.
+	// Used to track when we first enter the critical zone.
+	hardFloorCrossed bool
+	// hardFloorTurns counts turns since the hard threshold was crossed.
+	// After exceeding 2, auto-execute handoff is triggered.
+	hardFloorTurns int
 }
 
 func newLoopState(

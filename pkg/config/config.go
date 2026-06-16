@@ -32,6 +32,52 @@ type Config struct {
 
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
+
+	// Context management configuration
+	ContextManagement *ContextManagementConfig `json:"contextManagement,omitempty"`
+}
+
+// Context management mode constants.
+const (
+	// ContextModeLegacy is the traditional compaction-based context management.
+	ContextModeLegacy = "legacy"
+	// ContextModeHandoff uses checkpoint-based context handoff.
+	ContextModeHandoff = "handoff"
+)
+
+// ContextManagementConfig controls which context management strategy is used.
+type ContextManagementConfig struct {
+	Mode string `json:"mode,omitempty"` // ContextModeLegacy | ContextModeHandoff (default: ContextModeLegacy)
+}
+
+// UnmarshalJSON accepts both the legacy boolean format
+// ("contextManagement": true/false) and the new object format
+// ("contextManagement": {"mode": "handoff"}). A legacy boolean maps to
+// ContextModeLegacy so existing users stay on the proven compaction path.
+func (c *ContextManagementConfig) UnmarshalJSON(data []byte) error {
+	// Try bool first (legacy format: "contextManagement": true/false).
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		c.Mode = ContextModeLegacy
+		return nil
+	}
+	// Try object (new format: "contextManagement": {"mode": "handoff"}).
+	// Use a type alias to avoid infinite recursion on UnmarshalJSON.
+	type alias ContextManagementConfig
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return fmt.Errorf("contextManagement: expected bool or object, got %s: %w", string(data), err)
+	}
+	*c = ContextManagementConfig(a)
+	return nil
+}
+
+// ContextManagementMode returns the configured mode, defaulting to ContextModeLegacy.
+func (c *Config) ContextManagementMode() string {
+	if c.ContextManagement != nil && c.ContextManagement.Mode != "" {
+		return c.ContextManagement.Mode
+	}
+	return ContextModeLegacy
 }
 
 // LogConfig contains logging configuration.
@@ -274,6 +320,9 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 			MaxChars: c.ToolOutput.MaxChars,
 		}
 	}
+
+	// Propagate context management mode.
+	loopCfg.ContextManagementMode = c.ContextManagementMode()
 
 	// Apply options last (they can override config values)
 	for _, opt := range opts {

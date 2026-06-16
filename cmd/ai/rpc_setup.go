@@ -151,9 +151,12 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 
 	// Skip context management (proactive LLM-driven cycle) in cache-first mode.
 	// Full compaction (75% threshold) is still active.
-	ctxManager.SetSkipCondition(func() bool {
-		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
-	})
+	// In handoff mode ctxManager is nil (no proactive context management).
+	if app.ctxManager != nil {
+		app.ctxManager.SetSkipCondition(func() bool {
+			return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
+		})
+	}
 
 	return app, nil
 }
@@ -325,6 +328,12 @@ func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contex
 		prompt.ContextManagementSystemPrompt(),
 		compactor,
 	)
+
+	// In handoff mode, disable the proactive ContextManager.
+	// The compactor is still created (needed for reactive context_limit_recovery).
+	if cfg.ContextManagementMode() == config.ContextModeHandoff {
+		return compactor, nil, compactorConfig
+	}
 
 	return compactor, ctxManager, compactorConfig
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -103,6 +104,15 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	if app.sess != nil {
 		sessionDir := app.sess.GetDir()
 		if sessionDir != "" {
+			// Handoff-mode initialization: for new sessions, create the
+			// checkpoint directory structure (cp_001 + current.txt) if it
+			// doesn't already exist.
+			if app.cfg.ContextManagementMode() == config.ContextModeHandoff && !session.IsHandoffSession(sessionDir) {
+				if err := session.InitHandoffSession(sessionDir); err != nil {
+					slog.Warn("Failed to initialize handoff session, falling back to legacy path",
+						"error", err)
+				}
+			}
 			ctx.LLMContext = ""
 		}
 		ctx.RecentMessages = app.sess.GetMessages()

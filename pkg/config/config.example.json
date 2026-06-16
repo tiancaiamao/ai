@@ -25,7 +25,9 @@
     "maxChars": 10000
   },
   "taskTracking": true,
-  "contextManagement": true,
+    "contextManagement": {
+    "mode": "handoff"
+  },
   "log": {
     "level": "info",
     "file": "~/.ai/ai-{pid}.log",

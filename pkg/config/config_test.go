@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -437,5 +438,89 @@ func TestCompactorDefaults(t *testing.T) {
 	}
 	if compactorConfig.ToolSummaryAutomation != "off" {
 		t.Errorf("Expected ToolSummaryAutomation off, got %q", compactorConfig.ToolSummaryAutomation)
+	}
+}
+
+// --- P1-1: Config migration (bool → struct) ---
+
+// TestContextManagementConfig_LegacyBoolTrue verifies that the legacy boolean
+// "contextManagement": true maps to ContextModeLegacy.
+func TestContextManagementConfig_LegacyBoolTrue(t *testing.T) {
+	jsonStr := `{"model": {"id": "test", "provider": "zai"}, "contextManagement": true}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		t.Fatalf("unmarshal with legacy bool true: %v", err)
+	}
+	if cfg.ContextManagement == nil {
+		t.Fatal("expected ContextManagement to be non-nil")
+	}
+	if cfg.ContextManagement.Mode != ContextModeLegacy {
+		t.Errorf("expected mode %q for legacy bool, got %q", ContextModeLegacy, cfg.ContextManagement.Mode)
+	}
+	if mode := cfg.ContextManagementMode(); mode != ContextModeLegacy {
+		t.Errorf("expected ContextManagementMode() %q, got %q", ContextModeLegacy, mode)
+	}
+}
+
+// TestContextManagementConfig_LegacyBoolFalse verifies that the legacy boolean
+// "contextManagement": false also maps to ContextModeLegacy.
+func TestContextManagementConfig_LegacyBoolFalse(t *testing.T) {
+	jsonStr := `{"model": {"id": "test", "provider": "zai"}, "contextManagement": false}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		t.Fatalf("unmarshal with legacy bool false: %v", err)
+	}
+	if cfg.ContextManagement == nil {
+		t.Fatal("expected ContextManagement to be non-nil")
+	}
+	if cfg.ContextManagement.Mode != ContextModeLegacy {
+		t.Errorf("expected mode %q for legacy bool false, got %q", ContextModeLegacy, cfg.ContextManagement.Mode)
+	}
+}
+
+// TestContextManagementConfig_ObjectHandoff verifies that the new object format
+// "contextManagement": {"mode": "handoff"} works correctly.
+func TestContextManagementConfig_ObjectHandoff(t *testing.T) {
+	jsonStr := `{"model": {"id": "test", "provider": "zai"}, "contextManagement": {"mode": "handoff"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		t.Fatalf("unmarshal with object: %v", err)
+	}
+	if cfg.ContextManagement == nil {
+		t.Fatal("expected ContextManagement to be non-nil")
+	}
+	if cfg.ContextManagement.Mode != ContextModeHandoff {
+		t.Errorf("expected mode %q, got %q", ContextModeHandoff, cfg.ContextManagement.Mode)
+	}
+	if mode := cfg.ContextManagementMode(); mode != ContextModeHandoff {
+		t.Errorf("expected ContextManagementMode() %q, got %q", ContextModeHandoff, mode)
+	}
+}
+
+// TestContextManagementConfig_ObjectLegacy verifies that the new object format
+// "contextManagement": {"mode": "legacy"} works correctly.
+func TestContextManagementConfig_ObjectLegacy(t *testing.T) {
+	jsonStr := `{"model": {"id": "test", "provider": "zai"}, "contextManagement": {"mode": "legacy"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		t.Fatalf("unmarshal with object: %v", err)
+	}
+	if mode := cfg.ContextManagementMode(); mode != ContextModeLegacy {
+		t.Errorf("expected ContextManagementMode() %q, got %q", ContextModeLegacy, mode)
+	}
+}
+
+// --- P1-2: Default mode should be "legacy" ---
+
+// TestContextManagementMode_Default verifies that when contextManagement is
+// absent, the default mode is ContextModeLegacy (not handoff).
+func TestContextManagementMode_Default(t *testing.T) {
+	jsonStr := `{"model": {"id": "test", "provider": "zai"}}`
+	var cfg Config
+	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if mode := cfg.ContextManagementMode(); mode != ContextModeLegacy {
+		t.Errorf("expected default ContextManagementMode() %q, got %q", ContextModeLegacy, mode)
 	}
 }

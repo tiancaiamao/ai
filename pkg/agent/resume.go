@@ -2,8 +2,10 @@ package agent
 
 import (
 	"fmt"
+	"log/slog"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/session"
 )
 
 // LoadResumeState loads the most up-to-date agent context state from a session
@@ -32,6 +34,12 @@ func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage
 	agentState *agentctx.AgentState,
 	err error,
 ) {
+	// Handoff-mode sessions use a separate checkpoint/resume path.
+	if session.IsHandoffSession(sessionDir) {
+		msgs, agentState, herr := LoadHandoffResumeState(sessionDir)
+		return msgs, "", agentState, herr
+	}
+
 	if sessionDir == "" {
 		return fallbackMessages, "", nil, nil
 	}
@@ -70,4 +78,72 @@ func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage
 	}
 
 	return snapshot.RecentMessages, snapshot.LLMContext, snapshot.AgentState, nil
+}
+
+// LoadHandoffResumeState loads the conversation state for a handoff-mode
+// session. It reads current.txt to find the active checkpoint, then loads
+// messages from that checkpoint's messages.jsonl.
+//
+// After loading the checkpoint messages, it replays entries from the ROOT
+// messages.jsonl that were written AFTER the checkpoint was created (using the
+// checkpoint header's timestamp as the cutoff). This ensures post-handoff
+// conversation is preserved on resume (P0-1).
+//
+// It also loads the checkpoint's agent_state.json to restore AgentState
+// (CWD, token counts, etc.) if present (P1-3).
+//
+// If sessionDir is empty or is not a handoff session, returns (nil, nil, nil).
+func LoadHandoffResumeState(sessionDir string) (
+	messages []agentctx.AgentMessage,
+	agentState *agentctx.AgentState,
+	err error,
+) {
+	if sessionDir == "" || !session.IsHandoffSession(sessionDir) {
+		return nil, nil, nil
+	}
+
+	checkpointName, err := session.GetCurrentCheckpoint(sessionDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read current checkpoint: %w", err)
+	}
+	if checkpointName == "" {
+		return nil, nil, nil
+	}
+
+	msgs, err := session.LoadHandoffCheckpointMessages(sessionDir, checkpointName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load checkpoint %s messages: %w", checkpointName, err)
+	}
+
+	// P0-1: Replay root messages.jsonl entries written AFTER the checkpoint
+	// was created. The session writer writes ALL messages to the root
+	// messages.jsonl, so post-handoff conversation lives there and must be
+	// picked up on resume.
+	if header, herr := session.ReadHandoffCheckpointHeader(sessionDir, checkpointName); herr != nil {
+		slog.Warn("[Handoff] Failed to read checkpoint header, skipping root journal replay",
+			"checkpoint", checkpointName, "error", herr)
+	} else {
+		rootMsgs, rerr := session.ReadRootMessagesAfter(sessionDir, header.Timestamp)
+		if rerr != nil {
+			slog.Warn("[Handoff] Failed to read root journal for replay", "error", rerr)
+		} else if len(rootMsgs) > 0 {
+			msgs = append(msgs, rootMsgs...)
+			slog.Info("[Handoff] Replayed root journal messages after checkpoint",
+				"checkpoint", checkpointName,
+				"checkpoint_messages", len(msgs)-len(rootMsgs),
+				"replayed", len(rootMsgs))
+		}
+	}
+
+	// P1-3: Load AgentState from the checkpoint if it exists.
+	agentState, _ = session.LoadHandoffCheckpointAgentState(sessionDir, checkpointName)
+	if agentState != nil {
+		slog.Info("[Handoff] Restored agent state from checkpoint",
+			"checkpoint", checkpointName,
+			"turns", agentState.TotalTurns,
+			"tokens", agentState.TokensUsed,
+			"cwd", agentState.CurrentWorkingDir)
+	}
+
+	return msgs, agentState, nil
 }

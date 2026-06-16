@@ -24,6 +24,12 @@ const (
 	defaultRuntimeMetaHeartbeatTurns   = 6
 	defaultLLMTotalTimeout             = 10 * time.Minute // Total timeout for LLM request
 	defaultLLMFirstResponseTimeout     = 2 * time.Minute  // Timeout between streaming chunks (2min)
+
+	// Context management mode constants. These mirror pkg/config.ContextModeLegacy
+	// and pkg/config.ContextModeHandoff. Defined locally to avoid a circular
+	// import (config imports agent).
+	contextModeLegacy  = "legacy"
+	contextModeHandoff = "handoff"
 )
 
 type LoopConfig struct {
@@ -85,6 +91,9 @@ type LoopConfig struct {
 	// Merging into one message and placing it in the prefix maximizes provider
 	// prefix cache hits — both skills and instructions are stable within a session.
 	AgentContextPrefix string
+	// ContextManagementMode controls proactive context management behavior.
+	// contextModeHandoff disables proactive compaction; contextModeLegacy enables it.
+	ContextManagementMode string
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -194,10 +203,27 @@ func runInnerLoop(
 		// Pre-LLM compaction: check thresholds and compact if needed.
 		// Save checkpoint BEFORE compaction so progress is preserved if the
 		// compaction LLM call crashes the process.
-		state.savePreCompactionCheckpoint("pre_llm_threshold")
-		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
-		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
+		// In handoff mode, proactive compaction is disabled — only reactive
+		// recovery (context_limit_recovery) remains active.
+		if config.ContextManagementMode != contextModeHandoff {
+			state.savePreCompactionCheckpoint("pre_llm_threshold")
+			compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
+			if compacted != nil {
+				saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
+			}
+		} else {
+			// Handoff mode: inject reminders instead of proactive compaction.
+			if autoExecute := state.maybeInjectHandoffReminder(agentCtx); autoExecute {
+				slog.Info("[Handoff] Auto-execute triggered")
+				doc, err := state.autoGenerateHandoffDoc(ctx)
+				if err != nil {
+					slog.Error("[Handoff] Auto handoff doc generation failed", "error", err)
+				} else if err := state.performHandoff(ctx, doc); err != nil {
+					slog.Error("[Handoff] Auto handoff failed", "error", err)
+				} else {
+					continue
+				}
+			}
 		}
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
@@ -267,6 +293,20 @@ func runInnerLoop(
 				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
 			agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
 			state.newMessages[len(state.newMessages)-1] = *msg
+		}
+
+		// Check for handoff marker in LLM response.
+		// If detected, run the handoff process: Q&A verification, checkpoint
+		// creation, context reload. On success, continue the loop with fresh
+		// context. On failure, fall through to normal tool processing.
+		if hasHandoffMarker(msg) {
+			handoffDoc := extractHandoffDoc(msg)
+			if err := state.performHandoff(ctx, handoffDoc); err != nil {
+				slog.Error("[Handoff] Handoff failed", "error", err)
+			} else {
+				stream.Push(NewTurnEndEvent(msg, nil))
+				continue
+			}
 		}
 
 		hasMore, toolResults := state.processToolCalls(ctx, msg)

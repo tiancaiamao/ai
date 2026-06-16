@@ -25,6 +25,8 @@ type SessionMeta struct {
 	Workspace string `json:"workspace,omitempty"`
 	// CurrentWorkdir is the current working directory path
 	CurrentWorkdir string `json:"currentWorkdir,omitempty"`
+	// ContextManagementMode records which context management strategy is used ("legacy" | "handoff").
+	ContextManagementMode string `json:"contextManagementMode,omitempty"`
 }
 
 // SessionManager manages multiple sessions.
