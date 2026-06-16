@@ -13,11 +13,10 @@ import (
 // runtime_state YAML). It is read-only with respect to loop state — it only
 // writes to agentCtx metadata fields.
 func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) string {
-	// Block A: LLMContext content injection — whenever non-empty.
+	// Block A: LLMContext content injection — disabled.
+	// LLMContext is a dead field (no runtime writers since compact.go stopped
+	// populating it). Injection is disabled to avoid cache-hostile prompts.
 	var llmContextContent string
-	if agentCtx.LLMContext != "" {
-		llmContextContent = agentCtx.LLMContext
-	}
 
 	// Block B: runtime_state telemetry — always, from turn 1.
 	const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default

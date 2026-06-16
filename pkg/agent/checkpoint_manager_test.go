@@ -155,7 +155,7 @@ func TestCheckpointManager_ShouldCheckpoint_Disabled(t *testing.T) {
 	}
 }
 
-func TestCheckpointManager_CreateSnapshot_EmptyLLMContext_CarriesForward(t *testing.T) {
+func TestCheckpointManager_CreateSnapshot_EmptyLLMContext_StaysEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mgr, err := NewAgentContextCheckpointManager(tmpDir)
@@ -176,34 +176,21 @@ func TestCheckpointManager_CreateSnapshot_EmptyLLMContext_CarriesForward(t *test
 		t.Fatalf("Failed to create initial snapshot: %v", err)
 	}
 
-	// Step 2: Create snapshot with empty LLMContext (simulates truncate-without-update)
+	// Step 2: Create snapshot with empty LLMContext — no carry-forward (disabled)
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("More messages"))
 	_, err = mgr.CreateSnapshot(agentCtx, "", 8)
 	if err != nil {
 		t.Fatalf("Failed to create snapshot with empty context: %v", err)
 	}
 
-	// Step 3: Reconstruct and verify context was carried forward
+	// Step 3: Reconstruct — LLMContext should be empty (no carry-forward)
 	recoveredLLMContext, _, _, err := mgr.Reconstruct()
 	if err != nil {
 		t.Fatalf("Failed to reconstruct: %v", err)
 	}
 
-	if recoveredLLMContext != initialContext {
-		t.Errorf("LLMContext should be carried forward from previous checkpoint.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
-	}
-
-	// Step 4: Verify the checkpoint file on disk has the carried-forward content
-	latestInfo, err := agentctx.LoadLatestCheckpoint(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to load latest checkpoint info: %v", err)
-	}
-	onDisk, err := agentctx.LoadCheckpointLLMContext(filepath.Join(tmpDir, latestInfo.Path))
-	if err != nil {
-		t.Fatalf("Failed to load LLM context from disk: %v", err)
-	}
-	if onDisk != initialContext {
-		t.Errorf("On-disk LLMContext should match carried-forward content.\nExpected: %q\nGot: %q", initialContext, onDisk)
+	if recoveredLLMContext != "" {
+		t.Errorf("LLMContext should NOT be carried forward (injection disabled).\nExpected: \"\"\nGot: %q", recoveredLLMContext)
 	}
 }
 
@@ -334,7 +321,7 @@ func TestSavePreCompactionCheckpoint_EmptyMessages_SkipsCheckpoint(t *testing.T)
 // verifies the key behavior change from the checkpoint-guard fix: an empty
 // LLMContext no longer blocks checkpointing when there are messages. This is
 // essential in the delta-compaction design where LLMContext is not actively
-// written. CreateSnapshot carries forward any previous LLMContext.
+// written. LLMContext carry-forward is disabled — empty stays empty.
 func TestSavePreCompactionCheckpoint_EmptyLLMContext_NonEmptyMessages_CreatesCheckpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -385,13 +372,13 @@ func TestSavePreCompactionCheckpoint_EmptyLLMContext_NonEmptyMessages_CreatesChe
 		t.Errorf("Expected 2 checkpoints (initial + new), got %d", len(idx.Checkpoints))
 	}
 
-	// The carried-forward LLMContext should be preserved by CreateSnapshot.
+	// LLMContext carry-forward is disabled — empty stays empty.
 	recoveredLLMContext, _, _, err := mgr.Reconstruct()
 	if err != nil {
 		t.Fatalf("Failed to reconstruct: %v", err)
 	}
-	if recoveredLLMContext != initialContext {
-		t.Errorf("LLMContext should be carried forward.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
+	if recoveredLLMContext != "" {
+		t.Errorf("LLMContext should NOT be carried forward (injection disabled).\nExpected: \"\"\nGot: %q", recoveredLLMContext)
 	}
 }
 

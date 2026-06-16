@@ -244,9 +244,9 @@ func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) 
 	}
 }
 
-func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
-	// sessionDir := t.TempDir()
-	// Use string LLMContext instead of file manager
+func TestStreamAssistantResponse_LLMContextNotInjectedAfterCompact(t *testing.T) {
+	// LLMContext injection is disabled — even when agentCtx.LLMContext is set,
+	// <llm_context> must NOT appear in the LLM request.
 	llmContextContent := `# LLM Context
 
 ## Current Task
@@ -304,8 +304,7 @@ Test task for post-compact recovery`
 		t.Fatalf("expected assistant text 'ok', got %q", got)
 	}
 
-	// After compact, llm_context SHOULD be injected
-	var foundLLMContext bool
+	// LLMContext injection is disabled — <llm_context> must NOT be injected
 	for _, observed := range observedMessages {
 		if observed.Role != "user" {
 			continue
@@ -315,13 +314,8 @@ Test task for post-compact recovery`
 			continue
 		}
 		if strings.Contains(content, "<llm_context>") {
-			foundLLMContext = true
-			break
+			t.Fatalf("expected <llm_context> to NOT be injected even when LLMContext is non-empty")
 		}
-	}
-
-	if !foundLLMContext {
-		t.Fatalf("expected llm_context to be injected whenever LLMContext is non-empty")
 	}
 }
 

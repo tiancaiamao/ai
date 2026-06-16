@@ -71,7 +71,7 @@ func ReconstructSnapshotWithCheckpoint(sessionDir string, checkpoint *Checkpoint
 				"kept_messages", entry.Compact.KeptMessageCount,
 				"summary_chars", len(entry.Compact.Summary),
 			)
-			snapshot.LLMContext = entry.Compact.Summary
+			// LLMContext generation disabled — field is dead, no runtime writers.
 			snapshot.RecentMessages = []AgentMessage{}
 			// Reset counters on compact (same behavior as during normal execution)
 			toolCallsAfterCheckpoint = 0
