@@ -158,17 +158,3 @@ func (es *EventStream[T, R]) IsDone() bool {
 	defer es.mu.Unlock()
 	return es.done
 }
-
-// SetMaxSize sets the maximum queue size before expansion.
-func (es *EventStream[T, R]) SetMaxSize(size int) {
-	es.mu.Lock()
-	defer es.mu.Unlock()
-	es.maxSize = size
-}
-
-// QueueSize returns the current queue size.
-func (es *EventStream[T, R]) QueueSize() int {
-	es.mu.Lock()
-	defer es.mu.Unlock()
-	return len(es.queue)
-}

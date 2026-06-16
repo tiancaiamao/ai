@@ -42,13 +42,6 @@ func LoadCheckpointIndex(sessionDir string) (*CheckpointIndex, error) {
 	return &idx, nil
 }
 
-// Save persists the checkpoint index to disk.
-func (idx *CheckpointIndex) Save(sessionDir string) error {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	return idx.saveLocked(sessionDir)
-}
-
 // saveLocked saves to disk while already holding the lock.
 func (idx *CheckpointIndex) saveLocked(sessionDir string) error {
 	indexPath := filepath.Join(sessionDir, "checkpoint_index.json")
@@ -110,23 +103,4 @@ func (idx *CheckpointIndex) GetCheckpointAtTurn(turn int) (*CheckpointInfo, erro
 	}
 
 	return nil, fmt.Errorf("checkpoint not found for turn %d", turn)
-}
-
-// GetLatestCheckpoint returns the most recent checkpoint.
-func (idx *CheckpointIndex) GetLatestCheckpoint() (*CheckpointInfo, error) {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
-	if len(idx.Checkpoints) == 0 {
-		return nil, fmt.Errorf("no checkpoints available")
-	}
-
-	return &idx.Checkpoints[len(idx.Checkpoints)-1], nil
-}
-
-// GetCheckpointCount returns the number of checkpoints.
-func (idx *CheckpointIndex) GetCheckpointCount() int {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return len(idx.Checkpoints)
 }

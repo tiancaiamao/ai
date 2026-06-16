@@ -5,7 +5,6 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 	"github.com/tiancaiamao/ai/pkg/truncate"
-	"strings"
 )
 
 const (
@@ -86,30 +85,4 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 	}
 
 	return result
-}
-
-// containsErrorPattern checks if text contains common error patterns.
-func containsErrorPattern(text string) bool {
-	text = strings.ToLower(text)
-	errorPatterns := []string{
-		"error:",
-		"failed:",
-		"exception:",
-		"fatal:",
-		"panic:",
-		"undefined",
-		"not found",
-		"no such file",
-		"permission denied",
-		"cannot",
-		"could not",
-		"unable to",
-	}
-
-	for _, pattern := range errorPatterns {
-		if strings.Contains(text, pattern) {
-			return true
-		}
-	}
-	return false
 }

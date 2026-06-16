@@ -7,8 +7,7 @@ import (
 )
 
 const (
-	recentToolResultsNoMetadata = 10
-	toolOutputSummaryTypeLimit  = 30
+	toolOutputSummaryTypeLimit = 30
 )
 
 func hasAgentToolMetadataTag(text string) bool {

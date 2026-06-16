@@ -60,13 +60,6 @@ func (j *Journal) AppendCompact(event CompactEvent) error {
 	return j.appendEntry(entry)
 }
 
-// AppendEntry appends a generic journal entry.
-func (j *Journal) AppendEntry(entry JournalEntry) error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.appendEntry(entry)
-}
-
 // appendEntry writes a single entry to the journal.
 func (j *Journal) appendEntry(entry JournalEntry) error {
 	data, err := json.Marshal(entry)

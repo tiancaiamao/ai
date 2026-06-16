@@ -41,14 +41,6 @@ type LLMContext struct {
 	// Cache
 	overviewContent string
 	overviewModTime time.Time
-
-	// Meta
-	tokensUsed    int
-	tokensMax     int
-	messagesCount int
-
-	// Runtime decision pressure signal
-	staleToolOutputs int
 }
 
 // NewLLMContext creates a new LLMContext for the given session directory.
@@ -116,56 +108,6 @@ func (wm *LLMContext) ensureLLMContext() error {
 	return nil
 }
 
-// Load loads the overview.md content with mtime-based caching.
-func (wm *LLMContext) Load() (string, error) {
-	return wm.loadContent()
-}
-
-func (wm *LLMContext) loadContent() (string, error) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
-	if err := wm.ensureLLMContext(); err != nil {
-		return "", err
-	}
-
-	info, err := os.Stat(wm.overviewPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return GetOverviewTemplate(wm.overviewPath, wm.detailPath), nil
-		}
-		return "", err
-	}
-
-	if info.ModTime().Equal(wm.overviewModTime) && wm.overviewContent != "" {
-		return wm.overviewContent, nil
-	}
-
-	content, err := os.ReadFile(wm.overviewPath)
-	if err != nil {
-		return "", err
-	}
-
-	wm.overviewContent = string(content)
-	wm.overviewModTime = info.ModTime()
-	return wm.overviewContent, nil
-}
-
-// GetPath returns the path to overview.md.
-func (wm *LLMContext) GetPath() string {
-	return wm.overviewPath
-}
-
-// GetDetailDir returns the path to the detail directory.
-func (wm *LLMContext) GetDetailDir() string {
-	return wm.detailPath
-}
-
-// GetSessionDir returns the session directory path.
-func (wm *LLMContext) GetSessionDir() string {
-	return wm.sessionDir
-}
-
 // WriteContent writes content to overview.md.
 func (wm *LLMContext) WriteContent(content string) error {
 	wm.mu.Lock()
@@ -182,86 +124,4 @@ func (wm *LLMContext) WriteContent(content string) error {
 	wm.overviewContent = content
 	wm.overviewModTime = time.Now()
 	return nil
-}
-
-// SetMeta updates the token and message count metadata.
-func (wm *LLMContext) SetMeta(tokensUsed, tokensMax, messagesCount int) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	wm.tokensUsed = tokensUsed
-	wm.tokensMax = tokensMax
-	wm.messagesCount = messagesCount
-}
-
-// GetMeta returns the current metadata.
-func (wm *LLMContext) GetMeta() ContextMeta {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
-
-	var tokensPercent float64
-	if wm.tokensMax > 0 {
-		tokensPercent = float64(wm.tokensUsed) / float64(wm.tokensMax) * 100
-	}
-
-	var llmContextSize int
-	if info, err := os.Stat(wm.overviewPath); err == nil {
-		llmContextSize = int(info.Size())
-	}
-
-	return ContextMeta{
-		TokensUsed:        wm.tokensUsed,
-		TokensMax:         wm.tokensMax,
-		TokensPercent:     tokensPercent,
-		MessagesInHistory: wm.messagesCount,
-		LLMContextSize:    llmContextSize,
-	}
-}
-
-// SetStaleToolCount sets the number of stale tool outputs.
-func (wm *LLMContext) SetStaleToolCount(count int) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	wm.staleToolOutputs = count
-}
-
-// GetStaleToolCount returns the number of stale tool outputs.
-func (wm *LLMContext) GetStaleToolCount() int {
-	wm.mu.RLock()
-	defer wm.mu.RUnlock()
-	return wm.staleToolOutputs
-}
-
-// InvalidateCache clears the content cache.
-func (wm *LLMContext) InvalidateCache() {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-	wm.overviewContent = ""
-	wm.overviewModTime = time.Time{}
-}
-
-// SaveCompactionSummary saves a compaction summary to the detail directory.
-// Returns the path to the saved summary file.
-func (wm *LLMContext) SaveCompactionSummary(summary string) (string, error) {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
-
-	if err := wm.ensureLLMContext(); err != nil {
-		return "", err
-	}
-
-	// Create compaction summaries directory
-	summariesDir := filepath.Join(wm.sessionDir, LLMContextDir, "summaries")
-	if err := os.MkdirAll(summariesDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create summaries directory: %w", err)
-	}
-
-	// Generate filename with timestamp
-	filename := fmt.Sprintf("compact-%s.md", time.Now().Format("20060102-150405"))
-	summaryPath := filepath.Join(summariesDir, filename)
-
-	if err := os.WriteFile(summaryPath, []byte(summary), 0644); err != nil {
-		return "", fmt.Errorf("failed to write compaction summary: %w", err)
-	}
-
-	return summaryPath, nil
 }
