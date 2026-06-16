@@ -1,7 +1,6 @@
 package testutil_test
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -118,31 +117,6 @@ func TestHarness_ToolCallFollowedByResponse(t *testing.T) {
 // TestHarness_CompactionTriggerDuringLoop verifies that a compactor can
 // trigger mid-loop and the agent continues afterwards.
 // Mirrors pi's compaction characterization tests.
-func TestHarness_CompactionTriggerDuringLoop(t *testing.T) {
-	compactor := &testCompactor{shouldCompact: true}
-	responses := []string{
-		testutil.TextResponse("first response"),
-		testutil.TextResponse("second response"),
-	}
-	h := testutil.NewAgentHarness(t, responses,
-		testutil.WithCompactors(compactor),
-		testutil.WithMaxTurns(3),
-	)
-	defer h.Close()
-
-	h.PromptAndWait("trigger compaction", 10*time.Second)
-
-	if !h.Events.HasEvent(agent.EventCompactionStart) {
-		t.Error("expected compaction_start event")
-	}
-	if !h.Events.HasEvent(agent.EventCompactionEnd) {
-		t.Error("expected compaction_end event")
-	}
-	if compactor.calls == 0 {
-		t.Error("expected compactor to be called")
-	}
-}
-
 // TestHarness_FollowUpQueue verifies that follow-up messages are processed
 // after the initial prompt completes.
 func TestHarness_FollowUpQueue(t *testing.T) {
@@ -588,26 +562,6 @@ func collectTextDeltas(collector *testutil.EventCollector) []string {
 	}
 	return deltas
 }
-
-// testCompactor is a simple compactor for testing.
-type testCompactor struct {
-	shouldCompact bool
-	calls         int
-}
-
-func (c *testCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
-	return c.shouldCompact
-}
-
-func (c *testCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	c.calls++
-	ctx.RecentMessages = []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[summary]"),
-	}
-	return &agentctx.CompactionResult{Summary: "[summary]"}, nil
-}
-
-func (c *testCompactor) CalculateDynamicThreshold() int { return 100000 }
 
 func eventTypes(events []agent.AgentEvent) []string {
 	types := make([]string, len(events))

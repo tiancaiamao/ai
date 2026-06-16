@@ -364,68 +364,6 @@ func (c *characterizationTriggerCompactor) CalculateDynamicThreshold() int {
 	return 100000
 }
 
-// TestCharacterization_CompactionTrigger verifies that when ShouldCompact returns
-// true, compaction fires automatically and emits the correct events.
-func TestCharacterization_CompactionTrigger(t *testing.T) {
-	compactor := &characterizationTriggerCompactor{shouldCompact: true}
-
-	llmCallCount := 0
-	var mu sync.Mutex
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		llmCallCount++
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "text/event-stream")
-
-		// First call: return text to end the loop
-		fmt.Fprint(w, sseTextResponse("done"))
-	}))
-	defer server.Close()
-
-	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
-
-	cfg := DefaultLoopConfig()
-	cfg.Compactors = []Compactor{compactor}
-	cfg.EnableCheckpoint = false
-
-	model := llm.Model{
-		ID:       "test-model",
-		Provider: "test",
-		BaseURL:  server.URL,
-		API:      "openai-completions",
-	}
-
-	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
-
-	if err := agent.Prompt("trigger compaction"); err != nil {
-		t.Fatalf("Prompt failed: %v", err)
-	}
-
-	events := collectAgentEvents(t, agent.Events(), 10*time.Second)
-	agent.Wait()
-
-	// Compactor should have been called
-	if compactor.calls != 1 {
-		t.Errorf("expected compactor.Compact to be called once, got %d", compactor.calls)
-	}
-
-	// Should see compaction_start and compaction_end events
-	if !hasEvent(events, EventCompactionStart) {
-		t.Error("expected EventCompactionStart")
-	}
-	if !hasEvent(events, EventCompactionEnd) {
-		t.Error("expected EventCompactionEnd")
-	}
-
-	// Should still have agent_end
-	if !hasEvent(events, EventAgentEnd) {
-		t.Error("expected EventAgentEnd")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Test 5: MaxTurns=2 with text final response
 // ---------------------------------------------------------------------------

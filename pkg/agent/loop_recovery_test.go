@@ -102,54 +102,6 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	}
 }
 
-func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
-	orig := streamAssistantResponseFn
-	defer func() { streamAssistantResponseFn = orig }()
-
-	compactor := &recoveryCompactor{shouldCompact: true}
-	callCount := 0
-	streamAssistantResponseFn = func(
-		_ context.Context,
-		_ *agentctx.AgentContext,
-		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
-	) (*agentctx.AgentMessage, error) {
-		callCount++
-		msg := agentctx.NewAssistantMessage()
-		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
-		msg.StopReason = "stop"
-		return &msg, nil
-	}
-
-	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
-	stream := newTestAgentEventStream()
-	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{compactor}}, stream)
-
-	var sawStart, sawEnd bool
-	for item := range stream.Iterator(context.Background()) {
-		if item.Done {
-			break
-		}
-		if item.Value.Type == EventCompactionStart && item.Value.Compaction != nil && item.Value.Compaction.Trigger == "pre_llm_threshold" {
-			sawStart = true
-		}
-		if item.Value.Type == EventCompactionEnd && item.Value.Compaction != nil && item.Value.Compaction.Trigger == "pre_llm_threshold" {
-			sawEnd = true
-		}
-	}
-
-	if compactor.calls != 1 {
-		t.Fatalf("expected compactor to be called once, got %d", compactor.calls)
-	}
-	if callCount != 1 {
-		t.Fatalf("expected assistant streaming to be called once, got %d", callCount)
-	}
-	if !sawStart || !sawEnd {
-		t.Fatalf("expected pre-LLM compaction start/end events, got start=%v end=%v", sawStart, sawEnd)
-	}
-}
-
 func TestRunInnerLoopStopsRepeatedToolCalls(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()

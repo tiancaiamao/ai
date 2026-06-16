@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 func (app *rpcApp) buildSystemPrompt(currentSess *session.Session) string {
@@ -191,96 +189,6 @@ func (app *rpcApp) expandSkillCommands(text string) string {
 		}
 	}
 	return expanded
-}
-
-func (app *rpcApp) compactBeforeRequest(trigger string) {
-	if app.compactor == nil || app.sess == nil {
-		return
-	}
-
-	if !app.compactor.ShouldCompact(context.Background(), app.ag.GetContext()) {
-		return
-	}
-	if !app.sess.CanCompact(app.compactor) {
-		messages := app.ag.GetMessages()
-		slog.Info("Pre-request compaction skipped: session not compactable",
-			"trigger", trigger,
-			"messages", len(messages),
-			"estimatedTokens", app.compactor.EstimateTokens(messages))
-		return
-	}
-
-	beforeCount := len(app.ag.GetMessages())
-	compactionInfo := agent.CompactionInfo{
-		Auto:    true,
-		Before:  beforeCount,
-		Trigger: trigger,
-	}
-
-	app.stateMu.Lock()
-	app.isCompacting = true
-	app.stateMu.Unlock()
-	app.server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
-
-	err := runDetachedTraceSpan(
-		"compaction",
-		traceevent.CategoryEvent,
-		[]traceevent.Field{
-			{Key: "source", Value: "pre_request"},
-			{Key: "auto", Value: true},
-			{Key: "trigger", Value: trigger},
-			{Key: "before_messages", Value: beforeCount},
-		},
-		func(_ context.Context, span *traceevent.Span) error {
-			result, err := app.sess.Compact(app.compactor)
-			if err != nil {
-				return err
-			}
-
-			app.ag.GetContext().RecentMessages = app.sess.GetMessages()
-			afterCount := len(app.ag.GetMessages())
-			compactionInfo.After = afterCount
-
-			span.AddField("after_messages", afterCount)
-			span.AddField("tokens_before", result.TokensBefore)
-			span.AddField("tokens_after", result.TokensAfter)
-			return nil
-		},
-	)
-
-	app.stateMu.Lock()
-	app.isCompacting = false
-	app.stateMu.Unlock()
-
-	if err != nil {
-		compactionInfo.Error = err.Error()
-		if session.IsNonActionableCompactionError(err) {
-			slog.Info("Pre-request compaction skipped", "trigger", trigger, "reason", err)
-		} else {
-			slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
-		}
-
-		// Nuclear fallback: after consecutive compaction failures, force-truncate
-		// oldest messages without LLM summary. This prevents permanent session death
-		// when the summarization model itself cannot handle the conversation size.
-		const maxConsecutiveFailures = 3
-		app.stateMu.Lock()
-		app.consecutiveCompactionFailures++
-		failures := app.consecutiveCompactionFailures
-		app.stateMu.Unlock()
-
-		if failures >= maxConsecutiveFailures {
-			slog.Warn("[Compact] Nuclear fallback: force-truncating oldest messages after consecutive compaction failures",
-				"failures", failures,
-				"trigger", trigger)
-			app.nuclearTruncate()
-		}
-	} else {
-		app.stateMu.Lock()
-		app.consecutiveCompactionFailures = 0
-		app.stateMu.Unlock()
-	}
-	app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 }
 
 func (app *rpcApp) updateCheckpointManager() error {

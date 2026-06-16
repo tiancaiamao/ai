@@ -196,14 +196,9 @@ func runInnerLoop(
 		}
 		state.advanceTurn()
 
-		// Pre-LLM compaction: check thresholds and compact if needed.
-		// Save checkpoint BEFORE compaction so progress is preserved if the
-		// compaction LLM call crashes the process.
-		state.savePreCompactionCheckpoint("pre_llm_threshold")
-		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
-		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
-		}
+		// Automatic pre-LLM compaction is handled by delta compaction
+		// (checkDeltaCompactionTrigger). The legacy performCompaction path is
+		// retained only as a context_limit_recovery safety net below.
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
 		config.Hooks.RunBeforeModel(HookContext{
