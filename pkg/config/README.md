@@ -57,15 +57,6 @@ type ConcurrencyConfig struct {
 ```go
 type ToolOutputConfig struct {
     MaxChars  int  `json:"maxChars,omitempty"`  // Max chars (0 = 10000 default)
-    HashLines bool `json:"hashLines,omitempty"` // Enable hashline verification
-}
-```
-
-## Edit
-
-```go
-type EditConfig struct {
-    Mode string `json:"mode,omitempty"` // "replace" (default) or "hashline"
 }
 ```
 

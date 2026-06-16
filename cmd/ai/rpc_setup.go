@@ -266,13 +266,6 @@ func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspac
 	readTool := tools.NewReadTool(ws)
 	editTool := tools.NewEditTool(ws)
 
-	if cfg.ToolOutput != nil && cfg.ToolOutput.HashLines {
-		readTool.SetHashLines(true)
-	}
-	if cfg.Edit != nil && cfg.Edit.Mode == "hashline" {
-		editTool.SetEditMode(tools.EditModeHashline)
-	}
-
 	registry.Register(readTool)
 	registry.Register(tools.NewBashTool(ws))
 	registry.Register(tools.NewWriteTool(ws))
