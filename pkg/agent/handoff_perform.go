@@ -9,6 +9,7 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 
@@ -48,7 +49,19 @@ func (s *loopState) performHandoff(ctx context.Context, handoffDoc string) error
 	// checkpoint using whatever Q&A turns were collected.
 	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_qa_start",
 		traceevent.Field{Key: "max_rounds", Value: handoffQADefaultRounds})
-	qaTurns, err := runHandoffQA(ctx, model, apiKey, contextWindow, handoffDoc, oldMessages, handoffQADefaultRounds, s.agentCtx.SystemPrompt)
+	// Build the QA system prompt with the thinking-level instruction appended,
+	// matching how the main LLM stream loop builds its system prompt. This keeps
+	// the prefix identical so provider prefix caching is not invalidated.
+	qaSystemPrompt := s.agentCtx.SystemPrompt
+	if instruction := prompt.ThinkingInstruction(s.config.ThinkingLevel); instruction != "" {
+		if strings.TrimSpace(qaSystemPrompt) == "" {
+			qaSystemPrompt = instruction
+		} else {
+			qaSystemPrompt = qaSystemPrompt + "\n\n" + instruction
+		}
+	}
+
+	qaTurns, err := runHandoffQA(ctx, model, apiKey, contextWindow, handoffDoc, oldMessages, handoffQADefaultRounds, qaSystemPrompt)
 	if err != nil {
 		slog.Warn("[Handoff] Q&A verification failed, proceeding with checkpoint",
 			"error", err,
@@ -258,9 +271,16 @@ func (s *loopState) autoGenerateHandoffDoc(ctx context.Context) (string, error) 
 
 	oldMessages := s.agentCtx.RecentMessages
 
-	// Serialize old messages into conversation text.
-	var conversationText strings.Builder
-	for _, msg := range oldMessages {
+	// Serialize conversation into a text transcript. We use a single user
+	// message (not raw LLM messages) to avoid role-formatting issues — the
+	// raw conversation may have consecutive same-role messages or tool-only
+	// messages that violate API constraints.
+	const maxTranscriptBytes = 512 * 1024 // ~128K tokens
+
+	var lines []string
+	totalBytes := 0
+	for i := len(oldMessages) - 1; i >= 0; i-- {
+		msg := oldMessages[i]
 		if !msg.IsAgentVisible() {
 			continue
 		}
@@ -268,23 +288,35 @@ func (s *loopState) autoGenerateHandoffDoc(ctx context.Context) (string, error) 
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		conversationText.WriteString(fmt.Sprintf("[%s]: %s\n\n", msg.Role, text))
+		line := fmt.Sprintf("[%s]: %s", msg.Role, text)
+		if totalBytes+len(line) > maxTranscriptBytes {
+			break
+		}
+		lines = append(lines, line)
+		totalBytes += len(line)
 	}
 
-	if conversationText.Len() == 0 {
+	// Reverse to chronological order (we walked backward).
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+
+	if len(lines) == 0 {
 		return "", fmt.Errorf("no conversation content to generate handoff doc from")
 	}
 
+	conversationText := strings.Join(lines, "\n\n")
+
 	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_start",
-		traceevent.Field{Key: "conversation_length", Value: conversationText.Len()})
+		traceevent.Field{Key: "message_count", Value: len(lines)},
+		traceevent.Field{Key: "transcript_bytes", Value: totalBytes})
 
 	// Reuse the main agent system prompt to preserve provider prefix caching.
-	// Send the generation instruction as a user message.
 	llmCtx := llm.LLMContext{
 		SystemPrompt: s.agentCtx.SystemPrompt,
 		Messages: []llm.LLMMessage{
 			{Role: "user", Content: handoffGenerateInstruction},
-			{Role: "user", Content: conversationText.String()},
+			{Role: "user", Content: conversationText},
 		},
 	}
 

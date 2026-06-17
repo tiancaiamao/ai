@@ -37,7 +37,16 @@ func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage
 	// Handoff-mode sessions use a separate checkpoint/resume path.
 	if session.IsHandoffSession(sessionDir) {
 		msgs, agentState, herr := LoadHandoffResumeState(sessionDir)
-		return msgs, "", agentState, herr
+		if herr != nil {
+			return fallbackMessages, "", nil, herr
+		}
+		// If LoadHandoffResumeState returned no messages (e.g. a legacy
+		// session whose meta.json defaults to handoff mode but has no
+		// checkpoint structure), fall back to session messages.
+		if len(msgs) == 0 {
+			return fallbackMessages, "", nil, nil
+		}
+		return msgs, "", agentState, nil
 	}
 
 	if sessionDir == "" {

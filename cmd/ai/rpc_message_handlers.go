@@ -15,6 +15,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -23,6 +24,12 @@ import (
 func (app *rpcApp) handleCompact(args string) (any, error) {
 	_ = args
 	slog.Info("Received compact")
+	// Reload messages from session if agent context is empty (e.g. legacy
+	// session resumed in handoff mode without checkpoint structure).
+	if len(app.ag.GetMessages()) == 0 && app.sess != nil {
+		app.ag.GetContext().RecentMessages = app.sess.GetMessages()
+	}
+
 	beforeCount := len(app.ag.GetMessages())
 
 	estimatedTokens := app.compactor.EstimateTokens(app.ag.GetMessages())
@@ -99,6 +106,72 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 		return nil, err
 	}
 	return response, nil
+}
+
+func (app *rpcApp) handleHandoff(args string) (any, error) {
+	_ = args
+
+	app.stateMu.Lock()
+	streaming := app.isStreaming
+	app.stateMu.Unlock()
+	if streaming {
+		return nil, fmt.Errorf("agent is busy")
+	}
+
+	sessionDir := app.sess.GetDir()
+	if sessionDir == "" {
+		return nil, fmt.Errorf("handoff requires a session directory")
+	}
+
+	// Initialize handoff checkpoint structure if current.txt does not exist.
+	// This handles resumed legacy sessions that have messages but no checkpoint
+	// directory. The existing messages are imported into cp_001.
+	if _, err := os.Stat(filepath.Join(sessionDir, "current.txt")); err != nil {
+		slog.Info("[Handoff] Initializing handoff structure for legacy session")
+		entries := app.sess.GetEntries()
+		var msgEntries []session.SessionEntry
+		for _, e := range entries {
+			if e.Type == session.EntryTypeMessage {
+				cp := e
+				msgEntries = append(msgEntries, cp)
+			}
+		}
+		if err := session.InitHandoffFromExisting(sessionDir, msgEntries); err != nil {
+			return nil, fmt.Errorf("init handoff session: %w", err)
+		}
+	}
+
+	// Reload messages from session if agent context is empty. This can happen
+	// when a legacy session was resumed in handoff mode without checkpoint
+	// structure — the resume path returns empty messages in that case.
+	if len(app.ag.GetMessages()) == 0 && app.sess != nil {
+		app.ag.GetContext().RecentMessages = app.sess.GetMessages()
+	}
+
+	beforeCount := len(app.ag.GetMessages())
+	if beforeCount == 0 {
+		return nil, fmt.Errorf("no messages to handoff")
+	}
+	slog.Info("[Handoff] Manual handoff triggered", "before_messages", beforeCount)
+
+	ctx := context.Background()
+	if err := app.ag.Handoff(ctx); err != nil {
+		return nil, fmt.Errorf("handoff failed: %w", err)
+	}
+
+	afterCount := len(app.ag.GetMessages())
+	checkpoint, _ := session.GetCurrentCheckpoint(sessionDir)
+	slog.Info("[Handoff] Manual handoff complete",
+		"checkpoint", checkpoint,
+		"before_messages", beforeCount,
+		"after_messages", afterCount)
+
+	return map[string]any{
+		"status":          "ok",
+		"checkpoint":      checkpoint,
+		"before_messages": beforeCount,
+		"after_messages":  afterCount,
+	}, nil
 }
 
 func (app *rpcApp) handleGetMessages(args string) (any, error) {
@@ -312,6 +385,10 @@ func (app *rpcApp) registerMessageHandlers() {
 
 	app.server.RegisterSlash("compact", "Compact conversation history to reduce context size", func(args string) (any, error) {
 		return app.handleCompact(args)
+	})
+
+	app.server.RegisterSlash("handoff", "Manually trigger context handoff (generates handoff doc, runs Q&A, creates new checkpoint)", func(args string) (any, error) {
+		return app.handleHandoff(args)
 	})
 
 	app.server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {

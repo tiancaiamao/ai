@@ -10,6 +10,10 @@ import (
 // the handoff document is complete.
 const handoffCompleteMarker = "<handoff_complete>"
 
+// handoffCompleteEndMarker is the optional closing tag. When present, the
+// handoff document is the text enclosed between the opening and closing tags.
+const handoffCompleteEndMarker = "</handoff_complete>"
+
 // hasHandoffMarker returns true if the assistant message contains
 // <handoff_complete> in any of its text content blocks.
 func hasHandoffMarker(msg *agentctx.AgentMessage) bool {
@@ -27,27 +31,46 @@ func hasHandoffMarker(msg *agentctx.AgentMessage) bool {
 }
 
 // extractHandoffDoc extracts the handoff document text from the assistant
-// message. The handoff doc is the text content BEFORE the
-// <handoff_complete> marker.
+// message. The LLM places the handoff document INSIDE the
+// <handoff_complete>...</handoff_complete> tags.
 //
-// If the marker is in a text block, everything before it in that block (plus
-// all prior text blocks) is the handoff doc. If the marker is not found an
-// empty string is returned.
+// Extraction rules:
+//   - If <handoff_complete>...</handoff_complete> exists: extract the text
+//     between the opening and closing tags.
+//   - If only <handoff_complete> exists (no closing tag): extract everything
+//     after the opening marker.
+//   - If no marker is found: return "".
+//
+// The result is trimmed of leading/trailing whitespace.
 func extractHandoffDoc(msg *agentctx.AgentMessage) string {
 	if msg == nil {
 		return ""
 	}
+	// Combine all text content into a single string so that tags may span
+	// multiple content blocks.
 	var parts []string
 	for _, block := range msg.Content {
 		tc, ok := block.(agentctx.TextContent)
 		if !ok {
 			continue
 		}
-		if idx := strings.Index(tc.Text, handoffCompleteMarker); idx >= 0 {
-			parts = append(parts, tc.Text[:idx])
-			return strings.Join(parts, "\n")
-		}
 		parts = append(parts, tc.Text)
 	}
-	return strings.Join(parts, "\n")
+	combined := strings.Join(parts, "\n")
+
+	// Find the opening marker.
+	openIdx := strings.Index(combined, handoffCompleteMarker)
+	if openIdx < 0 {
+		return ""
+	}
+	contentStart := openIdx + len(handoffCompleteMarker)
+
+	// Look for a closing tag after the opening marker.
+	closeIdx := strings.Index(combined[contentStart:], handoffCompleteEndMarker)
+	if closeIdx >= 0 {
+		return strings.TrimSpace(combined[contentStart : contentStart+closeIdx])
+	}
+
+	// No closing tag — extract everything after the opening marker.
+	return strings.TrimSpace(combined[contentStart:])
 }

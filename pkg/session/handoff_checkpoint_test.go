@@ -86,6 +86,78 @@ func TestInitHandoffSession_Idempotent(t *testing.T) {
 	}
 }
 
+func TestInitHandoffFromExisting(t *testing.T) {
+	sessionDir := makeTestSessionDir(t)
+
+	entries := []SessionEntry{
+		{Type: EntryTypeMessage, ID: "m1", Message: &agentctx.AgentMessage{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "hello"}}}},
+		{Type: EntryTypeMessage, ID: "m2", Message: &agentctx.AgentMessage{Role: "assistant", Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "hi there"}}}},
+	}
+
+	if err := InitHandoffFromExisting(sessionDir, entries); err != nil {
+		t.Fatalf("InitHandoffFromExisting failed: %v", err)
+	}
+
+	// Verify current.txt
+	cur, err := GetCurrentCheckpoint(sessionDir)
+	if err != nil {
+		t.Fatalf("GetCurrentCheckpoint: %v", err)
+	}
+	if cur != "cp_001" {
+		t.Errorf("expected cp_001, got %s", cur)
+	}
+
+	// Verify messages were written
+	msgs, err := LoadHandoffCheckpointMessages(sessionDir, "cp_001")
+	if err != nil {
+		t.Fatalf("LoadHandoffCheckpointMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" || msgs[1].Role != "assistant" {
+		t.Errorf("unexpected roles: %s, %s", msgs[0].Role, msgs[1].Role)
+	}
+
+	// Verify checkpoint count
+	count, err := ReadCheckpointCount(sessionDir)
+	if err != nil {
+		t.Fatalf("ReadCheckpointCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected count 1, got %d", count)
+	}
+}
+
+func TestInitHandoffFromExisting_Idempotent(t *testing.T) {
+	sessionDir := makeTestSessionDir(t)
+
+	// First call initializes
+	entries := []SessionEntry{
+		{Type: EntryTypeMessage, ID: "m1", Message: &agentctx.AgentMessage{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "first"}}}},
+	}
+	if err := InitHandoffFromExisting(sessionDir, entries); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Second call should be no-op (current.txt exists)
+	entries2 := []SessionEntry{
+		{Type: EntryTypeMessage, ID: "m2", Message: &agentctx.AgentMessage{Role: "user", Content: []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "second"}}}},
+	}
+	if err := InitHandoffFromExisting(sessionDir, entries2); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	// Should still have only the first message
+	msgs, err := LoadHandoffCheckpointMessages(sessionDir, "cp_001")
+	if err != nil {
+		t.Fatalf("LoadHandoffCheckpointMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (no-op), got %d", len(msgs))
+	}
+}
+
 func TestCreateHandoffCheckpoint_Sequential(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
 

@@ -644,6 +644,27 @@ func (a *Agent) Compact(compactor Compactor) error {
 	return nil
 }
 
+// Handoff manually triggers a context handoff. It generates a handoff document
+// from the current conversation, runs Q&A verification, creates a new
+// checkpoint, and switches to the fresh context.
+//
+// This is the entry point for the /handoff slash command. It constructs a
+// temporary loopState to reuse the same performHandoff / autoGenerateHandoffDoc
+// code paths as the automatic trigger.
+func (a *Agent) Handoff(ctx context.Context) error {
+	state := &loopState{
+		config:   &a.LoopConfig,
+		agentCtx: a.context,
+	}
+
+	doc, err := state.autoGenerateHandoffDoc(ctx)
+	if err != nil {
+		return fmt.Errorf("generate handoff doc: %w", err)
+	}
+
+	return state.performHandoff(ctx, doc)
+}
+
 // tryAutoCompact attempts automatic compression if thresholds exceeded.
 func (a *Agent) tryAutoCompact(ctx context.Context) {
 	if len(a.LoopConfig.Compactors) == 0 {

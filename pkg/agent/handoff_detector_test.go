@@ -87,29 +87,39 @@ func TestExtractHandoffDoc(t *testing.T) {
 		want string
 	}{
 		{
-			name: "marker at end of single block",
-			msg:  makeTextMessage("assistant", "Task: implement X\nStatus: done\n<handoff_complete>"),
-			want: "Task: implement X\nStatus: done\n",
+			name: "content inside tags",
+			msg:  makeTextMessage("assistant", "<handoff_complete>\nContent here\n</handoff_complete>"),
+			want: "Content here",
 		},
 		{
-			name: "marker in middle of text",
-			msg:  makeTextMessage("assistant", "Doc content <handoff_complete> trailing text"),
-			want: "Doc content ",
+			name: "content after open tag, no closing tag",
+			msg:  makeTextMessage("assistant", "<handoff_complete>\nContent here"),
+			want: "Content here",
 		},
 		{
-			name: "marker in second block — first block preserved",
-			msg: makeTextMessage("assistant",
-				"First block content",
-				"Second <handoff_complete> rest"),
-			want: "First block content\nSecond ",
+			name: "text before marker is not the doc",
+			msg:  makeTextMessage("assistant", "Some text\n<handoff_complete>\nReal content\n</handoff_complete>"),
+			want: "Real content",
 		},
 		{
-			name: "marker in first of three blocks",
-			msg: makeTextMessage("assistant",
-				"Alpha <handoff_complete>",
-				"Beta",
-				"Gamma"),
-			want: "Alpha ",
+			name: "no marker at all",
+			msg:  makeTextMessage("assistant", "No marker at all"),
+			want: "",
+		},
+		{
+			name: "content inside tags with surrounding text",
+			msg:  makeTextMessage("assistant", "Intro text\n<handoff_complete>\n## Handoff\nTask: X\n</handoff_complete>\nTrailing"),
+			want: "## Handoff\nTask: X",
+		},
+		{
+			name: "open tag only with nothing after",
+			msg:  makeTextMessage("assistant", "Task: implement X\n<handoff_complete>"),
+			want: "",
+		},
+		{
+			name: "multi-line doc between tags",
+			msg:  makeTextMessage("assistant", "<handoff_complete>\n## Status\n- Done: A\n- Pending: B\n</handoff_complete>"),
+			want: "## Status\n- Done: A\n- Pending: B",
 		},
 		{
 			name: "nil message returns empty",
@@ -117,23 +127,25 @@ func TestExtractHandoffDoc(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "no marker returns all text joined",
-			msg: makeTextMessage("assistant",
-				"Block A",
-				"Block B"),
-			want: "Block A\nBlock B",
-		},
-		{
-			name: "marker at very start",
-			msg:  makeTextMessage("assistant", "<handoff_complete>rest"),
+			name: "empty message returns empty",
+			msg:  &agentctx.AgentMessage{Role: "assistant", Content: []agentctx.ContentBlock{}},
 			want: "",
 		},
 		{
-			name: "empty blocks before marker",
+			name: "content spans multiple blocks inside tags",
 			msg: makeTextMessage("assistant",
-				"",
-				"<handoff_complete>"),
-			want: "\n",
+				"<handoff_complete>",
+				"Line one",
+				"Line two",
+				"</handoff_complete>"),
+			want: "Line one\nLine two",
+		},
+		{
+			name: "open and close in different blocks",
+			msg: makeTextMessage("assistant",
+				"<handoff_complete>Start content",
+				"more content</handoff_complete>"),
+			want: "Start content\nmore content",
 		},
 	}
 
@@ -151,7 +163,7 @@ func TestExtractHandoffDoc_RoundTripWithHasHandoffMarker(t *testing.T) {
 	// A message that has the marker should produce a non-nil doc when extracted,
 	// and the extracted doc should not contain the marker.
 	docText := "## Handoff\n\nTask complete.\nNext: run tests."
-	msg := makeTextMessage("assistant", docText+"<handoff_complete>")
+	msg := makeTextMessage("assistant", "<handoff_complete>\n"+docText+"\n</handoff_complete>")
 
 	if !hasHandoffMarker(msg) {
 		t.Fatal("expected hasHandoffMarker to return true")

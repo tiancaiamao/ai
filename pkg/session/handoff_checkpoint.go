@@ -90,6 +90,36 @@ func WriteCheckpointCount(sessionDir string, count int) error {
 	return nil
 }
 
+// writeSessionMode sets the ContextManagementMode field in the session's
+// meta.json, preserving all other existing fields. If meta.json does not yet
+// exist it is created.
+func writeSessionMode(sessionDir, mode string) error {
+	metaPath := metaFilePath(sessionDir)
+	var meta SessionMeta
+
+	if data, err := os.ReadFile(metaPath); err == nil {
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return fmt.Errorf("unmarshal meta.json: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read meta.json: %w", err)
+	}
+
+	meta.ContextManagementMode = mode
+
+	data, err := json.MarshalIndent(&meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal meta.json: %w", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("write meta.json: %w", err)
+	}
+	return nil
+}
+
 // newHandoffSessionHeader builds a SessionHeader for a checkpoint's
 // messages.jsonl. The header records the parent checkpoint for chain traversal.
 func newHandoffSessionHeader(parentCheckpoint string) SessionHeader {
@@ -314,7 +344,47 @@ func InitHandoffSession(sessionDir string) error {
 		return fmt.Errorf("write checkpoint count: %w", err)
 	}
 
+	// Persist the context management mode so resume/other paths know this
+	// is a handoff-mode session.
+	if err := writeSessionMode(sessionDir, "handoff"); err != nil {
+		return fmt.Errorf("write session mode: %w", err)
+	}
+
 	// Point current.txt at it.
+	if err := SwitchCheckpoint(sessionDir, checkpointName); err != nil {
+		return fmt.Errorf("switch to initial checkpoint: %w", err)
+	}
+
+	return nil
+}
+
+// InitHandoffFromExisting initializes handoff checkpoint structure for a
+// session that already has messages (e.g. a legacy session being switched to
+// handoff mode). It creates cp_001 and writes the given entries into it.
+//
+// If the session already has a checkpoint structure (current.txt exists),
+// this is a no-op.
+func InitHandoffFromExisting(sessionDir string, entries []SessionEntry) error {
+	curPath := filepath.Join(sessionDir, handoffCurrentFile)
+	if _, err := os.Stat(curPath); err == nil {
+		return nil // already initialized
+	}
+
+	checkpointName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
+	if err != nil {
+		return fmt.Errorf("create initial checkpoint: %w", err)
+	}
+
+	if len(entries) > 0 {
+		if err := WriteHandoffMessages(sessionDir, checkpointName, entries); err != nil {
+			return fmt.Errorf("write initial checkpoint messages: %w", err)
+		}
+	}
+
+	if err := WriteCheckpointCount(sessionDir, 1); err != nil {
+		return fmt.Errorf("write checkpoint count: %w", err)
+	}
+
 	if err := SwitchCheckpoint(sessionDir, checkpointName); err != nil {
 		return fmt.Errorf("switch to initial checkpoint: %w", err)
 	}

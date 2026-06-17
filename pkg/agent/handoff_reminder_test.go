@@ -94,21 +94,24 @@ func TestEstimateContextTokens_AllZeroUsage(t *testing.T) {
 
 // --- handoffThresholds tests ---
 
-func TestHandoffThresholds_DefaultWindow(t *testing.T) {
+func TestHandoffThresholds_ZeroWindow(t *testing.T) {
+	// contextWindow=0: proportional gives 0, clamped to minimums.
 	soft, hard := handoffThresholds(0)
-	assert.Equal(t, 40000, soft)
-	assert.Equal(t, 150000, hard)
+	assert.Equal(t, 20000, soft)
+	assert.Equal(t, 80000, hard)
 }
 
 func TestHandoffThresholds_128KWindow(t *testing.T) {
+	// 128000 * 0.35 = 44800; 128000 * 0.75 = 96000
 	soft, hard := handoffThresholds(128000)
-	assert.Equal(t, 40000, soft)
-	assert.Equal(t, 150000, hard)
+	assert.Equal(t, 44800, soft)
+	assert.Equal(t, 96000, hard)
 }
 
 func TestHandoffThresholds_200KWindow(t *testing.T) {
+	// 200000 * 0.35 = 70000; 200000 * 0.75 = 150000
 	soft, hard := handoffThresholds(200000)
-	assert.Equal(t, 40000, soft)
+	assert.Equal(t, 70000, soft)
 	assert.Equal(t, 150000, hard)
 }
 
@@ -196,7 +199,7 @@ func TestMaybeInjectHandoffReminder_NotHandoffMode(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_BelowSoftThreshold(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 200000}
-	agentCtx := newHandoffTestAgentCtx(30000) // below soft=40000
+	agentCtx := newHandoffTestAgentCtx(30000) // below soft=70000
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
@@ -210,9 +213,9 @@ func TestMaybeInjectHandoffReminder_BelowSoftThreshold(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_AboveSoftIntervalNotMet(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 200000}
-	agentCtx := newHandoffTestAgentCtx(50000) // above soft=40000
+	agentCtx := newHandoffTestAgentCtx(80000) // above soft=70000
 	state := newTestLoopState(config, agentCtx)
-	// interval = 10 - (50000/40000) = 10 - 1 = 9
+	// interval = 10 - (80000/70000) = 10 - 1 = 9
 	// ToolCallsSinceLastTrigger = 5, which is < 9
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 5
 
@@ -223,7 +226,7 @@ func TestMaybeInjectHandoffReminder_AboveSoftIntervalNotMet(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_AboveSoftIntervalMet(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 200000}
-	agentCtx := newHandoffTestAgentCtx(50000) // above soft=40000
+	agentCtx := newHandoffTestAgentCtx(80000) // above soft=70000
 	state := newTestLoopState(config, agentCtx)
 	// interval = 9, ToolCallsSinceLastTrigger = 10 >= 9
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
@@ -237,8 +240,8 @@ func TestMaybeInjectHandoffReminder_AboveSoftIntervalMet(t *testing.T) {
 	assert.Equal(t, "user", injected.Role)
 	text := injected.ExtractText()
 	assert.Contains(t, text, "<context_management>")
-	assert.Contains(t, text, "Context usage: 50000 tokens of 200000 window.")
-	assert.Contains(t, text, "Soft threshold: 40000. Hard limit: 150000.")
+	assert.Contains(t, text, "Context usage: 80000 tokens of 200000 window.")
+	assert.Contains(t, text, "Soft threshold: 70000. Hard limit: 150000.")
 	assert.Contains(t, text, "handoff_complete")
 
 	// Counter should be reset
@@ -353,8 +356,9 @@ func TestMaybeInjectHandoffReminder_LargeWindowThresholds(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_DefaultContextWindow(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 0}
-	// Default window = 200000, soft=40000, hard=150000
-	agentCtx := newHandoffTestAgentCtx(50000)
+	// handoffThresholds(0): soft=20000 (clamped), hard=80000 (clamped)
+	// effectiveContextWindow(0) = 200000
+	agentCtx := newHandoffTestAgentCtx(50000) // above soft=20000
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
@@ -369,7 +373,7 @@ func TestMaybeInjectHandoffReminder_DefaultContextWindow(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_MessageMetadata(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 200000}
-	agentCtx := newHandoffTestAgentCtx(50000)
+	agentCtx := newHandoffTestAgentCtx(80000) // above soft=70000
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
@@ -402,7 +406,7 @@ func TestMaybeInjectHandoffReminder_NoUsageReturnsFalse(t *testing.T) {
 
 func TestMaybeInjectHandoffReminder_SoftCounterResetsAfterInjection(t *testing.T) {
 	config := &LoopConfig{ContextManagementMode: "handoff", ContextWindow: 200000}
-	agentCtx := newHandoffTestAgentCtx(50000)
+	agentCtx := newHandoffTestAgentCtx(80000) // above soft=70000
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
 

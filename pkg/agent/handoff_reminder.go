@@ -53,12 +53,25 @@ func handoffUsageTotalTokens(usage *agentctx.Usage) int {
 // reminders based on the model's context window size.
 //
 //   - Windows >= 500000 (1M-class): soft=100000, hard=200000
-//   - Smaller windows (200K-class, the default): soft=40000, hard=150000
+//   - Smaller windows (e.g. 200K): proportional thresholds with soft at 35%
+//     and hard at 75%, clamped to reasonable minimums.
 func handoffThresholds(contextWindow int) (soft, hard int) {
 	if contextWindow >= 500000 {
 		return 100000, 200000
 	}
-	return 40000, 150000
+	// For smaller windows (e.g. 200K), use proportional thresholds.
+	// Soft at 35% triggers reminders before context pressure gets severe.
+	// Hard at 75% forces mandatory handoff.
+	soft = contextWindow * 35 / 100
+	hard = contextWindow * 75 / 100
+	// Clamp to reasonable minimums.
+	if soft < 20000 {
+		soft = 20000
+	}
+	if hard < 80000 {
+		hard = 80000
+	}
+	return soft, hard
 }
 
 // injectionInterval calculates the dynamic interval (in tool calls) between
