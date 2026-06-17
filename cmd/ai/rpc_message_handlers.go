@@ -21,14 +21,29 @@ import (
 
 // --- Message and content handlers --@
 
+// reloadMessagesIfEmpty populates the agent context with session messages
+// when the context is currently empty. This handles legacy sessions resumed
+// in handoff mode that lack checkpoint structure. It is a no-op when the
+// agent context is nil.
+func (app *rpcApp) reloadMessagesIfEmpty() {
+	if app.sess == nil {
+		return
+	}
+	ctx := app.ag.GetContext()
+	if ctx == nil {
+		return
+	}
+	if len(ctx.RecentMessages) == 0 {
+		ctx.RecentMessages = app.sess.GetMessages()
+	}
+}
+
 func (app *rpcApp) handleCompact(args string) (any, error) {
 	_ = args
 	slog.Info("Received compact")
 	// Reload messages from session if agent context is empty (e.g. legacy
 	// session resumed in handoff mode without checkpoint structure).
-	if len(app.ag.GetMessages()) == 0 && app.sess != nil {
-		app.ag.GetContext().RecentMessages = app.sess.GetMessages()
-	}
+	app.reloadMessagesIfEmpty()
 
 	beforeCount := len(app.ag.GetMessages())
 
@@ -73,7 +88,9 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 				return err
 			}
 
-			app.ag.GetContext().RecentMessages = app.sess.GetMessages()
+			if ctx := app.ag.GetContext(); ctx != nil {
+				ctx.RecentMessages = app.sess.GetMessages()
+			}
 
 			afterCount := len(app.ag.GetMessages())
 			span.AddField("after_messages", afterCount)
@@ -113,6 +130,10 @@ func (app *rpcApp) handleHandoff(args string) (any, error) {
 
 	app.stateMu.Lock()
 	streaming := app.isStreaming
+	if app.isCompacting {
+		app.stateMu.Unlock()
+		return nil, fmt.Errorf("context management already in progress")
+	}
 	app.stateMu.Unlock()
 	if streaming {
 		return nil, fmt.Errorf("agent is busy")
@@ -144,9 +165,7 @@ func (app *rpcApp) handleHandoff(args string) (any, error) {
 	// Reload messages from session if agent context is empty. This can happen
 	// when a legacy session was resumed in handoff mode without checkpoint
 	// structure — the resume path returns empty messages in that case.
-	if len(app.ag.GetMessages()) == 0 && app.sess != nil {
-		app.ag.GetContext().RecentMessages = app.sess.GetMessages()
-	}
+	app.reloadMessagesIfEmpty()
 
 	beforeCount := len(app.ag.GetMessages())
 	if beforeCount == 0 {
@@ -154,8 +173,32 @@ func (app *rpcApp) handleHandoff(args string) (any, error) {
 	}
 	slog.Info("[Handoff] Manual handoff triggered", "before_messages", beforeCount)
 
+	// Emit compaction events with Type="handoff" so the TUI shows progress
+	// (same pattern as /compact). The compaction_start event also sets
+	// app.isCompacting=true via the event handler, guarding against double
+	// execution.
+	compactionInfo := agent.CompactionInfo{
+		Type:   "handoff",
+		Before: beforeCount,
+	}
+	app.stateMu.Lock()
+	app.isCompacting = true
+	app.stateMu.Unlock()
+	app.server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
+	defer func() {
+		app.stateMu.Lock()
+		app.isCompacting = false
+		app.stateMu.Unlock()
+		compactionInfo.After = len(app.ag.GetMessages())
+		if compactionInfo.Error != "" {
+			compactionInfo.After = 0
+		}
+		app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
+	}()
+
 	ctx := context.Background()
 	if err := app.ag.Handoff(ctx); err != nil {
+		compactionInfo.Error = err.Error()
 		return nil, fmt.Errorf("handoff failed: %w", err)
 	}
 

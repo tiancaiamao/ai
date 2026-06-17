@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -25,7 +24,7 @@ const (
 	// handoffQAChunkTimeout is the inter-chunk timeout passed to StreamLLM.
 	handoffQAChunkTimeout = 2 * time.Minute
 	// handoffQADefaultRounds is the default number of Q&A rounds.
-	handoffQADefaultRounds = 3
+	handoffQADefaultRounds = 1
 )
 
 // qaAskUserMessage instructs the LLM to identify gaps in the handoff document.
@@ -68,14 +67,23 @@ func hasNoGaps(text string) bool {
 }
 
 // streamLLMText is a helper that calls llm.StreamLLM and collects the full text
-// response. It applies a bounded timeout via context.WithTimeout.
+// response. It applies a bounded timeout via context.WithTimeout and includes
+// repetition detection to prevent the model from getting stuck in a loop.
 func streamLLMText(ctx context.Context, model llm.Model, llmCtx llm.LLMContext, apiKey string) (string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, handoffQATimeout)
 	defer cancel()
 
 	llmStream := llm.StreamLLM(callCtx, model, llmCtx, apiKey, handoffQAChunkTimeout)
 
+	const (
+		maxRepeats     = 20        // consecutive identical deltas → circuit breaker
+		maxOutputChars = 64 * 1024 // hard cap (~16K tokens) to bound runaway output
+	)
+
 	var text strings.Builder
+	var lastDelta string
+	repeatCount := 0
+
 	for event := range llmStream.Iterator(callCtx) {
 		if event.Done {
 			break
@@ -83,6 +91,27 @@ func streamLLMText(ctx context.Context, model llm.Model, llmCtx llm.LLMContext, 
 		switch e := event.Value.(type) {
 		case llm.LLMTextDeltaEvent:
 			text.WriteString(e.Delta)
+
+			// Repetition detection: identical chunks streamed consecutively
+			// indicate the model is stuck (observed during handoff Q&A).
+			if e.Delta == lastDelta {
+				repeatCount++
+				if repeatCount >= maxRepeats {
+					slog.Warn("[Handoff] streamLLMText: repetition detected, breaking",
+						"repeats", repeatCount, "delta_len", len(e.Delta))
+					break
+				}
+			} else {
+				repeatCount = 0
+			}
+			lastDelta = e.Delta
+
+			// Hard cap to bound runaway output even if chunk boundaries vary.
+			if text.Len() > maxOutputChars {
+				slog.Warn("[Handoff] streamLLMText: output cap exceeded, breaking",
+					"len", text.Len(), "cap", maxOutputChars)
+				break
+			}
 		case llm.LLMErrorEvent:
 			return "", e.Error
 		}
@@ -97,8 +126,8 @@ func streamLLMText(ctx context.Context, model llm.Model, llmCtx llm.LLMContext, 
 //  1. Ask questions: send the handoff doc to the LLM (without old context) to
 //     identify gaps.
 //  2. If no gaps found → break early.
-//  3. Answer questions: send old context messages plus the questions to the
-//     LLM and collect the answer.
+//  3. Answer questions: send the handoff doc plus the questions to the LLM
+//     and collect the answer.
 //  4. Store the question-answer pair as a qaTurn and augment the handoff doc
 //     with the Q&A for the next round.
 //
@@ -107,9 +136,7 @@ func runHandoffQA(
 	ctx context.Context,
 	model llm.Model,
 	apiKey string,
-	contextWindow int,
 	handoffDoc string,
-	oldMessages []agentctx.AgentMessage,
 	maxRounds int,
 	systemPrompt string,
 ) ([]qaTurn, error) {
@@ -141,41 +168,17 @@ func runHandoffQA(
 		if hasNoGaps(questions) {
 			slog.Info("[Handoff] QA verification complete — no gaps found",
 				"round", round)
+			span.End()
 			break
 		}
 
-		// --- Answer questions: send old context + questions to LLM.
-		// Serialize conversation into a text transcript (same approach as
-		// autoGenerateHandoffDoc) to avoid role-formatting issues with raw
-		// messages (toolResult role, consecutive same-role, etc.).
-		const maxTranscriptBytes = 512 * 1024 // ~128K tokens
-		var lines []string
-		totalBytes := 0
-		for i := len(oldMessages) - 1; i >= 0; i-- {
-			msg := oldMessages[i]
-			if !msg.IsAgentVisible() {
-				continue
-			}
-			text := msg.ExtractText()
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-			line := fmt.Sprintf("[%s]: %s", msg.Role, text)
-			if totalBytes+len(line) > maxTranscriptBytes {
-				break
-			}
-			lines = append(lines, line)
-			totalBytes += len(line)
-		}
-		for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-			lines[i], lines[j] = lines[j], lines[i]
-		}
-		conversationText := strings.Join(lines, "\n\n")
-
+		// --- Answer questions: send handoff doc + questions to LLM.
+		// Use the handoff doc as context (not the raw conversation) — it's
+		// already a focused summary and avoids resending 100K+ of raw messages.
 		answerCtx := llm.LLMContext{
 			SystemPrompt: systemPrompt,
 			Messages: []llm.LLMMessage{
-				{Role: "user", Content: conversationText},
+				{Role: "user", Content: handoffDoc},
 				{Role: "user", Content: fmt.Sprintf(qaAnswerUserMessageTemplate, questions)},
 			},
 		}

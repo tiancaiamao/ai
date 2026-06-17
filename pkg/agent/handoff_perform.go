@@ -60,16 +60,11 @@ const handoffGenerateInstruction = `Below is a conversation transcript. Read it 
 func (s *loopState) performHandoff(ctx context.Context, handoffDoc string) error {
 	model := getEffectiveModel(s.config)
 	apiKey := getEffectiveAPIKey(s.config)
-	contextWindow := s.config.ContextWindow
 
 	startTime := time.Now()
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_start",
 		traceevent.Field{Key: "session_dir", Value: s.config.GetSessionDir()})
-
-	// Save old messages before Q&A (Q&A does not mutate RecentMessages, but
-	// we capture a snapshot for clarity).
-	oldMessages := s.agentCtx.RecentMessages
 
 	// Run Q&A verification. Failures here are non-fatal — we proceed with the
 	// checkpoint using whatever Q&A turns were collected.
@@ -87,7 +82,7 @@ func (s *loopState) performHandoff(ctx context.Context, handoffDoc string) error
 		}
 	}
 
-	qaTurns, err := runHandoffQA(ctx, model, apiKey, contextWindow, handoffDoc, oldMessages, handoffQADefaultRounds, qaSystemPrompt)
+	qaTurns, err := runHandoffQA(ctx, model, apiKey, handoffDoc, handoffQADefaultRounds, qaSystemPrompt)
 	if err != nil {
 		slog.Warn("[Handoff] Q&A verification failed, proceeding with checkpoint",
 			"error", err,
