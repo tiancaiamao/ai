@@ -14,13 +14,15 @@ type Model struct {
 	API           string `json:"api"`           // e.g., "openai-completions"
 	ContextWindow int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
 	MaxTokens     int    `json:"maxTokens,omitempty"`
+	Reasoning     bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
 }
 
 // LLMContext represents the context for an LLM request.
 type LLMContext struct {
-	SystemPrompt string       `json:"systemPrompt,omitempty"`
-	Messages     []LLMMessage `json:"messages"`
-	Tools        []LLMTool    `json:"tools,omitempty"`
+	SystemPrompt  string       `json:"systemPrompt,omitempty"`
+	Messages      []LLMMessage `json:"messages"`
+	Tools         []LLMTool    `json:"tools,omitempty"`
+	ThinkingLevel string       `json:"thinkingLevel,omitempty"` // normalized: off/minimal/low/medium/high/xhigh
 }
 
 // LLMMessage represents a message in the LLM conversation.
