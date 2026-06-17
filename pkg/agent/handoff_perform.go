@@ -16,10 +16,36 @@ import (
 	"github.com/google/uuid"
 )
 
+// handoffGenerateSystemPrompt is a focused system prompt for handoff document
+// generation. It replaces the main agent system prompt to avoid confusing the
+// model — a coding assistant prompt and a summarization task are incompatible.
+const handoffGenerateSystemPrompt = `You are a context handoff document generator. Your job is to read the conversation transcript and produce a comprehensive handoff document that allows a fresh agent to continue the work without losing context.
+
+The document MUST include these sections:
+
+## Current Task
+What is being worked on right now. What was the original goal.
+
+## Key Decisions
+Important decisions made, alternatives considered, and why.
+
+## Completed Work
+What has been done so far. File paths modified, commands run, results obtained.
+
+## Pending Work
+What remains to be done. Specific next steps.
+
+## Important Context
+File paths, error messages, API constraints, environment details, or anything a fresh agent would need to know.
+
+## Open Questions
+Unresolved issues or questions that need clarification.
+
+Be specific. Include exact file paths, error messages, and code snippets. A fresh agent reading this document should be able to continue the work immediately.`
+
 // handoffGenerateInstruction instructs the LLM to produce a handoff document
-// from the current conversation. Sent as a role:"user" message to preserve
-// provider prefix caching with the main agent system prompt.
-const handoffGenerateInstruction = `Summarize the current task, key decisions, and pending work. Include file paths, error context, and next steps. Be thorough but concise.`
+// from the current conversation transcript.
+const handoffGenerateInstruction = `Below is a conversation transcript. Read it carefully and write a handoff document using the format specified in your instructions. The document must be detailed enough for a fresh agent to continue the work.`
 
 // performHandoff executes the complete handoff process:
 //  1. Run Q&A verification on the handoff document.
@@ -311,9 +337,11 @@ func (s *loopState) autoGenerateHandoffDoc(ctx context.Context) (string, error) 
 		traceevent.Field{Key: "message_count", Value: len(lines)},
 		traceevent.Field{Key: "transcript_bytes", Value: totalBytes})
 
-	// Reuse the main agent system prompt to preserve provider prefix caching.
+	// Use a dedicated system prompt for handoff generation. The main agent
+	// system prompt (coding assistant) confuses the model into trying to
+	// respond as a coding assistant rather than writing a summary.
 	llmCtx := llm.LLMContext{
-		SystemPrompt: s.agentCtx.SystemPrompt,
+		SystemPrompt: handoffGenerateSystemPrompt,
 		Messages: []llm.LLMMessage{
 			{Role: "user", Content: handoffGenerateInstruction},
 			{Role: "user", Content: conversationText},

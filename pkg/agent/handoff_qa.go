@@ -145,8 +145,14 @@ func runHandoffQA(
 		}
 
 		// --- Answer questions: send old context + questions to LLM.
-		answerMessages := make([]llm.LLMMessage, 0, len(oldMessages)+1)
-		for _, msg := range oldMessages {
+		// Serialize conversation into a text transcript (same approach as
+		// autoGenerateHandoffDoc) to avoid role-formatting issues with raw
+		// messages (toolResult role, consecutive same-role, etc.).
+		const maxTranscriptBytes = 512 * 1024 // ~128K tokens
+		var lines []string
+		totalBytes := 0
+		for i := len(oldMessages) - 1; i >= 0; i-- {
+			msg := oldMessages[i]
 			if !msg.IsAgentVisible() {
 				continue
 			}
@@ -154,22 +160,24 @@ func runHandoffQA(
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			answerMessages = append(answerMessages, llm.LLMMessage{
-				Role:    msg.Role,
-				Content: text,
-			})
+			line := fmt.Sprintf("[%s]: %s", msg.Role, text)
+			if totalBytes+len(line) > maxTranscriptBytes {
+				break
+			}
+			lines = append(lines, line)
+			totalBytes += len(line)
 		}
-		answerMessages = append(answerMessages, llm.LLMMessage{
-			Role: "user",
-			Content: fmt.Sprintf(
-				qaAnswerUserMessageTemplate,
-				questions,
-			),
-		})
+		for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+			lines[i], lines[j] = lines[j], lines[i]
+		}
+		conversationText := strings.Join(lines, "\n\n")
 
 		answerCtx := llm.LLMContext{
 			SystemPrompt: systemPrompt,
-			Messages:     answerMessages,
+			Messages: []llm.LLMMessage{
+				{Role: "user", Content: conversationText},
+				{Role: "user", Content: fmt.Sprintf(qaAnswerUserMessageTemplate, questions)},
+			},
 		}
 		answer, err := streamLLMText(ctx, model, answerCtx, apiKey)
 		if err != nil {
