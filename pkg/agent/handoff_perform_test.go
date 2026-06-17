@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +63,7 @@ func TestFinalizeHandoff_CreatesCheckpoint(t *testing.T) {
 		{Question: "Any errors?", Answer: "No errors encountered"},
 	}
 
-	if err := state.finalizeHandoff(handoffDoc, qaTurns); err != nil {
+	if err := state.finalizeHandoff(context.Background(), handoffDoc, qaTurns); err != nil {
 		t.Fatalf("finalizeHandoff: %v", err)
 	}
 
@@ -104,7 +105,7 @@ func TestFinalizeHandoff_ReloadsContext(t *testing.T) {
 		{Question: "Q1?", Answer: "A1"},
 	}
 
-	if err := state.finalizeHandoff(handoffDoc, qaTurns); err != nil {
+	if err := state.finalizeHandoff(context.Background(), handoffDoc, qaTurns); err != nil {
 		t.Fatalf("finalizeHandoff: %v", err)
 	}
 
@@ -147,7 +148,7 @@ func TestFinalizeHandoff_ResetsState(t *testing.T) {
 	state.emptyRetries = 1
 	state.guardAbortRecovery = true
 
-	if err := state.finalizeHandoff("test doc", nil); err != nil {
+	if err := state.finalizeHandoff(context.Background(), "test doc", nil); err != nil {
 		t.Fatalf("finalizeHandoff: %v", err)
 	}
 
@@ -170,7 +171,7 @@ func TestFinalizeHandoff_ResetsState(t *testing.T) {
 
 func TestFinalizeHandoff_NoSessionDir(t *testing.T) {
 	state := newHandoffTestLoopState("")
-	err := state.finalizeHandoff("test doc", nil)
+	err := state.finalizeHandoff(context.Background(), "test doc", nil)
 	if err == nil {
 		t.Fatal("expected error for empty session dir")
 	}
@@ -185,7 +186,7 @@ func TestFinalizeHandoff_HandoffDocWritten(t *testing.T) {
 	state := newHandoffTestLoopState(sessionDir)
 
 	handoffDoc := "# Detailed Handoff\n\n## Task\nImplement feature Y\n## Files\n- a.go\n- b.go"
-	if err := state.finalizeHandoff(handoffDoc, nil); err != nil {
+	if err := state.finalizeHandoff(context.Background(), handoffDoc, nil); err != nil {
 		t.Fatalf("finalizeHandoff: %v", err)
 	}
 
@@ -213,7 +214,7 @@ func TestFinalizeHandoff_MultipleChainedHandoffs(t *testing.T) {
 	// Perform three chained handoffs.
 	for i := 0; i < 3; i++ {
 		doc := "Handoff round " + string(rune('A'+i))
-		if err := state.finalizeHandoff(doc, []qaTurn{
+		if err := state.finalizeHandoff(context.Background(), doc, []qaTurn{
 			{Question: "Q" + string(rune('A'+i)), Answer: "A" + string(rune('A'+i))},
 		}); err != nil {
 			t.Fatalf("finalizeHandoff round %d: %v", i, err)
@@ -335,7 +336,7 @@ func TestFinalizeHandoff_AgentStateWritten(t *testing.T) {
 	state.agentCtx.AgentState.CurrentWorkingDir = "/project/src"
 	state.agentCtx.AgentState.TotalTurns = 10
 
-	if err := state.finalizeHandoff("test doc", nil); err != nil {
+	if err := state.finalizeHandoff(context.Background(), "test doc", nil); err != nil {
 		t.Fatalf("finalizeHandoff: %v", err)
 	}
 

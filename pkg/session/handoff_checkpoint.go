@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -37,60 +34,60 @@ const (
 	handoffDocumentFile = "handoff.md"
 )
 
-// checkpointNamePattern matches checkpoint directory names like cp_001, cp_042.
-var checkpointNamePattern = regexp.MustCompile(`^cp_(\d+)$`)
-
 // handoffCheckpointDir returns the directory path for a named checkpoint.
 func handoffCheckpointDir(sessionDir, checkpointName string) string {
 	return filepath.Join(sessionDir, handoffCheckpointsDir, checkpointName)
 }
 
-// listExistingCheckpoints returns the sorted checkpoint directory names found
-// under sessionDir/checkpoints/. Only directories matching cp_NNN are returned.
-func listExistingCheckpoints(sessionDir string) ([]string, error) {
-	cpDir := filepath.Join(sessionDir, handoffCheckpointsDir)
-	entries, err := os.ReadDir(cpDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if checkpointNamePattern.MatchString(e.Name()) {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-	return names, nil
+// metaFilePath returns the path to the session's meta.json file.
+func metaFilePath(sessionDir string) string {
+	return filepath.Join(sessionDir, "meta.json")
 }
 
-// nextCheckpointName determines the next sequential checkpoint name based on
-// existing checkpoint directories. Returns "cp_001" if none exist yet.
-func nextCheckpointName(sessionDir string) (string, error) {
-	names, err := listExistingCheckpoints(sessionDir)
+// ReadCheckpointCount reads the handoff checkpoint count from the session's
+// meta.json. Returns 0 if meta.json does not exist or the field is unset.
+func ReadCheckpointCount(sessionDir string) (int, error) {
+	data, err := os.ReadFile(metaFilePath(sessionDir))
 	if err != nil {
-		return "", fmt.Errorf("list checkpoints: %w", err)
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read meta.json: %w", err)
 	}
-	maxNum := 0
-	for _, name := range names {
-		m := checkpointNamePattern.FindStringSubmatch(name)
-		if len(m) < 2 {
-			continue
-		}
-		n, err := strconv.Atoi(m[1])
-		if err != nil {
-			continue
-		}
-		if n > maxNum {
-			maxNum = n
-		}
+	var meta SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return 0, fmt.Errorf("unmarshal meta.json: %w", err)
 	}
-	return fmt.Sprintf("cp_%03d", maxNum+1), nil
+	return meta.HandoffCheckpointCount, nil
+}
+
+// WriteCheckpointCount writes the handoff checkpoint count to the session's
+// meta.json, preserving other existing fields.
+func WriteCheckpointCount(sessionDir string, count int) error {
+	metaPath := metaFilePath(sessionDir)
+	var meta SessionMeta
+
+	if data, err := os.ReadFile(metaPath); err == nil {
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return fmt.Errorf("unmarshal meta.json: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read meta.json: %w", err)
+	}
+
+	meta.HandoffCheckpointCount = count
+
+	data, err := json.MarshalIndent(&meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal meta.json: %w", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("write meta.json: %w", err)
+	}
+	return nil
 }
 
 // newHandoffSessionHeader builds a SessionHeader for a checkpoint's
@@ -110,13 +107,10 @@ func newHandoffSessionHeader(parentCheckpoint string) SessionHeader {
 // It does NOT update current.txt — that is done by SwitchCheckpoint after the
 // checkpoint data has been fully written.
 //
-// Returns the checkpoint name (e.g. "cp_002").
-func CreateHandoffCheckpoint(sessionDir, parentCheckpoint string) (string, error) {
-	checkpointName, err := nextCheckpointName(sessionDir)
-	if err != nil {
-		return "", err
-	}
-
+// The checkpoint number (checkpointNum, 1-based) is assigned by the caller and
+// formatted as cp_%03d. Returns the checkpoint name (e.g. "cp_002").
+func CreateHandoffCheckpoint(sessionDir string, checkpointNum int, parentCheckpoint string) (string, error) {
+	checkpointName := fmt.Sprintf("cp_%03d", checkpointNum)
 	cpDir := handoffCheckpointDir(sessionDir, checkpointName)
 	if err := os.MkdirAll(cpDir, 0755); err != nil {
 		return "", fmt.Errorf("create checkpoint dir %s: %w", cpDir, err)
@@ -231,39 +225,93 @@ func LoadHandoffCheckpointMessages(sessionDir, checkpointName string) ([]agentct
 	return messages, nil
 }
 
-// IsHandoffSession returns true if sessionDir has both a checkpoints/ directory
-// and a current.txt file. This distinguishes handoff-mode sessions from legacy
-// sessions that use the old checkpoint_%05d recovery system.
+// IsHandoffSession returns true if the session's context management mode is
+// "handoff" according to meta.json. If meta.json does not exist (a legacy
+// session), this returns false because legacy sessions must not be treated as
+// handoff.
 func IsHandoffSession(sessionDir string) bool {
 	if sessionDir == "" {
 		return false
 	}
-	cpDir := filepath.Join(sessionDir, handoffCheckpointsDir)
-	if info, err := os.Stat(cpDir); err != nil || !info.IsDir() {
+	mode, err := ReadSessionMode(sessionDir)
+	if err != nil {
 		return false
 	}
-	curPath := filepath.Join(sessionDir, handoffCurrentFile)
-	if info, err := os.Stat(curPath); err != nil || info.IsDir() {
+	return mode == "handoff"
+}
+
+// ReadSessionMode reads the context management mode from the session's
+// meta.json. If meta.json exists but the mode field is empty, it returns
+// "handoff" (the project default for NEW sessions). If meta.json does NOT
+// exist, it returns an error so that callers can distinguish legacy sessions
+// (which must not be treated as handoff) from new ones.
+func ReadSessionMode(sessionDir string) (string, error) {
+	data, err := os.ReadFile(metaFilePath(sessionDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("meta.json not found")
+		}
+		return "", fmt.Errorf("read meta.json: %w", err)
+	}
+	var meta SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return "", fmt.Errorf("unmarshal meta.json: %w", err)
+	}
+	if meta.ContextManagementMode == "" {
+		return "handoff", nil
+	}
+	return meta.ContextManagementMode, nil
+}
+
+// IsHandoffSessionWithDefault is like IsHandoffSession but uses defaultMode
+// when the session has no meta.json. This lets callers pass the configured
+// default (e.g. from app.cfg.ContextManagementMode()) for sessions that have
+// not been persisted yet.
+func IsHandoffSessionWithDefault(sessionDir, defaultMode string) bool {
+	if sessionDir == "" {
 		return false
 	}
-	return true
+	data, err := os.ReadFile(metaFilePath(sessionDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return defaultMode == "handoff"
+		}
+		return false
+	}
+	var meta SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return false
+	}
+	mode := meta.ContextManagementMode
+	if mode == "" {
+		mode = defaultMode
+	}
+	return mode == "handoff"
 }
 
 // InitHandoffSession initializes the checkpoint structure for a new handoff-mode
 // session. It creates checkpoints/cp_001/ with a SessionHeader (ParentCheckpoint
 // empty) and writes current.txt pointing to "cp_001".
 //
-// If the session is already initialized (IsHandoffSession returns true), this
-// is a no-op.
+// If the session already has a checkpoint structure (current.txt exists),
+// this is a no-op.
 func InitHandoffSession(sessionDir string) error {
-	if IsHandoffSession(sessionDir) {
-		return nil
+	// Check for existing checkpoint structure directly, not IsHandoffSession,
+	// because IsHandoffSession reads mode from meta.json which may not exist yet.
+	curPath := filepath.Join(sessionDir, handoffCurrentFile)
+	if _, err := os.Stat(curPath); err == nil {
+		return nil // already initialized
 	}
 
 	// Create the first checkpoint.
-	checkpointName, err := CreateHandoffCheckpoint(sessionDir, "")
+	checkpointName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		return fmt.Errorf("create initial checkpoint: %w", err)
+	}
+
+	// Record the checkpoint count in meta.json.
+	if err := WriteCheckpointCount(sessionDir, 1); err != nil {
+		return fmt.Errorf("write checkpoint count: %w", err)
 	}
 
 	// Point current.txt at it.

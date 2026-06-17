@@ -60,7 +60,7 @@ func makeTestHandoffSessionDir(t *testing.T) (*SessionManager, *Session, string)
 	}
 
 	// Create a second checkpoint (simulating a handoff).
-	cp2, err := CreateHandoffCheckpoint(sessDir, "cp_001")
+	cp2, err := CreateHandoffCheckpoint(sessDir, 2, "cp_001")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint cp_002 failed: %v", err)
 	}

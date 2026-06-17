@@ -10,13 +10,15 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/session"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 
 	"github.com/google/uuid"
 )
 
-// handoffGenerateSystemPrompt instructs the LLM to produce a handoff document
-// from the current conversation. Used by auto-execute.
-const handoffGenerateSystemPrompt = `Summarize the current task, key decisions, and pending work. Include file paths, error context, and next steps. Be thorough but concise.`
+// handoffGenerateInstruction instructs the LLM to produce a handoff document
+// from the current conversation. Sent as a role:"user" message to preserve
+// provider prefix caching with the main agent system prompt.
+const handoffGenerateInstruction = `Summarize the current task, key decisions, and pending work. Include file paths, error context, and next steps. Be thorough but concise.`
 
 // performHandoff executes the complete handoff process:
 //  1. Run Q&A verification on the handoff document.
@@ -33,27 +35,59 @@ func (s *loopState) performHandoff(ctx context.Context, handoffDoc string) error
 	apiKey := getEffectiveAPIKey(s.config)
 	contextWindow := s.config.ContextWindow
 
+	startTime := time.Now()
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_start",
+		traceevent.Field{Key: "session_dir", Value: s.config.GetSessionDir()})
+
 	// Save old messages before Q&A (Q&A does not mutate RecentMessages, but
 	// we capture a snapshot for clarity).
 	oldMessages := s.agentCtx.RecentMessages
 
 	// Run Q&A verification. Failures here are non-fatal — we proceed with the
 	// checkpoint using whatever Q&A turns were collected.
-	qaTurns, err := runHandoffQA(ctx, model, apiKey, contextWindow, handoffDoc, oldMessages, 3)
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_qa_start",
+		traceevent.Field{Key: "max_rounds", Value: handoffQADefaultRounds})
+	qaTurns, err := runHandoffQA(ctx, model, apiKey, contextWindow, handoffDoc, oldMessages, handoffQADefaultRounds, s.agentCtx.SystemPrompt)
 	if err != nil {
 		slog.Warn("[Handoff] Q&A verification failed, proceeding with checkpoint",
 			"error", err,
 			"qa_turns", len(qaTurns),
 		)
 	}
+	totalQuestions := 0
+	totalAnswers := 0
+	for _, t := range qaTurns {
+		totalQuestions += len(t.Question)
+		totalAnswers += len(t.Answer)
+	}
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_qa_complete",
+		traceevent.Field{Key: "rounds_completed", Value: len(qaTurns)},
+		traceevent.Field{Key: "total_questions", Value: totalQuestions},
+		traceevent.Field{Key: "total_answers", Value: totalAnswers})
 
-	return s.finalizeHandoff(handoffDoc, qaTurns)
+	if err := s.finalizeHandoff(ctx, handoffDoc, qaTurns); err != nil {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_failed",
+			traceevent.Field{Key: "error", Value: err.Error()},
+			traceevent.Field{Key: "phase", Value: "checkpoint"})
+		s.handoffPending = false
+		return err
+	}
+
+	durationMs := time.Since(startTime).Milliseconds()
+	checkpoint, _ := session.GetCurrentCheckpoint(s.config.GetSessionDir())
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_complete",
+		traceevent.Field{Key: "checkpoint_name", Value: checkpoint},
+		traceevent.Field{Key: "duration_ms", Value: durationMs})
+
+	s.handoffPending = false
+	return nil
 }
 
 // finalizeHandoff creates the checkpoint, writes messages, switches the active
 // checkpoint, and reloads context. It is separated from performHandoff so it
 // can be unit-tested without making LLM calls.
-func (s *loopState) finalizeHandoff(handoffDoc string, qaTurns []qaTurn) error {
+func (s *loopState) finalizeHandoff(ctx context.Context, handoffDoc string, qaTurns []qaTurn) error {
 	sessionDir := s.config.GetSessionDir()
 	if sessionDir == "" {
 		return fmt.Errorf("handoff requires a session directory")
@@ -64,10 +98,22 @@ func (s *loopState) finalizeHandoff(handoffDoc string, qaTurns []qaTurn) error {
 		return fmt.Errorf("get current checkpoint: %w", err)
 	}
 
+	// Read checkpoint count from meta, compute next checkpoint number.
+	checkpointCount, err := session.ReadCheckpointCount(sessionDir)
+	if err != nil {
+		return fmt.Errorf("read checkpoint count: %w", err)
+	}
+	checkpointNum := checkpointCount + 1
+
 	// Create new checkpoint directory.
-	checkpointName, err := session.CreateHandoffCheckpoint(sessionDir, parentCheckpoint)
+	checkpointName, err := session.CreateHandoffCheckpoint(sessionDir, checkpointNum, parentCheckpoint)
 	if err != nil {
 		return fmt.Errorf("create handoff checkpoint: %w", err)
+	}
+
+	// Persist the updated checkpoint count.
+	if err := session.WriteCheckpointCount(sessionDir, checkpointNum); err != nil {
+		return fmt.Errorf("write checkpoint count: %w", err)
 	}
 
 	// Build checkpoint messages from handoff doc + Q&A turns.
@@ -77,6 +123,11 @@ func (s *loopState) finalizeHandoff(handoffDoc string, qaTurns []qaTurn) error {
 	if err := session.WriteHandoffMessages(sessionDir, checkpointName, entries); err != nil {
 		return fmt.Errorf("write handoff messages: %w", err)
 	}
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_checkpoint_created",
+		traceevent.Field{Key: "checkpoint_name", Value: checkpointName},
+		traceevent.Field{Key: "checkpoint_num", Value: checkpointNum},
+		traceevent.Field{Key: "messages_written", Value: len(entries)})
 
 	// Write the handoff document as handoff.md.
 	if err := session.WriteHandoffDocument(sessionDir, checkpointName, handoffDoc); err != nil {
@@ -92,6 +143,9 @@ func (s *loopState) finalizeHandoff(handoffDoc string, qaTurns []qaTurn) error {
 		}
 	}
 
+	// Capture old message count before switching.
+	oldMessagesCount := len(s.agentCtx.RecentMessages)
+
 	// Atomically switch current.txt to the new checkpoint.
 	if err := session.SwitchCheckpoint(sessionDir, checkpointName); err != nil {
 		return fmt.Errorf("switch checkpoint: %w", err)
@@ -104,9 +158,15 @@ func (s *loopState) finalizeHandoff(handoffDoc string, qaTurns []qaTurn) error {
 	}
 	s.agentCtx.RecentMessages = messages
 
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_context_switched",
+		traceevent.Field{Key: "new_checkpoint", Value: checkpointName},
+		traceevent.Field{Key: "old_messages_count", Value: oldMessagesCount},
+		traceevent.Field{Key: "new_messages_count", Value: len(messages)})
+
 	// Reset state counters — the new checkpoint starts fresh.
 	s.hardFloorCrossed = false
 	s.hardFloorTurns = 0
+	s.handoffPending = false
 	s.compactionRecs = 0
 	s.emptyRetries = 0
 	s.guardAbortRecovery = false
@@ -215,22 +275,35 @@ func (s *loopState) autoGenerateHandoffDoc(ctx context.Context) (string, error) 
 		return "", fmt.Errorf("no conversation content to generate handoff doc from")
 	}
 
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_start",
+		traceevent.Field{Key: "conversation_length", Value: conversationText.Len()})
+
+	// Reuse the main agent system prompt to preserve provider prefix caching.
+	// Send the generation instruction as a user message.
 	llmCtx := llm.LLMContext{
-		SystemPrompt: handoffGenerateSystemPrompt,
+		SystemPrompt: s.agentCtx.SystemPrompt,
 		Messages: []llm.LLMMessage{
+			{Role: "user", Content: handoffGenerateInstruction},
 			{Role: "user", Content: conversationText.String()},
 		},
 	}
 
 	doc, err := streamLLMText(ctx, model, llmCtx, apiKey)
 	if err != nil {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_failed",
+			traceevent.Field{Key: "error", Value: err.Error()})
 		return "", fmt.Errorf("auto-generate handoff doc: %w", err)
 	}
 
 	doc = strings.TrimSpace(doc)
 	if doc == "" {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_failed",
+			traceevent.Field{Key: "error", Value: "empty doc"})
 		return "", fmt.Errorf("auto-generated handoff doc is empty")
 	}
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_complete",
+		traceevent.Field{Key: "doc_length", Value: len(doc)})
 
 	return doc, nil
 }

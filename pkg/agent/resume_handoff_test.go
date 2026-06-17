@@ -77,7 +77,7 @@ func TestLoadHandoffResumeState_AfterSwitch(t *testing.T) {
 	}
 
 	// Create cp_002, write to it, switch
-	cp2, err := session.CreateHandoffCheckpoint(sessionDir, "cp_001")
+	cp2, err := session.CreateHandoffCheckpoint(sessionDir, 2, "cp_001")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint: %v", err)
 	}

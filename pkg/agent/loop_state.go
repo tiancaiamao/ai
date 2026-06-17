@@ -37,6 +37,11 @@ type loopState struct {
 	// hardFloorTurns counts turns since the hard threshold was crossed.
 	// After exceeding 2, auto-execute handoff is triggered.
 	hardFloorTurns int
+	// handoffPending is true when a handoff reminder was recently injected,
+	// false after handoff completes or fails. Used to optimize the marker
+	// detection check — we only scan for <handoff_complete> when a reminder
+	// was recently sent.
+	handoffPending bool
 }
 
 func newLoopState(

@@ -47,7 +47,7 @@ const (
 
 // ContextManagementConfig controls which context management strategy is used.
 type ContextManagementConfig struct {
-	Mode string `json:"mode,omitempty"` // ContextModeLegacy | ContextModeHandoff (default: ContextModeLegacy)
+	Mode string `json:"mode,omitempty"` // ContextModeLegacy | ContextModeHandoff (default: ContextModeHandoff)
 }
 
 // UnmarshalJSON accepts both the legacy boolean format
@@ -72,12 +72,12 @@ func (c *ContextManagementConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ContextManagementMode returns the configured mode, defaulting to ContextModeLegacy.
+// ContextManagementMode returns the configured mode, defaulting to ContextModeHandoff.
 func (c *Config) ContextManagementMode() string {
 	if c.ContextManagement != nil && c.ContextManagement.Mode != "" {
 		return c.ContextManagement.Mode
 	}
-	return ContextModeLegacy
+	return ContextModeHandoff
 }
 
 // LogConfig contains logging configuration.

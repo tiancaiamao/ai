@@ -168,7 +168,7 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	// messages (pre and post handoff). Cross-checkpoint rewind is not supported.
 	// Returning an error is the safest correct behavior — users should use /fork
 	// to branch from a specific point instead.
-	if session.IsHandoffSession(app.sess.GetDir()) {
+	if session.IsHandoffSessionWithDefault(app.sess.GetDir(), app.cfg.ContextManagementMode()) {
 		return nil, fmt.Errorf("rewind is not supported in handoff mode; use /fork to branch from a specific checkpoint point")
 	}
 
@@ -256,7 +256,7 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 	// Handoff mode: fork copies the entire session directory (all checkpoints,
 	// current.txt, meta.json). Entry-level branching is not needed.
 	sessionDir := app.sess.GetDir()
-	if session.IsHandoffSession(sessionDir) {
+	if session.IsHandoffSessionWithDefault(sessionDir, app.cfg.ContextManagementMode()) {
 		slog.Info("Forking handoff session (directory copy)", "sourceDir", sessionDir)
 		newSess, err := app.sessionMgr.ForkHandoffSession(app.sess, name, title)
 		if err != nil {

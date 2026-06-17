@@ -510,17 +510,17 @@ func TestContextManagementConfig_ObjectLegacy(t *testing.T) {
 	}
 }
 
-// --- P1-2: Default mode should be "legacy" ---
+// --- P1-2: Default mode should be "handoff" ---
 
 // TestContextManagementMode_Default verifies that when contextManagement is
-// absent, the default mode is ContextModeLegacy (not handoff).
+// absent, the default mode is ContextModeHandoff.
 func TestContextManagementMode_Default(t *testing.T) {
 	jsonStr := `{"model": {"id": "test", "provider": "zai"}}`
 	var cfg Config
 	if err := json.Unmarshal([]byte(jsonStr), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if mode := cfg.ContextManagementMode(); mode != ContextModeLegacy {
-		t.Errorf("expected default ContextManagementMode() %q, got %q", ContextModeLegacy, mode)
+	if mode := cfg.ContextManagementMode(); mode != ContextModeHandoff {
+		t.Errorf("expected default ContextManagementMode() %q, got %q", ContextModeHandoff, mode)
 	}
 }

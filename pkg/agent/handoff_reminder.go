@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // estimateContextTokens returns the total context token count from the last
@@ -129,7 +131,7 @@ func newContextManagementMessage(text string) agentctx.AgentMessage {
 // auto-executed.
 //
 // The method is a no-op when ContextManagementMode != contextModeHandoff.
-func (s *loopState) maybeInjectHandoffReminder(agentCtx *agentctx.AgentContext) (autoExecute bool) {
+func (s *loopState) maybeInjectHandoffReminder(ctx context.Context, agentCtx *agentctx.AgentContext) (autoExecute bool) {
 	if s.config.ContextManagementMode != contextModeHandoff {
 		return false
 	}
@@ -142,6 +144,7 @@ func (s *loopState) maybeInjectHandoffReminder(agentCtx *agentctx.AgentContext) 
 	if currentTokens < soft {
 		s.hardFloorCrossed = false
 		s.hardFloorTurns = 0
+		s.handoffPending = false
 		return false
 	}
 
@@ -151,11 +154,17 @@ func (s *loopState) maybeInjectHandoffReminder(agentCtx *agentctx.AgentContext) 
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages, reminder)
 		s.newMessages = append(s.newMessages, reminder)
 		agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+		s.handoffPending = true
 		slog.Info("[Loop] Handoff reminder injected (soft threshold)",
 			"tokens", currentTokens,
 			"soft", soft,
 			"hard", hard,
 		)
+		traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_reminder_injected",
+			traceevent.Field{Key: "tokens", Value: currentTokens},
+			traceevent.Field{Key: "soft", Value: soft},
+			traceevent.Field{Key: "hard", Value: hard},
+			traceevent.Field{Key: "urgency", Value: "soft"})
 	}
 
 	// At or above hard threshold — urgent reminder every turn.
@@ -168,13 +177,22 @@ func (s *loopState) maybeInjectHandoffReminder(agentCtx *agentctx.AgentContext) 
 		agentCtx.RecentMessages = append(agentCtx.RecentMessages, urgent)
 		s.newMessages = append(s.newMessages, urgent)
 		s.hardFloorTurns++
+		s.handoffPending = true
 		slog.Warn("[Loop] Urgent handoff reminder injected (hard threshold)",
 			"tokens", currentTokens,
 			"soft", soft,
 			"hard", hard,
 			"hardFloorTurns", s.hardFloorTurns,
 		)
+		traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_reminder_injected",
+			traceevent.Field{Key: "tokens", Value: currentTokens},
+			traceevent.Field{Key: "soft", Value: soft},
+			traceevent.Field{Key: "hard", Value: hard},
+			traceevent.Field{Key: "urgency", Value: "hard"})
 		if s.hardFloorTurns > 2 {
+			traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_execute_triggered",
+				traceevent.Field{Key: "tokens", Value: currentTokens},
+				traceevent.Field{Key: "hard", Value: hard})
 			return true
 		}
 	} else {

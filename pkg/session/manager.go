@@ -27,6 +27,10 @@ type SessionMeta struct {
 	CurrentWorkdir string `json:"currentWorkdir,omitempty"`
 	// ContextManagementMode records which context management strategy is used ("legacy" | "handoff").
 	ContextManagementMode string `json:"contextManagementMode,omitempty"`
+	// HandoffCheckpointCount tracks the number of handoff checkpoints created
+	// for this session. Used to assign sequential checkpoint names (cp_001,
+	// cp_002, ...) without scanning the directory.
+	HandoffCheckpointCount int `json:"handoffCheckpointCount,omitempty"`
 }
 
 // SessionManager manages multiple sessions.

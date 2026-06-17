@@ -90,7 +90,7 @@ func TestCreateHandoffCheckpoint_Sequential(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
 
 	// First checkpoint
-	cp1, err := CreateHandoffCheckpoint(sessionDir, "")
+	cp1, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint #1 failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestCreateHandoffCheckpoint_Sequential(t *testing.T) {
 	}
 
 	// Second checkpoint with parent
-	cp2, err := CreateHandoffCheckpoint(sessionDir, cp1)
+	cp2, err := CreateHandoffCheckpoint(sessionDir, 2, cp1)
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint #2 failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestCreateHandoffCheckpoint_Sequential(t *testing.T) {
 	}
 
 	// Third checkpoint
-	cp3, err := CreateHandoffCheckpoint(sessionDir, cp2)
+	cp3, err := CreateHandoffCheckpoint(sessionDir, 3, cp2)
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint #3 failed: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCreateHandoffCheckpoint_Sequential(t *testing.T) {
 
 func TestWriteHandoffMessages(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
-	cpName, err := CreateHandoffCheckpoint(sessionDir, "")
+	cpName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint failed: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestWriteHandoffMessages(t *testing.T) {
 
 func TestLoadHandoffCheckpointMessages_SkipsHeader(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
-	cpName, err := CreateHandoffCheckpoint(sessionDir, "")
+	cpName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint failed: %v", err)
 	}
@@ -250,28 +250,37 @@ func TestGetCurrentCheckpoint_NoFile(t *testing.T) {
 }
 
 func TestIsHandoffSession(t *testing.T) {
-	t.Run("not handoff (empty)", func(t *testing.T) {
+	t.Run("not handoff (empty path)", func(t *testing.T) {
 		if IsHandoffSession("") {
 			t.Error("empty dir should not be handoff")
 		}
 	})
 
-	t.Run("not handoff (no checkpoints)", func(t *testing.T) {
+	t.Run("not handoff (no meta, treated as legacy)", func(t *testing.T) {
 		dir := makeTestSessionDir(t)
+		// With no meta.json, the session is legacy and must NOT be treated
+		// as handoff.
 		if IsHandoffSession(dir) {
-			t.Error("dir without checkpoints should not be handoff")
+			t.Error("dir without meta.json should not be handoff")
 		}
 	})
 
-	t.Run("not handoff (checkpoints but no current.txt)", func(t *testing.T) {
+	t.Run("not handoff (legacy mode in meta)", func(t *testing.T) {
 		dir := makeTestSessionDir(t)
-		_ = os.MkdirAll(filepath.Join(dir, "checkpoints", "cp_001"), 0755)
+		meta := SessionMeta{ContextManagementMode: "legacy"}
+		data, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatalf("marshal meta: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+			t.Fatalf("write meta.json: %v", err)
+		}
 		if IsHandoffSession(dir) {
-			t.Error("dir with checkpoints but no current.txt should not be handoff")
+			t.Error("legacy session should not be handoff")
 		}
 	})
 
-	t.Run("is handoff", func(t *testing.T) {
+	t.Run("is handoff (initialized)", func(t *testing.T) {
 		dir := makeTestSessionDir(t)
 		if err := InitHandoffSession(dir); err != nil {
 			t.Fatalf("InitHandoffSession failed: %v", err)
@@ -280,11 +289,25 @@ func TestIsHandoffSession(t *testing.T) {
 			t.Error("initialized session should be handoff")
 		}
 	})
+
+	t.Run("IsHandoffSessionWithDefault (legacy default)", func(t *testing.T) {
+		dir := makeTestSessionDir(t)
+		if IsHandoffSessionWithDefault(dir, "legacy") {
+			t.Error("should be false when default is legacy and no meta")
+		}
+	})
+
+	t.Run("IsHandoffSessionWithDefault (handoff default)", func(t *testing.T) {
+		dir := makeTestSessionDir(t)
+		if !IsHandoffSessionWithDefault(dir, "handoff") {
+			t.Error("should be true when default is handoff and no meta")
+		}
+	})
 }
 
 func TestWriteHandoffDocument(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
-	cpName, err := CreateHandoffCheckpoint(sessionDir, "")
+	cpName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint failed: %v", err)
 	}
@@ -306,7 +329,7 @@ func TestWriteHandoffDocument(t *testing.T) {
 
 func TestLoadHandoffCheckpointMessages_MixedEntries(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
-	cpName, err := CreateHandoffCheckpoint(sessionDir, "")
+	cpName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint failed: %v", err)
 	}
@@ -354,21 +377,21 @@ func TestLoadHandoffCheckpointMessages_MixedEntries(t *testing.T) {
 	}
 }
 
-// TestCreateHandoffCheckpoint_IgnoresNonCheckpointDirs verifies that
-// non-matching directories under checkpoints/ are ignored when computing
-// the next checkpoint number.
-func TestCreateHandoffCheckpoint_IgnoresNonCheckpointDirs(t *testing.T) {
+// TestCreateHandoffCheckpoint_WithExistingDirs verifies that creating a
+// checkpoint works even when non-matching directories exist under checkpoints/.
+// The checkpoint number comes from the caller, not directory scanning.
+func TestCreateHandoffCheckpoint_WithExistingDirs(t *testing.T) {
 	sessionDir := makeTestSessionDir(t)
 
 	// Create a bogus directory that doesn't match cp_NNN pattern
 	_ = os.MkdirAll(filepath.Join(sessionDir, "checkpoints", "random_dir"), 0755)
 
-	cpName, err := CreateHandoffCheckpoint(sessionDir, "")
+	cpName, err := CreateHandoffCheckpoint(sessionDir, 1, "")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint failed: %v", err)
 	}
 	if cpName != "cp_001" {
-		t.Errorf("expected cp_001 (ignoring non-matching dirs), got %s", cpName)
+		t.Errorf("expected cp_001 (number from caller), got %s", cpName)
 	}
 }
 
@@ -400,7 +423,7 @@ func TestFullHandoffLifecycle(t *testing.T) {
 	}
 
 	// 3. Create cp_002 and write a handoff doc
-	cp2, err := CreateHandoffCheckpoint(sessionDir, "cp_001")
+	cp2, err := CreateHandoffCheckpoint(sessionDir, 2, "cp_001")
 	if err != nil {
 		t.Fatalf("CreateHandoffCheckpoint: %v", err)
 	}

@@ -213,7 +213,7 @@ func runInnerLoop(
 			}
 		} else {
 			// Handoff mode: inject reminders instead of proactive compaction.
-			if autoExecute := state.maybeInjectHandoffReminder(agentCtx); autoExecute {
+			if autoExecute := state.maybeInjectHandoffReminder(ctx, agentCtx); autoExecute {
 				slog.Info("[Handoff] Auto-execute triggered")
 				doc, err := state.autoGenerateHandoffDoc(ctx)
 				if err != nil {
@@ -296,11 +296,14 @@ func runInnerLoop(
 		}
 
 		// Check for handoff marker in LLM response.
+		// Only scan when a reminder was recently injected (handoffPending).
 		// If detected, run the handoff process: Q&A verification, checkpoint
 		// creation, context reload. On success, continue the loop with fresh
 		// context. On failure, fall through to normal tool processing.
-		if hasHandoffMarker(msg) {
+		if state.handoffPending && hasHandoffMarker(msg) {
 			handoffDoc := extractHandoffDoc(msg)
+			traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_marker_detected",
+				traceevent.Field{Key: "doc_length", Value: len(handoffDoc)})
 			if err := state.performHandoff(ctx, handoffDoc); err != nil {
 				slog.Error("[Handoff] Handoff failed", "error", err)
 			} else {

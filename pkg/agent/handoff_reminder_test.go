@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -188,7 +189,7 @@ func TestMaybeInjectHandoffReminder_NotHandoffMode(t *testing.T) {
 	agentCtx := newHandoffTestAgentCtx(100000)
 	state := newTestLoopState(config, agentCtx)
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 1, len(agentCtx.RecentMessages), "no injection in legacy mode")
 }
@@ -199,7 +200,7 @@ func TestMaybeInjectHandoffReminder_BelowSoftThreshold(t *testing.T) {
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 1, len(agentCtx.RecentMessages), "no injection below soft threshold")
 	// Hard floor state should be reset
@@ -215,7 +216,7 @@ func TestMaybeInjectHandoffReminder_AboveSoftIntervalNotMet(t *testing.T) {
 	// ToolCallsSinceLastTrigger = 5, which is < 9
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 5
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 1, len(agentCtx.RecentMessages), "no injection when interval not met")
 }
@@ -227,7 +228,7 @@ func TestMaybeInjectHandoffReminder_AboveSoftIntervalMet(t *testing.T) {
 	// interval = 9, ToolCallsSinceLastTrigger = 10 >= 9
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 2, len(agentCtx.RecentMessages), "should inject one reminder")
 
@@ -251,7 +252,7 @@ func TestMaybeInjectHandoffReminder_AboveHardInjectsUrgent(t *testing.T) {
 	// Set high enough to trigger soft injection too
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	// First call above hard → hardFloorTurns becomes 1, not > 2 yet
 	assert.False(t, autoExecute)
 
@@ -275,19 +276,19 @@ func TestMaybeInjectHandoffReminder_AutoExecuteAfterThreeCalls(t *testing.T) {
 
 	// Call 1: hardFloorTurns goes 0 → 1
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 1, state.hardFloorTurns)
 
 	// Call 2: hardFloorTurns goes 1 → 2
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	autoExecute = state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute = state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 2, state.hardFloorTurns)
 
 	// Call 3: hardFloorTurns goes 2 → 3, which is > 2 → auto-execute
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	autoExecute = state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute = state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.True(t, autoExecute)
 	assert.Equal(t, 3, state.hardFloorTurns)
 }
@@ -299,7 +300,7 @@ func TestMaybeInjectHandoffReminder_ResetWhenBelowSoft(t *testing.T) {
 
 	// First go above hard to set hardFloorCrossed
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.True(t, state.hardFloorCrossed)
 	assert.Equal(t, 1, state.hardFloorTurns)
 
@@ -307,7 +308,7 @@ func TestMaybeInjectHandoffReminder_ResetWhenBelowSoft(t *testing.T) {
 	agentCtx2 := newHandoffTestAgentCtx(30000)
 	// Keep the same AgentState
 	agentCtx2.AgentState = agentCtx.AgentState
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx2)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx2)
 	assert.False(t, autoExecute)
 	assert.False(t, state.hardFloorCrossed)
 	assert.Equal(t, 0, state.hardFloorTurns)
@@ -320,14 +321,14 @@ func TestMaybeInjectHandoffReminder_ResetWhenBetweenSoftAndHard(t *testing.T) {
 	agentCtx := newHandoffTestAgentCtx(160000)
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.True(t, state.hardFloorCrossed)
 
 	// Now drop to between soft and hard (e.g. 80000)
 	agentCtx2 := newHandoffTestAgentCtx(80000)
 	agentCtx2.AgentState = agentCtx.AgentState
 	agentCtx2.AgentState.ToolCallsSinceLastTrigger = 100
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx2)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx2)
 	assert.False(t, autoExecute)
 	assert.False(t, state.hardFloorCrossed, "hard floor should reset when below hard")
 	assert.Equal(t, 0, state.hardFloorTurns)
@@ -341,7 +342,7 @@ func TestMaybeInjectHandoffReminder_LargeWindowThresholds(t *testing.T) {
 	// interval = 10 - (120000/100000) = 10 - 1 = 9
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 2, len(agentCtx.RecentMessages), "should inject one reminder")
 
@@ -357,7 +358,7 @@ func TestMaybeInjectHandoffReminder_DefaultContextWindow(t *testing.T) {
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 
 	injected := agentCtx.RecentMessages[1]
@@ -372,7 +373,7 @@ func TestMaybeInjectHandoffReminder_MessageMetadata(t *testing.T) {
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 
 	injected := agentCtx.RecentMessages[1]
 	assert.Equal(t, "user", injected.Role)
@@ -394,7 +395,7 @@ func TestMaybeInjectHandoffReminder_NoUsageReturnsFalse(t *testing.T) {
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
 	// No assistant message with usage → tokens = 0, below soft → no injection
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, 1, len(agentCtx.RecentMessages))
 }
@@ -405,14 +406,14 @@ func TestMaybeInjectHandoffReminder_SoftCounterResetsAfterInjection(t *testing.T
 	state := newTestLoopState(config, agentCtx)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
 
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.Equal(t, 0, agentCtx.AgentState.ToolCallsSinceLastTrigger,
 		"ToolCallsSinceLastTrigger should reset after injection")
 
 	// Second call immediately: interval=9, counter=0 → 0 < 9 → no injection
 	before := len(agentCtx.RecentMessages)
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
-	autoExecute := state.maybeInjectHandoffReminder(agentCtx)
+	autoExecute := state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	assert.False(t, autoExecute)
 	assert.Equal(t, before, len(agentCtx.RecentMessages),
 		"no injection when counter just reset")
@@ -425,11 +426,11 @@ func TestMaybeInjectHandoffReminder_AboveHardEveryCall(t *testing.T) {
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
 
 	// Each call above hard should inject urgent
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	msgsAfterCall1 := len(agentCtx.RecentMessages)
 
 	agentCtx.AgentState.ToolCallsSinceLastTrigger = 100
-	state.maybeInjectHandoffReminder(agentCtx)
+	state.maybeInjectHandoffReminder(context.Background(), agentCtx)
 	msgsAfterCall2 := len(agentCtx.RecentMessages)
 
 	// Each call should add at least 1 message (urgent)

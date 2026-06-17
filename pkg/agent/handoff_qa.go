@@ -9,6 +9,7 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // qaTurn represents a single question-answer exchange during handoff
@@ -27,12 +28,16 @@ const (
 	handoffQADefaultRounds = 3
 )
 
-// qaAskSystemPrompt instructs the LLM to identify gaps in the handoff document.
-const qaAskSystemPrompt = `You are reviewing a handoff document. Identify any critical information that is missing or unclear. Ask specific questions to fill the gaps. Focus on: current task state, key decisions, pending work, file paths, error context. If the document is complete and has no gaps, respond with exactly "no gaps found".`
+// qaAskUserMessage instructs the LLM to identify gaps in the handoff document.
+// Sent as a role:"user" message so the system prompt prefix is preserved for
+// provider prefix caching.
+const qaAskUserMessage = `You are being asked to review a handoff document for completeness. Identify any critical information that is missing or unclear. Ask specific questions. If the document is complete, respond with 'COMPLETE'. Focus on: current task state, key decisions, pending work, file paths, error context.`
 
 // qaAnswerSystemPrompt instructs the LLM to answer questions from conversation
 // history.
-const qaAnswerSystemPrompt = `Answer the following questions based on the conversation history. Be concise and specific. If the information is not available in the history, say so.`
+// qaAnswerUserMessage is the template for requesting answers about the handoff
+// document from conversation history. Sent as a role:"user" message.
+const qaAnswerUserMessageTemplate = `Answer these questions about the handoff document based on the conversation history: %s`
 
 // noGapsIndicators are substrings that signal the LLM found no gaps. The check
 // is case-insensitive.
@@ -106,6 +111,7 @@ func runHandoffQA(
 	handoffDoc string,
 	oldMessages []agentctx.AgentMessage,
 	maxRounds int,
+	systemPrompt string,
 ) ([]qaTurn, error) {
 	if maxRounds <= 0 {
 		maxRounds = handoffQADefaultRounds
@@ -114,10 +120,16 @@ func runHandoffQA(
 	var turns []qaTurn
 
 	for round := 0; round < maxRounds; round++ {
-		// --- Ask questions: send handoff doc to LLM without old context.
+		// --- Ask questions: send handoff doc + QA instructions as user messages.
+		// The system prompt is reused from the main agent loop to preserve
+		// provider prefix caching.
+		span := traceevent.StartSpan(ctx, "handoff_qa_round", traceevent.CategoryEvent,
+			traceevent.Field{Key: "round", Value: round})
+
 		askCtx := llm.LLMContext{
-			SystemPrompt: qaAskSystemPrompt,
+			SystemPrompt: systemPrompt,
 			Messages: []llm.LLMMessage{
+				{Role: "user", Content: qaAskUserMessage},
 				{Role: "user", Content: handoffDoc},
 			},
 		}
@@ -150,13 +162,13 @@ func runHandoffQA(
 		answerMessages = append(answerMessages, llm.LLMMessage{
 			Role: "user",
 			Content: fmt.Sprintf(
-				"Please answer these questions about the handoff document:\n\n%s",
+				qaAnswerUserMessageTemplate,
 				questions,
 			),
 		})
 
 		answerCtx := llm.LLMContext{
-			SystemPrompt: qaAnswerSystemPrompt,
+			SystemPrompt: systemPrompt,
 			Messages:     answerMessages,
 		}
 		answer, err := streamLLMText(ctx, model, answerCtx, apiKey)
@@ -181,6 +193,8 @@ func runHandoffQA(
 			"%s\n\n## Q&A Round %d\n\n**Q:** %s\n\n**A:** %s",
 			handoffDoc, round+1, questions, answer,
 		)
+
+		span.End()
 	}
 
 	return turns, nil
