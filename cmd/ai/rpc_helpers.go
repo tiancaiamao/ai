@@ -106,8 +106,10 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 		if sessionDir != "" {
 			// Handoff-mode initialization: for new sessions, create the
 			// checkpoint directory structure (cp_001 + current.txt) if it
-			// doesn't already exist.
-			if app.cfg.ContextManagementMode() == config.ContextModeHandoff && !session.IsHandoffSessionWithDefault(sessionDir, app.cfg.ContextManagementMode()) {
+			// doesn't already exist. InitHandoffSession is idempotent — it
+			// returns nil when current.txt already exists — so calling it
+			// unconditionally in handoff mode is safe.
+			if app.cfg.ContextManagementMode() == config.ContextModeHandoff {
 				if err := session.InitHandoffSession(sessionDir); err != nil {
 					slog.Warn("Failed to initialize handoff session, falling back to legacy path",
 						"error", err)
