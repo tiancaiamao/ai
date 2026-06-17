@@ -128,25 +128,67 @@ echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 **⚠️ tmux session 命名规则：** 必须包含 `$RUN_ID` 前缀（如 `agent-$RUN_ID-xxx`），避免与其他 agent 的 tmux session 冲突。
 
-### 阶段 2: 收集初始回复
+### 阶段 2: 收集回复
 
-spawn 时通过 `--input` 传入任务后，子 agent 会立即开始处理。收集回复有两种方式：
+spawn 时通过 `--input` 传入任务后，子 agent 会立即开始处理。**根据预期输出长度选择收集方式**：
 
-**方式 A（推荐）: `ai send --wait`**
+#### 方式 C（长输出任务）: 写文件 + 观察等待
+
+> **适用场景：** review、代码探索、设计文档、任何预期输出 >500 字的任务。
+>
+> **原理：** spawn 时就告诉子 agent把结果写到文件。主 agent 用 `watch` 观察进度（不打断），完成后读文件。**零截断、零打断**。
+
+```bash
+# spawn 时在 --input 里指示写文件
+RESULT_FILE="/tmp/task-$RUN_ID-result.md"
+
+tmux new-session -d -s "$TMUX_SESSION" \
+  "ai serve --role coder \
+   --input '...Write your complete output to $RESULT_FILE...When done, output DONE.' \
+   --name 'my-task' \
+   --id-file $ID_FILE"
+
+# 观察进度（不打断，不注入新 prompt）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 15m
+
+# 完成后读文件（完整内容，无截断）
+cat "$RESULT_FILE"
+```
+
+**为什么长任务必须用方式 C：**
+- 方式 A 的 `--summary` 会截断长输出（实测超 ~3K tokens 就截断）
+- 方式 A 会注入新 prompt，打断正在干活（如深度代码核查）的子 agent
+- 文件写入不受任何长度限制，主 agent 读到的是完整结果
+
+#### 方式 A（短输出 / 多轮交互）: `ai send --wait`
+
+> **适用场景：** 状态查询、简单问答、多轮对话追加反馈。
 
 ```bash
 # ⚠️ ai send 必须带消息参数，即使是等待 --input 的回复
 ai send --id "$CHILD_ID" --wait --summary --timeout 20m "请给出你的完整结果"
 ```
 
-**方式 B: `ai watch --follow`**
+**⚠️ 方式 A 会注入一条新 prompt。** 子 agent 会把它当作追问处理。如果子 agent 正在执行长任务（如深度代码核查），这条注入会打断它——**长任务不要用方式 A**。
+
+#### 方式 B（观察中间过程）: `ai watch --follow`
+
+> **适用场景：** 需要实时看子 agent 的 tool calls / thinking 过程。
 
 ```bash
+# ⚠️ 必须加 --pretty，否则非交互终端无输出
 ai watch --id "$CHILD_ID" --follow --pretty --timeout 20m
 ```
 
-> **为什么推荐方式 A：** `send --wait` 先订阅事件流再发送，消除了 race condition。且 `--summary` 只输出最终结论，不刷屏中间 tool calls。
-> **但注意：** 方式 A 会给子 agent 发送一条额外消息，子 agent 会把它当作追问来处理。
+> **方式 B 不注入 prompt、不打断**，适合"偷看"子 agent 在干什么。但中间 tool calls 会刷屏，长任务看起来像卡住了（其实在做大量沉默的 grep/read）。配合方式 C（写文件）一起用效果最好。
+
+#### 决策表
+
+| 预期输出 | 收集方式 | 观察方式 |
+|---------|---------|---------|
+| 短（问答、状态） | 方式 A (`send --wait --summary`) | 不需要 |
+| 长（review、探索、设计） | 方式 C（写文件 + 读文件） | 方式 B (`watch --follow --pretty`) |
+| 需要中间过程调试 | 方式 B | — |
 
 **⚠️ `ai send` 必须带消息参数。** 即使子 agent 已经通过 `--input` 收到了任务，`ai send` 也不支持无消息调用（会报错 `error: no message provided`）。消息内容可以是简单的追问，比如 `"请给出你的分析结果"` 或 `"继续"`。
 
@@ -251,7 +293,16 @@ done
 | `--timeout 20m` | 最多等 20 分钟，超时退出 |
 | `--timeout 0` | 永远等，直到进程退出或被 kill |
 
-注意：`--timeout` 超时只影响 watch 命令退出，**不影响子 agent 进程**。超时后子 agent 仍在运行，需要 `ai kill` 清理。
+**⚠️ 按任务复杂度设 timeout——给得太短会导致"超时→打断→kill→重来"的恶性循环：**
+
+| 任务类型 | 建议 timeout | 理由 |
+|---------|-------------|------|
+| 简单问答 / 状态查询 | `2m` | 单轮 LLM 调用 |
+| 单文件修改 / 小 bug fix | `5m` | 少量 tool calls |
+| 代码探索 / review（需 grep+read 多文件） | `10-15m` | 深度代码核查很慢，子 agent 会沉默很久 |
+| 实现任务（多文件、测试） | `15-30m` | 多轮 tool 调用 + 验证 |
+
+注意：`--timeout` 超时只影响 watch/send 命令退出，**不影响子 agent 进程**。超时后子 agent 仍在运行，需要 `ai kill` 清理。
 
 ## How to List Your Subagents
 
@@ -283,7 +334,7 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | `--name <string>` | Human-readable name |
 | `--role <coder\|orchestrator\|validator>` | Agent role (affects system prompt) |
 | `--timeout <duration>` | Total execution timeout (e.g., `10m`, `600s`) |
-| `--session <path>` | Resume from existing session file |
+| `--session <path>` | Resume from existing session — **must be the session DIRECTORY path** (containing messages.jsonl), NOT the file path itself |
 | `--max-turns <int>` | Max conversation turns |
 | `--id-file <path>` | Write run ID to file after startup (for background mode) |
 
@@ -344,6 +395,11 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | tmux session 名不含 `$RUN_ID` | 必须用 `agent-$RUN_ID-xxx` 格式，避免冲突 |
 | 忘记写入 subagent 文件 | spawn 后必须 `echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent` |
 | 用 `ai kill` 杀不属于自己的 agent | ⛔ 只 kill 自己 subagent 文件里的 ID |
+| 长输出任务用 `send --wait --summary` 收集 | ⛔ `--summary` 截断长输出；长任务用**方式 C（写文件）** |
+| 用 `ai send` 查询正在干活的子 agent 进度 | ⛔ `send` 会注入新 prompt **打断**子 agent；用 `watch --follow --pretty` 观察 |
+| `ai watch` 不加 `--pretty` | ⛔ 非 TUI 环境（tmux/脚本）不加 `--pretty` 会无输出 |
+| timeout 设太短（如 review 任务设 60s） | ⛔ 超时→打断→kill→重来循环；按任务类型设（探索/review 至少 10m） |
+| kill 前不确认子 agent 是否在推进 | kill 前 `watch --follow --pretty` 确认是否真的卡死 |
 
 ## Relationship to Other Skills
 

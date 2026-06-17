@@ -98,3 +98,4 @@ Use `change_workspace` tool for persistent directory switches; "cd <dir> && <com
 - **`bash | grep` for source code search:** Use the `grep` tool instead — it provides structured output, `context` lines, `filePattern` filtering. Only use `bash | grep` for log files, `/tmp/` files, or pipe intermediates.
 - **Compound bash commands:** Each `bash` call should do one thing. For multi-step workflows, split into separate calls or write intermediate results to temp files.
 - **Blind file reads:** Never `read` an entire file blindly. Use `grep` to locate relevant sections first, then `read` with `offset`/`limit`.
+- **Broad filesystem searches (`find ~`, `find /`):** Never search the entire home directory or filesystem root. Either target a known specific directory, or search within the cwd/workspace directory. Full-tree `find` is slow, noisy, and wasteful.
