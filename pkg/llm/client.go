@@ -84,6 +84,11 @@ func StreamLLM(
 			reqBody["tool_choice"] = "auto"
 		}
 
+		// Inject thinking/reasoning parameters for models that support API control.
+		for k, v := range buildThinkingParams(model, llmCtx.ThinkingLevel) {
+			reqBody[k] = v
+		}
+
 		jsonBody, err := json.Marshal(reqBody)
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: err})

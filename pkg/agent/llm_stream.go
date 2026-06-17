@@ -35,17 +35,21 @@ func streamAssistantResponse(
 	selectedMessages, _ := selectMessagesForLLM(agentCtx)
 	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
 
+	// Resolve model early — needed for thinking API detection and cache mode.
+	model := getEffectiveModel(config)
+
 	systemPrompt := agentCtx.SystemPrompt
-	if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
-		if strings.TrimSpace(systemPrompt) == "" {
-			systemPrompt = instruction
-		} else {
-			systemPrompt = systemPrompt + "\n\n" + instruction
+	// For models that support thinking via API params, skip the text instruction;
+	// the thinking level is passed as API parameters instead.
+	if !model.Reasoning {
+		if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
+			if strings.TrimSpace(systemPrompt) == "" {
+				systemPrompt = instruction
+			} else {
+				systemPrompt = systemPrompt + "\n\n" + instruction
+			}
 		}
 	}
-
-	// Resolve model early — needed for cache mode detection before runtime_state injection.
-	model := getEffectiveModel(config)
 
 	// Resolve cache mode and determine runtime_state injection strategy.
 	// Cache-first (e.g. DeepSeek): persist runtime_state as AgentMessage in RecentMessages
@@ -107,9 +111,10 @@ func streamAssistantResponse(
 	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
 
 	llmCtxParams := llm.LLMContext{
-		SystemPrompt: systemPrompt,
-		Messages:     llmMessages,
-		Tools:        llmTools,
+		SystemPrompt:  systemPrompt,
+		Messages:      llmMessages,
+		Tools:         llmTools,
+		ThinkingLevel: thinkingLevel,
 	}
 	//	emitLLMRequestSnapshot(ctx, config.Model, llmCtxParams)
 

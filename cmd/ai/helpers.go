@@ -159,6 +159,9 @@ func applyModelLimitsFromSpec(model llm.Model, spec config.ModelSpec) llm.Model 
 	if model.MaxTokens <= 0 && spec.MaxTokens > 0 {
 		model.MaxTokens = spec.MaxTokens
 	}
+	if spec.Reasoning {
+		model.Reasoning = true
+	}
 	return model
 }
 

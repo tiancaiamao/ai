@@ -125,6 +125,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 		API:           spec.API,
 		ContextWindow: spec.ContextWindow,
 		MaxTokens:     spec.MaxTokens,
+		Reasoning:     spec.Reasoning,
 	}
 	app.apiKey = newAPIKey
 
