@@ -316,6 +316,9 @@ func (c *ContextManager) CompactWithCtx(parent context.Context, agentCtx *agentc
 			llmSpan.AddField("input_tokens", usage.InputTokens)
 			llmSpan.AddField("output_tokens", usage.OutputTokens)
 			llmSpan.AddField("total_tokens", usage.TotalTokens)
+			if usage.PromptTokensDetails != nil {
+				llmSpan.AddField("cache_read", usage.PromptTokensDetails.CachedTokens)
+			}
 			duration := time.Since(llmCallStart)
 			if duration.Seconds() > 0 {
 				llmSpan.AddField("input_tokens_per_sec", float64(usage.InputTokens)/duration.Seconds())

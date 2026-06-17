@@ -219,6 +219,11 @@ func streamAssistantResponse(
 			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
+			cachedTokens := 0
+			if e.Usage.PromptTokensDetails != nil {
+				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
+			}
+			llmSpan.AddField("cache_read", cachedTokens)
 			llmSpan.AddField("stop_reason", e.StopReason)
 			elapsed := time.Since(llmStart)
 			if elapsed > 0 {
@@ -272,6 +277,7 @@ func streamAssistantResponse(
 				InputTokens:  e.Usage.InputTokens,
 				OutputTokens: e.Usage.OutputTokens,
 				TotalTokens:  e.Usage.TotalTokens,
+				CacheRead:    cachedTokens,
 			}
 
 			// Try to inject tool calls from tagged text

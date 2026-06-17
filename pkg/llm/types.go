@@ -103,9 +103,15 @@ type ToolFunction struct {
 
 // Usage represents token usage information.
 type Usage struct {
-	InputTokens  int `json:"prompt_tokens"`
-	OutputTokens int `json:"completion_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens         int                  `json:"prompt_tokens"`
+	OutputTokens        int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// PromptTokensDetails holds the breakdown of prompt tokens, including cache hits.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 // LLMEvent represents an event from the LLM stream.
