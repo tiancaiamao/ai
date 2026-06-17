@@ -16,10 +16,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// handoffGenerateSystemPrompt is a focused system prompt for handoff document
-// generation. It replaces the main agent system prompt to avoid confusing the
-// model — a coding assistant prompt and a summarization task are incompatible.
-const handoffGenerateSystemPrompt = `You are a context handoff document generator. Your job is to read the conversation transcript and produce a comprehensive handoff document that allows a fresh agent to continue the work without losing context.
+// handoffGenerateInstruction is appended as a user message to the existing
+// conversation to instruct the model to generate a handoff document. It reuses
+// the original session context (system prompt + messages) so provider prefix
+// cache is preserved — only this instruction is new.
+const handoffGenerateInstruction = `Based on the conversation above, generate a comprehensive handoff document so that a fresh agent can continue the work without losing context.
 
 The document MUST include these sections:
 
@@ -42,10 +43,6 @@ File paths, error messages, API constraints, environment details, or anything a 
 Unresolved issues or questions that need clarification.
 
 Be specific. Include exact file paths, error messages, and code snippets. A fresh agent reading this document should be able to continue the work immediately.`
-
-// handoffGenerateInstruction instructs the LLM to produce a handoff document
-// from the current conversation transcript.
-const handoffGenerateInstruction = `Below is a conversation transcript. Read it carefully and write a handoff document using the format specified in your instructions. The document must be detailed enough for a fresh agent to continue the work.`
 
 // performHandoff executes the complete handoff process:
 //  1. Run Q&A verification on the handoff document.
@@ -290,57 +287,34 @@ func (s *loopState) autoGenerateHandoffDoc(ctx context.Context) (string, error) 
 	model := getEffectiveModel(s.config)
 	apiKey := getEffectiveAPIKey(s.config)
 
-	oldMessages := s.agentCtx.RecentMessages
-
-	// Serialize conversation into a text transcript. We use a single user
-	// message (not raw LLM messages) to avoid role-formatting issues — the
-	// raw conversation may have consecutive same-role messages or tool-only
-	// messages that violate API constraints.
-	const maxTranscriptBytes = 512 * 1024 // ~128K tokens
-
-	var lines []string
-	totalBytes := 0
-	for i := len(oldMessages) - 1; i >= 0; i-- {
-		msg := oldMessages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		text := msg.ExtractText()
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		line := fmt.Sprintf("[%s]: %s", msg.Role, text)
-		if totalBytes+len(line) > maxTranscriptBytes {
-			break
-		}
-		lines = append(lines, line)
-		totalBytes += len(line)
-	}
-
-	// Reverse to chronological order (we walked backward).
-	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-		lines[i], lines[j] = lines[j], lines[i]
-	}
-
-	if len(lines) == 0 {
+	if len(s.agentCtx.RecentMessages) == 0 {
 		return "", fmt.Errorf("no conversation content to generate handoff doc from")
 	}
 
-	conversationText := strings.Join(lines, "\n\n")
+	// Reuse the original session's system prompt and messages to maximize
+	// provider prefix cache hits. The entire conversation prefix is identical
+	// to a normal LLM turn — only the appended instruction is new.
+	systemPrompt := s.agentCtx.SystemPrompt
+	if instruction := prompt.ThinkingInstruction(s.config.ThinkingLevel); instruction != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = instruction
+		} else {
+			systemPrompt = systemPrompt + "\n\n" + instruction
+		}
+	}
+
+	messages := ConvertMessagesToLLM(ctx, s.agentCtx.RecentMessages)
+	messages = append(messages, llm.LLMMessage{
+		Role:    "user",
+		Content: handoffGenerateInstruction,
+	})
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "handoff_auto_generate_start",
-		traceevent.Field{Key: "message_count", Value: len(lines)},
-		traceevent.Field{Key: "transcript_bytes", Value: totalBytes})
+		traceevent.Field{Key: "message_count", Value: len(messages)})
 
-	// Use a dedicated system prompt for handoff generation. The main agent
-	// system prompt (coding assistant) confuses the model into trying to
-	// respond as a coding assistant rather than writing a summary.
 	llmCtx := llm.LLMContext{
-		SystemPrompt: handoffGenerateSystemPrompt,
-		Messages: []llm.LLMMessage{
-			{Role: "user", Content: handoffGenerateInstruction},
-			{Role: "user", Content: conversationText},
-		},
+		SystemPrompt: systemPrompt,
+		Messages:     messages,
 	}
 
 	doc, err := streamLLMText(ctx, model, llmCtx, apiKey)
