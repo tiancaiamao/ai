@@ -10,6 +10,7 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 )
 
 // GenerateSummary generates a structured summary of messages using the LLM.
@@ -29,53 +30,89 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 		return "", fmt.Errorf("no messages to summarize")
 	}
 
-	projected := projectMessagesForSummary(messages)
-	if len(projected) == 0 {
+	// Filter agent-visible messages.
+	visible := make([]agentctx.AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.IsAgentVisible() {
+			visible = append(visible, msg)
+		}
+	}
+	if len(visible) == 0 {
 		if strings.TrimSpace(previousSummary) != "" {
 			return previousSummary, nil
 		}
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	conversationText := serializeConversation(projected)
-
-	// Guard against sending a conversation that exceeds the model's context
-	// window. For large sessions the serialized text can be many megabytes,
-	// which the summarization model cannot process. Truncate oldest messages
-	// until the conversation fits within ~40% of the model's context window
-	// (leaving room for the prompt, system prompt, and response).
-	const maxContextFraction = 0.4
+	// Truncation safeguard: if the visible messages exceed ~50% of the
+	// context window, drop the oldest ones to prevent the summary request
+	// from overflowing. This leaves room for the system prompt, prefix,
+	// instruction, and the summary response.
 	if c.contextWindow > 0 {
-		maxTokens := int(float64(c.contextWindow) * maxContextFraction)
-		// Each char is roughly 0.25 tokens, so maxBytes ≈ maxTokens * 4
-		maxChars := maxTokens * 4
-		if len(conversationText) > maxChars {
-			truncated := truncateConversationToCharBudget(projected, maxChars)
-			conversationText = serializeConversation(truncated)
-			slog.Info("[Compact] Truncated conversation for summarization",
-				"original_messages", len(projected),
-				"truncated_messages", len(truncated),
-				"original_chars", len(serializeConversation(projected)),
-				"truncated_chars", len(conversationText),
-				"context_window", c.contextWindow,
-				"max_chars", maxChars)
+		maxTokens := int(float64(c.contextWindow) * 0.5)
+		originalCount := len(visible)
+		for len(visible) > 2 && c.EstimateTokens(visible) > maxTokens {
+			visible = visible[1:]
+		}
+		if dropped := originalCount - len(visible); dropped > 0 {
+			slog.Info("[Compact] Truncated messages for summarization",
+				"original", originalCount, "remaining", len(visible),
+				"context_window", c.contextWindow, "max_tokens", maxTokens)
 		}
 	}
 
-	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
-	basePrompt := summarizationPrompt
-	if previousSummary != "" {
-		promptText += fmt.Sprintf("<previous-summary>\\n%s\\n</previous-summary>\\n\\n", previousSummary)
-		basePrompt = updateSummarizationPrompt
+	// Build cache-friendly LLM messages. Instead of serializing the
+	// conversation into text under a dedicated system prompt, we reuse the
+	// main agent's system prompt and real message format. This makes the
+	// summarization request share a prefix with the main conversation
+	// (system prompt + context prefix + real messages), maximizing provider
+	// prefix-cache hits — only the trailing compact instruction is new.
+	var llmMessages []llm.LLMMessage
+	if c.messageConverter != nil {
+		llmMessages = c.messageConverter(visible)
+	} else {
+		llmMessages = convertAgentMessagesToLLM(visible)
 	}
-	promptText += basePrompt
 
-	llmMessages := []llm.LLMMessage{
-		{Role: "user", Content: promptText},
+	// Prepend the agent context prefix (skills + AGENTS.md) exactly like the
+	// main loop, so the message prefix matches the main conversation.
+	if c.agentContextPrefix != "" {
+		llmMessages = insertBeforeFirstUserMessage(llmMessages, llm.LLMMessage{
+			Role:    "user",
+			Content: c.agentContextPrefix,
+		})
+	}
+
+	// Append the summarization instruction as a trailing user message.
+	// The format requirements (formerly a dedicated system prompt) are moved
+	// here so the system prompt stays identical to the main conversation.
+	instruction := summarizationSystemPrompt + "\n\n" + summarizationPrompt
+	if previousSummary != "" {
+		instruction = summarizationSystemPrompt + "\n\n" +
+			"Update the existing summary with the conversation above. Preserve ALL mandatory sections.\n\n" +
+			"<previous-summary>\n" + previousSummary + "\n</previous-summary>"
+	}
+	llmMessages = append(llmMessages, llm.LLMMessage{
+		Role:    "user",
+		Content: instruction,
+	})
+
+	// Use the main agent's system prompt (identical to the main conversation)
+	// for cache reuse; fall back to the compact system prompt if not set.
+	systemPrompt := c.agentSystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = summarizationSystemPrompt
+	} else if !c.model.Reasoning {
+		// Mirror the main agent loop (llm_stream.go): append the thinking
+		// instruction so the system prompt matches exactly, preserving the
+		// provider prefix cache from the first token.
+		if instruction := prompt.ThinkingInstruction(c.thinkingLevel); instruction != "" {
+			systemPrompt = systemPrompt + "\n\n" + instruction
+		}
 	}
 
 	llmCtx := llm.LLMContext{
-		SystemPrompt: summarizationSystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     llmMessages,
 	}
 
@@ -359,4 +396,86 @@ func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.Agen
 		projected = append(projected, copyMsg)
 	}
 	return projected
+}
+
+// convertAgentMessagesToLLM is a fallback message converter used when no
+// converter is injected via SetAgentLLMContext. Production code injects
+// agent.ConvertMessagesToLLM to guarantee byte-identical output with the main
+// conversation (required for prefix-cache hits). This fallback handles the
+// common cases (text, thinking, tool calls, tool results) but omits
+// sanitizeToolCallProtocol. This is acceptable because production code always
+// injects agent.ConvertMessagesToLLM (which includes sanitize) via
+// SetAgentLLMContext. This fallback is only used in tests and during the
+// brief window before initialization.
+func convertAgentMessagesToLLM(messages []agentctx.AgentMessage) []llm.LLMMessage {
+	llmMessages := make([]llm.LLMMessage, 0, len(messages))
+	for _, msg := range messages {
+		if !msg.IsAgentVisible() {
+			continue
+		}
+		role := msg.Role
+		if role == "toolResult" {
+			role = "tool"
+		}
+		llmMsg := llm.LLMMessage{Role: role}
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case agentctx.TextContent:
+				llmMsg.Content = b.Text
+			case agentctx.ThinkingContent:
+				llmMsg.Thinking = b.Thinking
+			}
+		}
+		if msg.Role == "assistant" {
+			toolCalls := msg.ExtractToolCalls()
+			if len(toolCalls) > 0 {
+				llmMsg.ToolCalls = make([]llm.ToolCall, len(toolCalls))
+				for i, tc := range toolCalls {
+					argsJSON, _ := json.Marshal(tc.Arguments)
+					llmMsg.ToolCalls[i] = llm.ToolCall{
+						ID:   tc.ID,
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      tc.Name,
+							Arguments: string(argsJSON),
+						},
+					}
+				}
+			}
+		}
+		if msg.Role == "toolResult" {
+			llmMsg.ToolCallID = msg.ToolCallID
+			llmMsg.Content = msg.ExtractText()
+		}
+		llmMessages = append(llmMessages, llmMsg)
+	}
+	return llmMessages
+}
+
+// insertBeforeFirstUserMessage inserts msg immediately before the first
+// user-role message. Mirrors agent.insertBeforeFirstUserMessage so the
+// context prefix sits at the same position as in the main conversation,
+// keeping the prefix cache-friendly.
+func insertBeforeFirstUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+	firstUserIdx := -1
+	for i, m := range messages {
+		if m.Role == "user" {
+			firstUserIdx = i
+			break
+		}
+	}
+	if firstUserIdx == -1 {
+		result := make([]llm.LLMMessage, 0, len(messages)+1)
+		result = append(result, msg)
+		result = append(result, messages...)
+		return result
+	}
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:firstUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[firstUserIdx:]...)
+	return result
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -140,6 +142,16 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 
 	// Recreate compactor with new model
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, spec.ContextWindow)
+	// Re-inject the agent LLM context so the new compactor reuses the main
+	// agent's system prompt + message format for cache-friendly summaries.
+	app.compactor.SetAgentLLMContext(
+		app.systemPrompt,
+		app.agentContextPrefix,
+		app.currentThinkingLevel,
+		func(msgs []agentctx.AgentMessage) []llm.LLMMessage {
+			return agent.ConvertMessagesToLLM(context.Background(), msgs)
+		},
+	)
 	app.sessionComp.Update(app.sess, app.compactor)
 	app.ag.SetCompactor(app.sessionComp)
 	app.ag.SetContextWindow(spec.ContextWindow)

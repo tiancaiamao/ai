@@ -67,7 +67,16 @@ func canCompactLocked(s *Session, compactor *compact.Compactor) bool {
 		}
 	}
 
-	boundaryStart := prevCompactionIndex + 1
+	// Include the previous compaction entry (if any) so its summary message
+	// is part of messagesToSummarize. This serves two purposes:
+	//  1. Cache: the message prefix matches buildSessionContext output (which
+	//     starts with the compaction summary), so the provider prefix cache hits.
+	//  2. Continuity: the LLM sees the previous summary and can update it
+	//     instead of generating a fresh one that loses earlier context.
+	boundaryStart := prevCompactionIndex
+	if boundaryStart < 0 {
+		boundaryStart = 0
+	}
 	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
 		slog.Debug("[CanCompact] no message refs after compaction boundary",
@@ -119,7 +128,10 @@ func (s *Session) Compact(compactor *compact.Compactor) (*CompactionResult, erro
 		}
 	}
 
-	boundaryStart := prevCompactionIndex + 1
+	boundaryStart := prevCompactionIndex
+	if boundaryStart < 0 {
+		boundaryStart = 0
+	}
 	refs := buildMessageRefs(path[boundaryStart:])
 	if len(refs) == 0 {
 		return nil, ErrNothingToCompact

@@ -57,6 +57,29 @@ type Compactor struct {
 	apiKey        string
 	systemPrompt  string
 	contextWindow int
+
+	// Cache-friendly summarization fields. When set via SetAgentLLMContext,
+	// summary requests reuse the main agent's system prompt and real message
+	// format so they share a prefix with the main conversation, maximizing
+	// provider prefix-cache hits. See GenerateSummaryWithPrevious.
+	agentSystemPrompt  string
+	agentContextPrefix string
+	thinkingLevel      string
+	messageConverter   func([]agentctx.AgentMessage) []llm.LLMMessage
+}
+
+// SetAgentLLMContext configures the compactor to reuse the main agent's system
+// prompt, context prefix, and message converter when generating summaries.
+// This makes summary requests share the conversation prefix for cache reuse
+// instead of using a dedicated system prompt with serialized text.
+// thinkingLevel is used to reconstruct the thinking instruction appended to
+// the system prompt (matching the main agent loop) so the cache prefix matches.
+// Call this after the agent context is built (system prompt + prefix are known).
+func (c *Compactor) SetAgentLLMContext(systemPrompt, contextPrefix, thinkingLevel string, converter func([]agentctx.AgentMessage) []llm.LLMMessage) {
+	c.agentSystemPrompt = systemPrompt
+	c.agentContextPrefix = contextPrefix
+	c.thinkingLevel = thinkingLevel
+	c.messageConverter = converter
 }
 
 // NewCompactor creates a new Compactor.

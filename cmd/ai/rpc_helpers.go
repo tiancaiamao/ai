@@ -8,6 +8,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
@@ -91,6 +92,19 @@ func (app *rpcApp) restoreLLMContextFromCompaction(sess *session.Session) {
 func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	app.systemPrompt = app.buildSystemPrompt(app.sess)
 	app.agentContextPrefix = app.buildAgentContextPrefix()
+	// Sync the compactor with the agent's system prompt, context prefix, and
+	// message converter so summary requests share the conversation prefix for
+	// provider prefix-cache hits (see GenerateSummaryWithPrevious).
+	if app.compactor != nil {
+		app.compactor.SetAgentLLMContext(
+			app.systemPrompt,
+			app.agentContextPrefix,
+			app.currentThinkingLevel,
+			func(msgs []agentctx.AgentMessage) []llm.LLMMessage {
+				return agent.ConvertMessagesToLLM(context.Background(), msgs)
+			},
+		)
+	}
 	// Keep loopCfg in sync if it has been constructed (createBaseContext
 	// may be re-invoked on session resume while loopCfg already exists).
 	if app.loopCfg != nil {

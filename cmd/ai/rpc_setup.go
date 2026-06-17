@@ -15,7 +15,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
@@ -149,10 +148,15 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		runID:                 params.runID,
 	}
 
-	// Skip context management (proactive LLM-driven cycle) in cache-first mode.
-	// Full compaction (75% threshold) is still active.
+	// largeContextWindowThreshold disables proactive context management for
+	// models with very large context windows (e.g. GLM-5.2 1M, Claude 200k).
+	const largeContextWindowThreshold = 200_000
+	// Skip proactive context management (LLM-driven mini compaction) for models
+	// with large context windows — they don't benefit from aggressive context
+	// trimming, and the extra LLM call wastes budget. Full compaction (75%
+	// threshold via the main Compactor) stays active regardless.
 	ctxManager.SetSkipCondition(func() bool {
-		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
+		return app.currentContextWindow >= largeContextWindowThreshold
 	})
 
 	return app, nil
