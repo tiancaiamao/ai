@@ -234,8 +234,8 @@ func (c *ContextManager) ShouldCompact(ctx context.Context, agentCtx *agentctx.A
 // Compact runs the LLM-driven context management cycle.
 // Uses context.Background() internally. For context-aware cancellation,
 // use CompactWithCtx instead.
-func (c *ContextManager) Compact(agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	return c.CompactWithCtx(context.Background(), agentCtx)
+func (c *ContextManager) Compact(ctx context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	return c.CompactWithCtx(ctx, agentCtx)
 }
 
 // CompactWithCtx runs the LLM-driven context management cycle with context support.

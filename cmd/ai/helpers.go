@@ -306,6 +306,9 @@ func runDetachedTraceSpan(
 			slog.Warn("Failed to finalize previous trace segment", "error", err)
 		}
 		tb.SetTraceID(traceevent.GenerateTraceID("session", 0))
+		// Explicitly attach trace buf to context so downstream LLM calls
+		// find it via context value, not just the global activeTraceBuf fallback.
+		ctx = traceevent.WithTraceBuf(ctx, tb)
 		defer func() {
 			if err := tb.Flush(ctx); err != nil {
 				slog.Warn("Failed to flush detached trace segment", "error", err)

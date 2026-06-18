@@ -160,7 +160,7 @@ func (s *loopState) performCompaction(
 		}
 
 		slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
-		compacted, compactErr = c.Compact(s.agentCtx)
+		compacted, compactErr = c.Compact(ctx, s.agentCtx)
 		if compactErr == nil && compacted != nil {
 			break // Compactor performed work; first real result wins
 		}

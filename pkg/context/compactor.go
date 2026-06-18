@@ -5,7 +5,7 @@ import "context"
 // Compactor interface for context compression.
 type Compactor interface {
 	ShouldCompact(ctx context.Context, agentCtx *AgentContext) bool
-	Compact(ctx *AgentContext) (*CompactionResult, error)
+	Compact(ctx context.Context, agentCtx *AgentContext) (*CompactionResult, error)
 	// CalculateDynamicThreshold returns the token threshold for compaction
 	CalculateDynamicThreshold() int
 }

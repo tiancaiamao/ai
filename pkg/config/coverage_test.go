@@ -673,7 +673,7 @@ type fakeCompactor struct{}
 func (f *fakeCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
 	return false
 }
-func (f *fakeCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (f *fakeCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return nil, nil
 }
 func (f *fakeCompactor) CalculateDynamicThreshold() int { return 0 }

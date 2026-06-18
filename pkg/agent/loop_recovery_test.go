@@ -20,7 +20,7 @@ func (c *recoveryCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentCo
 	return c.shouldCompact
 }
 
-func (c *recoveryCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *recoveryCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
 	// Compactor directly modifies ctx.RecentMessages
 	ctx.RecentMessages = []agentctx.AgentMessage{
@@ -523,7 +523,7 @@ func (f *failingCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentCon
 	return false
 }
 
-func (f *failingCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (f *failingCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return nil, errors.New("compaction failed")
 }
 
@@ -1336,7 +1336,7 @@ func (c *noopCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContex
 	return c.shouldCompact
 }
 
-func (c *noopCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *noopCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
 	return nil, nil // no-op
 }

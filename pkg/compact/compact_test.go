@@ -113,7 +113,7 @@ func TestCompact_FewMessages(t *testing.T) {
 		},
 	}
 
-	result, err := compactor.Compact(agentCtx)
+	result, err := compactor.Compact(context.Background(), agentCtx)
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}

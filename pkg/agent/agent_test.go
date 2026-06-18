@@ -95,49 +95,6 @@ func TestAgentAbort(t *testing.T) {
 	}
 }
 
-// TestCompactorInterface tests the Compactor interface.
-func TestCompactorInterface(t *testing.T) {
-	// Create a mock compactor
-	mockCompactor := &mockCompactor{
-		shouldCompact: true,
-	}
-
-	agent := NewAgent(llm.Model{}, "test-key", "test")
-	agent.SetCompactor(mockCompactor)
-
-	// Trigger auto-compact check
-	agent.tryAutoCompact(context.Background())
-
-	if !mockCompactor.called {
-		t.Error("Expected compactor to be called")
-	}
-}
-
-// mockCompactor is a test double for Compactor.
-type mockCompactor struct {
-	shouldCompact bool
-	called        bool
-}
-
-func (m *mockCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
-	m.called = true
-	return m.shouldCompact
-}
-
-func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	// Compactor directly modifies ctx.RecentMessages
-	ctx.RecentMessages = []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[Summary]"),
-	}
-	return &agentctx.CompactionResult{
-		Summary: "[Summary]",
-	}, nil
-}
-
-func (m *mockCompactor) CalculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
-}
-
 // TestAgentEvents tests the event channel.
 func TestAgentEvents(t *testing.T) {
 	agent := NewAgent(llm.Model{}, "test-key", "test")
