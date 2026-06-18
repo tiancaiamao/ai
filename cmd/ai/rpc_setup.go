@@ -149,14 +149,12 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		runID:                 params.runID,
 	}
 
-	// Select proactive compactor: LLMDecideCompactor for large context windows,
-	// ContextManager otherwise.
+	// Enable LLM-decides compaction for large context windows.
 	if currentContextWindow >= compact.LargeContextThreshold {
 		decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
-		app.proactiveCompactor = compact.NewLLMDecideCompactor(
-			decideCfg, app.model, apiKey, currentContextWindow, compactor,
-		)
-		slog.Info("Using LLMDecideCompactor (large context window)",
+		compactorConfig.LLMDecide = &decideCfg
+		app.proactiveCompactor = compactor
+		slog.Info("Using LLMDecide compaction (large context window)",
 			"contextWindow", currentContextWindow,
 			"softThreshold", decideCfg.SoftThreshold,
 			"hardLimit", decideCfg.HardLimit)

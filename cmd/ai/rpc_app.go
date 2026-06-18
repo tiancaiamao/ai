@@ -64,7 +64,7 @@ type rpcApp struct {
 	// --- Compaction ---
 	compactor          *compact.Compactor
 	ctxManager         *compact.ContextManager
-	proactiveCompactor agent.Compactor // ctxManager or LLMDecideCompactor
+	proactiveCompactor agent.Compactor // ctxManager or compactor (LLMDecide mode)
 	compactorConfig    *compact.Config
 
 	// --- Tracing ---

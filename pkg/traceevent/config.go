@@ -247,6 +247,8 @@ var eventNameToBit = map[string]int{
 	"context_mgmt_llm_context_updated":    55,
 	"context_mgmt":                        56,
 	"compact_skipped_cache_first":         57,
+	"compact_llm_decide_check":            58,
+	"compact_llm_decide_ask":              59,
 }
 
 var defaultEnabledEvents = []string{
@@ -293,6 +295,8 @@ var defaultEnabledEvents = []string{
 	"context_mgmt_messages_truncated",
 	"context_mgmt_llm_context_updated",
 	"compact_skipped_cache_first",
+	"compact_llm_decide_check",
+	"compact_llm_decide_ask",
 	// Default log events
 	"log:info",
 	"log:warn",
@@ -341,6 +345,8 @@ var eventSelectorGroups = map[string][]string{
 		"context_mgmt_check",
 		"context_mgmt_messages_truncated",
 		"context_mgmt_llm_context_updated",
+		"compact_llm_decide_check",
+		"compact_llm_decide_ask",
 	},
 	"log": {
 		"log:info",
