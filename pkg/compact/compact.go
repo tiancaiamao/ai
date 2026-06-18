@@ -108,6 +108,14 @@ type Compactor struct {
 	// askFunc allows tests to inject a fake LLM decision without a real API
 	// call. nil means use the real askLLM method.
 	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
+
+	// LLM-decide idempotency state. ShouldCompact may be called multiple times
+	// per turn (e.g. savePreCompactionCheckpoint + performCompaction). The
+	// cached decision is reused as long as ToolCallsSinceLastTrigger hasn't
+	// changed, making ShouldCompact safe to call repeatedly.
+	llmDecideAnswer       *bool // cached answer from askLLM; nil = not yet asked this cycle
+	llmDecideAnswerCount  int   // ToolCallsSinceLastTrigger value when answer was cached
+	llmDecideLastAskCount int   // counter value at last askLLM; prevents re-asking every turn after a "no"
 }
 
 // NewCompactor creates a new Compactor.
@@ -475,6 +483,11 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	messagesAfter := len(newRecentMessages)
 	slog.Info("[Compact] Compressed context", "messages", messagesAfter)
 
+	// Reset tool-call counter and clear LLM-decide cache after successful compaction.
+	ctx.AgentState.ToolCallsSinceLastTrigger = 0
+	c.llmDecideAnswer = nil
+	c.llmDecideLastAskCount = 0
+
 	return &agentctx.CompactionResult{
 		Summary:        summary,
 		TokensBefore:   tokensBefore,
@@ -561,13 +574,24 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 		tier = "medium"
 	}
 
-	if agentCtx.AgentState.ToolCallsSinceLastTrigger < interval {
+	currentCount := agentCtx.AgentState.ToolCallsSinceLastTrigger
+
+	// Idempotency: if we already asked and the counter hasn't changed,
+	// return the cached answer. This makes ShouldCompact safe to call
+	// multiple times per turn (savePreCompactionCheckpoint + performCompaction).
+	if c.llmDecideAnswer != nil && c.llmDecideAnswerCount == currentCount {
+		return *c.llmDecideAnswer
+	}
+
+	// Don't re-ask until a full interval has elapsed since the last ask.
+	// This prevents asking every turn after a "no".
+	if currentCount-c.llmDecideLastAskCount < interval {
 		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
 			traceevent.Field{Key: "decision", Value: false},
 			traceevent.Field{Key: "reason", Value: "interval_not_reached"},
 			traceevent.Field{Key: "tokens", Value: tokens},
 			traceevent.Field{Key: "tier", Value: tier},
-			traceevent.Field{Key: "tool_calls_since", Value: agentCtx.AgentState.ToolCallsSinceLastTrigger},
+			traceevent.Field{Key: "tool_calls_since", Value: currentCount},
 			traceevent.Field{Key: "interval", Value: interval},
 		)
 		return false
@@ -580,8 +604,6 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 		ask = c.askLLM
 	}
 	shouldDo, err := ask(ctx, agentCtx, tokens)
-	// Reset counter after each ask so we don't ask every turn.
-	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
 
 	decision := true
 	reason := "ask_yes"
@@ -599,6 +621,15 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 			"tokens", tokens,
 			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
 	}
+
+	// Cache the answer for this counter value. The counter is NOT reset here —
+	// that happens in Compact() after successful compaction. The cache prevents
+	// duplicate askLLM calls within the same turn; once the counter changes
+	// (next tool call), the cache is invalidated but llmDecideLastAskCount
+	// prevents re-asking until a full interval has elapsed.
+	c.llmDecideAnswer = &decision
+	c.llmDecideAnswerCount = currentCount
+	c.llmDecideLastAskCount = currentCount
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
 		traceevent.Field{Key: "decision", Value: decision},

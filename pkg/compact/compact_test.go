@@ -284,7 +284,9 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 		},
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	askCount := 0
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		askCount++
 		return true, nil // LLM says yes
 	}
 
@@ -300,8 +302,19 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 	if !c.ShouldCompact(context.Background(), agentCtx) {
 		t.Error("should compact when interval reached and LLM says yes")
 	}
-	if agentCtx.AgentState.ToolCallsSinceLastTrigger != 0 {
-		t.Error("counter should be reset after asking LLM")
+	// Counter is NOT reset in ShouldCompact; it's reset in Compact after success.
+	if agentCtx.AgentState.ToolCallsSinceLastTrigger != 5 {
+		t.Errorf("counter should be unchanged after ShouldCompact, got %d", agentCtx.AgentState.ToolCallsSinceLastTrigger)
+	}
+
+	// Simulate the double-call bug: performCompaction calls ShouldCompact again
+	// with the same counter. It must return the cached answer (true) without
+	// calling askLLM a second time.
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("second ShouldCompact call should return cached true")
+	}
+	if askCount != 1 {
+		t.Errorf("askLLM should be called once, got %d", askCount)
 	}
 }
 
@@ -311,11 +324,15 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMNo(t *testing.T) {
 		LLMDecide: &LLMDecideConfig{
 			SoftThreshold: 100,
 			HardLimit:     50000,
+			TierMedium:    10000, // ensure we stay in low tier at 200 tokens
+			TierHigh:      20000,
 			IntervalLow:   5,
 		},
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	askCount := 0
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		askCount++
 		return false, nil // LLM says no
 	}
 
@@ -329,6 +346,25 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMNo(t *testing.T) {
 	}
 	if c.ShouldCompact(context.Background(), agentCtx) {
 		t.Error("should not compact when LLM says no")
+	}
+
+	// Simulate next turn: 1 more tool call (counter=6). Interval not yet reached
+	// since last ask (6-5=1 < 5), so no re-ask.
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 6
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact: interval not reached since last ask")
+	}
+	if askCount != 1 {
+		t.Errorf("askLLM should not be called again, got %d calls", askCount)
+	}
+
+	// After enough tool calls (counter=10, 10-5=5 >= interval), ask again.
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("LLM says no again, should not compact")
+	}
+	if askCount != 2 {
+		t.Errorf("askLLM should be called a second time, got %d", askCount)
 	}
 }
 
