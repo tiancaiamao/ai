@@ -26,6 +26,9 @@ var compactUpdatePrompt string
 //go:embed "context_management.md"
 var contextManagementSystemPrompt string
 
+//go:embed "llm_decide_check.md"
+var llmDecideCheckPrompt string
+
 //go:embed "orchestrator.md"
 var orchestratorTemplate string
 
@@ -320,6 +323,13 @@ func NormalizeThinkingLevel(level string) string {
 // ContextManagementSystemPrompt returns system prompt for context management.
 func ContextManagementSystemPrompt() string {
 	return contextManagementSystemPrompt
+}
+
+// LLMDecideCheckPrompt returns the prompt template for asking the LLM
+// whether to compact. Contains a single %s placeholder for the budget
+// percentage (e.g. "40%").
+func LLMDecideCheckPrompt() string {
+	return llmDecideCheckPrompt
 }
 
 // OrchestratorTemplate returns the PGE orchestrator prompt template.

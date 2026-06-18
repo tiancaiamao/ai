@@ -149,11 +149,27 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		runID:                 params.runID,
 	}
 
-	// Skip context management (proactive LLM-driven cycle) in cache-first mode.
-	// Full compaction (75% threshold) is still active.
-	ctxManager.SetSkipCondition(func() bool {
-		return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
-	})
+	// Select proactive compactor: LLMDecideCompactor for large context windows,
+	// ContextManager otherwise.
+	if currentContextWindow >= compact.LargeContextThreshold {
+		decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
+		app.proactiveCompactor = compact.NewLLMDecideCompactor(
+			decideCfg, app.model, apiKey, currentContextWindow, compactor,
+		)
+		slog.Info("Using LLMDecideCompactor (large context window)",
+			"contextWindow", currentContextWindow,
+			"softThreshold", decideCfg.SoftThreshold,
+			"hardLimit", decideCfg.HardLimit)
+
+		// Skip old ContextManager entirely for large windows.
+		ctxManager.SetSkipCondition(func() bool { return true })
+	} else {
+		app.proactiveCompactor = app.ctxManager
+		// Skip context management in cache-first mode.
+		ctxManager.SetSkipCondition(func() bool {
+			return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
+		})
+	}
 
 	return app, nil
 }
