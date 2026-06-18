@@ -1,16 +1,6 @@
-<agent:compact-check> You are reaching %s of the context budget before a hard compaction is triggered.
+<agent:compact-check> You are at %s of the context budget. Compaction keeps your recent messages fully intact and summarizes only older messages into a brief recap — the context for your current task is never lost.
 
-This is a periodic check. Compacting will summarize older messages into a concise summary. Only compact if the conversation has reached a natural transition point.
-
-GOOD times to compact:
-- A phase of work just completed, about to start something new
-- Investigation results have been written to a file or summary
-- Too many tool outputs that are no longer relevant to the current task
-- Earlier messages contain information you've already internalized
-
-BAD times to compact:
-- In the middle of active multi-step work
-- Recent messages contain details still needed for the current step
+Prefer to compact. Only say "no" if you need specific details from earlier messages for your very next action. Otherwise the context keeps growing until a forced hard compaction that you cannot control.
 
 Reply ONLY "yes" to compact now, or "no" to continue. Do not use any tools.
 </agent:compact-check>
