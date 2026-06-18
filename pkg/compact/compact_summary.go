@@ -35,16 +35,11 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 		return "", fmt.Errorf("no messages to summarize")
 	}
 
-	// Guard: cap old messages to fit within ~40% of context window, leaving
-	// room for system prompt, tools, instruction, and the summary response.
-	// For large sessions oldMessages can be very large; without this guard
-	// the request exceeds the model's context window and compaction fails.
-	if c.contextWindow > 0 {
-		messages = c.truncateForSummary(messages)
-	}
-
 	// Convert old messages to the same structured LLMMessage format used by
-	// normal agent turns — this is what makes the prefix cache hit work.
+	// normal agent turns. oldMessages is a strict prefix of the conversation
+	// (split off by splitMessagesByTokenBudget in Compact), so it already fits
+	// within the context window — no further truncation needed or wanted:
+	// truncating here would break prefix-cache alignment.
 	llmMessages := agentctx.ConvertMessagesToLLM(messages)
 	if len(llmMessages) == 0 {
 		if strings.TrimSpace(previousSummary) != "" {
@@ -53,15 +48,15 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	// Inject contextPrefix (skills + AGENTS.md) before the first user message,
-	// mirroring insertBeforeFirstUserMessage in the agent loop.
-	// This must match the agent loop's message structure exactly for prefix
-	// cache to hit on the [contextPrefix + old messages] segment.
+	// Prepend contextPrefix (skills + AGENTS.md) as the first message (after
+	// system). oldMessages starts with the conversation's first user message
+	// (it's a strict prefix), so placing the prefix at [0] mirrors the agent
+	// loop's structure exactly: [system, prefix, real_first_user, ...].
 	if strings.TrimSpace(contextPrefix) != "" {
-		llmMessages = agentctx.InsertBeforeFirstUserMessage(llmMessages, llm.LLMMessage{
+		llmMessages = append([]llm.LLMMessage{{
 			Role:    "user",
 			Content: contextPrefix,
-		})
+		}}, llmMessages...)
 	}
 
 	// Build the summarisation instruction as a trailing user message.
@@ -196,41 +191,4 @@ func splitMessagesByTokenBudget(
 		return messages[:len(messages)-1], messages[len(messages)-1:]
 	}
 	return messages[:start], messages[start:]
-}
-
-// truncateForSummary drops oldest messages until the remaining fit within
-// ~40% of the model's context window. This prevents oversized requests
-// that would exceed the context window and fail compaction.
-func (c *Compactor) truncateForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	const maxContextFraction = 0.4
-	maxTokens := int(float64(c.contextWindow) * maxContextFraction)
-	if maxTokens <= 0 {
-		return messages
-	}
-
-	// Quick check: sum token estimates across all messages.
-	totalTokens := 0
-	for _, msg := range messages {
-		totalTokens += estimateMessageTokens(msg)
-	}
-	if totalTokens <= maxTokens {
-		return messages
-	}
-
-	// Drop oldest messages to fit within budget. splitMessagesByTokenBudget
-	// walks from the newest backwards, so recent = the suffix that fits.
-	dropped, kept := splitMessagesByTokenBudget(messages, maxTokens)
-	if len(dropped) > 0 {
-		slog.Info("[Compact] Truncated old messages for summary",
-			"dropped", len(dropped), "kept", len(kept),
-			"total_tokens", totalTokens, "max_tokens", maxTokens)
-	}
-
-	// Fix tool_call/tool_result pairing that the split may have broken.
-	if c.config.GracePeriod > 0 {
-		kept = c.ensureToolCallPairingWithGrace(dropped, kept)
-	} else {
-		kept = ensureToolCallPairing(dropped, kept)
-	}
-	return kept
 }
