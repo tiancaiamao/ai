@@ -93,6 +93,7 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 
 		var summary strings.Builder
 		var streamErr error
+		var doneEvent llm.LLMDoneEvent
 		for event := range llmStream.Iterator(ctx) {
 			if event.Done {
 				break
@@ -103,6 +104,8 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 				summary.WriteString(e.Delta)
 			case llm.LLMErrorEvent:
 				streamErr = e.Error
+			case llm.LLMDoneEvent:
+				doneEvent = e
 			}
 		}
 		cancel()
@@ -125,6 +128,15 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 			}
 			continue
 		}
+
+		span.AddField("input_tokens", doneEvent.Usage.InputTokens)
+		span.AddField("output_tokens", doneEvent.Usage.OutputTokens)
+		span.AddField("total_tokens", doneEvent.Usage.TotalTokens)
+		cachedTokens := 0
+		if doneEvent.Usage.PromptTokensDetails != nil {
+			cachedTokens = doneEvent.Usage.PromptTokensDetails.CachedTokens
+		}
+		span.AddField("cache_read", cachedTokens)
 
 		result := summary.String()
 		if strings.TrimSpace(result) == "" {
