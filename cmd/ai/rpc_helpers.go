@@ -194,23 +194,16 @@ func (app *rpcApp) expandSkillCommands(text string) string {
 }
 
 func (app *rpcApp) compactBeforeRequest(trigger string) {
-	if app.compactor == nil || app.sess == nil {
+	if app.compactor == nil {
 		return
 	}
 
-	if !app.compactor.ShouldCompact(context.Background(), app.ag.GetContext()) {
-		return
-	}
-	if !app.sess.CanCompact(app.compactor) {
-		messages := app.ag.GetMessages()
-		slog.Info("Pre-request compaction skipped: session not compactable",
-			"trigger", trigger,
-			"messages", len(messages),
-			"estimatedTokens", app.compactor.EstimateTokens(messages))
+	agentCtx := app.ag.GetContext()
+	if !app.compactor.ShouldCompact(context.Background(), agentCtx) {
 		return
 	}
 
-	beforeCount := len(app.ag.GetMessages())
+	beforeCount := len(agentCtx.RecentMessages)
 	compactionInfo := agent.CompactionInfo{
 		Auto:    true,
 		Before:  beforeCount,
@@ -232,18 +225,24 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 			{Key: "before_messages", Value: beforeCount},
 		},
 		func(_ context.Context, span *traceevent.Span) error {
-			result, err := app.sess.Compact(app.compactor)
+			result, err := app.compactor.Compact(agentCtx)
 			if err != nil {
 				return err
 			}
 
-			app.ag.GetContext().RecentMessages = app.sess.GetMessages()
-			afterCount := len(app.ag.GetMessages())
+			afterCount := len(agentCtx.RecentMessages)
 			compactionInfo.After = afterCount
 
 			span.AddField("after_messages", afterCount)
-			span.AddField("tokens_before", result.TokensBefore)
-			span.AddField("tokens_after", result.TokensAfter)
+			if result != nil {
+				span.AddField("tokens_before", result.TokensBefore)
+				span.AddField("tokens_after", result.TokensAfter)
+			}
+
+			// Persist compacted messages to session file
+			if result != nil && app.sess != nil && app.sessionWriter != nil {
+				app.sessionWriter.Replace(app.sess, agentCtx.RecentMessages)
+			}
 			return nil
 		},
 	)
@@ -254,11 +253,7 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 
 	if err != nil {
 		compactionInfo.Error = err.Error()
-		if session.IsNonActionableCompactionError(err) {
-			slog.Info("Pre-request compaction skipped", "trigger", trigger, "reason", err)
-		} else {
-			slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
-		}
+		slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
 
 		// Nuclear fallback: after consecutive compaction failures, force-truncate
 		// oldest messages without LLM summary. This prevents permanent session death

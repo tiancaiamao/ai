@@ -2,49 +2,51 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"reflect"
 	"sync"
 
-	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
 
+// sessionCompactor is a thin mutable wrapper around *compact.Compactor.
+// It exists so the loop config can hold a stable Compactor reference
+// that can be swapped on model/session changes without rebuilding the config.
 type sessionCompactor struct {
 	mu        sync.Mutex
-	session   *session.Session
-	compactor *compact.Compactor
-	writer    *sessionWriter
+	compactor agentctx.Compactor
 }
 
-func (sc *sessionCompactor) Update(sess *session.Session, comp *compact.Compactor) {
+func (sc *sessionCompactor) Update(comp agentctx.Compactor) {
 	sc.mu.Lock()
-	sc.session = sess
 	sc.compactor = comp
 	sc.mu.Unlock()
 }
 
 func (sc *sessionCompactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	sc.mu.Lock()
-	sess := sc.session
 	comp := sc.compactor
 	sc.mu.Unlock()
 	if comp == nil {
 		return false
 	}
-	// Check if underlying compactor should trigger
-	if !comp.ShouldCompact(ctx, agentCtx) {
-		return false
-	}
-	if sess == nil {
-		return false
-	}
-	return sess.CanCompact(comp)
+	return comp.ShouldCompact(ctx, agentCtx)
 }
 
-// CalculateDynamicThreshold returns the token threshold for compaction.
+// Compact delegates directly to the underlying compactor.
+// The compactor modifies agentCtx.RecentMessages in place.
+// Session persistence is handled separately (via events or direct writer.Replace).
+func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+	sc.mu.Lock()
+	comp := sc.compactor
+	sc.mu.Unlock()
+	if comp == nil {
+		return nil, nil
+	}
+	return comp.Compact(ctx)
+}
+
 func (sc *sessionCompactor) CalculateDynamicThreshold() int {
 	sc.mu.Lock()
 	comp := sc.compactor
@@ -55,67 +57,13 @@ func (sc *sessionCompactor) CalculateDynamicThreshold() int {
 	return comp.CalculateDynamicThreshold()
 }
 
-func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	sc.mu.Lock()
-	sess := sc.session
-	comp := sc.compactor
-	writer := sc.writer
-	sc.mu.Unlock()
-	if sess == nil || comp == nil {
-		return nil, nil
-	}
-	if writer != nil {
-		compacted, err := writer.Compact(sess, comp)
-		if err != nil {
-			if session.IsNonActionableCompactionError(err) {
-				return nil, nil
-			}
-			return nil, err
-		}
-		if compacted != nil {
-			// Update ctx.RecentMessages with compacted messages
-			messages := sess.GetMessages()
-			ctx.RecentMessages = messages
-			return &agentctx.CompactionResult{
-				Summary:      compacted.Summary,
-				TokensBefore: compacted.TokensBefore,
-				TokensAfter:  compacted.TokensAfter,
-			}, nil
-		}
-	}
-	// Session layer handles previousSummary internally via compaction entries
-	sessionResult, err := sess.Compact(comp)
-	if err != nil {
-		if session.IsNonActionableCompactionError(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	// Update ctx.RecentMessages with compacted messages
-	messages := sess.GetMessages()
-	ctx.RecentMessages = messages
-	// Convert session.CompactionResult to agentctx.CompactionResult
-	result := &agentctx.CompactionResult{
-		Summary:      sessionResult.Summary,
-		TokensBefore: sessionResult.TokensBefore,
-		TokensAfter:  sessionResult.TokensAfter,
-	}
-	return result, nil
-}
+// --- sessionWriter: single-goroutine serializer for session writes ---
 
 type sessionWriteRequest struct {
 	sess            *session.Session
 	message         *agentctx.AgentMessage
 	replaceMessages []agentctx.AgentMessage
-	comp            *compact.Compactor
-	response        chan sessionCompactResponse
 	replaceResp     chan error
-}
-
-type sessionCompactResponse struct {
-	messages []agentctx.AgentMessage
-	summary  string
-	err      error
 }
 
 type sessionWriter struct {
@@ -133,27 +81,6 @@ func newSessionWriter(buffer int) *sessionWriter {
 	go func() {
 		defer writer.wg.Done()
 		for req := range writer.ch {
-			if req.response != nil {
-				var resp sessionCompactResponse
-				if req.sess == nil || req.comp == nil {
-					resp.messages = nil
-				} else {
-					result, err := req.sess.Compact(req.comp)
-					if err != nil {
-						if session.IsNonActionableCompactionError(err) || errors.Is(err, session.ErrNothingToCompact) {
-							resp.messages = req.sess.GetMessages()
-							req.response <- resp
-							continue
-						}
-						resp.err = err
-					} else {
-						resp.messages = req.sess.GetMessages()
-						resp.summary = result.Summary
-					}
-				}
-				req.response <- resp
-				continue
-			}
 			if req.replaceMessages != nil {
 				var err error
 				if req.sess != nil {
@@ -183,23 +110,6 @@ func (w *sessionWriter) Append(sess *session.Session, message agentctx.AgentMess
 		return
 	}
 	w.enqueue(sessionWriteRequest{sess: sess, message: &message})
-}
-
-func (w *sessionWriter) Compact(sess *session.Session, comp *compact.Compactor) (*agentctx.CompactionResult, error) {
-	if w == nil || sess == nil || comp == nil {
-		return nil, nil
-	}
-	response := make(chan sessionCompactResponse, 1)
-	if !w.enqueue(sessionWriteRequest{sess: sess, comp: comp, response: response}) {
-		return nil, nil
-	}
-	result := <-response
-	if result.err != nil {
-		return nil, result.err
-	}
-	return &agentctx.CompactionResult{
-		Summary: result.summary,
-	}, nil
 }
 
 func (w *sessionWriter) Replace(sess *session.Session, messages []agentctx.AgentMessage) error {
