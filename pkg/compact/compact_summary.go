@@ -44,28 +44,14 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 	// (split off by splitMessagesByTokenBudget in Compact), so it already fits
 	// within the context window — no further truncation needed or wanted:
 	// truncating here would break prefix-cache alignment.
-	llmMessages := agentctx.ConvertMessagesToLLM(messages)
-	if len(llmMessages) == 0 {
+	if len(agentctx.ConvertMessagesToLLM(messages)) == 0 {
 		if strings.TrimSpace(previousSummary) != "" {
 			return previousSummary, nil
 		}
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	// Prepend contextPrefix (skills + AGENTS.md) as the first message (after
-	// system). oldMessages starts with the conversation's first user message
-	// (it's a strict prefix), so placing the prefix at [0] mirrors the agent
-	// loop's structure exactly: [system, prefix, real_first_user, ...].
-	if strings.TrimSpace(contextPrefix) != "" {
-		llmMessages = append([]llm.LLMMessage{{
-			Role:    "user",
-			Content: contextPrefix,
-		}}, llmMessages...)
-	}
-
 	// Build the summarisation instruction as a trailing user message.
-	// Everything before this point is identical to a normal agent request,
-	// so it is served from the provider's prompt cache.
 	var instruction string
 	if previousSummary != "" {
 		instruction = summarizationSystemPrompt + "\n\n" +
@@ -73,13 +59,8 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 	} else {
 		instruction = summarizationSystemPrompt + "\n\n" + summarizationPrompt
 	}
-	llmMessages = append(llmMessages, llm.LLMMessage{Role: "user", Content: instruction})
 
-	llmCtx := llm.LLMContext{
-		SystemPrompt: systemPrompt,
-		Messages:     llmMessages,
-		Tools:        agentctx.ConvertToolsToLLM(tools),
-	}
+	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, instruction)
 
 	const maxRetries = 3
 	const totalTimeout = 5 * time.Minute

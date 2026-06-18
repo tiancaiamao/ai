@@ -96,6 +96,11 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	if app.loopCfg != nil {
 		app.loopCfg.AgentContextPrefix = app.agentContextPrefix
 	}
+	// Sync prefix to compactor: AgentContext.AgentContextPrefix has json:"-"
+	// and is lost on checkpoint/restore, so the compactor stores its own copy.
+	if app.compactor != nil {
+		app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
+	}
 	ctx := agentctx.NewAgentContext(app.systemPrompt)
 	ctx.AgentContextPrefix = app.agentContextPrefix
 	for _, tool := range app.registry.All() {

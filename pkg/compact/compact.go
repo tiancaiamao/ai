@@ -105,6 +105,10 @@ type Compactor struct {
 	systemPrompt  string
 	contextWindow int
 	askPrompt     string // LLM-decide ask template (loaded lazily)
+	// agentContextPrefix is the skills + AGENTS.md prefix, stored at
+	// construction time so it survives agentCtx checkpoint/restore cycles
+	// (AgentContext.AgentContextPrefix has json:"-" and is lost on restore).
+	agentContextPrefix string
 	// askFunc allows tests to inject a fake LLM decision without a real API
 	// call. nil means use the real askLLM method.
 	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
@@ -234,6 +238,12 @@ func (c *Compactor) ContextWindow() int {
 // SetContextWindow updates the model context window used for compaction.
 func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window
+}
+
+// SetAgentContextPrefix updates the skills + AGENTS.md prefix used for
+// cache-friendly LLM requests (askLLM, GenerateSummaryWithPrevious).
+func (c *Compactor) SetAgentContextPrefix(prefix string) {
+	c.agentContextPrefix = prefix
 }
 
 // ReserveTokens returns the effective reserve tokens setting.
@@ -447,7 +457,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, ctx.AgentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -653,6 +663,44 @@ func (c *Compactor) llmDecideInterval(tokens int) int {
 	}
 }
 
+// buildCacheFriendlyLLMContext builds an LLM request whose prefix matches a
+// normal agent turn, maximising provider prefix-cache hits. Used by both
+// askLLM and GenerateSummaryWithPrevious.
+//
+// Message ordering (mirrors the agent loop):
+//
+//	[system_prompt]
+//	[contextPrefix as user message]   ← skills + AGENTS.md, only if non-empty
+//	[...conversation messages...]
+//	[trailingInstruction]             ← ask question or summarisation prompt
+func buildCacheFriendlyLLMContext(
+	messages []agentctx.AgentMessage,
+	systemPrompt string,
+	contextPrefix string,
+	tools []agentctx.Tool,
+	trailingInstruction string,
+) llm.LLMContext {
+	llmMessages := agentctx.ConvertMessagesToLLM(messages)
+
+	if strings.TrimSpace(contextPrefix) != "" {
+		llmMessages = append([]llm.LLMMessage{{
+			Role:    "user",
+			Content: contextPrefix,
+		}}, llmMessages...)
+	}
+
+	llmMessages = append(llmMessages, llm.LLMMessage{
+		Role:    "user",
+		Content: trailingInstruction,
+	})
+
+	return llm.LLMContext{
+		SystemPrompt: systemPrompt,
+		Messages:     llmMessages,
+		Tools:        agentctx.ConvertToolsToLLM(tools),
+	}
+}
+
 // askLLM sends a lightweight yes/no question to the LLM, reusing the main
 // conversation prefix for cache efficiency. Returns true if the LLM says yes.
 func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
@@ -670,28 +718,13 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	span.AddField("tokens", tokens)
 	span.AddField("budget_pct", budgetPct)
 
-	// Build messages identical to a normal agent turn so the prefix is a cache hit.
-	llmMessages := agentctx.ConvertMessagesToLLM(agentCtx.RecentMessages)
-
-	// Prepend contextPrefix (skills + AGENTS.md) as a user message, matching the agent loop.
-	if strings.TrimSpace(agentCtx.AgentContextPrefix) != "" {
-		llmMessages = append([]llm.LLMMessage{{
-			Role:    "user",
-			Content: agentCtx.AgentContextPrefix,
-		}}, llmMessages...)
-	}
-
-	// Append the compact-check question as a trailing user message.
-	llmMessages = append(llmMessages, llm.LLMMessage{
-		Role:    "user",
-		Content: askContent,
-	})
-
-	llmCtx := llm.LLMContext{
-		SystemPrompt: agentCtx.SystemPrompt,
-		Messages:     llmMessages,
-		Tools:        agentctx.ConvertToolsToLLM(agentCtx.Tools),
-	}
+	llmCtx := buildCacheFriendlyLLMContext(
+		agentCtx.RecentMessages,
+		agentCtx.SystemPrompt,
+		c.agentContextPrefix,
+		agentCtx.Tools,
+		askContent,
+	)
 
 	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
