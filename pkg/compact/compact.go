@@ -60,11 +60,11 @@ type LLMDecideConfig struct {
 
 // DefaultLLMDecideConfig returns thresholds scaled to the context window.
 //
-// For 1M context: soft=80K, tiers at 100K/120K, hard=300K.
+// For 1M context: soft=80K, tiers at 100K/120K, hard=200K.
 // Smaller windows scale proportionally, capped at the 1M values.
 func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 	soft := min(contextWindow*8/100, 80_000)
-	hard := min(contextWindow*30/100, 300_000)
+	hard := min(contextWindow*20/100, 200_000)
 	return LLMDecideConfig{
 		SoftThreshold:  soft,
 		HardLimit:      hard,
@@ -712,7 +712,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	}
 
 	cfg := c.config.LLMDecide
-	budgetPct := fmt.Sprintf("%d%%", tokens*100/cfg.HardLimit)
+	budgetPct := fmt.Sprintf("%d%% (%d / %d tokens)", tokens*100/cfg.HardLimit, tokens, cfg.HardLimit)
 	askContent := fmt.Sprintf(c.askPrompt, budgetPct)
 
 	span.AddField("tokens", tokens)
