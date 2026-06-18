@@ -141,7 +141,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		agentConfig:           agentCfg,
 		steeringMode:          "all",
 		followUpMode:          "one-at-a-time",
-		currentThinkingLevel:  "high",
+		currentThinkingLevel:  cfg.ThinkingLevel,
 		showThinking:          true,
 		showTools:             true,
 		showPrefix:            true,
