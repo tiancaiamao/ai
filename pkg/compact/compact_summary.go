@@ -110,6 +110,18 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 		}
 		cancel()
 
+		// Record token usage regardless of success/failure — the LLM call
+		// already happened, and usage data is critical for debugging cache
+		// behavior even when the summary is empty or the stream errors.
+		span.AddField("input_tokens", doneEvent.Usage.InputTokens)
+		span.AddField("output_tokens", doneEvent.Usage.OutputTokens)
+		span.AddField("total_tokens", doneEvent.Usage.TotalTokens)
+		cachedTokens := 0
+		if doneEvent.Usage.PromptTokensDetails != nil {
+			cachedTokens = doneEvent.Usage.PromptTokensDetails.CachedTokens
+		}
+		span.AddField("cache_read", cachedTokens)
+
 		if streamErr != nil {
 			lastErr = streamErr
 			if !llm.IsRetryableError(streamErr) {
@@ -128,15 +140,6 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 			}
 			continue
 		}
-
-		span.AddField("input_tokens", doneEvent.Usage.InputTokens)
-		span.AddField("output_tokens", doneEvent.Usage.OutputTokens)
-		span.AddField("total_tokens", doneEvent.Usage.TotalTokens)
-		cachedTokens := 0
-		if doneEvent.Usage.PromptTokensDetails != nil {
-			cachedTokens = doneEvent.Usage.PromptTokensDetails.CachedTokens
-		}
-		span.AddField("cache_read", cachedTokens)
 
 		result := summary.String()
 		if strings.TrimSpace(result) == "" {

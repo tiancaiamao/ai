@@ -693,7 +693,15 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		switch e := event.Value.(type) {
 		case llm.LLMTextDeltaEvent:
 			response.WriteString(e.Delta)
+		case llm.LLMDoneEvent:
+			span.AddField("input_tokens", e.Usage.InputTokens)
+			span.AddField("output_tokens", e.Usage.OutputTokens)
+			span.AddField("total_tokens", e.Usage.TotalTokens)
+			if e.Usage.PromptTokensDetails != nil {
+				span.AddField("cache_read", e.Usage.PromptTokensDetails.CachedTokens)
+			}
 		case llm.LLMErrorEvent:
+			span.AddField("error", e.Error.Error())
 			return false, e.Error
 		}
 	}
