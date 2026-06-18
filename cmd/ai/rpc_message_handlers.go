@@ -23,18 +23,8 @@ import (
 func (app *rpcApp) handleCompact(args string) (any, error) {
 	_ = args
 	slog.Info("Received compact")
-	beforeCount := len(app.ag.GetMessages())
-
-	estimatedTokens := app.compactor.EstimateTokens(app.ag.GetMessages())
-	keepTokens := app.compactor.KeepRecentTokens()
-
-	if !app.sess.CanCompact(app.compactor) {
-		if estimatedTokens < keepTokens {
-			return nil, fmt.Errorf("all %d messages (%d tokens) fit within keep-recent budget (%d tokens); no compaction needed",
-				beforeCount, estimatedTokens, keepTokens)
-		}
-		return nil, fmt.Errorf("no messages available for compaction (all within retention window)")
-	}
+	agentCtx := app.ag.GetContext()
+	beforeCount := len(agentCtx.RecentMessages)
 
 	compactionInfo := agent.CompactionInfo{
 		Auto:    false,
@@ -60,15 +50,16 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 		func(_ context.Context, span *traceevent.Span) error {
 			span.AddField("before_messages", beforeCount)
 
-			result, err := app.sess.Compact(app.compactor)
+			result, err := app.compactor.Compact(agentCtx)
 			if err != nil {
 				slog.Info("Compact failed:", "value", err)
 				return err
 			}
+			if result == nil {
+				return fmt.Errorf("compactor returned nil result")
+			}
 
-			app.ag.GetContext().RecentMessages = app.sess.GetMessages()
-
-			afterCount := len(app.ag.GetMessages())
+			afterCount := len(agentCtx.RecentMessages)
 			span.AddField("after_messages", afterCount)
 			span.AddField("tokens_before", result.TokensBefore)
 			span.AddField("tokens_after", result.TokensAfter)
@@ -76,9 +67,13 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 
 			slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
 			response = &rpc.CompactResult{
-				FirstKeptEntryID: result.FirstKeptEntryID,
-				TokensBefore:     result.TokensBefore,
-				TokensAfter:      result.TokensAfter,
+				TokensBefore: result.TokensBefore,
+				TokensAfter:  result.TokensAfter,
+			}
+
+			// Persist compacted messages to session file
+			if app.sess != nil && app.sessionWriter != nil {
+				app.sessionWriter.Replace(app.sess, agentCtx.RecentMessages)
 			}
 
 			if app.checkpointMgr != nil && app.checkpointMgr.ShouldCheckpoint() {

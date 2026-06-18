@@ -18,7 +18,7 @@ import (
 
 func (app *rpcApp) setSession(newSess *session.Session, newID, newName string) {
 	app.sess = newSess
-	app.sessionComp.Update(app.sess, app.compactor)
+	app.sessionComp.Update(app.compactor)
 	app.setAgentContext(app.createBaseContext())
 
 	if err := app.updateCheckpointManager(); err != nil {

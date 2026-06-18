@@ -181,6 +181,15 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 			app.isCompacting = false
 			app.pendingSteer = false
 			app.stateMu.Unlock()
+
+			// Sync final messages to session file.
+			// This is the single persistence point for loop-triggered compaction:
+			// all message_end Append calls are already enqueued before agent_end
+			// (event ordering guarantees), so this Replace arrives last in the
+			// writer channel and overwrites any stale pre-compaction entries.
+			if app.sessionWriter != nil && app.sess != nil && len(event.Messages) > 0 {
+				app.sessionWriter.Replace(app.sess, event.Messages)
+			}
 		}
 		if event.Type == "compaction_start" {
 			app.stateMu.Lock()
