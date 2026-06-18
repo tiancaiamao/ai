@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -50,7 +51,7 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 		func(ctx context.Context, span *traceevent.Span) error {
 			span.AddField("before_messages", beforeCount)
 
-			result, err := app.compactor.Compact(ctx, agentCtx)
+			result, err := app.compactor.Compact(compact.WithManualCompact(ctx), agentCtx)
 			if err != nil {
 				slog.Info("Compact failed:", "value", err)
 				return err

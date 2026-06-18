@@ -380,12 +380,16 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		}, nil
 	}
 
-	// LLMDecide mode: ask the LLM first (unless hard limit).
+	// LLMDecide mode: ask the LLM first (unless hard limit or explicit request).
 	if c.config.LLMDecide != nil {
 		tokens := ctx.EstimateTokens()
 		cfg := c.config.LLMDecide
 
-		if tokens < cfg.HardLimit {
+		if _, manual := goCtx.Value(manualCompactKey{}).(bool); manual {
+			slog.Info("[Compact] Explicit request, skipping LLM-decide gate")
+			traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
+				traceevent.Field{Key: "decision", Value: "manual_compact"})
+		} else if tokens < cfg.HardLimit {
 			shouldDo, err := c.askLLM(goCtx, ctx, tokens)
 			if err != nil {
 				slog.Warn("[Compact] LLM-decide ask failed, compacting as fallback", "error", err)
@@ -638,6 +642,16 @@ func (c *Compactor) llmDecideInterval(tokens int) int {
 	default:
 		return cfg.IntervalLow
 	}
+}
+
+// manualCompactKey is a context key that marks a compaction request as
+// explicitly triggered (e.g. /compact command or compact tool). When set,
+// Compact() bypasses the LLM-decide gate.
+type manualCompactKey struct{}
+
+// WithManualCompact returns a context marked for explicit compaction.
+func WithManualCompact(ctx context.Context) context.Context {
+	return context.WithValue(ctx, manualCompactKey{}, true)
 }
 
 // askLLM sends a lightweight yes/no question to the LLM, reusing the main
