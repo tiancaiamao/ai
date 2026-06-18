@@ -372,7 +372,7 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 
 func TestGenerateSummary_NoMessages(t *testing.T) {
 	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0)
-	if _, err := c.GenerateSummary(nil); err == nil {
+	if _, err := c.GenerateSummary(context.Background(), nil); err == nil {
 		t.Error("expected error for no messages")
 	}
 }

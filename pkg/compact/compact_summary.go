@@ -9,11 +9,12 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // GenerateSummary generates a structured summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(context.Background(), messages, c.systemPrompt, "", nil, "")
+func (c *Compactor) GenerateSummary(ctx context.Context, messages []agentctx.AgentMessage) (string, error) {
+	return c.GenerateSummaryWithPrevious(ctx, messages, c.systemPrompt, "", nil, "")
 }
 
 // GenerateSummaryWithPrevious generates a structured summary, optionally
@@ -31,6 +32,9 @@ func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, e
 // [system_prompt + tools + contextPrefix + old_messages] is served from cache.
 // Only the trailing summarisation instruction is new.
 func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool, previousSummary string) (string, error) {
+	span := traceevent.StartSpan(goCtx, "GenerateSummaryWithPrevious", traceevent.CategoryEvent)
+	defer span.End()
+
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages to summarize")
 	}
