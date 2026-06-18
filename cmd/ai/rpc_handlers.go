@@ -102,7 +102,7 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
 	defer ag.Shutdown()
-	ag.SetThinkingLevel("high")
+	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
 	app.ag = ag
 
 	// Initialize checkpoint manager for persistent state

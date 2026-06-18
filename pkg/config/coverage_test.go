@@ -803,3 +803,47 @@ func TestLoadConfigEnvOverride_InvalidInt(t *testing.T) {
 		t.Errorf("expected fallback to file value 333, got %d", cfg.Model.MaxTokens)
 	}
 }
+
+// TestDefaultConfig_ThinkingLevel verifies DefaultConfig sets ThinkingLevel to "high".
+func TestDefaultConfig_ThinkingLevel(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ThinkingLevel != "high" {
+		t.Errorf("expected default ThinkingLevel 'high', got %q", cfg.ThinkingLevel)
+	}
+}
+
+// TestLoadConfig_ThinkingLevelFromFile verifies ThinkingLevel is read from config file.
+func TestLoadConfig_ThinkingLevelFromFile(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.json")
+
+	if err := os.WriteFile(cfgPath, []byte(`{"thinkingLevel":"medium"}`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.ThinkingLevel != "medium" {
+		t.Errorf("expected ThinkingLevel 'medium', got %q", cfg.ThinkingLevel)
+	}
+}
+
+// TestLoadConfig_ThinkingLevelDefault verifies default "high" when not set in file.
+func TestLoadConfig_ThinkingLevelDefault(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.json")
+
+	if err := os.WriteFile(cfgPath, []byte(`{"model":{"id":"x"}}`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.ThinkingLevel != "high" {
+		t.Errorf("expected default ThinkingLevel 'high' when unset, got %q", cfg.ThinkingLevel)
+	}
+}
