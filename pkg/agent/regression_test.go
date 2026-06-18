@@ -340,7 +340,7 @@ type testCompactor struct {
 	called        bool
 }
 
-func (c *testCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *testCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.called = true
 	return &agentctx.CompactionResult{
 		Summary:      "Test summary",

@@ -420,7 +420,7 @@ func (a *alwaysCompactCompactor) ShouldCompact(_ context.Context, _ *agentctx.Ag
 	return true
 }
 
-func (a *alwaysCompactCompactor) Compact(_ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (a *alwaysCompactCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	return &agentctx.CompactionResult{Summary: "test compaction"}, nil
 }
 

@@ -1,9 +1,10 @@
 package compact
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"context"
 	"testing"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
@@ -264,7 +265,7 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: messages,
 	}
-	result, err := compactor.Compact(agentCtx)
+	result, err := compactor.Compact(context.Background(), agentCtx)
 	if err != nil {
 		t.Fatalf("Compact failed: %v", err)
 	}

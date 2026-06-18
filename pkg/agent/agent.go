@@ -633,7 +633,7 @@ func (a *Agent) GetPendingFollowUps() int {
 
 // Compact compacts the agent's context using the provided compactor.
 func (a *Agent) Compact(compactor Compactor) error {
-	_, err := compactor.Compact(a.context)
+	_, err := compactor.Compact(context.Background(), a.context)
 	if err != nil {
 		return fmt.Errorf("failed to compact: %w", err)
 	}

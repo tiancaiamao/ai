@@ -47,10 +47,10 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 		"compaction",
 		traceevent.CategoryEvent,
 		[]traceevent.Field{{Key: "source", Value: "manual"}},
-		func(_ context.Context, span *traceevent.Span) error {
+		func(ctx context.Context, span *traceevent.Span) error {
 			span.AddField("before_messages", beforeCount)
 
-			result, err := app.compactor.Compact(agentCtx)
+			result, err := app.compactor.Compact(ctx, agentCtx)
 			if err != nil {
 				slog.Info("Compact failed:", "value", err)
 				return err

@@ -334,7 +334,7 @@ func TestSplitMessagesByTokenBudget_EdgeCases(t *testing.T) {
 func TestCompact_EmptyMessages(t *testing.T) {
 	c := NewCompactor(DefaultConfig(), llm.Model{}, "", "", 0)
 	ctx := agentctx.NewAgentContext("sys")
-	r, err := c.Compact(ctx)
+	r, err := c.Compact(context.Background(), ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 		agentctx.NewUserMessage("b"),
 	}
 	// Fewer messages than KeepRecent — no-op
-	r, err := c.Compact(ctx)
+	r, err := c.Compact(context.Background(), ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -382,11 +382,11 @@ func TestGenerateSummaryWithPrevious_NoVisibleMessages(t *testing.T) {
 	// Agent-invisible messages only → no agent-visible
 	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
 	// With empty previous summary → error
-	if _, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, "", "", nil, ""); err == nil {
+	if _, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{invisible}, "", "", nil, ""); err == nil {
 		t.Error("expected error when no agent-visible messages and no previous summary")
 	}
 	// With non-empty previous summary → returned as-is
-	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, "", "", nil, "prior")
+	got, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{invisible}, "", "", nil, "prior")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
 	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0)
 
-	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	got, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer emptyServer.Close()
 	c2 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: emptyServer.URL, API: "openai"}, "k", "sys", 0)
-	_, err = c2.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	_, err = c2.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error for empty summary")
 	}
@@ -452,7 +452,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer authServer.Close()
 	c3 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: authServer.URL, API: "openai"}, "k", "sys", 0)
-	_, err = c3.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	_, err = c3.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error from 401")
 	}
@@ -716,7 +716,7 @@ func TestContextManager_Compact_DelegatesToWithCtx(t *testing.T) {
 	// No LLM server reachable → expect error; ensures Compact delegates.
 	ctx := agentctx.NewAgentContext("sys")
 	ctx.RecentMessages = []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}
-	_, err := cm.Compact(ctx)
+	_, err := cm.Compact(context.Background(), ctx)
 	if err == nil {
 		// When contextWindow=0, estimateTokenPercent=0 → behavior depends on server
 		// The key here is that Compact does not panic and goes through CompactWithCtx.

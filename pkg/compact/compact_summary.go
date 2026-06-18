@@ -13,7 +13,7 @@ import (
 
 // GenerateSummary generates a structured summary of messages using the LLM.
 func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(messages, c.systemPrompt, "", nil, "")
+	return c.GenerateSummaryWithPrevious(context.Background(), messages, c.systemPrompt, "", nil, "")
 }
 
 // GenerateSummaryWithPrevious generates a structured summary, optionally
@@ -30,7 +30,7 @@ func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, e
 // are a prefix of the full conversation, so the entire prefix
 // [system_prompt + tools + contextPrefix + old_messages] is served from cache.
 // Only the trailing summarisation instruction is new.
-func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool, previousSummary string) (string, error) {
+func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool, previousSummary string) (string, error) {
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages to summarize")
 	}
@@ -83,7 +83,7 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
+		ctx, cancel := context.WithTimeout(goCtx, totalTimeout)
 
 		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
 

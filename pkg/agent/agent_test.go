@@ -124,7 +124,7 @@ func (m *mockCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContex
 	return m.shouldCompact
 }
 
-func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (m *mockCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	// Compactor directly modifies ctx.RecentMessages
 	ctx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("[Summary]"),

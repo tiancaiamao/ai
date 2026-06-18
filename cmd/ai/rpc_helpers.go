@@ -225,8 +225,8 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 			{Key: "trigger", Value: trigger},
 			{Key: "before_messages", Value: beforeCount},
 		},
-		func(_ context.Context, span *traceevent.Span) error {
-			result, err := app.compactor.Compact(agentCtx)
+		func(ctx context.Context, span *traceevent.Span) error {
+			result, err := app.compactor.Compact(ctx, agentCtx)
 			if err != nil {
 				return err
 			}

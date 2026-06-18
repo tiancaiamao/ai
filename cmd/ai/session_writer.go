@@ -37,14 +37,14 @@ func (sc *sessionCompactor) ShouldCompact(ctx context.Context, agentCtx *agentct
 // Compact delegates directly to the underlying compactor.
 // The compactor modifies agentCtx.RecentMessages in place.
 // Session persistence is handled separately (via events or direct writer.Replace).
-func (sc *sessionCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (sc *sessionCompactor) Compact(ctx context.Context, agentCtx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	sc.mu.Lock()
 	comp := sc.compactor
 	sc.mu.Unlock()
 	if comp == nil {
 		return nil, nil
 	}
-	return comp.Compact(ctx)
+	return comp.Compact(ctx, agentCtx)
 }
 
 func (sc *sessionCompactor) CalculateDynamicThreshold() int {

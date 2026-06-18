@@ -319,7 +319,9 @@ func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 
 // Compact compacts context by summarizing old messages using AgentContext.
 // This method implements the context.Compactor interface.
-func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+// goCtx carries trace context (trace buf + span) so LLM calls within
+// compaction are properly traced.
+func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	if len(ctx.RecentMessages) == 0 {
 		return &agentctx.CompactionResult{
 			TokensBefore: 0,
@@ -383,7 +385,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(oldMessages, ctx.SystemPrompt, ctx.AgentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, ctx.AgentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}

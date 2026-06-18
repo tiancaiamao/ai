@@ -346,7 +346,7 @@ func (c *characterizationTriggerCompactor) ShouldCompact(_ context.Context, _ *a
 	return c.shouldCompact
 }
 
-func (c *characterizationTriggerCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *characterizationTriggerCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
 	ctx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("[compacted summary]"),

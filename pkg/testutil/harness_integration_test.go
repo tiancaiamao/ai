@@ -599,7 +599,7 @@ func (c *testCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContex
 	return c.shouldCompact
 }
 
-func (c *testCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *testCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
 	ctx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("[summary]"),
