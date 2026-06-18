@@ -104,28 +104,3 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 		t.Fatalf("expected 1 remaining tool_call after filtering archived pair, got %d", toolCallCount)
 	}
 }
-
-func TestProjectMessagesForSummaryTrimsToolOutputs(t *testing.T) {
-	longText := strings.Repeat("a", 5000)
-	messages := []agentctx.AgentMessage{
-		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: longText},
-		}, false),
-		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "hidden"},
-		}, false).WithVisibility(false, true),
-	}
-
-	projected := projectMessagesForSummary(messages)
-	if len(projected) != 1 {
-		t.Fatalf("expected only visible messages in projection, got %d", len(projected))
-	}
-
-	text := projected[0].ExtractText()
-	if len([]rune(text)) > 1850 {
-		t.Fatalf("expected trimmed tool output, got rune length %d", len([]rune(text)))
-	}
-	if !strings.Contains(text, "... (truncated) ...") {
-		t.Fatalf("expected truncation marker, got %q", text)
-	}
-}

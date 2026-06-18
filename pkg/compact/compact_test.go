@@ -145,44 +145,6 @@ func TestSplitMessagesByTokenBudget(t *testing.T) {
 		t.Errorf("Unexpected recent messages order")
 	}
 }
-func TestTruncateConversationToCharBudget(t *testing.T) {
-	// Create messages with known text sizes
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage(strings.Repeat("a", 1000)), // 1000+ chars
-		agentctx.NewUserMessage(strings.Repeat("b", 1000)), // 1000+ chars
-		agentctx.NewUserMessage(strings.Repeat("c", 1000)), // 1000+ chars
-		agentctx.NewUserMessage(strings.Repeat("d", 1000)), // 1000+ chars
-		agentctx.NewUserMessage(strings.Repeat("e", 500)),  // 500+ chars
-	}
-
-	// Budget for ~2 messages (2000 chars)
-	truncated := truncateConversationToCharBudget(messages, 2500)
-	if len(truncated) >= len(messages) {
-		t.Fatalf("expected truncation, got %d messages (same as original %d)", len(truncated), len(messages))
-	}
-	// Should keep the most recent messages
-	if len(truncated) < 2 {
-		t.Fatalf("expected at least 2 messages kept, got %d", len(truncated))
-	}
-	lastText := truncated[len(truncated)-1].ExtractText()
-	if !strings.HasPrefix(lastText, strings.Repeat("e", 10)) {
-		t.Fatalf("expected last message to be 'e' message, got %s...", lastText[:20])
-	}
-}
-
-func TestTruncateConversationToCharBudget_NoTruncationNeeded(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("short"),
-		agentctx.NewUserMessage("also short"),
-	}
-
-	// Budget larger than total
-	truncated := truncateConversationToCharBudget(messages, 10000)
-	if len(truncated) != len(messages) {
-		t.Fatalf("expected no truncation, got %d messages (original %d)", len(truncated), len(messages))
-	}
-}
-
 func TestCompact_ForcedSplitWhenManyMessagesButNoOldMessages(t *testing.T) {
 	// Create a compactor with a large keep-recent budget
 	// so that splitMessagesByTokenBudget returns oldMessages=[]

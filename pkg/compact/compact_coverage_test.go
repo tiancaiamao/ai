@@ -29,28 +29,6 @@ func TestEstimateStringTokens(t *testing.T) {
 	}
 }
 
-func TestTrimTextWithTail(t *testing.T) {
-	if got := trimTextWithTail("", 10); got != "" {
-		t.Errorf("empty input should return empty, got %q", got)
-	}
-	short := "hello"
-	if got := trimTextWithTail(short, 100); got != short {
-		t.Errorf("input under limit should return unchanged, got %q", got)
-	}
-	if got := trimTextWithTail("xyz", 0); got != "xyz" {
-		t.Errorf("limit=0 should return input, got %q", got)
-	}
-	// Long input — verify head + tail + truncation marker structure
-	long := strings.Repeat("a", 300)
-	got := trimTextWithTail(long, 30)
-	if !strings.Contains(got, "(truncated)") {
-		t.Errorf("expected truncation marker, got %q", got)
-	}
-	if !strings.HasPrefix(got, strings.Repeat("a", 20)) {
-		t.Errorf("expected head to be first 2/3 of limit, got %q", got[:20])
-	}
-}
-
 func TestExtractText(t *testing.T) {
 	// With content blocks
 	msg := agentctx.AgentMessage{
@@ -304,138 +282,6 @@ func TestEstimateMessageTokens_Variants(t *testing.T) {
 	}
 }
 
-// --- serialization helpers ---
-
-func TestSerializeConversation_AllRoles(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("user-text"),
-	}
-
-	// Assistant with text, thinking, tool call
-	a := agentctx.NewAssistantMessage()
-	a.Content = []agentctx.ContentBlock{
-		agentctx.ThinkingContent{Type: "thinking", Thinking: "I should think"},
-		agentctx.TextContent{Type: "text", Text: "answer"},
-		agentctx.ToolCallContent{Type: "toolCall", ID: "c1", Name: "bash", Arguments: map[string]any{"cmd": "ls"}},
-	}
-	messages = append(messages, a)
-
-	// Tool result with name
-	messages = append(messages, agentctx.NewToolResultMessage("c1", "bash",
-		[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "result"}}, false))
-
-	// Tool result without name
-	tr := agentctx.NewToolResultMessage("c2", "",
-		[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "no name"}}, false)
-	messages = append(messages, tr)
-
-	out := serializeConversation(messages)
-	for _, want := range []string{"[User]: user-text", "[Assistant thinking]", "[Assistant]: answer", "[Assistant tool calls]", "[Tool result bash]: result", "[Tool result]: no name"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in output, got:\n%s", want, out)
-		}
-	}
-
-	// Tool call with no arguments should render with empty parens
-	a2 := agentctx.NewAssistantMessage()
-	a2.Content = []agentctx.ContentBlock{
-		agentctx.ToolCallContent{Type: "toolCall", ID: "c3", Name: "ping"},
-	}
-	out2 := serializeConversation([]agentctx.AgentMessage{a2})
-	if !strings.Contains(out2, "ping()") {
-		t.Errorf("expected empty args rendered as ping(), got:\n%s", out2)
-	}
-}
-
-func TestSerializeConversation_EmptyAndInvisible(t *testing.T) {
-	if serializeConversation(nil) != "" {
-		t.Error("expected empty output for nil input")
-	}
-
-	// Agent-invisible messages are skipped
-	visible := agentctx.NewUserMessage("visible")
-	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
-	out := serializeConversation([]agentctx.AgentMessage{visible, invisible})
-	if !strings.Contains(out, "visible") {
-		t.Errorf("expected visible text, got %q", out)
-	}
-	if strings.Contains(out, "hidden") {
-		t.Errorf("expected invisible to be skipped, got %q", out)
-	}
-}
-
-func TestSerializeSingleMessage(t *testing.T) {
-	if got := serializeSingleMessage(agentctx.AgentMessage{}); got != "" {
-		t.Errorf("expected empty for unknown role, got %q", got)
-	}
-	if got := serializeSingleMessage(agentctx.NewUserMessage("hi")); !strings.Contains(got, "[User]: hi") {
-		t.Errorf("expected user prefix, got %q", got)
-	}
-	a := agentctx.NewAssistantMessage()
-	a.Content = []agentctx.ContentBlock{
-		agentctx.TextContent{Type: "text", Text: "ok"},
-		agentctx.ToolCallContent{Type: "toolCall", ID: "x", Name: "noArgs"},
-	}
-	if got := serializeSingleMessage(a); !strings.Contains(got, "[Assistant]:") || !strings.Contains(got, "noArgs()") {
-		t.Errorf("unexpected assistant serialization: %q", got)
-	}
-	// Tool result with no name → no suffix
-	tr := agentctx.NewToolResultMessage("c", "", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "data"}}, false)
-	if got := serializeSingleMessage(tr); !strings.Contains(got, "[Tool result]: data") {
-		t.Errorf("expected plain tool result prefix, got %q", got)
-	}
-	// Tool result with name
-	tr2 := agentctx.NewToolResultMessage("c", "grep", []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "match"}}, false)
-	if got := serializeSingleMessage(tr2); !strings.Contains(got, "[Tool result grep]: match") {
-		t.Errorf("expected named tool result, got %q", got)
-	}
-}
-
-func TestProjectMessagesForSummary(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("u"),
-		agentctx.NewAssistantMessage(),
-		agentctx.NewToolResultMessage("c1", "bash",
-			[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: strings.Repeat("y", 5000)}}, false),
-		agentctx.NewToolResultMessage("c2", "grep",
-			[]agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: ""}}, false),
-	}
-
-	out := projectMessagesForSummary(messages)
-	if len(out) != 4 {
-		t.Fatalf("expected 4 projected messages, got %d", len(out))
-	}
-
-	// Tool result text should be truncated to ≤1800 runes + tail marker
-	trText := ""
-	for _, blk := range out[2].Content {
-		if tc, ok := blk.(agentctx.TextContent); ok {
-			trText = tc.Text
-		}
-	}
-	if !strings.Contains(trText, "(truncated)") {
-		t.Errorf("expected large tool result to be truncated, got %d chars", len(trText))
-	}
-
-	// Empty tool result text → "(empty output)"
-	emptyText := ""
-	for _, blk := range out[3].Content {
-		if tc, ok := blk.(agentctx.TextContent); ok {
-			emptyText = tc.Text
-		}
-	}
-	if emptyText != "(empty output)" {
-		t.Errorf("expected '(empty output)', got %q", emptyText)
-	}
-
-	// Agent-invisible messages are skipped
-	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
-	out2 := projectMessagesForSummary([]agentctx.AgentMessage{invisible})
-	if len(out2) != 0 {
-		t.Errorf("expected 0 projected messages for invisible, got %d", len(out2))
-	}
-}
-
 // --- splitMessagesByTokenBudget edge cases ---
 
 func TestSplitMessagesByTokenBudget_EdgeCases(t *testing.T) {
@@ -480,20 +326,6 @@ func TestSplitMessagesByTokenBudget_EdgeCases(t *testing.T) {
 	}
 	if !foundSummary {
 		t.Errorf("expected compaction summary in recent, got old=%d recent=%d", len(old), len(recent))
-	}
-}
-
-// --- truncateConversationToCharBudget edge cases ---
-
-func TestTruncateConversationToCharBudget_EdgeCases(t *testing.T) {
-	if got := truncateConversationToCharBudget(nil, 100); got != nil {
-		t.Errorf("expected nil for nil input, got %v", got)
-	}
-	if got := truncateConversationToCharBudget([]agentctx.AgentMessage{agentctx.NewUserMessage("x")}, 0); len(got) != 1 {
-		t.Errorf("budget=0: expected input unchanged, got %d", len(got))
-	}
-	if got := truncateConversationToCharBudget([]agentctx.AgentMessage{agentctx.NewUserMessage("x")}, -1); len(got) != 1 {
-		t.Errorf("budget<0: expected input unchanged, got %d", len(got))
 	}
 }
 
@@ -550,11 +382,11 @@ func TestGenerateSummaryWithPrevious_NoVisibleMessages(t *testing.T) {
 	// Agent-invisible messages only → no agent-visible
 	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
 	// With empty previous summary → error
-	if _, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, ""); err == nil {
+	if _, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, "", "", nil, ""); err == nil {
 		t.Error("expected error when no agent-visible messages and no previous summary")
 	}
 	// With non-empty previous summary → returned as-is
-	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, "prior")
+	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{invisible}, "", "", nil, "prior")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -587,7 +419,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
 	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0)
 
-	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "")
+	got, err := c.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -606,7 +438,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer emptyServer.Close()
 	c2 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: emptyServer.URL, API: "openai"}, "k", "sys", 0)
-	_, err = c2.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "")
+	_, err = c2.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error for empty summary")
 	}
@@ -620,7 +452,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer authServer.Close()
 	c3 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: authServer.URL, API: "openai"}, "k", "sys", 0)
-	_, err = c3.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "")
+	_, err = c3.GenerateSummaryWithPrevious([]agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error from 401")
 	}
