@@ -121,7 +121,7 @@ func (t *CompactTool) Execute(ctx context.Context, params map[string]any) ([]age
 	// Temporarily set the adjusted config on compactor
 	originalConfig := config
 	t.compactor.config = &adjustedConfig
-	result, err := t.compactor.Compact(WithManualCompact(ctx), t.agentCtx)
+	result, err := t.compactor.Compact(ctx, t.agentCtx)
 	t.compactor.config = originalConfig // Restore original config
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)

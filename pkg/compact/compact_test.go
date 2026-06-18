@@ -272,7 +272,7 @@ func TestShouldCompact_LLMDecide_IntervalNotReached(t *testing.T) {
 	}
 }
 
-func TestShouldCompact_LLMDecide_IntervalReached(t *testing.T) {
+func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 	cfg := &Config{
 		AutoCompact: true,
 		LLMDecide: &LLMDecideConfig{
@@ -284,6 +284,9 @@ func TestShouldCompact_LLMDecide_IntervalReached(t *testing.T) {
 		},
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		return true, nil // LLM says yes
+	}
 
 	longText := strings.Repeat("a", 800) // ~200 tokens
 	agentCtx := &agentctx.AgentContext{
@@ -295,7 +298,64 @@ func TestShouldCompact_LLMDecide_IntervalReached(t *testing.T) {
 		},
 	}
 	if !c.ShouldCompact(context.Background(), agentCtx) {
-		t.Error("should compact when interval reached")
+		t.Error("should compact when interval reached and LLM says yes")
+	}
+	if agentCtx.AgentState.ToolCallsSinceLastTrigger != 0 {
+		t.Error("counter should be reset after asking LLM")
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalReached_LLMNo(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     50000,
+			IntervalLow:   5,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		return false, nil // LLM says no
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(strings.Repeat("a", 800)),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 5,
+		},
+	}
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact when LLM says no")
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalReached_LLMError(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     50000,
+			IntervalLow:   5,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		return false, fmt.Errorf("LLM unavailable")
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(strings.Repeat("a", 800)),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 5,
+		},
+	}
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should compact (fallback) when askLLM errors")
 	}
 }
 

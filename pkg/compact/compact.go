@@ -37,7 +37,7 @@ type Config struct {
 
 	// LLMDecide enables LLM-decides compaction mode for large context windows.
 	// When set, ShouldCompact uses soft/hard thresholds + tool-call intervals,
-	// and Compact asks the LLM whether to compact before actually doing so.
+	// and asks the LLM whether to compact when an interval is reached.
 	// A hard limit forces compaction without asking.
 	LLMDecide *LLMDecideConfig
 }
@@ -105,6 +105,9 @@ type Compactor struct {
 	systemPrompt  string
 	contextWindow int
 	askPrompt     string // LLM-decide ask template (loaded lazily)
+	// askFunc allows tests to inject a fake LLM decision without a real API
+	// call. nil means use the real askLLM method.
+	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
 }
 
 // NewCompactor creates a new Compactor.
@@ -369,9 +372,6 @@ func EstimateMessageTokens(msg agentctx.AgentMessage) int {
 // This method implements the context.Compactor interface.
 // goCtx carries trace context (trace buf + span) so LLM calls within
 // compaction are properly traced.
-//
-// In LLMDecide mode, asks the LLM whether to compact before doing so.
-// A hard limit forces compaction without asking.
 func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	if len(ctx.RecentMessages) == 0 {
 		return &agentctx.CompactionResult{
@@ -380,57 +380,8 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		}, nil
 	}
 
-	// LLMDecide mode: ask the LLM first (unless hard limit or explicit request).
-	if c.config.LLMDecide != nil {
-		tokens := ctx.EstimateTokens()
-		cfg := c.config.LLMDecide
-
-		if _, manual := goCtx.Value(manualCompactKey{}).(bool); manual {
-			slog.Info("[Compact] Explicit request, skipping LLM-decide gate")
-			traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
-				traceevent.Field{Key: "decision", Value: "manual_compact"})
-		} else if tokens < cfg.HardLimit {
-			shouldDo, err := c.askLLM(goCtx, ctx, tokens)
-			if err != nil {
-				slog.Warn("[Compact] LLM-decide ask failed, compacting as fallback", "error", err)
-				traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
-					traceevent.Field{Key: "decision", Value: "compact_fallback"},
-					traceevent.Field{Key: "tokens", Value: tokens},
-					traceevent.Field{Key: "error", Value: err.Error()},
-				)
-			} else {
-				// Reset counter after each check (even "no") to avoid asking every turn.
-				ctx.AgentState.ToolCallsSinceLastTrigger = 0
-				if !shouldDo {
-					slog.Info("[Compact] LLM decided not to compact",
-						"tokens", tokens,
-						"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
-					traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
-						traceevent.Field{Key: "decision", Value: "skip"},
-						traceevent.Field{Key: "tokens", Value: tokens},
-						traceevent.Field{Key: "budget_pct", Value: tokens * 100 / cfg.HardLimit},
-					)
-					return nil, nil
-				}
-				slog.Info("[Compact] LLM decided to compact",
-					"tokens", tokens,
-					"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
-				traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
-					traceevent.Field{Key: "decision", Value: "compact"},
-					traceevent.Field{Key: "tokens", Value: tokens},
-					traceevent.Field{Key: "budget_pct", Value: tokens * 100 / cfg.HardLimit},
-				)
-			}
-		} else {
-			slog.Info("[Compact] Hard limit reached, forcing compact",
-				"tokens", tokens, "hard_limit", cfg.HardLimit)
-			traceevent.Log(goCtx, traceevent.CategoryEvent, "compact_llm_decide_ask",
-				traceevent.Field{Key: "decision", Value: "force_compact"},
-				traceevent.Field{Key: "tokens", Value: tokens},
-				traceevent.Field{Key: "hard_limit", Value: cfg.HardLimit},
-			)
-		}
-	}
+	// Compact is purely an execution method. The decision (including the
+	// LLM-decides askLLM gate) lives in ShouldCompact.
 
 	tokensBefore := ctx.EstimateTokens()
 
@@ -582,6 +533,8 @@ func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentC
 }
 
 // shouldCompactLLMDecide implements the LLM-decides threshold check.
+// When an interval is reached, it asks the LLM whether to compact;
+// on error it falls back to compacting.
 func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	tokens := agentCtx.EstimateTokens()
 	cfg := c.config.LLMDecide
@@ -596,18 +549,10 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 		return true
 	}
 	if tokens < cfg.SoftThreshold {
-		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
-			traceevent.Field{Key: "decision", Value: false},
-			traceevent.Field{Key: "reason", Value: "below_soft_threshold"},
-			traceevent.Field{Key: "tokens", Value: tokens},
-			traceevent.Field{Key: "soft_threshold", Value: cfg.SoftThreshold},
-		)
 		return false
 	}
 
 	interval := c.llmDecideInterval(tokens)
-	should := agentCtx.AgentState.ToolCallsSinceLastTrigger >= interval
-
 	tier := "low"
 	switch {
 	case tokens >= cfg.TierHigh:
@@ -616,20 +561,53 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 		tier = "medium"
 	}
 
+	if agentCtx.AgentState.ToolCallsSinceLastTrigger < interval {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+			traceevent.Field{Key: "decision", Value: false},
+			traceevent.Field{Key: "reason", Value: "interval_not_reached"},
+			traceevent.Field{Key: "tokens", Value: tokens},
+			traceevent.Field{Key: "tier", Value: tier},
+			traceevent.Field{Key: "tool_calls_since", Value: agentCtx.AgentState.ToolCallsSinceLastTrigger},
+			traceevent.Field{Key: "interval", Value: interval},
+		)
+		return false
+	}
+
+	// Interval reached — ask the LLM whether to compact.
+	// The askLLM span (compact_llm_decide_ask) records cache/token details.
+	ask := c.askFunc
+	if ask == nil {
+		ask = c.askLLM
+	}
+	shouldDo, err := ask(ctx, agentCtx, tokens)
+	// Reset counter after each ask so we don't ask every turn.
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 0
+
+	decision := true
+	reason := "ask_yes"
+	if err != nil {
+		slog.Warn("[Compact] LLM-decide ask failed, compacting as fallback", "error", err)
+		reason = "ask_fallback"
+	} else if !shouldDo {
+		decision = false
+		reason = "ask_no"
+		slog.Info("[Compact] LLM decided not to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	} else {
+		slog.Info("[Compact] LLM decided to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	}
+
 	traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
-		traceevent.Field{Key: "decision", Value: should},
-		traceevent.Field{Key: "reason", Value: func() string {
-			if should {
-				return "interval_reached"
-			}
-			return "interval_not_reached"
-		}()},
+		traceevent.Field{Key: "decision", Value: decision},
+		traceevent.Field{Key: "reason", Value: reason},
 		traceevent.Field{Key: "tokens", Value: tokens},
 		traceevent.Field{Key: "tier", Value: tier},
-		traceevent.Field{Key: "tool_calls_since", Value: agentCtx.AgentState.ToolCallsSinceLastTrigger},
 		traceevent.Field{Key: "interval", Value: interval},
 	)
-	return should
+	return decision
 }
 
 func (c *Compactor) llmDecideInterval(tokens int) int {
@@ -642,16 +620,6 @@ func (c *Compactor) llmDecideInterval(tokens int) int {
 	default:
 		return cfg.IntervalLow
 	}
-}
-
-// manualCompactKey is a context key that marks a compaction request as
-// explicitly triggered (e.g. /compact command or compact tool). When set,
-// Compact() bypasses the LLM-decide gate.
-type manualCompactKey struct{}
-
-// WithManualCompact returns a context marked for explicit compaction.
-func WithManualCompact(ctx context.Context) context.Context {
-	return context.WithValue(ctx, manualCompactKey{}, true)
 }
 
 // askLLM sends a lightweight yes/no question to the LLM, reusing the main
