@@ -1,4 +1,4 @@
-[compact-check] You are reaching %s of the context budget before a hard compaction is triggered.
+<agent:compact-check> You are reaching %s of the context budget before a hard compaction is triggered.
 
 This is a periodic check. Compacting will summarize older messages into a concise summary. Only compact if the conversation has reached a natural transition point.
 
@@ -13,3 +13,4 @@ BAD times to compact:
 - Recent messages contain details still needed for the current step
 
 Reply ONLY "yes" to compact now, or "no" to continue. Do not use any tools.
+</agent:compact-check>
