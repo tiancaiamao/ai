@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // Config contains configuration for context compression.
@@ -32,7 +34,52 @@ type Config struct {
 	// to complete without their results being hidden. Default is 1 (the most recent).
 	GracePeriod int
 	AutoCompact bool // Whether to automatically compact
+
+	// LLMDecide enables LLM-decides compaction mode for large context windows.
+	// When set, ShouldCompact uses soft/hard thresholds + tool-call intervals,
+	// and asks the LLM whether to compact when an interval is reached.
+	// A hard limit forces compaction without asking.
+	LLMDecide *LLMDecideConfig
 }
+
+// LLMDecideConfig configures the LLM-decides compaction strategy.
+type LLMDecideConfig struct {
+	// SoftThreshold: tokens before periodic checks begin.
+	SoftThreshold int
+	// HardLimit: tokens where compaction is forced without asking.
+	HardLimit int
+	// TierMedium: token level to switch from low to medium interval.
+	TierMedium int
+	// TierHigh: token level to switch from medium to high interval.
+	TierHigh int
+	// IntervalLow/Medium/High: tool calls between checks per tier.
+	IntervalLow    int
+	IntervalMedium int
+	IntervalHigh   int
+}
+
+// DefaultLLMDecideConfig returns thresholds scaled to the context window.
+//
+// For 1M context: soft=80K, tiers at 100K/120K, hard=200K.
+// Smaller windows scale proportionally, capped at the 1M values.
+func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
+	soft := min(contextWindow*8/100, 80_000)
+	hard := min(contextWindow*20/100, 200_000)
+	return LLMDecideConfig{
+		SoftThreshold:  soft,
+		HardLimit:      hard,
+		TierMedium:     soft + 20_000,
+		TierHigh:       soft + 40_000,
+		IntervalLow:    15,
+		IntervalMedium: 10,
+		IntervalHigh:   7,
+	}
+}
+
+// LargeContextThreshold is the minimum context window size for enabling
+// LLM-decides compaction. Models with smaller windows keep the old
+// truncate/update cycle.
+const LargeContextThreshold = 500_000
 
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
@@ -57,6 +104,22 @@ type Compactor struct {
 	apiKey        string
 	systemPrompt  string
 	contextWindow int
+	askPrompt     string // LLM-decide ask template (loaded lazily)
+	// agentContextPrefix is the skills + AGENTS.md prefix, stored at
+	// construction time so it survives agentCtx checkpoint/restore cycles
+	// (AgentContext.AgentContextPrefix has json:"-" and is lost on restore).
+	agentContextPrefix string
+	// askFunc allows tests to inject a fake LLM decision without a real API
+	// call. nil means use the real askLLM method.
+	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
+
+	// LLM-decide idempotency state. ShouldCompact may be called multiple times
+	// per turn (e.g. savePreCompactionCheckpoint + performCompaction). The
+	// cached decision is reused as long as ToolCallsSinceLastTrigger hasn't
+	// changed, making ShouldCompact safe to call repeatedly.
+	llmDecideAnswer       *bool // cached answer from askLLM; nil = not yet asked this cycle
+	llmDecideAnswerCount  int   // ToolCallsSinceLastTrigger value when answer was cached
+	llmDecideLastAskCount int   // counter value at last askLLM; prevents re-asking every turn after a "no"
 }
 
 // NewCompactor creates a new Compactor.
@@ -175,6 +238,12 @@ func (c *Compactor) ContextWindow() int {
 // SetContextWindow updates the model context window used for compaction.
 func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window
+}
+
+// SetAgentContextPrefix updates the skills + AGENTS.md prefix used for
+// cache-friendly LLM requests (askLLM, GenerateSummaryWithPrevious).
+func (c *Compactor) SetAgentContextPrefix(prefix string) {
+	c.agentContextPrefix = prefix
 }
 
 // ReserveTokens returns the effective reserve tokens setting.
@@ -329,6 +398,9 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		}, nil
 	}
 
+	// Compact is purely an execution method. The decision (including the
+	// LLM-decides askLLM gate) lives in ShouldCompact.
+
 	tokensBefore := ctx.EstimateTokens()
 
 	keepRecentTokens := c.calculateKeepRecentBudget()
@@ -385,7 +457,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, ctx.AgentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -420,6 +492,11 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	tokensAfter := ctx.EstimateTokens()
 	messagesAfter := len(newRecentMessages)
 	slog.Info("[Compact] Compressed context", "messages", messagesAfter)
+
+	// Reset tool-call counter and clear LLM-decide cache after successful compaction.
+	ctx.AgentState.ToolCallsSinceLastTrigger = 0
+	c.llmDecideAnswer = nil
+	c.llmDecideLastAskCount = 0
 
 	return &agentctx.CompactionResult{
 		Summary:        summary,
@@ -458,10 +535,16 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 	return result
 }
 
-// ShouldCompact determines if context should be compressed using AgentContext.
-func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentContext) bool {
+// ShouldCompact determines if context should be compressed.
+// In LLMDecide mode, uses soft/hard thresholds + tool-call intervals.
+// In classic mode, uses the dynamic token threshold.
+func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
 		return false
+	}
+
+	if c.config.LLMDecide != nil {
+		return c.shouldCompactLLMDecide(ctx, agentCtx)
 	}
 
 	threshold := c.CalculateDynamicThreshold()
@@ -470,4 +553,210 @@ func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentCon
 		return tokens >= threshold
 	}
 	return false
+}
+
+// shouldCompactLLMDecide implements the LLM-decides threshold check.
+// When an interval is reached, it asks the LLM whether to compact;
+// on error it falls back to compacting.
+func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
+	tokens := agentCtx.EstimateTokens()
+	cfg := c.config.LLMDecide
+
+	if tokens >= cfg.HardLimit {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+			traceevent.Field{Key: "decision", Value: true},
+			traceevent.Field{Key: "reason", Value: "hard_limit"},
+			traceevent.Field{Key: "tokens", Value: tokens},
+			traceevent.Field{Key: "hard_limit", Value: cfg.HardLimit},
+		)
+		return true
+	}
+	if tokens < cfg.SoftThreshold {
+		return false
+	}
+
+	interval := c.llmDecideInterval(tokens)
+	tier := "low"
+	switch {
+	case tokens >= cfg.TierHigh:
+		tier = "high"
+	case tokens >= cfg.TierMedium:
+		tier = "medium"
+	}
+
+	currentCount := agentCtx.AgentState.ToolCallsSinceLastTrigger
+
+	// Idempotency: if we already asked and the counter hasn't changed,
+	// return the cached answer. This makes ShouldCompact safe to call
+	// multiple times per turn (savePreCompactionCheckpoint + performCompaction).
+	if c.llmDecideAnswer != nil && c.llmDecideAnswerCount == currentCount {
+		return *c.llmDecideAnswer
+	}
+
+	// Don't re-ask until a full interval has elapsed since the last ask.
+	// This prevents asking every turn after a "no".
+	if currentCount-c.llmDecideLastAskCount < interval {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+			traceevent.Field{Key: "decision", Value: false},
+			traceevent.Field{Key: "reason", Value: "interval_not_reached"},
+			traceevent.Field{Key: "tokens", Value: tokens},
+			traceevent.Field{Key: "tier", Value: tier},
+			traceevent.Field{Key: "tool_calls_since", Value: currentCount},
+			traceevent.Field{Key: "interval", Value: interval},
+		)
+		return false
+	}
+
+	// Interval reached — ask the LLM whether to compact.
+	// The askLLM span (compact_llm_decide_ask) records cache/token details.
+	ask := c.askFunc
+	if ask == nil {
+		ask = c.askLLM
+	}
+	shouldDo, err := ask(ctx, agentCtx, tokens)
+
+	decision := true
+	reason := "ask_yes"
+	if err != nil {
+		slog.Warn("[Compact] LLM-decide ask failed, compacting as fallback", "error", err)
+		reason = "ask_fallback"
+	} else if !shouldDo {
+		decision = false
+		reason = "ask_no"
+		slog.Info("[Compact] LLM decided not to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	} else {
+		slog.Info("[Compact] LLM decided to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	}
+
+	// Cache the answer for this counter value. The counter is NOT reset here —
+	// that happens in Compact() after successful compaction. The cache prevents
+	// duplicate askLLM calls within the same turn; once the counter changes
+	// (next tool call), the cache is invalidated but llmDecideLastAskCount
+	// prevents re-asking until a full interval has elapsed.
+	c.llmDecideAnswer = &decision
+	c.llmDecideAnswerCount = currentCount
+	c.llmDecideLastAskCount = currentCount
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+		traceevent.Field{Key: "decision", Value: decision},
+		traceevent.Field{Key: "reason", Value: reason},
+		traceevent.Field{Key: "tokens", Value: tokens},
+		traceevent.Field{Key: "tier", Value: tier},
+		traceevent.Field{Key: "interval", Value: interval},
+	)
+	return decision
+}
+
+func (c *Compactor) llmDecideInterval(tokens int) int {
+	cfg := c.config.LLMDecide
+	switch {
+	case tokens >= cfg.TierHigh:
+		return cfg.IntervalHigh
+	case tokens >= cfg.TierMedium:
+		return cfg.IntervalMedium
+	default:
+		return cfg.IntervalLow
+	}
+}
+
+// buildCacheFriendlyLLMContext builds an LLM request whose prefix matches a
+// normal agent turn, maximising provider prefix-cache hits. Used by both
+// askLLM and GenerateSummaryWithPrevious.
+//
+// Message ordering (mirrors the agent loop):
+//
+//	[system_prompt]
+//	[contextPrefix as user message]   ← skills + AGENTS.md, only if non-empty
+//	[...conversation messages...]
+//	[trailingInstruction]             ← ask question or summarisation prompt
+func buildCacheFriendlyLLMContext(
+	messages []agentctx.AgentMessage,
+	systemPrompt string,
+	contextPrefix string,
+	tools []agentctx.Tool,
+	trailingInstruction string,
+) llm.LLMContext {
+	llmMessages := agentctx.ConvertMessagesToLLM(messages)
+
+	if strings.TrimSpace(contextPrefix) != "" {
+		llmMessages = append([]llm.LLMMessage{{
+			Role:    "user",
+			Content: contextPrefix,
+		}}, llmMessages...)
+	}
+
+	llmMessages = append(llmMessages, llm.LLMMessage{
+		Role:    "user",
+		Content: trailingInstruction,
+	})
+
+	return llm.LLMContext{
+		SystemPrompt: systemPrompt,
+		Messages:     llmMessages,
+		Tools:        agentctx.ConvertToolsToLLM(tools),
+	}
+}
+
+// askLLM sends a lightweight yes/no question to the LLM, reusing the main
+// conversation prefix for cache efficiency. Returns true if the LLM says yes.
+func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
+	span := traceevent.StartSpan(ctx, "compact_llm_decide_ask", traceevent.CategoryLLM)
+	defer span.End()
+
+	if c.askPrompt == "" {
+		c.askPrompt = prompt.LLMDecideCheckPrompt()
+	}
+
+	cfg := c.config.LLMDecide
+	budgetPct := fmt.Sprintf("%d%% (%d / %d tokens)", tokens*100/cfg.HardLimit, tokens, cfg.HardLimit)
+	askContent := fmt.Sprintf(c.askPrompt, budgetPct)
+
+	span.AddField("tokens", tokens)
+	span.AddField("budget_pct", budgetPct)
+
+	llmCtx := buildCacheFriendlyLLMContext(
+		agentCtx.RecentMessages,
+		agentCtx.SystemPrompt,
+		c.agentContextPrefix,
+		agentCtx.Tools,
+		askContent,
+	)
+
+	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	stream := llm.StreamLLM(callCtx, c.model, llmCtx, c.apiKey, 60*time.Second)
+
+	var response strings.Builder
+	for event := range stream.Iterator(callCtx) {
+		if event.Done {
+			break
+		}
+		switch e := event.Value.(type) {
+		case llm.LLMTextDeltaEvent:
+			response.WriteString(e.Delta)
+		case llm.LLMDoneEvent:
+			span.AddField("input_tokens", e.Usage.InputTokens)
+			span.AddField("output_tokens", e.Usage.OutputTokens)
+			span.AddField("total_tokens", e.Usage.TotalTokens)
+			if e.Usage.PromptTokensDetails != nil {
+				span.AddField("cache_read", e.Usage.PromptTokensDetails.CachedTokens)
+			}
+		case llm.LLMErrorEvent:
+			span.AddField("error", e.Error.Error())
+			return false, e.Error
+		}
+	}
+
+	answer := strings.ToLower(strings.TrimSpace(response.String()))
+	yes := strings.Contains(answer, "yes")
+
+	span.AddField("response", response.String())
+	span.AddField("decision", yes)
+
+	return yes, nil
 }

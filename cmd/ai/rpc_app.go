@@ -62,9 +62,10 @@ type rpcApp struct {
 	registry *tools.Registry
 
 	// --- Compaction ---
-	compactor       *compact.Compactor
-	ctxManager      *compact.ContextManager
-	compactorConfig *compact.Config
+	compactor          *compact.Compactor
+	ctxManager         *compact.ContextManager
+	proactiveCompactor agent.Compactor // ctxManager or compactor (LLMDecide mode)
+	compactorConfig    *compact.Config
 
 	// --- Tracing ---
 	traceOutputPath string

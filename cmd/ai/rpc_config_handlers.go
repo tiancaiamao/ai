@@ -140,6 +140,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 
 	// Recreate compactor with new model
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, spec.ContextWindow)
+	app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
 	app.sessionComp.Update(app.compactor)
 	app.ag.SetCompactor(app.sessionComp)
 	app.ag.SetContextWindow(spec.ContextWindow)

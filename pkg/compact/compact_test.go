@@ -194,3 +194,223 @@ func TestCompact_ForcedSplitWhenManyMessagesButNoOldMessages(t *testing.T) {
 		t.Fatalf("expected %d recent messages, got %d", max(10, int(float64(60)*0.3)), len(recentMsgs))
 	}
 }
+
+func TestShouldCompact_LLMDecide_BelowSoftThreshold(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 10000,
+			HardLimit:     30000,
+			TierMedium:    12000,
+			TierHigh:      14000,
+			IntervalLow:   15,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("short"),
+		},
+	}
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact below soft threshold")
+	}
+}
+
+func TestShouldCompact_LLMDecide_HardLimit(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     500,
+			TierMedium:    200,
+			TierHigh:      300,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+
+	// ~250 tokens, above hard limit of 500? no — need more.
+	// Generate enough text to exceed hard limit
+	longText := strings.Repeat("a", 3000) // ~750 tokens
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(longText),
+		},
+	}
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should compact at/above hard limit regardless of interval")
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalNotReached(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold:  100,
+			HardLimit:      50000,
+			TierMedium:     200,
+			TierHigh:       300,
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+
+	longText := strings.Repeat("a", 800) // ~200 tokens, between soft and hard
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(longText),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 3,
+		},
+	}
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact when interval not reached")
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     50000,
+			TierMedium:    200,
+			TierHigh:      300,
+			IntervalLow:   5,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	askCount := 0
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		askCount++
+		return true, nil // LLM says yes
+	}
+
+	longText := strings.Repeat("a", 800) // ~200 tokens
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(longText),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 5,
+		},
+	}
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should compact when interval reached and LLM says yes")
+	}
+	// Counter is NOT reset in ShouldCompact; it's reset in Compact after success.
+	if agentCtx.AgentState.ToolCallsSinceLastTrigger != 5 {
+		t.Errorf("counter should be unchanged after ShouldCompact, got %d", agentCtx.AgentState.ToolCallsSinceLastTrigger)
+	}
+
+	// Simulate the double-call bug: performCompaction calls ShouldCompact again
+	// with the same counter. It must return the cached answer (true) without
+	// calling askLLM a second time.
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("second ShouldCompact call should return cached true")
+	}
+	if askCount != 1 {
+		t.Errorf("askLLM should be called once, got %d", askCount)
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalReached_LLMNo(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     50000,
+			TierMedium:    10000, // ensure we stay in low tier at 200 tokens
+			TierHigh:      20000,
+			IntervalLow:   5,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	askCount := 0
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		askCount++
+		return false, nil // LLM says no
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(strings.Repeat("a", 800)),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 5,
+		},
+	}
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact when LLM says no")
+	}
+
+	// Simulate next turn: 1 more tool call (counter=6). Interval not yet reached
+	// since last ask (6-5=1 < 5), so no re-ask.
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 6
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact: interval not reached since last ask")
+	}
+	if askCount != 1 {
+		t.Errorf("askLLM should not be called again, got %d calls", askCount)
+	}
+
+	// After enough tool calls (counter=10, 10-5=5 >= interval), ask again.
+	agentCtx.AgentState.ToolCallsSinceLastTrigger = 10
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("LLM says no again, should not compact")
+	}
+	if askCount != 2 {
+		t.Errorf("askLLM should be called a second time, got %d", askCount)
+	}
+}
+
+func TestShouldCompact_LLMDecide_IntervalReached_LLMError(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: true,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 100,
+			HardLimit:     50000,
+			IntervalLow:   5,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
+		return false, fmt.Errorf("LLM unavailable")
+	}
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(strings.Repeat("a", 800)),
+		},
+		AgentState: &agentctx.AgentState{
+			ToolCallsSinceLastTrigger: 5,
+		},
+	}
+	if !c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should compact (fallback) when askLLM errors")
+	}
+}
+
+func TestShouldCompact_LLMDecide_Disabled(t *testing.T) {
+	cfg := &Config{
+		AutoCompact: false,
+		LLMDecide: &LLMDecideConfig{
+			SoftThreshold: 1,
+			HardLimit:     10,
+		},
+	}
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+
+	agentCtx := &agentctx.AgentContext{
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage(strings.Repeat("a", 1000)),
+		},
+	}
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("should not compact when AutoCompact disabled")
+	}
+}
