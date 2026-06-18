@@ -76,27 +76,6 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 	return compacted
 }
 
-func trimTextWithTail(input string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= maxRunes {
-		return input
-	}
-
-	head := maxRunes * 2 / 3
-	tail := maxRunes - head
-	if head < 1 {
-		head = 1
-	}
-	if tail < 1 {
-		tail = 1
-	}
-
-	return string(runes[:head]) + "\n... (truncated) ...\n" + string(runes[len(runes)-tail:])
-}
-
 // ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
 // If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
 // the tool_result must be hidden (archived) so the API doesn't see a mismatch.

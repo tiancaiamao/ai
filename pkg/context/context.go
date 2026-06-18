@@ -10,9 +10,10 @@ import (
 // AgentContext represents the context for agent execution.
 type AgentContext struct {
 	// Core components
-	SystemPrompt string        `json:"systemPrompt,omitempty"`
-	Tools        []Tool        `json:"tools,omitempty"`
-	Skills       []skill.Skill `json:"skills,omitempty"` // Loaded skills
+	SystemPrompt       string        `json:"systemPrompt,omitempty"`
+	AgentContextPrefix string        `json:"-"` // Skills + AGENTS.md prefix (rebuilt at startup, not persisted)
+	Tools              []Tool        `json:"tools,omitempty"`
+	Skills             []skill.Skill `json:"skills,omitempty"` // Loaded skills
 
 	// Unified context state
 	LLMContext     string         `json:"llmContext,omitempty"` // Structured LLM context content (not file manager)

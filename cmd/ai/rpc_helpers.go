@@ -97,6 +97,7 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 		app.loopCfg.AgentContextPrefix = app.agentContextPrefix
 	}
 	ctx := agentctx.NewAgentContext(app.systemPrompt)
+	ctx.AgentContextPrefix = app.agentContextPrefix
 	for _, tool := range app.registry.All() {
 		ctx.AddTool(tool)
 	}

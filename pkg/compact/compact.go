@@ -383,7 +383,7 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(oldMessages, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummaryWithPrevious(oldMessages, ctx.SystemPrompt, ctx.AgentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}

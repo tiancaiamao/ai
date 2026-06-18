@@ -2,7 +2,6 @@ package compact
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,69 +13,68 @@ import (
 
 // GenerateSummary generates a structured summary of messages using the LLM.
 func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(messages, "")
+	return c.GenerateSummaryWithPrevious(messages, c.systemPrompt, "", nil, "")
 }
 
-// GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
-// It includes retry logic for transient LLM errors and a total timeout to prevent
-// the compaction path from hanging indefinitely on network failures.
-
-// GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
-// It includes retry logic for transient LLM errors and a total timeout to prevent
-// the compaction path from hanging indefinitely on network failures.
-func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, previousSummary string) (string, error) {
+// GenerateSummaryWithPrevious generates a structured summary, optionally
+// updating a previous summary.
+//
+// To maximise prompt-cache reuse, the request mirrors a normal agent turn:
+//
+//	SystemPrompt: systemPrompt              (cached)
+//	Tools:        agent tools               (cached)
+//	Messages:     [contextPrefix] + old messages + summarisation instruction
+//
+// The contextPrefix (skills + AGENTS.md) is injected as a user message before
+// the first old message, exactly like the agent loop does. The old messages
+// are a prefix of the full conversation, so the entire prefix
+// [system_prompt + tools + contextPrefix + old_messages] is served from cache.
+// Only the trailing summarisation instruction is new.
+func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool, previousSummary string) (string, error) {
 	if len(messages) == 0 {
 		return "", fmt.Errorf("no messages to summarize")
 	}
 
-	projected := projectMessagesForSummary(messages)
-	if len(projected) == 0 {
+	// Convert old messages to the same structured LLMMessage format used by
+	// normal agent turns. oldMessages is a strict prefix of the conversation
+	// (split off by splitMessagesByTokenBudget in Compact), so it already fits
+	// within the context window — no further truncation needed or wanted:
+	// truncating here would break prefix-cache alignment.
+	llmMessages := agentctx.ConvertMessagesToLLM(messages)
+	if len(llmMessages) == 0 {
 		if strings.TrimSpace(previousSummary) != "" {
 			return previousSummary, nil
 		}
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	conversationText := serializeConversation(projected)
-
-	// Guard against sending a conversation that exceeds the model's context
-	// window. For large sessions the serialized text can be many megabytes,
-	// which the summarization model cannot process. Truncate oldest messages
-	// until the conversation fits within ~40% of the model's context window
-	// (leaving room for the prompt, system prompt, and response).
-	const maxContextFraction = 0.4
-	if c.contextWindow > 0 {
-		maxTokens := int(float64(c.contextWindow) * maxContextFraction)
-		// Each char is roughly 0.25 tokens, so maxBytes ≈ maxTokens * 4
-		maxChars := maxTokens * 4
-		if len(conversationText) > maxChars {
-			truncated := truncateConversationToCharBudget(projected, maxChars)
-			conversationText = serializeConversation(truncated)
-			slog.Info("[Compact] Truncated conversation for summarization",
-				"original_messages", len(projected),
-				"truncated_messages", len(truncated),
-				"original_chars", len(serializeConversation(projected)),
-				"truncated_chars", len(conversationText),
-				"context_window", c.contextWindow,
-				"max_chars", maxChars)
-		}
+	// Prepend contextPrefix (skills + AGENTS.md) as the first message (after
+	// system). oldMessages starts with the conversation's first user message
+	// (it's a strict prefix), so placing the prefix at [0] mirrors the agent
+	// loop's structure exactly: [system, prefix, real_first_user, ...].
+	if strings.TrimSpace(contextPrefix) != "" {
+		llmMessages = append([]llm.LLMMessage{{
+			Role:    "user",
+			Content: contextPrefix,
+		}}, llmMessages...)
 	}
 
-	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
-	basePrompt := summarizationPrompt
+	// Build the summarisation instruction as a trailing user message.
+	// Everything before this point is identical to a normal agent request,
+	// so it is served from the provider's prompt cache.
+	var instruction string
 	if previousSummary != "" {
-		promptText += fmt.Sprintf("<previous-summary>\\n%s\\n</previous-summary>\\n\\n", previousSummary)
-		basePrompt = updateSummarizationPrompt
+		instruction = summarizationSystemPrompt + "\n\n" +
+			fmt.Sprintf(updateSummarizationPrompt, previousSummary, "(see conversation messages above)")
+	} else {
+		instruction = summarizationSystemPrompt + "\n\n" + summarizationPrompt
 	}
-	promptText += basePrompt
-
-	llmMessages := []llm.LLMMessage{
-		{Role: "user", Content: promptText},
-	}
+	llmMessages = append(llmMessages, llm.LLMMessage{Role: "user", Content: instruction})
 
 	llmCtx := llm.LLMContext{
-		SystemPrompt: summarizationSystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     llmMessages,
+		Tools:        agentctx.ConvertToolsToLLM(tools),
 	}
 
 	const maxRetries = 3
@@ -85,7 +83,6 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Use a bounded context with timeout instead of context.Background().
 		ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
 
 		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
@@ -135,8 +132,6 @@ func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage
 
 	return "", fmt.Errorf("failed to generate summary after %d retries: %w", maxRetries, lastErr)
 }
-
-// ContextWindow returns the configured model context window.
 
 func splitMessagesByTokenBudget(
 	messages []agentctx.AgentMessage,
@@ -196,167 +191,4 @@ func splitMessagesByTokenBudget(
 		return messages[:len(messages)-1], messages[len(messages)-1:]
 	}
 	return messages[:start], messages[start:]
-}
-
-func serializeConversation(messages []agentctx.AgentMessage) string {
-	parts := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		switch msg.Role {
-		case "user":
-			if text := msg.ExtractText(); text != "" {
-				parts = append(parts, "[User]: "+text)
-			}
-		case "assistant":
-			textParts := make([]string, 0)
-			thinkingParts := make([]string, 0)
-			toolCalls := make([]string, 0)
-			for _, block := range msg.Content {
-				switch b := block.(type) {
-				case agentctx.TextContent:
-					if b.Text != "" {
-						textParts = append(textParts, b.Text)
-					}
-				case agentctx.ThinkingContent:
-					if b.Thinking != "" {
-						thinkingParts = append(thinkingParts, b.Thinking)
-					}
-				case agentctx.ToolCallContent:
-					args := ""
-					if b.Arguments != nil {
-						if raw, err := json.Marshal(b.Arguments); err == nil {
-							args = string(raw)
-						}
-					}
-					if args != "" {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s(%s)", b.Name, args))
-					} else {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s()", b.Name))
-					}
-				}
-			}
-			if len(thinkingParts) > 0 {
-				parts = append(parts, "[Assistant thinking]: "+strings.Join(thinkingParts, "\n"))
-			}
-			if len(textParts) > 0 {
-				parts = append(parts, "[Assistant]: "+strings.Join(textParts, "\n"))
-			}
-			if len(toolCalls) > 0 {
-				parts = append(parts, "[Assistant tool calls]: "+strings.Join(toolCalls, "; "))
-			}
-		case "toolResult":
-			if text := msg.ExtractText(); text != "" {
-				toolName := strings.TrimSpace(msg.ToolName)
-				if toolName == "" {
-					parts = append(parts, "[Tool result]: "+text)
-				} else {
-					parts = append(parts, "[Tool result "+toolName+"]: "+text)
-				}
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// truncateConversationToCharBudget keeps the most recent messages whose
-// serialized text fits within charBudget. It drops oldest messages first.
-
-// truncateConversationToCharBudget keeps the most recent messages whose
-// serialized text fits within charBudget. It drops oldest messages first.
-func truncateConversationToCharBudget(messages []agentctx.AgentMessage, charBudget int) []agentctx.AgentMessage {
-	if len(messages) == 0 || charBudget <= 0 {
-		return messages
-	}
-
-	// Walk from the end backwards, accumulating size until we exceed the budget.
-	totalChars := 0
-	cutoff := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		msgText := serializeSingleMessage(messages[i])
-		totalChars += len(msgText)
-		if totalChars > charBudget {
-			cutoff = i + 1
-			break
-		}
-	}
-
-	if cutoff >= len(messages) {
-		return messages
-	}
-	return messages[cutoff:]
-}
-
-// serializeSingleMessage returns the serialized text of a single message.
-
-// serializeSingleMessage returns the serialized text of a single message.
-func serializeSingleMessage(msg agentctx.AgentMessage) string {
-	switch msg.Role {
-	case "user":
-		if text := msg.ExtractText(); text != "" {
-			return "[User]: " + text
-		}
-	case "assistant":
-		parts := make([]string, 0)
-		for _, block := range msg.Content {
-			switch b := block.(type) {
-			case agentctx.TextContent:
-				if b.Text != "" {
-					parts = append(parts, b.Text)
-				}
-			case agentctx.ToolCallContent:
-				args := ""
-				if b.Arguments != nil {
-					if raw, err := json.Marshal(b.Arguments); err == nil {
-						args = string(raw)
-					}
-				}
-				if args != "" {
-					parts = append(parts, fmt.Sprintf("%s(%s)", b.Name, args))
-				} else {
-					parts = append(parts, fmt.Sprintf("%s()", b.Name))
-				}
-			}
-		}
-		if len(parts) > 0 {
-			return "[Assistant]: " + strings.Join(parts, "\n")
-		}
-	case "toolResult":
-		if text := msg.ExtractText(); text != "" {
-			toolName := strings.TrimSpace(msg.ToolName)
-			if toolName == "" {
-				return "[Tool result]: " + text
-			}
-			return "[Tool result " + toolName + "]: " + text
-		}
-	}
-	return ""
-}
-
-func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	projected := make([]agentctx.AgentMessage, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		if msg.Role != "toolResult" {
-			projected = append(projected, msg)
-			continue
-		}
-
-		copyMsg := msg
-		toolText := strings.TrimSpace(msg.ExtractText())
-		if toolText == "" {
-			toolText = "(empty output)"
-		}
-		toolText = trimTextWithTail(toolText, 1800)
-		copyMsg.Content = []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: toolText},
-		}
-		projected = append(projected, copyMsg)
-	}
-	return projected
 }
