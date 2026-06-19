@@ -26,15 +26,11 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
                            │ Unix socket (run/serve)
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
-│               cmd/ai — CLI Subcommands                          │
+│               cmd/ai — CLI Entry Point                          │
 │                                                                 │
-│  main.go          — Subcommand dispatch (run/serve/rpc/ls/...)  │
-│  rpc_handlers.go  — RPC server setup, session lifecycle         │
-│  run.go           — run/serve: subprocess + TUI (Bubble Tea)    │
-│  session_writer.go— Session persistence, compaction bridge      │
-│  watch.go         — Event stream TUI renderer                   │
-│  send.go          — Send messages to running agent via socket   │
-│  ls.go / kill.go  — List and terminate agent instances          │
+│  main.go          — Flag parsing, calls rpcapp.RunRPC()         │
+│                   Subcommand dispatch (run/serve/rpc/ls/...)    │
+│                   via pkg/cli                                   │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
@@ -264,17 +260,12 @@ See [test-strategy.md](test-strategy.md) for detailed testing approach.
 
 ```
 ai/
-├── cmd/ai/           # CLI entry points
-│   ├── main.go       # Subcommand dispatch
-│   ├── rpc_handlers.go
-│   ├── run.go        # run + serve subcommands
-│   ├── watch.go      # TUI event renderer
-│   ├── send.go       # Send to running agent
-│   ├── ls.go         # List runs
-│   └── kill.go       # Terminate agent
+├── cmd/ai/           # CLI entry point
+│   └── main.go       # Flag parsing → rpcapp.RunRPC()
 ├── pkg/
 │   ├── agent/        # Core agent loop, execution, metrics
 │   ├── agentconfig/  # Agent configuration types
+│   ├── cli/          # CLI subcommands (run/serve/ls/send/kill/watch)
 │   ├── middlewares/  # RPC middleware
 │   ├── compact/      # LLM-driven compaction (LLMDecide mode)
 │   ├── command/      # Slash command registry
@@ -285,6 +276,7 @@ ai/
 │   ├── modelselect/  # Model selection logic
 │   ├── prompt/       # System prompt builder
 │   ├── rpc/          # RPC server, types
+│   ├── rpcapp/       # RPC application (handlers, setup, session writer)
 │   ├── run/          # Run metadata, socket server
 │   ├── session/      # Session persistence (JSONL)
 │   ├── skill/        # Skill loading and formatting
