@@ -1,4 +1,4 @@
-package rpcapp
+package app
 
 import (
 	"io"

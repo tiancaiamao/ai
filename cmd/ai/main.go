@@ -8,8 +8,8 @@ import (
 
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/app"
 	"github.com/tiancaiamao/ai/pkg/cli"
-	"github.com/tiancaiamao/ai/pkg/rpcapp"
 )
 
 func main() {
@@ -82,7 +82,7 @@ func deprecatedModeDispatch() {
 
 	switch *mode {
 	case "rpc", "":
-		if err := rpcapp.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, ""); err != nil {
+		if err := app.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, ""); err != nil {
 			slog.Error("rpc error", "error", err)
 			os.Exit(1)
 		}
@@ -175,7 +175,7 @@ func rpcSubcommand() {
 
 	systemPrompt := cli.ParseSystemPrompt(*systemPromptFlag)
 
-	if err := rpcapp.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
+	if err := app.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
 		slog.Error("rpc error", "error", err)
 		os.Exit(1)
 	}

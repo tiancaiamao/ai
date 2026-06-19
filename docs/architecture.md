@@ -28,7 +28,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 ┌────────────────────────────────────────────────────────────────┐
 │               cmd/ai — CLI Entry Point                          │
 │                                                                 │
-│  main.go          — Flag parsing, calls rpcapp.RunRPC()         │
+│  main.go          — Flag parsing, calls app.RunRPC()         │
 │                   Subcommand dispatch (run/serve/rpc/ls/...)    │
 │                   via pkg/cli                                   │
 └──────────────────────────┬─────────────────────────────────────┘
@@ -261,7 +261,7 @@ See [test-strategy.md](test-strategy.md) for detailed testing approach.
 ```
 ai/
 ├── cmd/ai/           # CLI entry point
-│   └── main.go       # Flag parsing → rpcapp.RunRPC()
+│   └── main.go       # Flag parsing → app.RunRPC()
 ├── pkg/
 │   ├── agent/        # Core agent loop, execution, metrics
 │   ├── agentconfig/  # Agent configuration types
@@ -276,7 +276,7 @@ ai/
 │   ├── modelselect/  # Model selection logic
 │   ├── prompt/       # System prompt builder
 │   ├── rpc/          # RPC server, types
-│   ├── rpcapp/       # RPC application (handlers, setup, session writer)
+│   ├── app/       # RPC application (handlers, setup, session writer)
 │   ├── run/          # Run metadata, socket server
 │   ├── session/      # Session persistence (JSONL)
 │   ├── skill/        # Skill loading and formatting
