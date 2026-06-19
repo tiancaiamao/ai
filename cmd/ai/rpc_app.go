@@ -510,7 +510,7 @@ func (app *rpcApp) handleAbort(cmd rpc.RPCCommand) (any, error) {
 // Handler methods are distributed across topic-specific files; this method
 // wires up protocol commands and delegates slash command registration.
 func (app *rpcApp) registerHandlers(
-	validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
+	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
 ) {
 	// === Protocol command handlers ===
 	app.server.Register(rpc.CommandPrompt, app.handlePrompt)
@@ -521,6 +521,6 @@ func (app *rpcApp) registerHandlers(
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()
 	app.registerMessageHandlers()
-	app.registerConfigHandlers(validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
+	app.registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
 	app.registerHelpHandlers()
 }

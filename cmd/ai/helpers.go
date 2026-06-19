@@ -149,7 +149,6 @@ func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *rp
 		KeepRecentTokens:      cfg.KeepRecentTokens,
 		ReserveTokens:         compactor.ReserveTokens(),
 		ToolCallCutoff:        cfg.ToolCallCutoff,
-		ToolSummaryStrategy:   cfg.ToolSummaryStrategy,
 		ToolSummaryAutomation: cfg.ToolSummaryAutomation,
 		ContextWindow:         compactor.ContextWindow(),
 		TokenLimit:            limit,

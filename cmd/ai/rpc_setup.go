@@ -199,7 +199,6 @@ func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec
 			"keepRecent", cfg.Compactor.KeepRecent, "keepRecentTokens", cfg.Compactor.KeepRecentTokens,
 			"reserveTokens", cfg.Compactor.ReserveTokens,
 			"toolCallCutoff", cfg.Compactor.ToolCallCutoff,
-			"toolSummaryStrategy", cfg.Compactor.ToolSummaryStrategy,
 			"toolSummaryAutomation", cfg.Compactor.ToolSummaryAutomation)
 	}
 
