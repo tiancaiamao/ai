@@ -2,7 +2,6 @@ package agent
 
 import (
 	"testing"
-	"time"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
@@ -28,10 +27,10 @@ func TestAgentSettersAndGetters(t *testing.T) {
 		t.Errorf("SetAPIKey failed, got %q", a.apiKey)
 	}
 
-	// SetExecutor / GetExecutor
+	// SetExecutor
 	a.LoopConfig.Executor = nil
 	a.SetExecutor(nil)
-	if a.GetExecutor() != nil {
+	if a.LoopConfig.Executor != nil {
 		t.Error("expected nil executor")
 	}
 
@@ -57,30 +56,6 @@ func TestAgentSettersAndGetters(t *testing.T) {
 		// ok — accepted fall-through
 	default:
 		t.Errorf("unexpected ThinkingLevel after garbage: %q", a.LoopConfig.ThinkingLevel)
-	}
-
-	// SetLLMRetryConfig with clamping
-	a.SetLLMRetryConfig(-5, -1)
-	if a.LoopConfig.MaxLLMRetries != 0 {
-		t.Errorf("expected clamped retries=0, got %d", a.LoopConfig.MaxLLMRetries)
-	}
-	if a.LoopConfig.RetryBaseDelay == 0 {
-		t.Error("expected non-zero RetryBaseDelay after clamp")
-	}
-	a.SetLLMRetryConfig(3, 100*time.Millisecond)
-	if a.LoopConfig.MaxLLMRetries != 3 || a.LoopConfig.RetryBaseDelay != 100*time.Millisecond {
-		t.Errorf("LLM retry config not set: retries=%d delay=%v",
-			a.LoopConfig.MaxLLMRetries, a.LoopConfig.RetryBaseDelay)
-	}
-
-	// SetMaxTurns with clamping
-	a.SetMaxTurns(-10)
-	if a.LoopConfig.MaxTurns != 0 {
-		t.Errorf("expected clamped MaxTurns=0, got %d", a.LoopConfig.MaxTurns)
-	}
-	a.SetMaxTurns(42)
-	if a.LoopConfig.MaxTurns != 42 {
-		t.Errorf("expected MaxTurns=42, got %d", a.LoopConfig.MaxTurns)
 	}
 
 	// SetContextWindow with clamping

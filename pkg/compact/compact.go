@@ -93,11 +93,6 @@ func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 	}
 }
 
-// TODO(cleanup): LargeContextThreshold is no longer used after unifying all
-// context windows onto LLMDecide compaction. Remove when ContextManager code
-// is cleaned up.
-const LargeContextThreshold = 500_000
-
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{

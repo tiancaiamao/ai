@@ -150,17 +150,17 @@ func TestAgentContext(t *testing.T) {
 func TestAgentAutoRetryDefaultsAndToggle(t *testing.T) {
 	ag := NewAgent(llm.Model{}, "test-key", "test")
 
-	if !ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries <= 0 {
 		t.Fatal("expected auto retry enabled by default")
 	}
 
 	ag.SetAutoRetry(false)
-	if ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries > 0 {
 		t.Fatal("expected auto retry disabled")
 	}
 
 	ag.SetAutoRetry(true)
-	if !ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries <= 0 {
 		t.Fatal("expected auto retry re-enabled")
 	}
 }
