@@ -2,9 +2,15 @@ package session
 
 import (
 	"encoding/json"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/version"
 )
 
@@ -50,6 +56,12 @@ type SessionEntry struct {
 	Timestamp string  `json:"timestamp"`
 
 	Message *agentctx.AgentMessage `json:"message,omitempty"`
+
+	// SnapshotRef is the relative path (within session dir) to a file containing
+	// the post-compaction in-memory messages. This is the Proposal B approach:
+	// messages.jsonl is append-only; compaction records reference an external
+	// snapshot file rather than rewriting history.
+	SnapshotRef string `json:"snapshotRef,omitempty"`
 
 	Summary          string `json:"summary,omitempty"`
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
@@ -114,7 +126,7 @@ func timestampToMillis(ts string) int64 {
 	return parsed.UnixMilli()
 }
 
-func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry) []agentctx.AgentMessage {
+func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry, sessionDir string) []agentctx.AgentMessage {
 	if len(entries) == 0 {
 		return []agentctx.AgentMessage{}
 	}
@@ -173,13 +185,28 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 	}
 
 	if compaction != nil {
-		msg := compactionSummaryMessage(compaction)
-		if msg.Role != "" {
-			messages = append(messages, msg)
-		}
-
-		foundFirstKept := false
-		if compaction.FirstKeptEntryID != "" {
+		// Proposal B: if SnapshotRef is set, load post-compaction messages from
+		// the external snapshot file. This avoids rewriting messages.jsonl and
+		// makes compaction entries simple pointers.
+		if compaction.SnapshotRef != "" && sessionDir != "" {
+			snapshotPath := filepath.Join(sessionDir, compaction.SnapshotRef)
+			if loaded, err := loadSnapshotMessages(snapshotPath); err == nil {
+				messages = append(messages, loaded...)
+			} else {
+				slog.Warn("[session] Failed to load compaction snapshot, falling back to summary only",
+					"path", snapshotPath, "error", err)
+				msg := compactionSummaryMessage(compaction)
+				if msg.Role != "" {
+					messages = append(messages, msg)
+				}
+			}
+		} else if compaction.FirstKeptEntryID != "" {
+			// Legacy path: reconstruct from FirstKeptEntryID (old sessions)
+			msg := compactionSummaryMessage(compaction)
+			if msg.Role != "" {
+				messages = append(messages, msg)
+			}
+			foundFirstKept := false
 			for i := 0; i < compactionIndex; i++ {
 				entry := path[i]
 				if entry.ID == compaction.FirstKeptEntryID {
@@ -188,6 +215,11 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 				if foundFirstKept {
 					appendMessage(entry)
 				}
+			}
+		} else {
+			msg := compactionSummaryMessage(compaction)
+			if msg.Role != "" {
+				messages = append(messages, msg)
 			}
 		}
 
@@ -254,4 +286,40 @@ func decodeSessionHeader(line []byte) (*SessionHeader, error) {
 		return nil, nil
 	}
 	return &header, nil
+}
+
+// loadSnapshotMessages reads a compaction snapshot file (JSONL of AgentMessage).
+func loadSnapshotMessages(path string) ([]agentctx.AgentMessage, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var messages []agentctx.AgentMessage
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	for {
+		var msg agentctx.AgentMessage
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("decode snapshot message: %w", err)
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// saveSnapshotMessages writes messages to a compaction snapshot file (JSONL).
+func saveSnapshotMessages(path string, messages []agentctx.AgentMessage) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	for _, msg := range messages {
+		if err := enc.Encode(msg); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte(buf.String()), 0644)
 }

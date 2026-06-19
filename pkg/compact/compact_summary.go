@@ -73,6 +73,7 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
 
 		var summary strings.Builder
+		var thinking strings.Builder
 		var streamErr error
 		var doneEvent llm.LLMDoneEvent
 		for event := range llmStream.Iterator(ctx) {
@@ -83,6 +84,8 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 			switch e := event.Value.(type) {
 			case llm.LLMTextDeltaEvent:
 				summary.WriteString(e.Delta)
+			case llm.LLMThinkingDeltaEvent:
+				thinking.WriteString(e.Delta)
 			case llm.LLMErrorEvent:
 				streamErr = e.Error
 			case llm.LLMDoneEvent:
@@ -124,9 +127,21 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 
 		result := summary.String()
 		if strings.TrimSpace(result) == "" {
-			return "", fmt.Errorf("empty summary generated")
+			// Some models (e.g. GLM-5.1) may place the entire response in
+			// reasoning_content instead of text content, especially when
+			// the agent's system prompt contains conflicting instructions.
+			// Fall back to thinking output to avoid discarding a valid summary.
+			thinkingStr := thinking.String()
+			if strings.TrimSpace(thinkingStr) != "" {
+				slog.Warn("[Compact] Summary text was empty, falling back to reasoning_content",
+					"thinking_chars", len(thinkingStr), "output_tokens", doneEvent.Usage.OutputTokens)
+				result = thinkingStr
+			} else {
+				return "", fmt.Errorf("empty summary generated")
+			}
 		}
 
+		span.AddField("summary_chars", len(result))
 		return result, nil
 	}
 

@@ -58,27 +58,42 @@ type LLMDecideConfig struct {
 	IntervalHigh   int
 }
 
-// DefaultLLMDecideConfig returns thresholds scaled to the context window.
+// DefaultLLMDecideConfig returns tuned thresholds for the given context window.
 //
-// For 1M context: soft=80K, tiers at 100K/120K, hard=200K.
-// Smaller windows scale proportionally, capped at the 1M values.
+// These values are empirically tuned per context-window tier, not derived from
+// a single formula. Update them only when you have usage data to justify it.
+//
+//	1M context:  soft=80K(8%),  tiers=100K/120K,  hard=200K(20%)
+//	200K context: soft=40K(20%), tiers=70K/100K,  hard=150K(75%)
 func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
-	soft := min(contextWindow*8/100, 80_000)
-	hard := min(contextWindow*20/100, 200_000)
-	return LLMDecideConfig{
-		SoftThreshold:  soft,
-		HardLimit:      hard,
-		TierMedium:     soft + 20_000,
-		TierHigh:       soft + 40_000,
-		IntervalLow:    15,
-		IntervalMedium: 10,
-		IntervalHigh:   7,
+	switch {
+	case contextWindow >= 800_000: // 1M-class models
+		return LLMDecideConfig{
+			SoftThreshold:  80_000,
+			HardLimit:      200_000,
+			TierMedium:     100_000,
+			TierHigh:       120_000,
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
+	default: // 200K-class and other smaller models
+		pct := func(p int) int { return contextWindow * p / 100 }
+		return LLMDecideConfig{
+			SoftThreshold:  pct(20),
+			HardLimit:      pct(75),
+			TierMedium:     pct(35),
+			TierHigh:       pct(50),
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
 	}
 }
 
-// LargeContextThreshold is the minimum context window size for enabling
-// LLM-decides compaction. Models with smaller windows keep the old
-// truncate/update cycle.
+// TODO(cleanup): LargeContextThreshold is no longer used after unifying all
+// context windows onto LLMDecide compaction. Remove when ContextManager code
+// is cleaned up.
 const LargeContextThreshold = 500_000
 
 // DefaultConfig returns default compression configuration.
@@ -601,7 +616,7 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 			traceevent.Field{Key: "reason", Value: "interval_not_reached"},
 			traceevent.Field{Key: "tokens", Value: tokens},
 			traceevent.Field{Key: "tier", Value: tier},
-			traceevent.Field{Key: "tool_calls_since", Value: currentCount},
+			traceevent.Field{Key: "tool_calls_since", Value: currentCount - c.llmDecideLastAskCount},
 			traceevent.Field{Key: "interval", Value: interval},
 		)
 		return false
@@ -732,6 +747,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	stream := llm.StreamLLM(callCtx, c.model, llmCtx, c.apiKey, 60*time.Second)
 
 	var response strings.Builder
+	var thinking strings.Builder
 	for event := range stream.Iterator(callCtx) {
 		if event.Done {
 			break
@@ -739,6 +755,8 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		switch e := event.Value.(type) {
 		case llm.LLMTextDeltaEvent:
 			response.WriteString(e.Delta)
+		case llm.LLMThinkingDeltaEvent:
+			thinking.WriteString(e.Delta)
 		case llm.LLMDoneEvent:
 			span.AddField("input_tokens", e.Usage.InputTokens)
 			span.AddField("output_tokens", e.Usage.OutputTokens)
@@ -752,10 +770,18 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		}
 	}
 
-	answer := strings.ToLower(strings.TrimSpace(response.String()))
+	// Fall back to reasoning_content if text response is empty (same model
+	// behavior as GenerateSummaryWithPrevious).
+	answerText := response.String()
+	if strings.TrimSpace(answerText) == "" && thinking.Len() > 0 {
+		answerText = thinking.String()
+		span.AddField("used_thinking_fallback", true)
+	}
+
+	answer := strings.ToLower(strings.TrimSpace(answerText))
 	yes := strings.Contains(answer, "yes")
 
-	span.AddField("response", response.String())
+	span.AddField("response", answerText)
 	span.AddField("decision", yes)
 
 	return yes, nil

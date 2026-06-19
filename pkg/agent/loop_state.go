@@ -208,17 +208,29 @@ func (s *loopState) performCompaction(
 
 	compactionSpan.AddField("after_messages", after)
 	compactionSpan.End()
-	s.stream.Push(NewCompactionEndEvent(CompactionInfo{
+
+	// Carry the summary and a copy of post-compaction messages on the event.
+	// The event consumer (rpc_app) persists these to a compaction snapshot file
+	// and appends a compaction entry to messages.jsonl. We copy the slice to
+	// avoid sharing the backing array with the loop goroutine.
+	endEvent := NewCompactionEndEvent(CompactionInfo{
 		Type:              compacted.Type,
 		Auto:              true,
 		Before:            before,
 		After:             after,
 		Trigger:           trigger,
+		Summary:           compacted.Summary,
 		TokensBefore:      compacted.TokensBefore,
 		TokensAfter:       compacted.TokensAfter,
 		TruncatedCount:    compacted.TruncatedCount,
 		LLMContextUpdated: compacted.LLMContextUpdated,
-	}))
+	})
+	if len(s.agentCtx.RecentMessages) > 0 {
+		msgs := make([]agentctx.AgentMessage, len(s.agentCtx.RecentMessages))
+		copy(msgs, s.agentCtx.RecentMessages)
+		endEvent.Messages = msgs
+	}
+	s.stream.Push(endEvent)
 
 	if trackRecovery {
 		s.compactionRecs++
