@@ -33,14 +33,6 @@ func (app *rpcApp) buildSystemPrompt(currentSess *session.Session) string {
 	promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 	promptBuilder.SetTools(app.registry.All()).SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
 
-	if currentSess != nil {
-		sessionDir := currentSess.GetDir()
-		if sessionDir != "" {
-			wm := agentctx.NewLLMContext(sessionDir)
-			_ = wm
-		}
-	}
-
 	return promptBuilder.Build()
 }
 
@@ -67,27 +59,6 @@ func (app *rpcApp) buildAgentContextPrefix() string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (app *rpcApp) restoreLLMContextFromCompaction(sess *session.Session) {
-	summary := sess.GetLastCompactionSummary()
-	if summary == "" {
-		slog.Info("[resume-on-branch] No compaction summary found, skipping llm context restore")
-		return
-	}
-
-	sessionDir := sess.GetDir()
-	if sessionDir == "" {
-		slog.Warn("[resume-on-branch] No session directory, cannot restore llm context")
-		return
-	}
-
-	wm := agentctx.NewLLMContext(sessionDir)
-	if err := wm.WriteContent(summary); err != nil {
-		slog.Warn("[resume-on-branch] Failed to restore llm context", "error", err)
-	} else {
-		slog.Info("[resume-on-branch] Restored llm context from compaction summary", "summary_len", len(summary))
-	}
-}
-
 func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	app.systemPrompt = app.buildSystemPrompt(app.sess)
 	app.agentContextPrefix = app.buildAgentContextPrefix()
@@ -108,15 +79,12 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	}
 	if app.sess != nil {
 		sessionDir := app.sess.GetDir()
-		if sessionDir != "" {
-			ctx.LLMContext = ""
-		}
 		ctx.RecentMessages = app.sess.GetMessages()
 		if sessionDir != "" {
 			// Resume path: load the latest checkpoint and replay any
 			// journal entries written AFTER the checkpoint. This is the
 			// single source of truth — see pkg/agent/resume.go.
-			msgs, llmCtx, agentState, err := agent.LoadResumeState(sessionDir, ctx.RecentMessages)
+			msgs, agentState, err := agent.LoadResumeState(sessionDir, ctx.RecentMessages)
 			if err != nil {
 				slog.Warn("Resume state load failed, using session messages",
 					"error", err,
@@ -129,9 +97,6 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 						"replayed", len(msgs)-len(ctx.RecentMessages))
 				}
 				ctx.RecentMessages = msgs
-				if llmCtx != "" {
-					ctx.LLMContext = llmCtx
-				}
 				if agentState != nil {
 					ctx.AgentState = agentState
 					if agentState.CurrentWorkingDir != "" {
@@ -172,9 +137,6 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 					}
 				}
 			}
-		}
-		ctx.OnCompactEvent = func(detail *agentctx.CompactEventDetail) error {
-			return app.sess.AppendCompactEvent(detail)
 		}
 	}
 	return ctx

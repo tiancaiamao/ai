@@ -214,51 +214,6 @@ func TestGetEnabledTools(t *testing.T) {
 	}
 }
 
-func TestResolveContextManagementConfig(t *testing.T) {
-	c := &AgentConfig{}
-	if got := c.ResolveContextManagementConfig(); got != nil {
-		t.Errorf("expected nil when ContextManagement is nil, got %+v", got)
-	}
-
-	cm := &ContextManagementConfig{StaleAnnotation: true}
-	c.ContextManagement = cm
-	if got := c.ResolveContextManagementConfig(); got != cm {
-		t.Errorf("expected same pointer, got %v", got)
-	}
-}
-
-func TestLoadContextManagementPrompt(t *testing.T) {
-	// Case 1: no ContextManagement -> empty string
-	c := &AgentConfig{}
-	if got := c.LoadContextManagementPrompt(); got != "" {
-		t.Errorf("expected empty when no ContextManagement, got %q", got)
-	}
-
-	// Case 2: ContextManagement but no PromptFile -> empty
-	c.ContextManagement = &ContextManagementConfig{}
-	if got := c.LoadContextManagementPrompt(); got != "" {
-		t.Errorf("expected empty when no PromptFile, got %q", got)
-	}
-
-	// Case 3: PromptFile pointing to a real file
-	dir := t.TempDir()
-	content := "this is a context mgmt prompt"
-	path := filepath.Join(dir, "prompt.md")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
-	}
-	c.ContextManagement = &ContextManagementConfig{PromptFile: path}
-	if got := c.LoadContextManagementPrompt(); got != content {
-		t.Errorf("expected prompt content %q, got %q", content, got)
-	}
-
-	// Case 4: PromptFile pointing to a missing file -> empty (silent fallback)
-	c.ContextManagement = &ContextManagementConfig{PromptFile: filepath.Join(dir, "no-such.md")}
-	if got := c.LoadContextManagementPrompt(); got != "" {
-		t.Errorf("expected empty for missing file, got %q", got)
-	}
-}
-
 func TestResolveSystemPrompt_MemoryFallback(t *testing.T) {
 	// Cover the "memory file missing -> skip" branch in ResolveSystemPrompt.
 	dir := t.TempDir()

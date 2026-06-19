@@ -64,7 +64,7 @@ func TestResume_LoadsAgentStateFromCheckpoint(t *testing.T) {
 
 	// Step 4: simulate a fresh process resuming the session.
 	fallback := sess.GetMessages()
-	gotMessages, gotLLMCtx, gotState, err := LoadResumeState(sessionDir, fallback)
+	gotMessages, gotState, err := LoadResumeState(sessionDir, fallback)
 	if err != nil {
 		t.Fatalf("LoadResumeState: %v", err)
 	}
@@ -75,11 +75,6 @@ func TestResume_LoadsAgentStateFromCheckpoint(t *testing.T) {
 		for i, m := range gotMessages {
 			t.Logf("  msg[%d] role=%s text=%q", i, m.Role, firstText(m))
 		}
-	}
-
-	// LLMContext: no longer restored from checkpoint.
-	if gotLLMCtx != "" {
-		t.Errorf("LLMContext = %q, want empty", gotLLMCtx)
 	}
 
 	// AgentState: restored from checkpoint.
@@ -108,16 +103,13 @@ func TestResume_FallsBackWhenNoCheckpoint(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 	}
 
-	gotMessages, gotLLMCtx, gotState, err := LoadResumeState(sessionDir, fallback)
+	gotMessages, gotState, err := LoadResumeState(sessionDir, fallback)
 	if err != nil {
 		t.Fatalf("LoadResumeState: %v", err)
 	}
 
 	if len(gotMessages) != len(fallback) {
 		t.Errorf("message count = %d, want %d (fallback)", len(gotMessages), len(fallback))
-	}
-	if gotLLMCtx != "" {
-		t.Errorf("LLMContext = %q, want empty (no checkpoint)", gotLLMCtx)
 	}
 	if gotState != nil {
 		t.Errorf("AgentState = %v, want nil (no checkpoint)", gotState)
@@ -128,7 +120,7 @@ func TestResume_FallsBackWhenNoCheckpoint(t *testing.T) {
 func TestResume_FallsBackWhenSessionDirEmpty(t *testing.T) {
 	fallback := []agentctx.AgentMessage{agentctx.NewUserMessage("hello")}
 
-	gotMessages, _, _, err := LoadResumeState("", fallback)
+	gotMessages, _, err := LoadResumeState("", fallback)
 	if err != nil {
 		t.Fatalf("LoadResumeState: %v", err)
 	}

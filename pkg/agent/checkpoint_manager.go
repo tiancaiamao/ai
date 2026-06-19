@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
@@ -56,36 +55,17 @@ func (m *AgentContextCheckpointManager) AppendMessage(msg agentctx.AgentMessage)
 // Returns turn number and error.
 func (m *AgentContextCheckpointManager) CreateSnapshot(
 	agentCtx *agentctx.AgentContext,
-	llmContext string,
 	totalTurns int,
 ) (int, error) {
 	if !m.enabled {
 		return totalTurns, nil
 	}
 
-	// Defense in depth: if the new LLMContext is empty, carry forward the
-	// content from the previous checkpoint. This prevents data loss when
-	// the caller passes an empty string (e.g. after truncate without
-	// update_llm_context).
-	if llmContext == "" {
-		if prev, err := agentctx.LoadLatestCheckpoint(m.sessionDir); err == nil {
-			if prevCtx, err := agentctx.LoadCheckpointLLMContext(
-				filepath.Join(m.sessionDir, prev.Path),
-			); err == nil && prevCtx != "" {
-				slog.Info("[Checkpoint] Carrying forward previous LLMContext (new context is empty)",
-					"previousTurn", prev.Turn, "previousChars", len(prevCtx))
-				llmContext = prevCtx
-			}
-		}
-	}
-
 	// Capture the full AgentState from the running context.
-	// This preserves runtime state like ToolCallsSinceLastTrigger, CWD, tokens, etc.
 	agentState := agentCtx.AgentState.Clone()
 	agentState.TotalTurns = totalTurns
 
 	snapshot := &agentctx.ContextSnapshot{
-		LLMContext:     llmContext,
 		RecentMessages: agentCtx.RecentMessages,
 		AgentState:     agentState,
 	}
@@ -145,7 +125,7 @@ func (m *AgentContextCheckpointManager) Reconstruct() (
 	m.lastTurn = snapshot.AgentState.TotalTurns
 	m.messageIndex = len(entries)
 
-	return snapshot.LLMContext, snapshot.RecentMessages, snapshot.AgentState.TotalTurns, nil
+	return "", snapshot.RecentMessages, snapshot.AgentState.TotalTurns, nil
 }
 
 // ShouldCheckpoint returns true if an event-driven checkpoint should be created.
@@ -181,27 +161,13 @@ func initCheckpointManager(config *LoopConfig) *AgentContextCheckpointManager {
 // The checkpoint's messages.jsonl is not used for resume (messages come from
 // sess.GetMessages() via compaction snapshot refs); only agent_state.json
 // is consumed by LoadResumeState.
-func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, llmContextUpdated bool, turnCount int, trigger string) {
+func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, turnCount int, trigger string) {
 	if mgr == nil || !mgr.ShouldCheckpoint() {
 		return
 	}
-	if _, err := mgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
+	if _, err := mgr.CreateSnapshot(agentCtx, turnCount); err != nil {
 		slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
 	} else {
 		slog.Info("[Loop] Checkpoint created after compaction", "trigger", trigger, "turn", turnCount)
-	}
-}
-
-// saveCheckpointAfterToolExecution creates a checkpoint after specific tool
-// executions that meaningfully update state (e.g. update_llm_context).
-func saveCheckpointAfterToolExecution(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, turnCount int, toolName string) {
-	if mgr == nil || !mgr.ShouldCheckpoint() {
-		return
-	}
-	llmContextContent := agentCtx.LLMContext
-	if _, err := mgr.CreateSnapshot(agentCtx, llmContextContent, turnCount); err != nil {
-		slog.Warn("[Loop] Failed to create checkpoint after "+toolName, "error", err, "turn", turnCount)
-	} else {
-		slog.Info("[Loop] Checkpoint created after "+toolName, "turn", turnCount)
 	}
 }

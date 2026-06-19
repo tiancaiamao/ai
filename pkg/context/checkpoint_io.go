@@ -19,12 +19,6 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 	info.MessageIndex = messageIndex
 	checkpointPath := filepath.Join(sessionDir, info.Path)
 
-	// Save llm_context.txt
-	llmContextPath := filepath.Join(checkpointPath, "llm_context.txt")
-	if err := saveAtomic(llmContextPath, []byte(snapshot.LLMContext)); err != nil {
-		return nil, fmt.Errorf("failed to save llm_context.txt: %w", err)
-	}
-
 	// Save agent_state.json
 	agentStatePath := filepath.Join(checkpointPath, "agent_state.json")
 	agentStateData, err := json.MarshalIndent(snapshot.AgentState, "", "  ")
@@ -43,7 +37,6 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 		}
 	}
 
-	info.LLMContextChars = len(snapshot.LLMContext)
 	info.RecentMessagesCount = len(snapshot.RecentMessages)
 
 	// Update checkpoint_index.json atomically
@@ -65,7 +58,6 @@ func SaveCheckpoint(sessionDir string, snapshot *ContextSnapshot, turn int, mess
 }
 
 // LoadCheckpoint loads a ContextSnapshot from a checkpoint directory.
-// Loads LLMContext, AgentState, and RecentMessages (if present).
 func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*ContextSnapshot, error) {
 	checkpointPath := filepath.Join(sessionDir, checkpointInfo.Path)
 
@@ -80,12 +72,6 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 		return nil, fmt.Errorf("failed to unmarshal agent state: %w", err)
 	}
 
-	// Load llm_context.txt
-	llmContextData, err := os.ReadFile(filepath.Join(checkpointPath, "llm_context.txt"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read llm_context.txt: %w", err)
-	}
-
 	// Load messages.jsonl if present (backward compatible)
 	recentMessages := []AgentMessage{}
 	if data, err := os.ReadFile(filepath.Join(checkpointPath, "messages.jsonl")); err == nil && len(data) > 0 {
@@ -95,19 +81,9 @@ func LoadCheckpoint(sessionDir string, checkpointInfo *CheckpointInfo) (*Context
 	}
 
 	return &ContextSnapshot{
-		LLMContext:     string(llmContextData),
 		RecentMessages: recentMessages,
 		AgentState:     &agentState,
 	}, nil
-}
-
-// LoadCheckpointLLMContext loads only the LLM context from a checkpoint.
-func LoadCheckpointLLMContext(checkpointPath string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(checkpointPath, "llm_context.txt"))
-	if err != nil {
-		return "", fmt.Errorf("failed to read llm_context.txt: %w", err)
-	}
-	return string(data), nil
 }
 
 // LoadCheckpointAgentState loads only the agent state from a checkpoint.
@@ -121,10 +97,10 @@ func LoadCheckpointAgentState(checkpointPath string) (*AgentState, error) {
 	if err := json.Unmarshal(data, &agentState); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal agent state: %w", err)
 	}
+
 	return &agentState, nil
 }
 
-// saveAtomic performs an atomic write using temporary file + rename.
 func saveAtomic(filePath string, data []byte) error {
 	tmpPath := filePath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {

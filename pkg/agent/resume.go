@@ -25,25 +25,24 @@ import (
 //   - err: any I/O or parsing error
 func LoadResumeState(sessionDir string, fallbackMessages []agentctx.AgentMessage) (
 	messages []agentctx.AgentMessage,
-	llmContext string,
 	agentState *agentctx.AgentState,
 	err error,
 ) {
 	if sessionDir == "" {
-		return fallbackMessages, "", nil, nil
+		return fallbackMessages, nil, nil
 	}
 
 	cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir)
 	if err != nil || cpInfo == nil {
-		return fallbackMessages, "", nil, nil
+		return fallbackMessages, nil, nil
 	}
 
 	// Load AgentState from checkpoint (for turn count, tokens, CWD, etc.)
 	cpPath := filepath.Join(sessionDir, cpInfo.Path)
 	agentState, err = agentctx.LoadCheckpointAgentState(cpPath)
 	if err != nil {
-		return fallbackMessages, "", nil, nil
+		return fallbackMessages, nil, nil
 	}
 
-	return fallbackMessages, "", agentState, nil
+	return fallbackMessages, agentState, nil
 }

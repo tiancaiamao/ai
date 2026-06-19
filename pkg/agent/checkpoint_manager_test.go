@@ -19,7 +19,6 @@ func TestCheckpointManager_CreateSnapshot(t *testing.T) {
 	defer mgr.Close()
 
 	// Create a snapshot
-	llmContext := "# Current Task\nTest task"
 	messages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("Hello"),
 		agentctx.NewAssistantMessage(),
@@ -30,7 +29,7 @@ func TestCheckpointManager_CreateSnapshot(t *testing.T) {
 		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
 	}
 
-	turn, err := mgr.CreateSnapshot(agentCtx, llmContext, 5)
+	turn, err := mgr.CreateSnapshot(agentCtx, 5)
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}
@@ -89,7 +88,6 @@ func TestCheckpointManager_Reconstruct(t *testing.T) {
 	defer mgr.Close()
 
 	// Create initial snapshot
-	llmContext := "# Current Task\nInitial task"
 	messages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("Initial"),
 	}
@@ -98,7 +96,7 @@ func TestCheckpointManager_Reconstruct(t *testing.T) {
 		RecentMessages: messages,
 		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
 	}
-	_, _ = mgr.CreateSnapshot(agentCtx, llmContext, 1)
+	_, _ = mgr.CreateSnapshot(agentCtx, 1)
 
 	// Append more messages
 	for i := 0; i < 3; i++ {
@@ -109,13 +107,9 @@ func TestCheckpointManager_Reconstruct(t *testing.T) {
 	}
 
 	// Reconstruct
-	recoveredLLMContext, recoveredMessages, recoveredTurns, err := mgr.Reconstruct()
+	_, recoveredMessages, recoveredTurns, err := mgr.Reconstruct()
 	if err != nil {
 		t.Fatalf("Failed to reconstruct: %v", err)
-	}
-
-	if recoveredLLMContext != llmContext {
-		t.Errorf("LLMContext mismatch: expected %q, got %q", llmContext, recoveredLLMContext)
 	}
 
 	// Should have 1 + 3 = 4 messages
@@ -155,264 +149,6 @@ func TestCheckpointManager_ShouldCheckpoint_Disabled(t *testing.T) {
 	}
 }
 
-func TestCheckpointManager_CreateSnapshot_EmptyLLMContext_CarriesForward(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mgr, err := NewAgentContextCheckpointManager(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create checkpoint manager: %v", err)
-	}
-	defer mgr.Close()
-
-	// Step 1: Create initial checkpoint with non-empty LLMContext
-	initialContext := "# Current Task\nImportant context that must not be lost"
-	agentCtx := &agentctx.AgentContext{
-		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("Hello")},
-		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
-	}
-
-	_, err = mgr.CreateSnapshot(agentCtx, initialContext, 5)
-	if err != nil {
-		t.Fatalf("Failed to create initial snapshot: %v", err)
-	}
-
-	// Step 2: Create snapshot with empty LLMContext (simulates truncate-without-update)
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("More messages"))
-	_, err = mgr.CreateSnapshot(agentCtx, "", 8)
-	if err != nil {
-		t.Fatalf("Failed to create snapshot with empty context: %v", err)
-	}
-
-	// Step 3: Reconstruct and verify context was carried forward
-	recoveredLLMContext, _, _, err := mgr.Reconstruct()
-	if err != nil {
-		t.Fatalf("Failed to reconstruct: %v", err)
-	}
-
-	if recoveredLLMContext != initialContext {
-		t.Errorf("LLMContext should be carried forward from previous checkpoint.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
-	}
-
-	// Step 4: Verify the checkpoint file on disk has the carried-forward content
-	latestInfo, err := agentctx.LoadLatestCheckpoint(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to load latest checkpoint info: %v", err)
-	}
-	onDisk, err := agentctx.LoadCheckpointLLMContext(filepath.Join(tmpDir, latestInfo.Path))
-	if err != nil {
-		t.Fatalf("Failed to load LLM context from disk: %v", err)
-	}
-	if onDisk != initialContext {
-		t.Errorf("On-disk LLMContext should match carried-forward content.\nExpected: %q\nGot: %q", initialContext, onDisk)
-	}
-}
-
-func TestCheckpointManager_CreateSnapshot_NonEmptyContext_Unchanged(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mgr, err := NewAgentContextCheckpointManager(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create checkpoint manager: %v", err)
-	}
-	defer mgr.Close()
-
-	// Create first checkpoint with content
-	firstContext := "First context"
-	agentCtx := &agentctx.AgentContext{
-		RecentMessages: []agentctx.AgentMessage{},
-		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
-	}
-	_, err = mgr.CreateSnapshot(agentCtx, firstContext, 1)
-	if err != nil {
-		t.Fatalf("Failed to create first snapshot: %v", err)
-	}
-
-	// Create second checkpoint with different content — should NOT carry forward
-	secondContext := "Second context (updated)"
-	_, err = mgr.CreateSnapshot(agentCtx, secondContext, 3)
-	if err != nil {
-		t.Fatalf("Failed to create second snapshot: %v", err)
-	}
-
-	// Reconstruct should return the second (latest) context
-	recoveredLLMContext, _, _, err := mgr.Reconstruct()
-	if err != nil {
-		t.Fatalf("Failed to reconstruct: %v", err)
-	}
-
-	if recoveredLLMContext != secondContext {
-		t.Errorf("LLMContext should be the latest non-empty value.\nExpected: %q\nGot: %q", secondContext, recoveredLLMContext)
-	}
-}
-
-func TestCheckpointManager_CreateSnapshot_EmptyFirst_NoPrevious(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mgr, err := NewAgentContextCheckpointManager(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create checkpoint manager: %v", err)
-	}
-	defer mgr.Close()
-
-	// Create very first snapshot with empty context — no previous to carry forward from
-	agentCtx := &agentctx.AgentContext{
-		RecentMessages: []agentctx.AgentMessage{},
-		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
-	}
-
-	_, err = mgr.CreateSnapshot(agentCtx, "", 0)
-	if err != nil {
-		t.Fatalf("Failed to create snapshot: %v", err)
-	}
-
-	// Should succeed but context stays empty (no previous to carry forward from)
-	recoveredLLMContext, _, _, err := mgr.Reconstruct()
-	if err != nil {
-		t.Fatalf("Failed to reconstruct: %v", err)
-	}
-
-	if recoveredLLMContext != "" {
-		t.Errorf("LLMContext should remain empty when no previous checkpoint exists, got: %q", recoveredLLMContext)
-	}
-}
-
-func TestHasToolResultNamed(t *testing.T) {
-	results := []agentctx.AgentMessage{
-		agentctx.NewToolResultMessage("id1", "bash", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "output"},
-		}, false),
-		agentctx.NewToolResultMessage("id2", "update_llm_context", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "LLM Context updated."},
-		}, false),
-		agentctx.NewToolResultMessage("id3", "read", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "file content"},
-		}, false),
-	}
-
-	if !hasToolResultNamed(results, "update_llm_context") {
-		t.Error("Expected to find update_llm_context")
-	}
-	if !hasToolResultNamed(results, "bash") {
-		t.Error("Expected to find bash")
-	}
-	if hasToolResultNamed(results, "write") {
-		t.Error("Should not find write")
-	}
-	if hasToolResultNamed(nil, "update_llm_context") {
-		t.Error("Should return false for nil results")
-	}
-	if hasToolResultNamed([]agentctx.AgentMessage{}, "update_llm_context") {
-		t.Error("Should return false for empty results")
-	}
-}
-
-// TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint verifies
-// the first defense layer: savePreCompactionCheckpoint skips when LLMContext
-// is empty, preventing creation of checkpoints that would overwrite good data.
-func TestSavePreCompactionCheckpoint_EmptyLLMContext_SkipsCheckpoint(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mgr, err := NewAgentContextCheckpointManager(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create checkpoint manager: %v", err)
-	}
-	defer mgr.Close()
-
-	// Create an initial checkpoint with real content
-	initialContext := "# Important context\nDo not lose this"
-	agentCtx := &agentctx.AgentContext{
-		LLMContext:     initialContext,
-		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("Hello")},
-		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
-	}
-	_, err = mgr.CreateSnapshot(agentCtx, initialContext, 1)
-	if err != nil {
-		t.Fatalf("Failed to create initial snapshot: %v", err)
-	}
-
-	// Now simulate the bug scenario: LLMContext is empty (truncate-without-update)
-	agentCtx.LLMContext = ""
-
-	// Create a loopState with a compactor that would normally trigger
-	ls := &loopState{
-		config: &LoopConfig{
-			Compactors: []agentctx.Compactor{
-				&alwaysCompactCompactor{},
-			},
-		},
-		agentCtx:      agentCtx,
-		checkpointMgr: mgr,
-		turnCount:     5,
-	}
-
-	// Call savePreCompactionCheckpoint — it should skip because LLMContext is empty
-	ls.savePreCompactionCheckpoint("pre_llm_threshold")
-
-	// Verify no new checkpoint was created by checking the count
-	idx, err := agentctx.LoadCheckpointIndex(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to load checkpoint index: %v", err)
-	}
-	if len(idx.Checkpoints) != 1 {
-		t.Errorf("Expected 1 checkpoint (initial only), got %d", len(idx.Checkpoints))
-	}
-
-	// Verify the current symlink still points to the good checkpoint
-	recoveredLLMContext, _, _, err := mgr.Reconstruct()
-	if err != nil {
-		t.Fatalf("Failed to reconstruct: %v", err)
-	}
-	if recoveredLLMContext != initialContext {
-		t.Errorf("LLMContext should still be the initial value.\nExpected: %q\nGot: %q", initialContext, recoveredLLMContext)
-	}
-}
-
-// TestSavePreCompactionCheckpoint_NonEmptyLLMContext_CreatesCheckpoint verifies
-// that savePreCompactionCheckpoint still works correctly when LLMContext is non-empty.
-func TestSavePreCompactionCheckpoint_NonEmptyLLMContext_CreatesCheckpoint(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mgr, err := NewAgentContextCheckpointManager(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to create checkpoint manager: %v", err)
-	}
-	defer mgr.Close()
-
-	// Create initial checkpoint
-	agentCtx := &agentctx.AgentContext{
-		LLMContext:     "# Task context",
-		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("Hello")},
-		AgentState:     agentctx.NewAgentState("test-session", "/workspace"),
-	}
-	_, err = mgr.CreateSnapshot(agentCtx, "# Task context", 1)
-	if err != nil {
-		t.Fatalf("Failed to create initial snapshot: %v", err)
-	}
-
-	// Now with non-empty LLMContext, savePreCompactionCheckpoint should create a new one
-	ls := &loopState{
-		config: &LoopConfig{
-			Compactors: []agentctx.Compactor{
-				&alwaysCompactCompactor{},
-			},
-		},
-		agentCtx:      agentCtx,
-		checkpointMgr: mgr,
-		turnCount:     3,
-	}
-
-	ls.savePreCompactionCheckpoint("pre_llm_threshold")
-
-	// Verify a new checkpoint was created
-	idx, err := agentctx.LoadCheckpointIndex(tmpDir)
-	if err != nil {
-		t.Fatalf("Failed to load checkpoint index: %v", err)
-	}
-	if len(idx.Checkpoints) != 2 {
-		t.Errorf("Expected 2 checkpoints, got %d", len(idx.Checkpoints))
-	}
-}
-
 // alwaysCompactCompactor is a test compactor that always reports ShouldCompact=true.
 type alwaysCompactCompactor struct{}
 
@@ -431,13 +167,6 @@ func (a *alwaysCompactCompactor) CalculateDynamicThreshold() int {
 // TestCreateSnapshot_PersistsJournalLength verifies that CreateSnapshot saves
 // MessageIndex equal to the current journal length, so that a subsequent
 // Reconstruct() can correctly replay only entries written AFTER the checkpoint.
-//
-// Bug (pre-fix): CreateSnapshot uses m.messageIndex (incremented only by
-// AgentContextCheckpointManager.AppendMessage), but production code never
-// calls AppendMessage — it writes via Session.AppendMessage instead. The
-// result is that every saved checkpoint has MessageIndex=0, causing
-// Reconstruct() to replay ALL journal entries on top of the snapshot and
-// producing duplicated messages.
 func TestCreateSnapshot_PersistsJournalLength(t *testing.T) {
 	sessionDir := t.TempDir()
 
@@ -462,7 +191,7 @@ func TestCreateSnapshot_PersistsJournalLength(t *testing.T) {
 		RecentMessages: []agentctx.AgentMessage{agentctx.NewUserMessage("dummy")},
 		AgentState:     agentctx.NewAgentState("test", "/workspace"),
 	}
-	if _, err := mgr.CreateSnapshot(agentCtx, "# ctx", 1); err != nil {
+	if _, err := mgr.CreateSnapshot(agentCtx, 1); err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
 
