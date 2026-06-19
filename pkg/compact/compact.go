@@ -82,7 +82,7 @@ func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 	default: // 200K-class and other smaller models
 		pct := func(p int) int { return contextWindow * p / 100 }
 		return LLMDecideConfig{
-			SoftThreshold:  pct(20),
+			SoftThreshold:  pct(25),
 			HardLimit:      pct(75),
 			TierMedium:     pct(35),
 			TierHigh:       pct(50),
@@ -662,14 +662,6 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 	// Don't re-ask until a full interval has elapsed since the last ask.
 	// This prevents asking every turn after a "no".
 	if currentCount-c.llmDecideLastAskCount < interval {
-		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
-			traceevent.Field{Key: "decision", Value: false},
-			traceevent.Field{Key: "reason", Value: "interval_not_reached"},
-			traceevent.Field{Key: "tokens", Value: tokens},
-			traceevent.Field{Key: "tier", Value: tier},
-			traceevent.Field{Key: "tool_calls_since", Value: currentCount - c.llmDecideLastAskCount},
-			traceevent.Field{Key: "interval", Value: interval},
-		)
 		return false
 	}
 
@@ -829,11 +821,16 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		span.AddField("used_thinking_fallback", true)
 	}
 
+	// Parse only the first line to avoid multi-line pollution.
 	answer := strings.ToLower(strings.TrimSpace(answerText))
-	yes := strings.Contains(answer, "yes")
+	if idx := strings.IndexByte(answer, '\n'); idx >= 0 {
+		answer = answer[:idx]
+	}
+	answer = strings.TrimSpace(answer)
+	confirmed := strings.Contains(answer, "confirm")
 
 	span.AddField("response", answerText)
-	span.AddField("decision", yes)
+	span.AddField("decision", confirmed)
 
-	return yes, nil
+	return confirmed, nil
 }

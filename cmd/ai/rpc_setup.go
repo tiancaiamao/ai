@@ -64,6 +64,9 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	currentModelInfo.MaxTokens = model.MaxTokens
 	currentModelInfo.ContextWindow = model.ContextWindow
 	currentContextWindow := activeSpec.ContextWindow
+	if currentContextWindow <= 0 {
+		currentContextWindow = model.ContextWindow
+	}
 
 	// --- Working directory ---
 	cwd, err := os.Getwd()
