@@ -77,32 +77,9 @@ type MessageCountsSnapshot struct {
 	ToolResults       int64 `json:"toolResults"`
 }
 
-type PromptMetricsSnapshot struct {
-	CallCount        int64         `json:"callCount"`
-	ErrorCount       int64         `json:"errorCount"`
-	SuccessRate      float64       `json:"successRate"`
-	TotalDuration    time.Duration `json:"totalDuration"`
-	LastDuration     time.Duration `json:"lastDuration"`
-	AvgDuration      time.Duration `json:"avgDuration"`
-	InFlight         bool          `json:"inFlight"`
-	InFlightDuration time.Duration `json:"inFlightDuration"`
-	LastStart        time.Time     `json:"lastStart"`
-	LastEnd          time.Time     `json:"lastEnd"`
-}
-
-type ContextMetricsSnapshot struct {
-	UpdateReminders   int64     `json:"updateReminders"`
-	DecisionReminders int64     `json:"decisionReminders"`
-	TotalReminders    int64     `json:"totalReminders"`
-	LastReminderType  string    `json:"lastReminderType"`
-	LastReminderAt    time.Time `json:"lastReminderAt"`
-}
-
 type FullMetricsSnapshot struct {
-	SessionUptime  time.Duration          `json:"sessionUptime"`
-	ToolMetrics    []ToolMetricsSnapshot  `json:"toolMetrics"`
-	LLMMetrics     LLMMetricsSnapshot     `json:"llmMetrics"`
-	MessageCounts  MessageCountsSnapshot  `json:"messageCounts"`
-	PromptMetrics  PromptMetricsSnapshot  `json:"promptMetrics"`
-	ContextMetrics ContextMetricsSnapshot `json:"contextMetrics"`
+	SessionUptime time.Duration         `json:"sessionUptime"`
+	ToolMetrics   []ToolMetricsSnapshot `json:"toolMetrics"`
+	LLMMetrics    LLMMetricsSnapshot    `json:"llmMetrics"`
+	MessageCounts MessageCountsSnapshot `json:"messageCounts"`
 }

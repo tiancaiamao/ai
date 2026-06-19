@@ -154,14 +154,6 @@ func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
 		},
 	})
 
-	prompt := m.GetPromptMetrics()
-	if prompt.CallCount != 1 {
-		t.Fatalf("expected prompt call count 1, got %d", prompt.CallCount)
-	}
-	if prompt.ErrorCount != 0 {
-		t.Fatalf("expected prompt error count 0, got %d", prompt.ErrorCount)
-	}
-
 	llm := m.GetLLMMetrics()
 	if llm.CallCount != 1 {
 		t.Fatalf("expected llm call count 1, got %d", llm.CallCount)
@@ -185,35 +177,6 @@ func TestRecordTraceEventCanonicalSpanNames(t *testing.T) {
 	}
 	if msg.AssistantMessages != 1 {
 		t.Fatalf("expected assistant messages 1, got %d", msg.AssistantMessages)
-	}
-}
-
-func TestRecordTraceEventLegacySpanAliases(t *testing.T) {
-	buf := traceevent.NewTraceBuf()
-	m := NewMetrics(buf)
-	now := time.Now()
-
-	m.RecordTraceEvent(traceevent.TraceEvent{
-		Timestamp: now,
-		Name:      "prompt_start",
-		Phase:     traceevent.PhaseBegin,
-	})
-	m.RecordTraceEvent(traceevent.TraceEvent{
-		Timestamp: now.Add(7 * time.Millisecond),
-		Name:      "prompt_end",
-		Phase:     traceevent.PhaseEnd,
-		Fields: []traceevent.Field{
-			{Key: "duration_ms", Value: int64(7)},
-			{Key: "error", Value: true},
-		},
-	})
-
-	prompt := m.GetPromptMetrics()
-	if prompt.CallCount != 1 {
-		t.Fatalf("expected prompt call count 1, got %d", prompt.CallCount)
-	}
-	if prompt.ErrorCount != 1 {
-		t.Fatalf("expected prompt error count 1, got %d", prompt.ErrorCount)
 	}
 }
 
