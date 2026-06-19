@@ -292,24 +292,6 @@ func (app *rpcApp) handleSetToolSummaryAutomation(value string, validModes map[s
 	return map[string]any{"setting": "tool-summary-automation", "value": mode}, nil
 }
 
-func (app *rpcApp) handleSetToolSummaryStrategy(value string, validStrategies map[string]bool) (any, error) {
-	var jsonData struct {
-		Strategy string `json:"strategy"`
-	}
-	strategy := strings.ToLower(strings.TrimSpace(value))
-	if app.parseJSONArgs(value, &jsonData) {
-		strategy = strings.ToLower(jsonData.Strategy)
-	}
-	if !validStrategies[strategy] {
-		return nil, fmt.Errorf("invalid tool summary strategy; valid: llm, heuristic, off")
-	}
-	app.compactorConfig.ToolSummaryStrategy = strategy
-	if err := config.SaveConfig(app.cfg, app.configPath); err != nil {
-		slog.Info("Failed to save config:", "value", err)
-	}
-	return map[string]any{"setting": "tool-summary-strategy", "value": strategy}, nil
-}
-
 func (app *rpcApp) handleSetSessionName(value string) (any, error) {
 	name := strings.TrimSpace(value)
 	var jsonData struct {
@@ -436,7 +418,7 @@ func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
 	return map[string]any{"setting": "auto-retry", "value": val}, nil
 }
 
-func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
+func (app *rpcApp) handleSet(args string, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
 	parts := strings.Fields(args)
 	if len(parts) == 0 || parts[0] == "help" {
 		return rpc.SetUsage(), nil
@@ -495,9 +477,6 @@ func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolS
 
 	case "tool-summary-automation":
 		return app.handleSetToolSummaryAutomation(value, validToolSummaryAutomations)
-
-	case "tool-summary-strategy":
-		return app.handleSetToolSummaryStrategy(value, validToolSummaryStrategies)
 
 	case "tools-display":
 		r := rpc.ParseToggleValue(value, app.showTools)
@@ -584,9 +563,9 @@ func (app *rpcApp) handleShow(args string) (any, error) {
 }
 
 // registerConfigHandlers registers configuration-related slash commands.
-func (app *rpcApp) registerConfigHandlers(validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) {
+func (app *rpcApp) registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) {
 	app.server.RegisterSlash("set", "Configure agent settings", func(args string) (any, error) {
-		return app.handleSet(args, validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
+		return app.handleSet(args, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
 	})
 
 	app.server.RegisterHiddenSlash("set_model", "Set the active model by ID (internal, use /model instead)", func(args string) (any, error) {

@@ -95,6 +95,20 @@ Design doc: `docs/archive/cache-friendly-message-architecture.md` (archived — 
 1. Removed dead reconstruction code: `journal.go`, `journal_io.go`, `reconstruction.go`, `messages.jsonl` duplication in checkpoints, `ContextSnapshot`, `Reconstruct()`, `AppendMessage()`, journal types.
 2. Flattened `agent_state.json` to session root. Deleted `checkpoint.go` (checkpoint dir creation, symlink management), `checkpoint_index.go`, `snapshot.go`. `SaveAgentState` / `LoadAgentState` now read/write directly from `agent_state.json` in the session directory.
 
+### Dead Code Cleanup (2026-07)
+
+**What**: Removed ~380 lines of dead or no-op code across the agent, compaction, and CLI layers.
+
+**Why**: Several metrics caches, config fields, and a legacy CLI dispatch path had no live consumers — they were written and persisted but never read to influence behavior.
+
+**Removed**:
+- `PromptMetrics` and `ContextMetrics` caches + aggregation: fed by trace events (`prompt_start/end`, `context_update_reminder`, `context_decision_reminder`) that were never emitted.
+- 10 ghost trace event definitions in `traceevent/config.go`.
+- `LargeContextThreshold` constant (never used).
+- 4 unused Agent methods: `GetExecutor`, `AutoRetryEnabled`, `SetLLMRetryConfig`, `SetMaxTurns`.
+- `ToolSummaryStrategy` config field: writable via `/set` and RPC, persisted, logged — but never read by the compactor. Removed from Config, RPC types, handler, and all call sites.
+- `deprecatedModeDispatch`: legacy `--mode` flag dispatch that only forwarded to `ai rpc`.
+
 ## Multi-Agent Orchestration: From `ag` CLI to Skill-Based PGE
 
 ### ag CLI — Bridge-per-Agent (2026-04)

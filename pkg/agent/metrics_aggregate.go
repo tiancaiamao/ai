@@ -10,33 +10,12 @@ import (
 // aggregateEvent incorporates a single trace event into the aggregation.
 func (m *Metrics) aggregateEvent(event traceevent.TraceEvent) {
 	switch canonicalTraceName(event.Name) {
-	case "prompt":
-		m.aggregatePrompt(event)
 	case "llm_call":
 		m.aggregateLLM(event)
 	case "tool_execution":
 		m.aggregateTool(event)
 	case "message_end":
 		m.aggregateMessage(event)
-	case "context_update_reminder", "context_decision_reminder":
-		m.aggregateContext(event)
-	}
-}
-
-// aggregatePrompt processes prompt-related events
-func (m *Metrics) aggregatePrompt(event traceevent.TraceEvent) {
-	if event.Phase == traceevent.PhaseEnd {
-		m.cachedPromptStats.CallCount++
-		durationMs := traceFieldInt64(event.Fields, "duration_ms")
-		m.cachedPromptStats.TotalDurationNs += durationMs * 1_000_000
-		m.cachedPromptStats.LastEndNs = event.Timestamp.UnixNano()
-
-		if traceFieldBool(event.Fields, "error") {
-			m.cachedPromptStats.ErrorCount++
-		}
-	}
-	if event.Phase == traceevent.PhaseBegin {
-		m.cachedPromptStats.LastStartNs = event.Timestamp.UnixNano()
 	}
 }
 
@@ -166,38 +145,14 @@ func (m *Metrics) aggregateMessage(event traceevent.TraceEvent) {
 	}
 }
 
-// aggregateContext processes context management reminder events
-func (m *Metrics) aggregateContext(event traceevent.TraceEvent) {
-	if event.Phase != traceevent.PhaseInstant {
-		return
-	}
-
-	reminderType := traceFieldString(event.Fields, "reminder_type")
-	m.cachedContextStats.LastReminderType = reminderType
-	m.cachedContextStats.LastReminderAtNs = event.Timestamp.UnixNano()
-
-	switch event.Name {
-	case "context_update_reminder":
-		m.cachedContextStats.UpdateReminders++
-	case "context_decision_reminder":
-		m.cachedContextStats.DecisionReminders++
-	}
-}
-
 // Helper functions
 
 func canonicalTraceName(name string) string {
 	switch name {
-	case "prompt_start", "prompt_end":
-		return "prompt"
 	case "llm_call_start", "llm_call_end":
 		return "llm_call"
 	case "tool_execution_start", "tool_execution_end":
 		return "tool_execution"
-	case "event_loop_start", "event_loop_end":
-		return "event_loop"
-	case "assistant_text_start", "assistant_text_end":
-		return "assistant_text"
 	default:
 		return name
 	}

@@ -556,11 +556,6 @@ func (a *Agent) SetExecutor(executor ToolExecutor) {
 	a.LoopConfig.Executor = executor
 }
 
-// GetExecutor returns the current tool executor.
-func (a *Agent) GetExecutor() ToolExecutor {
-	return a.LoopConfig.Executor
-}
-
 // SetToolOutputLimits sets truncation limits for tool output.
 func (a *Agent) SetToolOutputLimits(limits ToolOutputLimits) {
 	a.LoopConfig.ToolOutput = normalizeToolOutputLimits(limits)
@@ -591,31 +586,6 @@ func (a *Agent) SetAutoRetry(enabled bool) {
 		return
 	}
 	a.LoopConfig.MaxLLMRetries = 0
-}
-
-// AutoRetryEnabled reports whether LLM auto retry is currently enabled.
-func (a *Agent) AutoRetryEnabled() bool {
-	return a.LoopConfig.MaxLLMRetries > 0
-}
-
-// SetLLMRetryConfig configures LLM retry count and base delay.
-func (a *Agent) SetLLMRetryConfig(maxRetries int, baseDelay time.Duration) {
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
-	if baseDelay <= 0 {
-		baseDelay = defaultRetryBaseDelay
-	}
-	a.LoopConfig.MaxLLMRetries = maxRetries
-	a.LoopConfig.RetryBaseDelay = baseDelay
-}
-
-// SetMaxTurns sets the maximum number of conversation turns.
-func (a *Agent) SetMaxTurns(maxTurns int) {
-	if maxTurns < 0 {
-		maxTurns = 0
-	}
-	a.LoopConfig.MaxTurns = maxTurns
 }
 
 // SetContextWindow sets the context window for the model.

@@ -19,13 +19,12 @@ import (
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages         int    // Maximum messages before compression
-	MaxTokens           int    // Approximate token limit before compression
-	KeepRecent          int    // Number of recent messages to keep
-	KeepRecentTokens    int    // Token budget to keep from the recent messages
-	ReserveTokens       int    // Tokens to reserve when using context window
-	ToolCallCutoff      int    // Summarize oldest tool outputs when visible tool calls exceed this
-	ToolSummaryStrategy string // llm, heuristic, off
+	MaxMessages      int // Maximum messages before compression
+	MaxTokens        int // Approximate token limit before compression
+	KeepRecent       int // Number of recent messages to keep
+	KeepRecentTokens int // Token budget to keep from the recent messages
+	ReserveTokens    int // Tokens to reserve when using context window
+	ToolCallCutoff   int // Summarize oldest tool outputs when visible tool calls exceed this
 	// ToolSummaryAutomation controls when background tool-output summary runs:
 	// - off: disable automatic tool-output summary
 	// - fallback: only run when compactor pressure fallback is triggered
@@ -93,11 +92,6 @@ func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 	}
 }
 
-// TODO(cleanup): LargeContextThreshold is no longer used after unifying all
-// context windows onto LLMDecide compaction. Remove when ContextManager code
-// is cleaned up.
-const LargeContextThreshold = 500_000
-
 // DefaultConfig returns default compression configuration.
 func DefaultConfig() *Config {
 	return &Config{
@@ -107,7 +101,6 @@ func DefaultConfig() *Config {
 		KeepRecentTokens:      20000, // Keep ~20k tokens from the recent context
 		ReserveTokens:         16384, // Reserve tokens for responses when using context window
 		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
-		ToolSummaryStrategy:   "off", // Tool summary strategy (llm, heuristic, off)
 		ToolSummaryAutomation: "off", // Automatic tool-output summary (off, fallback, always)
 		GracePeriod:           1,     // Protect 1 most recent tool result by default
 		AutoCompact:           true,  // Automatic context compression at 75% threshold

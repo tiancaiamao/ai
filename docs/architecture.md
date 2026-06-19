@@ -191,7 +191,7 @@ Recovery: load messages from session JSONL (handles compaction snapshots) → lo
 **Rationale:**
 - Clearer semantics (each command does one thing)
 - Independent flag sets per subcommand
-- Backward compatibility via deprecated `--mode` dispatch
+- Subcommands fully replace the old `--mode` flag
 - `ai run` = subprocess rpc + TUI in one process
 - `ai serve` = daemon mode with socket control
 

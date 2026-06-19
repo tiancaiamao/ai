@@ -15,7 +15,6 @@ func BuildCompactionState(cfg *Config, compactor *Compactor) *rpc.CompactionStat
 		KeepRecentTokens:      cfg.KeepRecentTokens,
 		ReserveTokens:         compactor.ReserveTokens(),
 		ToolCallCutoff:        cfg.ToolCallCutoff,
-		ToolSummaryStrategy:   cfg.ToolSummaryStrategy,
 		ToolSummaryAutomation: cfg.ToolSummaryAutomation,
 		ContextWindow:         compactor.ContextWindow(),
 		TokenLimit:            limit,
