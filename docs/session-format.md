@@ -6,8 +6,8 @@ Sessions persist the full conversation history for an agent instance as append-o
 
 1. **Append-only**: New entries are appended to `messages.jsonl`. Existing entries are never modified in place.
 2. **Tree structure**: Entries are linked via `parentId`, forming a conversation tree. The current branch tip is the `leafID`.
-3. **Crash-safe**: Append-only writes minimize data loss risk. Periodic checkpoints enable fast recovery.
-4. **Lazy-loadable**: Large sessions can be restored from checkpoint + journal, or loaded with only the recent messages needed.
+3. **Crash-safe**: Append-only writes minimize data loss risk. AgentState is persisted after compaction for fast recovery.
+4. **Lazy-loadable**: Large sessions can be restored from compaction snapshots, or loaded with only the recent messages needed.
 
 ## File Layout
 
@@ -16,16 +16,10 @@ Sessions persist the full conversation history for an agent instance as append-o
 └── --<sanitized-path>--/
     ├── <session-uuid-1>/
     │   ├── messages.jsonl               # Append-only entry log
-    │   ├── compactions/                 # Compaction snapshot files
+        │   ├── compactions/                 # Compaction snapshot files
     │   │   ├── compaction_00001.jsonl   # Post-compaction messages
     │   │   └── compaction_00002.jsonl
-    │   ├── checkpoints/                 # Periodic context snapshots
-    │   │   ├── checkpoint_00000/
-    │   │   │   ├── agent_state.json
-    │   │   │   ├── llm_context.txt
-    │   │   │   └── messages.jsonl
-    │   │   └── checkpoint_00001/
-    │   ├── checkpoint_index.json        # Checkpoint index for fast lookup
+    │   ├── agent_state.json             # Persisted AgentState (turn, CWD, etc.)
     │   └── (meta.json managed externally by SessionManager)
     ├── <session-uuid-2>/
     │   ├── messages.jsonl
@@ -303,62 +297,20 @@ sess, err := session.LoadSessionLazy(dir, opts)
 
 The loader scans backwards from the end of the file to find the most recent compaction entry, then loads only from that point forward.
 
-## Checkpoints
+## AgentState Persistence
 
-**Files:** `pkg/context/checkpoint*.go`, `pkg/agent/checkpoint_manager.go`
+**Files:** `pkg/context/checkpoint_io.go`, `pkg/agent/checkpoint_manager.go`
 
-Checkpoints are full snapshots of `AgentContext` at a specific turn, used for crash recovery and session resume optimization.
+`AgentState` (turn count, CWD, token usage, compaction counters) is persisted to `agent_state.json` in the session directory. This file is written after compaction events and loaded on session resume.
 
-### Checkpoint Directory Layout
-
-```
-checkpoints/
-├── checkpoint_00000/
-│   ├── agent_state.json     # Serialized AgentState
-│   ├── llm_context.txt      # System prompt / context prefix
-│   └── messages.jsonl       # Full RecentMessages snapshot
-├── checkpoint_00001/
-│   └── ...
-└── (symlink: latest → most recent checkpoint)
-```
-
-### Checkpoint Index
-
-`checkpoint_index.json` provides fast lookup:
-
-```json
-{
-  "latest_checkpoint_turn": 229,
-  "latest_checkpoint_path": "checkpoints/checkpoint_00003",
-  "checkpoints": [
-    {
-      "turn": 22,
-      "message_index": 208,
-      "path": "checkpoints/checkpoint_00000",
-      "created_at": "2026-06-19T09:30:26+08:00",
-      "recent_messages_count": 54
-    },
-    ...
-  ]
-}
-```
-
-### Journal
-
-The checkpoint system uses an append-only journal (`pkg/context/journal.go`) with three entry types:
-
-| Journal Type | Description |
-|-------------|-------------|
-| `message` | A message was appended |
-| `truncate` | Messages were truncated |
-| `compact` | Compaction occurred |
+Messages are NOT stored in `agent_state.json` — they come from `sess.GetMessages()` which handles compaction snapshot refs internally.
 
 ### Recovery
 
 On crash or restart:
 
-1. Load the latest checkpoint
-2. Replay journal entries after the checkpoint
+1. Load messages from `sess.GetMessages()` (handles compaction snapshots)
+2. Load `agent_state.json` for AgentState (CWD, turn count, etc.)
 3. Continue from the recovered state
 
 ## Compaction Persistence Flow
@@ -395,10 +347,6 @@ Session metadata stored alongside the JSONL, managed by `SessionManager`:
 | `pkg/session/session.go` | `Session` struct, `AppendMessage`, `AppendCompaction`, loading |
 | `pkg/session/entries.go` | `SessionEntry`, `SessionHeader`, entry type constants, `buildSessionContext` |
 | `pkg/session/lazy.go` | Lazy session loading |
-| `pkg/context/checkpoint.go` | Checkpoint save/load, symlink management |
-| `pkg/context/checkpoint_index.go` | Checkpoint index for fast lookup |
-| `pkg/context/checkpoint_io.go` | Checkpoint I/O operations |
-| `pkg/context/journal.go` | `JournalEntry` types (message/truncate/compact) |
-| `pkg/context/journal_io.go` | Journal I/O operations |
-| `pkg/context/reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
-| `pkg/agent/checkpoint_manager.go` | Checkpoint lifecycle management |
+| `pkg/context/checkpoint_io.go` | `SaveAgentState` / `LoadAgentState`, `SplitLines` |
+| `pkg/agent/checkpoint_manager.go` | AgentState persistence lifecycle |
+| `pkg/agent/resume.go` | `LoadResumeState()` — session resume |

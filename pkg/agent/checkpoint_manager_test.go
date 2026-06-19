@@ -17,11 +17,9 @@ func TestCheckpointManager_CreateSnapshot(t *testing.T) {
 		t.Fatalf("Failed to create checkpoint manager: %v", err)
 	}
 
-	// Create a snapshot
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("Hello"),
-			agentctx.NewAssistantMessage(),
 		},
 		AgentState: agentctx.NewAgentState("test-session", "/workspace"),
 	}
@@ -35,16 +33,19 @@ func TestCheckpointManager_CreateSnapshot(t *testing.T) {
 		t.Errorf("Expected turn 5, got %d", turn)
 	}
 
-	// Verify checkpoint directory exists
-	checkpointsDir := filepath.Join(tmpDir, "checkpoints")
-	if _, err := os.Stat(checkpointsDir); os.IsNotExist(err) {
-		t.Error("Checkpoints directory should exist")
+	// Verify agent_state.json exists in session root
+	statePath := filepath.Join(tmpDir, "agent_state.json")
+	if _, err := os.Stat(statePath); os.IsNotExist(err) {
+		t.Error("agent_state.json should exist in session root")
 	}
 
-	// Verify current/ symlink exists
-	currentLink := filepath.Join(tmpDir, "current")
-	if _, err := os.Lstat(currentLink); os.IsNotExist(err) {
-		t.Error("current/ symlink should exist")
+	// Verify it can be loaded
+	loaded, err := agentctx.LoadAgentState(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadAgentState: %v", err)
+	}
+	if loaded.TotalTurns != 5 {
+		t.Errorf("loaded TotalTurns = %d, want 5", loaded.TotalTurns)
 	}
 }
 
@@ -56,7 +57,6 @@ func TestCheckpointManager_ShouldCheckpoint(t *testing.T) {
 		t.Fatalf("Failed to create checkpoint manager: %v", err)
 	}
 
-	// ShouldCheckpoint now always returns true when enabled (event-driven)
 	if !mgr.ShouldCheckpoint() {
 		t.Error("ShouldCheckpoint should return true when enabled")
 	}
@@ -68,7 +68,6 @@ func TestCheckpointManager_ShouldCheckpoint_Disabled(t *testing.T) {
 		t.Fatalf("Failed to create checkpoint manager: %v", err)
 	}
 
-	// ShouldCheckpoint returns false when disabled (empty sessionDir)
 	if mgr.ShouldCheckpoint() {
 		t.Error("ShouldCheckpoint should return false when disabled")
 	}

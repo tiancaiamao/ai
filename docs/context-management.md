@@ -103,7 +103,7 @@ Since all but the trailing question is a prefix of the normal conversation, prov
 
 ### Idempotency
 
-The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigger`). This makes `ShouldCompact` safe to call multiple times per turn (checkpoint save + loop trigger). The cache is cleared after a successful `Compact()`.
+The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigger`). This makes `ShouldCompact` safe to call multiple times per turn. The cache is cleared after a successful `Compact()`.
 
 ## 3. Compaction Execution
 
@@ -194,7 +194,6 @@ See [session-format.md](./session-format.md) for the full session format specifi
 
 ```
 1. Pre-LLM check: ShouldCompact() returns true
-   → Save pre-compaction checkpoint
    → Call Compact()
 
 2. Context-limit recovery: API returns context-length error
@@ -232,16 +231,12 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/context/message.go` | `AgentMessage`, `ContentBlock` types |
 | `pkg/context/agent_state.go` | `AgentState` tracking metadata |
 | `pkg/context/compactor.go` | `Compactor` interface, `CompactionResult` |
-| `pkg/context/snapshot.go` | `ContextSnapshot` for checkpoint persistence |
-| `pkg/context/journal.go` | `JournalEntry` types (message/truncate/compact) |
-| `pkg/context/checkpoint.go` | Checkpoint save/load, symlink management |
-| `pkg/context/checkpoint_index.go` | Checkpoint index for fast lookup |
-| `pkg/context/reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
+| `pkg/context/checkpoint_io.go` | `SaveAgentState` / `LoadAgentState` |
 | `pkg/agent/loop.go` | Agent loop, compaction trigger orchestration |
 | `pkg/agent/loop_state.go` | `performCompaction`, pre-LLM + recovery paths |
 | `pkg/agent/tool_output.go` | Tool output normalization |
 | `pkg/agent/executor.go` | Tool execution with concurrency control |
-| `pkg/agent/checkpoint_manager.go` | Checkpoint lifecycle management |
+| `pkg/agent/checkpoint_manager.go` | AgentState persistence lifecycle |
 | `pkg/session/session.go` | Session persistence, `AppendCompaction` |
 | `pkg/session/entries.go` | `SessionEntry`, `SessionHeader`, entry types |
 | `cmd/ai/session_writer.go` | `sessionCompactor`: thread-safe compactor wrapper |

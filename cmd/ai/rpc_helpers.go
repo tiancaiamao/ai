@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
+
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -81,21 +81,14 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 		sessionDir := app.sess.GetDir()
 		ctx.RecentMessages = app.sess.GetMessages()
 		if sessionDir != "" {
-			// Resume path: load the latest checkpoint and replay any
-			// journal entries written AFTER the checkpoint. This is the
-			// single source of truth — see pkg/agent/resume.go.
+			// Resume path: load AgentState from agent_state.json.
+			// Messages come from sess.GetMessages() (source of truth).
 			msgs, agentState, err := agent.LoadResumeState(sessionDir, ctx.RecentMessages)
 			if err != nil {
 				slog.Warn("Resume state load failed, using session messages",
 					"error", err,
 					"session_messages", len(ctx.RecentMessages))
 			} else {
-				if len(msgs) != len(ctx.RecentMessages) {
-					slog.Info("Resumed messages from checkpoint + journal replay",
-						"resumed_messages", len(msgs),
-						"session_messages", len(ctx.RecentMessages),
-						"replayed", len(msgs)-len(ctx.RecentMessages))
-				}
 				ctx.RecentMessages = msgs
 				if agentState != nil {
 					ctx.AgentState = agentState
@@ -111,30 +104,6 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 						"toolCallsSince", agentState.ToolCallsSinceLastTrigger,
 						"cwd", agentState.CurrentWorkingDir,
 					)
-				}
-			}
-
-			// Legacy fallback: if LoadResumeState returned no AgentState
-			// (e.g. a very old checkpoint with only agent_state.json and
-			// no RecentMessages), try loading agent_state.json directly.
-			if ctx.AgentState == nil {
-				if cpInfo, err := agentctx.LoadLatestCheckpoint(sessionDir); err == nil && cpInfo != nil {
-					cpPath := filepath.Join(sessionDir, cpInfo.Path)
-					if savedState, err := agentctx.LoadCheckpointAgentState(cpPath); err == nil {
-						ctx.AgentState = savedState
-						if savedState.CurrentWorkingDir != "" {
-							if err := app.ws.SetCWD(savedState.CurrentWorkingDir); err != nil {
-								slog.Warn("Failed to restore CWD from checkpoint",
-									"cwd", savedState.CurrentWorkingDir, "error", err)
-							}
-						}
-						slog.Info("Restored agent state from checkpoint (legacy, no messages)",
-							"turns", savedState.TotalTurns,
-							"tokens", savedState.TokensUsed,
-							"toolCallsSince", savedState.ToolCallsSinceLastTrigger,
-							"cwd", savedState.CurrentWorkingDir,
-						)
-					}
 				}
 			}
 		}

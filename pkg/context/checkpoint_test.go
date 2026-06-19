@@ -3,39 +3,11 @@ package context
 import (
 	"os"
 	"path/filepath"
-		"testing"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// --- Snapshot tests ---
-
-func TestNewContextSnapshot(t *testing.T) {
-	snapshot := NewContextSnapshot("session-1", "/workspace")
-
-	assert.Empty(t, snapshot.RecentMessages)
-	assert.Equal(t, "session-1", snapshot.AgentState.SessionID)
-	assert.Equal(t, "/workspace", snapshot.AgentState.CurrentWorkingDir)
-	assert.Equal(t, 200000, snapshot.AgentState.TokensLimit)
-}
-
-func TestContextSnapshotClone(t *testing.T) {
-	original := NewContextSnapshot("test-session", "/test/dir")
-	original.RecentMessages = append(original.RecentMessages, NewUserMessage("Hello"))
-	original.AgentState.TotalTurns = 10
-
-	clone := original.Clone()
-
-	assert.Equal(t, len(original.RecentMessages), len(clone.RecentMessages))
-	assert.Equal(t, original.AgentState.TotalTurns, clone.AgentState.TotalTurns)
-}
-
-func TestContextSnapshotClone_Nil(t *testing.T) {
-	var snapshot *ContextSnapshot
-	clone := snapshot.Clone()
-	assert.Nil(t, clone)
-}
 
 // --- AgentState tests ---
 
@@ -60,67 +32,39 @@ func TestAgentStateClone_Nil(t *testing.T) {
 	assert.Nil(t, clone)
 }
 
-// --- Checkpoint save/load tests ---
+// --- SaveAgentState / LoadAgentState tests ---
 
-func TestCheckpoint_SaveLoad_PreservesState(t *testing.T) {
+func TestSaveLoadAgentState(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "session")
 	require.NoError(t, os.MkdirAll(sessionDir, 0755))
 
-	originalSnapshot := &ContextSnapshot{
-		AgentState: &AgentState{
-			WorkspaceRoot:     "/workspace",
-			CurrentWorkingDir: "/workspace/project",
-			TotalTurns:        10,
-			TokensUsed:        5000,
-			TokensLimit:       200000,
-			LastCheckpoint:    0,
-			LastTriggerTurn:   5,
-		},
+	original := &AgentState{
+		WorkspaceRoot:     "/workspace",
+		CurrentWorkingDir: "/workspace/project",
+		TotalTurns:        10,
+		TokensUsed:        5000,
+		TokensLimit:       200000,
+		LastTriggerTurn:   5,
 	}
 
-	info, err := SaveCheckpoint(sessionDir, originalSnapshot, 10)
+	require.NoError(t, SaveAgentState(sessionDir, original))
+	assert.FileExists(t, filepath.Join(sessionDir, AgentStateFile))
+
+	loaded, err := LoadAgentState(sessionDir)
 	require.NoError(t, err)
-
-	assert.Equal(t, 10, info.Turn)
-
-	// Verify agent_state.json exists in checkpoint dir
-	checkpointPath := filepath.Join(sessionDir, info.Path)
-	assert.FileExists(t, filepath.Join(checkpointPath, "agent_state.json"))
-
-	// Verify agent state can be loaded
-	loadedState, err := LoadCheckpointAgentState(checkpointPath)
-	require.NoError(t, err)
-
-	assert.Equal(t, originalSnapshot.AgentState.WorkspaceRoot, loadedState.WorkspaceRoot)
-	assert.Equal(t, originalSnapshot.AgentState.TotalTurns, loadedState.TotalTurns)
-	assert.Equal(t, originalSnapshot.AgentState.TokensUsed, loadedState.TokensUsed)
-	assert.Equal(t, originalSnapshot.AgentState.LastTriggerTurn, loadedState.LastTriggerTurn)
+	assert.Equal(t, original.WorkspaceRoot, loaded.WorkspaceRoot)
+	assert.Equal(t, original.TotalTurns, loaded.TotalTurns)
+	assert.Equal(t, original.TokensUsed, loaded.TokensUsed)
+	assert.Equal(t, original.LastTriggerTurn, loaded.LastTriggerTurn)
 }
 
-// --- Symlink tests ---
-
-func TestCurrentSymlink_PointsToLatest(t *testing.T) {
+func TestLoadAgentState_NoFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	sessionDir := filepath.Join(tmpDir, "session")
-	require.NoError(t, os.MkdirAll(sessionDir, 0755))
 
-	snapshot1 := &ContextSnapshot{
-		AgentState: &AgentState{TotalTurns: 1},
-	}
-	_, err := SaveCheckpoint(sessionDir, snapshot1, 1)
+	state, err := LoadAgentState(tmpDir)
 	require.NoError(t, err)
-
-	snapshot2 := &ContextSnapshot{
-		AgentState: &AgentState{TotalTurns: 2},
-	}
-	info2, err := SaveCheckpoint(sessionDir, snapshot2, 2)
-	require.NoError(t, err)
-
-	// Verify current symlink
-	latestInfo, err := LoadLatestCheckpoint(sessionDir)
-	require.NoError(t, err)
-	assert.Equal(t, info2.Path, latestInfo.Path)
+	assert.Nil(t, state)
 }
 
 // --- SplitLines tests ---
@@ -145,4 +89,3 @@ func TestSplitLines(t *testing.T) {
 		t.Errorf("expected blank lines skipped, got %+v", got)
 	}
 }
-

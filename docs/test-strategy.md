@@ -34,14 +34,14 @@ Test individual functions and methods in isolation.
 | `pkg/agent` | `tool_call_normalize_test.go` | Tool call parsing |
 | `pkg/agent` | `result_test.go` | Result processing |
 | `pkg/agent` | `error_stack_test.go` | Error chain tracking |
-| `pkg/agent` | `checkpoint_manager_test.go` | Checkpoint management |
+| `pkg/agent` | `checkpoint_manager_test.go` | AgentState persistence |
 | `pkg/compact` | `compact_test.go` | Compaction logic |
 | `pkg/compact` | `context_management_test.go` | LLM-driven context management |
 | `pkg/compact` | `compact_tool_pairing_test.go` | Compact tool integration |
 | `pkg/config` | `config_test.go` | Configuration loading |
 | `pkg/config` | `auth_test.go` | API key resolution |
 | `pkg/config` | `models_test.go` | Model spec handling |
-| `pkg/context` | `checkpoint_test.go` | Checkpoint save/load |
+| `pkg/context` | `checkpoint_test.go` | AgentState save/load |
 | `pkg/llm` | `client_test.go` | LLM client |
 | `pkg/llm` | `errors_test.go` | Error classification |
 | `pkg/prompt` | `builder_test.go` | Prompt construction |

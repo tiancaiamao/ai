@@ -74,6 +74,8 @@ System-maintained metadata tracking:
 - `ToolCallsSinceLastTrigger` — counter for compaction interval logic
 - Runtime state
 
+Persisted to `agent_state.json` in the session directory via `SaveAgentState` / `LoadAgentState`.
+
 ## Compaction Result
 
 ```go
@@ -103,9 +105,11 @@ type Compactor interface {
 
 Implemented by `pkg/compact.Compactor`. See [docs/context-management.md](../../docs/context-management.md) for the full compaction architecture.
 
-## Journal
+## AgentState Persistence
 
-`Journal` provides append-only file I/O for incremental message logging, used by the checkpoint manager for crash recovery. Entry types: `message`, `truncate`, `compact`.
+`AgentState` is persisted as `agent_state.json` directly in the session directory.
+This file is written after compaction events and loaded on session resume.
+Messages are NOT stored here — they come from `sess.GetMessages()`.
 
 ## Token Estimation
 
@@ -125,13 +129,7 @@ Estimates use a simple heuristic (~4 characters per token). Used by the compacto
 | `message.go` | `AgentMessage`, `ContentBlock`, `TextContent`, `ImageContent`, `ToolCallContent`, `ThinkingContent` |
 | `agent_state.go` | `AgentState` tracking metadata |
 | `compactor.go` | `Compactor` interface, `CompactionResult`, `ToolCallRecord` |
-| `journal.go` | `JournalEntry` types (message/truncate/compact) |
-| `journal_io.go` | Journal I/O operations |
-| `snapshot.go` | `ContextSnapshot` for checkpoint persistence |
-| `checkpoint.go` | `CheckpointInfo`, checkpoint save/load, symlink management |
-| `checkpoint_index.go` | Checkpoint index for fast lookup |
-| `checkpoint_io.go` | Checkpoint I/O operations |
-| `reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
+| `checkpoint_io.go` | `SaveAgentState` / `LoadAgentState`, `SplitLines` |
 | `conversion.go` | `ConvertMessagesToLLM`, `ConvertToolsToLLM` — agent-to-LLM type conversion |
 | `token_estimation.go` | `EstimateTokens()` standalone function |
 | `constants.go` | Package constants (`RecentMessagesKeep`) |

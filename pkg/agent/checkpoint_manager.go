@@ -8,7 +8,7 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// AgentContextCheckpointManager manages checkpoint integration with AgentContext.
+// AgentContextCheckpointManager persists AgentState to the session directory.
 type AgentContextCheckpointManager struct {
 	sessionDir string
 	enabled    bool
@@ -31,8 +31,7 @@ func NewAgentContextCheckpointManager(sessionDir string) (*AgentContextCheckpoin
 	}, nil
 }
 
-// CreateSnapshot creates a checkpoint from current AgentContext state.
-// Returns turn number and error.
+// CreateSnapshot persists the current AgentState to agent_state.json.
 func (m *AgentContextCheckpointManager) CreateSnapshot(
 	agentCtx *agentctx.AgentContext,
 	totalTurns int,
@@ -44,18 +43,14 @@ func (m *AgentContextCheckpointManager) CreateSnapshot(
 	agentState := agentCtx.AgentState.Clone()
 	agentState.TotalTurns = totalTurns
 
-	info, err := agentctx.SaveCheckpoint(m.sessionDir, &agentctx.ContextSnapshot{
-		AgentState: agentState,
-	}, totalTurns)
-	if err != nil {
-		return 0, fmt.Errorf("failed to save checkpoint: %w", err)
+	if err := agentctx.SaveAgentState(m.sessionDir, agentState); err != nil {
+		return 0, fmt.Errorf("failed to save agent state: %w", err)
 	}
 
-	return info.Turn, nil
+	return totalTurns, nil
 }
 
-// ShouldCheckpoint returns true if an event-driven checkpoint should be created.
-// Always returns true when enabled — the caller decides when to trigger.
+// ShouldCheckpoint returns true if checkpoint persistence is enabled.
 func (m *AgentContextCheckpointManager) ShouldCheckpoint() bool {
 	return m.enabled
 }
@@ -74,15 +69,14 @@ func initCheckpointManager(config *LoopConfig) *AgentContextCheckpointManager {
 	return mgr
 }
 
-// saveCheckpointAfterCompaction creates a checkpoint after compaction to
-// persist the current AgentState (turn count, tokens, CWD, etc.).
+// saveCheckpointAfterCompaction persists AgentState after compaction.
 func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, turnCount int, trigger string) {
 	if mgr == nil || !mgr.ShouldCheckpoint() {
 		return
 	}
 	if _, err := mgr.CreateSnapshot(agentCtx, turnCount); err != nil {
-		slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
+		slog.Warn("[Loop] Failed to save agent state after compaction", "error", err, "turn", turnCount)
 	} else {
-		slog.Info("[Loop] Checkpoint created after compaction", "trigger", trigger, "turn", turnCount)
+		slog.Info("[Loop] Agent state saved after compaction", "trigger", trigger, "turn", turnCount)
 	}
 }
