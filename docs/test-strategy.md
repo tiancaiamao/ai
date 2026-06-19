@@ -98,7 +98,7 @@ Test component interactions within the agent system.
 | `pkg/agent/llm_context_test.go` | LLM context lifecycle |
 | `pkg/agent/runtime_meta_test.go` | Runtime telemetry |
 | `pkg/agent/metrics_trace_test.go` | Metrics via trace events |
-| `pkg/session/compact_event_test.go` | Session compaction events |
+| `pkg/session/compaction_snapshot_test.go` | Session compaction snapshots |
 | `pkg/skill/integration_test.go` | Skill loading integration |
 | `cmd/ai/integration_test.go` | Full CLI integration |
 | `cmd/ai/session_writer_test.go` | Session writer compaction |
@@ -109,8 +109,6 @@ Test component interactions within the agent system.
 | `pkg/run/conv_test.go` | Run metadata conversion |
 | `pkg/run/socket_test.go` | Socket server |
 | `pkg/run/meta_test.go` | Run metadata |
-| `skills/ag/cmd/backend_integration_test.go` | ag backend integration |
-| `skills/ag/internal/*/...` | ag internal package tests |
 
 ### Running Integration Tests
 

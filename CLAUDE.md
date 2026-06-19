@@ -43,8 +43,8 @@ make fmt
 # install (recommended - ensures fresh binary)
 go install ./cmd/ai
 
-# run rpc mode
-ai --mode rpc
+# run rpc mode (stdin/stdout JSON-RPC)
+ai rpc
 
 # run all tests
 go test ./... -v
@@ -81,8 +81,8 @@ The agent loop has been refactored from a monolithic function into a structured 
 - `agent.go` — Agent struct, context/model wiring, public API (`Run`, `Compact`, etc.)
 - `loop.go` — Outer loop: turns, tool calls, compaction orchestration
 - `loop_state.go` — `loopState` struct & extracted methods (`performCompaction`, `processToolCalls`, `shouldStop`, `advanceTurn`, `cleanup`)
-- `compaction_controller.go` — Background compaction trigger logic
 - `executor.go` — Tool execution dispatch
+- `hooks.go`, `loop_hooks.go` — Hook registry, BeforeModel/AfterTool/AfterAgent hooks
 - `llm_stream.go`, `llm_stream_parse.go` — LLM streaming response handling
 - `llm_retry.go` — Retry logic for LLM API calls
 - `error_stack.go` — Error wrapping with stack traces
@@ -96,6 +96,23 @@ The agent loop has been refactored from a monolithic function into a structured 
 - Tool implementations: `pkg/tools/`
 - Compaction: `pkg/compact/` (implements `context.Compactor` interface via `ShouldCompact`, `Compact`, `EstimateTokens`)
 - Context management: `pkg/context/` (defines `AgentContext`, `Compactor` interface)
+- Agent config (harness): `pkg/agentconfig/` (YAML loading, system prompt + memory)
+- Middlewares: `pkg/middlewares/` (hook-based guards, e.g. destructive command guard)
+
+## Documentation Maintenance
+
+**Before committing any change**, check [`docs/README.md`](docs/README.md):
+
+1. **Scan the Live Docs table** — does your change touch a listed code area?
+2. **If yes**, verify the corresponding doc is still accurate. Update it in the same commit.
+3. **If you added/removed/renamed a package**, update `docs/architecture.md` Package Structure.
+4. **Add a `CHANGELOG.md` entry** for functional changes (new features, behavior changes, removed code).
+   - One line, under `## Unreleased`, grouped by `Added` / `Changed` / `Removed`.
+   - Include commit hash after commit (e.g. `([abc123](commit-url))`).
+
+**Live docs** (`architecture.md`, `rpc-protocol.md`, `session-format.md`, `context-management.md`, `test-strategy.md`) must stay in sync with code.
+
+**Archive** (`docs/archive/`) contains historical design proposals — read for context only, do not update.
 
 ## Guardrails
 
@@ -103,6 +120,18 @@ The agent loop has been refactored from a monolithic function into a structured 
 - Respect context cancellation through loop/tool execution paths.
 - Keep behavior compatible with session persistence format in `pkg/session/`.
 - Prefer minimal, targeted changes; avoid broad refactors unless requested.
+
+### 📝 Documentation Maintenance
+
+**Before any commit, check if documentation needs updating.**
+
+1. Review [`docs/README.md`](docs/README.md) — the Live Docs index table
+2. Determine if your changes affect any listed document's coverage area
+3. If yes: update the corresponding doc to match the code (verify every file path, type name, and function name against actual code)
+4. If your change adds a feature or fixes a significant bug: add an entry to [`CHANGELOG.md`](CHANGELOG.md)
+5. Design proposals live in `docs/archive/` and are **not** maintained — do not update them
+
+**Key principle:** Live docs must be verified against code. Never blindly move or edit documentation without checking that every reference (file path, type, function) actually exists in the codebase.
 
 ### ⛔ NEVER commit directly to `main`
 

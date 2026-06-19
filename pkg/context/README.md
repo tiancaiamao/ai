@@ -12,14 +12,13 @@ Agent execution context: messages, tools, skills, and compaction state.
 
 ```go
 type AgentContext struct {
-    SystemPrompt         string
-    Tools                []Tool
-    Skills               []skill.Skill
-    LLMContext           string            // Structured context content (managed by ContextManager)
-    RecentMessages       []AgentMessage    // Current conversation (not full history)
-    AgentState           *AgentState       // System-maintained metadata
-    LastCompactionSummary string           // For incremental summary updates
-    // ... callbacks, tool whitelist, context management lock
+    SystemPrompt          string            // System prompt for LLM calls
+    Tools                 []Tool            // Available tools
+    Skills                []skill.Skill     // Loaded skills
+    RecentMessages        []AgentMessage    // Current conversation (not full history)
+    AgentState            *AgentState       // System-maintained metadata
+    LastCompactionSummary string            // For incremental summary updates
+    // ... callbacks, tool whitelist
 }
 ```
 
@@ -47,11 +46,11 @@ Interface that all agent tools must implement.
 
 ```go
 type AgentMessage struct {
-    Role      string         `json:"role"`      // "user", "assistant", "tool"
-    Content   []ContentBlock `json:"content"`
-    ToolCalls []ToolCall     `json:"toolCalls,omitempty"`
-    ToolCallID string        `json:"toolCallId,omitempty"`
-    // ... metadata fields
+    Role       string         `json:"role"`      // "user", "assistant", "tool"
+    Content    []ContentBlock `json:"content"`
+    ToolCalls  []ToolCall     `json:"toolCalls,omitempty"`
+    ToolCallID string         `json:"toolCallId,omitempty"`
+    // ... metadata fields (visibility, kind, timestamp, entry ID)
 }
 ```
 
@@ -64,31 +63,8 @@ Discriminated union with types: `text`, `image`, `tool_use`, `tool_result`.
 System-maintained metadata tracking:
 - Tool call counts (per name and total)
 - Current turn number
-- Compaction history
+- `ToolCallsSinceLastTrigger` — counter for compaction interval logic
 - Runtime state
-
-## Compaction Actions
-
-```go
-type CompactAction string
-
-const (
-    CompactActionTruncate         CompactAction = "truncate"           // Trim tool output
-    CompactActionUpdateLLMContext CompactAction = "update_llm_context" // Update structured context
-    CompactActionCompact          CompactAction = "compact"            // Major compaction
-)
-```
-
-### CompactEventDetail
-
-```go
-type CompactEventDetail struct {
-    Action CompactAction
-    IDs    []string // Target message/tool-call IDs
-}
-```
-
-Records individual compaction actions for session persistence and replay.
 
 ## Compaction Result
 
@@ -105,9 +81,21 @@ type CompactionResult struct {
 
 Returned by compactors after performing compression.
 
+## Compactor Interface
+
+```go
+type Compactor interface {
+    ShouldCompact(ctx, agentCtx) bool
+    Compact(ctx, agentCtx) (*CompactionResult, error)
+    CalculateDynamicThreshold() int
+}
+```
+
+Implemented by `pkg/compact.Compactor`. See [docs/context-management.md](../../docs/context-management.md) for the full compaction architecture.
+
 ## Journal
 
-`Journal` provides append-only file I/O for incremental message logging, used by the checkpoint manager for crash recovery.
+`Journal` provides append-only file I/O for incremental message logging, used by the checkpoint manager for crash recovery. Entry types: `message`, `truncate`, `compact`.
 
 ## Token Estimation
 
@@ -117,15 +105,23 @@ func (c *AgentContext) EstimateToolsTokens() int
 func (c *AgentContext) EstimateTokenPercent(windowSize int) float64
 ```
 
-Estimates use a simple heuristic (~4 characters per token). Used by both the compactor and context manager to decide when to act.
+Estimates use a simple heuristic (~4 characters per token). Used by the compactor to decide when to act.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
 | `context.go` | `AgentContext`, message management, token estimation, tool whitelist |
-| `journal.go` | Append-only journal for checkpoint recovery |
-| `checkpoint.go` | Checkpoint save/load for session persistence |
+| `message.go` | `AgentMessage`, `ContentBlock` types |
+| `agent_state.go` | `AgentState` tracking metadata |
+| `compactor.go` | `Compactor` interface, `CompactionResult` |
+| `journal.go` | `JournalEntry` types (message/truncate/compact) |
+| `journal_io.go` | Journal I/O operations |
+| `snapshot.go` | `ContextSnapshot` for checkpoint persistence |
+| `checkpoint.go` | Checkpoint save/load, symlink management |
+| `checkpoint_index.go` | Checkpoint index for fast lookup |
+| `checkpoint_io.go` | Checkpoint I/O operations |
+| `reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
 
 ## Dependencies
 

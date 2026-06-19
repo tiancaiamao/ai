@@ -105,12 +105,25 @@ The stream supports abort via `Push(agentEndEvent)` and cancellation through con
 | `event.go` | `AgentEvent` type and constructors for all event variants |
 | `eventstream.go` | Generic `EventStream[T, R]` implementation |
 | `checkpoint_manager.go` | Journal-based checkpoint integration |
-| `compaction_controller.go` | Triggers and manages context compaction cycles |
+| `hooks.go` | Agent lifecycle hooks |
+| `loop_hooks.go` | Loop-specific hook implementations |
+| `tool_exec.go` | Tool execution dispatch |
+| `tool_guard.go` | Tool execution safety guards |
+| `tool_output.go` | Tool output processing |
+| `tool_call_normalize.go` | Tool call normalization |
+| `tool_metadata.go` | Tool metadata |
+| `tool_tag_parser.go` | Tool tag parsing |
 | `llm_stream.go` | LLM stream consumption and event translation |
 | `llm_stream_parse.go` | Parsing LLM streaming responses into events |
 | `llm_retry.go` | Retry logic for LLM API errors |
 | `llm_error_types.go` | Error classification for retries |
 | `error_stack.go` | Error chain tracking |
+| `metrics.go` | Metrics collection |
+| `metrics_aggregate.go` | Metrics aggregation |
+| `metrics_snapshot.go` | Metrics snapshots |
+| `result.go` | Agent run result types |
+| `resume.go` | Session resume logic |
+| `runtime_meta.go` | Runtime metadata |
 | `conversion.go` | Message type conversions |
 
 ## Dependencies

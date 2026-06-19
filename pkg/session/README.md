@@ -38,15 +38,14 @@ Each line in `messages.jsonl` is a JSON object with a `type` discriminator:
 |------|----------|-------------|
 | `session` | `EntryTypeSession` | Header entry — first line, contains session ID, version, CWD |
 | `message` | `EntryTypeMessage` | User/assistant/tool message |
-| `compaction` | `EntryTypeCompaction` | Compaction summary replacing older messages |
-| `compact_event` | `EntryTypeCompactEvent` | Granular compaction action (truncate, update_llm_context) |
+| `compaction` | `EntryTypeCompaction` | Compaction summary replacing older messages (has `snapshotRef` pointing to `compactions/compaction_NNNNN.jsonl`) |
 | `branch_summary` | `EntryTypeBranchSummary` | Summary of a branched conversation |
 | `session_info` | `EntryTypeSessionInfo` | Session name/title metadata |
 
 ### Session Header
 
 ```json
-{"type":"session","version":1,"id":"<uuid>","timestamp":"2025-01-15T10:30:00Z","cwd":"/Users/genius/project/myapp"}
+{"type":"session","version":1,"id":"<uuid>","timestamp":"2025-01-15T10:30:00Z","cwd":"/Users/genius/project/myapp","gitCommit":"<sha>","gitVersion":"<tag>","lastCompactionId":"<entry-id>"}
 ```
 
 ### Message Entry
@@ -60,10 +59,11 @@ Messages form a tree via `parentId` links. The current conversation tip is the `
 ### Compaction Entry
 
 ```json
-{"type":"compaction","id":"<entry-id>","parentId":"<parent-entry-id>","timestamp":"...","summary":"...","firstKeptEntryId":"<id>","tokensBefore":50000,"tokensAfter":5000}
+{"type":"compaction","id":"<entry-id>","parentId":"<parent-entry-id>","timestamp":"...","summary":"...","firstKeptEntryId":"<id>","tokensBefore":50000,"snapshotRef":"compactions/compaction_00001.jsonl"}
 ```
 
 The `firstKeptEntryId` marks where messages resume after the summary.
+The `snapshotRef` points to a file in `compactions/` containing the full post-compaction message list (Proposal B: append-only design).
 
 ## Core Types
 
@@ -145,19 +145,7 @@ When context grows too large, the session system works with `pkg/compact` to:
 3. Append a `compaction` entry with the summary
 4. Set `firstKeptEntryId` to the first message after the cut point
 
-On replay, compaction entries are converted to a user message containing the summary wrapped in `<summary>` tags. All entries before `firstKeptEntryId` are skipped.
-
-### Compact Events (Granular)
-
-`compact_event` entries record individual actions by the context manager:
-
-```json
-{"type":"compact_event","action":"truncate","ids":["tool-call-id-1","tool-call-id-2"]}
-```
-
-Actions: `truncate` (trim tool output), `update_llm_context` (update structured context), `compact` (major compaction).
-
-On replay, `truncate` actions restore truncated tool outputs using `TruncateWithHeadTail`.
+On replay, compaction entries are converted to a user message containing the summary wrapped in `<summary>` tags. All entries before `firstKeptEntryId` are skipped. The full post-compaction message list is loaded from the `snapshotRef` file.
 
 ## Key Files
 
@@ -167,4 +155,3 @@ On replay, `truncate` actions restore truncated tool outputs using `TruncateWith
 | `entries.go` | Entry types, header parsing, entry-to-message conversion, replay |
 | `manager.go` | SessionManager — CRUD, listing, forking across sessions |
 | `lazy.go` | Lazy loading with LoadSessionLazy |
-| `compaction.go` | Session-level compaction logic (find cut points, summarize) |
