@@ -188,19 +188,7 @@ func (app *rpcApp) handleModelList() (any, error) {
 }
 
 func (app *rpcApp) handleSetAutoCompaction(value string) (any, error) {
-	enabled := strings.TrimSpace(strings.ToLower(value))
-	var jsonData struct {
-		Enabled bool `json:"enabled"`
-	}
-	if app.parseJSONArgs(value, &jsonData) {
-		app.compactorConfig.AutoCompact = jsonData.Enabled
-		app.stateMu.Lock()
-		app.autoCompactionEnabled = jsonData.Enabled
-		app.stateMu.Unlock()
-		slog.Info("set auto-compaction", "enabled", jsonData.Enabled)
-		return map[string]any{"setting": "auto-compaction", "value": jsonData.Enabled}, nil
-	}
-	val := enabled == "true" || enabled == "1"
+	val := rpc.ParseBoolFromInput(value, "enabled")
 	app.compactorConfig.AutoCompact = val
 	app.stateMu.Lock()
 	app.autoCompactionEnabled = val
@@ -428,80 +416,21 @@ func (app *rpcApp) handleSetTraceEvents(value string) (any, error) {
 }
 
 func (app *rpcApp) handleShowSettings() (any, error) {
-	compaction := buildCompactionState(app.compactorConfig, app.compactor)
-
-	model := app.currentModelInfo.ID
-	if app.currentModelInfo.Provider != "" {
-		model = app.currentModelInfo.Provider + "/" + app.currentModelInfo.ID
-	}
-
-	compactionContext := "unknown"
-	compactionReserve := "unknown"
-	compactionLimit := "unknown"
-	compactionMaxMessages := "disabled"
-	compactionMaxTokens := "disabled"
-	compactionKeepRecent := "unknown"
-	compactionKeepRecentTokens := "unknown"
-	if compaction != nil {
-		compactionContext = formatIntOrUnknown(compaction.ContextWindow)
-		compactionReserve = formatIntOrUnknown(compaction.ReserveTokens)
-		compactionLimit = formatTokenLimit(compaction)
-		compactionMaxMessages = formatLimit(compaction.MaxMessages)
-		compactionMaxTokens = formatLimit(compaction.MaxTokens)
-		compactionKeepRecent = formatIntOrUnknown(compaction.KeepRecent)
-		compactionKeepRecentTokens = formatIntOrUnknown(compaction.KeepRecentTokens)
-	}
-
-	autoCompStr := "off"
-	if app.autoCompactionEnabled {
-		autoCompStr = "on"
-	}
-
-	showThinkingStr := "off"
-	if app.showThinking {
-		showThinkingStr = "on"
-	}
-	showToolsStr := "off"
-	if app.showTools {
-		showToolsStr = "on"
-	}
-	showPrefixStr := "off"
-	if app.showPrefix {
-		showPrefixStr = "on"
-	}
-
-	return map[string]any{
-		"type": "settings",
-		"data": map[string]any{
-			"model":                         model,
-			"show-thinking":                 showThinkingStr,
-			"tools":                         showToolsStr,
-			"prefix":                        showPrefixStr,
-			"thinking-level":                app.currentThinkingLevel,
-			"busy-mode":                     app.busyMode,
-			"auto-compaction":               autoCompStr,
-			"compaction-context-window":     compactionContext,
-			"compaction-reserve-tokens":     compactionReserve,
-			"compaction-token-limit":        compactionLimit,
-			"compaction-max-messages":       compactionMaxMessages,
-			"compaction-max-tokens":         compactionMaxTokens,
-			"compaction-keep-recent":        compactionKeepRecent,
-			"compaction-keep-recent-tokens": compactionKeepRecentTokens,
-		},
-	}, nil
+	return rpc.BuildSettingsResponse(rpc.SettingsSnapshot{
+		ModelID:        app.currentModelInfo.ID,
+		ModelProvider:  app.currentModelInfo.Provider,
+		ShowThinking:   app.showThinking,
+		ShowTools:      app.showTools,
+		ShowPrefix:     app.showPrefix,
+		ThinkingLevel:  app.currentThinkingLevel,
+		BusyMode:       app.busyMode,
+		AutoCompaction: app.autoCompactionEnabled,
+		Compaction:     buildCompactionState(app.compactorConfig, app.compactor),
+	}), nil
 }
 
 func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
-	enabled := strings.TrimSpace(strings.ToLower(value))
-	var jsonData struct {
-		Enabled bool `json:"enabled"`
-	}
-	if app.parseJSONArgs(value, &jsonData) {
-		app.ag.SetAutoRetry(jsonData.Enabled)
-		slog.Info("set auto-retry", "enabled", jsonData.Enabled)
-		return map[string]any{"setting": "auto-retry", "value": jsonData.Enabled}, nil
-	}
-	val := enabled == "true" || enabled == "1"
+	val := rpc.ParseBoolFromInput(value, "enabled")
 	app.ag.SetAutoRetry(val)
 	slog.Info("set auto-retry", "enabled", val)
 	return map[string]any{"setting": "auto-retry", "value": val}, nil
@@ -510,25 +439,7 @@ func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
 func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
 	parts := strings.Fields(args)
 	if len(parts) == 0 || parts[0] == "help" {
-		return map[string]any{
-			"usage": "/set <key> [value]",
-			"settings": []string{
-				"auto-retry <on|off>",
-				"auto-compaction <on|off>",
-				"busy-mode <steer|follow-up|reject>",
-				"follow-up-mode <all|immediate|one-at-a-time>",
-				"prefix-display <on|off|toggle>",
-				"session-name <name>",
-				"steering-mode <all|immediate|one-at-a-time>",
-				"thinking-display <on|off|toggle>",
-				"thinking-level <off|minimal|low|medium|high|xhigh>",
-				"tool-call-cutoff <n>",
-				"tool-summary-automation <off|fallback|always>",
-				"tool-summary-strategy <llm|heuristic|off>",
-				"tools-display <on|off|toggle>",
-				"trace-events [on|off|all|enable <selectors>|disable <selectors>]",
-			},
-		}, nil
+		return rpc.SetUsage(), nil
 	}
 
 	key := parts[0]
@@ -558,32 +469,22 @@ func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolS
 		return app.handleSetFollowUpMode(value, validFollowUpModes)
 
 	case "prefix-display":
-		switch strings.TrimSpace(value) {
-		case "on":
-			app.showPrefix = true
-		case "off":
-			app.showPrefix = false
-		case "toggle", "":
-			app.showPrefix = !app.showPrefix
-		default:
+		r := rpc.ParseToggleValue(value, app.showPrefix)
+		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set prefix-display <on|off|toggle>")
 		}
+		app.showPrefix = r.Value
 		return map[string]any{"setting": "prefix-display", "value": app.showPrefix}, nil
 
 	case "steering-mode":
 		return app.handleSetSteeringMode(value, validSteeringModes)
 
 	case "thinking-display":
-		switch strings.TrimSpace(value) {
-		case "on":
-			app.showThinking = true
-		case "off":
-			app.showThinking = false
-		case "toggle", "":
-			app.showThinking = !app.showThinking
-		default:
+		r := rpc.ParseToggleValue(value, app.showThinking)
+		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set thinking-display <on|off|toggle>")
 		}
+		app.showThinking = r.Value
 		return map[string]any{"setting": "thinking-display", "value": app.showThinking}, nil
 
 	case "thinking-level":
@@ -599,16 +500,11 @@ func (app *rpcApp) handleSet(args string, validToolSummaryStrategies, validToolS
 		return app.handleSetToolSummaryStrategy(value, validToolSummaryStrategies)
 
 	case "tools-display":
-		switch strings.TrimSpace(value) {
-		case "on":
-			app.showTools = true
-		case "off":
-			app.showTools = false
-		case "toggle", "":
-			app.showTools = !app.showTools
-		default:
+		r := rpc.ParseToggleValue(value, app.showTools)
+		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set tools-display <on|off|toggle>")
 		}
+		app.showTools = r.Value
 		return map[string]any{"setting": "tools-display", "value": app.showTools}, nil
 
 	case "session-name":
