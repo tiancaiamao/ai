@@ -14,7 +14,7 @@ func TestFormatMessagesForDisplay_BasicUserMessage(t *testing.T) {
 		agentctx.NewUserMessage("Hello, world!"),
 	}
 
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if result.Total != 1 {
 		t.Errorf("Expected Total=1, got %d", result.Total)
@@ -43,7 +43,7 @@ func TestFormatMessagesForDisplay_Truncation(t *testing.T) {
 		agentctx.NewUserMessage(longText),
 	}
 
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if len(result.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(result.Messages))
@@ -60,7 +60,7 @@ func TestFormatMessagesForDisplay_CountLimit(t *testing.T) {
 		msgs[i] = agentctx.NewUserMessage("msg")
 	}
 
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if result.Total != 50 {
 		t.Errorf("Expected Total=50, got %d", result.Total)
@@ -87,7 +87,7 @@ func TestFormatMessagesForDisplay_CountExceedsTotal(t *testing.T) {
 		agentctx.NewUserMessage("msg2"),
 	}
 
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if result.Total != 2 {
 		t.Errorf("Expected Total=2, got %d", result.Total)
@@ -103,7 +103,7 @@ func TestFormatMessagesForDisplay_CountExceedsTotal(t *testing.T) {
 func TestFormatMessagesForDisplay_EmptyMessages(t *testing.T) {
 	msgs := []agentctx.AgentMessage{}
 
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if result.Total != 0 {
 		t.Errorf("Expected Total=0, got %d", result.Total)
@@ -142,7 +142,7 @@ func TestFormatMessagesForDisplay_ToolCalls(t *testing.T) {
 	}
 
 	msgs := []agentctx.AgentMessage{msg}
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if len(result.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(result.Messages))
@@ -171,7 +171,7 @@ func TestFormatMessagesForDisplay_ToolResult(t *testing.T) {
 	}, false)
 
 	msgs := []agentctx.AgentMessage{msg}
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if len(result.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(result.Messages))
@@ -197,7 +197,7 @@ func TestFormatMessagesForDisplay_ToolResultError(t *testing.T) {
 	}, true)
 
 	msgs := []agentctx.AgentMessage{msg}
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if len(result.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(result.Messages))
@@ -217,7 +217,7 @@ func TestFormatMessagesForDisplay_ThinkingFallback(t *testing.T) {
 	}
 
 	msgs := []agentctx.AgentMessage{msg}
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if len(result.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(result.Messages))
@@ -244,7 +244,7 @@ func TestFormatMessagesForDisplay_MixedMessages(t *testing.T) {
 	}, false)
 
 	msgs := []agentctx.AgentMessage{userMsg, assistantMsg, toolResultMsg}
-	result := formatMessagesForDisplay(msgs, 20, 200)
+	result := rpc.FormatMessagesForDisplay(msgs, 20, 200)
 
 	if result.Total != 3 {
 		t.Errorf("Expected Total=3, got %d", result.Total)

@@ -2,18 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -115,7 +109,7 @@ func (app *rpcApp) handleGetMessages(args string) (any, error) {
 	}
 
 	messages := app.ag.GetMessages()
-	return formatMessagesForDisplay(messages, count, maxPreviewLen), nil
+	return rpc.FormatMessagesForDisplay(messages, count, maxPreviewLen), nil
 }
 
 func (app *rpcApp) handleGetLastAssistantText(args string) (any, error) {
@@ -138,7 +132,7 @@ func (app *rpcApp) handleExportHTML(args string) (any, error) {
 func (app *rpcApp) handleGetWorkflowStatus(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_workflow_status")
-	status, err := getWorkflowStatus(app.ws.GetCWD())
+	status, err := rpc.GetWorkflowStatus(app.ws.GetCWD())
 	if err != nil {
 		return nil, err
 	}
@@ -146,162 +140,6 @@ func (app *rpcApp) handleGetWorkflowStatus(args string) (any, error) {
 		return nil, nil
 	}
 	return status, nil
-}
-
-// registerHandlers registers all RPC command handlers and slash commands on the server.
-
-func getWorkflowStatus(cwd string) (*rpc.WorkflowState, error) {
-	state := &rpc.WorkflowState{
-		Phase:      "not_started",
-		LastUpdate: time.Now().UTC().Format(time.RFC3339),
-	}
-
-	workflowDir := filepath.Join(cwd, ".workflow")
-	stateFile := filepath.Join(workflowDir, "state.json")
-
-	// Read state.json if it exists
-	if data, err := os.ReadFile(stateFile); err == nil {
-		var stateData struct {
-			Phase     string `json:"phase"`
-			StartedAt string `json:"started_at"`
-			TasksFile string `json:"tasks_file"`
-		}
-		if err := json.Unmarshal(data, &stateData); err == nil {
-			state.Phase = stateData.Phase
-			state.StartedAt = stateData.StartedAt
-			if stateData.TasksFile != "" {
-				// Handle relative or absolute path
-				if filepath.IsAbs(stateData.TasksFile) {
-					state.TasksFile = stateData.TasksFile
-				} else {
-					state.TasksFile = filepath.Join(cwd, stateData.TasksFile)
-				}
-			}
-		}
-	}
-
-	// Read tasks.md if specified
-	if state.TasksFile != "" {
-		tasksData, err := os.ReadFile(state.TasksFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read tasks file %s: %w", state.TasksFile, err)
-		}
-
-		// Parse task statuses
-		lines := strings.Split(string(tasksData), "\n")
-		var inProgressTask *rpc.WorkflowTask
-
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "- [") {
-				continue
-			}
-
-			status := "pending"
-			if strings.HasPrefix(line, "- [x]") || strings.HasPrefix(line, "- [X]") {
-				status = "done"
-				state.DoneTasks++
-			} else if strings.HasPrefix(line, "- [-]") {
-				status = "in_progress"
-				state.PendingTasks++ // In-progress also counts toward pending
-			} else if strings.HasPrefix(line, "- [!]") {
-				status = "failed"
-				state.FailedTasks++
-			} else {
-				state.PendingTasks++
-			}
-
-			state.TotalTasks++
-
-			// Extract task ID and description for in-progress task
-			if status == "in_progress" && inProgressTask == nil {
-				// Extract task ID (e.g., TASK001, T01, etc.)
-				var id string
-				idMatch := regexp.MustCompile(`[A-Z]{3,}\d+|[A-Z]\d+`).FindString(line)
-				if idMatch != "" {
-					id = idMatch
-				}
-
-				// Extract description: remove checkbox first, then task ID
-				desc := line
-				// Remove checkbox
-				desc = regexp.MustCompile(`^-\s*\[[xX\-\!]\]\s*`).ReplaceAllString(desc, "")
-				desc = regexp.MustCompile(`^-\s*\[\s*\]\s*`).ReplaceAllString(desc, "")
-				// Remove task ID (e.g., TASK002: or TASK002 )
-				desc = regexp.MustCompile(`^[A-Z]{3,}\d+:?\s*`).ReplaceAllString(desc, "")
-				desc = strings.TrimSpace(desc)
-
-				inProgressTask = &rpc.WorkflowTask{
-					ID:          id,
-					Description: desc,
-					Status:      status,
-				}
-			}
-		}
-
-		state.InProgressTask = inProgressTask
-	}
-
-	return state, nil
-}
-
-// formatMessagesForDisplay converts AgentMessages into a structured summary for the /messages command.
-// It returns the last `count` messages with previews truncated to maxPreviewLen characters.
-
-func formatMessagesForDisplay(messages []agentctx.AgentMessage, count int, maxPreviewLen int) rpc.MessagesResult {
-	total := len(messages)
-
-	start := total - count
-	if start < 0 {
-		start = 0
-	}
-	showing := total - start
-
-	formatted := make([]rpc.FormattedMessage, 0, showing)
-	for i := start; i < total; i++ {
-		msg := messages[i]
-		fm := rpc.FormattedMessage{
-			Index: i,
-			Role:  msg.Role,
-		}
-
-		// Build preview from text content
-		preview := msg.ExtractText()
-		if preview == "" {
-			// Try thinking content as fallback for assistant messages
-			if thinking := msg.ExtractThinking(); thinking != "" {
-				preview = "(thinking) " + thinking
-			}
-		}
-		if len(preview) > maxPreviewLen {
-			preview = preview[:maxPreviewLen] + "..."
-		}
-		fm.Preview = preview
-
-		// Extract tool call names for assistant messages
-		toolCalls := msg.ExtractToolCalls()
-		if len(toolCalls) > 0 {
-			names := make([]string, 0, len(toolCalls))
-			for _, tc := range toolCalls {
-				names = append(names, tc.Name)
-			}
-			fm.ToolCalls = names
-		}
-
-		// Include tool name for tool results
-		if msg.ToolName != "" {
-			fm.ToolName = msg.ToolName
-		}
-		fm.IsError = msg.IsError
-
-		formatted = append(formatted, fm)
-	}
-
-	return rpc.MessagesResult{
-		Total:    total,
-		Showing:  showing,
-		Messages: formatted,
-	}
 }
 
 // registerMessageHandlers registers message-related slash commands.
