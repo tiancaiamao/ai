@@ -9,7 +9,14 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
+	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
+)
+
+var (
+	summarizationSystemPrompt = prompt.CompactSystemPrompt()
+	summarizationPrompt       = prompt.CompactSummarizePrompt()
+	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
 )
 
 // GenerateSummary generates a structured summary of messages using the LLM.

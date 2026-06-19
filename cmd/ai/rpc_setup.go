@@ -88,7 +88,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	}
 
 	// --- Compactors ---
-	compactor, ctxManager, compactorConfig := createCompactors(cfg, model, apiKey, currentContextWindow, agentCfg)
+	compactor, compactorConfig := createCompactors(cfg, model, apiKey, currentContextWindow)
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -131,7 +131,6 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		ws:                    ws,
 		registry:              registry,
 		compactor:             compactor,
-		ctxManager:            ctxManager,
 		compactorConfig:       compactorConfig,
 		traceOutputPath:       traceOutputPath,
 		skillResult:           skillResult,
@@ -156,13 +155,6 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		"contextWindow", currentContextWindow,
 		"softThreshold", decideCfg.SoftThreshold,
 		"hardLimit", decideCfg.HardLimit)
-
-	// TODO(cleanup): ctxManager and the entire ContextManager code path are now
-	// dead code — always skipped in favor of LLMDecide compaction. Remove
-	// ctxManager, ContextManager, context_mgmt tools, and related session
-	// replay logic (applyContextManagementEvents) when cleaning up.
-	// Also remove the cache-mode check (agent.IsCacheMode) that lived here.
-	ctxManager.SetSkipCondition(func() bool { return true })
 
 	return app, nil
 }
@@ -293,8 +285,8 @@ func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspac
 	return ws, registry, nil
 }
 
-// createCompactors creates the main compactor and context manager.
-func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contextWindow int, agentCfg *agentconfig.AgentConfig) (*compact.Compactor, *compact.ContextManager, *compact.Config) {
+// createCompactors creates the main compactor.
+func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contextWindow int) (*compact.Compactor, *compact.Config) {
 	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()
@@ -308,34 +300,7 @@ func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contex
 		contextWindow,
 	)
 
-	ctxMgmtConfig := compact.DefaultContextManagerConfig()
-
-	// Apply context_management config from agent.yaml if present
-	if agentCfg != nil {
-		if cmCfg := agentCfg.ResolveContextManagementConfig(); cmCfg != nil {
-			ctxMgmtConfig.StaleAnnotation = cmCfg.StaleAnnotation
-			if cmCfg.StaleAgeInvestigative > 0 {
-				ctxMgmtConfig.StaleAgeInvestigative = cmCfg.StaleAgeInvestigative
-			}
-			if cmCfg.StaleAgeModification > 0 {
-				ctxMgmtConfig.StaleAgeModification = cmCfg.StaleAgeModification
-			}
-			if customPrompt := agentCfg.LoadContextManagementPrompt(); customPrompt != "" {
-				ctxMgmtConfig.ContextMgmtPrompt = customPrompt
-			}
-		}
-	}
-
-	ctxManager := compact.NewContextManager(
-		ctxMgmtConfig,
-		model,
-		apiKey,
-		contextWindow,
-		prompt.ContextManagementSystemPrompt(),
-		compactor,
-	)
-
-	return compactor, ctxManager, compactorConfig
+	return compactor, compactorConfig
 }
 
 // loadSkills loads skills from the agent directory and registers find_skill tool.

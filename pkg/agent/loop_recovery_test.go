@@ -793,9 +793,9 @@ func TestRunInnerLoopEmitsToolCallRecoveryEvent(t *testing.T) {
 	}
 }
 
-// TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard verifies that task_tracking
+// TestRunInnerLoopTaskTrackingDoesNotTriggerLoopGuard verifies that task_tracking
 // tool calls do not contribute to loop guard detection.
-func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
+func TestRunInnerLoopTaskTrackingDoesNotTriggerLoopGuard(t *testing.T) {
 	orig := streamAssistantResponseFn
 	defer func() { streamAssistantResponseFn = orig }()
 
@@ -815,7 +815,7 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 		if callCount <= 10 {
 			msg.Content = []agentctx.ContentBlock{
 				agentctx.ToolCallContent{
-					ID:        "call-llm-context-" + fmt.Sprint(callCount),
+					ID:        "call-task-tracking-" + fmt.Sprint(callCount),
 					Type:      "toolCall",
 					Name:      "task_tracking",
 					Arguments: map[string]any{"content": fmt.Sprintf("task %d", callCount)},
@@ -850,7 +850,7 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 		t.Fatalf("expected more than 10 LLM calls (task_tracking should be exempt), got %d", callCount)
 	}
 
-	var guardTriggeredForLLMContextUpdate bool
+	var guardTriggeredForTaskTracking bool
 	for item := range stream.Iterator(context.Background()) {
 		if item.Done {
 			break
@@ -859,12 +859,12 @@ func TestRunInnerLoopLLMContextUpdateDoesNotTriggerLoopGuard(t *testing.T) {
 			reason := item.Value.LoopGuard.Reason
 			// Check if loop guard was triggered for task_tracking
 			if strings.Contains(reason, "task_tracking") {
-				guardTriggeredForLLMContextUpdate = true
+				guardTriggeredForTaskTracking = true
 			}
 		}
 	}
 
-	if guardTriggeredForLLMContextUpdate {
+	if guardTriggeredForTaskTracking {
 		t.Fatal("task_tracking should NOT trigger loop guard")
 	}
 }

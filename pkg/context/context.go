@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
@@ -16,9 +15,8 @@ type AgentContext struct {
 	Skills             []skill.Skill `json:"skills,omitempty"` // Loaded skills
 
 	// Unified context state
-	LLMContext     string         `json:"llmContext,omitempty"` // Structured LLM context content (not file manager)
-	RecentMessages []AgentMessage `json:"recentMessages"`       // Recent messages (not full history)
-	AgentState     *AgentState    `json:"agentState"`           // System-maintained metadata
+	RecentMessages []AgentMessage `json:"recentMessages"` // Recent messages (not full history)
+	AgentState     *AgentState    `json:"agentState"`     // System-maintained metadata
 
 	// Compaction state
 	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
@@ -27,34 +25,9 @@ type AgentContext struct {
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`
 
-	// OnCompactEvent is called to append a compact event to messages.jsonl.
-	// The caller is responsible for then applying the event to RecentMessages in memory.
-	OnCompactEvent func(detail *CompactEventDetail) error `json:"-"`
-
 	// allowedTools restricts which tools can be executed.
 	// nil means all tools are allowed, non-nil is a whitelist.
 	allowedTools map[string]bool `json:"-"`
-
-	// contextMgmtMu serializes mutations to shared turn state
-	// and assistant message tool-call arguments.
-	contextMgmtMu sync.Mutex `json:"-"`
-}
-
-// CompactAction defines the type of compact operation.
-type CompactAction string
-
-const (
-	CompactActionTruncate         CompactAction = "truncate"
-	CompactActionUpdateLLMContext CompactAction = "update_llm_context"
-	CompactActionCompact          CompactAction = "compact"
-)
-
-// CompactEventDetail records one compact operation.
-// Only the operation itself is recorded (action + target IDs).
-// Apply reconstructs the result deterministically from the original message content.
-type CompactEventDetail struct {
-	Action CompactAction `json:"action"`
-	IDs    []string      `json:"ids,omitempty"` // target tool_call_id list
 }
 
 // Tool represents a tool that can be called by the agent.
@@ -117,7 +90,6 @@ func ToolExecutionCallID(ctx context.Context) string {
 func NewAgentContext(systemPrompt string) *AgentContext {
 	return &AgentContext{
 		SystemPrompt:   systemPrompt,
-		LLMContext:     "",
 		RecentMessages: make([]AgentMessage, 0),
 		Tools:          make([]Tool, 0),
 		Skills:         make([]skill.Skill, 0),
@@ -129,7 +101,6 @@ func NewAgentContext(systemPrompt string) *AgentContext {
 func NewAgentContextWithSessionID(systemPrompt, sessionID, cwd string) *AgentContext {
 	ctx := &AgentContext{
 		SystemPrompt:   systemPrompt,
-		LLMContext:     "",
 		RecentMessages: make([]AgentMessage, 0),
 		Tools:          make([]Tool, 0),
 		Skills:         make([]skill.Skill, 0),
@@ -173,7 +144,7 @@ func (c *AgentContext) EstimateToolsTokens() int {
 // EstimateTokens estimates total token usage for the current context.
 // Delegates to the package-level EstimateTokens function.
 func (c *AgentContext) EstimateTokens() int {
-	return EstimateTokens(c.SystemPrompt+c.LLMContext, c.Tools, c.RecentMessages)
+	return EstimateTokens(c.SystemPrompt, c.Tools, c.RecentMessages)
 }
 
 // EstimateTokenPercent returns token usage as a fraction of the limit.
@@ -192,22 +163,6 @@ func (c *AgentContext) CountStaleOutputs(maxAge int) int {
 		}
 	}
 	return count
-}
-
-// LockContextManagement serializes context mutations on this context.
-func (c *AgentContext) LockContextManagement() {
-	if c == nil {
-		return
-	}
-	c.contextMgmtMu.Lock()
-}
-
-// UnlockContextManagement releases the context mutation serialization lock.
-func (c *AgentContext) UnlockContextManagement() {
-	if c == nil {
-		return
-	}
-	c.contextMgmtMu.Unlock()
 }
 
 // AddTool adds a tool to the context.

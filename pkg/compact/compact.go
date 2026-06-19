@@ -237,14 +237,6 @@ func estimateStringTokens(s string) int {
 	return int(float64(len(s)) / 4.0)
 }
 
-var (
-	summarizationSystemPrompt = prompt.CompactSystemPrompt()
-	summarizationPrompt       = prompt.CompactSummarizePrompt()
-	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
-)
-
-// GenerateSummary generates a structured summary of messages using the LLM.
-
 // ContextWindow returns the configured model context window.
 func (c *Compactor) ContextWindow() int {
 	return c.contextWindow
@@ -499,10 +491,6 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
 	ctx.LastCompactionSummary = summary
-	// Preserve LLMContext maintained by ContextManager; do not overwrite.
-	// The summary is already stored in ctx.LastCompactionSummary and injected
-	// as [Previous conversation summary] message in newRecentMessages above.
-	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()
 	messagesAfter := len(newRecentMessages)

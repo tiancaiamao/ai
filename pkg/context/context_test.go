@@ -108,23 +108,6 @@ func TestCountStaleOutputs(t *testing.T) {
 	}
 }
 
-func TestLockUnlockContextManagement(t *testing.T) {
-	t.Run("non-nil receiver", func(t *testing.T) {
-		ctx := NewAgentContext("")
-		ctx.LockContextManagement()
-		ctx.UnlockContextManagement()
-		// Should not deadlock — re-acquire to confirm.
-		ctx.LockContextManagement()
-		ctx.UnlockContextManagement()
-	})
-
-	t.Run("nil receiver is safe", func(t *testing.T) {
-		var ctx *AgentContext
-		ctx.LockContextManagement()   // should not panic
-		ctx.UnlockContextManagement() // should not panic
-	})
-}
-
 func TestAddAndGetTool(t *testing.T) {
 	ctx := NewAgentContext("")
 

@@ -51,39 +51,14 @@ func streamAssistantResponse(
 		}
 	}
 
-	// Resolve cache mode and determine runtime_state injection strategy.
-	// Cache-first (e.g. DeepSeek): persist runtime_state as AgentMessage in RecentMessages
-	//   for higher prefix cache hit rates across turns.
-	// Context-first (default): ephemeral injection before last user message, current behavior.
+	// Inject runtime_state as ephemeral message before last user message.
 	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
 	if runtimeAppendix != "" {
-		cacheMode := ResolveCacheMode(config.CacheMode, model.ID)
-		policy := DefaultMutationPolicy(cacheMode)
-
-		switch policy.RuntimeStateStrategy() {
-		case RuntimeStatePersist:
-			// Cache-first: create a persistent AgentMessage and append to RecentMessages,
-			// then rebuild LLM messages so the new runtime_state is included.
-			// Remove any stale runtime_state left by a previous retry attempt of this turn.
-			agentCtx.RecentMessages = removeRuntimeStateMessages(agentCtx.RecentMessages)
-			runtimeAgentMsg := agentctx.AgentMessage{
-				Role:      "user",
-				Content:   []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: runtimeAppendix}},
-				Timestamp: time.Now().UnixMilli(),
-				Metadata:  &agentctx.MessageMetadata{Kind: "runtime_state"},
-			}
-			agentCtx.RecentMessages = append(agentCtx.RecentMessages, runtimeAgentMsg)
-			selectedMessages, _ = selectMessagesForLLM(agentCtx)
-			llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
-
-		case RuntimeStateEphemeral:
-			// Context-first: current behavior unchanged — temporary injection.
-			runtimeMsg := llm.LLMMessage{
-				Role:    "user",
-				Content: runtimeAppendix,
-			}
-			llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
+		runtimeMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: runtimeAppendix,
 		}
+		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
 	}
 
 	// Inject skills + instructions as a single user message before the first
@@ -349,29 +324,22 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
 
-func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
-	sections := make([]string, 0, 3)
-	if strings.TrimSpace(llmContextContent) != "" {
-		sections = append(sections, fmt.Sprintf("<llm_context>\n%s\n</llm_context>", llmContextContent))
-	}
-	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
-		sections = append(sections, runtimeMetaSnapshot)
-	}
-	if len(sections) == 0 {
+func buildRuntimeUserAppendix(runtimeMetaSnapshot string) string {
+	if strings.TrimSpace(runtimeMetaSnapshot) == "" {
 		return ""
 	}
-	return strings.Join(sections, "\n\n")
+	return runtimeMetaSnapshot
 }
 
 // buildRuntimeSystemAppendix is kept for backward-compatible tests/helpers.
 // Runtime state is now injected as a user message, not appended to system prompt.
-func buildRuntimeSystemAppendix(llmContextContent, runtimeMetaSnapshot string) string {
-	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
+func buildRuntimeSystemAppendix(runtimeMetaSnapshot string) string {
+	return buildRuntimeUserAppendix(runtimeMetaSnapshot)
 }
 
 func updateRuntimeMetaSnapshot(
 	agentCtx *agentctx.AgentContext,
-	meta agentctx.ContextMeta,
+	meta ContextMeta,
 	heartbeatTurns int,
 	currentWorkdir string,
 	startupPath string,
@@ -415,20 +383,6 @@ func updateRuntimeMetaSnapshot(
 	agentCtx.AgentState.RuntimeMetaTurns = 0
 
 	return snapshot, true
-}
-
-// removeRuntimeStateMessages removes all runtime_state messages from the slice.
-// This prevents duplicate runtime_state messages from accumulating when
-// streamAssistantResponse is retried (each retry appends a fresh one).
-func removeRuntimeStateMessages(msgs []agentctx.AgentMessage) []agentctx.AgentMessage {
-	filtered := msgs[:0]
-	for _, msg := range msgs {
-		if msg.Metadata != nil && msg.Metadata.Kind == "runtime_state" {
-			continue
-		}
-		filtered = append(filtered, msg)
-	}
-	return filtered
 }
 
 func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {

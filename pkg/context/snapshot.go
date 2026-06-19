@@ -4,9 +4,6 @@ package context
 // It is the in-memory structure reconstructed from checkpoint + journal replay,
 // analogous to a database snapshot rebuilt from redo logs.
 type ContextSnapshot struct {
-	// LLMContext - LLM-maintained structured context
-	LLMContext string
-
 	// RecentMessages - Recent conversation history
 	RecentMessages []AgentMessage
 
@@ -17,7 +14,6 @@ type ContextSnapshot struct {
 // NewContextSnapshot creates a new empty snapshot.
 func NewContextSnapshot(sessionID, cwd string) *ContextSnapshot {
 	return &ContextSnapshot{
-		LLMContext:     "",
 		RecentMessages: []AgentMessage{},
 		AgentState:     NewAgentState(sessionID, cwd),
 	}
@@ -54,7 +50,6 @@ func (s *ContextSnapshot) Clone() *ContextSnapshot {
 	}
 
 	return &ContextSnapshot{
-		LLMContext:     s.LLMContext,
 		RecentMessages: messages,
 		AgentState:     s.AgentState.Clone(),
 	}

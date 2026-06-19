@@ -286,22 +286,6 @@ func TestSession_EnsureFullyLoaded_Persisted(t *testing.T) {
 	}
 }
 
-func TestAppendCompactEvent_NonPersistedAndPersisted(t *testing.T) {
-	// Non-persisted (in-memory)
-	sess := NewSession("")
-	detail := &agentctx.CompactEventDetail{Action: agentctx.CompactActionTruncate}
-	if err := sess.AppendCompactEvent(detail); err != nil {
-		t.Fatalf("non-persisted: unexpected error: %v", err)
-	}
-
-	// Persisted
-	tmpDir := t.TempDir()
-	sess2 := NewSession(tmpDir)
-	if err := sess2.AppendCompactEvent(detail); err != nil {
-		t.Fatalf("persisted: unexpected error: %v", err)
-	}
-}
-
 func TestAppendSessionInfo_Persisted(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "s")

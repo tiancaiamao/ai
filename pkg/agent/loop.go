@@ -76,9 +76,6 @@ type LoopConfig struct {
 	// Hooks is the hook registry for BeforeModel/AfterTool/AfterAgent hooks.
 	// Nil is safe — all Run* methods are no-ops.
 	Hooks *HookRegistry
-	// CacheMode controls how runtime_state telemetry is managed.
-	// CacheModeAuto (default) auto-detects from model name.
-	CacheMode CacheMode
 	// AgentContextPrefix combines skills and project-level instructions (AGENTS.md)
 	// into a single user message injected before the first user message on each LLM call.
 	// Empty means no injection.
@@ -153,7 +150,6 @@ func RunLoop(
 			SystemPrompt:   agentCtx.SystemPrompt,
 			RecentMessages: append(agentCtx.RecentMessages, prompts...),
 			Tools:          agentCtx.Tools,
-			LLMContext:     agentCtx.LLMContext,
 			AgentState:     agentCtx.AgentState,
 		}
 
@@ -197,7 +193,7 @@ func runInnerLoop(
 		state.savePreCompactionCheckpoint("pre_llm_threshold")
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
 		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
+			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, state.turnCount, "pre_llm_threshold")
 		}
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
@@ -211,10 +207,9 @@ func runInnerLoop(
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
 			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && state.compactionRecs < maxCompactionRecoveries {
-				recoveryResult, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
+				_, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
 				if recoveryErr == nil {
-					recoveryUpdated := recoveryResult != nil && recoveryResult.LLMContextUpdated
-					saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, recoveryUpdated, state.turnCount, "context_limit_recovery")
+					saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, state.turnCount, "context_limit_recovery")
 					continue
 				}
 			}

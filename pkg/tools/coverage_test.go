@@ -646,8 +646,3 @@ func TestGrepTool_Parameters(t *testing.T) {
 		t.Errorf("Parameters type = %v, want object", params["type"])
 	}
 }
-
-// ----- context_mgmt tools ---------------------------------------------------
-
-// These are in a separate package, so we use a small _test.go in that subpackage
-// (created separately).
