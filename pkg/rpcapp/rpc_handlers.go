@@ -1,4 +1,4 @@
-package main
+package rpcapp
 
 import (
 	"io"
@@ -12,7 +12,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
-func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
