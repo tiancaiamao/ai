@@ -52,7 +52,7 @@ func TestExtractText(t *testing.T) {
 // --- compactor getters / setters ---
 
 func TestNewCompactor_NilConfig(t *testing.T) {
-	c := NewCompactor(nil, llm.Model{}, "key", "sys", 0)
+	c := NewCompactor(nil, llm.Model{}, "key", "sys", 0, "")
 	if c.GetConfig() == nil {
 		t.Error("expected non-nil default config")
 	}
@@ -62,7 +62,7 @@ func TestNewCompactor_NilConfig(t *testing.T) {
 }
 
 func TestCompactor_ContextWindowAndReserve(t *testing.T) {
-	c := NewCompactor(&Config{ReserveTokens: 0}, llm.Model{}, "", "", 5000)
+	c := NewCompactor(&Config{ReserveTokens: 0}, llm.Model{}, "", "", 5000, "")
 	if c.ContextWindow() != 5000 {
 		t.Errorf("expected context window 5000, got %d", c.ContextWindow())
 	}
@@ -78,7 +78,7 @@ func TestCompactor_ContextWindowAndReserve(t *testing.T) {
 	}
 
 	// Configured ReserveTokens
-	c2 := NewCompactor(&Config{ReserveTokens: 4096}, llm.Model{}, "", "", 0)
+	c2 := NewCompactor(&Config{ReserveTokens: 4096}, llm.Model{}, "", "", 0, "")
 	if c2.ReserveTokens() != 4096 {
 		t.Errorf("expected 4096, got %d", c2.ReserveTokens())
 	}
@@ -86,7 +86,7 @@ func TestCompactor_ContextWindowAndReserve(t *testing.T) {
 
 func TestCompactor_KeepRecentAccessors(t *testing.T) {
 	// Default KeepRecent fallback
-	c := NewCompactor(&Config{KeepRecent: 0, KeepRecentTokens: 0}, llm.Model{}, "", "", 0)
+	c := NewCompactor(&Config{KeepRecent: 0, KeepRecentTokens: 0}, llm.Model{}, "", "", 0, "")
 	if c.KeepRecentMessages() != DefaultConfig().KeepRecent {
 		t.Errorf("expected default KeepRecent=%d, got %d", DefaultConfig().KeepRecent, c.KeepRecentMessages())
 	}
@@ -95,13 +95,13 @@ func TestCompactor_KeepRecentAccessors(t *testing.T) {
 	}
 
 	// Explicit KeepRecent
-	c2 := NewCompactor(&Config{KeepRecent: 7}, llm.Model{}, "", "", 0)
+	c2 := NewCompactor(&Config{KeepRecent: 7}, llm.Model{}, "", "", 0, "")
 	if c2.KeepRecentMessages() != 7 {
 		t.Errorf("expected 7, got %d", c2.KeepRecentMessages())
 	}
 
 	// KeepRecentTokens capped by EffectiveTokenLimit/2
-	c3 := NewCompactor(&Config{KeepRecentTokens: 100000}, llm.Model{}, "", "", 100000)
+	c3 := NewCompactor(&Config{KeepRecentTokens: 100000}, llm.Model{}, "", "", 100000, "")
 	got := c3.KeepRecentTokens()
 	if got >= 100000 {
 		t.Errorf("expected KeepRecentTokens to be capped, got %d", got)
@@ -116,7 +116,7 @@ func TestCompactor_EffectiveTokenLimit(t *testing.T) {
 	}
 
 	// context window wins
-	c := NewCompactor(&Config{MaxTokens: 9999}, llm.Model{}, "", "", 100000)
+	c := NewCompactor(&Config{MaxTokens: 9999}, llm.Model{}, "", "", 100000, "")
 	limit, src := c.EffectiveTokenLimit()
 	if src != "context_window" {
 		t.Errorf("expected context_window source, got %s", src)
@@ -126,20 +126,20 @@ func TestCompactor_EffectiveTokenLimit(t *testing.T) {
 	}
 
 	// falls back to MaxTokens when window=0
-	c2 := NewCompactor(&Config{MaxTokens: 8000}, llm.Model{}, "", "", 0)
+	c2 := NewCompactor(&Config{MaxTokens: 8000}, llm.Model{}, "", "", 0, "")
 	limit2, src2 := c2.EffectiveTokenLimit()
 	if src2 != "max_tokens" || limit2 != 8000 {
 		t.Errorf("expected (8000, max_tokens), got (%d, %s)", limit2, src2)
 	}
 
 	// none when both unset
-	c3 := NewCompactor(&Config{}, llm.Model{}, "", "", 0)
+	c3 := NewCompactor(&Config{}, llm.Model{}, "", "", 0, "")
 	if limit3, src3 := c3.EffectiveTokenLimit(); limit3 != 0 || src3 != "none" {
 		t.Errorf("expected (0, none), got (%d, %s)", limit3, src3)
 	}
 
 	// context window with reserve exceeding window → fall back to max_tokens
-	c4 := NewCompactor(&Config{MaxTokens: 1234, ReserveTokens: 200000}, llm.Model{}, "", "", 1000)
+	c4 := NewCompactor(&Config{MaxTokens: 1234, ReserveTokens: 200000}, llm.Model{}, "", "", 1000, "")
 	limit4, src4 := c4.EffectiveTokenLimit()
 	if src4 != "max_tokens" || limit4 != 1234 {
 		t.Errorf("expected fall-back to max_tokens, got (%d, %s)", limit4, src4)
@@ -148,19 +148,19 @@ func TestCompactor_EffectiveTokenLimit(t *testing.T) {
 
 func TestCalculateDynamicThreshold_EdgeCases(t *testing.T) {
 	// No context window → use config MaxTokens
-	c := NewCompactor(&Config{MaxTokens: 7777}, llm.Model{}, "", "", 0)
+	c := NewCompactor(&Config{MaxTokens: 7777}, llm.Model{}, "", "", 0, "")
 	if got := c.CalculateDynamicThreshold(); got != 7777 {
 		t.Errorf("expected 7777, got %d", got)
 	}
 
 	// Tiny context window (overhead > window) → fall back to MaxTokens
-	c2 := NewCompactor(&Config{MaxTokens: 3333, ReserveTokens: 50000}, llm.Model{}, "", "huge system prompt", 1000)
+	c2 := NewCompactor(&Config{MaxTokens: 3333, ReserveTokens: 50000}, llm.Model{}, "", "huge system prompt", 1000, "")
 	if got := c2.CalculateDynamicThreshold(); got != 3333 {
 		t.Errorf("expected fall-back 3333, got %d", got)
 	}
 
 	// Window with all overhead but small available → minimum threshold 4000 applies
-	c3 := NewCompactor(&Config{ReserveTokens: 16384, MaxTokens: 5000}, llm.Model{}, "", "", 20000)
+	c3 := NewCompactor(&Config{ReserveTokens: 16384, MaxTokens: 5000}, llm.Model{}, "", "", 20000, "")
 	got := c3.CalculateDynamicThreshold()
 	if got < 4000 {
 		t.Errorf("expected minimum threshold 4000, got %d", got)
@@ -330,7 +330,7 @@ func TestSplitMessagesByTokenBudget_EdgeCases(t *testing.T) {
 // --- Compactor.Compact edge cases ---
 
 func TestCompact_EmptyMessages(t *testing.T) {
-	c := NewCompactor(DefaultConfig(), llm.Model{}, "", "", 0)
+	c := NewCompactor(DefaultConfig(), llm.Model{}, "", "", 0, "")
 	ctx := agentctx.NewAgentContext("sys")
 	r, err := c.Compact(context.Background(), ctx)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 		KeepRecentTokens: 0, // exercise the keepCount branch
 		AutoCompact:      true,
 	}
-	c := NewCompactor(cfg, llm.Model{}, "", "", 0)
+	c := NewCompactor(cfg, llm.Model{}, "", "", 0, "")
 	ctx := agentctx.NewAgentContext("sys")
 	ctx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("a"),
@@ -369,14 +369,14 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 // --- GenerateSummary error paths ---
 
 func TestGenerateSummary_NoMessages(t *testing.T) {
-	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0)
+	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0, "")
 	if _, err := c.GenerateSummary(context.Background(), nil); err == nil {
 		t.Error("expected error for no messages")
 	}
 }
 
 func TestGenerateSummaryWithPrevious_NoVisibleMessages(t *testing.T) {
-	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0)
+	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0, "")
 	// Agent-invisible messages only → no agent-visible
 	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
 	// With empty previous summary → error
@@ -415,7 +415,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	defer server.Close()
 
 	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
-	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0)
+	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0, "")
 
 	got, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err != nil {
@@ -435,7 +435,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 		fmt.Fprint(w, `data: [DONE]`+"\n\n")
 	}))
 	defer emptyServer.Close()
-	c2 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: emptyServer.URL, API: "openai"}, "k", "sys", 0)
+	c2 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: emptyServer.URL, API: "openai"}, "k", "sys", 0, "")
 	_, err = c2.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error for empty summary")
@@ -449,7 +449,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 		fmt.Fprintf(w, `{"error":{"message":"Invalid API key"}}`)
 	}))
 	defer authServer.Close()
-	c3 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: authServer.URL, API: "openai"}, "k", "sys", 0)
+	c3 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: authServer.URL, API: "openai"}, "k", "sys", 0, "")
 	_, err = c3.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
 	if err == nil {
 		t.Error("expected error from 401")

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,6 +126,9 @@ type Compactor struct {
 	// construction time so it survives agentCtx checkpoint/restore cycles
 	// (AgentContext.AgentContextPrefix has json:"-" and is lost on restore).
 	agentContextPrefix string
+	// sessionDir is the session directory used for archiving old messages
+	// that are removed during compaction. When empty, archiving is skipped.
+	sessionDir string
 	// askFunc allows tests to inject a fake LLM decision without a real API
 	// call. nil means use the real askLLM method.
 	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
@@ -138,7 +143,7 @@ type Compactor struct {
 }
 
 // NewCompactor creates a new Compactor.
-func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int) *Compactor {
+func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int, sessionDir string) *Compactor {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -148,6 +153,7 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 		apiKey:        apiKey,
 		systemPrompt:  systemPrompt,
 		contextWindow: contextWindow,
+		sessionDir:    sessionDir,
 	}
 }
 
@@ -478,9 +484,16 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
 	}
 
-	// Create new recent messages with summary
+	// Archive old messages so the agent can access them via read/grep later.
+	archivePath := saveArchivedMessages(c.sessionDir, oldMessages)
+
+	// Create new recent messages with summary, including archive path note
+	summaryText := summary
+	if archivePath != "" {
+		summaryText = summary + "\n\n" + fmt.Sprintf(archiveNoteTemplate, archivePath)
+	}
 	newRecentMessages := []agentctx.AgentMessage{
-		agentctx.NewCompactionSummaryMessage(summary),
+		agentctx.NewCompactionSummaryMessage(summaryText),
 	}
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
@@ -536,6 +549,56 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 		result = append(result, msg)
 	}
 	return result
+}
+
+// archiveNoteTemplate is appended to the compaction summary so the agent knows
+// where to find the full pre-compaction conversation.
+const archiveNoteTemplate = "The full conversation before this summary is archived at `%s`.\nUse the read or grep tool to search it when you need details from earlier."
+
+// saveArchivedMessages writes old messages removed during compaction to a
+// sequential JSONL file under <sessionDir>/compactions/archived_NNNNN.jsonl.
+// Returns the absolute path, or "" if sessionDir is empty or no messages.
+func saveArchivedMessages(sessionDir string, messages []agentctx.AgentMessage) string {
+	if sessionDir == "" || len(messages) == 0 {
+		return ""
+	}
+	compactionsDir := filepath.Join(sessionDir, "compactions")
+	entries, err := os.ReadDir(compactionsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("[Compact] Failed to read compactions dir for archiving", "error", err)
+			return ""
+		}
+	}
+	count := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "archived_") {
+			count++
+		}
+	}
+	name := fmt.Sprintf("archived_%05d.jsonl", count+1)
+	archivePath := filepath.Join(compactionsDir, name)
+
+	if err := os.MkdirAll(compactionsDir, 0755); err != nil {
+		slog.Warn("[Compact] Failed to create compactions dir for archiving", "error", err)
+		return ""
+	}
+
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	for _, msg := range messages {
+		if err := enc.Encode(msg); err != nil {
+			slog.Warn("[Compact] Failed to encode archived message", "error", err)
+			return ""
+		}
+	}
+	if err := os.WriteFile(archivePath, []byte(buf.String()), 0644); err != nil {
+		slog.Warn("[Compact] Failed to write archived messages", "path", archivePath, "error", err)
+		return ""
+	}
+
+	slog.Info("[Compact] Archived old messages", "path", archivePath, "count", len(messages))
+	return archivePath
 }
 
 // ShouldCompact determines if context should be compressed.

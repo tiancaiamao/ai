@@ -232,7 +232,7 @@ func TestFullCompactPreservesPairing(t *testing.T) {
 		AutoCompact:      true,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	// Create messages: 1 user + tool_call + tool_result + 1 user
 	// The tool_call and tool_result should end up in the same visibility state after compaction
@@ -298,7 +298,7 @@ func TestEnsureToolCallPairingWithGrace_ProtectsRecentToolResults(t *testing.T) 
 		GracePeriod: 1, // Protect 1 most recent tool result
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	// Scenario: tool_call in oldMessages, tool_result in recentMessages
 	// With grace period = 1, the most recent tool_result should be protected (not archived)
@@ -352,7 +352,7 @@ func TestEnsureToolCallPairingWithGrace_OlderResultsArchived(t *testing.T) {
 		GracePeriod: 1, // Protect only 1 most recent tool result
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	// Scenario: 2 tool_results in recentMessages, both with calls in oldMessages
 	// First (older) should be archived, second (most recent) should be protected
@@ -432,7 +432,7 @@ func TestEnsureToolCallPairingWithGrace_GracePeriodZeroFallsBack(t *testing.T) {
 		GracePeriod: 0, // Defaults to 1 internally
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	oldMessages := []agentctx.AgentMessage{
 		{
@@ -485,7 +485,7 @@ func TestEnsureToolCallPairingWithGrace_LargerGracePeriod(t *testing.T) {
 		GracePeriod: 2, // Protect 2 most recent tool results
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	oldMessages := []agentctx.AgentMessage{
 		{
