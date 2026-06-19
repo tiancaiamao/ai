@@ -149,44 +149,16 @@ func splitMessagesByTokenBudget(
 		return messages[:len(messages)-1], messages[len(messages)-1:]
 	}
 
-	// Compaction summary messages should always be in recent messages.
-	// We'll find them first and ensure they're included.
-	compactionSummaryIndices := make(map[int]struct{})
-	for i, msg := range messages {
-		if msg.Metadata != nil && msg.Metadata.Kind == "compactionSummary" {
-			compactionSummaryIndices[i] = struct{}{}
-		}
-	}
-
 	used := 0
 	start := len(messages)
 
 	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-
-		// Skip compaction summaries - they'll be handled specially
-		if _, isSummary := compactionSummaryIndices[i]; isSummary {
-			continue
-		}
-
-		msgTokens := estimateMessageTokens(msg)
+		msgTokens := estimateMessageTokens(messages[i])
 		if used+msgTokens > tokenBudget && start != len(messages) {
 			break
 		}
 		used += msgTokens
 		start = i
-	}
-
-	// Now ensure all compaction summaries are included in recent
-	// by moving start to the earliest summary index
-	minSummaryIndex := len(messages)
-	for i := range compactionSummaryIndices {
-		if i < minSummaryIndex {
-			minSummaryIndex = i
-		}
-	}
-	if minSummaryIndex < len(messages) && minSummaryIndex < start {
-		start = minSummaryIndex
 	}
 
 	if start <= 0 {

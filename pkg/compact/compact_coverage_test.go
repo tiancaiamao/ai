@@ -85,19 +85,10 @@ func TestCompactor_ContextWindowAndReserve(t *testing.T) {
 }
 
 func TestCompactor_KeepRecentAccessors(t *testing.T) {
-	// Default KeepRecent fallback
-	c := NewCompactor(&Config{KeepRecent: 0, KeepRecentTokens: 0}, llm.Model{}, "", "", 0, "")
-	if c.KeepRecentMessages() != DefaultConfig().KeepRecent {
-		t.Errorf("expected default KeepRecent=%d, got %d", DefaultConfig().KeepRecent, c.KeepRecentMessages())
-	}
+	// Default KeepRecentTokens fallback
+	c := NewCompactor(&Config{KeepRecentTokens: 0}, llm.Model{}, "", "", 0, "")
 	if c.KeepRecentTokens() != 0 {
 		t.Errorf("expected 0 when KeepRecentTokens=0, got %d", c.KeepRecentTokens())
-	}
-
-	// Explicit KeepRecent
-	c2 := NewCompactor(&Config{KeepRecent: 7}, llm.Model{}, "", "", 0, "")
-	if c2.KeepRecentMessages() != 7 {
-		t.Errorf("expected 7, got %d", c2.KeepRecentMessages())
 	}
 
 	// KeepRecentTokens capped by EffectiveTokenLimit/2

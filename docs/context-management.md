@@ -111,7 +111,7 @@ The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigg
 
 ### Flow
 
-1. **Split messages**: Divide `RecentMessages` into `oldMessages` (to summarize) and `recentMessages` (to keep intact), using either a token budget (`KeepRecentTokens`) or message count (`KeepRecent`)
+1. **Split messages**: Divide `RecentMessages` into `oldMessages` (to summarize) and `recentMessages` (to keep intact), using a token budget (`KeepRecentTokens`). If all messages fit within the budget but the message count exceeds 50, a forced split keeps the last 30%.
 2. **Generate summary**: LLM summarizes `oldMessages` (which may include the previous compaction summary message)
 3. **Fix tool-call pairing**: Ensure `tool_call` / `tool_result` pairs are not split across the boundary
 4. **Compact tool results**: If visible tool results exceed `ToolCallCutoff`, hide oldest ones from agent (keep visible to user)

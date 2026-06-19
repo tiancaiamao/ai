@@ -267,21 +267,9 @@ func (c *Compactor) ReserveTokens() int {
 	return c.config.ReserveTokens
 }
 
-// KeepRecentMessages returns the effective keep-recent message count.
-func (c *Compactor) KeepRecentMessages() int {
-	return c.keepRecentMessages()
-}
-
 // KeepRecentTokens returns the effective keep-recent token budget.
 func (c *Compactor) KeepRecentTokens() int {
 	return c.effectiveKeepRecentTokens()
-}
-
-func (c *Compactor) keepRecentMessages() int {
-	if c.config == nil || c.config.KeepRecent <= 0 {
-		return DefaultConfig().KeepRecent
-	}
-	return c.config.KeepRecent
 }
 
 func (c *Compactor) effectiveKeepRecentTokens() int {
@@ -417,57 +405,36 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	tokensBefore := ctx.EstimateTokens()
 
 	keepRecentTokens := c.calculateKeepRecentBudget()
-	var oldMessages []agentctx.AgentMessage
-	var recentMessages []agentctx.AgentMessage
 
-	if keepRecentTokens > 0 {
-		oldMessages, recentMessages = splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
-		if len(oldMessages) == 0 {
-			// Token estimation says all messages fit within budget, but if we have
-			// many messages the estimation is likely inaccurate (rough char/4
-			// heuristic). Force a split when message count is high.
-			const forceSplitMinMessages = 50
-			if len(ctx.RecentMessages) > forceSplitMinMessages {
-				// Keep the last 30% of messages (minimum 10)
-				keepCount := max(10, int(float64(len(ctx.RecentMessages))*0.3))
-				splitIndex := len(ctx.RecentMessages) - keepCount
-				oldMessages = ctx.RecentMessages[:splitIndex]
-				recentMessages = ctx.RecentMessages[splitIndex:]
-				slog.Info("[Compact] Forced split: token budget covered all messages but count exceeds threshold",
-					"count", len(ctx.RecentMessages),
-					"keepCount", keepCount,
-					"keepTokens", keepRecentTokens,
-					"forceSplitMin", forceSplitMinMessages)
-			} else {
-				return &agentctx.CompactionResult{
-					TokensBefore: tokensBefore,
-					TokensAfter:  tokensBefore,
-				}, nil
-			}
-		}
-		slog.Info("[Compact] Compressing messages",
-			"count", len(ctx.RecentMessages),
-			"keepTokens", keepRecentTokens,
-			"threshold", c.CalculateDynamicThreshold(),
-			"contextWindow", c.contextWindow,
-			"hasPreviousSummary", ctx.LastCompactionSummary != "")
-	} else {
-		keepCount := c.keepRecentMessages()
-		if len(ctx.RecentMessages) <= keepCount {
+	oldMessages, recentMessages := splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
+	if len(oldMessages) == 0 {
+		// Token estimation says all messages fit within budget, but if we have
+		// many messages the estimation is likely inaccurate (rough char/4
+		// heuristic). Force a split when message count is high.
+		const forceSplitMinMessages = 50
+		if len(ctx.RecentMessages) > forceSplitMinMessages {
+			keepCount := max(10, int(float64(len(ctx.RecentMessages))*0.3))
+			splitIndex := len(ctx.RecentMessages) - keepCount
+			oldMessages = ctx.RecentMessages[:splitIndex]
+			recentMessages = ctx.RecentMessages[splitIndex:]
+			slog.Info("[Compact] Forced split: token budget covered all messages but count exceeds threshold",
+				"count", len(ctx.RecentMessages),
+				"keepCount", keepCount,
+				"keepTokens", keepRecentTokens,
+				"forceSplitMin", forceSplitMinMessages)
+		} else {
 			return &agentctx.CompactionResult{
 				TokensBefore: tokensBefore,
 				TokensAfter:  tokensBefore,
 			}, nil
 		}
-		slog.Info("[Compact] Compressing messages",
-			"count", len(ctx.RecentMessages),
-			"keepRecent", keepCount,
-			"threshold", c.CalculateDynamicThreshold(),
-			"hasPreviousSummary", ctx.LastCompactionSummary != "")
-		splitIndex := len(ctx.RecentMessages) - keepCount
-		oldMessages = ctx.RecentMessages[:splitIndex]
-		recentMessages = ctx.RecentMessages[splitIndex:]
 	}
+	slog.Info("[Compact] Compressing messages",
+		"count", len(ctx.RecentMessages),
+		"keepTokens", keepRecentTokens,
+		"threshold", c.CalculateDynamicThreshold(),
+		"contextWindow", c.contextWindow,
+		"hasPreviousSummary", ctx.LastCompactionSummary != "")
 
 	// Generate summary of old messages (with previous summary for incremental update)
 	summary, err := c.GenerateSummary(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools)
