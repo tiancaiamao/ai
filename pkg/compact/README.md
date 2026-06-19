@@ -36,8 +36,7 @@ type Config struct {
     KeepRecent            int              // Always keep this many recent messages
     KeepRecentTokens      int              // Token budget for recent messages
     ReserveTokens         int              // Tokens to reserve from context window
-    ToolCallCutoff        int              // Archive tool results when visible count exceeds this
-    ToolSummaryStrategy   string           // "llm", "heuristic", or "off"
+        ToolCallCutoff        int              // Archive tool results when visible count exceeds this
     ToolSummaryAutomation string           // "off", "fallback", or "always"
     AutoCompact           bool             // Enable automatic compaction
     GracePeriod           int              // Protect N most recent tool results from archiving
