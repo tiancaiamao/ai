@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -77,7 +77,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 
 	// Resolve system prompt: --system-prompt overrides --role.
 	// Parse @file syntax before role fallback.
-	sysPrompt := parseSystemPrompt(cfg.systemPrompt)
+	sysPrompt := ParseSystemPrompt(cfg.systemPrompt)
 	if sysPrompt == "" && cfg.role != "coder" {
 		tmpl, err := prompt.TemplateForRole(cfg.role)
 		if err != nil {
@@ -88,7 +88,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	}
 
 	// Build RPC flags to forward.
-	rpcFlags := buildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
+	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
 
 	if runtime.GOOS == "linux" {
 		binPath = "/proc/self/exe"
@@ -209,7 +209,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	}
 }
 
-func runSubcommand(binPath string) {
+func RunSubcommand(binPath string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
@@ -275,11 +275,11 @@ func runSubcommand(binPath string) {
 	run.SaveRunMeta(sp.meta, sp.metaPath)
 }
 
-// serveSubcommand starts the agent as a daemon process.
+// ServeSubcommand starts the agent as a daemon process.
 // It runs in the foreground but keeps I/O silent (redirected to files).
 // The socket server runs in-process, enabling ai send/watch control.
 // Use "ai serve &" or "nohup ai serve &" for background operation.
-func serveSubcommand(binPath string) {
+func ServeSubcommand(binPath string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	sessionFlag := fs.String("session", "", "Session file path (forwarded to ai rpc)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt (forwarded to ai rpc)")
@@ -371,8 +371,8 @@ func serveSubcommand(binPath string) {
 	run.SaveRunMeta(sp.meta, sp.metaPath)
 }
 
-// buildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-func buildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, runid string) []string {
+// BuildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
+func BuildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, runid string) []string {
 	var flags []string
 	if session != "" {
 		flags = append(flags, "--session", session)

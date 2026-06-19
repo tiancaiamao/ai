@@ -7,38 +7,9 @@ import (
 	"strings"
 
 	"log/slog"
-)
 
-// parseSystemPrompt parses the --system-prompt flag.
-// If the value starts with '@', it reads the file content.
-// Otherwise, it returns the value as-is.
-func parseSystemPrompt(systemPromptFlag string) string {
-	if systemPromptFlag == "" {
-		return ""
-	}
-	// If starts with '@', read file
-	if strings.HasPrefix(systemPromptFlag, "@") {
-		filePath := strings.TrimPrefix(systemPromptFlag, "@")
-		filePath = strings.TrimSpace(filePath)
-		if filePath == "" {
-			slog.Warn("empty file path after '@' in --system-prompt flag")
-			return ""
-		}
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			slog.Error("failed to read system-prompt file", "path", filePath, "error", err)
-			return ""
-		}
-		// Limit file size to 64KB
-		if len(content) > 64*1024 {
-			slog.Warn("system-prompt file too large, truncating to 64KB", "size", len(content))
-			content = content[:64*1024]
-		}
-		return string(content)
-	}
-	// Otherwise, use the value as-is
-	return systemPromptFlag
-}
+	"github.com/tiancaiamao/ai/pkg/cli"
+)
 
 func main() {
 	// Save original binary path before we mutate os.Args.
@@ -65,17 +36,17 @@ func main() {
 	case "rpc":
 		rpcSubcommand()
 	case "run":
-		runSubcommand(binPath)
+		cli.RunSubcommand(binPath)
 	case "serve":
-		serveSubcommand(binPath)
+		cli.ServeSubcommand(binPath)
 	case "ls":
-		lsSubcommand()
+		cli.LsSubcommand()
 	case "watch":
-		watchSubcommand()
+		cli.WatchSubcommand()
 	case "send":
-		sendSubcommand()
+		cli.SendSubcommand()
 	case "kill":
-		killSubcommand()
+		cli.KillSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", subcmd)
 		fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
@@ -106,7 +77,7 @@ func deprecatedModeDispatch() {
 	modelFlag := flag.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	flag.Parse()
 
-	systemPrompt := parseSystemPrompt(*systemPromptFlag)
+	systemPrompt := cli.ParseSystemPrompt(*systemPromptFlag)
 
 	switch *mode {
 	case "rpc", "":
@@ -201,7 +172,7 @@ func rpcSubcommand() {
 	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
 	fs.Parse(os.Args[1:])
 
-	systemPrompt := parseSystemPrompt(*systemPromptFlag)
+	systemPrompt := cli.ParseSystemPrompt(*systemPromptFlag)
 
 	if err := runRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
 		slog.Error("rpc error", "error", err)

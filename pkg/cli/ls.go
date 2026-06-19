@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
-func lsSubcommand() {
+func LsSubcommand() {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
 	allFlag := fs.Bool("all", false, "show all runs, not just running ones")
 	jsonFlag := fs.Bool("json", false, "output as JSON array")

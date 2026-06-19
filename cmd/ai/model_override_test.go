@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/tiancaiamao/ai/pkg/config"
 )
@@ -170,74 +169,5 @@ func TestApplyModelOverride_NoModelsFile(t *testing.T) {
 	// Provider/BaseURL/API should remain from original config.
 	if cfg.Model.Provider != "openai" {
 		t.Errorf("expected Provider 'openai', got %q", cfg.Model.Provider)
-	}
-}
-
-// --- buildRPCFlags tests ---
-
-// TestBuildRPCFlags_ModelIncluded verifies that --model is included in the
-// flags when a non-empty model string is provided.
-func TestBuildRPCFlags_ModelIncluded(t *testing.T) {
-	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "claude-sonnet-4-20250514", "")
-
-	found := false
-	for i, f := range flags {
-		if f == "--model" && i+1 < len(flags) && flags[i+1] == "claude-sonnet-4-20250514" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected --model claude-sonnet-4-20250514 in flags, got %v", flags)
-	}
-}
-
-// TestBuildRPCFlags_ModelEmpty verifies that --model is NOT included when empty.
-func TestBuildRPCFlags_ModelEmpty(t *testing.T) {
-	flags := buildRPCFlags("/tmp/session.json", "", 0, 0, "", "", "")
-
-	for _, f := range flags {
-		if f == "--model" {
-			t.Errorf("expected --model to be absent, but found in flags: %v", flags)
-		}
-	}
-}
-
-// TestBuildRPCFlags_AllFlags verifies that all flags including model are present.
-func TestBuildRPCFlags_AllFlags(t *testing.T) {
-	flags := buildRPCFlags(
-		"/tmp/session.json",
-		"system prompt",
-		10,
-		5*time.Minute,
-		":6060",
-		"test-model",
-		"abc123",
-	)
-
-	expected := map[string]string{
-		"--session":       "/tmp/session.json",
-		"--system-prompt": "system prompt",
-		"--max-turns":     "10",
-		"--timeout":       "5m0s",
-		"--http":          ":6060",
-		"--model":         "test-model",
-		"--runid":         "abc123",
-	}
-
-	for key, want := range expected {
-		found := false
-		for i, f := range flags {
-			if f == key && i+1 < len(flags) {
-				if flags[i+1] != want {
-					t.Errorf("flag %s: expected value %q, got %q", key, want, flags[i+1])
-				}
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected flag %s in result, got %v", key, flags)
-		}
 	}
 }

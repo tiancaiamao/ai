@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -14,7 +14,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
-func killSubcommand() {
+func KillSubcommand() {
 	fs := flag.NewFlagSet("kill", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	forceFlag := fs.Bool("force", false, "send SIGKILL instead of graceful abort")

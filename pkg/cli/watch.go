@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -645,7 +645,7 @@ func waitForFile(path string, offset int64) tea.Cmd {
 
 // --- Subcommand entry point ---
 
-func watchSubcommand() {
+func WatchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")

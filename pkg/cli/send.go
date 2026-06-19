@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -15,7 +15,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/run"
 )
 
-func sendSubcommand() {
+func SendSubcommand() {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	waitFlag := fs.Bool("wait", false, "wait for agent to finish processing and stream the response")
