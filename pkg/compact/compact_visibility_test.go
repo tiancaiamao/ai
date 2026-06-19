@@ -9,7 +9,7 @@ import (
 )
 
 func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
-	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0)
+	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0, "")
 
 	visible := agentctx.NewUserMessage("short visible text")
 	invisible := agentctx.NewUserMessage(strings.Repeat("X", 8000)).WithVisibility(false, true)

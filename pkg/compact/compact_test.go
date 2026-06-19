@@ -17,7 +17,7 @@ func TestShouldCompact_TokenThreshold(t *testing.T) {
 		AutoCompact: true,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
 	// Few tokens — should not compact
 	agentCtx := &agentctx.AgentContext{
@@ -46,7 +46,7 @@ func TestShouldCompact_Disabled(t *testing.T) {
 		AutoCompact: false,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: make([]agentctx.AgentMessage, 100),
@@ -67,7 +67,7 @@ func TestShouldCompact_MessageCountDoesNotTriggerWithContextWindow(t *testing.T)
 		AutoCompact: true,
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 200000)
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 200000, "")
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
 			agentctx.NewUserMessage("a"),
@@ -83,7 +83,7 @@ func TestShouldCompact_MessageCountDoesNotTriggerWithContextWindow(t *testing.T)
 
 func TestEstimateTokens(t *testing.T) {
 	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
 	messages := []agentctx.AgentMessage{
 		agentctx.NewUserMessage("Hello world"),
@@ -103,7 +103,7 @@ func TestEstimateTokens(t *testing.T) {
 
 func TestCompact_FewMessages(t *testing.T) {
 	config := DefaultConfig()
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0)
+	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
 
 	// With fewer messages than KeepRecent, should return nil result
 	agentCtx := &agentctx.AgentContext{
@@ -164,7 +164,7 @@ func TestCompact_ForcedSplitWhenManyMessagesButNoOldMessages(t *testing.T) {
 	_ = agentctx.NewAgentContext("sys")
 
 	// Use a compactor to verify config
-	c := NewCompactor(cfg, llm.Model{ID: "test"}, "test-key", "test prompt", 200000)
+	c := NewCompactor(cfg, llm.Model{ID: "test"}, "test-key", "test prompt", 200000, "")
 	_ = c
 
 	// Test the split logic directly
@@ -206,7 +206,7 @@ func TestShouldCompact_LLMDecide_BelowSoftThreshold(t *testing.T) {
 			IntervalLow:   15,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{
@@ -228,7 +228,7 @@ func TestShouldCompact_LLMDecide_HardLimit(t *testing.T) {
 			TierHigh:      300,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 
 	// ~250 tokens, above hard limit of 500? no — need more.
 	// Generate enough text to exceed hard limit
@@ -256,7 +256,7 @@ func TestShouldCompact_LLMDecide_IntervalNotReached(t *testing.T) {
 			IntervalHigh:   7,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 
 	longText := strings.Repeat("a", 800) // ~200 tokens, between soft and hard
 	agentCtx := &agentctx.AgentContext{
@@ -283,7 +283,7 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 			IntervalLow:   5,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 	askCount := 0
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
 		askCount++
@@ -329,7 +329,7 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMNo(t *testing.T) {
 			IntervalLow:   5,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 	askCount := 0
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
 		askCount++
@@ -377,7 +377,7 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMError(t *testing.T) {
 			IntervalLow:   5,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
 		return false, fmt.Errorf("LLM unavailable")
 	}
@@ -403,7 +403,7 @@ func TestShouldCompact_LLMDecide_Disabled(t *testing.T) {
 			HardLimit:     10,
 		},
 	}
-	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000)
+	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 
 	agentCtx := &agentctx.AgentContext{
 		RecentMessages: []agentctx.AgentMessage{

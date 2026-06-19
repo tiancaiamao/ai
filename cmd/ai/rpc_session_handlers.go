@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -18,7 +19,13 @@ import (
 
 func (app *rpcApp) setSession(newSess *session.Session, newID, newName string) {
 	app.sess = newSess
+
+	// Rebuild compactor with the new session directory so that
+	// archive files are written to the correct session dir.
+	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, app.model.ContextWindow, newSess.GetDir())
+	app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
 	app.sessionComp.Update(app.compactor)
+
 	app.setAgentContext(app.createBaseContext())
 
 	if err := app.updateCheckpointManager(); err != nil {

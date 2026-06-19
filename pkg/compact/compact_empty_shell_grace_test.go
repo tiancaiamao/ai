@@ -14,7 +14,7 @@ func TestEnsureToolCallPairingWithGrace_EmptyShell(t *testing.T) {
 		GracePeriod: 1, // Protect 1 most recent tool result
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	oldMessages := []agentctx.AgentMessage{
 		{
@@ -98,7 +98,7 @@ func TestEnsureToolCallPairingWithGrace_EmptyShellWithGraceProtected(t *testing.
 		GracePeriod: 1, // Protect 1 most recent tool result
 	}
 
-	compactor := NewCompactor(config, llm.Model{}, "", "", 0)
+	compactor := NewCompactor(config, llm.Model{}, "", "", 0, "")
 
 	oldMessages := []agentctx.AgentMessage{
 		{
