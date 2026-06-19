@@ -18,7 +18,7 @@ MANDATORY — ALWAYS preserve these sections from previous summary:
 UPDATE RULES:
 1. ADD new discoveries, errors, decisions to existing sections
 2. MOVE completed "Next Steps" to "What's Complete"
-3. UPDATE "Current Task" if focus changed
+3. UPDATE "Current Task" if the user's focus changed — always include the latest user request VERBATIM
 4. MARK errors as "resolved" if fixed
 5. PRESERVE exact paths, errors, names — do NOT paraphrase
 
@@ -29,6 +29,7 @@ ANTI-PATTERNS:
 - ❌ Don't remove items from "What's Complete" (they're completed for a reason)
 - ❌ Don't paraphrase — keep exact paths, errors, names
 - ❌ Don't create new section names — use existing structure
-</critical>
+- ❌ Don't paraphrase the user's request — quote it verbatim
 
 Output the updated summary using the same format. This matters.
+</critical>
