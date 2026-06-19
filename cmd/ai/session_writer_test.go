@@ -1,32 +1,25 @@
 package main
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"testing"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
 
-func TestSessionWriterReplaceOverridesPreviousAppends(t *testing.T) {
+func TestSessionWriterAppend(t *testing.T) {
 	sess := session.NewSession(t.TempDir())
 	writer := newSessionWriter(16)
 	defer writer.Close()
 
-	writer.Append(sess, agentctx.NewUserMessage("before-1"))
-	writer.Append(sess, agentctx.NewUserMessage("before-2"))
+	writer.Append(sess, agentctx.NewUserMessage("msg-1"))
+	writer.Append(sess, agentctx.NewUserMessage("msg-2"))
 
-	replaced := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("after"),
-	}
-	if err := writer.Replace(sess, replaced); err != nil {
-		t.Fatalf("replace failed: %v", err)
-	}
+	// Drain channel synchronously (Close waits for pending writes).
+	writer.Close()
 
 	messages := sess.GetMessages()
-	if len(messages) != 1 {
-		t.Fatalf("expected 1 message after replace, got %d", len(messages))
-	}
-	if got := messages[0].ExtractText(); got != "after" {
-		t.Fatalf("expected replaced message content, got %q", got)
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
 	}
 }

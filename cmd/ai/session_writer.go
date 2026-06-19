@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"reflect"
 	"sync"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -60,10 +59,8 @@ func (sc *sessionCompactor) CalculateDynamicThreshold() int {
 // --- sessionWriter: single-goroutine serializer for session writes ---
 
 type sessionWriteRequest struct {
-	sess            *session.Session
-	message         *agentctx.AgentMessage
-	replaceMessages []agentctx.AgentMessage
-	replaceResp     chan error
+	sess    *session.Session
+	message *agentctx.AgentMessage
 }
 
 type sessionWriter struct {
@@ -81,19 +78,6 @@ func newSessionWriter(buffer int) *sessionWriter {
 	go func() {
 		defer writer.wg.Done()
 		for req := range writer.ch {
-			if req.replaceMessages != nil {
-				var err error
-				if req.sess != nil {
-					current := req.sess.GetMessages()
-					if !reflect.DeepEqual(current, req.replaceMessages) {
-						err = req.sess.SaveMessages(req.replaceMessages)
-					}
-				}
-				if req.replaceResp != nil {
-					req.replaceResp <- err
-				}
-				continue
-			}
 			if req.sess == nil || req.message == nil {
 				continue
 			}
@@ -110,22 +94,6 @@ func (w *sessionWriter) Append(sess *session.Session, message agentctx.AgentMess
 		return
 	}
 	w.enqueue(sessionWriteRequest{sess: sess, message: &message})
-}
-
-func (w *sessionWriter) Replace(sess *session.Session, messages []agentctx.AgentMessage) error {
-	if w == nil || sess == nil {
-		return nil
-	}
-	response := make(chan error, 1)
-	req := sessionWriteRequest{
-		sess:            sess,
-		replaceMessages: append([]agentctx.AgentMessage(nil), messages...),
-		replaceResp:     response,
-	}
-	if !w.enqueue(req) {
-		return nil
-	}
-	return <-response
 }
 
 func (w *sessionWriter) Close() {

@@ -245,9 +245,14 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 				span.AddField("tokens_after", result.TokensAfter)
 			}
 
-			// Persist compacted messages to session file
-			if result != nil && app.sess != nil && app.sessionWriter != nil {
-				app.sessionWriter.Replace(app.sess, agentCtx.RecentMessages)
+			// Persist compaction: save snapshot + append compaction entry.
+			// messages.jsonl stays append-only.
+			if result != nil && app.sess != nil {
+				if _, err := app.sess.AppendCompaction(
+					result.Summary, agentCtx.RecentMessages,
+				); err != nil {
+					slog.Error("Failed to persist pre-request compaction", "error", err)
+				}
 			}
 			return nil
 		},

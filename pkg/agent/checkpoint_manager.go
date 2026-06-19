@@ -176,20 +176,19 @@ func initCheckpointManager(config *LoopConfig) *AgentContextCheckpointManager {
 	return mgr
 }
 
-// saveCheckpointAfterCompaction creates a checkpoint if LLM context was updated
-// during compaction. This avoids saving checkpoints for trivial compactions.
+// saveCheckpointAfterCompaction creates a checkpoint after compaction to
+// persist the current AgentState (turn count, tokens, CWD, etc.).
+// The checkpoint's messages.jsonl is not used for resume (messages come from
+// sess.GetMessages() via compaction snapshot refs); only agent_state.json
+// is consumed by LoadResumeState.
 func saveCheckpointAfterCompaction(mgr *AgentContextCheckpointManager, agentCtx *agentctx.AgentContext, llmContextUpdated bool, turnCount int, trigger string) {
 	if mgr == nil || !mgr.ShouldCheckpoint() {
-		return
-	}
-	if !llmContextUpdated {
-		slog.Info("[Loop] Skipping checkpoint creation after compaction (LLM context not updated, resume will replay from last checkpoint)", "trigger", trigger, "turn", turnCount)
 		return
 	}
 	if _, err := mgr.CreateSnapshot(agentCtx, agentCtx.LLMContext, turnCount); err != nil {
 		slog.Warn("[Loop] Failed to create checkpoint after compaction", "error", err, "turn", turnCount)
 	} else {
-		slog.Info("[Loop] Checkpoint created after compaction (LLM context updated)", "trigger", trigger, "turn", turnCount)
+		slog.Info("[Loop] Checkpoint created after compaction", "trigger", trigger, "turn", turnCount)
 	}
 }
 

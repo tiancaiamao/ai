@@ -183,14 +183,10 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 			app.pendingSteer = false
 			app.stateMu.Unlock()
 
-			// Sync final messages to session file.
-			// This is the single persistence point for loop-triggered compaction:
-			// all message_end Append calls are already enqueued before agent_end
-			// (event ordering guarantees), so this Replace arrives last in the
-			// writer channel and overwrites any stale pre-compaction entries.
-			if app.sessionWriter != nil && app.sess != nil && len(event.Messages) > 0 {
-				app.sessionWriter.Replace(app.sess, event.Messages)
-			}
+			// Session persistence is handled incrementally:
+			// - message_end/tool_execution_end → sessionWriter.Append (per message)
+			// - compaction_end → sess.AppendCompaction (snapshot + entry)
+			// No Replace needed — messages.jsonl is append-only.
 		}
 		if event.Type == "compaction_start" {
 			app.stateMu.Lock()
@@ -201,6 +197,16 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 			app.stateMu.Lock()
 			app.isCompacting = false
 			app.stateMu.Unlock()
+
+			// Persist compaction: save snapshot file + append compaction entry
+			// to messages.jsonl. This is the loop-triggered compaction path.
+			if event.Compaction != nil && len(event.Messages) > 0 && app.sess != nil {
+				if _, err := app.sess.AppendCompaction(
+					event.Compaction.Summary, event.Messages,
+				); err != nil {
+					slog.Error("Failed to persist compaction entry", "error", err)
+				}
+			}
 		}
 
 		if event.Type == "message_end" && event.Message != nil {

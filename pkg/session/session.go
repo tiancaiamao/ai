@@ -148,7 +148,7 @@ func LoadSession(sessionDir string) (*Session, error) {
 func (s *Session) GetMessages() []agentctx.AgentMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return buildSessionContext(s.entries, s.leafID, s.byID)
+	return buildSessionContext(s.entries, s.leafID, s.byID, s.sessionDir)
 }
 
 // GetDir returns the session directory path.
@@ -156,6 +156,43 @@ func (s *Session) GetDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionDir
+}
+
+// AppendCompaction records a compaction event: saves the post-compaction
+// in-memory messages to an external snapshot file, then appends a compaction
+// entry to messages.jsonl referencing that snapshot. This keeps messages.jsonl
+// append-only — history is never rewritten.
+func (s *Session) AppendCompaction(summary string, messages []agentctx.AgentMessage) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var snapshotRef string
+	if s.sessionDir != "" {
+		// Assign sequential snapshot file name based on existing compaction entries.
+		count := 0
+		for _, e := range s.entries {
+			if e.Type == EntryTypeCompaction {
+				count++
+			}
+		}
+		name := fmt.Sprintf("compaction_%05d.jsonl", count+1)
+		snapshotPath := filepath.Join(s.sessionDir, "compactions", name)
+		if err := saveSnapshotMessages(snapshotPath, messages); err != nil {
+			return "", fmt.Errorf("save compaction snapshot: %w", err)
+		}
+		snapshotRef = filepath.Join("compactions", name)
+	}
+
+	entry := &SessionEntry{
+		Type:        EntryTypeCompaction,
+		ID:          generateEntryID(s.byID),
+		ParentID:    s.leafID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		Summary:     summary,
+		SnapshotRef: snapshotRef,
+	}
+	s.addEntry(entry)
+	return entry.ID, s.persistEntry(entry)
 }
 
 // GetPath returns the messages.jsonl file path of the session.

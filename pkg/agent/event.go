@@ -84,6 +84,10 @@ type CompactionInfo struct {
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
 
+	// Summary is the compaction summary text, carried so the event consumer
+	// (rpc_app) can persist it to a compaction snapshot + entry.
+	Summary string `json:"summary,omitempty"`
+
 	// Context management specific fields
 	TokensBefore      int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
 	TokensAfter       int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)

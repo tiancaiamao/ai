@@ -15,7 +15,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/agentconfig"
 )
 
@@ -149,25 +148,21 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		runID:                 params.runID,
 	}
 
-	// Enable LLM-decides compaction for large context windows.
-	if currentContextWindow >= compact.LargeContextThreshold {
-		decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
-		compactorConfig.LLMDecide = &decideCfg
-		app.proactiveCompactor = compactor
-		slog.Info("Using LLMDecide compaction (large context window)",
-			"contextWindow", currentContextWindow,
-			"softThreshold", decideCfg.SoftThreshold,
-			"hardLimit", decideCfg.HardLimit)
+	// Always use LLM-decides compaction (unified context management).
+	decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
+	compactorConfig.LLMDecide = &decideCfg
+	app.proactiveCompactor = compactor
+	slog.Info("Using LLMDecide compaction",
+		"contextWindow", currentContextWindow,
+		"softThreshold", decideCfg.SoftThreshold,
+		"hardLimit", decideCfg.HardLimit)
 
-		// Skip old ContextManager entirely for large windows.
-		ctxManager.SetSkipCondition(func() bool { return true })
-	} else {
-		app.proactiveCompactor = app.ctxManager
-		// Skip context management in cache-first mode.
-		ctxManager.SetSkipCondition(func() bool {
-			return agent.IsCacheMode(app.model.ID) == agent.CacheModeCache
-		})
-	}
+	// TODO(cleanup): ctxManager and the entire ContextManager code path are now
+	// dead code — always skipped in favor of LLMDecide compaction. Remove
+	// ctxManager, ContextManager, context_mgmt tools, and related session
+	// replay logic (applyContextManagementEvents) when cleaning up.
+	// Also remove the cache-mode check (agent.IsCacheMode) that lived here.
+	ctxManager.SetSkipCondition(func() bool { return true })
 
 	return app, nil
 }
