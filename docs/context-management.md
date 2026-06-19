@@ -112,7 +112,7 @@ The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigg
 ### Flow
 
 1. **Split messages**: Divide `RecentMessages` into `oldMessages` (to summarize) and `recentMessages` (to keep intact), using either a token budget (`KeepRecentTokens`) or message count (`KeepRecent`)
-2. **Generate summary**: LLM summarizes `oldMessages` with previous summary (if any) for incremental update
+2. **Generate summary**: LLM summarizes `oldMessages` (which may include the previous compaction summary message)
 3. **Fix tool-call pairing**: Ensure `tool_call` / `tool_result` pairs are not split across the boundary
 4. **Compact tool results**: If visible tool results exceed `ToolCallCutoff`, hide oldest ones from agent (keep visible to user)
 5. **Clean runtime state**: Remove stale `runtime_state` messages (keep only the latest)
@@ -147,13 +147,12 @@ When visible tool results exceed `ToolCallCutoff` (default 10):
 
 ## 4. Summary Generation
 
-**File:** `pkg/compact/compact_summary.go` — `GenerateSummaryWithPrevious()`
+**File:** `pkg/compact/compact_summary.go` — `GenerateSummary()`
 
 Generates an LLM summary of old messages. Cache-friendly request structure (same as `askLLM`):
 - System prompt + tools + context prefix + old messages + summarization instruction
 - Only the trailing instruction is new; everything else is a prefix of the original conversation
-
-**Incremental updates**: When `LastCompactionSummary` is non-empty, uses `compact_update.md` prompt template to update the existing summary rather than generating from scratch.
+- The previous compaction summary (if any) is included in `oldMessages`, so the LLM can see it without a separate prompt
 
 **Fallback**: If the summary text is empty but `reasoning_content` (thinking) is non-empty, falls back to using thinking output (some models put everything in thinking).
 
@@ -226,7 +225,7 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | File | Responsibility |
 |------|---------------|
 | `pkg/compact/compact.go` | `Compactor` — `ShouldCompact`, `Compact`, `askLLM`, LLMDecide logic |
-| `pkg/compact/compact_summary.go` | Summary generation (`GenerateSummaryWithPrevious`), message splitting |
+| `pkg/compact/compact_summary.go` | Summary generation (`GenerateSummary`), message splitting |
 | `pkg/compact/compact_tools.go` | Tool-call pairing, tool result compaction |
 | `pkg/context/context.go` | `AgentContext`, `EstimateTokens` |
 | `pkg/context/message.go` | `AgentMessage`, `ContentBlock` types |
@@ -248,13 +247,13 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/prompt/builder.go` | System prompt construction |
 | `pkg/prompt/llm_decide_check.md` | LLM ask prompt template |
 | `pkg/prompt/compact_summarize.md` | Summarization prompt (initial) |
-| `pkg/prompt/compact_update.md` | Incremental summary update template |
+| `pkg/prompt/compact_summarize.md` | Summarization prompt |
 
 ## 10. Design Principles
 
 1. **System controls timing, LLM controls decision** — The system decides *when* to ask (tiered thresholds + intervals). The LLM decides *whether* to compact (yes/no gate). This replaces deterministic single-threshold rules with adaptive, context-aware decisions.
 
-2. **Cache-friendly LLM asks** — Both `askLLM` and `GenerateSummaryWithPrevious` build requests whose prefix matches a normal agent turn, maximizing provider prefix-cache hits. Only the trailing instruction is new.
+2. **Cache-friendly LLM asks** — Both `askLLM` and `GenerateSummary` build requests whose prefix matches a normal agent turn, maximizing provider prefix-cache hits. Only the trailing instruction is new.
 
 3. **Append-only session log** — `messages.jsonl` is never rewritten. Compaction saves post-compaction messages to a snapshot file and appends a `compaction` entry referencing it.
 

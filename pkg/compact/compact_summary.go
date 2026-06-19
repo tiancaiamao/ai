@@ -14,17 +14,10 @@ import (
 )
 
 var (
-	summarizationPrompt       = prompt.CompactSummarizePrompt()
-	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
+	summarizationPrompt = prompt.CompactSummarizePrompt()
 )
 
-// GenerateSummary generates a structured summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(ctx context.Context, messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(ctx, messages, c.systemPrompt, "", nil, "")
-}
-
-// GenerateSummaryWithPrevious generates a structured summary, optionally
-// updating a previous summary.
+// GenerateSummary generates a structured summary of messages.
 //
 // To maximise prompt-cache reuse, the request mirrors a normal agent turn:
 //
@@ -37,8 +30,11 @@ func (c *Compactor) GenerateSummary(ctx context.Context, messages []agentctx.Age
 // are a prefix of the full conversation, so the entire prefix
 // [system_prompt + tools + contextPrefix + old_messages] is served from cache.
 // Only the trailing summarisation instruction is new.
-func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool, previousSummary string) (string, error) {
-	span := traceevent.StartSpan(goCtx, "GenerateSummaryWithPrevious", traceevent.CategoryEvent)
+//
+// The previous compaction summary (if any) is part of oldMessages, so the LLM
+// can see it without a separate prompt.
+func (c *Compactor) GenerateSummary(goCtx context.Context, messages []agentctx.AgentMessage, systemPrompt string, contextPrefix string, tools []agentctx.Tool) (string, error) {
+	span := traceevent.StartSpan(goCtx, "GenerateSummary", traceevent.CategoryEvent)
 	defer span.End()
 
 	if len(messages) == 0 {
@@ -51,21 +47,10 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 	// within the context window — no further truncation needed or wanted:
 	// truncating here would break prefix-cache alignment.
 	if len(agentctx.ConvertMessagesToLLM(messages)) == 0 {
-		if strings.TrimSpace(previousSummary) != "" {
-			return previousSummary, nil
-		}
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	// Build the summarisation instruction as a trailing user message.
-	var instruction string
-	if previousSummary != "" {
-		instruction = fmt.Sprintf(updateSummarizationPrompt, previousSummary)
-	} else {
-		instruction = summarizationPrompt
-	}
-
-	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, instruction)
+	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, summarizationPrompt)
 
 	const maxRetries = 3
 	const totalTimeout = 5 * time.Minute

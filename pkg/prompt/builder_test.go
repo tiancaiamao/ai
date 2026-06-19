@@ -403,9 +403,6 @@ func TestCompactAndTemplateAccessors(t *testing.T) {
 	if got := CompactSummarizePrompt(); got == "" {
 		t.Error("CompactSummarizePrompt returned empty string")
 	}
-	if got := CompactUpdatePrompt(); got == "" {
-		t.Error("CompactUpdatePrompt returned empty string")
-	}
 	if got := OrchestratorTemplate(); got == "" {
 		t.Error("OrchestratorTemplate returned empty string")
 	}

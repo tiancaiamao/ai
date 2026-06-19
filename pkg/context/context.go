@@ -19,7 +19,7 @@ type AgentContext struct {
 	AgentState     *AgentState    `json:"agentState"`     // System-maintained metadata
 
 	// Compaction state
-	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary for incremental updates
+	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary (for session resume)
 
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.

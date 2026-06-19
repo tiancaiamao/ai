@@ -254,7 +254,7 @@ func (c *Compactor) SetContextWindow(window int) {
 }
 
 // SetAgentContextPrefix updates the skills + AGENTS.md prefix used for
-// cache-friendly LLM requests (askLLM, GenerateSummaryWithPrevious).
+// cache-friendly LLM requests (askLLM, GenerateSummary).
 func (c *Compactor) SetAgentContextPrefix(prefix string) {
 	c.agentContextPrefix = prefix
 }
@@ -470,7 +470,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	}
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummary(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -723,7 +723,7 @@ func (c *Compactor) llmDecideInterval(tokens int) int {
 
 // buildCacheFriendlyLLMContext builds an LLM request whose prefix matches a
 // normal agent turn, maximising provider prefix-cache hits. Used by both
-// askLLM and GenerateSummaryWithPrevious.
+// askLLM and GenerateSummary.
 //
 // Message ordering (mirrors the agent loop):
 //
@@ -814,7 +814,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	}
 
 	// Fall back to reasoning_content if text response is empty (same model
-	// behavior as GenerateSummaryWithPrevious).
+	// behavior as GenerateSummary).
 	answerText := response.String()
 	if strings.TrimSpace(answerText) == "" && thinking.Len() > 0 {
 		answerText = thinking.String()
