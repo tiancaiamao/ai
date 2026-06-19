@@ -1288,7 +1288,6 @@ func TestLoopGuardPollingDetection(t *testing.T) {
 	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{
 		MaxConsecutiveToolCalls: 3, // trigger after 3 consecutive identical calls
 		MaxToolCallsPerName:     100,
-		EnableCheckpoint:        false,
 	}, stream)
 
 	// With polling detection:

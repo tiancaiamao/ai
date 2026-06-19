@@ -34,12 +34,13 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 
 | Package | Role |
 |---------|------|
-| `cmd/ai/` | Entry point. `rpc_app.go` is the hub — all handlers wire through `rpcApp` struct |
+| `cmd/ai/` | Entry point. `main.go` parses flags and calls `app.RunRPC()` |
+| `pkg/app/` | RPC application — all handlers, setup, session writer (formerly `cmd/ai/rpc_*.go`) |
 | `pkg/agent/` | Agent loop, tool execution, hooks, streaming, checkpoint recovery |
 | `pkg/context/` | `AgentContext`, messages, `Tool` interface, `Compactor` interface |
 | `pkg/compact/` | LLM-driven compaction (LLMDecide mode) |
 | `pkg/session/` | JSONL session persistence, lazy loading, compaction snapshots |
-| `pkg/tools/` | Built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `change_workspace`, `find_skill`). Registered in `cmd/ai/rpc_setup.go` |
+| `pkg/tools/` | Built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `change_workspace`, `find_skill`). Registered in `pkg/app/rpc_setup.go` |
 | `pkg/skill/` | Skill loading, parsing, formatting, progressive disclosure ranking |
 | `pkg/rpc/` | RPC types (`types.go`) |
 | `pkg/prompt/` | System prompt builder |

@@ -3,6 +3,31 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Architecture: Code Organization Refactor
+
+### cmd/ai → pkg/app + pkg/cli (2026-05)
+
+**Problem**: All RPC handler logic lived in `package main` (cmd/ai), making it untestable.
+cmd/ai had grown to 5700+ lines across 20+ files.
+
+**Changes**:
+- Moved all `rpc_*.go`, `session_writer.go`, `helpers.go` to `pkg/app/`
+- Moved CLI subcommands (run/serve/ls/send/kill/watch) to `pkg/cli/`
+- `cmd/ai/main.go` is now a thin 182-line entry point
+- Added smoke tests that exercise the full RunRPC pipeline (coverage 6.8% → 44.5%)
+
+### Checkpoint Manager Removal (2026-05)
+
+**Problem**: The checkpoint system (`AgentContextCheckpointManager`) wrote `agent_state.json`
+snapshots after compaction, but this added complexity with minimal benefit.
+
+**Changes**:
+- Deleted `pkg/agent/checkpoint_manager.go`
+- Removed `EnableCheckpoint` from `LoopConfig`
+- Removed `checkpointMgr` field from `rpcApp`, `loopState`
+- Removed `updateCheckpointManager`, `saveCheckpointAfterCompaction`, `savePreCompactionCheckpoint`
+- Session resume (`resume.go`) remains but is now a no-op (no snapshots written)
+
 ## Context Management: Four Generations
 
 The compaction/context-management system went through four major rewrites, each driven by a fundamental shift in constraints.

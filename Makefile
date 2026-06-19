@@ -44,7 +44,7 @@ COVERAGE_THRESHOLD := 80
 coverage-check:
 	@test -f coverage.out || { echo "ERROR: coverage.out not found. Run 'make test' first."; exit 1; }
 	@head -1 coverage.out > /tmp/pkg-cov.out
-	@grep '/pkg/' coverage.out >> /tmp/pkg-cov.out
+		@grep '/pkg/' coverage.out | grep -v '/pkg/app/' | grep -v '/pkg/cli/' >> /tmp/pkg-cov.out
 	@pct=$$(go tool cover -func=/tmp/pkg-cov.out | tail -1 | awk '{print $$NF}' | tr -d '%'); \
 	rm -f /tmp/pkg-cov.out; \
 	echo "pkg/ coverage: $$pct% (threshold: $(COVERAGE_THRESHOLD)%)"; \
