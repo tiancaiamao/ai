@@ -1,22 +1,21 @@
 # Archive
 
-Design proposals and historical documents. **Not maintained.**
+Historical design proposals. Not maintained — read for context only.
 
-These documents were created during the design phase of various features.
-Some have been fully implemented; others were exploratory or superseded.
+These documents capture the design thinking behind features that were implemented, superseded, or abandoned. See [CHANGELOG.md](../../CHANGELOG.md) for the full architectural history.
 
-## Implementation Status
+## Documents
 
-| Document | Status | Notes |
-|----------|--------|-------|
-| `ai-agent-control.md` | ✅ Implemented | Steer/abort commands in `pkg/run/` and RPC handlers |
-| `cache-friendly-message-architecture.md` | ✅ Implemented | `buildCacheFriendlyLLMContext` in `pkg/compact/compact.go` |
-| `agent-harness-evolve-v1.md` | ✅ Implemented | Agent loop refactored into structured state machine |
-| `agent-harness-evolve-step-by-step.md` | ✅ Implemented | Incremental evolution steps completed |
-| `agent-harness-evolution.md` | 📋 Superseded | Original harness evolution design, see live docs instead |
-| `agent-debugger-design.md` | 🔬 Exploratory | Debugging concepts partially in trace event system |
-| `evolve-directions.md` | 📋 Historical | Evolution directions for reference only |
-| `evolve-output-spec.md` | 📋 Historical | Output spec exploration |
-| `plan-format-analysis.md` | 📋 Historical | Plan format analysis |
-| `planner-system-prompt.md` | 📋 Historical | Planner prompt design |
-| `test-analysis.md` | 📋 Historical | Test strategy analysis, see `test-strategy.md` instead |
+| Document | Era | Fate |
+|----------|-----|------|
+| `ai-agent-control.md` | PGE era (2026-05) | ✅ Implemented — steer/send/watch became native `ai` CLI commands |
+| `cache-friendly-message-architecture.md` | Context v3 (2026-05) | ✅ Implemented — `buildCacheFriendlyLLMContext` in `pkg/compact/` |
+| `agent-harness-evolution.md` | Harness separation (2026-05) | ✅ Implemented — hook system + `pkg/agentconfig/` + `pkg/middlewares/` |
+| `agent-harness-evolve-v1.md` | Harness separation (2026-05) | ✅ Implemented — same as above, earlier draft |
+| `agent-harness-evolve-step-by-step.md` | Harness separation (2026-05) | ✅ Implemented — incremental steps completed |
+| `evolve-directions.md` | Auto-evolution (2026-06) | ✅ Implemented — autonomous prompt-optimization loop |
+| `evolve-output-spec.md` | Auto-evolution (2026-06) | 📋 Historical — output format spec, evolve loop no longer active |
+| `planner-system-prompt.md` | Auto-evolution (2026-06) | 📋 Historical — planner prompt for evolve loop |
+| `agent-debugger-design.md` | Auto-evolution (2026-06) | 🔬 Exploratory — trace-level debugging concepts partially in `pkg/traceevent/` |
+| `plan-format-analysis.md` | Plan format (2026-05) | ✅ Implemented — migrated from YAML to Markdown |
+| `test-analysis.md` | Test infra (2026-05) | 📋 Historical — see `docs/test-strategy.md` instead |

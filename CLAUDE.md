@@ -54,7 +54,7 @@ Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):
 1. Modified a package? → check its `pkg/*/README.md`
 2. Changed architecture/RPC/session/compaction? → update `docs/*.md` (see `docs/README.md` index)
 3. Added/removed/renamed a package? → update root `README.md` + `docs/architecture.md`
-4. **Functional code change** (not docs-only, not test-only)? → add `CHANGELOG.md` entry under today's date with commit hash, grouped by Added/Changed/Fixed/Removed
+4. **Architecture-level change** (new feature, removed feature, design pivot)? → add `CHANGELOG.md` entry explaining **what changed and why**, not just what the commit did. Group by topic, not by date. See existing entries for style.
 
 **Verify every file path, type name, function name in live docs against actual code.**
 
