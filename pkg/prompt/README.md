@@ -13,7 +13,6 @@ The package uses Go's `embed` directive to bundle markdown templates:
 | Template | File | Purpose |
 |----------|------|---------|
 | Base prompt | `prompt.md` | Main system prompt for the agent |
-| Compact system | `compact_system.md` | System prompt for compaction LLM calls |
 | Compact summarize | `compact_summarize.md` | Prompt for initial summarization |
 | Compact update | `compact_update.md` | Prompt for incremental summary updates |
 | LLM decide check | `llm_decide_check.md` | Prompt for LLM-based compaction decision |
@@ -51,7 +50,6 @@ Skills and AGENTS.md instructions are injected per-LLM-call as user-role message
 
 ```go
 func CompactorBasePrompt() string
-func CompactSystemPrompt() string
 func CompactSummarizePrompt() string
 func CompactUpdatePrompt() string
 func LLMDecideCheckPrompt() string
@@ -75,7 +73,6 @@ func NormalizeThinkingLevel(level string) string     // Normalizes: off/minimal/
 |------|-------------|
 | `builder.go` | `Builder`, `ToolInfo`, template accessors, thinking level helpers |
 | `prompt.md` | Base system prompt template |
-| `compact_system.md` | Compaction system prompt |
 | `compact_summarize.md` | Initial summarization prompt |
 | `compact_update.md` | Incremental update prompt |
 | `llm_decide_check.md` | LLM-based compaction decision prompt |

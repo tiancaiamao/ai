@@ -14,9 +14,6 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-//go:embed "compact_system.md"
-var compactSystemPrompt string
-
 //go:embed "compact_summarize.md"
 var compactSummarizePrompt string
 
@@ -35,11 +32,6 @@ var validatorTemplate string
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
-}
-
-// CompactSystemPrompt returns the system prompt for compaction.
-func CompactSystemPrompt() string {
-	return compactSystemPrompt
 }
 
 // CompactSummarizePrompt returns the prompt for initial summarization.

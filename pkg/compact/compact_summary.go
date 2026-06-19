@@ -14,7 +14,6 @@ import (
 )
 
 var (
-	summarizationSystemPrompt = prompt.CompactSystemPrompt()
 	summarizationPrompt       = prompt.CompactSummarizePrompt()
 	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
 )
@@ -61,10 +60,9 @@ func (c *Compactor) GenerateSummaryWithPrevious(goCtx context.Context, messages 
 	// Build the summarisation instruction as a trailing user message.
 	var instruction string
 	if previousSummary != "" {
-		instruction = summarizationSystemPrompt + "\n\n" +
-			fmt.Sprintf(updateSummarizationPrompt, previousSummary, "(see conversation messages above)")
+		instruction = fmt.Sprintf(updateSummarizationPrompt, previousSummary)
 	} else {
-		instruction = summarizationSystemPrompt + "\n\n" + summarizationPrompt
+		instruction = summarizationPrompt
 	}
 
 	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, instruction)

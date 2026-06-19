@@ -1,12 +1,8 @@
-Update the existing summary with NEW conversation messages.
+Update the existing summary with NEW conversation messages (shown above). Output ONLY the updated summary — do NOT continue the conversation.
 
 <previous-summary>
 %s
 </previous-summary>
-
-<new-messages>
-%s
-</new-messages>
 
 <critical>
 MANDATORY — ALWAYS preserve these sections from previous summary:
@@ -20,16 +16,8 @@ UPDATE RULES:
 2. MOVE completed "Next Steps" to "What's Complete"
 3. UPDATE "Current Task" if the user's focus changed — always include the latest user request VERBATIM
 4. MARK errors as "resolved" if fixed
-5. PRESERVE exact paths, errors, names — do NOT paraphrase
-
-Keep ALL sections. If empty, write "None yet."
-
-ANTI-PATTERNS:
-- ❌ Don't start fresh — always UPDATE existing summary
-- ❌ Don't remove items from "What's Complete" (they're completed for a reason)
-- ❌ Don't paraphrase — keep exact paths, errors, names
-- ❌ Don't create new section names — use existing structure
-- ❌ Don't paraphrase the user's request — quote it verbatim
-
-Output the updated summary using the same format. This matters.
+5. PRESERVE exact paths, errors, function names — do NOT paraphrase
+6. Keep "Decisions Made" as a separate section — don't merge with others
+7. Keep ALL sections. If empty, write "None yet."
+8. DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>
