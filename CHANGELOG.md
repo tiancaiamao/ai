@@ -58,7 +58,7 @@ Session persistence uses Proposal B: post-compaction messages saved to `compacti
 
 Key commits: `d3c9162` (#273) cache-friendly message architecture, `017919d` (#300) reuse prefix cache in compaction, `b6545ad` (#299) unify through compactor.Compact(), `6f4623a` (#302) LLMDecideCompactor, `8b8cb75` (#304) append-only compaction, `b28a112` (#305) remove old context management system.
 
-Design docs: `docs/context-management.md` (live), `docs/archive/cache-friendly-message-architecture.md` (original proposal).
+Design doc: `docs/archive/cache-friendly-message-architecture.md` (archived — CacheMode was removed in #305; `buildCacheFriendlyLLMContext` that remains is a simpler internal helper, not the dual-mode design).
 
 ## Multi-Agent Orchestration: From `ag` CLI to Skill-Based PGE
 

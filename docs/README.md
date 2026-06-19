@@ -17,7 +17,6 @@ These documents describe the **current** codebase and must stay in sync.
 | [`test-strategy.md`](test-strategy.md) | Test pyramid, test files, regression tests | Test structure changed; new test layer added |
 | [`skill-progressive-disclosure.md`](skill-progressive-disclosure.md) | Skill ranking, topN selection, find_skill discovery | Skill formatting/usage tracking changed |
 | [`ai-agent-control.md`](ai-agent-control.md) | Agent-controlling-agent via CLI (steer/watch/send) | RPC slash commands or watch modes changed |
-| [`cache-friendly-message-architecture.md`](cache-friendly-message-architecture.md) | Prefix cache strategy, message immutability | Cache-friendly message construction changed |
 | [`agent-harness-evolution.md`](agent-harness-evolution.md) | Kernel/shell separation, hook system design | Hook system or harness config changed |
 | [`evolve-directions.md`](evolve-directions.md) | Auto-evolution methodology and stages | Evolve loop or pipeline changed |
 | [`evolve-output-spec.md`](evolve-output-spec.md) | Evolve artifact file formats | Evolve output file structure changed |
