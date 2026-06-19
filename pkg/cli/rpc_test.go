@@ -49,6 +49,8 @@ func TestRunNoArgs(t *testing.T) {
 }
 
 func TestRunRPC(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "test-key")
+
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
