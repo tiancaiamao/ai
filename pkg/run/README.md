@@ -43,7 +43,6 @@ type RunMeta struct {
 ```go
 func FindRunningByCwd(baseDir, cwd string) ([]RunMeta, error)
 func FindByPrefix(baseDir, prefix string) ([]RunMeta, error)
-func FindByStatus(baseDir, status string) ([]RunMeta, error)
 ```
 
 ## SocketServer
@@ -60,7 +59,7 @@ func NewSocketServer(sockPath string, handler CommandHandler) *SocketServer
 
 ```go
 type Command struct {
-    Type    string `json:"type"`              // "send", "abort", "stream", "status"
+    Type    string `json:"type"`              // "prompt", "steer", "abort", "stream", "get_state"
     Message string `json:"message"`
     FromSeq uint64 `json:"from_seq,omitempty"` // For "stream": replay from this sequence
 }
@@ -73,8 +72,8 @@ type Command struct {
 ```go
 type EventBroadcaster struct { ... }
 
-func (b *EventBroadcaster) Broadcast(event any)     // Send to all consumers
-func (b *EventBroadcaster) NewConsumer() *Consumer   // Create new subscriber
+func (b *EventBroadcaster) Push(event []byte)       // Send to all subscribers
+func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer  // Create subscriber
 ```
 
 Consumers receive events via a ring buffer. Late-joining consumers can replay from a sequence number.
@@ -83,7 +82,11 @@ Consumers receive events via a ring buffer. Late-joining consumers can replay fr
 
 | File | Description |
 |------|-------------|
-| `meta.go` | `RunMeta`, discovery functions, process detection |
-| `socket.go` | `SocketServer`, Unix domain socket command handling |
-| `event_broadcaster.go` | `EventBroadcaster`, ring-buffer fan-out |
-| `conv.go` | Event serialization/conversion utilities |
+| `meta.go` | `RunMeta`, `GenerateID`, discovery functions, `IsRunning` process detection |
+| `meta_linux.go` | Linux-specific process start time detection (build tag: linux) |
+| `socket.go` | `SocketServer`, `Command`, `CommandHandler`, Unix domain socket handling |
+| `event_broadcaster.go` | `EventBroadcaster`, `Consumer` — ring-buffer fan-out with replay |
+| `event_parser.go` | `ParseEvent` — parse raw JSONL event lines into `FormattedEvent` |
+| `event_renderer.go` | Event rendering for terminal display |
+| `agent_end.go` | `AgentEndInfo`, `FindLastAgentEnd` — locate last agent_end in event log |
+| `types.go` | `EventKind`, `FormattedEvent` — formatted output types |

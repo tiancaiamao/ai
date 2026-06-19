@@ -123,15 +123,32 @@ The agent loop has been refactored from a monolithic function into a structured 
 
 ### 📝 Documentation Maintenance
 
-**Before any commit, check if documentation needs updating.**
+**Docs must stay in sync with code. Before any commit, check if documentation needs updating.**
+
+#### Pre-commit checklist
 
 1. Review [`docs/README.md`](docs/README.md) — the Live Docs index table
 2. Determine if your changes affect any listed document's coverage area
-3. If yes: update the corresponding doc to match the code (verify every file path, type name, and function name against actual code)
-4. If your change adds a feature or fixes a significant bug: add an entry to [`CHANGELOG.md`](CHANGELOG.md)
-5. Design proposals live in `docs/archive/` and are **not** maintained — do not update them
+3. If yes: update the corresponding doc to match the code
+4. Check the package README (`pkg/<package>/README.md`) for any package you modified
+5. If your change adds a feature, removes a feature, or changes behavior: add an entry to [`CHANGELOG.md`](CHANGELOG.md)
+6. If you add/remove/rename a package, update the root [README.md](README.md) and [docs/architecture.md](docs/architecture.md)
 
-**Key principle:** Live docs must be verified against code. Never blindly move or edit documentation without checking that every reference (file path, type, function) actually exists in the codebase.
+#### Documentation surface
+
+| Location | Scope | Maintenance |
+|----------|-------|-------------|
+| `README.md` | Project overview, CLI, config, tools | **Live** — must match code |
+| `docs/*.md` | Architecture, RPC protocol, session format, etc. | **Live** — see `docs/README.md` index |
+| `pkg/*/README.md` | Package-level API and design | **Live** — must match code |
+| `CLAUDE.md` | Agent guidance for this repo | **Live** |
+| `CHANGELOG.md` | Functional changes per commit | **Live** — updated on each meaningful change |
+| `docs/adr/` | Architecture Decision Records | **Immutable** — historical record |
+| `docs/archive/` | Old design proposals | **Not maintained** — read for context only |
+
+#### Verification rule
+
+**Every file path, type name, function name, and struct field mentioned in live docs must be verified against actual code.** Never blindly edit documentation without confirming references exist. If you're not sure, grep the codebase.
 
 ### ⛔ NEVER commit directly to `main`
 

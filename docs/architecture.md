@@ -252,7 +252,7 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 - **Execution timeout**: Configurable per-tool and per-turn timeouts
 - **Resource limits**: Max consecutive tool calls, max turns, token limits
 - **Session isolation**: Sessions scoped by git repository root
-- **Agent isolation**: Each ag agent is an independent process
+- **Agent isolation**: Each sub-agent runs as an independent process
 - **Path protection**: Tools validate file paths within workspace
 - **API key storage**: Support for both env vars and file-based credentials
 

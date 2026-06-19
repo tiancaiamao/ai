@@ -31,7 +31,25 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 | `grep` | `grep.go` | Search file contents with regex |
 | `find_skill` | `find_skill.go` | Search and load agent skills |
 | `change_workspace` | `change_workspace.go` | Change working directory |
-| `workspace` | `workspace.go` | Workspace info and path resolution |
+
+## Workspace
+
+```go
+type Workspace struct { ... }
+
+func NewWorkspace(initialCwd string) (*Workspace, error)
+func MustNewWorkspace(initialCwd string) *Workspace
+
+func (w *Workspace) GetCWD() string
+func (w *Workspace) SetCWD(cwd string) error
+func (w *Workspace) GetInitialCWD() string
+func (w *Workspace) GetGitRoot() string
+func (w *Workspace) ResolvePath(path string) string
+func (w *Workspace) GetRelativePath(path string) (string, error)
+func (w *Workspace) IsGitRepository() bool
+```
+
+Tracks the current working directory across tool invocations, with git root detection for session storage that shares sessions across worktrees.
 
 ## Tool Output Processing
 
@@ -43,7 +61,8 @@ Tool output is processed through the truncation pipeline before being stored:
 
 | File | Description |
 |------|-------------|
-| `registry.go` | Tool registry |
+| `registry.go` | `Registry` — tool registration and lookup |
+| `workspace.go` | `Workspace` — dynamic working directory with git root detection |
 | `bash.go` | Shell command execution |
 | `read.go` | File reading |
 | `write.go` | File writing |
@@ -51,4 +70,3 @@ Tool output is processed through the truncation pipeline before being stored:
 | `grep.go` | Content search |
 | `find_skill.go` | Skill discovery |
 | `change_workspace.go` | Working directory management |
-| `workspace.go` | Workspace utilities |

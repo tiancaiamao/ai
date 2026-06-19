@@ -31,16 +31,17 @@ The LLM ask is a cache-friendly request that mirrors a normal agent turn prefix,
 
 ```go
 type Config struct {
-    MaxMessages         int    // Compress when messages exceed this
-    MaxTokens           int    // Compress when estimated tokens exceed this
-    KeepRecent          int    // Always keep this many recent messages
-    KeepRecentTokens    int    // Token budget for recent messages
-    ReserveTokens       int    // Tokens to reserve from context window
-    ToolCallCutoff      int    // Archive tool results when visible count exceeds this
-    ToolSummaryStrategy string // "llm", "heuristic", or "off"
-    AutoCompact         bool   // Enable automatic compaction
-    GracePeriod         int    // Protect N most recent tool results from archiving
-    LLMDecide           *LLMDecideConfig // Enable LLM-decides mode
+    MaxMessages           int              // Compress when messages exceed this
+    MaxTokens             int              // Compress when estimated tokens exceed this
+    KeepRecent            int              // Always keep this many recent messages
+    KeepRecentTokens      int              // Token budget for recent messages
+    ReserveTokens         int              // Tokens to reserve from context window
+    ToolCallCutoff        int              // Archive tool results when visible count exceeds this
+    ToolSummaryStrategy   string           // "llm", "heuristic", or "off"
+    ToolSummaryAutomation string           // "off", "fallback", or "always"
+    AutoCompact           bool             // Enable automatic compaction
+    GracePeriod           int              // Protect N most recent tool results from archiving
+    LLMDecide             *LLMDecideConfig // Enable LLM-decides mode
 }
 
 type LLMDecideConfig struct {
@@ -78,9 +79,11 @@ func (c *Compactor) Compact(ctx, agentCtx) (*CompactionResult, error)
 ### Token Estimation
 
 ```go
-func EstimateTokens(text string) int            // ~4 chars per token
-func EstimateMessageTokens(msg AgentMessage) int // Per-message estimation
+func EstimateMessageTokens(msg AgentMessage) int  // Per-message estimation
+func estimateMessageTokens(msg AgentMessage) int  // Unexported internal helper
 ```
+
+Note: The standalone `EstimateTokens()` function lives in `pkg/context`.
 
 ## Cache-Friendly Design
 

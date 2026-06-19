@@ -13,21 +13,22 @@ Agent execution context: messages, tools, skills, and compaction state.
 ```go
 type AgentContext struct {
     SystemPrompt          string            // System prompt for LLM calls
+    AgentContextPrefix    string            // Skills + AGENTS.md prefix (rebuilt at startup)
     Tools                 []Tool            // Available tools
     Skills                []skill.Skill     // Loaded skills
     RecentMessages        []AgentMessage    // Current conversation (not full history)
     AgentState            *AgentState       // System-maintained metadata
     LastCompactionSummary string            // For incremental summary updates
-    // ... callbacks, tool whitelist
+    OnMessagesChanged     func() error      // Callback when messages are modified
+    // allowedTools — nil means all allowed, non-nil is a whitelist
 }
 ```
 
 Key methods:
 - `AddMessage(msg)` — Append a message, call OnMessagesChanged
-- `GetMessages()` — Return recent messages
 - `EstimateTokens()` — Estimate total token count
 - `SetAllowedTools(names)` / `IsToolAllowed(name)` — Tool whitelist management
-- `EstimateTokenPercent(windowSize)` — Context usage as percentage
+- `EstimateTokenPercent()` — Context usage as percentage
 
 ### Tool
 
@@ -46,17 +47,24 @@ Interface that all agent tools must implement.
 
 ```go
 type AgentMessage struct {
-    Role       string         `json:"role"`      // "user", "assistant", "tool"
-    Content    []ContentBlock `json:"content"`
-    ToolCalls  []ToolCall     `json:"toolCalls,omitempty"`
-    ToolCallID string         `json:"toolCallId,omitempty"`
-    // ... metadata fields (visibility, kind, timestamp, entry ID)
+    Role       string           `json:"role"`      // "user", "assistant", "toolResult"
+    Content    []ContentBlock   `json:"content"`
+    Timestamp  int64            `json:"timestamp"`
+    Metadata   *MessageMetadata `json:"metadata,omitempty"`
+    Model      string           `json:"model,omitempty"`
+    Usage      *Usage           `json:"usage,omitempty"`
+    StopReason string           `json:"stopReason,omitempty"`
+    ToolCallID string           `json:"toolCallId,omitempty"`
+    ToolName   string           `json:"toolName,omitempty"`
+    IsError    bool             `json:"isError,omitempty"`
+    EntryID    string           `json:"entryId,omitempty"`
+    // ... truncation tracking fields
 }
 ```
 
 ### ContentBlock
 
-Discriminated union with types: `text`, `image`, `tool_use`, `tool_result`.
+Discriminated union (interface) with implementations: `TextContent` (type `"text"`), `ImageContent` (type `"image"`), `ToolCallContent` (type `"toolCall"`), `ThinkingContent` (type `"thinking"`).
 
 ### AgentState
 
@@ -75,7 +83,9 @@ type CompactionResult struct {
     TokensAfter    int
     MessagesBefore int
     MessagesAfter  int
-    Type           string // "major"
+    Type           string           // "major" or "mini"
+    TruncatedCount int              // Number of messages truncated (mini only)
+    ExecutedTools  []ToolCallRecord // Tools actually executed during compaction
 }
 ```
 
@@ -102,7 +112,7 @@ Implemented by `pkg/compact.Compactor`. See [docs/context-management.md](../../d
 ```go
 func (c *AgentContext) EstimateTokens() int
 func (c *AgentContext) EstimateToolsTokens() int
-func (c *AgentContext) EstimateTokenPercent(windowSize int) float64
+func (c *AgentContext) EstimateTokenPercent() float64
 ```
 
 Estimates use a simple heuristic (~4 characters per token). Used by the compactor to decide when to act.
@@ -111,17 +121,20 @@ Estimates use a simple heuristic (~4 characters per token). Used by the compacto
 
 | File | Description |
 |------|-------------|
-| `context.go` | `AgentContext`, message management, token estimation, tool whitelist |
-| `message.go` | `AgentMessage`, `ContentBlock` types |
+| `context.go` | `AgentContext`, `Tool` interface, message management, token estimation, tool whitelist |
+| `message.go` | `AgentMessage`, `ContentBlock`, `TextContent`, `ImageContent`, `ToolCallContent`, `ThinkingContent` |
 | `agent_state.go` | `AgentState` tracking metadata |
-| `compactor.go` | `Compactor` interface, `CompactionResult` |
+| `compactor.go` | `Compactor` interface, `CompactionResult`, `ToolCallRecord` |
 | `journal.go` | `JournalEntry` types (message/truncate/compact) |
 | `journal_io.go` | Journal I/O operations |
 | `snapshot.go` | `ContextSnapshot` for checkpoint persistence |
-| `checkpoint.go` | Checkpoint save/load, symlink management |
+| `checkpoint.go` | `CheckpointInfo`, checkpoint save/load, symlink management |
 | `checkpoint_index.go` | Checkpoint index for fast lookup |
 | `checkpoint_io.go` | Checkpoint I/O operations |
 | `reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
+| `conversion.go` | `ConvertMessagesToLLM`, `ConvertToolsToLLM` — agent-to-LLM type conversion |
+| `token_estimation.go` | `EstimateTokens()` standalone function |
+| `constants.go` | Package constants (`RecentMessagesKeep`) |
 
 ## Dependencies
 

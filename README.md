@@ -1,6 +1,6 @@
 # ai — AI Coding Agent (Go)
 
-`ai` is a Go-based AI coding agent with an RPC-first architecture, designed for editor and CLI integration. It features a subcommand-based CLI, session persistence, LLM-driven context management, a pluggable skills system, and an agent orchestration runtime (`ag`).
+`ai` is a Go-based AI coding agent with an RPC-first architecture, designed for editor and CLI integration. It features a subcommand-based CLI, session persistence, LLM-driven context management, and a pluggable skills system.
 
 ## Build & Install
 
@@ -60,16 +60,21 @@ ai ls --all --json
 - `--max-turns <n>` — Maximum conversation turns (0 = unlimited)
 - `--timeout <duration>` — Total execution timeout (0 = unlimited)
 - `--input <text>` — Initial prompt to send after startup
+- `--input-file <path>` — Read initial prompt from file (avoids shell ARG_MAX)
+- `--role <coder\|orchestrator\|validator>` — Agent role (affects system prompt)
+- `--name <text>` — Human-readable name for the run
 
 **`serve` only:**
 - `--http <addr>` — Enable HTTP debug server (e.g., `:6060`)
-- `--name <text>` — Human-readable name for the run
+- `--id-file <path>` — Write run ID to file after startup
 
 **`watch`:**
 - `--id <run-id>` — Run ID or prefix (auto-selects by cwd if omitted)
 
 **`send`:**
 - `--id <run-id>` — Run ID or prefix
+- `--wait` — Send message and wait for response
+- `--timeout <duration>` — Max wait time
 
 **`kill`:**
 - `--id <run-id>` — Run ID or prefix
@@ -87,6 +92,9 @@ ai ls --all --json
 | `ZAI_BASE_URL` | No | `https://api.z.ai/api/coding/paas/v4` | LLM API base URL |
 | `ZAI_MODEL` | No | `glm-4.5-air` | Model ID |
 | `ZAI_MAX_TOKENS` | No | Model default | Max output tokens |
+| `ZAI_MAX_CONCURRENT_TOOLS` | No | `5` | Max concurrent tool execution |
+| `ZAI_TOOL_TIMEOUT` | No | `30` | Tool execution timeout (seconds) |
+| `ZAI_QUEUE_TIMEOUT` | No | `60` | Tool queue wait timeout (seconds) |
 
 API key can also be stored in `~/.ai/auth.json`:
 
@@ -111,14 +119,19 @@ Config file: `~/.ai/config.json`
     "id": "glm-4.5-air",
     "provider": "zai",
     "baseUrl": "https://api.z.ai/api/coding/paas/v4",
-    "api": "openai-completions"
+    "api": "openai-completions",
+    "maxTokens": 16384
   },
+  "thinkingLevel": "off",
   "compactor": {
-    "maxMessages": 100,
-    "maxTokens": 100000,
-    "keepRecent": 10,
+    "maxMessages": 50,
+    "maxTokens": 8000,
+    "keepRecent": 5,
+    "keepRecentTokens": 20000,
     "reserveTokens": 16384,
-    "toolCallCutoff": 10
+    "toolCallCutoff": 10,
+    "toolSummaryStrategy": "off",
+    "autoCompact": true
   },
   "concurrency": {
     "maxConcurrentTools": 5,
@@ -137,15 +150,17 @@ Config file: `~/.ai/config.json`
 
 ## RPC Protocol
 
-In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/events to stdout.
+In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/events to stdout. See [docs/rpc-protocol.md](docs/rpc-protocol.md) for full details.
 
 ### Commands
 
-- `prompt` — Send a user message
-- `steer` — Inject mid-turn guidance
-- `follow_up` — Queue a follow-up message
-- `abort` — Cancel current turn
-- `ping` — Health check
+| Command | Description |
+|---------|-------------|
+| `prompt` | Send a user message |
+| `steer` | Inject mid-turn guidance |
+| `follow_up` | Queue a follow-up message |
+| `abort` | Cancel current turn |
+| `ping` | Health check |
 
 ### Events
 
@@ -156,6 +171,11 @@ In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/even
 | `turn_start` / `turn_end` | Turn boundaries |
 | `message_start` / `message_update` / `message_end` | Streaming message chunks |
 | `tool_execution_start` / `tool_execution_end` | Tool invocations |
+| `compaction_start` / `compaction_end` | Context compaction |
+| `llm_retry` | LLM API retry (rate limit, etc.) |
+| `loop_guard_triggered` | Loop guard protection |
+| `tool_call_recovery` | Tool call recovery |
+| `error` | Error event |
 
 `message_update` types: `text_start`, `text_delta`, `text_end`, `toolcall_delta`, `thinking_delta`.
 
@@ -169,7 +189,7 @@ In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/even
 | `bash` | Execute shell commands (with timeout control) |
 | `grep` | Search file contents (ripgrep or grep) |
 | `change_workspace` | Change working directory |
-| `context_management` | LLM-driven context truncation/compaction |
+| `find_skill` | Search and discover available skills |
 
 ## Skills System
 
@@ -177,57 +197,9 @@ Skills are Markdown files (with optional YAML frontmatter) loaded from:
 - `~/.ai/skills/` — Global skills
 - `.ai/skills/` — Project skills
 
-Skills extend the agent's capabilities with domain-specific instructions, prompts, and scripts.
+Skills extend the agent's capabilities with domain-specific instructions, prompts, and scripts. Use the `find_skill` tool to search for relevant skills during a session.
 
-### Key Skills
-
-| Skill | Description |
-|-------|-------------|
-| `ag` | Agent orchestration runtime — spawn, steer, and coordinate AI agents |
-| `brainstorm` | Explore user intent through conversation |
-| `plan` | Read design docs, produce task plan with dependency DAG |
-| `implement` | Code-driven task execution with ag task scheduler |
-| `brainstorm` | Interactive design exploration → design.md |
-| `review` | Code review using codex-rs methodology |
-| `systematic-debugging` | Structured debugging workflow |
-| `github` | GitHub interaction via `gh` CLI |
-| `land` | Merge PRs with branch management |
-| `tmux` | Background process management |
-
-
-## Agent Orchestration (`ag`)
-
-`ag` is a companion CLI (built from `skills/ag/`) for orchestrating multiple AI agents:
-
-```bash
-# Build ag
-cd skills/ag && go install .
-
-# Spawn agents
-ag agent spawn worker-1 --input "fix authentication bug"
-ag agent spawn reviewer --system @reviewer.md --input "review the changes"
-
-# Monitor
-ag agent status worker-1
-ag agent output worker-1 --tail 50
-
-# Control
-ag agent steer worker-1 "also check error handling"
-ag agent kill worker-1
-
-# Task DAG scheduling
-ag task import-plan tasks.md
-ag task next --claimant worker-1
-ag task done T001 --summary "completed"
-```
-
-Key features:
-- Bridge-per-agent architecture (no central daemon, no tmux dependency)
-- Multi-backend support (`ai` JSON-RPC, `codex` raw protocol)
-- Inter-agent communication via channels
-- Task DAG with dependency resolution
-
-See `skills/ag/SKILL.md` for full documentation.
+See [skills/](skills/) for available skill packages.
 
 ## File Locations
 
@@ -236,7 +208,7 @@ See `skills/ag/SKILL.md` for full documentation.
 | `~/.ai/config.json` | Configuration |
 | `~/.ai/auth.json` | API credentials |
 | `~/.ai/ai-{pid}.log` | Per-process logs |
-| `~/.ai/sessions/--<cwd>--/` | Session data (per git repo root) |
+| `~/.ai/sessions/--<cwd>--/` | Session data (per working directory) |
 | `~/.ai/skills/` | Global skills |
 | `.ai/skills/` | Project skills |
 | `~/.ai/traces/` | Perfetto-compatible trace files |
@@ -250,14 +222,23 @@ The agent writes Perfetto-compatible trace files to `~/.ai/traces/`. Events incl
 
 Sessions are stored as append-only JSONL files under `~/.ai/sessions/--<sanitized-path>--/`. Key properties:
 - Directory-based with `messages.jsonl` as the primary file
-- Header entry contains session ID and metadata
+- Header entry contains session ID, CWD, git version metadata
 - Fork support: branch conversations from any point
 - Checkpoint + journal: efficient recovery with periodic snapshots
+- Compaction snapshots: post-compaction state saved to `compactions/` files
 - Legacy format auto-migration on load
+
+See [docs/session-format.md](docs/session-format.md) for format details.
 
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md) for detailed component diagrams and data flow.
+
+## Documentation
+
+- [docs/README.md](docs/README.md) — Documentation index and live docs
+- [CHANGELOG.md](CHANGELOG.md) — Functional changes per commit
+- [CLAUDE.md](CLAUDE.md) — Agent guidance for this repository
 
 ## License
 

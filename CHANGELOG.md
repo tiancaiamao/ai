@@ -7,6 +7,11 @@ Format: one entry per meaningful change, newest first.
 ## Unreleased
 
 ### Changed
+- docs: rewrote root `README.md` — removed non-existent `ag` CLI and `context_management` tool, fixed config/env vars/tools/skills sections, added complete RPC event types
+- docs: created README for `pkg/agentconfig`, `pkg/middlewares`, `pkg/testutil` (previously missing)
+- docs: strengthened `CLAUDE.md` Documentation Maintenance section — added pre-commit checklist and documentation surface table
+- docs: updated `docs/README.md` — added root README and `pkg/*/README.md` to Live Docs index
+- docs: verified and fixed all `pkg/*/README.md` against actual code (types, functions, file references)
 - docs: restructured documentation — live docs, ADRs, and archive separated; added `docs/README.md` as entry point
 - docs: rewrote `context-management.md` to match actual LLMDecide architecture (removed obsolete ContextManager/truncate/update tools)
 - docs: rewrote `session-format.md` — added `snapshotRef` + checkpoint layout, removed non-existent `compact_event` entry type

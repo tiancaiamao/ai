@@ -77,9 +77,9 @@ Main session struct. Manages an in-memory tree of entries backed by `messages.js
 
 - `AppendMessage(msg)` — Append a user/assistant/tool message
 - `GetMessages()` — Get current conversation branch as `[]AgentMessage`
-- `Compact(compactor)` — Compact older messages into a summary entry
+- `AppendCompaction(summary, messages)` — Append a compaction entry with summary
 - `GetUserMessagesForForking()` — List user messages suitable as fork points
-- `GetBranch(leafID)` — Get entries from root to a specific leaf
+- `GetBranch(id)` — Get entries from root to a specific leaf
 
 ### SessionManager
 
@@ -93,7 +93,7 @@ Manages multiple sessions within a sessions directory. Handles:
 - `CreateSession(name, title)` — Create a new session
 - `ForkSessionFrom(source, leafID, name, title)` — Branch a conversation from any point
 - `DeleteSession(id)` — Remove a session
-- `RenameSession(id, name)` — Rename a session
+- `UpdateSessionName(id, name, title)` — Rename/update a session
 
 ## Forking
 

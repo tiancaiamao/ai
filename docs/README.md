@@ -9,11 +9,13 @@ These documents describe the **current** codebase and must stay in sync.
 
 | Document | Covers | When to Update |
 |----------|--------|----------------|
+| [`../README.md`](../README.md) | Project overview, CLI usage, config, tools, env vars | CLI commands changed; tools added/removed; config structure changed |
 | [`architecture.md`](architecture.md) | Package structure, component diagram, system overview | Package added/removed/renamed; component relationships change |
 | [`rpc-protocol.md`](rpc-protocol.md) | RPC command types, event types, socket protocol | New RPC command/event added; protocol format changed |
 | [`session-format.md`](session-format.md) | JSONL entry types, session layout, lazy loading | Entry type added/removed; session storage format changed |
 | [`context-management.md`](context-management.md) | Compaction, LLMDecide, token estimation | Compaction strategy changed; context management refactored |
 | [`test-strategy.md`](test-strategy.md) | Test pyramid, test files, regression tests | Test structure changed; new test layer added |
+| [`../pkg/*/README.md`](../pkg/) | Package-level API, types, key files | Package API changed; files added/removed/renamed |
 
 ## ADRs
 
