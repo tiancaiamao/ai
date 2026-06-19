@@ -16,6 +16,12 @@ These documents describe the **current** codebase and must stay in sync.
 | [`context-management.md`](context-management.md) | Compaction, LLMDecide, token estimation | Compaction strategy changed; context management refactored |
 | [`test-strategy.md`](test-strategy.md) | Test pyramid, test files, regression tests | Test structure changed; new test layer added |
 | [`skill-progressive-disclosure.md`](skill-progressive-disclosure.md) | Skill ranking, topN selection, find_skill discovery | Skill formatting/usage tracking changed |
+| [`ai-agent-control.md`](ai-agent-control.md) | Agent-controlling-agent via CLI (steer/watch/send) | RPC slash commands or watch modes changed |
+| [`cache-friendly-message-architecture.md`](cache-friendly-message-architecture.md) | Prefix cache strategy, message immutability | Cache-friendly message construction changed |
+| [`agent-harness-evolution.md`](agent-harness-evolution.md) | Kernel/shell separation, hook system design | Hook system or harness config changed |
+| [`evolve-directions.md`](evolve-directions.md) | Auto-evolution methodology and stages | Evolve loop or pipeline changed |
+| [`evolve-output-spec.md`](evolve-output-spec.md) | Evolve artifact file formats | Evolve output file structure changed |
+| [`planner-system-prompt.md`](planner-system-prompt.md) | System prompt for evolve planner agent | Evolve planner prompt changed |
 | [`../pkg/*/README.md`](../pkg/) | Package-level API, types, key files | Package API changed; files added/removed/renamed |
 
 ## ADRs

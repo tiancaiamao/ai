@@ -541,7 +541,7 @@ rpc_msg = json.dumps({'type': 'prompt', 'message': prompt})
 print(rpc_msg)
 " | "${AI_BIN}" --mode rpc \
         --agent-config "${AGENT_CONFIG}" \
-        --system-prompt "@${PROJECT_ROOT}/docs/design/planner-system-prompt.md" \
+        --system-prompt "@${PROJECT_ROOT}/docs/planner-system-prompt.md" \
         2>"${ARTIFACTS_DIR}/planner-stderr.log" \
                 | python3 "${PROJECT_ROOT}/scripts/planner_rpc_filter.py" \
         --iteration "${ITER}" \

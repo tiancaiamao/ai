@@ -87,6 +87,8 @@ Inspired by the long-run harness exploration — workflow mode's fundamental dil
 
 Key commits: `c90b146` (#242) PGE infrastructure, `6ac6352` (#245) skills for ai CLI subagent pattern, `e819b4b` (#275) slim down orchestrator prompt.
 
+Design doc: `docs/ai-agent-control.md` (live — design still matches current implementation).
+
 ## Workflow System: Rise and Fall (2026-03 — 2026-05)
 
 ### Workflow Engine (2026-03 — 2026-04)
