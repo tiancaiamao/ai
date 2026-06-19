@@ -7,5 +7,5 @@ import (
 )
 
 func main() {
-	cli.Dispatch(os.Args[0])
+	cli.Run(os.Args[0])
 }

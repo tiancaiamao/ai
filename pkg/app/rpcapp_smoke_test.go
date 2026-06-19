@@ -45,6 +45,9 @@ func readResponses(r io.Reader) []map[string]any {
 func runRPCSmoke(t *testing.T, tmpDir string, cmds []string, modelOverride string) []map[string]any {
 	t.Helper()
 
+	// Ensure API key is set so resolveModelAndKey doesn't fail in CI.
+	t.Setenv("ZAI_API_KEY", "test-key")
+
 	reader, writer := io.Pipe()
 	outReader, outWriter := io.Pipe()
 

@@ -33,7 +33,7 @@ func RPCSubcommand() {
 
 // RPCSubcommand implements the 'ai rpc' subcommand.
 // binPath is the path to the current binary (os.Args[0]).
-func Dispatch(binPath string) {
+func Run(binPath string) {
 	if len(os.Args) < 2 {
 		PrintUsage()
 		return

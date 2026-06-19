@@ -29,7 +29,7 @@ func TestPrintUsage(t *testing.T) {
 	}
 }
 
-func TestDispatchNoArgs(t *testing.T) {
+func TestRunNoArgs(t *testing.T) {
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
@@ -39,7 +39,7 @@ func TestDispatchNoArgs(t *testing.T) {
 	defer func() { os.Stderr = oldStderr }()
 
 	os.Args = []string{"ai"}
-	Dispatch("ai")
+	Run("ai")
 
 	w.Close()
 	data, _ := io.ReadAll(r)
@@ -48,7 +48,7 @@ func TestDispatchNoArgs(t *testing.T) {
 	}
 }
 
-func TestDispatchRPC(t *testing.T) {
+func TestRunRPC(t *testing.T) {
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
@@ -71,7 +71,7 @@ func TestDispatchRPC(t *testing.T) {
 		stdinW.Close()
 	}()
 
-	Dispatch("ai")
+	Run("ai")
 
 	stdoutW.Close()
 	scanner := bufio.NewScanner(stdoutR)
@@ -94,16 +94,16 @@ func TestDispatchRPC(t *testing.T) {
 	}
 }
 
-// TestDispatchUnknownSubcommand runs Dispatch with a bad subcommand in a
+// TestRunUnknownSubcommand runs Run with a bad subcommand in a
 // subprocess because it calls os.Exit(1).
-func TestDispatchUnknownSubcommand(t *testing.T) {
+func TestRunUnknownSubcommand(t *testing.T) {
 	if os.Getenv("TEST_UNKNOWN_SUBCMD") == "1" {
 		os.Args = []string{"ai", "frobnicate"}
-		Dispatch("ai")
+		Run("ai")
 		return
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestDispatchUnknownSubcommand")
+	cmd := exec.Command(os.Args[0], "-test.run=TestRunUnknownSubcommand")
 	cmd.Env = append(os.Environ(), "TEST_UNKNOWN_SUBCMD=1")
 	err := cmd.Run()
 	if err == nil {
