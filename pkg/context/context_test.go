@@ -3,8 +3,6 @@ package context
 import (
 	"context"
 	"testing"
-
-	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
 // AgentContext convenience methods — all 0% covered without tests.
@@ -20,43 +18,6 @@ func TestNewAgentContext(t *testing.T) {
 	if ctx.AgentState == nil {
 		t.Fatal("expected non-nil AgentState")
 	}
-}
-
-func TestNewAgentContextWithSessionID(t *testing.T) {
-	ctx := NewAgentContextWithSessionID("sys", "session-1", "/cwd")
-	if ctx.AgentState.SessionID != "session-1" {
-		t.Fatalf("expected session-1, got %q", ctx.AgentState.SessionID)
-	}
-	if ctx.AgentState.CurrentWorkingDir != "/cwd" {
-		t.Fatalf("expected /cwd, got %q", ctx.AgentState.CurrentWorkingDir)
-	}
-}
-
-func TestNewAgentContextWithSkills(t *testing.T) {
-	t.Run("no skills", func(t *testing.T) {
-		ctx := NewAgentContextWithSkills("sys", nil)
-		if ctx.SystemPrompt != "sys" {
-			t.Fatalf("expected unchanged prompt, got %q", ctx.SystemPrompt)
-		}
-	})
-
-	t.Run("with skills appends formatted text", func(t *testing.T) {
-		skills := []skill.Skill{
-			{
-				Name:        "test-skill",
-				Description: "a skill for testing",
-			},
-		}
-		ctx := NewAgentContextWithSkills("sys\n", skills)
-		if ctx.SystemPrompt == "sys\n" {
-			t.Fatal("expected system prompt to be extended with skill text")
-		}
-		// The skill should be mentioned somewhere in the extended prompt.
-		// (The exact format depends on skill.FormatForPrompt — we just sanity check.)
-		if len(ctx.Skills) != 1 {
-			t.Fatalf("expected 1 skill, got %d", len(ctx.Skills))
-		}
-	})
 }
 
 func TestAddRecentAndAddMessage(t *testing.T) {

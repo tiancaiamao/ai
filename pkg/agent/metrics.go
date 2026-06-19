@@ -271,29 +271,6 @@ func (m *Metrics) finalizeLLMWindowStats() {
 	stats.RecentWindowDurationNs = stats.RecentWindowEndNs - stats.RecentWindowStartNs
 }
 
-// GetToolMetrics returns aggregated metrics for a specific tool.
-func (m *Metrics) GetToolMetrics(toolName string) ToolMetricsSnapshot {
-	m.refreshAggregations()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	cache, ok := m.cachedToolStats[toolName]
-	if !ok {
-		return ToolMetricsSnapshot{}
-	}
-
-	return ToolMetricsSnapshot{
-		Name:              cache.Name,
-		CallCount:         cache.CallCount,
-		SuccessCount:      cache.SuccessCount,
-		FailCount:         cache.FailCount,
-		SuccessRate:       safeRatio(cache.SuccessCount, cache.CallCount),
-		AverageDurationMs: safeDurationMillis(cache.TotalDurationNs, cache.CallCount),
-		LastCall:          cache.LastCall,
-	}
-}
-
 // GetLLMMetrics returns aggregated LLM metrics.
 func (m *Metrics) GetLLMMetrics() LLMMetricsSnapshot {
 	m.refreshAggregations()
@@ -459,20 +436,6 @@ func (m *Metrics) contextMetricsSnapshotLocked() ContextMetricsSnapshot {
 	}
 }
 
-// GetAllTools returns all tool names that have metrics.
-func (m *Metrics) GetAllTools() []string {
-	m.refreshAggregations()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	names := make([]string, 0, len(m.cachedToolStats))
-	for name := range m.cachedToolStats {
-		names = append(names, name)
-	}
-	return names
-}
-
 // GetFullMetrics returns a complete metrics snapshot.
 func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 	m.refreshAggregations()
@@ -501,30 +464,6 @@ func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 		PromptMetrics:  m.promptMetricsSnapshotLocked(),
 		ContextMetrics: m.contextMetricsSnapshotLocked(),
 	}
-}
-
-// GetSessionUptime returns the session uptime.
-func (m *Metrics) GetSessionUptime() time.Duration {
-	return time.Since(m.sessionStart)
-}
-
-// Reset clears all cached metrics.
-func (m *Metrics) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.cachedToolStats = make(map[string]*toolStatsCache)
-	m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
-	m.cachedPromptStats = &promptStatsCache{}
-	m.cachedMessageStats = &messageStatsCache{}
-	m.cachedContextStats = &contextStatsCache{}
-	m.cacheValid = false
-	m.sessionStart = time.Now()
-
-	// Reset incremental aggregation state
-	m.lastAggregatedCount = 0
-	m.lastAggregatedTime = time.Time{}
-	m.bufferResetDetected = false
 }
 
 // RecordTraceEvent records a trace event to the buffer and invalidates cache.

@@ -24,7 +24,6 @@ type harnessConfig struct {
 	apiKey       string
 	// Advanced options
 	maxConsecutiveToolCalls int
-	contextWindow           int
 }
 
 // WithMaxTurns limits the number of agent loop turns.
@@ -40,11 +39,6 @@ func WithTools(tools ...agentctx.Tool) HarnessOption {
 // WithCompactors sets compaction strategies on the agent.
 func WithCompactors(c ...agentctx.Compactor) HarnessOption {
 	return func(cfg *harnessConfig) { cfg.compactors = append(cfg.compactors, c...) }
-}
-
-// WithContextWindow sets the context window size.
-func WithContextWindow(tokens int) HarnessOption {
-	return func(c *harnessConfig) { c.contextWindow = tokens }
 }
 
 // AgentHarness is a fully-wired test harness for agent.Agent.
@@ -126,9 +120,7 @@ func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *A
 	if cfg.maxConsecutiveToolCalls > 0 {
 		loopCfg.MaxConsecutiveToolCalls = cfg.maxConsecutiveToolCalls
 	}
-	if cfg.contextWindow > 0 {
-		loopCfg.ContextWindow = cfg.contextWindow
-	}
+
 	loopCfg.EnableCheckpoint = false
 	loopCfg.Compactors = cfg.compactors
 
@@ -196,14 +188,4 @@ func (h *AgentHarness) FollowUp(msg string) {
 func (h *AgentHarness) Close() {
 	h.stopSub()
 	h.Server.Close()
-}
-
-// Reset clears collected events for a new assertion round.
-func (h *AgentHarness) Reset() {
-	h.Events.Reset()
-}
-
-// LLMCallCount returns the total number of LLM calls made to the mock server.
-func (h *AgentHarness) LLMCallCount() int {
-	return h.CallCount
 }

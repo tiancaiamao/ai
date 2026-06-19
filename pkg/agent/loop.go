@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -318,11 +317,6 @@ func hashAny(value any) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// randFloat64 returns a random float64 in [0, 1)
-func randFloat64() float64 {
-	return rand.Float64()
 }
 
 // isEmptyActionableResponse returns true if the message contains no actionable

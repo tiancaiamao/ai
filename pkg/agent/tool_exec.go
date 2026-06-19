@@ -369,12 +369,3 @@ Alternatively:
 
 	return msg
 }
-
-func hasToolResultNamed(results []agentctx.AgentMessage, toolName string) bool {
-	for _, r := range results {
-		if r.ToolName == toolName {
-			return true
-		}
-	}
-	return false
-}

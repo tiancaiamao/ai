@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -625,21 +624,4 @@ func parseXMLTagStyleArguments(args string) map[string]any {
 		}
 	}
 	return result
-}
-
-func parseRetryAfterHeaderAnthropic(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		d := time.Until(at)
-		if d > 0 {
-			return d
-		}
-	}
-	return 0
 }

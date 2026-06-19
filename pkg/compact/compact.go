@@ -318,37 +318,6 @@ func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
 	return totalTokens
 }
 
-func lastAssistantUsageTokens(messages []agentctx.AgentMessage) (int, int) {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		if msg.Role != "assistant" || msg.Usage == nil {
-			continue
-		}
-		stopReason := strings.ToLower(strings.TrimSpace(msg.StopReason))
-		if stopReason == "aborted" || stopReason == "error" {
-			continue
-		}
-		tokens := usageTotalTokens(msg.Usage)
-		if tokens > 0 {
-			return tokens, i
-		}
-	}
-	return 0, -1
-}
-
-func usageTotalTokens(usage *agentctx.Usage) int {
-	if usage == nil {
-		return 0
-	}
-	if usage.TotalTokens > 0 {
-		return usage.TotalTokens
-	}
-	return usage.InputTokens + usage.OutputTokens + usage.CacheRead + usage.CacheWrite
-}
-
 func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
@@ -380,11 +349,6 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 		return 0
 	}
 	return int(math.Ceil(float64(charCount) / 4.0))
-}
-
-// EstimateMessageTokens estimates token usage for a single message.
-func EstimateMessageTokens(msg agentctx.AgentMessage) int {
-	return estimateMessageTokens(msg)
 }
 
 // Compact compacts context by summarizing old messages using AgentContext.

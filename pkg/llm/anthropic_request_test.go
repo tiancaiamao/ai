@@ -2,10 +2,8 @@ package llm
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildAnthropicRequestUsesConfiguredMaxTokens(t *testing.T) {
@@ -267,36 +265,6 @@ func TestParseXMLTagStyleArguments(t *testing.T) {
 			t.Fatalf("expected empty map (no arrow), got %#v", got)
 		}
 	})
-}
-
-// Cover parseRetryAfterHeaderAnthropic — seconds, http-date, invalid, empty.
-func TestParseRetryAfterHeaderAnthropic(t *testing.T) {
-	if got := parseRetryAfterHeaderAnthropic(""); got != 0 {
-		t.Fatalf("expected 0 for empty, got %v", got)
-	}
-	if got := parseRetryAfterHeaderAnthropic("   "); got != 0 {
-		t.Fatalf("expected 0 for whitespace, got %v", got)
-	}
-	if got := parseRetryAfterHeaderAnthropic("10"); got != 10*time.Second {
-		t.Fatalf("expected 10s, got %v", got)
-	}
-	if got := parseRetryAfterHeaderAnthropic("0"); got != 0 {
-		t.Fatalf("expected 0 for non-positive seconds, got %v", got)
-	}
-	if got := parseRetryAfterHeaderAnthropic("-5"); got != 0 {
-		t.Fatalf("expected 0 for negative seconds, got %v", got)
-	}
-	future := time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)
-	if got := parseRetryAfterHeaderAnthropic(future); got <= 0 {
-		t.Fatalf("expected positive duration for http-date, got %v", got)
-	}
-	past := time.Now().Add(-2 * time.Second).UTC().Format(http.TimeFormat)
-	if got := parseRetryAfterHeaderAnthropic(past); got != 0 {
-		t.Fatalf("expected 0 for past http-date, got %v", got)
-	}
-	if got := parseRetryAfterHeaderAnthropic("not-a-date"); got != 0 {
-		t.Fatalf("expected 0 for invalid, got %v", got)
-	}
 }
 
 // Cover more buildAnthropicRequest branches: system prompt + system message,

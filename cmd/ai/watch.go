@@ -87,46 +87,12 @@ func newSentenceBuffer(flushFunc func(text string)) *sentenceBuffer {
 	return &sentenceBuffer{flushFunc: flushFunc}
 }
 
-func (sb *sentenceBuffer) write(text string) {
-	sb.buf.WriteString(text)
-	// Flush at sentence boundaries (ASCII: .!? + space/newline; CJK: 。，！？、)
-	s := sb.buf.String()
-	if hasSentenceBoundary(s) {
-		sb.flush()
-		return
-	}
-	// Flush if buffer exceeds 80 chars to avoid starving the UI.
-	if sb.buf.Len()-sb.lastFlush >= 80 {
-		sb.flush()
-	}
-}
-
 func (sb *sentenceBuffer) flush() {
 	if sb.buf.Len() > 0 {
 		sb.flushFunc(sb.buf.String())
 		sb.lastFlush = 0
 		sb.buf.Reset()
 	}
-}
-
-func hasSentenceBoundary(s string) bool {
-	runes := []rune(s)
-	n := len(runes)
-	for i, c := range runes {
-		switch c {
-		case '.', '!', '?':
-			if i < n-1 {
-				next := runes[i+1]
-				if next == ' ' || next == '\n' || next == '\t' {
-					return true
-				}
-			}
-		case '。', '！', '？', '，', '、', '；', '：', '\n':
-			// CJK sentence/clause boundaries — flush immediately.
-			return true
-		}
-	}
-	return false
 }
 
 // --- Model ---
@@ -929,127 +895,6 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
-// --- Pretty printing helpers ---
-
-type prettyContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	Thinking  string          `json:"thinking"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-}
-
-type prettyMessage struct {
-	Role    string               `json:"role"`
-	Content []prettyContentBlock `json:"content"`
-}
-
-// summarizeToolInput returns a short summary of a tool call's input.
-func summarizeToolInput(name string, raw json.RawMessage) string {
-	if raw == nil {
-		return ""
-	}
-	var input map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return string(raw)
-	}
-	switch name {
-	case "bash":
-		if v, ok := input["command"]; ok {
-			s := strings.Trim(string(v), `"`)
-			if len(s) > 120 {
-				return s[:120] + "..."
-			}
-			return s
-		}
-	case "read":
-		if v, ok := input["path"]; ok {
-			return strings.Trim(string(v), `"`)
-		}
-	case "write":
-		if v, ok := input["path"]; ok {
-			return strings.Trim(string(v), `"`)
-		}
-	case "edit":
-		path := ""
-		if v, ok := input["path"]; ok {
-			path = strings.Trim(string(v), `"`)
-		}
-		return path
-	case "grep":
-		parts := []string{}
-		if v, ok := input["pattern"]; ok {
-			parts = append(parts, strings.Trim(string(v), `"`))
-		}
-		if v, ok := input["path"]; ok {
-			parts = append(parts, strings.Trim(string(v), `"`))
-		}
-		return strings.Join(parts, " in ")
-	}
-	// Generic: show first field.
-	for k, v := range input {
-		s := strings.Trim(string(v), `"`)
-		if len(s) > 80 {
-			s = s[:80] + "..."
-		}
-		return k + "=" + s
-	}
-	return ""
-}
-
-// prettyPrintAgentEnd formats the complete conversation from agent_end.
-func prettyPrintAgentEnd(line string) {
-	var event struct {
-		Messages []prettyMessage `json:"messages"`
-	}
-	if err := json.Unmarshal([]byte(line), &event); err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to parse agent_end: %v\n", err)
-		return
-	}
-
-	for _, msg := range event.Messages {
-		// Skip tool result messages — output is too verbose.
-		if msg.Role == "toolResult" {
-			continue
-		}
-		for _, block := range msg.Content {
-			switch block.Type {
-			case "text":
-				text := strings.TrimSpace(block.Text)
-				if text == "" {
-					continue
-				}
-				if msg.Role == "user" {
-					fmt.Printf("user: %s\n", text)
-				} else {
-					fmt.Printf("assistant: %s\n", text)
-				}
-			case "thinking":
-				t := strings.TrimSpace(block.Thinking)
-				if t == "" {
-					continue
-				}
-				if len(t) > 300 {
-					t = t[:300] + "..."
-				}
-				fmt.Printf("thinking: %s\n", t)
-			case "toolCall":
-				fmt.Printf("tool: %s(%s)\n", block.Name, summarizeToolInput(block.Name, block.Arguments))
-			}
-		}
-	}
-
-	// Extract stop reason from the raw line.
-	if idx := strings.Index(line, `"stopReason":"`); idx != -1 {
-		start := idx + len(`"stopReason":"`)
-		end := strings.IndexByte(line[start:], '"')
-		if end > 0 {
-			reason := line[start : start+end]
-			fmt.Printf("--- done (stopReason: %s) ---\n", reason)
-		}
-	}
-}
-
 // resolveRunForWatch resolves a run by ID flag or auto-selection.
 func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 	if idFlag != "" {
@@ -1217,43 +1062,5 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 	default:
 		m.endInline()
 		m.appendContent(f.Text)
-	}
-}
-
-// renderEvent converts a FormattedEvent to a styled string for display.
-// Legacy function used for non-streaming contexts.
-func renderEvent(f *run.FormattedEvent) string {
-	switch f.Kind {
-	case run.KindText:
-		// Assistant text: no prefix, plain output (streamed via sentBuf)
-		return f.Text
-
-	case run.KindThinking:
-		// Thinking: styled, with "thinking: " prefix when role is set
-		return thinkingStyle.Render(f.Text)
-
-	case run.KindTool:
-		// Tool execution: styled
-		return toolStyle.Render(f.Text)
-
-	case run.KindResponse:
-		// Slash command response: style errors differently
-		if strings.Contains(f.Text, "ai:") && (strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error")) {
-			return errStyle.Render(f.Text)
-		}
-		return metaStyle.Render(f.Text)
-
-	case run.KindMeta:
-		// System messages (ai: agent started, ai: compaction done, etc.)
-		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
-			return errStyle.Render(f.Text)
-		}
-		return aiStyle.Render(f.Text)
-
-	case run.KindSessionSwitch:
-		return sessStyle.Render(f.Text)
-
-	default:
-		return f.Text
 	}
 }

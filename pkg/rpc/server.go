@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/tiancaiamao/ai/pkg/command"
@@ -98,12 +97,6 @@ func (s *Server) HasHandler(cmdType string) bool {
 	defer s.mu.Unlock()
 	_, ok := s.handlers[cmdType]
 	return ok
-}
-
-// Run starts the RPC server reading from stdin and writing to stdout.
-// This method blocks until an error occurs or stdin is closed.
-func (s *Server) Run() error {
-	return s.RunWithIO(os.Stdin, os.Stdout)
 }
 
 // RunWithIO starts the RPC server using the provided reader and writer.
