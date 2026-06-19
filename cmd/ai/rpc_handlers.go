@@ -108,16 +108,11 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Initialize checkpoint manager for persistent state
 	if app.sess != nil {
 		sessionDir := app.sess.GetDir()
-		if mgr, err := agent.NewAgentContextCheckpointManager(sessionDir); err != nil {
+				if mgr, err := agent.NewAgentContextCheckpointManager(sessionDir); err != nil {
 			slog.Warn("Failed to create checkpoint manager", "error", err)
 			app.checkpointMgr = nil
 		} else {
 			app.checkpointMgr = mgr
-			defer func() {
-				if app.checkpointMgr != nil {
-					app.checkpointMgr.Close()
-				}
-			}()
 		}
 	}
 

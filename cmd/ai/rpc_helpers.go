@@ -255,12 +255,6 @@ func (app *rpcApp) updateCheckpointManager() error {
 	app.stateMu.Lock()
 	defer app.stateMu.Unlock()
 
-	if app.checkpointMgr != nil {
-		if err := app.checkpointMgr.Close(); err != nil {
-			slog.Warn("Failed to close old checkpoint manager", "error", err)
-		}
-	}
-
 	if app.sess != nil {
 		sessionDir := app.sess.GetDir()
 		if sessionDir != "" {

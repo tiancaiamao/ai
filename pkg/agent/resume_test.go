@@ -144,13 +144,7 @@ func newTestSession(t *testing.T, sessionDir string) *session.Session {
 }
 
 func saveCheckpointAtJournalHead(sessionDir string, snapshot *agentctx.ContextSnapshot, turn int) (*agentctx.CheckpointInfo, error) {
-	journal, err := agentctx.OpenJournal(sessionDir)
-	if err != nil {
-		return nil, fmt.Errorf("open journal: %w", err)
-	}
-	defer journal.Close()
-	msgIdx := journal.GetLength()
-	return agentctx.SaveCheckpoint(sessionDir, snapshot, turn, msgIdx)
+	return agentctx.SaveCheckpoint(sessionDir, snapshot, turn)
 }
 
 func cloneMessages(in []agentctx.AgentMessage) []agentctx.AgentMessage {

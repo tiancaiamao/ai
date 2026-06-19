@@ -3,8 +3,7 @@ package context
 import (
 	"os"
 	"path/filepath"
-	"strings"
-	"testing"
+		"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,11 +68,6 @@ func TestCheckpoint_SaveLoad_PreservesState(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sessionDir, 0755))
 
 	originalSnapshot := &ContextSnapshot{
-		RecentMessages: []AgentMessage{
-			NewUserMessage("First message"),
-			NewAssistantMessage(),
-			NewUserMessage("Second message"),
-		},
 		AgentState: &AgentState{
 			WorkspaceRoot:     "/workspace",
 			CurrentWorkingDir: "/workspace/project",
@@ -85,60 +79,23 @@ func TestCheckpoint_SaveLoad_PreservesState(t *testing.T) {
 		},
 	}
 
-	info, err := SaveCheckpoint(sessionDir, originalSnapshot, 10, 3)
+	info, err := SaveCheckpoint(sessionDir, originalSnapshot, 10)
 	require.NoError(t, err)
 
 	assert.Equal(t, 10, info.Turn)
-	assert.Equal(t, 3, info.MessageIndex)
-	assert.Equal(t, len(originalSnapshot.RecentMessages), info.RecentMessagesCount)
 
-	loadedSnapshot, err := LoadCheckpoint(sessionDir, info)
-	require.NoError(t, err)
-
-	assert.Equal(t, len(originalSnapshot.RecentMessages), len(loadedSnapshot.RecentMessages))
-	assert.Equal(t, originalSnapshot.AgentState.WorkspaceRoot, loadedSnapshot.AgentState.WorkspaceRoot)
-	assert.Equal(t, originalSnapshot.AgentState.TotalTurns, loadedSnapshot.AgentState.TotalTurns)
-	assert.Equal(t, originalSnapshot.AgentState.TokensUsed, loadedSnapshot.AgentState.TokensUsed)
-	assert.Equal(t, originalSnapshot.AgentState.LastTriggerTurn, loadedSnapshot.AgentState.LastTriggerTurn)
-}
-
-func TestCheckpoint_SavesMessagesJsonl(t *testing.T) {
-	tmpDir := t.TempDir()
-	sessionDir := filepath.Join(tmpDir, "session")
-	require.NoError(t, os.MkdirAll(sessionDir, 0755))
-
-	snapshot := &ContextSnapshot{
-		RecentMessages: []AgentMessage{
-			NewUserMessage("Message 1"),
-			NewAssistantMessage(),
-			NewUserMessage("Message 2"),
-		},
-		AgentState: &AgentState{TotalTurns: 3},
-	}
-
-	info, err := SaveCheckpoint(sessionDir, snapshot, 3, 10)
-	require.NoError(t, err)
-
+	// Verify agent_state.json exists in checkpoint dir
 	checkpointPath := filepath.Join(sessionDir, info.Path)
 	assert.FileExists(t, filepath.Join(checkpointPath, "agent_state.json"))
-	assert.FileExists(t, filepath.Join(checkpointPath, "messages.jsonl"))
-}
 
-func TestCheckpoint_EmptyRecentMessagesNotSaved(t *testing.T) {
-	tmpDir := t.TempDir()
-	sessionDir := filepath.Join(tmpDir, "session")
-	require.NoError(t, os.MkdirAll(sessionDir, 0755))
-
-	snapshot := &ContextSnapshot{
-		RecentMessages: []AgentMessage{},
-		AgentState:     &AgentState{TotalTurns: 0},
-	}
-
-	info, err := SaveCheckpoint(sessionDir, snapshot, 0, 0)
+	// Verify agent state can be loaded
+	loadedState, err := LoadCheckpointAgentState(checkpointPath)
 	require.NoError(t, err)
 
-	checkpointPath := filepath.Join(sessionDir, info.Path)
-	assert.NoFileExists(t, filepath.Join(checkpointPath, "messages.jsonl"))
+	assert.Equal(t, originalSnapshot.AgentState.WorkspaceRoot, loadedState.WorkspaceRoot)
+	assert.Equal(t, originalSnapshot.AgentState.TotalTurns, loadedState.TotalTurns)
+	assert.Equal(t, originalSnapshot.AgentState.TokensUsed, loadedState.TokensUsed)
+	assert.Equal(t, originalSnapshot.AgentState.LastTriggerTurn, loadedState.LastTriggerTurn)
 }
 
 // --- Symlink tests ---
@@ -149,17 +106,15 @@ func TestCurrentSymlink_PointsToLatest(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sessionDir, 0755))
 
 	snapshot1 := &ContextSnapshot{
-		RecentMessages: []AgentMessage{NewUserMessage("msg1")},
-		AgentState:     &AgentState{TotalTurns: 1},
+		AgentState: &AgentState{TotalTurns: 1},
 	}
-	_, err := SaveCheckpoint(sessionDir, snapshot1, 1, 0)
+	_, err := SaveCheckpoint(sessionDir, snapshot1, 1)
 	require.NoError(t, err)
 
 	snapshot2 := &ContextSnapshot{
-		RecentMessages: []AgentMessage{NewUserMessage("msg2")},
-		AgentState:     &AgentState{TotalTurns: 2},
+		AgentState: &AgentState{TotalTurns: 2},
 	}
-	info2, err := SaveCheckpoint(sessionDir, snapshot2, 2, 1)
+	info2, err := SaveCheckpoint(sessionDir, snapshot2, 2)
 	require.NoError(t, err)
 
 	// Verify current symlink
@@ -168,75 +123,7 @@ func TestCurrentSymlink_PointsToLatest(t *testing.T) {
 	assert.Equal(t, info2.Path, latestInfo.Path)
 }
 
-// --- ReconstructSnapshotWithCheckpoint tests ---
-
-func TestReconstructSnapshotWithCheckpoint_BasicReconstruction(t *testing.T) {
-	tmpDir := t.TempDir()
-	sessionDir := filepath.Join(tmpDir, "session")
-	require.NoError(t, os.MkdirAll(sessionDir, 0755))
-
-	// Step 1: Create journal with 5 messages
-	journal, err := OpenJournal(sessionDir)
-	require.NoError(t, err)
-
-	for i := 0; i < 5; i++ {
-		if i%2 == 0 {
-			require.NoError(t, journal.AppendMessage(NewUserMessage("msg")))
-		} else {
-			require.NoError(t, journal.AppendMessage(NewAssistantMessage()))
-		}
-	}
-
-	// Step 2: Create checkpoint (snapshot includes messages)
-	allEntries, err := journal.ReadAll()
-	require.NoError(t, err)
-
-	var msgs []AgentMessage
-	for _, e := range allEntries {
-		if e.Type == "message" && e.Message != nil {
-			msgs = append(msgs, *e.Message)
-		}
-	}
-
-	snapshot := &ContextSnapshot{
-		RecentMessages: msgs,
-		AgentState:     NewAgentState("session-1", "/workspace"),
-	}
-
-	info, err := SaveCheckpoint(sessionDir, snapshot, 5, 5)
-	require.NoError(t, err)
-
-	// Step 3: Append 3 more messages
-	require.NoError(t, journal.AppendMessage(NewUserMessage("incremental 1")))
-	require.NoError(t, journal.AppendMessage(NewAssistantMessage()))
-	require.NoError(t, journal.AppendMessage(NewToolResultMessage("call-2", "bash", []ContentBlock{
-		TextContent{Type: "text", Text: "output"},
-	}, false)))
-
-	// Step 4: Reconstruct
-	entries, err := journal.ReadAll()
-	require.NoError(t, err)
-
-	reconstructed, err := ReconstructSnapshotWithCheckpoint(sessionDir, info, entries)
-	require.NoError(t, err)
-
-	// 5 from checkpoint + 3 incremental = 8
-	assert.Len(t, reconstructed.RecentMessages, 8)
-}
-
-// --- TruncateWithHeadTail tests ---
-
-func TestTruncateWithHeadTail_Short(t *testing.T) {
-	result := TruncateWithHeadTail("short text")
-	assert.Contains(t, result, "truncated")
-}
-
-func TestTruncateWithHeadTail_Long(t *testing.T) {
-	longText := strings.Repeat("a", 5000)
-	result := TruncateWithHeadTail(longText)
-	assert.Contains(t, result, "chars truncated")
-	assert.True(t, len(result) < len(longText))
-}
+// --- SplitLines tests ---
 
 func TestSplitLines(t *testing.T) {
 	// Empty input
@@ -258,3 +145,4 @@ func TestSplitLines(t *testing.T) {
 		t.Errorf("expected blank lines skipped, got %+v", got)
 	}
 }
+
