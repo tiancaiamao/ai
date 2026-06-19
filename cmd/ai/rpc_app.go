@@ -81,7 +81,6 @@ type rpcApp struct {
 	loopCfg          *agent.LoopConfig
 	executor         agent.ToolExecutor
 	toolOutputConfig *config.ToolOutputConfig
-	checkpointMgr    *agent.AgentContextCheckpointManager
 
 	// --- Session I/O ---
 	sessionWriter *sessionWriter

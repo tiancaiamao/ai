@@ -75,16 +75,6 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 				}
 			}
 
-			if app.checkpointMgr != nil && app.checkpointMgr.ShouldCheckpoint() {
-				agentCtx := app.ag.GetContext()
-				slog.Info("[Loop] Creating checkpoint after manual compact", "trigger", "manual_command", "turn", agentCtx.AgentState.TotalTurns)
-				checkpointTurn, err := app.checkpointMgr.CreateSnapshot(agentCtx, agentCtx.AgentState.TotalTurns)
-				if err != nil {
-					slog.Warn("[Loop] Failed to create checkpoint after manual compact", "error", err, "turn", agentCtx.AgentState.TotalTurns)
-				} else {
-					slog.Info("[Loop] Checkpoint created after manual compact", "trigger", "manual_command", "checkpoint_turn", checkpointTurn)
-				}
-			}
 			return nil
 		},
 	)

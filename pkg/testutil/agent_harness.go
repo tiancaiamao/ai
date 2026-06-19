@@ -121,7 +121,6 @@ func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *A
 		loopCfg.MaxConsecutiveToolCalls = cfg.maxConsecutiveToolCalls
 	}
 
-	loopCfg.EnableCheckpoint = false
 	loopCfg.Compactors = cfg.compactors
 
 	// Create agent

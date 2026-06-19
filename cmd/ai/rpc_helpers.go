@@ -219,27 +219,3 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 	}
 	app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 }
-
-func (app *rpcApp) updateCheckpointManager() error {
-	app.stateMu.Lock()
-	defer app.stateMu.Unlock()
-
-	if app.sess != nil {
-		sessionDir := app.sess.GetDir()
-		if sessionDir != "" {
-			mgr, err := agent.NewAgentContextCheckpointManager(sessionDir)
-			if err != nil {
-				slog.Warn("Failed to create checkpoint manager", "error", err)
-				app.checkpointMgr = nil
-			} else {
-				app.checkpointMgr = mgr
-				slog.Info("Updated checkpoint manager", "sessionDir", sessionDir)
-			}
-		} else {
-			slog.Warn("Session directory is empty, checkpoint manager not updated")
-			app.checkpointMgr = nil
-		}
-	}
-
-	return nil
-}

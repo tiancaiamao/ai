@@ -67,8 +67,7 @@ type LoopConfig struct {
 	LLMTotalTimeout time.Duration
 	// LLMFirstResponseTimeout is the timeout between streaming chunks (default 2min).
 	LLMFirstResponseTimeout time.Duration
-	// EnableCheckpoint enables automatic checkpoint creation (default true).
-	EnableCheckpoint bool
+
 	// MaxLoopGuardFeedback is the number of feedback rounds the loop guard gives
 	// the LLM before escalating to a hard abort (0=default=2).
 	MaxLoopGuardFeedback int
@@ -110,7 +109,6 @@ func DefaultLoopConfig() *LoopConfig {
 		ToolOutput:              DefaultToolOutputLimits(),
 		LLMTotalTimeout:         defaultLLMTotalTimeout,
 		LLMFirstResponseTimeout: defaultLLMFirstResponseTimeout,
-		EnableCheckpoint:        true,
 	}
 }
 
@@ -187,13 +185,8 @@ func runInnerLoop(
 		state.advanceTurn()
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
-		// Save checkpoint BEFORE compaction so progress is preserved if the
-		// compaction LLM call crashes the process.
-		state.savePreCompactionCheckpoint("pre_llm_threshold")
 		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
-		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, state.turnCount, "pre_llm_threshold")
-		}
+		_ = compacted
 
 		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
 		config.Hooks.RunBeforeModel(HookContext{
@@ -208,7 +201,6 @@ func runInnerLoop(
 			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && state.compactionRecs < maxCompactionRecoveries {
 				_, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
 				if recoveryErr == nil {
-					saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, state.turnCount, "context_limit_recovery")
 					continue
 				}
 			}

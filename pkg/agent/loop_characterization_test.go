@@ -155,7 +155,6 @@ func TestCharacterization_MaxTurnsEnforcement(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 2
 	cfg.MaxConsecutiveToolCalls = 100 // don't trigger loop guard
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -226,7 +225,6 @@ func TestCharacterization_ToolLoopGuard(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxConsecutiveToolCalls = 3 // trigger after 3 consecutive identical calls
 	cfg.MaxTurns = 20               // high enough that MaxTurns doesn't kick in first
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -293,7 +291,6 @@ func TestCharacterization_ContextCancellation(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 100
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -389,7 +386,6 @@ func TestCharacterization_CompactionTrigger(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.Compactors = []Compactor{compactor}
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -464,7 +460,6 @@ func TestCharacterization_MaxTurnsStopsExactlyAtLimit(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 2
 	cfg.MaxConsecutiveToolCalls = 100
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -520,7 +515,6 @@ func TestCharacterization_NoCompactionWhenNotNeeded(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.Compactors = []Compactor{compactor}
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -590,7 +584,6 @@ func TestCharacterization_SingleTurnEventSequence(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -658,7 +651,6 @@ func TestCharacterization_ToolExecutionEvents(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 1
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",

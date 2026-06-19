@@ -28,10 +28,6 @@ func (app *rpcApp) setSession(newSess *session.Session, newID, newName string) {
 
 	app.setAgentContext(app.createBaseContext())
 
-	if err := app.updateCheckpointManager(); err != nil {
-		slog.Warn("Failed to update checkpoint manager", "error", err)
-	}
-
 	// Update trace handler to use the new session ID.
 	if handler := traceevent.GetHandler(); handler != nil {
 		if fh, ok := handler.(*traceevent.FileHandler); ok {

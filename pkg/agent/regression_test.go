@@ -16,7 +16,6 @@ func TestRegression001_MaxConsecutiveToolCalls(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxConsecutiveToolCalls = 3 // Low limit for testing
-	cfg.EnableCheckpoint = false
 
 	// Verify that default config allows unlimited tool calls (0)
 	defaultCfg := DefaultLoopConfig()
@@ -47,7 +46,6 @@ func TestRegression002_AutoCompactConfiguration(t *testing.T) {
 	cfg.Compactors = []agentctx.Compactor{
 		&testCompactor{shouldTrigger: true},
 	}
-	cfg.EnableCheckpoint = false
 
 	agentCtx := agentctx.NewAgentContext("Test agent")
 
@@ -74,7 +72,6 @@ func TestRegression003_ToolCallCutoffConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.ToolCallCutoff = 2 // Low limit for testing
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has ToolCallCutoff set to a positive value
 	defaultCfg := DefaultLoopConfig()
@@ -102,7 +99,6 @@ func TestRegression004_MaxToolCallsPerName(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxToolCallsPerName = 5 // Low limit for testing
-	cfg.EnableCheckpoint = false
 
 	// Verify default config allows unlimited tool calls per name (0)
 	defaultCfg := DefaultLoopConfig()
@@ -130,7 +126,6 @@ func TestRegression005_MaxTurnsConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 3
-	cfg.EnableCheckpoint = false
 
 	// Verify default config allows unlimited turns (0)
 	defaultCfg := DefaultLoopConfig()
@@ -158,7 +153,6 @@ func TestRegression006_ContextWindowConfiguration(t *testing.T) {
 
 	cfg := DefaultLoopConfig()
 	cfg.ContextWindow = 1000 // Small limit for testing
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has ContextWindow set to 0 (use model default)
 	defaultCfg := DefaultLoopConfig()
@@ -187,7 +181,6 @@ func TestRegression007_LLMRetryConfiguration(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxLLMRetries = 3
 	cfg.RetryBaseDelay = 100 // milliseconds
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has retries enabled
 	defaultCfg := DefaultLoopConfig()
@@ -217,7 +210,6 @@ func TestRegression008_ToolOutputLimits(t *testing.T) {
 	cfg.ToolOutput = ToolOutputLimits{
 		MaxChars: 1000,
 	}
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has ToolOutput limits set
 	defaultCfg := DefaultLoopConfig()
@@ -244,7 +236,6 @@ func TestRegression009_ExecutorPoolConfiguration(t *testing.T) {
 	// Fix: Added executor pool with concurrency and timeout controls
 
 	cfg := DefaultLoopConfig()
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has Executor set
 	defaultCfg := DefaultLoopConfig()
@@ -263,33 +254,6 @@ func TestRegression009_ExecutorPoolConfiguration(t *testing.T) {
 	// Actual tool execution behavior is tested in executor_test.go
 }
 
-// TestRegression010_EnableCheckpointConfiguration tests that checkpoint is configurable
-func TestRegression010_EnableCheckpointConfiguration(t *testing.T) {
-	// Bug: Checkpoints always enabled, causing overhead in some scenarios
-	// Fix: Made checkpoint configurable
-
-	cfg := DefaultLoopConfig()
-	cfg.EnableCheckpoint = false
-
-	// Verify default config has checkpoint enabled
-	defaultCfg := DefaultLoopConfig()
-	if !defaultCfg.EnableCheckpoint {
-		t.Error("DefaultLoopConfig should have EnableCheckpoint = true")
-	}
-
-	// Verify custom config can be set
-	if cfg.EnableCheckpoint != false {
-		t.Errorf("EnableCheckpoint not set correctly: got %v, want false", cfg.EnableCheckpoint)
-	}
-
-	agent := NewAgentFromConfig(llm.Model{}, "test-key", "Test agent", cfg)
-
-	// Verify config is embedded in agent
-	if agent.EnableCheckpoint != false {
-		t.Errorf("agent.EnableCheckpoint not set: got %v, want false", agent.EnableCheckpoint)
-	}
-}
-
 // TestRegression011_LLMTimeoutConfiguration tests that LLM timeouts are configurable
 func TestRegression011_LLMTimeoutConfiguration(t *testing.T) {
 	// Bug: LLM calls can hang indefinitely
@@ -298,7 +262,6 @@ func TestRegression011_LLMTimeoutConfiguration(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.LLMTotalTimeout = 5 * 60 * 1000000000         // 5 minutes in nanoseconds
 	cfg.LLMFirstResponseTimeout = 1 * 60 * 1000000000 // 1 minute in nanoseconds
-	cfg.EnableCheckpoint = false
 
 	// Verify default config has timeouts set
 	defaultCfg := DefaultLoopConfig()
