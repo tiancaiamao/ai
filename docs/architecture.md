@@ -82,7 +82,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │ - edit           │ │ - Stream │ │ - Checkpoint      │
 │ - grep           │ │ - Retry  │ │ - Journal         │
 │ - change_workspace│ │          │ │ - Compaction      │
-│ - context_mgmt/* │ │          │ │ - Reconstruction  │
+│                  │ │          │ │ - Reconstruction  │
 └──────────────────┘ └──────────┘ └──────────────────┘
 ```
 
@@ -94,7 +94,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 | `pkg/session` | Append-only JSONL session storage, fork support, lazy loading |
 | `pkg/prompt` | System prompt construction, skill expansion, thinking instructions |
 | `pkg/skill` | Skill discovery, loading (frontmatter parsing), formatting |
-| `pkg/compact` | Heavyweight LLM summarization + lightweight context management |
+| `pkg/compact` | LLM-driven compaction with cache-friendly summarization (LLMDecide mode) |
 | `pkg/traceevent` | Perfetto-compatible trace event recording and export |
 | `pkg/truncate` | Tool output truncation with head/tail preservation |
 | `pkg/modelselect` | Model selection and spec resolution |
@@ -107,30 +107,16 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│              ag CLI (skills/ag/)                                │
-│  Standalone Go binary for multi-agent orchestration             │
+│  Agent Orchestration (bridge-per-agent via skills)              │
+│  Multi-agent orchestration via skill-defined workflows          │
 │                                                                 │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐ │
-│  │ Agent Lifecycle │  │ Task DAG       │  │ Channels         │ │
-│  │ - spawn         │  │ - import-plan  │  │ - create/send    │ │
-│  │ - steer/abort   │  │ - claim/next   │  │ - recv/wait      │ │
-│  │ - status/output │  │ - done/fail    │  │ - async messages │ │
-│  │ - kill          │  │ - dependencies │  │                  │ │
-│  └───────┬────────┘  └───────┬────────┘  └──────────────────┘ │
-│          │                   │                                  │
-│          ▼                   ▼                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │         Bridge-per-Agent Architecture                     │  │
-│  │                                                           │  │
-│  │  ag bridge <id> (detached process)                        │  │
-│  │  ├── <backend command> (ai rpc / codex exec / ...)        │  │
-│  │  ├── StreamWriter → stream.log (real-time readable)       │  │
-│  │  ├── EventReader → activity.json (structured events)      │  │
-│  │  └── Unix socket → bridge.sock (control plane)            │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  Skills define orchestration patterns using `ai` CLI:           │
+│  - spawn/kill sub-agents via ai serve/send/watch               │
+│  - steer/abort running agents                                   │
+│  - Bridge-per-agent: detached process with socket control      │
 │                                                                 │
-│  Backends: ai (json-rpc), codex (raw), pluggable via config     │
 │  Storage: .ag/ directory (CWD-scoped)                           │
+│  Backends: ai (json-rpc), codex (raw), pluggable via config     │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,19 +143,18 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 ### Context Management Flow
 
 ```
-1. Turn completes → check token usage
-2. If threshold exceeded:
-   a. ContextManager (lightweight): separate LLM call with mgmt tools
-      - truncate_messages: remove stale tool outputs
-      - update_llm_context: update task state summary
-      - compact: trigger full summarization
-      - no_action: skip (context is fine)
-   b. sessionCompactor (heavyweight): full LLM summarization
-      - Generates new summary from conversation
-      - Replaces old messages with summary
-      - Persists via checkpoint + journal
-3. LLMContext (task state) injected into future requests for continuity
+1. Turn completes → check token usage (EstimateTokens)
+2. If SoftThreshold < tokens < HardLimit:
+   a. At interval boundary → askLLM: "compact now?" (cache-friendly yes/no)
+   b. LLM says yes → compact; LLM says no → skip until next interval
+   c. On ask error → compact as fallback
+3. If tokens >= HardLimit: compact immediately (no ask)
+4. Compact(): split messages by token budget, summarize old via LLM,
+   fix tool-call pairing, archive excess tool results, clean stale state
+5. Persist: AppendCompaction → snapshot file + compaction entry in messages.jsonl
 ```
+
+See [context-management.md](context-management.md) for full details.
 
 ### Session Persistence
 
@@ -267,7 +252,7 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 - **Execution timeout**: Configurable per-tool and per-turn timeouts
 - **Resource limits**: Max consecutive tool calls, max turns, token limits
 - **Session isolation**: Sessions scoped by git repository root
-- **Agent isolation**: Each ag agent is an independent process
+- **Agent isolation**: Each sub-agent runs as an independent process
 - **Path protection**: Tools validate file paths within workspace
 - **API key storage**: Support for both env vars and file-based credentials
 
@@ -289,7 +274,9 @@ ai/
 │   └── kill.go       # Terminate agent
 ├── pkg/
 │   ├── agent/        # Core agent loop, execution, metrics
-│   ├── compact/      # Compaction strategies
+│   ├── agentconfig/  # Agent configuration types
+│   ├── middlewares/  # RPC middleware
+│   ├── compact/      # LLM-driven compaction (LLMDecide mode)
 │   ├── command/      # Slash command registry
 │   ├── config/       # Configuration, auth, model specs
 │   ├── context/      # Agent context, messages, checkpoints
@@ -301,18 +288,12 @@ ai/
 │   ├── run/          # Run metadata, socket server
 │   ├── session/      # Session persistence (JSONL)
 │   ├── skill/        # Skill loading and formatting
-│   ├── tools/        # Tool implementations
-│   │   └── context_mgmt/  # Context management tools
+│   ├── testutil/     # Test utilities
+│   ├── tools/        # Tool implementations (bash, read, write, edit, grep, etc.)
 │   ├── traceevent/   # Perfetto-compatible tracing
 │   ├── truncate/     # Output truncation
 │   └── version/      # Version info
-├── skills/           # Skill definitions
-│   ├── ag/           # Agent orchestration CLI (separate Go module)
-│   ├── brainstorm/   # Intent exploration
-│   ├── plan/         # Task planning
-│   ├── implement/    # Task execution
-│   ├── review/       # Code review
-│   └── ...           # Other skills
+├── skills/           # Skill definitions (user-installed and project-level)
 ├── docs/             # Documentation
 ├── benchmark/        # E2E benchmark tasks
 └── tests/            # Integration test scripts

@@ -1,22 +1,21 @@
 # pkg/config
 
-Application configuration: model selection, compaction, concurrency, and tool output settings.
+Application configuration: model selection, compaction, concurrency, tool output, and logging.
 
 ## Overview
 
-Loads configuration from `~/.ai/config.json` (or `AI_CONFIG_PATH`). Configuration is structured into sections for model, compaction, concurrency, tool output, and logging.
+Loads configuration from `~/.ai/config.json` (or `AI_CONFIG_PATH`). Configuration is structured into sections for model, compaction, concurrency, tool output, and logging. Model specs are loaded separately from `~/.ai/models.json` (or `AI_MODELS_PATH`).
 
 ## Config
 
 ```go
 type Config struct {
-    Model        ModelConfig        `json:"model"`
-    Compactor    *compact.Config    `json:"compactor,omitempty"`
-    Concurrency  *ConcurrencyConfig `json:"concurrency,omitempty"`
-    ToolOutput   *ToolOutputConfig  `json:"toolOutput,omitempty"`
-    Edit         *EditConfig        `json:"edit,omitempty"`
-    Log          *LogConfig         `json:"log,omitempty"`
-    Workspace    string             `json:"workspace,omitempty"`
+    Model         ModelConfig        `json:"model"`
+    ThinkingLevel string             `json:"thinkingLevel,omitempty"` // off, minimal, low, medium, high, xhigh
+    Compactor     *compact.Config    `json:"compactor,omitempty"`
+    Concurrency   *ConcurrencyConfig `json:"concurrency,omitempty"`
+    ToolOutput    *ToolOutputConfig  `json:"toolOutput,omitempty"`
+    Log           *LogConfig         `json:"log,omitempty"`
 }
 ```
 
@@ -24,18 +23,35 @@ type Config struct {
 
 ```go
 type ModelConfig struct {
-    Default string `json:"default"` // Model ID (e.g., "claude-sonnet-4-20250514")
-    APIKey  string `json:"apiKey"`  // API key or env var reference (${ENV_VAR})
+    ID        string `json:"id"`        // Model ID (e.g., "glm-4.5-air")
+    Provider  string `json:"provider"`  // Provider (e.g., "zai")
+    BaseURL   string `json:"baseUrl"`   // API base URL
+    API       string `json:"api"`       // API style: "openai-completions" or "anthropic-messages"
+    MaxTokens int    `json:"maxTokens,omitempty"`
 }
 ```
 
-### Model Spec Format
+Environment overrides (take precedence over config file):
+- `ZAI_MODEL` → `Model.ID`
+- `ZAI_BASE_URL` → `Model.BaseURL`
+- `ZAI_MAX_TOKENS` → `Model.MaxTokens`
 
-The `Default` field supports extended notation:
+## Model Specs
 
-```
-provider/model-id    → Model{Provider: "provider", ID: "model-id"}
-model-id             → Model{Provider: "", ID: "model-id"}
+Model definitions are loaded from `~/.ai/models.json` via `ModelSpec`:
+
+```go
+type ModelSpec struct {
+    ID            string
+    Name          string
+    Provider      string
+    BaseURL       string
+    API           string
+    Reasoning     bool
+    Input         []string
+    ContextWindow int
+    MaxTokens     int
+}
 ```
 
 ## Compaction Configuration
@@ -46,9 +62,9 @@ Passed through to `pkg/compact.Config`. See `pkg/compact/README.md` for details.
 
 ```go
 type ConcurrencyConfig struct {
-    MaxConcurrentTools int  // Max parallel tool executions
-    ToolTimeout        int  // Per-tool timeout in seconds
-    QueueTimeout       int  // Wait timeout for executor queue slot
+    MaxConcurrentTools int `json:"maxConcurrentTools"` // Max parallel tool executions
+    ToolTimeout        int `json:"toolTimeout"`        // Per-tool timeout in seconds
+    QueueTimeout       int `json:"queueTimeout"`       // Wait timeout for executor queue slot
 }
 ```
 
@@ -56,27 +72,32 @@ type ConcurrencyConfig struct {
 
 ```go
 type ToolOutputConfig struct {
-    MaxChars  int  `json:"maxChars,omitempty"`  // Max chars (0 = 10000 default)
+    MaxChars int `json:"maxChars,omitempty"` // Max chars (0 = 10000 default)
 }
 ```
 
 ## API Key Resolution
 
-API keys are resolved in order:
-1. Config file value (supports `${ENV_VAR}` references)
-2. Environment variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
-3. Auth file (`~/.ai/auth.json`)
+API keys are resolved by `ResolveAPIKey(provider)` in priority order (auth-first by default):
+
+1. Auth file (`~/.ai/auth.json`) — provider entry with `key`, `apiKey`, or `token`
+2. Environment variable (`<PROVIDER>_API_KEY`, e.g., `ZAI_API_KEY`)
+
+Set `AI_API_KEY_SOURCE=env` to prefer environment over auth file.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `config.go` | Config struct, loading, model resolution, defaults |
-| `auth.go` | API key resolution from environment and auth files |
+| `config.go` | `Config`, `ModelConfig`, `LogConfig` structs, loading, defaults, `ToLoopConfig` |
+| `auth.go` | `AuthEntry`, `ResolveAPIKey`, auth file path resolution |
+| `concurrency.go` | `ConcurrencyConfig`, `ResolveConcurrencyConfig` from environment |
+| `models.go` | `ModelSpec`, `LoadModelSpecs` from `models.json` |
 
 ## Dependencies
 
 - `pkg/compact` — Compaction configuration types
 - `pkg/llm` — Model type
-- `pkg/agent` — Agent configuration
+- `pkg/agent` — Agent configuration (`LoopConfig`)
 - `pkg/logger` — Logger initialization
+- `pkg/modelselect` — Model sorting

@@ -164,7 +164,7 @@ Agent events are emitted directly (not nested under an envelope). Each has a `ty
 
 ## Workflow State
 
-> **Note:** The `WorkflowState` and `WorkflowTask` types are defined in `pkg/rpc/types.go` for use by the `skills/ag` orchestration skill. The ag skill manages workflow lifecycle independently. This section is intentionally minimal — see `skills/ag/` for the full workflow protocol.
+> **Note:** The `WorkflowState` and `WorkflowTask` types are defined in `pkg/rpc/types.go`. They were used by a workflow engine that has been removed from the codebase. The types remain in the RPC schema for backward compatibility but are no longer actively used.
 
 ### Workflow Phases
 

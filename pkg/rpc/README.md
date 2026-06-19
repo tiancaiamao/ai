@@ -29,12 +29,7 @@ Each command is a single JSON line:
 | `steer` | Inject a system message (mid-conversation guidance) |
 | `follow_up` | Queue a follow-up prompt after current processing |
 | `abort` | Cancel current LLM stream |
-| `get_context` | Retrieve current agent context |
-| `set_context` | Update agent context |
-| `slash_command` | Execute a slash command (e.g., `/model`, `/compact`) |
-| `workflow_init` | Initialize workflow execution |
-| `workflow_start` | Start workflow processing |
-| `workflow_heartbeat` | Periodic workflow status update |
+| `ping` | Health check |
 
 **Prompt-specific data** (`PromptRequest`):
 
@@ -81,11 +76,8 @@ Events are unsolicited JSON lines emitted during processing:
 | Type | Description |
 |------|-------------|
 | `agent_event` | Agent lifecycle and stream events (see `pkg/agent` event types) |
-| `session_event` | Session save/load/compact events |
-| `workflow_event` | Workflow state changes |
-| `context_limit_recovery_event` | Context overflow recovery |
-| `compaction_event` | Compaction summary |
-| `ready` | Agent ready for commands |
+| `session_switch` | Session changed (switch/fork) |
+| `server_start` | Server initialized, model and tools ready |
 
 ### Workflow State
 
@@ -110,10 +102,10 @@ Events are unsolicited JSON lines emitted during processing:
 type Server struct { ... }
 ```
 
-Thread-safe RPC server. Created with `NewServer(ctx)`:
+Thread-safe RPC server. Created with `NewServer()`:
 
 ```go
-srv := rpc.NewServer(ctx)
+srv := rpc.NewServer()
 srv.Register("prompt", handlePrompt)
 srv.Register("abort", handleAbort)
 srv.Run() // Blocks, reads stdin, dispatches commands

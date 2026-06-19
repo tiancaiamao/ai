@@ -1,82 +1,18 @@
 # ai 基础设施：Agent 控制 Agent
 
-## 1. 现状
+> Status: ✅ Implemented. All slash commands registered, `ai watch --follow` available.
 
-`ai` 已经有完整的 RPC 协议（prompt、steer、abort、follow-up）和 CLI 子命令（serve、send、watch、kill、ls）。但 agent 想控制另一个 agent 时，存在两个断裂点：
+## 背景
 
-### 问题 1：`ai send` 不能发 steer
+`ai` 有完整的 RPC 协议（prompt、steer、abort、follow-up）和 CLI 子命令（serve、send、watch、kill、ls）。
+本文档描述 agent 如何通过 CLI 命令控制其他 agent。
 
-`ai send` 把所有消息都当 `prompt` 类型发到 socket。RPC server 的 prompt handler 走 slash 命令分发。
+## 设计决策
 
-- `/abort` → 已注册为 slash 命令 ✅ → `ai send "/abort"` 可用
-- `/follow-up xxx` → 已注册为 slash 命令 ✅ → `ai send "/follow-up xxx"` 可用
-- `/steer xxx` → **没有注册为 slash 命令** ❌ → `ai send "/steer xxx"` 报 unknown command
-- `/model opus`、`/compact` 等 → 已注册 ✅
+### 所有能力通过 slash 命令暴露
 
-`/steer` 只能通过发送 `{"type": "steer", "message": "xxx"}` 这种原生 RPC 命令触发，但 `ai send` 不支持指定命令类型。
-
-### 问题 2：`ai watch` 只有 TUI
-
-`ai watch` 默认启动 Bubble Tea TUI 界面。`--since` 参数提供了一次性文件读取模式（machineWatch），输出原始事件行 + `__offset`。但：
-
-- 一次性读取，不是持续流
-- agent 需要轮询才能获取新事件
-- 没有阻塞等待新事件的能力
-- 没有结构化输出（事件是原始 JSONL，格式随内部实现变化）
-
-### 问题 3：ag 是不必要的中间层
-
-当前 agent 间协作通过 `ag` CLI，它封装了 `ai serve` 的启动和 socket 通信。但 ag 引入了：
-- task/channel 额外抽象
-- 6k+ 行 Go 代码维护负担
-- spawn/wait/prompt/steer 是 ag 定义的 API，不是 `ai` 原生能力
-
-如果 `ai` 本身就提供完整的 agent 控制能力，ag 的核心价值就只剩 task DAG 调度——而这正是 PGE 要替代的。
-
-## 2. 为什么改
-
-目标：**agent 用 `ai` 的 CLI 命令控制其他 agent，跟人类操作体验一致。**
-
-```
-人类操作 agent 的方式：         agent 操作 agent 的方式（改后）：
-ai serve                       ai serve
-ai send "消息"                 ai send "消息"
-ai send "/steer 换方向"        ai send "/steer 换方向"
-ai send "/abort"               ai send "/abort"
-ai send "/model opus"          ai send "/model opus"
-ai watch                       ai watch --follow --output json
-ai kill                        ai kill
-```
-
-完全一样，没有额外抽象。
-
-## 3. 关键设计决策
-
-### 决策 1：所有能力通过 slash 命令暴露
-
-**选择：** `ai send` 始终发 prompt，`/steer`、`/abort`、`/follow-up` 等全部注册为 slash 命令。
-
-**不选：** 给 `ai send` 加 `--type steer` 之类的参数。
-
-理由：
-- 一个入口，心智模型简单
-- 新增能力只需注册 slash handler，不改 `ai send` 代码
-- 跟人类操作方式完全一致
-
-### 决策 2：`ai watch` 增加 `--follow` 持续监听模式
-
-**选择：** `ai watch --follow --output json` 持续输出事件流，直到 agent 结束或被 Ctrl+C。
-
-**不选：** 让 agent 轮询 `ai watch --since`。
-
-理由：
-- 轮询浪费且有延迟
-- `--follow` 是 Unix 惯例（`tail -f`）
-- agent 可以作为子进程启动 `ai watch --follow`，读 stdout 获取实时事件
-
-### 决策 3：ag 暂时保留但不作为 PGE 的依赖
-
-ag 不删不废，但 PGE 架构直接基于 `ai` CLI 构建。ag 作为遗留方案保留给不想迁移的场景。
+`ai send` 始终发 prompt，`/steer`、`/abort`、`/follow-up` 等全部注册为 slash 命令。
+这样 agent 控制其他 agent 跟人类操作方式完全一致，无需额外抽象层。
 
 ## 4. 怎么做
 

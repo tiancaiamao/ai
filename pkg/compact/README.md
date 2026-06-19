@@ -1,118 +1,114 @@
 # pkg/compact
 
-LLM-driven context compaction with configurable strategies and context management.
+LLM-driven context compaction with cache-friendly summarization.
 
 ## Overview
 
-The `compact` package manages conversation context size within LLM window limits. It provides two complementary mechanisms:
+The `compact` package manages conversation context size within LLM window limits. It provides a single `Compactor` that handles both the compaction decision and execution.
 
-1. **Compactor** — Heavyweight LLM summarization when context is too large
-2. **ContextManager** — Lightweight LLM-driven decisions (truncate, update, compact) at periodic intervals
+### Compaction Decision: LLMDecide Mode
 
-Both delegate decisions to the LLM rather than using deterministic rules, producing higher-quality context management.
+When `LLMDecideConfig` is set, the compactor uses a tiered threshold system:
 
-## Compactor
+1. **Hard limit**: At or above → compact immediately
+2. **Soft threshold**: Below → skip (not enough pressure)
+3. **Tiered ask**: Between soft and hard → ask LLM "compact now?" at intervals
 
-### Config
+The LLM ask is a cache-friendly request that mirrors a normal agent turn prefix, maximizing provider prefix-cache hits.
+
+### Compaction Execution
+
+`Compact()` performs:
+
+1. Split messages into "old" (summarize) and "recent" (keep) by token budget or count
+2. Generate LLM summary of old messages (with previous summary for incremental update)
+3. Fix tool-call/result pairing across the split boundary
+4. Archive excess visible tool results (beyond `ToolCallCutoff`)
+5. Clean stale runtime_state messages
+6. Return `CompactionResult` with before/after token counts
+
+## Config
 
 ```go
 type Config struct {
-    MaxMessages         int    // Compress when messages exceed this
-    MaxTokens           int    // Compress when estimated tokens exceed this
-    KeepRecent          int    // Always keep this many recent messages
-    KeepRecentTokens    int    // Token budget for recent messages
-    ReserveTokens       int    // Tokens to reserve from context window
-    ToolCallCutoff      int    // Summarize tool outputs when visible results exceed this
-    ToolSummaryStrategy string // "llm", "heuristic", or "off"
-    AutoCompact         bool   // Enable automatic compaction
+    MaxMessages           int              // Compress when messages exceed this
+    MaxTokens             int              // Compress when estimated tokens exceed this
+    KeepRecent            int              // Always keep this many recent messages
+    KeepRecentTokens      int              // Token budget for recent messages
+    ReserveTokens         int              // Tokens to reserve from context window
+    ToolCallCutoff        int              // Archive tool results when visible count exceeds this
+    ToolSummaryStrategy   string           // "llm", "heuristic", or "off"
+    ToolSummaryAutomation string           // "off", "fallback", or "always"
+    AutoCompact           bool             // Enable automatic compaction
+    GracePeriod           int              // Protect N most recent tool results from archiving
+    LLMDecide             *LLMDecideConfig // Enable LLM-decides mode
+}
+
+type LLMDecideConfig struct {
+    SoftThreshold  int  // Below this: never compact
+    HardLimit      int  // At or above: compact immediately (no LLM ask)
+    TierMedium     int  // Token count for "medium" tier
+    TierHigh       int  // Token count for "high" tier
+    IntervalLow    int  // Tool calls between asks (low tier)
+    IntervalMedium int  // Tool calls between asks (medium tier)
+    IntervalHigh   int  // Tool calls between asks (high tier)
 }
 ```
 
-### Core Methods
+`DefaultLLMDecideConfig(contextWindow)` returns tuned thresholds for the given context window size.
+
+## Core Methods
 
 ```go
-func (c *Compactor) Compress(ctx, agentCtx) (*CompactionResult, error)
 func (c *Compactor) ShouldCompact(ctx, agentCtx) bool
+func (c *Compactor) Compact(ctx, agentCtx) (*CompactionResult, error)
 ```
 
-`Compress` performs the compaction:
-1. Splits messages into "old" and "recent" based on token budget
-2. Summarizes old messages via LLM (initial summary or incremental update)
-3. Returns a `CompactionResult` with the summary, before/after token counts
+`ShouldCompact`:
+- If `LLMDecide` is set: tiered threshold + LLM yes/no gate (`shouldCompactLLMDecide`)
+- Otherwise: dynamic threshold based on `MaxTokens` or `MaxMessages`
 
-`ShouldCompact` checks if compaction is needed using a dynamic threshold:
-- If `MaxTokens > 0`: triggers when estimated tokens exceed the limit
-- If `AutoCompact` is false: never triggers
+`Compact`:
+1. Splits messages by token budget (`splitMessagesByTokenBudget`) or count
+2. Summarizes old messages via LLM (`GenerateSummaryWithPrevious`)
+3. Fixes tool-call/result pairing (`ensureToolCallPairing` / `ensureToolCallPairingWithGrace`)
+4. Compacts excess tool results (`compactToolResultsInRecent`)
+5. Cleans stale runtime_state (`cleanOldRuntimeState`)
+6. Updates `AgentContext` in place
 
 ### Token Estimation
 
 ```go
-func EstimateTokens(text string) int            // ~4 chars per token
-func EstimateMessageTokens(msg AgentMessage) int // Per-message estimation
-func EstimateMessagesTokens(msgs []AgentMessage) int
+func EstimateMessageTokens(msg AgentMessage) int  // Per-message estimation
+func estimateMessageTokens(msg AgentMessage) int  // Unexported internal helper
 ```
 
-## ContextManager
+Note: The standalone `EstimateTokens()` function lives in `pkg/context`.
 
-Lightweight LLM-driven context management that runs periodically during agent execution.
+## Cache-Friendly Design
 
-### Trigger Thresholds
+Both `askLLM` and `GenerateSummaryWithPrevious` build requests whose prefix matches a normal agent turn:
 
-```go
-const (
-    MgmtTokenLow    = 0.20  // 20% of context: start periodic checks
-    MgmtTokenMedium = 0.33  // 33%: more aggressive checks
-    MgmtTokenHigh   = 0.50  // 50%: frequent checks
-)
+```
+[system_prompt]           (cached)
+[contextPrefix as user]   ← skills + AGENTS.md (cached)
+[...conversation messages...] (cached)
+[trailing instruction]    ← only this is new
 ```
 
-### Check Intervals
-
-Token usage determines how often the context manager runs:
-
-| Token Usage | Interval (tool calls) |
-|-------------|----------------------|
-| 20-33% | Every 15 calls |
-| 33-50% | Every 10 calls |
-| 50%+ | Every 7 calls |
-
-### LLM-Driven Decisions
-
-The context manager provides the LLM with tools to manage context:
-
-| Tool | Action | Description |
-|------|--------|-------------|
-| `truncate_messages` | `truncate` | Trim long tool outputs in-place |
-| `update_llm_context` | `update_llm_context` | Update structured LLM context |
-| `compact_messages` | `compact` | Trigger major compaction |
-
-The LLM analyzes the conversation and decides which action(s) to take. The system does **not** decide what to compact — it only decides **when** to ask.
-
-### Compact Event Recording
-
-Each context management action is recorded as a `compact_event` in the session:
-
-```go
-type CompactEventDetail struct {
-    Action CompactAction  // "truncate", "update_llm_context", "compact"
-    IDs    []string       // Target message/tool-call IDs
-}
-```
-
-These events are replayed deterministically when loading sessions.
+This maximizes provider prefix-cache hits, reducing latency and cost.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
-| `compact.go` | `Compactor` — heavyweight summarization, token estimation, compression |
-| `context_management.go` | `ContextManager` — lightweight periodic LLM-driven decisions |
-| `compact_tool.go` | Tool implementations for context management actions |
-| `compact_visibility_test.go` | Visibility tests for compaction |
+| `compact.go` | `Compactor` — `ShouldCompact`, `Compact`, `askLLM`, LLMDecide logic |
+| `compact_summary.go` | Summary generation, message splitting (`splitMessagesByTokenBudget`) |
+| `compact_tools.go` | Tool-call pairing, tool result compaction |
 
 ## Dependencies
 
-- `pkg/context` — `AgentContext`, `CompactionResult`, `CompactEventDetail`
-- `pkg/llm` — LLM streaming for summarization calls
-- `pkg/prompt` — Compaction system prompts
+- `pkg/context` — `AgentContext`, `CompactionResult`, `AgentMessage`
+- `pkg/llm` — LLM streaming for summarization and yes/no asks
+- `pkg/prompt` — Compaction prompts, LLM-decide check prompt
 - `pkg/traceevent` — Tracing

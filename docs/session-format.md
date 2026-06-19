@@ -15,13 +15,21 @@ Sessions persist the full conversation history for an agent instance as append-o
 ~/.ai/sessions/
 └── --<sanitized-path>--/
     ├── <session-uuid-1>/
-    │   ├── messages.jsonl      # Append-only entry log
-    │   ├── meta.json           # Session metadata
-    │   ├── llm_context.txt     # Persisted LLM context (from context management)
-    │   └── checkpoint.json     # Periodic context snapshot
+    │   ├── messages.jsonl               # Append-only entry log
+    │   ├── compactions/                 # Compaction snapshot files
+    │   │   ├── compaction_00001.jsonl   # Post-compaction messages
+    │   │   └── compaction_00002.jsonl
+    │   ├── checkpoints/                 # Periodic context snapshots
+    │   │   ├── checkpoint_00000/
+    │   │   │   ├── agent_state.json
+    │   │   │   ├── llm_context.txt
+    │   │   │   └── messages.jsonl
+    │   │   └── checkpoint_00001/
+    │   ├── checkpoint_index.json        # Checkpoint index for fast lookup
+    │   └── (meta.json managed externally by SessionManager)
     ├── <session-uuid-2>/
     │   ├── messages.jsonl
-    │   └── meta.json
+    │   └── ...
     └── ...
 ```
 
@@ -47,6 +55,16 @@ Each line in `messages.jsonl` is a JSON object. All entries share common fields:
 }
 ```
 
+**Entry type constants** (defined in `pkg/session/entries.go`):
+
+| Type | Constant | Description |
+|------|----------|-------------|
+| `session` | `EntryTypeSession` | Session header (first line) |
+| `message` | `EntryTypeMessage` | User/assistant/tool message |
+| `compaction` | `EntryTypeCompaction` | Compaction event |
+| `branch_summary` | `EntryTypeBranchSummary` | Summary of a forked branch |
+| `session_info` | `EntryTypeSessionInfo` | Session metadata (name, title) |
+
 ### session (Header)
 
 First line of every `messages.jsonl`. Exactly one per session.
@@ -57,15 +75,21 @@ First line of every `messages.jsonl`. Exactly one per session.
   "version": 1,
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "timestamp": "2025-01-15T10:30:00.123456789Z",
-  "cwd": "/Users/genius/project/myapp"
+  "cwd": "/Users/genius/project/myapp",
+  "gitCommit": "3ac71c28aaf41755fbe046570152096e6469f9ff",
+  "gitVersion": ""
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `version` | Format version (currently `1`) |
+| `version` | Format version (currently `1`, defined by `CurrentSessionVersion`) |
 | `id` | Session UUID |
 | `cwd` | Working directory at session creation |
+| `parentSession` | Parent session UUID (set when forked; omitted otherwise) |
+| `lastCompactionId` | Most recent compaction entry ID (resume optimization; omitted if no compaction) |
+| `gitCommit` | Git commit hash of the `ai` binary that created this session |
+| `gitVersion` | Git version/tag of the `ai` binary |
 
 ### message
 
@@ -133,7 +157,7 @@ Tool result messages:
 
 ### compaction
 
-Replaces older messages with an LLM-generated summary.
+Records a compaction event. The post-compaction messages are saved to an external snapshot file (Proposal B approach), keeping `messages.jsonl` append-only.
 
 ```json
 {
@@ -141,21 +165,21 @@ Replaces older messages with an LLM-generated summary.
   "id": "comp-001",
   "parentId": "msg-003",
   "timestamp": "2025-01-15T10:35:00.000Z",
-  "summary": "The user asked to fix a bug in auth.go. The assistant read the file and identified an issue with token validation...",
-  "firstKeptEntryId": "msg-010",
-  "tokensBefore": 45000,
-  "tokensAfter": 5000
+  "snapshotRef": "compactions/compaction_00001.jsonl",
+  "summary": "The user asked to fix a bug in auth.go. The assistant read the file and identified an issue with token validation..."
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `summary` | LLM-generated summary of all messages before `firstKeptEntryId` |
-| `firstKeptEntryId` | First message ID after the compaction cut point |
-| `tokensBefore` | Estimated tokens before compaction |
-| `tokensAfter` | Estimated tokens after compaction |
+| `snapshotRef` | Relative path (within session dir) to the post-compaction snapshot file. Contains the full `AgentMessage` array after compaction. |
+| `summary` | LLM-generated summary of compacted messages |
+| `firstKeptEntryId` | *(Legacy)* First message ID after the compaction cut point. Used by old sessions without `snapshotRef`. |
+| `tokensBefore` | *(Optional)* Estimated tokens before compaction |
 
-On replay, the compaction entry is converted to a synthetic user message:
+**On replay**, the loader follows `snapshotRef` to load post-compaction messages directly from the snapshot file. If `snapshotRef` is empty (legacy sessions), it falls back to the `summary` text + `firstKeptEntryId` reconstruction path.
+
+The summary is also converted to a synthetic user message at the start of the replayed message set:
 
 ```
 The conversation history before this point was compacted into the following summary:
@@ -164,31 +188,6 @@ The conversation history before this point was compacted into the following summ
 ...summary text...
 </summary>
 ```
-
-All entries before `firstKeptEntryId` are skipped during replay.
-
-### compact_event
-
-Records individual context management actions for fine-grained replay.
-
-```json
-{
-  "type": "compact_event",
-  "id": "ce-001",
-  "parentId": "msg-005",
-  "timestamp": "2025-01-15T10:32:00.000Z",
-  "actions": [
-    {"action": "truncate", "ids": ["call_abc123", "call_def456"]},
-    {"action": "update_llm_context", "ids": []}
-  ]
-}
-```
-
-| Action | Description | Replay Behavior |
-|--------|-------------|-----------------|
-| `truncate` | Trim tool output to head+tail | Apply `TruncateWithHeadTail` to matching tool results |
-| `update_llm_context` | Update structured LLM context | Context loaded from `llm_context.txt` |
-| `compact` | Major compaction triggered | Replayed via parent `compaction` entry |
 
 ### branch_summary
 
@@ -229,6 +228,29 @@ Session metadata (name, title).
 }
 ```
 
+## SessionEntry Struct
+
+**File:** `pkg/session/entries.go`
+
+```go
+type SessionEntry struct {
+    Type      string                `json:"type"`
+    ID        string                `json:"id"`
+    ParentID  *string               `json:"parentId"`
+    Timestamp string                `json:"timestamp"`
+
+    Message          *AgentMessage  `json:"message,omitempty"`
+    SnapshotRef      string         `json:"snapshotRef,omitempty"`
+    Summary          string         `json:"summary,omitempty"`
+    FirstKeptEntryID string         `json:"firstKeptEntryId,omitempty"`
+    TokensBefore     int            `json:"tokensBefore,omitempty"`
+
+    FromID string `json:"fromId,omitempty"`
+    Name   string `json:"name,omitempty"`
+    Title  string `json:"title,omitempty"`
+}
+```
+
 ## Conversation Tree
 
 Entries form a tree via `parentId` links:
@@ -253,7 +275,20 @@ A fork creates a new session directory that copies entries from the source sessi
 
 The original session is never modified.
 
-## Lazy Loading
+## Loading
+
+**File:** `pkg/session/entries.go` — `buildSessionContext()`
+
+Session loading reconstructs the conversation from the entry tree:
+
+1. Read all entries from `messages.jsonl`
+2. Walk the tree from `leafID` back to root via `parentId` links
+3. Find the most recent `compaction` entry on the path (if any)
+4. If compaction exists with `snapshotRef`: load post-compaction messages from the snapshot file
+5. If compaction exists with `firstKeptEntryID` (legacy): reconstruct using summary + kept entries
+6. Append all entries after the compaction point
+
+### Lazy Loading
 
 For large sessions, lazy loading avoids reading the entire JSONL file:
 
@@ -266,67 +301,79 @@ opts := session.LoadOptions{
 sess, err := session.LoadSessionLazy(dir, opts)
 ```
 
-### Loading Strategy
+The loader scans backwards from the end of the file to find the most recent compaction entry, then loads only from that point forward.
 
-1. Read the session header (first line)
-2. Scan backwards from the end of the file
-3. Find the most recent `compaction` entry (if any)
-4. Load entries from `firstKeptEntryId` to the end
-5. Fix broken parent links: if an entry's parent is not in the loaded set, link it to the compaction entry (or set to `nil`)
+## Checkpoints
 
-### MaxMessages Behavior
+**Files:** `pkg/context/checkpoint*.go`, `pkg/agent/checkpoint_manager.go`
 
-| Value | Behavior |
-|-------|----------|
-| `0` | Auto — load from `firstKeptEntryId` to end |
-| `-1` | Load all entries |
-| `N > 0` | Load at most N recent messages |
+Checkpoints are full snapshots of `AgentContext` at a specific turn, used for crash recovery and session resume optimization.
 
-## Checkpoint and Journal
+### Checkpoint Directory Layout
 
-### Journal
+```
+checkpoints/
+├── checkpoint_00000/
+│   ├── agent_state.json     # Serialized AgentState
+│   ├── llm_context.txt      # System prompt / context prefix
+│   └── messages.jsonl       # Full RecentMessages snapshot
+├── checkpoint_00001/
+│   └── ...
+└── (symlink: latest → most recent checkpoint)
+```
 
-The `AgentContextCheckpointManager` maintains an append-only journal in the session directory:
+### Checkpoint Index
 
-- Each message append is written to the journal
-- Turn boundaries trigger periodic checkpoints
-- Journal entries are compacted into checkpoints periodically
-
-### Checkpoint
-
-A checkpoint is a full snapshot of `AgentContext`:
+`checkpoint_index.json` provides fast lookup:
 
 ```json
 {
-  "turn": 5,
-  "messageIndex": 23,
-  "context": { ... }
+  "latest_checkpoint_turn": 229,
+  "latest_checkpoint_path": "checkpoints/checkpoint_00003",
+  "checkpoints": [
+    {
+      "turn": 22,
+      "message_index": 208,
+      "path": "checkpoints/checkpoint_00000",
+      "created_at": "2026-06-19T09:30:26+08:00",
+      "recent_messages_count": 54
+    },
+    ...
+  ]
 }
 ```
+
+### Journal
+
+The checkpoint system uses an append-only journal (`pkg/context/journal.go`) with three entry types:
+
+| Journal Type | Description |
+|-------------|-------------|
+| `message` | A message was appended |
+| `truncate` | Messages were truncated |
+| `compact` | Compaction occurred |
 
 ### Recovery
 
 On crash or restart:
 
-1. Load the last checkpoint
+1. Load the latest checkpoint
 2. Replay journal entries after the checkpoint
 3. Continue from the recovered state
 
-## Compaction Flow
+## Compaction Persistence Flow
 
-When context exceeds the configured threshold:
+When `Compact()` succeeds:
 
-1. **Trigger**: `ShouldCompact()` returns `true` based on estimated tokens
-2. **Cut point**: Find the oldest cuttable message (user messages are cuttable boundaries)
-3. **Summarize**: LLM generates a summary of all messages before the cut point
-4. **Record**: Append a `compaction` entry with the summary and `firstKeptEntryId`
-5. **Update**: Remove old messages from `AgentContext.RecentMessages`, replace with summary message
+1. **Snapshot save** (`session.AppendCompaction`): Post-compaction messages are written to `compactions/compaction_NNNNN.jsonl`
+2. **Entry append**: A `compaction` entry with `snapshotRef` is appended to `messages.jsonl`
+3. **Header update**: `lastCompactionId` in the session header is updated
 
-The session JSONL retains all original entries. Compaction only affects the in-memory state — the append-only log is preserved for replay from any point.
+The session JSONL retains all original entries. Compaction only adds new entries — history is never rewritten.
 
 ## meta.json
 
-Session metadata stored alongside the JSONL:
+Session metadata stored alongside the JSONL, managed by `SessionManager`:
 
 ```json
 {
@@ -341,8 +388,17 @@ Session metadata stored alongside the JSONL:
 }
 ```
 
-Managed by `SessionManager`. Updated on each session save.
+## Key File Index
 
-## Legacy Format
-
-> **Warning:** Legacy session formats (single `.jsonl` files without directory layout, or old entry schemas) still exist in the codebase. The loader auto-detects and handles them, but this code should be cleaned up. Once legacy format support is removed, update this section accordingly.
+| File | Responsibility |
+|------|---------------|
+| `pkg/session/session.go` | `Session` struct, `AppendMessage`, `AppendCompaction`, loading |
+| `pkg/session/entries.go` | `SessionEntry`, `SessionHeader`, entry type constants, `buildSessionContext` |
+| `pkg/session/lazy.go` | Lazy session loading |
+| `pkg/context/checkpoint.go` | Checkpoint save/load, symlink management |
+| `pkg/context/checkpoint_index.go` | Checkpoint index for fast lookup |
+| `pkg/context/checkpoint_io.go` | Checkpoint I/O operations |
+| `pkg/context/journal.go` | `JournalEntry` types (message/truncate/compact) |
+| `pkg/context/journal_io.go` | Journal I/O operations |
+| `pkg/context/reconstruction.go` | Snapshot reconstruction from checkpoint + journal replay |
+| `pkg/agent/checkpoint_manager.go` | Checkpoint lifecycle management |

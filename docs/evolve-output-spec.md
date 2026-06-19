@@ -645,12 +645,12 @@ test -f agent/benchmarks/evolve/iter-0-artifacts/decision.json
 
 ### 路径
 ```
-docs/design/planner-system-prompt.md
+docs/planner-system-prompt.md
 ```
 
 ### 说明
 
-Planner 是一个 **AI Agent**（使用 `./bin/ai serve` 启动），它的 system prompt 定义在 `docs/design/planner-system-prompt.md`。
+Planner 是一个 **AI Agent**（使用 `./bin/ai serve` 启动），它的 system prompt 定义在 `docs/planner-system-prompt.md`。
 
 ### 使用方式
 
@@ -658,7 +658,7 @@ Planner 是一个 **AI Agent**（使用 `./bin/ai serve` 启动），它的 syst
 # 启动 planner
 ./bin/ai serve \
   --input-file iter-0-artifacts/planner-input.md \
-  --system-prompt docs/design/planner-system-prompt.md \
+  --system-prompt docs/planner-system-prompt.md \
   > iter-0-artifacts/planner-response.txt
 ```
 
@@ -713,7 +713,7 @@ python3 benchmark/scripts/build_planner_context.py \
 
 ### Debugger System Prompt
 
-**文档**: `docs/design/agent-debugger-design.md`
+**文档**: `docs/archive/agent-debugger-design.md`
 
 **章节**: Debugger Agent Prompt → System Prompt
 
@@ -723,7 +723,7 @@ python3 benchmark/scripts/build_planner_context.py \
 
 ### Planner System Prompt
 
-**文档**: `docs/design/planner-system-prompt.md`
+**文档**: `docs/planner-system-prompt.md`
 
 **内容**: 定义 planner 的身份、输入、任务、关键要求、输出格式
 
