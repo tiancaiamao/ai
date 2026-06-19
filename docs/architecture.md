@@ -166,11 +166,11 @@ Session Directory (~/.ai/sessions/--<git-root>--/)
 │   ├── {"type":"message","id":"abc2","parentId":"abc1",...}
 │   ├── {"type":"truncate","id":"abc3",...}
 │   └── {"type":"compact","id":"abc4",...}
-├── checkpoint.jsonl        # Periodic snapshot (full state)
-└── checkpoint-index.json   # Checkpoint lookup index
+├── agent_state.json        # Persisted AgentState (turn, CWD, etc.)
+└── compactions/            # Compaction snapshot files
 ```
 
-Recovery: load latest checkpoint → replay journal entries after checkpoint → rebuild in-memory state.
+Recovery: load messages from session JSONL (handles compaction snapshots) → load `agent_state.json` for AgentState → rebuild in-memory state.
 
 ## Key Design Decisions
 
@@ -227,13 +227,13 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 
 **Context:** How to persist conversation state.
 
-**Decision:** Append-only JSONL with periodic checkpoints.
+**Decision:** Append-only JSONL with AgentState persistence.
 
 **Rationale:**
 - Crash-safe (partial writes don't corrupt)
 - Efficient (no rewriting)
 - Fork support (tree structure via parent IDs)
-- Fast recovery (checkpoint + journal replay)
+- Fast recovery (AgentState + compaction snapshots)
 
 ## Performance Characteristics
 
@@ -279,7 +279,7 @@ ai/
 │   ├── compact/      # LLM-driven compaction (LLMDecide mode)
 │   ├── command/      # Slash command registry
 │   ├── config/       # Configuration, auth, model specs
-│   ├── context/      # Agent context, messages, checkpoints
+│   ├── context/      # Agent context, messages, AgentState persistence
 │   ├── llm/          # LLM client (OpenAI-compatible)
 │   ├── logger/       # Structured logging
 │   ├── modelselect/  # Model selection logic

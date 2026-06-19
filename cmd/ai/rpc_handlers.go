@@ -113,11 +113,6 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			app.checkpointMgr = nil
 		} else {
 			app.checkpointMgr = mgr
-			defer func() {
-				if app.checkpointMgr != nil {
-					app.checkpointMgr.Close()
-				}
-			}()
 		}
 	}
 

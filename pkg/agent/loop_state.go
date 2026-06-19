@@ -48,12 +48,8 @@ func newLoopState(
 	}
 }
 
-// cleanup closes the checkpoint manager if present.
-func (s *loopState) cleanup() {
-	if s.checkpointMgr != nil {
-		_ = s.checkpointMgr.Close()
-	}
-}
+// cleanup is a no-op now that the checkpoint manager holds no resources.
+func (s *loopState) cleanup() {}
 
 // shouldStop checks for context cancellation and max turns limit.
 // Returns true if the loop should terminate. Pushes AgentEndEvent on stop.

@@ -2,8 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -11,22 +9,11 @@ import (
 )
 
 // TestResume_LoadsAgentStateFromCheckpoint verifies that resuming a session
-// correctly restores AgentState from the latest checkpoint.
+// correctly restores AgentState from agent_state.json.
 //
-// In the Proposal B design:
-//   - Messages are the sole responsibility of sess.GetMessages() (which
-//     handles compaction snapshot refs internally).
-//   - LoadResumeState returns fallbackMessages unchanged and only restores
-//     AgentState from the latest checkpoint.
-//
-// Scenario:
-//  1. Session writes 3 messages
-//  2. SaveCheckpoint (snapshot of current AgentState)
-//  3. Session writes 2 more messages
-//  4. Resume: LoadResumeState with fallback = sess.GetMessages()
-//
-// Expected: LoadResumeState returns all 5 messages (from fallback) and
-// AgentState with TotalTurns=7 from checkpoint.
+// Messages are the sole responsibility of sess.GetMessages().
+// LoadResumeState returns fallbackMessages unchanged and only restores
+// AgentState from agent_state.json.
 func TestResume_LoadsAgentStateFromCheckpoint(t *testing.T) {
 	sessionDir := t.TempDir()
 
@@ -40,19 +27,12 @@ func TestResume_LoadsAgentStateFromCheckpoint(t *testing.T) {
 		}
 	}
 
-	// Step 2: save checkpoint with AgentState.
+	// Step 2: save AgentState directly.
 	preAgentState := agentctx.NewAgentState("test-session", "/workspace")
 	preAgentState.TotalTurns = 7
-	snapshot := &agentctx.ContextSnapshot{
-		RecentMessages: cloneMessages(sess.GetMessages()),
-		AgentState:     preAgentState,
+	if err := agentctx.SaveAgentState(sessionDir, preAgentState); err != nil {
+		t.Fatalf("SaveAgentState: %v", err)
 	}
-	checkpointInfo, err := saveCheckpointAtJournalHead(sessionDir, snapshot, 1)
-	if err != nil {
-		t.Fatalf("saveCheckpointAtJournalHead: %v", err)
-	}
-	t.Logf("checkpoint saved: path=%s msgIndex=%d messages=%d",
-		checkpointInfo.Path, checkpointInfo.MessageIndex, len(snapshot.RecentMessages))
 
 	// Step 3: write 2 post-checkpoint messages.
 	for i := 0; i < 2; i++ {
@@ -77,7 +57,7 @@ func TestResume_LoadsAgentStateFromCheckpoint(t *testing.T) {
 		}
 	}
 
-	// AgentState: restored from checkpoint.
+	// AgentState: restored from agent_state.json.
 	if gotState == nil {
 		t.Error("AgentState = nil, want non-nil")
 	} else if gotState.TotalTurns != 7 {
@@ -133,24 +113,11 @@ func TestResume_FallsBackWhenSessionDirEmpty(t *testing.T) {
 
 func newTestSession(t *testing.T, sessionDir string) *session.Session {
 	t.Helper()
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll %s: %v", sessionDir, err)
-	}
 	sess := session.NewSession(sessionDir)
 	if _, err := sess.AppendSessionInfo("test", ""); err != nil {
 		t.Fatalf("AppendSessionInfo: %v", err)
 	}
 	return sess
-}
-
-func saveCheckpointAtJournalHead(sessionDir string, snapshot *agentctx.ContextSnapshot, turn int) (*agentctx.CheckpointInfo, error) {
-	journal, err := agentctx.OpenJournal(sessionDir)
-	if err != nil {
-		return nil, fmt.Errorf("open journal: %w", err)
-	}
-	defer journal.Close()
-	msgIdx := journal.GetLength()
-	return agentctx.SaveCheckpoint(sessionDir, snapshot, turn, msgIdx)
 }
 
 func cloneMessages(in []agentctx.AgentMessage) []agentctx.AgentMessage {
@@ -167,5 +134,3 @@ func firstText(m agentctx.AgentMessage) string {
 	}
 	return ""
 }
-
-var _ = filepath.Join

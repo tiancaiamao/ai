@@ -60,6 +60,16 @@ Key commits: `d3c9162` (#273) cache-friendly message architecture, `017919d` (#3
 
 Design doc: `docs/archive/cache-friendly-message-architecture.md` (archived — CacheMode was removed in #305; `buildCacheFriendlyLLMContext` that remains is a simpler internal helper, not the dual-mode design).
 
+### Checkpoint Dead Code Cleanup (2026-07)
+
+**What**: Removed ~1000 lines of dead checkpoint reconstruction code and flattened `agent_state.json` from nested `checkpoints/checkpoint_NNNNN/` directories to the session root.
+
+**Why**: The checkpoint system (checkpoint directories, journal, messages.jsonl duplication, `current` symlink, `checkpoint_index.json`) was a legacy from earlier context-management generations. After v3's compaction architecture, session messages live in `messages.jsonl` with compaction snapshots in `compactions/`. The checkpoint reconstruction path (journal replay) had zero production callers. The only active code was `agent_state.json` persistence (CWD, turn count, compaction counters) used by `LoadResumeState()`.
+
+**Two-step cleanup**:
+1. Removed dead reconstruction code: `journal.go`, `journal_io.go`, `reconstruction.go`, `messages.jsonl` duplication in checkpoints, `ContextSnapshot`, `Reconstruct()`, `AppendMessage()`, journal types.
+2. Flattened `agent_state.json` to session root. Deleted `checkpoint.go` (checkpoint dir creation, symlink management), `checkpoint_index.go`, `snapshot.go`. `SaveAgentState` / `LoadAgentState` now read/write directly from `agent_state.json` in the session directory.
+
 ## Multi-Agent Orchestration: From `ag` CLI to Skill-Based PGE
 
 ### ag CLI — Bridge-per-Agent (2026-04)

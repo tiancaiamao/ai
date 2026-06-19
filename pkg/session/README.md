@@ -16,8 +16,8 @@ Sessions are stored under `~/.ai/sessions/` (or a configured base directory):
 │   ├── <uuid-1>/                     # Session directory
 │   │   ├── messages.jsonl            # Append-only entry log
 │   │   ├── meta.json                 # Session metadata (name, title, timestamps)
-│   │   ├── llm_context.txt           # Persisted LLM context (from context management)
-│   │   └── checkpoint.json           # Periodic checkpoint snapshot
+│   │   ├── agent_state.json          # Persisted AgentState (turn, CWD, etc.)
+│   │   └── compactions/              # Compaction snapshot files
 │   ├── <uuid-2>/
 │   └── ...
 └── --Users-genius-project-other--/
@@ -124,17 +124,9 @@ The `MaxMessages` field controls how many recent entries to load:
 - `-1` — Load everything
 - `N > 0` — Load at most N messages
 
-## Checkpoint and Journal
+## AgentState Persistence
 
-The `AgentContextCheckpointManager` in `pkg/agent` writes periodic checkpoints:
-
-- **Journal**: Append-only log of messages within the current agent run
-- **Checkpoint**: Periodic snapshot of `AgentContext` state (messages, system prompt, tools)
-- **Recovery**: On crash, replay from last checkpoint + journal entries
-
-Checkpoint files are stored in the session directory:
-- `checkpoint.json` — Full context snapshot
-- Journal entries — Incremental updates since last checkpoint
+The `AgentContextCheckpointManager` in `pkg/agent` persists `AgentState` (turn count, CWD, token usage, compaction counters) to `agent_state.json` in the session directory. This file is written after compaction events and loaded on session resume via `LoadResumeState()`.
 
 ## Compaction in Sessions
 
