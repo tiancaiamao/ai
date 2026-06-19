@@ -61,10 +61,6 @@ func TestStreamAssistantResponse_RecoversToolCallFromThinkingDelta(t *testing.T)
 }
 
 func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T) {
-	// sessionDir := t.TempDir()
-	// Use string LLMContext instead of file manager
-	llmContextContent := "# Test LLM Context\n\nThis is test content."
-
 	var observedMessages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -93,7 +89,6 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = llmContextContent
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
@@ -130,7 +125,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 	if err := json.Unmarshal(observedMessages[0].Content, &systemContent); err != nil {
 		t.Fatalf("failed to parse system content: %v", err)
 	}
-	if strings.Contains(systemContent, "<llm_context>") || strings.Contains(systemContent, "<runtime_state>") {
+	if strings.Contains(systemContent, "<runtime_state>") {
 		t.Fatalf("expected runtime payload outside system prompt, got system content: %q", systemContent)
 	}
 
@@ -158,8 +153,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedAsUserMessage(t *testing.T)
 }
 
 func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) {
-	// Simulate a brand new session: LLMContext is empty (no compact has occurred yet).
-	// runtime_state telemetry must still be injected so the agent knows its working directory.
+	// runtime_state telemetry must be injected so the agent knows its working directory.
 	var observedMessages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -188,7 +182,6 @@ func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) 
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	// LLMContext is "" — new session, no compact yet
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
@@ -214,7 +207,7 @@ func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) 
 		t.Fatalf("expected assistant text 'ok', got %q", got)
 	}
 
-	// runtime_state MUST be injected even with empty LLMContext
+	// runtime_state MUST be injected
 	foundRuntimeState := false
 	for _, m := range observedMessages {
 		if m.Role != "user" {
@@ -232,104 +225,15 @@ func TestStreamAssistantResponse_RuntimeStateInjectedInNewSession(t *testing.T) 
 			if !strings.Contains(content, `startup_path: "/tmp/startup-root"`) {
 				t.Fatalf("expected runtime_state to include startup_path, got: %q", content)
 			}
-			// LLMContext is empty, so <llm_context> should NOT be present
-			if strings.Contains(content, "<llm_context>") {
-				t.Fatal("expected no <llm_context> in new session (no compact recovery)")
-			}
 			break
 		}
 	}
 	if !foundRuntimeState {
-		t.Fatal("expected runtime_state to be injected in new session (LLMContext empty)")
-	}
-}
-
-func TestStreamAssistantResponse_LLMContextInjectedAfterCompact(t *testing.T) {
-	// sessionDir := t.TempDir()
-	// Use string LLMContext instead of file manager
-	llmContextContent := `# LLM Context
-
-## Current Task
-Test task for post-compact recovery`
-
-	var observedMessages []struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("failed to read request body: %v", err)
-		}
-		var req struct {
-			Messages []struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Fatalf("failed to decode request JSON: %v", err)
-		}
-		observedMessages = req.Messages
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":2,\"total_tokens\":14}}\n\n")
-	}))
-	defer server.Close()
-
-	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = llmContextContent
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("continue"))
-
-	config := &LoopConfig{
-		Model: llm.Model{
-			ID:       "test-model",
-			Provider: "test",
-			BaseURL:  server.URL,
-			API:      "openai-completions",
-		},
-		APIKey:        "test-key",
-		ThinkingLevel: "high",
-		ContextWindow: 128000,
-	}
-
-	stream := newTestAgentEventStream()
-	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
-	if err != nil {
-		t.Fatalf("streamAssistantResponse returned error: %v", err)
-	}
-	if got := strings.TrimSpace(msg.ExtractText()); got != "ok" {
-		t.Fatalf("expected assistant text 'ok', got %q", got)
-	}
-
-	// After compact, llm_context SHOULD be injected
-	var foundLLMContext bool
-	for _, observed := range observedMessages {
-		if observed.Role != "user" {
-			continue
-		}
-		var content string
-		if err := json.Unmarshal(observed.Content, &content); err != nil {
-			continue
-		}
-		if strings.Contains(content, "<llm_context>") {
-			foundLLMContext = true
-			break
-		}
-	}
-
-	if !foundLLMContext {
-		t.Fatalf("expected llm_context to be injected whenever LLMContext is non-empty")
+		t.Fatal("expected runtime_state to be injected")
 	}
 }
 
 func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
-	// sessionDir := t.TempDir()
-	// Use string LLMContext instead of file manager
-	llmContextContent := "# LLM Context\n\n## Current Task\n- keep recent user turns\n"
-
 	var observedMessages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -358,7 +262,6 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("static system prompt")
-	agentCtx.LLMContext = llmContextContent
 
 	userTurn1 := "user-turn-1: first requirement"
 	userTurn2 := "user-turn-2: second requirement"
@@ -431,9 +334,6 @@ func TestStreamAssistantResponse_KeepsSeveralRecentRealUserTurns(t *testing.T) {
 		var content string
 		if err := json.Unmarshal(observed.Content, &content); err != nil {
 			t.Fatalf("failed to parse user content: %v", err)
-		}
-		if strings.Contains(content, "<llm_context>") {
-			continue // runtime state injection (llm context part)
 		}
 		if strings.Contains(content, "<agent:runtime_state") {
 			continue // runtime state injection (meta part)

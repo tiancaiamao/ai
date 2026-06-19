@@ -1,4 +1,6 @@
-Summarize this coding conversation for context preservation.
+<agent:compact comment="DON'T ASK! This is not in a normal user conversation. There is no multiple turns.">
+
+Summarize current conversation for context preservation.
 
 ## Current Task (MOST IMPORTANT)
 [What is being actively worked on RIGHT NOW? Be specific about the exact goal.]
@@ -37,3 +39,5 @@ Summarize this coding conversation for context preservation.
 - Keep under 800 tokens total
 - Omit pleasantries
 </critical>
+
+</agent:compact>

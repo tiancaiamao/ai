@@ -8,12 +8,11 @@ import (
 
 func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
-	meta := agentctx.ContextMeta{
+	meta := ContextMeta{
 		TokensUsed:        12345,
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-		LLMContextSize:    3000,
 	}
 
 	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
@@ -61,15 +60,12 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 }
 
 func TestBuildRuntimeSystemAppendix(t *testing.T) {
-	appendix := buildRuntimeSystemAppendix("# wm", "<runtime_state>ok</runtime_state>")
-	if !containsString(appendix, "<llm_context>") {
-		t.Fatalf("expected llm_context section, got: %s", appendix)
-	}
+	appendix := buildRuntimeSystemAppendix("<runtime_state>ok</runtime_state>")
 	if !containsString(appendix, "<runtime_state>ok</runtime_state>") {
 		t.Fatalf("expected runtime_state section, got: %s", appendix)
 	}
 
-	empty := buildRuntimeSystemAppendix("", "")
+	empty := buildRuntimeSystemAppendix("")
 	if empty != "" {
 		t.Fatalf("expected empty appendix, got: %s", empty)
 	}
@@ -149,12 +145,11 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 	agentCtx := agentctx.NewAgentContext("sys")
 	// Note: ContextMgmtState removed in backport - CurrentTurn no longer tracked separately
 
-	meta := agentctx.ContextMeta{
+	meta := ContextMeta{
 		TokensUsed:        90000,
 		TokensMax:         128000,
 		TokensPercent:     70.0,
 		MessagesInHistory: 10,
-		LLMContextSize:    1000,
 	}
 
 	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")

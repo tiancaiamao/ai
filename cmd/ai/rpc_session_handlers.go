@@ -188,7 +188,6 @@ func (app *rpcApp) handleRewind(args string) (any, error) {
 	}
 
 	app.setAgentContext(app.createBaseContext())
-	app.restoreLLMContextFromCompaction(app.sess)
 
 	if err := app.sessionMgr.SaveCurrent(); err != nil {
 		slog.Info("Failed to update session metadata:", "value", err)

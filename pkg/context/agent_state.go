@@ -14,7 +14,6 @@ type AgentState struct {
 	TokensLimit int
 
 	// Tracking
-	LastLLMContextUpdate      int // Last turn when LLMContext was updated
 	LastCheckpoint            int // Last turn when checkpoint was created
 	LastTriggerTurn           int // Last turn when context management was triggered
 	TurnsSinceLastTrigger     int // Turns elapsed since last trigger
@@ -48,7 +47,6 @@ func NewAgentState(sessionID, cwd string) *AgentState {
 		TotalTurns:                0,
 		TokensUsed:                0,
 		TokensLimit:               200000,
-		LastLLMContextUpdate:      0,
 		LastCheckpoint:            0,
 		LastTriggerTurn:           0,
 		TurnsSinceLastTrigger:     0,
@@ -77,7 +75,6 @@ func (a *AgentState) Clone() *AgentState {
 		TotalTurns:                a.TotalTurns,
 		TokensUsed:                a.TokensUsed,
 		TokensLimit:               a.TokensLimit,
-		LastLLMContextUpdate:      a.LastLLMContextUpdate,
 		LastCheckpoint:            a.LastCheckpoint,
 		LastTriggerTurn:           a.LastTriggerTurn,
 		TurnsSinceLastTrigger:     a.TurnsSinceLastTrigger,

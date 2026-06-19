@@ -20,7 +20,6 @@ type CheckpointInfo struct {
 	MessageIndex        int    `json:"message_index"`
 	Path                string `json:"path"`
 	CreatedAt           string `json:"created_at"`
-	LLMContextChars     int    `json:"llm_context_chars,omitempty"`
 	RecentMessagesCount int    `json:"recent_messages_count,omitempty"`
 }
 

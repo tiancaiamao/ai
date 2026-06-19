@@ -13,13 +13,7 @@ import (
 // runtime_state YAML). It is read-only with respect to loop state — it only
 // writes to agentCtx metadata fields.
 func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) string {
-	// Block A: LLMContext content injection — whenever non-empty.
-	var llmContextContent string
-	if agentCtx.LLMContext != "" {
-		llmContextContent = agentCtx.LLMContext
-	}
-
-	// Block B: runtime_state telemetry — always, from turn 1.
+	// runtime_state telemetry — always, from turn 1.
 	const defaultContextWindow = 200000 // matches internal/winai/interpreter.go default
 	tokensMax := defaultContextWindow
 	if config.ContextWindow > 0 {
@@ -60,16 +54,15 @@ func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) stri
 		metaTokensPercent = float64(metaTokensUsed) / float64(metaTokensMax) * 100
 	}
 
-	meta := agentctx.ContextMeta{
+	meta := ContextMeta{
 		TokensUsed:        metaTokensUsed,
 		TokensMax:         metaTokensMax,
 		TokensPercent:     metaTokensPercent,
 		MessagesInHistory: len(agentCtx.RecentMessages),
-		LLMContextSize:    len(agentCtx.LLMContext),
 	}
 
 	runtimeMetaSnapshot, _ := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath, config.RunID)
-	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
+	return buildRuntimeUserAppendix(runtimeMetaSnapshot)
 }
 
 func extractRecentMessages(messages []agentctx.AgentMessage, tokenBudget int) []agentctx.AgentMessage {
@@ -178,6 +171,14 @@ type runtimeToolPressure struct {
 	StaleCount   int
 	LargeCount   int
 	LargestChars int
+}
+
+// ContextMeta holds telemetry values for runtime state snapshot.
+type ContextMeta struct {
+	TokensUsed        int     `json:"tokens_used"`
+	TokensMax         int     `json:"tokens_max"`
+	TokensPercent     float64 `json:"tokens_percent"`
+	MessagesInHistory int     `json:"messages_in_history"`
 }
 
 func collectRuntimeToolPressure(messages []agentctx.AgentMessage) runtimeToolPressure {

@@ -89,13 +89,6 @@ func (s *loopState) savePreCompactionCheckpoint(trigger string) {
 	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
 		return
 	}
-	// Guard: skip checkpoint when LLMContext is empty (e.g. after truncate
-	// without update_llm_context). Writing an empty checkpoint would
-	// overwrite the previous checkpoint that had content.
-	if s.agentCtx.LLMContext == "" {
-		slog.Info("[Loop] Skipping pre-compaction checkpoint (LLMContext is empty)", "trigger", trigger, "turn", s.turnCount)
-		return
-	}
 	// Check if any compactor would trigger before saving checkpoint.
 	shouldCompact := false
 	for _, c := range s.config.Compactors {
@@ -107,7 +100,7 @@ func (s *loopState) savePreCompactionCheckpoint(trigger string) {
 	if !shouldCompact {
 		return
 	}
-	if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.agentCtx.LLMContext, s.turnCount); err != nil {
+	if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.turnCount); err != nil {
 		slog.Warn("[Loop] Failed to save pre-compaction checkpoint", "error", err, "trigger", trigger, "turn", s.turnCount)
 	} else {
 		slog.Info("[Loop] Pre-compaction checkpoint saved", "trigger", trigger, "turn", s.turnCount)
@@ -214,16 +207,15 @@ func (s *loopState) performCompaction(
 	// and appends a compaction entry to messages.jsonl. We copy the slice to
 	// avoid sharing the backing array with the loop goroutine.
 	endEvent := NewCompactionEndEvent(CompactionInfo{
-		Type:              compacted.Type,
-		Auto:              true,
-		Before:            before,
-		After:             after,
-		Trigger:           trigger,
-		Summary:           compacted.Summary,
-		TokensBefore:      compacted.TokensBefore,
-		TokensAfter:       compacted.TokensAfter,
-		TruncatedCount:    compacted.TruncatedCount,
-		LLMContextUpdated: compacted.LLMContextUpdated,
+		Type:           compacted.Type,
+		Auto:           true,
+		Before:         before,
+		After:          after,
+		Trigger:        trigger,
+		Summary:        compacted.Summary,
+		TokensBefore:   compacted.TokensBefore,
+		TokensAfter:    compacted.TokensAfter,
+		TruncatedCount: compacted.TruncatedCount,
 	})
 	if len(s.agentCtx.RecentMessages) > 0 {
 		msgs := make([]agentctx.AgentMessage, len(s.agentCtx.RecentMessages))
@@ -324,11 +316,6 @@ func (s *loopState) processToolCalls(
 
 	// Increment tool call counter for compactor trigger intervals.
 	s.agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
-
-	// Create checkpoint after update_llm_context tool execution.
-	if hasToolResultNamed(toolResults, "update_llm_context") {
-		saveCheckpointAfterToolExecution(s.checkpointMgr, s.agentCtx, s.turnCount, "update_llm_context")
-	}
 
 	return hasMore, toolResults
 }
