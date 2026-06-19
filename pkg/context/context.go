@@ -97,34 +97,6 @@ func NewAgentContext(systemPrompt string) *AgentContext {
 	}
 }
 
-// NewAgentContextWithSessionID creates a new AgentContext with session ID and working directory.
-func NewAgentContextWithSessionID(systemPrompt, sessionID, cwd string) *AgentContext {
-	ctx := &AgentContext{
-		SystemPrompt:   systemPrompt,
-		RecentMessages: make([]AgentMessage, 0),
-		Tools:          make([]Tool, 0),
-		Skills:         make([]skill.Skill, 0),
-		AgentState:     NewAgentState(sessionID, cwd),
-	}
-	return ctx
-}
-
-// NewAgentContextWithSkills creates a new AgentContext with skills.
-func NewAgentContextWithSkills(systemPrompt string, skills []skill.Skill) *AgentContext {
-	ctx := NewAgentContext(systemPrompt)
-	ctx.Skills = skills
-
-	// Append skills to system prompt
-	if len(skills) > 0 {
-		skillsText := skill.FormatForPrompt(skills, nil)
-		if skillsText != "" {
-			ctx.SystemPrompt = systemPrompt + skillsText
-		}
-	}
-
-	return ctx
-}
-
 // AddRecentMessage adds a message to the recent messages.
 func (c *AgentContext) AddRecentMessage(message AgentMessage) {
 	c.RecentMessages = append(c.RecentMessages, message)

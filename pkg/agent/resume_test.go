@@ -120,12 +120,6 @@ func newTestSession(t *testing.T, sessionDir string) *session.Session {
 	return sess
 }
 
-func cloneMessages(in []agentctx.AgentMessage) []agentctx.AgentMessage {
-	out := make([]agentctx.AgentMessage, len(in))
-	copy(out, in)
-	return out
-}
-
 func firstText(m agentctx.AgentMessage) string {
 	for _, c := range m.Content {
 		if tc, ok := c.(agentctx.TextContent); ok {

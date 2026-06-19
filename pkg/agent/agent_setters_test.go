@@ -1,19 +1,11 @@
 package agent
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
-
-// fakeExecutor is a minimal ToolExecutor used only to exercise SetExecutor/GetExecutor.
-type fakeExecutor struct{}
-
-func (f *fakeExecutor) Execute(_ context.Context, _ interface{}, _ map[string]interface{}) ([]interface{}, error) {
-	return nil, nil
-}
 
 // TestAgentSettersAndGetters exercises the simple Set*/Get* methods on Agent.
 // These are mostly trivial setters but they need to register in coverage.

@@ -94,12 +94,6 @@ func (b *Builder) GetCWD() string {
 	return b.cwd
 }
 
-// SetMinimal enables/disables minimal mode.
-func (b *Builder) SetMinimal(minimal bool) *Builder {
-	b.minimal = minimal
-	return b
-}
-
 // SetTools sets the available tools.
 func (b *Builder) SetTools(tools interface{}) *Builder {
 	b.tools = convertTools(tools)
@@ -130,24 +124,6 @@ func (b *Builder) SetSkills(skills []skill.Skill) *Builder {
 // SetSkillStats sets the skill usage statistics for progressive disclosure.
 func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder {
 	b.skillStats = stats
-	return b
-}
-
-// SetTemplate sets a custom prompt template. If empty, uses the default embedded prompt.md.
-func (b *Builder) SetTemplate(t string) *Builder {
-	b.template = t
-	return b
-}
-
-// SetContextMeta sets the runtime_state telemetry metadata.
-func (b *Builder) SetContextMeta(meta string) *Builder {
-	b.contextMeta = meta
-	return b
-}
-
-// SetTokensPercent sets the current token usage percentage.
-func (b *Builder) SetTokensPercent(pct float64) *Builder {
-	b.tokensPercent = pct
 	return b
 }
 
@@ -306,16 +282,6 @@ func NormalizeThinkingLevel(level string) string {
 // percentage (e.g. "40%").
 func LLMDecideCheckPrompt() string {
 	return llmDecideCheckPrompt
-}
-
-// OrchestratorTemplate returns the PGE orchestrator prompt template.
-func OrchestratorTemplate() string {
-	return orchestratorTemplate
-}
-
-// ValidatorTemplate returns the PGE validator prompt template.
-func ValidatorTemplate() string {
-	return validatorTemplate
 }
 
 // TemplateForRole returns the system prompt template for the given role.

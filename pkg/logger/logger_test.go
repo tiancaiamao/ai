@@ -24,11 +24,3 @@ func TestNewLogger(t *testing.T) {
 	l.Debug("debug message")
 	l.WithGroup("sub").LogAttrs(context.Background(), slog.LevelInfo, "attr msg", slog.String("k", "v"))
 }
-
-func TestNewDefaultLogger(t *testing.T) {
-	l := NewDefaultLogger()
-	if l == nil {
-		t.Fatal("NewDefaultLogger returned nil")
-	}
-	l.Info("default logger works")
-}

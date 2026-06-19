@@ -331,12 +331,6 @@ func buildRuntimeUserAppendix(runtimeMetaSnapshot string) string {
 	return runtimeMetaSnapshot
 }
 
-// buildRuntimeSystemAppendix is kept for backward-compatible tests/helpers.
-// Runtime state is now injected as a user message, not appended to system prompt.
-func buildRuntimeSystemAppendix(runtimeMetaSnapshot string) string {
-	return buildRuntimeUserAppendix(runtimeMetaSnapshot)
-}
-
 func updateRuntimeMetaSnapshot(
 	agentCtx *agentctx.AgentContext,
 	meta ContextMeta,

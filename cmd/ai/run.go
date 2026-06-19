@@ -427,23 +427,6 @@ func sendRPCCommandResult(w io.Writer, cmdType, message string) (int, error) {
 	return w.Write(data)
 }
 
-// hasAgentEndEvent checks if a raw JSON line has type "agent_end".
-func hasAgentEndEvent(data []byte) bool {
-	// Fast path: check for the string before full JSON parse.
-	// This avoids allocation for the vast majority of events.
-	s := string(data)
-	if !strings.Contains(s, `"agent_end"`) {
-		return false
-	}
-	var evt struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &evt); err != nil {
-		return false
-	}
-	return evt.Type == "agent_end"
-}
-
 // sendRPCCommandWithTimeout is like sendRPCCommand but aborts the write
 // after the given deadline. This is a safety measure for cases where the
 // subprocess is dead or unresponsive — with os.Pipe, writes return quickly

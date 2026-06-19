@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -19,19 +18,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
-	"github.com/tiancaiamao/ai/pkg/skill"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
-
-// parseJSONArgs attempts to unmarshal args as JSON into target.
-// Returns true if args looks like JSON and was successfully parsed.
-func parseJSONArgs(args string, target any) bool {
-	args = strings.TrimSpace(args)
-	if len(args) > 0 && args[0] == '{' {
-		return json.Unmarshal([]byte(args), target) == nil
-	}
-	return false
-}
 
 func normalizeSessionPath(sessionPath string) (string, error) {
 	if sessionPath == "" {
@@ -55,21 +43,6 @@ func normalizeSessionPath(sessionPath string) (string, error) {
 	return absPath, nil
 }
 
-func sessionIDFromPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	base := filepath.Base(path)
-	if strings.HasSuffix(base, ".jsonl") {
-		return strings.TrimSuffix(base, ".jsonl")
-	}
-	ext := filepath.Ext(base)
-	if ext != "" {
-		return strings.TrimSuffix(base, ext)
-	}
-	return base
-}
-
 func resolveSessionName(sessionMgr *session.SessionManager, sessionID string) string {
 	if sessionMgr == nil || sessionID == "" {
 		return sessionID
@@ -79,18 +52,6 @@ func resolveSessionName(sessionMgr *session.SessionManager, sessionID string) st
 		return sessionID
 	}
 	return meta.Name
-}
-
-func modelInfoFromModel(model llm.Model) rpc.ModelInfo {
-	return rpc.ModelInfo{
-		ID:            model.ID,
-		Name:          model.ID,
-		Provider:      model.Provider,
-		API:           model.API,
-		Input:         []string{"text"},
-		ContextWindow: model.ContextWindow,
-		MaxTokens:     model.MaxTokens,
-	}
 }
 
 func modelInfoFromSpec(spec config.ModelSpec) rpc.ModelInfo {
@@ -252,24 +213,6 @@ func findModelSpec(specs []config.ModelSpec, provider, modelID string) (config.M
 	return config.ModelSpec{}, false
 }
 
-func buildSkillCommands(skills []skill.Skill) []rpc.SlashCommand {
-	commands := make([]rpc.SlashCommand, 0, len(skills))
-	for _, s := range skills {
-		name := s.Name
-		if name == "" {
-			continue
-		}
-		commands = append(commands, rpc.SlashCommand{
-			Name:        "skill:" + name,
-			Description: s.Description,
-			Source:      "skill",
-			Location:    s.Source,
-			Path:        s.FilePath,
-		})
-	}
-	return commands
-}
-
 func initTraceFileHandler(sessionID string) (*traceevent.FileHandler, string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -333,27 +276,6 @@ func runDetachedTraceSpan(
 		}
 	}
 	return err
-}
-
-func forkEntryID(msg agentctx.AgentMessage, index int) string {
-	if msg.Timestamp != 0 {
-		return fmt.Sprintf("msg-%d", msg.Timestamp)
-	}
-	return fmt.Sprintf("idx-%d", index)
-}
-
-func buildForkMessages(messages []agentctx.AgentMessage) []rpc.ForkMessage {
-	results := make([]rpc.ForkMessage, 0)
-	for i, msg := range messages {
-		if msg.Role != "user" {
-			continue
-		}
-		results = append(results, rpc.ForkMessage{
-			EntryID: forkEntryID(msg, i),
-			Text:    msg.ExtractText(),
-		})
-	}
-	return results
 }
 
 type treeNode struct {
@@ -479,37 +401,6 @@ func truncateText(text string, limit int) string {
 		return text[:limit]
 	}
 	return text[:limit-3] + "..."
-}
-
-func resolveForkEntry(entryID string, messages []agentctx.AgentMessage) (int, string, error) {
-	if entryID == "" {
-		return -1, "", fmt.Errorf("entryId is required")
-	}
-	if strings.HasPrefix(entryID, "msg-") {
-		raw := strings.TrimPrefix(entryID, "msg-")
-		ts, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return -1, "", fmt.Errorf("invalid entryId: %s", entryID)
-		}
-		for i, msg := range messages {
-			if msg.Timestamp == ts {
-				return i, msg.ExtractText(), nil
-			}
-		}
-		return -1, "", fmt.Errorf("entryId not found: %s", entryID)
-	}
-	if strings.HasPrefix(entryID, "idx-") {
-		raw := strings.TrimPrefix(entryID, "idx-")
-		index, err := strconv.Atoi(raw)
-		if err != nil {
-			return -1, "", fmt.Errorf("invalid entryId: %s", entryID)
-		}
-		if index < 0 || index >= len(messages) {
-			return -1, "", fmt.Errorf("entryId out of range: %s", entryID)
-		}
-		return index, messages[index].ExtractText(), nil
-	}
-	return -1, "", fmt.Errorf("unknown entryId format: %s", entryID)
 }
 
 func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, rpc.SessionTokenStats, float64) {

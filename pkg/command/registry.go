@@ -6,7 +6,7 @@ package command
 import (
 	"fmt"
 	"sort"
-	"strings"
+
 	"sync"
 )
 
@@ -79,18 +79,6 @@ func (r *Registry) Get(name string) (Handler, bool) {
 	return h, ok
 }
 
-// List returns all registered command names, sorted alphabetically.
-func (r *Registry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.handlers))
-	for name := range r.handlers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // ListCommands returns user-visible commands (excluding hidden ones), sorted by name.
 func (r *Registry) ListCommands() []CommandInfo {
 	r.mu.RLock()
@@ -104,74 +92,6 @@ func (r *Registry) ListCommands() []CommandInfo {
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name < result[j].Name
-	})
-	return result
-}
-
-// AllCommands returns all registered commands including hidden ones, sorted by name.
-func (r *Registry) AllCommands() []CommandInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]CommandInfo, 0, len(r.handlers))
-	for name, desc := range r.info {
-		result = append(result, CommandInfo{
-			Name:        name,
-			Description: desc,
-			Hidden:      r.hidden[name],
-		})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-	return result
-}
-
-// Dispatch looks up and invokes a command handler by name.
-// Returns an error if the command is not found.
-func (r *Registry) Dispatch(name, args string) (any, error) {
-	h, ok := r.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("unknown command: %s", name)
-	}
-	return h(args)
-}
-
-// RegisterSetSub registers a handler for a /set subkey.
-func (r *Registry) RegisterSetSub(key, description string, handler Handler) {
-	r.setMu.Lock()
-	defer r.setMu.Unlock()
-	r.setHandlers[key] = handler
-	r.setInfo[key] = description
-}
-
-// DispatchSet looks up and invokes a /set subkey handler.
-func (r *Registry) DispatchSet(key, args string) (any, error) {
-	r.setMu.RLock()
-	h, ok := r.setHandlers[key]
-	r.setMu.RUnlock()
-	if !ok {
-		r.setMu.RLock()
-		available := make([]string, 0, len(r.setInfo))
-		for k := range r.setInfo {
-			available = append(available, k)
-		}
-		r.setMu.RUnlock()
-		sort.Strings(available)
-		return nil, fmt.Errorf("unknown set key: %s (available: %s)", key, strings.Join(available, ", "))
-	}
-	return h(args)
-}
-
-// ListSetSubs returns all /set subcommands with descriptions, sorted by key.
-func (r *Registry) ListSetSubs() []SetSubcommand {
-	r.setMu.RLock()
-	defer r.setMu.RUnlock()
-	result := make([]SetSubcommand, 0, len(r.setInfo))
-	for key, desc := range r.setInfo {
-		result = append(result, SetSubcommand{Key: key, Description: desc})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Key < result[j].Key
 	})
 	return result
 }

@@ -120,29 +120,6 @@ func (c *LogConfig) CreateLogger() (*slog.Logger, error) {
 	return logger.NewLogger(cfg)
 }
 
-// ResolveLogPath returns the resolved log file path with PID expansion.
-func ResolveLogPath(c *LogConfig) string {
-	return resolveLogPath(c)
-}
-
-func resolveLogPath(c *LogConfig) string {
-	if c == nil {
-		c = DefaultLogConfig()
-	}
-	path := strings.TrimSpace(c.File)
-	if path == "" {
-		return ""
-	}
-	return expandLogPath(path)
-}
-
-func expandLogPath(path string) string {
-	pid := strconv.Itoa(os.Getpid())
-	path = strings.ReplaceAll(path, "{pid}", pid)
-	path = strings.ReplaceAll(path, "{PID}", pid)
-	return path
-}
-
 // LoadConfig loads configuration from file and merges with environment variables.
 // Environment variables take precedence over config file values.
 func LoadConfig(configPath string) (*Config, error) {
@@ -291,15 +268,6 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 type LoopConfigOption func(*agent.LoopConfig)
 
 // WithCompactor sets a single compactor for context compression.
-// Deprecated: Use WithCompactors([]agent.Compactor{...}) for multiple compactors.
-func WithCompactor(compactor agent.Compactor) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		if compactor != nil {
-			cfg.Compactors = []agent.Compactor{compactor}
-		}
-	}
-}
-
 // WithCompactors sets multiple compactors for context compression.
 // Array order determines execution priority (first trigger wins).
 func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
@@ -312,13 +280,6 @@ func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
 func WithContextWindow(window int) LoopConfigOption {
 	return func(cfg *agent.LoopConfig) {
 		cfg.ContextWindow = window
-	}
-}
-
-// WithThinkingLevel sets the thinking level.
-func WithThinkingLevel(level string) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ThinkingLevel = level
 	}
 }
 

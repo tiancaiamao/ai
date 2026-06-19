@@ -94,36 +94,6 @@ func TestBuilderWithSkills(t *testing.T) {
 	}
 }
 
-func TestBuilderMinimalMode(t *testing.T) {
-	cwd := "/workspace"
-
-	tools := []ToolInfo{
-		mockTool{name: "read", description: "Read files"},
-	}
-	skills := []skill.Skill{
-		{Name: "test", Description: "A test skill"},
-	}
-
-	b := NewBuilder("", cwd)
-	b.SetTools(tools).SetSkills(skills).SetMinimal(true)
-	result := b.Build()
-
-	// In minimal mode, skills should be excluded from BuildSkillsMessage too
-	skillsMsg := b.BuildSkillsMessage()
-	if skillsMsg != "" {
-		t.Error("BuildSkillsMessage should return empty in minimal mode")
-	}
-
-	// But tools and workspace should still be there
-	if !contains(result, "## Tools") {
-		t.Error("Tools section missing in minimal mode")
-	}
-
-	if !contains(result, "## Workspace") {
-		t.Error("Workspace section missing in minimal mode")
-	}
-}
-
 func TestBuilderSkillsRendering(t *testing.T) {
 	cwd := "/workspace"
 	skills := []skill.Skill{
@@ -398,19 +368,6 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
-func TestCompactAndTemplateAccessors(t *testing.T) {
-	// Simple accessor coverage for the compact/role template helpers.
-	if got := CompactSummarizePrompt(); got == "" {
-		t.Error("CompactSummarizePrompt returned empty string")
-	}
-	if got := OrchestratorTemplate(); got == "" {
-		t.Error("OrchestratorTemplate returned empty string")
-	}
-	if got := ValidatorTemplate(); got == "" {
-		t.Error("ValidatorTemplate returned empty string")
-	}
-}
-
 func TestTemplateForRole(t *testing.T) {
 	cases := []struct {
 		role    string
@@ -436,30 +393,6 @@ func TestTemplateForRole(t *testing.T) {
 		if got == "" {
 			t.Errorf("role %q: got empty template", c.role)
 		}
-	}
-}
-
-func TestBuilderSetters(t *testing.T) {
-	// Coverage for the simple setter chain + minimal-build path.
-	b := NewBuilder("", "")
-
-	// All Set* methods should return the builder for chaining.
-	if got := b.SetMinimal(true); got != b {
-		t.Error("SetMinimal did not return builder")
-	}
-	if got := b.SetTemplate("custom template {{workspace_section}} {{tool_descriptions}}"); got != b {
-		t.Error("SetTemplate did not return builder")
-	}
-	if got := b.SetContextMeta("meta"); got != b {
-		t.Error("SetContextMeta did not return builder")
-	}
-	if got := b.SetTokensPercent(42.5); got != b {
-		t.Error("SetTokensPercent did not return builder")
-	}
-
-	// Build with custom template should still produce a non-empty string.
-	if out := b.Build(); out == "" {
-		t.Error("Build returned empty string with custom template")
 	}
 }
 

@@ -185,33 +185,3 @@ func ConvertToolsToLLM(tools []Tool) []llm.LLMTool {
 
 	return llmTools
 }
-
-// InsertBeforeFirstUserMessage inserts msg immediately before the first
-// user-role message. Used for skills/AGENTS.md prefix injection to keep
-// the system prompt + prefix stable across turns for provider prefix caching.
-func InsertBeforeFirstUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
-	if len(messages) == 0 {
-		return []llm.LLMMessage{msg}
-	}
-
-	firstUserIdx := -1
-	for i := 0; i < len(messages); i++ {
-		if messages[i].Role == "user" {
-			firstUserIdx = i
-			break
-		}
-	}
-
-	if firstUserIdx == -1 {
-		result := make([]llm.LLMMessage, 0, len(messages)+1)
-		result = append(result, msg)
-		result = append(result, messages...)
-		return result
-	}
-
-	result := make([]llm.LLMMessage, 0, len(messages)+1)
-	result = append(result, messages[:firstUserIdx]...)
-	result = append(result, msg)
-	result = append(result, messages[firstUserIdx:]...)
-	return result
-}

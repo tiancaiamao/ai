@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
@@ -101,27 +100,4 @@ func createLargeSessionFile(sessionDir string, n int) {
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
 	os.WriteFile(filePath, data, 0644)
-}
-
-func serializeSessionForBenchmark(s *Session) []byte {
-	var data []byte
-
-	headerLine := map[string]interface{}{
-		"type":      EntryTypeSession,
-		"version":   s.header.Version,
-		"id":        s.header.ID,
-		"timestamp": s.header.Timestamp,
-		"cwd":       s.header.Cwd,
-	}
-	headerBytes, _ := json.Marshal(headerLine)
-	data = append(data, headerBytes...)
-	data = append(data, '\n')
-
-	for _, entry := range s.entries {
-		entryBytes, _ := json.Marshal(entry)
-		data = append(data, entryBytes...)
-		data = append(data, '\n')
-	}
-
-	return data
 }

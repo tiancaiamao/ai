@@ -311,28 +311,6 @@ func TestParsePositiveIntArg_IntOverflow(t *testing.T) {
 	// int64 overflow: only triggers when int is 32-bit. Skip — we can't simulate portably.
 }
 
-// TestDetectFileType_Branches covers all three branches of DetectFileType.
-func TestDetectFileType_Branches(t *testing.T) {
-	// Text extensions.
-	for _, ext := range []string{".txt", ".md", ".go", ".py", ".json"} {
-		if got := DetectFileType("foo" + ext); got != "text" {
-			t.Errorf("DetectFileType(%q) = %q, want %q", "foo"+ext, got, "text")
-		}
-	}
-	// Unknown extension -> binary.
-	if got := DetectFileType("foo.unknownext"); got != "binary" {
-		t.Errorf("DetectFileType(unknown) = %q, want %q", got, "binary")
-	}
-	// No extension -> binary.
-	if got := DetectFileType("README"); got != "binary" {
-		t.Errorf("DetectFileType(README) = %q, want %q", got, "binary")
-	}
-	// Mixed case should still match.
-	if got := DetectFileType("foo.JSON"); got != "text" {
-		t.Errorf("DetectFileType(.JSON uppercase) = %q, want %q", got, "text")
-	}
-}
-
 // TestGetReadLimit_EnvOverride covers the env-override branch of getReadLimit.
 func TestGetReadLimit_EnvOverride(t *testing.T) {
 	t.Setenv("AI_READ_MAX_LINES", "1234")

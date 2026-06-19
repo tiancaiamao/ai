@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,19 +70,4 @@ func TestCheckpointManager_ShouldCheckpoint_Disabled(t *testing.T) {
 	if mgr.ShouldCheckpoint() {
 		t.Error("ShouldCheckpoint should return false when disabled")
 	}
-}
-
-// alwaysCompactCompactor is a test compactor that always reports ShouldCompact=true.
-type alwaysCompactCompactor struct{}
-
-func (a *alwaysCompactCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
-	return true
-}
-
-func (a *alwaysCompactCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	return &agentctx.CompactionResult{Summary: "test compaction"}, nil
-}
-
-func (a *alwaysCompactCompactor) CalculateDynamicThreshold() int {
-	return 0
 }
