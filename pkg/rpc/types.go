@@ -68,7 +68,6 @@ type CompactionState struct {
 	KeepRecentTokens      int    `json:"keepRecentTokens,omitempty"`
 	ReserveTokens         int    `json:"reserveTokens,omitempty"`
 	ToolCallCutoff        int    `json:"toolCallCutoff,omitempty"`
-	ToolSummaryStrategy   string `json:"toolSummaryStrategy,omitempty"`
 	ToolSummaryAutomation string `json:"toolSummaryAutomation,omitempty"`
 	ContextWindow         int    `json:"contextWindow,omitempty"`
 	TokenLimit            int    `json:"tokenLimit,omitempty"`

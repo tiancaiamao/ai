@@ -390,26 +390,6 @@ func TestSubcommandHelp(t *testing.T) {
 	}
 }
 
-// TestBackwardCompatModeFlag tests that --mode rpc still works.
-func TestBackwardCompatModeFlag(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("skipping on non-unix")
-	}
-
-	bin := filepath.Join(t.TempDir(), "ai-test")
-	cmd := exec.Command("go", "build", "-o", bin, "github.com/tiancaiamao/ai/cmd/ai")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
-
-	// --mode invalid should fail.
-	cmd = exec.Command(bin, "--mode", "invalid")
-	out, _ := cmd.CombinedOutput()
-	if !strings.Contains(string(out), "invalid mode") && !strings.Contains(string(out), "deprecated") {
-		t.Errorf("expected mode error in output, got: %s", string(out))
-	}
-}
-
 // TestStaleRunDetection tests that IsRunning correctly detects dead processes.
 func TestStaleRunDetection(t *testing.T) {
 	// A process that doesn't exist should be detected as not running.

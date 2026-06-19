@@ -139,14 +139,12 @@ func runRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// --- Register all handlers ---
-	validToolSummaryStrategies := map[string]bool{"llm": true, "heuristic": true, "off": true}
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
 	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
 	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
 	validThinkingLevels := map[string]bool{"off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true}
 
 	app.registerHandlers(
-		validToolSummaryStrategies,
 		validToolSummaryAutomations,
 		validSteeringModes,
 		validFollowUpModes,

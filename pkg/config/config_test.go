@@ -73,8 +73,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 			"keepRecent": 10,
 			"keepRecentTokens": 12000,
 			"toolCallCutoff": 6,
-			"toolSummaryStrategy": "heuristic",
-			"toolSummaryAutomation": "always",
+		"toolSummaryAutomation": "always",
 			"autoCompact": false
 		},
 		"toolOutput": {
@@ -123,9 +122,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.Compactor.ToolCallCutoff != 6 {
 		t.Errorf("Expected ToolCallCutoff 6, got %d", cfg.Compactor.ToolCallCutoff)
-	}
-	if cfg.Compactor.ToolSummaryStrategy != "heuristic" {
-		t.Errorf("Expected ToolSummaryStrategy heuristic, got %q", cfg.Compactor.ToolSummaryStrategy)
 	}
 	if cfg.Compactor.ToolSummaryAutomation != "always" {
 		t.Errorf("Expected ToolSummaryAutomation always, got %q", cfg.Compactor.ToolSummaryAutomation)
@@ -431,9 +427,6 @@ func TestCompactorDefaults(t *testing.T) {
 	}
 	if compactorConfig.ToolCallCutoff != 10 {
 		t.Errorf("Expected ToolCallCutoff 10, got %d", compactorConfig.ToolCallCutoff)
-	}
-	if compactorConfig.ToolSummaryStrategy != "off" {
-		t.Errorf("Expected ToolSummaryStrategy off, got %q", compactorConfig.ToolSummaryStrategy)
 	}
 	if compactorConfig.ToolSummaryAutomation != "off" {
 		t.Errorf("Expected ToolSummaryAutomation off, got %q", compactorConfig.ToolSummaryAutomation)

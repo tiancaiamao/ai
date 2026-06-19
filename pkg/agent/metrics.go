@@ -22,9 +22,7 @@ type Metrics struct {
 	// Cached aggregations (updated on demand)
 	cachedToolStats    map[string]*toolStatsCache
 	cachedLLMStats     *llmStatsCache
-	cachedPromptStats  *promptStatsCache
 	cachedMessageStats *messageStatsCache
-	cachedContextStats *contextStatsCache
 	cacheValid         bool
 
 	// Incremental aggregation state
@@ -93,29 +91,12 @@ type llmTokenSample struct {
 	totalTokens  int64
 }
 
-// promptStatsCache holds aggregated prompt statistics
-type promptStatsCache struct {
-	CallCount       int64
-	ErrorCount      int64
-	TotalDurationNs int64
-	LastEndNs       int64
-	LastStartNs     int64
-}
-
 // messageStatsCache holds aggregated message statistics
 type messageStatsCache struct {
 	UserMessages      int64
 	AssistantMessages int64
 	ToolCalls         int64
 	ToolResults       int64
-}
-
-// contextStatsCache holds aggregated context management statistics
-type contextStatsCache struct {
-	UpdateReminders   int64
-	DecisionReminders int64
-	LastReminderType  string
-	LastReminderAtNs  int64
 }
 
 // NewMetrics creates a new metrics collector attached to a trace buffer.
@@ -126,9 +107,7 @@ func NewMetrics(buf *traceevent.TraceBuf) *Metrics {
 		flushInterval:       5 * time.Second,
 		cachedToolStats:     make(map[string]*toolStatsCache),
 		cachedLLMStats:      &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())},
-		cachedPromptStats:   &promptStatsCache{},
 		cachedMessageStats:  &messageStatsCache{},
-		cachedContextStats:  &contextStatsCache{},
 		lastAggregatedCount: 0,
 		lastAggregatedTime:  time.Time{},
 		bufferResetDetected: false,
@@ -188,9 +167,7 @@ func (m *Metrics) refreshAggregations() {
 		// Full aggregation: reset all caches and process all events
 		m.cachedToolStats = make(map[string]*toolStatsCache)
 		m.cachedLLMStats = &llmStatsCache{RecentWindowSeconds: int64(defaultLLMRecentWindow.Seconds())}
-		m.cachedPromptStats = &promptStatsCache{}
 		m.cachedMessageStats = &messageStatsCache{}
-		m.cachedContextStats = &contextStatsCache{}
 
 		for _, event := range events {
 			m.aggregateEvent(event)
@@ -379,34 +356,6 @@ func (m *Metrics) llmMetricsSnapshotLocked() LLMMetricsSnapshot {
 	}
 }
 
-// GetPromptMetrics returns aggregated prompt metrics.
-func (m *Metrics) GetPromptMetrics() PromptMetricsSnapshot {
-	m.refreshAggregations()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return m.promptMetricsSnapshotLocked()
-}
-
-func (m *Metrics) promptMetricsSnapshotLocked() PromptMetricsSnapshot {
-	totalCalls := m.cachedPromptStats.CallCount
-	successRate := 0.0
-	if totalCalls > 0 {
-		successRate = float64(totalCalls-m.cachedPromptStats.ErrorCount) / float64(totalCalls)
-	}
-
-	return PromptMetricsSnapshot{
-		CallCount:     totalCalls,
-		ErrorCount:    m.cachedPromptStats.ErrorCount,
-		SuccessRate:   successRate,
-		TotalDuration: time.Duration(m.cachedPromptStats.TotalDurationNs),
-		AvgDuration:   safeDuration(m.cachedPromptStats.TotalDurationNs, totalCalls),
-		LastStart:     timeFromNs(m.cachedPromptStats.LastStartNs),
-		LastEnd:       timeFromNs(m.cachedPromptStats.LastEndNs),
-	}
-}
-
 // GetMessageCounts returns aggregated message counts.
 func (m *Metrics) GetMessageCounts() MessageCountsSnapshot {
 	m.refreshAggregations()
@@ -423,16 +372,6 @@ func (m *Metrics) messageCountsSnapshotLocked() MessageCountsSnapshot {
 		AssistantMessages: m.cachedMessageStats.AssistantMessages,
 		ToolCalls:         m.cachedMessageStats.ToolCalls,
 		ToolResults:       m.cachedMessageStats.ToolResults,
-	}
-}
-
-func (m *Metrics) contextMetricsSnapshotLocked() ContextMetricsSnapshot {
-	return ContextMetricsSnapshot{
-		UpdateReminders:   m.cachedContextStats.UpdateReminders,
-		DecisionReminders: m.cachedContextStats.DecisionReminders,
-		TotalReminders:    m.cachedContextStats.UpdateReminders + m.cachedContextStats.DecisionReminders,
-		LastReminderType:  m.cachedContextStats.LastReminderType,
-		LastReminderAt:    timeFromNs(m.cachedContextStats.LastReminderAtNs),
 	}
 }
 
@@ -457,12 +396,10 @@ func (m *Metrics) GetFullMetrics() FullMetricsSnapshot {
 	}
 
 	return FullMetricsSnapshot{
-		SessionUptime:  time.Since(m.sessionStart),
-		ToolMetrics:    toolSnapshots,
-		LLMMetrics:     m.llmMetricsSnapshotLocked(),
-		MessageCounts:  m.messageCountsSnapshotLocked(),
-		PromptMetrics:  m.promptMetricsSnapshotLocked(),
-		ContextMetrics: m.contextMetricsSnapshotLocked(),
+		SessionUptime: time.Since(m.sessionStart),
+		ToolMetrics:   toolSnapshots,
+		LLMMetrics:    m.llmMetricsSnapshotLocked(),
+		MessageCounts: m.messageCountsSnapshotLocked(),
 	}
 }
 

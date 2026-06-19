@@ -129,8 +129,7 @@ Config file: `~/.ai/config.json`
     "keepRecent": 5,
     "keepRecentTokens": 20000,
     "reserveTokens": 16384,
-    "toolCallCutoff": 10,
-    "toolSummaryStrategy": "off",
+        "toolCallCutoff": 10,
     "autoCompact": true
   },
   "concurrency": {
