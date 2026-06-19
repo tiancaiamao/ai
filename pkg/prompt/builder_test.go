@@ -400,14 +400,8 @@ func findSubstring(s, substr string) bool {
 
 func TestCompactAndTemplateAccessors(t *testing.T) {
 	// Simple accessor coverage for the compact/role template helpers.
-	if got := CompactSystemPrompt(); got == "" {
-		t.Error("CompactSystemPrompt returned empty string")
-	}
 	if got := CompactSummarizePrompt(); got == "" {
 		t.Error("CompactSummarizePrompt returned empty string")
-	}
-	if got := CompactUpdatePrompt(); got == "" {
-		t.Error("CompactUpdatePrompt returned empty string")
 	}
 	if got := OrchestratorTemplate(); got == "" {
 		t.Error("OrchestratorTemplate returned empty string")

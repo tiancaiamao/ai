@@ -6,48 +6,6 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// TestSplitMessagesByTokenBudget_ExcludesCompactionSummaries verifies that
-// compaction summary messages are always kept in recent messages and not
-// counted toward the token budget.
-func TestSplitMessagesByTokenBudget_ExcludesCompactionSummaries(t *testing.T) {
-	messages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage("Old message 1"),
-		agentctx.NewUserMessage("Old message 2"),
-		agentctx.NewUserMessage("Old message 3"),
-		// This compaction summary should be kept regardless of budget
-		agentctx.NewCompactionSummaryMessage("Previous summary content"),
-		agentctx.NewUserMessage("Recent message 1"),
-		agentctx.NewUserMessage("Recent message 2"),
-	}
-
-	// Set a very small budget that would normally only fit 1-2 messages
-	// The compaction summary should still be included in recent messages
-	oldMessages, recentMessages := splitMessagesByTokenBudget(messages, 2)
-
-	t.Logf("Old messages: %d, Recent messages: %d", len(oldMessages), len(recentMessages))
-
-	// Verify that the compaction summary is in recent messages
-	foundSummary := false
-	for _, msg := range recentMessages {
-		if msg.Metadata != nil && msg.Metadata.Kind == "compactionSummary" {
-			foundSummary = true
-			t.Logf("Found compaction summary in recent messages: %s", msg.ExtractText())
-			break
-		}
-	}
-
-	if !foundSummary {
-		t.Error("Compaction summary should be in recent messages")
-	}
-
-	// Verify recent messages order (compaction summary should be before recent messages)
-	// Expected order: [Old1, Old2, Old3], [CompactionSummary, Recent1, Recent2]
-	// or similar based on budget
-	if len(recentMessages) < 2 {
-		t.Logf("Warning: Only %d recent messages, expected at least 2 (summary + recent)", len(recentMessages))
-	}
-}
-
 // TestCompactionSummaryMessageKind verifies that compaction summary
 // messages have the correct Kind field.
 func TestCompactionSummaryMessageKind(t *testing.T) {

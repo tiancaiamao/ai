@@ -1,6 +1,6 @@
 <agent:compact comment="DON'T ASK! This is not in a normal user conversation. There is no multiple turns.">
 
-Summarize current conversation for context preservation.
+Summarize current conversation for context preservation. Output ONLY the structured summary — do NOT continue the conversation.
 
 ## Current Task (MOST IMPORTANT)
 [What is the user asking for RIGHT NOW? Quote the latest user request VERBATIM, then describe the current goal.]
@@ -29,11 +29,12 @@ Summarize current conversation for context preservation.
 
 <critical>
 - ALWAYS include the latest user's request VERBATIM in Current Task
-- Preserve EXACT paths, errors, names (use quotes)
+- Preserve EXACT paths, errors, function names (use quotes)
 - Keep ALL sections even if empty — write "None" if truly empty
 - Keep "What's Complete" — never drop this section
+- Keep "Decisions Made" as a separate section — don't merge with others
 - Keep under 800 tokens total
-- Omit pleasantries
+- DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>
 
 </agent:compact>

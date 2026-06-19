@@ -70,7 +70,7 @@ func (c *Compactor) Compact(ctx, agentCtx) (*CompactionResult, error)
 
 `Compact`:
 1. Splits messages by token budget (`splitMessagesByTokenBudget`) or count
-2. Summarizes old messages via LLM (`GenerateSummaryWithPrevious`)
+2. Summarizes old messages via LLM (`GenerateSummary`)
 3. Fixes tool-call/result pairing (`ensureToolCallPairing` / `ensureToolCallPairingWithGrace`)
 4. Compacts excess tool results (`compactToolResultsInRecent`)
 5. Cleans stale runtime_state (`cleanOldRuntimeState`)
@@ -87,7 +87,7 @@ Note: The standalone `EstimateTokens()` function lives in `pkg/context`.
 
 ## Cache-Friendly Design
 
-Both `askLLM` and `GenerateSummaryWithPrevious` build requests whose prefix matches a normal agent turn:
+Both `askLLM` and `GenerateSummary` build requests whose prefix matches a normal agent turn:
 
 ```
 [system_prompt]           (cached)

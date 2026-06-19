@@ -85,19 +85,10 @@ func TestCompactor_ContextWindowAndReserve(t *testing.T) {
 }
 
 func TestCompactor_KeepRecentAccessors(t *testing.T) {
-	// Default KeepRecent fallback
-	c := NewCompactor(&Config{KeepRecent: 0, KeepRecentTokens: 0}, llm.Model{}, "", "", 0, "")
-	if c.KeepRecentMessages() != DefaultConfig().KeepRecent {
-		t.Errorf("expected default KeepRecent=%d, got %d", DefaultConfig().KeepRecent, c.KeepRecentMessages())
-	}
+	// Default KeepRecentTokens fallback
+	c := NewCompactor(&Config{KeepRecentTokens: 0}, llm.Model{}, "", "", 0, "")
 	if c.KeepRecentTokens() != 0 {
 		t.Errorf("expected 0 when KeepRecentTokens=0, got %d", c.KeepRecentTokens())
-	}
-
-	// Explicit KeepRecent
-	c2 := NewCompactor(&Config{KeepRecent: 7}, llm.Model{}, "", "", 0, "")
-	if c2.KeepRecentMessages() != 7 {
-		t.Errorf("expected 7, got %d", c2.KeepRecentMessages())
 	}
 
 	// KeepRecentTokens capped by EffectiveTokenLimit/2
@@ -370,26 +361,16 @@ func TestCompact_NoKeepRecentTokens_TooFewMessages(t *testing.T) {
 
 func TestGenerateSummary_NoMessages(t *testing.T) {
 	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0, "")
-	if _, err := c.GenerateSummary(context.Background(), nil); err == nil {
+	if _, err := c.GenerateSummary(context.Background(), nil, "", "", nil); err == nil {
 		t.Error("expected error for no messages")
 	}
 }
 
-func TestGenerateSummaryWithPrevious_NoVisibleMessages(t *testing.T) {
+func TestGenerateSummary_NoVisibleMessages(t *testing.T) {
 	c := NewCompactor(DefaultConfig(), llm.Model{}, "k", "sys", 0, "")
-	// Agent-invisible messages only → no agent-visible
 	invisible := agentctx.NewUserMessage("hidden").WithVisibility(false, true)
-	// With empty previous summary → error
-	if _, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{invisible}, "", "", nil, ""); err == nil {
-		t.Error("expected error when no agent-visible messages and no previous summary")
-	}
-	// With non-empty previous summary → returned as-is
-	got, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{invisible}, "", "", nil, "prior")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "prior" {
-		t.Errorf("expected prior summary returned, got %q", got)
+	if _, err := c.GenerateSummary(context.Background(), []agentctx.AgentMessage{invisible}, "", "", nil); err == nil {
+		t.Error("expected error when no agent-visible messages")
 	}
 }
 
@@ -403,7 +384,7 @@ func sseTextResponse(text string) string {
 	return strings.Join(chunks, "\n\n") + "\n\n"
 }
 
-func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
+func TestGenerateSummary_LLMSuccessAndFailures(t *testing.T) {
 	// Success path: LLM returns text → summary returned.
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -417,7 +398,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	model := llm.Model{ID: "m", ContextWindow: 200000, BaseURL: server.URL, API: "openai"}
 	c := NewCompactor(DefaultConfig(), model, "k", "sys", 0, "")
 
-	got, err := c.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	got, err := c.GenerateSummary(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -436,7 +417,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer emptyServer.Close()
 	c2 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: emptyServer.URL, API: "openai"}, "k", "sys", 0, "")
-	_, err = c2.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	_, err = c2.GenerateSummary(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil)
 	if err == nil {
 		t.Error("expected error for empty summary")
 	}
@@ -450,7 +431,7 @@ func TestGenerateSummaryWithPrevious_LLMSuccessAndFailures(t *testing.T) {
 	}))
 	defer authServer.Close()
 	c3 := NewCompactor(DefaultConfig(), llm.Model{ID: "m", ContextWindow: 200000, BaseURL: authServer.URL, API: "openai"}, "k", "sys", 0, "")
-	_, err = c3.GenerateSummaryWithPrevious(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil, "")
+	_, err = c3.GenerateSummary(context.Background(), []agentctx.AgentMessage{agentctx.NewUserMessage("hi")}, "", "", nil)
 	if err == nil {
 		t.Error("expected error from 401")
 	}

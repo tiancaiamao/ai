@@ -14,14 +14,8 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-//go:embed "compact_system.md"
-var compactSystemPrompt string
-
 //go:embed "compact_summarize.md"
 var compactSummarizePrompt string
-
-//go:embed "compact_update.md"
-var compactUpdatePrompt string
 
 //go:embed "llm_decide_check.md"
 var llmDecideCheckPrompt string
@@ -37,19 +31,9 @@ func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }
 
-// CompactSystemPrompt returns the system prompt for compaction.
-func CompactSystemPrompt() string {
-	return compactSystemPrompt
-}
-
-// CompactSummarizePrompt returns the prompt for initial summarization.
+// CompactSummarizePrompt returns the prompt for summarization.
 func CompactSummarizePrompt() string {
 	return compactSummarizePrompt
-}
-
-// CompactUpdatePrompt returns the prompt for updating existing summary.
-func CompactUpdatePrompt() string {
-	return compactUpdatePrompt
 }
 
 // ToolInfo describes a tool for prompt generation.
