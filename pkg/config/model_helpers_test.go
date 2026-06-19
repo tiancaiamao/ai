@@ -6,6 +6,33 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
+func TestModelInfoFromSpec(t *testing.T) {
+	t.Run("with name", func(t *testing.T) {
+		info := ModelInfoFromSpec(ModelSpec{ID: "gpt-4", Name: "GPT-4", Provider: "openai"})
+		if info.Name != "GPT-4" {
+			t.Errorf("Name = %q, want GPT-4", info.Name)
+		}
+	})
+	t.Run("fallback to ID", func(t *testing.T) {
+		info := ModelInfoFromSpec(ModelSpec{ID: "gpt-4"})
+		if info.Name != "gpt-4" {
+			t.Errorf("Name = %q, want gpt-4", info.Name)
+		}
+	})
+	t.Run("default input", func(t *testing.T) {
+		info := ModelInfoFromSpec(ModelSpec{ID: "gpt-4"})
+		if len(info.Input) != 1 || info.Input[0] != "text" {
+			t.Errorf("Input = %v, want [text]", info.Input)
+		}
+	})
+	t.Run("custom input", func(t *testing.T) {
+		info := ModelInfoFromSpec(ModelSpec{ID: "gpt-4", Input: []string{"text", "image"}})
+		if len(info.Input) != 2 {
+			t.Errorf("Input len = %d, want 2", len(info.Input))
+		}
+	})
+}
+
 func TestModelSpecFromConfig(t *testing.T) {
 	cfg := &Config{
 		Model: ModelConfig{

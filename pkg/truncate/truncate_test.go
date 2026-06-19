@@ -316,3 +316,28 @@ func TestTrimRunes(t *testing.T) {
 		t.Errorf("expected first 2 runes, got %q", got)
 	}
 }
+
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		s      string
+		maxLen int
+		want   string
+	}{
+		{"hello", 10, "hello"},
+		{"hello world", 8, "hello..."},
+		{"hi", 2, "hi"},
+		{"hello", 5, "hello"},
+		{"hello", 3, "hel"},
+		{"hello", 0, ""},
+		{"", 5, ""},
+		{"ab", 2, "ab"},
+		{"abcdef", 6, "abcdef"},
+		{"abcdefg", 6, "abc..."},
+	}
+	for _, tt := range tests {
+		got := TruncateString(tt.s, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("TruncateString(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
+		}
+	}
+}
