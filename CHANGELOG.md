@@ -7,6 +7,10 @@ Format: one entry per meaningful change, newest first.
 ## Unreleased
 
 ### Changed
+- docs: deleted `docs/archive/tasks.yml` (no longer relevant)
+- docs: un-archived `skill-progressive-disclosure.md` — feature is implemented, moved back to `docs/`
+- docs: renamed `docs/archive/design.md` → `docs/archive/agent-harness-evolution.md` (clearer name)
+- docs: heavily condensed `CLAUDE.md` — 242→76 lines (70% reduction) by removing duplicated sections, verbose examples, and redundant formatting. Key info preserved: language rules, commands, package index, doc maintenance protocol, guardrails.
 - docs: rewrote root `README.md` — removed non-existent `ag` CLI and `context_management` tool, fixed config/env vars/tools/skills sections, added complete RPC event types
 - docs: created README for `pkg/agentconfig`, `pkg/middlewares`, `pkg/testutil` (previously missing)
 - docs: strengthened `CLAUDE.md` Documentation Maintenance section — added pre-commit checklist and documentation surface table

@@ -15,6 +15,7 @@ These documents describe the **current** codebase and must stay in sync.
 | [`session-format.md`](session-format.md) | JSONL entry types, session layout, lazy loading | Entry type added/removed; session storage format changed |
 | [`context-management.md`](context-management.md) | Compaction, LLMDecide, token estimation | Compaction strategy changed; context management refactored |
 | [`test-strategy.md`](test-strategy.md) | Test pyramid, test files, regression tests | Test structure changed; new test layer added |
+| [`skill-progressive-disclosure.md`](skill-progressive-disclosure.md) | Skill ranking, topN selection, find_skill discovery | Skill formatting/usage tracking changed |
 | [`../pkg/*/README.md`](../pkg/) | Package-level API, types, key files | Package API changed; files added/removed/renamed |
 
 ## ADRs

@@ -4,239 +4,74 @@ Concise project guidance for coding agents working in this repository.
 
 ## Project
 
-- Name: `ai`
-- Language: Go (`go1.24`)
+- Name: `ai` — Go-based AI coding agent (`go1.24`)
 - Interface: stdin/stdout JSON-RPC server
-- Model API: OpenAI-compatible (`ZAI` provider in config)
+- Model API: OpenAI-compatible (`ZAI` provider)
 
 ## Language Rules
 
-IMPORTANT: Different rules apply to different contexts!
-
-### Code (MUST be English)
-- All **code** must be in English (variable names, function names, types, etc.)
-- All **code comments** must be in English
-- All **commit messages** must be in English
-- All **documentation files** under `docs/` or `**/docs/` must be in English
-
-### Communication (Chinese OK)
-- **Chat/conversation** with the user: Use Chinese (中文)
-- **Explanations** to the user: Use Chinese
-- **Code reviews**: Use Chinese
-
-### Summary
 | Context | Language |
 |---------|----------|
-| Writing code | English only |
-| Code comments | English only |
-| Commit messages | English only |
-| Documentation files | English only |
-| Chatting with user | Chinese (中文) |
-| Explaining things | Chinese (中文) |
+| Code, comments, commit messages, docs under `docs/` | English only |
+| Chat / explanations / code reviews | Chinese (中文) |
 
-## Most Used Commands
+## Commands
 
 ```bash
-# format code (must be clean before commit)
-make fmt
-
-# install (recommended - ensures fresh binary)
-go install ./cmd/ai
-
-# run rpc mode (stdin/stdout JSON-RPC)
-ai rpc
-
-# run all tests
-go test ./... -v
-
-# focused tests
-go test ./pkg/agent -v
-go test ./pkg/rpc -v
+make fmt              # format (must be clean before commit)
+go install ./cmd/ai   # build & install
+ai rpc                # run RPC mode (stdin/stdout JSON-RPC)
+go test ./pkg/agent -v  # focused tests
 ```
 
-### Formatting Rules
+## Key Packages
 
-- All Go code **must** pass `make fmt-check` before commit.
-- CI will reject PRs with unformatted code.
-- Always run `make fmt` after editing `.go` files.
+| Package | Role |
+|---------|------|
+| `cmd/ai/` | RPC server, CLI entry, handler wiring (`rpc_app.go` is the hub) |
+| `pkg/agent/` | Agent loop, tool execution, hooks, streaming, checkpoint |
+| `pkg/context/` | `AgentContext`, messages, `Compactor` interface |
+| `pkg/compact/` | LLM-driven compaction (LLMDecide mode) |
+| `pkg/session/` | JSONL session persistence, lazy loading |
+| `pkg/rpc/` | RPC types (`types.go`) |
+| `pkg/config/` | Config, auth, model specs |
+| `pkg/agentconfig/` | `agent.yaml` loading (system prompt, memory, middleware) |
+| `pkg/middlewares/` | Hook-based guards (e.g. destructive command detection) |
 
-## High-Value Code Paths
-
-### `cmd/ai/` — RPC Server & Wiring
-
-The RPC server is decomposed into topic-specific handler files, all sharing state via the `rpcApp` struct defined in `rpc_app.go`:
-
-- `rpc_app.go` — `rpcApp` struct: holds config, session, agent, compactor, skills; shared by all handlers
-- `rpc_handlers.go` — `runRPC()` entrypoint, main request loop
-- `rpc_setup.go` — `newRPCApp()` construction & dependency wiring
-- `rpc_config_handlers.go` — config-related RPC methods
-- `rpc_help_handlers.go` — help/documentation RPC methods
-- `rpc_message_handlers.go` — message handling (send, etc.)
-- `rpc_session_handlers.go` — session management RPC methods
-
-### `pkg/agent/` — Agent Loop
-
-The agent loop has been refactored from a monolithic function into a structured state machine:
-
-- `agent.go` — Agent struct, context/model wiring, public API (`Run`, `Compact`, etc.)
-- `loop.go` — Outer loop: turns, tool calls, compaction orchestration
-- `loop_state.go` — `loopState` struct & extracted methods (`performCompaction`, `processToolCalls`, `shouldStop`, `advanceTurn`, `cleanup`)
-- `executor.go` — Tool execution dispatch
-- `hooks.go`, `loop_hooks.go` — Hook registry, BeforeModel/AfterTool/AfterAgent hooks
-- `llm_stream.go`, `llm_stream_parse.go` — LLM streaming response handling
-- `llm_retry.go` — Retry logic for LLM API calls
-- `error_stack.go` — Error wrapping with stack traces
-- `checkpoint_manager.go` — AgentContext checkpoint/restore for recovery
-
-### Other Key Packages
-
-- Shared RPC types: `pkg/rpc/types.go`
-- Session storage/loading: `pkg/session/`
-- Prompt building: `pkg/prompt/builder.go`
-- Tool implementations: `pkg/tools/`
-- Compaction: `pkg/compact/` (implements `context.Compactor` interface via `ShouldCompact`, `Compact`, `EstimateTokens`)
-- Context management: `pkg/context/` (defines `AgentContext`, `Compactor` interface)
-- Agent config (harness): `pkg/agentconfig/` (YAML loading, system prompt + memory)
-- Middlewares: `pkg/middlewares/` (hook-based guards, e.g. destructive command guard)
+See `pkg/*/README.md` for package details.
 
 ## Documentation Maintenance
 
-**Before committing any change**, check [`docs/README.md`](docs/README.md):
+**Before any commit**, check if docs need updating:
 
-1. **Scan the Live Docs table** — does your change touch a listed code area?
-2. **If yes**, verify the corresponding doc is still accurate. Update it in the same commit.
-3. **If you added/removed/renamed a package**, update `docs/architecture.md` Package Structure.
-4. **Add a `CHANGELOG.md` entry** for functional changes (new features, behavior changes, removed code).
-   - One line, under `## Unreleased`, grouped by `Added` / `Changed` / `Removed`.
-   - Include commit hash after commit (e.g. `([abc123](commit-url))`).
+1. Modified a package? → check its `pkg/*/README.md`
+2. Changed architecture/RPC/session/compaction? → update `docs/*.md` (see `docs/README.md` index)
+3. Added/removed/renamed a package? → update root `README.md` + `docs/architecture.md`
+4. Functional change? → add `CHANGELOG.md` entry
 
-**Live docs** (`architecture.md`, `rpc-protocol.md`, `session-format.md`, `context-management.md`, `test-strategy.md`) must stay in sync with code.
+**Every file path, type name, function name in live docs must be verified against actual code.**
 
-**Archive** (`docs/archive/`) contains historical design proposals — read for context only, do not update.
+`docs/archive/` = historical, not maintained. `docs/adr/` = immutable.
 
 ## Guardrails
 
-- Reuse shared RPC structs in `pkg/rpc/types.go` instead of duplicating types.
-- Respect context cancellation through loop/tool execution paths.
-- Keep behavior compatible with session persistence format in `pkg/session/`.
-- Prefer minimal, targeted changes; avoid broad refactors unless requested.
+- Reuse `pkg/rpc/types.go` structs — don't duplicate types.
+- Respect context cancellation through loop/tool paths.
+- Keep compatible with `pkg/session/` persistence format.
+- Minimal, targeted changes; no broad refactors unless asked.
 
-### 📝 Documentation Maintenance
+### ⛔ NEVER commit to `main`
 
-**Docs must stay in sync with code. Before any commit, check if documentation needs updating.**
+Always create a feature branch, push, and open a PR. No exceptions (features, fixes, docs, typos).
 
-#### Pre-commit checklist
+## Runtime Notes
 
-1. Review [`docs/README.md`](docs/README.md) — the Live Docs index table
-2. Determine if your changes affect any listed document's coverage area
-3. If yes: update the corresponding doc to match the code
-4. Check the package README (`pkg/<package>/README.md`) for any package you modified
-5. If your change adds a feature, removes a feature, or changes behavior: add an entry to [`CHANGELOG.md`](CHANGELOG.md)
-6. If you add/remove/rename a package, update the root [README.md](README.md) and [docs/architecture.md](docs/architecture.md)
+- Sessions: `~/.ai/sessions/--<cwd>--/`
+- Skills: `~/.ai/skills/` + `.ai/skills/`
+- Traces: `~/.ai/traces/` (Perfetto-compatible, see `pkg/traceevent/config.go`)
 
-#### Documentation surface
-
-| Location | Scope | Maintenance |
-|----------|-------|-------------|
-| `README.md` | Project overview, CLI, config, tools | **Live** — must match code |
-| `docs/*.md` | Architecture, RPC protocol, session format, etc. | **Live** — see `docs/README.md` index |
-| `pkg/*/README.md` | Package-level API and design | **Live** — must match code |
-| `CLAUDE.md` | Agent guidance for this repo | **Live** |
-| `CHANGELOG.md` | Functional changes per commit | **Live** — updated on each meaningful change |
-| `docs/adr/` | Architecture Decision Records | **Immutable** — historical record |
-| `docs/archive/` | Old design proposals | **Not maintained** — read for context only |
-
-#### Verification rule
-
-**Every file path, type name, function name, and struct field mentioned in live docs must be verified against actual code.** Never blindly edit documentation without confirming references exist. If you're not sure, grep the codebase.
-
-### ⛔ NEVER commit directly to `main`
-
-**This is a hard rule. No exceptions.**
-
-- **NEVER** commit directly on the `main` branch
-- **ALWAYS** create a feature branch from `main`
-- **ALWAYS** push the feature branch and open a PR for review
-- This applies to ALL changes — features, bugfixes, refactors, docs, even typos
-- Use git worktrees for isolated development when working on features
-- If you accidentally commit on `main`, revert the commit and redo on a branch
-
-```
-# ❌ WRONG
-git checkout main
-git commit -m "fix something"
-git push origin main
-
-# ✅ CORRECT
-git worktree add .worktrees/my-feature my-feature  # or git checkout -b feat/xxx
-git commit -m "fix something"
-git push origin my-feature
-gh pr create
-```
-
-## Runtime/Storage Notes
-
-- Sessions are isolated by working directory.
-- Session files live under `~/.ai/sessions/--<cwd>--/`.
-- Skills load from:
-  - `~/.ai/skills/`
-  - `.ai/skills/`
-
-## Testing Guidance
+## Testing
 
 - Run focused package tests for touched code first.
-- Then run broader tests when changes affect shared paths (`pkg/agent`, `pkg/session`, `pkg/rpc`, `pkg/prompt`).
-- Existing stress/integration tests can be slow; still run them when touching loop/session behavior.
-
-## Debugging Guidance
-
-### Trace File Analysis
-
-The agent writes Perfetto-compatible trace files to `~/.ai/traces/`. These are invaluable for debugging runtime behavior:
-
-```bash
-# List recent traces
-ls -lt ~/.ai/traces/ | head -5
-
-# Check if specific event appears in traces
-grep -c 'tool_output_truncated' ~/.ai/traces/<latest>.json
-
-# Extract event details with Python
-python3 -c "
-import json
-with open('/Users/genius/.ai/traces/<file>.json') as f:
-    data = json.load(f)
-for e in data['traceEvents']:
-    if e.get('name') == 'tool_output_truncated':
-        print(json.dumps(e, indent=2))
-"
-```
-
-### Event Registration Debug
-
-If a trace event isn't appearing:
-
-1. Check if event is registered in `pkg/traceevent/config.go`:
-   - Must be in `eventNameToBit` map
-   - Should be in `defaultEnabledEvents` for default visibility
-   - Or add to a selector group (e.g., `tool`, `llm`)
-
-2. Verify `IsEventEnabled()` returns true by checking the bit flag
-
-### Interactive Testing Pattern
-
-For debugging event emission or runtime behavior:
-
-1. Make code changes (e.g., add new trace event)
-2. Rebuild: `go install ./cmd/ai`
-3. Restart agent to pick up changes
-4. Trigger the behavior (e.g., run a tool with large output)
-5. Check trace file for expected events
-6. Iterate
-
-### Trace Event Categories
-
-- `tool`: Tool execution, truncation, normalization
-- `llm`: API calls, streaming, retries
-- `event`: Agent lifecycle, turns, messages
-- `log`: slog bridge output (info/warn/error)
+- Broader tests when changes affect `pkg/agent`, `pkg/session`, `pkg/rpc`, `pkg/prompt`.
+- Stress/integration tests can be slow; still run them for loop/session changes.
