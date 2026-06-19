@@ -47,9 +47,9 @@ See `pkg/*/README.md` for package details.
 1. Modified a package? → check its `pkg/*/README.md`
 2. Changed architecture/RPC/session/compaction? → update `docs/*.md` (see `docs/README.md` index)
 3. Added/removed/renamed a package? → update root `README.md` + `docs/architecture.md`
-4. Functional change? → add `CHANGELOG.md` entry
+4. **Functional code change** (not docs-only)? → add `CHANGELOG.md` entry under today's date with commit hash, grouped by Added/Changed/Fixed/Removed
 
-**Every file path, type name, function name in live docs must be verified against actual code.**
+**Verify every file path, type name, function name in live docs against actual code.**
 
 `docs/archive/` = historical, not maintained. `docs/adr/` = immutable.
 
@@ -62,7 +62,7 @@ See `pkg/*/README.md` for package details.
 
 ### ⛔ NEVER commit to `main`
 
-Always create a feature branch, push, and open a PR. No exceptions (features, fixes, docs, typos).
+Always create a feature branch, worktree, push, and open a PR. No exceptions (features, fixes, docs, typos).
 
 ## Runtime Notes
 
