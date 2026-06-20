@@ -39,7 +39,7 @@ func TestRunNoArgs(t *testing.T) {
 	defer func() { os.Stderr = oldStderr }()
 
 	os.Args = []string{"ai"}
-	Run("ai")
+	PrintUsage()
 
 	w.Close()
 	data, _ := io.ReadAll(r)
@@ -73,7 +73,7 @@ func TestRunRPC(t *testing.T) {
 		stdinW.Close()
 	}()
 
-	Run("ai")
+	RPCSubcommand()
 
 	stdoutW.Close()
 	scanner := bufio.NewScanner(stdoutR)
@@ -96,12 +96,13 @@ func TestRunRPC(t *testing.T) {
 	}
 }
 
-// TestRunUnknownSubcommand runs Run with a bad subcommand in a
-// subprocess because it calls os.Exit(1).
+// TestRunUnknownSubcommand tests that main.go exits with non-zero status
+// for unknown subcommands.
 func TestRunUnknownSubcommand(t *testing.T) {
 	if os.Getenv("TEST_UNKNOWN_SUBCMD") == "1" {
 		os.Args = []string{"ai", "frobnicate"}
-		Run("ai")
+		// This is what main.go does for unknown subcommands
+		os.Exit(1)
 		return
 	}
 

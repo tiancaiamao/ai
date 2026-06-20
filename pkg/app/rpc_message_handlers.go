@@ -119,19 +119,6 @@ func (app *rpcApp) handleExportHTML(args string) (any, error) {
 	return "", fmt.Errorf("export_html is not supported")
 }
 
-func (app *rpcApp) handleGetWorkflowStatus(args string) (any, error) {
-	_ = args
-	slog.Info("Received get_workflow_status")
-	status, err := rpc.GetWorkflowStatus(app.ws.GetCWD())
-	if err != nil {
-		return nil, err
-	}
-	if status == nil {
-		return nil, nil
-	}
-	return status, nil
-}
-
 // registerMessageHandlers registers message-related slash commands.
 func (app *rpcApp) registerMessageHandlers() {
 	app.server.RegisterSlash("messages", "Get formatted message summaries for the current session", func(args string) (any, error) {
@@ -144,10 +131,6 @@ func (app *rpcApp) registerMessageHandlers() {
 
 	app.server.RegisterSlash("export_html", "Export the current session as HTML", func(args string) (any, error) {
 		return app.handleExportHTML(args)
-	})
-
-	app.server.RegisterHiddenSlash("get_workflow_status", "Get workflow task status (internal)", func(args string) (any, error) {
-		return app.handleGetWorkflowStatus(args)
 	})
 
 	app.server.RegisterHiddenSlash("get_last_assistant_text", "Get the last assistant text response (internal)", func(args string) (any, error) {

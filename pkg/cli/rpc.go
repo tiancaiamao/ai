@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"log/slog"
 
@@ -23,43 +25,20 @@ func RPCSubcommand() {
 	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
 	fs.Parse(os.Args[1:])
 
+	// Setup signal handling for graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		fmt.Fprintf(os.Stderr, "[rpc] received signal: %v, aborting agent\n", sig)
+		app.AgentAbort() // Trigger agent abort in RunRPC
+	}()
+
 	systemPrompt := ParseSystemPrompt(*systemPromptFlag)
 
 	if err := app.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
 		slog.Error("rpc error", "error", err)
-		os.Exit(1)
-	}
-}
-
-// RPCSubcommand implements the 'ai rpc' subcommand.
-// binPath is the path to the current binary (os.Args[0]).
-func Run(binPath string) {
-	if len(os.Args) < 2 {
-		PrintUsage()
-		return
-	}
-
-	subcmd := os.Args[1]
-	os.Args = os.Args[1:]
-
-	switch subcmd {
-	case "rpc":
-		RPCSubcommand()
-	case "run":
-		RunSubcommand(binPath)
-	case "serve":
-		ServeSubcommand(binPath)
-	case "ls":
-		LsSubcommand()
-	case "watch":
-		WatchSubcommand()
-	case "send":
-		SendSubcommand()
-	case "kill":
-		KillSubcommand()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", subcmd)
-		fmt.Fprintf(os.Stderr, "available subcommands: rpc, serve, ls, watch, send, kill\n")
 		os.Exit(1)
 	}
 }
