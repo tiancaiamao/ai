@@ -13,38 +13,10 @@ import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
-// LoadOptions controls session loading behavior.
-type LoadOptions struct {
-	// MaxMessages limits how many messages to load (0 = auto based on compaction, -1 = all)
-	MaxMessages int
-	// IncludeSummary includes compaction summary as history
-	IncludeSummary bool
-	// Lazy enables lazy loading (only load recent entries + compaction summary)
-	Lazy bool
-}
-
-// DefaultLoadOptions returns the default load options for lazy loading.
-func DefaultLoadOptions() LoadOptions {
-	return LoadOptions{
-		MaxMessages:    0,    // auto
-		IncludeSummary: true, // include summary
-		Lazy:           true, // lazy load
-	}
-}
-
-// FullLoadOptions returns options for loading everything (non-lazy).
-func FullLoadOptions() LoadOptions {
-	return LoadOptions{
-		MaxMessages:    -1, // all
-		IncludeSummary: true,
-		Lazy:           false,
-	}
-}
-
 // loadSessionLazy is the internal implementation of lazy loading.
 // It reads the session file efficiently by scanning from end to find compaction entry.
 // Only loads recent messages + compaction summary.
-func loadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
+func loadSessionLazy(sessionDir string) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
 			entries: make([]*SessionEntry, 0),
@@ -89,7 +61,7 @@ func loadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	}
 
 	// Load from end to find compaction entry
-	if err := loadFromEnd(f, sess, opts); err != nil {
+	if err := loadFromEnd(f, sess); err != nil {
 		// If lazy loading fails, fall back to full load
 		return loadSessionFull(sessionDir)
 	}
@@ -130,7 +102,7 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 // loadFromEnd scans the file from the end to find the most recent compaction entry
 // and loads only the relevant entries.
 // Optimized to read only the tail of the file (typically 64KB is enough to find recent compaction).
-func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
+func loadFromEnd(f *os.File, sess *Session) error {
 	stat, err := f.Stat()
 	if err != nil {
 		return err
@@ -202,11 +174,6 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 		}
 
 		// Collect entries after the most recent compaction
-		// If MaxMessages is set, respect the limit; otherwise load all
-		if opts.MaxMessages > 0 && len(recentEntries) >= opts.MaxMessages {
-			continue
-		}
-
 		switch entry.Type {
 		case EntryTypeMessage:
 			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
@@ -247,7 +214,7 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 	}
 
 	// Build final entries list
-	if compactionEntry != nil && opts.IncludeSummary {
+	if compactionEntry != nil {
 		// Compaction entry's parent is the last compressed message
 		if len(sess.entries) > 0 {
 			lastID := sess.entries[len(sess.entries)-1].ID
@@ -267,7 +234,7 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 			if !parentExists {
 				// Parent not loaded, break the chain here
 				// If we have a compaction entry, link to it; otherwise set to nil
-				if compactionEntry != nil && opts.IncludeSummary {
+				if compactionEntry != nil {
 					firstEntry.ParentID = &compactionEntry.ID
 				} else {
 					firstEntry.ParentID = nil
