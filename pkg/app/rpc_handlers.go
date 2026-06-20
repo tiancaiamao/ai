@@ -3,6 +3,7 @@ package app
 import (
 	"io"
 	_ "net/http/pprof"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -11,6 +12,20 @@ import (
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/rpc"
 )
+
+// Global channel for signal-triggered agent abort.
+// Used by pkg/cli.RPCSubcommand to trigger graceful shutdown.
+var (
+	agentAbortSignal = make(chan struct{}, 1)
+	abortSignalOnce  sync.Once
+)
+
+// AgentAbort triggers the abort signal for RPC subprocess graceful shutdown.
+func AgentAbort() {
+	abortSignalOnce.Do(func() {
+		close(agentAbortSignal)
+	})
+}
 
 func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
@@ -126,6 +141,16 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			server.Cancel()
 		}()
 	}
+
+	// Watch for external abort signal (e.g., from SIGTERM handler).
+	go func() {
+		slog.Info("[RPC] Abort signal watcher started")
+		<-agentAbortSignal
+		slog.Info("[RPC] External abort signal received, aborting agent")
+		ag.Abort()
+		server.Cancel()
+		slog.Info("[RPC] Abort triggered successfully")
+	}()
 
 	// --- Register all handlers ---
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
