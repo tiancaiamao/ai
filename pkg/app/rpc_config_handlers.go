@@ -10,17 +10,16 @@ import (
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // --- Configuration handlers ---
 
-func (app *rpcApp) collectSessionUsageFromAgent() (int, int, int, int, rpc.SessionTokenStats, float64) {
+func (app *rpcApp) collectSessionUsageFromAgent() (int, int, int, int, SessionTokenStats, float64) {
 	return collectSessionUsage(app.ag.GetMessages())
 }
 
-func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
+func (app *rpcApp) getSessionStats() (*SessionStats, error) {
 	userCount, assistantCount, toolCalls, toolResults, tokens, cost := app.collectSessionUsageFromAgent()
 
 	actx := app.ag.GetContext()
@@ -29,10 +28,10 @@ func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
 	activeWindowTokens := agent.EstimateConversationTokens(app.ag.GetMessages())
 	tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
 
-	var tokenRate *rpc.TokenRateStats
+	var tokenRate *TokenRateStats
 	if metrics := app.ag.GetMetrics(); metrics != nil {
 		llmMetrics := metrics.GetLLMMetrics()
-		tokenRate = &rpc.TokenRateStats{
+		tokenRate = &TokenRateStats{
 			ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
 			ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
 			ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
@@ -48,7 +47,7 @@ func (app *rpcApp) getSessionStats() (*rpc.SessionStats, error) {
 			RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
 		}
 	}
-	return &rpc.SessionStats{
+	return &SessionStats{
 		SessionFile:       app.sess.GetPath(),
 		SessionID:         app.sessionID,
 		UserMessages:      userCount,
@@ -168,7 +167,7 @@ func (app *rpcApp) handleModelList() (any, error) {
 		return nil, fmt.Errorf("no models available (missing API keys?). Set provider keys or update %s", authPath)
 	}
 
-	models := make([]rpc.ModelInfo, 0, len(specs))
+	models := make([]config.ModelInfo, 0, len(specs))
 	currentIndex := -1
 	for i, spec := range specs {
 		models = append(models, modelInfoFromSpec(spec))
@@ -188,7 +187,7 @@ func (app *rpcApp) handleModelList() (any, error) {
 }
 
 func (app *rpcApp) handleSetAutoCompaction(value string) (any, error) {
-	val := rpc.ParseBoolFromInput(value, "enabled")
+	val := ParseBoolFromInput(value, "enabled")
 	app.compactorConfig.AutoCompact = val
 	app.stateMu.Lock()
 	app.autoCompactionEnabled = val
@@ -398,7 +397,7 @@ func (app *rpcApp) handleSetTraceEvents(value string) (any, error) {
 }
 
 func (app *rpcApp) handleShowSettings() (any, error) {
-	return rpc.BuildSettingsResponse(rpc.SettingsSnapshot{
+	return BuildSettingsResponse(SettingsSnapshot{
 		ModelID:        app.currentModelInfo.ID,
 		ModelProvider:  app.currentModelInfo.Provider,
 		ShowThinking:   app.showThinking,
@@ -407,12 +406,12 @@ func (app *rpcApp) handleShowSettings() (any, error) {
 		ThinkingLevel:  app.currentThinkingLevel,
 		BusyMode:       app.busyMode,
 		AutoCompaction: app.autoCompactionEnabled,
-		Compaction:     buildCompactionState(app.compactorConfig, app.compactor),
+		Compaction:     compact.BuildCompactionState(app.compactorConfig, app.compactor),
 	}), nil
 }
 
 func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
-	val := rpc.ParseBoolFromInput(value, "enabled")
+	val := ParseBoolFromInput(value, "enabled")
 	app.ag.SetAutoRetry(val)
 	slog.Info("set auto-retry", "enabled", val)
 	return map[string]any{"setting": "auto-retry", "value": val}, nil
@@ -421,7 +420,7 @@ func (app *rpcApp) handleSetAutoRetry(value string) (any, error) {
 func (app *rpcApp) handleSet(args string, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) (any, error) {
 	parts := strings.Fields(args)
 	if len(parts) == 0 || parts[0] == "help" {
-		return rpc.SetUsage(), nil
+		return SetUsage(), nil
 	}
 
 	key := parts[0]
@@ -451,7 +450,7 @@ func (app *rpcApp) handleSet(args string, validToolSummaryAutomations, validStee
 		return app.handleSetFollowUpMode(value, validFollowUpModes)
 
 	case "prefix-display":
-		r := rpc.ParseToggleValue(value, app.showPrefix)
+		r := ParseToggleValue(value, app.showPrefix)
 		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set prefix-display <on|off|toggle>")
 		}
@@ -462,7 +461,7 @@ func (app *rpcApp) handleSet(args string, validToolSummaryAutomations, validStee
 		return app.handleSetSteeringMode(value, validSteeringModes)
 
 	case "thinking-display":
-		r := rpc.ParseToggleValue(value, app.showThinking)
+		r := ParseToggleValue(value, app.showThinking)
 		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set thinking-display <on|off|toggle>")
 		}
@@ -479,7 +478,7 @@ func (app *rpcApp) handleSet(args string, validToolSummaryAutomations, validStee
 		return app.handleSetToolSummaryAutomation(value, validToolSummaryAutomations)
 
 	case "tools-display":
-		r := rpc.ParseToggleValue(value, app.showTools)
+		r := ParseToggleValue(value, app.showTools)
 		if !r.Changed {
 			return nil, fmt.Errorf("usage: /set tools-display <on|off|toggle>")
 		}

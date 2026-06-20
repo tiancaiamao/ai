@@ -8,8 +8,21 @@ import (
 	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 )
+
+// truncateText truncates text to at most limit bytes, appending "..." if truncation occurs.
+func truncateText(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return text[:limit-3] + "..."
+}
 
 // NormalizeSessionPath expands ~ and converts to absolute path.
 // Returns "" for empty input.
@@ -55,8 +68,9 @@ type treeNode struct {
 	children []*treeNode
 }
 
-// BuildTreeEntries builds a depth-ordered tree of RPC TreeEntries from flat session entries.
-func BuildTreeEntries(entries []SessionEntry, leafID *string) []rpc.TreeEntry {
+// BuildTreeEntries builds a depth-ordered tree of TreeEntries from flat session entries.
+// Returns session.TreeEntry (internal type) which is different from RPC TreeEntry in pkg/app.
+func BuildTreeEntries(entries []SessionEntry, leafID *string) []TreeEntry {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -86,7 +100,7 @@ func BuildTreeEntries(entries []SessionEntry, leafID *string) []rpc.TreeEntry {
 
 	sortRoots(roots, order)
 
-	var result []rpc.TreeEntry
+	var result []TreeEntry
 	var walk func(nodes []*treeNode, depth int)
 	walk = func(nodes []*treeNode, depth int) {
 		for _, node := range nodes {
@@ -95,13 +109,13 @@ func BuildTreeEntries(entries []SessionEntry, leafID *string) []rpc.TreeEntry {
 			}
 			role, text := TreeEntryLabel(node.entry)
 			if text != "" {
-				text = rpc.TruncateText(text, 120)
+				text = truncateText(text, 120)
 			}
 			isLeaf := false
 			if leafID != nil && *leafID == node.entry.ID {
 				isLeaf = true
 			}
-			result = append(result, rpc.TreeEntry{
+			result = append(result, TreeEntry{
 				EntryID:   node.entry.ID,
 				ParentID:  node.entry.ParentID,
 				Type:      node.entry.Type,
@@ -168,7 +182,7 @@ type SessionUsage struct {
 	AssistantCount int
 	ToolCalls      int
 	ToolResults    int
-	Tokens         rpc.SessionTokenStats
+	Tokens         SessionTokenStats
 	Cost           float64
 }
 

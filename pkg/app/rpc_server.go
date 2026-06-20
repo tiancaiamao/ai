@@ -1,4 +1,4 @@
-package rpc
+package app
 
 import (
 	"bufio"

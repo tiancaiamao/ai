@@ -1,9 +1,11 @@
-package rpc
+package app
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
 // SettingsSnapshot holds the mutable display settings shown by /show settings.
@@ -16,7 +18,7 @@ type SettingsSnapshot struct {
 	ThinkingLevel  string
 	BusyMode       string
 	AutoCompaction bool
-	Compaction     *CompactionState
+	Compaction     *compact.CompactionState
 }
 
 // ToggleResult represents the outcome of parsing a toggle-style setting value.

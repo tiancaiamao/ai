@@ -1,4 +1,4 @@
-package app
+package run
 
 import (
 	"encoding/json"
@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/tiancaiamao/ai/pkg/run"
 )
 
 // TestRunDirectoryLifecycle tests that a run directory is created with
@@ -21,8 +19,8 @@ import (
 func TestRunDirectoryLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create a run.
-	meta, err := run.CreateRun(tmpDir, "/test/cwd", os.Getpid())
+	// Create a
+	meta, err := CreateRun(tmpDir, "/test/cwd", os.Getpid())
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -33,25 +31,25 @@ func TestRunDirectoryLifecycle(t *testing.T) {
 	}
 
 	// Verify directory structure.
-	runDir := run.RunDir(tmpDir, meta.ID)
+	runDir := RunDir(tmpDir, meta.ID)
 	if _, err := os.Stat(runDir); os.IsNotExist(err) {
 		t.Errorf("run directory not created: %s", runDir)
 	}
 
-	metaPath := run.RunMetaPath(tmpDir, meta.ID)
+	metaPath := RunMetaPath(tmpDir, meta.ID)
 	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
-		t.Errorf("run.json not created: %s", metaPath)
+		t.Errorf("json not created: %s", metaPath)
 	}
 
 	// Load and verify metadata.
-	loaded, err := run.LoadRunMeta(metaPath)
+	loaded, err := LoadRunMeta(metaPath)
 	if err != nil {
 		t.Fatalf("LoadRunMeta: %v", err)
 	}
 	if loaded.ID != meta.ID {
 		t.Errorf("ID mismatch: got %s, want %s", loaded.ID, meta.ID)
 	}
-	if loaded.Status != run.StatusRunning {
+	if loaded.Status != StatusRunning {
 		t.Errorf("Status = %s, want running", loaded.Status)
 	}
 	if loaded.CWD != "/test/cwd" {
@@ -59,18 +57,18 @@ func TestRunDirectoryLifecycle(t *testing.T) {
 	}
 
 	// Update status to done.
-	loaded.Status = run.StatusDone
+	loaded.Status = StatusDone
 	loaded.FinishedAt = time.Now().Unix()
-	if err := run.SaveRunMeta(loaded, metaPath); err != nil {
+	if err := SaveRunMeta(loaded, metaPath); err != nil {
 		t.Fatalf("SaveRunMeta: %v", err)
 	}
 
 	// Reload and verify.
-	reloaded, err := run.LoadRunMeta(metaPath)
+	reloaded, err := LoadRunMeta(metaPath)
 	if err != nil {
 		t.Fatalf("LoadRunMeta after update: %v", err)
 	}
-	if reloaded.Status != run.StatusDone {
+	if reloaded.Status != StatusDone {
 		t.Errorf("Status after update = %s, want done", reloaded.Status)
 	}
 	if reloaded.FinishedAt == 0 {
@@ -84,26 +82,26 @@ func TestSocketCommunication(t *testing.T) {
 	tmpDir := t.TempDir()
 	sockPath := filepath.Join(tmpDir, "control.sock")
 
-	received := make(chan run.Command, 1)
+	received := make(chan Command, 1)
 
-	handler := func(cmd run.Command) run.Response {
+	handler := func(cmd Command) Response {
 		received <- cmd
 		switch cmd.Type {
 		case "steer":
 			if cmd.Message == "" {
-				return run.Response{OK: false, Error: "empty message"}
+				return Response{OK: false, Error: "empty message"}
 			}
-			return run.Response{OK: true, Data: map[string]string{"echo": cmd.Message}}
+			return Response{OK: true, Data: map[string]string{"echo": cmd.Message}}
 		case "abort":
-			return run.Response{OK: true}
+			return Response{OK: true}
 		case "get_state":
-			return run.Response{OK: true, Data: map[string]string{"status": "running"}}
+			return Response{OK: true, Data: map[string]string{"status": "running"}}
 		default:
-			return run.Response{OK: false, Error: fmt.Sprintf("unknown: %s", cmd.Type)}
+			return Response{OK: false, Error: fmt.Sprintf("unknown: %s", cmd.Type)}
 		}
 	}
 
-	srv := run.NewSocketServer(sockPath, handler)
+	srv := NewSocketServer(sockPath, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -120,7 +118,7 @@ func TestSocketCommunication(t *testing.T) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	cmd := run.Command{Type: "steer", Message: "hello world"}
+	cmd := Command{Type: "steer", Message: "hello world"}
 	data, _ := json.Marshal(cmd)
 	conn.Write(append(data, '\n'))
 
@@ -131,7 +129,7 @@ func TestSocketCommunication(t *testing.T) {
 		t.Fatalf("Read response: %v", err)
 	}
 
-	var resp run.Response
+	var resp Response
 	raw := strings.TrimRight(string(buf[:n]), "\n")
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		t.Fatalf("Unmarshal response: %v (raw: %q)", err, raw)
@@ -193,11 +191,11 @@ func TestEventParsingPipeline(t *testing.T) {
 		t.Fatalf("Expected %d lines, got %d", len(events), len(lines))
 	}
 
-	kinds := make([]run.EventKind, 0, len(events))
+	kinds := make([]EventKind, 0, len(events))
 	texts := make([]string, 0, len(events))
 
 	for _, line := range lines {
-		evt := run.ParseEvent(line)
+		evt := ParseEvent(line)
 		if evt == nil {
 			kinds = append(kinds, "nil")
 			texts = append(texts, "")
@@ -208,15 +206,15 @@ func TestEventParsingPipeline(t *testing.T) {
 	}
 
 	// Verify parsed kinds.
-	expectedKinds := []run.EventKind{
-		run.KindMeta,          // agent_start -> "ai: agent started"
-		"nil",                 // turn_start -> silent
-		run.KindText,          // text_delta
-		run.KindText,          // text_delta
-		run.KindTool,          // tool_execution_start
-		run.KindTool,          // tool_execution_end -> "tool: tool bash done"
-		run.KindSessionSwitch, // session_switch
-		run.KindMeta,          // agent_end -> "ai: agent done"
+	expectedKinds := []EventKind{
+		KindMeta,          // agent_start -> "ai: agent started"
+		"nil",             // turn_start -> silent
+		KindText,          // text_delta
+		KindText,          // text_delta
+		KindTool,          // tool_execution_start
+		KindTool,          // tool_execution_end -> "tool: tool bash done"
+		KindSessionSwitch, // session_switch
+		KindMeta,          // agent_end -> "ai: agent done"
 	}
 
 	for i, expected := range expectedKinds {
@@ -242,9 +240,9 @@ func TestAutoSelectionByCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create runs with different cwds.
-	run1, _ := run.CreateRun(tmpDir, "/project/alpha", os.Getpid())
-	run2, _ := run.CreateRun(tmpDir, "/project/beta", os.Getpid())
-	run3, _ := run.CreateRun(tmpDir, "/project/alpha", 99999) // different cwd, dead PID
+	run1, _ := CreateRun(tmpDir, "/project/alpha", os.Getpid())
+	run2, _ := CreateRun(tmpDir, "/project/beta", os.Getpid())
+	run3, _ := CreateRun(tmpDir, "/project/alpha", 99999) // different cwd, dead PID
 
 	_ = run1
 	_ = run2
@@ -253,7 +251,7 @@ func TestAutoSelectionByCwd(t *testing.T) {
 	// Find runs for /project/alpha.
 	// run3 has dead PID 99999, so IsRunning filters it out.
 	// Only run1 (alive PID) should be returned.
-	results, err := run.FindRunningByCwd(tmpDir, "/project/alpha")
+	results, err := FindRunningByCwd(tmpDir, "/project/alpha")
 	if err != nil {
 		t.Fatalf("FindRunningByCwd: %v", err)
 	}
@@ -266,7 +264,7 @@ func TestAutoSelectionByCwd(t *testing.T) {
 	}
 
 	// Find runs for /project/beta.
-	results, err = run.FindRunningByCwd(tmpDir, "/project/beta")
+	results, err = FindRunningByCwd(tmpDir, "/project/beta")
 	if err != nil {
 		t.Fatalf("FindRunningByCwd beta: %v", err)
 	}
@@ -278,7 +276,7 @@ func TestAutoSelectionByCwd(t *testing.T) {
 	}
 
 	// Find runs for non-existent cwd.
-	results, err = run.FindRunningByCwd(tmpDir, "/nonexistent")
+	results, err = FindRunningByCwd(tmpDir, "/nonexistent")
 	if err != nil {
 		t.Fatalf("FindRunningByCwd nonexistent: %v", err)
 	}
@@ -294,20 +292,20 @@ func TestPrefixMatch(t *testing.T) {
 	// Create runs with known IDs by manually creating them.
 	ids := []string{"aabb01", "aabb02", "ccdd03"}
 	for _, id := range ids {
-		meta := &run.RunMeta{
+		meta := &RunMeta{
 			ID:     id,
 			PID:    os.Getpid(),
 			CWD:    "/test",
-			Status: run.StatusRunning,
+			Status: StatusRunning,
 		}
 		meta.StartedAt = time.Now().Unix()
-		path := run.RunMetaPath(tmpDir, id)
+		path := RunMetaPath(tmpDir, id)
 		os.MkdirAll(filepath.Dir(path), 0755)
-		run.SaveRunMeta(meta, path)
+		SaveRunMeta(meta, path)
 	}
 
 	// Prefix "aa" should match 2 runs -> error.
-	_, err := run.FindByPrefix(tmpDir, "aa")
+	_, err := FindByPrefix(tmpDir, "aa")
 	if err == nil {
 		t.Error("Expected error for ambiguous prefix")
 	}
@@ -316,19 +314,19 @@ func TestPrefixMatch(t *testing.T) {
 	}
 
 	// Prefix "aab" should match 2 runs -> error.
-	_, err = run.FindByPrefix(tmpDir, "aab")
+	_, err = FindByPrefix(tmpDir, "aab")
 	if err == nil {
 		t.Error("Expected error for ambiguous prefix aab")
 	}
 
 	// Prefix "aabb0" should match 2 runs -> error.
-	_, err = run.FindByPrefix(tmpDir, "aabb0")
+	_, err = FindByPrefix(tmpDir, "aabb0")
 	if err == nil {
 		t.Error("Expected error for ambiguous prefix aabb0")
 	}
 
 	// Full ID should match exactly.
-	results, err := run.FindByPrefix(tmpDir, "aabb01")
+	results, err := FindByPrefix(tmpDir, "aabb01")
 	if err != nil {
 		t.Fatalf("FindByPrefix exact: %v", err)
 	}
@@ -336,8 +334,8 @@ func TestPrefixMatch(t *testing.T) {
 		t.Errorf("Expected exactly aabb01, got %v", results)
 	}
 
-	// Prefix "cc" should match 1 run.
-	results, err = run.FindByPrefix(tmpDir, "cc")
+	// Prefix "cc" should match 1
+	results, err = FindByPrefix(tmpDir, "cc")
 	if err != nil {
 		t.Fatalf("FindByPrefix cc: %v", err)
 	}
@@ -346,7 +344,7 @@ func TestPrefixMatch(t *testing.T) {
 	}
 
 	// Non-matching prefix.
-	results, err = run.FindByPrefix(tmpDir, "zz")
+	results, err = FindByPrefix(tmpDir, "zz")
 	if err != nil {
 		t.Fatalf("FindByPrefix zz: %v", err)
 	}
@@ -393,25 +391,25 @@ func TestSubcommandHelp(t *testing.T) {
 // TestStaleRunDetection tests that IsRunning correctly detects dead processes.
 func TestStaleRunDetection(t *testing.T) {
 	// A process that doesn't exist should be detected as not running.
-	meta := &run.RunMeta{
+	meta := &RunMeta{
 		ID:     "dead01",
 		PID:    999998, // very unlikely to exist
-		Status: run.StatusRunning,
+		Status: StatusRunning,
 	}
 
-	if run.IsRunning(meta) {
+	if IsRunning(meta) {
 		t.Error("Dead PID should not be reported as running")
 	}
 
 	// Current process should be detected as running.
 	meta.PID = os.Getpid()
-	if !run.IsRunning(meta) {
+	if !IsRunning(meta) {
 		t.Error("Current process should be reported as running")
 	}
 
 	// Done status should not be running.
-	meta.Status = run.StatusDone
-	if run.IsRunning(meta) {
+	meta.Status = StatusDone
+	if IsRunning(meta) {
 		t.Error("Done status should not be running")
 	}
 }
@@ -425,20 +423,20 @@ func TestRunStatusOnProcessExit(t *testing.T) {
 		sig        syscall.Signal
 		wantStatus string
 	}{
-		{"clean exit", 0, 0, run.StatusDone},
-		{"error exit", 1, 0, run.StatusFailed},
-		{"signal killed", 0, syscall.SIGTERM, run.StatusKilled},
+		{"clean exit", 0, 0, StatusDone},
+		{"error exit", 1, 0, StatusFailed},
+		{"signal killed", 0, syscall.SIGTERM, StatusKilled},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var status string
 			if tt.sig != 0 {
-				status = run.StatusKilled
+				status = StatusKilled
 			} else if tt.exitStatus == 0 {
-				status = run.StatusDone
+				status = StatusDone
 			} else {
-				status = run.StatusFailed
+				status = StatusFailed
 			}
 
 			if status != tt.wantStatus {

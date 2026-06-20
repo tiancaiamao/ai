@@ -10,7 +10,6 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -284,12 +283,12 @@ func (app *rpcApp) handleFork(args string) (any, error) {
 	app.setSession(newSess, newSessionID, name)
 
 	slog.Info("Forked to new session", "name", name, "id", newSessionID)
-	return &rpc.ForkResult{Cancelled: false, Text: text}, nil
+	return &ForkResult{Cancelled: false, Text: text}, nil
 }
 
 func (app *rpcApp) handleSessionGetState() (any, error) {
 	slog.Info("Received get_state")
-	compactionState := buildCompactionState(app.compactorConfig, app.compactor)
+	compactionState := compact.BuildCompactionState(app.compactorConfig, app.compactor)
 	app.stateMu.Lock()
 	currentSessionID := app.sessionID
 	currentSessionName := app.sessionName
@@ -304,7 +303,7 @@ func (app *rpcApp) handleSessionGetState() (any, error) {
 
 	aiLogPath := app.getCurrentAILogPath()
 
-	return &rpc.SessionState{
+	return &SessionState{
 		Model:                 &modelInfo,
 		ThinkingLevel:         thinkingLevel,
 		IsStreaming:           streaming,
@@ -329,9 +328,9 @@ func (app *rpcApp) handleGetForkMessages(args string) (any, error) {
 	_ = args
 	slog.Info("Received get_fork_messages")
 	forkMessages := app.sess.GetUserMessagesForForking()
-	result := make([]rpc.ForkMessage, 0, len(forkMessages))
+	result := make([]ForkMessage, 0, len(forkMessages))
 	for _, msg := range forkMessages {
-		result = append(result, rpc.ForkMessage{
+		result = append(result, ForkMessage{
 			EntryID: msg.EntryID,
 			Text:    msg.Text,
 		})
