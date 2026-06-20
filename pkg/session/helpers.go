@@ -69,7 +69,7 @@ type treeNode struct {
 }
 
 // BuildTreeEntries builds a depth-ordered tree of TreeEntries from flat session entries.
-// Returns session.TreeEntry (internal type) which is different from RPC TreeEntry in pkg/app.
+// Returns session.TreeEntry (internal type) which is different from RPC TreeEntry in pkg/rpc.
 func BuildTreeEntries(entries []SessionEntry, leafID *string) []TreeEntry {
 	if len(entries) == 0 {
 		return nil

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 // resolveRunID resolves the target run given an optional ID flag.
@@ -80,7 +80,7 @@ func KillSubcommand() {
 	}
 	baseDir := filepath.Join(home, ".ai")
 
-		meta, err := helpers.ResolveRunID(baseDir, *idFlag)
+	meta, err := helpers.ResolveRunID(baseDir, *idFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
