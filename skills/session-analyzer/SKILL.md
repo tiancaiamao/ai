@@ -44,25 +44,32 @@
 ```
 ~/.ai/sessions/--<cwd>--/<session-id>/
 ├── meta.json                    # 会话元数据 (id, name, title, createdAt, updatedAt)
-├── messages.jsonl               # Append-only journal（唯一数据源，3 种 entry type）
+├── messages.jsonl               # Append-only journal（唯一数据源，5 种 entry type）
 ├── messages.jsonl.lock          # 文件锁
-├── checkpoint_index.json        # 所有 checkpoint 元信息索引
-├── current -> checkpoints/checkpoint_NNNNN/  # 当前 checkpoint 符号链接
-├── checkpoints/
-│   ├── checkpoint_00000/
-│   │   ├── llm_context.txt      # LLM 维护的结构化上下文（markdown）
-│   │   └── agent_state.json     # 系统维护的元数据
-│   ├── checkpoint_00001/
-│   └── ...
+├── agent_state.json             # AgentState (turn, token usage, compaction counters)
+└── compactions/                 # Compaction 相关文件
+    ├── archived_00001.jsonl     # 被压缩掉的历史消息（原始 JSONL entry 格式）
+    ├── archived_00002.jsonl     # 每次压缩一个文件
+    ├── ...
+    ├── compaction_00001.jsonl   # 压缩后的消息列表（AgentMessage 格式）
+    ├── compaction_00002.jsonl   # 对应 archived 的顺序
+    └── ...
 ```
+
+**Entry 类型**（5 种）：
+1. `session` — 会话头部（第一行，含 version, id, cwd）
+2. `session_info` — 会话名称、标题元数据
+3. `message` — 用户/assistant/tool 消息
+4. `compaction` — 压缩摘要（含 `snapshotRef` 指向 `compactions/compaction_NNNNN.jsonl`）
+5. `branch_summary` — 分支会话摘要
 
 ### 辅助数据文件
 
 | 文件 | 用途 | 分析价值 |
 |------|------|----------|
-| `checkpoint_index.json` | 所有 checkpoint 索引 | 追踪 checkpoint 创建频率、上下文增长趋势 |
-| `agent_state.json` | 当前 agent 状态 | 查看触发追踪字段、token 使用量 |
-| `llm_context.txt` | LLM 记忆快照 | 评估 agent 的信息保留质量 |
+| `agent_state.json` | 当前 agent 状态 | 查看总轮次、token 使用量、压缩次数、触发追踪 |
+| `compactions/archived_*.jsonl` | 被压缩的历史消息 | 追踪历史上下文丢失情况、压缩前的完整对话 |
+| `compactions/compaction_*.jsonl` | 压缩后的消息列表 | 追踪压缩质量、消息保留情况 |
 
 ## 工作流程
 
@@ -87,11 +94,22 @@ for t, c in types.most_common():
 # 查看会话元数据
 cat <path>/meta.json | python3 -m json.tool
 
-# 查看 checkpoint 索引（上下文管理历史）
-cat <path>/checkpoint_index.json | python3 -m json.tool
+# 查看 agent 状态（token 使用、压缩计数）
+cat <path>/agent_state.json | python3 -m json.tool
 
-# 当前 agent 状态（token 使用、触发追踪）
-cat <path>/checkpoints/$(readlink <path>/current | xargs basename)/agent_state.json | python3 -m json.tool
+# 查看压缩历史（如果有）
+if [ -d '<path>/compactions' ]; then
+    echo "=== Compactions Summary ==="
+    ls -lh <path>/compactions/ | grep -E 'archived|compaction'
+    echo ""
+    echo "=== First Compaction Entry ==="
+    grep '"type":"compaction"' <path>/messages.jsonl | head -1 | python3 -m json.tool
+    echo ""
+    echo "=== Archived File Count ==="
+    ls <path>/compactions/archived_*.jsonl 2>/dev/null | wc -l
+    echo "=== Compaction File Count ==="
+    ls <path>/compactions/compaction_*.jsonl 2>/dev/null | wc -l
+fi
 ```
 
 ### 步骤 1：选择分析模式
@@ -119,8 +137,8 @@ ls -lS ~/.ai/sessions/--Users-genius-project-ai--/*/messages.jsonl | head -10
 
 **批处理策略**：
 - **每次分析 5-10 个 session**
-- 从 checkpoint 继续，避免重复分析
 - 分析完所有 session 后，生成汇总报告
+- 优先分析有 compaction 的 session（上下文管理问题更明显）
 
 ### 步骤 3：按模式逐个分析 session
 
