@@ -227,6 +227,60 @@ func TestRPCAppShowSettings(t *testing.T) {
 	}
 }
 
+func TestRPCAppSetFollowUpMode(t *testing.T) {
+	cmds := []string{
+		`{"type":"set","message":"follow-up-mode one-at-a-time"}`,
+		`{"type":"set","message":"follow-up-mode all"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "set follow-up-mode")
+		t.Logf("response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppSetSteeringMode(t *testing.T) {
+	cmds := []string{
+		`{"type":"set","message":"steering-mode all"}`,
+		`{"type":"set","message":"steering-mode one-at-a-time"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "set steering-mode")
+		t.Logf("response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppSetToolCallCutoff(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"tool-call-cutoff 10"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected tool-call-cutoff response")
+	}
+	assertCmdSuccess(t, responses[0], "set tool-call-cutoff")
+}
+
+func TestRPCAppSetToolSummaryAutomation(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"tool-summary-automation fallback"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected tool-summary-automation response")
+	}
+	assertCmdSuccess(t, responses[0], "set tool-summary-automation")
+}
+
+func TestRPCAppSetSessionName(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"session-name Test Session"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected session-name response")
+	}
+	assertCmdSuccess(t, responses[0], "set session-name")
+}
+
 func TestRPCAppInvalidCommand(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"nonexistent_command_xyz"}`}, "")
 	if len(responses) == 0 {
