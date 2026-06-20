@@ -207,6 +207,26 @@ func TestRPCAppExportHTML(t *testing.T) {
 	}
 }
 
+func TestRPCAppShowSettings(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"show","message":"settings"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected settings response")
+	}
+	assertCmdSuccess(t, responses[0], "show settings")
+	// Verify settings structure
+	if data, ok := responses[0]["data"].(map[string]any); ok {
+		// The response contains a nested data field
+		if innerData, ok := data["data"].(map[string]any); ok {
+			// Verify data map contains expected fields
+			if _, ok := innerData["model"]; !ok {
+				t.Error("expected model field in settings response")
+			}
+		} else {
+			t.Error("expected nested data field in settings response")
+		}
+	}
+}
+
 func TestRPCAppInvalidCommand(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"nonexistent_command_xyz"}`}, "")
 	if len(responses) == 0 {
