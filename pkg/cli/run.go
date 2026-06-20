@@ -162,7 +162,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 		}
 	}()
 
-	// Write initial run.json.
+	// Write initial tui.json.
 	meta := &tui.RunMeta{
 		ID:           id,
 		PID:          cmd.Process.Pid,

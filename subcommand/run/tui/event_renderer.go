@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
+	"github.com/tiancaiamao/ai/pkg/rpc"
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 

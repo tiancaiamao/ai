@@ -40,7 +40,7 @@ type LoopConfig struct {
 	GetStartupPath func() string
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
-		// RunID is the run ID assigned by the parent ai serve process.
+	// RunID is the run ID assigned by the parent ai serve process.
 	// Empty when running standalone (ai --mode rpc without ai serve).
 	RunID      string
 	Executor   ToolExecutor // agentctx.Tool executor with concurrency control

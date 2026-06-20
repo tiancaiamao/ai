@@ -39,9 +39,9 @@ func (app *rpcApp) getSessionStats() (*SessionStats, error) {
 		CompactionCount:   app.sess.GetCompactionCount(),
 		Tokens:            tokens,
 
-		Cost:              cost,
-		Workspace:         app.ws.GetGitRoot(),
-		CurrentWorkdir:    app.ws.GetCWD(),
+		Cost:           cost,
+		Workspace:      app.ws.GetGitRoot(),
+		CurrentWorkdir: app.ws.GetCWD(),
 	}, nil
 }
 

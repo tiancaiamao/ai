@@ -634,5 +634,3 @@ func (a *Agent) clearFollowUps() {
 		}
 	}
 }
-
-
