@@ -50,7 +50,22 @@ func NewSession(sessionDir string) *Session {
 }
 
 // LoadSession loads a session from the given directory path.
+// It automatically uses lazy loading optimization (loading from the most recent compaction)
+// and falls back to full loading if lazy loading fails.
+// LoadSession loads a session from disk with lazy loading enabled.
+// It reads only the recent messages and compaction entries, falling back to full
+// loading if lazy loading fails (e.g., no compaction entry found).
 func LoadSession(sessionDir string) (*Session, error) {
+	sess, err := loadSessionLazy(sessionDir)
+	if err == nil {
+		return sess, nil
+	}
+	// Lazy loading failed, fall back to full loading
+	return loadSessionFull(sessionDir)
+}
+
+// loadSessionFull loads the entire session file (original LoadSession implementation).
+func loadSessionFull(sessionDir string) (*Session, error) {
 	sess := &Session{
 		sessionDir: sessionDir,
 		entries:    make([]*SessionEntry, 0),
@@ -290,8 +305,8 @@ func (s *Session) EnsureFullyLoaded() error {
 		return nil
 	}
 
-	// Load full session from disk
-	full, err := LoadSession(s.sessionDir)
+	// Load full session from disk (non-lazy)
+	full, err := loadSessionFull(s.sessionDir)
 	if err != nil {
 		return fmt.Errorf("failed to fully load session: %w", err)
 	}

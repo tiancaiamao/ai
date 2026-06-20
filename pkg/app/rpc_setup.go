@@ -228,8 +228,7 @@ func loadOrCreateSession(sessionPath string, cwd string) (*session.Session, stri
 	var sessionName string
 
 	if sessionPath != "" {
-		opts := session.DefaultLoadOptions()
-		sess, err = session.LoadSessionLazy(sessionPath, opts)
+		sess, err = session.LoadSession(sessionPath)
 		if err != nil {
 			return nil, "", "", nil, fmt.Errorf("failed to load session from %s: %w", sessionPath, err)
 		}
