@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -36,7 +35,7 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 		app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}()
 
-	var response *rpc.CompactResult
+	var response *CompactResult
 	err := runDetachedTraceSpan(
 		"compaction",
 		traceevent.CategoryEvent,
@@ -60,7 +59,7 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 			compactionInfo.After = afterCount
 
 			slog.Info("Compact successful", "before", beforeCount, "after", afterCount)
-			response = &rpc.CompactResult{
+			response = &CompactResult{
 				TokensBefore: result.TokensBefore,
 				TokensAfter:  result.TokensAfter,
 			}
@@ -99,7 +98,7 @@ func (app *rpcApp) handleGetMessages(args string) (any, error) {
 	}
 
 	messages := app.ag.GetMessages()
-	return rpc.FormatMessagesForDisplay(messages, count, maxPreviewLen), nil
+	return FormatMessagesForDisplay(messages, count, maxPreviewLen), nil
 }
 
 func (app *rpcApp) handleGetLastAssistantText(args string) (any, error) {

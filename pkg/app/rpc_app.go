@@ -3,7 +3,6 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,8 +14,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 	"github.com/tiancaiamao/ai/pkg/tools"
@@ -43,7 +42,7 @@ type rpcApp struct {
 	model                llm.Model
 	apiKey               string
 	activeSpec           config.ModelSpec
-	currentModelInfo     rpc.ModelInfo
+	currentModelInfo     config.ModelInfo
 	currentContextWindow int
 
 	// --- Paths ---
@@ -72,7 +71,7 @@ type rpcApp struct {
 	// --- Skills ---
 	skillResult   *skill.LoadResult
 	skillStats    *skill.SkillStatsFile
-	skillCommands []rpc.SlashCommand
+	skillCommands []SlashCommand
 
 	// --- Agent ---
 	ag               *agent.Agent
@@ -95,7 +94,7 @@ type rpcApp struct {
 	agentContextPrefix string
 
 	// --- RPC Server ---
-	server *rpc.Server
+	server *Server
 
 	// --- Mutable state protected by stateMu ---
 	stateMu                       sync.Mutex
@@ -331,7 +330,7 @@ func (app *rpcApp) forwardToSet(subcmd string) func(string) (any, error) {
 
 // collectSessionUsageFromAgent is a convenience wrapper around collectSessionUsage
 
-func (app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error) {
+func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 	var data struct {
 		Message           string            `json:"message"`
 		StreamingBehavior string            `json:"streamingBehavior"`
@@ -426,7 +425,7 @@ func (app *rpcApp) handlePrompt(cmd rpc.RPCCommand) (any, error) {
 	return nil, app.ag.Prompt(message)
 }
 
-func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
+func (app *rpcApp) handleSteer(cmd RPCCommand) (any, error) {
 	message := cmd.Message
 	if message == "" && len(cmd.Data) > 0 {
 		var data struct {
@@ -467,7 +466,7 @@ func (app *rpcApp) handleSteer(cmd rpc.RPCCommand) (any, error) {
 	return nil, nil
 }
 
-func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
+func (app *rpcApp) handleFollowUp(cmd RPCCommand) (any, error) {
 	message := cmd.Message
 	if message == "" && len(cmd.Data) > 0 {
 		var data struct {
@@ -498,7 +497,7 @@ func (app *rpcApp) handleFollowUp(cmd rpc.RPCCommand) (any, error) {
 	return nil, app.ag.FollowUp(expandedMessage)
 }
 
-func (app *rpcApp) handleAbort(cmd rpc.RPCCommand) (any, error) {
+func (app *rpcApp) handleAbort(cmd RPCCommand) (any, error) {
 	_ = cmd
 	slog.Info("Received abort")
 	app.ag.Abort()
@@ -512,10 +511,10 @@ func (app *rpcApp) registerHandlers(
 	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
 ) {
 	// === Protocol command handlers ===
-	app.server.Register(rpc.CommandPrompt, app.handlePrompt)
-	app.server.Register(rpc.CommandSteer, app.handleSteer)
-	app.server.Register(rpc.CommandFollowUp, app.handleFollowUp)
-	app.server.Register(rpc.CommandAbort, app.handleAbort)
+	app.server.Register(CommandPrompt, app.handlePrompt)
+	app.server.Register(CommandSteer, app.handleSteer)
+	app.server.Register(CommandFollowUp, app.handleFollowUp)
+	app.server.Register(CommandAbort, app.handleAbort)
 
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()

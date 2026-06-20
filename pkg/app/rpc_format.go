@@ -1,9 +1,11 @@
-package rpc
+package app
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/compact"
 )
 
 // TruncateText truncates text to at most limit bytes, appending "..." if truncation occurs.
@@ -38,7 +40,7 @@ func FormatLimit(value int) string {
 }
 
 // FormatTokenLimit renders a compaction state's token limit for display.
-func FormatTokenLimit(state *CompactionState) string {
+func FormatTokenLimit(state *compact.CompactionState) string {
 	if state == nil || state.TokenLimit <= 0 {
 		return "unknown"
 	}

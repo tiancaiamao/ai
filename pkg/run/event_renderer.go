@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/pkg/app"
+	"github.com/tiancaiamao/ai/pkg/compact"
+	"github.com/tiancaiamao/ai/pkg/config"
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
@@ -184,7 +186,7 @@ func renderSessions(dataJSON []byte) *FormattedEvent {
 // renderSkills renders /skills output.
 func renderSkills(dataJSON []byte) *FormattedEvent {
 	var payload struct {
-		Commands []rpc.SlashCommand `json:"commands"`
+		Commands []app.SlashCommand `json:"commands"`
 	}
 	if err := json.Unmarshal(dataJSON, &payload); err != nil {
 		return fallbackJSON(dataJSON)
@@ -222,10 +224,10 @@ func renderSkills(dataJSON []byte) *FormattedEvent {
 // renderContext renders /context output.
 func renderContext(dataJSON []byte) *FormattedEvent {
 	var payload struct {
-		State  *rpc.SessionState `json:"state"`
-		Stats  *rpc.SessionStats `json:"stats"`
+		State  *app.SessionState `json:"state"`
+		Stats  *app.SessionStats `json:"stats"`
 		Models struct {
-			Models []rpc.ModelInfo `json:"models"`
+			Models []config.ModelInfo `json:"models"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(dataJSON, &payload); err != nil {
@@ -312,7 +314,7 @@ func renderContext(dataJSON []byte) *FormattedEvent {
 
 // renderSessionState renders /session output.
 func renderSessionState(dataJSON []byte) *FormattedEvent {
-	var state rpc.SessionState
+	var state app.SessionState
 	if err := json.Unmarshal(dataJSON, &state); err != nil {
 		return fallbackJSON(dataJSON)
 	}
@@ -396,7 +398,7 @@ func renderSessionState(dataJSON []byte) *FormattedEvent {
 // renderMessages renders /messages output.
 func renderMessages(dataJSON []byte) *FormattedEvent {
 	// Try new MessagesResult format first (has total/showing/preview fields)
-	var result rpc.MessagesResult
+	var result app.MessagesResult
 	if err := json.Unmarshal(dataJSON, &result); err == nil && result.Total > 0 {
 		return renderFormattedMessages(result)
 	}
@@ -425,13 +427,13 @@ func renderMessages(dataJSON []byte) *FormattedEvent {
 	}
 
 	// Convert legacy format to MessagesResult
-	legacyResult := rpc.MessagesResult{
+	legacyResult := app.MessagesResult{
 		Total:    len(payload.Messages),
 		Showing:  len(payload.Messages),
-		Messages: make([]rpc.FormattedMessage, len(payload.Messages)),
+		Messages: make([]app.FormattedMessage, len(payload.Messages)),
 	}
 	for i, msg := range payload.Messages {
-		legacyResult.Messages[i] = rpc.FormattedMessage{
+		legacyResult.Messages[i] = app.FormattedMessage{
 			Index:   i,
 			Role:    msg.Role,
 			Preview: msg.Content,
@@ -441,7 +443,7 @@ func renderMessages(dataJSON []byte) *FormattedEvent {
 }
 
 // renderFormattedMessages renders a MessagesResult into a human-readable display.
-func renderFormattedMessages(result rpc.MessagesResult) *FormattedEvent {
+func renderFormattedMessages(result app.MessagesResult) *FormattedEvent {
 	if len(result.Messages) == 0 {
 		return &FormattedEvent{Kind: KindMeta, Text: "no messages"}
 	}
@@ -482,11 +484,11 @@ func renderFormattedMessages(result rpc.MessagesResult) *FormattedEvent {
 
 // renderModel renders /model output.
 func renderModel(dataJSON []byte) *FormattedEvent {
-	var result rpc.CycleModelResult
+	var result app.CycleModelResult
 	if err := json.Unmarshal(dataJSON, &result); err != nil {
 		// Fallback: try just {model: {id, name}}
 		var payload struct {
-			Model *rpc.ModelInfo `json:"model"`
+			Model *config.ModelInfo `json:"model"`
 		}
 		if err2 := json.Unmarshal(dataJSON, &payload); err2 != nil || payload.Model == nil {
 			return fallbackJSON(dataJSON)
@@ -504,8 +506,8 @@ func renderModel(dataJSON []byte) *FormattedEvent {
 // renderModelList renders /model (no args) and /get_available_models output.
 func renderModelList(dataJSON []byte) *FormattedEvent {
 	var payload struct {
-		Models       []rpc.ModelInfo `json:"models"`
-		CurrentIndex *int            `json:"currentIndex,omitempty"`
+		Models       []config.ModelInfo `json:"models"`
+		CurrentIndex *int               `json:"currentIndex,omitempty"`
 		Current      *struct {
 			Provider string `json:"provider"`
 			ID       string `json:"id"`
@@ -598,7 +600,7 @@ func renderSettings(dataJSON []byte) *FormattedEvent {
 
 // renderSessionStats renders /session stats output.
 func renderSessionStats(dataJSON []byte) *FormattedEvent {
-	var stats rpc.SessionStats
+	var stats app.SessionStats
 	if err := json.Unmarshal(dataJSON, &stats); err != nil {
 		return fallbackJSON(dataJSON)
 	}
@@ -677,7 +679,7 @@ func renderTraceEvents(dataJSON []byte) *FormattedEvent {
 // renderTree renders /tree output.
 func renderTree(dataJSON []byte) *FormattedEvent {
 	var payload struct {
-		Entries []rpc.TreeEntry `json:"entries"`
+		Entries []app.TreeEntry `json:"entries"`
 	}
 	if err := json.Unmarshal(dataJSON, &payload); err != nil {
 		return fallbackJSON(dataJSON)
@@ -723,7 +725,7 @@ func formatIntOrUnknown(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func formatTokenLimit(cs *rpc.CompactionState) string {
+func formatTokenLimit(cs *compact.CompactionState) string {
 	if cs == nil {
 		return "unknown"
 	}

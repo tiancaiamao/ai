@@ -1,6 +1,11 @@
-package rpc
+package app
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/tiancaiamao/ai/pkg/compact"
+	"github.com/tiancaiamao/ai/pkg/config"
+)
 
 // RPCCommand represents a command received on stdin.
 type RPCCommand struct {
@@ -41,52 +46,26 @@ const (
 
 // SessionState represents the current session state.
 type SessionState struct {
-	Model                 *ModelInfo       `json:"model,omitempty"`
-	ThinkingLevel         string           `json:"thinkingLevel"`
-	IsStreaming           bool             `json:"isStreaming"`
-	IsCompacting          bool             `json:"isCompacting"`
-	SteeringMode          string           `json:"steeringMode"`
-	FollowUpMode          string           `json:"followUpMode"`
-	SessionFile           string           `json:"sessionFile,omitempty"`
-	SessionID             string           `json:"sessionId,omitempty"`
-	SessionName           string           `json:"sessionName,omitempty"`
-	AIPid                 int              `json:"aiPid,omitempty"`
-	AILogPath             string           `json:"aiLogPath,omitempty"`
-	AIWorkingDir          string           `json:"aiWorkingDir,omitempty"`  // Current working directory
-	AIStartupPath         string           `json:"aiStartupPath,omitempty"` // Git repository root (where session started)
-	AutoCompactionEnabled bool             `json:"autoCompactionEnabled"`
-	MessageCount          int              `json:"messageCount"`
-	PendingMessageCount   int              `json:"pendingMessageCount"`
-	Compaction            *CompactionState `json:"compaction,omitempty"`
+	Model                 *config.ModelInfo        `json:"model,omitempty"`
+	ThinkingLevel         string                   `json:"thinkingLevel"`
+	IsStreaming           bool                     `json:"isStreaming"`
+	IsCompacting          bool                     `json:"isCompacting"`
+	SteeringMode          string                   `json:"steeringMode"`
+	FollowUpMode          string                   `json:"followUpMode"`
+	SessionFile           string                   `json:"sessionFile,omitempty"`
+	SessionID             string                   `json:"sessionId,omitempty"`
+	SessionName           string                   `json:"sessionName,omitempty"`
+	AIPid                 int                      `json:"aiPid,omitempty"`
+	AILogPath             string                   `json:"aiLogPath,omitempty"`
+	AIWorkingDir          string                   `json:"aiWorkingDir,omitempty"`  // Current working directory
+	AIStartupPath         string                   `json:"aiStartupPath,omitempty"` // Git repository root (where session started)
+	AutoCompactionEnabled bool                     `json:"autoCompactionEnabled"`
+	MessageCount          int                      `json:"messageCount"`
+	PendingMessageCount   int                      `json:"pendingMessageCount"`
+	Compaction            *compact.CompactionState `json:"compaction,omitempty"`
 }
 
-// CompactionState represents compaction thresholds and settings.
-type CompactionState struct {
-	MaxMessages           int    `json:"maxMessages,omitempty"`
-	MaxTokens             int    `json:"maxTokens,omitempty"`
-	KeepRecent            int    `json:"keepRecent,omitempty"`
-	KeepRecentTokens      int    `json:"keepRecentTokens,omitempty"`
-	ReserveTokens         int    `json:"reserveTokens,omitempty"`
-	ToolCallCutoff        int    `json:"toolCallCutoff,omitempty"`
-	ToolSummaryAutomation string `json:"toolSummaryAutomation,omitempty"`
-	ContextWindow         int    `json:"contextWindow,omitempty"`
-	TokenLimit            int    `json:"tokenLimit,omitempty"`
-	TokenLimitSource      string `json:"tokenLimitSource,omitempty"`
-}
-
-// ModelInfo represents a model description for RPC clients.
-type ModelInfo struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Provider      string   `json:"provider"`
-	API           string   `json:"api"`
-	Reasoning     bool     `json:"reasoning"`
-	Input         []string `json:"input,omitempty"`
-	ContextWindow int      `json:"contextWindow,omitempty"`
-	MaxTokens     int      `json:"maxTokens,omitempty"`
-}
-
-// SlashCommand describes an available slash command for clients.
+// SlashCommand represents an available slash command for clients.
 type SlashCommand struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
@@ -169,10 +148,10 @@ type ForkResult struct {
 
 // CycleModelResult represents a cycle_model response payload.
 type CycleModelResult struct {
-	Model          ModelInfo `json:"model"`
-	ThinkingLevel  string    `json:"thinkingLevel,omitempty"`
-	IsScoped       bool      `json:"isScoped,omitempty"`
-	ScopedProvider string    `json:"scopedProvider,omitempty"`
+	Model          config.ModelInfo `json:"model"`
+	ThinkingLevel  string           `json:"thinkingLevel,omitempty"`
+	IsScoped       bool             `json:"isScoped,omitempty"`
+	ScopedProvider string           `json:"scopedProvider,omitempty"`
 }
 
 // FormattedMessage represents a summarized message for display purposes.

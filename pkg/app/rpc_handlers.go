@@ -10,7 +10,6 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/config"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
 // Global channel for signal-triggered agent abort.
@@ -125,7 +124,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
 	// --- Create RPC server ---
-	server := rpc.NewServer()
+	server := NewServer()
 	server.SetOutput(output)
 	app.server = server
 
@@ -166,18 +165,18 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	)
 
 	// --- Build skill commands list ---
-	app.skillCommands = make([]rpc.SlashCommand, 0)
+	app.skillCommands = make([]SlashCommand, 0)
 	for _, cmd := range server.ListSlashCommands() {
 		if cmd.Hidden {
 			continue
 		}
-		app.skillCommands = append(app.skillCommands, rpc.SlashCommand{
+		app.skillCommands = append(app.skillCommands, SlashCommand{
 			Name:        cmd.Name,
 			Description: cmd.Description,
 		})
 	}
 	for _, s := range app.skillResult.Skills {
-		app.skillCommands = append(app.skillCommands, rpc.SlashCommand{
+		app.skillCommands = append(app.skillCommands, SlashCommand{
 			Name:        "/skill:" + s.Name,
 			Description: s.Description,
 		})

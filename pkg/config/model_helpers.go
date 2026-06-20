@@ -7,11 +7,10 @@ import (
 	"os"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
-// ModelInfoFromSpec converts a ModelSpec to an rpc.ModelInfo for display.
-func ModelInfoFromSpec(spec ModelSpec) rpc.ModelInfo {
+// ModelInfoFromSpec converts a ModelSpec to a ModelInfo for display.
+func ModelInfoFromSpec(spec ModelSpec) ModelInfo {
 	name := spec.Name
 	if name == "" {
 		name = spec.ID
@@ -20,7 +19,7 @@ func ModelInfoFromSpec(spec ModelSpec) rpc.ModelInfo {
 	if len(input) == 0 {
 		input = []string{"text"}
 	}
-	return rpc.ModelInfo{
+	return ModelInfo{
 		ID:            spec.ID,
 		Name:          name,
 		Provider:      spec.Provider,

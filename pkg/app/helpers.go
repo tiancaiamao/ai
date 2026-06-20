@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,8 +9,8 @@ import (
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/session"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
@@ -26,10 +25,11 @@ func resolveSessionName(sessionMgr *session.SessionManager, sessionID string) st
 	return session.ResolveSessionName(sessionMgr, sessionID)
 }
 
-// Model spec helpers moved to pkg/config and pkg/rpc.
+// Model spec helpers moved to pkg/config and pkg/
 // Thin wrappers kept for cmd/ai callers.
 
-func modelInfoFromSpec(spec config.ModelSpec) rpc.ModelInfo {
+// ModelInfoFromSpec is now in pkg/config.
+func modelInfoFromSpec(spec config.ModelSpec) config.ModelInfo {
 	return config.ModelInfoFromSpec(spec)
 }
 
@@ -62,7 +62,7 @@ func findModelSpec(specs []config.ModelSpec, provider, modelID string) (config.M
 }
 
 // buildCompactionState delegates to compact.BuildCompactionState.
-func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *rpc.CompactionState {
+func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *compact.CompactionState {
 	return compact.BuildCompactionState(cfg, compactor)
 }
 
@@ -133,25 +133,48 @@ func runDetachedTraceSpan(
 	return err
 }
 
-func buildTreeEntries(entries []session.SessionEntry, leafID *string) []rpc.TreeEntry {
-	return session.BuildTreeEntries(entries, leafID)
+func buildTreeEntries(entries []session.SessionEntry, leafID *string) []TreeEntry {
+	sessionEntries := session.BuildTreeEntries(entries, leafID)
+	result := make([]TreeEntry, len(sessionEntries))
+	for i, se := range sessionEntries {
+		result[i] = TreeEntry{
+			EntryID:   se.EntryID,
+			ParentID:  se.ParentID,
+			Type:      se.Type,
+			Role:      se.Role,
+			Text:      se.Text,
+			Timestamp: se.Timestamp,
+			Depth:     se.Depth,
+			Leaf:      se.Leaf,
+		}
+	}
+	return result
 }
 
 func treeEntryLabel(entry session.SessionEntry) (string, string) {
 	return session.TreeEntryLabel(entry)
 }
 
-// truncateText delegates to rpc.TruncateText.
-func truncateText(text string, limit int) string { return rpc.TruncateText(text, limit) }
+// truncateText delegates to TruncateText.
+func truncateText(text string, limit int) string { return TruncateText(text, limit) }
 
-func formatIntOrUnknown(value int) string                { return rpc.FormatIntOrUnknown(value) }
-func formatLimit(value int) string                       { return rpc.FormatLimit(value) }
-func formatTokenLimit(state *rpc.CompactionState) string { return rpc.FormatTokenLimit(state) }
-func formatTokenLimitSource(value string) string         { return rpc.FormatTokenLimitSource(value) }
+func formatIntOrUnknown(value int) string                    { return FormatIntOrUnknown(value) }
+func formatLimit(value int) string                           { return FormatLimit(value) }
+func formatTokenLimit(state *compact.CompactionState) string { return FormatTokenLimit(state) }
+func formatTokenLimitSource(value string) string             { return FormatTokenLimitSource(value) }
 
-func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, rpc.SessionTokenStats, float64) {
+func collectSessionUsage(messages []agentctx.AgentMessage) (int, int, int, int, SessionTokenStats, float64) {
 	u := session.CollectSessionUsage(messages)
-	return u.UserCount, u.AssistantCount, u.ToolCalls, u.ToolResults, u.Tokens, u.Cost
+	return u.UserCount, u.AssistantCount, u.ToolCalls, u.ToolResults, SessionTokenStats{
+		Input:              u.Tokens.Input,
+		Output:             u.Tokens.Output,
+		CacheRead:          0, // session.SessionTokenStats doesn't have this
+		CacheWrite:         0, // session.SessionTokenStats doesn't have this
+		Total:              u.Tokens.Total,
+		ActiveWindowTokens: u.Tokens.ActiveWindow,
+		SystemPromptTokens: u.Tokens.SystemPrompt,
+		SystemToolsTokens:  u.Tokens.SystemTools,
+	}, u.Cost
 }
 
 // format functions moved to pkg/rpc/format.go
