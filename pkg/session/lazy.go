@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
 
 // LoadOptions controls session loading behavior.
@@ -39,10 +41,10 @@ func FullLoadOptions() LoadOptions {
 	}
 }
 
-// LoadSessionLazy loads a session with lazy loading support.
+// loadSessionLazy is the internal implementation of lazy loading.
 // It reads the session file efficiently by scanning from end to find compaction entry.
 // Only loads recent messages + compaction summary.
-func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
+func loadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	if sessionDir == "" {
 		sess := &Session{
 			entries: make([]*SessionEntry, 0),
@@ -50,11 +52,6 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 		}
 		sess.header = newSessionHeader(uuid.NewString(), "", "")
 		return sess, nil
-	}
-
-	// Non-lazy mode: use original LoadSession
-	if !opts.Lazy {
-		return LoadSession(sessionDir)
 	}
 
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
@@ -80,7 +77,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	header, err := readHeaderFromFile(f)
 	if err != nil {
 		// Fallback to full load if header parsing fails
-		return LoadSession(sessionDir)
+		return loadSessionFull(sessionDir)
 	}
 
 	sess := &Session{
@@ -94,7 +91,7 @@ func LoadSessionLazy(sessionDir string, opts LoadOptions) (*Session, error) {
 	// Load from end to find compaction entry
 	if err := loadFromEnd(f, sess, opts); err != nil {
 		// If lazy loading fails, fall back to full load
-		return LoadSession(sessionDir)
+		return loadSessionFull(sessionDir)
 	}
 
 	sess.flushed = true
@@ -132,7 +129,7 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 
 // loadFromEnd scans the file from the end to find the most recent compaction entry
 // and loads only the relevant entries.
-// Uses a simple approach: read all lines into memory, then scan backwards.
+// Optimized to read only the tail of the file (typically 64KB is enough to find recent compaction).
 func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 	stat, err := f.Stat()
 	if err != nil {
@@ -143,31 +140,35 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 		return nil
 	}
 
-	// Read entire file into memory (simple but effective for session files)
-	_, err = f.Seek(0, io.SeekStart)
+	// Optimization: Read only the tail of the file (64KB typically enough for recent compaction)
+	const scanSize = 64 * 1024 // 64KB
+	var startOffset int64
+
+	if size > scanSize {
+		startOffset = size - scanSize
+	}
+
+	_, err = f.Seek(startOffset, io.SeekStart)
 	if err != nil {
 		return err
 	}
 
-	// First pass: read all lines
-	var lines [][]byte
-	scanner := bufio.NewScanner(f)
-	// Increase buffer size for long lines
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		// Make a copy since scanner reuses the buffer
-		lineCopy := make([]byte, len(line))
-		copy(lineCopy, line)
-		lines = append(lines, lineCopy)
-	}
-	if err := scanner.Err(); err != nil {
+	// Read tail data
+	tailData := make([]byte, size-startOffset)
+	n, err := f.Read(tailData)
+	if err != nil && err != io.EOF {
 		return err
+	}
+	tailData = tailData[:n]
+
+	// Split lines, skipping the first line if it's incomplete (we started mid-line)
+	lines := agentctx.SplitLines(tailData)
+	if len(lines) > 0 && startOffset > 0 {
+		// First line might be incomplete (we started mid-file), skip it
+		var test map[string]any
+		if json.Unmarshal(lines[0], &test) != nil {
+			lines = lines[1:]
+		}
 	}
 
 	// Skip header line (first line with type="session")
@@ -214,10 +215,46 @@ func loadFromEnd(f *os.File, sess *Session, opts LoadOptions) error {
 		}
 	}
 
+	// No compaction found - this session hasn't been compacted yet
+	if compactionEntry == nil {
+		return errors.New("no compaction entry found in session")
+	}
+
+	// Load compressed messages from snapshot file
+	if compactionEntry.SnapshotRef != "" && sess.sessionDir != "" {
+		snapshotPath := filepath.Join(sess.sessionDir, compactionEntry.SnapshotRef)
+		loadedMessages, err := loadSnapshotMessages(snapshotPath)
+		if err == nil {
+			// Add compressed messages as entries
+			var parentID *string
+			for i := range loadedMessages {
+				ts := time.Now().UTC().Format(time.RFC3339Nano)
+				if loadedMessages[i].Timestamp != 0 {
+					ts = time.UnixMilli(loadedMessages[i].Timestamp).UTC().Format(time.RFC3339Nano)
+				}
+				entry := &SessionEntry{
+					Type:      EntryTypeMessage,
+					ID:        generateEntryID(sess.byID),
+					ParentID:  parentID,
+					Timestamp: ts,
+					Message:   &loadedMessages[i],
+				}
+				sess.addEntry(entry)
+				pid := entry.ID
+				parentID = &pid
+			}
+		}
+	}
+
 	// Build final entries list
 	if compactionEntry != nil && opts.IncludeSummary {
-		// Compaction entry's parent is likely not loaded, break the chain here
-		compactionEntry.ParentID = nil
+		// Compaction entry's parent is the last compressed message
+		if len(sess.entries) > 0 {
+			lastID := sess.entries[len(sess.entries)-1].ID
+			compactionEntry.ParentID = &lastID
+		} else {
+			compactionEntry.ParentID = nil
+		}
 		sess.addEntry(compactionEntry)
 	}
 

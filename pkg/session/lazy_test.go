@@ -27,7 +27,7 @@ func TestFullLoadOptions(t *testing.T) {
 
 func TestLoadSessionLazyEmptyPath(t *testing.T) {
 	opts := DefaultLoadOptions()
-	sess, err := LoadSessionLazy("", opts)
+	sess, err := LoadSessionWithOpts("", opts)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.NotEmpty(t, sess.header.ID)
@@ -38,7 +38,7 @@ func TestLoadSessionLazyNonExistent(t *testing.T) {
 	sessionDir := filepath.Join(tmpDir, "nonexistent")
 
 	opts := DefaultLoadOptions()
-	sess, err := LoadSessionLazy(sessionDir, opts)
+	sess, err := LoadSessionWithOpts(sessionDir, opts)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.NotEmpty(t, sess.header.ID)
@@ -55,7 +55,7 @@ func TestLoadSessionLazyEmptyFile(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := DefaultLoadOptions()
-	sess, err := LoadSessionLazy(sessionDir, opts)
+	sess, err := LoadSessionWithOpts(sessionDir, opts)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 }
@@ -94,7 +94,7 @@ func TestLoadSessionLazyWithMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lazy loading with default options (should load all messages)
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -158,7 +158,7 @@ func TestLoadSessionLazyWithCompaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lazy loading
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -208,7 +208,7 @@ func TestLoadSessionLazyFullLoad(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test full loading (non-lazy)
-	loaded, err := LoadSessionLazy(sessionDir, FullLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, FullLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -252,14 +252,14 @@ func TestLoadSessionLazyWithoutCompaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lazy loading - should work by scanning from end
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Equal(t, "legacy-session", loaded.header.ID)
 }
 
 // TestLoadSessionLazyMessageChain tests that message chain is properly linked
-// when lazy loading loads all messages (no compaction case)
+// when lazy loading loads all messages (no compaction case -> falls back to full load)
 func TestLoadSessionLazyMessageChain(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionDir := filepath.Join(tmpDir, "session")
@@ -293,9 +293,10 @@ func TestLoadSessionLazyMessageChain(t *testing.T) {
 	err = os.WriteFile(filePath, data, 0644)
 	require.NoError(t, err)
 
-	// Test lazy loading with maxMessages = 10
-	// Since there's no compaction, this should return the last 10 messages
-	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
+	// Test lazy loading with no compaction.
+	// Since there's no compaction, lazy loading should fall back to full load.
+	// MaxMessages only applies when there's a compaction entry.
+	loaded, err := LoadSessionWithOpts(sessionDir, LoadOptions{
 		MaxMessages:    10,
 		IncludeSummary: false,
 		Lazy:           true,
@@ -303,10 +304,10 @@ func TestLoadSessionLazyMessageChain(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
-	// GetMessages should return exactly 10 messages (not 0 or 1)
+	// GetMessages should return all messages (no compaction -> full load fallback)
 	// This tests that the message chain is properly linked
 	messages := loaded.GetMessages()
-	assert.Len(t, messages, 10, "Should return exactly 10 messages with proper chain linking")
+	assert.Len(t, messages, 100, "Should return all messages (no compaction -> full load)")
 }
 
 // TestLoadSessionLazyMessageChainWithCompaction tests message chain with compaction
@@ -364,7 +365,7 @@ func TestLoadSessionLazyMessageChainWithCompaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lazy loading with maxMessages = 10
-	loaded, err := LoadSessionLazy(sessionDir, LoadOptions{
+	loaded, err := LoadSessionWithOpts(sessionDir, LoadOptions{
 		MaxMessages:    10,
 		IncludeSummary: true,
 		Lazy:           true,
@@ -437,7 +438,7 @@ func TestRewindPreCompactionEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load lazily — pre-compaction entries should NOT be in byID
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -520,7 +521,7 @@ func TestRewindPostCompactionEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load lazily
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 
 	// EnsureFullyLoaded + Branch should work for post-compaction too
@@ -564,7 +565,7 @@ func TestRewindRoot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load lazily
-	loaded, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+	loaded, err := LoadSessionWithOpts(sessionDir, DefaultLoadOptions())
 	require.NoError(t, err)
 
 	// ResetLeaf should work (this is what "root" rewind does)
