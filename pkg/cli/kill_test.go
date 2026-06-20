@@ -109,7 +109,7 @@ func TestKillRunUpdatesMetaAndKillsProcess(t *testing.T) {
 	}()
 	select {
 	case <-waitDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("subprocess did not exit after killRun")
 	}
 
@@ -131,30 +131,30 @@ func TestWaitForExit(t *testing.T) {
 	}
 
 	// Test 1: Process exits within timeout
-	cmd := exec.Command("sh", "-c", "sleep 1")
+	cmd := exec.Command("sh", "-c", "sleep 0.1")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start subprocess: %v", err)
 	}
 	defer cmd.Wait()
 
-	waitForExit(cmd.Process.Pid, 3*time.Second)
+	waitForExit(cmd.Process.Pid, 500*time.Millisecond)
 	// Should return quickly, no assertion needed if it doesn't hang
 
 	// Test 2: Process doesn't exit within timeout
-	cmd2 := exec.Command("sh", "-c", "sleep 30")
+	cmd2 := exec.Command("sh", "-c", "sleep 10")
 	if err := cmd2.Start(); err != nil {
 		t.Fatalf("start subprocess: %v", err)
 	}
 	defer cmd2.Process.Kill()
 
 	start := time.Now()
-	waitForExit(cmd2.Process.Pid, 500*time.Millisecond)
+	waitForExit(cmd2.Process.Pid, 200*time.Millisecond)
 	elapsed := time.Since(start)
 
-	if elapsed < 450*time.Millisecond {
-		t.Errorf("expected waitForExit to wait ~500ms, got %v", elapsed)
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("expected waitForExit to wait ~200ms, got %v", elapsed)
 	}
-	if elapsed > 600*time.Millisecond {
-		t.Errorf("expected waitForExit to wait ~500ms, got %v", elapsed)
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("expected waitForExit to wait ~200ms, got %v", elapsed)
 	}
 }
