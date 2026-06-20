@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/tiancaiamao/ai/pkg/prompt"
+	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -76,7 +77,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 
 	// Resolve system prompt: --system-prompt overrides --role.
 	// Parse @file syntax before role fallback.
-	sysPrompt := ParseSystemPrompt(cfg.systemPrompt)
+	sysPrompt := helpers.ParseSystemPrompt(cfg.systemPrompt)
 	if sysPrompt == "" && cfg.role != "coder" {
 		tmpl, err := prompt.TemplateForRole(cfg.role)
 		if err != nil {

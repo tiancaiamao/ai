@@ -1,4 +1,4 @@
-package app
+package rpc
 
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"

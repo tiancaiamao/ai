@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/tiancaiamao/ai/pkg/rpc"
+	"github.com/tiancaiamao/ai/subcommand/helpers"
 )
 
 // RPCSubcommand implements the 'ai rpc' subcommand.
@@ -32,12 +33,12 @@ func RPCSubcommand() {
 	go func() {
 		sig := <-sigCh
 		fmt.Fprintf(os.Stderr, "[rpc] received signal: %v, aborting agent\n", sig)
-		app.AgentAbort() // Trigger agent abort in RunRPC
+		rpc.AgentAbort() // Trigger agent abort in RunRPC
 	}()
 
-	systemPrompt := ParseSystemPrompt(*systemPromptFlag)
+	systemPrompt := helpers.ParseSystemPrompt(*systemPromptFlag)
 
-	if err := app.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
+	if err := rpc.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
 		slog.Error("rpc error", "error", err)
 		os.Exit(1)
 	}
