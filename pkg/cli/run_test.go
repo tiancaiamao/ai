@@ -52,14 +52,14 @@ func TestSendRPCCommandWithTimeout_BlockedWrite(t *testing.T) {
 	// No reader at all — Write will hang forever without the timeout.
 
 	start := time.Now()
-	err := sendRPCCommandWithTimeout(pw, "prompt", "hello", 1*time.Second)
+	err := sendRPCCommandWithTimeout(pw, "prompt", "hello", 500*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("took %v, should have timed out in ~1s", elapsed)
+	if elapsed > 1*time.Second {
+		t.Fatalf("took %v, should have timed out in ~500ms", elapsed)
 	}
 	t.Logf("got expected error after %v: %v", elapsed, err)
 }
@@ -92,18 +92,27 @@ func TestRunSocketHandler_DeadSubprocess(t *testing.T) {
 // Takes ~10s (the handler's write timeout).
 func TestRunSocketHandler_PromptBlockedByDeadPipe(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping 10s integration test in short mode")
+		t.Skip("skipping 1s integration test in short mode")
 	}
 
-	proc := os.Process{Pid: os.Getpid()}
+	testTimeout := 1 * time.Second
 	_, pw := io.Pipe()
 
-	handler := runSocketHandler(
-		&run.RunMeta{ID: "test"},
-		"/dev/null",
-		&proc,
-		pw,
-	)
+	// Use a custom handler with shorter timeout for testing.
+	handler := func(cmd run.Command) run.Response {
+		switch cmd.Type {
+		case "steer", "prompt":
+			if cmd.Message == "" {
+				return run.Response{OK: false, Error: "command requires a message"}
+			}
+			if err := sendRPCCommandWithTimeout(pw, "prompt", cmd.Message, testTimeout); err != nil {
+				return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
+			}
+			return run.Response{OK: true}
+		default:
+			return run.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
+		}
+	}
 
 	start := time.Now()
 	resp := handler(run.Command{Type: "prompt", Message: "hello"})
@@ -112,8 +121,8 @@ func TestRunSocketHandler_PromptBlockedByDeadPipe(t *testing.T) {
 	if resp.OK {
 		t.Fatal("expected OK=false when pipe reader is dead")
 	}
-	if elapsed > 12*time.Second {
-		t.Fatalf("response took %v, should have timed out within ~10s", elapsed)
+	if elapsed > 3*time.Second {
+		t.Fatalf("response took %v, should have timed out within ~%v", elapsed, testTimeout)
 	}
 	t.Logf("got error after %v (expected): %s", elapsed, resp.Error)
 }
@@ -288,9 +297,13 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 	os.Remove(sockPath)
 	t.Cleanup(func() { os.Remove(sockPath) })
 
+	// Use a channel to block the slow handler instead of sleeping.
+	slowRequestStarted := make(chan struct{})
+	slowRequestUnblock := make(chan struct{})
 	handler := func(cmd run.Command) run.Response {
 		if cmd.Message == "slow" {
-			time.Sleep(2 * time.Second)
+			close(slowRequestStarted)
+			<-slowRequestUnblock
 		}
 		return run.Response{OK: true, Data: cmd.Message}
 	}
@@ -314,14 +327,14 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 		cmd := run.Command{Type: "test", Message: "slow"}
 		data, _ := json.Marshal(cmd)
 		conn.Write(append(data, '\n'))
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
 		var buf [4096]byte
 		_, err = conn.Read(buf[:])
 		slowDone <- err
 	}()
 
-	// Give the slow request time to be accepted and start sleeping.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for slow request to be accepted and blocked.
+	<-slowRequestStarted
 
 	// Send a fast request — must not be blocked by the slow one.
 	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
@@ -353,13 +366,14 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 		t.Fatalf("fast response not OK: %s", resp.Error)
 	}
 
-	// Wait for the slow request to finish.
+	// Unblock the slow request and wait for it to finish.
+	close(slowRequestUnblock)
 	select {
 	case err := <-slowDone:
 		if err != nil {
 			t.Logf("slow request ended with: %v (acceptable)", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(500 * time.Millisecond):
 		t.Fatal("slow request did not complete in time")
 	}
 

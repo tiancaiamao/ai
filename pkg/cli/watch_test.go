@@ -179,8 +179,8 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithTimeout(t *testing.T) {
 	select {
 	case <-done:
 		// Good — exited on agent_end.
-	case <-time.After(5 * time.Second):
-		t.Fatal("followWatchSummary did not exit on agent_end within 5s (would have waited full timeout)")
+	case <-time.After(2 * time.Second):
+		t.Fatal("followWatchSummary did not exit on agent_end within 2s (would have waited full timeout)")
 	}
 
 	// Close write ends and restore before reading.
@@ -235,7 +235,7 @@ func TestFollowWatchSummary_ExitsOnAgentEnd_WithoutTimeout(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("followWatchSummary did not exit on agent_end")
 	}
 
@@ -284,7 +284,7 @@ func TestFollowWatchSummary_StreamEndsWithoutAgentEnd(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("followWatchSummary did not exit when stream ended")
 	}
 

@@ -165,7 +165,7 @@ func TestBroadcaster_SlowConsumerDisconnected(t *testing.T) {
 	// Drain the consumer channel and check if it was closed.
 	drained := 0
 	closed := false
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(500 * time.Millisecond)
 	for {
 		select {
 		case _, ok := <-consumer.Events():
