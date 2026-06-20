@@ -124,3 +124,37 @@ func TestKillRunUpdatesMetaAndKillsProcess(t *testing.T) {
 		t.Fatal("expected FinishedAt to be set")
 	}
 }
+
+func TestWaitForExit(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("skipping on non-unix")
+	}
+
+	// Test 1: Process exits within timeout
+	cmd := exec.Command("sh", "-c", "sleep 1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start subprocess: %v", err)
+	}
+	defer cmd.Wait()
+
+	waitForExit(cmd.Process.Pid, 3*time.Second)
+	// Should return quickly, no assertion needed if it doesn't hang
+
+	// Test 2: Process doesn't exit within timeout
+	cmd2 := exec.Command("sh", "-c", "sleep 30")
+	if err := cmd2.Start(); err != nil {
+		t.Fatalf("start subprocess: %v", err)
+	}
+	defer cmd2.Process.Kill()
+
+	start := time.Now()
+	waitForExit(cmd2.Process.Pid, 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed < 450*time.Millisecond {
+		t.Errorf("expected waitForExit to wait ~500ms, got %v", elapsed)
+	}
+	if elapsed > 600*time.Millisecond {
+		t.Errorf("expected waitForExit to wait ~500ms, got %v", elapsed)
+	}
+}

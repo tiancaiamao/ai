@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/tiancaiamao/ai/pkg/run"
 )
 
 func TestFormatAge(t *testing.T) {
@@ -98,6 +103,117 @@ func TestColorizeStatus(t *testing.T) {
 	// "killed" should be yellow
 	if !contains(colorizeStatus("killed"), "\x1b[33m") {
 		t.Error("killed status should be yellow")
+	}
+}
+
+func TestEmitJSON(t *testing.T) {
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	now := time.Now().Unix()
+	runs := []run.RunMeta{
+		{
+			ID:        "test1",
+			CWD:       "/tmp/test",
+			Name:      "test run",
+			Status:    run.StatusRunning,
+			StartedAt: now,
+		},
+		{
+			ID:        "test2",
+			CWD:       "/tmp/test2",
+			Name:      "another test",
+			Status:    run.StatusDone,
+			StartedAt: now - 3600,
+		},
+	}
+
+	emitJSON(runs)
+
+	// Restore stdout and read captured output
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	output := buf.String()
+
+	// Verify output is valid JSON
+	var entries []lsRunEntry
+	if err := json.Unmarshal([]byte(output), &entries); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, output)
+	}
+
+	// Verify entries
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].ID != "test1" {
+		t.Errorf("expected ID test1, got %s", entries[0].ID)
+	}
+	if entries[1].ID != "test2" {
+		t.Errorf("expected ID test2, got %s", entries[1].ID)
+	}
+}
+
+func TestEmitTable(t *testing.T) {
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	now := time.Now().Unix()
+	runs := []run.RunMeta{
+		{
+			ID:        "test1",
+			CWD:       "/tmp/test",
+			Name:      "test run",
+			Status:    run.StatusRunning,
+			StartedAt: now,
+		},
+		{
+			ID:        "test2",
+			CWD:       "/tmp/test2",
+			Name:      "another test",
+			Status:    run.StatusDone,
+			StartedAt: now - 3600,
+		},
+	}
+
+	emitTable(runs)
+
+	// Restore stdout and read captured output
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	output := buf.String()
+
+	// Verify output contains header
+	if !contains(output, "ID") || !contains(output, "STATUS") || !contains(output, "NAME") {
+		t.Errorf("output should contain table header\nGot:\n%s", output)
+	}
+
+	// Verify output contains run IDs
+	if !contains(output, "test1") || !contains(output, "test2") {
+		t.Errorf("output should contain run IDs\nGot:\n%s", output)
+	}
+
+	// Empty list should produce no output
+	r2, w2, _ := os.Pipe()
+	os.Stdout = w2
+	emitTable([]run.RunMeta{})
+	w2.Close()
+	os.Stdout = oldStdout
+
+	var buf2 bytes.Buffer
+	buf2.ReadFrom(r2)
+	output2 := buf2.String()
+	if output2 != "" {
+		t.Errorf("empty list should produce no output, got: %q", output2)
 	}
 }
 

@@ -207,6 +207,145 @@ func TestRPCAppExportHTML(t *testing.T) {
 	}
 }
 
+func TestRPCAppShowSettings(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"show","message":"settings"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected settings response")
+	}
+	assertCmdSuccess(t, responses[0], "show settings")
+	// Verify settings structure
+	if data, ok := responses[0]["data"].(map[string]any); ok {
+		// The response contains a nested data field
+		if innerData, ok := data["data"].(map[string]any); ok {
+			// Verify data map contains expected fields
+			if _, ok := innerData["model"]; !ok {
+				t.Error("expected model field in settings response")
+			}
+		} else {
+			t.Error("expected nested data field in settings response")
+		}
+	}
+}
+
+func TestRPCAppSetFollowUpMode(t *testing.T) {
+	cmds := []string{
+		`{"type":"set","message":"follow-up-mode one-at-a-time"}`,
+		`{"type":"set","message":"follow-up-mode all"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "set follow-up-mode")
+		t.Logf("response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppSetSteeringMode(t *testing.T) {
+	cmds := []string{
+		`{"type":"set","message":"steering-mode all"}`,
+		`{"type":"set","message":"steering-mode one-at-a-time"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "set steering-mode")
+		t.Logf("response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppSetToolCallCutoff(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"tool-call-cutoff 10"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected tool-call-cutoff response")
+	}
+	assertCmdSuccess(t, responses[0], "set tool-call-cutoff")
+}
+
+func TestRPCAppSetToolSummaryAutomation(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"tool-summary-automation fallback"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected tool-summary-automation response")
+	}
+	assertCmdSuccess(t, responses[0], "set tool-summary-automation")
+}
+
+func TestRPCAppSetSessionName(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"set","message":"session-name Test Session"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected session-name response")
+	}
+	assertCmdSuccess(t, responses[0], "set session-name")
+}
+
+func TestRPCAppCompact(t *testing.T) {
+	cmds := []string{
+		`{"type":"compact","message":"now"}`,
+		`{"type":"compact","message":"off"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "compact")
+		t.Logf("compact response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppResume(t *testing.T) {
+	// First, try to resume with no sessions (should list available sessions)
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"resume","message":""}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected resume response")
+	}
+	// Resume may fail if no sessions exist, but should return a response
+	t.Logf("resume response: %+v", responses[0])
+}
+
+func TestRPCAppNewSession(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"new_session"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected new_session response")
+	}
+	t.Logf("new_session response: %+v", responses[0])
+}
+
+func TestRPCAppRetry(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"retry"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected retry response")
+	}
+	t.Logf("retry response: %+v", responses[0])
+}
+
+func TestRPCAppUndo(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"undo"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected undo response")
+	}
+	t.Logf("undo response: %+v", responses[0])
+}
+
+func TestRPCAppRedo(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"redo"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected redo response")
+	}
+	t.Logf("redo response: %+v", responses[0])
+}
+
+func TestRPCAppContinue(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"continue"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected continue response")
+	}
+	t.Logf("continue response: %+v", responses[0])
+}
+
 func TestRPCAppInvalidCommand(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"nonexistent_command_xyz"}`}, "")
 	if len(responses) == 0 {
