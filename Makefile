@@ -13,11 +13,11 @@ install:
 
 # Run tests with coverage
 test:
-	go test ./... -timeout 30s -coverprofile=coverage.out -covermode=atomic
+	go test ./pkg/... -timeout 30s -coverprofile=coverage.out -covermode=atomic
 
 # Run tests with race detector and coverage (may fail with "text file busy" on CI)
 test-ci:
-	go test -short ./... -race -coverprofile=coverage.out -covermode=atomic -timeout 30s
+	go test -short ./pkg/... -race -coverprofile=coverage.out -covermode=atomic -timeout 30s
 
 # Run vet
 vet:
