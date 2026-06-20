@@ -314,6 +314,38 @@ func TestRPCAppNewSession(t *testing.T) {
 	t.Logf("new_session response: %+v", responses[0])
 }
 
+func TestRPCAppRetry(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"retry"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected retry response")
+	}
+	t.Logf("retry response: %+v", responses[0])
+}
+
+func TestRPCAppUndo(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"undo"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected undo response")
+	}
+	t.Logf("undo response: %+v", responses[0])
+}
+
+func TestRPCAppRedo(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"redo"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected redo response")
+	}
+	t.Logf("redo response: %+v", responses[0])
+}
+
+func TestRPCAppContinue(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"continue"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected continue response")
+	}
+	t.Logf("continue response: %+v", responses[0])
+}
+
 func TestRPCAppInvalidCommand(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"nonexistent_command_xyz"}`}, "")
 	if len(responses) == 0 {
