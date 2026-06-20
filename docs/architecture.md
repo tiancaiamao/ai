@@ -30,7 +30,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │                                                                 │
 │  main.go          — Flag parsing, calls app.RunRPC()         │
 │                   Subcommand dispatch (run/serve/rpc/ls/...)    │
-│                   via pkg/cli                                   │
+│                   via subcommand/ packages                      │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼

@@ -1,4 +1,4 @@
-package cli
+package kill
 
 import (
 	"encoding/json"
