@@ -281,6 +281,39 @@ func TestRPCAppSetSessionName(t *testing.T) {
 	assertCmdSuccess(t, responses[0], "set session-name")
 }
 
+func TestRPCAppCompact(t *testing.T) {
+	cmds := []string{
+		`{"type":"compact","message":"now"}`,
+		`{"type":"compact","message":"off"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		assertCmdSuccess(t, resp, "compact")
+		t.Logf("compact response %d: %+v", i, resp)
+	}
+}
+
+func TestRPCAppResume(t *testing.T) {
+	// First, try to resume with no sessions (should list available sessions)
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"resume","message":""}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected resume response")
+	}
+	// Resume may fail if no sessions exist, but should return a response
+	t.Logf("resume response: %+v", responses[0])
+}
+
+func TestRPCAppNewSession(t *testing.T) {
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"new_session"}`}, "")
+	if len(responses) == 0 {
+		t.Fatal("expected new_session response")
+	}
+	t.Logf("new_session response: %+v", responses[0])
+}
+
 func TestRPCAppInvalidCommand(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"nonexistent_command_xyz"}`}, "")
 	if len(responses) == 0 {
