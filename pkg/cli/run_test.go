@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 // --- sendRPCCommandWithTimeout tests ---
@@ -74,13 +74,13 @@ func TestRunSocketHandler_DeadSubprocess(t *testing.T) {
 	cmd.Wait()
 
 	handler := runSocketHandler(
-		&run.RunMeta{ID: "test"},
+		&tui.RunMeta{ID: "test"},
 		"/dev/null",
 		cmd.Process,
 		nil,
 	)
 
-	resp := handler(run.Command{Type: "prompt", Message: "hello"})
+	resp := handler(tui.Command{Type: "prompt", Message: "hello"})
 	if resp.OK {
 		t.Fatal("expected OK=false for dead subprocess")
 	}
@@ -99,23 +99,23 @@ func TestRunSocketHandler_PromptBlockedByDeadPipe(t *testing.T) {
 	_, pw := io.Pipe()
 
 	// Use a custom handler with shorter timeout for testing.
-	handler := func(cmd run.Command) run.Response {
+	handler := func(cmd tui.Command) tui.Response {
 		switch cmd.Type {
 		case "steer", "prompt":
 			if cmd.Message == "" {
-				return run.Response{OK: false, Error: "command requires a message"}
+				return tui.Response{OK: false, Error: "command requires a message"}
 			}
 			if err := sendRPCCommandWithTimeout(pw, "prompt", cmd.Message, testTimeout); err != nil {
-				return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
+				return tui.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
 			}
-			return run.Response{OK: true}
+			return tui.Response{OK: true}
 		default:
-			return run.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
+			return tui.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
 		}
 	}
 
 	start := time.Now()
-	resp := handler(run.Command{Type: "prompt", Message: "hello"})
+	resp := handler(tui.Command{Type: "prompt", Message: "hello"})
 	elapsed := time.Since(start)
 
 	if resp.OK {
@@ -300,15 +300,15 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 	// Use a channel to block the slow handler instead of sleeping.
 	slowRequestStarted := make(chan struct{})
 	slowRequestUnblock := make(chan struct{})
-	handler := func(cmd run.Command) run.Response {
+	handler := func(cmd tui.Command) tui.Response {
 		if cmd.Message == "slow" {
 			close(slowRequestStarted)
 			<-slowRequestUnblock
 		}
-		return run.Response{OK: true, Data: cmd.Message}
+		return tui.Response{OK: true, Data: cmd.Message}
 	}
 
-	srv := run.NewSocketServer(sockPath, handler)
+	srv := tui.NewSocketServer(sockPath, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		cmd := run.Command{Type: "test", Message: "slow"}
+		cmd := tui.Command{Type: "test", Message: "slow"}
 		data, _ := json.Marshal(cmd)
 		conn.Write(append(data, '\n'))
 		conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -344,7 +344,7 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 	defer conn.Close()
 
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	cmd := run.Command{Type: "test", Message: "fast"}
+	cmd := tui.Command{Type: "test", Message: "fast"}
 	data, _ := json.Marshal(cmd)
 	conn.Write(append(data, '\n'))
 
@@ -354,7 +354,7 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 		t.Fatalf("fast read: %v", err)
 	}
 
-	var resp run.Response
+	var resp tui.Response
 	raw := buf[:n]
 	if raw[len(raw)-1] == '\n' {
 		raw = raw[:len(raw)-1]

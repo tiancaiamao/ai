@@ -1,4 +1,4 @@
-package run
+package tui
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/app"
+	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
@@ -604,39 +604,12 @@ func renderSessionStats(dataJSON []byte) *FormattedEvent {
 	if err := json.Unmarshal(dataJSON, &stats); err != nil {
 		return fallbackJSON(dataJSON)
 	}
-
-	rateLine := "  token-rate: unavailable"
-	recentLine := "  token-rate-recent: unavailable"
-	lastLine := "  token-rate-last: unavailable"
-	if stats.TokenRate != nil {
-		rateLine = fmt.Sprintf("  token-rate: active in %.1f/s, out %.1f/s, total %.1f/s | wall total %.1f/s",
-			stats.TokenRate.ActiveInputPerSec,
-			stats.TokenRate.ActiveOutputPerSec,
-			stats.TokenRate.ActiveTotalPerSec,
-			stats.TokenRate.WallTotalPerSec,
-		)
-		recentLine = fmt.Sprintf("  token-rate-recent(%ds): in %.1f/s, out %.1f/s, total %.1f/s",
-			stats.TokenRate.RecentWindowSeconds,
-			stats.TokenRate.RecentInputPerSec,
-			stats.TokenRate.RecentOutputPerSec,
-			stats.TokenRate.RecentTotalPerSec,
-		)
-		lastLine = fmt.Sprintf("  token-rate-last: in %.1f/s, out %.1f/s, total %.1f/s",
-			stats.TokenRate.LastInputPerSec,
-			stats.TokenRate.LastOutputPerSec,
-			stats.TokenRate.LastTotalPerSec,
-		)
-	}
-
 	text := fmt.Sprintf(`Usage:
   session: %s
   messages: %d (user %d, assistant %d)
   tools: %d calls, %d results
   compactions: %d
   tokens: in %d, out %d, cache read %d, cache write %d, total %d
-%s
-%s
-%s
   cost: %.4f`,
 		orUnknown(stats.SessionID),
 		stats.TotalMessages,
@@ -650,9 +623,6 @@ func renderSessionStats(dataJSON []byte) *FormattedEvent {
 		stats.Tokens.CacheRead,
 		stats.Tokens.CacheWrite,
 		stats.Tokens.Total,
-		rateLine,
-		recentLine,
-		lastLine,
 		stats.Cost,
 	)
 

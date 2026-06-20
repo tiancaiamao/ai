@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 // ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBroadcaster_SlowConsumerDisconnected(t *testing.T) {
-	b := run.NewEventBroadcaster()
+	b := tui.NewEventBroadcaster()
 	defer b.Close()
 
 	consumer := b.Subscribe(0)
@@ -157,7 +157,7 @@ func TestBroadcaster_SlowConsumerDisconnected(t *testing.T) {
 	// Push events without reading — simulate fast LLM streaming
 	// while TUI is blocked in syncContent.
 	pushed := 0
-	for i := 0; i < run.ConsumerChanSize+100; i++ {
+	for i := 0; i < tui.ConsumerChanSize+100; i++ {
 		b.Push([]byte(`{"type":"text_delta","delta":"word"}`))
 		pushed++
 	}
@@ -181,13 +181,13 @@ func TestBroadcaster_SlowConsumerDisconnected(t *testing.T) {
 done:
 	if closed {
 		t.Logf("PASS: consumer disconnected after %d pushes without draining (channel size=%d)",
-			pushed, run.ConsumerChanSize)
+			pushed, tui.ConsumerChanSize)
 	} else {
 		// With ConsumerChanSize=2048, 2148 pushes should overflow.
 		// If channel still not closed, something is wrong with the test setup.
 		t.Logf("Consumer not disconnected. Pushed=%d, drained=%d, channel_size=%d. "+
 			"Consumer may still be connected if channel was large enough.",
-			pushed, drained, run.ConsumerChanSize)
+			pushed, drained, tui.ConsumerChanSize)
 		// This is still informational — the key insight is that
 		// if channel CAN overflow, consumer WILL be disconnected.
 	}
@@ -227,8 +227,8 @@ func TestProcessEvent_Performance(t *testing.T) {
 	mNew := newModel()
 	start := time.Now()
 	for i := 0; i < eventCount; i++ {
-		mNew.processEvent(&run.FormattedEvent{
-			Kind: run.KindText,
+		mNew.processEvent(&tui.FormattedEvent{
+			Kind: tui.KindText,
 			Role: "assistant",
 			Text: "This is a test sentence. ",
 			Raw:  "This is a test sentence. ",
@@ -249,8 +249,8 @@ func TestProcessEvent_Performance(t *testing.T) {
 
 	start = time.Now()
 	for i := 0; i < eventCount; i++ {
-		mOld.processEvent(&run.FormattedEvent{
-			Kind: run.KindText,
+		mOld.processEvent(&tui.FormattedEvent{
+			Kind: tui.KindText,
 			Role: "assistant",
 			Text: "This is a test sentence. ",
 			Raw:  "This is a test sentence. ",

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func TestProcessAlive(t *testing.T) {
@@ -56,7 +56,7 @@ func TestTrySocketAbortReadsLineDelimitedResponse(t *testing.T) {
 		buf := make([]byte, 1024)
 		_, _ = conn.Read(buf)
 
-		resp := run.Response{OK: true}
+		resp := tui.Response{OK: true}
 		data, _ := json.Marshal(resp)
 		data = append(data, '\n')
 
@@ -89,15 +89,15 @@ func TestKillRunUpdatesMetaAndKillsProcess(t *testing.T) {
 	}()
 
 	baseDir := t.TempDir()
-	meta := &run.RunMeta{
+	meta := &tui.RunMeta{
 		ID:        "abc123",
 		PID:       cmd.Process.Pid,
 		CWD:       "/tmp",
-		Status:    run.StatusRunning,
+		Status:    tui.StatusRunning,
 		StartedAt: time.Now().Unix(),
 	}
-	metaPath := run.RunMetaPath(baseDir, meta.ID)
-	if err := run.SaveRunMeta(meta, metaPath); err != nil {
+	metaPath := tui.RunMetaPath(baseDir, meta.ID)
+	if err := tui.SaveRunMeta(meta, metaPath); err != nil {
 		t.Fatalf("save run meta: %v", err)
 	}
 
@@ -113,12 +113,12 @@ func TestKillRunUpdatesMetaAndKillsProcess(t *testing.T) {
 		t.Fatal("subprocess did not exit after killRun")
 	}
 
-	loaded, err := run.LoadRunMeta(metaPath)
+	loaded, err := tui.LoadRunMeta(metaPath)
 	if err != nil {
 		t.Fatalf("load run meta: %v", err)
 	}
-	if loaded.Status != run.StatusKilled {
-		t.Fatalf("expected status %q, got %q", run.StatusKilled, loaded.Status)
+	if loaded.Status != tui.StatusKilled {
+		t.Fatalf("expected status %q, got %q", tui.StatusKilled, loaded.Status)
 	}
 	if loaded.FinishedAt == 0 {
 		t.Fatal("expected FinishedAt to be set")

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func SendSubcommand() {
@@ -67,7 +67,7 @@ func SendSubcommand() {
 		os.Exit(1)
 	}
 
-	sockPath := run.SocketPath(baseDir, meta.ID)
+	sockPath := tui.SocketPath(baseDir, meta.ID)
 
 	if *waitFlag {
 		sendAndWait(sockPath, message, meta.ID, *summaryFlag, *timeoutFlag)
@@ -96,7 +96,7 @@ func sendAndWait(sockPath, message, runID string, summary bool, timeout time.Dur
 	// Use a fromSeq that exceeds any realistic sequence number to skip replay
 	// and only receive events produced after this point.
 	const noReplaySeq = uint64(1) << 60
-	client := run.NewSocketClient(sockPath)
+	client := tui.NewSocketClient(sockPath)
 	streamConn, _, err := client.Stream(noReplaySeq)
 	if err != nil {
 		// Stream unavailable (e.g. no broadcaster) — fall back to fire-and-forget.
@@ -144,37 +144,37 @@ func sendAndWait(sockPath, message, runID string, summary bool, timeout time.Dur
 // waitStreamPretty prints formatted agent events in real-time, exiting when
 // the agent finishes (agent_end event). Output mirrors watch --follow --pretty.
 func waitStreamPretty(scanner *bufio.Scanner) {
-	lastKind := run.EventKind("")
+	lastKind := tui.EventKind("")
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
 
-		evt := run.ParseEvent(line)
+		evt := tui.ParseEvent(line)
 		if evt == nil {
 			continue
 		}
 
 		// Add line break on kind transitions for readability.
-		if evt.Kind != lastKind && lastKind != "" && lastKind != run.KindTool {
+		if evt.Kind != lastKind && lastKind != "" && lastKind != tui.KindTool {
 			fmt.Println()
 		}
 
 		switch evt.Kind {
-		case run.KindText:
+		case tui.KindText:
 			fmt.Print(evt.Text)
-		case run.KindThinking:
+		case tui.KindThinking:
 			fmt.Print(evt.Text)
-		case run.KindTool:
+		case tui.KindTool:
 			fmt.Printf("  %s\n", evt.Text)
-		case run.KindMeta:
+		case tui.KindMeta:
 			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
-		case run.KindResponse:
+		case tui.KindResponse:
 			fmt.Print(evt.Text)
 		}
 
-		if evt.Kind != run.KindMeta {
+		if evt.Kind != tui.KindMeta {
 			lastKind = evt.Kind
 		}
 
@@ -206,8 +206,8 @@ func waitStreamSummary(scanner *bufio.Scanner) {
 			return
 		}
 
-		evt := run.ParseEvent(line)
-		if evt != nil && evt.Kind == run.KindText {
+		evt := tui.ParseEvent(line)
+		if evt != nil && evt.Kind == tui.KindText {
 			currentText.WriteString(evt.Text)
 		}
 	}
@@ -221,16 +221,16 @@ func waitStreamSummary(scanner *bufio.Scanner) {
 // resolveRunID resolves the target run given an optional ID flag.
 // If id is empty, it auto-selects by cwd. If id is a partial prefix,
 // it uses FindByPrefix.
-func resolveRunID(baseDir, id string) (*run.RunMeta, error) {
+func resolveRunID(baseDir, id string) (*tui.RunMeta, error) {
 	if id != "" {
 		// Try exact match first: look for run.json directly.
-		exactPath := run.RunMetaPath(baseDir, id)
-		if meta, err := run.LoadRunMeta(exactPath); err == nil && run.IsRunning(meta) {
+		exactPath := tui.RunMetaPath(baseDir, id)
+		if meta, err := tui.LoadRunMeta(exactPath); err == nil && tui.IsRunning(meta) {
 			return meta, nil
 		}
 
 		// Try prefix match.
-		matches, err := run.FindByPrefix(baseDir, id)
+		matches, err := tui.FindByPrefix(baseDir, id)
 		if err != nil {
 			return nil, fmt.Errorf("prefix match for %q: %w", id, err)
 		}
@@ -239,7 +239,7 @@ func resolveRunID(baseDir, id string) (*run.RunMeta, error) {
 		}
 		// FindByPrefix returns at most 1 match on success (errors on multiple).
 		m := matches[0]
-		if !run.IsRunning(&m) {
+		if !tui.IsRunning(&m) {
 			return nil, fmt.Errorf("run %s is not running (status: %s)", m.ID, m.Status)
 		}
 		return &m, nil
@@ -251,7 +251,7 @@ func resolveRunID(baseDir, id string) (*run.RunMeta, error) {
 		return nil, fmt.Errorf("get cwd: %w", err)
 	}
 
-	matches, err := run.FindRunningByCwd(baseDir, cwd)
+	matches, err := tui.FindRunningByCwd(baseDir, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("find running by cwd: %w", err)
 	}
@@ -272,7 +272,7 @@ func resolveRunID(baseDir, id string) (*run.RunMeta, error) {
 
 // sendMessage connects to the Unix domain socket at sockPath, sends a steer
 // command with the given message, and returns the response.
-func sendMessage(sockPath, message string) (*run.Response, error) {
+func sendMessage(sockPath, message string) (*tui.Response, error) {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("dial socket %s: %w", sockPath, err)
@@ -286,7 +286,7 @@ func sendMessage(sockPath, message string) (*run.Response, error) {
 	// Slash commands go through prompt handler for proper parsing.
 	// Regular messages use steer to work during streaming.
 	cmdType := "prompt"
-	cmd := run.Command{
+	cmd := tui.Command{
 		Type:    cmdType,
 		Message: message,
 	}
@@ -306,7 +306,7 @@ func sendMessage(sockPath, message string) (*run.Response, error) {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	var resp run.Response
+	var resp tui.Response
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}

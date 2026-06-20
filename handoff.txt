@@ -1,0 +1,193 @@
+# Handoff: Context Management Redesign Review
+
+This file hands off the context of an ongoing review/discussion session to a
+fresh agent. Read it fully before asking questions.
+
+## 1. What is this project
+
+- Repo: `ai` — a Go (go1.24) stdin/stdout JSON-RPC server. OpenAI-compatible
+  model API. See `AGENTS.md` / `CLAUDE.md`.
+- Working dir: `/Users/genius/project/ai`
+- Current branch: `feat/delta-compaction` (a feature branch off `main`).
+- This branch is a large PR: `git diff main --stat` shows ~2835 insertions /
+  ~4329 deletions across 64 files.
+
+## 2. What this PR does (two things bundled together)
+
+**A. New feature: delta compaction.**
+Incremental context compression. Instead of compressing the whole conversation
+at a high threshold, it summarizes only the "delta" — messages accumulated since
+the last compaction boundary — into a short summary.
+
+Key new files:
+- `pkg/agent/delta_compaction.go` — decision engine: token estimation, trigger
+  tiers, protected-boundary calc, LLM response parsing.
+- `pkg/agent/loop_state.go` (modified) — loop integration:
+  `checkDeltaCompactionTrigger`, `processDeltaCompactionResponse`,
+  `executeDeltaCompaction`.
+- `pkg/agent/loop.go` (modified) — injects prompt, handles response, resumes
+  task after a compaction turn.
+- `pkg/session/entries.go` (modified) — new `EntryTypeDeltaCompact` +
+  interval-based replay (`[FromID, ToEntryID]` range replacement).
+- `pkg/session/session.go` — `AppendDeltaCompact(...)`.
+- `pkg/prompt/delta_compaction_decision.md`, `delta_compaction_forced.md`.
+- `cmd/ai/rpc_handlers.go` wires `PersistDeltaCompact` callback.
+- `pkg/context/agent_state.go` — adds `TokensSinceLastDeltaCompaction`.
+
+**B. Cleanup: remove legacy context management.**
+- Deleted: `pkg/compact/context_management.go` (899 lines, the "ContextManager"),
+  `pkg/compact/context_management_test.go`, `pkg/tools/context_mgmt/*` (the
+  truncate_messages / update_llm_context / no_action / compact tools),
+  `pkg/compact/compact_tool.go`, `pkg/prompt/context_management.md`.
+- Modified: removed LLMContext active injection (`pkg/agent/runtime_meta.go`),
+  simplified `createCompactors` in `cmd/ai/rpc_setup.go` (no longer returns a
+  ContextManager), removed runtime tool-pressure telemetry.
+
+Design docs live in `docs/context-mgmt-redesign/` (draft-v1, v2, final-v3,
+cross-project-analysis, cleanup-todo).
+
+## 3. Background motivation (why redesign at all)
+
+GLM5.2 context window grew 200K -> 1M. Old design used percentage thresholds,
+but the *cost* of compaction (LLM call + cache invalidation + output tokens)
+scales in absolute terms, not percentages. Core contradiction:
+"thresholds are percentages, costs are absolute."
+
+Cache economics (relative, cache-hit input = 1x):
+- input cache hit = 1x
+- input cache miss = 50x
+- output = 100x
+
+So preserving cache prefix hits is critical, and output tokens dominate
+compaction cost.
+
+## 4. Design decisions (from final-v3.md)
+
+- D1: thresholds use absolute token values, not percentages.
+- D2: delta compaction is the main mechanism (no full compaction at high %).
+- D3: compaction reuses the main-conversation cache prefix (inline, not a
+  separate LLM call). 42x cheaper on input than the old independent call.
+- D4: inject as `<agent:context_compaction_decision>` user message.
+- D5: append multiple summaries, never merge/rewrite old ones (cache-friendly).
+- D6: session journal uses interval compression, not a global cut-point.
+- D7: reliability via prompt; no format-validation fallback (unparseable = "no").
+- D8: trigger via periodic asks + hard-threshold fallback (not telemetry signals).
+
+Tier constants (in delta_compaction.go): DeltaTierAsk=30K, 50K, 80K,
+HardLimit=120K. Tool-call intervals: 10/7/3 per tier. ProtectedTokenBudget=10K.
+
+## 5. Reviewer's (the previous agent's) findings — the problems spotted
+
+These are the open concerns raised during the review. They are NOT yet resolved.
+
+**(a) The "fallback" is not really a fallback (most important — blocker-level).**
+Design doc claims heavyweight Compactor @ ~90% window is a fallback. But the
+implementation only triggers the heavyweight path reactively when the API
+returns `IsContextLengthExceeded`, and retries only once
+(`maxCompactionRecoveries = 1`). There is no proactive 90% threshold.
+Worse: when forced delta compaction at 120K produces an *unparseable* summary,
+`ParseForcedCompactionResponse` returns ok=false -> code just resets the counter
+and compresses NOTHING. Delta keeps growing, next turn hits 120K again, may fail
+again... naked until the API errors out. Missing: an escalation path
+("forced compaction failed N times -> force heavyweight full compaction").
+
+**(b) Compaction response pollutes context.**
+The LLM's raw compaction reply (`<decision>yes</decision><summary>...</summary>`)
+stays in RecentMessages as a normal assistant message and survives inside the
+protected tail (~10K) for several turns. Subsequent turns see the markup as
+noise.
+
+**(c) Letting a "lost" LLM summarize itself.**
+D8 argues the LLM gets lost in big contexts and can't self-trigger. But the
+design still asks it to do the yes/no decision AND write the summary at 80K-120K
+delta. Internal contradiction: don't trust it to decide whether to compress, but
+trust it to write a good summary.
+
+**(d) Cache rebuild cost vs trigger frequency.**
+Each `executeDeltaCompaction` inserts a summary mid-stream, breaking the cache
+from the insert point onward -> one-time miss of the protected tail (~10K). The
+payback period is ~10-15 turns. But at the 80K tier the tool-call interval is
+only 3 calls — if tool calls are fast, a compaction could fire every 3-4 turns,
+approaching or below the payback line. Need to actually compute this.
+
+## 6. The user's two principles (stated explicitly)
+
+1. "快满了才压缩是不行的，按比例压缩也是不行的，行的唯一策略就只有增量。"
+   (Only incremental compaction is viable; compress-when-near-full and
+   percentage-based are both wrong.)
+2. "压缩一定是一个破坏缓存的事情，所以方向一定是性价比 + 上下文质量，综合来决策做压缩。"
+   (Compaction always breaks cache, so the decision must weigh cost-effectiveness
+   AND context quality together.)
+
+IMPORTANT: the reviewer pointed out that the current implementation does NOT
+actually implement principle 2. The trigger logic is purely mechanical token
+tiers + tool-call counts. The decision prompt offloads yes/no to the LLM but
+gives it no decision criteria (no cache cost info, no context-quality signal).
+This gap — "what signals should drive the trigger decision?" — is the core
+unresolved design question.
+
+## 7. The new idea being explored: handoff
+
+The user proposed an alternative/complementary mechanism:
+- When context is near full, the main agent persists key info to a `handoff.txt`
+  (this very file is the experiment for that).
+- A fresh subagent loads handoff.txt.
+- The subagent can ask the main agent questions until it "fully understands"
+  the context.
+- Then the subagent continues the task with a clean context.
+
+The reviewer's analysis of handoff:
+- Best feature: the Q&A loop is a *summary verification* mechanism that delta
+  compaction completely lacks (delta summaries are "blind-written").
+- Caveats:
+  - "Unknown unknowns": subagent can ask about what it knows it doesn't know,
+    but can't ask about what it doesn't know it's missing.
+  - Main agent must stay alive during Q&A; in RPC model this needs bounded rounds.
+  - Precision: coding tasks need exact file state / errors; handoff prose can't
+    carry that, subagent must re-read files. handoff is a *map*, not a *snapshot*.
+  - Cold-start cache: subagent context is cold (all miss) for several turns;
+    delta compaction keeps a stable prefix (cache hit). Repeated handoffs on very
+    long tasks could be more expensive.
+- Reviewer's framing: handoff and delta compaction are not either/or — they fix
+  different failure modes. Possible combo: delta compaction for smooth daily
+  compression, handoff as an escalation path once summaries have stacked up
+  5-10x and started drifting.
+
+## 8. Two open questions the reviewer asked the user (NOT yet answered)
+
+1. Is handoff meant to *replace* delta compaction as the single mechanism, or to
+   be an *escalation layer* on top of delta compaction? This determines the whole
+   architecture direction.
+2. For the trigger decision: lean toward trusting the LLM's yes/no (with better
+   criteria), or using mechanical signals (summary stack count + token count +
+   quality proxy metrics) without delegating to the LLM?
+
+The conversation stopped here. If you are the subagent, these two questions are
+the live decision points.
+
+## 9. How to verify the current state yourself
+
+```bash
+cd /Users/genius/project/ai
+git branch --show-current            # feat/delta-compaction
+git diff main --stat                 # see the 64-file diff
+ls docs/context-mgmt-redesign/       # design docs
+grep -n "executeDeltaCompaction\|checkDeltaCompactionTrigger\|processDeltaCompactionResponse" pkg/agent/loop_state.go pkg/agent/loop.go
+go test ./pkg/agent/ -run Delta -count=1   # delta tests pass
+go build ./cmd/ai                            # builds (one unrelated benchmark setup pkg has a pre-existing build issue, ignore)
+```
+
+Key files to read if you need detail:
+- `pkg/agent/delta_compaction.go` (decision engine, full)
+- `pkg/agent/loop_state.go:241` onwards (processDeltaCompactionResponse,
+  executeDeltaCompaction, checkDeltaCompactionTrigger)
+- `pkg/agent/loop.go:196-326` (loop integration points)
+- `pkg/session/entries.go` (interval replay logic)
+- `docs/context-mgmt-redesign/final-v3.md` (design)
+
+## 10. User's communication preference
+
+- Chat/explanations: Chinese (中文).
+- Code, comments, commit messages, docs: English.
+- The user is the author/maintainer of this repo; treat design discussion as
+  with a senior engineer — be direct, challenge assumptions, don't sycophant.

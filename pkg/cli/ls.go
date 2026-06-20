@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func LsSubcommand() {
@@ -38,28 +38,28 @@ func LsSubcommand() {
 		os.Exit(1)
 	}
 
-	var runs []run.RunMeta
+	var runs []tui.RunMeta
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		metaPath := filepath.Join(runsDir, e.Name(), "run.json")
-		meta, err := run.LoadRunMeta(metaPath)
+		meta, err := tui.LoadRunMeta(metaPath)
 		if err != nil {
 			continue
 		}
 
 		// Reconcile stale runs: if run.json says "running" but PID is
 		// dead or recycled, update to "failed" so callers see the real state.
-		if meta.Status == run.StatusRunning && !run.IsRunning(meta) {
-			meta.Status = run.StatusFailed
+		if meta.Status == tui.StatusRunning && !tui.IsRunning(meta) {
+			meta.Status = tui.StatusFailed
 			meta.FinishedAt = time.Now().Unix()
-			_ = run.SaveRunMeta(meta, metaPath)
+			_ = tui.SaveRunMeta(meta, metaPath)
 		}
 
 		// For non --all mode, check if the run is actually alive.
 		if !*allFlag {
-			if !run.IsRunning(meta) {
+			if !tui.IsRunning(meta) {
 				continue
 			}
 		}
@@ -81,13 +81,13 @@ func LsSubcommand() {
 
 // lsRunEntry is the JSON output structure with added fields.
 type lsRunEntry struct {
-	run.RunMeta
+	tui.RunMeta
 	Age    string            `json:"age"`
 	Status string            `json:"status"` // overridden: includes "idle" for completed-prompt agents
-	End    *run.AgentEndInfo `json:"end,omitempty"`
+	End    *tui.AgentEndInfo `json:"end,omitempty"`
 }
 
-func emitJSON(runs []run.RunMeta) {
+func emitJSON(runs []tui.RunMeta) {
 	entries := make([]lsRunEntry, len(runs))
 	for i, r := range runs {
 		entry := lsRunEntry{
@@ -97,9 +97,9 @@ func emitJSON(runs []run.RunMeta) {
 		}
 
 		// For running agents, check if they've completed at least one prompt.
-		if r.Status == run.StatusRunning && run.IsRunning(&r) {
-			eventsPath := run.EventsPath("", r.ID)
-			if endInfo := run.FindLastAgentEndFast(eventsPath); endInfo != nil {
+		if r.Status == tui.StatusRunning && tui.IsRunning(&r) {
+			eventsPath := tui.EventsPath("", r.ID)
+			if endInfo := tui.FindLastAgentEndFast(eventsPath); endInfo != nil {
 				entry.End = endInfo
 				if endInfo.Success {
 					entry.Status = "idle"
@@ -119,7 +119,7 @@ func emitJSON(runs []run.RunMeta) {
 	fmt.Println(string(data))
 }
 
-func emitTable(runs []run.RunMeta) {
+func emitTable(runs []tui.RunMeta) {
 	if len(runs) == 0 {
 		return
 	}
@@ -135,12 +135,12 @@ func emitTable(runs []run.RunMeta) {
 
 		displayStatus := r.Status
 		// Re-check actual liveness for display accuracy.
-		if r.Status == run.StatusRunning && !run.IsRunning(&r) {
+		if r.Status == tui.StatusRunning && !tui.IsRunning(&r) {
 			displayStatus = "dead"
-		} else if r.Status == run.StatusRunning {
+		} else if r.Status == tui.StatusRunning {
 			// Check if agent has completed a prompt (idle) vs still processing.
-			eventsPath := run.EventsPath("", r.ID)
-			if endInfo := run.FindLastAgentEndFast(eventsPath); endInfo != nil && endInfo.Success {
+			eventsPath := tui.EventsPath("", r.ID)
+			if endInfo := tui.FindLastAgentEndFast(eventsPath); endInfo != nil && endInfo.Success {
 				displayStatus = "idle"
 			}
 		}
@@ -160,15 +160,15 @@ func emitTable(runs []run.RunMeta) {
 // colorizeStatus wraps the status string with ANSI color codes.
 func colorizeStatus(status string) string {
 	switch status {
-	case run.StatusRunning:
+	case tui.StatusRunning:
 		return "\x1b[32m" + status + "\x1b[0m" // green
 	case "idle":
 		return "\x1b[36m" + status + "\x1b[0m" // cyan
-	case run.StatusDone:
+	case tui.StatusDone:
 		return "\x1b[90m" + status + "\x1b[0m" // gray
-	case run.StatusFailed:
+	case tui.StatusFailed:
 		return "\x1b[31m" + status + "\x1b[0m" // red
-	case run.StatusKilled:
+	case tui.StatusKilled:
 		return "\x1b[33m" + status + "\x1b[0m" // yellow
 	case "dead":
 		return "\x1b[31m" + status + "\x1b[0m" // red

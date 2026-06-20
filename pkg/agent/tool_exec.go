@@ -22,7 +22,6 @@ func executeToolCalls(
 	assistantMsg *agentctx.AgentMessage,
 	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 	executor ToolExecutor,
-	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
 ) []agentctx.AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()

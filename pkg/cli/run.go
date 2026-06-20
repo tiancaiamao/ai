@@ -19,7 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/tiancaiamao/ai/pkg/prompt"
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 // serveConfig holds the common configuration for launching an RPC subprocess.
@@ -39,12 +39,12 @@ type serveConfig struct {
 type serveProcess struct {
 	cmd          *exec.Cmd
 	stdinWriter  *os.File
-	broadcaster  *run.EventBroadcaster
-	meta         *run.RunMeta
+	broadcaster  *tui.EventBroadcaster
+	meta         *tui.RunMeta
 	metaPath     string
 	sockPath     string
 	baseDir      string
-	socketServer *run.SocketServer
+	socketServer *tui.SocketServer
 	bridgeDone   chan struct{}
 	logFile      *os.File
 }
@@ -61,14 +61,14 @@ func (sp *serveProcess) Close() {
 // run ID, log file, stdin/stdout pipes, event broadcaster, and socket server.
 func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	// Generate run ID and create directory.
-	id := run.GenerateID()
+	id := tui.GenerateID()
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("failed to get home directory", "error", err)
 		os.Exit(1)
 	}
 	baseDir := filepath.Join(homeDir, ".ai")
-	runDir := run.RunDir(baseDir, id)
+	runDir := tui.RunDir(baseDir, id)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		slog.Error("failed to create run directory", "path", runDir, "error", err)
 		os.Exit(1)
@@ -122,7 +122,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 
 	// Stdout goes to event broadcaster instead of events.jsonl.
 	// The broadcaster fans out to N watch clients via ring buffer + channels.
-	broadcaster := run.NewEventBroadcaster()
+	broadcaster := tui.NewEventBroadcaster()
 
 	pipeReader, pipeWriter, err := os.Pipe()
 	if err != nil {
@@ -162,30 +162,30 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	}()
 
 	// Write initial run.json.
-	meta := &run.RunMeta{
+	meta := &tui.RunMeta{
 		ID:           id,
 		PID:          cmd.Process.Pid,
 		CWD:          cwd,
-		Status:       run.StatusRunning,
+		Status:       tui.StatusRunning,
 		StartedAt:    time.Now().Unix(),
 		Name:         cfg.name,
-		PidStartTime: run.GetProcessStartTime(cmd.Process.Pid),
+		PidStartTime: tui.GetProcessStartTime(cmd.Process.Pid),
 	}
-	metaPath := run.RunMetaPath(baseDir, id)
-	if err := run.SaveRunMeta(meta, metaPath); err != nil {
+	metaPath := tui.RunMetaPath(baseDir, id)
+	if err := tui.SaveRunMeta(meta, metaPath); err != nil {
 		slog.Error("failed to save run meta", "error", err)
 	}
 
 	// Start socket server for external commands + event streaming.
-	sockPath := run.SocketPath(baseDir, id)
-	socketServer := run.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
+	sockPath := tui.SocketPath(baseDir, id)
+	socketServer := tui.NewSocketServer(sockPath, runSocketHandler(meta, metaPath, cmd.Process, stdinWriter))
 	socketServer.SetBroadcaster(broadcaster)
 	if err := socketServer.Start(); err != nil {
 		slog.Error("failed to start socket server", "error", err)
 		cmd.Process.Kill()
-		meta.Status = run.StatusFailed
+		meta.Status = tui.StatusFailed
 		meta.FinishedAt = time.Now().Unix()
-		run.SaveRunMeta(meta, metaPath)
+		tui.SaveRunMeta(meta, metaPath)
 		os.Exit(1)
 	}
 
@@ -264,9 +264,9 @@ func RunSubcommand(binPath string) {
 	}
 
 	// Update final status.
-	sp.meta.Status = run.StatusDone
+	sp.meta.Status = tui.StatusDone
 	sp.meta.FinishedAt = time.Now().Unix()
-	run.SaveRunMeta(sp.meta, sp.metaPath)
+	tui.SaveRunMeta(sp.meta, sp.metaPath)
 }
 
 // ServeSubcommand starts the agent as a daemon process.
@@ -347,22 +347,22 @@ func ServeSubcommand(binPath string) {
 	// Determine final status using the captured process state (not cmd.Wait()
 	// error, which is unreliable due to the double-wait).
 	processState := <-processStateCh
-	status := run.StatusFailed
+	status := tui.StatusFailed
 	if processState == nil {
-		status = run.StatusKilled
+		status = tui.StatusKilled
 	} else if processState.Success() {
-		status = run.StatusDone
+		status = tui.StatusDone
 	} else {
 		if ws, ok := processState.Sys().(syscall.WaitStatus); ok {
 			if ws.Signaled() {
-				status = run.StatusKilled
+				status = tui.StatusKilled
 			}
 		}
 	}
 
 	sp.meta.Status = status
 	sp.meta.FinishedAt = time.Now().Unix()
-	run.SaveRunMeta(sp.meta, sp.metaPath)
+	tui.SaveRunMeta(sp.meta, sp.metaPath)
 }
 
 // BuildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
@@ -447,7 +447,7 @@ func sendRPCCommandWithTimeout(w io.Writer, cmdType, message string, timeout tim
 
 // runSocketHandler creates a command handler for the socket server.
 // It wraps the RPC subprocess stdin/stdout with liveness checks and timeouts.
-func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdinWriter io.Writer) run.CommandHandler {
+func runSocketHandler(meta *tui.RunMeta, metaPath string, proc *os.Process, stdinWriter io.Writer) tui.CommandHandler {
 	var mu sync.Mutex
 
 	// isAlive checks whether the subprocess is still running.
@@ -459,41 +459,41 @@ func runSocketHandler(meta *run.RunMeta, metaPath string, proc *os.Process, stdi
 		return true
 	}
 
-	return func(cmd run.Command) run.Response {
+	return func(cmd tui.Command) tui.Response {
 		mu.Lock()
 		defer mu.Unlock()
 
 		switch cmd.Type {
 		case "steer", "prompt":
 			if cmd.Message == "" {
-				return run.Response{OK: false, Error: "command requires a message"}
+				return tui.Response{OK: false, Error: "command requires a message"}
 			}
 			if !isAlive() {
-				return run.Response{OK: false, Error: "subprocess is no longer alive"}
+				return tui.Response{OK: false, Error: "subprocess is no longer alive"}
 			}
 			// Forward as "prompt" so RPC handles slash commands correctly.
 			// Use a deadline so the write does not block forever when the
 			// subprocess dies between the liveness check and the write.
 			if err := sendRPCCommandWithTimeout(stdinWriter, "prompt", cmd.Message, 10*time.Second); err != nil {
-				return run.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
+				return tui.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
 			}
-			return run.Response{OK: true}
+			return tui.Response{OK: true}
 
 		case "abort":
 			if err := proc.Signal(syscall.SIGTERM); err != nil {
-				return run.Response{OK: false, Error: fmt.Sprintf("abort failed: %v", err)}
+				return tui.Response{OK: false, Error: fmt.Sprintf("abort failed: %v", err)}
 			}
-			return run.Response{OK: true}
+			return tui.Response{OK: true}
 
 		case "get_state":
-			loaded, err := run.LoadRunMeta(metaPath)
+			loaded, err := tui.LoadRunMeta(metaPath)
 			if err != nil {
-				return run.Response{OK: false, Error: fmt.Sprintf("load run meta: %v", err)}
+				return tui.Response{OK: false, Error: fmt.Sprintf("load run meta: %v", err)}
 			}
-			return run.Response{OK: true, Data: loaded}
+			return tui.Response{OK: true, Data: loaded}
 
 		default:
-			return run.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
+			return tui.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
 		}
 	}
 }
@@ -508,18 +508,18 @@ type runModel struct {
 	sockPath    string
 	proc        *os.Process
 	stdinPipe   io.Writer
-	meta        *run.RunMeta
+	meta        *tui.RunMeta
 	metaPath    string
 	inputMode   bool // true when user is typing a message
 	inputBuf    *strings.Builder
-	broadcaster *run.EventBroadcaster
+	broadcaster *tui.EventBroadcaster
 }
 
 func newRunModel(
-	broadcaster *run.EventBroadcaster, runID, sockPath string,
+	broadcaster *tui.EventBroadcaster, runID, sockPath string,
 	proc *os.Process,
 	stdinPipe io.Writer,
-	meta *run.RunMeta,
+	meta *tui.RunMeta,
 	metaPath string,
 ) runModel {
 	w := newWatchModelFromBroadcaster(broadcaster, runID)
@@ -631,7 +631,7 @@ func (m *runModel) sendMessage(text string) error {
 	}
 	defer conn.Close()
 
-	cmd := run.Command{Type: "prompt", Message: text}
+	cmd := tui.Command{Type: "prompt", Message: text}
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return fmt.Errorf("marshal command: %w", err)

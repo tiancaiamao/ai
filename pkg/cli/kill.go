@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func KillSubcommand() {
@@ -39,7 +39,7 @@ func KillSubcommand() {
 	}
 
 	// Try graceful shutdown via socket first.
-	sockPath := run.SocketPath(baseDir, meta.ID)
+	sockPath := tui.SocketPath(baseDir, meta.ID)
 	killed := trySocketAbort(sockPath)
 	if killed {
 		// Wait briefly for process to exit and update its own state.
@@ -70,7 +70,7 @@ func trySocketAbort(sockPath string) bool {
 		return false
 	}
 
-	cmd := run.Command{Type: "abort"}
+	cmd := tui.Command{Type: "abort"}
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return false
@@ -88,7 +88,7 @@ func trySocketAbort(sockPath string) bool {
 		return false
 	}
 
-	var resp run.Response
+	var resp tui.Response
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return false
 	}
@@ -97,7 +97,7 @@ func trySocketAbort(sockPath string) bool {
 }
 
 // killRun sends SIGKILL to the run's process and updates run.json.
-func killRun(meta *run.RunMeta, baseDir string) {
+func killRun(meta *tui.RunMeta, baseDir string) {
 	proc, err := os.FindProcess(meta.PID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot find process %d: %v\n", meta.PID, err)
@@ -111,10 +111,10 @@ func killRun(meta *run.RunMeta, baseDir string) {
 	}
 
 	// Update run.json.
-	meta.Status = run.StatusKilled
+	meta.Status = tui.StatusKilled
 	meta.FinishedAt = time.Now().Unix()
-	metaPath := run.RunMetaPath(baseDir, meta.ID)
-	if err := run.SaveRunMeta(meta, metaPath); err != nil {
+	metaPath := tui.RunMetaPath(baseDir, meta.ID)
+	if err := tui.SaveRunMeta(meta, metaPath); err != nil {
 		fmt.Fprintf(os.Stderr, "warn: failed to update run.json: %v\n", err)
 	}
 

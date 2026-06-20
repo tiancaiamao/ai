@@ -28,25 +28,6 @@ func (app *rpcApp) getSessionStats() (*SessionStats, error) {
 	activeWindowTokens := agent.EstimateConversationTokens(app.ag.GetMessages())
 	tokens.ActiveWindowTokens = activeWindowTokens + tokens.SystemPromptTokens + tokens.SystemToolsTokens
 
-	var tokenRate *TokenRateStats
-	if metrics := app.ag.GetMetrics(); metrics != nil {
-		llmMetrics := metrics.GetLLMMetrics()
-		tokenRate = &TokenRateStats{
-			ActiveInputPerSec:   llmMetrics.ActiveInputTokensPerSec,
-			ActiveOutputPerSec:  llmMetrics.ActiveOutputTokensPerSec,
-			ActiveTotalPerSec:   llmMetrics.ActiveTotalTokensPerSec,
-			WallInputPerSec:     llmMetrics.WallInputTokensPerSec,
-			WallOutputPerSec:    llmMetrics.WallOutputTokensPerSec,
-			WallTotalPerSec:     llmMetrics.WallTotalTokensPerSec,
-			LastInputPerSec:     llmMetrics.LastInputTokensPerSec,
-			LastOutputPerSec:    llmMetrics.LastOutputTokensPerSec,
-			LastTotalPerSec:     llmMetrics.LastTotalTokensPerSec,
-			RecentWindowSeconds: llmMetrics.RecentWindowSeconds,
-			RecentInputPerSec:   llmMetrics.RecentInputTokensPerSec,
-			RecentOutputPerSec:  llmMetrics.RecentOutputTokensPerSec,
-			RecentTotalPerSec:   llmMetrics.RecentTotalTokensPerSec,
-		}
-	}
 	return &SessionStats{
 		SessionFile:       app.sess.GetPath(),
 		SessionID:         app.sessionID,
@@ -57,7 +38,7 @@ func (app *rpcApp) getSessionStats() (*SessionStats, error) {
 		TotalMessages:     len(app.ag.GetMessages()),
 		CompactionCount:   app.sess.GetCompactionCount(),
 		Tokens:            tokens,
-		TokenRate:         tokenRate,
+
 		Cost:              cost,
 		Workspace:         app.ws.GetGitRoot(),
 		CurrentWorkdir:    app.ws.GetCWD(),

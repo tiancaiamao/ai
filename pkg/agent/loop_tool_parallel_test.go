@@ -83,7 +83,7 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 		&delayTool{name: "grep", delay: 160 * time.Millisecond},
 	}
 
-	start := time.Now()
+		start := time.Now()
 	results := executeToolCalls(
 		context.Background(),
 		&agentctx.AgentContext{},
@@ -91,7 +91,6 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 		nil, // allowedTools - nil means all tools allowed
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)
@@ -120,14 +119,13 @@ func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
 		&delayTool{name: "grep", delay: 20 * time.Millisecond},
 	}
 
-	results := executeToolCalls(
+		results := executeToolCalls(
 		context.Background(),
 		&agentctx.AgentContext{},
 		tools,
 		nil, // allowedTools - nil means all tools allowed
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)
@@ -162,14 +160,13 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 		&contextMutationTool{name: "mutate"},
 	}
 
-	results := executeToolCalls(
+		results := executeToolCalls(
 		context.Background(),
 		loopCtx,
 		tools,
 		nil,
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)
@@ -200,11 +197,10 @@ func TestExecuteToolCallsReportsMaxTokensTruncationClearly(t *testing.T) {
 	results := executeToolCalls(
 		context.Background(),
 		&agentctx.AgentContext{},
-		[]agentctx.Tool{&delayTool{name: "write", delay: 10 * time.Millisecond}},
+			[]agentctx.Tool{&delayTool{name: "write", delay: 10 * time.Millisecond}},
 		nil,
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)

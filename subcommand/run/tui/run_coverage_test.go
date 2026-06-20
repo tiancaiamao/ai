@@ -1,4 +1,4 @@
-package run
+package tui
 
 import (
 	"encoding/json"
@@ -512,17 +512,17 @@ func TestRenderSettings(t *testing.T) {
 }
 
 func TestRenderSessionStats(t *testing.T) {
-	data := `{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":1,"tokens":{"input":100,"output":50,"cacheRead":10,"cacheWrite":5,"total":165},"tokenRate":{"activeInputPerSec":10,"activeOutputPerSec":20,"activeTotalPerSec":30,"wallTotalPerSec":15,"recentWindowSeconds":5,"recentInputPerSec":8,"recentOutputPerSec":12,"recentTotalPerSec":20,"lastInputPerSec":5,"lastOutputPerSec":7,"lastTotalPerSec":12},"cost":0.002}`
+	data := `{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":1,"tokens":{"input":100,"output":50,"cacheRead":10,"cacheWrite":5,"total":165},"cost":0.002}`
 	r := renderSessionStats([]byte(data))
-	if r == nil || !strings.Contains(r.Text, "session: s1") || !strings.Contains(r.Text, "token-rate:") {
+	if r == nil || !strings.Contains(r.Text, "session: s1") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
-	// No token rate
+	// Test with minimal data
 	data2 := `{"sessionId":"s2","totalMessages":1,"userMessages":1,"assistantMessages":0,"toolCalls":0,"toolResults":0,"compactionCount":0,"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0},"cost":0}`
 	r = renderSessionStats([]byte(data2))
-	if r == nil || !strings.Contains(r.Text, "unavailable") {
-		t.Errorf("expected 'unavailable' for missing token rate, got %+v", r)
+	if r == nil || !strings.Contains(r.Text, "session: s2") {
+		t.Errorf("expected 'session: s2', got %+v", r)
 	}
 
 	// Bad JSON

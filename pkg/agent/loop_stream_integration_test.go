@@ -398,14 +398,13 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 		t.Fatalf("expected truncated args to preserve content field, got %+v", calls[0].Arguments)
 	}
 
-	results := executeToolCalls(
+		results := executeToolCalls(
 		context.Background(),
 		agentCtx,
 		[]agentctx.Tool{&delayTool{name: "write", delay: 10 * time.Millisecond}},
 		nil,
 		assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)

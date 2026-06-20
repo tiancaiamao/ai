@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 // --- Styles ---
@@ -125,8 +125,8 @@ type watchModel struct {
 	showTools    bool   // whether to show tool content
 
 	// In-memory event source (used by ai run embedded TUI).
-	broadcaster    *run.EventBroadcaster
-	broadcasterSub *run.Consumer
+	broadcaster    *tui.EventBroadcaster
+	broadcasterSub *tui.Consumer
 
 	// Socket stream event source (used by ai watch connecting to ai serve).
 	sockConn    net.Conn
@@ -155,7 +155,7 @@ func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool
 
 // newWatchModelFromBroadcaster creates a watchModel that reads events from
 // an in-memory EventBroadcaster (used by the `ai run` embedded TUI).
-func newWatchModelFromBroadcaster(b *run.EventBroadcaster, runID string) watchModel {
+func newWatchModelFromBroadcaster(b *tui.EventBroadcaster, runID string) watchModel {
 	m := watchModel{
 		runID:        runID,
 		mode:         "live",
@@ -367,7 +367,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case broadcasterEvent:
 		// Event from in-memory broadcaster (ai run).
-		formatted := run.ParseEvent(msg.line)
+		formatted := tui.ParseEvent(msg.line)
 		if formatted == nil {
 			return m, pollBroadcaster(m.broadcasterSub)
 		}
@@ -396,7 +396,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case socketEvent:
 		// Event from unix socket stream (ai watch → ai serve).
-		formatted := run.ParseEvent(msg.line)
+		formatted := tui.ParseEvent(msg.line)
 		if formatted == nil {
 			return m, readSocketEvent(m.sockScanner)
 		}
@@ -420,7 +420,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Batch of events from replay phase — render all at full speed.
 		m.offset = msg.offset
 		for _, line := range msg.lines {
-			m.processEvent(run.ParseEvent(line))
+			m.processEvent(tui.ParseEvent(line))
 		}
 		m.endInline()
 		m.syncIfDirty()
@@ -429,7 +429,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventLine:
 		m.offset = msg.offset
-		formatted := run.ParseEvent(msg.line)
+		formatted := tui.ParseEvent(msg.line)
 		if formatted == nil {
 			return m, m.nextCmd()
 		}
@@ -476,7 +476,7 @@ func (m watchModel) View() string {
 
 // pollBroadcaster reads one event from the broadcaster consumer channel
 // and returns it as a broadcasterEvent tea.Msg.
-func pollBroadcaster(c *run.Consumer) tea.Cmd {
+func pollBroadcaster(c *tui.Consumer) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-c.Events()
 		if !ok {
@@ -495,7 +495,7 @@ func connectSocketStream(sockPath string) tea.Cmd {
 		}
 
 		// Send stream command.
-		cmd := run.Command{Type: "stream", FromSeq: 0}
+		cmd := tui.Command{Type: "stream", FromSeq: 0}
 		cmdData, err := json.Marshal(cmd)
 		if err != nil {
 			conn.Close()
@@ -516,7 +516,7 @@ func connectSocketStream(sockPath string) tea.Cmd {
 			return socketConnectFailed{err: fmt.Errorf("read stream response: %w", err)}
 		}
 
-		var resp run.Response
+		var resp tui.Response
 		if err := json.Unmarshal([]byte(strings.TrimRight(line, "\n")), &resp); err != nil {
 			conn.Close()
 			return socketConnectFailed{err: fmt.Errorf("parse stream response: %w", err)}
@@ -659,7 +659,7 @@ func WatchSubcommand() {
 
 	// Machine-readable modes (--since, --follow) allow completed runs.
 	// TUI mode requires a running agent (for live socket stream).
-	var meta *run.RunMeta
+	var meta *tui.RunMeta
 	var err error
 	if machineMode {
 		meta, err = resolveRunForMachineWatch(*idFlag)
@@ -671,12 +671,12 @@ func WatchSubcommand() {
 		os.Exit(1)
 	}
 
-	eventsPath := run.EventsPath("", meta.ID)
+	eventsPath := tui.EventsPath("", meta.ID)
 
 	// Follow mode: continuously stream events until agent exits.
 	if *followFlag {
 		// --follow requires the agent to be running (uses socket stream).
-		if !run.IsRunning(meta) {
+		if !tui.IsRunning(meta) {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
@@ -692,7 +692,7 @@ func WatchSubcommand() {
 	}
 
 	// Connect via socket stream for live events.
-	sockPath := run.SocketPath("", meta.ID)
+	sockPath := tui.SocketPath("", meta.ID)
 
 	// Check that the socket exists.
 	if _, err := os.Stat(sockPath); err != nil {
@@ -745,10 +745,10 @@ func machineWatch(eventsPath string, offset int64) {
 // followWatch continuously streams events from the agent via socket.
 // It connects to the Unix domain socket and subscribes to the event stream,
 // printing each event line to stdout until the connection closes (agent exits).
-func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) {
-	sockPath := run.SocketPath("", meta.ID)
+func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) {
+	sockPath := tui.SocketPath("", meta.ID)
 
-	client := run.NewSocketClient(sockPath)
+	client := tui.NewSocketClient(sockPath)
 	conn, _, err := client.Stream(fromSeq)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: cannot connect to agent stream: %v\n", err)
@@ -790,7 +790,7 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	// Pretty mode: stream formatted output in real-time using ParseEvent.
 	// No ANSI colors — this output is consumed by agents, not humans.
 	seq := fromSeq
-	lastKind := run.EventKind("")
+	lastKind := tui.EventKind("")
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -798,31 +798,31 @@ func followWatch(meta *run.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		}
 		seq++
 
-		evt := run.ParseEvent(line)
+		evt := tui.ParseEvent(line)
 		if evt == nil {
 			continue
 		}
 
 		// On kind transition, add line break for readability.
-		if evt.Kind != lastKind && lastKind != "" && lastKind != run.KindTool {
+		if evt.Kind != lastKind && lastKind != "" && lastKind != tui.KindTool {
 			fmt.Println()
 		}
 
 		switch evt.Kind {
-		case run.KindText:
+		case tui.KindText:
 			fmt.Print(evt.Text)
-		case run.KindThinking:
+		case tui.KindThinking:
 			fmt.Print(evt.Text)
-		case run.KindTool:
+		case tui.KindTool:
 			fmt.Printf("  %s\n", evt.Text)
-		case run.KindMeta:
+		case tui.KindMeta:
 			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
-		case run.KindResponse:
+		case tui.KindResponse:
 			fmt.Print(evt.Text)
-		case run.KindSessionSwitch:
+		case tui.KindSessionSwitch:
 			fmt.Fprintf(os.Stderr, "%s\n", evt.Text)
 		}
-		if evt.Kind != run.KindMeta && evt.Kind != run.KindSessionSwitch {
+		if evt.Kind != tui.KindMeta && evt.Kind != tui.KindSessionSwitch {
 			lastKind = evt.Kind
 		}
 
@@ -873,11 +873,11 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 		}
 
 		// Parse and accumulate assistant text only.
-		evt := run.ParseEvent(line)
+		evt := tui.ParseEvent(line)
 		if evt == nil {
 			continue
 		}
-		if evt.Kind == run.KindText {
+		if evt.Kind == tui.KindText {
 			currentAssistantText.WriteString(evt.Text)
 		}
 	}
@@ -896,18 +896,18 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 }
 
 // resolveRunForWatch resolves a run by ID flag or auto-selection.
-func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
+func resolveRunForWatch(idFlag string) (*tui.RunMeta, error) {
 	if idFlag != "" {
 		// Try exact match first.
-		meta, err := run.LoadRunMeta(run.RunMetaPath("", idFlag))
+		meta, err := tui.LoadRunMeta(tui.RunMetaPath("", idFlag))
 		if err == nil {
-			if !run.IsRunning(meta) {
+			if !tui.IsRunning(meta) {
 				return nil, fmt.Errorf("run %s is not running (status: %s)", meta.ID, meta.Status)
 			}
 			return meta, nil
 		}
 		// Try prefix match.
-		results, err := run.FindByPrefix("", idFlag)
+		results, err := tui.FindByPrefix("", idFlag)
 		if err != nil {
 			return nil, fmt.Errorf("prefix lookup for %q: %w", idFlag, err)
 		}
@@ -916,7 +916,7 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 		}
 		if len(results) == 1 {
 			m := results[0]
-			if !run.IsRunning(&m) {
+			if !tui.IsRunning(&m) {
 				return nil, fmt.Errorf("run %s is not running (status: %s)", m.ID, m.Status)
 			}
 			return &m, nil
@@ -929,15 +929,15 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get cwd: %w", err)
 	}
-	running, err := run.FindRunningByCwd("", cwd)
+	running, err := tui.FindRunningByCwd("", cwd)
 	if err != nil {
 		return nil, fmt.Errorf("find running: %w", err)
 	}
 
 	// Filter to only actually-alive processes.
-	var alive []run.RunMeta
+	var alive []tui.RunMeta
 	for _, r := range running {
-		if run.IsRunning(&r) {
+		if tui.IsRunning(&r) {
 			alive = append(alive, r)
 		}
 	}
@@ -957,15 +957,15 @@ func resolveRunForWatch(idFlag string) (*run.RunMeta, error) {
 
 // resolveRunForMachineWatch resolves a run without requiring it to be running.
 // Used by --since and --follow modes for replaying completed runs.
-func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
+func resolveRunForMachineWatch(idFlag string) (*tui.RunMeta, error) {
 	if idFlag != "" {
 		// Try exact match first.
-		meta, err := run.LoadRunMeta(run.RunMetaPath("", idFlag))
+		meta, err := tui.LoadRunMeta(tui.RunMetaPath("", idFlag))
 		if err == nil {
 			return meta, nil
 		}
 		// Try prefix match.
-		results, err := run.FindByPrefix("", idFlag)
+		results, err := tui.FindByPrefix("", idFlag)
 		if err != nil {
 			return nil, fmt.Errorf("prefix lookup for %q: %w", idFlag, err)
 		}
@@ -983,13 +983,13 @@ func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get cwd: %w", err)
 	}
-	running, err := run.FindRunningByCwd("", cwd)
+	running, err := tui.FindRunningByCwd("", cwd)
 	if err != nil {
 		return nil, fmt.Errorf("find runs: %w", err)
 	}
-	var alive []run.RunMeta
+	var alive []tui.RunMeta
 	for _, r := range running {
-		if run.IsRunning(&r) {
+		if tui.IsRunning(&r) {
 			alive = append(alive, r)
 		}
 	}
@@ -1008,13 +1008,13 @@ func resolveRunForMachineWatch(idFlag string) (*run.RunMeta, error) {
 }
 
 // processEvent handles a single parsed event with role-aware streaming.
-func (m *watchModel) processEvent(f *run.FormattedEvent) {
+func (m *watchModel) processEvent(f *tui.FormattedEvent) {
 	if f == nil {
 		return
 	}
 
 	switch f.Kind {
-	case run.KindText:
+	case tui.KindText:
 		// Text content (assistant or user) — stream inline with role prefix
 		role := f.Role
 		if role == "" {
@@ -1025,19 +1025,19 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 			m.appendInline(text)
 		}
 
-	case run.KindThinking:
+	case tui.KindThinking:
 		// Thinking delta — stream inline with role prefix
 		if m.ensureRole("thinking") {
 			text := f.Text
 			m.appendInline(thinkingStyle.Render(text))
 		}
 
-	case run.KindTool:
+	case tui.KindTool:
 		// Tool events — one line per event, prefixed
 		m.endInline()
 		m.appendContent(toolStyle.Render(f.Text))
 
-	case run.KindResponse:
+	case tui.KindResponse:
 		// Slash command response — one line
 		m.endInline()
 		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
@@ -1046,7 +1046,7 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 			m.appendContent(metaStyle.Render(f.Text))
 		}
 
-	case run.KindMeta:
+	case tui.KindMeta:
 		// System messages (ai: agent started, compaction, etc.)
 		m.endInline()
 		if strings.Contains(f.Text, "failed") || strings.Contains(f.Text, "error") {
@@ -1055,7 +1055,7 @@ func (m *watchModel) processEvent(f *run.FormattedEvent) {
 			m.appendContent(aiStyle.Render(f.Text))
 		}
 
-	case run.KindSessionSwitch:
+	case tui.KindSessionSwitch:
 		m.endInline()
 		m.appendContent(sessStyle.Render(f.Text))
 

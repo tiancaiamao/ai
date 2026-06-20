@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func TestWrapContent_PlainTextShortLine(t *testing.T) {
@@ -116,8 +116,8 @@ func TestProcessEvent_LiveThinkingDelta_RendersImmediately(t *testing.T) {
 	m.mode = "live"
 
 	// A short delta without sentence boundary should still be visible immediately.
-	m.processEvent(&run.FormattedEvent{
-		Kind: run.KindThinking,
+	m.processEvent(&tui.FormattedEvent{
+		Kind: tui.KindThinking,
 		Role: "thinking",
 		Text: "abc",
 		Raw:  "abc",

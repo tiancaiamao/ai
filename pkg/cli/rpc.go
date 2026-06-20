@@ -9,7 +9,7 @@ import (
 
 	"log/slog"
 
-	"github.com/tiancaiamao/ai/pkg/app"
+	"github.com/tiancaiamao/ai/pkg/rpc"
 )
 
 // RPCSubcommand implements the 'ai rpc' subcommand.

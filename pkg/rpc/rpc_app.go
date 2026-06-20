@@ -260,22 +260,6 @@ func (app *rpcApp) startDebugServer() {
 		return
 	}
 	go func() {
-		// Register metrics endpoint on DefaultServeMux
-		http.HandleFunc("/debug/metrics", func(w http.ResponseWriter, r *http.Request) {
-			metrics := app.ag.GetMetrics()
-			if metrics == nil {
-				http.Error(w, "Metrics not available", http.StatusServiceUnavailable)
-				return
-			}
-
-			fullMetrics := metrics.GetFullMetrics()
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(fullMetrics); err != nil {
-				slog.Error("Failed to encode metrics:", "value", err)
-				http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
-			}
-		})
-
 		slog.Info("Debug server listening on", "value", app.debugAddr)
 		slog.Info("Debug endpoints available at:")
 		slog.Info("- http:///debug/pprof/          (profiling index)", "value", app.debugAddr)
@@ -283,7 +267,6 @@ func (app *rpcApp) startDebugServer() {
 		slog.Info("- http:///debug/pprof/heap       (memory profile)", "value", app.debugAddr)
 		slog.Info("- http:///debug/pprof/goroutine  (goroutine dump)", "value", app.debugAddr)
 		slog.Info("- http:///debug/pprof/trace      (execution trace)", "value", app.debugAddr)
-		slog.Info("- http:///debug/metrics         (agent metrics)", "value", app.debugAddr)
 
 		if err := http.ListenAndServe(app.debugAddr, nil); err != nil {
 			slog.Error("Debug server error:", "error", err)

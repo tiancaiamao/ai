@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/run"
+	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
 func TestFormatAge(t *testing.T) {
@@ -113,19 +113,19 @@ func TestEmitJSON(t *testing.T) {
 	os.Stdout = w
 
 	now := time.Now().Unix()
-	runs := []run.RunMeta{
+	runs := []tui.RunMeta{
 		{
 			ID:        "test1",
 			CWD:       "/tmp/test",
 			Name:      "test run",
-			Status:    run.StatusRunning,
+			Status:    tui.StatusRunning,
 			StartedAt: now,
 		},
 		{
 			ID:        "test2",
 			CWD:       "/tmp/test2",
 			Name:      "another test",
-			Status:    run.StatusDone,
+			Status:    tui.StatusDone,
 			StartedAt: now - 3600,
 		},
 	}
@@ -165,19 +165,19 @@ func TestEmitTable(t *testing.T) {
 	os.Stdout = w
 
 	now := time.Now().Unix()
-	runs := []run.RunMeta{
+	runs := []tui.RunMeta{
 		{
 			ID:        "test1",
 			CWD:       "/tmp/test",
 			Name:      "test run",
-			Status:    run.StatusRunning,
+			Status:    tui.StatusRunning,
 			StartedAt: now,
 		},
 		{
 			ID:        "test2",
 			CWD:       "/tmp/test2",
 			Name:      "another test",
-			Status:    run.StatusDone,
+			Status:    tui.StatusDone,
 			StartedAt: now - 3600,
 		},
 	}
@@ -205,7 +205,7 @@ func TestEmitTable(t *testing.T) {
 	// Empty list should produce no output
 	r2, w2, _ := os.Pipe()
 	os.Stdout = w2
-	emitTable([]run.RunMeta{})
+	emitTable([]tui.RunMeta{})
 	w2.Close()
 	os.Stdout = oldStdout
 

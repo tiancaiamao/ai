@@ -1,4 +1,4 @@
-package run
+package tui
 
 // EventKind classifies the type of formatted output.
 type EventKind string
