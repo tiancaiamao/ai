@@ -89,11 +89,6 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 
 	// Build RPC flags to forward.
 	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
-
-	if runtime.GOOS == "linux" {
-		binPath = "/proc/self/exe"
-	}
-
 	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
