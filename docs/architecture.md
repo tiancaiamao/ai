@@ -30,7 +30,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │                                                                 │
 │  main.go          — Flag parsing, calls app.RunRPC()         │
 │                   Subcommand dispatch (run/serve/rpc/ls/...)    │
-│                   via pkg/cli                                   │
+│                   via subcommand/ packages                      │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
@@ -260,33 +260,34 @@ See [test-strategy.md](test-strategy.md) for detailed testing approach.
 
 ```
 ai/
-├── cmd/ai/           # CLI entry point
-│   └── main.go       # Flag parsing → app.RunRPC()
-├── pkg/
-│   ├── agent/        # Core agent loop, execution, metrics
-│   ├── agentconfig/  # Agent configuration types
-│   ├── cli/          # CLI subcommands (run/serve/ls/send/kill/watch)
-│   ├── middlewares/  # RPC middleware
-│   ├── compact/      # LLM-driven compaction (LLMDecide mode)
-│   ├── command/      # Slash command registry
-│   ├── config/       # Configuration, auth, model specs
-│   ├── context/      # Agent context, messages, AgentState persistence
-│   ├── llm/          # LLM client (OpenAI-compatible)
-│   ├── logger/       # Structured logging
-│   ├── modelselect/  # Model selection logic
-│   ├── prompt/       # System prompt builder
-│   ├── rpc/          # RPC server, types
-│   ├── app/       # RPC application (handlers, setup, session writer)
-│   ├── run/          # Run metadata, socket server
-│   ├── session/      # Session persistence (JSONL)
-│   ├── skill/        # Skill loading and formatting
-│   ├── testutil/     # Test utilities
-│   ├── tools/        # Tool implementations (bash, read, write, edit, grep, etc.)
-│   ├── traceevent/   # Perfetto-compatible tracing
-│   ├── truncate/     # Output truncation
-│   └── version/      # Version info
-├── skills/           # Skill definitions (user-installed and project-level)
-├── docs/             # Documentation
-├── benchmark/        # E2E benchmark tasks
-└── tests/            # Integration test scripts
+├── cmd/ai/               # CLI entry point
+│   └── main.go           # Flag parsing → app.RunRPC()
+├── pkg/                  # RPC core logic only
+│   ├── agent/            # Core agent loop, execution
+│   ├── agentconfig/      # Agent configuration types
+│   ├── cli/              # CLI subcommand entry points (run/serve/ls/send/kill/watch)
+│   ├── middlewares/      # RPC middleware
+│   ├── compact/          # LLM-driven compaction (LLMDecide mode)
+│   ├── command/          # Slash command registry
+│   ├── config/           # Configuration, auth, model specs
+│   ├── context/          # Agent context, messages, AgentState persistence
+│   ├── llm/              # LLM client (OpenAI-compatible)
+│   ├── logger/           # Structured logging
+│   ├── modelselect/      # Model selection logic
+│   ├── prompt/           # System prompt builder
+│   ├── rpc/              # RPC server, types, handlers (from pkg/app)
+│   ├── session/          # Session persistence (JSONL)
+│   ├── skill/            # Skill loading and formatting
+│   ├── testutil/         # Test utilities
+│   ├── tools/            # Tool implementations (bash, read, write, edit, grep, etc.)
+│   ├── traceevent/       # Perfetto-compatible tracing
+│   ├── truncate/         # Output truncation
+│   └── version/          # Version info
+├── subcommand/           # Subcommand implementations
+│   ├── helpers/          # Shared CLI utilities
+│   └── run/tui/          # TUI shared code (event renderer, socket, metadata)
+├── skills/               # Skill definitions (user-installed and project-level)
+├── docs/                 # Documentation
+├── benchmark/            # E2E benchmark tasks
+└── tests/                # Integration test scripts
 ```

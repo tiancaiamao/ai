@@ -3,6 +3,59 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Architecture: Package Structure Reorganization (2026-06)
+
+**Problem**: Package structure didn't reflect the actual separation of concerns:
+- `pkg/app` contained RPC application logic but the name was ambiguous
+- `pkg/run` contained TUI-related code but was placed in `pkg/` (should be in `subcommand/`)
+- `pkg/agent` contained 368 lines of untested metrics code
+
+**Design principle**: `pkg/` should only contain RPC core logic; TUI and CLI implementations should be in `subcommand/`.
+
+**Changes**:
+
+1. **Deleted metrics (368 lines)**:
+   - Removed `pkg/agent/metrics.go` and related files (`metrics_aggregate.go`, `metrics_snapshot.go`, etc.)
+   - Removed metrics from `Agent`, `LoopConfig`, and `executeToolCalls`
+   - Removed `TokenRateStats` type and token rate handling from RPC types
+   - Metrics were untested and not integrated with core functionality
+
+2. **Moved `pkg/app/` → `pkg/rpc/`** (23 files):
+   - RPC application, handlers, types, session writer
+   - Changed package name from `app` to `rpc` for clarity
+   - Updated all import paths across codebase
+
+3. **Moved `pkg/run/` → `subcommand/run/tui/`** (17 files):
+   - TUI shared code (event renderer, socket server, metadata)
+   - Created `subcommand/helpers/` for shared CLI utilities
+   - Updated all import paths from `pkg/run` to `subcommand/run/tui`
+
+**New structure**:
+```
+pkg/                    - RPC core logic only
+  ├── rpc/             - RPC server, handlers, types (from pkg/app)
+  ├── agent/           - Agent core logic
+  ├── cli/             - CLI subcommand entry points (uses subcommand/run/tui)
+  └── ...
+
+subcommand/            - Subcommand implementations
+  ├── helpers/         - Shared CLI utilities
+  └── run/tui/         - TUI shared code (from pkg/run)
+```
+
+**Status**:
+- All tests passing
+- Binary compiles successfully
+- `pkg/cli/` still contains subcommand entry points (uses `subcommand/run/tui`)
+- Full `pkg/cli/` split to `subcommand/*` can be done as follow-up
+
+**Benefits**:
+- Clearer separation: `pkg/` is pure RPC core, `subcommand/` is CLI/TUI layer
+- Better testability: RPC core can be tested independently
+- Easier to understand: Package names match their responsibilities
+
+**See also**: [docs/architecture.md](docs/architecture.md)
+
 ## Architecture: Code Organization Refactor
 
 ### cmd/ai → pkg/app + pkg/cli (2026-05)

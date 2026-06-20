@@ -107,22 +107,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
 	traceBuf.SetFlushInterval(traceFlushWindow)
-
-	// Metrics should not depend on the primary trace buffer lifecycle because
-	// the primary buffer is flushed/rotated for trace exporting.
-	metricsBuf := traceevent.NewTraceBuf()
-	metricsBuf.SetMaxEvents(200_000)
-	metrics := NewMetrics(metricsBuf)
-	traceBuf.AddSink(func(event traceevent.TraceEvent) {
-		metricsBuf.Record(event)
-		metrics.InvalidateCache()
-	})
 	traceevent.SetActiveTraceBuf(traceBuf)
-
-	// Ensure Metrics is set in config
-	if cfg.Metrics == nil {
-		cfg.Metrics = metrics
-	}
 
 	// Ensure Executor is set in config
 	if cfg.Executor == nil {
@@ -648,9 +633,4 @@ func (a *Agent) clearFollowUps() {
 			return
 		}
 	}
-}
-
-// GetMetrics returns the agent's metrics collector.
-func (a *Agent) GetMetrics() *Metrics {
-	return a.LoopConfig.Metrics
 }

@@ -255,7 +255,7 @@ func (s *loopState) processToolCalls(
 	}
 
 	// Dispatch tool calls to the executor.
-	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.Metrics, s.config.ToolOutput)
+	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.ToolOutput)
 
 	// Run AfterTool hooks: chain-style, each hook's output feeds the next.
 	hookCtx := HookContext{

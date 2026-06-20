@@ -406,7 +406,6 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 		assistant,
 		newLoopTestEventStream(),
 		nil,
-		nil,
 		DefaultToolOutputLimits(),
 	)
 	if len(results) != 1 {

@@ -44,7 +44,6 @@ type LoopConfig struct {
 	// Empty when running standalone (ai --mode rpc without ai serve).
 	RunID      string
 	Executor   ToolExecutor // agentctx.Tool executor with concurrency control
-	Metrics    *Metrics     // Metrics collector
 	ToolOutput ToolOutputLimits
 	Compactors []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.

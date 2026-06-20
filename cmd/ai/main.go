@@ -3,12 +3,17 @@ package main
 import (
 	"os"
 
-	"github.com/tiancaiamao/ai/pkg/cli"
+	"github.com/tiancaiamao/ai/subcommand/kill"
+	"github.com/tiancaiamao/ai/subcommand/ls"
+	rpcsubcommand "github.com/tiancaiamao/ai/subcommand/rpc"
+	"github.com/tiancaiamao/ai/subcommand/run"
+	"github.com/tiancaiamao/ai/subcommand/send"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		cli.PrintUsage()
+		// TODO: Add usage print from individual packages
+		os.Exit(1)
 		return
 	}
 
@@ -18,19 +23,19 @@ func main() {
 
 	switch subcmd {
 	case "rpc":
-		cli.RPCSubcommand()
+		rpcsubcommand.RPCSubcommand()
 	case "run":
-		cli.RunSubcommand(binPath)
+		run.RunSubcommand(binPath)
 	case "serve":
-		cli.ServeSubcommand(binPath)
+		run.ServeSubcommand(binPath)
 	case "ls":
-		cli.LsSubcommand()
+		ls.LsSubcommand()
 	case "watch":
-		cli.WatchSubcommand()
+		run.WatchSubcommand()
 	case "send":
-		cli.SendSubcommand()
+		send.SendSubcommand()
 	case "kill":
-		cli.KillSubcommand()
+		kill.KillSubcommand()
 	default:
 		os.Exit(1)
 	}
