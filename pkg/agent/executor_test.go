@@ -38,7 +38,7 @@ func TestToolExecutorConcurrency(t *testing.T) {
 
 	// Create a slow tool that tracks concurrent executions
 	slowTool := &slowTool{
-		delay: 200 * time.Millisecond,
+		delay: 50 * time.Millisecond,
 		executeFunc: func() {
 			mu.Lock()
 			runningCount++
@@ -48,7 +48,7 @@ func TestToolExecutorConcurrency(t *testing.T) {
 			mu.Unlock()
 
 			// Hold the slot
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 
 			mu.Lock()
 			runningCount--
@@ -79,11 +79,11 @@ func TestToolExecutorConcurrency(t *testing.T) {
 
 // TestToolExecutorQueueTimeout tests queue timeout.
 func TestToolExecutorQueueTimeout(t *testing.T) {
-	executor := NewToolExecutor(1, 1) // Max 1 concurrent, 1s queue timeout
+	executor := NewToolExecutorWithDuration(1, 50*time.Millisecond) // Max 1 concurrent, 50ms queue timeout
 
 	// Start a slow tool that will occupy the slot
-	// Delay must exceed queue timeout (1s) so the second tool times out waiting
-	slowTool := &slowTool{delay: 1500 * time.Millisecond} // was 5s; reduced for CI timeout budget
+	// Delay must exceed queue timeout so the second tool times out waiting
+	slowTool := &slowTool{delay: 200 * time.Millisecond}
 
 	ctx := context.Background()
 	resultCh := make(chan error, 1)
@@ -93,7 +93,7 @@ func TestToolExecutorQueueTimeout(t *testing.T) {
 	}()
 
 	// Wait for the slow tool to acquire the semaphore
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
 	// Try to execute another tool - should timeout waiting for slot
 	fastTool := &mockTool{name: "fast"}
