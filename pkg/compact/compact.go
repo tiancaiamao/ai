@@ -488,11 +488,11 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 // archiveNoteTemplate is prepended to the compaction summary so the agent knows
 // where to find the full pre-compaction conversation. It uses directive language
 // to encourage proactive recovery of lost context.
-const archiveNoteTemplate = `<critical>
-The full conversation before this summary is archived at %s.
-This summary may omit important details — analysis results, intermediate findings, discussion context.
-If anything seems incomplete or you are unsure what was discussed earlier, read this file (use the read or grep tool) BEFORE asking the user.
-</critical>`
+const archiveNoteTemplate = "<critical>\n" +
+	"The full conversation before this summary is archived at `%s`.\n" +
+	"This summary may omit important details — analysis results, intermediate findings, discussion context.\n" +
+	"If anything seems incomplete or you are unsure what was discussed earlier, read this file (use the read or grep tool) BEFORE asking the user.\n" +
+	"</critical>"
 
 // saveArchivedMessages writes old messages removed during compaction to a
 // sequential JSONL file under <sessionDir>/compactions/archived_NNNNN.jsonl.
