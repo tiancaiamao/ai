@@ -164,7 +164,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 
 // loadConfigWithLogger loads the config file and initializes the slog logger.
 func loadConfigWithLogger() (*config.Config, string, error) {
-	configPath, err := config.GetDefaultConfigPath()
+	configPath, err := config.ResolveConfigPath()
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get config path: %w", err)
 	}

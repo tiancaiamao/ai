@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -47,6 +48,10 @@ func runRPCSmoke(t *testing.T, tmpDir string, cmds []string, modelOverride strin
 
 	// Ensure API key is set so resolveModelAndKey doesn't fail in CI.
 	t.Setenv("ZAI_API_KEY", "test-key")
+
+	// Isolate config to avoid polluting ~/.ai/config.json.
+	configPath := filepath.Join(tmpDir, "config.json")
+	t.Setenv("AI_CONFIG_PATH", configPath)
 
 	reader, writer := io.Pipe()
 	outReader, outWriter := io.Pipe()
