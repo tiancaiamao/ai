@@ -10,37 +10,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
 
-func TestShouldCompact_TokenThreshold(t *testing.T) {
-	config := &Config{
-		MaxTokens:   50,
-		KeepRecent:  2,
-		AutoCompact: true,
-	}
-
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 0, "")
-
-	// Few tokens — should not compact
-	agentCtx := &agentctx.AgentContext{
-		RecentMessages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("hi"),
-			agentctx.NewAssistantMessage(),
-		},
-	}
-	if compactor.ShouldCompact(context.Background(), agentCtx) {
-		t.Error("Should not compact when token threshold is not reached")
-	}
-
-	// High token content — should compact
-	longText := strings.Repeat("a", 400) // ~100 tokens
-	agentCtx.RecentMessages = []agentctx.AgentMessage{
-		agentctx.NewUserMessage(longText),
-		agentctx.NewAssistantMessage(),
-	}
-	if !compactor.ShouldCompact(context.Background(), agentCtx) {
-		t.Error("Should compact when token threshold is exceeded")
-	}
-}
-
 func TestShouldCompact_Disabled(t *testing.T) {
 	config := &Config{
 		AutoCompact: false,
@@ -57,27 +26,6 @@ func TestShouldCompact_Disabled(t *testing.T) {
 
 	if compactor.ShouldCompact(context.Background(), agentCtx) {
 		t.Error("Should not compact when AutoCompact is disabled")
-	}
-}
-
-func TestShouldCompact_MessageCountDoesNotTriggerWithContextWindow(t *testing.T) {
-	config := &Config{
-		MaxMessages: 3,
-		MaxTokens:   8000,
-		AutoCompact: true,
-	}
-
-	compactor := NewCompactor(config, llm.Model{}, "test-key", "test", 200000, "")
-	agentCtx := &agentctx.AgentContext{
-		RecentMessages: []agentctx.AgentMessage{
-			agentctx.NewUserMessage("a"),
-			agentctx.NewAssistantMessage(),
-			agentctx.NewUserMessage("b"),
-		},
-	}
-
-	if compactor.ShouldCompact(context.Background(), agentCtx) {
-		t.Fatal("expected message-count alone not to trigger compaction with large context window")
 	}
 }
 

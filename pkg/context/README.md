@@ -17,8 +17,7 @@ type AgentContext struct {
     Tools                 []Tool            // Available tools
     Skills                []skill.Skill     // Loaded skills
     RecentMessages        []AgentMessage    // Current conversation (not full history)
-    AgentState            *AgentState       // System-maintained metadata
-    LastCompactionSummary string            // For incremental summary updates
+            AgentState            *AgentState       // System-maintained metadata
     OnMessagesChanged     func() error      // Callback when messages are modified
     // allowedTools — nil means all allowed, non-nil is a whitelist
 }

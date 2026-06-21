@@ -89,10 +89,11 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 	}
 
 	// Verify tool_call messages are filtered for archived tool_results
-	// so assistant/tool protocol stays valid.
+	// so assistant/tool protocol stays valid. Only count visible messages —
+	// empty assistant shells (toolCall removed) are hidden.
 	toolCallCount := 0
 	for _, msg := range compacted {
-		if msg.Role == "assistant" {
+		if msg.Role == "assistant" && msg.IsAgentVisible() {
 			for _, block := range msg.Content {
 				if _, ok := block.(agentctx.ToolCallContent); ok {
 					toolCallCount++

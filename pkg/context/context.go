@@ -18,9 +18,6 @@ type AgentContext struct {
 	RecentMessages []AgentMessage `json:"recentMessages"` // Recent messages (not full history)
 	AgentState     *AgentState    `json:"agentState"`     // System-maintained metadata
 
-	// Compaction state
-	LastCompactionSummary string `json:"lastCompactionSummary,omitempty"` // Last compaction summary (for session resume)
-
 	// OnMessagesChanged is called when messages are modified (e.g., after compact).
 	// This allows persistence to session storage.
 	OnMessagesChanged func() error `json:"-"`

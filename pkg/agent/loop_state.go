@@ -166,7 +166,6 @@ func (s *loopState) performCompaction(
 		return nil, nil
 	}
 
-	s.agentCtx.LastCompactionSummary = compacted.Summary
 	after := len(s.agentCtx.RecentMessages)
 
 	compactionSpan.AddField("after_messages", after)

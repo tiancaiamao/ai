@@ -390,8 +390,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		"count", len(ctx.RecentMessages),
 		"keepTokens", keepRecentTokens,
 		"threshold", c.CalculateDynamicThreshold(),
-		"contextWindow", c.contextWindow,
-		"hasPreviousSummary", ctx.LastCompactionSummary != "")
+		"contextWindow", c.contextWindow)
 
 	// Generate summary of old messages (with previous summary for incremental update)
 	summary, err := c.GenerateSummary(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools)
@@ -399,7 +398,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", ctx.LastCompactionSummary != "")
+	slog.Info("[Compact] Generated summary", "chars", len(summary))
 
 	// Ensure tool_call and tool_result pairing is preserved
 	if c.config.GracePeriod > 0 {
@@ -427,7 +426,6 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
-	ctx.LastCompactionSummary = summary
 
 	tokensAfter := ctx.EstimateTokens()
 	messagesAfter := len(newRecentMessages)
@@ -533,16 +531,8 @@ func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentC
 		return false
 	}
 
-	if c.config.LLMDecide != nil {
-		return c.shouldCompactLLMDecide(ctx, agentCtx)
-	}
-
-	threshold := c.CalculateDynamicThreshold()
-	if threshold > 0 {
-		tokens := agentCtx.EstimateTokens()
-		return tokens >= threshold
-	}
-	return false
+	// LLMDecide is always enabled (set unconditionally in rpc_setup.go).
+	return c.shouldCompactLLMDecide(ctx, agentCtx)
 }
 
 // shouldCompactLLMDecide implements the LLM-decides threshold check.
