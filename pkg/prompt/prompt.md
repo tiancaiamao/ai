@@ -24,6 +24,8 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 
 **Minimum code that solves the problem. Nothing speculative.**
 
+- Before writing new code, grep the codebase or check if a library already does this — reuse over reinvent.
+- Prefer deleting code over adding it. Good software shrinks over time.
 - No features, abstractions, flexibility, or configurability beyond what was asked.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
@@ -38,21 +40,15 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - When your changes create orphans, remove the imports/vars/funcs your changes made unused (not pre-existing dead code).
 - Every changed line should trace directly to the user's request.
 
-### 4. Goal-Driven Execution
+## Planning
 
-**Define success criteria. Loop until verified.**
+For tasks with 5+ steps, plan the steps before executing. Track progress with checkboxes and **update them as you go** — marking each step `- [x]` immediately after completing it is how you recall what's done when the context grows long.
 
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+- [ ] Add retry logic in `callLLM()`
+- [ ] Write retry test
+- [ ] Update docs
 
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
+Skip this for single-step tasks or quick answers.
 
 ## Long-Running Reasoning
 
