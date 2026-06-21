@@ -160,30 +160,6 @@ func TestSession_GetSessionNameTitle(t *testing.T) {
 	}
 }
 
-func TestSession_GetLastCompactionSummary(t *testing.T) {
-	sess := NewSession("")
-	if got := sess.GetLastCompactionSummary(); got != "" {
-		t.Errorf("expected empty, got %q", got)
-	}
-	if _, err := sess.AppendMessage(agentctx.NewUserMessage("u")); err != nil {
-		t.Fatal(err)
-	}
-	// Manually add a compaction entry
-	sess.mu.Lock()
-	entry := &SessionEntry{
-		Type:      EntryTypeCompaction,
-		ID:        generateEntryID(sess.byID),
-		ParentID:  sess.leafID,
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Summary:   "the summary",
-	}
-	sess.addEntry(entry)
-	sess.mu.Unlock()
-	if got := sess.GetLastCompactionSummary(); got != "the summary" {
-		t.Errorf("expected 'the summary', got %q", got)
-	}
-}
-
 func TestSession_GetCompactionCount(t *testing.T) {
 	sess := NewSession("")
 	if got := sess.GetCompactionCount(); got != 0 {

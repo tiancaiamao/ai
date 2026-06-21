@@ -9,6 +9,20 @@ import (
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+// hasAgentContent returns true if the content blocks contain any text or tool
+// call — the two content types that carry meaningful information for the LLM.
+// Thinking-only messages are excluded: after compaction removes tool calls,
+// a thinking-only assistant message becomes an empty shell that some APIs reject.
+func hasAgentContent(blocks []agentctx.ContentBlock) bool {
+	for _, block := range blocks {
+		switch block.(type) {
+		case agentctx.TextContent, agentctx.ToolCallContent:
+			return true
+		}
+	}
+	return false
+}
+
 func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []agentctx.AgentMessage {
 	if cutoff <= 0 || len(messages) == 0 {
 		return messages
@@ -67,7 +81,13 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 			filtered = append(filtered, block)
 		}
 		if removed {
-			compacted[i].Content = filtered
+			// Check if the message still has meaningful content (text or tool calls).
+			// If only thinking blocks remain, hide it to avoid empty assistant shells.
+			if !hasAgentContent(filtered) {
+				compacted[i] = compacted[i].WithVisibility(false, compacted[i].IsUserVisible())
+			} else {
+				compacted[i].Content = filtered
+			}
 		}
 	}
 
@@ -144,7 +164,7 @@ func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) 
 			}
 
 			if hasOldToolCalls {
-				if len(filteredContent) == 0 {
+				if !hasAgentContent(filteredContent) {
 					// Empty shell! Hide the entire assistant message
 					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
 					continue
@@ -257,7 +277,7 @@ func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages [
 			}
 
 			if hasOldToolCalls {
-				if len(filteredContent) == 0 {
+				if !hasAgentContent(filteredContent) {
 					// Empty shell! Hide the entire assistant message
 					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
 					continue
