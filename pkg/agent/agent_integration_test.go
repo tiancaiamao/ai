@@ -21,7 +21,7 @@ func TestExecutorPoolConcurrency(t *testing.T) {
 				name:        "slow-tool-" + string(rune('A'+i)),
 				maxFailures: 0,
 				failMessage: "success",
-				execDelayMs: 200, // 200ms each
+				execDelayMs: 50, // 50ms each
 			})
 		}
 
@@ -44,28 +44,28 @@ func TestExecutorPoolConcurrency(t *testing.T) {
 
 		elapsed := time.Since(start)
 
-		// With 3 concurrent tools and 200ms each:
-		// First 3 tools: 0-200ms
-		// Second 2 tools: 200-400ms
-		// Total: ~400ms
-		assert.True(t, elapsed >= 300*time.Millisecond)
-		assert.True(t, elapsed < 600*time.Millisecond)
+		// With 3 concurrent tools and 50ms each:
+		// First 3 tools: 0-50ms
+		// Second 2 tools: 50-100ms
+		// Total: ~100ms
+		assert.True(t, elapsed >= 80*time.Millisecond)
+		assert.True(t, elapsed < 250*time.Millisecond)
 	})
 
 	t.Run("queue_timeout", func(t *testing.T) {
-		pool := NewToolExecutor(1, 1)
+		pool := NewToolExecutorWithDuration(1, 50*time.Millisecond)
 
-		// Create a slow tool (delay must exceed queue timeout of 1s)
+		// Create a slow tool (delay must exceed queue timeout of 50ms)
 		tool := &MockTool{
 			name:        "very-slow-tool",
 			maxFailures: 0,
 			failMessage: "success",
-			execDelayMs: 1500, // was 5000ms; reduced for CI 30s timeout budget (must > 1s queue timeout)
+			execDelayMs: 200, // 200ms (must > 50ms queue timeout)
 		}
 
 		ctx := context.Background()
 
-		// Start first tool (should take 5s)
+		// Start first tool (should take 200ms)
 		resultCh1 := make(chan error, 1)
 		go func() {
 			_, err := pool.Execute(ctx, tool, map[string]any{"input": "test"})
@@ -73,7 +73,7 @@ func TestExecutorPoolConcurrency(t *testing.T) {
 		}()
 
 		// Wait for first tool to start
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 
 		// Try to execute second tool (should timeout in queue)
 		resultCh2 := make(chan error, 1)

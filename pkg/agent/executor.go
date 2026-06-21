@@ -33,6 +33,15 @@ func NewToolExecutor(maxConcurrent int, queueTimeoutSec int) ToolExecutor {
 	}
 }
 
+// NewToolExecutorWithDuration is like NewToolExecutor but accepts a time.Duration,
+// allowing tests to use sub-second timeouts.
+func NewToolExecutorWithDuration(maxConcurrent int, queueTimeout time.Duration) ToolExecutor {
+	return &concurrentToolExecutor{
+		semaphore:    make(chan struct{}, maxConcurrent),
+		queueTimeout: queueTimeout,
+	}
+}
+
 // Execute runs a tool with concurrency control.
 // The tool is responsible for its own timeout handling.
 func (e *concurrentToolExecutor) Execute(ctx context.Context, tool agentctx.Tool, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
