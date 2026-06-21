@@ -195,7 +195,7 @@ For each task in the decomposition:
 3. **Watch Generator** — 等待 DONE/BLOCKED
 4. **Generator 完成后** — **不要 kill Generator**，保持它活着（后续可能需要它修复问题）
 5. **Spawn Evaluator** — 独立 agent，对照 spec 逐条验证。**Evaluator 必须写结果到 `.pge/eval-{task}.md`**（见下方 Eval Report 格式）
-6. **读 eval report** — Orchestrator 读 `.pge/eval-{task}.md`（Evaluator 超时 300s，超时则 kill Evaluator，spawn 新的）：
+6. **读 eval report** — Orchestrator 读 `.pge/eval-{task}.md`（Evaluator 等待遵循 `subagent` 技能的 watch loop）：
 
    - **PASS**: `ai kill` Generator + Evaluator，进入下一个 task
    - **FAIL**: 把 eval report 中的失败项作为反馈，通过 `ai send` 发给**同一个 Generator**（它有完整上下文）。然后 `ai kill` Evaluator，spawn 新 Evaluator，回到步骤 5
@@ -286,30 +286,32 @@ GENERATOR RULES (mandatory):
 
 ### Orchestrator Polling Protocol
 
-After spawning a Generator, the Orchestrator watches:
+After spawning a Generator, the Orchestrator uses the **watch loop** pattern from `subagent` 技能：
 
 ```
-Watch loop:
-1. Check Generator output for "DONE:" or "BLOCKED:"
-2. If DONE:
+Watch loop (遵循 subagent 技能):
+1. ai watch --follow --pretty → 观察 Generator 输出
+2. 检查输出中是否有 "DONE:" 或 "BLOCKED:"
+3. If DONE:
    a. Verify listed files exist (ls <each file>)
    b. Run build (make)
    c. Do NOT kill Generator — keep alive for potential fix rounds
-   d. Spawn Evaluator → wait for eval report
+   d. Spawn Evaluator → watch loop 等待 eval report
    e. Read .pge/eval-{task}.md:
       - PASS → kill Generator + Evaluator, next task
       - FAIL → ai send feedback to Generator, kill Evaluator, spawn new Evaluator
-3. If BLOCKED:
+4. If BLOCKED:
    a. Read reason from Generator output
    b. Kill Generator
    c. If reason is API confusion → provide guidance, respawn
    d. If reason is spec ambiguity → clarify spec, respawn
-4. **If timeout (600s) reached**（例外：超时时 Generator 已被强制 kill，不再适用 keep-alive 规则）：
-   a. Kill Generator
-   b. Check if any files were created
-   c. If files exist + build passes → spawn Evaluator to validate
-   d. If eval FAIL → spawn **new** Generator with fix task (original is dead)
-   e. If no files or build fails → mark FAILED, report to user
+5. If watch 超时 (无输出):
+   a. ❌ 不要立即 kill
+   b. ✅ git diff --stat 检查 Generator 是否已产出文件
+   c. 有产出 → 在推进 → 再 watch 一轮
+   d. 连续两轮无输出且无变化 → 确认卡死 → kill Generator
+   e. kill 后检查产出：有文件 + build 通过 → spawn Evaluator 验证
+   f. 无产出 → mark FAILED, report to user
 ```
 
 ### Test Policy
@@ -362,14 +364,14 @@ Maintain `.pge/progress.md`:
 
 | Scenario | Detection | Action |
 |----------|-----------|--------|
-| Generator timeout | `timeout` exits 124 or 600s reached | Kill → check files + build → if pass: spawn Evaluator; if fail: report to user |
+| Generator 无响应 | 连续两轮 watch 无输出且 `git diff` 无变化 | kill → 检查产出 → 有文件 + build 通过: spawn Evaluator; 否则: report to user |
 | Generator outputs BLOCKED | Parse output for "BLOCKED:" | Kill → address reason → respawn once |
 | Agent crash | `ai ls` shows `failed` or `killed` | Check rpc.log → retry with modified instructions |
 | Agent off-track | Parse output, see wrong direction | `ai send` correction, or kill + respawn |
 | Same task fails 3× | Three consecutive eval FAILs | **Stop. Report to user.** |
 | Evaluator says not done | Eval report says FAIL | `ai send` feedback to same Generator, spawn new Evaluator |
 | Build fails after Generator | build returns non-zero | Report to Generator via `ai send`, let it fix |
-| Evaluator timeout | 300s reached, no eval report | Kill Evaluator → spawn new one |
+| Evaluator 无响应 | 连续两轮 watch 无输出且无 eval report | Kill Evaluator → spawn new one |
 | Evaluator crash | `ai ls` shows `failed` | Check output, spawn new Evaluator |
 | Malformed eval report | File exists but no PASS/FAIL verdict | Kill Evaluator → spawn new one, clarify format in prompt |
 | Spec changed mid-execution | User modifies spec during phase | Re-evaluate completed tasks? Report to user for guidance |
@@ -418,6 +420,9 @@ Maintain `.pge/progress.md`:
 | Orchestrator 创建 eval report | `write .pge/eval-*.md` | 只有 Evaluator 可以写 eval report |
 | PGE 结束但有 agent 存活 | PGE 流程结束但未清理所有子 agent | 最后一步：检查 spawn 列表，逐个 cleanup |
 | kill 了非自己 spawn 的 agent | `ai kill` 了 `ai ls` 中的非本流程 agent | ⛔ **严禁**。遵循 `subagent` 技能安全规则 |
+| 用 `send --wait` 收集 `--input-file` 任务的回复 | spawn 时传了任务又 send | 用 `watch --follow` 观察（详见 `subagent` 技能） |
+| watch 超时后立即 kill 子 agent | watch 返回后直接 kill | 先 `git diff` 检查产出，有变化则再 watch 一轮（详见 `subagent` 技能） |
+| kill 后不检查就手动重做 | kill 后直接写代码 | 先 `git diff` 检查子 agent 产出，在此基础上继续 |
 
 ## Reference Prompts
 
