@@ -420,10 +420,12 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// Archive old messages so the agent can access them via read/grep later.
 	archivePath := saveArchivedMessages(c.sessionDir, oldMessages)
 
-	// Create new recent messages with summary, including archive path note
+	// Create new recent messages with summary, including archive path note.
+	// The archive note is placed BEFORE the summary so the agent sees it first
+	// and is more likely to use it proactively.
 	summaryText := summary
 	if archivePath != "" {
-		summaryText = summary + "\n\n" + fmt.Sprintf(archiveNoteTemplate, archivePath)
+		summaryText = fmt.Sprintf(archiveNoteTemplate, archivePath) + "\n\n" + summary
 	}
 	newRecentMessages := []agentctx.AgentMessage{
 		agentctx.NewCompactionSummaryMessage(summaryText),
@@ -483,9 +485,14 @@ func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMess
 	return result
 }
 
-// archiveNoteTemplate is appended to the compaction summary so the agent knows
-// where to find the full pre-compaction conversation.
-const archiveNoteTemplate = "The full conversation before this summary is archived at `%s`.\nUse the read or grep tool to search it when you need details from earlier."
+// archiveNoteTemplate is prepended to the compaction summary so the agent knows
+// where to find the full pre-compaction conversation. It uses directive language
+// to encourage proactive recovery of lost context.
+const archiveNoteTemplate = "<critical>\n" +
+	"The full conversation before this summary is archived at `%s`.\n" +
+	"This summary may omit important details — analysis results, intermediate findings, discussion context.\n" +
+	"If anything seems incomplete or you are unsure what was discussed earlier, read this file (use the read or grep tool) BEFORE asking the user.\n" +
+	"</critical>"
 
 // saveArchivedMessages writes old messages removed during compaction to a
 // sequential JSONL file under <sessionDir>/compactions/archived_NNNNN.jsonl.

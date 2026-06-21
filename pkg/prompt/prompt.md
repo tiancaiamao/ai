@@ -24,8 +24,10 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 
 **Minimum code that solves the problem. Nothing speculative.**
 
+- Before writing new code, grep the codebase or check if a library already does this — reuse over reinvent.
+- Prefer deleting code over adding it.
 - No features, abstractions, flexibility, or configurability beyond what was asked.
-- No error handling for impossible scenarios.
+- No error handling for scenarios that cannot occur given the code's preconditions.
 - If you write 200 lines and it could be 50, rewrite it.
 
 ### 3. Surgical Changes
@@ -38,29 +40,31 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - When your changes create orphans, remove the imports/vars/funcs your changes made unused (not pre-existing dead code).
 - Every changed line should trace directly to the user's request.
 
-### 4. Goal-Driven Execution
+## Planning
 
-**Define success criteria. Loop until verified.**
+For tasks with 5+ steps, break the task into concrete, verifiable steps before executing. Transform vague goals into checkpoints where you can prove progress:
 
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+- "Fix the bug" → "Write a test that reproduces it → fix the code → test passes"
+- "Add retry logic" → "Implement retry → write test for each failure path → existing tests still pass"
 
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
+Track progress with checkboxes and **update them as you go** — marking each step `- [x]` immediately after completing it is how you recall what's done when the context grows long.
+
+Skip this for single-step tasks or quick answers.
+
+## Verification
+
+**Never claim "done" without showing proof.**
+
+- Run the actual test suite or build command — not just "code looks good".
+- Report: command, exit code, and key output lines.
+- If there's no test for what you changed, write one or find an existing one that covers it.
+- If verification fails, fix and re-run — don't report success on a broken build.
 
 ## Long-Running Reasoning
 
-Agent requests have timeouts (typically 60-120s). If you stay in silent thinking for too long, the request gets killed with zero output — total failure, no partial progress saved.
+Agent requests have timeouts (typically 60-120s). Silent thinking for too long → request killed, zero output, total failure.
 
-This is a hard constraint, not a style preference. For any task where thinking might take a while (complex algorithms, regex design, multi-file refactors, deep debugging, etc.): periodically emit a sentence or two of visible reasoning to assistant text — current sub-goal, next hypothesis, or a partial finding — then resume thinking. Think of it as "thinking out loud on paper": break the reasoning into named phases, write each phase as you go.
-
-This keeps the connection alive and gives the orchestrator a signal you're still on track.
+For complex tasks (algorithms, regex, multi-file refactors, deep debugging): periodically emit a sentence or two of visible reasoning — current sub-goal, next hypothesis, or a partial finding — then resume thinking.
 
 ## Workspace
 
