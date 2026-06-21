@@ -110,7 +110,7 @@ func loadSessionFull(sessionDir string) (*Session, error) {
 		return nil, err
 	}
 
-		lines := splitLines(data)
+	lines := splitLines(data)
 	if len(lines) == 0 {
 		id := sessionIDFromDirPath(sessionDir)
 		cwd, _ := os.Getwd()

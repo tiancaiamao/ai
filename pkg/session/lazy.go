@@ -132,7 +132,7 @@ func loadFromEnd(f *os.File, sess *Session) error {
 	}
 	tailData = tailData[:n]
 
-		// Split lines, skipping the first line if it's incomplete (we started mid-line)
+	// Split lines, skipping the first line if it's incomplete (we started mid-line)
 	lines := splitLines(tailData)
 	if len(lines) > 0 && startOffset > 0 {
 		// First line might be incomplete (we started mid-file), skip it

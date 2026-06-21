@@ -57,7 +57,7 @@ type rpcApp struct {
 	sessionName string
 
 	// --- Workspace & Tools ---
-		ws       *tools.Workspace
+	ws       *tools.Workspace
 	registry *tools.Registry
 
 	// --- Compaction ---

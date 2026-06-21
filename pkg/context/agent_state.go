@@ -52,7 +52,7 @@ func NewAgentState(sessionID, cwd string) *AgentState {
 		TurnsSinceLastTrigger:     0,
 		ToolCallsSinceLastTrigger: 0,
 		ActiveToolCalls:           []string{},
-				RuntimeMetaTurns:          0,
+		RuntimeMetaTurns:          0,
 		RuntimeMetaSnapshot:       "",
 		RuntimeMetaBand:           "",
 		SessionID:                 sessionID,

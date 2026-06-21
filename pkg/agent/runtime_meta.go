@@ -61,7 +61,7 @@ func injectRuntimeMeta(agentCtx *agentctx.AgentContext, config *LoopConfig) stri
 		MessagesInHistory: len(agentCtx.RecentMessages),
 	}
 
-		runtimeMetaSnapshot := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath, config.RunID)
+	runtimeMetaSnapshot := updateRuntimeMetaSnapshot(agentCtx, meta, defaultRuntimeMetaHeartbeatTurns, currentWorkdir, startupPath, config.RunID)
 	return buildRuntimeUserAppendix(runtimeMetaSnapshot)
 }
 

@@ -72,7 +72,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	toolOutputConfig := app.cfg.ToolOutput
 	if toolOutputConfig == nil {
 		toolOutputConfig = config.DefaultToolOutputConfig()
-		}
+	}
 	app.toolOutputConfig = toolOutputConfig
 
 	// Build LoopConfig with all settings

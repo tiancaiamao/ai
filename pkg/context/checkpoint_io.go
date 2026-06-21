@@ -33,7 +33,7 @@ func LoadAgentState(sessionDir string) (*AgentState, error) {
 
 	var state AgentState
 	if err := json.Unmarshal(data, &state); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal agent state: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal agent state: %w", err)
 	}
 	return &state, nil
 }

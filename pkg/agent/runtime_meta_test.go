@@ -13,7 +13,7 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-		}
+	}
 
 	snapshot := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if snapshot == "" {
@@ -52,7 +52,7 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 		TokensUsed:        90000,
 		TokensMax:         128000,
 		TokensPercent:     70.0,
-				MessagesInHistory: 10,
+		MessagesInHistory: 10,
 	}
 
 	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")

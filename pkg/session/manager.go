@@ -519,7 +519,7 @@ func countLegacyMessages(sessPath string) int {
 		return 0
 	}
 
-		count := 0
+	count := 0
 	for _, line := range splitLines(data) {
 		line = bytesTrimSpace(line)
 		if len(line) == 0 {
