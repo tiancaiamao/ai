@@ -50,7 +50,7 @@ func (c *Compactor) GenerateSummary(goCtx context.Context, messages []agentctx.A
 		return "", fmt.Errorf("no agent-visible messages to summarize")
 	}
 
-	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, summarizationPrompt)
+	llmCtx := buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, summarizationPrompt, c.thinkingLevel)
 
 	const maxRetries = 3
 	const totalTimeout = 5 * time.Minute

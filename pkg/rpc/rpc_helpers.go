@@ -71,6 +71,7 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 	// and is lost on checkpoint/restore, so the compactor stores its own copy.
 	if app.compactor != nil {
 		app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
+		app.compactor.SetThinkingLevel(app.currentThinkingLevel)
 	}
 	ctx := agentctx.NewAgentContext(app.systemPrompt)
 	ctx.AgentContextPrefix = app.agentContextPrefix

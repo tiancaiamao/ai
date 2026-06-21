@@ -119,6 +119,10 @@ type Compactor struct {
 	// construction time so it survives agentCtx checkpoint/restore cycles
 	// (AgentContext.AgentContextPrefix has json:"-" and is lost on restore).
 	agentContextPrefix string
+	// thinkingLevel mirrors the agent loop's thinking level so that
+	// askLLM/GenerateSummary requests include the same thinking/reasoning
+	// parameters, keeping them in the same prefix-cache partition.
+	thinkingLevel string
 	// sessionDir is the session directory used for archiving old messages
 	// that are removed during compaction. When empty, archiving is skipped.
 	sessionDir string
@@ -250,6 +254,12 @@ func (c *Compactor) SetContextWindow(window int) {
 // cache-friendly LLM requests (askLLM, GenerateSummary).
 func (c *Compactor) SetAgentContextPrefix(prefix string) {
 	c.agentContextPrefix = prefix
+}
+
+// SetThinkingLevel sets the thinking level used in askLLM/GenerateSummary
+// requests so they match the agent loop's thinking/reasoning parameters.
+func (c *Compactor) SetThinkingLevel(level string) {
+	c.thinkingLevel = level
 }
 
 // ReserveTokens returns the effective reserve tokens setting.
@@ -651,6 +661,7 @@ func buildCacheFriendlyLLMContext(
 	contextPrefix string,
 	tools []agentctx.Tool,
 	trailingInstruction string,
+	thinkingLevel string,
 ) llm.LLMContext {
 	llmMessages := agentctx.ConvertMessagesToLLM(messages)
 
@@ -667,9 +678,10 @@ func buildCacheFriendlyLLMContext(
 	})
 
 	return llm.LLMContext{
-		SystemPrompt: systemPrompt,
-		Messages:     llmMessages,
-		Tools:        agentctx.ConvertToolsToLLM(tools),
+		SystemPrompt:  systemPrompt,
+		Messages:      llmMessages,
+		Tools:         agentctx.ConvertToolsToLLM(tools),
+		ThinkingLevel: thinkingLevel,
 	}
 }
 
@@ -696,6 +708,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		c.agentContextPrefix,
 		agentCtx.Tools,
 		askContent,
+		c.thinkingLevel,
 	)
 
 	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
