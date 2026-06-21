@@ -676,6 +676,40 @@ func buildCacheFriendlyLLMContext(
 // askLLM sends a lightweight yes/no question to the LLM, reusing the main
 // conversation prefix for cache efficiency. Returns true if the LLM says yes.
 func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
+	const maxRetries = 2
+	const initialRetryDelay = 1 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		result, err := c.askLLMOnce(ctx, agentCtx, tokens, attempt)
+		if err == nil {
+			return result, nil
+		}
+
+		// Last attempt failed, return error
+		if attempt == maxRetries {
+			slog.Warn("[Compact] askLLM failed after retries",
+				"attempt", attempt,
+				"max_retries", maxRetries,
+				"error", err)
+			return false, fmt.Errorf("askLLM failed after %d attempts: %w", maxRetries, err)
+		}
+
+		// Retry with exponential backoff
+		delay := initialRetryDelay * time.Duration(attempt)
+		slog.Warn("[Compact] askLLM retry",
+			"attempt", attempt,
+			"max_retries", maxRetries,
+			"retry_delay", delay,
+			"error", err)
+		time.Sleep(delay)
+	}
+
+	// Should not reach here
+	return false, fmt.Errorf("askLLM failed unexpectedly")
+}
+
+// askLLMOnce performs a single askLLM call with the given attempt number.
+func (c *Compactor) askLLMOnce(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int, attempt int) (bool, error) {
 	span := traceevent.StartSpan(ctx, "compact_llm_decide_ask", traceevent.CategoryLLM)
 	defer span.End()
 
@@ -689,6 +723,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 
 	span.AddField("tokens", tokens)
 	span.AddField("budget_pct", budgetPct)
+	span.AddField("attempt", attempt)
 
 	llmCtx := buildCacheFriendlyLLMContext(
 		agentCtx.RecentMessages,
@@ -723,6 +758,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 			}
 		case llm.LLMErrorEvent:
 			span.AddField("error", e.Error.Error())
+			span.AddField("error_type", classifyLLMError(e.Error))
 			return false, e.Error
 		}
 	}
@@ -747,4 +783,45 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	span.AddField("decision", confirmed)
 
 	return confirmed, nil
+}
+
+// classifyLLMError classifies an LLM error for better monitoring and debugging.
+func classifyLLMError(err error) string {
+	if err == nil {
+		return "none"
+	}
+
+	errStr := err.Error()
+
+	// Check for context limit errors
+	if strings.Contains(errStr, "context length") || strings.Contains(errStr, "too long") {
+		return "context_limit"
+	}
+
+	// Check for timeout errors
+	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
+		return "timeout"
+	}
+
+	// Check for rate limit errors
+	if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "too many requests") {
+		return "rate_limit"
+	}
+
+	// Check for network errors
+	if strings.Contains(errStr, "connection") || strings.Contains(errStr, "network") {
+		return "network"
+	}
+
+	// Check for auth errors
+	if strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "authentication") {
+		return "auth"
+	}
+
+	// Check for invalid request errors
+	if strings.Contains(errStr, "invalid") || strings.Contains(errStr, "bad request") {
+		return "invalid_request"
+	}
+
+	return "unknown"
 }
