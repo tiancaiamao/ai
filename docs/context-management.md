@@ -38,7 +38,6 @@ It is implementation-aligned with the current codebase. If behavior changes, upd
 │  │         pkg/context/context.go                           │ │
 │  │                                                          │ │
 │  │  RecentMessages: []AgentMessage                          │ │
-│  │  LastCompactionSummary: string                           │ │
 │  │  AgentState: *AgentState (system metadata)               │ │
 │  │  SystemPrompt, Tools, ...                                │ │
 │  └─────────────────────────────────────────────────────────┘ │
@@ -116,7 +115,7 @@ The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigg
 3. **Fix tool-call pairing**: Ensure `tool_call` / `tool_result` pairs are not split across the boundary
 4. **Compact tool results**: If visible tool results exceed `ToolCallCutoff`, hide oldest ones from agent (keep visible to user)
 5. **Clean runtime state**: Remove stale `runtime_state` messages (keep only the latest)
-6. **Update context**: Replace `RecentMessages` with `[compactionSummary, ...recentMessages]`, store summary in `LastCompactionSummary`
+6. **Update context**: Replace `RecentMessages` with `[compactionSummary, ...recentMessages]`
 
 ### Token Budget Split
 
