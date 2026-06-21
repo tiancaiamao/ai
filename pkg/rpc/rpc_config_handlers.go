@@ -121,6 +121,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	// Recreate compactor with new model
 	app.compactor = compact.NewCompactor(app.compactorConfig, app.model, app.apiKey, app.systemPrompt, spec.ContextWindow, app.sess.GetDir())
 	app.compactor.SetAgentContextPrefix(app.agentContextPrefix)
+	app.compactor.SetThinkingLevel(app.currentThinkingLevel)
 	app.sessionComp.Update(app.compactor)
 	app.ag.SetCompactor(app.sessionComp)
 	app.ag.SetContextWindow(spec.ContextWindow)
@@ -192,6 +193,9 @@ func (app *rpcApp) handleSetThinkingLevel(value string, validLevels map[string]b
 	app.currentThinkingLevel = level
 	app.stateMu.Unlock()
 	app.ag.SetThinkingLevel(level)
+	if app.compactor != nil {
+		app.compactor.SetThinkingLevel(level)
+	}
 	return map[string]any{"setting": "thinking-level", "value": level}, nil
 }
 
