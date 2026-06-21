@@ -180,6 +180,14 @@ func (c *Config) GetLLMModel() llm.Model {
 	}
 }
 
+// ResolveConfigPath returns the config file path, honoring AI_CONFIG_PATH if set.
+func ResolveConfigPath() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("AI_CONFIG_PATH")); override != "" {
+		return override, nil
+	}
+	return GetDefaultConfigPath()
+}
+
 // GetDefaultConfigPath returns the default config file path.
 func GetDefaultConfigPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
