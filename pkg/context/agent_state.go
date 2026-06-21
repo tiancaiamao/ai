@@ -52,42 +52,11 @@ func NewAgentState(sessionID, cwd string) *AgentState {
 		TurnsSinceLastTrigger:     0,
 		ToolCallsSinceLastTrigger: 0,
 		ActiveToolCalls:           []string{},
-		RuntimeMetaTurns:          0,
+				RuntimeMetaTurns:          0,
 		RuntimeMetaSnapshot:       "",
 		RuntimeMetaBand:           "",
 		SessionID:                 sessionID,
 		CreatedAt:                 now,
 		UpdatedAt:                 now,
-	}
-}
-
-// Clone creates a deep copy of the AgentState.
-func (a *AgentState) Clone() *AgentState {
-	if a == nil {
-		return nil
-	}
-	activeToolCalls := make([]string, len(a.ActiveToolCalls))
-	copy(activeToolCalls, a.ActiveToolCalls)
-
-	return &AgentState{
-		WorkspaceRoot:             a.WorkspaceRoot,
-		CurrentWorkingDir:         a.CurrentWorkingDir,
-		TotalTurns:                a.TotalTurns,
-		TokensUsed:                a.TokensUsed,
-		TokensLimit:               a.TokensLimit,
-		LastCheckpoint:            a.LastCheckpoint,
-		LastTriggerTurn:           a.LastTriggerTurn,
-		TurnsSinceLastTrigger:     a.TurnsSinceLastTrigger,
-		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
-		TotalTruncations:          a.TotalTruncations,
-		TotalCompactions:          a.TotalCompactions,
-		LastCompactTurn:           a.LastCompactTurn,
-		ActiveToolCalls:           activeToolCalls,
-		RuntimeMetaTurns:          a.RuntimeMetaTurns,
-		RuntimeMetaSnapshot:       a.RuntimeMetaSnapshot,
-		RuntimeMetaBand:           a.RuntimeMetaBand,
-		SessionID:                 a.SessionID,
-		CreatedAt:                 a.CreatedAt,
-		UpdatedAt:                 a.UpdatedAt,
 	}
 }

@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -520,8 +519,8 @@ func countLegacyMessages(sessPath string) int {
 		return 0
 	}
 
-	count := 0
-	for _, line := range agentctx.SplitLines(data) {
+		count := 0
+	for _, line := range splitLines(data) {
 		line = bytesTrimSpace(line)
 		if len(line) == 0 {
 			continue

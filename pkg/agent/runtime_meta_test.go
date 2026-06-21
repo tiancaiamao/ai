@@ -13,12 +13,9 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 		TokensMax:         128000,
 		TokensPercent:     25.0,
 		MessagesInHistory: 18,
-	}
+		}
 
-	snapshot, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if !refreshed {
-		t.Fatal("expected initial snapshot refresh")
-	}
+	snapshot := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if snapshot == "" {
 		t.Fatal("expected non-empty snapshot")
 	}
@@ -27,32 +24,20 @@ func TestUpdateRuntimeMetaSnapshotRefreshRules(t *testing.T) {
 	}
 	// action_hint field has been removed
 
-	snapshot2, refreshed2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if refreshed2 {
-		t.Fatal("did not expect refresh before heartbeat")
-	}
+	snapshot2 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if snapshot2 != snapshot {
 		t.Fatal("expected snapshot to stay stable before refresh")
 	}
 
-	_, refreshed3 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if refreshed3 {
-		t.Fatal("did not expect refresh on second non-heartbeat turn")
-	}
+	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 
-	snapshot4, refreshed4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if !refreshed4 {
-		t.Fatal("expected heartbeat refresh")
-	}
+	snapshot4 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if snapshot4 == "" {
 		t.Fatal("expected non-empty snapshot after heartbeat refresh")
 	}
 
 	meta.TokensPercent = 61.0
-	snapshot5, refreshed5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if !refreshed5 {
-		t.Fatal("expected refresh on band change")
-	}
+	snapshot5 := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	if !containsString(snapshot5, "current_workdir:") {
 		t.Fatalf("expected current_workdir after band-change refresh, got: %s", snapshot5)
 	}
@@ -67,13 +52,10 @@ func TestUpdateRuntimeMetaSnapshotRecordsReminderUsingCurrentTurn(t *testing.T) 
 		TokensUsed:        90000,
 		TokensMax:         128000,
 		TokensPercent:     70.0,
-		MessagesInHistory: 10,
+				MessagesInHistory: 10,
 	}
 
-	_, refreshed := updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
-	if !refreshed {
-		t.Fatal("expected refreshed snapshot")
-	}
+	_ = updateRuntimeMetaSnapshot(agentCtx, meta, 3, "", "", "")
 	// Note: LastReminderTurn is now set when reminder is actually shown (in streamAssistantResponse)
 	// not in updateRuntimeMetaSnapshot which is telemetry-only
 }

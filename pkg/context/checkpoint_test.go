@@ -9,29 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- AgentState tests ---
-
-func TestAgentStateClone(t *testing.T) {
-	state := NewAgentState("session-1", "/workspace")
-	state.TotalTurns = 42
-	state.ActiveToolCalls = []string{"call-1", "call-2"}
-
-	clone := state.Clone()
-
-	assert.Equal(t, state.TotalTurns, clone.TotalTurns)
-	assert.Equal(t, len(state.ActiveToolCalls), len(clone.ActiveToolCalls))
-
-	// Verify deep copy of slice
-	state.ActiveToolCalls[0] = "modified"
-	assert.NotEqual(t, "modified", clone.ActiveToolCalls[0])
-}
-
-func TestAgentStateClone_Nil(t *testing.T) {
-	var state *AgentState
-	clone := state.Clone()
-	assert.Nil(t, clone)
-}
-
 // --- SaveAgentState / LoadAgentState tests ---
 
 func TestSaveLoadAgentState(t *testing.T) {
@@ -65,27 +42,4 @@ func TestLoadAgentState_NoFile(t *testing.T) {
 	state, err := LoadAgentState(tmpDir)
 	require.NoError(t, err)
 	assert.Nil(t, state)
-}
-
-// --- SplitLines tests ---
-
-func TestSplitLines(t *testing.T) {
-	// Empty input
-	if got := SplitLines(nil); len(got) != 0 {
-		t.Errorf("expected 0 lines, got %d", len(got))
-	}
-	// Trailing newline only → skipped (empty lines are dropped)
-	if got := SplitLines([]byte("\n")); len(got) != 0 {
-		t.Errorf("expected 0 lines for lone newline, got %d", len(got))
-	}
-	// Multiple lines, no trailing newline
-	got := SplitLines([]byte("a\nb\nc"))
-	if len(got) != 3 || string(got[0]) != "a" || string(got[2]) != "c" {
-		t.Errorf("unexpected: %+v", got)
-	}
-	// Blank lines in the middle are skipped
-	got = SplitLines([]byte("a\n\nb"))
-	if len(got) != 2 || string(got[0]) != "a" || string(got[1]) != "b" {
-		t.Errorf("expected blank lines skipped, got %+v", got)
-	}
 }
