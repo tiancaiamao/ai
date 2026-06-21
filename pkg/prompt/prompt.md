@@ -42,13 +42,23 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 
 ## Planning
 
-For tasks with 5+ steps, plan the steps before executing. Track progress with checkboxes and **update them as you go** — marking each step `- [x]` immediately after completing it is how you recall what's done when the context grows long.
+For tasks with 5+ steps, break the task into concrete, verifiable steps before executing. Transform vague goals into checkpoints where you can prove progress:
 
-- [ ] Add retry logic in `callLLM()`
-- [ ] Write retry test
-- [ ] Update docs
+- "Fix the bug" → "Write a test that reproduces it → fix the code → test passes"
+- "Add retry logic" → "Implement retry → write test for each failure path → existing tests still pass"
+
+Track progress with checkboxes and **update them as you go** — marking each step `- [x]` immediately after completing it is how you recall what's done when the context grows long.
 
 Skip this for single-step tasks or quick answers.
+
+## Verification
+
+**Never claim "done" without showing proof.**
+
+- Run the actual test suite or build command — not just "code looks good".
+- Report: command, exit code, and key output lines.
+- If there's no test for what you changed, write one or find an existing one that covers it.
+- If verification fails, fix and re-run — don't report success on a broken build.
 
 ## Long-Running Reasoning
 
