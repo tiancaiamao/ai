@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,25 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// splitLines splits byte data by newline, skipping empty lines.
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			if len(data) > 0 {
+				lines = append(lines, data)
+			}
+			break
+		}
+		if i > 0 {
+			lines = append(lines, data[:i])
+		}
+		data = data[i+1:]
+	}
+	return lines
+}
 
 // Session represents a conversation session backed by an append-only JSONL file.
 type Session struct {
@@ -90,7 +110,7 @@ func loadSessionFull(sessionDir string) (*Session, error) {
 		return nil, err
 	}
 
-	lines := agentctx.SplitLines(data)
+	lines := splitLines(data)
 	if len(lines) == 0 {
 		id := sessionIDFromDirPath(sessionDir)
 		cwd, _ := os.Getwd()

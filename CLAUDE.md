@@ -28,6 +28,33 @@ go install ./cmd/ai   # build & install binary
 go test ./pkg/<pkg>/...  # focused tests for a single package
 ```
 
+## Pre-PR Checklist ⚠️
+
+**Before pushing / creating PR**, run these checks to avoid CI failures:
+
+```bash
+# 1. Format check (must pass)
+make fmt
+
+# 2. Build check (catch syntax errors, missing imports)
+go build ./...
+
+# 3. Run relevant tests
+make test          # full test suite
+# OR focused test:
+go test ./pkg/<pkg>/...
+
+# 4. Review changes (check for copy-paste errors, dead code, etc.)
+git diff           # review unstaged changes
+git diff --cached  # review staged changes
+```
+
+**Common failure patterns to check manually:**
+- Copy-paste errors: duplicate lines, partially deleted blocks (e.g., missing `)`, duplicate log calls)
+- Unused imports/functions: `go build ./...` doesn't catch unused code in tests
+- Missing error handling: check if `err` is checked after all function calls
+- Documentation: README.md and docs/ updated if architecture changed
+
 ## Key Packages
 
 Core packages (see `pkg/*/README.md` for details, `pkg/` for full list):

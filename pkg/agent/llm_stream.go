@@ -338,9 +338,9 @@ func updateRuntimeMetaSnapshot(
 	currentWorkdir string,
 	startupPath string,
 	runID string,
-) (string, bool) {
+) string {
 	if agentCtx == nil {
-		return "", false
+		return ""
 	}
 	if heartbeatTurns <= 0 {
 		heartbeatTurns = defaultRuntimeMetaHeartbeatTurns
@@ -354,7 +354,7 @@ func updateRuntimeMetaSnapshot(
 		agentCtx.AgentState.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
-		return agentCtx.AgentState.RuntimeMetaSnapshot, false
+		return agentCtx.AgentState.RuntimeMetaSnapshot
 	}
 
 	// runtime_state is purely informational - no directives or commands
@@ -363,7 +363,7 @@ func updateRuntimeMetaSnapshot(
 	if runID != "" {
 		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
 	}
-	snapshot := fmt.Sprintf(`<agent:runtime_state"/>
+	snapshot := fmt.Sprintf(`<agent:runtime_state/>
 %s
   current_workdir: %s
   startup_path: %s`,
@@ -376,7 +376,7 @@ func updateRuntimeMetaSnapshot(
 	agentCtx.AgentState.RuntimeMetaBand = band
 	agentCtx.AgentState.RuntimeMetaTurns = 0
 
-	return snapshot, true
+	return snapshot
 }
 
 func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {

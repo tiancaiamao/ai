@@ -46,16 +46,6 @@ func (sc *sessionCompactor) Compact(ctx context.Context, agentCtx *agentctx.Agen
 	return comp.Compact(ctx, agentCtx)
 }
 
-func (sc *sessionCompactor) CalculateDynamicThreshold() int {
-	sc.mu.Lock()
-	comp := sc.compactor
-	sc.mu.Unlock()
-	if comp == nil {
-		return 0
-	}
-	return comp.CalculateDynamicThreshold()
-}
-
 // --- sessionWriter: single-goroutine serializer for session writes ---
 
 type sessionWriteRequest struct {

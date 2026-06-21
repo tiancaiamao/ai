@@ -61,9 +61,8 @@ type rpcApp struct {
 	registry *tools.Registry
 
 	// --- Compaction ---
-	compactor          *compact.Compactor
-	proactiveCompactor agent.Compactor
-	compactorConfig    *compact.Config
+	compactor       *compact.Compactor
+	compactorConfig *compact.Config
 
 	// --- Tracing ---
 	traceOutputPath string
@@ -123,8 +122,14 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 }
 
 // nuclearTruncate force-truncates oldest messages without LLM summary.
+//
 // This is the last-resort fallback when compaction repeatedly fails (e.g.,
 // the summarization model cannot handle the conversation size).
+//
+// NOTE: This path is unreachable in normal operation. It is only triggered
+// when consecutiveCompactionFailures reaches 3, which occurs only when
+// compaction fails repeatedly. Coverage: 0% because actual compaction
+// does not fail in typical usage.
 func (app *rpcApp) nuclearTruncate() {
 	if app.ag == nil {
 		return

@@ -153,11 +153,11 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	// Always use LLM-decides compaction (unified context management).
 	decideCfg := compact.DefaultLLMDecideConfig(currentContextWindow)
 	compactorConfig.LLMDecide = &decideCfg
-	app.proactiveCompactor = compactor
 	slog.Info("Using LLMDecide compaction",
 		"contextWindow", currentContextWindow,
 		"softThreshold", decideCfg.SoftThreshold,
-		"hardLimit", decideCfg.HardLimit)
+		"hardLimit", decideCfg.HardLimit,
+	)
 
 	return app, nil
 }

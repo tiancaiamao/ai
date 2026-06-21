@@ -1,7 +1,6 @@
 package context
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -49,23 +48,4 @@ func saveAtomic(filePath string, data []byte) error {
 		return fmt.Errorf("failed to rename file: %w", err)
 	}
 	return nil
-}
-
-// SplitLines splits byte data by newline, skipping empty lines.
-func SplitLines(data []byte) [][]byte {
-	var lines [][]byte
-	for {
-		i := bytes.IndexByte(data, '\n')
-		if i < 0 {
-			if len(data) > 0 {
-				lines = append(lines, data)
-			}
-			break
-		}
-		if i > 0 {
-			lines = append(lines, data[:i])
-		}
-		data = data[i+1:]
-	}
-	return lines
 }

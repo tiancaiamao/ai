@@ -6,8 +6,6 @@ import "context"
 type Compactor interface {
 	ShouldCompact(ctx context.Context, agentCtx *AgentContext) bool
 	Compact(ctx context.Context, agentCtx *AgentContext) (*CompactionResult, error)
-	// CalculateDynamicThreshold returns the token threshold for compaction
-	CalculateDynamicThreshold() int
 }
 
 // CompactionResult contains the result of a compaction operation.
