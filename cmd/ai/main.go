@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/tiancaiamao/ai/subcommand/kill"
@@ -12,9 +13,8 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		// TODO: Add usage print from individual packages
+		rpcsubcommand.PrintUsage()
 		os.Exit(1)
-		return
 	}
 
 	binPath := os.Args[0]
@@ -22,21 +22,26 @@ func main() {
 	os.Args = os.Args[1:]
 
 	switch subcmd {
+	case "-h", "--help", "help":
+		rpcsubcommand.PrintUsage()
+		os.Exit(0)
 	case "rpc":
 		rpcsubcommand.RPCSubcommand()
 	case "run":
 		run.RunSubcommand(binPath)
 	case "serve":
 		run.ServeSubcommand(binPath)
-	case "ls":
-		ls.LsSubcommand()
 	case "watch":
 		run.WatchSubcommand()
+	case "ls":
+		ls.LsSubcommand()
 	case "send":
 		send.SendSubcommand()
 	case "kill":
 		kill.KillSubcommand()
 	default:
+		fmt.Fprintf(os.Stderr, "ai: unknown command %q\n\n", subcmd)
+		rpcsubcommand.PrintUsage()
 		os.Exit(1)
 	}
 }
