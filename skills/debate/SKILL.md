@@ -86,7 +86,15 @@ Append your R${round} rebuttal to: $DEBATE_FILE
 Ground every claim in specific code.
 ```
 
-每轮顺序：`ai send` 给 Proposer → `ai send --wait` 等待完成 → `ai send` 给 Opposer → `ai send --wait` 等待完成。
+每轮顺序：Proposer `ai send --wait` → Opposer `ai send --wait`，交替执行。
+
+```bash
+# 完整示例：每轮发送
+ai send --id "$PROP_ID" --wait --timeout 5m "<prompt>"
+ai send --id "$OPP_ID" --wait --timeout 5m "<prompt>"
+```
+
+> ⚠️ `--timeout` 使用 Go duration 格式（`5m`、`300s`、`1h`），**不能写裸数字** `300`。
 
 ## Cleanup
 
@@ -149,3 +157,4 @@ After the debate, read the transcript and synthesize:
 | Send before serve is ready | `sleep 1` after spawn, then `cat $ID_FILE` |
 | Both agents write same file simultaneously | Alternate: proposer first, then opposer |
 | Agent re-reads debate file every round | Inline opponent arguments in prompt (R2+) |
+| `--timeout 300` (裸数字) | `--timeout 5m` 或 `--timeout 300s`（Go duration 格式） |

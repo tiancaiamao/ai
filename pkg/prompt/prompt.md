@@ -40,17 +40,6 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - When your changes create orphans, remove the imports/vars/funcs your changes made unused (not pre-existing dead code).
 - Every changed line should trace directly to the user's request.
 
-## Planning
-
-For tasks with 5+ steps, break the task into concrete, verifiable steps before executing. Transform vague goals into checkpoints where you can prove progress:
-
-- "Fix the bug" → "Write a test that reproduces it → fix the code → test passes"
-- "Add retry logic" → "Implement retry → write test for each failure path → existing tests still pass"
-
-Track progress with checkboxes and **update them as you go** — marking each step `- [x]` immediately after completing it is how you recall what's done when the context grows long.
-
-Skip this for single-step tasks or quick answers.
-
 ## Verification
 
 **Never claim "done" without showing proof.**
