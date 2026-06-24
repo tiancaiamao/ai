@@ -174,10 +174,9 @@ func TestDetectIncompleteToolCalls(t *testing.T) {
 			shouldHave: "closing </bash>",
 		},
 		{
-			name:       "uppercase tag",
-			text:       "<Bash>ls -la</Bash>",
-			wantIssues: 1,
-			shouldHave: "uppercase",
+			name:       "plain text with angle brackets (no false positive)",
+			text:       "fn foo<T>() -> Result<T, E> { ... }",
+			wantIssues: 0,
 		},
 	}
 

@@ -264,12 +264,14 @@ func streamAssistantResponse(
 				text := finalMessage.ExtractText()
 				if len(text) > 0 && strings.Contains(text, "<") {
 					issues := DetectIncompleteToolCalls(text)
-					traceevent.Log(ctx, traceevent.CategoryTool, "assistant_tool_tag_parse_failed",
-						traceevent.Field{Key: "stop_reason", Value: e.StopReason},
-						traceevent.Field{Key: "text_preview", Value: truncateLine(text, 500)},
-						traceevent.Field{Key: "issues", Value: issues},
-						traceevent.Field{Key: "issue_count", Value: len(issues)},
-					)
+					if len(issues) > 0 {
+						traceevent.Log(ctx, traceevent.CategoryTool, "assistant_tool_tag_parse_failed",
+							traceevent.Field{Key: "stop_reason", Value: e.StopReason},
+							traceevent.Field{Key: "text_preview", Value: truncateLine(text, 500)},
+							traceevent.Field{Key: "issues", Value: issues},
+							traceevent.Field{Key: "issue_count", Value: len(issues)},
+						)
+					}
 				}
 			}
 
