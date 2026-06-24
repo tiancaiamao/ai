@@ -384,12 +384,6 @@ func DetectIncompleteToolCalls(text string) []string {
 		}
 	}
 
-	// Check for malformed tool call patterns (like <Read instead of <read>)
-	malformedRegex := regexp.MustCompile(`<[A-Z][a-z]+[>\s]`)
-	if malformedRegex.MatchString(text) {
-		issues = append(issues, "detected tool call with uppercase letters (should use lowercase)")
-	}
-
 	return issues
 }
 
