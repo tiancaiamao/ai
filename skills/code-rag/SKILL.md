@@ -37,6 +37,7 @@ metadata:
 |------|----------|---------|---------|------|
 | OceanBase | `~/project/oceanbase-code-RAG/` | `~/project/oceanbase/` | 9 | 321KB |
 | TiDB | `~/project/tidb-code-RAG/` | `~/project/tidb/` | 10 | 558KB |
+| CSE | `~/project/cloud-storage-engine/wiki` | `~/project/cloud-storage-engine/` | 11 子系统 + 6 流程 + 13 特性 | ~33 页面 |
 
 **使用方式**：进入 wiki 目录，执行 `wiki/snapshot/snapshot.sh start`，然后用 `ask` 提问。
 详见下方 Phase 3 章节。
