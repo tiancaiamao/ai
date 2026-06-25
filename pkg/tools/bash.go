@@ -109,7 +109,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}, nil
 	}
 
-		// Block broad filesystem searches (find /, find ~, find $HOME).
+	// Block broad filesystem searches (find /, find ~, find $HOME).
 	// These are slow, noisy, and wasteful. The agent should target specific directories.
 	if isBroadFilesystemSearch(command) {
 		return []agentctx.ContentBlock{
