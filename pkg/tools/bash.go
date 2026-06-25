@@ -442,7 +442,10 @@ func detectSleepCommand(command string) (int, bool) {
 //
 // Blocked patterns:
 //   - find /            (any position in compound commands)
+//   - find /*           (glob expands to all of root)
+//   - find -- /         (double-dash separator)
 //   - find ~
+//   - find ~/*          (glob expands to all of home)
 //   - find $HOME
 //
 // Allowed:
@@ -450,13 +453,15 @@ func detectSleepCommand(command string) (int, bool) {
 //   - find ~/project      (specific subdirectory under home)
 //   - find .              (current directory)
 func isBroadFilesystemSearch(command string) bool {
-	// find / — slash immediately followed by whitespace, pipe, semicolon, &,
-	// ), or end of string. Does NOT match /tmp, /home/user, etc.
-	rootRe := regexp.MustCompile(`\bfind\s+/([\s|;&)]|$)`)
+	// find /, find /*, find -- /  — root path or glob of root.
+	// Matches when / is immediately followed by: whitespace, pipe, semicolon,
+	// &, ), * (glob), or end of string. Does NOT match /tmp, /home/user, etc.
+	rootRe := regexp.MustCompile(`\bfind\s+(--\s+)?/([\s|;&)*]|$)`)
 
-	// find ~ — tilde immediately followed by whitespace, pipe, semicolon, &,
-	// ), or end of string. Does NOT match ~/project (tilde followed by /).
-	homeTildeRe := regexp.MustCompile(`\bfind\s+~([\s|;&)]|$)`)
+	// find ~, find ~/*, find -- ~  — home path or glob of home.
+	// Matches when ~ is followed by a terminator (whitespace, pipe, etc.),
+	// end of string, or /* (glob). Does NOT match ~/project.
+	homeTildeRe := regexp.MustCompile(`\bfind\s+(--\s+)?~([\s|;&)]|$|/\*)`)
 
 	// find $HOME
 	homeEnvRe := regexp.MustCompile(`\bfind\s+\$HOME\b`)

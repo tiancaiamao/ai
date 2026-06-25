@@ -24,10 +24,23 @@ func TestIsBroadFilesystemSearch(t *testing.T) {
 		{"find root multiline", "echo hi\nfind /", true},
 		{"find root pipe after", "find / | head", true},
 
+		// Blocked: glob variants of root
+		{"find root glob", "find /*", true},
+		{"find root glob with flag", "find /* -name '*.go'", true},
+		{"find root glob compound", "echo hi && find /*", true},
+
+		// Blocked: double-dash separator
+		{"find dashdash root", "find -- /", true},
+		{"find dashdash root flag", "find -- / -name x", true},
+
 		// Blocked: home via tilde
 		{"find home tilde basic", "find ~", true},
 		{"find home tilde with flag", "find ~ -name '*.go'", true},
 		{"find home tilde compound", "echo hi && find ~ -type f", true},
+
+		// Blocked: glob variants of home
+		{"find home tilde glob", "find ~/*", true},
+		{"find home tilde glob with flag", "find ~/* -name '*.go'", true},
 
 		// Blocked: home via $HOME
 		{"find $HOME basic", "find $HOME", true},
