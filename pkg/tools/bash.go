@@ -109,6 +109,25 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}, nil
 	}
 
+	// Block broad filesystem searches (find /, find ~, find $HOME).
+	// These are slow, noisy, and wasteful. The agent should target specific directories.
+	if isBroadFilesystemSearch(command) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: searching from filesystem root or home directory is forbidden.\n\n" +
+					"Full-tree `find` is slow, noisy, and wasteful.\n\n" +
+					"Instead, search within a specific directory:\n" +
+					"  ❌ find /\n" +
+					"  ❌ find ~\n" +
+					"  ❌ find $HOME\n" +
+					"  ✅ find /path/to/specific/dir -name '*.go'\n" +
+					"  ✅ Use the grep tool for source code search\n\n" +
+					"Either target a known specific directory, or search within the cwd/workspace directory.",
+			},
+		}, nil
+	}
+
 	// Detect sleep commands with duration >= 30 seconds
 	if sleepDuration, hasSleep := detectSleepCommand(command); hasSleep && sleepDuration >= 30 {
 		return []agentctx.ContentBlock{
@@ -415,6 +434,41 @@ func detectSleepCommand(command string) (int, bool) {
 	}
 
 	return duration, true
+}
+
+// isBroadFilesystemSearch checks if the command runs `find` against the
+// filesystem root (/), home directory (~), or $HOME — all of which are
+// slow, noisy, and wasteful.
+//
+// Blocked patterns:
+//   - find /            (any position in compound commands)
+//   - find /*           (glob expands to all of root)
+//   - find -- /         (double-dash separator)
+//   - find ~
+//   - find ~/*          (glob expands to all of home)
+//   - find $HOME
+//
+// Allowed:
+//   - find /tmp -name x   (specific subdirectory)
+//   - find ~/project      (specific subdirectory under home)
+//   - find .              (current directory)
+func isBroadFilesystemSearch(command string) bool {
+	// find /, find /*, find -- /  — root path or glob of root.
+	// Matches when / is immediately followed by: whitespace, pipe, semicolon,
+	// &, ), * (glob), or end of string. Does NOT match /tmp, /home/user, etc.
+	rootRe := regexp.MustCompile(`\bfind\s+(--\s+)?/([\s|;&)*]|$)`)
+
+	// find ~, find ~/*, find -- ~  — home path or glob of home.
+	// Matches when ~ is followed by a terminator (whitespace, pipe, etc.),
+	// end of string, or /* (glob). Does NOT match ~/project.
+	homeTildeRe := regexp.MustCompile(`\bfind\s+(--\s+)?~([\s|;&)]|$|/\*)`)
+
+	// find $HOME
+	homeEnvRe := regexp.MustCompile(`\bfind\s+\$HOME\b`)
+
+	return rootRe.MatchString(command) ||
+		homeTildeRe.MatchString(command) ||
+		homeEnvRe.MatchString(command)
 }
 
 // isDangerousTmuxKill checks if the command contains tmux kill-server,
