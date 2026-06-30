@@ -65,6 +65,7 @@ Use `change_workspace` tool for persistent directory switches; "cd <dir> && <com
 ### Usage Rules
 
 - **bash**: Default 2-min timeout will hard-kill the process. For builds, large test suites, servers, or anything that may exceed 2 min: set `timeout=` explicitly, or use the `tmux` skill for proper background management.
+- **Piping long commands to head/tail:** For expensive commands (builds, tests, etc.), avoid `cmd 2>&1 | head -N` — if output is truncated or the process is killed, the full output is lost and you'll need to re-run. Instead, redirect to a temp file first: `cmd > /tmp/build.log 2>&1`, then read it with `head -N /tmp/build.log` or the `read` tool. This preserves the full output for later inspection without re-running.
 - **Interactive commands**: Prefer non-interactive flags (e.g. `npm init -y`). Warn user if interaction is unavoidable.
 - **read**: Prefer `read` over `bash cat`. Use `offset`/`limit` for targeted reads.
 - **Paths**: Prefer absolute paths for `read`/`write`.
@@ -79,7 +80,7 @@ Use `change_workspace` tool for persistent directory switches; "cd <dir> && <com
 
 ### Anti-Patterns
 
-- **`bash | grep` for source code search:** Use the `grep` tool instead — it provides structured output, `context` lines, `filePattern` filtering. Only use `bash | grep` for log files, `/tmp/` files, or pipe intermediates.
+- **`bash | grep` for source code search:** Prefer the `grep` tool — it provides structured output, `context` lines, `filePattern` filtering. However, `bash grep` is acceptable when you need features the `grep` tool lacks: asymmetric context (`-A`/`-B`), pipe chaining (`grep ... | grep -v`), file-list mode (`-l`), or multi-command sequences (`grep A; grep B`).
 - **Compound bash commands:** Each `bash` call should do one thing. For multi-step workflows, split into separate calls or write intermediate results to temp files.
 - **Blind file reads:** Never `read` an entire file blindly. Use `grep` to locate relevant sections first, then `read` with `offset`/`limit`.
 - **Broad filesystem searches (`find ~`, `find /`):** Never search the entire home directory or filesystem root. Either target a known specific directory, or search within the cwd/workspace directory. Full-tree `find` is slow, noisy, and wasteful.

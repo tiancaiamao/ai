@@ -27,6 +27,10 @@ Summarize current conversation for context preservation. Output ONLY the structu
 1. [immediate action]
 2. [following action]
 
+## Skills Loaded
+[List skill names loaded via find_skill during this conversation. After compaction, skill content is LOST. The agent MUST reload these skills via find_skill(name="<name>", load=true) before using them.]
+- **skill_name** — [why it was loaded / what it's used for]
+
 ## User Requirements
 [Explicit constraints from user]
 
@@ -37,6 +41,7 @@ Summarize current conversation for context preservation. Output ONLY the structu
 - Keep "What's Complete" — never drop this section
 - Keep "Key Findings" — preserve non-obvious analysis results and intermediate conclusions
 - Keep "Decisions Made" as a separate section — don't merge with others
+- Keep "Skills Loaded" — list every skill that was loaded; these are lost after compaction
 - Keep under 800 tokens total
 - DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>

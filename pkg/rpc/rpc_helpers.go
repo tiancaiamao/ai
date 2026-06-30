@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"log/slog"
-
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -217,6 +216,27 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 		app.stateMu.Lock()
 		app.consecutiveCompactionFailures = 0
 		app.stateMu.Unlock()
+
+		// Inject a post-compaction hint so the LLM knows to reload
+		// skills and design docs that were lost during compaction.
+		injectCompactionHint(agentCtx)
 	}
 	app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
+}
+
+// injectCompactionHint inserts an ephemeral user message at the beginning of
+// RecentMessages (right after the compaction summary) to remind the agent that
+// compaction just occurred. Skills and design docs loaded earlier are now lost
+// — the agent should reload them if needed before proceeding.
+func injectCompactionHint(agentCtx *agentctx.AgentContext) {
+	const hint = `<agent:hint>
+Context was just compacted. The summary above lists skills that were loaded — their full content is now LOST from context. If you need to use any of those skills (e.g. pge, subagent, grill-me), reload them via find_skill(name="<skill>", load=true) BEFORE acting. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
+</agent:hint>`
+
+	msg := agentctx.NewUserMessage(hint).
+		WithKind("compaction_hint").
+		WithVisibility(true, false)
+
+	// Insert at the beginning so it appears right after the compaction summary.
+	agentCtx.RecentMessages = append([]agentctx.AgentMessage{msg}, agentCtx.RecentMessages...)
 }

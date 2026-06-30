@@ -165,8 +165,8 @@ func TestLoadConfigClampsOversizedToolOutput(t *testing.T) {
 	if cfg.ToolOutput == nil {
 		t.Fatal("Expected tool output config to be initialized")
 	}
-	if cfg.ToolOutput.MaxChars != 10000 {
-		t.Fatalf("expected oversized maxChars to be clamped to 10000, got %d", cfg.ToolOutput.MaxChars)
+	if cfg.ToolOutput.MaxChars != maxToolOutputMaxChars {
+		t.Fatalf("expected oversized maxChars to be clamped to %d, got %d", maxToolOutputMaxChars, cfg.ToolOutput.MaxChars)
 	}
 }
 

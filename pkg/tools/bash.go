@@ -111,7 +111,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Block broad filesystem searches (find /, find ~, find $HOME).
 	// These are slow, noisy, and wasteful. The agent should target specific directories.
-	if isBroadFilesystemSearch(command) {
+	if isBroadFilesystemSearch(command, t.workspace.GetCWD()) {
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
 				Type: "text",
@@ -452,7 +452,7 @@ func detectSleepCommand(command string) (int, bool) {
 //   - find /tmp -name x   (specific subdirectory)
 //   - find ~/project      (specific subdirectory under home)
 //   - find .              (current directory)
-func isBroadFilesystemSearch(command string) bool {
+func isBroadFilesystemSearch(command string, cwd string) bool {
 	// find /, find /*, find -- /  — root path or glob of root.
 	// Matches when / is immediately followed by: whitespace, pipe, semicolon,
 	// &, ), * (glob), or end of string. Does NOT match /tmp, /home/user, etc.
@@ -466,9 +466,26 @@ func isBroadFilesystemSearch(command string) bool {
 	// find $HOME
 	homeEnvRe := regexp.MustCompile(`\bfind\s+\$HOME\b`)
 
-	return rootRe.MatchString(command) ||
+	if rootRe.MatchString(command) ||
 		homeTildeRe.MatchString(command) ||
-		homeEnvRe.MatchString(command)
+		homeEnvRe.MatchString(command) {
+		return true
+	}
+
+	// find /Users/genius — home directory via absolute path.
+	// Same risk as find ~, but bypasses the tilde check. Block it too,
+	// unless the workspace cwd IS the home directory (equivalent to find .).
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" || homeDir == "/" {
+		return false
+	}
+	if cwd != "" && cwd == homeDir {
+		return false
+	}
+	homeEscaped := regexp.QuoteMeta(homeDir)
+	homeAbsRe := regexp.MustCompile(`\bfind\s+(--\s+)?` + homeEscaped + `([\s|;&)]|$|/\*|/(?:[\s|;&)]|$))`)
+
+	return homeAbsRe.MatchString(command)
 }
 
 // isDangerousTmuxKill checks if the command contains tmux kill-server,

@@ -11,7 +11,12 @@ const (
 	// Match Codex default truncation order of magnitude: 10,000 bytes/chars.
 	defaultToolOutputMaxChars = 10_000
 	// Hard safety cap to avoid configuration values that can exhaust model context.
-	maxToolOutputMaxChars = defaultToolOutputMaxChars
+	maxToolOutputMaxChars = 30_000
+
+	// find_skill loads skill files which can be long (orchestration skills
+	// routinely exceed 20K chars). Use a higher limit to avoid cutting off
+	// critical rules at the end of the file.
+	skillToolOutputMaxChars = 30_000
 )
 
 // ToolOutputLimits defines truncation limits for tool output (simplified).
@@ -44,6 +49,12 @@ func truncateToolContent(ctx context.Context, content []agentctx.ContentBlock, l
 	}
 
 	maxChars := normalizeToolOutputLimits(limits).MaxChars
+
+	// find_skill returns full skill files which are often >10K chars.
+	// Use a higher limit so critical rules at the end aren't truncated.
+	if toolName == "find_skill" && maxChars < skillToolOutputMaxChars {
+		maxChars = skillToolOutputMaxChars
+	}
 
 	result := make([]agentctx.ContentBlock, 0, len(content))
 	for _, block := range content {
