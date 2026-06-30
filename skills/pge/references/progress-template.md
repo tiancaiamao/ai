@@ -1,6 +1,6 @@
 # Progress Tracking Template
 
-维护 `.pge/progress.md`，记录每个 task/phase 状态、commit hash、eval/review 结果。**压缩后此文件是恢复上下文的唯一依据。**
+维护 `.pge/progress.md`（append-only 事件流）。与 `state.md`（snapshot）互补——`progress.md` 记录执行历史，`state.md` 记录当前快照。compaction 后两者共同恢复上下文。
 
 ```markdown
 ## Phase: <name>

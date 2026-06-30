@@ -21,6 +21,7 @@
 
 ## Context
 {简要项目背景，帮助 Generator 理解代码库}
+**Before starting, read `.pge/state.md` for context from previous tasks.**
 
 ## What to Implement
 {具体的实现要求，给 WHAT 不给 HOW}

@@ -19,6 +19,10 @@
 ## Constraints
 - <technical constraints>
 
+## Phases
+1. <phase-1 name> — <简述>
+2. <phase-2 name> — <简述>
+
 ## Out of Scope
 - <explicitly excluded>
 ```
