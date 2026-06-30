@@ -101,6 +101,12 @@ Design (用户需求)
 
 **⚠️ 进入前加载 `worker-judge` 技能：** `find_skill(name="worker-judge", load=true)`
 
+> **🔥 state.md 是 PGE 的生命线。** 每个 task PASS 后，Orchestrator **必须**更新 `.pge/state.md`（模板见 [`references/state-template.md`](references/state-template.md)）。
+>
+> 为什么？context 会被 compaction 压缩，`state.md` 是恢复上下文的核心依据。**漏了一次更新 = 下次 compaction 后丢失进度 = 整个流程断裂。**
+>
+> 这不是可选步骤。它和 eval report 门禁一样是硬性约束。
+
 每个 task 执行以下循环：
 
 ```
@@ -110,7 +116,9 @@ Design (用户需求)
 4. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
 5. Evaluator 写报告 → .pge/eval-{task}.md
 
-   ┌── PASS ──→ Kill Generator + Evaluator → 更新 state.md → 下一个 task
+   ┌── PASS ──→ ① 更新 .pge/state.md（必须！）
+   │              ② Kill Generator + Evaluator
+   │              ③ 下一个 task
    │
    └── FAIL ──→ ai send eval feedback 给同一个 Generator
                  Generator 修复 → spawn 新 Evaluator → 回到步骤 4
@@ -136,10 +144,6 @@ Design (用户需求)
 
 **⚠️ 并发限制：** Generator + Evaluator = 主 agent + 2 个子 agent = 3，已达 `subagent` 技能的并发上限。Phase 4 spawn Review 前必须先 kill 当前 task 的 Generator 和 Evaluator。
 
-### Phase 3.5: Update State（每个 task PASS 后）
-
-task PASS 后，Orchestrator **必须**更新 `.pge/state.md`。这是 context handoff 的核心机制——当 context 被 compaction 压缩后，`state.md` + `progress.md` 是恢复上下文的唯一依据。（模板见 [`references/state-template.md`](references/state-template.md)）
-
 ### Phase 4: Phase Review & Commit
 
 **⚠️ 进入前加载 `review` 技能：** `find_skill(name="review", load=true)`
@@ -155,6 +159,7 @@ task PASS 后，Orchestrator **必须**更新 `.pge/state.md`。这是 context h
    - **P2/P3**: 记录在 progress.md，不阻塞 commit
 5. **Commit** — 前提：所有 eval report PASS + review 无 P1
 6. **Cleanup all subagents** — 检查 spawn 列表，逐个 cleanup
+7. **下一个 Phase** — 如果还有未完成的 phase，回到 Phase 2 处理下一个 phase；所有 phase 完成则结束
 
 ## File Layout
 
@@ -204,7 +209,7 @@ task PASS 后，Orchestrator **必须**更新 `.pge/state.md`。这是 context h
 | Task 太大/太小 | >500 行 / <80 行 | 拆分 / 合并相邻任务 |
 | PGE 结束但 agent 存活 | 流程结束未清理子 agent | 最后一步：检查 spawn 列表，逐个 cleanup |
 | kill 非自己 spawn 的 agent | `ai kill` 了别的 agent | ⛔ 严禁。遵循 `subagent` 安全规则 |
-| 用 `send --wait` 收集 `--input-file` 任务回复 | spawn 时传了任务又 send | 用 `watch --follow` 观察 |
+| 用 `send --wait` 收集 `--input-file` 任务的**首次**回复 | spawn 时传了任务，首次结果用 send 而非 watch | 首次结果用 `watch --follow` 观察；`send --wait` 仅用于 FAIL 后发送修复反馈 |
 | watch 超时后直接 kill | watch 返回就 kill | 先 `git diff` 检查产出，有变化再 watch 一轮 |
 | kill 后不检查就手动重做 | kill 后直接写代码 | 先 `git diff` 检查子 agent 产出 |
 
