@@ -116,15 +116,22 @@ do_start() {
         [ -f "$FREEZE_DIR/meta.json" ] && cp "$FREEZE_DIR/meta.json" "$RUNTIME_DIR/meta.json"
         local freeze_count=$(wc -l < "$FREEZE_DIR/messages.jsonl" | tr -d ' ')
         echo "   已复制 ${freeze_count} 条消息"
-    fi
+        fi
 
     echo "🚀 启动 ${EXPERT_LABEL}..."
+
+    local system_prompt="$SNAPSHOT_DIR/system-prompt.md"
+    local prompt_arg=""
+    if [ -f "$system_prompt" ]; then
+        prompt_arg="--system-prompt @${system_prompt}"
+    fi
 
     tmux new-session -d -s "$TMUX_SESSION" \
         "ai serve \
             --session $RUNTIME_DIR \
             --name '${PROJECT_NAME}-expert' \
             --id-file $ID_FILE \
+            $prompt_arg \
             --timeout 0"
 
     for i in $(seq 1 30); do
