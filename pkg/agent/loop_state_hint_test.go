@@ -28,7 +28,7 @@ func TestAppendCompactionHint_AppendsToEnd(t *testing.T) {
 	assert.Contains(t, text, "Context was just compacted")
 	assert.Contains(t, text, "find_skill")
 
-		// AgentVisible=true, UserVisible=false
+	// AgentVisible=true, UserVisible=false
 	assert.True(t, last.IsAgentVisible())
 	assert.False(t, last.IsUserVisible())
 	assert.Equal(t, "compaction_hint", last.Metadata.Kind)
