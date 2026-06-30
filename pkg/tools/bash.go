@@ -460,11 +460,12 @@ func isBroadFilesystemSearch(command string, cwd string) bool {
 
 	// find ~, find ~/*, find -- ~  — home path or glob of home.
 	// Matches when ~ is followed by a terminator (whitespace, pipe, etc.),
-	// end of string, or /* (glob). Does NOT match ~/project.
-	homeTildeRe := regexp.MustCompile(`\bfind\s+(--\s+)?~([\s|;&)]|$|/\*)`)
+	// end of string, /* (glob), or a bare trailing slash (~/ at end or ~/ |).
+	// Does NOT match ~/project.
+	homeTildeRe := regexp.MustCompile(`\bfind\s+(--\s+)?~([\s|;&)]|$|/\*|/(?:[\s|;&)]|$))`)
 
-	// find $HOME
-	homeEnvRe := regexp.MustCompile(`\bfind\s+\$HOME\b`)
+	// find $HOME or find ${HOME}
+	homeEnvRe := regexp.MustCompile(`\bfind\s+\$\{?HOME\}?\b`)
 
 	if rootRe.MatchString(command) ||
 		homeTildeRe.MatchString(command) ||

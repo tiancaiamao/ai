@@ -51,9 +51,15 @@ func TestIsBroadFilesystemSearch(t *testing.T) {
 		{"find home tilde glob", "find ~/*", true},
 		{"find home tilde glob with flag", "find ~/* -name '*.go'", true},
 
+		// Blocked: tilde + trailing slash (~/ expands to home dir)
+		{"find home tilde trailing slash", "find ~/ -name '*.go'", true},
+		{"find home tilde trailing slash basic", "find ~/", true},
+
 		// Blocked: home via $HOME
 		{"find $HOME basic", "find $HOME", true},
 		{"find $HOME with flag", "find $HOME -name '*.go'", true},
+		{"find ${HOME} basic", "find ${HOME}", true},
+		{"find ${HOME} with flag", "find ${HOME} -name '*.go'", true},
 
 		// Blocked: home via absolute path (e.g. find /Users/genius)
 		{"find home abs path", "find " + homeDir + " -name '*.go'", true},

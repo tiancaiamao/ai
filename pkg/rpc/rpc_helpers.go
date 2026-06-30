@@ -237,6 +237,11 @@ Context was just compacted. The summary above lists skills that were loaded — 
 		WithKind("compaction_hint").
 		WithVisibility(true, false)
 
-	// Insert at the beginning so it appears right after the compaction summary.
-	agentCtx.RecentMessages = append([]agentctx.AgentMessage{msg}, agentCtx.RecentMessages...)
+		// Insert at index 1 (after the compaction summary at index 0) so the
+	// hint appears after the summary it references.
+	if len(agentCtx.RecentMessages) > 0 {
+		agentCtx.RecentMessages = append([]agentctx.AgentMessage{agentCtx.RecentMessages[0], msg}, agentCtx.RecentMessages[1:]...)
+	} else {
+		agentCtx.RecentMessages = append([]agentctx.AgentMessage{msg}, agentCtx.RecentMessages...)
+	}
 }
