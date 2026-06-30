@@ -5,6 +5,14 @@ Summarize current conversation for context preservation. Output ONLY the structu
 ## Current Task (MOST IMPORTANT)
 [What is the user asking for RIGHT NOW? Quote the latest user request VERBATIM, then describe the current goal.]
 
+## Architecture & Plan
+[HIGH-LEVEL design and plan — this section MUST survive compaction. Include:]
+- Overall goal and task decomposition (phases/steps)
+- Current phase and what remains
+- Key architectural decisions and design constraints that span the ENTIRE task
+- Path to design doc or plan file if one exists (e.g. /tmp/pge-plan.md)
+[If no multi-step plan exists, write "None"]
+
 ## Files Involved
 - path/to/file: [status/changes]
 - path/to/another: [status/changes]
@@ -27,6 +35,10 @@ Summarize current conversation for context preservation. Output ONLY the structu
 1. [immediate action]
 2. [following action]
 
+## Skills Loaded
+[List skill names loaded via find_skill during this conversation. After compaction, skill content is LOST. The agent MUST reload these skills via find_skill(name="<name>", load=true) before using them.]
+- **skill_name** — [why it was loaded / what it's used for]
+
 ## User Requirements
 [Explicit constraints from user]
 
@@ -37,6 +49,8 @@ Summarize current conversation for context preservation. Output ONLY the structu
 - Keep "What's Complete" — never drop this section
 - Keep "Key Findings" — preserve non-obvious analysis results and intermediate conclusions
 - Keep "Decisions Made" as a separate section — don't merge with others
+- Keep "Architecture & Plan" — preserve global design, phase progress, and multi-step plans across compaction; this is the MOST easily lost information
+- Keep "Skills Loaded" — list every skill that was loaded; these are lost after compaction
 - Keep under 800 tokens total
 - DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>

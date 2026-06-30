@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"log/slog"
-
 	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
@@ -217,6 +216,12 @@ func (app *rpcApp) compactBeforeRequest(trigger string) {
 		app.stateMu.Lock()
 		app.consecutiveCompactionFailures = 0
 		app.stateMu.Unlock()
+
+		// Append a post-compaction hint to the summary message so the
+		// LLM knows to reload skills and design docs lost during compaction.
+		agent.AppendCompactionHint(agentCtx)
 	}
 	app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 }
+
+// appendCompactionHint is defined in pkg/agent/loop_state.go.

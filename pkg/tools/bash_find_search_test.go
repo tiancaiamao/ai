@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -10,6 +11,14 @@ import (
 )
 
 func TestIsBroadFilesystemSearch(t *testing.T) {
+	// Use a cwd that is NOT the home dir, so home-abs-path cases are blocked.
+	nonHomeCwd := "/tmp"
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("os.UserHomeDir() failed: %v", err)
+	}
+
 	tests := []struct {
 		name    string
 		command string
@@ -42,9 +51,21 @@ func TestIsBroadFilesystemSearch(t *testing.T) {
 		{"find home tilde glob", "find ~/*", true},
 		{"find home tilde glob with flag", "find ~/* -name '*.go'", true},
 
+		// Blocked: tilde + trailing slash (~/ expands to home dir)
+		{"find home tilde trailing slash", "find ~/ -name '*.go'", true},
+		{"find home tilde trailing slash basic", "find ~/", true},
+
 		// Blocked: home via $HOME
 		{"find $HOME basic", "find $HOME", true},
 		{"find $HOME with flag", "find $HOME -name '*.go'", true},
+		{"find ${HOME} basic", "find ${HOME}", true},
+		{"find ${HOME} with flag", "find ${HOME} -name '*.go'", true},
+
+		// Blocked: home via absolute path (e.g. find /Users/genius)
+		{"find home abs path", "find " + homeDir + " -name '*.go'", true},
+		{"find home abs path basic", "find " + homeDir, true},
+		{"find home abs path trailing slash", "find " + homeDir + "/ -name '*.go'", true},
+		{"find home abs path trailing slash basic", "find " + homeDir + "/", true},
 
 		// Allowed: specific subdirectories
 		{"find /tmp", "find /tmp -name '*.go'", false},
@@ -53,6 +74,9 @@ func TestIsBroadFilesystemSearch(t *testing.T) {
 		{"find current dir", "find . -name '*.go'", false},
 		{"find relative", "find src -name '*.go'", false},
 		{"find with path then root flag", "find /home/user/project -name x", false},
+
+		// Allowed: subdirectory of home via absolute path (e.g. find /Users/genius/project)
+		{"find home subdir abs", "find " + homeDir + "/project -name x", false},
 
 		// Allowed: not a find command at all
 		{"grep find", "grep -r 'find /' file.txt", false},
@@ -66,7 +90,7 @@ func TestIsBroadFilesystemSearch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isBroadFilesystemSearch(tt.command)
+			result := isBroadFilesystemSearch(tt.command, nonHomeCwd)
 			assert.Equal(t, tt.blocked, result, "command: %q", tt.command)
 		})
 	}
@@ -85,6 +109,10 @@ func TestBashToolBlocksBroadFilesystemSearch(t *testing.T) {
 		"find $HOME",
 		"find / -name '*.go'",
 		"echo hi && find /",
+	}
+	// Also test home-dir-as-absolute-path when cwd is NOT home.
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		blockedCmds = append(blockedCmds, "find "+homeDir)
 	}
 
 	for _, cmd := range blockedCmds {
@@ -120,4 +148,25 @@ func TestBashToolAllowsScopedFind(t *testing.T) {
 			assert.NotContains(t, result.Text, "⛔ Blocked")
 		})
 	}
+}
+
+func TestIsBroadFilesystemSearch_HomeCwdAllowsHomeFind(t *testing.T) {
+	// When the workspace cwd IS the home directory,
+	// `find <home>` is equivalent to `find .` and should be allowed.
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("os.UserHomeDir() failed: %v", err)
+	}
+
+	// find <home> with cwd == home → allowed (equivalent to find .)
+	assert.False(t, isBroadFilesystemSearch("find "+homeDir, homeDir))
+	assert.False(t, isBroadFilesystemSearch("find "+homeDir+" -name '*.go'", homeDir))
+
+	// find ~ and find $HOME are still blocked even when cwd == home,
+	// because the explicit ~ / $HOME signals intent to search all of home.
+	assert.True(t, isBroadFilesystemSearch("find ~", homeDir))
+	assert.True(t, isBroadFilesystemSearch("find $HOME", homeDir))
+
+	// find / is still blocked regardless of cwd.
+	assert.True(t, isBroadFilesystemSearch("find /", homeDir))
 }

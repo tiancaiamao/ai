@@ -58,8 +58,8 @@ func TestTruncateToolContentClampsOversizedLimit(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected text content, got %T", result[0])
 	}
-	if len(text.Text) > 10000 {
-		t.Fatalf("oversized tool output limit should be clamped to 10000, got %d", len(text.Text))
+	if len(text.Text) > maxToolOutputMaxChars {
+		t.Fatalf("oversized tool output limit should be clamped to %d, got %d", maxToolOutputMaxChars, len(text.Text))
 	}
 }
 
@@ -82,7 +82,7 @@ func TestSetToolOutputLimitsNormalizesLimit(t *testing.T) {
 	a := &Agent{}
 	a.SetToolOutputLimits(ToolOutputLimits{MaxChars: 204800})
 
-	if a.LoopConfig.ToolOutput.MaxChars != 10000 {
-		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to 10000, got %d", a.LoopConfig.ToolOutput.MaxChars)
+	if a.LoopConfig.ToolOutput.MaxChars != maxToolOutputMaxChars {
+		t.Fatalf("expected SetToolOutputLimits to clamp maxChars to %d, got %d", maxToolOutputMaxChars, a.LoopConfig.ToolOutput.MaxChars)
 	}
 }
