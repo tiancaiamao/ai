@@ -67,7 +67,7 @@ type ToolOutputConfig struct {
 
 const (
 	defaultToolOutputMaxChars = 10_000
-	maxToolOutputMaxChars     = defaultToolOutputMaxChars
+	maxToolOutputMaxChars     = 30_000
 )
 
 // DefaultConcurrencyConfig returns default concurrency configuration.

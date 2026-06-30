@@ -82,6 +82,14 @@ func StreamLLM(
 			"stream":   true,
 		}
 
+		// Set max_tokens if the model specifies one; otherwise omit and let the
+		// provider use its default. Reasoning models (e.g. via Ollama) can have
+		// their entire token budget consumed by <think> blocks, leaving content
+		// empty — so a generous max_tokens is important.
+		if model.MaxTokens > 0 {
+			reqBody["max_tokens"] = model.MaxTokens
+		}
+
 		if len(llmCtx.Tools) > 0 {
 			reqBody["tools"] = llmCtx.Tools
 			reqBody["tool_choice"] = "auto"
