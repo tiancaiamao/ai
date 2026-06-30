@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -301,38 +300,18 @@ func replaceLast(msgs []agentctx.AgentMessage, msg agentctx.AgentMessage) []agen
 	return msgs
 }
 
-// AppendCompactionHint appends a post-compaction hint to the summary message's
-// text content. By merging into the existing summary message rather than
-// inserting a separate message, we avoid changing the message count/structure
-// (better for prefix caching) and avoid introducing a spurious user-role
-// message.
-//
-// Idempotent: if the summary already contains the hint marker, it's a no-op.
+// AppendCompactionHint appends a new user-role hint message at the END of
+// RecentMessages after a successful compaction. The LLM's last input is the
+// most attention-grabbing position, making it ideal for a "reload your skills"
+// reminder. The message uses kind "compaction_hint" and is AgentVisible only.
 func AppendCompactionHint(agentCtx *agentctx.AgentContext) {
-	if len(agentCtx.RecentMessages) == 0 {
-		return
-	}
-	summaryMsg := &agentCtx.RecentMessages[0]
-	if summaryMsg.Metadata == nil || summaryMsg.Metadata.Kind != "compactionSummary" {
-		return
-	}
-	for _, block := range summaryMsg.Content {
-		if tc, ok := block.(agentctx.TextContent); ok {
-			if strings.Contains(tc.Text, "<agent:hint>") {
-				return
-			}
-		}
-	}
-	const hint = `
-
-<agent:hint>
+	hint := `<agent:hint>
 Context was just compacted. The summary above lists skills that were loaded — their full content is now LOST from context. If you need to use any of those skills, reload them via find_skill(name="<skill>", load=true) BEFORE acting. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
 </agent:hint>`
-	for i, block := range summaryMsg.Content {
-		if tc, ok := block.(agentctx.TextContent); ok {
-			tc.Text += hint
-			summaryMsg.Content[i] = tc
-			return
-		}
-	}
+
+	msg := agentctx.NewUserMessage(hint).
+		WithKind("compaction_hint").
+		WithVisibility(true, false)
+
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, msg)
 }
