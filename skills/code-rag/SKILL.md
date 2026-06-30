@@ -59,7 +59,8 @@ metadata:
 │   └── snapshot/
 │       ├── frozen/                  ← 🔒 冻结镜像（只读）
 │       ├── runtime/                 ← 🔧 工作副本（可脏）
-│       ├── bootstrap.md             ← Agent 加载指令
+│       ├── bootstrap.md             ← Agent 加载指令（freeze 时使用）
+│       ├── system-prompt.md         ← Expert agent 的 system prompt（start 时使用）
 │       └── snapshot.sh              ← 管理脚本
 ```
 
@@ -82,6 +83,9 @@ metadata:
 
 4. 生成 bootstrap.md（从模板，Phase 2 结束后再填入子系统列表）
    cp <skill-dir>/templates/bootstrap.md ~/project/<project>-code-RAG/wiki/snapshot/
+
+5. 生成 system-prompt.md（Expert agent 的行为约束）
+   cp <skill-dir>/templates/system-prompt.md ~/project/<project>-code-RAG/wiki/snapshot/
 ```
 
 ### Phase 2: Build — 构建 wiki 内容
@@ -346,9 +350,14 @@ N 条消息, ~100-200KB         随提问增长
 **关键原则：frozen 只读，runtime 随便脏。**
 
 - **freeze**：启动临时 agent，让它读完所有 wiki 页面，保存 session 为冻结镜像
-- **start**：从 frozen 复制到 runtime，启动 expert agent
+- **start**：从 frozen 复制到 runtime，启动 expert agent（使用 `system-prompt.md` 约束行为）
 - **ask**：向 agent 提问，消息追加到 runtime
 - **clean**：丢弃 runtime，下次 start 重新 fork
+
+> **为什么需要 system-prompt.md？**
+> `ai serve` 默认使用 `coder` role 的 system prompt，这会让 agent 倾向于读写代码、运行测试。
+> 但 code RAG expert 的职责是「基于 wiki 知识回答问题」，不应该主动修改代码或运行构建。
+> `system-prompt.md` 覆盖默认行为，确保 agent 专注于知识问答。
 
 ## Commands Reference
 
