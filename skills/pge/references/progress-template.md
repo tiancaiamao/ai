@@ -12,7 +12,7 @@
 ### Task 1: <name>
 - Generator: gen-001 (alive)
 - Evaluator: val-001 (killed)
-- Eval: .pge/eval-task-1.md — FAIL (round 1) → PASS (round 2)
+- Eval: .pge/eval-{task1-name}.md — FAIL (round 1) → PASS (round 2)
 - Status: VALIDATED ✅
 
 ## Phase Review

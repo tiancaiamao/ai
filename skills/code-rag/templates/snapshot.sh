@@ -116,9 +116,9 @@ do_start() {
         [ -f "$FREEZE_DIR/meta.json" ] && cp "$FREEZE_DIR/meta.json" "$RUNTIME_DIR/meta.json"
         local freeze_count=$(wc -l < "$FREEZE_DIR/messages.jsonl" | tr -d ' ')
         echo "   已复制 ${freeze_count} 条消息"
-    fi
+        fi
 
-        echo "🚀 启动 ${EXPERT_LABEL}..."
+    echo "🚀 启动 ${EXPERT_LABEL}..."
 
     local system_prompt="$SNAPSHOT_DIR/system-prompt.md"
     local prompt_arg=""

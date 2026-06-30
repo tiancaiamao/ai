@@ -64,6 +64,20 @@ Critically and objectively verify each acceptance criterion.
 
 ---
 
+## Generator Fix Prompt 模板（FAIL 后 ai send 给同一个 Generator）
+
+当 Evaluator 返回 FAIL 时，Orchestrator 通过 `ai send` 发送给同一个 Generator：
+
+```markdown
+## Feedback from Evaluator (Round {N})
+The evaluator found the following issues:
+{paste relevant ❌ items from eval report}
+Please fix these issues. The eval report is at .pge/eval-{task}.md.
+Output DONE: <file list> when complete.
+```
+
+---
+
 ## Review Agent Prompt 模板
 
 写入 `/tmp/review-{phase}.md`，作为 `--input-file` 传入：
