@@ -1,38 +1,43 @@
 # State Template
 
-`state.md` 是**当前快照（snapshot）**——只保留最新状态，可覆写。与 `progress.md`（append-only 事件流）互补。
-
-| 文件 | 性质 | 内容 |
-|------|------|------|
-| `state.md` | snapshot（可覆写） | 当前状态：完成了什么、关键决策、下一步 |
-| `progress.md` | log（append-only） | 执行历史：谁做了什么、何时、结果如何 |
-
-**为什么重要：** 当主 agent 的 context 被 compaction 压缩后，读 `state.md`（快速了解当前进度）+ `progress.md`（了解执行历史）恢复上下文。每个新 Generator 也读 `state.md` 来了解前序工作。
-
-写入 `.pge/state.md`：
+`state.md` 是 PGE 的**唯一状态文件**。每个 task PASS 后必须更新。
 
 ```markdown
 # State
 
-## Completed Tasks
-- T001: Add JWT auth — done, files: src/auth/jwt.go, src/api/login.go
-- T002: Add RBAC middleware — done, files: src/middleware/rbac.go
+## Task Status
+
+| Task | Status | Eval |
+|------|--------|------|
+| P1-T1: WitnessStorage wiring | ✅ PASS | eval-p1-t1.md |
+| P1-T2: conf_state tests | ✅ PASS | eval-p1-t2.md |
+| P1-T3: trait contract tests | ⏳ In Progress | |
+
+## Next Task
+P1-T3
 
 ## Key Decisions
-- Token in http-only cookie (not localStorage)
-- Roles: admin, editor, viewer
+- Use `cargo check` not `cargo test` (macOS linker issue)
+- Generator injected witness_storage in both `start()` and `run_node()`
 
 ## Known Issues
-- Token refresh not yet implemented (T003)
+- macOS arm64 linker error affects all rfstore tests (pre-existing)
 
-## What's Next
-- T003: Implement token refresh
+## Phase Log
+- Phase 1: commit f800f329c — 5 tasks, all PASS, review clean
+- Phase 2: commit e35e8952a — 5 tasks, all PASS, 1 P1 fix applied
 ```
 
-## 更新规则
+## 字段说明
 
-- **每个 task PASS 后立即更新** — 不要积累多个 task 再批量更新
-- Completed Tasks 只记录已通过 eval 的 task
-- Key Decisions 记录影响后续 task 的架构/设计决策
-- Known Issues 记录遗留问题，帮助后续 Generator 避坑
-- What's Next 指向下一个要执行的 task
+| 字段 | 更新时机 | 说明 |
+|------|----------|------|
+| Task Status | 每个 task PASS 后 | 表格行 edit，标记 ✅/⏳ + eval 文件名 |
+| Next Task | 每个 task PASS 后 | 改为下一个 task 名（仅 task 名，不写散文） |
+| Key Decisions | 有重要决策时 | 影响后续 task 的架构/设计决策 |
+| Known Issues | 发现问题时 | 遗留问题，帮后续 Generator 避坑 |
+| Phase Log | 每个 phase commit 后 | 一行：commit hash + task 数 + review 结果 |
+
+## 为什么 Next Task 只写 task 名
+
+在之前的设计中，Next Task 是散文（"P1-T2: Add unit tests for..."），agent 每次 `edit` 表格行但**从不更新 Next Task**——因为改散文比重写表格行难。改为仅 task 名后，更新操作是一行精准替换。
