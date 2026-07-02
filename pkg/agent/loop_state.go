@@ -306,7 +306,10 @@ func replaceLast(msgs []agentctx.AgentMessage, msg agentctx.AgentMessage) []agen
 // reminder. The message uses kind "compaction_hint" and is AgentVisible only.
 func AppendCompactionHint(agentCtx *agentctx.AgentContext) {
 	hint := `<agent:hint>
-Context was just compacted. The summary above lists skills that were loaded — their full content is now LOST from context. If you need to use any of those skills, reload them via find_skill(name="<skill>", load=true) BEFORE acting. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
+Context was just compacted. The compaction summary preserves key information:
+1. "Skills Loaded" lists skills whose full content is now LOST. Reload via find_skill(name="<skill>", load=true) if you need the full details.
+2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
+3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
 </agent:hint>`
 
 	msg := agentctx.NewUserMessage(hint).
