@@ -1,28 +1,12 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
-	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
-
-// ConvertMessagesToLLM converts agent messages to LLM messages.
-func ConvertMessagesToLLM(ctx context.Context, messages []agentctx.AgentMessage) []llm.LLMMessage {
-	span := traceevent.StartSpan(ctx, "ConvertMessagesToLLM", traceevent.CategoryEvent)
-	defer span.End()
-	return agentctx.ConvertMessagesToLLM(messages)
-}
-
-// ConvertToolsToLLM converts agent tools to LLM tools.
-func ConvertToolsToLLM(ctx context.Context, tools []agentctx.Tool) []llm.LLMTool {
-	span := traceevent.StartSpan(ctx, "ConvertToolsToLLM", traceevent.CategoryEvent)
-	defer span.End()
-	return agentctx.ConvertToolsToLLM(tools)
-}
 
 // ConvertLLMMessageToAgent converts an LLM message to an agent message.
 //

@@ -125,25 +125,26 @@ ai kill --id "$EVAL_ID"
 ## Step 6: PASS → Update State, Kill Agents, Next Task
 
 ```bash
-# 1. 更新 state.md（Orchestrator 负责）
+# 1. 更新 state.md（Orchestrator 负责，3 步）
 cat > .pge/state.md << 'EOF'
 # State
-## Completed Tasks
-- add-jwt-auth: JWT middleware — done, files: src/middleware/auth.go
+## Task Status
+| Task | Status | Eval |
+|------|--------|------|
+| add-jwt-auth | ✅ PASS | eval-add-jwt-auth.md |
+| add-rbac | ⏳ In Progress | |
+
+## Next Task
+add-rbac
 
 ## Key Decisions
 - Using HS256 for JWT signing
 
 ## Known Issues
 - (none yet)
-
-## What's Next
-- add-rbac: Role-based access control
 EOF
 
-# 2. 更新 progress.md（append）
-
-# 3. Kill Generator + Evaluator
+# 2. Kill Generator + Evaluator
 ai kill --id "$CHILD_ID"
 ai kill --id "$EVAL_ID"
 

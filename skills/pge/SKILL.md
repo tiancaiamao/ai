@@ -116,7 +116,7 @@ Design (用户需求)
 4. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
 5. Evaluator 写报告 → .pge/eval-{task}.md
 
-   ┌── PASS ──→ ① 更新 .pge/state.md（必须！）
+      ┌── PASS ──→ ① 更新 .pge/state.md（3 步：表格 + Next Task + kill agents）
    │              ② Kill Generator + Evaluator
    │              ③ 下一个 task
    │
@@ -156,7 +156,7 @@ Design (用户需求)
 4. **Orchestrator 读 review report**：
    - **无 P1**: 可以 commit
    - **有 P1**: 写修复任务 → spawn Generator 修复 → spawn Evaluator 验证 → 回到 Review
-   - **P2/P3**: 记录在 progress.md，不阻塞 commit
+      - **P2/P3**: 记录在 state.md 的 Known Issues 中，不阻塞 commit
 5. **Commit** — 前提：所有 eval report PASS + review 无 P1
 6. **Cleanup all subagents** — 检查 spawn 列表，逐个 cleanup
 7. **下一个 Phase** — 如果还有未完成的 phase，回到 Phase 2 处理下一个 phase；所有 phase 完成则结束
@@ -166,28 +166,33 @@ Design (用户需求)
 ```
 .pge/
   spec.md              # 需求 + 验收标准
-  state.md             # 当前状态（每个 task 完成后更新）
-  progress.md          # 执行日志（append-only）
+  state.md             # 唯一真相源：当前状态 + phase 日志（每个 task 完成后更新）
   tasks/
     task-{name}.md     # 任务描述
   eval-{task}.md       # Evaluator 报告
   review-phase{N}.md   # Review 报告
 ```
 
-建议在 `.gitignore` 中添加 `.pge/`（eval report 和 progress 是过程文件，不提交到仓库）。
+建议在 `.gitignore` 中添加 `.pge/`（eval report 和 state.md 是过程文件，不提交到仓库）。
 
-## Progress Tracking
+> **⚠️ 不使用 progress.md。** state.md 是唯一的状态文件。执行历史由 eval report 文件 + git log 覆盖，不需要额外的 append-only 日志。少一个文件 = 少一个会忘记更新的东西。
 
-维护 `.pge/progress.md`，记录每个 task/phase 状态、commit hash、eval/review 结果。**压缩后此文件 + `state.md` 是恢复上下文的唯一依据。**（模板见 [`references/progress-template.md`](references/progress-template.md)）
+## State Tracking
+
+`state.md` 是 PGE 的**唯一状态文件**——既是当前快照，也是 compaction 后恢复上下文的唯一依据。每个 task PASS 后必须更新。（模板见 [`references/state-template.md`](references/state-template.md)）
+
+**更新规则（每个 task PASS 后，3 步必须全做）：**
+1. `edit` Task Status 表格：标记 task 为 ✅ PASS + eval 文件名
+2. `edit` Next Task：改为下一个 task 名
+3. （仅在 phase 结束时）追加 Phase Log 一行：commit hash + review 结果
 
 ## Context Recovery（compaction 后）
 
 当 context 被 compaction 压缩后，按以下步骤恢复：
 
 1. Read `.pge/spec.md` — 回顾目标
-2. Read `.pge/state.md` — 了解当前进度和关键决策
-3. Read `.pge/progress.md` — 了解执行历史
-4. Resume from `state.md` 的 "What's Next"
+2. Read `.pge/state.md` — 了解当前进度、关键决策和下一步
+3. Resume from `state.md` 的 "Next Task"
 
 ## ⛔ Anti-Patterns（必读）
 
@@ -199,7 +204,7 @@ Design (用户需求)
 | 自测判定通过 | 自己跑测试宣布 PASS | PASS/FAIL 必须由独立 Evaluator 判定 |
 | Orchestrator 创建 eval report | `write .pge/eval-*.md` | 只有 Evaluator 可以写 eval report |
 | 跳过 Review | phase 完成未 Review 就 commit | commit 前必须 spawn Review agent |
-| task PASS 后不更新 state.md | state.md 内容过时 | 每个 task PASS 后必须更新 |
+| task PASS 后不更新 state.md | state.md 内容过时 | 每个 task PASS 后必须执行 3 步更新（见 State Tracking）|
 | 自己动手改源码 | `edit`/`write` src/ 中的文件 | 停下来。写任务描述交给 Generator |
 | 凭猜测操作子 agent | 未加载 `subagent` 技能就写 ai serve/kill 命令 | 先 `find_skill(name="subagent", load=true)` |
 | 无 eval report 就 commit | commit 时没有 `.pge/eval-{task}.md` PASS | 先读 eval report，必须存在且 PASS |
@@ -235,7 +240,7 @@ Design (用户需求)
 4. **FAIL 后 `ai send` 给同一个 Generator** — 保持上下文连续性，不 spawn 新的
 5. **PASS 后才 kill Generator** — task 循环内保持存活
 6. **Eval report 是门禁** — 文件必须存在且 PASS，才能进入下一个 task
-7. **每个 task PASS 后更新 state.md** — compaction 后恢复上下文的依据
+7. **每个 task PASS 后更新 state.md（3 步）** — 见 State Tracking 章节；compaction 后恢复上下文唯一依据
 8. **Commit 只在 eval PASS + review 无 P1 之后**
 9. **Generator MUST read existing API before using it** — no hallucinated function calls
 10. **Build MUST pass before DONE**

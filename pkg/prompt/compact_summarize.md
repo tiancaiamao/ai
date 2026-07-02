@@ -39,6 +39,9 @@ Summarize current conversation for context preservation. Output ONLY the structu
 [List skill names loaded via find_skill during this conversation. After compaction, skill content is LOST. The agent MUST reload these skills via find_skill(name="<name>", load=true) before using them.]
 - **skill_name** — [why it was loaded / what it's used for]
 
+## Behavioral Constraints
+[Key process rules and invariants from loaded skills that the agent MUST follow. Extract ONLY actionable behavioral rules — not general knowledge. These survive compaction so the agent can comply without reloading the full skill. Examples: "Update state.md AND progress.md after every task PASS", "Eval report must exist and PASS before starting next task", "Never skip the review phase before commit". Write "None" if no skill-imposed constraints apply.]
+
 ## User Requirements
 [Explicit constraints from user]
 
@@ -51,6 +54,7 @@ Summarize current conversation for context preservation. Output ONLY the structu
 - Keep "Decisions Made" as a separate section — don't merge with others
 - Keep "Architecture & Plan" — preserve global design, phase progress, and multi-step plans across compaction; this is the MOST easily lost information
 - Keep "Skills Loaded" — list every skill that was loaded; these are lost after compaction
+- Keep "Behavioral Constraints" — extract key process rules from loaded skills; these survive compaction so the agent can comply without reloading
 - Keep under 800 tokens total
 - DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>
