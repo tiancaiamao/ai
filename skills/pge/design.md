@@ -176,11 +176,10 @@ reads:                    reads:                   reads:
 ```
 .pge/
   spec.md              # Requirements + acceptance criteria
-  state.md             # Current state — updated after each generator
+      state.md             # Current state — updated after each task PASS
   tasks/
     001-add-auth.md
     002-add-rbac.md
-  progress.md          # Append-only execution log
 ```
 
 ## Key Differences from `implement` Skill

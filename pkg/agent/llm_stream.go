@@ -33,7 +33,7 @@ func streamAssistantResponse(
 	var llmMessages []llm.LLMMessage
 
 	selectedMessages, _ := selectMessagesForLLM(agentCtx)
-	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
+	llmMessages = agentctx.ConvertMessagesToLLM(selectedMessages)
 
 	// Resolve model early — needed for thinking API detection and cache mode.
 	model := getEffectiveModel(config)
@@ -83,7 +83,7 @@ func streamAssistantResponse(
 	}
 
 	// Convert tools to LLM format
-	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
+	llmTools := agentctx.ConvertToolsToLLM(agentCtx.Tools)
 
 	llmCtxParams := llm.LLMContext{
 		SystemPrompt:  systemPrompt,

@@ -24,9 +24,6 @@ func StreamLLM(
 	apiKey string,
 	chunkIntervalTimeout time.Duration, // Timeout between chunks (e.g., 2min)
 ) *EventStream[LLMEvent, LLMMessage] {
-	span := traceevent.StartSpan(ctx, "llm.StreamLLM", traceevent.CategoryLLM)
-	defer span.End()
-
 	// Route to Anthropic API if requested
 	if model.API == "anthropic-messages" {
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)

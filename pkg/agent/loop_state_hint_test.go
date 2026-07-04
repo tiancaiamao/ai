@@ -26,6 +26,7 @@ func TestAppendCompactionHint_AppendsToEnd(t *testing.T) {
 	text := last.ExtractText()
 	assert.Contains(t, text, "<agent:hint>")
 	assert.Contains(t, text, "Context was just compacted")
+	assert.Contains(t, text, "Behavioral Constraints")
 	assert.Contains(t, text, "find_skill")
 
 	// AgentVisible=true, UserVisible=false
