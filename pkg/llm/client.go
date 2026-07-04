@@ -309,7 +309,8 @@ func StreamLLM(
 					}
 
 					partial.AppendToolCall(tcDelta.Index, toolCall)
-					stream.Push(LLMToolCallDeltaEvent{Index: tcDelta.Index, ToolCall: toolCall})
+					tcCopy := *toolCall
+					stream.Push(LLMToolCallDeltaEvent{Index: tcDelta.Index, ToolCall: &tcCopy})
 				}
 			}
 
