@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -341,6 +340,3 @@ func TestParseRetryAfterHeader(t *testing.T) {
 		t.Fatalf("expected 0 from invalid header, got %v", got)
 	}
 }
-
-// ensure we have at least 2 goroutines to trigger the race detector
-var _ = runtime.GOMAXPROCS(2)
