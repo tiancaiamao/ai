@@ -239,7 +239,7 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/session/entries.go` | `SessionEntry`, `SessionHeader`, entry types |
 | `cmd/ai/session_writer.go` | `sessionCompactor`: thread-safe compactor wrapper |
 | `pkg/prompt/builder.go` | System prompt construction |
-| `pkg/prompt/llm_decide_check.md` | LLM ask prompt template |
+| `pkg/prompt/compact_check.md` | LLM ask prompt template |
 | `pkg/prompt/compact_summarize.md` | Summarization prompt (initial) |
 | `pkg/prompt/compact_summarize.md` | Summarization prompt |
 

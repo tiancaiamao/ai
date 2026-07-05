@@ -699,7 +699,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	defer span.End()
 
 	if c.askPrompt == "" {
-		c.askPrompt = prompt.LLMDecideCheckPrompt()
+		c.askPrompt = prompt.CompactCheckPrompt()
 	}
 
 	cfg := c.config.LLMDecide

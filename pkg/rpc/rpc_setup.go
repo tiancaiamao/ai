@@ -45,30 +45,12 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		return nil, err
 	}
 
-	// --- Model override from CLI ---
-	if params.modelOverride != "" {
-		applyModelOverride(cfg, params.modelOverride)
-	}
-
-	// --- Model + API Key ---
-	model, apiKey, activeSpec, err := resolveModelAndKey(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	currentModelInfo := modelInfoFromSpec(activeSpec)
-	currentModelInfo.MaxTokens = model.MaxTokens
-	currentModelInfo.ContextWindow = model.ContextWindow
-	currentContextWindow := activeSpec.ContextWindow
-	if currentContextWindow <= 0 {
-		currentContextWindow = model.ContextWindow
-	}
-
 	// --- Working directory ---
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
+
 	// --- Session ---
 	sessionPath, err = normalizeSessionPath(sessionPath)
 	if err != nil {
@@ -115,6 +97,31 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		}
 		agentCfg = roleCfg
 		slog.Info("Loaded role config", "role", params.role, "path", roleConfigPath)
+
+		// Apply role's default model if no --model CLI override.
+		if params.modelOverride == "" && agentCfg.Model != "" {
+			slog.Info("Applying role default model", "role", params.role, "model", agentCfg.Model)
+			applyModelOverride(cfg, agentCfg.Model)
+		}
+	}
+
+	// --- Model override from CLI (highest priority) ---
+	if params.modelOverride != "" {
+		applyModelOverride(cfg, params.modelOverride)
+	}
+
+	// --- Model + API Key ---
+	model, apiKey, activeSpec, err := resolveModelAndKey(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	currentModelInfo := modelInfoFromSpec(activeSpec)
+	currentModelInfo.MaxTokens = model.MaxTokens
+	currentModelInfo.ContextWindow = model.ContextWindow
+	currentContextWindow := activeSpec.ContextWindow
+	if currentContextWindow <= 0 {
+		currentContextWindow = model.ContextWindow
 	}
 
 	// Record role in session meta for future resume.

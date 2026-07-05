@@ -17,8 +17,8 @@ var promptTemplate string
 //go:embed "compact_summarize.md"
 var compactSummarizePrompt string
 
-//go:embed "llm_decide_check.md"
-var llmDecideCheckPrompt string
+//go:embed "compact_check.md"
+var compactCheckPrompt string
 
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
@@ -271,9 +271,9 @@ func NormalizeThinkingLevel(level string) string {
 	}
 }
 
-// LLMDecideCheckPrompt returns the prompt template for asking the LLM
+// CompactCheckPrompt returns the prompt template for asking the LLM
 // whether to compact. Contains a single %s placeholder for the budget
 // percentage (e.g. "40%").
-func LLMDecideCheckPrompt() string {
-	return llmDecideCheckPrompt
+func CompactCheckPrompt() string {
+	return compactCheckPrompt
 }
