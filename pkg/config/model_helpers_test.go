@@ -173,13 +173,16 @@ func TestApplyModelOverride_ProviderIDNotFound(t *testing.T) {
 		},
 	}
 
-	// Unknown provider/id — warn, keep original config.
+	// Unknown provider/id — warn, clean ID but keep original Provider/BaseURL/API.
 	applyModelOverrideForTest(cfg, "unknown-provider/unknown-model", specs)
-	if cfg.Model.ID != "unknown-provider/unknown-model" {
-		t.Errorf("ID = %q, want 'unknown-provider/unknown-model'", cfg.Model.ID)
+	if cfg.Model.ID != "unknown-model" {
+		t.Errorf("ID = %q, want 'unknown-model'", cfg.Model.ID)
 	}
 	if cfg.Model.Provider != "original-provider" {
 		t.Errorf("Provider = %q, want 'original-provider'", cfg.Model.Provider)
+	}
+	if cfg.Model.BaseURL != "https://original.com" {
+		t.Errorf("BaseURL = %q, want 'https://original.com'", cfg.Model.BaseURL)
 	}
 }
 
@@ -251,6 +254,8 @@ func applyModelOverrideForTest(cfg *Config, modelOverride string, specs []ModelS
 			cfg.Model.API = spec.API
 			return
 		}
+		// Not found — still strip provider/ prefix
+		cfg.Model.ID = id
 		return
 	}
 

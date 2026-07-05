@@ -71,8 +71,13 @@ func StreamAnthropic(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		// Build URL - Anthropic Messages API uses /v1/messages
-		url := strings.TrimSuffix(model.BaseURL, "/") + "/v1/messages"
+		// Build URL for Anthropic Messages API.
+		// If the base URL already includes the full path (e.g. "https://opencode.ai/zen/go/v1/messages"),
+		// use it directly. Otherwise, append "/v1/messages" (standard Anthropic convention).
+		url := model.BaseURL
+		if !strings.HasSuffix(url, "/v1/messages") {
+			url = strings.TrimSuffix(url, "/") + "/v1/messages"
+		}
 
 		// Create request
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
@@ -82,7 +87,7 @@ func StreamAnthropic(
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 
 		// Execute request — derive total timeout from context deadline so the HTTP client enforces
@@ -112,7 +117,8 @@ func StreamAnthropic(
 				traceevent.Field{Key: "http_error", Value: true},
 				traceevent.Field{Key: "json", Value: string(body)},
 			)
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))})
+			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
 			return
 		}
 
