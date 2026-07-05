@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -31,14 +30,10 @@ func ModelsSubcommand() {
 		filter = args[0]
 	}
 
-	home, err := os.UserHomeDir()
+	modelsPath, err := config.ResolveModelsPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-	modelsPath := filepath.Join(home, ".ai", "models.json")
-	if override := strings.TrimSpace(os.Getenv("AI_MODELS_PATH")); override != "" {
-		modelsPath = override
 	}
 
 	specs, err := config.LoadModelSpecs(modelsPath)
