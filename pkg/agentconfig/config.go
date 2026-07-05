@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,7 +22,8 @@ type ToolEntry struct {
 type AgentConfig struct {
 	Version      int               `yaml:"version"`
 	SystemPrompt string            `yaml:"system_prompt"`
-	Memory       string            `yaml:"memory"`
+	Memory       string            `yaml:"memory,omitempty"`
+	Model        string            `yaml:"model,omitempty"`
 	Middlewares  []MiddlewareEntry `yaml:"middlewares"`
 	Tools        []ToolEntry       `yaml:"tools,omitempty"`
 
@@ -103,9 +105,15 @@ func (c *AgentConfig) ResolveSystemPrompt() (string, error) {
 
 // resolvePath resolves a path relative to the YAML file directory.
 // If the path is already absolute, it is returned as-is.
+// A "~" prefix is expanded to the user's home directory.
 func (c *AgentConfig) resolvePath(p string) string {
 	if filepath.IsAbs(p) {
 		return p
+	}
+	// Expand ~/ prefix to home directory.
+	if strings.HasPrefix(p, "~/") {
+		homeDir, _ := os.UserHomeDir()
+		return filepath.Join(homeDir, p[2:])
 	}
 	return filepath.Join(c.dir, p)
 }

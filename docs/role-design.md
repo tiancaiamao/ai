@@ -14,10 +14,10 @@ ai run --role orchestrator
   → ai rpc 层失去 role 信息，只有一段文本
 ```
 
-三个 role 的 prompt 模板通过 `//go:embed` 编译进二进制：
+三个 role 的 prompt 模板最初通过 `//go:embed` 编译进二进制（已迁移到 `roles/` 目录）：
 - `pkg/prompt/prompt.md` — coder（默认）
-- `pkg/prompt/orchestrator.md`
-- `pkg/prompt/validator.md`
+- `pkg/prompt/orchestrator.md`（已迁移到 `roles/orchestrator/system_prompt.md`）
+- `pkg/prompt/validator.md`（已迁移到 `roles/validator/system_prompt.md`）
 
 ### 当前 skill-stats
 
@@ -94,19 +94,20 @@ B. 技能库全局共享，使用统计按角色隔离
 
 ```
 ~/.ai/roles/
-├── coder/                          # 系统角色：--role coder
-│   ├── agent.yaml                  # 配置引用
-│   ├── system_prompt.md → .../ai/pkg/prompt/prompt.md  # symlink
-│   └── skill-stats.json            # 自动生成
-├── orchestrator/                   # 系统角色：--role orchestrator
+├── orchestrator/                   # 系统角色（git 管理）：--role orchestrator
 │   ├── agent.yaml
-│   ├── system_prompt.md → .../ai/pkg/prompt/orchestrator.md  # symlink
+│   ├── system_prompt.md
 │   ├── context_management.md       # (可选)
 │   └── skill-stats.json
-└── validator/                      # 系统角色：--role validator
+├── validator/                      # 系统角色（git 管理）：--role validator
+│   ├── agent.yaml
+│   ├── system_prompt.md
+│   └── skill-stats.json
+├── reviewer/                       # 本地角色：--role reviewer
+│   └── agent.yaml                  # system_prompt 引用 ~/.ai/skills/review/reviewer.md
+└── claw/                           # 本地角色：--role claw
     ├── agent.yaml
-    ├── system_prompt.md → .../ai/pkg/prompt/validator.md  # symlink
-    └── skill-stats.json
+    └── system_prompt.md
 ```
 
 ### 4.2 数据流
@@ -121,6 +122,7 @@ ai run --role orchestrator
       ~/.ai/roles/orchestrator/agent.yaml 存在？
         → agentconfig.Load() 加载
         → system_prompt 从 agent.yaml 中 system_prompt 字段指向的文件读取
+        → 如果 agent.yaml 中有 model 字段且未指定 --model → 应用角色默认模型
         → skillStats = LoadStats("~/.ai/roles/orchestrator/skill-stats.json")
       → 不存在 → return error
   → createBaseContext() 正常构建 system prompt
@@ -154,8 +156,7 @@ ai run
 | `pkg/session/manager.go` | `SessionMeta` 加 `Role` 字段；保存/恢复逻辑 |
 | `pkg/session/entries.go` | 无变化（role 不写 messages.jsonl） |
 | `pkg/prompt/builder.go` | 删除 `TemplateForRole()`；保留 `prompt.md` embed |
-| `pkg/prompt/orchestrator.md` | 保留在 git 中 |
-| `pkg/prompt/validator.md` | 保留在 git 中 |
+| `pkg/prompt/prompt.md` | 保留在 git 中（默认 role） |
 | `pkg/skill/stats.go` | 无变化（已支持任意路径 `LoadStats(path)`） |
 
 ### 4.4 Session meta.json 变更
@@ -235,4 +236,16 @@ if app.role != "" && meta.Role != "" && app.role != meta.Role {
 - **role 目录缺少必要文件**（如 agent.yaml 存在但引用的 system_prompt.md 不存在）：`agentconfig.Load()` / `ResolveSystemPrompt()` 返回错误，`newRPCApp` 报错退出
 - **并发安全**：role 目录读取是只读操作（skill-stats 写入除外，已有锁），无并发问题
 - **skill-stats 迁移**：已有全局 `~/.ai/skill-stats.json` 不受影响，继续用于无 role 模式
-- **`agent.yaml` 格式无需改动**：现有 `agentconfig` 包的结构完全满足需求，仅需在调用 `Load()` 时传入角色目录下的路径
+- **`system_prompt` 路径支持 `~/` 前缀**：`agentconfig.resolvePath()` 会展开 `~/` 为 home 目录，方便引用 `~/.ai/skills/` 下的文件
+- **模型优先级**：`--model` CLI 参数 > agent.yaml 中 `model` 字段 > 全局 config.json
+
+## 7. agent.yaml 字段说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `version` | 是 | 配置版本，当前为 `1` |
+| `system_prompt` | 是 | System prompt 文件路径（相对 agent.yaml 目录，或 `~/` 开头绝对路径） |
+| `memory` | 否 | Memory 文件路径，可选追加到 system prompt 后的内容 |
+| `model` | 否 | 角色默认模型 ID，格式同 `--model` 参数（如 `zai/glm-5.2` 或 `opencode/deepseek-v4-flash`） |
+| `tools` | 否 | 工具白名单，未指定时使用全部内置工具 |
+| `middlewares` | 否 | 中间件配置（如 `destructive_guard`） |
