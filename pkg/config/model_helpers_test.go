@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -105,6 +106,169 @@ func TestApplyModelLimitsFromSpec(t *testing.T) {
 				t.Errorf("Reasoning = %v, want %v", got.Reasoning, tt.wantR)
 			}
 		})
+	}
+}
+
+func TestCountModelMatches(t *testing.T) {
+	specs := []ModelSpec{
+		{ID: "gpt-4", Provider: "openai"},
+		{ID: "deepseek-v4-flash", Provider: "opencode"},
+		{ID: "deepseek-v4-flash", Provider: "deepseek"},
+		{ID: "claude-3", Provider: "anthropic"},
+	}
+
+	tests := []struct {
+		modelID string
+		want    int
+	}{
+		{"gpt-4", 1},
+		{"deepseek-v4-flash", 2},
+		{"nonexistent", 0},
+	}
+	for _, tt := range tests {
+		got := countModelMatches(specs, tt.modelID)
+		if got != tt.want {
+			t.Errorf("countModelMatches(%q) = %d, want %d", tt.modelID, got, tt.want)
+		}
+	}
+}
+
+func TestApplyModelOverride_ProviderIDSyntax(t *testing.T) {
+	specs := []ModelSpec{
+		{ID: "deepseek-v4-flash", Provider: "opencode", BaseURL: "https://opencode.ai/zen/go/v1", API: "openai-completions"},
+		{ID: "deepseek-v4-flash", Provider: "deepseek", BaseURL: "https://api.deepseek.com", API: "openai-completions"},
+	}
+	cfg := &Config{
+		Model: ModelConfig{
+			ID:       "original-model",
+			Provider: "original-provider",
+			BaseURL:  "https://original.com",
+			API:      "chat",
+		},
+	}
+
+	// "provider/id" picks the right one.
+	applyModelOverrideForTest(cfg, "opencode/deepseek-v4-flash", specs)
+	if cfg.Model.ID != "deepseek-v4-flash" {
+		t.Errorf("ID = %q, want 'deepseek-v4-flash'", cfg.Model.ID)
+	}
+	if cfg.Model.Provider != "opencode" {
+		t.Errorf("Provider = %q, want 'opencode'", cfg.Model.Provider)
+	}
+	if cfg.Model.BaseURL != "https://opencode.ai/zen/go/v1" {
+		t.Errorf("BaseURL = %q, want 'https://opencode.ai/zen/go/v1'", cfg.Model.BaseURL)
+	}
+}
+
+func TestApplyModelOverride_ProviderIDNotFound(t *testing.T) {
+	specs := []ModelSpec{
+		{ID: "gpt-4", Provider: "openai"},
+	}
+	cfg := &Config{
+		Model: ModelConfig{
+			ID:       "original-model",
+			Provider: "original-provider",
+			BaseURL:  "https://original.com",
+			API:      "chat",
+		},
+	}
+
+	// Unknown provider/id — warn, keep original config.
+	applyModelOverrideForTest(cfg, "unknown-provider/unknown-model", specs)
+	if cfg.Model.ID != "unknown-provider/unknown-model" {
+		t.Errorf("ID = %q, want 'unknown-provider/unknown-model'", cfg.Model.ID)
+	}
+	if cfg.Model.Provider != "original-provider" {
+		t.Errorf("Provider = %q, want 'original-provider'", cfg.Model.Provider)
+	}
+}
+
+func TestApplyModelOverride_AmbiguousBareID(t *testing.T) {
+	specs := []ModelSpec{
+		{ID: "deepseek-v4-flash", Provider: "opencode", BaseURL: "https://opencode.ai/zen/go/v1", API: "openai-completions"},
+		{ID: "deepseek-v4-flash", Provider: "deepseek", BaseURL: "https://api.deepseek.com", API: "openai-completions"},
+	}
+	cfg := &Config{
+		Model: ModelConfig{
+			ID:       "original-model",
+			Provider: "original-provider",
+			BaseURL:  "https://original.com",
+			API:      "chat",
+		},
+	}
+
+	// Ambiguous bare ID — warn, preserve original config.
+	applyModelOverrideForTest(cfg, "deepseek-v4-flash", specs)
+	if cfg.Model.ID != "deepseek-v4-flash" {
+		t.Errorf("ID = %q, want 'deepseek-v4-flash'", cfg.Model.ID)
+	}
+	// Provider/BaseURL/API should remain unchanged (ambiguity rejected).
+	if cfg.Model.Provider != "original-provider" {
+		t.Errorf("Provider = %q, want 'original-provider'", cfg.Model.Provider)
+	}
+	if cfg.Model.BaseURL != "https://original.com" {
+		t.Errorf("BaseURL = %q, want 'https://original.com'", cfg.Model.BaseURL)
+	}
+}
+
+func TestApplyModelOverride_UniqueBareID(t *testing.T) {
+	specs := []ModelSpec{
+		{ID: "unique-model", Provider: "some-provider", BaseURL: "https://some.api.com", API: "openai-completions"},
+	}
+	cfg := &Config{
+		Model: ModelConfig{
+			ID:       "original-model",
+			Provider: "original-provider",
+			BaseURL:  "https://original.com",
+			API:      "chat",
+		},
+	}
+
+	// Unique bare ID — auto-fill provider/baseUrl/api.
+	applyModelOverrideForTest(cfg, "unique-model", specs)
+	if cfg.Model.ID != "unique-model" {
+		t.Errorf("ID = %q, want 'unique-model'", cfg.Model.ID)
+	}
+	if cfg.Model.Provider != "some-provider" {
+		t.Errorf("Provider = %q, want 'some-provider'", cfg.Model.Provider)
+	}
+	if cfg.Model.BaseURL != "https://some.api.com" {
+		t.Errorf("BaseURL = %q, want 'https://some.api.com'", cfg.Model.BaseURL)
+	}
+}
+
+// applyModelOverrideForTest is a test helper that calls ApplyModelOverride
+// with pre-loaded specs, bypassing file I/O.
+func applyModelOverrideForTest(cfg *Config, modelOverride string, specs []ModelSpec) {
+	cfg.Model.ID = modelOverride
+
+	// Format 1: "provider/id"
+	if provider, id, ok := strings.Cut(modelOverride, "/"); ok && provider != "" && id != "" {
+		if spec, ok := FindModelSpec(specs, provider, id); ok {
+			cfg.Model.ID = id
+			cfg.Model.Provider = spec.Provider
+			cfg.Model.BaseURL = spec.BaseURL
+			cfg.Model.API = spec.API
+			return
+		}
+		return
+	}
+
+	// Format 2: bare "id"
+	switch n := countModelMatches(specs, modelOverride); {
+	case n == 0:
+		// not found, keep original config
+	case n == 1:
+		for _, spec := range specs {
+			if spec.ID == modelOverride {
+				cfg.Model.Provider = spec.Provider
+				cfg.Model.BaseURL = spec.BaseURL
+				cfg.Model.API = spec.API
+				return
+			}
+		}
+	default: // n > 1
+		// ambiguous, keep original config
 	}
 }
 

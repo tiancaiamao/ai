@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/llm"
 )
@@ -113,27 +114,64 @@ func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 	return model
 }
 
+// countModelMatches counts how many providers have a given model ID.
+func countModelMatches(specs []ModelSpec, modelID string) int {
+	n := 0
+	for _, spec := range specs {
+		if spec.ID == modelID {
+			n++
+		}
+	}
+	return n
+}
+
 // ApplyModelOverride sets the model ID from the CLI --model flag.
-// If the model ID is found in models.json, Provider/BaseURL/API are auto-filled.
+//
+// Two formats are supported:
+//
+//  1. "provider/id" — exact match: split on '/', resolve via FindModelSpec.
+//  2. bare "id" — unique match: only auto-fills Provider/BaseURL/API when
+//     exactly one provider has this model ID. If multiple providers share the
+//     same ID, the ambiguity is reported and the original config is preserved.
 func ApplyModelOverride(cfg *Config, modelOverride string) {
 	cfg.Model.ID = modelOverride
 	specs, _, specErr := LoadModelSpecsFromConfig(cfg)
-	if specErr == nil {
-		found := false
+	if specErr != nil {
+		slog.Warn("Model override: could not load model specs, using raw ID", "id", modelOverride, "error", specErr)
+		return
+	}
+
+	// Format 1: "provider/id" — exact match.
+	if provider, id, ok := strings.Cut(modelOverride, "/"); ok && provider != "" && id != "" {
+		if spec, ok := FindModelSpec(specs, provider, id); ok {
+			cfg.Model.ID = id
+			cfg.Model.Provider = spec.Provider
+			cfg.Model.BaseURL = spec.BaseURL
+			cfg.Model.API = spec.API
+			slog.Info("Model override applied", "id", id, "provider", spec.Provider)
+			return
+		}
+		slog.Warn("Model override: provider/id not found in models.json, using raw ID with existing config",
+			"provider", provider, "id", id)
+		return
+	}
+
+	// Format 2: bare "id" — only accept when exactly one provider has it.
+	switch n := countModelMatches(specs, modelOverride); {
+	case n == 0:
+		slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", modelOverride)
+	case n == 1:
 		for _, spec := range specs {
 			if spec.ID == modelOverride {
 				cfg.Model.Provider = spec.Provider
 				cfg.Model.BaseURL = spec.BaseURL
 				cfg.Model.API = spec.API
 				slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
-				found = true
-				break
+				return
 			}
 		}
-		if !found {
-			slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", modelOverride)
-		}
-	} else {
-		slog.Warn("Model override: could not load model specs, using raw ID", "id", modelOverride, "error", specErr)
+	default: // n > 1
+		slog.Warn("Model override: ambiguous model ID found in multiple providers, using raw ID with existing config. Use \"provider/id\" syntax to disambiguate.",
+			"id", modelOverride, "matches", n)
 	}
 }
