@@ -20,12 +20,6 @@ var compactSummarizePrompt string
 //go:embed "llm_decide_check.md"
 var llmDecideCheckPrompt string
 
-//go:embed "orchestrator.md"
-var orchestratorTemplate string
-
-//go:embed "validator.md"
-var validatorTemplate string
-
 // CompactorBasePrompt returns the baseline prompt used by compactor requests.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
@@ -282,20 +276,4 @@ func NormalizeThinkingLevel(level string) string {
 // percentage (e.g. "40%").
 func LLMDecideCheckPrompt() string {
 	return llmDecideCheckPrompt
-}
-
-// TemplateForRole returns the system prompt template for the given role.
-// Supported roles: "coder" (default), "orchestrator", "validator".
-// Returns empty string for unknown roles.
-func TemplateForRole(role string) (string, error) {
-	switch role {
-	case "", "coder":
-		return promptTemplate, nil
-	case "orchestrator":
-		return orchestratorTemplate, nil
-	case "validator":
-		return validatorTemplate, nil
-	default:
-		return "", fmt.Errorf("unknown role %q (valid: coder, orchestrator, validator)", role)
-	}
 }

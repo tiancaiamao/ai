@@ -258,6 +258,34 @@ Safety feature: block `tmux kill-server` at tool level to prevent agent self-des
 
 Key commits: `54b553f` (#170) daemon mode, `5bbf304` (#183) ai kill, `a75d013` (#276) subagent isolation, `4437d11` (#266) send --wait and /rewind.
 
+## Role System: `--agent-config` → `--role` (2026-07)
+
+**Problem**: `--agent-config` required manually crafting `agent.yaml` paths. There was no
+discoverable way to share config across worktrees or define project roles.
+
+**Design**: Replace `--agent-config <path>` with `--role <name>` which loads
+`~/.ai/roles/<name>/agent.yaml`. Roles are symlinked from a shared worktree, making
+them portable across clones. Session metadata persists the role for automatic recovery
+on re-attach.
+
+**Changes**:
+
+1. **Role loading** (previously `--agent-config`): Unified in `newRPCApp` after session
+   init, enabling resume recovery from `meta.Role`
+2. **Session meta**: Added `SessionMeta.Role` + `GetMeta()` / `SetSessionRole()`
+3. **Resume recovery**: Re-attaching to an existing session without `--role` restores
+   the previously-used role from session metadata
+4. **`--system-prompt` priority**: Now overrides role config's system prompt (was
+   reversed: role config always won)
+5. **Removed `prompt.TemplateForRole()`**: Orchestrator/validator templates live in
+   `~/.ai/roles/` as `system_prompt.md` instead of being embedded
+6. **Skill stats**: Per-role `skill-stats.json` auto-created on first use
+7. **Validation**: `ai run/serve --role non-exist` exits early with an error (was:
+   spawned rpc subprocess silently then TUI started)
+
+Key commits: `c9eb5aa` (#338) --role flag, `fddee39` role validation,
+`93e5bdf` auto-create skill-stats.json.
+
 ## Removed Features
 
 | Feature | Introduced | Removed | Why |

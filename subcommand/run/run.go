@@ -18,7 +18,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
@@ -75,20 +74,20 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 		os.Exit(1)
 	}
 
-	// Resolve system prompt: --system-prompt overrides --role.
-	// Parse @file syntax before role fallback.
+	// Resolve system prompt from --system-prompt only (--role is passed through to rpc).
 	sysPrompt := helpers.ParseSystemPrompt(cfg.systemPrompt)
-	if sysPrompt == "" && cfg.role != "coder" {
-		tmpl, err := prompt.TemplateForRole(cfg.role)
-		if err != nil {
-			slog.Error("invalid role", "error", err)
-			os.Exit(1)
-		}
-		sysPrompt = tmpl
-	}
 
 	// Build RPC flags to forward.
 	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
+	if cfg.role != "" {
+		// Validate role exists before spawning to avoid silent failure.
+		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.role, "agent.yaml")
+		if _, err := os.Stat(roleConfigPath); err != nil {
+			slog.Error("role not found", "role", cfg.role, "path", roleConfigPath)
+			os.Exit(1)
+		}
+		rpcFlags = append(rpcFlags, "--role", cfg.role)
+	}
 	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
 	cmd.Dir = cwd
@@ -213,7 +212,7 @@ func RunSubcommand(binPath string) {
 	httpFlag := fs.String("http", "", "HTTP debug server address (forwarded to ai rpc)")
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
+	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])
 
@@ -284,7 +283,7 @@ func ServeSubcommand(binPath string) {
 	inputFlag := fs.String("input", "", "Initial prompt to send after startup")
 	inputFileFlag := fs.String("input-file", "", "Read initial prompt from file (avoids OS ARG_MAX limits)")
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
-	roleFlag := fs.String("role", "coder", "Agent role: coder (default), orchestrator, validator")
+	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	idFileFlag := fs.String("id-file", "", "Write run ID to this file after startup (useful for background mode)")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
 	fs.Parse(os.Args[1:])

@@ -23,25 +23,21 @@ type rpcAppSetupParams struct {
 	customSystemPrompt string
 	maxTurns           int
 	debugAddr          string
-	agentConfigPath    string
 	modelOverride      string
 	runID              string
+	role               string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
 // config loading, model resolution, session loading/creation, tool registration,
 // compactor creation, and skill loading.
 func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
-	// --- Agent config (optional) ---
-	var agentCfg *agentconfig.AgentConfig
-	if params.agentConfigPath != "" {
-		var err error
-		agentCfg, err = agentconfig.Load(params.agentConfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load agent config: %w", err)
-		}
-		slog.Info("Loaded agent config", "path", params.agentConfigPath)
+	// --- Home directory (used for role + skills paths) ---
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
+	agentDir := filepath.Join(homeDir, ".ai")
 
 	// --- Config + Logger ---
 	cfg, configPath, err := loadConfigWithLogger()
@@ -84,6 +80,50 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		return nil, err
 	}
 
+	// --- Resume role recovery ---
+	// If no --role specified but session has one recorded, recover it.
+	if params.role == "" && sessionID != "" {
+		meta, err := sessionMgr.GetMeta(sessionID)
+		if err == nil && meta.Role != "" {
+			params.role = meta.Role
+			slog.Info("Recovered role from session", "role", params.role)
+		}
+	}
+
+	// --- Role mismatch warning ---
+	if params.role != "" && sessionID != "" {
+		meta, err := sessionMgr.GetMeta(sessionID)
+		if err == nil && meta.Role != "" && meta.Role != params.role {
+			slog.Warn("Role mismatch between session and current --role",
+				"session_role", meta.Role,
+				"current_role", params.role)
+		}
+	}
+
+	// --- Role-based agent config ---
+	var agentCfg *agentconfig.AgentConfig
+	if params.role != "" {
+		roleDir := filepath.Join(agentDir, "roles", params.role)
+		roleConfigPath := filepath.Join(roleDir, "agent.yaml")
+
+		roleCfg, err := agentconfig.Load(roleConfigPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("role %q not found: no config at %s", params.role, roleConfigPath)
+			}
+			return nil, fmt.Errorf("failed to load role config for %q: %w", params.role, err)
+		}
+		agentCfg = roleCfg
+		slog.Info("Loaded role config", "role", params.role, "path", roleConfigPath)
+	}
+
+	// Record role in session meta for future resume.
+	if params.role != "" && sessionID != "" {
+		if err := sessionMgr.SetSessionRole(sessionID, params.role); err != nil {
+			slog.Warn("Failed to record role in session meta", "role", params.role, "error", err)
+		}
+	}
+
 	// --- Workspace & Tools ---
 	ws, registry, err := createWorkspaceAndRegistry(cwd, cfg)
 	if err != nil {
@@ -104,13 +144,23 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		slog.Info("Trace handler initialized", "outputDir", traceOutputPath)
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	// Skill-stats path: per-role if role specified, otherwise global.
+	var skillStatsPath string
+	if params.role != "" {
+		skillStatsPath = filepath.Join(agentDir, "roles", params.role, "skill-stats.json")
+		// Auto-create empty skill-stats.json for roles that don't have one yet.
+		if _, err := os.Stat(skillStatsPath); os.IsNotExist(err) {
+			emptyStats := skill.LoadStats(skillStatsPath)
+			if saveErr := emptyStats.Save(); saveErr != nil {
+				slog.Warn("[SkillStats] failed to create stats file for role",
+					"role", params.role, "path", skillStatsPath, "error", saveErr)
+			}
+		}
+	} else {
+		skillStatsPath = filepath.Join(agentDir, "skill-stats.json")
 	}
-	agentDir := filepath.Join(homeDir, ".ai")
 
-	skillResult, skillStats := loadSkills(agentDir, cwd, registry)
+	skillResult, skillStats := loadSkills(agentDir, cwd, registry, skillStatsPath)
 
 	// --- Build rpcApp ---
 	app := &rpcApp{
@@ -126,6 +176,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		currentContextWindow:  currentContextWindow,
 		cwd:                   cwd,
 		agentDir:              agentDir,
+		role:                  params.role,
 		sessionPath:           sessionPath,
 		sessionMgr:            sessionMgr,
 		sess:                  sess,
@@ -306,7 +357,7 @@ func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contex
 }
 
 // loadSkills loads skills from the agent directory and registers find_skill tool.
-func loadSkills(agentDir string, cwd string, registry *tools.Registry) (*skill.LoadResult, *skill.SkillStatsFile) {
+func loadSkills(agentDir string, cwd string, registry *tools.Registry, statsPath string) (*skill.LoadResult, *skill.SkillStatsFile) {
 	skillLoader := skill.NewLoader(agentDir)
 	skillResult := skillLoader.Load(&skill.LoadOptions{
 		CWD:             cwd,
@@ -331,7 +382,7 @@ func loadSkills(agentDir string, cwd string, registry *tools.Registry) (*skill.L
 		slog.Info("Skill", "name", s.Name, "description", s.Description)
 	}
 
-	skillStats := skill.LoadStats(filepath.Join(agentDir, "skill-stats.json"))
+	skillStats := skill.LoadStats(statsPath)
 	registry.Register(tools.NewFindSkillTool(skillResult.Skills, skillStats))
 
 	return skillResult, skillStats

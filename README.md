@@ -61,7 +61,7 @@ ai ls --all --json
 - `--timeout <duration>` — Total execution timeout (0 = unlimited)
 - `--input <text>` — Initial prompt to send after startup
 - `--input-file <path>` — Read initial prompt from file (avoids shell ARG_MAX)
-- `--role <coder\|orchestrator\|validator>` — Agent role (affects system prompt)
+- `--role <name>` — Agent role name (loads `~/.ai/roles/<name>/agent.yaml`)
 - `--name <text>` — Human-readable name for the run
 
 **`serve` only:**

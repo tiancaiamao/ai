@@ -26,13 +26,13 @@ func AgentAbort() {
 	})
 }
 
-func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
 		maxTurns:           maxTurns,
 		debugAddr:          debugAddr,
-		agentConfigPath:    agentConfigPath,
+		role:               role,
 		modelOverride:      modelOverride,
 		runID:              runID,
 	})
