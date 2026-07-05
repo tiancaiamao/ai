@@ -6,6 +6,7 @@ import (
 
 	"github.com/tiancaiamao/ai/subcommand/kill"
 	"github.com/tiancaiamao/ai/subcommand/ls"
+	"github.com/tiancaiamao/ai/subcommand/models"
 	rpcsubcommand "github.com/tiancaiamao/ai/subcommand/rpc"
 	"github.com/tiancaiamao/ai/subcommand/run"
 	"github.com/tiancaiamao/ai/subcommand/send"
@@ -25,6 +26,8 @@ func main() {
 	case "-h", "--help", "help":
 		rpcsubcommand.PrintUsage()
 		os.Exit(0)
+	case "models":
+		models.ModelsSubcommand()
 	case "rpc":
 		rpcsubcommand.RPCSubcommand()
 	case "run":
