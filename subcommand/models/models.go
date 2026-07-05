@@ -46,8 +46,10 @@ func ModelsSubcommand() {
 		fmt.Fprintf(os.Stderr, "error loading models: %v\n", err)
 		os.Exit(1)
 	}
+	// Only show models whose providers have API keys configured.
+	specs = config.FilterModelSpecsWithKeys(specs)
 	if len(specs) == 0 {
-		fmt.Println("no models available")
+		fmt.Println("no models available (missing API keys?)")
 		return
 	}
 
