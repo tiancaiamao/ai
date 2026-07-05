@@ -7,8 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"log/slog"
-
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 )
@@ -21,7 +19,7 @@ func RPCSubcommand() {
 	timeoutFlag := fs.Duration("timeout", 0, "Total execution timeout (0 = unlimited)")
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
-	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
+	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
 	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
 	fs.Parse(os.Args[1:])
@@ -38,8 +36,10 @@ func RPCSubcommand() {
 
 	systemPrompt := helpers.ParseSystemPrompt(*systemPromptFlag)
 
-	if err := rpc.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *agentConfigFlag, *modelFlag, *runidFlag); err != nil {
-		slog.Error("rpc error", "error", err)
+	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
+	// during initialization (see logger.NewLogger).
+	if err := rpc.RunRPC(*sessionPathFlag, *debugAddr, os.Stdin, os.Stdout, systemPrompt, *maxTurnsFlag, *timeoutFlag, *roleFlag, *modelFlag, *runidFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -64,7 +64,7 @@ Subcommands:
 Flags for 'run':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
-  --role <role>            Agent role: coder (default), orchestrator, validator
+    --role <role>            Agent role name: loads ~/.ai/roles/<role>/agent.yaml
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --input <text>           Initial prompt to send after startup
@@ -73,7 +73,7 @@ Flags for 'run':
 Flags for 'serve':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
-  --role <role>            Agent role: coder (default), orchestrator, validator
+    --role <role>            Agent role name: loads ~/.ai/roles/<role>/agent.yaml
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')
@@ -86,7 +86,7 @@ Flags for 'serve':
 Flags for 'rpc':
   --session <path>         Session file path
   --system-prompt <text>   Custom system prompt (@file to load from file)
-  --agent-config <path>    Path to agent.yaml configuration file
+  --role <name>            Agent role name: loads ~/.ai/roles/<name>/agent.yaml
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')

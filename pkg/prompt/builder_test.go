@@ -368,34 +368,6 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
-func TestTemplateForRole(t *testing.T) {
-	cases := []struct {
-		role    string
-		wantErr bool
-	}{
-		{"", false},
-		{"coder", false},
-		{"orchestrator", false},
-		{"validator", false},
-		{"unknown", true},
-	}
-	for _, c := range cases {
-		got, err := TemplateForRole(c.role)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("role %q: expected error, got nil", c.role)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("role %q: unexpected error: %v", c.role, err)
-		}
-		if got == "" {
-			t.Errorf("role %q: got empty template", c.role)
-		}
-	}
-}
-
 func TestNewBuilderWithWorkspaceAndGetCWD(t *testing.T) {
 	// With workspace: GetCWD should delegate to workspace.GetCWD()
 	ws := tools.MustNewWorkspace("/custom/cwd")

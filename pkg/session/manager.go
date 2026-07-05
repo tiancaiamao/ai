@@ -24,6 +24,9 @@ type SessionMeta struct {
 	Workspace string `json:"workspace,omitempty"`
 	// CurrentWorkdir is the current working directory path
 	CurrentWorkdir string `json:"currentWorkdir,omitempty"`
+	// Role records the agent role used when the session was created.
+	// Empty means no explicit role (embedded default).
+	Role string `json:"role,omitempty"`
 }
 
 // SessionManager manages multiple sessions.
@@ -339,6 +342,21 @@ func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
 	} else if strings.TrimSpace(meta.Title) == "" {
 		meta.Title = trimmedName
 	}
+	meta.UpdatedAt = time.Now()
+	return sm.saveMeta(id, meta)
+}
+
+// SetSessionRole updates the role field in a session's metadata.
+func (sm *SessionManager) SetSessionRole(id, role string) error {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+	meta, err := sm.GetMeta(id)
+	if err != nil {
+		return err
+	}
+	meta.Role = role
 	meta.UpdatedAt = time.Now()
 	return sm.saveMeta(id, meta)
 }

@@ -14,7 +14,12 @@ import (
 )
 
 func (app *rpcApp) buildSystemPrompt(currentSess *session.Session) string {
-	// Agent config overrides the default system prompt.
+	// --system-prompt overrides everything (even role config).
+	if app.customSystemPrompt != "" {
+		slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
+		return app.customSystemPrompt
+	}
+	// Role config system prompt (from ~/.ai/roles/<name>/agent.yaml) is next.
 	if app.agentConfig != nil {
 		sp, err := app.agentConfig.ResolveSystemPrompt()
 		if err != nil {
@@ -25,10 +30,7 @@ func (app *rpcApp) buildSystemPrompt(currentSess *session.Session) string {
 			return sp
 		}
 	}
-	if app.customSystemPrompt != "" {
-		slog.Info("Using custom system prompt", "length", len(app.customSystemPrompt))
-		return app.customSystemPrompt
-	}
+	// Default: embedded coder prompt.
 	promptBuilder := prompt.NewBuilderWithWorkspace("", app.ws)
 	promptBuilder.SetTools(app.registry.All()).SetSkills(app.skillResult.Skills).SetSkillStats(app.skillStats)
 

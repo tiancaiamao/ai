@@ -51,12 +51,9 @@ Skills and AGENTS.md instructions are injected per-LLM-call as user-role message
 func CompactorBasePrompt() string
 func CompactSummarizePrompt() string
 func LLMDecideCheckPrompt() string
-func OrchestratorTemplate() string
-func ValidatorTemplate() string
-func TemplateForRole(role string) (string, error) // "coder", "orchestrator", "validator"
 ```
 
-Direct access to embedded prompt templates for use by `pkg/compact` and `pkg/agent`.
+Direct access to embedded prompts for use by `pkg/compact` and `pkg/agent`.
 
 ## Thinking Level Helpers
 

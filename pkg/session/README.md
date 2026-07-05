@@ -95,6 +95,22 @@ Manages multiple sessions within a sessions directory. Handles:
 - `DeleteSession(id)` — Remove a session
 - `UpdateSessionName(id, name, title)` — Rename/update a session
 
+### Session Meta
+
+```go
+type SessionMeta struct {
+	Role string `json:"role,omitempty"`
+}
+```
+
+Persistent metadata attached to each session:
+
+- `GetMeta(id)` — Read metadata for a session
+- `SetSessionRole(id, role)` — Record the agent role used in a session
+
+The `Role` field is written on first use (via `SetSessionRole`) and recovered on resume
+to restore the previous role without requiring `--role` on re-attach.
+
 ## Forking
 
 A fork creates a new session that copies entries from the source session up to the specified `leafID`. The new session gets:

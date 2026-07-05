@@ -48,6 +48,7 @@ type rpcApp struct {
 	// --- Paths ---
 	cwd      string
 	agentDir string
+	role     string // agent role name; empty = embedded default
 
 	// --- Session ---
 	sessionPath string
