@@ -115,24 +115,32 @@ func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 
 // ApplyModelOverride sets the model ID from the CLI --model flag.
 // If the model ID is found in models.json, Provider/BaseURL/API are auto-filled.
+// It first searches under the currently configured provider (from config.json),
+// then falls back to a cross-provider search. This prevents a model ID that
+// exists in multiple providers from silently switching providers.
 func ApplyModelOverride(cfg *Config, modelOverride string) {
 	cfg.Model.ID = modelOverride
 	specs, _, specErr := LoadModelSpecsFromConfig(cfg)
 	if specErr == nil {
-		found := false
+		// 1) Prefer the current provider (from config.json).
+		if spec, ok := FindModelSpec(specs, cfg.Model.Provider, modelOverride); ok {
+			cfg.Model.Provider = spec.Provider
+			cfg.Model.BaseURL = spec.BaseURL
+			cfg.Model.API = spec.API
+			slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
+			return
+		}
+		// 2) Fall back to cross-provider search.
 		for _, spec := range specs {
 			if spec.ID == modelOverride {
 				cfg.Model.Provider = spec.Provider
 				cfg.Model.BaseURL = spec.BaseURL
 				cfg.Model.API = spec.API
-				slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
-				found = true
-				break
+				slog.Info("Model override applied (cross-provider fallback)", "id", modelOverride, "provider", spec.Provider)
+				return
 			}
 		}
-		if !found {
-			slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", modelOverride)
-		}
+		slog.Warn("Model override: model ID not found in models.json, using raw ID with existing config", "id", modelOverride)
 	} else {
 		slog.Warn("Model override: could not load model specs, using raw ID", "id", modelOverride, "error", specErr)
 	}
