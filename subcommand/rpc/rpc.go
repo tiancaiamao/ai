@@ -22,7 +22,7 @@ func RPCSubcommand() {
 	systemPromptFlag := fs.String("system-prompt", "", "Custom system prompt. Use '@' prefix to load from file (e.g., @/path/to/file.md)")
 	debugAddr := fs.String("http", "", "Enable HTTP debug server on specified address (e.g., ':6060')")
 	agentConfigFlag := fs.String("agent-config", "", "Path to agent.yaml configuration file")
-	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
+	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
 	runidFlag := fs.String("runid", "", "Run ID from parent ai serve process (used for subagent tracking)")
 	fs.Parse(os.Args[1:])
 
@@ -55,7 +55,8 @@ Subcommands:
   run             Start agent with interactive TUI (serve + watch)
   serve           Start agent as background daemon
   rpc             Start in raw RPC mode (stdin/stdout JSON-RPC)
-  ls              List running and recent runs
+    ls              List running and recent runs
+  models          List available models (use "provider/id" syntax for --model)
   watch           Attach to a running serve instance (TUI)
   send            Send a message to a running serve instance
   kill            Stop a running agent instance
@@ -67,7 +68,7 @@ Flags for 'run':
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --input <text>           Initial prompt to send after startup
-  --model <id>             Override LLM model ID (e.g. claude-sonnet-4-20250514)
+    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
 Flags for 'serve':
   --session <path>         Session file path
@@ -80,7 +81,7 @@ Flags for 'serve':
   --input-file <path>      Read initial prompt from file (avoids ARG_MAX limits)
   --name <text>            Human-readable name for the run
   --id-file <path>         Write run ID to this file after startup
-  --model <id>             Override LLM model ID (e.g. claude-sonnet-4-20250514)
+    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
 Flags for 'rpc':
   --session <path>         Session file path
@@ -89,7 +90,7 @@ Flags for 'rpc':
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --http <addr>            Enable HTTP debug server (e.g., ':6060')
-  --model <id>             Override LLM model ID (e.g. claude-sonnet-4-20250514)
+    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
 Flags for 'ls':
   --all                    Include finished runs
@@ -119,7 +120,9 @@ Examples:
   ai serve --input "fix the bug"  Start daemon with an initial prompt
   ai rpc                          Start raw JSON-RPC on stdin/stdout
   ai ls                           List running agents
-  ai ls --all                     Include finished runs
+    ai ls --all                     Include finished runs
+  ai models                       List available models
+  ai models deepseek               Search models by keyword
   ai send "hello"                 Send message to agent in current directory
   ai send "/session"              Send slash command
   ai send --wait "fix the bug"    Send and wait for response
