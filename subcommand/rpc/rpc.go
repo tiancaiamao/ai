@@ -68,7 +68,7 @@ Flags for 'run':
   --max-turns <n>          Maximum conversation turns (0 = unlimited)
   --timeout <duration>     Total execution timeout (0 = unlimited)
   --input <text>           Initial prompt to send after startup
-    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
+  --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
 Flags for 'serve':
   --session <path>         Session file path
@@ -81,7 +81,7 @@ Flags for 'serve':
   --input-file <path>      Read initial prompt from file (avoids ARG_MAX limits)
   --name <text>            Human-readable name for the run
   --id-file <path>         Write run ID to this file after startup
-    --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
+  --model <id>             Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.
 
 Flags for 'rpc':
   --session <path>         Session file path
@@ -120,7 +120,7 @@ Examples:
   ai serve --input "fix the bug"  Start daemon with an initial prompt
   ai rpc                          Start raw JSON-RPC on stdin/stdout
   ai ls                           List running agents
-    ai ls --all                     Include finished runs
+  ai ls --all                     Include finished runs
   ai models                       List available models
   ai models deepseek               Search models by keyword
   ai send "hello"                 Send message to agent in current directory
