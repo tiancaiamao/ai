@@ -153,6 +153,7 @@ func ApplyModelOverride(cfg *Config, modelOverride string) {
 			cfg.Model.Provider = spec.Provider
 			cfg.Model.BaseURL = spec.BaseURL
 			cfg.Model.API = spec.API
+			cfg.Model.MaxTokens = spec.MaxTokens
 			slog.Info("Model override applied", "id", id, "provider", spec.Provider)
 			return
 		}
@@ -175,6 +176,7 @@ func ApplyModelOverride(cfg *Config, modelOverride string) {
 				cfg.Model.Provider = spec.Provider
 				cfg.Model.BaseURL = spec.BaseURL
 				cfg.Model.API = spec.API
+				cfg.Model.MaxTokens = spec.MaxTokens
 				slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
 				return
 			}
