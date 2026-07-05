@@ -315,7 +315,7 @@ func parseSessionSwitch(evt map[string]any) *FormattedEvent {
 
 // parseCompactionStart handles compaction_start events.
 func parseCompactionStart(evt map[string]any) *FormattedEvent {
-	info, _ := evt["info"].(map[string]any)
+	info, _ := evt["compaction"].(map[string]any)
 	label := "compaction"
 	if auto, _ := info["auto"].(bool); auto {
 		label = "auto-compaction"
@@ -330,7 +330,7 @@ func parseCompactionStart(evt map[string]any) *FormattedEvent {
 
 // parseCompactionEnd handles compaction_end events.
 func parseCompactionEnd(evt map[string]any) *FormattedEvent {
-	info, _ := evt["info"].(map[string]any)
+	info, _ := evt["compaction"].(map[string]any)
 	label := "compaction"
 	if auto, _ := info["auto"].(bool); auto {
 		label = "auto-compaction"

@@ -100,12 +100,17 @@ func ResolveActiveModelSpec(cfg *Config) (ModelSpec, error) {
 	return ModelSpecFromConfig(cfg), nil
 }
 
-// ApplyModelLimitsFromSpec fills in zero-valued model fields from the spec.
+// ApplyModelLimitsFromSpec fills in zero-valued model fields from the spec,
+// and caps MaxTokens/ContextWindow when the spec is more restrictive.
 func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 	if model.ContextWindow <= 0 && spec.ContextWindow > 0 {
 		model.ContextWindow = spec.ContextWindow
 	}
 	if model.MaxTokens <= 0 && spec.MaxTokens > 0 {
+		model.MaxTokens = spec.MaxTokens
+	} else if spec.MaxTokens > 0 && model.MaxTokens > spec.MaxTokens {
+		// Spec has a lower max — cap to spec value (e.g. config from a
+		// different model may have a higher maxTokens that doesn't apply).
 		model.MaxTokens = spec.MaxTokens
 	}
 	if spec.Reasoning {
@@ -151,6 +156,10 @@ func ApplyModelOverride(cfg *Config, modelOverride string) {
 			slog.Info("Model override applied", "id", id, "provider", spec.Provider)
 			return
 		}
+		// Not found in models.json — still strip the provider/ prefix so the
+		// model ID is clean (e.g. "opencode/minimax-m2.5" → "minimax-m2.5").
+		// Keep existing Provider/BaseURL/API from config as fallback.
+		cfg.Model.ID = id
 		slog.Warn("Model override: provider/id not found in models.json, using raw ID with existing config",
 			"provider", provider, "id", id)
 		return

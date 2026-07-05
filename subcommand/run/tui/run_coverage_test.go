@@ -161,19 +161,19 @@ func TestParseTextDelta_NonEmpty(t *testing.T) {
 func TestParseCompactionStart(t *testing.T) {
 	// Auto-compaction with "before" count
 	r := parseCompactionStart(map[string]any{
-		"info": map[string]any{"auto": true, "before": 10.0},
+		"compaction": map[string]any{"auto": true, "before": 10.0},
 	})
 	if r == nil || !strings.Contains(r.Text, "auto-compaction") || !strings.Contains(r.Text, "10 messages") {
 		t.Errorf("unexpected: %+v", r)
 	}
 	// Manual compaction
 	r = parseCompactionStart(map[string]any{
-		"info": map[string]any{"auto": false},
+		"compaction": map[string]any{"auto": false},
 	})
 	if r == nil || !strings.Contains(r.Text, "compaction started") {
 		t.Errorf("expected 'compaction started', got %+v", r)
 	}
-	// Missing info
+	// Missing compaction info
 	r = parseCompactionStart(map[string]any{})
 	if r == nil || !strings.Contains(r.Text, "compaction started") {
 		t.Errorf("expected fallback text, got %+v", r)
@@ -183,7 +183,7 @@ func TestParseCompactionStart(t *testing.T) {
 func TestParseCompactionEnd(t *testing.T) {
 	// Mini compaction with truncations
 	r := parseCompactionEnd(map[string]any{
-		"info": map[string]any{
+		"compaction": map[string]any{
 			"type":              "mini",
 			"auto":              true,
 			"truncatedCount":    3.0,
@@ -198,7 +198,7 @@ func TestParseCompactionEnd(t *testing.T) {
 
 	// Mini compaction no action
 	r = parseCompactionEnd(map[string]any{
-		"info": map[string]any{"type": "mini", "auto": false},
+		"compaction": map[string]any{"type": "mini", "auto": false},
 	})
 	if r == nil || !strings.Contains(r.Text, "no action needed") {
 		t.Errorf("unexpected: %+v", r)
@@ -206,7 +206,7 @@ func TestParseCompactionEnd(t *testing.T) {
 
 	// Mini compaction with truncations but no token info
 	r = parseCompactionEnd(map[string]any{
-		"info": map[string]any{"type": "mini", "truncatedCount": 2.0},
+		"compaction": map[string]any{"type": "mini", "truncatedCount": 2.0},
 	})
 	if r == nil || !strings.Contains(r.Text, "2 messages truncated") {
 		t.Errorf("unexpected: %+v", r)
@@ -214,7 +214,7 @@ func TestParseCompactionEnd(t *testing.T) {
 
 	// Error case
 	r = parseCompactionEnd(map[string]any{
-		"info": map[string]any{"error": "kaboom"},
+		"compaction": map[string]any{"error": "kaboom"},
 	})
 	if r == nil || !strings.Contains(r.Text, "failed: kaboom") {
 		t.Errorf("unexpected: %+v", r)
@@ -222,7 +222,7 @@ func TestParseCompactionEnd(t *testing.T) {
 
 	// Major compaction with before/after
 	r = parseCompactionEnd(map[string]any{
-		"info": map[string]any{"before": 10.0, "after": 2.0, "auto": true},
+		"compaction": map[string]any{"before": 10.0, "after": 2.0, "auto": true},
 	})
 	if r == nil || !strings.Contains(r.Text, "10 -> 2 messages") {
 		t.Errorf("unexpected: %+v", r)
@@ -230,7 +230,7 @@ func TestParseCompactionEnd(t *testing.T) {
 
 	// Major compaction no info
 	r = parseCompactionEnd(map[string]any{
-		"info": map[string]any{},
+		"compaction": map[string]any{},
 	})
 	if r == nil || !strings.Contains(r.Text, "compaction done") {
 		t.Errorf("unexpected: %+v", r)
@@ -295,7 +295,7 @@ func TestParseEvent_CompactionStart(t *testing.T) {
 }
 
 func TestParseEvent_CompactionEnd(t *testing.T) {
-	r := ParseEvent(`{"type":"compaction_end","info":{"type":"mini","truncatedCount":2}}`)
+	r := ParseEvent(`{"type":"compaction_end","compaction":{"type":"mini","truncatedCount":2}}`)
 	if r == nil || r.Kind != KindMeta {
 		t.Errorf("expected KindMeta, got %+v", r)
 	}

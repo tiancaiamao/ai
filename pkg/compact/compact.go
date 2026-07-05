@@ -78,13 +78,23 @@ func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
 			IntervalMedium: 10,
 			IntervalHigh:   7,
 		}
-	default: // 200K-class and other smaller models
+	case contextWindow > 0: // Known context window (e.g. 200K)
 		pct := func(p int) int { return contextWindow * p / 100 }
 		return LLMDecideConfig{
 			SoftThreshold:  pct(25),
 			HardLimit:      pct(75),
 			TierMedium:     pct(35),
 			TierHigh:       pct(50),
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
+	default: // Unknown context window (0 or negative) — use 200K defaults
+		return LLMDecideConfig{
+			SoftThreshold:  50_000,
+			HardLimit:      150_000,
+			TierMedium:     70_000,
+			TierHigh:       100_000,
 			IntervalLow:    15,
 			IntervalMedium: 10,
 			IntervalHigh:   7,
