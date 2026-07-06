@@ -7,8 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 )
 
 func init() {
@@ -47,12 +45,42 @@ func getProcessStartTimeLinuxImpl(pid int) int64 {
 		return 0
 	}
 
-	// Convert ticks to epoch seconds: ticks / CLK_TCK + boot_time.
-	var si syscall.Sysinfo_t
-	if syscall.Sysinfo(&si) != nil {
+	// Read boot time (btime) directly from /proc/stat.
+	// Previously we computed bootTime as now - Sysinfo.Uptime, but that has
+	// a race condition: time.Now().Unix() and Sysinfo.Uptime (both second-
+	// precision) can tick over at different moments, causing ±1 second jitter
+	// in the result. This made IsRunning() flaky — the same PID could appear
+	// alive or dead on different invocations of ai ls.
+	//
+	// The btime field in /proc/stat is a fixed value set at system boot,
+	// eliminating the race entirely.
+	btime, err := readProcStatBtime()
+	if err != nil {
 		return 0
 	}
+
 	clkTck := getClockTicks()
-	bootTime := time.Now().Unix() - int64(si.Uptime)
-	return bootTime + ticks/clkTck
+	return btime + ticks/clkTck
+}
+
+// readProcStatBtime reads the boot time (btime) field from /proc/stat.
+func readProcStatBtime() (int64, error) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "btime") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				return 0, fmt.Errorf("btime field missing value in /proc/stat")
+			}
+			btime, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse btime: %w", err)
+			}
+			return btime, nil
+		}
+	}
+	return 0, fmt.Errorf("btime not found in /proc/stat")
 }

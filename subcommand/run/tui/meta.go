@@ -140,10 +140,22 @@ func IsRunning(meta *RunMeta) bool {
 		return false
 	}
 	// Verify PID still belongs to the original process.
-	// If PidStartTime was recorded, the current start time must match.
+	// If PidStartTime was recorded, the current start time must match
+	// within a 1-second tolerance. The tolerance accounts for boot time
+	// calculation skew between the old approach (now - Sysinfo.Uptime) and
+	// the current /proc/stat btime approach — they can differ by 1 second
+	// due to integer rounding. This is safe for PID reuse detection because
+	// recycled PIDs have start times differing by many seconds or more.
 	if meta.PidStartTime > 0 {
 		currentStart := GetProcessStartTime(meta.PID)
-		if currentStart == 0 || currentStart != meta.PidStartTime {
+		if currentStart == 0 {
+			return false
+		}
+		diff := currentStart - meta.PidStartTime
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 1 {
 			return false
 		}
 	}
