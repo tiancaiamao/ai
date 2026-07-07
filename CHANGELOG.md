@@ -3,6 +3,46 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## PGE Skill: Progress WAL + loop-rules Removal (2026-07)
+
+**Problem**: The PGE skill had no audit trail to verify protocol compliance, and the
+`loop-rules.md` concept was fundamentally flawed — it injected generic loop constraints
+into Generator prompts when Generators only need precise task scope.
+
+**Changes**:
+
+1. **progress.md WAL added**: Append-only operation log written by all agents
+   (Orchestrator, Generator, Evaluator, Review). Serves as compliance evidence that
+   agents follow PGE protocol order and responsibilities. Compaction recovery now reads
+   progress.md tail before state.md.
+
+2. **loop-rules.md removed**: The concept of injecting global "loop rules" into Generator
+   prompts was wrong — "loop" is the Orchestrator's concern (spec→decompose→implement→validate),
+   not the Generator's. Generators only need precise task scope. Removed all references
+   from SKILL.md and deleted references/loop-rules-template.md.
+
+3. **Eval vs Review clarified**: Added comparison table. Evaluator = task-level functional
+   verification (acceptance criteria). Review = phase-level code quality (cross-task
+   integration, dead code, architecture issues). Both are required.
+
+4. **Generator/Evaluator prompts enhanced** (validated via real sub-agent dry-run):
+   - Generator: Added BLOCKED exit path, unified {task-name} variable, all verification
+     commands must pass, clarified Read scope and DONE output format
+   - Evaluator: Added mkdir -p .pge guard, ⚠️ support for partial meets, PASS threshold
+     defined (any ❌ = global FAIL)
+
+5. **Kitchen Sink check**: New scope guard between Generator DONE and Evaluator spawn.
+   Orchestrator runs `git diff --name-only` against task Write list, rolls back out-of-scope
+   changes before spawning Evaluator.
+
+6. **Task-level commit**: Each task can commit independently after eval PASS (previously
+   only phase-end commit was allowed).
+
+7. **State Tracking updated**: Attempt Log (abandoned approaches) added as conditional
+   update. State/progress separation clarified (state.md = snapshot, progress.md = WAL).
+
+**Archived**: `references/eval-report-template.md` content merged into `references/prompt-templates.md`.
+
 ## Architecture: Package Structure Reorganization (2026-06)
 
 **Problem**: Package structure didn't reflect the actual separation of concerns:

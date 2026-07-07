@@ -20,6 +20,10 @@ P1-T3
 - Use `cargo check` not `cargo test` (macOS linker issue)
 - Generator injected witness_storage in both `start()` and `run_node()`
 
+## Attempt Log
+- P1-T3: tried direct SQL approach → migration conflict, reverted
+- P1-T3: switched to ORM approach → eval PASS
+
 ## Known Issues
 - macOS arm64 linker error affects all rfstore tests (pre-existing)
 
@@ -35,6 +39,7 @@ P1-T3
 | Task Status | 每个 task PASS 后 | 表格行 edit，标记 ✅/⏳ + eval 文件名 |
 | Next Task | 每个 task PASS 后 | 改为下一个 task 名（仅 task 名，不写散文） |
 | Key Decisions | 有重要决策时 | 影响后续 task 的架构/设计决策 |
+| Attempt Log | 有被放弃的方案时 | 记录尝试过但放弃的路径 + 原因。每行不超过 20 字。帮助后续 Generator 避免重复踩坑 |
 | Known Issues | 发现问题时 | 遗留问题，帮后续 Generator 避坑 |
 | Phase Log | 每个 phase commit 后 | 一行：commit hash + task 数 + review 结果 |
 
