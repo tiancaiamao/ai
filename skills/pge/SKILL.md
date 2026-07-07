@@ -149,7 +149,7 @@ Design (用户需求)
 - Orchestrator 可以运行构建和测试命令收集信息，但 **PASS/FAIL 判定必须由独立 Evaluator 做**
 - progress.md 会记录下全部角色的操作历史，这会被用于审核 agent 是否有按照 pge 技能要求执行
 
-**Eval Report 格式：** 由 `~/.ai/roles/validator/system_prompt.md` 定义（✅/❌/⚠️ 格式），参考 [`references/prompt-templates.md`](references/prompt-templates.md) 的 Eval Report Format 章节。
+**Eval Report 格式：** 见 [`references/eval-report-template.md`](references/eval-report-template.md)
 
 **One task at a time.** 不要在 Task 1 通过前启动 Task 2。
 
