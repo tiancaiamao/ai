@@ -6,30 +6,9 @@
 |---|---|---|
 | Generator | `coder` | 实现代码 |
 | Evaluator | `validator` | 独立验证 |
-| Review | `coder` | 代码审查 |
+| Review | `reviewer` | 代码审查 |
 
 具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file`, `--timeout` 等）参见 `subagent` 技能。
-
----
-
-## Eval Report Format
-
-Evaluator 按照 `~/.ai/roles/validator/system_prompt.md` 中定义的格式输出：
-
-```
-✅ <criterion>: <what you verified and how>
-❌ <criterion>: <what's wrong, specific evidence>
-⚠️ <criterion>: <partially met, what's missing>
-
-Summary: X/Y criteria fully passed, Z partial
-```
-
-**评分规则：**
-- ✅ = 全部通过 → 整体 PASS
-- 任一 ❌ = 整体 FAIL（即使部分 ✅）
-- ⚠️ = 部分达标或无法自动验证（不做为 FAIL 依据）
-
-Evaluator 将报告写入 `.pge/eval-{task}.md`。
 
 ---
 
@@ -42,7 +21,7 @@ ai serve --role coder --name gen-{task} --input-file /tmp/task-{name}.md
 ```
 
 ```markdown
-## Task: {task-name}
+## Task: {title}
 
 ## Context
 {简要项目背景，帮助 Generator 理解代码库}
@@ -113,6 +92,10 @@ Output DONE: <file list> when complete.
 ## Review Agent Prompt 模板
 
 写入 `/tmp/review-{phase}.md`，作为 `--input-file` 传入：
+
+```bash
+ai serve --role reviewer --name review-{task} --input-file /tmp/review-{name}.md
+```
 
 ```markdown
 ## Task: Review Phase {N} Code
