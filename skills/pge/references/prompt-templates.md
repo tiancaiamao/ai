@@ -16,10 +16,6 @@
 
 写入 `/tmp/task-{name}.md`，作为 `--input-file` 传入：
 
-```bash
-ai serve --role coder --name gen-{task} --input-file /tmp/task-{name}.md
-```
-
 ```markdown
 ## Task: {title}
 
