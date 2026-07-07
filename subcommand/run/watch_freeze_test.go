@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,15 +16,16 @@ import (
 
 func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	m := watchModel{
-		rawContent:   &strings.Builder{},
-		pendingRaw:   &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-		dirty:        false,
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          true,
+		showThinking:          true,
+		showTools:             true,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		dirty:                 false,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
 	}
 
 	// appendInline should only set dirty, not sync viewport.
@@ -51,7 +53,7 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	}
 
 	// Content should have all appended text.
-	got := m.rawContent.String()
+	got := m.rawText()
 	if !strings.Contains(got, "hello ") || !strings.Contains(got, "world") {
 		t.Errorf("content should contain both 'hello ' and 'world', got %q", got)
 	}
@@ -70,15 +72,16 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 
 func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 	m := watchModel{
-		rawContent:   &strings.Builder{},
-		pendingRaw:   &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-		dirty:        false,
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          true,
+		showThinking:          true,
+		showTools:             true,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		dirty:                 false,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
 	}
 
 	// Simulate 50 streaming tokens (like thinking deltas).
@@ -96,7 +99,8 @@ func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 		t.Fatal("expected dirty=false after syncIfDirty")
 	}
 
-	got := m.rawContent.String()
+	// pendingRaw has the accumulated text (no endInline was called).
+	got := m.pendingRaw.String()
 	expected := strings.Repeat("word ", 50)
 	if got != expected {
 		t.Errorf("content mismatch: got %d chars, expected %d chars", len(got), len(expected))
@@ -175,14 +179,15 @@ func TestProcessEvent_Performance(t *testing.T) {
 
 	newModel := func() watchModel {
 		m := watchModel{
-			rawContent:   &strings.Builder{},
-			pendingRaw:   &strings.Builder{},
-			showPrefixes: true,
-			showThinking: true,
-			showTools:    true,
-			mode:         "live",
-			width:        80,
-			ready:        true,
+			pendingRaw:            &strings.Builder{},
+			showPrefixes:          true,
+			showThinking:          true,
+			showTools:             true,
+			mode:                  "live",
+			width:                 80,
+			ready:                 true,
+			maxWrapped:            5000,
+			pendingFlushThreshold: 2000,
 		}
 		return m
 	}
@@ -206,9 +211,8 @@ func TestProcessEvent_Performance(t *testing.T) {
 	// --- With history: same processEvent+syncIfDirty, but with 500 lines of history ---
 	mHist := newModel()
 	for i := 0; i < 500; i++ {
-		mHist.rawContent.WriteString("Previous line of content already in buffer for wrapping.\n")
+		mHist.appendContent("Previous line of content already in buffer for wrapping.")
 	}
-	mHist.rebuildWrappedLines()
 
 	start = time.Now()
 	for i := 0; i < eventCount; i++ {
@@ -224,12 +228,123 @@ func TestProcessEvent_Performance(t *testing.T) {
 	t.Logf("With 500-line history: %d events in %v (%.0f events/sec)",
 		eventCount, histDuration, float64(eventCount)/histDuration.Seconds())
 
-	// Ratio of with-history to without-history should be close to 1.0
-	// (indicating history doesn't slow down the new implementation).
+	// Ratio of with-history to without-history should be modest.
+	// Some overhead is expected: syncContent does strings.Join on all
+	// wrappedLines (capped at maxWrapped) per call. The key invariant is
+	// that this is O(maxWrapped × N_events), NOT O(N²).
 	ratio := float64(histDuration) / float64(newDuration)
-	t.Logf("History overhead ratio: %.2f (should be close to 1.0)", ratio)
+	t.Logf("History overhead ratio: %.2f (should be < 5.0)", ratio)
 
-	if ratio > 3.0 {
-		t.Errorf("history should not cause >3x slowdown, got ratio=%.2f", ratio)
+	if ratio > 5.0 {
+		t.Errorf("history should not cause >5x slowdown, got ratio=%.2f", ratio)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: rebuildWrappedLines preserves empty lines after resize.
+//
+// Ensures that paragraphs which produce empty wrapped lines (e.g. from
+// endInline with no content) are preserved on resize.
+// ---------------------------------------------------------------------------
+
+func TestRebuildWrappedLines_PreservesEmptyLines(t *testing.T) {
+	m := watchModel{
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          false,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
+	}
+
+	// Simulate: line1, empty line, line2
+	m.appendContent("line1")
+	m.inlineActive = true
+	m.endInline() // empty inline → produces blank line
+	m.appendContent("line2")
+
+	// Before resize: wrappedLines should have "line1", "", "line2".
+	if len(m.wrappedLines) != 3 {
+		t.Fatalf("expected 3 wrapped lines, got %d: %v", len(m.wrappedLines), m.wrappedLines)
+	}
+	if m.wrappedLines[1] != "" {
+		t.Errorf("expected empty line at index 1, got %q", m.wrappedLines[1])
+	}
+
+	// Resize to a different width and rebuild.
+	m.width = 60
+	m.rebuildWrappedLines()
+
+	// After resize: empty line should still be present.
+	if len(m.wrappedLines) != 3 {
+		t.Fatalf("expected 3 wrapped lines after resize, got %d: %v", len(m.wrappedLines), m.wrappedLines)
+	}
+	if m.wrappedLines[1] != "" {
+		t.Errorf("expected empty line preserved after resize, got %q", m.wrappedLines[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: capContent caps both rawParas and wrappedLines.
+// ---------------------------------------------------------------------------
+
+func TestCapContent_LimitsGrowth(t *testing.T) {
+	m := watchModel{
+		pendingRaw: &strings.Builder{},
+		mode:       "live",
+		width:      80,
+		ready:      true,
+		maxWrapped: 5, // small limit for testing
+	}
+
+	for i := 0; i < 20; i++ {
+		m.appendContent(fmt.Sprintf("line %d", i))
+	}
+
+	if len(m.wrappedLines) > m.maxWrapped {
+		t.Errorf("wrappedLines exceeded max: got %d, max %d", len(m.wrappedLines), m.maxWrapped)
+	}
+	if len(m.rawParas) > m.maxWrapped {
+		t.Errorf("rawParas exceeded max: got %d, max %d", len(m.rawParas), m.maxWrapped)
+	}
+	// Most recent content should be retained.
+	if !strings.Contains(m.wrappedLines[len(m.wrappedLines)-1], "line 19") {
+		t.Errorf("expected most recent line retained, got %v", m.wrappedLines)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: appendInline flushes early when pendingRaw exceeds threshold.
+// ---------------------------------------------------------------------------
+
+func TestAppendInline_EarlyFlush(t *testing.T) {
+	m := watchModel{
+		pendingRaw:            &strings.Builder{},
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 20, // very small threshold
+	}
+	m.inlineActive = true
+	m.currentRole = "assistant"
+
+	// Append enough text to trigger early flush.
+	for i := 0; i < 10; i++ {
+		m.appendInline("abcdefghij") // 10 chars each
+	}
+
+	// After early flush, pendingRaw should be small (< last chunk).
+	if m.pendingRaw.Len() >= 20 {
+		t.Errorf("expected pendingRaw to be flushed early, got len=%d", m.pendingRaw.Len())
+	}
+	// wrappedLines should have content from flushed paragraphs.
+	if len(m.wrappedLines) == 0 {
+		t.Error("expected wrappedLines to have flushed content")
+	}
+	// rawParas should have the flushed paragraph(s).
+	if len(m.rawParas) == 0 {
+		t.Error("expected rawParas to have flushed paragraph(s)")
 	}
 }

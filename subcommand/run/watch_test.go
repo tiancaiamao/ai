@@ -123,7 +123,7 @@ func TestProcessEvent_LiveThinkingDelta_RendersImmediately(t *testing.T) {
 		Raw:  "abc",
 	})
 
-	out := m.rawContent.String()
+	out := m.rawText()
 	if !strings.Contains(out, "thinking: ") {
 		t.Fatalf("expected thinking prefix, got %q", out)
 	}
