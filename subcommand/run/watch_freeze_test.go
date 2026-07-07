@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,14 +16,16 @@ import (
 
 func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	m := watchModel{
-		content:      &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-		dirty:        false,
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          true,
+		showThinking:          true,
+		showTools:             true,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		dirty:                 false,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
 	}
 
 	// appendInline should only set dirty, not sync viewport.
@@ -50,7 +53,7 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	}
 
 	// Content should have all appended text.
-	got := m.content.String()
+	got := m.rawText()
 	if !strings.Contains(got, "hello ") || !strings.Contains(got, "world") {
 		t.Errorf("content should contain both 'hello ' and 'world', got %q", got)
 	}
@@ -63,57 +66,22 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 // O(1 + 2 + ... + N) = O(N²). With dirty flag, it's called once per event = O(N).
 // ---------------------------------------------------------------------------
 
-func TestSyncContent_LinearGrowth(t *testing.T) {
-	m := watchModel{
-		content:      &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-	}
-
-	sizes := []int{100, 1000}
-
-	var timings []time.Duration
-	for _, size := range sizes {
-		m.content.Reset()
-		for i := 0; i < size; i++ {
-			m.content.WriteString("This is a line of content for wrapping test.\n")
-		}
-
-		start := time.Now()
-		for i := 0; i < 100; i++ {
-			m.syncContent()
-		}
-		timings = append(timings, time.Since(start))
-	}
-
-	ratio := float64(timings[1]) / float64(timings[0])
-	t.Logf("syncContent: %d lines=%v, %d lines=%v, ratio=%.1f",
-		sizes[0], timings[0], sizes[1], timings[1], ratio)
-
-	// 10x more content should take at least 2x longer (O(n) growth).
-	if ratio < 2.0 {
-		t.Errorf("expected O(n) growth, but ratio=%.1f (larger content not slower)", ratio)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Test 3: Multiple appends coalesced — dirty flag only triggers one sync.
 // ---------------------------------------------------------------------------
 
 func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 	m := watchModel{
-		content:      &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-		dirty:        false,
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          true,
+		showThinking:          true,
+		showTools:             true,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		dirty:                 false,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
 	}
 
 	// Simulate 50 streaming tokens (like thinking deltas).
@@ -131,7 +99,8 @@ func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 		t.Fatal("expected dirty=false after syncIfDirty")
 	}
 
-	got := m.content.String()
+	// pendingRaw has the accumulated text (no endInline was called).
+	got := m.pendingRaw.String()
 	expected := strings.Repeat("word ", 50)
 	if got != expected {
 		t.Errorf("content mismatch: got %d chars, expected %d chars", len(got), len(expected))
@@ -196,8 +165,9 @@ done:
 // ---------------------------------------------------------------------------
 // Test 5: End-to-end — processEvent + syncIfDirty with accumulated content.
 //
-// Measures processing 200 events with accumulated history to show
-// the old behavior (sync on every append) vs new (sync once per event).
+// Measures processing 200 events with accumulated history to verify that
+// the dirty-flag coalescing (sync once per event, not per append) maintains
+// linear performance regardless of history size.
 // ---------------------------------------------------------------------------
 
 func TestProcessEvent_Performance(t *testing.T) {
@@ -209,17 +179,16 @@ func TestProcessEvent_Performance(t *testing.T) {
 
 	newModel := func() watchModel {
 		m := watchModel{
-			content:      &strings.Builder{},
-			showPrefixes: true,
-			showThinking: true,
-			showTools:    true,
-			mode:         "live",
-			width:        80,
-			ready:        true,
+			pendingRaw:            &strings.Builder{},
+			showPrefixes:          true,
+			showThinking:          true,
+			showTools:             true,
+			mode:                  "live",
+			width:                 80,
+			ready:                 true,
+			maxWrapped:            5000,
+			pendingFlushThreshold: 2000,
 		}
-		m.sentBuf = newSentenceBuffer(func(text string) {
-			m.appendInline(text)
-		})
 		return m
 	}
 
@@ -239,34 +208,143 @@ func TestProcessEvent_Performance(t *testing.T) {
 	t.Logf("NEW (dirty flag): %d events in %v (%.0f events/sec)",
 		eventCount, newDuration, float64(eventCount)/newDuration.Seconds())
 
-	// --- OLD behavior: syncContent on every append (simulate pre-fix) ---
-	mOld := newModel()
-	// Pre-build history to make the O(n) effect visible.
+	// --- With history: same processEvent+syncIfDirty, but with 500 lines of history ---
+	mHist := newModel()
 	for i := 0; i < 500; i++ {
-		mOld.content.WriteString("Previous line of content already in buffer for wrapping.\n")
+		mHist.appendContent("Previous line of content already in buffer for wrapping.")
 	}
-	mOld.syncContent()
 
 	start = time.Now()
 	for i := 0; i < eventCount; i++ {
-		mOld.processEvent(&tui.FormattedEvent{
+		mHist.processEvent(&tui.FormattedEvent{
 			Kind: tui.KindText,
 			Role: "assistant",
 			Text: "This is a test sentence. ",
 			Raw:  "This is a test sentence. ",
 		})
-		// OLD: syncContent called inside every appendInline.
-		// processEvent triggers appendInline via sentBuf → appendInline → syncContent.
-		// We simulate by calling syncContent after each processEvent
-		// (this is actually FEWER calls than the real old code, which called
-		// syncContent per appendInline, not per processEvent).
-		mOld.syncContent()
+		mHist.syncIfDirty()
 	}
-	oldDuration := time.Since(start)
-	t.Logf("OLD (sync every append, 500-line history): %d events in %v (%.0f events/sec)",
-		eventCount, oldDuration, float64(eventCount)/oldDuration.Seconds())
+	histDuration := time.Since(start)
+	t.Logf("With 500-line history: %d events in %v (%.0f events/sec)",
+		eventCount, histDuration, float64(eventCount)/histDuration.Seconds())
 
-	if newDuration >= oldDuration {
-		t.Logf("WARNING: new behavior not faster — new=%v old=%v", newDuration, oldDuration)
+	// Ratio of with-history to without-history should be modest.
+	// Some overhead is expected: syncContent does strings.Join on all
+	// wrappedLines (capped at maxWrapped) per call. The key invariant is
+	// that this is O(maxWrapped × N_events), NOT O(N²).
+	ratio := float64(histDuration) / float64(newDuration)
+	t.Logf("History overhead ratio: %.2f (should be < 5.0)", ratio)
+
+	if ratio > 5.0 {
+		t.Errorf("history should not cause >5x slowdown, got ratio=%.2f", ratio)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: rebuildWrappedLines preserves empty lines after resize.
+//
+// Ensures that paragraphs which produce empty wrapped lines (e.g. from
+// endInline with no content) are preserved on resize.
+// ---------------------------------------------------------------------------
+
+func TestRebuildWrappedLines_PreservesEmptyLines(t *testing.T) {
+	m := watchModel{
+		pendingRaw:            &strings.Builder{},
+		showPrefixes:          false,
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 2000,
+	}
+
+	// Simulate: line1, empty line, line2
+	m.appendContent("line1")
+	m.inlineActive = true
+	m.endInline() // empty inline → produces blank line
+	m.appendContent("line2")
+
+	// Before resize: wrappedLines should have "line1", "", "line2".
+	if len(m.wrappedLines) != 3 {
+		t.Fatalf("expected 3 wrapped lines, got %d: %v", len(m.wrappedLines), m.wrappedLines)
+	}
+	if m.wrappedLines[1] != "" {
+		t.Errorf("expected empty line at index 1, got %q", m.wrappedLines[1])
+	}
+
+	// Resize to a different width and rebuild.
+	m.width = 60
+	m.rebuildWrappedLines()
+
+	// After resize: empty line should still be present.
+	if len(m.wrappedLines) != 3 {
+		t.Fatalf("expected 3 wrapped lines after resize, got %d: %v", len(m.wrappedLines), m.wrappedLines)
+	}
+	if m.wrappedLines[1] != "" {
+		t.Errorf("expected empty line preserved after resize, got %q", m.wrappedLines[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: capContent caps both rawParas and wrappedLines.
+// ---------------------------------------------------------------------------
+
+func TestCapContent_LimitsGrowth(t *testing.T) {
+	m := watchModel{
+		pendingRaw: &strings.Builder{},
+		mode:       "live",
+		width:      80,
+		ready:      true,
+		maxWrapped: 5, // small limit for testing
+	}
+
+	for i := 0; i < 20; i++ {
+		m.appendContent(fmt.Sprintf("line %d", i))
+	}
+
+	if len(m.wrappedLines) > m.maxWrapped {
+		t.Errorf("wrappedLines exceeded max: got %d, max %d", len(m.wrappedLines), m.maxWrapped)
+	}
+	if len(m.rawParas) > m.maxWrapped {
+		t.Errorf("rawParas exceeded max: got %d, max %d", len(m.rawParas), m.maxWrapped)
+	}
+	// Most recent content should be retained.
+	if !strings.Contains(m.wrappedLines[len(m.wrappedLines)-1], "line 19") {
+		t.Errorf("expected most recent line retained, got %v", m.wrappedLines)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: appendInline flushes early when pendingRaw exceeds threshold.
+// ---------------------------------------------------------------------------
+
+func TestAppendInline_EarlyFlush(t *testing.T) {
+	m := watchModel{
+		pendingRaw:            &strings.Builder{},
+		mode:                  "live",
+		width:                 80,
+		ready:                 true,
+		maxWrapped:            5000,
+		pendingFlushThreshold: 20, // very small threshold
+	}
+	m.inlineActive = true
+	m.currentRole = "assistant"
+
+	// Append enough text to trigger early flush.
+	for i := 0; i < 10; i++ {
+		m.appendInline("abcdefghij") // 10 chars each
+	}
+
+	// After early flush, pendingRaw should be small (< last chunk).
+	if m.pendingRaw.Len() >= 20 {
+		t.Errorf("expected pendingRaw to be flushed early, got len=%d", m.pendingRaw.Len())
+	}
+	// wrappedLines should have content from flushed paragraphs.
+	if len(m.wrappedLines) == 0 {
+		t.Error("expected wrappedLines to have flushed content")
+	}
+	// rawParas should have the flushed paragraph(s).
+	if len(m.rawParas) == 0 {
+		t.Error("expected rawParas to have flushed paragraph(s)")
 	}
 }
