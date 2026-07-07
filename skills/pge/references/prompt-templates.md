@@ -12,31 +12,24 @@
 
 ---
 
-## Eval Report Format（Evaluator 输出格式）
+## Eval Report Format
 
-Evaluator **必须**将验证结果写入 `.pge/eval-{task}.md`：
+Evaluator 按照 `~/.ai/roles/validator/system_prompt.md` 中定义的格式输出：
 
-```markdown
-# Eval Report: {task-name}
+```
+✅ <criterion>: <what you verified and how>
+❌ <criterion>: <what's wrong, specific evidence>
+⚠️ <criterion>: <partially met, what's missing>
 
-**Result: PASS / FAIL**
-
-## Criteria Verification
-
-### L1 — Structural
-- [✅/⚠️/❌] <criterion> — Evidence: <actual output or observation>
-
-### L2 — Behavioral
-- [✅/⚠️/❌] <criterion> — Evidence: <actual output or observation>
-
-## Issues Found (if any)
-- <description of each failure, with enough detail for Generator to fix>
+Summary: X/Y criteria fully passed, Z partial
 ```
 
 **评分规则：**
 - ✅ = 全部通过 → 整体 PASS
 - 任一 ❌ = 整体 FAIL（即使部分 ✅）
-- ⚠️ = 部分达标、无法自动验证、或边界情况（不做为 FAIL 依据，但需要在 Issues 中说明）
+- ⚠️ = 部分达标或无法自动验证（不做为 FAIL 依据）
+
+Evaluator 将报告写入 `.pge/eval-{task}.md`。
 
 ---
 
@@ -83,11 +76,12 @@ ai serve --role coder --name gen-{task} --input-file /tmp/task-{name}.md
 
 写入 `/tmp/eval-{task}.md`，作为 `--input-file` 传入：
 
+```bash
+ai serve --role validator --name eval-{task} --input-file /tmp/eval-{task}.md
+```
+
 ```markdown
 ## Task: Evaluate {task-name}
-
-You are an INDEPENDENT evaluator. You did NOT write this code.
-Critically and objectively verify each acceptance criterion.
 
 ## Spec Acceptance Criteria
 {从 spec.md 复制相关 criteria}
@@ -96,11 +90,9 @@ Critically and objectively verify each acceptance criterion.
 1. cd {project_dir}
 2. For each criterion, run the verification command YOURSELF
 3. For code quality, READ the actual source files
-4. Output a structured report with ✅ or ❌ for EVERY criterion, with EVIDENCE
-5. For any ❌, explain what failed and what the actual behavior was
-6. At the end, give overall PASS/FAIL verdict
-7. Write your report to .pge/eval-{task}.md
-8. **After writing report, append verdict to `.pge/progress.md`**: `bash -c 'mkdir -p .pge && echo "[$(date "+%Y-%m-%d %H:%M:%S")] EVALUATOR | {task-name} PASS/FAIL: <summary>" >> .pge/progress.md'`
+4. Output verdict in the format defined in your system prompt (✅/❌/⚠️)
+5. Write report to `.pge/eval-{task}.md`
+6. **Append verdict to `.pge/progress.md`**: `bash -c 'mkdir -p .pge && echo "[$(date "+%Y-%m-%d %H:%M:%S")] EVALUATOR | {task-name} PASS/FAIL: <summary>" >> .pge/progress.md'`
 ```
 
 ---
@@ -127,9 +119,9 @@ Output DONE: <file list> when complete.
 ## Task: Review Phase {N} Code
 
 Review all code changes in this phase:
-cd {project_dir} && git diff HEAD
+cd {project_dir} && git diff $(cat .pge/phase-start-commit)
 
-(Phase 3 的工作树修改尚未提交，`git diff HEAD` 显示自上次 commit 以来的所有变更)
+(Phase 3 各 task 已独立 commit，`git diff $(cat .pge/phase-start-commit)` 显示相位基线以来的累计变更)
 
 Look for: memory safety, GC correctness, error handling, type safety, dead code.
 Write findings to .pge/review-phase{N}.md with priority levels (P0-P3).

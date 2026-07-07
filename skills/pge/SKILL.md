@@ -118,7 +118,7 @@ Design (用户需求)
 3. Generator 完成 → 写 progress.md（含产出文件列表）
    不要 kill，保持活着
 4. **Kitchen Sink 检查**（Orchestrator 执行，不 spawn agent）：
-   `git diff --name-only` 对比 task 的 Write 文件列表
+   `git status --porcelain --untracked-files=all` 列出所有变更文件（含新增、暂存、未暂存），对比 task 的 Write 文件列表
    有超出范围的文件 → progress.md → ai send 让 Generator 回滚 → 回到步骤 2
    未超出范围 → progress.md → 继续
 5. Spawn Evaluator (validator role) → 独立读代码、跑验证命令
@@ -149,7 +149,7 @@ Design (用户需求)
 - Orchestrator 可以运行构建和测试命令收集信息，但 **PASS/FAIL 判定必须由独立 Evaluator 做**
 - progress.md 会记录下全部角色的操作历史，这会被用于审核 agent 是否有按照 pge 技能要求执行
 
-**Eval Report 格式：** 见 [`references/prompt-templates.md`](references/prompt-templates.md) 的 Eval Report Format 章节
+**Eval Report 格式：** 由 `~/.ai/roles/validator/system_prompt.md` 定义（✅/❌/⚠️ 格式），参考 [`references/prompt-templates.md`](references/prompt-templates.md) 的 Eval Report Format 章节。
 
 **One task at a time.** 不要在 Task 1 通过前启动 Task 2。
 
@@ -301,7 +301,7 @@ Design (用户需求)
 8. **Task 级 commit 可在 eval PASS 后执行** — 每个 task 通过 Evaluator 验证后即可独立 commit。Phase end 的 review 检查跨 task 代码质量，review 无 P1 后执行 Phase 合入
 9. **Generator MUST read existing API before using it** — no hallucinated function calls
 10. **Build MUST pass before DONE**
-11. **Kitchen Sink 检查** — Generator DONE 后、spawn Evaluator 前，Orchestrator 跑 `git diff --name-only` 对比 task Write 范围，超范围则回滚
+11. **Kitchen Sink 检查** — Generator DONE 后、spawn Evaluator 前，Orchestrator 跑 `git status --porcelain --untracked-files=all` 对比 task Write 范围，超范围则回滚
 12. **只 kill 自己 spawn 的 agent** — 严禁批量 kill，遵循 `subagent` 安全规则
 
 ## Prompt Templates

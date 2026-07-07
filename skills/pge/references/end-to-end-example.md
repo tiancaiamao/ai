@@ -76,8 +76,8 @@ ai watch --id "$CHILD_ID" --follow --pretty
 Generator DONE 后，Orchestrator 先检查 scope 合规性（不 spawn agent）：
 
 ```bash
-# 列出本次修改的所有文件
-git diff --name-only
+# 列出本次修改的所有文件（含新增/暂存/未暂存）
+git status --porcelain --untracked-files=all
 
 # 对比 task 的 Write 列表：
 # Write: src/middleware/auth.go, src/routes/router.go
@@ -91,7 +91,7 @@ echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Kitchen Sink 越界" >> .pge
 
 ai send --id "$CHILD_ID" --wait --timeout 5m \
   "Kitchen Sink detected. The following files are outside task Write scope:
-  $(git diff --name-only | grep -v 'src/middleware/auth.go' | grep -v 'src/routes/router.go')
+  $(git status --porcelain --untracked-files=all | sed 's/^...//' | grep -v 'src/middleware/auth.go' | grep -v 'src/routes/router.go')
   Please revert these changes and only modify files in Write scope.
   Output DONE: <fixed file list> when complete."
 # 回到 Step 3 watch
