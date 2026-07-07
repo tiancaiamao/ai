@@ -15,7 +15,8 @@ import (
 
 func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	m := watchModel{
-		content:      &strings.Builder{},
+		rawContent:   &strings.Builder{},
+		pendingRaw:   &strings.Builder{},
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
@@ -50,7 +51,7 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 	}
 
 	// Content should have all appended text.
-	got := m.content.String()
+	got := m.rawContent.String()
 	if !strings.Contains(got, "hello ") || !strings.Contains(got, "world") {
 		t.Errorf("content should contain both 'hello ' and 'world', got %q", got)
 	}
@@ -63,50 +64,14 @@ func TestDirtyFlag_AppendSetsDirtyNotSync(t *testing.T) {
 // O(1 + 2 + ... + N) = O(N²). With dirty flag, it's called once per event = O(N).
 // ---------------------------------------------------------------------------
 
-func TestSyncContent_LinearGrowth(t *testing.T) {
-	m := watchModel{
-		content:      &strings.Builder{},
-		showPrefixes: true,
-		showThinking: true,
-		showTools:    true,
-		mode:         "live",
-		width:        80,
-		ready:        true,
-	}
-
-	sizes := []int{100, 1000}
-
-	var timings []time.Duration
-	for _, size := range sizes {
-		m.content.Reset()
-		for i := 0; i < size; i++ {
-			m.content.WriteString("This is a line of content for wrapping test.\n")
-		}
-
-		start := time.Now()
-		for i := 0; i < 100; i++ {
-			m.syncContent()
-		}
-		timings = append(timings, time.Since(start))
-	}
-
-	ratio := float64(timings[1]) / float64(timings[0])
-	t.Logf("syncContent: %d lines=%v, %d lines=%v, ratio=%.1f",
-		sizes[0], timings[0], sizes[1], timings[1], ratio)
-
-	// 10x more content should take at least 2x longer (O(n) growth).
-	if ratio < 2.0 {
-		t.Errorf("expected O(n) growth, but ratio=%.1f (larger content not slower)", ratio)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Test 3: Multiple appends coalesced — dirty flag only triggers one sync.
 // ---------------------------------------------------------------------------
 
 func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 	m := watchModel{
-		content:      &strings.Builder{},
+		rawContent:   &strings.Builder{},
+		pendingRaw:   &strings.Builder{},
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
@@ -131,7 +96,7 @@ func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 		t.Fatal("expected dirty=false after syncIfDirty")
 	}
 
-	got := m.content.String()
+	got := m.rawContent.String()
 	expected := strings.Repeat("word ", 50)
 	if got != expected {
 		t.Errorf("content mismatch: got %d chars, expected %d chars", len(got), len(expected))
@@ -196,8 +161,9 @@ done:
 // ---------------------------------------------------------------------------
 // Test 5: End-to-end — processEvent + syncIfDirty with accumulated content.
 //
-// Measures processing 200 events with accumulated history to show
-// the old behavior (sync on every append) vs new (sync once per event).
+// Measures processing 200 events with accumulated history to verify that
+// the dirty-flag coalescing (sync once per event, not per append) maintains
+// linear performance regardless of history size.
 // ---------------------------------------------------------------------------
 
 func TestProcessEvent_Performance(t *testing.T) {
@@ -209,7 +175,8 @@ func TestProcessEvent_Performance(t *testing.T) {
 
 	newModel := func() watchModel {
 		m := watchModel{
-			content:      &strings.Builder{},
+			rawContent:   &strings.Builder{},
+			pendingRaw:   &strings.Builder{},
 			showPrefixes: true,
 			showThinking: true,
 			showTools:    true,
@@ -217,9 +184,6 @@ func TestProcessEvent_Performance(t *testing.T) {
 			width:        80,
 			ready:        true,
 		}
-		m.sentBuf = newSentenceBuffer(func(text string) {
-			m.appendInline(text)
-		})
 		return m
 	}
 
@@ -239,34 +203,33 @@ func TestProcessEvent_Performance(t *testing.T) {
 	t.Logf("NEW (dirty flag): %d events in %v (%.0f events/sec)",
 		eventCount, newDuration, float64(eventCount)/newDuration.Seconds())
 
-	// --- OLD behavior: syncContent on every append (simulate pre-fix) ---
-	mOld := newModel()
-	// Pre-build history to make the O(n) effect visible.
+	// --- With history: same processEvent+syncIfDirty, but with 500 lines of history ---
+	mHist := newModel()
 	for i := 0; i < 500; i++ {
-		mOld.content.WriteString("Previous line of content already in buffer for wrapping.\n")
+		mHist.rawContent.WriteString("Previous line of content already in buffer for wrapping.\n")
 	}
-	mOld.syncContent()
+	mHist.rebuildWrappedLines()
 
 	start = time.Now()
 	for i := 0; i < eventCount; i++ {
-		mOld.processEvent(&tui.FormattedEvent{
+		mHist.processEvent(&tui.FormattedEvent{
 			Kind: tui.KindText,
 			Role: "assistant",
 			Text: "This is a test sentence. ",
 			Raw:  "This is a test sentence. ",
 		})
-		// OLD: syncContent called inside every appendInline.
-		// processEvent triggers appendInline via sentBuf → appendInline → syncContent.
-		// We simulate by calling syncContent after each processEvent
-		// (this is actually FEWER calls than the real old code, which called
-		// syncContent per appendInline, not per processEvent).
-		mOld.syncContent()
+		mHist.syncIfDirty()
 	}
-	oldDuration := time.Since(start)
-	t.Logf("OLD (sync every append, 500-line history): %d events in %v (%.0f events/sec)",
-		eventCount, oldDuration, float64(eventCount)/oldDuration.Seconds())
+	histDuration := time.Since(start)
+	t.Logf("With 500-line history: %d events in %v (%.0f events/sec)",
+		eventCount, histDuration, float64(eventCount)/histDuration.Seconds())
 
-	if newDuration >= oldDuration {
-		t.Logf("WARNING: new behavior not faster — new=%v old=%v", newDuration, oldDuration)
+	// Ratio of with-history to without-history should be close to 1.0
+	// (indicating history doesn't slow down the new implementation).
+	ratio := float64(histDuration) / float64(newDuration)
+	t.Logf("History overhead ratio: %.2f (should be close to 1.0)", ratio)
+
+	if ratio > 3.0 {
+		t.Errorf("history should not cause >3x slowdown, got ratio=%.2f", ratio)
 	}
 }

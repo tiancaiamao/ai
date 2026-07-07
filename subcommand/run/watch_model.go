@@ -74,46 +74,31 @@ type socketConnectFailed struct {
 	err error
 }
 
-// --- Sentence buffer for typewriter effect ---
-
-// sentenceBuffer accumulates text deltas and flushes at sentence boundaries.
-type sentenceBuffer struct {
-	buf       strings.Builder
-	flushFunc func(text string)
-	lastFlush int // buf.Len() at last flush
-}
-
-func newSentenceBuffer(flushFunc func(text string)) *sentenceBuffer {
-	return &sentenceBuffer{flushFunc: flushFunc}
-}
-
-func (sb *sentenceBuffer) flush() {
-	if sb.buf.Len() > 0 {
-		sb.flushFunc(sb.buf.String())
-		sb.lastFlush = 0
-		sb.buf.Reset()
-	}
-}
-
 // --- Model ---
 
 type watchModel struct {
 	viewport    viewport.Model
 	eventsPath  string // legacy: for file-based polling (machine mode only)
 	offset      int64  // legacy: current read position in events.jsonl
-	content     *strings.Builder
 	ready       bool
 	err         error
 	width       int
 	height      int
-	lines       int    // total lines rendered
 	mode        string // "replay" or "live"
 	caughtUp    bool   // true when replay phase finishes
 	runID       string
 	statusLine  string
-	sentBuf     *sentenceBuffer
 	sinceFlag   int64 // --since offset for machine-readable mode
 	machineMode bool  // if true, print raw events + cursor and exit
+
+	// Content management (line-buffered, incremental wrapping).
+	// - rawContent stores ALL raw text (used only for resize re-wrap).
+	// - pendingRaw accumulates the current in-progress text_delta stream.
+	// - wrappedLines stores pre-wrapped lines from completed paragraphs.
+	rawContent   *strings.Builder // all raw text (for resize)
+	pendingRaw   *strings.Builder // current inline text accumulation
+	wrappedLines []string         // pre-wrapped lines from completed paragraphs
+	maxWrapped   int              // max wrapped lines before dropping oldest (0 = unlimited)
 
 	// Streaming state: tracks current role prefix for inline content.
 	// Role prefix printed once when role changes, then text appended inline
@@ -140,16 +125,15 @@ func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool
 		runID:        runID,
 		mode:         "replay",
 		statusLine:   fmt.Sprintf("ai watch | run %s | replaying...", runID),
-		content:      &strings.Builder{},
+		rawContent:   &strings.Builder{},
+		pendingRaw:   &strings.Builder{},
 		sinceFlag:    sinceOffset,
 		machineMode:  machineMode,
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
+		maxWrapped:   5000,
 	}
-	m.sentBuf = newSentenceBuffer(func(text string) {
-		m.appendInline(text)
-	})
 	return m
 }
 
@@ -161,15 +145,14 @@ func newWatchModelFromBroadcaster(b *tui.EventBroadcaster, runID string) watchMo
 		mode:         "live",
 		caughtUp:     true,
 		statusLine:   fmt.Sprintf("ai run | run %s | live", runID),
-		content:      &strings.Builder{},
+		rawContent:   &strings.Builder{},
+		pendingRaw:   &strings.Builder{},
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
+		maxWrapped:   5000,
 		broadcaster:  b,
 	}
-	m.sentBuf = newSentenceBuffer(func(text string) {
-		m.appendInline(text)
-	})
 
 	// Subscribe to broadcaster for live events only (no replay).
 	if b != nil {
@@ -187,15 +170,14 @@ func newWatchModelFromSocket(sockPath, runID string) watchModel {
 		mode:         "live",
 		caughtUp:     true,
 		statusLine:   fmt.Sprintf("ai watch | run %s | connecting...", runID),
-		content:      &strings.Builder{},
+		rawContent:   &strings.Builder{},
+		pendingRaw:   &strings.Builder{},
 		showPrefixes: true,
 		showThinking: true,
 		showTools:    true,
+		maxWrapped:   5000,
 		sockPath:     sockPath,
 	}
-	m.sentBuf = newSentenceBuffer(func(text string) {
-		m.appendInline(text)
-	})
 	return m
 }
 
@@ -222,27 +204,56 @@ func wrapContent(raw string, width int) string {
 	return b.String()
 }
 
-// syncContent applies word-wrapping to the raw content and pushes it
-// to the viewport, then scrolls to the bottom.
+// syncContent pushes the current content to the viewport and scrolls to the bottom.
+// Unlike the old implementation, it does NOT re-wrap all raw content every call.
+// It joins pre-wrapped lines (from completed paragraphs) and only wraps the
+// current in-progress inline text (usually short).
 func (m *watchModel) syncContent() {
 	if !m.ready {
 		return
 	}
-	wrapped := wrapContent(m.content.String(), m.width)
-	m.viewport.SetContent(wrapped)
+
+	var content string
+	if len(m.wrappedLines) > 0 {
+		content = strings.Join(m.wrappedLines, "\n")
+	}
+
+	// If there's in-progress inline text, wrap it and append.
+	// This is typically short (a few words), so wrapping is cheap.
+	if m.pendingRaw.Len() > 0 {
+		if content != "" {
+			content += "\n"
+		}
+		content += ansi.Wrap(m.pendingRaw.String(), m.width, "")
+	}
+
+	m.viewport.SetContent(content)
 	m.viewport.GotoBottom()
 }
 
+// appendContent writes a complete, non-inline line to the content buffer.
+// This is used for tool events, meta messages, etc.
 func (m *watchModel) appendContent(text string) {
-	m.endInline()
-	m.content.WriteString(text)
-	m.content.WriteString("\n")
-	m.lines++
+	m.endInline() // flush any pending inline text
+
+	m.rawContent.WriteString(text)
+	m.rawContent.WriteString("\n")
+
+	// Wrap and append to wrappedLines immediately.
+	wrapped := ansi.Wrap(text, m.width, "")
+	for _, line := range strings.Split(wrapped, "\n") {
+		m.wrappedLines = append(m.wrappedLines, line)
+	}
+	m.capWrappedLines()
+
 	m.dirty = true
 }
 
+// appendInline appends text to the current inline stream.
+// The text is accumulated in pendingRaw and wrapped-on-demand by syncContent.
 func (m *watchModel) appendInline(text string) {
-	m.content.WriteString(text)
+	m.rawContent.WriteString(text)
+	m.pendingRaw.WriteString(text)
 	m.dirty = true
 }
 
@@ -276,8 +287,7 @@ func (m *watchModel) ensureRole(role string) bool {
 		return true // same role, continue inline
 	}
 
-	// Role changed — flush any buffered text, end previous inline
-	m.sentBuf.flush()
+	// Role changed — end previous inline, start new role prefix
 	m.endInline()
 
 	if m.showPrefixes && role != "" {
@@ -294,7 +304,8 @@ func (m *watchModel) ensureRole(role string) bool {
 		default:
 			styled = role + ": "
 		}
-		m.content.WriteString(styled)
+		m.rawContent.WriteString(styled)
+		m.pendingRaw.WriteString(styled)
 	}
 
 	m.currentRole = role
@@ -303,14 +314,80 @@ func (m *watchModel) ensureRole(role string) bool {
 }
 
 // endInline finishes the current inline stream (if any) with a newline.
+// It flushes any accumulated pendingRaw to wrappedLines as a completed paragraph.
 func (m *watchModel) endInline() {
 	if m.inlineActive {
-		m.content.WriteString("\n")
-		m.lines++
+		m.rawContent.WriteString("\n")
+
+		// Flush pending inline text as a completed wrapped paragraph.
+		if m.pendingRaw.Len() > 0 {
+			raw := m.pendingRaw.String()
+			m.pendingRaw.Reset()
+			wrapped := ansi.Wrap(raw, m.width, "")
+			for _, line := range strings.Split(wrapped, "\n") {
+				m.wrappedLines = append(m.wrappedLines, line)
+			}
+			m.capWrappedLines()
+		}
+
 		m.inlineActive = false
 		m.currentRole = ""
 		m.dirty = true
 	}
+}
+
+// rebuildWrappedLines re-wraps ALL raw content from rawContent and
+// rebuilds wrappedLines. This is called on terminal resize (rare).
+// It does NOT touch pendingRaw — the current inline text is preserved
+// and will be wrapped by syncContent on the next update cycle.
+func (m *watchModel) rebuildWrappedLines() {
+	raw := m.rawContent.String()
+	m.wrappedLines = nil
+
+	if len(raw) == 0 {
+		m.syncContent()
+		return
+	}
+
+	paras := strings.Split(raw, "\n")
+	// If rawContent ends with '\n' the last element is empty (completed paragraph).
+	// If rawContent does NOT end with '\n', the last element is the in-progress
+	// paragraph, which is also held in pendingRaw — skip it to avoid duplication.
+	n := len(paras)
+	if n > 0 && paras[n-1] == "" {
+		n-- // trailing \n
+	}
+	if m.pendingRaw.Len() > 0 && n > 0 {
+		n-- // in-progress paragraph, handled by pendingRaw in syncContent
+	}
+
+	for i := 0; i < n; i++ {
+		para := paras[i]
+		if para == "" {
+			continue
+		}
+		wrapped := ansi.Wrap(para, m.width, "")
+		for _, line := range strings.Split(wrapped, "\n") {
+			m.wrappedLines = append(m.wrappedLines, line)
+		}
+	}
+	m.capWrappedLines()
+
+	// Update viewport with rebuilt content.
+	m.syncContent()
+}
+
+// capWrappedLines trims wrappedLines to maxWrapped by dropping the oldest lines.
+// rawContent is NOT trimmed — it's only used for resize (which re-wraps everything
+// and then calls capWrappedLines again), so unbounded growth of rawContent between
+// resize events is acceptable. Resize is rare (terminal width change) and the
+// occasional O(raw) re-wrap is fine.
+func (m *watchModel) capWrappedLines() {
+	if m.maxWrapped <= 0 || len(m.wrappedLines) <= m.maxWrapped {
+		return
+	}
+	n := len(m.wrappedLines) - m.maxWrapped
+	m.wrappedLines = m.wrappedLines[n:]
 }
 
 func (m watchModel) Init() tea.Cmd {
@@ -362,8 +439,8 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = msg.Height - headerHeight
 		}
-		// Re-wrap content to the new width.
-		m.syncContent()
+		// Re-wrap all content at the new width (one-time cost on resize).
+		m.rebuildWrappedLines()
 
 	case broadcasterEvent:
 		// Event from in-memory broadcaster (ai run).
@@ -411,8 +488,6 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.caughtUp = true
 		m.mode = "live"
 		m.updateStatus()
-		// Flush any remaining buffered text.
-		m.sentBuf.flush()
 		m.syncIfDirty()
 		return m, waitForFile(m.eventsPath, m.offset)
 
@@ -462,7 +537,7 @@ func (m *watchModel) nextCmd() tea.Cmd {
 }
 
 func (m *watchModel) updateStatus() {
-	m.statusLine = fmt.Sprintf("ai watch | run %s | %s | %d lines", m.runID, m.mode, m.lines)
+	m.statusLine = fmt.Sprintf("ai watch | run %s | %s | %d lines", m.runID, m.mode, len(m.wrappedLines))
 }
 
 func (m watchModel) View() string {
