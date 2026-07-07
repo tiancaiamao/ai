@@ -36,7 +36,7 @@ cd /home/user/myproject && go build ./... && go test ./src/middleware/...
 EOF
 
 # 写 progress.md
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Task file task-add-jwt-auth.md 已创建" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Task file task-add-jwt-auth.md 已创建" >> .pge/progress.md
 ```
 
 ## Step 2: Spawn Generator
@@ -59,7 +59,7 @@ CHILD_ID=$(cat $ID_FILE)
 echo "$CHILD_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Spawn gen-jwt (coder)" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn gen-jwt (coder)" >> .pge/progress.md
 ```
 
 ## Step 3: Watch Generator
@@ -87,7 +87,7 @@ git status --porcelain --untracked-files=all
 如有越界文件 → 写 progress.md，用 `ai send` 让 Generator 回滚：
 
 ```bash
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Kitchen Sink 越界" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Kitchen Sink 越界" >> .pge/progress.md
 
 ai send --id "$CHILD_ID" --wait --timeout 5m \
   "Kitchen Sink detected. The following files are outside task Write scope:
@@ -100,7 +100,7 @@ ai send --id "$CHILD_ID" --wait --timeout 5m \
 无越界 → 写 progress.md，继续 Step 5。
 
 ```bash
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Kitchen Sink 检查通过，未超出范围" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Kitchen Sink 检查通过，未超出范围" >> .pge/progress.md
 ```
 
 ## Step 5: Spawn Evaluator
@@ -137,7 +137,7 @@ EVAL_ID=$(cat $EVAL_ID_FILE)
 echo "$EVAL_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Spawn eval-jwt (validator)" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn eval-jwt (validator)" >> .pge/progress.md
 ```
 
 ## Step 6: Watch Evaluator → Read Eval Report
@@ -206,12 +206,12 @@ EOF
 
 
 # 2. 写 progress.md
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | task-add-jwt-auth ✅ state.md 已更新" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | task-add-jwt-auth ✅ state.md 已更新" >> .pge/progress.md
 
 
 # 3. 可选：task 级 commit（每个 task 通过 eval 后可独立提交）
 # git add -A && git commit -m "task-add-jwt-auth: JWT auth middleware"
-# echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | task-add-jwt-auth ✅ commit: $(git rev-parse HEAD)" >> .pge/progress.md
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | task-add-jwt-auth ✅ commit: $(git rev-parse HEAD)" >> .pge/progress.md
 
 
 # 4. Kill Generator + Evaluator
@@ -239,7 +239,7 @@ REVIEW_ID_FILE="/tmp/agent-$RUN_ID-review.id"
 tmux new-session -d -s "$REVIEW_TMUX" \
     "ai serve --role coder \
    --system-prompt @~/.ai/skills/review/reviewer.md \
-   --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit) (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
+   --input 'Review all code changes in this phase. Run: cd /home/user/myproject && git diff \$(cat .pge/phase-start-commit)..HEAD (this shows the cumulative diff of all task commits in this phase against the baseline). Write findings to .pge/review-phase1.md with P0-P3 priorities.' \
    --name 'rev-phase1' \
    --id-file $REVIEW_ID_FILE \
    --timeout 5m"
@@ -249,7 +249,7 @@ REVIEW_ID=$(cat $REVIEW_ID_FILE)
 echo "$REVIEW_ID" >> ~/.ai/runs/$RUN_ID/subagent
 
 # 写 progress.md
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Spawn rev-phase1 (coder)" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Spawn rev-phase1 (coder)" >> .pge/progress.md
 
 # Watch Review agent
 ai watch --id "$REVIEW_ID" --follow --pretty
@@ -267,7 +267,7 @@ cat .pge/review-phase1.md
 
 # 写 progress.md
 COMMIT_HASH=$(git rev-parse HEAD)
-echo "[$(date "+%Y-%m-%d %H:%M:%S")] ORCHESTRATOR | Phase 1 合入. Review: $(cat .pge/review-phase1.md | grep -c 'P0\|P1' || echo 'clean')" >> .pge/progress.md
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] ORCHESTRATOR | Phase 1 合入. Review: $(cat .pge/review-phase1.md | grep -c 'P0\|P1' || echo 'clean')" >> .pge/progress.md
 
 # 6. Update state.md Phase Log
 # 找到 state.md 的 Phase Log 段落，在其下追加一行：

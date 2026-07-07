@@ -173,8 +173,8 @@ Design (用户需求)
 
 **两者互补，职责不重叠，不能省略 Review。** Evaluator 确保功能正确（"做对了事"），Review 确保代码健康（"把事情做好"）。
 
-1. **Record start commit** — `git rev-parse HEAD > .pge/phase-start-commit`（标记 phase 基线）
-2. **Spawn Review agent**（`coder` role）— 审查整个 phase 的代码变更。使用 `git diff $(cat .pge/phase-start-commit)` 作为 diff 输入（Phase 3 各 task 已独立 commit，diff 累计所有 task 变更）。使用 `review` 技能的 reviewer system prompt（`~/.ai/skills/review/reviewer.md`）
+1. **Record start commit** — 在 Phase 3 开始前（spawn 第一个 Generator 前）执行一次：`git rev-parse HEAD > .pge/phase-start-commit`（标记 phase 基线）
+2. **Spawn Review agent**（`coder` role）— 审查整个 phase 的代码变更。使用 `git diff $(cat .pge/phase-start-commit)..HEAD` 作为 diff 输入（Phase 3 各 task 已独立 commit，diff 累计所有 task 变更）。使用 `review` 技能的 reviewer system prompt（`~/.ai/skills/review/reviewer.md`）
 3. **Review agent 写** `.pge/review-phase{N}.md` — 包含发现的问题（P0-P3）
 4. **Orchestrator 读 review report**：
    - **无 P1**: 可以 commit
@@ -212,7 +212,7 @@ Design (用户需求)
 | `state.md` | 全局状态快照（当前进度、决策记录） | Orchestrator 仅 | `edit` 覆盖/追加 |
 | `progress.md` | 操作日志（谁做了什么、结果如何） | 所有 agent | `>>` 追加 |
 
-**格式：** 每行一条记录：`[时间戳] 角色 | 操作 | 结果`
+**格式：** 每行一条记录：`[时间戳] 角色 | 事件`
 
 示例：
 ```
@@ -234,7 +234,7 @@ Design (用户需求)
 | Generator | DONE/BLOCKED 时 | 状态 + 产出文件列表 |
 | Evaluator | 写完 eval report 后 | PASS/FAIL + 摘要 |
 
-所有 agent 使用 `bash -c 'echo "[$(date "+%Y-%m-%d %H:%M:%S")] ..." >> .pge/progress.md'` 追加。
+所有 agent 使用 `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] ...\" >> .pge/progress.md"` 追加。
 
 **目的：** 执行历史由 eval report + git log 覆盖功能视角，`progress.md` 提供 **流程视角**——验证每个 agent 是否按 PGE 技能要求的顺序和职责执行。会话结束后可据此审计流程合规性。
 

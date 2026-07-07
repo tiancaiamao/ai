@@ -14,7 +14,7 @@
 
 ### Write (expected changes)
 <files the Generator is expected to modify/create>
-**Kitchen Sink check will compare git diff against this list.**
+**Kitchen Sink check will compare `git status --porcelain --untracked-files=all` against this list.**
 
 ## Estimated Size
 <S(<100) / M(100-300) / L(300-500) / XL(>500, consider splitting)>
