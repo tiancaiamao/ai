@@ -8,6 +8,9 @@ coverage.out
 __pycache__/
 *.pyc
 benchmark/results/progress.json
+
+# Auto-generated role stats
+**/skill-stats.json
 benchmark/tasks/*/setup/
 benchmark/tasks/*/*/setup/
 

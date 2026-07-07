@@ -3,10 +3,10 @@
 ## Role Mapping
 
 | PGE Role | `--role` 参数 | 说明 |
-|----------|--------------|------|
+|---|---|---|
 | Generator | `coder` | 实现代码 |
 | Evaluator | `validator` | 独立验证 |
-| Review | `coder` | 代码审查 |
+| Review | `reviewer` | 代码审查 |
 
 具体的 `ai serve` 参数（`--name`, `--input-file`, `--id-file`, `--timeout` 等）参见 `subagent` 技能。
 
@@ -26,16 +26,23 @@
 ## What to Implement
 {具体的实现要求，给 WHAT 不给 HOW}
 
-## Files to Modify/Create
-{明确的文件列表}
+## Files
+### Read (context, do not modify)
+{文件列表 — You may grep the entire codebase for API verification}
+
+### Write (expected changes)
+{文件列表 — Kitchen Sink 检查会对比此范围}
 
 ## Verification
-{构建命令 + 测试命令}
+{构建命令 + 测试命令 — 所有命令必须通过}
 
 ## Rules
 1. READ BEFORE WRITE — grep 确认 API 存在再使用
-2. BUILD MUST PASS — 实现后必须构建成功
-3. Output DONE: <file list> when complete
+2. MODIFY ONLY WRITE FILES — 不要改动 Write 列表之外的文件
+3. VERIFICATION MUST PASS — Verification 节中的所有命令（build + test）必须通过
+4. Output `DONE: <file list>` when complete (file list: space-separated, relative to project root)
+5. **On DONE, write to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] GENERATOR | {task-name} DONE. Write: <file list>\" >> .pge/progress.md"`
+6. **BLOCKED if stuck** — 如果遇到无法解决的问题（API 不存在、需求矛盾、超出 Write 范围的关键依赖缺失），输出 `BLOCKED: <reason>`，不要猜测实现
 ```
 
 ---
@@ -44,11 +51,12 @@
 
 写入 `/tmp/eval-{task}.md`，作为 `--input-file` 传入：
 
+```bash
+ai serve --role validator --name eval-{task} --input-file /tmp/eval-{task}.md
+```
+
 ```markdown
 ## Task: Evaluate {task-name}
-
-You are an INDEPENDENT evaluator. You did NOT write this code.
-Critically and objectively verify each acceptance criterion.
 
 ## Spec Acceptance Criteria
 {从 spec.md 复制相关 criteria}
@@ -57,11 +65,9 @@ Critically and objectively verify each acceptance criterion.
 1. cd {project_dir}
 2. For each criterion, run the verification command YOURSELF
 3. For code quality, READ the actual source files
-4. Output a structured report with ✅ or ❌ for EVERY criterion, with EVIDENCE
-5. For any ❌, explain what failed and what the actual behavior was
-6. At the end, give overall PASS/FAIL verdict
-7. Write your report to .pge/eval-{task}.md
-```
+4. Output verdict in the format defined in your system prompt (✅/❌/⚠️)
+5. Write report to `.pge/eval-{task}.md`
+6. **Append verdict to `.pge/progress.md`**: `bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] EVALUATOR | {task-name} VERDICT: <PASS|FAIL> — <summary>\" >> .pge/progress.md"`
 
 ---
 
@@ -83,12 +89,20 @@ Output DONE: <file list> when complete.
 
 写入 `/tmp/review-{phase}.md`，作为 `--input-file` 传入：
 
+```bash
+ai serve --role reviewer --name review-{task} --input-file /tmp/review-{name}.md
+```
+
 ```markdown
 ## Task: Review Phase {N} Code
 
 Review all code changes in this phase:
-cd {project_dir} && git diff {start_commit}..HEAD -- '*.c' '*.h' (adapt extensions)
+cd {project_dir} && git diff $(cat .pge/phase-start-commit)
+
+(Phase 3 各 task 已独立 commit，`git diff $(cat .pge/phase-start-commit)` 显示相位基线以来的累计变更)
 
 Look for: memory safety, GC correctness, error handling, type safety, dead code.
 Write findings to .pge/review-phase{N}.md with priority levels (P0-P3).
+After writing the report, append to .pge/progress.md:
+`bash -c "mkdir -p .pge && echo \"[$(date '+%Y-%m-%d %H:%M:%S')] REVIEW | Phase {N} done. Issues: P0=<n> P1=<n>\" >> .pge/progress.md"`
 ```
