@@ -15,6 +15,13 @@ import (
 
 var (
 	summarizationPrompt = prompt.CompactSummarizePrompt()
+
+	// fallbackSummarizationPrompt is used when the primary prompt produces an
+	// empty summary. Some models struggle with the structured template in
+	// summarizationPrompt; the fallback asks for plain key-fact extraction.
+	fallbackSummarizationPrompt = "Extract ONLY the essential facts from the conversation above. " +
+		"List: current task (verbatim), key decisions, file paths involved, errors, and next steps. " +
+		"Omit pleasantries, repetition, and abandoned approaches. Keep under 300 words."
 )
 
 // GenerateSummary generates a structured summary of messages.
@@ -127,6 +134,16 @@ func (c *Compactor) GenerateSummary(goCtx context.Context, messages []agentctx.A
 					"thinking_chars", len(thinkingStr), "output_tokens", doneEvent.Usage.OutputTokens)
 				result = thinkingStr
 			} else {
+				// Empty summary from primary prompt — retry once with a simpler
+				// fallback prompt before giving up. Some models choke on the
+				// structured template; the fallback asks for plain fact extraction.
+				if attempt == 1 {
+					slog.Warn("[Compact] Empty summary from primary prompt, retrying with fallback prompt",
+						"attempt", attempt)
+					// Rebuild context with simpler prompt and retry
+					llmCtx = buildCacheFriendlyLLMContext(messages, systemPrompt, contextPrefix, tools, fallbackSummarizationPrompt, c.thinkingLevel)
+					continue
+				}
 				return "", fmt.Errorf("empty summary generated")
 			}
 		}

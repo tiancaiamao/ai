@@ -111,8 +111,10 @@ func loadFromEnd(f *os.File, sess *Session) error {
 		return nil
 	}
 
-	// Optimization: Read only the tail of the file (64KB typically enough for recent compaction)
-	const scanSize = 64 * 1024 // 64KB
+	// Optimization: Read only the tail of the file (256KB covers most compaction entries).
+	// In large sessions (multi-MB), the last compaction entry may be >64KB from the
+	// file end. Adjust if compaction entries become even more distant.
+	const scanSize = 256 * 1024 // 256KB
 	var startOffset int64
 
 	if size > scanSize {

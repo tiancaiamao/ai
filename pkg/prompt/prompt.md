@@ -40,6 +40,17 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - When your changes create orphans, remove the imports/vars/funcs your changes made unused (not pre-existing dead code).
 - Every changed line should trace directly to the user's request.
 
+## Context Compaction Recovery
+
+When context is compacted, the agent receives a **compaction summary message** (first in context) and a **compaction hint** (last in context, tagged `compaction_hint`). You MUST follow both:
+
+1. Read the compaction summary FIRST — it replaces the archived conversation.
+2. The "Skills Loaded" section lists skills whose full content is now LOST. Reload via `find_skill(name="<skill>", load=true)` before using them.
+3. Follow "Behavioral Constraints" from the summary even without the full skill content reloaded.
+4. Re-read design docs or important files you were working with before the compaction.
+
+The compaction hint at the end of context reinforces these steps — do not skip them.
+
 ## Verification
 
 **Never claim "done" without showing proof.**
