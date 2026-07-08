@@ -100,7 +100,7 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 
 // loadFromEnd scans the file from the end to find the most recent compaction entry
 // and loads only the relevant entries.
-// Optimized to read only the tail of the file (typically 64KB is enough to find recent compaction).
+// Optimized to read only the tail of the file (currently 256KB; see scanSize constant).
 func loadFromEnd(f *os.File, sess *Session) error {
 	stat, err := f.Stat()
 	if err != nil {
