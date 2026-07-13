@@ -52,7 +52,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	}
 
 	// --- Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig ---
-	sessionWriter := newSessionWriter(256)
+	sessionWriter := newSessionWriter(2048)
 	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
 		compactor: app.compactor,

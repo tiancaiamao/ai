@@ -125,7 +125,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 		apiKey:        apiKey,
 		systemPrompt:  agentCtx.SystemPrompt,
 		context:       agentCtx,
-		eventChan:     make(chan AgentEvent, 100),
+		eventChan:     make(chan AgentEvent, 512),
 		followUpQueue: make(chan string, 100),
 		runLoopFn:     RunLoop,
 		traceBuf:      traceBuf,
@@ -323,7 +323,7 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		}
 
 		// Send to event channel
-		a.emitEvent(event.Value)
+		a.emitEventBlocking(ctx, event.Value)
 	}
 	span.AddField("error", hadError)
 	if hadError {
@@ -420,6 +420,10 @@ func (a *Agent) Steer(message string) {
 	if a.cancel != nil {
 		a.cancel()
 	}
+
+	// Reset tool-call counter — steer is a fresh start, the new loop
+	// should not inherit the old loop's compaction timing.
+	a.context.AgentState.ToolCallsSinceLastTrigger = 0
 
 	// Create new context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -591,6 +595,17 @@ func (a *Agent) emitEvent(event AgentEvent) {
 	case a.eventChan <- event:
 	default:
 		slog.Warn("[Agent] Event channel full, dropping event")
+	}
+}
+
+// emitEventBlocking sends an event to the event channel, blocking until
+// the event is consumed or the context is cancelled. Unlike emitEvent,
+// this propagates backpressure to the caller — use it in the main event
+// loop where losing events would cause silent data loss.
+func (a *Agent) emitEventBlocking(ctx context.Context, event AgentEvent) {
+	select {
+	case a.eventChan <- event:
+	case <-ctx.Done():
 	}
 }
 

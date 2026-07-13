@@ -446,6 +446,13 @@ func (app *rpcApp) handleSteer(cmd RPCCommand) (any, error) {
 		return nil, fmt.Errorf("steer already pending")
 	}
 	if !streaming {
+		// Steer is a fresh start: reset compaction tracking so the old
+		// loop's tool-call count doesn't trigger premature compaction
+		// of accumulated pre-steer messages.
+		app.ag.GetContext().AgentState.ToolCallsSinceLastTrigger = 0
+		if app.compactor != nil {
+			app.compactor.ResetDecideState()
+		}
 		app.compactBeforeRequest("pre_request_steer")
 	}
 	app.stateMu.Lock()
