@@ -454,6 +454,13 @@ func (app *rpcApp) handleSteer(cmd RPCCommand) (any, error) {
 			app.compactor.ResetDecideState()
 		}
 		app.compactBeforeRequest("pre_request_steer")
+	} else {
+		// Even when streaming, the compactor's llmDecideLastAskCount
+		// must be reset — otherwise the new loop inherits the old
+		// loop's ask interval timing.
+		if app.compactor != nil {
+			app.compactor.ResetDecideState()
+		}
 	}
 	app.stateMu.Lock()
 	app.pendingSteer = true

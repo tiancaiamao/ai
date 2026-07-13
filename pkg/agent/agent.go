@@ -423,7 +423,13 @@ func (a *Agent) Steer(message string) {
 
 	// Reset tool-call counter — steer is a fresh start, the new loop
 	// should not inherit the old loop's compaction timing.
-	a.context.AgentState.ToolCallsSinceLastTrigger = 0
+	// Replace the AgentState pointer to avoid data races with the
+	// exiting old loop (which shares the same *AgentState via RunLoop's
+	// currentCtx copy).
+	oldState := a.context.AgentState
+	newState := *oldState // shallow copy
+	newState.ToolCallsSinceLastTrigger = 0
+	a.context.AgentState = &newState
 
 	// Create new context
 	ctx, cancel := context.WithCancel(context.Background())

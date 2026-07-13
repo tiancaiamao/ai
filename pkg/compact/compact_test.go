@@ -224,11 +224,13 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 	cfg := &Config{
 		AutoCompact: true,
 		LLMDecide: &LLMDecideConfig{
-			SoftThreshold: 100,
-			HardLimit:     50000,
-			TierMedium:    10000,
-			TierHigh:      300,
-			IntervalLow:   5,
+			SoftThreshold:  100,
+			HardLimit:      50000,
+			TierMedium:     200,
+			TierHigh:       300,
+			IntervalLow:    5,
+			IntervalMedium: 5,
+			IntervalHigh:   7,
 		},
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
