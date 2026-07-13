@@ -449,7 +449,11 @@ func (app *rpcApp) handleSteer(cmd RPCCommand) (any, error) {
 		// Steer is a fresh start: reset compaction tracking so the old
 		// loop's tool-call count doesn't trigger premature compaction
 		// of accumulated pre-steer messages.
-		app.ag.GetContext().AgentState.ToolCallsSinceLastTrigger = 0
+		agentCtx := app.ag.GetContext()
+		oldState := agentCtx.AgentState
+		newState := *oldState
+		newState.ToolCallsSinceLastTrigger = 0
+		agentCtx.AgentState = &newState
 		if app.compactor != nil {
 			app.compactor.ResetDecideState()
 		}

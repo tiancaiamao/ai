@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -143,12 +144,17 @@ type Compactor struct {
 	// llmDecideLastAskCount tracks the tool-call counter value at the last
 	// LLM-decide ask, preventing re-asking every turn after a "no".
 	llmDecideLastAskCount int
+	// mu guards llmDecideLastAskCount across the loop goroutine
+	// (ShouldCompact/Compact) and the steer goroutine (ResetDecideState).
+	mu sync.Mutex
 }
 
 // ResetDecideState resets the LLM-decide tracking state so the next
 // ShouldCompact call starts fresh. Call this on steer to prevent the
 // old loop's ask-timing from carrying over to the new loop.
 func (c *Compactor) ResetDecideState() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.llmDecideLastAskCount = 0
 }
 
@@ -458,7 +464,9 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 
 	// Reset tool-call counter after successful compaction.
 	ctx.AgentState.ToolCallsSinceLastTrigger = 0
+	c.mu.Lock()
 	c.llmDecideLastAskCount = 0
+	c.mu.Unlock()
 
 	return &agentctx.CompactionResult{
 		Summary:        summary,
@@ -597,7 +605,10 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 
 	// Don't re-ask until a full interval has elapsed since the last ask.
 	// This prevents asking every turn after a "no".
-	if currentCount-c.llmDecideLastAskCount < interval {
+	c.mu.Lock()
+	lastAskCount := c.llmDecideLastAskCount
+	c.mu.Unlock()
+	if currentCount-lastAskCount < interval {
 		return false
 	}
 
@@ -625,7 +636,9 @@ func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentc
 			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
 	}
 
+	c.mu.Lock()
 	c.llmDecideLastAskCount = currentCount
+	c.mu.Unlock()
 
 	traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
 		traceevent.Field{Key: "decision", Value: decision},
