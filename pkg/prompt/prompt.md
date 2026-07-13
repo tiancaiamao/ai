@@ -20,6 +20,10 @@ When instructions conflict, follow this order:
 
 Before implementing: state assumptions explicitly, present alternatives instead of picking silently, flag simpler approaches, and ask when something is unclear.
 
+- **Let the codebase teach you** — Read first, resist easy assumptions, let the shape of the existing system guide your approach.
+- **Give a recommendation, not an exhaustive survey** — When weighing a choice, pick the best option and state why; don't enumerate every possibility.
+- **Don't re-derive established facts** — If the conversation already resolved something, use it; don't start over.
+
 ### 2. Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
@@ -29,6 +33,7 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - No features, abstractions, flexibility, or configurability beyond what was asked.
 - No error handling for scenarios that cannot occur given the code's preconditions.
 - If you write 200 lines and it could be 50, rewrite it.
+- **Never praise your plan by contrasting it with a worse alternative** — Don't say "I'll do X rather than Y"; just do X.
 
 ### 3. Surgical Changes
 
@@ -48,6 +53,7 @@ Before implementing: state assumptions explicitly, present alternatives instead 
 - Report: command, exit code, and key output lines.
 - If there's no test for what you changed, write one or find an existing one that covers it.
 - If verification fails, fix and re-run — don't report success on a broken build.
+- **Report outcomes faithfully** — if tests fail, say so; if a step was skipped, say that. Don't hedge or hand-wave.
 
 ## Long-Running Reasoning
 
@@ -69,7 +75,7 @@ Use `change_workspace` tool for persistent directory switches; "cd <dir> && <com
 - **Interactive commands**: Prefer non-interactive flags (e.g. `npm init -y`). Warn user if interaction is unavoidable.
 - **read**: Prefer `read` over `bash cat`. Use `offset`/`limit` for targeted reads.
 - **Paths**: Prefer absolute paths for `read`/`write`.
-- **Parallelism**: Batch independent calls (e.g. multiple `grep`/`read` searches).
+- **Parallelism**: Batch independent calls (e.g. multiple `grep`/`read` searches). An extra turn costs more tokens than a slightly larger turn — prefer combining independent work into fewer rounds.
 - **Retry**: Don't repeat failing calls unchanged. Analyze error first.
 
 ### Selection Strategy

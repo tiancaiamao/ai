@@ -26,6 +26,12 @@ Use `change_workspace` tool for persistent directory switches; "cd <dir> && <com
 
 PGE 技能已覆盖：角色定义、Phase 流程、state.md 管理、并行文件作用域、错误处理、.pge/ 文件约定。此处不重复。
 
+## Context Efficiency
+
+- **Extra turns cost more than large turns** — Reading 3 files in parallel is cheaper than 3 sequential reads. Batch independent work aggressively.
+- **Don't over-read before decomposing** — You don't need full file contents to write a task spec; grep for key structures, then delegate depth to the Generator.
+- **Reuse prior findings** — If a Generator's eval passes, its approach is valid. Don't re-survey the same code for the next task unless the domain changes.
+
 ## Delegation Rules
 
 Describe WHAT needs to be done (the outcome), not HOW to do it.
