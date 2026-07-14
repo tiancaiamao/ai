@@ -485,13 +485,6 @@ func runSocketHandler(meta *tui.RunMeta, metaPath string, proc *os.Process, stdi
 			}
 			return tui.Response{OK: true}
 
-		case "get_state":
-			loaded, err := tui.LoadRunMeta(metaPath)
-			if err != nil {
-				return tui.Response{OK: false, Error: fmt.Sprintf("load run meta: %v", err)}
-			}
-			return tui.Response{OK: true, Data: loaded}
-
 		default:
 			return tui.Response{OK: false, Error: fmt.Sprintf("unknown command type: %s", cmd.Type)}
 		}

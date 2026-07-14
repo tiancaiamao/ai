@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -125,11 +126,36 @@ func TestRPCAppModelList(t *testing.T) {
 }
 
 func TestRPCAppModelSwitch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an isolated models.json with the model we want to switch to.
+	modelsPath := filepath.Join(tmpDir, "models.json")
+	modelsData := map[string]interface{}{
+		"providers": map[string]interface{}{
+			"zai": map[string]interface{}{
+				"baseUrl": "https://api.z.ai/api/coding/paas/v4",
+				"api":     "openai-completions",
+				"models": []map[string]interface{}{
+					{
+						"id":            "glm-4.5-air",
+						"contextWindow": 200000,
+						"maxTokens":     131072,
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(modelsData)
+	if err := os.WriteFile(modelsPath, data, 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+	t.Setenv("AI_MODELS_PATH", modelsPath)
+
 	cmds := []string{
 		`{"type":"model","message":"zai/glm-4.5-air"}`,
 		`{"type":"model"}`,
 	}
-	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	responses := runRPCSmoke(t, tmpDir, cmds, "")
 	if len(responses) < 2 {
 		t.Fatalf("expected at least 2 responses, got %d", len(responses))
 	}
@@ -294,11 +320,11 @@ func TestRPCAppResume(t *testing.T) {
 }
 
 func TestRPCAppNewSession(t *testing.T) {
-	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"new_session"}`}, "")
+	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"new"}`}, "")
 	if len(responses) == 0 {
-		t.Fatal("expected new_session response")
+		t.Fatal("expected new response")
 	}
-	t.Logf("new_session response: %+v", responses[0])
+	t.Logf("new response: %+v", responses[0])
 }
 
 func TestRPCAppRetry(t *testing.T) {

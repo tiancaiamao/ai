@@ -120,12 +120,4 @@ func (app *rpcApp) registerHelpHandlers() {
 	app.server.RegisterSlash("follow-up", "Add a follow-up message when agent is busy", func(args string) (any, error) {
 		return app.handleFollowUpSlash(args)
 	})
-
-	// Hidden aliases — help-related
-	app.registerHiddenAlias("get_messages", "Get session messages (internal)", "messages")
-	app.registerHiddenAlias("get_state", "Get agent state (internal)", "session")
-	app.registerHiddenAlias("get_commands", "List commands (internal)", "skills")
-	app.registerHiddenAlias("new_session", "Create new session (internal)", "new")
-	app.registerHiddenAlias("list_sessions", "List sessions (internal)", "resume")
-	app.registerHiddenAlias("switch_session", "Switch session (internal)", "resume")
 }

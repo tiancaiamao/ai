@@ -178,7 +178,7 @@ func TestParseEvent_Response_Error(t *testing.T) {
 }
 
 func TestParseEvent_Response_Commands(t *testing.T) {
-	input := `{"type":"response","command":"prompt","success":true,"data":{"commands":[{"name":"compact","description":"Compact context"},{"name":"get_state","description":"Get agent state"}]}}`
+	input := `{"type":"response","command":"prompt","success":true,"data":{"commands":[{"name":"compact","description":"Compact context"},{"name":"session","description":"Get agent state"}]}}`
 	evt := ParseEvent(input)
 	if evt == nil {
 		t.Fatal("expected non-nil event")
@@ -186,7 +186,7 @@ func TestParseEvent_Response_Commands(t *testing.T) {
 	if evt.Kind != KindMeta {
 		t.Fatalf("expected KindMeta, got %s", evt.Kind)
 	}
-	if !strings.Contains(evt.Text, "compact") || !strings.Contains(evt.Text, "get_state") {
+	if !strings.Contains(evt.Text, "compact") || !strings.Contains(evt.Text, "session") {
 		t.Fatalf("expected commands in text, got: %s", evt.Text)
 	}
 }

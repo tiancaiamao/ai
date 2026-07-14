@@ -249,17 +249,7 @@ func (app *rpcApp) emitStartEvent() {
 	})
 }
 
-// --- Slash command aliases (registration helpers) ---
-
-func (app *rpcApp) registerHiddenAlias(alias, desc, canonical string) {
-	app.server.RegisterHiddenSlash(alias, desc, func(args string) (any, error) {
-		h, ok := app.server.GetSlashHandler(canonical)
-		if !ok {
-			return nil, fmt.Errorf("unknown command: /%s", canonical)
-		}
-		return h(args)
-	})
-}
+// --- Slash command helpers ---
 
 func (app *rpcApp) forwardToSet(subcmd string) func(string) (any, error) {
 	return func(args string) (any, error) {

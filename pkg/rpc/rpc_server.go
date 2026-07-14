@@ -109,8 +109,6 @@ func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
 	}
 
 	// Try slash command handlers as fallback for backward compatibility.
-	// This allows clients to send {"type": "get_state"} directly
-	// while the same command can also be invoked via "/get_state".
 	if slashHandler, slashOK := s.GetSlashHandler(cmd.Type); slashOK {
 		args := s.extractSlashArgs(cmd)
 		result, err := slashHandler(args)
