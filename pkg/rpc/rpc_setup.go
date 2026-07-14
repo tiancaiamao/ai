@@ -137,8 +137,8 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		return nil, err
 	}
 
-	// --- Compactors ---
-	compactor, compactorConfig := createCompactors(cfg, model, apiKey, currentContextWindow, sess.GetDir())
+	// --- Compactor ---
+	compactor, compactorConfig := createCompactor(cfg, model, apiKey, currentContextWindow, sess.GetDir())
 
 	slog.Info("Registered tools: read, bash, write, grep, edit", "count", len(registry.All()))
 
@@ -344,8 +344,8 @@ func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspac
 	return ws, registry, nil
 }
 
-// createCompactors creates the main compactor.
-func createCompactors(cfg *config.Config, model llm.Model, apiKey string, contextWindow int, sessionDir string) (*compact.Compactor, *compact.Config) {
+// createCompactor creates the main compactor.
+func createCompactor(cfg *config.Config, model llm.Model, apiKey string, contextWindow int, sessionDir string) (*compact.Compactor, *compact.Config) {
 	compactorConfig := cfg.Compactor
 	if compactorConfig == nil {
 		compactorConfig = compact.DefaultConfig()

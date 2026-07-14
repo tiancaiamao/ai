@@ -95,51 +95,33 @@ func (s *loopState) performCompaction(
 	checkShouldCompact bool,
 	trackRecovery bool,
 ) (*agentctx.CompactionResult, error) {
-	var compacted *agentctx.CompactionResult
-	var compactErr error
-	var compactionStarted bool
-	var before int
-	var compactionSpan *traceevent.Span
-
-	for _, c := range s.config.Compactors {
-		if checkShouldCompact && !c.ShouldCompact(ctx, s.agentCtx) {
-			continue
-		}
-
-		if !compactionStarted {
-			before = len(s.agentCtx.RecentMessages)
-			compactionSpan = traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-				traceevent.Field{Key: "source", Value: trigger},
-				traceevent.Field{Key: "auto", Value: true},
-				traceevent.Field{Key: "before_messages", Value: before},
-				traceevent.Field{Key: "trigger", Value: trigger},
-			)
-			s.stream.Push(NewCompactionStartEvent(CompactionInfo{
-				Auto:    true,
-				Before:  before,
-				Trigger: trigger,
-			}))
-			compactionStarted = true
-		}
-
-		slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
-		compacted, compactErr = c.Compact(ctx, s.agentCtx)
-		if compactErr == nil && compacted != nil {
-			break // Compactor performed work; first real result wins
-		}
-		if compactErr == nil && compacted == nil {
-			slog.Info("[Loop] Compactor returned nil result, trying next", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
-			continue // No-op: try the next compactor
-		}
-		slog.Warn("[Loop] Compaction failed", "trigger", trigger, "compactor", fmt.Sprintf("%T", c), "error", compactErr)
-	}
-
-	if !compactionStarted {
+	c := s.config.Compactor
+	if c == nil {
 		return nil, nil
 	}
 
+	if checkShouldCompact && !c.ShouldCompact(ctx, s.agentCtx) {
+		return nil, nil
+	}
+
+	before := len(s.agentCtx.RecentMessages)
+	compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+		traceevent.Field{Key: "source", Value: trigger},
+		traceevent.Field{Key: "auto", Value: true},
+		traceevent.Field{Key: "before_messages", Value: before},
+		traceevent.Field{Key: "trigger", Value: trigger},
+	)
+	s.stream.Push(NewCompactionStartEvent(CompactionInfo{
+		Auto:    true,
+		Before:  before,
+		Trigger: trigger,
+	}))
+
+	slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
+	compacted, compactErr := c.Compact(ctx, s.agentCtx)
+
 	if compactErr != nil {
-		slog.Warn("[Loop] Compaction triggered but all compactors failed", "trigger", trigger, "error", compactErr)
+		slog.Warn("[Loop] Compaction failed", "trigger", trigger, "compactor", fmt.Sprintf("%T", c), "error", compactErr)
 		compactionSpan.AddField("error", true)
 		compactionSpan.AddField("error_message", compactErr.Error())
 		if stack := ErrorStack(compactErr); stack != "" {
@@ -156,7 +138,7 @@ func (s *loopState) performCompaction(
 	}
 
 	if compacted == nil {
-		slog.Warn("[Loop] Compaction triggered but returned nil result", "trigger", trigger)
+		slog.Info("[Loop] Compactor returned nil result", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
 		compactionSpan.End()
 		s.stream.Push(NewCompactionEndEvent(CompactionInfo{
 			Auto:    true,

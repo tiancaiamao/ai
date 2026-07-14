@@ -385,7 +385,7 @@ func TestCharacterization_CompactionTrigger(t *testing.T) {
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	cfg := DefaultLoopConfig()
-	cfg.Compactors = []Compactor{compactor}
+	cfg.Compactor = compactor
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -514,7 +514,7 @@ func TestCharacterization_NoCompactionWhenNotNeeded(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.Compactors = []Compactor{compactor}
+	cfg.Compactor = compactor
 
 	model := llm.Model{
 		ID:       "test-model",

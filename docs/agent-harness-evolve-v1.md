@@ -50,7 +50,7 @@ for {
 - `ContentBlock`：工具输出的基本单元（discriminated union），文本内容通过 `NewTextContent(text)` 创建
 - `Tool` 接口：`Name()` / `Description()` / `Parameters()` / `Execute()`
 - `Compactor` 接口：`ShouldCompact()` / `Compact()`
-- `LoopConfig`：循环的全部配置（Model, Tools, Compactors, MaxTurns, ToolOutput limits 等）
+- `LoopConfig`：循环的全部配置（Model, Tools, Compactor, MaxTurns, ToolOutput limits 等）
 
 ### Prompt 构建
 

@@ -19,7 +19,7 @@ type harnessConfig struct {
 	model        llm.Model
 	maxTurns     int
 	tools        []agentctx.Tool
-	compactors   []agentctx.Compactor
+	compactor    agentctx.Compactor
 	systemPrompt string
 	apiKey       string
 	// Advanced options
@@ -36,9 +36,9 @@ func WithTools(tools ...agentctx.Tool) HarnessOption {
 	return func(c *harnessConfig) { c.tools = append(c.tools, tools...) }
 }
 
-// WithCompactors sets compaction strategies on the agent.
-func WithCompactors(c ...agentctx.Compactor) HarnessOption {
-	return func(cfg *harnessConfig) { cfg.compactors = append(cfg.compactors, c...) }
+// WithCompactor sets the compactor on the agent.
+func WithCompactor(c agentctx.Compactor) HarnessOption {
+	return func(cfg *harnessConfig) { cfg.compactor = c }
 }
 
 // AgentHarness is a fully-wired test harness for agent.Agent.
@@ -121,7 +121,7 @@ func NewAgentHarness(t *testing.T, responses []string, opts ...HarnessOption) *A
 		loopCfg.MaxConsecutiveToolCalls = cfg.maxConsecutiveToolCalls
 	}
 
-	loopCfg.Compactors = cfg.compactors
+	loopCfg.Compactor = cfg.compactor
 
 	// Create agent
 	a := agent.NewAgentFromConfigWithContext(cfg.model, cfg.apiKey, agentCtx, loopCfg)

@@ -79,7 +79,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	// Note: proactiveCompactor and sessionComp both wrap the same underlying *compact.Compactor
 	// We only need one; sessionComp provides thread-safe swapping capability
 	loopCfg := app.cfg.ToLoopConfig(
-		config.WithCompactors([]agent.Compactor{sessionComp}),
+		config.WithCompactor(sessionComp),
 		config.WithContextWindow(app.currentContextWindow),
 		config.WithToolCallCutoff(app.compactorConfig.ToolCallCutoff),
 		config.WithExecutor(executor),
