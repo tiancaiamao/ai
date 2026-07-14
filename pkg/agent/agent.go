@@ -529,11 +529,8 @@ func (a *Agent) GetContext() *agentctx.AgentContext {
 }
 
 // SetCompactor sets the compactor for automatic context compression.
-// Deprecated: Use SetCompactors([]Compactor{...}) for multiple compactors.
 func (a *Agent) SetCompactor(compactor Compactor) {
-	if compactor != nil {
-		a.LoopConfig.Compactors = []Compactor{compactor}
-	}
+	a.LoopConfig.Compactor = compactor
 }
 
 // SetExecutor sets the tool executor for concurrency control.

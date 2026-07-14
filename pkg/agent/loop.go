@@ -45,7 +45,7 @@ type LoopConfig struct {
 	RunID      string
 	Executor   ToolExecutor // agentctx.Tool executor with concurrency control
 	ToolOutput ToolOutputLimits
-	Compactors []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
+	Compactor  agentctx.Compactor // Context compression
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
 	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
@@ -197,7 +197,7 @@ func runInnerLoop(
 		// Stream assistant response with retry logic.
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
-			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && state.compactionRecs < maxCompactionRecoveries {
+			if llm.IsContextLengthExceeded(err) && config.Compactor != nil && state.compactionRecs < maxCompactionRecoveries {
 				_, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
 				if recoveryErr == nil {
 					continue

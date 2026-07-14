@@ -125,7 +125,7 @@ func TestHarness_CompactionTriggerDuringLoop(t *testing.T) {
 		testutil.TextResponse("second response"),
 	}
 	h := testutil.NewAgentHarness(t, responses,
-		testutil.WithCompactors(compactor),
+		testutil.WithCompactor(compactor),
 		testutil.WithMaxTurns(3),
 	)
 	defer h.Close()

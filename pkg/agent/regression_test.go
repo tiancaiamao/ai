@@ -43,9 +43,7 @@ func TestRegression002_AutoCompactConfiguration(t *testing.T) {
 	// Fix: Auto-compact with ShouldCompact threshold
 
 	cfg := DefaultLoopConfig()
-	cfg.Compactors = []agentctx.Compactor{
-		&testCompactor{shouldTrigger: true},
-	}
+	cfg.Compactor = &testCompactor{shouldTrigger: true}
 
 	agentCtx := agentctx.NewAgentContext("Test agent")
 
@@ -57,8 +55,8 @@ func TestRegression002_AutoCompactConfiguration(t *testing.T) {
 	agent := NewAgentFromConfigWithContext(llm.Model{}, "test-key", agentCtx, cfg)
 
 	// Verify compactor is registered
-	if len(agent.Compactors) != 1 {
-		t.Errorf("Expected 1 compactor, got %d", len(agent.Compactors))
+	if agent.Compactor == nil {
+		t.Error("Expected compactor to be registered, got nil")
 	}
 
 	// This test verifies the infrastructure is in place

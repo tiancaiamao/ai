@@ -72,7 +72,7 @@ func TestRunInnerLoopCompactionRecoveryOnContextLengthError(t *testing.T) {
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
-		Compactors: []Compactor{compactor},
+		Compactor: compactor,
 	}
 
 	stream := newTestAgentEventStream()
@@ -124,7 +124,7 @@ func TestRunInnerLoopPreLLMCompactionTrigger(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 	stream := newTestAgentEventStream()
-	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{compactor}}, stream)
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: compactor}, stream)
 
 	var sawStart, sawEnd bool
 	for item := range stream.Iterator(context.Background()) {
@@ -451,7 +451,7 @@ func TestRunInnerLoopCompactionRecoveryFailureFallsBackToError(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("sys")
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
-	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactors: []Compactor{brokenCompactor}}, stream)
+	runInnerLoop(context.Background(), agentCtx, nil, &LoopConfig{Compactor: brokenCompactor}, stream)
 
 	var sawAgentEnd bool
 	for item := range stream.Iterator(context.Background()) {
@@ -562,9 +562,9 @@ func TestRunInnerLoopMaxTurnsLimit(t *testing.T) {
 	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
-		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:   executor,
-		MaxTurns:   3, // Limit to 3 turns
+		Compactor: &recoveryCompactor{},
+		Executor:  executor,
+		MaxTurns:  3, // Limit to 3 turns
 	}
 
 	stream := newTestAgentEventStream()
@@ -615,9 +615,9 @@ func TestRunInnerLoopMaxTurnsUnlimited(t *testing.T) {
 	executor := NewToolExecutor(1, 10)
 
 	config := &LoopConfig{
-		Compactors: []Compactor{&recoveryCompactor{}},
-		Executor:   executor,
-		MaxTurns:   0, // Unlimited
+		Compactor: &recoveryCompactor{},
+		Executor:  executor,
+		MaxTurns:  0, // Unlimited
 	}
 
 	stream := newTestAgentEventStream()
@@ -1096,7 +1096,7 @@ func TestRunInnerLoopCompactionRecoveryOnContextLimitStopReason(t *testing.T) {
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	config := &LoopConfig{
-		Compactors: []Compactor{compactor},
+		Compactor: compactor,
 	}
 
 	stream := newTestAgentEventStream()
@@ -1325,109 +1325,7 @@ func TestLoopGuardPollingDetection(t *testing.T) {
 	}
 }
 
-// noopCompactor returns (nil, nil) — simulating ContextManager doing no work.
-type noopCompactor struct {
-	calls         int
-	shouldCompact bool
-}
-
-func (c *noopCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
-	return c.shouldCompact
-}
-
-func (c *noopCompactor) Compact(_ context.Context, _ *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	c.calls++
-	return nil, nil // no-op
-}
-
-func (c *noopCompactor) CalculateDynamicThreshold() int {
-	return 100000
-}
-
-// TestPerformCompaction_NoOpDoesNotBlockFallback verifies that when the first
-// compactor returns (nil, nil) (no actual work), the loop falls through to the
-// next compactor which can then perform real compaction.
-func TestPerformCompaction_NoOpDoesNotBlockFallback(t *testing.T) {
-	orig := streamAssistantResponseFn
-	defer func() { streamAssistantResponseFn = orig }()
-
-	noop := &noopCompactor{shouldCompact: true}
-	real := &recoveryCompactor{shouldCompact: true}
-
-	streamAssistantResponseFn = func(
-		_ context.Context,
-		_ *agentctx.AgentContext,
-		_ *LoopConfig,
-		_ *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
-	) (*agentctx.AgentMessage, error) {
-		msg := agentctx.NewAssistantMessage()
-		msg.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "done"}}
-		msg.StopReason = "stop"
-		return &msg, nil
-	}
-
-	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
-	stream := newTestAgentEventStream()
-
-	ls := &loopState{
-		agentCtx: agentCtx,
-		config: &LoopConfig{
-			Compactors: []Compactor{noop, real},
-		},
-		stream: stream,
-	}
-
-	result, err := ls.performCompaction(context.Background(), "test", true, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// noopCompactor should have been called but returned nil
-	if noop.calls != 1 {
-		t.Fatalf("expected noop compactor to be called once, got %d", noop.calls)
-	}
-
-	// recoveryCompactor should have been called as fallback
-	if real.calls != 1 {
-		t.Fatalf("expected real compactor to be called once as fallback, got %d", real.calls)
-	}
-
-	// The result should come from the real compactor
-	if result == nil {
-		t.Fatal("expected non-nil compaction result from fallback compactor")
-	}
-	if result.Summary != "[summary]" {
-		t.Fatalf("expected summary from real compactor, got %q", result.Summary)
-	}
-}
-
-// TestPerformCompaction_AllNoOpsReturnsNil verifies that when all compactors
-// return (nil, nil), the overall result is nil with no error.
-func TestPerformCompaction_AllNoOpsReturnsNil(t *testing.T) {
-	noop1 := &noopCompactor{shouldCompact: true}
-	noop2 := &noopCompactor{shouldCompact: true}
-
-	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
-	stream := newTestAgentEventStream()
-
-	ls := &loopState{
-		agentCtx: agentCtx,
-		config: &LoopConfig{
-			Compactors: []Compactor{noop1, noop2},
-		},
-		stream: stream,
-	}
-
-	result, err := ls.performCompaction(context.Background(), "test", true, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != nil {
-		t.Fatalf("expected nil result when all compactors are no-op, got %+v", result)
-	}
-	if noop1.calls != 1 || noop2.calls != 1 {
-		t.Fatalf("expected both compactors to be called, got noop1=%d noop2=%d", noop1.calls, noop2.calls)
-	}
-}
+// TestPerformCompaction_NoOpDoesNotBlockFallback and
+// TestPerformCompaction_AllNoOpsReturnsNil (and noopCompactor) were removed
+// because the multi-compactor fallback logic no longer exists — only one
+// compactor is supported.

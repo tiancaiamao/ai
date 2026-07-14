@@ -60,7 +60,7 @@ type LoopConfig struct {
     GetModel           func() llm.Model       // Dynamic model switching
     GetAPIKey          func() string          // Dynamic API key switching
     Executor           ToolExecutor           // Tool execution interface
-    Compactors         []agentctx.Compactor   // Compaction chain
+        Compactor          agentctx.Compactor    // Context compression
     ThinkingLevel      string                 // off, minimal, low, medium, high, xhigh
     MaxConsecutiveToolCalls int               // Default: 6
     MaxToolCallsPerName      int              // Per-name tool call limit

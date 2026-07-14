@@ -54,11 +54,11 @@ func TestToLoopConfig(t *testing.T) {
 	})
 }
 
-func TestWithCompactors(t *testing.T) {
+func TestWithCompactor(t *testing.T) {
 	cfg := &Config{}
-	lc := cfg.ToLoopConfig(WithCompactors(nil))
-	if lc.Compactors != nil {
-		t.Error("expected nil compactors")
+	lc := cfg.ToLoopConfig(WithCompactor(nil))
+	if lc.Compactor != nil {
+		t.Error("expected nil compactor")
 	}
 }
 
