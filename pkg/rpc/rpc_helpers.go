@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"context"
 	"log/slog"
 	"strings"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 func (app *rpcApp) buildSystemPrompt(currentSess *session.Session) string {
@@ -130,100 +128,6 @@ func (app *rpcApp) expandSkillCommands(text string) string {
 		}
 	}
 	return expanded
-}
-
-func (app *rpcApp) compactBeforeRequest(trigger string) {
-	if app.compactor == nil {
-		return
-	}
-
-	agentCtx := app.ag.GetContext()
-	if !app.compactor.ShouldCompact(context.Background(), agentCtx) {
-		return
-	}
-
-	beforeCount := len(agentCtx.RecentMessages)
-	compactionInfo := agent.CompactionInfo{
-		Auto:    true,
-		Before:  beforeCount,
-		Trigger: trigger,
-	}
-
-	app.stateMu.Lock()
-	app.isCompacting = true
-	app.stateMu.Unlock()
-	app.server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
-
-	err := runDetachedTraceSpan(
-		"compaction",
-		traceevent.CategoryEvent,
-		[]traceevent.Field{
-			{Key: "source", Value: "pre_request"},
-			{Key: "auto", Value: true},
-			{Key: "trigger", Value: trigger},
-			{Key: "before_messages", Value: beforeCount},
-		},
-		func(ctx context.Context, span *traceevent.Span) error {
-			result, err := app.compactor.Compact(ctx, agentCtx)
-			if err != nil {
-				return err
-			}
-
-			afterCount := len(agentCtx.RecentMessages)
-			compactionInfo.After = afterCount
-
-			span.AddField("after_messages", afterCount)
-			if result != nil {
-				span.AddField("tokens_before", result.TokensBefore)
-				span.AddField("tokens_after", result.TokensAfter)
-			}
-
-			// Persist compaction: save snapshot + append compaction entry.
-			// messages.jsonl stays append-only.
-			if result != nil && app.sess != nil {
-				if _, err := app.sess.AppendCompaction(
-					result.Summary, agentCtx.RecentMessages,
-				); err != nil {
-					slog.Error("Failed to persist pre-request compaction", "error", err)
-				}
-			}
-			return nil
-		},
-	)
-
-	app.stateMu.Lock()
-	app.isCompacting = false
-	app.stateMu.Unlock()
-
-	if err != nil {
-		compactionInfo.Error = err.Error()
-		slog.Error("Pre-request compaction failed", "trigger", trigger, "error", err)
-
-		// Nuclear fallback: after consecutive compaction failures, force-truncate
-		// oldest messages without LLM summary. This prevents permanent session death
-		// when the summarization model itself cannot handle the conversation size.
-		const maxConsecutiveFailures = 3
-		app.stateMu.Lock()
-		app.consecutiveCompactionFailures++
-		failures := app.consecutiveCompactionFailures
-		app.stateMu.Unlock()
-
-		if failures >= maxConsecutiveFailures {
-			slog.Warn("[Compact] Nuclear fallback: force-truncating oldest messages after consecutive compaction failures",
-				"failures", failures,
-				"trigger", trigger)
-			app.nuclearTruncate()
-		}
-	} else {
-		app.stateMu.Lock()
-		app.consecutiveCompactionFailures = 0
-		app.stateMu.Unlock()
-
-		// Append a post-compaction hint to the summary message so the
-		// LLM knows to reload skills and design docs lost during compaction.
-		agent.AppendCompactionHint(agentCtx)
-	}
-	app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
 }
 
 // appendCompactionHint is defined in pkg/agent/loop_state.go.
