@@ -471,10 +471,12 @@ func runSocketHandler(meta *tui.RunMeta, metaPath string, proc *os.Process, stdi
 			if !isAlive() {
 				return tui.Response{OK: false, Error: "subprocess is no longer alive"}
 			}
-			// Forward as "prompt" so RPC handles slash commands correctly.
-			// Use a deadline so the write does not block forever when the
-			// subprocess dies between the liveness check and the write.
-			if err := sendRPCCommandWithTimeout(stdinWriter, "prompt", cmd.Message, 10*time.Second); err != nil {
+			// Forward the original command type so the RPC subprocess can
+			// distinguish steer (compact-before-request + cancel + reprompt)
+			// from prompt (normal forwarding).  Previously both were converted
+			// to "prompt", which made the steer RPC handler unreachable via
+			// the socket path.
+			if err := sendRPCCommandWithTimeout(stdinWriter, cmd.Type, cmd.Message, 10*time.Second); err != nil {
 				return tui.Response{OK: false, Error: fmt.Sprintf("command failed: %v", err)}
 			}
 			return tui.Response{OK: true}
