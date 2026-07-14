@@ -145,7 +145,10 @@ func TestRPCAppModelSwitch(t *testing.T) {
 			},
 		},
 	}
-	data, _ := json.Marshal(modelsData)
+	data, err := json.Marshal(modelsData)
+	if err != nil {
+		t.Fatalf("marshal models.json: %v", err)
+	}
 	if err := os.WriteFile(modelsPath, data, 0644); err != nil {
 		t.Fatalf("write models.json: %v", err)
 	}
