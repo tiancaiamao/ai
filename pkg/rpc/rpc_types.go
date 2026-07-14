@@ -162,24 +162,3 @@ type CompactResult struct {
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
 	TokensAfter      int    `json:"tokensAfter,omitempty"`
 }
-
-// WorkflowTask represents a single task in a workflow.
-type WorkflowTask struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	Status      string `json:"status"` // pending, in_progress, done, failed
-}
-
-// WorkflowState represents the current workflow execution state.
-type WorkflowState struct {
-	Phase          string        `json:"phase"` // init, worker, completed, error
-	TasksFile      string        `json:"tasksFile,omitempty"`
-	TotalTasks     int           `json:"totalTasks"`
-	PendingTasks   int           `json:"pendingTasks"`
-	DoneTasks      int           `json:"doneTasks"`
-	FailedTasks    int           `json:"failedTasks"`
-	InProgressTask *WorkflowTask `json:"inProgressTask,omitempty"`
-	StartedAt      string        `json:"startedAt,omitempty"`
-	LastUpdate     string        `json:"lastUpdate,omitempty"`
-	Error          string        `json:"error,omitempty"`
-}

@@ -94,8 +94,6 @@ func TestSocketCommunication(t *testing.T) {
 			return Response{OK: true, Data: map[string]string{"echo": cmd.Message}}
 		case "abort":
 			return Response{OK: true}
-		case "get_state":
-			return Response{OK: true, Data: map[string]string{"status": "running"}}
 		default:
 			return Response{OK: false, Error: fmt.Sprintf("unknown: %s", cmd.Type)}
 		}

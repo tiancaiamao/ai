@@ -59,7 +59,7 @@ func NewSocketServer(sockPath string, handler CommandHandler) *SocketServer
 
 ```go
 type Command struct {
-    Type    string `json:"type"`              // "prompt", "steer", "abort", "stream", "get_state"
+    Type    string `json:"type"`              // "prompt", "steer", "abort", "stream"
     Message string `json:"message"`
     FromSeq uint64 `json:"from_seq,omitempty"` // For "stream": replay from this sequence
 }

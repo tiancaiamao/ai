@@ -586,9 +586,9 @@ func (app *rpcApp) registerConfigHandlers(validToolSummaryAutomations, validStee
 
 	app.server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
 		_ = args
-		stateH, _ := app.server.GetSlashHandler("get_state")
+		stateH, _ := app.server.GetSlashHandler("session")
 		statsH, _ := app.server.GetSlashHandler("get_session_stats")
-		modelsH, _ := app.server.GetSlashHandler("get_available_models")
+		modelsH, _ := app.server.GetSlashHandler("model")
 
 		stateResult, err := stateH("")
 		if err != nil {
@@ -613,8 +613,4 @@ func (app *rpcApp) registerConfigHandlers(validToolSummaryAutomations, validStee
 	app.server.RegisterHiddenSlash("set_thinking_level", "Set thinking level (internal)", app.forwardToSet("thinking-level"))
 	app.server.RegisterHiddenSlash("set_trace_events", "Set trace events (internal)", app.forwardToSet("trace-events"))
 	app.server.RegisterHiddenSlash("get_trace_events", "Get trace events (internal)", app.forwardToSet("trace-events"))
-
-	// Hidden aliases — config-related
-	app.registerHiddenAlias("model-select", "Select a model (alias for /model)", "model")
-	app.registerHiddenAlias("get_available_models", "List all available models (internal)", "model")
 }
