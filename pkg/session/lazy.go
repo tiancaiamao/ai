@@ -268,8 +268,6 @@ func loadFromEnd(f *os.File, sess *Session) error {
 		// Double scan size and retry
 		scanSize *= 2
 	}
-
-	return nil
 }
 
 // scanSessionInfoFromTail scans the tail of a JSONL file for the most recent
