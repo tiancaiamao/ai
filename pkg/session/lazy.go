@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,7 +101,8 @@ func readHeaderFromFile(f *os.File) (*SessionHeader, error) {
 
 // loadFromEnd scans the file from the end to find the most recent compaction entry
 // and loads only the relevant entries.
-// Optimized to read only the tail of the file (currently 256KB; see scanSize constant).
+// Starts with a 256KB tail scan; if no compaction entry is found, progressively
+// doubles the scan window until one is found or the entire file is scanned.
 func loadFromEnd(f *os.File, sess *Session) error {
 	stat, err := f.Stat()
 	if err != nil {
@@ -111,142 +113,218 @@ func loadFromEnd(f *os.File, sess *Session) error {
 		return nil
 	}
 
-	// Optimization: Read only the tail of the file (256KB covers most compaction entries).
-	// In large sessions (multi-MB), the last compaction entry may be >64KB from the
-	// file end. Adjust if compaction entries become even more distant.
-	const scanSize = 256 * 1024 // 256KB
-	var startOffset int64
+	const minScanSize = 256 * 1024 // 256KB initial scan
+	scanSize := int64(minScanSize)
 
-	if size > scanSize {
-		startOffset = size - scanSize
+	for {
+		if scanSize > size {
+			scanSize = size
+		}
+		startOffset := size - scanSize
+		if startOffset < 0 {
+			startOffset = 0
+		}
+
+		_, err = f.Seek(startOffset, io.SeekStart)
+		if err != nil {
+			return err
+		}
+
+		// Read tail data
+		tailData := make([]byte, size-startOffset)
+		if _, err := io.ReadFull(f, tailData); err != nil && err != io.ErrUnexpectedEOF {
+			return err
+		}
+
+		// Split lines, skipping the first line if it's incomplete (we started mid-line)
+		lines := splitLines(tailData)
+		if len(lines) > 0 && startOffset > 0 {
+			// First line might be incomplete (we started mid-file), skip it
+			var test map[string]any
+			if json.Unmarshal(lines[0], &test) != nil {
+				lines = lines[1:]
+			}
+		}
+
+		// Skip header line (first line with type="session")
+		startIdx := 0
+		for i, line := range lines {
+			var peek struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(line, &peek); err == nil && peek.Type == EntryTypeSession {
+				startIdx = i + 1
+				break
+			}
+		}
+
+		// Scan backwards to find compaction entry and collect recent messages
+		var compactionEntry *SessionEntry
+		var recentEntries []*SessionEntry
+
+		for i := len(lines) - 1; i >= startIdx; i-- {
+			line := lines[i]
+
+			entry, err := decodeSessionEntry(line)
+			if err != nil || entry == nil {
+				continue
+			}
+
+			// Found compaction entry - this is our starting point
+			if entry.Type == EntryTypeCompaction {
+				compactionEntry = entry
+				break
+			}
+
+			// Collect entries after the most recent compaction
+			switch entry.Type {
+			case EntryTypeMessage:
+				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+			case EntryTypeBranchSummary:
+				recentEntries = append([]*SessionEntry{entry}, recentEntries...)
+			}
+		}
+
+		if compactionEntry != nil {
+			// Found compaction entry — process it and remaining recent entries
+			// Load compressed messages from snapshot file
+			if compactionEntry.SnapshotRef != "" && sess.sessionDir != "" {
+				snapshotPath := filepath.Join(sess.sessionDir, compactionEntry.SnapshotRef)
+				loadedMessages, err := loadSnapshotMessages(snapshotPath)
+				if err == nil {
+					// Add compressed messages as entries
+					var parentID *string
+					for i := range loadedMessages {
+						ts := time.Now().UTC().Format(time.RFC3339Nano)
+						if loadedMessages[i].Timestamp != 0 {
+							ts = time.UnixMilli(loadedMessages[i].Timestamp).UTC().Format(time.RFC3339Nano)
+						}
+						entry := &SessionEntry{
+							Type:      EntryTypeMessage,
+							ID:        generateEntryID(sess.byID),
+							ParentID:  parentID,
+							Timestamp: ts,
+							Message:   &loadedMessages[i],
+						}
+						sess.addEntry(entry)
+						pid := entry.ID
+						parentID = &pid
+					}
+				}
+			}
+
+			// Build final entries list
+			if compactionEntry != nil {
+				// Compaction entry's parent is the last compressed message
+				if len(sess.entries) > 0 {
+					lastID := sess.entries[len(sess.entries)-1].ID
+					compactionEntry.ParentID = &lastID
+				} else {
+					compactionEntry.ParentID = nil
+				}
+				sess.addEntry(compactionEntry)
+			}
+
+			// Fix message chain: if the first entry's parent is not in byID, set it to nil
+			// or point to compaction entry if available
+			if len(recentEntries) > 0 {
+				firstEntry := recentEntries[0]
+				if firstEntry.ParentID != nil {
+					_, parentExists := sess.byID[*firstEntry.ParentID]
+					if !parentExists {
+						// Parent not loaded, break the chain here
+						// If we have a compaction entry, link to it; otherwise set to nil
+						if compactionEntry != nil {
+							firstEntry.ParentID = &compactionEntry.ID
+						} else {
+							firstEntry.ParentID = nil
+						}
+					}
+				}
+			}
+
+			for _, entry := range recentEntries {
+				sess.addEntry(entry)
+			}
+
+			return nil
+		}
+
+		// No compaction found in this chunk
+		if startOffset == 0 {
+			// Scanned entire file without finding a compaction entry.
+			// Process all remaining lines as a full session load
+			// to avoid re-reading the file in loadSessionFull.
+			for _, line := range lines[startIdx:] {
+				entry, err := decodeSessionEntry(line)
+				if err != nil || entry == nil {
+					continue
+				}
+				sess.addEntry(entry)
+			}
+			return nil
+		}
+
+		// Double scan size and retry
+		scanSize *= 2
+	}
+}
+
+// scanSessionInfoFromTail scans the tail of a JSONL file for the most recent
+// SessionInfo entries to extract the session name and title.
+// Lightweight: reads only the last 64KB, doesn't load all entries.
+func scanSessionInfoFromTail(f *os.File) (name, title string) {
+	stat, err := f.Stat()
+	if err != nil || stat.Size() == 0 {
+		return "", ""
+	}
+
+	size := stat.Size()
+	const scanSize int64 = 64 * 1024 // 64KB tail scan
+	startOffset := size - scanSize
+	if startOffset < 0 {
+		startOffset = 0
 	}
 
 	_, err = f.Seek(startOffset, io.SeekStart)
 	if err != nil {
-		return err
+		return "", ""
 	}
 
-	// Read tail data
-	tailData := make([]byte, size-startOffset)
-	n, err := f.Read(tailData)
-	if err != nil && err != io.EOF {
-		return err
-	}
-	tailData = tailData[:n]
+	data := make([]byte, size-startOffset)
+	n, _ := f.Read(data)
+	data = data[:n]
 
-	// Split lines, skipping the first line if it's incomplete (we started mid-line)
-	lines := splitLines(tailData)
+	lines := splitLines(data)
 	if len(lines) > 0 && startOffset > 0 {
-		// First line might be incomplete (we started mid-file), skip it
 		var test map[string]any
 		if json.Unmarshal(lines[0], &test) != nil {
 			lines = lines[1:]
 		}
 	}
 
-	// Skip header line (first line with type="session")
-	startIdx := 0
-	for i, line := range lines {
-		var peek struct {
-			Type string `json:"type"`
+	// Scan backward for SessionInfo entries
+	for i := len(lines) - 1; i >= 0; i-- {
+		var entry struct {
+			Type  string `json:"type"`
+			Name  string `json:"name"`
+			Title string `json:"title"`
 		}
-		if err := json.Unmarshal(line, &peek); err == nil && peek.Type == EntryTypeSession {
-			startIdx = i + 1
-			break
-		}
-	}
-
-	// Scan backwards to find compaction entry and collect recent messages
-	var compactionEntry *SessionEntry
-	var recentEntries []*SessionEntry
-
-	for i := len(lines) - 1; i >= startIdx; i-- {
-		line := lines[i]
-
-		entry, err := decodeSessionEntry(line)
-		if err != nil || entry == nil {
+		if err := json.Unmarshal(lines[i], &entry); err != nil {
 			continue
 		}
-
-		// Found compaction entry - this is our starting point
-		if entry.Type == EntryTypeCompaction {
-			compactionEntry = entry
-			break
-		}
-
-		// Collect entries after the most recent compaction
-		switch entry.Type {
-		case EntryTypeMessage:
-			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
-		case EntryTypeBranchSummary:
-			recentEntries = append([]*SessionEntry{entry}, recentEntries...)
-		}
-	}
-
-	// No compaction found - this session hasn't been compacted yet
-	if compactionEntry == nil {
-		return errors.New("no compaction entry found in session")
-	}
-
-	// Load compressed messages from snapshot file
-	if compactionEntry.SnapshotRef != "" && sess.sessionDir != "" {
-		snapshotPath := filepath.Join(sess.sessionDir, compactionEntry.SnapshotRef)
-		loadedMessages, err := loadSnapshotMessages(snapshotPath)
-		if err == nil {
-			// Add compressed messages as entries
-			var parentID *string
-			for i := range loadedMessages {
-				ts := time.Now().UTC().Format(time.RFC3339Nano)
-				if loadedMessages[i].Timestamp != 0 {
-					ts = time.UnixMilli(loadedMessages[i].Timestamp).UTC().Format(time.RFC3339Nano)
-				}
-				entry := &SessionEntry{
-					Type:      EntryTypeMessage,
-					ID:        generateEntryID(sess.byID),
-					ParentID:  parentID,
-					Timestamp: ts,
-					Message:   &loadedMessages[i],
-				}
-				sess.addEntry(entry)
-				pid := entry.ID
-				parentID = &pid
+		if entry.Type == EntryTypeSessionInfo {
+			if name == "" && strings.TrimSpace(entry.Name) != "" {
+				name = strings.TrimSpace(entry.Name)
+			}
+			if title == "" && strings.TrimSpace(entry.Title) != "" {
+				title = strings.TrimSpace(entry.Title)
+			}
+			if name != "" && title != "" {
+				break
 			}
 		}
 	}
 
-	// Build final entries list
-	if compactionEntry != nil {
-		// Compaction entry's parent is the last compressed message
-		if len(sess.entries) > 0 {
-			lastID := sess.entries[len(sess.entries)-1].ID
-			compactionEntry.ParentID = &lastID
-		} else {
-			compactionEntry.ParentID = nil
-		}
-		sess.addEntry(compactionEntry)
-	}
-
-	// Fix message chain: if the first entry's parent is not in byID, set it to nil
-	// or point to compaction entry if available
-	if len(recentEntries) > 0 {
-		firstEntry := recentEntries[0]
-		if firstEntry.ParentID != nil {
-			_, parentExists := sess.byID[*firstEntry.ParentID]
-			if !parentExists {
-				// Parent not loaded, break the chain here
-				// If we have a compaction entry, link to it; otherwise set to nil
-				if compactionEntry != nil {
-					firstEntry.ParentID = &compactionEntry.ID
-				} else {
-					firstEntry.ParentID = nil
-				}
-			}
-		}
-	}
-
-	for _, entry := range recentEntries {
-		sess.addEntry(entry)
-	}
-
-	return nil
+	return name, title
 }

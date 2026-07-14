@@ -207,10 +207,10 @@ func (sm *SessionManager) GetMeta(id string) (*SessionMeta, error) {
 		return meta, nil
 	}
 
-	// Fallback: try to build from session file
-	sessPath := sm.getSessionPath(id)
-	if _, statErr := os.Stat(sessPath); statErr == nil {
-		return sm.createMetaFromSession(sessPath)
+	// Fallback: build metadata directly from session directory
+	sessDir := sm.getSessionPath(id)
+	if _, statErr := os.Stat(sessDir); statErr == nil {
+		return sm.createMetaFromSessionDir(sessDir)
 	}
 	return nil, err
 }
@@ -412,17 +412,74 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 		}
 	}
 
-	// Fallback: create from session file
-	sess, err := LoadSession(sessDir)
+	// Lightweight fallback: read header from JSONL file without loading all entries.
+	// The canonical metadata is in meta.json; this path only exists for edge cases
+	// where meta.json is missing (e.g. sessions from older versions).
+	jsonlPath := filepath.Join(sessDir, "messages.jsonl")
+	f, err := os.Open(jsonlPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			info, statErr := os.Stat(sessDir)
+			modTime := time.Now()
+			if statErr == nil {
+				modTime = info.ModTime()
+			}
+			return &SessionMeta{
+				ID: id, Name: id, Title: "Session",
+				CreatedAt: modTime, UpdatedAt: modTime,
+			}, nil
+		}
 		return nil, err
 	}
+	defer f.Close()
 
+	header, err := readHeaderFromFile(f)
+	if err != nil {
+		// Fallback to full load only if we can't even read the header
+		sess, loadErr := LoadSession(sessDir)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		return buildMetaFromSession(sess, id, sessDir)
+	}
+
+	info, statErr := os.Stat(sessDir)
+	modTime := time.Now()
+	if statErr == nil {
+		modTime = info.ModTime()
+	}
+	createdAt := modTime
+	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			createdAt = parsed
+		}
+	}
+
+	// Lightweight tail scan for session name/title (no full entry loading)
+	sessName, sessTitle := scanSessionInfoFromTail(f)
+	if sessName == "" {
+		sessName = id
+	}
+	if sessTitle == "" {
+		sessTitle = "Session"
+	}
+
+	return &SessionMeta{
+		ID:           id,
+		Name:         sessName,
+		Title:        sessTitle,
+		CreatedAt:    createdAt,
+		UpdatedAt:    modTime,
+		MessageCount: 0,
+	}, nil
+}
+
+// buildMetaFromSession builds SessionMeta from a fully loaded session.
+func buildMetaFromSession(sess *Session, id string, sessDir string) (*SessionMeta, error) {
 	info, err := os.Stat(sessDir)
 	if err != nil {
 		return nil, err
 	}
-
 	header := sess.GetHeader()
 	createdAt := info.ModTime()
 	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
@@ -430,7 +487,6 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 			createdAt = parsed
 		}
 	}
-
 	name := sess.GetSessionName()
 	if name == "" {
 		name = id
@@ -439,7 +495,6 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 	if title == "" {
 		title = "Session"
 	}
-
 	return &SessionMeta{
 		ID:           id,
 		Name:         name,
@@ -447,60 +502,6 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 		CreatedAt:    createdAt,
 		UpdatedAt:    info.ModTime(),
 		MessageCount: len(sess.GetMessages()),
-	}, nil
-}
-
-// createMetaFromSession creates metadata from an existing session file path (legacy).
-func (sm *SessionManager) createMetaFromSession(sessPath string) (*SessionMeta, error) {
-	// If it's a directory, use the new method
-	if info, err := os.Stat(sessPath); err == nil && info.IsDir() {
-		return sm.createMetaFromSessionDir(sessPath)
-	}
-
-	// Extract ID from filename (legacy file format).
-	id := sessionIDFromFilePath(sessPath)
-
-	info, err := os.Stat(sessPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Best-effort load from new directory format if it exists.
-	var sess *Session
-	if dirInfo, dirErr := os.Stat(sm.getSessionPath(id)); dirErr == nil && dirInfo.IsDir() {
-		sess, _ = LoadSession(sm.getSessionPath(id))
-	}
-
-	messageCount := 0
-	createdAt := info.ModTime()
-	name := id
-	title := "Session"
-
-	if sess != nil {
-		header := sess.GetHeader()
-		if ts := strings.TrimSpace(header.Timestamp); ts != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-				createdAt = parsed
-			}
-		}
-		messageCount = len(sess.GetMessages())
-		if sessionName := sess.GetSessionName(); sessionName != "" {
-			name = sessionName
-		}
-		if sessionTitle := sess.GetSessionTitle(); sessionTitle != "" {
-			title = sessionTitle
-		}
-	} else {
-		messageCount = countLegacyMessages(sessPath)
-	}
-
-	return &SessionMeta{
-		ID:           id,
-		Name:         name,
-		Title:        title,
-		CreatedAt:    createdAt,
-		UpdatedAt:    info.ModTime(),
-		MessageCount: messageCount,
 	}, nil
 }
 
@@ -529,29 +530,6 @@ func normalizeSessionID(id string) string {
 		return strings.TrimSuffix(base, ".jsonl")
 	}
 	return base
-}
-
-func countLegacyMessages(sessPath string) int {
-	data, err := os.ReadFile(sessPath)
-	if err != nil {
-		return 0
-	}
-
-	count := 0
-	for _, line := range splitLines(data) {
-		line = bytesTrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var msg map[string]any
-		if err := json.Unmarshal(line, &msg); err != nil {
-			continue
-		}
-		if _, ok := msg["role"]; ok {
-			count++
-		}
-	}
-	return count
 }
 
 // GetSessionsDir returns the sessions directory path.
