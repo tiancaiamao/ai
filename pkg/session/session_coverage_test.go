@@ -689,43 +689,6 @@ func TestNormalizeSessionID(t *testing.T) {
 	}
 }
 
-func TestCountLegacyMessages(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "legacy.jsonl")
-	data := `{"role":"user","content":[{"type":"text","text":"a"}]}
-{"role":"assistant","content":[{"type":"text","text":"b"}]}
-not json
-{"foo":"bar"}
-`
-	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if got := countLegacyMessages(path); got != 2 {
-		t.Errorf("expected 2 messages, got %d", got)
-	}
-	if got := countLegacyMessages("/nonexistent"); got != 0 {
-		t.Errorf("expected 0 for missing file, got %d", got)
-	}
-}
-
-func TestCreateMetaFromSession_LegacyFileWithDir(t *testing.T) {
-	tmp := t.TempDir()
-	sm := NewSessionManager(tmp)
-	// Create a legacy file
-	sessID := "legacy-1"
-	legacyPath := filepath.Join(tmp, sessID+".jsonl")
-	if err := os.WriteFile(legacyPath, []byte(`{"role":"user","content":[{"type":"text","text":"hi"}]}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	meta, err := sm.createMetaFromSession(legacyPath)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if meta.ID != sessID {
-		t.Errorf("expected ID %q, got %q", sessID, meta.ID)
-	}
-}
-
 func TestForkSessionFrom_NilSource(t *testing.T) {
 	tmp := t.TempDir()
 	sm := NewSessionManager(tmp)

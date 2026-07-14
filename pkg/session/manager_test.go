@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func TestSessionManager(t *testing.T) {
@@ -225,41 +223,43 @@ func TestSessionManagerCreateDefaultSession(t *testing.T) {
 	// No persisted pointer file. Current session is process-local state.
 }
 
-func TestCreateMetaFromSession(t *testing.T) {
-	// Create temporary directory for testing
+func TestCreateMetaFromSessionDir_NoMetaJson(t *testing.T) {
+	// Test that createMetaFromSessionDir can build metadata from the JSONL header
+	// when meta.json is missing.
 	tempDir, err := os.MkdirTemp("", "ai-session-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Create a legacy session file manually
-	sessID := uuid.New().String()
-	sessPath := filepath.Join(tempDir, sessID+".jsonl")
-	legacyData := `{"role":"user","content":[{"type":"text","text":"Hello"}]}
-{"role":"assistant","content":[{"type":"text","text":"Hi"}]}
-`
-	if err := os.WriteFile(sessPath, []byte(legacyData), 0644); err != nil {
-		t.Fatalf("Failed to write legacy session file: %v", err)
-	}
-
-	// Create session manager and test createMetaFromSession
 	sm := NewSessionManager(tempDir)
-	meta, err := sm.createMetaFromSession(sessPath)
+
+	// Create a proper session via the manager (this writes meta.json)
+	id := "test-session-dir"
+	sessDir := filepath.Join(tempDir, id)
+	if err := os.MkdirAll(sessDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(sessDir)
+	if _, err := sess.AppendSessionInfo("test-name", "test-title"); err != nil {
+		t.Fatal(err)
+	}
+	// Now delete meta.json to test the fallback path
+	os.Remove(filepath.Join(sessDir, "meta.json"))
+
+	meta, err := sm.createMetaFromSessionDir(sessDir)
 	if err != nil {
-		t.Fatalf("Failed to create meta from session: %v", err)
+		t.Fatalf("createMetaFromSessionDir failed: %v", err)
 	}
 
-	if meta.ID != sessID {
-		t.Errorf("Expected ID '%s', got '%s'", sessID, meta.ID)
+	if meta.ID != id {
+		t.Errorf("Expected ID '%s', got '%s'", id, meta.ID)
 	}
-
-	if meta.MessageCount != 2 {
-		t.Errorf("Expected 2 messages, got %d", meta.MessageCount)
+	if meta.Name != "test-name" {
+		t.Errorf("Expected name 'test-name', got '%s'", meta.Name)
 	}
-
-	if meta.Title != "Session" {
-		t.Errorf("Expected title 'Session', got '%s'", meta.Title)
+	if meta.Title != "test-title" {
+		t.Errorf("Expected title 'test-title', got '%s'", meta.Title)
 	}
 }
 

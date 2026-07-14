@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,11 +132,9 @@ func loadFromEnd(f *os.File, sess *Session) error {
 
 		// Read tail data
 		tailData := make([]byte, size-startOffset)
-		n, err := f.Read(tailData)
-		if err != nil && err != io.EOF {
+		if _, err := io.ReadFull(f, tailData); err != nil && err != io.ErrUnexpectedEOF {
 			return err
 		}
-		tailData = tailData[:n]
 
 		// Split lines, skipping the first line if it's incomplete (we started mid-line)
 		lines := splitLines(tailData)
@@ -253,12 +252,81 @@ func loadFromEnd(f *os.File, sess *Session) error {
 
 		// No compaction found in this chunk
 		if startOffset == 0 {
-			break // Scanned entire file
+			// Scanned entire file without finding a compaction entry.
+			// Process all remaining lines as a full session load
+			// to avoid re-reading the file in loadSessionFull.
+			for _, line := range lines[startIdx:] {
+				entry, err := decodeSessionEntry(line)
+				if err != nil || entry == nil {
+					continue
+				}
+				sess.addEntry(entry)
+			}
+			return nil
 		}
 
 		// Double scan size and retry
 		scanSize *= 2
 	}
 
-	return errors.New("no compaction entry found in session")
+	return nil
+}
+
+// scanSessionInfoFromTail scans the tail of a JSONL file for the most recent
+// SessionInfo entries to extract the session name and title.
+// Lightweight: reads only the last 64KB, doesn't load all entries.
+func scanSessionInfoFromTail(f *os.File) (name, title string) {
+	stat, err := f.Stat()
+	if err != nil || stat.Size() == 0 {
+		return "", ""
+	}
+
+	size := stat.Size()
+	const scanSize int64 = 64 * 1024 // 64KB tail scan
+	startOffset := size - scanSize
+	if startOffset < 0 {
+		startOffset = 0
+	}
+
+	_, err = f.Seek(startOffset, io.SeekStart)
+	if err != nil {
+		return "", ""
+	}
+
+	data := make([]byte, size-startOffset)
+	n, _ := f.Read(data)
+	data = data[:n]
+
+	lines := splitLines(data)
+	if len(lines) > 0 && startOffset > 0 {
+		var test map[string]any
+		if json.Unmarshal(lines[0], &test) != nil {
+			lines = lines[1:]
+		}
+	}
+
+	// Scan backward for SessionInfo entries
+	for i := len(lines) - 1; i >= 0; i-- {
+		var entry struct {
+			Type  string `json:"type"`
+			Name  string `json:"name"`
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal(lines[i], &entry); err != nil {
+			continue
+		}
+		if entry.Type == EntryTypeSessionInfo {
+			if name == "" && strings.TrimSpace(entry.Name) != "" {
+				name = strings.TrimSpace(entry.Name)
+			}
+			if title == "" && strings.TrimSpace(entry.Title) != "" {
+				title = strings.TrimSpace(entry.Title)
+			}
+			if name != "" && title != "" {
+				break
+			}
+		}
+	}
+
+	return name, title
 }
