@@ -412,18 +412,34 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 		}
 	}
 
-	// Fallback: create from session file
-	sess, err := LoadSession(sessDir)
+	// Lightweight fallback: read header from JSONL file without loading all entries.
+	// The canonical metadata is in meta.json; this path only exists for edge cases
+	// where meta.json is missing (e.g. sessions from older versions).
+	jsonlPath := filepath.Join(sessDir, "messages.jsonl")
+	f, err := os.Open(jsonlPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			info, _ := os.Stat(sessDir)
+			return &SessionMeta{
+				ID: id, Name: id, Title: "Session",
+				CreatedAt: info.ModTime(), UpdatedAt: info.ModTime(),
+			}, nil
+		}
 		return nil, err
 	}
+	defer f.Close()
 
-	info, err := os.Stat(sessDir)
+	header, err := readHeaderFromFile(f)
 	if err != nil {
-		return nil, err
+		// Fallback to full load only if we can't even read the header
+		sess, loadErr := LoadSession(sessDir)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		return buildMetaFromSession(sess, id, sessDir)
 	}
 
-	header := sess.GetHeader()
+	info, _ := os.Stat(sessDir)
 	createdAt := info.ModTime()
 	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
@@ -431,6 +447,29 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 		}
 	}
 
+	return &SessionMeta{
+		ID:           id,
+		Name:         id,
+		Title:        "Session",
+		CreatedAt:    createdAt,
+		UpdatedAt:    info.ModTime(),
+		MessageCount: 0,
+	}, nil
+}
+
+// buildMetaFromSession builds SessionMeta from a fully loaded session.
+func buildMetaFromSession(sess *Session, id string, sessDir string) (*SessionMeta, error) {
+	info, err := os.Stat(sessDir)
+	if err != nil {
+		return nil, err
+	}
+	header := sess.GetHeader()
+	createdAt := info.ModTime()
+	if ts := strings.TrimSpace(header.Timestamp); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			createdAt = parsed
+		}
+	}
 	name := sess.GetSessionName()
 	if name == "" {
 		name = id
@@ -439,7 +478,6 @@ func (sm *SessionManager) createMetaFromSessionDir(sessDir string) (*SessionMeta
 	if title == "" {
 		title = "Session"
 	}
-
 	return &SessionMeta{
 		ID:           id,
 		Name:         name,
