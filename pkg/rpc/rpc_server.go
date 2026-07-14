@@ -28,40 +28,37 @@ type SlashHandler = command.Handler
 type SlashCommandInfo = command.CommandInfo
 
 // Server handles RPC communication via stdin/stdout.
-// Protocol commands (prompt, steer, follow_up, abort, ping) use Register.
-// Slash commands use RegisterSlash — they can be invoked both via prompt
-// interception ("/command args") and directly via JSON-RPC command type.
+// Only the "prompt" command is handled as a protocol-level command.
+// All other operations use slash commands registered via RegisterSlash.
 type Server struct {
-	mu       sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	writer   sync.Mutex
-	output   *bufio.Writer
-	handlers map[string]Handler
-	commands *command.Registry
+	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	writer        sync.Mutex
+	output        *bufio.Writer
+	promptHandler Handler
+	commands      *command.Registry
 }
 
-// NewServer creates a new RPC server with ping pre-registered.
+// NewServer creates a new RPC server.
 func NewServer() *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		ctx:      ctx,
 		cancel:   cancel,
-		handlers: make(map[string]Handler),
 		commands: command.New(),
 	}
-	s.Register(CommandPing, func(cmd RPCCommand) (any, error) {
-		return map[string]any{"ok": true}, nil
-	})
 	return s
 }
 
-// Register registers a handler for the given protocol command type.
-func (s *Server) Register(cmdType string, handler Handler) {
+// SetPromptHandler sets the handler for the "prompt" protocol command.
+// This is the only protocol-level command — all other commands go through
+// slash command dispatch via the prompt channel.
+func (s *Server) SetPromptHandler(handler Handler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.handlers[cmdType] = handler
+	s.promptHandler = handler
 }
 
 // RegisterSlash registers a slash command handler. Slash commands can be invoked
@@ -91,12 +88,38 @@ func (s *Server) Commands() *command.Registry {
 	return s.commands
 }
 
-// HasHandler reports whether a handler is registered for the given command type.
-func (s *Server) HasHandler(cmdType string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.handlers[cmdType]
-	return ok
+// handleCommand processes a single RPC command.
+// Only the "prompt" command is a protocol-level command.
+// All other command types fall back to slash command dispatch.
+func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
+	if cmd.Type == "prompt" {
+		s.mu.Lock()
+		handler := s.promptHandler
+		s.mu.Unlock()
+
+		if handler == nil {
+			return s.errorResponse(cmd.ID, cmd.Type, "prompt handler not set")
+		}
+
+		result, err := handler(cmd)
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, result)
+	}
+
+	// Try slash command handlers as fallback for backward compatibility.
+	// This allows clients to send {"type": "get_state"} directly
+	// while the same command can also be invoked via "/get_state".
+	if slashHandler, slashOK := s.GetSlashHandler(cmd.Type); slashOK {
+		args := s.extractSlashArgs(cmd)
+		result, err := slashHandler(args)
+		if err != nil {
+			return s.errorResponse(cmd.ID, cmd.Type, err.Error())
+		}
+		return s.successResponse(cmd.ID, cmd.Type, result)
+	}
+	return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("No %s handler registered", cmd.Type))
 }
 
 // RunWithIO starts the RPC server using the provided reader and writer.
@@ -135,34 +158,6 @@ func (s *Server) RunWithIO(reader io.Reader, writer io.Writer) error {
 	}
 
 	return nil
-}
-
-// handleCommand processes a single RPC command.
-func (s *Server) handleCommand(cmd RPCCommand) RPCResponse {
-	s.mu.Lock()
-	handler, ok := s.handlers[cmd.Type]
-	s.mu.Unlock()
-
-	if !ok {
-		// Try slash command handlers as fallback for backward compatibility.
-		// This allows clients to send {"type": "get_state"} directly
-		// while the same command can also be invoked via "/get_state".
-		if slashHandler, slashOK := s.GetSlashHandler(cmd.Type); slashOK {
-			args := s.extractSlashArgs(cmd)
-			result, err := slashHandler(args)
-			if err != nil {
-				return s.errorResponse(cmd.ID, cmd.Type, err.Error())
-			}
-			return s.successResponse(cmd.ID, cmd.Type, result)
-		}
-		return s.errorResponse(cmd.ID, cmd.Type, fmt.Sprintf("No %s handler registered", cmd.Type))
-	}
-
-	result, err := handler(cmd)
-	if err != nil {
-		return s.errorResponse(cmd.ID, cmd.Type, err.Error())
-	}
-	return s.successResponse(cmd.ID, cmd.Type, result)
 }
 
 // extractSlashArgs converts an RPCCommand's data to a text args string

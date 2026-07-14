@@ -101,16 +101,6 @@ func TestRPCAppSmoke(t *testing.T) {
 	}
 }
 
-func TestRPCAppPing(t *testing.T) {
-	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"ping"}`}, "")
-	if len(responses) == 0 {
-		t.Fatal("expected ping response")
-	}
-	if cmd, _ := responses[0]["command"].(string); cmd != "ping" {
-		t.Errorf("expected command 'ping', got %q", cmd)
-	}
-}
-
 func TestRPCAppHelpContent(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"help"}`}, "")
 	if len(responses) == 0 {
@@ -181,14 +171,6 @@ func TestRPCAppContext(t *testing.T) {
 		t.Fatal("expected context response")
 	}
 	assertCmdSuccess(t, responses[0], "context")
-}
-
-func TestRPCAppAbort(t *testing.T) {
-	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"abort"}`}, "")
-	if len(responses) == 0 {
-		t.Fatal("expected abort response")
-	}
-	assertCmdSuccess(t, responses[0], "abort")
 }
 
 func TestRPCAppShowPipeline(t *testing.T) {

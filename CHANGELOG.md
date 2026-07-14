@@ -3,6 +3,42 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Protocol Simplification: Removed steer/follow_up/abort RPC Commands (2026-07)
+
+**Problem**: Four protocol-level command types (`prompt`, `steer`, `follow_up`, `abort`) were registered in the RPC server, but only `prompt` was ever sent to the subprocess stdin. The other three were dead code:
+
+- `ai send --id` always sent `"prompt"` type to the Unix socket
+- The socket handler (`runSocketHandler`) forwarded both `"steer"` and `"prompt"` as `"prompt"` to RPC stdin — the distinction was discarded before reaching the handler
+- `"abort"` was handled at the socket layer (SIGTERM), not via RPC protocol
+- Nobody sent `"follow_up"` at the protocol level at all
+
+**Changes**:
+
+1. **Removed protocol constants**: `CommandSteer`, `CommandFollowUp`, `CommandAbort` from `pkg/rpc/rpc_types.go`
+2. **Removed protocol handlers**: `handleSteer()`, `handleFollowUp()`, `handleAbort()` from `pkg/rpc/rpc_app.go`
+3. **Removed dead registration**: Three `app.server.Register(...)` calls in `registerHandlers()`
+4. **Simplified socket handler**: Merged `case "steer", "prompt"` → `case "prompt"` in `runSocketHandler()`
+5. **Cleaned up tests**: Deleted `handler_steer_followup_test.go`, removed `TestRPCAppAbort`
+6. **Updated docs**: `docs/rpc-protocol.md` table, `docs/ai-agent-control.md` references
+
+**Result**: Only `prompt` and `ping` remain as protocol-level commands. `/steer`, `/follow-up`, `/abort` still work as slash commands through the prompt channel — no user-facing functionality was removed.
+
+## Further Simplification: Removed ping, Eliminated Handler Dispatch Map (2026-07)
+
+**Problem**: After removing steer/follow_up/abort, `ping` was the only remaining protocol command besides `prompt`, but nothing in production code ever sent a `ping` command. The `handlers map[string]Handler` dispatch was over-engineered for a single command.
+
+**Changes**:
+
+1. **Removed `CommandPing`** — constant and registration deleted
+2. **Removed `handlers` map + `Register()` + `HasHandler()`** from `Server` struct
+3. **Added `promptHandler Handler` field + `SetPromptHandler()`** — direct reference instead of map lookup
+4. **Simplified `handleCommand()`** — uses `if cmd.Type == "prompt"` directly instead of map dispatch; non-prompt commands fall through to slash command dispatch
+5. **Simplified `NewServer()`** — no more ping pre-registration; empty initialization
+6. **Removed `TestRPCAppPing`** smoke test
+7. **Updated docs**: protocol table and CHANGELOG
+
+**Result**: The entire RPC command dispatch is now a simple if-else ladder, eliminating 30+ lines of infrastructure code for a single protocol command type.
+
 ## Architecture: Package Structure Reorganization (2026-06)
 
 **Problem**: Package structure didn't reflect the actual separation of concerns:

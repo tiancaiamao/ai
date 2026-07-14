@@ -49,7 +49,7 @@ app.server.RegisterSlash("steer", "Inject mid-conversation guidance", func(args 
 })
 ```
 
-注意：这段逻辑跟 `handleSteer`（rpc_app.go:677）基本一样。理想情况应该复用，但 `handleSteer` 从 RPCCommand 取 message 的方式跟 slash handler 从 args 取不一样。可以做一个小重构：
+注意：这段逻辑跟 `handleSteerSlash`（rpc_help_handlers.go:14）基本一样。理想情况应该复用，但 `handleSteerSlash` 从 args 取 message 的方式跟其他调用方不一样。可以做一个小重构：
 
 ```go
 func (app *rpcApp) steerAgent(message string) (any, error) {
@@ -64,7 +64,7 @@ func (app *rpcApp) steerAgent(message string) (any, error) {
 }
 ```
 
-然后 `handleSteer` 和 slash handler 都调 `steerAgent`。
+然后 `handleSteerSlash` 和其他调用方都调 `steerAgent`。
 
 ### 4.2 `ai watch --follow` 持续监听模式
 
@@ -156,7 +156,7 @@ ai ls
 1. `ai serve` 启动后，`ai send "/steer 换个思路"` 成功执行，agent 收到 steer 消息并调整方向
 2. agent 不在 streaming 状态时发 `/steer`，自动触发 compact 后再执行
 3. 空 steer 消息 `ai send "/steer"` 返回错误提示
-4. 跟 `handleSteer` RPC 命令行为一致（skill expansion、pending 检查等）
+4. 跟 `handleSteerSlash` slash 命令行为一致（skill expansion、pending 检查等）
 
 ### P0: `ai watch --follow` 持续监听
 

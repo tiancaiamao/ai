@@ -101,7 +101,7 @@ func TestRunSocketHandler_PromptBlockedByDeadPipe(t *testing.T) {
 	// Use a custom handler with shorter timeout for testing.
 	handler := func(cmd tui.Command) tui.Response {
 		switch cmd.Type {
-		case "steer", "prompt":
+		case "prompt":
 			if cmd.Message == "" {
 				return tui.Response{OK: false, Error: "command requires a message"}
 			}

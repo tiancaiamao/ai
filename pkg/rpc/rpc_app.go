@@ -414,85 +414,6 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 	return nil, app.ag.Prompt(message)
 }
 
-func (app *rpcApp) handleSteer(cmd RPCCommand) (any, error) {
-	message := cmd.Message
-	if message == "" && len(cmd.Data) > 0 {
-		var data struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
-			return nil, fmt.Errorf("invalid data: %w", err)
-		}
-		message = data.Message
-	}
-
-	slog.Info("Received steer:", "value", message)
-
-	if strings.TrimSpace(message) == "" {
-		return nil, fmt.Errorf("empty steer message")
-	}
-
-	expandedMessage := app.expandSkillCommands(message)
-	if skill.IsSkillCommand(message) {
-		slog.Info("Expanded skill command in steer", "original", message, "skill", skill.ExtractSkillName(message))
-	}
-
-	app.stateMu.Lock()
-	mode := app.steeringMode
-	pending := app.pendingSteer
-	streaming := app.isStreaming
-	app.stateMu.Unlock()
-	if mode == "one-at-a-time" && pending {
-		return nil, fmt.Errorf("steer already pending")
-	}
-	if !streaming {
-		app.compactBeforeRequest("pre_request_steer")
-	}
-	app.stateMu.Lock()
-	app.pendingSteer = true
-	app.stateMu.Unlock()
-	app.ag.Steer(expandedMessage)
-	return nil, nil
-}
-
-func (app *rpcApp) handleFollowUp(cmd RPCCommand) (any, error) {
-	message := cmd.Message
-	if message == "" && len(cmd.Data) > 0 {
-		var data struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
-			return nil, fmt.Errorf("invalid data: %w", err)
-		}
-		message = data.Message
-	}
-
-	slog.Info("Received follow_up:", "value", message)
-	if strings.TrimSpace(message) == "" {
-		return nil, fmt.Errorf("empty follow-up message")
-	}
-
-	expandedMessage := app.expandSkillCommands(message)
-	if skill.IsSkillCommand(message) {
-		slog.Info("Expanded skill command in follow_up", "original", message, "skill", skill.ExtractSkillName(message))
-	}
-
-	app.stateMu.Lock()
-	mode := app.followUpMode
-	app.stateMu.Unlock()
-	if mode == "one-at-a-time" && app.ag.GetPendingFollowUps() > 0 {
-		return nil, fmt.Errorf("follow-up queue already has a pending message")
-	}
-	return nil, app.ag.FollowUp(expandedMessage)
-}
-
-func (app *rpcApp) handleAbort(cmd RPCCommand) (any, error) {
-	_ = cmd
-	slog.Info("Received abort")
-	app.ag.Abort()
-	return nil, nil
-}
-
 // registerHandlers registers all RPC command handlers and slash commands.
 // Handler methods are distributed across topic-specific files; this method
 // wires up protocol commands and delegates slash command registration.
@@ -500,10 +421,7 @@ func (app *rpcApp) registerHandlers(
 	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
 ) {
 	// === Protocol command handlers ===
-	app.server.Register(CommandPrompt, app.handlePrompt)
-	app.server.Register(CommandSteer, app.handleSteer)
-	app.server.Register(CommandFollowUp, app.handleFollowUp)
-	app.server.Register(CommandAbort, app.handleAbort)
+	app.server.SetPromptHandler(app.handlePrompt)
 
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()

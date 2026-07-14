@@ -33,15 +33,11 @@ type RPCResponse struct {
 }
 
 // Protocol command type constants.
-// Only protocol-level commands remain in the RPC layer.
+// "prompt" is the only protocol-level command.
 // All other commands (state queries, settings, actions, session management)
 // are handled as slash commands via the prompt channel.
 const (
-	CommandPrompt   = "prompt"
-	CommandSteer    = "steer"
-	CommandFollowUp = "follow_up"
-	CommandAbort    = "abort"
-	CommandPing     = "ping"
+	CommandPrompt = "prompt"
 )
 
 // SessionState represents the current session state.
