@@ -97,19 +97,18 @@ type rpcApp struct {
 	server *Server
 
 	// --- Mutable state protected by stateMu ---
-	stateMu                       sync.Mutex
-	isStreaming                   bool
-	isCompacting                  bool
-	currentThinkingLevel          string
-	autoCompactionEnabled         bool
-	steeringMode                  string
-	followUpMode                  string
-	pendingSteer                  bool
-	showThinking                  bool
-	showTools                     bool
-	showPrefix                    bool
-	busyMode                      string
-	consecutiveCompactionFailures int
+	stateMu               sync.Mutex
+	isStreaming           bool
+	isCompacting          bool
+	currentThinkingLevel  string
+	autoCompactionEnabled bool
+	steeringMode          string
+	followUpMode          string
+	pendingSteer          bool
+	showThinking          bool
+	showTools             bool
+	showPrefix            bool
+	busyMode              string
 }
 
 // parseJSONArgs attempts to unmarshal args as JSON into target.
@@ -120,51 +119,6 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 		return json.Unmarshal([]byte(args), target) == nil
 	}
 	return false
-}
-
-// nuclearTruncate force-truncates oldest messages without LLM summary.
-//
-// This is the last-resort fallback when compaction repeatedly fails (e.g.,
-// the summarization model cannot handle the conversation size).
-//
-// NOTE: This path is unreachable in normal operation. It is only triggered
-// when consecutiveCompactionFailures reaches 3, which occurs only when
-// compaction fails repeatedly. Coverage: 0% because actual compaction
-// does not fail in typical usage.
-func (app *rpcApp) nuclearTruncate() {
-	if app.ag == nil {
-		return
-	}
-	agentCtx := app.ag.GetContext()
-	if agentCtx == nil {
-		return
-	}
-	messages := agentCtx.RecentMessages
-	if len(messages) <= 10 {
-		return
-	}
-
-	// Keep only the last 20% of messages (minimum 10)
-	keepCount := max(10, int(float64(len(messages))*0.2))
-	truncatedCount := len(messages) - keepCount
-	agentCtx.RecentMessages = messages[len(messages)-keepCount:]
-
-	// Also sync to session
-	if app.sess != nil {
-		if err := app.sess.SaveMessages(agentCtx.RecentMessages); err != nil {
-			slog.Error("[Compact] Nuclear truncation failed to save session", "error", err)
-		}
-	}
-
-	// Reset failure counter after nuclear truncation
-	app.stateMu.Lock()
-	app.consecutiveCompactionFailures = 0
-	app.stateMu.Unlock()
-
-	slog.Warn("[Compact] Nuclear truncation completed",
-		"messages_before", len(messages),
-		"messages_after", keepCount,
-		"truncated_count", truncatedCount)
 }
 
 // initEventEmitter starts the goroutine that reads agent events and forwards
@@ -359,7 +313,6 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 			return nil, nil
 		}
 
-		app.compactBeforeRequest("pre_request_prompt")
 		return nil, app.ag.Prompt(expandedMessage)
 	}
 
@@ -410,7 +363,6 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 		}
 	}
 
-	app.compactBeforeRequest("pre_request_prompt")
 	return nil, app.ag.Prompt(message)
 }
 

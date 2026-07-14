@@ -27,14 +27,10 @@ func (app *rpcApp) handleSteerSlash(args string) (any, error) {
 	app.stateMu.Lock()
 	mode := app.steeringMode
 	pending := app.pendingSteer
-	streaming := app.isStreaming
 	app.stateMu.Unlock()
 
 	if mode == "one-at-a-time" && pending {
 		return nil, fmt.Errorf("steer already pending")
-	}
-	if !streaming {
-		app.compactBeforeRequest("pre_request_steer")
 	}
 
 	app.stateMu.Lock()
