@@ -183,14 +183,6 @@ func TestRPCAppContext(t *testing.T) {
 	assertCmdSuccess(t, responses[0], "context")
 }
 
-func TestRPCAppAbort(t *testing.T) {
-	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"abort"}`}, "")
-	if len(responses) == 0 {
-		t.Fatal("expected abort response")
-	}
-	assertCmdSuccess(t, responses[0], "abort")
-}
-
 func TestRPCAppShowPipeline(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"show","message":"pipeline"}`}, "")
 	if len(responses) == 0 {

@@ -34,9 +34,6 @@ The actual protocol commands registered by the RPC server (`pkg/rpc`):
 | Type | Constant | Description | Data Field |
 |------|----------|-------------|------------|
 | `prompt` | `CommandPrompt` | Send a user message | `PromptRequest` |
-| `steer` | `CommandSteer` | Inject a system message mid-conversation | String message |
-| `follow_up` | `CommandFollowUp` | Queue a prompt for after current processing | String message |
-| `abort` | `CommandAbort` | Cancel the current LLM stream | — |
 | `ping` | `CommandPing` | Health check / keep-alive | — |
 
 > **Note:** All other operations (state queries, settings, session management, model switching, etc.) are handled as **slash commands** sent through the `prompt` channel (e.g., `/model gpt-4`, `/compact`, `/help`). See `pkg/command` for the slash command registry.

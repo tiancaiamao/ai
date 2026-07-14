@@ -37,11 +37,8 @@ type RPCResponse struct {
 // All other commands (state queries, settings, actions, session management)
 // are handled as slash commands via the prompt channel.
 const (
-	CommandPrompt   = "prompt"
-	CommandSteer    = "steer"
-	CommandFollowUp = "follow_up"
-	CommandAbort    = "abort"
-	CommandPing     = "ping"
+	CommandPrompt = "prompt"
+	CommandPing   = "ping"
 )
 
 // SessionState represents the current session state.

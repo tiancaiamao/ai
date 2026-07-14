@@ -464,7 +464,7 @@ func runSocketHandler(meta *tui.RunMeta, metaPath string, proc *os.Process, stdi
 		defer mu.Unlock()
 
 		switch cmd.Type {
-		case "steer", "prompt":
+		case "prompt":
 			if cmd.Message == "" {
 				return tui.Response{OK: false, Error: "command requires a message"}
 			}
