@@ -101,16 +101,6 @@ func TestRPCAppSmoke(t *testing.T) {
 	}
 }
 
-func TestRPCAppPing(t *testing.T) {
-	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"ping"}`}, "")
-	if len(responses) == 0 {
-		t.Fatal("expected ping response")
-	}
-	if cmd, _ := responses[0]["command"].(string); cmd != "ping" {
-		t.Errorf("expected command 'ping', got %q", cmd)
-	}
-}
-
 func TestRPCAppHelpContent(t *testing.T) {
 	responses := runRPCSmoke(t, t.TempDir(), []string{`{"type":"help"}`}, "")
 	if len(responses) == 0 {

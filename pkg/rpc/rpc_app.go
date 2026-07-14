@@ -421,7 +421,7 @@ func (app *rpcApp) registerHandlers(
 	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
 ) {
 	// === Protocol command handlers ===
-	app.server.Register(CommandPrompt, app.handlePrompt)
+	app.server.SetPromptHandler(app.handlePrompt)
 
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()

@@ -23,6 +23,22 @@ Not a git log mirror — focus on what changed at the design level and why.
 
 **Result**: Only `prompt` and `ping` remain as protocol-level commands. `/steer`, `/follow-up`, `/abort` still work as slash commands through the prompt channel — no user-facing functionality was removed.
 
+## Further Simplification: Removed ping, Eliminated Handler Dispatch Map (2026-07)
+
+**Problem**: After removing steer/follow_up/abort, `ping` was the only remaining protocol command besides `prompt`, but nothing in production code ever sent a `ping` command. The `handlers map[string]Handler` dispatch was over-engineered for a single command.
+
+**Changes**:
+
+1. **Removed `CommandPing`** — constant and registration deleted
+2. **Removed `handlers` map + `Register()` + `HasHandler()`** from `Server` struct
+3. **Added `promptHandler Handler` field + `SetPromptHandler()`** — direct reference instead of map lookup
+4. **Simplified `handleCommand()`** — uses `if cmd.Type == "prompt"` directly instead of map dispatch; non-prompt commands fall through to slash command dispatch
+5. **Simplified `NewServer()`** — no more ping pre-registration; empty initialization
+6. **Removed `TestRPCAppPing`** smoke test
+7. **Updated docs**: protocol table and CHANGELOG
+
+**Result**: The entire RPC command dispatch is now a simple if-else ladder, eliminating 30+ lines of infrastructure code for a single protocol command type.
+
 ## Architecture: Package Structure Reorganization (2026-06)
 
 **Problem**: Package structure didn't reflect the actual separation of concerns:
