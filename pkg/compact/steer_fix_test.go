@@ -86,7 +86,7 @@ func TestSteer_CounterReset(t *testing.T) {
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
 
-		askCount := 0
+	askCount := 0
 	c.askFunc = func(_ context.Context, _ *agentctx.AgentContext, _ int) (bool, error) {
 		askCount++
 		return true, nil
