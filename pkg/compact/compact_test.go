@@ -224,11 +224,13 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 	cfg := &Config{
 		AutoCompact: true,
 		LLMDecide: &LLMDecideConfig{
-			SoftThreshold: 100,
-			HardLimit:     50000,
-			TierMedium:    200,
-			TierHigh:      300,
-			IntervalLow:   5,
+			SoftThreshold:  100,
+			HardLimit:      50000,
+			TierMedium:     200,
+			TierHigh:       300,
+			IntervalLow:    5,
+			IntervalMedium: 5,
+			IntervalHigh:   7,
 		},
 	}
 	c := NewCompactor(cfg, llm.Model{}, "key", "sys", 1_000_000, "")
@@ -255,11 +257,11 @@ func TestShouldCompact_LLMDecide_IntervalReached_LLMYes(t *testing.T) {
 		t.Errorf("counter should be unchanged after ShouldCompact, got %d", agentCtx.AgentState.ToolCallsSinceLastTrigger)
 	}
 
-	// Simulate the double-call bug: performCompaction calls ShouldCompact again
-	// with the same counter. It must return the cached answer (true) without
-	// calling askLLM a second time.
-	if !c.ShouldCompact(context.Background(), agentCtx) {
-		t.Error("second ShouldCompact call should return cached true")
+	// Second call at the same counter: interval hasn't elapsed since the last
+	// ask (llmDecideLastAskCount was updated), so ShouldCompact returns false.
+	// This is fine — performCompaction only calls ShouldCompact once per turn.
+	if c.ShouldCompact(context.Background(), agentCtx) {
+		t.Error("second ShouldCompact call should return false (interval not elapsed)")
 	}
 	if askCount != 1 {
 		t.Errorf("askLLM should be called once, got %d", askCount)
