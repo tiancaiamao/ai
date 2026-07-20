@@ -421,6 +421,19 @@ func (a *Agent) Steer(message string) {
 		a.cancel()
 	}
 
+	// Wait for the old loop to fully exit before touching AgentState.
+	// The old loop holds a.mu via Prompt's goroutine; acquiring it
+	// here guarantees the old loop has released all references to the
+	// shared *AgentState.
+	a.mu <- struct{}{}
+
+	// Reset tool-call counter — steer is a fresh start, the new loop
+	// should not inherit the old loop's compaction timing.
+	a.context.AgentState.ToolCallsSinceLastTrigger = 0
+
+	// Release mu — Prompt will re-acquire it.
+	<-a.mu
+
 	// Create new context
 	ctx, cancel := context.WithCancel(context.Background())
 	if a.traceBuf != nil {
