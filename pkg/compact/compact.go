@@ -802,12 +802,16 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 
 		if !canaryOK {
 			confirmed = true
-			slog.Warn("[Compact] Canary check failed — context may be degraded",
+			slog.Warn("[Compact] Canary check failed — context may be degraded, forcing compaction",
 				"expected", canaryVal,
 				"got", canaryAnswer)
-		} else if len(lines) > 1 {
-			decisionLine := strings.TrimSpace(lines[1])
-			confirmed = strings.Contains(decisionLine, "confirm")
+		} else {
+			slog.Info("[Compact] Canary check passed",
+				"value", canaryVal)
+			if len(lines) > 1 {
+				decisionLine := strings.TrimSpace(lines[1])
+				confirmed = strings.Contains(decisionLine, "confirm")
+			}
 		}
 	} else {
 		if len(lines) > 0 {
