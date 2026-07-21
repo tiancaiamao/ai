@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
@@ -153,6 +154,14 @@ func (s *loopState) performCompaction(
 	// Append a post-compaction hint to the summary message so the LLM
 	// knows to reload skills and design docs lost during compaction.
 	AppendCompactionHint(s.agentCtx)
+
+	// Plant a fresh canary for context retention checks in future askLLM
+	// rounds. The canary is appended to the end and stays in RecentMessages
+	// until the next compaction — askLLM never touches RecentMessages.
+	if comp, ok := c.(*compact.Compactor); ok {
+		val := compact.InsertCanary(s.agentCtx)
+		comp.SetCanaryValue(val)
+	}
 
 	compactionSpan.AddField("after_messages", after)
 	compactionSpan.End()

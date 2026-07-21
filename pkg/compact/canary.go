@@ -22,15 +22,14 @@ func generateCanaryValue() string {
 	return hex.EncodeToString(buf)
 }
 
-// AppendCanary appends a new canary message to RecentMessages after removing
-// all existing canary messages. Returns the canary value.
-func AppendCanary(agentCtx *agentctx.AgentContext) string {
+// InsertCanary appends a canary message to RecentMessages and returns the
+// canary value. Called once after each compaction (from performCompaction).
+// The canary stays in RecentMessages until the next compaction cleans it.
+// askLLM only reads it — never modifies RecentMessages.
+func InsertCanary(agentCtx *agentctx.AgentContext) string {
 	if agentCtx == nil {
 		return ""
 	}
-
-	// Remove old canaries first.
-	agentCtx.RecentMessages = RemoveAllCanaries(agentCtx.RecentMessages)
 
 	value := generateCanaryValue()
 	content := `<agent:canary value="` + value + `"/>`

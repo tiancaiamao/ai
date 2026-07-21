@@ -145,9 +145,14 @@ type Compactor struct {
 	llmDecideLastAskCount int
 
 	// canaryValue is the expected value for the next context retention check.
-	// It is set by askLLM (shown to the LLM as "Canary for next check: <val>")
-	// and checked in the subsequent askLLM call. Reset after compaction.
+	// Set by InsertCanary after compaction, checked by askLLM, reset on compaction.
 	canaryValue string
+}
+
+// SetCanaryValue sets the canary value for context retention checks.
+// Called by the agent loop after compaction, after planting a canary message.
+func (c *Compactor) SetCanaryValue(val string) {
+	c.canaryValue = val
 }
 
 // NewCompactor creates a new Compactor.
@@ -699,17 +704,16 @@ func buildCacheFriendlyLLMContext(
 // conversation prefix for cache efficiency. Returns true if the LLM says yes.
 //
 // Canary context retention check:
-//   - The canary value is persisted in RecentMessages as an agent-visible
-//     user message. It is appended (never inserted mid-list), so the provider
-//     prefix-cache for earlier messages is unaffected.
-//   - On each call, we ask the LLM to recall the canary value planted in
-//     the previous round. The message list still contains the old canary,
-//     so the LLM can find it — testing "lost in the middle" when context
-//     grows long.
+//   - A canary message was planted in RecentMessages after the last compaction
+//     (by InsertCanary in performCompaction). It is appended to the end, so the
+//     provider prefix-cache for earlier messages is unaffected.
+//   - On each call, we ask the LLM to report the canary value. The canary
+//     message still exists in RecentMessages, having naturally sunk toward
+//     the middle as new tool call/result messages accumulated.
 //   - An incorrect or missing canary answer indicates context degradation
 //     and forces compaction (returns true).
-//   - After the LLM call, old canary messages are cleaned and a new one
-//     is appended, ready for the next check round.
+//   - The canary is NEVER modified by askLLM — no cleaning, no re-planting.
+//     It stays in RecentMessages until the next compaction cleans it.
 func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
 	span := traceevent.StartSpan(ctx, "compact_llm_decide_ask", traceevent.CategoryLLM)
 	defer span.End()
@@ -725,25 +729,19 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	span.AddField("tokens", tokens)
 	span.AddField("budget_pct", budgetPct)
 
-	// -- Canary lifecycle --
-	// The old canary value (planted in the previous askLLM round) is used as
-	// the expected answer. The canary message still exists in RecentMessages,
-	// so the LLM can find it in a long context.
-	oldCanary := c.canaryValue
-	hasCanary := oldCanary != ""
-
+	// Canary recall check. The canary was planted after the last compaction
+	// and is never modified by askLLM — zero cache disruption.
+	canaryVal := c.canaryValue
+	hasCanary := canaryVal != ""
 	if hasCanary {
 		askContent += fmt.Sprintf(
 			"\n\n---\nContext retention check: what is the <agent:canary> value from the conversation?\n" +
 				"Reply with just the value on the first line.\n" +
 				"Then on the next line, reply \"confirm\" to compact now, or \"reject\" to continue.",
 		)
-		span.AddField("canary_expected", oldCanary)
+		span.AddField("canary_expected", canaryVal)
 	}
 
-	// Build LLM context from current RecentMessages (which includes the old
-	// canary message) + the trailing instruction. The cache prefix up to the
-	// old canary is unaffected because we only append new messages.
 	llmCtx := buildCacheFriendlyLLMContext(
 		agentCtx.RecentMessages,
 		agentCtx.SystemPrompt,
@@ -782,8 +780,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		}
 	}
 
-	// Fall back to reasoning_content if text response is empty (same model
-	// behavior as GenerateSummary).
+	// Fall back to reasoning_content if text response is empty.
 	answerText := response.String()
 	if strings.TrimSpace(answerText) == "" && thinking.Len() > 0 {
 		answerText = thinking.String()
@@ -800,37 +797,27 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	canaryOK := true
 
 	if hasCanary {
-		// First line should be the canary value.
 		canaryAnswer := strings.TrimSpace(lines[0])
-		canaryOK = strings.EqualFold(canaryAnswer, oldCanary)
+		canaryOK = strings.EqualFold(canaryAnswer, canaryVal)
 
 		if !canaryOK {
-			// Canary mismatch → context likely degraded → force compact.
 			confirmed = true
 			slog.Warn("[Compact] Canary check failed — context may be degraded",
-				"expected", oldCanary,
+				"expected", canaryVal,
 				"got", canaryAnswer)
 		} else if len(lines) > 1 {
-			// Canary OK → check second line for confirm/reject.
 			decisionLine := strings.TrimSpace(lines[1])
 			confirmed = strings.Contains(decisionLine, "confirm")
 		}
 	} else {
-		// No canary → original behavior: first line = confirm/reject.
 		if len(lines) > 0 {
 			decisionLine := strings.TrimSpace(lines[0])
 			confirmed = strings.Contains(decisionLine, "confirm")
 		}
 	}
 
-	// After the LLM call, replant: clean old canary messages from
-	// RecentMessages and append a fresh canary for the next round.
-	newCanary := AppendCanary(agentCtx)
-	c.canaryValue = newCanary
-
 	span.AddField("response", answerText)
 	span.AddField("canary_ok", canaryOK)
-	span.AddField("canary_new", newCanary)
 	span.AddField("decision", confirmed)
 
 	return confirmed, nil
