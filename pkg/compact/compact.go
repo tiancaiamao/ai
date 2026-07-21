@@ -734,11 +734,15 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 	canaryVal := c.canaryValue
 	hasCanary := canaryVal != ""
 	if hasCanary {
-		askContent += fmt.Sprintf(
-			"\n\n---\nContext retention check: what is the <agent:canary> value from the conversation?\n" +
-				"Reply with just the value on the first line.\n" +
-				"Then on the next line, reply \"confirm\" to compact now, or \"reject\" to continue.",
-		)
+		// Prepend canary instruction BEFORE the base prompt so the format
+		// override (canary value on line 1, then confirm/reject on line 2)
+		// is seen first and dominates the base prompt's conflicting format.
+		askContent = fmt.Sprintf(
+			"--- Context Retention Check ---\n"+
+				"Report the <agent:canary> value from the conversation.\n"+
+				"Line 1: the canary value only (no backticks, no quotes, no extra text).\n"+
+				"Line 2: \"confirm\" to compact now, or \"reject\" to continue.\n\n---\n\n%s",
+			askContent)
 		span.AddField("canary_expected", canaryVal)
 	}
 
@@ -798,7 +802,11 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 
 	if hasCanary {
 		canaryAnswer := strings.TrimSpace(lines[0])
-		canaryOK = strings.EqualFold(canaryAnswer, canaryVal)
+		// Strip common formatting LLMs add around short values.
+		canaryAnswer = strings.Trim(canaryAnswer, "`\"'“”‘’")
+
+		canaryOK = strings.EqualFold(canaryAnswer, canaryVal) ||
+			strings.Contains(strings.ToLower(canaryAnswer), strings.ToLower(canaryVal))
 
 		if !canaryOK {
 			confirmed = true
