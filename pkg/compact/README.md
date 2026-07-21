@@ -16,6 +16,20 @@ When `LLMDecideConfig` is set, the compactor uses a tiered threshold system:
 
 The LLM ask is a cache-friendly request that mirrors a normal agent turn prefix, maximizing provider prefix-cache hits.
 
+### Context Retention Check (Canary)
+
+The `askLLM` call also performs a context retention check when enabled:
+
+1. On the first `askLLM` call, a random canary value (e.g. `<agent:canary value="a1b2c3d4e5f6"/>`) is **appended** to `RecentMessages` as an agent-visible user message. The expected value is stored in `Compactor.canaryValue`.
+2. On subsequent `askLLM` calls, the LLM is asked to report the canary value from the conversation.
+3. If the LLM answers correctly → proceed with normal confirm/reject logic.
+4. If the LLM answers incorrectly → context is likely degraded → **force compaction** (overrides LLM decision).
+5. After each `askLLM` call, old canary messages are cleaned and a new canary is appended for the next round.
+
+The canary is appended (never inserted mid-list), so the provider prefix-cache for earlier messages is unaffected. As new tool call/result messages accumulate, the canary naturally sinks to the "lost in the middle" zone.
+
+When compaction triggers (`Compact`), all canary messages are removed and `canaryValue` is reset, starting a fresh cycle on the next `askLLM`.
+
 ### Compaction Execution
 
 `Compact()` performs:
@@ -104,6 +118,7 @@ This maximizes provider prefix-cache hits, reducing latency and cost.
 | `compact.go` | `Compactor` — `ShouldCompact`, `Compact`, `askLLM`, LLMDecide logic |
 | `compact_summary.go` | Summary generation, message splitting (`splitMessagesByTokenBudget`) |
 | `compact_tools.go` | Tool-call pairing, tool result compaction |
+| `canary.go` | Canary context retention check — `AppendCanary`, `FindCanaryValue`, `RemoveAllCanaries` |
 
 ## Dependencies
 
