@@ -370,10 +370,6 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 // goCtx carries trace context (trace buf + span) so LLM calls within
 // compaction are properly traced.
 func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	// Remove canary messages — they are internal probes and should not survive
-	// into the summary or waste space in the recent window.
-	ctx.RecentMessages = RemoveAllCanaries(ctx.RecentMessages)
-
 	if len(ctx.RecentMessages) == 0 {
 		return &agentctx.CompactionResult{
 			TokensBefore: 0,
@@ -438,6 +434,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// Create new recent messages with summary, including archive path note.
 	// The archive note is placed BEFORE the summary so the agent sees it first
 	// and is more likely to use it proactively.
+	recentMessages = RemoveAllCanaries(recentMessages)
 	summaryText := summary
 	if archivePath != "" {
 		summaryText = fmt.Sprintf(archiveNoteTemplate, archivePath) + "\n\n" + summary
