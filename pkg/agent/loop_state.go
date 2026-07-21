@@ -4,13 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 const maxCompactionRecoveries = 1
+
+// maxCompactionAckReminders limits how many times we remind the LLM to
+// acknowledge a compaction hint. After exhausting reminders, the loop
+// aborts with an error instead of proceeding silently.
+const maxCompactionAckReminders = 2
 
 // loopState holds shared mutable state for the inner agent loop.
 // It replaces multiple local variables and repeated parameter passing
@@ -30,6 +37,9 @@ type loopState struct {
 	// recovery turn after a loop guard hard abort. Prevents re-triggering
 	// if the LLM continues the loop.
 	guardAbortRecovery bool
+	// compactionAckReminders counts how many times we've reminded the LLM
+	// to acknowledge a compaction hint. Bounded by maxCompactionAckReminders.
+	compactionAckReminders int
 }
 
 func newLoopState(
@@ -147,12 +157,7 @@ func (s *loopState) performCompaction(
 		}))
 		return nil, nil
 	}
-
 	after := len(s.agentCtx.RecentMessages)
-
-	// Append a post-compaction hint to the summary message so the LLM
-	// knows to reload skills and design docs lost during compaction.
-	AppendCompactionHint(s.agentCtx)
 
 	compactionSpan.AddField("after_messages", after)
 	compactionSpan.End()
@@ -282,21 +287,37 @@ func replaceLast(msgs []agentctx.AgentMessage, msg agentctx.AgentMessage) []agen
 	return msgs
 }
 
-// AppendCompactionHint appends a new user-role hint message at the END of
-// RecentMessages after a successful compaction. The LLM's last input is the
-// most attention-grabbing position, making it ideal for a "reload your skills"
-// reminder. The message uses kind "compaction_hint" and is AgentVisible only.
-func AppendCompactionHint(agentCtx *agentctx.AgentContext) {
-	hint := `<agent:hint>
-Context was just compacted. The compaction summary preserves key information:
-1. "Skills Loaded" lists skills whose full content is now LOST. Reload via find_skill(name="<skill>", load=true) if you need the full details.
-2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
-3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
-</agent:hint>`
+// checkCompactionHintAcknowledged checks if the most recent assistant response
+// acknowledges a compaction hint. Returns true if:
+//   - no compaction hint is present as the preceding message, OR
+//   - the assistant response contains the required CompactionAckTag
+func checkCompactionHintAcknowledged(agentCtx *agentctx.AgentContext) bool {
+	msgs := agentCtx.RecentMessages
+	if len(msgs) < 2 {
+		return true
+	}
+	last := msgs[len(msgs)-1]
+	secondLast := msgs[len(msgs)-2]
 
-	msg := agentctx.NewUserMessage(hint).
-		WithKind("compaction_hint").
+	if last.Role != "assistant" {
+		return true
+	}
+	if secondLast.Metadata == nil || (secondLast.Metadata.Kind != "compaction_hint" && secondLast.Metadata.Kind != "compaction_hint_reminder") {
+		return true
+	}
+
+	text := last.ExtractText()
+	return strings.Contains(text, compact.CompactionAckTag)
+}
+
+// newCompactionHintReminder creates a user message reminding the LLM to
+// acknowledge the compaction hint. Kind is "compaction_hint_reminder".
+func newCompactionHintReminder() agentctx.AgentMessage {
+	msg := `⚠️ Please read the <agent:hint> above and acknowledge the compaction as instructed.
+
+Re-acknowledge: ` + compact.CompactionAckTag + `I acknowledge the compaction and will follow the instructions above` + compact.CompactionAckTag
+
+	return agentctx.NewUserMessage(msg).
+		WithKind("compaction_hint_reminder").
 		WithVisibility(true, false)
-
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, msg)
 }
