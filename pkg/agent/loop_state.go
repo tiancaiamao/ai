@@ -158,6 +158,7 @@ func (s *loopState) performCompaction(
 		return nil, nil
 	}
 	after := len(s.agentCtx.RecentMessages)
+	s.compactionAckReminders = 0
 
 	compactionSpan.AddField("after_messages", after)
 	compactionSpan.End()
