@@ -254,6 +254,37 @@ func runInnerLoop(
 			state.newMessages[len(state.newMessages)-1] = *msg
 		}
 
+		// Compaction hint acknowledgment check: if the LLM made tool calls
+		// without first acknowledging the compaction hint, inject a reminder
+		// and re-prompt. Text-only responses are implicitly acknowledging and
+		// are not checked — the problematic pattern is the LLM ignoring the
+		// hint and immediately making tool calls with stale context.
+		// After exhausting maxCompactionAckReminders, abort with an error.
+		toolCalls := msg.ExtractToolCalls()
+		if len(toolCalls) > 0 && !checkCompactionHintAcknowledged(agentCtx) {
+			if state.compactionAckReminders < maxCompactionAckReminders {
+				state.compactionAckReminders++
+				slog.Warn("[Loop] LLM did not acknowledge compaction hint before tool calls, re-prompting",
+					"turn", state.turnCount,
+					"reminder", state.compactionAckReminders)
+				reminder := newCompactionHintReminder()
+				agentCtx.RecentMessages = append(agentCtx.RecentMessages, reminder)
+				state.newMessages = append(state.newMessages, reminder)
+				continue
+			}
+
+			// Exhausted reminders — abort.
+			err := fmt.Errorf("LLM failed to acknowledge compaction hint after %d reminders", maxCompactionAckReminders)
+			slog.Error("[Loop] Compaction hint not acknowledged, aborting",
+				"error", err,
+				"turn", state.turnCount,
+				"reminders", state.compactionAckReminders)
+			stream.Push(NewErrorEvent(err))
+			stream.Push(NewTurnEndEvent(msg, nil))
+			stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
+			return
+		}
+
 		hasMore, toolResults := state.processToolCalls(ctx, msg)
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))

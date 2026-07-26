@@ -453,6 +453,11 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	ctx.AgentState.ToolCallsSinceLastTrigger = 0
 	c.llmDecideLastAskCount = 0
 
+	// Append a post-compaction hint so the LLM knows to reload skills and
+	// design docs lost during compaction, and must acknowledge it before
+	// making tool calls.
+	AppendCompactionHint(ctx)
+
 	return &agentctx.CompactionResult{
 		Summary:        summary,
 		TokensBefore:   tokensBefore,
