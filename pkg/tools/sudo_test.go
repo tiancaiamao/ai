@@ -71,13 +71,30 @@ func TestRewriteSudoInvocations_SudoInQuotes(t *testing.T) {
 }
 
 func TestRewriteSudoInvocations_SudoAfterPipe(t *testing.T) {
+	// sudo after a bare | pipe should NOT be rewritten because the
+	// password can't reach sudo (its stdin is from the pipe).
 	cmd := `echo test | sudo tee /etc/hosts`
 	got, n := rewriteSudoInvocations(cmd)
+	if n != 0 {
+		t.Fatalf("expected 0 sudo after pipe, got %d", n)
+	}
+	if strings.Contains(got, "sudo -S -p ''") {
+		t.Errorf("sudo after pipe should not be rewritten, got: %s", got)
+	}
+	if !strings.Contains(got, "sudo tee") {
+		t.Errorf("original sudo should be preserved, got: %s", got)
+	}
+}
+
+func TestRewriteSudoInvocations_SudoAfterDoublePipe(t *testing.T) {
+	// sudo after || should be rewritten (|| is logical OR, not a pipe).
+	cmd := `false || sudo apt update`
+	got, n := rewriteSudoInvocations(cmd)
 	if n != 1 {
-		t.Fatalf("expected 1 sudo, got %d", n)
+		t.Fatalf("expected 1 sudo after ||, got %d", n)
 	}
 	if !strings.Contains(got, "sudo -S -p ''") {
-		t.Errorf("expected sudo after pipe to be rewritten, got: %s", got)
+		t.Errorf("sudo after || should be rewritten, got: %s", got)
 	}
 }
 

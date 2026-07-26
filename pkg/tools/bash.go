@@ -201,15 +201,19 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Setpgid: true,
 	}
 
-	// When sudo needs a password piped to stdin, set up a pipe.
+		// When sudo needs a password piped to stdin, set up a pipe.
+	// Declare stdinRead outside the if block so the deferred close
+	// is visible regardless of which path we take.
+	var stdinRead *os.File
 	var stdinPipeWrite *os.File
 	if sudoResult.passwordLines != "" {
-		stdinRead, stdinWrite, err := os.Pipe()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+		var pipeErr error
+		stdinRead, stdinPipeWrite, pipeErr = os.Pipe()
+		if pipeErr != nil {
+			return nil, fmt.Errorf("failed to create stdin pipe: %w", pipeErr)
 		}
 		cmd.Stdin = stdinRead
-		stdinPipeWrite = stdinWrite
+		defer stdinRead.Close()
 	}
 
 	// Setup pipes for stdout and stderr using os.Pipe() instead of

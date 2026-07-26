@@ -194,6 +194,7 @@ func rewriteSudoInvocations(command string) (string, int) {
 	i := 0
 	n := len(command)
 	commandStart := true
+	afterPipe := false
 
 	for i < n {
 		ch := command[i]
@@ -205,11 +206,12 @@ func rewriteSudoInvocations(command string) (string, int) {
 			continue
 		}
 
-		// Newlines reset commandStart
+		// Newlines reset commandStart and afterPipe
 		if ch == '\n' {
 			out.WriteByte(ch)
 			i++
 			commandStart = true
+			afterPipe = false
 			continue
 		}
 
@@ -227,6 +229,7 @@ func rewriteSudoInvocations(command string) (string, int) {
 				out.WriteByte(next)
 				i += 2
 				commandStart = true
+				afterPipe = false
 				continue
 			}
 		}
@@ -236,6 +239,7 @@ func rewriteSudoInvocations(command string) (string, int) {
 			out.WriteByte(ch)
 			i++
 			commandStart = true
+			afterPipe = (ch == '|')
 			continue
 		}
 
@@ -244,6 +248,7 @@ func rewriteSudoInvocations(command string) (string, int) {
 			out.WriteByte(ch)
 			i++
 			commandStart = true
+			afterPipe = false
 			continue
 		}
 
@@ -252,22 +257,24 @@ func rewriteSudoInvocations(command string) (string, int) {
 			out.WriteByte(ch)
 			i++
 			commandStart = false
+			afterPipe = false
 			continue
 		}
 
 		// Read a full token (handles quotes and $() subshells)
 		token, next := readShellToken(command, i)
-		if commandStart && token == "sudo" {
+		if commandStart && token == "sudo" && !afterPipe {
 			out.WriteString("sudo -S -p ''")
 			sudoCount++
 		} else {
 			out.WriteString(token)
 		}
 		commandStart = false
+		afterPipe = false
 		i = next
 	}
 
-			return out.String(), sudoCount
+	return out.String(), sudoCount
 }
 
 // ---------------------------------------------------------------------------
