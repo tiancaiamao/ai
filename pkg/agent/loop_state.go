@@ -314,9 +314,9 @@ func checkCompactionHintAcknowledged(agentCtx *agentctx.AgentContext) bool {
 // newCompactionHintReminder creates a user message reminding the LLM to
 // acknowledge the compaction hint. Kind is "compaction_hint_reminder".
 func newCompactionHintReminder() agentctx.AgentMessage {
-	msg := `⚠️ Please read the <agent:hint> above and acknowledge the compaction as instructed.
+	msg := `⚠️ Please read the <agent:hint> above and acknowledge the compaction in your **text** content (not in thinking/reasoning).
 
-Re-acknowledge: ` + compact.CompactionAckTag + `I acknowledge the compaction and will follow the instructions above` + compact.CompactionAckTag
+Re-acknowledge in text: ` + compact.CompactionAckTag + `I acknowledge the compaction and will follow the instructions above` + compact.CompactionAckTag
 
 	return agentctx.NewUserMessage(msg).
 		WithKind("compaction_hint_reminder").

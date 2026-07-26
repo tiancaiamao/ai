@@ -21,7 +21,8 @@ Context was just compacted. The compaction summary preserves key information:
 2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
 3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
 
-Please confirm you have read and understood this hint by including this acknowledgment in your response:
+Please confirm you have read and understood this hint by including the acknowledgment tag in your **text** content (not in thinking/reasoning):
+
 ` + CompactionAckTag + `I acknowledge the compaction and will follow the instructions above` + CompactionAckTag + `
 </agent:hint>`
 
