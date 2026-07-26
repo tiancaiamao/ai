@@ -340,3 +340,154 @@ func TestParseRetryAfterHeader(t *testing.T) {
 		t.Fatalf("expected 0 from invalid header, got %v", got)
 	}
 }
+
+func TestStreamLLMHandlesReasoningField(t *testing.T) {
+	// Ollama's OpenAI-compatible endpoint sends `reasoning` (not
+	// reasoning_content nor thinking) in the streaming delta.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, canFlush := w.(http.Flusher)
+
+		write := func(s string) {
+			fmt.Fprint(w, s)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+
+		// Stream: reasoning content first, then text content.
+		write("data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking step 1\"}}]}\n\n")
+		write("data: {\"choices\":[{\"delta\":{\"reasoning\":\" thinking step 2\"}}]}\n\n")
+		write("data: {\"choices\":[{\"delta\":{\"content\":\"final answer\"}}]}\n\n")
+		write("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		write("data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	model := Model{
+		ID:       "test-model",
+		Provider: "ollama",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+	llmCtx := LLMContext{
+		Messages: []LLMMessage{
+			{Role: "user", Content: "test"},
+		},
+	}
+
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
+
+	var thinkingDeltas []string
+	var textDeltas []string
+	var doneEvent *LLMDoneEvent
+
+	for item := range stream.Iterator(context.Background()) {
+		switch event := item.Value.(type) {
+		case LLMThinkingDeltaEvent:
+			thinkingDeltas = append(thinkingDeltas, event.Delta)
+		case LLMTextDeltaEvent:
+			textDeltas = append(textDeltas, event.Delta)
+		case LLMDoneEvent:
+			doneEvent = &event
+		case LLMErrorEvent:
+			t.Fatalf("unexpected error: %v", event.Error)
+		}
+	}
+
+	// Verify thinking/reasoning deltas were captured
+	if len(thinkingDeltas) != 2 {
+		t.Fatalf("expected 2 thinking deltas, got %d: %v", len(thinkingDeltas), thinkingDeltas)
+	}
+	if thinkingDeltas[0] != "thinking step 1" {
+		t.Fatalf("unexpected first thinking delta: %q", thinkingDeltas[0])
+	}
+	if thinkingDeltas[1] != " thinking step 2" {
+		t.Fatalf("unexpected second thinking delta: %q", thinkingDeltas[1])
+	}
+
+	// Verify text content
+	if len(textDeltas) != 1 {
+		t.Fatalf("expected 1 text delta, got %d: %v", len(textDeltas), textDeltas)
+	}
+	if textDeltas[0] != "final answer" {
+		t.Fatalf("unexpected text delta: %q", textDeltas[0])
+	}
+
+	// Verify final message
+	if doneEvent == nil {
+		t.Fatal("expected done event")
+	}
+	if doneEvent.Message == nil {
+		t.Fatal("expected final message")
+	}
+	if doneEvent.Message.Content != "final answer" {
+		t.Fatalf("unexpected final content: %q", doneEvent.Message.Content)
+	}
+	if doneEvent.Message.Thinking != "thinking step 1 thinking step 2" {
+		t.Fatalf("unexpected final thinking: %q", doneEvent.Message.Thinking)
+	}
+}
+
+func TestStreamLLMHandlesAllReasoningFields(t *testing.T) {
+	// Verify all three reasoning-related delta fields work:
+	//   reasoning_content (Z.AI / DeepSeek)
+	//   thinking          (Anthropic)
+	//   reasoning         (Ollama)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"from reasoning_content\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"thinking\":\"from thinking\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning\":\"from reasoning\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	model := Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+	llmCtx := LLMContext{
+		Messages: []LLMMessage{
+			{Role: "user", Content: "test"},
+		},
+	}
+
+	stream := StreamLLM(context.Background(), model, llmCtx, "test-key", 0)
+
+	var thinkingDeltas []string
+	var doneEvent *LLMDoneEvent
+
+	for item := range stream.Iterator(context.Background()) {
+		switch event := item.Value.(type) {
+		case LLMThinkingDeltaEvent:
+			thinkingDeltas = append(thinkingDeltas, event.Delta)
+		case LLMDoneEvent:
+			doneEvent = &event
+		case LLMErrorEvent:
+			t.Fatalf("unexpected error: %v", event.Error)
+		}
+	}
+
+	if len(thinkingDeltas) != 3 {
+		t.Fatalf("expected 3 thinking deltas (one per field), got %d: %v", len(thinkingDeltas), thinkingDeltas)
+	}
+	if thinkingDeltas[0] != "from reasoning_content" {
+		t.Fatalf("expected reasoning_content first, got %q", thinkingDeltas[0])
+	}
+	if thinkingDeltas[1] != "from thinking" {
+		t.Fatalf("expected thinking second, got %q", thinkingDeltas[1])
+	}
+	if thinkingDeltas[2] != "from reasoning" {
+		t.Fatalf("expected reasoning third, got %q", thinkingDeltas[2])
+	}
+	if doneEvent == nil {
+		t.Fatal("expected done event")
+	}
+	if doneEvent.Message.Thinking != "from reasoning_contentfrom thinkingfrom reasoning" {
+		t.Fatalf("unexpected accumulated thinking: %q", doneEvent.Message.Thinking)
+	}
+}
