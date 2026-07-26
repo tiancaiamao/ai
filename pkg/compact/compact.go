@@ -468,6 +468,11 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// retention cycle on the next askLLM.
 	c.canaryValue = ""
 
+	// Append a post-compaction hint so the LLM knows to reload skills and
+	// design docs lost during compaction, and must acknowledge it before
+	// making tool calls.
+	AppendCompactionHint(ctx)
+
 	return &agentctx.CompactionResult{
 		Summary:        summary,
 		TokensBefore:   tokensBefore,
