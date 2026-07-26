@@ -152,6 +152,12 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
 	}
 
+	// Transform sudo commands if SUDO_PASSWORD is available.
+	// This must happen after all safety guards (which check the original
+	// command) and before the exec.CommandContext creation below.
+	sudoResult := transformSudoCommand(command)
+	execCommand := sudoResult.command
+
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
 
@@ -186,13 +192,28 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}()
 	}
 
-	// Create command
-	cmd := exec.CommandContext(cmdCtx, "/bin/sh", "-c", command)
+	// Create command — use the sudo-transformed version if applicable.
+	cmd := exec.CommandContext(cmdCtx, "/bin/sh", "-c", execCommand)
 	cmd.Dir = cwd
 
 	// Set process group to enable cleanup of entire process tree
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
+	}
+
+	// When sudo needs a password piped to stdin, set up a pipe.
+	// Declare stdinRead outside the if block so the deferred close
+	// is visible regardless of which path we take.
+	var stdinRead *os.File
+	var stdinPipeWrite *os.File
+	if sudoResult.passwordLines != "" {
+		var pipeErr error
+		stdinRead, stdinPipeWrite, pipeErr = os.Pipe()
+		if pipeErr != nil {
+			return nil, fmt.Errorf("failed to create stdin pipe: %w", pipeErr)
+		}
+		cmd.Stdin = stdinRead
+		defer stdinRead.Close()
 	}
 
 	// Setup pipes for stdout and stderr using os.Pipe() instead of
@@ -222,6 +243,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		stdoutWrite.Close()
 		stderrRead.Close()
 		stderrWrite.Close()
+		if stdinPipeWrite != nil {
+			stdinPipeWrite.Close()
+		}
 		msg := fmt.Sprintf("Failed to start command: %v", err)
 		if cmd.Dir != "" {
 			if _, statErr := os.Stat(cmd.Dir); statErr != nil {
@@ -234,6 +258,18 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				Text: msg,
 			},
 		}, nil
+	}
+
+	// If sudo password is needed, write it to stdin on a goroutine to avoid
+	// pipe-buffer deadlocks (the child may not read stdin until its stdout
+	// buffer fills, or vice versa).
+	if stdinPipeWrite != nil {
+		go func() {
+			defer stdinPipeWrite.Close()
+			if _, err := io.WriteString(stdinPipeWrite, sudoResult.passwordLines); err != nil {
+				slog.Debug("[Bash] sudo password write error (child may have exited early)", "error", err)
+			}
+		}()
 	}
 
 	// Close write ends in the parent process. The child process has its own
@@ -344,9 +380,16 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		"elapsed", elapsed.Seconds(),
 		"outputSize", output.Len())
 
+	// Handle sudo password issues: add helpful hints when sudo fails
+	// in non-interactive contexts.
+	outputText := output.String()
+	if hint := SudoHint(outputText); hint != "" {
+		outputText += hint
+	}
+
 	// Build result
 	var result strings.Builder
-	result.WriteString(output.String())
+	result.WriteString(outputText)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if result.Len() > 0 {
