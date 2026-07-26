@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -59,7 +61,7 @@ func (t *ReadTool) Name() string {
 
 // Description returns the tool description.
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges. For large or unfamiliar files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially."
+	return "Read the contents of a file. Supports text files and image files. Use offset and limit to read specific line ranges from text files. For large or unfamiliar text files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially. For image files, the image content is returned directly and can be seen by multimodal models."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.
@@ -106,6 +108,25 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+
+	// Detect content type from the file data.
+	contentType := http.DetectContentType(data)
+
+	// If it's an image, return ImageContent.
+	if strings.HasPrefix(contentType, "image/") {
+		encoded := base64.StdEncoding.EncodeToString(data)
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Read image file [%s]", contentType),
+			},
+			agentctx.ImageContent{
+				Type:     "image",
+				Data:     encoded,
+				MimeType: contentType,
+			},
+		}, nil
 	}
 
 	// Check if it's a text file

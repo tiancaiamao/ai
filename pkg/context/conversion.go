@@ -10,8 +10,18 @@ import (
 // ConvertMessagesToLLM converts agent messages to LLM messages.
 // This is shared between the agent loop and the compactor so that both
 // produce identical token sequences, enabling prefix-cache reuse.
+//
+// IMPORTANT: Tool result messages (role: "tool") with images require special
+// handling. OpenAI-compatible APIs expect tool message content to be a string,
+// not an array. When a tool result contains image content, we inject the
+// image into the preceding user message and keep only text in the tool message.
 func ConvertMessagesToLLM(messages []AgentMessage) []llm.LLMMessage {
 	llmMessages := make([]llm.LLMMessage, 0, len(messages))
+
+	// pendingImages accumulates image content parts from tool results.
+	// Since tool messages cannot contain images (OpenAI API constraint),
+	// we inject them into the most recent user message instead.
+	var pendingImages []llm.ContentPart
 
 	for _, msg := range messages {
 		if !msg.IsAgentVisible() {
@@ -32,14 +42,23 @@ func ConvertMessagesToLLM(messages []AgentMessage) []llm.LLMMessage {
 			case TextContent:
 				llmMsg.Content = b.Text
 			case ImageContent:
-				llmMsg.ContentParts = append(llmMsg.ContentParts, llm.ContentPart{
+				url := "data:" + b.MimeType + ";base64," + b.Data
+				cp := llm.ContentPart{
 					Type: "image_url",
 					ImageURL: &struct {
 						URL string `json:"url"`
 					}{
-						URL: b.Data,
+						URL: url,
 					},
-				})
+				}
+				if role == "tool" {
+					// OpenAI-compatible APIs require tool message content to be
+					// a string, not an array. Collect images from tool results
+					// and inject them into the preceding user message instead.
+					pendingImages = append(pendingImages, cp)
+				} else {
+					llmMsg.ContentParts = append(llmMsg.ContentParts, cp)
+				}
 			case ThinkingContent:
 				llmMsg.Thinking = b.Thinking
 			}
@@ -64,13 +83,47 @@ func ConvertMessagesToLLM(messages []AgentMessage) []llm.LLMMessage {
 			}
 		}
 
-		// Tool result message
+		// Tool result message: only text content (images handled via pendingImages)
 		if msg.Role == "toolResult" {
 			llmMsg.ToolCallID = msg.ToolCallID
 			llmMsg.Content = msg.ExtractText()
+			llmMsg.ContentParts = nil // images moved to pendingImages
+		}
+
+		// Inject pending images into the preceding user message.
+		// After the tool result, the next user-relevant message gets the images.
+		if role == "user" && len(pendingImages) > 0 {
+			if llmMsg.Content != "" {
+				// Convert string content to array, prepend text, append images
+				parts := make([]llm.ContentPart, 0, 1+len(pendingImages))
+				parts = append(parts, llm.ContentPart{Type: "text", Text: llmMsg.Content})
+				parts = append(parts, pendingImages...)
+				llmMsg.Content = ""
+				llmMsg.ContentParts = append(parts, llmMsg.ContentParts...)
+			} else {
+				llmMsg.ContentParts = append(pendingImages, llmMsg.ContentParts...)
+			}
+			pendingImages = nil
 		}
 
 		llmMessages = append(llmMessages, llmMsg)
+	}
+
+	// If there are still pending images that weren't injected into a user
+	// message (e.g. tool results at the end without a following user message),
+	// inject them as a new synthetic user message following the tool results.
+	// This preserves temporal ordering — images appear after the tool call
+	// that produced them, not before it. (Matching pi's approach.)
+	if len(pendingImages) > 0 {
+		syntheticMsg := llm.LLMMessage{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "Attached image(s) from tool result:"},
+			},
+		}
+		syntheticMsg.ContentParts = append(syntheticMsg.ContentParts, pendingImages...)
+		llmMessages = append(llmMessages, syntheticMsg)
+		pendingImages = nil
 	}
 
 	return sanitizeToolCallProtocol(llmMessages)

@@ -182,7 +182,7 @@ In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/even
 
 | Tool | Description |
 |------|-------------|
-| `read` | Read file contents |
+| `read` | Read file contents (supports images) |
 | `write` | Write to file |
 | `edit` | Edit file by replacing text (supports fuzzy matching) |
 | `bash` | Execute shell commands (with timeout control) |
