@@ -3,6 +3,25 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Canary Context Retention Check for LLMDecide (2026-07)
+
+**Problem**: LLMDecide compaction mode relied solely on token count heuristics to decide when to compact. Token count is an indirect measure — models can suffer "lost in the middle" degradation well before hitting context limits, or function perfectly even near limits depending on content distribution.
+
+**Solution**: Added a canary-based context retention check to the LLMDecide `askLLM` flow:
+
+1. Each `askLLM` call appends an agent-visible `<agent:canary value="..."/>` message to `RecentMessages` (after cleaning old canaries). The expected value is stored in `Compactor.canaryValue`.
+2. On the next `askLLM` call, the LLM is asked to report the canary value from the conversation.
+3. A correct answer → proceed with normal confirm/reject logic. An incorrect answer → context degraded → **force compaction** (overrides LLM decision).
+4. After each `askLLM` call, old canaries are cleaned and a new one is appended for the next round.
+
+The canary is appended (never inserted mid-list), so the provider prefix-cache for earlier messages is unaffected. The canary naturally sinks to the "lost in the middle" zone as tool call/result messages accumulate.
+
+On compaction (`Compact`), all canary messages are removed and `canaryValue` is reset, starting a fresh retention cycle.
+
+**Files**: New `pkg/compact/canary.go` + `canary_test.go`, modified `compact.go` (Compactor struct, Compact, askLLM).
+
+**Design doc**: Updated `docs/context-management.md` and `pkg/compact/README.md`.
+
 ## Protocol Simplification: Removed steer/follow_up/abort RPC Commands (2026-07)
 
 **Problem**: Four protocol-level command types (`prompt`, `steer`, `follow_up`, `abort`) were registered in the RPC server, but only `prompt` was ever sent to the subprocess stdin. The other three were dead code:

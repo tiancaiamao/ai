@@ -100,6 +100,16 @@ The LLM ask is a cache-friendly request that mirrors a normal agent turn:
 
 Since all but the trailing question is a prefix of the normal conversation, provider prefix-cache hits are maximized.
 
+#### Context Retention Check (Canary)
+
+The `askLLM` call also runs a context retention check using a canary value:
+
+1. **Planting**: On each `askLLM` call, an agent-visible `<agent:canary value="..."/>` message is **appended** to `RecentMessages` (after cleaning old canaries). The expected value is stored in `Compactor.canaryValue`.
+2. **Recall test**: On the next `askLLM` call, the LLM is asked to report the canary value from the conversation. The canary message still exists in `RecentMessages`, having naturally sunk toward the middle as new tool call/result messages accumulated.
+3. **Result**: If the LLM answers correctly → continue with normal confirm/reject logic. If incorrectly → context is degraded → **force compaction** (overrides LLM decision).
+4. **Cache impact**: The canary is appended (never inserted mid-list), so provider prefix-cache for earlier messages is unaffected.
+5. **Compaction**: `Compact()` calls `RemoveAllCanaries()` to clean canary messages, and resets `canaryValue` to start a fresh cycle.
+
 ### Idempotency
 
 The LLM decision is cached per tool-call counter value (`ToolCallsSinceLastTrigger`). This makes `ShouldCompact` safe to call multiple times per turn. The cache is cleared after a successful `Compact()`.
@@ -225,6 +235,7 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/compact/compact.go` | `Compactor` — `ShouldCompact`, `Compact`, `askLLM`, LLMDecide logic |
 | `pkg/compact/compact_summary.go` | Summary generation (`GenerateSummary`), message splitting |
 | `pkg/compact/compact_tools.go` | Tool-call pairing, tool result compaction |
+| `pkg/compact/canary.go` | Canary context retention check — `AppendCanary`, `FindCanaryValue`, `RemoveAllCanaries` |
 | `pkg/context/context.go` | `AgentContext`, `EstimateTokens` |
 | `pkg/context/message.go` | `AgentMessage`, `ContentBlock` types |
 | `pkg/context/agent_state.go` | `AgentState` tracking metadata |
