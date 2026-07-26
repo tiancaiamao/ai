@@ -53,7 +53,17 @@ func (m LLMMessage) MarshalJSON() ([]byte, error) {
 
 	// If ContentParts is present and non-empty, use it
 	if len(m.ContentParts) > 0 {
-		tmp.Content = m.ContentParts
+		if m.Content != "" {
+			// Both text content and content parts exist (e.g. tool result with
+			// text description + image). Merge them into a single array with
+			// the text part first, then the image/content parts.
+			parts := make([]ContentPart, 0, len(m.ContentParts)+1)
+			parts = append(parts, ContentPart{Type: "text", Text: m.Content})
+			parts = append(parts, m.ContentParts...)
+			tmp.Content = parts
+		} else {
+			tmp.Content = m.ContentParts
+		}
 	} else {
 		// Otherwise use Content string
 		tmp.Content = m.Content

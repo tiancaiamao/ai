@@ -89,7 +89,7 @@ func TestConvertMessagesToLLM(t *testing.T) {
 			{
 				Role: "user",
 				Content: []ContentBlock{
-					ImageContent{Type: "image", Data: "base64data"},
+					ImageContent{Type: "image", Data: "base64data", MimeType: "image/png"},
 				},
 			},
 		}
@@ -97,8 +97,9 @@ func TestConvertMessagesToLLM(t *testing.T) {
 		if len(got[0].ContentParts) != 1 {
 			t.Fatalf("ContentParts len = %d, want 1", len(got[0].ContentParts))
 		}
-		if got[0].ContentParts[0].ImageURL.URL != "base64data" {
-			t.Errorf("ImageURL = %v", got[0].ContentParts[0].ImageURL)
+		wantURL := "data:image/png;base64,base64data"
+		if got[0].ContentParts[0].ImageURL.URL != wantURL {
+			t.Errorf("ImageURL.URL = %q, want %q", got[0].ContentParts[0].ImageURL.URL, wantURL)
 		}
 	})
 

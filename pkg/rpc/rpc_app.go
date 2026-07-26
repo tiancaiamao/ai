@@ -181,6 +181,12 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 		if event.EventAt == 0 {
 			event.EventAt = emitAt.UnixNano()
 		}
+		// Strip image data from events before emitting to stdout.
+		// The base64-encoded image data can exceed the 1MB scanner buffer max
+		// in run.go, causing "token too long" errors. The image data is not
+		// needed by stdout consumers (TUI, watch) — they only display tool status.
+		// Session persistence (above) already wrote the full data.
+		stripImageDataFromEvent(&event)
 		app.server.EmitEvent(event)
 
 		if event.Type == "agent_end" {
@@ -213,6 +219,69 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 	}()
 
 	return shutdownEmitter, eventEmitterDone
+}
+
+// stripImageDataFromEvent replaces base64 image data in events with a placeholder.
+// The base64-encoded image content can be multiple megabytes, easily exceeding the
+// 1MB scanner buffer max in run.go's stdout bridge. Since stdout consumers (TUI,
+// watch clients) only display tool status text and never render image content,
+// we strip the raw data here. Session persistence writes the full data before
+// this function is called.
+func stripImageDataFromEvent(event *agent.AgentEvent) {
+	if event == nil {
+		return
+	}
+	// tool_execution_end: Result contains the full tool output
+	if event.Result != nil {
+		stripImageDataFromMessage(event.Result)
+	}
+	// turn_end: ToolResults contains tool outputs from this turn
+	for i := range event.ToolResults {
+		stripImageDataFromMessage(&event.ToolResults[i])
+	}
+	// agent_end: Messages contains all session messages
+	for i := range event.Messages {
+		stripImageDataFromMessage(&event.Messages[i])
+	}
+	// message_end / message_update: Message may contain image content
+	if event.Message != nil {
+		stripImageDataFromMessage(event.Message)
+	}
+}
+
+// stripImageDataFromMessage replaces base64 data in ImageContent blocks
+// with a short placeholder showing the original data length.
+// It deep-copies the Content slice to avoid mutating shared underlying arrays;
+// callers (sessionWriter, AgentContext) may hold value-copied AgentMessages
+// that share the same Content backing array.
+func stripImageDataFromMessage(msg *agentctx.AgentMessage) {
+	if msg == nil {
+		return
+	}
+	needsStrip := false
+	for _, block := range msg.Content {
+		if ic, ok := block.(agentctx.ImageContent); ok && len(ic.Data) > 0 {
+			needsStrip = true
+			break
+		}
+	}
+	if !needsStrip {
+		return
+	}
+	// Deep-copy the Content slice so modifications don't leak to other copies
+	// of this AgentMessage that share the same backing array.
+	newContent := make([]agentctx.ContentBlock, len(msg.Content))
+	copy(newContent, msg.Content)
+	for i, block := range newContent {
+		if ic, ok := block.(agentctx.ImageContent); ok && len(ic.Data) > 0 {
+			newContent[i] = agentctx.ImageContent{
+				Type:     ic.Type,
+				Data:     fmt.Sprintf("<base64 image data: %d bytes>", len(ic.Data)),
+				MimeType: ic.MimeType,
+			}
+		}
+	}
+	msg.Content = newContent
 }
 
 func (app *rpcApp) startDebugServer() {

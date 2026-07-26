@@ -25,7 +25,7 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 | Tool | File | Description |
 |------|------|-------------|
 | `bash` | `bash.go` | Execute shell commands with timeout |
-| `read` | `read.go` | Read file contents (supports offset/limit) |
+| `read` | `read.go` | Read file contents (supports offset/limit, auto-detects images) |
 | `write` | `write.go` | Write content to files |
 | `edit` | `edit.go` | Edit files by replacing text ranges |
 | `grep` | `grep.go` | Search file contents with regex |
