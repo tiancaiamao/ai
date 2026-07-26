@@ -230,6 +230,7 @@ func StreamLLM(
 					Delta struct {
 						Content          string            `json:"content,omitempty"`
 						ReasoningContent string            `json:"reasoning_content,omitempty"`
+						Reasoning        string            `json:"reasoning,omitempty"`
 						Thinking         string            `json:"thinking,omitempty"`
 						ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
 					} `json:"delta"`
@@ -280,6 +281,12 @@ func StreamLLM(
 			if choice.Delta.Thinking != "" {
 				partial.AppendThinking(choice.Delta.Thinking)
 				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.Thinking})
+			}
+
+			// Reasoning delta (Ollama OpenAI-compat uses reasoning)
+			if choice.Delta.Reasoning != "" {
+				partial.AppendThinking(choice.Delta.Reasoning)
+				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.Reasoning})
 			}
 
 			// Tool calls
