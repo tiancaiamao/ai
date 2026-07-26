@@ -60,7 +60,7 @@ func transformSudoCommand(command string) sudoResult {
 
 	// Source 2: Check NOPASSWD (sudo -n). Re-probes every call so an
 	// expired sudo timestamp can't cause a later command to block.
-		if sudoNopasswdWorks() {
+	if sudoNopasswdWorks() {
 		return sudoResult{
 			command: command,
 		}
@@ -182,7 +182,7 @@ func readShellToken(command string, start int) (token string, next int) {
 	return b.String(), start + b.Len()
 }
 
-// rewriteSudoInvocations rewrites bare `sudo` tokens to `sudo -S -p ''`
+// rewriteSudoInvocations rewrites bare `sudo` tokens to `sudo -S -p ”`
 // and returns the transformed command plus the count of rewritten invocations.
 //
 // It only rewrites real unquoted sudo command words appearing at command

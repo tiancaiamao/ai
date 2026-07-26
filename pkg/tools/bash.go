@@ -201,7 +201,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Setpgid: true,
 	}
 
-		// When sudo needs a password piped to stdin, set up a pipe.
+	// When sudo needs a password piped to stdin, set up a pipe.
 	// Declare stdinRead outside the if block so the deferred close
 	// is visible regardless of which path we take.
 	var stdinRead *os.File
@@ -380,7 +380,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		"elapsed", elapsed.Seconds(),
 		"outputSize", output.Len())
 
-		// Handle sudo password issues: add helpful hints when sudo fails
+	// Handle sudo password issues: add helpful hints when sudo fails
 	// in non-interactive contexts.
 	outputText := output.String()
 	if hint := SudoHint(outputText); hint != "" {
