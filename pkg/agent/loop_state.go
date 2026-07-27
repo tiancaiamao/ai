@@ -151,10 +151,6 @@ func (s *loopState) performCompaction(
 
 	after := len(s.agentCtx.RecentMessages)
 
-	// Append a post-compaction hint to the summary message so the LLM
-	// knows to reload skills and design docs lost during compaction.
-	AppendCompactionHint(s.agentCtx)
-
 	// Plant a fresh canary for context retention checks in future askLLM
 	// rounds. The canary is appended to the end and stays in RecentMessages
 	// until the next compaction — askLLM never touches RecentMessages.
@@ -289,23 +285,4 @@ func (s *loopState) processToolCalls(
 func replaceLast(msgs []agentctx.AgentMessage, msg agentctx.AgentMessage) []agentctx.AgentMessage {
 	msgs[len(msgs)-1] = msg
 	return msgs
-}
-
-// AppendCompactionHint appends a new user-role hint message at the END of
-// RecentMessages after a successful compaction. The LLM's last input is the
-// most attention-grabbing position, making it ideal for a "reload your skills"
-// reminder. The message uses kind "compaction_hint" and is AgentVisible only.
-func AppendCompactionHint(agentCtx *agentctx.AgentContext) {
-	hint := `<agent:hint>
-Context was just compacted. The compaction summary preserves key information:
-1. "Skills Loaded" lists skills whose full content is now LOST. Reload via find_skill(name="<skill>", load=true) if you need the full details.
-2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
-3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
-</agent:hint>`
-
-	msg := agentctx.NewUserMessage(hint).
-		WithKind("compaction_hint").
-		WithVisibility(true, false)
-
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, msg)
 }
