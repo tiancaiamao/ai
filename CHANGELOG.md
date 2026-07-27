@@ -3,6 +3,16 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Removed Compaction Ack Requirement (2026-07)
+
+**Problem**: The `<agent:hint>` injected after compaction required the LLM to acknowledge with a `<compaction_ack>` tag before making tool calls. Analysis of real sessions showed this was ineffective — the LLM acknowledged in text while simultaneously calling tools, never actually pausing to reload skills or re-read docs.
+
+**What changed**: Removed the ack enforcement code while keeping the `<agent:hint>` message itself (the 3 behavioral requirements: reload skills, follow constraints, re-read docs). The hint is still present in RecentMessages but no longer requires acknowledgment.
+
+**Removed**: `maxCompactionAckReminders` constant, `compactionAckReminders` field, `checkCompactionHintAcknowledged()`, `newCompactionHintReminder()`, checkpoint check block in `loop.go`, `CompactionAckTag` from `compaction_hint.go` (file deleted, function moved back to `loop_state.go`).
+
+**Why**: The ack pattern asks the LLM to self-enforce a behavioral constraint with no execution-layer verification. The canary mechanism already verifies context retention; forcing ack at the loop level adds complexity for no measurable benefit.
+
 ## Canary Context Retention Check for LLMDecide (2026-07)
 
 **Problem**: LLMDecide compaction mode relied solely on token count heuristics to decide when to compact. Token count is an indirect measure — models can suffer "lost in the middle" degradation well before hitting context limits, or function perfectly even near limits depending on content distribution.

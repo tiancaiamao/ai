@@ -468,10 +468,18 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// retention cycle on the next askLLM.
 	c.canaryValue = ""
 
-	// Append a post-compaction hint so the LLM knows to reload skills and
-	// design docs lost during compaction, and must acknowledge it before
-	// making tool calls.
-	AppendCompactionHint(ctx)
+	// Append post-compaction hint so the LLM knows to reload skills and
+	// re-read design docs that were lost during compaction.
+	hint := `<agent:hint>
+Context was just compacted. The compaction summary preserves key information:
+1. "Skills Loaded" lists skills whose full content is now LOST. Reload via find_skill(name="<skill>", load=true) if you need the full details.
+2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
+3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
+</agent:hint>`
+	ctx.RecentMessages = append(ctx.RecentMessages,
+		agentctx.NewUserMessage(hint).
+			WithKind("compaction_hint").
+			WithVisibility(true, false))
 
 	return &agentctx.CompactionResult{
 		Summary:        summary,
