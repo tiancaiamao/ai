@@ -462,7 +462,7 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 
 	// Reset tool-call counter after successful compaction.
 	ctx.AgentState.ToolCallsSinceLastTrigger = 0
-		c.llmDecideLastAskCount = 0
+	c.llmDecideLastAskCount = 0
 
 	// Reset canary — after compaction the context is fresh, start a new
 	// retention cycle on the next askLLM.

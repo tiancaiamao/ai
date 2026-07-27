@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
