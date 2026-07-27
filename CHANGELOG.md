@@ -3,24 +3,6 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
-## Removed Compaction Ack Mechanism (2026-07)
-
-**Problem**: After each compaction, the system injected an `<agent:hint>` message into RecentMessages asking the LLM to acknowledge with `<compaction_ack>...</compaction_ack>` and reload skills/re-read docs. Analysis of real sessions showed this mechanism was ineffective:
-
-- The LLM acknowledged compaction in text **while simultaneously making tool calls** in the same response, never actually pausing to reload skills or re-read docs.
-- Users repeatedly complained (4× in a single session) that the agent ignored compaction instructions.
-- The `ack_compaction` tool was never wired to any enforcement — it was just another text acknowledgment.
-- The canary mechanism (separate from this) already verified the LLM can read RecentMessages; the real problem was prioritization of the hint vs existing execution plan, not visibility.
-
-**Removed**:
-- `pkg/compact/compaction_hint.go` — `AppendCompactionHint()` and `CompactionAckTag` constant
-- `pkg/agent/loop_state_hint_test.go` — all hint/ack tests
-- `pkg/agent/loop_state.go` — `maxCompactionAckReminders` constant, `compactionAckReminders` field, `checkCompactionHintAcknowledged()`, `newCompactionHintReminder()`
-- `pkg/agent/loop.go` — compaction hint acknowledgment check block (reminder loop + abort)
-- `pkg/compact/compact.go` — `AppendCompactionHint(ctx)` call
-
-**Why not fix instead**: The ack pattern is fundamentally flawed — it asks the LLM to self-enforce a behavioral constraint with no execution-layer verification. Fixing it would require the loop to pause tool execution until ack, which adds complexity for a mechanism that only helps when the LLM would already follow instructions anyway.
-
 ## Canary Context Retention Check for LLMDecide (2026-07)
 
 **Problem**: LLMDecide compaction mode relied solely on token count heuristics to decide when to compact. Token count is an indirect measure — models can suffer "lost in the middle" degradation well before hitting context limits, or function perfectly even near limits depending on content distribution.

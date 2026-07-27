@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/tiancaiamao/ai/pkg/compact"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -12,6 +13,11 @@ import (
 )
 
 const maxCompactionRecoveries = 1
+
+// maxCompactionAckReminders limits how many times we remind the LLM to
+// acknowledge a compaction hint. After exhausting reminders, the loop
+// aborts with an error instead of proceeding silently.
+const maxCompactionAckReminders = 2
 
 // loopState holds shared mutable state for the inner agent loop.
 // It replaces multiple local variables and repeated parameter passing
@@ -31,6 +37,9 @@ type loopState struct {
 	// recovery turn after a loop guard hard abort. Prevents re-triggering
 	// if the LLM continues the loop.
 	guardAbortRecovery bool
+	// compactionAckReminders counts how many times we've reminded the LLM
+	// to acknowledge a compaction hint. Bounded by maxCompactionAckReminders.
+	compactionAckReminders int
 }
 
 func newLoopState(
@@ -149,6 +158,7 @@ func (s *loopState) performCompaction(
 		return nil, nil
 	}
 	after := len(s.agentCtx.RecentMessages)
+	s.compactionAckReminders = 0
 
 	// Plant a fresh canary for context retention checks in future askLLM
 	// rounds. The canary is appended to the end and stays in RecentMessages
@@ -284,4 +294,39 @@ func (s *loopState) processToolCalls(
 func replaceLast(msgs []agentctx.AgentMessage, msg agentctx.AgentMessage) []agentctx.AgentMessage {
 	msgs[len(msgs)-1] = msg
 	return msgs
+}
+
+// checkCompactionHintAcknowledged checks if the most recent assistant response
+// acknowledges a compaction hint. Returns true if:
+//   - no compaction hint is present as the preceding message, OR
+//   - the assistant response contains the required CompactionAckTag
+func checkCompactionHintAcknowledged(agentCtx *agentctx.AgentContext) bool {
+	msgs := agentCtx.RecentMessages
+	if len(msgs) < 2 {
+		return true
+	}
+	last := msgs[len(msgs)-1]
+	secondLast := msgs[len(msgs)-2]
+
+	if last.Role != "assistant" {
+		return true
+	}
+	if secondLast.Metadata == nil || (secondLast.Metadata.Kind != "compaction_hint" && secondLast.Metadata.Kind != "compaction_hint_reminder") {
+		return true
+	}
+
+	text := last.ExtractText()
+	return strings.Contains(text, compact.CompactionAckTag)
+}
+
+// newCompactionHintReminder creates a user message reminding the LLM to
+// acknowledge the compaction hint. Kind is "compaction_hint_reminder".
+func newCompactionHintReminder() agentctx.AgentMessage {
+	msg := `⚠️ Please read the <agent:hint> above and acknowledge the compaction in your **text** content (not in thinking/reasoning).
+
+Re-acknowledge in text: ` + compact.CompactionAckTag + `I acknowledge the compaction and will follow the instructions above` + compact.CompactionAckTag
+
+	return agentctx.NewUserMessage(msg).
+		WithKind("compaction_hint_reminder").
+		WithVisibility(true, false)
 }
