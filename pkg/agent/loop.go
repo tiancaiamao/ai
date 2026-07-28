@@ -142,13 +142,9 @@ func RunLoop(
 		}()
 
 		newMessages := append([]agentctx.AgentMessage{}, prompts...)
-		// Force a new backing array so concurrent appends by processPrompt's
-		// event loop and runInnerLoop don't corrupt each other's data.
-		recentCopy := make([]agentctx.AgentMessage, len(agentCtx.RecentMessages))
-		copy(recentCopy, agentCtx.RecentMessages)
 		currentCtx := &agentctx.AgentContext{
 			SystemPrompt:   agentCtx.SystemPrompt,
-			RecentMessages: append(recentCopy, prompts...),
+			RecentMessages: append(agentCtx.RecentMessages, prompts...),
 			Tools:          agentCtx.Tools,
 			AgentState:     agentCtx.AgentState,
 		}
