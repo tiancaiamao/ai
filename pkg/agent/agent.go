@@ -314,6 +314,19 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 			// Auto-compaction is owned by runInnerLoop pre-LLM checks.
 			// Keeping a second trigger here causes duplicate context management runs.
 		}
+		if event.Value.Type == EventCompactionEnd {
+			// Sync compaction result to the outer context immediately.
+			// Without this, a.context.RecentMessages keeps growing via
+			// AddMessage above while the loop's currentCtx gets compacted.
+			// If EventAgentEnd is never consumed (e.g. Steer cancels ctx),
+			// the next prompt starts with the stale un-compacted messages,
+			// triggering a spurious compaction.
+			if len(event.Value.Messages) > 0 {
+				a.ctxMu.Lock()
+				a.context.RecentMessages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
+				a.ctxMu.Unlock()
+			}
+		}
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
 			// (e.g. auto-compaction editing older messages).
