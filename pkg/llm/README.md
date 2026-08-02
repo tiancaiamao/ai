@@ -12,14 +12,33 @@ Provides a unified interface for streaming LLM completions. Routes to Anthropic 
 
 ```go
 type Model struct {
-    ID            string `json:"id"`                       // e.g., "gpt-4o", "claude-sonnet-4-20250514"
-    Provider      string `json:"provider"`                 // e.g., "zai", "openai"
-    BaseURL       string `json:"baseUrl"`                  // API base URL
-    API           string `json:"api"`                      // "openai-completions" or "anthropic-messages"
-    ContextWindow int    `json:"contextWindow"`            // Token limit (0 = unknown)
-    MaxTokens     int    `json:"maxTokens,omitempty"`
-    Reasoning     bool   `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    ID            string       `json:"id"`                       // e.g., "gpt-4o", "claude-sonnet-4-20250514"
+    Provider      string       `json:"provider"`                 // e.g., "zai", "openai"
+    BaseURL       string       `json:"baseUrl"`                  // API base URL
+    API           string       `json:"api"`                      // "openai-completions" or "anthropic-messages"
+    ContextWindow int          `json:"contextWindow"`            // Token limit (0 = unknown)
+    MaxTokens     int          `json:"maxTokens,omitempty"`
+    Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    Capabilities  ModelCapability `json:"capabilities,omitempty"` // Supported capabilities (text, vision, function_calling)
 }
+```
+
+### ModelCapability
+
+Capability bitmask (see `pkg/model/capability.go`):
+
+```go
+type Capability int
+
+const (
+    CapabilityText            Capability = 1 << iota // 0x01 - baseline, always set
+    CapabilityVision                                  // 0x02 - supports image_url content
+    CapabilityFunctionCalling                         // 0x04 - supports function calling
+)
+
+func (c Capability) Has(other Capability) bool
+func (c Capability) SupportsVision() bool
+func (c Capability) SupportsFunctionCalling() bool
 ```
 
 ### LLMContext
@@ -155,6 +174,24 @@ Accumulates streaming deltas into a complete `LLMMessage`. Handles:
 - Thinking content accumulation
 - Tool call merging by index (arguments are appended incrementally)
 
+## Capability Filtering
+
+`filter.go` provides functions to filter messages based on model capabilities:
+
+```go
+func FilterMessagesForCapability(messages []LLMMessage, capabilities ModelCapability) []LLMMessage
+func DetectUnsupportedContent(messages []LLMMessage, capabilities ModelCapability) string
+```
+
+`FilterMessagesForCapability` removes unsupported content types from messages before sending to the LLM:
+- For text-only models: removes all `image_url` content parts
+- For models without function calling: removes tool call related content (if added in the future)
+- Preserves supported content and messages that still have content after filtering
+
+`DetectUnsupportedContent` returns a descriptive string about what content would be filtered (e.g., "2 images would be filtered").
+
+This filtering is applied in `pkg/agent/llm_stream.go` before calling `StreamLLM`.
+
 ## Error Handling
 
 Typed errors in `errors.go`:
@@ -194,7 +231,10 @@ func RetryAfter(err error) time.Duration
 | `errors.go` | `APIError`, `ContextLengthExceededError`, `RateLimitError`, error classification |
 | `eventstream.go` | `EventStream` — generic push-based async event stream |
 | `thinking.go` | `buildThinkingParams` — reasoning/thinking parameter injection |
+| `filter.go` | `FilterMessagesForCapability()` — message content filtering based on model capabilities |
+| `capabilities.go` | Re-exports `Capability` type and constants for backward compatibility |
 
 ## Dependencies
 
 - `pkg/traceevent` — LLM call tracing
+- `pkg/model` — `Capability` type definition

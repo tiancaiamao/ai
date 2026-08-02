@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -35,8 +36,18 @@ func streamAssistantResponse(
 	selectedMessages, _ := selectMessagesForLLM(agentCtx)
 	llmMessages = agentctx.ConvertMessagesToLLM(selectedMessages)
 
-	// Resolve model early — needed for thinking API detection and cache mode.
+	// Resolve model early — needed for thinking API detection, cache mode, and capability filtering.
 	model := getEffectiveModel(config)
+
+	// Filter messages based on model capabilities to avoid API errors.
+	// For example, if model doesn't support vision, remove image_url content parts.
+	if unsupported := llm.DetectUnsupportedContent(llmMessages, model.Capabilities); unsupported != "" {
+		slog.Warn("[Loop] Filtering unsupported content for model",
+			"model", model.ID,
+			"unsupported", unsupported,
+		)
+		llmMessages = llm.FilterMessagesForCapability(llmMessages, model.Capabilities)
+	}
 
 	systemPrompt := agentCtx.SystemPrompt
 	// For models that support thinking via API params, skip the text instruction;

@@ -6,7 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tiancaiamao/ai/pkg/model"
 	"github.com/tiancaiamao/ai/pkg/modelselect"
+)
+
+// ModelCapability is an alias for model.Capability.
+type ModelCapability = model.Capability
+
+// Capability constants re-exported for convenience.
+const (
+	CapabilityText            = model.CapabilityText
+	CapabilityVision          = model.CapabilityVision
+	CapabilityFunctionCalling = model.CapabilityFunctionCalling
 )
 
 // ModelSpec represents a resolved model entry from models.json.
@@ -20,6 +31,7 @@ type ModelSpec struct {
 	Input         []string
 	ContextWindow int
 	MaxTokens     int
+	Capabilities  ModelCapability // capabilities (vision, function calling, etc.)
 }
 
 type modelsFile struct {
@@ -41,6 +53,7 @@ type modelConfig struct {
 	Input         []string `json:"input,omitempty"`
 	ContextWindow int      `json:"contextWindow,omitempty"`
 	MaxTokens     int      `json:"maxTokens,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty"` // ["vision", "function_calling"]
 }
 
 // GetDefaultModelsPath returns the default models file path.
@@ -99,6 +112,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				Input:         model.Input,
 				ContextWindow: model.ContextWindow,
 				MaxTokens:     model.MaxTokens,
+				Capabilities:  parseCapabilities(model.Capabilities, model.Input),
 			})
 		}
 	}
@@ -121,4 +135,33 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseCapabilities converts capability strings and input types to ModelCapability bitmask.
+func parseCapabilities(caps []string, inputs []string) ModelCapability {
+	var result ModelCapability
+	// Always include text capability (baseline)
+	result |= CapabilityText
+
+	// Parse explicit capabilities
+	for _, cap := range caps {
+		switch strings.ToLower(strings.TrimSpace(cap)) {
+		case "vision":
+			result |= CapabilityVision
+		case "function_calling", "function-calling":
+			result |= CapabilityFunctionCalling
+		}
+	}
+
+	// Infer capabilities from input types
+	for _, input := range inputs {
+		switch strings.ToLower(strings.TrimSpace(input)) {
+		case "vision", "image":
+			result |= CapabilityVision
+		case "function_calling", "function-calling":
+			result |= CapabilityFunctionCalling
+		}
+	}
+
+	return result
 }
