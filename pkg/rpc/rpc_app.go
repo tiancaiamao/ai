@@ -122,8 +122,10 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 }
 
 // initEventEmitter starts the goroutine that reads agent events and forwards
-
-func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
+// them to emit. It owns session state tracking and persistence; emit is
+// responsible for protocol-specific forwarding (NDJSON events for RunRPC,
+// ACP session/update notifications for RunACP).
+func (app *rpcApp) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, chan struct{}) {
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
 
@@ -187,7 +189,7 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 		// needed by stdout consumers (TUI, watch) — they only display tool status.
 		// Session persistence (above) already wrote the full data.
 		stripImageDataFromEvent(&event)
-		app.server.EmitEvent(event)
+		emit(event)
 
 		if event.Type == "agent_end" {
 			go func() {

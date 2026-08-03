@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tiancaiamao/ai/subcommand/acp"
 	"github.com/tiancaiamao/ai/subcommand/kill"
 	"github.com/tiancaiamao/ai/subcommand/ls"
 	"github.com/tiancaiamao/ai/subcommand/models"
@@ -30,6 +31,8 @@ func main() {
 		models.ModelsSubcommand()
 	case "rpc":
 		rpcsubcommand.RPCSubcommand()
+	case "acp":
+		acp.ACPSubcommand()
 	case "run":
 		run.RunSubcommand(binPath)
 	case "serve":

@@ -25,6 +25,7 @@ ai <subcommand> [flags]
 | `run` | Start agent with interactive TUI (serves + watches in one process) |
 | `serve` | Start agent as a background daemon (foreground process, redirect I/O to files) |
 | `rpc` | Raw JSON-RPC mode over stdin/stdout (for programmatic integration) |
+| `acp` | ACP (Agent Client Protocol) agent over stdio (agent-shell, Zed, etc.) |
 | `ls` | List running and recent agent instances |
 | `watch` | Attach to a running serve instance (TUI) |
 | `send` | Send a message to a running agent instance |
@@ -223,6 +224,25 @@ Sessions are stored as append-only JSONL files under `~/.ai/sessions/--<sanitize
 - Directory-based with `messages.jsonl` as the primary file
 - Header entry contains session ID, CWD, git version metadata
 - Fork support: branch conversations from any point
+- Checkpoint + journal: efficient recovery with periodic snapshots
+- Compaction snapshots: post-compaction state saved to `compactions/` files
+- Legacy format auto-migration on load
+
+See [docs/session-format.md](docs/session-format.md) for format details.
+
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for detailed component diagrams and data flow.
+
+## Documentation
+
+- [docs/README.md](docs/README.md) — Documentation index and live docs
+- [CHANGELOG.md](CHANGELOG.md) — Functional changes per commit
+- [CLAUDE.md](CLAUDE.md) — Agent guidance for this repository
+
+## License
+
+Consistent with the original project (see [pi-mono](https://github.com/badlogic/pi-mono)).rt: branch conversations from any point
 - Checkpoint + journal: efficient recovery with periodic snapshots
 - Compaction snapshots: post-compaction state saved to `compactions/` files
 - Legacy format auto-migration on load

@@ -55,7 +55,8 @@ Subcommands:
   run             Start agent with interactive TUI (serve + watch)
   serve           Start agent as background daemon
   rpc             Start in raw RPC mode (stdin/stdout JSON-RPC)
-    ls              List running and recent runs
+  acp             Start as ACP agent over stdio (agent-shell, Zed, etc.)
+  ls              List running and recent runs
   models          List available models (use "provider/id" syntax for --model)
   watch           Attach to a running serve instance (TUI)
   send            Send a message to a running serve instance
