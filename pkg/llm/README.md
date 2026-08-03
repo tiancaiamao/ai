@@ -18,28 +18,12 @@ type Model struct {
     API           string       `json:"api"`                      // "openai-completions" or "anthropic-messages"
     ContextWindow int          `json:"contextWindow"`            // Token limit (0 = unknown)
     MaxTokens     int          `json:"maxTokens,omitempty"`
-    Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
-    Capabilities  ModelCapability `json:"capabilities,omitempty"` // Supported capabilities (text, vision, function_calling)
+        Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
 }
 ```
 
-### ModelCapability
-
-Capability bitmask (see `pkg/model/capability.go`):
-
-```go
-type Capability int
-
-const (
-    CapabilityText            Capability = 1 << iota // 0x01 - baseline, always set
-    CapabilityVision                                  // 0x02 - supports image_url content
-    CapabilityFunctionCalling                         // 0x04 - supports function calling
-)
-
-func (c Capability) Has(other Capability) bool
-func (c Capability) SupportsVision() bool
-func (c Capability) SupportsFunctionCalling() bool
-```
+`SupportsVision` is a runtime-derived field, not part of the JSON model config. It comes from `ModelSpec.SupportsVision`, which is `true` when the model's `input` types in `models.json` include `"image"` or `"vision"` (mirroring the "vision" check on `Model.input`).
 
 ### LLMContext
 
@@ -176,19 +160,20 @@ Accumulates streaming deltas into a complete `LLMMessage`. Handles:
 
 ## Capability Filtering
 
-`filter.go` provides functions to filter messages based on model capabilities:
+`filter.go` filters message content the active model doesn't support. The only
+case today is stripping `image_url` parts when the model doesn't support vision
+(e.g. resuming a vision session with a text-only model):
 
 ```go
-func FilterMessagesForCapability(messages []LLMMessage, capabilities ModelCapability) []LLMMessage
-func DetectUnsupportedContent(messages []LLMMessage, capabilities ModelCapability) string
+func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLMMessage, int)
 ```
 
-`FilterMessagesForCapability` removes unsupported content types from messages before sending to the LLM:
-- For text-only models: removes all `image_url` content parts
-- For models without function calling: removes tool call related content (if added in the future)
-- Preserves supported content and messages that still have content after filtering
-
-`DetectUnsupportedContent` returns a descriptive string about what content would be filtered (e.g., "2 images would be filtered").
+`FilterUnsupportedContent` returns the filtered messages and the number of
+removed content parts:
+- Text-only models: all `image_url` content parts are removed
+- Unknown content part types are preserved (forward compatible)
+- A message is dropped only when no text and no content parts remain
+- If `supportsVision` is true, messages are returned unchanged
 
 This filtering is applied in `pkg/agent/llm_stream.go` before calling `StreamLLM`.
 
@@ -231,10 +216,8 @@ func RetryAfter(err error) time.Duration
 | `errors.go` | `APIError`, `ContextLengthExceededError`, `RateLimitError`, error classification |
 | `eventstream.go` | `EventStream` — generic push-based async event stream |
 | `thinking.go` | `buildThinkingParams` — reasoning/thinking parameter injection |
-| `filter.go` | `FilterMessagesForCapability()` — message content filtering based on model capabilities |
-| `capabilities.go` | Re-exports `Capability` type and constants for backward compatibility |
+| `filter.go` | `FilterUnsupportedContent()` — strips unsupported content (image_url for text-only models) |
 
 ## Dependencies
 
 - `pkg/traceevent` — LLM call tracing
-- `pkg/model` — `Capability` type definition

@@ -41,12 +41,12 @@ func streamAssistantResponse(
 
 	// Filter messages based on model capabilities to avoid API errors.
 	// For example, if model doesn't support vision, remove image_url content parts.
-	if unsupported := llm.DetectUnsupportedContent(llmMessages, model.Capabilities); unsupported != "" {
+	if filtered, removed := llm.FilterUnsupportedContent(llmMessages, model.SupportsVision); removed > 0 {
 		slog.Warn("[Loop] Filtering unsupported content for model",
 			"model", model.ID,
-			"unsupported", unsupported,
+			"removed", removed,
 		)
-		llmMessages = llm.FilterMessagesForCapability(llmMessages, model.Capabilities)
+		llmMessages = filtered
 	}
 
 	systemPrompt := agentCtx.SystemPrompt

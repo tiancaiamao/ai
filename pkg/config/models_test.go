@@ -137,76 +137,29 @@ func TestLoadModelSpecsDeterministicSort(t *testing.T) {
 	}
 }
 
-func TestParseCapabilities(t *testing.T) {
+func TestSupportsVision(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       []string
-		caps        []string
-		expected    ModelCapability
-		description string
+		name  string
+		input []string
+		want  bool
 	}{
-		{
-			name:        "text only from input",
-			input:       []string{"text"},
-			caps:        nil,
-			expected:    CapabilityText,
-			description: "text only model should have text capability",
-		},
-		{
-			name:        "vision from input",
-			input:       []string{"text", "image"},
-			caps:        nil,
-			expected:    CapabilityText | CapabilityVision,
-			description: "model with image input should have text and vision",
-		},
-		{
-			name:        "vision from input with vision keyword",
-			input:       []string{"text", "vision"},
-			caps:        nil,
-			expected:    CapabilityText | CapabilityVision,
-			description: "model with vision input should have text and vision",
-		},
-		{
-			name:        "explicit capabilities",
-			input:       []string{"text"},
-			caps:        []string{"vision"},
-			expected:    CapabilityText | CapabilityVision,
-			description: "explicit capabilities should be added",
-		},
-		{
-			name:        "function calling from input",
-			input:       []string{"text", "function_calling"},
-			caps:        nil,
-			expected:    CapabilityText | CapabilityFunctionCalling,
-			description: "model with function_calling input should have function calling",
-		},
-		{
-			name:        "combined all",
-			input:       []string{"text", "image", "function_calling"},
-			caps:        nil,
-			expected:    CapabilityText | CapabilityVision | CapabilityFunctionCalling,
-			description: "all capabilities from input",
-		},
-		{
-			name:        "empty defaults to text",
-			input:       nil,
-			caps:        nil,
-			expected:    CapabilityText,
-			description: "empty input should default to text",
-		},
+		{name: "text only", input: []string{"text"}, want: false},
+		{name: "image input", input: []string{"text", "image"}, want: true},
+		{name: "vision keyword", input: []string{"text", "vision"}, want: true},
+		{name: "empty defaults to text", input: nil, want: false},
+		{name: "case insensitive", input: []string{"TEXT", "Image"}, want: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseCapabilities(tt.caps, tt.input)
-			if result != tt.expected {
-				t.Errorf("%s: parseCapabilities(%v, %v) = %v, want %v", tt.description, tt.caps, tt.input, result, tt.expected)
+			if got := supportsVision(tt.input); got != tt.want {
+				t.Errorf("supportsVision(%v) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestLoadModelSpecsWithCapabilities(t *testing.T) {
+func TestLoadModelSpecsSupportsVision(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
 	data := `{
@@ -214,8 +167,7 @@ func TestLoadModelSpecsWithCapabilities(t *testing.T) {
     "test": {
       "models": [
         { "id": "text-only", "name": "Text Only", "input": ["text"] },
-        { "id": "vision-model", "name": "Vision Model", "input": ["text", "image"] },
-        { "id": "explicit-vision", "name": "Explicit Vision", "input": ["text"], "capabilities": ["vision"] }
+        { "id": "vision-model", "name": "Vision Model", "input": ["text", "image"] }
       ]
     }
   }
@@ -229,40 +181,20 @@ func TestLoadModelSpecsWithCapabilities(t *testing.T) {
 		t.Fatalf("LoadModelSpecs error: %v", err)
 	}
 
-	// Find and check text-only model
-	var textOnly *ModelSpec
-	var visionModel *ModelSpec
-	var explicitVision *ModelSpec
-
-	for i := range specs {
-		switch specs[i].ID {
-		case "text-only":
-			textOnly = &specs[i]
-		case "vision-model":
-			visionModel = &specs[i]
-		case "explicit-vision":
-			explicitVision = &specs[i]
-		}
+	byID := make(map[string]ModelSpec)
+	for _, spec := range specs {
+		byID[spec.ID] = spec
 	}
 
-	if textOnly == nil {
+	if spec, ok := byID["text-only"]; !ok {
 		t.Fatal("text-only model not found")
-	}
-	if textOnly.Capabilities != CapabilityText {
-		t.Errorf("text-only model capabilities = %v, want %v", textOnly.Capabilities, CapabilityText)
+	} else if spec.SupportsVision {
+		t.Errorf("text-only model SupportsVision = true, want false")
 	}
 
-	if visionModel == nil {
+	if spec, ok := byID["vision-model"]; !ok {
 		t.Fatal("vision-model not found")
-	}
-	if visionModel.Capabilities != (CapabilityText | CapabilityVision) {
-		t.Errorf("vision-model capabilities = %v, want %v", visionModel.Capabilities, CapabilityText|CapabilityVision)
-	}
-
-	if explicitVision == nil {
-		t.Fatal("explicit-vision not found")
-	}
-	if explicitVision.Capabilities != (CapabilityText | CapabilityVision) {
-		t.Errorf("explicit-vision capabilities = %v, want %v", explicitVision.Capabilities, CapabilityText|CapabilityVision)
+	} else if !spec.SupportsVision {
+		t.Errorf("vision-model SupportsVision = false, want true")
 	}
 }
