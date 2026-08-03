@@ -12,15 +12,18 @@ Provides a unified interface for streaming LLM completions. Routes to Anthropic 
 
 ```go
 type Model struct {
-    ID            string `json:"id"`                       // e.g., "gpt-4o", "claude-sonnet-4-20250514"
-    Provider      string `json:"provider"`                 // e.g., "zai", "openai"
-    BaseURL       string `json:"baseUrl"`                  // API base URL
-    API           string `json:"api"`                      // "openai-completions" or "anthropic-messages"
-    ContextWindow int    `json:"contextWindow"`            // Token limit (0 = unknown)
-    MaxTokens     int    `json:"maxTokens,omitempty"`
-    Reasoning     bool   `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    ID            string       `json:"id"`                       // e.g., "gpt-4o", "claude-sonnet-4-20250514"
+    Provider      string       `json:"provider"`                 // e.g., "zai", "openai"
+    BaseURL       string       `json:"baseUrl"`                  // API base URL
+    API           string       `json:"api"`                      // "openai-completions" or "anthropic-messages"
+    ContextWindow int          `json:"contextWindow"`            // Token limit (0 = unknown)
+    MaxTokens     int          `json:"maxTokens,omitempty"`
+        Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
 }
 ```
+
+`SupportsVision` is a runtime-derived field, not part of the JSON model config. It comes from `ModelSpec.SupportsVision`, which is `true` when the model's `input` types in `models.json` include `"image"` or `"vision"` (mirroring the "vision" check on `Model.input`).
 
 ### LLMContext
 
@@ -155,6 +158,25 @@ Accumulates streaming deltas into a complete `LLMMessage`. Handles:
 - Thinking content accumulation
 - Tool call merging by index (arguments are appended incrementally)
 
+## Capability Filtering
+
+`filter.go` filters message content the active model doesn't support. The only
+case today is stripping `image_url` parts when the model doesn't support vision
+(e.g. resuming a vision session with a text-only model):
+
+```go
+func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLMMessage, int)
+```
+
+`FilterUnsupportedContent` returns the filtered messages and the number of
+removed content parts:
+- Text-only models: all `image_url` content parts are removed
+- Unknown content part types are preserved (forward compatible)
+- A message is dropped only when no text and no content parts remain
+- If `supportsVision` is true, messages are returned unchanged
+
+This filtering is applied in `pkg/agent/llm_stream.go` before calling `StreamLLM`.
+
 ## Error Handling
 
 Typed errors in `errors.go`:
@@ -194,6 +216,7 @@ func RetryAfter(err error) time.Duration
 | `errors.go` | `APIError`, `ContextLengthExceededError`, `RateLimitError`, error classification |
 | `eventstream.go` | `EventStream` — generic push-based async event stream |
 | `thinking.go` | `buildThinkingParams` — reasoning/thinking parameter injection |
+| `filter.go` | `FilterUnsupportedContent()` — strips unsupported content (image_url for text-only models) |
 
 ## Dependencies
 

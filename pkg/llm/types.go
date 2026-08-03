@@ -8,13 +8,14 @@ import (
 
 // Model represents an LLM model configuration.
 type Model struct {
-	ID            string `json:"id"`            // e.g., "gpt-4", "gpt-3.5-turbo"
-	Provider      string `json:"provider"`      // e.g., "zai", "openai"
-	BaseURL       string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
-	API           string `json:"api"`           // e.g., "openai-completions"
-	ContextWindow int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
-	MaxTokens     int    `json:"maxTokens,omitempty"`
-	Reasoning     bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
+	ID             string `json:"id"`            // e.g., "gpt-4", "gpt-3.5-turbo"
+	Provider       string `json:"provider"`      // e.g., "zai", "openai"
+	BaseURL        string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
+	API            string `json:"api"`           // e.g., "openai-completions"
+	ContextWindow  int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
+	MaxTokens      int    `json:"maxTokens,omitempty"`
+	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
+	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
 }
 
 // LLMContext represents the context for an LLM request.

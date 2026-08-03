@@ -122,7 +122,7 @@ type Compactor struct {
 	config        *Config
 	model         llm.Model
 	apiKey        string
-	systemPrompt  string
+	systemPrompt  string // Used ONLY for token estimation in CalculateDynamicThreshold. Actual LLM calls reuse the agent's system prompt.
 	contextWindow int
 	askPrompt     string // LLM-decide ask template (loaded lazily)
 	// agentContextPrefix is the skills + AGENTS.md prefix, stored at
@@ -471,10 +471,17 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 	// Append post-compaction hint so the LLM knows to reload skills and
 	// re-read design docs that were lost during compaction.
 	hint := `<agent:hint>
-Context was just compacted. The compaction summary preserves key information:
-1. "Skills Loaded" lists skills whose full content is now LOST. Reload via find_skill(name="<skill>", load=true) if you need the full details.
-2. "Behavioral Constraints" captures process rules from loaded skills — follow these even though the skill content is gone.
-3. Similarly, re-read any design docs or important files you were working with. Don't proceed on stale memory.
+Context was compacted. The summary above preserves key information, but some details may be lost. You MUST do the following BEFORE responding to the user:
+
+1. **Check "Skills Loaded"** in the compaction summary. Any skills listed there have lost their full content. Reload them via ` + "`" + `find_skill(name="<name>", load=true)` + "`" + ` if you need the full details.
+
+2. **Check "Behavioral Constraints"** — these are process rules from loaded skills. Follow them even though the skill content is gone.
+
+3. **Read the archived conversation** if anything seems unclear: The full pre-compaction conversation is stored at the path mentioned in the <critical> section of the summary. Use the read or grep tool to load it.
+
+4. **Re-read any design docs or planning files** you were working with. Do NOT proceed based on stale memory.
+
+Do NOT skip these steps. If you skip them and produce incorrect work, the user will be frustrated.
 </agent:hint>`
 	ctx.RecentMessages = append(ctx.RecentMessages,
 		agentctx.NewUserMessage(hint).
@@ -690,8 +697,13 @@ func buildCacheFriendlyLLMContext(
 	tools []agentctx.Tool,
 	trailingInstruction string,
 	thinkingLevel string,
+	supportsVision bool,
 ) llm.LLMContext {
 	llmMessages := agentctx.ConvertMessagesToLLM(messages)
+	// Same capability filtering as the agent loop: a session created with a
+	// vision-capable model can be resumed with a text-only model, in which
+	// case image_url parts must be stripped or the LLM call will error.
+	llmMessages, _ = llm.FilterUnsupportedContent(llmMessages, supportsVision)
 
 	if strings.TrimSpace(contextPrefix) != "" {
 		llmMessages = append([]llm.LLMMessage{{
@@ -766,6 +778,7 @@ func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext,
 		agentCtx.Tools,
 		askContent,
 		c.thinkingLevel,
+		c.model.SupportsVision,
 	)
 
 	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)

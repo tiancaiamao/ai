@@ -116,6 +116,9 @@ func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
 	if spec.Reasoning {
 		model.Reasoning = true
 	}
+	if spec.SupportsVision {
+		model.SupportsVision = true
+	}
 	return model
 }
 

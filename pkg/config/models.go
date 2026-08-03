@@ -11,15 +11,16 @@ import (
 
 // ModelSpec represents a resolved model entry from models.json.
 type ModelSpec struct {
-	ID            string
-	Name          string
-	Provider      string
-	BaseURL       string
-	API           string
-	Reasoning     bool
-	Input         []string
-	ContextWindow int
-	MaxTokens     int
+	ID             string
+	Name           string
+	Provider       string
+	BaseURL        string
+	API            string
+	Reasoning      bool
+	Input          []string
+	ContextWindow  int
+	MaxTokens      int
+	SupportsVision bool // true when Input includes image/vision
 }
 
 type modelsFile struct {
@@ -90,15 +91,16 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				continue
 			}
 			specs = append(specs, ModelSpec{
-				ID:            id,
-				Name:          strings.TrimSpace(model.Name),
-				Provider:      provider,
-				BaseURL:       firstNonEmpty(model.BaseURL, baseURL),
-				API:           firstNonEmpty(model.API, api),
-				Reasoning:     model.Reasoning,
-				Input:         model.Input,
-				ContextWindow: model.ContextWindow,
-				MaxTokens:     model.MaxTokens,
+				ID:             id,
+				Name:           strings.TrimSpace(model.Name),
+				Provider:       provider,
+				BaseURL:        firstNonEmpty(model.BaseURL, baseURL),
+				API:            firstNonEmpty(model.API, api),
+				Reasoning:      model.Reasoning,
+				Input:          model.Input,
+				ContextWindow:  model.ContextWindow,
+				MaxTokens:      model.MaxTokens,
+				SupportsVision: supportsVision(model.Input),
 			})
 		}
 	}
@@ -121,4 +123,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// supportsVision reports whether the model's input types include images.
+func supportsVision(inputs []string) bool {
+	for _, input := range inputs {
+		switch strings.ToLower(strings.TrimSpace(input)) {
+		case "vision", "image":
+			return true
+		}
+	}
+	return false
 }

@@ -23,7 +23,7 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	}
 }
 
-func TestPromptABMetricsSmoke(t *testing.T) {
+func TestABPromptMetricsSmoke(t *testing.T) {
 	legacyRPCBasePrompt := strings.TrimSpace(`You are a helpful AI coding assistant.
 - If you cannot answer the request, return an empty JSON with error field.
 - Do not hallucinate or add unnecessary commentary.

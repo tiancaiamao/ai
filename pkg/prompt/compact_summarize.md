@@ -59,4 +59,6 @@ Summarize current conversation for context preservation. Output ONLY the structu
 - DISCARD: pleasantries, redundant explanations, abandoned approaches
 </critical>
 
+Do not use any tools. Respond with text only, not tool calls.
+
 </agent:compact>

@@ -3,6 +3,21 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Model Capabilities: Bitmask → Single Vision Flag (2026-08)
+
+**Problem**: The capability system introduced for vision filtering was over-engineered for a single boolean question. It added a `Capability` bitmask (`pkg/model`), a `capabilities` field + parser in `models.json`, an `llm.Capability` re-export layer, and a two-function filter API — roughly 870 lines — to answer "does this model support images?". Worse, the value had to propagate through three construction sites (`GetLLMModel`, `ApplyModelLimitsFromSpec`, the RPC model-switch handler); one of them was missed, so `llm.Model.Capabilities` was always 0 and **every model's images were stripped**, silently breaking vision.
+
+**What changed**: Removed the bitmask machinery and followed the pattern used by the pi project (`Model.input.includes("image")`):
+
+- `pkg/model` package deleted (`capability.go`, `capability_test.go`, `README.md`).
+- `llm.Model.Capabilities Capability` → `llm.Model.SupportsVision bool` (runtime-derived, `json:"-"`).
+- `ModelSpec.Capabilities` → `ModelSpec.SupportsVision`, derived from the existing `input` field (`"image"`/`"vision"`) in `LoadModelSpecs`. The `capabilities` JSON field is removed (it was new in this PR, no compatibility burden).
+- `DetectUnsupportedContent` + `FilterMessagesForCapability` merged into one function `FilterUnsupportedContent(messages, supportsVision) ([]LLMMessage, int)`.
+- Fixed the propagation bug: `ApplyModelLimitsFromSpec` and the RPC model-switch handler now copy `SupportsVision` from the spec.
+- Applied the filter to the compactor's LLM calls (`buildCacheFriendlyLLMContext`, used by `askLLM` and `GenerateSummary`) as well — the agent loop's filtering is local-only, so compaction would otherwise send the same `image_url` parts to a text-only model.
+
+**Why**: A boolean capability needs boolean plumbing. Keeping the value on `ModelSpec` (single derivation point) and copying it at the two construction sites that have a spec eliminates the "forgot to propagate" failure class. Unknown models default to text-only (matching pi's custom-model default), which keeps the resume-with-text-model scenario safe.
+
 ## Removed Compaction Ack Requirement (2026-07)
 
 **Problem**: The `<agent:hint>` injected after compaction required the LLM to acknowledge with a `<compaction_ack>` tag before making tool calls. Analysis of real sessions showed this was ineffective — the LLM acknowledged in text while simultaneously calling tools, never actually pausing to reload skills or re-read docs.
