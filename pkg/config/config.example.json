@@ -18,7 +18,7 @@
   },
   "concurrency": {
     "maxConcurrentTools": 5,
-    "toolTimeout": 30,
+    "toolTimeout": 0,
     "queueTimeout": 60
   },
   "toolOutput": {
