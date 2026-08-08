@@ -15,6 +15,7 @@ Not a git log mirror — focus on what changed at the design level and why.
 
 **Why**: The old code conflated "main process exited" with "pipe closed". Backgrounding is a legitimate bash pattern (`server &`), so the fix must not kill the background process — it must stop *waiting* for it. The idle-grace approach keeps full output for normal commands, bounds the wait for backgrounding commands, and leaves the timeout path reachable (the deadline check now executes because the drain can no longer block forever).
 
+
 ## Model Capabilities: Bitmask → Single Vision Flag (2026-08)
 
 **Problem**: The capability system introduced for vision filtering was over-engineered for a single boolean question. It added a `Capability` bitmask (`pkg/model`), a `capabilities` field + parser in `models.json`, an `llm.Capability` re-export layer, and a two-function filter API — roughly 870 lines — to answer "does this model support images?". Worse, the value had to propagate through three construction sites (`GetLLMModel`, `ApplyModelLimitsFromSpec`, the RPC model-switch handler); one of them was missed, so `llm.Model.Capabilities` was always 0 and **every model's images were stripped**, silently breaking vision.
