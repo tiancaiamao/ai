@@ -252,9 +252,10 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 
 	// Override with config file values if present
 	if c.Concurrency != nil {
-		loopCfg.Executor = agent.NewToolExecutor(
+		loopCfg.Executor = agent.NewToolExecutorWithTimeout(
 			c.Concurrency.MaxConcurrentTools,
 			c.Concurrency.QueueTimeout,
+			c.Concurrency.ToolTimeout,
 		)
 	}
 
