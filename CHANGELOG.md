@@ -3,6 +3,19 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Bash Tool Hang Fix: Idle-Grace Pipe Drain + Wired-Up ToolTimeout (2026-08)
+
+**Problem**: The bash tool could hang indefinitely on commands that background a process. `cmd.Wait()` returns as soon as the main shell exits, but a descendant (e.g. a subshell waiting on a daemon started with `cmd &`) keeps the stdout/stderr pipe write ends open, so EOF never arrives. The tool then blocked forever on `outputWG.Wait()`, and because the timeout check runs *after* the drain, neither the 120s default nor an LLM-set `timeout` could ever fire. In production this hung a tool call for 20.6 hours. Meanwhile `Concurrency.ToolTimeout` (default 30s) was dead config: it was only logged, never enforced.
+
+**What changed**:
+
+- **Bash drain is now bounded by an idle-grace timer** (250ms), mirroring the pi project's `waitForChildProcess` design. After the main process exits, the drain finalizes once the pipes fall idle: every received chunk re-arms the timer, so actively-writing descendants keep the tool reading, while a quiet holder of the pipe (a daemon the user just started) releases it after the grace period. The daemon itself is left running — it is not part of the command, and we do not kill it.
+- **`Concurrency.ToolTimeout` is now enforced** as an executor-level hard cap via the new `NewToolExecutorWithTimeout`. Its default changed from 30 to **0 (disabled)**: a 30s cap would break bash's 120s default and the LLM's `timeout: 300` override. 0 = tools manage their own timeouts (pi philosophy); admins can set it explicitly as a safety net.
+- Closed-read errors (`os.ErrClosed`) from our own pipe teardown are no longer reported as "stream read error".
+
+**Why**: The old code conflated "main process exited" with "pipe closed". Backgrounding is a legitimate bash pattern (`server &`), so the fix must not kill the background process — it must stop *waiting* for it. The idle-grace approach keeps full output for normal commands, bounds the wait for backgrounding commands, and leaves the timeout path reachable (the deadline check now executes because the drain can no longer block forever).
+
+
 ## Model Capabilities: Bitmask → Single Vision Flag (2026-08)
 
 **Problem**: The capability system introduced for vision filtering was over-engineered for a single boolean question. It added a `Capability` bitmask (`pkg/model`), a `capabilities` field + parser in `models.json`, an `llm.Capability` re-export layer, and a two-function filter API — roughly 870 lines — to answer "does this model support images?". Worse, the value had to propagate through three construction sites (`GetLLMModel`, `ApplyModelLimitsFromSpec`, the RPC model-switch handler); one of them was missed, so `llm.Model.Capabilities` was always 0 and **every model's images were stripped**, silently breaking vision.

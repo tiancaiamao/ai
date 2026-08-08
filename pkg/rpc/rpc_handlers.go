@@ -64,9 +64,10 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-	executor := agent.NewToolExecutor(
+	executor := agent.NewToolExecutorWithTimeout(
 		concurrencyConfig.MaxConcurrentTools,
 		concurrencyConfig.QueueTimeout,
+		concurrencyConfig.ToolTimeout,
 	)
 
 	toolOutputConfig := app.cfg.ToolOutput

@@ -96,7 +96,7 @@ func TestConfigDefaultsMatchCode(t *testing.T) {
 		{"Compactor.ToolCallCutoff", DefaultCompactorConfig().ToolCallCutoff, 10},
 		{"Compactor.AutoCompact", DefaultCompactorConfig().AutoCompact, true},
 		{"Concurrency.MaxConcurrentTools", DefaultConcurrencyConfig().MaxConcurrentTools, 5},
-		{"Concurrency.ToolTimeout", DefaultConcurrencyConfig().ToolTimeout, 30},
+		{"Concurrency.ToolTimeout", DefaultConcurrencyConfig().ToolTimeout, 0},
 		{"Concurrency.QueueTimeout", DefaultConcurrencyConfig().QueueTimeout, 60},
 		{"ToolOutput.MaxChars", DefaultToolOutputConfig().MaxChars, 10000},
 		{"Log.Level", DefaultLogConfig().Level, "info"},
