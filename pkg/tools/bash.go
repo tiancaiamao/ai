@@ -160,9 +160,10 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
 	}
 
-	// Transform sudo commands if SUDO_PASSWORD is available.
-	// This must happen after all safety guards (which check the original
-	// command) and before the exec.CommandContext creation below.
+	// Transform sudo commands: rewrite to sudo -S -p '' with the password
+	// piped when SUDO_PASSWORD is set, or to sudo -n (non-interactive,
+	// never blocks) otherwise. Must happen after all safety guards (which
+	// check the original command) and before exec.CommandContext below.
 	sudoResult := transformSudoCommand(command)
 	execCommand := sudoResult.command
 

@@ -8,22 +8,23 @@ import (
 // ---------------------------------------------------------------------------
 // sudo password support for the bash tool.
 //
-// Inspired by the approach in hermes-agent/tools/terminal_tool.py:
+// Inspired by the approach in hermes-agent/tools/terminal_tool.py.
 //
-//   • Rewrites bare `sudo cmd` → `sudo -S -p '' cmd` so sudo reads the
-//     password from stdin instead of /dev/tty.
-//   • When SUDO_PASSWORD is set, the rewritten command gets the password
-//     piped to its stdin.
-//   • Without SUDO_PASSWORD, the command runs unchanged: sudo may still
-//     succeed via an existing sudoers NOPASSWD rule or a still-valid
+// Bare `sudo` invocations are rewritten so they can never hang waiting
+// for a password on a non-tty stdin. Two modes, chosen by SUDO_PASSWORD:
+//
+//   • SUDO_PASSWORD set → rewrite `sudo cmd` → `sudo -S -p '' cmd` and
+//     pipe the password to stdin. Every sudo invocation goes through.
+//   • SUDO_PASSWORD unset → rewrite `sudo cmd` → `sudo -n cmd`. sudo
+//     still succeeds via a NOPASSWD sudoers rule or a still-valid
 //     timestamp cache (e.g. the user recently typed the password in a
-//     terminal). If none apply, sudo fails gracefully with a "password
-//     required" error and the bash tool appends a helpful hint.
+//     terminal); otherwise it fails immediately instead of blocking.
+//     Lower bound: never hang.
 // ---------------------------------------------------------------------------
 
 // sudoResult holds the result of transforming a sudo command.
 type sudoResult struct {
-	// command is the transformed command string (uses sudo -S -p '').
+	// command is the transformed command string.
 	command string
 
 	// passwordLines is the password + "\n" to write to stdin, repeated for
@@ -31,41 +32,54 @@ type sudoResult struct {
 	passwordLines string
 }
 
+// sudo rewrite modes used with rewriteSudoInvocations.
+const (
+	// sudoStdinRewrite reads the password from stdin (needs SUDO_PASSWORD).
+	sudoStdinRewrite = "sudo -S -p ''"
+	// sudoNonInteractiveRewrite never prompts; fails fast when a password
+	// would be required (works via NOPASSWD rule or valid timestamp cache).
+	sudoNonInteractiveRewrite = "sudo -n"
+)
+
 // transformSudoCommand inspects a bash command for bare `sudo` invocations
-// and returns a transformed version that uses sudo -S (stdin password read).
+// and returns a transformed version that can never block on a password
+// prompt.
 //
 // Decision tree:
 //
 //  1. No sudo invocations → return command unchanged, no password.
-//  2. SUDO_PASSWORD env var is set → rewrite to sudo -S, return password.
-//  3. Otherwise → return command unchanged. sudo may still succeed via a
-//     NOPASSWD sudoers rule or a valid timestamp cache; if not, it fails
-//     gracefully (no rewrite, no password) and the bash tool appends a hint.
+//  2. SUDO_PASSWORD env var is set → rewrite to `sudo -S -p ”`, return
+//     the password (repeated per invocation) for stdin injection.
+//  3. Otherwise → rewrite to `sudo -n` so sudo can't block waiting for
+//     input: it succeeds via a NOPASSWD rule or a still-valid timestamp
+//     cache, and fails immediately otherwise (SudoHint explains how to
+//     enable passwordless sudo).
 func transformSudoCommand(command string) sudoResult {
 	if command == "" {
 		return sudoResult{command: command}
 	}
 
-	transformed, sudoCount := rewriteSudoInvocations(command)
-	if sudoCount == 0 {
-		return sudoResult{command: command}
-	}
-
-	// SUDO_PASSWORD env var (explicit, persistent)
+	// SUDO_PASSWORD set — every sudo invocation goes through.
 	if pwd := os.Getenv("SUDO_PASSWORD"); pwd != "" {
+		transformed, sudoCount := rewriteSudoInvocations(command, sudoStdinRewrite)
+		if sudoCount == 0 {
+			return sudoResult{command: command}
+		}
 		return sudoResult{
 			command:       transformed,
 			passwordLines: strings.Repeat(pwd+"\n", sudoCount),
 		}
 	}
 
-	// No password available — run unchanged. sudo may still succeed via a
-	// NOPASSWD sudoers rule or a valid timestamp cache (we must not probe
-	// with `sudo -n` here: its result depends on the timestamp cache and
-	// probing with `sudo -k` would clear a user's still-valid cache).
-	// If no rule/cache applies, sudo fails gracefully and SudoHint explains
-	// how to enable passwordless sudo.
-	return sudoResult{command: command}
+	// No SUDO_PASSWORD — lower bound: never hang. `sudo -n` fails fast
+	// instead of blocking on a non-tty stdin, while still succeeding via
+	// a NOPASSWD rule or a still-valid timestamp cache. We must not probe
+	// with `sudo -k` here: it would clear a user's still-valid cache.
+	transformed, sudoCount := rewriteSudoInvocations(command, sudoNonInteractiveRewrite)
+	if sudoCount == 0 {
+		return sudoResult{command: command}
+	}
+	return sudoResult{command: transformed}
 }
 
 // ---------------------------------------------------------------------------
@@ -169,13 +183,14 @@ func readShellToken(command string, start int) (token string, next int) {
 	return b.String(), start + b.Len()
 }
 
-// rewriteSudoInvocations rewrites bare `sudo` tokens to `sudo -S -p ”`
-// and returns the transformed command plus the count of rewritten invocations.
+// rewriteSudoInvocations rewrites bare `sudo` tokens to replacement
+// (e.g. "sudo -S -p ”" or "sudo -n") and returns the transformed command
+// plus the count of rewritten invocations.
 //
 // It only rewrites real unquoted sudo command words appearing at command
 // boundaries (start of command, after ; | & && || \n, or after ().
 // Sudo inside quotes, comments, or as part of another word is left alone.
-func rewriteSudoInvocations(command string) (string, int) {
+func rewriteSudoInvocations(command, replacement string) (string, int) {
 	var out strings.Builder
 	var sudoCount int
 	i := 0
@@ -251,7 +266,7 @@ func rewriteSudoInvocations(command string) (string, int) {
 		// Read a full token (handles quotes and $() subshells)
 		token, next := readShellToken(command, i)
 		if commandStart && token == "sudo" && !afterPipe {
-			out.WriteString("sudo -S -p ''")
+			out.WriteString(replacement)
 			sudoCount++
 		} else {
 			out.WriteString(token)
@@ -274,6 +289,7 @@ var sudoFailureMarkers = []string{
 	"sudo: a password is required",
 	"sudo: no tty present",
 	"sudo: a terminal is required",
+	"sudo: interactive authentication is required",
 }
 
 // hasSudoFailure checks if the output contains a sudo password-required
