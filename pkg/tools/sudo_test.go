@@ -161,15 +161,19 @@ func TestTransformSudoCommand_WithEnvPasswordMultipleSudo(t *testing.T) {
 	}
 }
 
-func TestTransformSudoCommand_WithEnvPasswordEmpty(t *testing.T) {
+func TestTransformSudoCommand_NoEnvPassword(t *testing.T) {
 	os.Setenv("SUDO_PASSWORD", "")
 	defer os.Unsetenv("SUDO_PASSWORD")
 
-	// Empty env var should be treated as unset — no password injection
+	// Without SUDO_PASSWORD the command must run unchanged: no rewrite,
+	// no injected password. sudo itself decides whether to use a NOPASSWD
+	// rule or a still-valid timestamp cache; we must not interfere.
 	result := transformSudoCommand("sudo apt update")
-	// Without a password and without NOPASSWD, command runs unchanged
-	if strings.Contains(result.command, "sudo -S -p ''") {
-		t.Logf("note: command was rewritten to sudo -S even with empty password (existing behavior)")
+	if result.command != "sudo apt update" {
+		t.Errorf("expected unchanged command, got %q", result.command)
+	}
+	if result.passwordLines != "" {
+		t.Errorf("expected no password lines, got %q", result.passwordLines)
 	}
 }
 

@@ -2,7 +2,6 @@ package tools
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -13,12 +12,13 @@ import (
 //
 //   • Rewrites bare `sudo cmd` → `sudo -S -p '' cmd` so sudo reads the
 //     password from stdin instead of /dev/tty.
-//   • Supports two sources for the sudo password, in priority order:
-//       1. SUDO_PASSWORD env var (explicit, persistent)
-//       2. NOPASSWD sudoers rule (detected via `sudo -n true`)
-//   • If neither applies, the command runs unchanged and fails gracefully
-//     with a "password required" error; the bash tool then appends a
-//     helpful hint.
+//   • When SUDO_PASSWORD is set, the rewritten command gets the password
+//     piped to its stdin.
+//   • Without SUDO_PASSWORD, the command runs unchanged: sudo may still
+//     succeed via an existing sudoers NOPASSWD rule or a still-valid
+//     timestamp cache (e.g. the user recently typed the password in a
+//     terminal). If none apply, sudo fails gracefully with a "password
+//     required" error and the bash tool appends a helpful hint.
 // ---------------------------------------------------------------------------
 
 // sudoResult holds the result of transforming a sudo command.
@@ -38,8 +38,9 @@ type sudoResult struct {
 //
 //  1. No sudo invocations → return command unchanged, no password.
 //  2. SUDO_PASSWORD env var is set → rewrite to sudo -S, return password.
-//  3. sudo -n true works (NOPASSWD) → return command unchanged, no password.
-//  4. None of the above → return command unchanged (will fail gracefully).
+//  3. Otherwise → return command unchanged. sudo may still succeed via a
+//     NOPASSWD sudoers rule or a valid timestamp cache; if not, it fails
+//     gracefully (no rewrite, no password) and the bash tool appends a hint.
 func transformSudoCommand(command string) sudoResult {
 	if command == "" {
 		return sudoResult{command: command}
@@ -50,7 +51,7 @@ func transformSudoCommand(command string) sudoResult {
 		return sudoResult{command: command}
 	}
 
-	// Source 1: SUDO_PASSWORD env var
+	// SUDO_PASSWORD env var (explicit, persistent)
 	if pwd := os.Getenv("SUDO_PASSWORD"); pwd != "" {
 		return sudoResult{
 			command:       transformed,
@@ -58,27 +59,13 @@ func transformSudoCommand(command string) sudoResult {
 		}
 	}
 
-	// Source 2: Check NOPASSWD (sudo -n). Re-probes every call so an
-	// expired sudo timestamp can't cause a later command to block.
-	if sudoNopasswdWorks() {
-		return sudoResult{
-			command: command,
-		}
-	}
-
-	// No password available — run unchanged; sudo will fail gracefully.
+	// No password available — run unchanged. sudo may still succeed via a
+	// NOPASSWD sudoers rule or a valid timestamp cache (we must not probe
+	// with `sudo -n` here: its result depends on the timestamp cache and
+	// probing with `sudo -k` would clear a user's still-valid cache).
+	// If no rule/cache applies, sudo fails gracefully and SudoHint explains
+	// how to enable passwordless sudo.
 	return sudoResult{command: command}
-}
-
-// sudoNopasswdWorks returns true when `sudo -n true` succeeds, meaning the
-// current user has NOPASSWD configured for at least some commands (or is
-// root). Re-probes every call — no process-lifetime cache.
-func sudoNopasswdWorks() bool {
-	probe := exec.Command("sudo", "-n", "true")
-	probe.Stdin = nil
-	probe.Stdout = nil
-	probe.Stderr = nil
-	return probe.Run() == nil
 }
 
 // ---------------------------------------------------------------------------
