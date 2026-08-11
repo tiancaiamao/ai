@@ -64,10 +64,9 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	if concurrencyConfig == nil {
 		concurrencyConfig = config.DefaultConcurrencyConfig()
 	}
-	executor := agent.NewToolExecutorWithTimeout(
+	executor := agent.NewToolExecutor(
 		concurrencyConfig.MaxConcurrentTools,
 		concurrencyConfig.QueueTimeout,
-		concurrencyConfig.ToolTimeout,
 	)
 
 	toolOutputConfig := app.cfg.ToolOutput
@@ -123,7 +122,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.ag = ag
 
 	slog.Info("Auto-compact enabled", "maxMessages", app.compactorConfig.MaxMessages, "maxTokens", app.compactorConfig.MaxTokens)
-	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
+	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
 	// --- Create RPC server ---
