@@ -150,42 +150,6 @@ func TestExecutorPool(t *testing.T) {
 	}
 }
 
-// TestToolExecutorToolTimeout verifies the toolTimeout cap: a tool that
-// ignores context and would block forever is terminated by the executor.
-func TestToolExecutorToolTimeout(t *testing.T) {
-	executor := NewToolExecutorWithTimeout(1, 5, 1) // 1s tool timeout cap
-	tool := &blockingTool{}
-
-	start := time.Now()
-	_, err := executor.Execute(context.Background(), tool, map[string]interface{}{})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Error("Expected context deadline error, got nil")
-	}
-	if elapsed > 3*time.Second {
-		t.Errorf("Tool timeout did not fire promptly: %v", elapsed)
-	}
-	t.Logf("Got expected error: %v", err)
-}
-
-// TestToolExecutorNoToolTimeout verifies the cap is disabled by default.
-func TestToolExecutorNoToolTimeout(t *testing.T) {
-	executor := NewToolExecutor(1, 5) // no tool timeout
-	tool := &mockTool{name: "test"}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	content, err := executor.Execute(ctx, tool, map[string]interface{}{})
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if len(content) != 1 {
-		t.Errorf("Expected 1 content block, got %d", len(content))
-	}
-}
-
 // TestDefaultExecutor tests default executor creation.
 func TestDefaultExecutor(t *testing.T) {
 	executor := DefaultExecutor()

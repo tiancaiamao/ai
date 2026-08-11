@@ -294,27 +294,6 @@ func (m *mockTool) Execute(ctx context.Context, args map[string]interface{}) ([]
 	}, nil
 }
 
-// blockingTool is a test double for agentctx.Tool that blocks until the
-// context is cancelled, to verify executor-level timeouts.
-type blockingTool struct{}
-
-func (m *blockingTool) Name() string {
-	return "blocking"
-}
-
-func (m *blockingTool) Description() string {
-	return "Blocking tool for testing"
-}
-
-func (m *blockingTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{}
-}
-
-func (m *blockingTool) Execute(ctx context.Context, args map[string]interface{}) ([]agentctx.ContentBlock, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
 // TestAgentState tests getting agent state.
 func TestAgentState(t *testing.T) {
 	agent := NewAgent(llm.Model{

@@ -21,7 +21,6 @@ type ToolExecutor interface {
 type concurrentToolExecutor struct {
 	semaphore    chan struct{}
 	queueTimeout time.Duration
-	toolTimeout  time.Duration
 }
 
 // NewToolExecutor creates a new tool executor and returns it as the ToolExecutor interface.
@@ -31,18 +30,6 @@ func NewToolExecutor(maxConcurrent int, queueTimeoutSec int) ToolExecutor {
 	return &concurrentToolExecutor{
 		semaphore:    make(chan struct{}, maxConcurrent),
 		queueTimeout: time.Duration(queueTimeoutSec) * time.Second,
-	}
-}
-
-// NewToolExecutorWithTimeout is like NewToolExecutor but also caps the total
-// execution time of every tool. toolTimeoutSec <= 0 disables the cap so
-// tools keep full control of their own timeouts (e.g. bash's per-call
-// timeout parameter).
-func NewToolExecutorWithTimeout(maxConcurrent int, queueTimeoutSec int, toolTimeoutSec int) ToolExecutor {
-	return &concurrentToolExecutor{
-		semaphore:    make(chan struct{}, maxConcurrent),
-		queueTimeout: time.Duration(queueTimeoutSec) * time.Second,
-		toolTimeout:  time.Duration(toolTimeoutSec) * time.Second,
 	}
 }
 
@@ -68,14 +55,6 @@ func (e *concurrentToolExecutor) Execute(ctx context.Context, tool agentctx.Tool
 			"tool", tool.Name(),
 			"concurrencyLimit", cap(e.semaphore))
 
-		// Hard cap on total execution time as a safety net for tools without
-		// their own timeout handling. Disabled when toolTimeout <= 0 so
-		// tools with per-call timeouts (e.g. bash) keep full control.
-		if e.toolTimeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, e.toolTimeout)
-			defer cancel()
-		}
 		return tool.Execute(ctx, args)
 
 	case <-time.After(e.queueTimeout):
