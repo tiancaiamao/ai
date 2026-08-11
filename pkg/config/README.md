@@ -68,6 +68,8 @@ type ConcurrencyConfig struct {
 }
 ```
 
+`ToolTimeout` is a safety net for tools without their own timeout handling. Tools that manage their own per-call timeout (e.g. bash's `timeout` parameter) are **not** overridden by it — bash only aborts on real cancellation, not on this deadline. The default is `0` (disabled); set it explicitly only if you want a coarse cap on tools that otherwise have none.
+
 ## Tool Output
 
 ```go

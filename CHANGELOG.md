@@ -3,6 +3,14 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## ToolTimeout No Longer Overrides Tools With Their Own Timeout (2026-08)
+
+**Problem**: Wiring up `Concurrency.ToolTimeout` as an executor-level hard cap (previous entry) broke the bash tool for any user whose config still had a nonzero `toolTimeout` (e.g. the old default 30, or a config file written before the default change). The executor wrapped every tool call in `context.WithTimeout(ctx, toolTimeout)`; bash listens to the parent context and treats any `Done()` as an abort. Result: every command — including ones where the LLM explicitly set `timeout: 300` — was killed at the configured cap (30s) with "Command canceled". The cap was meant as a safety net for tools *without* their own timeout handling, but it was applied unconditionally, defeating bash's documented per-call timeout.
+
+**What changed**: The bash tool now reacts only to genuine parent *cancellation* (session abort, `context.Canceled`), ignoring a parent *deadline* (`context.DeadlineExceeded`). The deadline on the tool-execution context comes exclusively from the executor's `toolTimeout` cap (no other layer sets one), so the cap still applies to tools that have no timeout of their own, while bash's own timeout (default 120s, or the LLM's `timeout: N`) remains authoritative.
+
+**Why**: A coarse safety net must not override a tool's explicit, documented per-call timeout. Bash owns its execution time; the parent context is for abort semantics only.
+
 ## Bash Tool Hang Fix: Idle-Grace Pipe Drain + Wired-Up ToolTimeout (2026-08)
 
 **Problem**: The bash tool could hang indefinitely on commands that background a process. `cmd.Wait()` returns as soon as the main shell exits, but a descendant (e.g. a subshell waiting on a daemon started with `cmd &`) keeps the stdout/stderr pipe write ends open, so EOF never arrives. The tool then blocked forever on `outputWG.Wait()`, and because the timeout check runs *after* the drain, neither the 120s default nor an LLM-set `timeout` could ever fire. In production this hung a tool call for 20.6 hours. Meanwhile `Concurrency.ToolTimeout` (default 30s) was dead config: it was only logged, never enforced.

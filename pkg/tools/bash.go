@@ -192,11 +192,17 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 	defer cancel()
 
-	// Also cancel on parent context done
+	// React to parent context cancellation (e.g. session abort) but not to a
+	// parent *deadline*: a deadline on the parent ctx is the executor's coarse
+	// toolTimeout safety net intended for tools without their own timeout
+	// handling. It must not override bash's own per-call timeout parameter
+	// (default 120s, or the LLM's timeout: N override).
 	if ctx.Done() != nil {
 		go func() {
 			<-ctx.Done()
-			cancel()
+			if ctx.Err() == context.Canceled {
+				cancel()
+			}
 		}()
 	}
 

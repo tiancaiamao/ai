@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,4 +183,89 @@ func TestBashToolBlocksTmuxKillServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBashToolIgnoresParentDeadline is a regression test for the bug
+// introduced when Concurrency.ToolTimeout was wired up as an executor-level
+// hard cap (PR #361): with toolTimeout set in config, every bash command was
+// canceled at that deadline regardless of the per-call timeout parameter,
+// because bash treated the parent deadline as a cancellation.
+//
+// The executor's toolTimeout is a safety net for tools without their own
+// timeout handling; it must not override bash's own timeout (default 120s or
+// the LLM's timeout: N override). Bash only reacts to real parent
+// cancellation (session abort), not to a parent deadline.
+func TestBashToolIgnoresParentDeadline(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	// Parent deadline (2s) fires before the command (4s) finishes and before
+	// bash's own timeout (10s). Only real cancellation may kill the command.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	blocks, err := tool.Execute(ctx, map[string]any{
+		"command": "sleep 4",
+		"timeout": float64(10),
+	})
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	if elapsed < 3*time.Second {
+		t.Fatalf("command canceled by parent deadline after %v; want it to run its full 4s", elapsed)
+	}
+	if elapsed > 8*time.Second {
+		t.Fatalf("command took too long: %v", elapsed)
+	}
+	for _, b := range blocks {
+		text, ok := b.(agentctx.TextContent)
+		if !ok {
+			continue
+		}
+		assert.NotContains(t, text.Text, "canceled", "command should not be canceled by parent deadline")
+	}
+}
+
+// TestBashToolParentCancellationStillAborts pins the abort semantics that
+// TestBashToolIgnoresParentDeadline relies on: a real parent cancellation
+// (session abort) must still kill the command promptly, unlike a parent
+// deadline which is ignored.
+func TestBashToolParentCancellationStillAborts(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	done := make(chan struct{})
+	var elapsed time.Duration
+	var blocks []agentctx.ContentBlock
+	var err error
+	go func() {
+		defer close(done)
+		blocks, err = tool.Execute(ctx, map[string]any{
+			"command": "sleep 4",
+			"timeout": float64(10),
+		})
+		elapsed = time.Since(start)
+	}()
+	time.Sleep(1 * time.Second)
+	cancel() // real abort
+	<-done
+
+	assert.NoError(t, err)
+	if elapsed > 3*time.Second {
+		t.Fatalf("command was not aborted promptly after parent cancel: %v", elapsed)
+	}
+	found := false
+	for _, b := range blocks {
+		text, ok := b.(agentctx.TextContent)
+		if !ok {
+			continue
+		}
+		if strings.Contains(text.Text, "canceled") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a 'Command canceled' result")
 }
