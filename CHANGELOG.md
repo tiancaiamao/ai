@@ -3,6 +3,23 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Reverted: Executor-Level ToolTimeout Cap (2026-08)
+
+**Problem**: #361 wired up the previously-dead `Concurrency.ToolTimeout` config as an executor-level hard cap (`NewToolExecutorWithTimeout`), wrapping every tool call in `context.WithTimeout(ctx, toolTimeout)`. The cap is fundamentally incompatible with tools that manage their own timeouts:
+
+- **It overrode bash's per-call `timeout: N`.** Any user with a nonzero `toolTimeout` in config (e.g. a config file written before the default changed to 0) had every command killed at the cap, no matter what the LLM requested — `timeout: 300` was silently capped at 30s.
+- **It severed session-abort propagation.** Bash listens on the parent ctx to kill its command on session abort. Once the cap's deadline fired, the wrapped ctx was permanently done, so a *later* real abort could no longer reach a command still running under bash's own longer timeout.
+- **It was redundant.** Every current tool either manages its own timeout (bash: 120s default or the LLM's `timeout: N`) or is a local sub-second operation (read/grep/write/edit). No tool needed an executor-level safety net.
+
+**What changed**:
+
+- **Removed the executor cap entirely**: deleted `NewToolExecutorWithTimeout` and the `toolTimeout` field from `concurrentToolExecutor`; `NewToolExecutor` is the only constructor.
+- **Removed the `Concurrency.ToolTimeout` config field** (default, ToLoopConfig wiring, README example). Old configs with `"toolTimeout"` load fine — the field is silently ignored by JSON unmarshalling, which also clears the hazard for stale configs.
+- **Reverted #363's bash guard** (`ctx.Err() == context.Canceled` check): with no executor deadline, the parent ctx is only ever canceled on a real abort, so bash's original simple listener (`<-ctx.Done(); cancel()`) is correct again.
+- **Kept #361's pipe-drain fix** (idle-grace timer) — that was the real bug fix and is unaffected.
+
+**Why**: The cap tried to be a generic safety net but could not distinguish tools with their own timeout handling. Patching around it (making bash ignore the deadline) left the abort-propagation gap above. Removing the cap restores correct semantics: bash's `timeout` parameter is authoritative, session abort always reaches the command, and there is no dead config left to be re-activated later.
+
 ## Bash Tool Hang Fix: Idle-Grace Pipe Drain + Wired-Up ToolTimeout (2026-08)
 
 **Problem**: The bash tool could hang indefinitely on commands that background a process. `cmd.Wait()` returns as soon as the main shell exits, but a descendant (e.g. a subshell waiting on a daemon started with `cmd &`) keeps the stdout/stderr pipe write ends open, so EOF never arrives. The tool then blocked forever on `outputWG.Wait()`, and because the timeout check runs *after* the drain, neither the 120s default nor an LLM-set `timeout` could ever fire. In production this hung a tool call for 20.6 hours. Meanwhile `Concurrency.ToolTimeout` (default 30s) was dead config: it was only logged, never enforced.
