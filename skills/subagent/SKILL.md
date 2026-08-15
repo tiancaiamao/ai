@@ -298,7 +298,18 @@ done
 
 ### `ai watch --timeout`
 
-控制单轮观察窗口（建议 `5m`）。watch 超时后控制权回到主 agent，子 agent 仍在 tmux 中继续运行。主 agent 判断是否需要再 watch 一轮。
+**必须设 ≥2m（推荐 `5m`）**。watch 超时后控制权回到主 agent，子 agent 仍在 tmux 中继续运行。主 agent 判断是否需要再 watch 一轮。
+
+**⚠️ 禁止短轮询（<40s）。** 短轮询会让上下文被大量"无进展"输出填满——每次 watch 的 toolResult 都进 context，是 compaction 次数暴涨和 token 浪费的主因。bash 工具允许设大 timeout 参数，长等待完全可行：
+
+```bash
+# ✅ 长窗口（bash timeout 同步设大，如 320）
+ai watch --id "$CHILD_ID" --follow --pretty --timeout 5m 2>&1 | tail -5
+# ❌ 短轮询（每 20-40s 一次）——只有在关键节点（测试落盘、CI 完成）才允许
+timeout 30 ai watch --id "$CHILD_ID" --follow --pretty --timeout 25s 2>&1 | tail -5
+```
+
+不要用 `sleep 25` 短循环钻 bash 的 `sleep≥30s` 禁令空子——那是次优策略；长等待用 `ai watch --timeout 5m` 或 tmux wait 脚本（`~/.ai/skills/tmux/bin/tmux_wait.sh`）。
 
 ### 卡死判断
 
@@ -387,6 +398,10 @@ cat ~/.ai/runs/$RUN_ID/subagent
 3. 让用户决定下一步
 4. **无论成功或失败，都必须 cleanup** — 失败的 agent 也不会自动退出
 
+### 发送指令必须确认送达
+
+`ai send` 后**不要只看发送端输出**，必须从对方确认已收到（`--wait` 的回复、对方 stream 中的确认、或 `watch` 对方 session 的输出）。发送端"看起来成功"≠ 对方已收到——错误可能被输出截断掩盖（见 Common Pitfalls）。
+
 ## Common Pitfalls
 
 | ❌ Wrong | ✅ Right |
@@ -398,6 +413,8 @@ cat ~/.ai/runs/$RUN_ID/subagent
 | 用 `ai ls` status 判断完成 | `ai serve` status 永远 `running`，用 `watch --follow` 或 `send --wait` 判断 |
 | `ai send` + `ai watch` 两步操作 | `ai send --wait` 一步完成发送+等待回复 |
 | `ai send --wait` 不带消息参数 | ⛔ **必须带消息**，否则报错 `no message provided`。写 `"请给出结果"` 即可 |
+| `ai send --id X --message '...'` | ⛔ **不存在 `--message` flag**；消息是位置参数：`ai send --id X "msg"`（报错会显示 `flag provided but not defined: -message`） |
+| 用 `\| tail -1` / `\| head -1` 截断 send/kill/push 等**状态变更命令**的输出 | ⛔ **绝对禁止**。截断会掩盖 stderr 错误（如 flag 拼错），只剩一行无害的 usage 尾行，造成"假成功"。必须看完整错误或退出码：`cmd 2>&1; echo "EXIT=$?"` |
 | kill 子 agent 后自己做它的活 | 用 `ai watch --follow` 观察进度，让子 agent 自己完成 |
 | `tmux kill-server` 清理环境 | ⛔ **绝对禁止**，会杀掉所有 tmux session |
 | `ai ls` 看到就 kill | ⛔ **绝对禁止**，只 kill subagent 文件中记录的 ID |
