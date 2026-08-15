@@ -12,20 +12,16 @@
     "KeepRecentTokens": 20000,
     "ReserveTokens": 16384,
     "ToolCallCutoff": 10,
-    "ToolSummaryStrategy": "off",
     "ToolSummaryAutomation": "off",
     "AutoCompact": true
   },
   "concurrency": {
     "maxConcurrentTools": 5,
-    "toolTimeout": 0,
     "queueTimeout": 60
   },
   "toolOutput": {
     "maxChars": 10000
   },
-  "taskTracking": true,
-  "contextManagement": true,
   "log": {
     "level": "info",
     "file": "~/.ai/ai-{pid}.log",
