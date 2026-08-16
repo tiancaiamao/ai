@@ -162,30 +162,65 @@ go test -v -run TestRegression001 ./pkg/agent
 
 **Rule:** All regression tests must pass before merging. 100% pass rate required.
 
-## Layer 4: E2E Benchmark Tests
+## Layer 4: E2E Tests (Real Model)
 
 ### Purpose
 
-Test complete agent behaviors with real LLM interactions.
+Test complete agent behaviors against a **real, OpenAI-compatible model
+endpoint** — the full pipeline: agent loop → streaming LLM client → tool
+execution → multi-turn state. These are the only tests that catch protocol
+drift between the code and an actual model server.
 
 ### Test Suite
 
-Located under `benchmark/`:
+Located under `pkg/e2e/` (opt-in via the `e2e` build tag — **not** part of
+`make test` / CI, since they need a reachable endpoint and a live model).
+Each test spawns the real `ai rpc` binary as a black box and drives it over
+stdin/stdout JSON-RPC:
 
-| Category | Focus |
-|----------|-------|
-| Agent Behavior | Exploration, debugging, memory |
-| Context Management | Overflow, compaction |
-| Tool Usage | Tool traps, misuse |
-| Performance | Budget management |
-| Code Generation | Various scenarios |
+| Test | What It Verifies |
+|------|------------------|
+| `TestE2E_StreamingCompletion` | Basic prompt → SSE streaming → non-empty assistant reply |
+| `TestE2E_MultiTurnContext` | Conversation state survives across prompts on one server |
+| `TestE2E_ToolExecution` | Real tool call → binary executes `read` → result fed back to model |
+| `TestE2E_RPCCommands` | Slash commands (`model`/`session`/`help`/`context`) return success |
 
-### Running Benchmark Tests
+### Coverage
+
+The binary is built with `-cover` (in `TestMain`), so every spawned `ai rpc`
+subprocess records coverage of the **whole application** to `GOCOVERDIR`. At
+the end of the run the profiles are merged (`go tool covdata`) and the total
+printed, e.g.:
+
+```
+=== E2E coverage (whole app via `ai rpc` subprocess) ===
+total: (statements) 25.4%
+```
+
+This is real subprocess coverage: `pkg/rpc`, `pkg/session`, `pkg/skill`,
+`cmd/ai` etc. are exercised through the same entry point a user invokes —
+something agent-level tests and mock servers cannot do.
+
+### Running E2E Tests
 
 ```bash
-# Run benchmark suite (requires API key, slow)
-cd benchmark && ./run.sh
+# Default: first ollama/* model from ~/.ai/models.json (prefers "laguna")
+make e2e
+
+# Override endpoint / model via environment variables
+E2E_BASE_URL=http://localhost:11434/v1 E2E_MODEL=qwen3:8b make e2e
 ```
+
+A test **skips** (does not fail) when the endpoint is unreachable or no model
+is configured, so the suite can also be run on machines without the model.
+Use `-v` to see which model each test targets.
+
+### Model Resolution
+
+1. `E2E_BASE_URL` env var wins (with `E2E_MODEL`, `E2E_PROVIDER`, `E2E_API`)
+2. Otherwise the first `ollama/*` model from `~/.ai/models.json` (prefers an
+   ID containing `laguna`)
+3. Otherwise the test skips
 
 ## Test Best Practices
 
@@ -231,7 +266,7 @@ func TestToolNormalization(t *testing.T) {
 1. **Unit tests**: `go test -cover ./...`
 2. **Regression tests**: `go test -run TestRegression ./...`
 3. **Integration tests**: `go test -v ./pkg/agent -run Integration`
-4. **E2E tests**: `cd benchmark && ./run.sh` (scheduled, not per-PR)
+4. **E2E tests**: `make e2e` (manual, not per-PR — requires a live model endpoint)
 
 ### Pre-Commit
 
