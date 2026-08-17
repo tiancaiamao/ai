@@ -21,7 +21,7 @@ func TestCompactCheckPrompt(t *testing.T) {
 	if strings.TrimSpace(p) == "" {
 		t.Error("CompactCheckPrompt should not be empty")
 	}
-			if !strings.Contains(p, "%s") {
+	if !strings.Contains(p, "%s") {
 		t.Error("CompactCheckPrompt must contain a budget-percentage placeholder")
 	}
 }
