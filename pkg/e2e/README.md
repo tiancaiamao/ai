@@ -69,5 +69,9 @@ mock server cannot do.
 | `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
 | `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
 | `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
-| `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle |
-| `TestE2E_Compaction` | LLM-driven compaction through the real binary |
+| `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
+| `TestE2E_Compaction` | Manual compaction of a tool-call-heavy + large context (compact_tools digest) |
+| `TestE2E_ToolVariety` | bash / write / grep / edit / change_workspace on one server |
+| `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
+| `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
+| `TestE2E_CompactionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |

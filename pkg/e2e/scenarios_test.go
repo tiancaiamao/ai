@@ -586,6 +586,9 @@ func TestE2E_Subcommands(t *testing.T) {
 	if out, err := runCmd("send", "--id", id, "Reply with the single word: ok"); err != nil {
 		t.Fatalf("ai send failed: %v\n%s", err, out)
 	}
+	if out, err := runCmd("send", "--id", "no-such-run", "hello"); err == nil {
+		t.Fatalf("ai send to unknown run unexpectedly succeeded:\n%s", out)
+	}
 	if out, err := runCmd("kill", "--id", id); err != nil {
 		t.Fatalf("ai kill failed: %v\n%s", err, out)
 	}
@@ -603,6 +606,15 @@ func TestE2E_Subcommands(t *testing.T) {
 		<-done
 		t.Fatalf("ai serve did not exit after kill:\n%s", serveOut.String())
 	}
+
+	// After the worker is gone: ls (non --all) must no longer list the run
+	// (running-only filter), while --json reports it as dead (reconcile).
+	if out, err := runCmd("ls"); err != nil || strings.Contains(out, id) {
+		t.Fatalf("ai ls should hide dead run %q: %v\n%s", id, err, out)
+	}
+	if out, err := runCmd("ls", "--all", "--json"); err != nil || !strings.Contains(out, `"status": "killed"`) && !strings.Contains(out, `"status": "failed"`) {
+		t.Fatalf("ai ls --all --json should report dead status for %q: %v\n%s", id, err, out)
+	}
 }
 
 func exitCode(err error) int {
@@ -617,7 +629,22 @@ func exitCode(err error) int {
 func TestE2E_Compaction(t *testing.T) {
 	m := requireEndpoint(t)
 	rs := startRPCServer(t, m, "")
-	rs.promptAndWait(t, "Reply with exactly: alpha")
+
+	// 15+ tool turns so that on compaction the visible tool results exceed the
+	// default ToolCallCutoff (10) and the compaction digest (compact_tools)
+	// archiving path is exercised with a non-trivial excess.
+	for i := 1; i <= 15; i++ {
+		rs.promptAndWait(t, fmt.Sprintf(
+			"Use the write tool to create a file named f%d.txt in the current directory containing the line 'content %d'. After it finishes, reply with the single word ok.",
+			i, i))
+	}
+	// Push the context past the keep-recent token budget (~16K) so the manual
+	// compact below actually compresses old messages instead of no-op'ing.
+	blob := strings.Repeat("The quick brown fox jumps over the lazy dog and keeps running through the meadow without stopping to rest. ", 500)
+	for i := 1; i <= 2; i++ {
+		rs.promptAndWait(t, fmt.Sprintf(
+			"Message number %d. Acknowledge receipt of the following text, then reply with the single word: ack\n\n%s", i, blob))
+	}
 	rs.promptAndWait(t, "Reply with exactly: beta")
 
 	// Manual compaction: LLMDecide compactor may decide either way; either
