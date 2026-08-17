@@ -29,6 +29,11 @@ func StreamLLM(
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
+	// Route to OpenAI Responses API if requested
+	if model.API == "openai-responses" {
+		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
+	}
+
 	stream := NewEventStream[LLMEvent, LLMMessage](
 		func(e LLMEvent) bool {
 			return e.GetEventType() == "done" || e.GetEventType() == "error"
