@@ -49,7 +49,7 @@ subprocess records coverage of the **whole application** to `GOCOVERDIR`
 
 ```
 === E2E coverage (whole app via `ai rpc` subprocess) ===
-total: (statements) 25.4%
+total: (statements) 50.2%
 ```
 
 This covers `pkg/rpc`, `pkg/session`, `pkg/skill`, `cmd/ai`, etc. through
@@ -74,4 +74,4 @@ mock server cannot do.
 | `TestE2E_ToolVariety` | bash / write / grep / edit / change_workspace on one server |
 | `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
 | `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
-| `TestE2E_CompactionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |
+| `TestE2E_CompactionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |ionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |

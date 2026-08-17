@@ -583,6 +583,19 @@ func TestE2E_Subcommands(t *testing.T) {
 	if out, err := runCmd("ls", "--all", "--json"); err != nil || !strings.Contains(out, id) {
 		t.Fatalf("ai ls --json failed: %v\n%s", err, out)
 	}
+
+	// ai watch: three live-streaming modes against the running serve. The
+	// pong turn's events are either streamed live or replayed from the ring
+	// buffer; each mode exits on agent_end.
+	if out, err := runCmd("watch", "--id", id, "--follow", "--timeout", "90s"); err != nil || !strings.Contains(out, "agent_end") {
+		t.Fatalf("ai watch --follow (raw) failed: %v\n%s", err, out)
+	}
+	if out, err := runCmd("watch", "--id", id, "--follow", "--pretty", "--timeout", "90s"); err != nil || !strings.Contains(out, "__seq:") {
+		t.Fatalf("ai watch --follow --pretty failed: %v\n%s", err, out)
+	}
+	if out, err := runCmd("watch", "--id", id, "--follow", "--pretty", "--summary", "--timeout", "90s"); err != nil || !strings.Contains(out, "pong") {
+		t.Fatalf("ai watch --follow --summary should print final assistant text: %v\n%s", err, out)
+	}
 	if out, err := runCmd("send", "--id", id, "Reply with the single word: ok"); err != nil {
 		t.Fatalf("ai send failed: %v\n%s", err, out)
 	}
@@ -605,6 +618,17 @@ func TestE2E_Subcommands(t *testing.T) {
 		serve.Process.Kill()
 		<-done
 		t.Fatalf("ai serve did not exit after kill:\n%s", serveOut.String())
+	}
+
+	// After the worker is gone, the event file is stable. Modern runs stream
+	// events via the in-memory broadcaster (no events.jsonl), so seed one to
+	// exercise the legacy machineWatch (--since) file-reading path.
+	if err := os.WriteFile(filepath.Join(home, ".ai", "runs", id, "events.jsonl"),
+		[]byte("{\"type\":\"agent_start\"}\n{\"type\":\"agent_end\",\"ok\":true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCmd("watch", "--id", id, "--since", "0"); err != nil || !strings.Contains(out, "__offset:") {
+		t.Fatalf("ai watch --since 0 failed: %v\n%s", err, out)
 	}
 
 	// After the worker is gone: ls (non --all) must no longer list the run
