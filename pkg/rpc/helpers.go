@@ -37,10 +37,6 @@ func applyModelOverride(cfg *config.Config, modelOverride string) {
 	config.ApplyModelOverride(cfg, modelOverride)
 }
 
-func modelSpecFromConfig(cfg *config.Config) config.ModelSpec {
-	return config.ModelSpecFromConfig(cfg)
-}
-
 func applyModelLimitsFromSpec(model llm.Model, spec config.ModelSpec) llm.Model {
 	return config.ApplyModelLimitsFromSpec(model, spec)
 }
@@ -59,11 +55,6 @@ func filterModelSpecsWithKeys(specs []config.ModelSpec) []config.ModelSpec {
 
 func findModelSpec(specs []config.ModelSpec, provider, modelID string) (config.ModelSpec, bool) {
 	return config.FindModelSpec(specs, provider, modelID)
-}
-
-// buildCompactionState delegates to compact.BuildCompactionState.
-func buildCompactionState(cfg *compact.Config, compactor *compact.Compactor) *compact.CompactionState {
-	return compact.BuildCompactionState(cfg, compactor)
 }
 
 // loadModelSpecs/filterModelSpecsWithKeys/findModelSpec moved to pkg/config.

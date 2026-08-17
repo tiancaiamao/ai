@@ -588,7 +588,7 @@ func TestE2E_AutoCompaction(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	largeBlob := strings.Repeat("Auto-compaction trigger: the agent should decide whether to compact now. ", 500)
-	fmt.Fprintf(stdin2, "\n"+`{"type":"prompt","message":"Read and acknowledge: `+largeBlob+` Reply with: compact-ok"}`+"\n")
+	fmt.Fprint(stdin2, "\n"+`{"type":"prompt","message":"Read and acknowledge: `+largeBlob+` Reply with: compact-ok"}`+"\n")
 
 	// Watch for compaction events or agent_end.
 	compactionSeen := make(chan bool, 1)
