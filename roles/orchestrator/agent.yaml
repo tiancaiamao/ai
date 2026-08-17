@@ -1,6 +1,6 @@
 version: 1
 system_prompt: ./system_prompt.md
-model: zai/glm-5.2
+model: zai/glm-5.3
 tools:
   - name: read
     enabled: true
