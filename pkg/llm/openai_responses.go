@@ -426,7 +426,7 @@ func StreamOpenAIResponses(
 		scanner := bufio.NewScanner(resp.Body)
 		// Increase buffer size for large responses (default 64KB, max 1MB)
 		const maxTokenSize = 1024 * 1024
-		buf := make([]byte, maxTokenSize)
+		buf := make([]byte, 64*1024)
 		scanner.Buffer(buf, maxTokenSize)
 
 		// Set read deadline so a stalled upstream (connected but silent)
@@ -589,15 +589,28 @@ func applyProxy(client *http.Client, proxyURL string) {
 		if err != nil {
 			return
 		}
-		transport := &http.Transport{}
+		// Keep the standard transport defaults (connection pooling, HTTP/2, etc.)
+		// while replacing only the dialer used for SOCKS5 connections.
+		baseTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return
+		}
+		transport := baseTransport.Clone()
 		if cd, ok := dialer.(proxy.ContextDialer); ok {
 			transport.DialContext = cd.DialContext
+		} else {
+			transport.Dial = dialer.Dial
 		}
 		client.Transport = transport
 		return
 	}
 	// HTTP/HTTPS proxy
-	transport := &http.Transport{Proxy: http.ProxyURL(parsed)}
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return
+	}
+	transport := baseTransport.Clone()
+	transport.Proxy = http.ProxyURL(parsed)
 	client.Transport = transport
 }
 

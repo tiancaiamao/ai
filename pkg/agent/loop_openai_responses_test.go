@@ -24,15 +24,15 @@ func TestStreamAssistantResponse_OpenAIResponsesThinking(t *testing.T) {
 		fmt.Fprint(w, `data: {"type":"response.reasoning_summary_part.done","output_index":0}`+"\n\n")
 		fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"final summary"}]}}`+"\n\n")
 		fmt.Fprint(w, `data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_1"}}`+"\n\n")
-		fmt.Fprint(w, `data: {"type":"response.output_text.delta","output_index":1,"delta":"你好"}`+"\n\n")
-		fmt.Fprint(w, `data: {"type":"response.output_text.delta","output_index":1,"delta":"！"}`+"\n\n")
-		fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"你好！"}]}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","output_index":1,"delta":"Hello"}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","output_index":1,"delta":"!"}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"Hello!"}]}}`+"\n\n")
 		fmt.Fprint(w, `data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`+"\n\n")
 	}))
 	defer server.Close()
 
 	agentCtx := agentctx.NewAgentContext("sys")
-	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("说一句你好"))
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("say hello"))
 
 	config := &LoopConfig{
 		Model: llm.Model{
@@ -75,8 +75,8 @@ drain:
 		t.Error("expected thinking_delta events on stream")
 	}
 
-	if got := msg.ExtractText(); got != "你好！" {
-		t.Errorf("text = %q, want %q", got, "你好！")
+	if got := msg.ExtractText(); got != "Hello!" {
+		t.Errorf("text = %q, want %q", got, "Hello!")
 	}
 	if got := msg.ExtractThinking(); got != "final summary" {
 		t.Errorf("thinking = %q, want %q", got, "final summary")
