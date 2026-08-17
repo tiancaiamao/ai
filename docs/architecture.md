@@ -271,6 +271,7 @@ ai/
 │   ├── command/          # Slash command registry
 │   ├── config/           # Configuration, auth, model specs
 │   ├── context/          # Agent context, messages, AgentState persistence
+│   ├── execworld/        # Execution world abstraction (SSHWorld remote execution)
 │   ├── llm/              # LLM client (OpenAI-compatible)
 │   ├── logger/           # Structured logging
 │   ├── modelselect/      # Model selection logic

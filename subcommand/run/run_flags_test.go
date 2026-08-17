@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildRPCFlags_ModelIncluded(t *testing.T) {
-	flags := BuildRPCFlags("/tmp/session.json", "", 0, 0, "", "claude-sonnet-4-20250514", "")
+	flags := BuildRPCFlags("/tmp/session.json", "", 0, 0, "", "claude-sonnet-4-20250514", "", "")
 
 	found := false
 	for i, f := range flags {
@@ -21,7 +21,7 @@ func TestBuildRPCFlags_ModelIncluded(t *testing.T) {
 }
 
 func TestBuildRPCFlags_ModelEmpty(t *testing.T) {
-	flags := BuildRPCFlags("/tmp/session.json", "", 0, 0, "", "", "")
+	flags := BuildRPCFlags("/tmp/session.json", "", 0, 0, "", "", "", "")
 
 	for _, f := range flags {
 		if f == "--model" {
@@ -38,6 +38,7 @@ func TestBuildRPCFlags_AllFlags(t *testing.T) {
 		5*time.Minute,
 		":6060",
 		"test-model",
+		"deploy@api-node:/srv/logs",
 		"abc123",
 	)
 
@@ -48,6 +49,7 @@ func TestBuildRPCFlags_AllFlags(t *testing.T) {
 		"--timeout":       "5m0s",
 		"--http":          ":6060",
 		"--model":         "test-model",
+		"--ssh":           "deploy@api-node:/srv/logs",
 		"--runid":         "abc123",
 	}
 

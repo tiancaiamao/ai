@@ -64,8 +64,9 @@ func (t *ChangeWorkspaceTool) Execute(ctx context.Context, args map[string]any) 
 	// Clean the path
 	newPath = filepath.Clean(newPath)
 
-	// Try to resolve symlinks
-	if resolved, err := filepath.EvalSymlinks(newPath); err == nil {
+	// Try to resolve symlinks — local host only; a remote world cannot
+	// resolve links through the local filesystem, and skipping is safe.
+	if resolved, err := filepath.EvalSymlinks(newPath); err == nil && t.workspace.GetWorld() == nil {
 		newPath = resolved
 	}
 

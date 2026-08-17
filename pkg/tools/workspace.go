@@ -1,12 +1,15 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/tiancaiamao/ai/pkg/execworld"
 )
 
 // Workspace represents a dynamic workspace that can track directory changes.
@@ -17,19 +20,42 @@ type Workspace struct {
 	cwd          string
 	gitRoot      string
 	initialCwd   string
-	gitRootDirty bool // flag to avoid repeated git calls
+	gitRootDirty bool            // flag to avoid repeated git calls
+	world        execworld.World // nil = operate on the local host
 }
 
 // NewWorkspace creates a new Workspace with the specified initial working directory.
 // It will attempt to detect the git root directory for session storage.
 func NewWorkspace(initialCwd string) (*Workspace, error) {
+	return newWorkspace(initialCwd, nil)
+}
+
+// NewWorkspaceWithWorld creates a Workspace whose tools operate against the
+// given World (e.g. a remote host via SSHWorld) instead of the local host.
+// initialCwd is a path in that world.
+func NewWorkspaceWithWorld(initialCwd string, world execworld.World) (*Workspace, error) {
+	if world == nil {
+		return nil, fmt.Errorf("NewWorkspaceWithWorld: nil world")
+	}
+	return newWorkspace(initialCwd, world)
+}
+
+func newWorkspace(initialCwd string, world execworld.World) (*Workspace, error) {
 	ws := &Workspace{
 		initialCwd: initialCwd,
 		cwd:        initialCwd,
+		world:      world,
 	}
 	// Initialize git root
 	ws.detectGitRoot()
 	return ws, nil
+}
+
+// GetWorld returns the execution world, or nil when operating locally.
+func (w *Workspace) GetWorld() execworld.World {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.world
 }
 
 // MustNewWorkspace is like NewWorkspace but panics on error. Useful for initialization.
@@ -60,9 +86,19 @@ func (w *Workspace) SetCWD(cwd string) error {
 		return fmt.Errorf("failed to resolve absolute path: %w", err)
 	}
 
-	// Verify the directory exists
-	if _, err := os.Stat(absPath); err != nil {
-		return fmt.Errorf("directory does not exist: %w", err)
+	// Verify the directory exists (in the execution world).
+	if w.world != nil {
+		fi, err := w.world.Stat(context.Background(), absPath)
+		if err != nil {
+			return fmt.Errorf("failed to stat directory: %w", err)
+		}
+		if !fi.Exists {
+			return fmt.Errorf("directory does not exist: %s", absPath)
+		}
+	} else {
+		if _, err := os.Stat(absPath); err != nil {
+			return fmt.Errorf("directory does not exist: %w", err)
+		}
 	}
 
 	w.cwd = absPath
@@ -109,6 +145,13 @@ func (w *Workspace) GetGitRoot() string {
 // It sets w.gitRoot and w.gitRootDirty = false.
 func (w *Workspace) detectGitRoot() {
 	defer func() { w.gitRootDirty = false }()
+
+	// Remote worlds: git root detection would run git on the local host against
+	// a remote path, which is meaningless. Fall back to the initial cwd.
+	if w.world != nil {
+		w.gitRoot = w.initialCwd
+		return
+	}
 
 	// Try git rev-parse --show-toplevel
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")

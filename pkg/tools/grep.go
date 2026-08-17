@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/execworld"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,12 +80,14 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	cwd := t.workspace.GetCWD()
 	searchPath := cwd
 	if path, ok := args["path"].(string); ok && path != "" {
-		// Expand ~ to home directory
-		if strings.HasPrefix(path, "~/") {
+		// Expand ~ to home directory — only locally. A remote world resolves
+		// "~" against its own home (the searchPath is passed through argv via
+		// SSHWorld.Run, and the world rewrites a leading "~").
+		if strings.HasPrefix(path, "~/") && t.workspace.GetWorld() == nil {
 			home, _ := os.UserHomeDir()
 			path = filepath.Join(home, path[2:])
 		}
-		if !filepath.IsAbs(path) {
+		if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") {
 			searchPath = filepath.Join(cwd, path)
 		} else {
 			searchPath = path
@@ -101,9 +104,19 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	// Build command
+	// Executable availability is probed in the execution world: the local
+	// rg/grep binaries are irrelevant when operating remotely.
 	var cmd *exec.Cmd
-	if t.commandExists("rg") {
-		cmdArgs := []string{"--no-heading", "--line-number", "--color=never"}
+	var cmdArgs []string
+	var cmdName string
+	world := t.workspace.GetWorld()
+	useRG := t.commandExists("rg")
+	if world != nil {
+		useRG = world.CommandExists(ctx, "rg")
+	}
+	if useRG {
+		cmdName = "rg"
+		cmdArgs = []string{"--no-heading", "--line-number", "--color=never"}
 
 		if ignoreCase {
 			cmdArgs = append(cmdArgs, "-i")
@@ -126,7 +139,8 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		cmd = exec.CommandContext(ctx, "rg", cmdArgs...)
 	} else {
 		// Fall back to grep
-		cmdArgs := []string{"-rn"}
+		cmdName = "grep"
+		cmdArgs = []string{"-rn"}
 
 		if ignoreCase {
 			cmdArgs = append(cmdArgs, "-i")
@@ -149,6 +163,44 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	cmd.Dir = cwd
+
+	// Remote world path: run the same rg/grep argv through the execution
+	// world (the argument semantics are machine-independent).
+	if world != nil {
+		argv := append([]string{cmdName}, cmdArgs...)
+		res, runErr := world.Run(ctx, execworld.RunSpec{Argv: argv, Cwd: cwd})
+		output := res.Stdout
+		if res.Stderr != "" {
+			if output != "" {
+				output += "\n"
+			}
+			output += res.Stderr
+		}
+		if runErr != nil {
+			return nil, fmt.Errorf("grep failed: %w", runErr)
+		}
+		// Grep returns exit code 1 when no matches found, which is not an error
+		if res.ExitCode != 0 && output == "" {
+			return []agentctx.ContentBlock{
+				agentctx.TextContent{
+					Type: "text",
+					Text: "No matches found",
+				},
+			}, nil
+		}
+
+		result := strings.TrimSpace(output)
+		if result == "" {
+			result = "No matches found"
+		}
+		result = limitMatches(result, limit)
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: result,
+			},
+		}, nil
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

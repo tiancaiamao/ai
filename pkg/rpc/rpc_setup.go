@@ -9,6 +9,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
+	"github.com/tiancaiamao/ai/pkg/execworld"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -26,6 +27,7 @@ type rpcAppSetupParams struct {
 	modelOverride      string
 	runID              string
 	role               string
+	ssh                string // "user@host[:path]"; empty = operate locally
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -132,7 +134,7 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 	}
 
 	// --- Workspace & Tools ---
-	ws, registry, err := createWorkspaceAndRegistry(cwd, cfg)
+	ws, registry, err := createWorkspaceAndRegistry(cwd, cfg, params.ssh)
 	if err != nil {
 		return nil, err
 	}
@@ -324,8 +326,21 @@ func loadOrCreateSession(sessionPath string, cwd string) (*session.Session, stri
 }
 
 // createWorkspaceAndRegistry creates the workspace and tool registry.
-func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspace, *tools.Registry, error) {
-	ws, err := tools.NewWorkspace(cwd)
+// When sshTarget is non-empty, the tools operate against the remote host
+// instead of the local one.
+func createWorkspaceAndRegistry(cwd string, cfg *config.Config, sshTarget string) (*tools.Workspace, *tools.Registry, error) {
+	var ws *tools.Workspace
+	var err error
+	if sshTarget != "" {
+		world, worldErr := execworld.NewSSHWorld(sshTarget)
+		if worldErr != nil {
+			return nil, nil, fmt.Errorf("failed to connect ssh target %s: %w", sshTarget, worldErr)
+		}
+		slog.Info("SSH world enabled", "target", world.Host(), "remote_cwd", world.InitialCwd())
+		ws, err = tools.NewWorkspaceWithWorld(world.InitialCwd(), world)
+	} else {
+		ws, err = tools.NewWorkspace(cwd)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create workspace: %w", err)
 	}

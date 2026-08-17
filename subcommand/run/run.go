@@ -32,7 +32,8 @@ type serveConfig struct {
 	name         string
 	role         string
 	model        string
-	daemon       bool // true for serve (new process group), false for run
+	ssh          string // "user@host[:path]"; empty = execute tools locally
+	daemon       bool   // true for serve (new process group), false for run
 }
 
 // serveProcess holds the runtime state of a managed RPC subprocess.
@@ -78,7 +79,7 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	sysPrompt := helpers.ParseSystemPrompt(cfg.systemPrompt)
 
 	// Build RPC flags to forward.
-	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
+	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, cfg.ssh, id)
 	if cfg.role != "" {
 		// Validate role exists before spawning to avoid silent failure.
 		roleConfigPath := filepath.Join(homeDir, ".ai", "roles", cfg.role, "agent.yaml")
@@ -214,6 +215,7 @@ func RunSubcommand(binPath string) {
 	nameFlag := fs.String("name", "", "Human-readable name for the run")
 	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
+	sshFlag := fs.String("ssh", "", `Execute tools on a remote host via ssh. Format: "user@host" or "user@host:/absolute/path"`)
 	fs.Parse(os.Args[1:])
 
 	sp := startServeProcess(binPath, serveConfig{
@@ -225,6 +227,7 @@ func RunSubcommand(binPath string) {
 		name:         *nameFlag,
 		role:         *roleFlag,
 		model:        *modelFlag,
+		ssh:          *sshFlag,
 	})
 	defer sp.Close()
 
@@ -286,6 +289,7 @@ func ServeSubcommand(binPath string) {
 	roleFlag := fs.String("role", "", "Agent role name (e.g. coder, orchestrator, validator). Loads ~/.ai/roles/<name>/agent.yaml")
 	idFileFlag := fs.String("id-file", "", "Write run ID to this file after startup (useful for background mode)")
 	modelFlag := fs.String("model", "", "Override LLM model ID (e.g. claude-sonnet-4-20250514)")
+	sshFlag := fs.String("ssh", "", `Execute tools on a remote host via ssh. Format: "user@host" or "user@host:/absolute/path"`)
 	fs.Parse(os.Args[1:])
 
 	sp := startServeProcess(binPath, serveConfig{
@@ -297,6 +301,7 @@ func ServeSubcommand(binPath string) {
 		name:         *nameFlag,
 		role:         *roleFlag,
 		model:        *modelFlag,
+		ssh:          *sshFlag,
 		daemon:       true,
 	})
 	defer sp.Close()
@@ -366,7 +371,7 @@ func ServeSubcommand(binPath string) {
 }
 
 // BuildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
-func BuildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, runid string) []string {
+func BuildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Duration, http, model, ssh, runid string) []string {
 	var flags []string
 	if session != "" {
 		flags = append(flags, "--session", session)
@@ -385,6 +390,9 @@ func BuildRPCFlags(session, systemPrompt string, maxTurns int, timeout time.Dura
 	}
 	if model != "" {
 		flags = append(flags, "--model", model)
+	}
+	if ssh != "" {
+		flags = append(flags, "--ssh", ssh)
 	}
 	if runid != "" {
 		flags = append(flags, "--runid", runid)
