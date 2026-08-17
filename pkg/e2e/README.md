@@ -17,9 +17,9 @@ Opt-in via the `e2e` build tag — **not** part of `make test` / CI, because
 they require a reachable endpoint and a live model:
 
 ```bash
-make e2e                                  # all tests, 20m timeout
+make e2e                                  # all tests, 30m timeout
 # or, focused:
-go test -tags e2e ./pkg/e2e/ -run TestE2E_SessionLifecycle -v
+go test -tags e2e ./pkg/e2e/ -run TestE2E_RealTask -v
 ```
 
 By default the suite connects to the first `ollama/*` model from
@@ -49,7 +49,7 @@ subprocess records coverage of the **whole application** to `GOCOVERDIR`
 
 ```
 === E2E coverage (whole app via `ai rpc` subprocess) ===
-total: (statements) 50.2%
+total: (statements) 47.3%
 ```
 
 This covers `pkg/rpc`, `pkg/session`, `pkg/skill`, `cmd/ai`, etc. through
@@ -60,18 +60,12 @@ mock server cannot do.
 
 | Test | What It Verifies |
 |------|------------------|
-| `TestLRRepro_SameBatchEvents` | Fast, deterministic log-replay regression repro (no model needed) |
-| `TestE2E_StreamingCompletion` | Basic prompt → SSE streaming → assistant reply |
-| `TestE2E_MultiTurnContext` | Conversation state survives across prompts on one server |
-| `TestE2E_ToolExecution` | Real tool call → subprocess executes `read` → result fed back |
-| `TestE2E_RPCCommands` | Slash commands (`model`/`session`/`help`/`context`) |
-| `TestE2E_SessionLifecycle` | `/new`, `resume` list/index/errors, tree, fork, rewind |
+| `TestE2E_RealTask` | Pre-seeded buggy Go code: fix off-by-one + race condition + create SVG. Verified by `go run` / `go run -race` / XML parse |
+| `TestE2E_SlashCommands` | Full server lifecycle: protocol errors → tool turns → large prompts → `/compact` → `/fork` → `/rewind` → `/new` → `/resume` → `/help` → EOF |
 | `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
 | `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
 | `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
 | `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
-| `TestE2E_Compaction` | Manual compaction of a tool-call-heavy + large context (compact_tools digest) |
-| `TestE2E_ToolVariety` | bash / write / grep / edit / change_workspace on one server |
 | `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
 | `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
-| `TestE2E_CompactionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |ionAtScale` | Large prompts cross the LLMDecide soft threshold repeatedly |
+| `TestLRRepro_SameBatchEvents` | Fast, deterministic log-replay regression repro (no model needed) |

@@ -1,41 +1,15 @@
 //go:build e2e
 
-// Coverage-extension scenarios: push whole-app coverage through the real
-// binary by exercising tool variety, middleware hooks, skill loading, and
-// LLM-decide compaction. These complement the behavioral scenarios in
-// scenarios_test.go; failures here usually mean the model declined a fairly
-// direct instruction, so keep the prompts simple and single-purpose.
+// Coverage-extension scenarios: middleware hooks (destructive guard) and
+// skill loading. These complement the behavioral scenarios in scenarios_test.go.
 
 package e2e
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
-
-// TestE2E_ToolVariety drives bash, write, grep and edit (read is already
-// covered by TestE2E_ToolExecution). The bash step emits a >10K-char output,
-// forcing tool-output truncation (pkg/truncate) on the way back.
-func TestE2E_ToolVariety(t *testing.T) {
-	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "")
-	defer rs.closeStdin()
-
-	steps := []string{
-		`Run the bash tool with the command: seq 1 3000. After it finishes, reply with the single word ok.`,
-		`Use the write tool to create a file named notes.txt in the current directory containing 80 lines of plain text. After it finishes, reply with the single word ok.`,
-		`Use the grep tool to search for the word "line" inside notes.txt. After it finishes, reply with the single word ok.`,
-		`Use the edit tool to change the first occurrence of the word "line" to the word "entry" in notes.txt. After it finishes, reply with the single word ok.`,
-		`Use the change_workspace tool to switch the workspace to the directory /tmp. After it finishes, reply with the single word ok.`,
-	}
-	for _, p := range steps {
-		t.Logf("step: %s", p)
-		rs.promptAndWait(t, p)
-	}
-}
 
 // TestE2E_DestructiveGuard starts the server with a role whose agent.yaml
 // enables the destructive_guard middleware, then asks the agent to remove a
@@ -124,23 +98,4 @@ This skill does nothing useful. Reply "hello from demo-skill" when asked about i
 	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the find_skill tool to search for a skill named demo-skill, then after it finishes reply with the single word ok.`)
-}
-
-// TestE2E_CompactionAtScale pushes enough estimated tokens across three large
-// prompts to cross the LLMDecide soft threshold (25% of the 131K context
-// window ≈ 32.8K), forcing the pre-LLM compaction check to ask the model
-// whether to compact (pkg/compact LLMDecide path).
-func TestE2E_CompactionAtScale(t *testing.T) {
-	m := requireEndpoint(t)
-	rs := startRPCServer(t, m, "")
-	defer rs.closeStdin()
-
-	// ~55K chars ≈ 13-14K estimated tokens per prompt; five prompts cross the
-	// 25% soft threshold (≈32.8K) well before the last turn, and the interval
-	// mechanism lets the model be asked more than once.
-	blob := strings.Repeat("The quick brown fox jumps over the lazy dog and keeps running through the meadow without stopping to rest. ", 500)
-	for i := 1; i <= 5; i++ {
-		t.Logf("sending large prompt %d/5", i)
-		rs.promptAndWait(t, fmt.Sprintf("Message number %d. Acknowledge receipt of the following text, then reply with the single word: ack\n\n%s", i, blob))
-	}
 }

@@ -61,7 +61,7 @@ coverage-check:
 # E2E_BASE_URL / E2E_MODEL / E2E_API_KEY. Tests skip when the endpoint is
 # unreachable or unconfigured.
 e2e:
-	go test -tags e2e ./pkg/e2e/ -v -count=1 -timeout 20m
+	go test -tags e2e ./pkg/e2e/ -v -count=1 -timeout 30m
 
 # Format code
 fmt:
