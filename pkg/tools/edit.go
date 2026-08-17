@@ -74,8 +74,16 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	// Resolve path using current workspace
 	fullPath := t.resolvePath(path)
 
-	// Read file
-	content, err := os.ReadFile(fullPath)
+	// Read file — through the execution world (remote) or locally.
+	var (
+		content []byte
+		err     error
+	)
+	if world := t.workspace.GetWorld(); world != nil {
+		content, err = world.ReadFile(ctx, fullPath)
+	} else {
+		content, err = os.ReadFile(fullPath)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -94,9 +102,15 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	// Replace text
 	editedContent := fileContent[:match.start] + newText + fileContent[match.end:]
 
-	// Write back
-	if err := os.WriteFile(fullPath, []byte(editedContent), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write file: %w", err)
+	// Write back — through the execution world (remote) or locally.
+	if world := t.workspace.GetWorld(); world != nil {
+		if err := world.WriteFile(ctx, fullPath, []byte(editedContent), 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write file: %w", err)
+		}
+	} else {
+		if err := os.WriteFile(fullPath, []byte(editedContent), 0644); err != nil {
+			return nil, fmt.Errorf("failed to write file: %w", err)
+		}
 	}
 
 	// Return success with diff
@@ -109,13 +123,14 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 }
 
 // resolvePath resolves a path relative to the current working directory.
+// A leading "~" is expanded against the local home only for local worlds;
+// remote worlds keep it so the execution world expands it against its own home.
 func (t *EditTool) resolvePath(path string) string {
-	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") {
+	if strings.HasPrefix(path, "~/") && t.workspace.GetWorld() == nil {
 		home, _ := os.UserHomeDir()
 		path = filepath.Join(home, path[2:])
 	}
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "~/") {
 		return path
 	}
 	return t.workspace.ResolvePath(path)

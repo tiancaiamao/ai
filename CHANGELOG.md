@@ -3,6 +3,46 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Remote Execution via SSHWorld (2026-08)
+
+**Problem**: Agents could only act on the local machine. Production log analysis,
+jump hosts, and machines that allow SSH but forbid installing agents all require
+operating a remote environment — yet installing the agent there is often
+impossible. The agent must stay local (session/roles/skills stay on the local
+machine) while its tools act elsewhere.
+
+**What changed**:
+
+- **New `pkg/execworld` package**: a `World` interface (ReadFile/Stat/Run/
+  WriteFile/CommandExists) plus `SSHWorld`, an implementation that forwards
+  primitive operations to a remote host through the system `ssh` client. Each
+  operation spawns a fresh `ssh` process; a ControlMaster socket keeps the
+  auth/TCP cost amortized. Command text travels over stdin (`cd <cwd> && exec
+  bash -s`), so arbitrary agent commands need no shell escaping; file content
+  travels over stdin into remote `cat > path` for the same reason.
+- **Password auth without sshpass**: `AI_SSH_PASSWORD` env + OpenSSH's native
+  `SSH_ASKPASS` mechanism (`SSH_ASKPASS_REQUIRE=force`), so password-enabled
+  targets drop `BatchMode`; passwordless targets keep it.
+- **`--ssh user@host[:path]` flag** threaded through `ai run` / `ai rpc`
+  (BuildRPCFlags): the workspace is created against `world.InitialCwd()`
+  (remote home, or `:path`), and tools resolve paths in the remote world.
+- **Tool layer**: bash/read/grep/write/edit gained a world branch — the same
+  tools now operate on the remote host when `--ssh` is set; local paths keep
+  the pre-existing behavior (all existing tests pass unchanged). Grep probes
+  `rg` via `world.CommandExists` (remote semantics) and falls back to `grep`.
+  Remote `~` expansion is deferred to the world (`$HOME` on the remote side),
+  not expanded against the local home.
+- **Not moved**: local-only bash machinery (exitGracePeriod, Setpgid, streaming
+  drain) stays local; the remote path buffers output synchronously.
+
+**Why**: A dual-world model — control plane (session, roles, skills, config)
+always local, execution world remote — covers the target scenarios with zero
+install on the remote side. Compared with integrating the agent into remote
+environments or adding an MCP-client tool channel (the project already removed
+its Go MCP implementation), extending the existing built-in tools with a world
+branch is the minimal-complexity path: no new protocol, no new integration
+surface.
+
 ## Reverted: Executor-Level ToolTimeout Cap (2026-08)
 
 **Problem**: #361 wired up the previously-dead `Concurrency.ToolTimeout` config as an executor-level hard cap (`NewToolExecutorWithTimeout`), wrapping every tool call in `context.WithTimeout(ctx, toolTimeout)`. The cap is fundamentally incompatible with tools that manage their own timeouts:

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/execworld"
 )
 
 // exitGracePeriod is how long the bash tool keeps draining stdout/stderr
@@ -169,6 +170,46 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
+
+	// Remote world path: forward the command to the execution world, which
+	// collects all output synchronously (same semantics as the local path's
+	// fully-buffered result, without streaming/grace machinery).
+	if world := t.workspace.GetWorld(); world != nil {
+		result, runErr := world.Run(ctx, execworld.RunSpec{
+			Command: execCommand,
+			Cwd:     cwd,
+		})
+		var sb strings.Builder
+		sb.WriteString(result.Stdout)
+		if result.Stderr != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(result.Stderr)
+		}
+		if result.TimedOut {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(fmt.Sprintf("Command timed out after %s", t.execTimeout))
+		} else if result.ExitCode != 0 {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(fmt.Sprintf("Command exited with error (exit code %d)", result.ExitCode))
+		}
+		if runErr != nil && sb.Len() == 0 {
+			sb.WriteString(fmt.Sprintf("Command error: %v", runErr))
+		}
+		// Keep SudoHint: remote worlds use the sudo -n rewrite, so the hint
+		// about enabling passwordless sudo is just as relevant there.
+		if hint := SudoHint(sb.String()); hint != "" {
+			sb.WriteString(hint)
+		}
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{Type: "text", Text: sb.String()},
+		}, nil
+	}
 
 	// Handle timeout parameter (default: 120 seconds)
 	execTimeout := t.execTimeout

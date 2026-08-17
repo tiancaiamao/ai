@@ -93,19 +93,31 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid path argument")
 	}
 
-	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[2:])
-	}
+	// Read file — either through the execution world (remote) or locally.
+	var data []byte
+	var err error
+	if world := t.workspace.GetWorld(); world != nil {
+		// Remote: resolve relative paths against the remote cwd, but keep
+		// a leading "~" so the world expands it against the remote home.
+		if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") && path != "~" {
+			path = t.workspace.ResolvePath(path)
+		}
+		data, err = world.ReadFile(ctx, path)
+	} else {
+		// Expand ~ to home directory
+		if strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = filepath.Join(home, path[2:])
+		}
 
-	// Resolve path using current workspace
-	if !filepath.IsAbs(path) {
-		path = t.workspace.ResolvePath(path)
-	}
+		// Resolve path using current workspace
+		if !filepath.IsAbs(path) {
+			path = t.workspace.ResolvePath(path)
+		}
 
-	// Read file
-	data, err := os.ReadFile(path)
+		// Read file
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
 	}

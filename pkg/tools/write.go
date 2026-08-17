@@ -55,6 +55,24 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agentct
 		return nil, fmt.Errorf("invalid arguments")
 	}
 
+	// Write file — through the execution world (remote) or locally.
+	if world := t.workspace.GetWorld(); world != nil {
+		// Remote: keep a leading "~" so the world expands it against the
+		// remote home; resolve relative paths against the remote cwd.
+		if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") && path != "~" {
+			path = t.workspace.ResolvePath(path)
+		}
+		if err := world.WriteFile(ctx, path, []byte(content), 0o644); err != nil {
+			return nil, fmt.Errorf("failed to write file %s: %w", path, err)
+		}
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path),
+			},
+		}, nil
+	}
+
 	// Expand ~ to home directory
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()

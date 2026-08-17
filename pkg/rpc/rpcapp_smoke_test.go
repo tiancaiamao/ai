@@ -64,7 +64,7 @@ func runRPCSmoke(t *testing.T, tmpDir string, cmds []string, modelOverride strin
 		respCh <- readResponses(outReader)
 	}()
 
-	_ = RunRPC(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", modelOverride, "smoke-test")
+	_ = RunRPC(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", modelOverride, "smoke-test", "")
 	outWriter.Close()
 
 	all := <-respCh
