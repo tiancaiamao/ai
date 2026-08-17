@@ -616,25 +616,25 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 					},
 				},
 			})
-		case "assistant":
-			item := map[string]any{
-				"role":    "assistant",
-				"content": msg.Content,
+				case "assistant":
+			// Emit plain text first (if any). Reasoning items are not
+			// replayable across requests without store:true.
+			if msg.Content != "" {
+				input = append(input, map[string]any{
+					"role":    "assistant",
+					"content": msg.Content,
+				})
 			}
-			if len(msg.ToolCalls) > 0 {
-				calls := make([]map[string]any, 0, len(msg.ToolCalls))
-				for _, tc := range msg.ToolCalls {
-					calls = append(calls, map[string]any{
-						"type": "function_call",
-						"id":   tc.ID,
-						"call_id": tc.ID,
-						"name": tc.Function.Name,
-						"arguments": tc.Function.Arguments,
-					})
-				}
-				item["tool_calls"] = calls
+			// Responses API requires tool calls as top-level function_call
+			// items — NOT chat-completions style nested "tool_calls".
+			for _, tc := range msg.ToolCalls {
+				input = append(input, map[string]any{
+					"type":      "function_call",
+					"call_id":   tc.ID,
+					"name":      tc.Function.Name,
+					"arguments": tc.Function.Arguments,
+				})
 			}
-			input = append(input, item)
 		case "tool":
 			input = append(input, map[string]any{
 				"type":    "function_call_output",

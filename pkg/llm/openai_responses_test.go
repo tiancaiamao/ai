@@ -359,3 +359,56 @@ func (c responsesEventChunk) outputItemDone() responsesEventChunk {
 	c.Type = "response.output_item.done"
 	return c
 }
+// Regression test: assistant tool calls must be emitted as top-level
+// function_call items, not chat-completions style nested "tool_calls".
+// The nested form makes the upstream provider reject the request with 400.
+func TestBuildOpenAIResponsesRequest_ToolCallReplay(t *testing.T) {
+	model := Model{ID: "gpt-test"}
+	ctx := LLMContext{
+		Messages: []LLMMessage{
+			{Role: "user", Content: "run ls"},
+			{
+				Role: "assistant",
+				ToolCalls: []ToolCall{
+					{ID: "call_1", Function: FunctionCall{Name: "bash", Arguments: `{"command":"ls"}`}},
+				},
+			},
+			{Role: "tool", ToolCallID: "call_1", Content: "file1.txt"},
+		},
+	}
+	req := buildOpenAIResponsesRequest(model, ctx)
+	input := req["input"].([]map[string]any)
+
+	if len(input) != 3 {
+		t.Fatalf("expected 3 input items, got %d: %v", len(input), input)
+	}
+
+	// Item 1: user message
+	if input[0]["role"] != "user" {
+		t.Errorf("input[0] role = %v, want user", input[0]["role"])
+	}
+
+	// Item 2: top-level function_call (no nested tool_calls anywhere)
+	if input[1]["type"] != "function_call" {
+		t.Errorf("input[1] type = %v, want function_call", input[1]["type"])
+	}
+	if input[1]["call_id"] != "call_1" {
+		t.Errorf("input[1] call_id = %v, want call_1", input[1]["call_id"])
+	}
+	if input[1]["name"] != "bash" {
+		t.Errorf("input[1] name = %v, want bash", input[1]["name"])
+	}
+	for _, item := range input {
+		if _, ok := item["tool_calls"]; ok {
+			t.Errorf("input item must not contain nested tool_calls: %v", item)
+		}
+	}
+
+	// Item 3: function_call_output
+	if input[2]["type"] != "function_call_output" {
+		t.Errorf("input[2] type = %v, want function_call_output", input[2]["type"])
+	}
+	if input[2]["call_id"] != "call_1" {
+		t.Errorf("input[2] call_id = %v, want call_1", input[2]["call_id"])
+	}
+}
