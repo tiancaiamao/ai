@@ -371,3 +371,128 @@ func indexOf(s, substr string) int {
 	}
 	return -1
 }
+
+// --- Additional ValidateToolCallArgs tests ---
+
+func TestValidateToolCallArgs_Extended(t *testing.T) {
+	tests := []struct {
+		name      string
+		toolName  string
+		args      map[string]any
+		wantError bool
+	}{
+		// write: missing content
+		{"write missing content", "write", map[string]any{"path": "a.txt"}, true},
+		// edit: valid
+		{"edit valid", "edit", map[string]any{"path": "a.txt", "oldText": "a", "newText": "b"}, false},
+		// edit: missing path
+		{"edit missing path", "edit", map[string]any{"oldText": "a", "newText": "b"}, true},
+		// edit: missing oldText (but has old)
+		{"edit with old alias", "edit", map[string]any{"path": "a.txt", "old": "a", "newText": "b"}, false},
+		// edit: missing newText (but has new)
+		{"edit with new alias", "edit", map[string]any{"path": "a.txt", "oldText": "a", "new": "b"}, false},
+		// edit: missing both old and newText
+		{"edit missing old and newText", "edit", map[string]any{"path": "a.txt"}, true},
+		// grep: valid
+		{"grep valid", "grep", map[string]any{"pattern": "foo"}, false},
+		// grep: with query alias
+		{"grep with query alias", "grep", map[string]any{"query": "foo"}, false},
+		// grep: missing pattern
+		{"grep missing pattern", "grep", map[string]any{}, true},
+		// bash: with cmd alias
+		{"bash with cmd alias", "bash", map[string]any{"cmd": "ls"}, false},
+		// read: missing path
+		{"read missing path", "read", map[string]any{}, true},
+		// unknown tool: always passes
+		{"unknown tool", "unknown_tool", map[string]any{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateToolCallArgs(tt.toolName, tt.args)
+			if (err != nil) != tt.wantError {
+				t.Errorf("ValidateToolCallArgs(%q) error = %v, wantError %v", tt.toolName, err, tt.wantError)
+			}
+		})
+	}
+}
+
+// --- Additional parseToolTag tests ---
+
+func TestParseToolTag_Extended(t *testing.T) {
+	tests := []struct {
+		name     string
+		tagName  string
+		body     string
+		wantTool string
+		wantOK   bool
+	}{
+		// read_file alias
+		{"read_file alias", "read_file", "<path>/tmp/f.txt</path>", "read", true},
+		// read with offset+limit
+		{"read with offset+limit", "read", "<path>/tmp/f.txt</path><offset>10</offset><limit>5</limit>", "read", true},
+		// read missing path
+		{"read no path", "read", "no tags here", "", false},
+		// write: missing content
+		{"write no content", "write", "<path>/tmp/f.txt</path>", "", false},
+		// write: missing path
+		{"write no path", "write", "<content>hello</content>", "", false},
+		// write: using file alias
+		{"write file alias", "write", "<file>/tmp/f.txt</file><text>hello</text>", "write", true},
+		// edit: missing old
+		{"edit no old", "edit", "<path>a.txt</path><newText>b</newText>", "", false},
+		// edit: missing new
+		{"edit no new", "edit", "<path>a.txt</path><oldText>a</oldText>", "", false},
+		// edit: using old/new aliases
+		{"edit aliases", "edit", "<file>a.txt</file><old>a</old><new>b</new>", "edit", true},
+		// bash: body-only
+		{"bash body only", "bash", "make test", "bash", true},
+		// bash: empty
+		{"bash empty", "bash", "", "", false},
+		// grep: using query alias
+		{"grep query alias", "grep", "<query>func.*Test</query>", "grep", true},
+		// grep: with path
+		{"grep with path", "grep", "<pattern>TODO</pattern><path>/src</path>", "grep", true},
+		// grep: missing pattern
+		{"grep no pattern", "grep", "<path>/src</path>", "", false},
+		// unknown tag
+		{"unknown tag", "unknown", "<arg>val</arg>", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, _, ok := parseToolTag(tt.tagName, tt.body)
+			if ok != tt.wantOK {
+				t.Errorf("parseToolTag(%q) ok = %v, want %v", tt.tagName, ok, tt.wantOK)
+			}
+			if tool != tt.wantTool {
+				t.Errorf("parseToolTag(%q) tool = %q, want %q", tt.tagName, tool, tt.wantTool)
+			}
+		})
+	}
+}
+
+// --- truncateLine tests ---
+
+func TestTruncateLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		limit int
+		want  string
+	}{
+		{"no truncation", "hello", 10, "hello"},
+		{"exact", "hello", 5, "hello"},
+		{"limit 0", "hello", 0, "hello"},
+		{"limit negative", "hello", -1, "hello"},
+		{"limit 3", "hello", 3, "hel"},
+		{"limit 2", "hello", 2, "he"},
+		{"limit 4 with ellipsis", "hello", 4, "h..."},
+		{"limit 6 with ellipsis", "hello world", 6, "hel..."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := truncateLine(tt.value, tt.limit); got != tt.want {
+				t.Errorf("truncateLine(%q, %d) = %q, want %q", tt.value, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
