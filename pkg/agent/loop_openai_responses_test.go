@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-			"net/http"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -36,17 +36,17 @@ func TestStreamAssistantResponse_OpenAIResponsesThinking(t *testing.T) {
 
 	config := &LoopConfig{
 		Model: llm.Model{
-			ID:       "gpt-test",
-			Provider: "opencode",
-			BaseURL:  server.URL,
-			API:      "openai-responses",
+			ID:        "gpt-test",
+			Provider:  "opencode",
+			BaseURL:   server.URL,
+			API:       "openai-responses",
 			Reasoning: true,
 		},
 		APIKey:        "test-key",
 		ThinkingLevel: "high",
 	}
 
-		stream := newTestAgentEventStream()
+	stream := newTestAgentEventStream()
 	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
 	if err != nil {
 		t.Fatalf("streamAssistantResponse returned error: %v", err)
@@ -128,7 +128,7 @@ func TestStreamAssistantResponse_OpenAIResponsesToolCall(t *testing.T) {
 	if got, _ := calls[0].Arguments["command"].(string); got != "ls" {
 		t.Errorf("command = %v, want ls", calls[0].Arguments["command"])
 	}
-		if msg.StopReason != "tool_calls" {
+	if msg.StopReason != "tool_calls" {
 		t.Errorf("stopReason = %q, want tool_calls", msg.StopReason)
 	}
 }

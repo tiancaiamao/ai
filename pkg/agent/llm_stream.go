@@ -244,7 +244,7 @@ func streamAssistantResponse(
 					ContentIndex: 0,
 				}))
 			}
-						var finalMessage agentctx.AgentMessage
+			var finalMessage agentctx.AgentMessage
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				finalMessage = *partialMessage

@@ -417,7 +417,8 @@ func StreamOpenAIResponses(
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))})
+			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
 			return
 		}
 
@@ -428,21 +429,40 @@ func StreamOpenAIResponses(
 		buf := make([]byte, maxTokenSize)
 		scanner.Buffer(buf, maxTokenSize)
 
+		// Set read deadline so a stalled upstream (connected but silent)
+		// triggers the chunk interval timeout instead of hanging until the
+		// total request deadline.
+		type deadliner interface {
+			SetReadDeadline(time.Time) error
+		}
+		setReadDeadline := func() {
+			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
+				nextDeadline := time.Now().Add(chunkIntervalTimeout)
+				if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
+					nextDeadline = ctxDeadline
+				}
+				dl.SetReadDeadline(nextDeadline)
+			}
+		}
+		setReadDeadline()
+
 		parser := newOpenAIResponsesParser()
-		var lastChunkTime time.Time
-		lastChunkTime = time.Now()
 
 		// Signal stream start so the agent layer accepts subsequent deltas.
 		stream.Push(LLMStartEvent{Partial: NewPartialMessage()})
 
 		for scanner.Scan() {
-			line := scanner.Text()
+			setReadDeadline()
 
-			// Check if chunk interval timeout has been exceeded
-			if chunkIntervalTimeout > 0 && time.Since(lastChunkTime) > chunkIntervalTimeout {
-				stream.Push(LLMErrorEvent{Error: fmt.Errorf("chunk interval timeout: no data received for %v", chunkIntervalTimeout)})
+			// Check parent context cancellation
+			select {
+			case <-ctx.Done():
+				stream.Push(LLMErrorEvent{Error: ctx.Err()})
 				return
+			default:
 			}
+
+			line := scanner.Text()
 
 			// Skip empty lines and SSE comments
 			if line == "" || strings.HasPrefix(line, ":") {
@@ -455,34 +475,33 @@ func StreamOpenAIResponses(
 			}
 			data := strings.TrimPrefix(line, "data: ")
 
+			// Some proxies terminate with a bare [DONE] sentinel, which is
+			// not valid JSON — check before unmarshal or the break below is
+			// unreachable.
+			if data == "[DONE]" {
+				break
+			}
+
 			var chunk responsesEventChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue // Skip malformed chunks
 			}
 
-			// Update last chunk time
-			lastChunkTime = time.Now()
-
 			if chunk.Type == "" {
-				if data == "[DONE]" {
-					break
-				}
 				continue
 			}
 
-			// Stream deltas to the consumer as they arrive.
+			// Stream deltas to the consumer as they arrive. Slot accumulation
+			// happens exclusively in parser.handle below — do not write to
+			// slots here or deltas will be double-accumulated.
 			switch chunk.Type {
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				parser.getOrCreateSlot(chunk.OutputIndex, slotThinking).text.WriteString(chunk.Delta)
 				stream.Push(LLMThinkingDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
 			case "response.reasoning_summary_part.done":
-				parser.getOrCreateSlot(chunk.OutputIndex, slotThinking).text.WriteString("\n\n")
 				stream.Push(LLMThinkingDeltaEvent{Delta: "\n\n", Index: chunk.OutputIndex})
 			case "response.output_text.delta", "response.refusal.delta":
-				parser.getOrCreateSlot(chunk.OutputIndex, slotText).text.WriteString(chunk.Delta)
 				stream.Push(LLMTextDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
 			case "response.function_call_arguments.delta":
-				parser.getOrCreateSlot(chunk.OutputIndex, slotToolCall).args.WriteString(chunk.Delta)
 				stream.Push(LLMToolCallDeltaEvent{
 					Index: chunk.OutputIndex,
 					ToolCall: &ToolCall{
@@ -492,9 +511,6 @@ func StreamOpenAIResponses(
 				})
 			case "response.output_item.added":
 				if chunk.Item != nil && chunk.Item.Type == "function_call" {
-					slot := parser.getOrCreateSlot(chunk.OutputIndex, slotToolCall)
-					slot.toolID = chunk.Item.CallID
-					slot.toolName = chunk.Item.Name
 					stream.Push(LLMToolCallDeltaEvent{
 						Index: chunk.OutputIndex,
 						ToolCall: &ToolCall{
@@ -512,10 +528,10 @@ func StreamOpenAIResponses(
 				stream.Push(LLMErrorEvent{Error: err})
 				return
 			}
-						if stopReason != "" {
+			if stopReason != "" {
 				msg := parser.buildMessage()
 				usage := extractResponsesUsage(chunk)
-								// A completed response containing tool calls is a tool-use turn
+				// A completed response containing tool calls is a tool-use turn
 				// regardless of the provider status (mirrors pi's mapping).
 				// Note: agent's isSuccessfulStopReason whitelist expects
 				// "tool_calls" (OpenAI style), not Anthropic's "tool_use".
@@ -616,7 +632,7 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 					},
 				},
 			})
-				case "assistant":
+		case "assistant":
 			// Emit plain text first (if any). Reasoning items are not
 			// replayable across requests without store:true.
 			if msg.Content != "" {
@@ -675,10 +691,24 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 		reqBody["tools"] = tools
 	}
 
-	// Add reasoning parameters if the model supports it
+	// Add reasoning parameters if the model supports it. Honor the
+	// requested thinking level; default to medium when unspecified.
 	if model.Reasoning {
-		reqBody["reasoning"] = map[string]any{
-			"effort": "medium",
+		effort := "medium"
+		switch llmCtx.ThinkingLevel {
+		case "minimal", "low", "medium", "high":
+			effort = llmCtx.ThinkingLevel
+		case "xhigh":
+			effort = "high" // Responses API has no xhigh
+		case "off":
+			// No API-level disable for Responses; omit the parameter so the
+			// provider default applies.
+			effort = ""
+		}
+		if effort != "" {
+			reqBody["reasoning"] = map[string]any{
+				"effort": effort,
+			}
 		}
 	}
 

@@ -1,8 +1,13 @@
 package llm
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseProxyURL(t *testing.T) {
@@ -359,6 +364,7 @@ func (c responsesEventChunk) outputItemDone() responsesEventChunk {
 	c.Type = "response.output_item.done"
 	return c
 }
+
 // Regression test: assistant tool calls must be emitted as top-level
 // function_call items, not chat-completions style nested "tool_calls".
 // The nested form makes the upstream provider reject the request with 400.
@@ -410,5 +416,88 @@ func TestBuildOpenAIResponsesRequest_ToolCallReplay(t *testing.T) {
 	}
 	if input[2]["call_id"] != "call_1" {
 		t.Errorf("input[2] call_id = %v, want call_1", input[2]["call_id"])
+	}
+}
+
+// Regression test for double accumulation: the streaming loop used to write
+// deltas into parser slots directly AND feed them to parser.handle, doubling
+// text/thinking/args when output_item.done carried no authoritative content.
+// Streams deltas without output_item.done content; the final message must
+// contain each delta exactly once.
+func TestStreamOpenAIResponses_NoDoubleAccumulation(t *testing.T) {
+	var body strings.Builder
+	w := func(s string) {
+		body.WriteString("data: " + s + "\n\n")
+	}
+	w(`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m1"}}`)
+	w(`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`)
+	w(`{"type":"response.output_text.delta","output_index":0,"delta":" world"}`)
+	w(`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(rw, body.String())
+	}))
+	defer srv.Close()
+
+	model := Model{ID: "gpt-test", BaseURL: srv.URL, API: "openai-responses"}
+	stream := StreamOpenAIResponses(context.Background(), model, LLMContext{}, "k", 5*time.Second)
+	var msg LLMMessage
+	var streamErr error
+	for it := stream.Iterator(context.Background()); ; {
+		r, ok := <-it
+		if !ok {
+			break
+		}
+		if r.Done {
+			break
+		}
+		switch e := r.Value.(type) {
+		case LLMDoneEvent:
+			if e.Message != nil {
+				msg = *e.Message
+			}
+		case LLMErrorEvent:
+			streamErr = e.Error
+		}
+	}
+	if streamErr != nil {
+		t.Fatalf("stream error: %v", streamErr)
+	}
+	if msg.Content != "Hello world" {
+		t.Errorf("Content = %q, want %q (deltas must accumulate exactly once)", msg.Content, "Hello world")
+	}
+}
+
+func TestBuildOpenAIResponsesRequest_ReasoningEffort(t *testing.T) {
+	cases := []struct {
+		level string
+		want  any // nil means no reasoning key
+	}{
+		{"", "medium"},
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+		{"xhigh", "high"},
+		{"off", nil},
+	}
+	for _, tc := range cases {
+		model := Model{Reasoning: true}
+		ctx := LLMContext{ThinkingLevel: tc.level}
+		req := buildOpenAIResponsesRequest(model, ctx)
+		reasoning, ok := req["reasoning"].(map[string]any)
+		if tc.want == nil {
+			if ok {
+				t.Errorf("level %q: expected no reasoning param, got %v", tc.level, req["reasoning"])
+			}
+			continue
+		}
+		if !ok {
+			t.Errorf("level %q: missing reasoning param", tc.level)
+			continue
+		}
+		if reasoning["effort"] != tc.want {
+			t.Errorf("level %q: effort = %v, want %v", tc.level, reasoning["effort"], tc.want)
+		}
 	}
 }
