@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"testing"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -237,6 +238,76 @@ func TestResolveSessionName(t *testing.T) {
 	t.Run("empty id", func(t *testing.T) {
 		if got := ResolveSessionName(nil, ""); got != "" {
 			t.Errorf("ResolveSessionName(nil, '') = %q, want ''", got)
+		}
+	})
+	t.Run("non-nil manager with non-existent session", func(t *testing.T) {
+		mgr := &SessionManager{sessionsDir: t.TempDir()}
+		if got := ResolveSessionName(mgr, "nonexistent"); got != "nonexistent" {
+			t.Errorf("expected fallback to sessionID, got %q", got)
+		}
+	})
+	t.Run("non-nil manager with empty id", func(t *testing.T) {
+		mgr := &SessionManager{sessionsDir: t.TempDir()}
+		if got := ResolveSessionName(mgr, ""); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
+}
+
+func TestTruncateText_Session(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		limit int
+		want  string
+	}{
+		{"empty limit", "hello", 0, ""},
+		{"negative limit", "hello", -1, ""},
+		{"no truncation", "hi", 10, "hi"},
+		{"exact limit", "hello", 5, "hello"},
+		{"limit 1", "hello", 1, "h"},
+		{"limit 3", "hello", 3, "hel"},
+		{"limit 4", "hello", 4, "h..."},
+		{"limit 8", "hello world", 8, "hello..."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := truncateText(tt.text, tt.limit); got != tt.want {
+				t.Errorf("truncateText(%q, %d) = %q, want %q", tt.text, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeSessionPath_Extended(t *testing.T) {
+	t.Run("tilde only", func(t *testing.T) {
+		got, err := NormalizeSessionPath("~")
+		if err != nil {
+			t.Fatal(err)
+		}
+		home, _ := os.UserHomeDir()
+		if got != home {
+			t.Errorf("expected home dir %q, got %q", home, got)
+		}
+	})
+	t.Run("tilde with subpath", func(t *testing.T) {
+		got, err := NormalizeSessionPath("~/foo/bar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		home, _ := os.UserHomeDir()
+		want := home + "/foo/bar"
+		if got != want {
+			t.Errorf("expected %q, got %q", want, got)
+		}
+	})
+	t.Run("abs path unchanged", func(t *testing.T) {
+		got, err := NormalizeSessionPath("/tmp/test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "/tmp/test" {
+			t.Errorf("expected /tmp/test, got %q", got)
 		}
 	})
 }

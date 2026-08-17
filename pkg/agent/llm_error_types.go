@@ -13,27 +13,6 @@ const (
 	llmErrorTypeUnknown      = "unknown"
 )
 
-func normalizeLLMErrorType(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case llmErrorTypeRateLimit:
-		return llmErrorTypeRateLimit
-	case llmErrorTypeTimeout:
-		return llmErrorTypeTimeout
-	case llmErrorTypeContextLimit:
-		return llmErrorTypeContextLimit
-	case llmErrorTypeNetwork:
-		return llmErrorTypeNetwork
-	case llmErrorTypeServer:
-		return llmErrorTypeServer
-	case llmErrorTypeClient:
-		return llmErrorTypeClient
-	case llmErrorTypeCanceled:
-		return llmErrorTypeCanceled
-	default:
-		return llmErrorTypeUnknown
-	}
-}
-
 func inferLLMErrorTypeFromMessage(message string) string {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	switch {

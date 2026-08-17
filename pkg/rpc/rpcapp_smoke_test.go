@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -375,4 +376,55 @@ func TestRPCAppModelOverride(t *testing.T) {
 		t.Fatal("expected model response with override")
 	}
 	assertCmdSuccess(t, responses[0], "model override")
+}
+
+func TestRPCAppSessionTreeCommands(t *testing.T) {
+	cmds := []string{
+		`{"type":"rewind","message":"root"}`,
+		`{"type":"get_tree"}`,
+		`{"type":"get_fork_messages"}`,
+		`{"type":"get_last_assistant_text"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 4 {
+		t.Fatalf("expected at least 4 responses, got %d", len(responses))
+	}
+	for _, resp := range responses {
+		assertCmdSuccess(t, resp, "session tree commands")
+	}
+}
+
+func TestRPCAppRewindForkUsageErrors(t *testing.T) {
+	cmds := []string{
+		`{"type":"rewind"}`,
+		`{"type":"fork"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for i, resp := range responses {
+		success, _ := resp["success"].(bool)
+		if success {
+			t.Errorf("response %d should be a usage error: %v", i, resp)
+		}
+		errMsg, _ := resp["error"].(string)
+		if !strings.Contains(errMsg, "usage") {
+			t.Errorf("response %d error = %q, want usage hint", i, errMsg)
+		}
+	}
+}
+
+func TestRPCAppSetAutoRetry(t *testing.T) {
+	cmds := []string{
+		`{"type":"set","message":"auto-retry on"}`,
+		`{"type":"set","message":"auto-retry off"}`,
+	}
+	responses := runRPCSmoke(t, t.TempDir(), cmds, "")
+	if len(responses) < 2 {
+		t.Fatalf("expected at least 2 responses, got %d", len(responses))
+	}
+	for _, resp := range responses {
+		assertCmdSuccess(t, resp, "set auto-retry")
+	}
 }
