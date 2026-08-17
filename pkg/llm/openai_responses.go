@@ -512,9 +512,16 @@ func StreamOpenAIResponses(
 				stream.Push(LLMErrorEvent{Error: err})
 				return
 			}
-			if stopReason != "" {
+						if stopReason != "" {
 				msg := parser.buildMessage()
 				usage := extractResponsesUsage(chunk)
+								// A completed response containing tool calls is a tool-use turn
+				// regardless of the provider status (mirrors pi's mapping).
+				// Note: agent's isSuccessfulStopReason whitelist expects
+				// "tool_calls" (OpenAI style), not Anthropic's "tool_use".
+				if len(msg.ToolCalls) > 0 && stopReason == "stop" {
+					stopReason = "tool_calls"
+				}
 				stream.Push(LLMDoneEvent{Message: &msg, Usage: usage, StopReason: stopReason})
 				return
 			}

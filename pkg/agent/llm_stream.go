@@ -244,7 +244,7 @@ func streamAssistantResponse(
 					ContentIndex: 0,
 				}))
 			}
-			var finalMessage agentctx.AgentMessage
+						var finalMessage agentctx.AgentMessage
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				finalMessage = *partialMessage
@@ -252,6 +252,14 @@ func streamAssistantResponse(
 				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
 				finalMessage = agentctx.NewAssistantMessage()
+			}
+
+			// Prefer the authoritative thinking from the DoneEvent message when
+			// available. Providers like the Responses API finalize reasoning via
+			// output_item.done, which can replace the streamed delta buffer with
+			// a cleaner summary than delta concatenation.
+			if e.Message != nil && e.Message.Thinking != "" && e.Message.Thinking != finalMessage.ExtractThinking() {
+				finalMessage.Content = replaceThinkingBlocks(finalMessage.Content, e.Message.Thinking)
 			}
 
 			finalMessage.API = model.API
@@ -325,6 +333,21 @@ func streamAssistantResponse(
 	}
 
 	return partialMessage, nil
+}
+
+// replaceThinkingBlocks swaps any thinking content blocks in content for a
+// single authoritative ThinkingContent holding finalThinking. Non-thinking
+// blocks are preserved in order.
+func replaceThinkingBlocks(content []agentctx.ContentBlock, finalThinking string) []agentctx.ContentBlock {
+	out := make([]agentctx.ContentBlock, 0, len(content)+1)
+	out = append(out, agentctx.ThinkingContent{Type: "thinking", Thinking: finalThinking})
+	for _, block := range content {
+		if _, ok := block.(agentctx.ThinkingContent); ok {
+			continue
+		}
+		out = append(out, block)
+	}
+	return out
 }
 
 func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMessage, string) {
