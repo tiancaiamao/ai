@@ -143,106 +143,28 @@ func TestE2E_RealTask(t *testing.T) {
 	m := requireEndpoint(t)
 	workDir := t.TempDir()
 
-	// --- Seed setup: buggy Go code + task description ---
-
-	// Task 1: off-by-one in SumRange
-	task1Dir := filepath.Join(workDir, "task1")
-	if err := os.MkdirAll(task1Dir, 0o755); err != nil {
-		t.Fatal(err)
+	// Seed setup: copy pre-buggy Go code + task description from testdata.
+	testdata := filepath.Join("testdata", "realtask")
+	for _, sub := range []string{"task1", "task2"} {
+		src := filepath.Join(testdata, sub)
+		dst := filepath.Join(workDir, sub)
+		if out, err := exec.Command("cp", "-r", src, dst).CombinedOutput(); err != nil {
+			t.Fatalf("cp %s -> %s: %v\n%s", src, dst, err, out)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(task1Dir, "main.go"), []byte(`package main
-
-import "fmt"
-
-// SumRange returns the sum of numbers from 1 to n (inclusive).
-func SumRange(n int) int {
-	sum := 0
-	for i := 1; i < n; i++ {
-		sum += i
-	}
-	return sum
-}
-
-func main() {
-	fmt.Println(SumRange(5))
-}
-`), 0o644); err != nil {
+	if err := copyFile(filepath.Join(testdata, "task.txt"), filepath.Join(workDir, "task.txt")); err != nil {
 		t.Fatal(err)
 	}
 
-	// Task 2: race condition in Counter
-	task2Dir := filepath.Join(workDir, "task2")
-	if err := os.MkdirAll(task2Dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(task2Dir, "counter.go"), []byte(`package main
-
-import (
-	"fmt"
-	"sync"
-)
-
-type Counter struct {
-	value int
-}
-
-func (c *Counter) Increment() { c.value++ }
-func (c *Counter) Value() int { return c.value }
-
-func main() {
-	var c Counter
-	var wg sync.WaitGroup
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 1000; j++ {
-				c.Increment()
-			}
-		}()
-	}
-	wg.Wait()
-	if c.Value() == 1000000 {
-		fmt.Println("SUCCESS")
-	} else {
-		fmt.Println("FAIL:", c.Value())
-	}
-}
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Task description
-	if err := os.WriteFile(filepath.Join(workDir, "task.txt"), []byte(`Complete the following tasks in this workspace:
-
-## Task 1: Fix Off-by-One Error
-The file task1/main.go contains a SumRange function with an off-by-one error.
-It should return the sum of numbers from 1 to n (inclusive), but currently
-it only sums from 1 to n-1. Fix the bug, then run "go run main.go" in the
-task1/ directory to verify it outputs "15".
-
-## Task 2: Fix Race Condition
-The file task2/counter.go has a race condition. Fix it so that 1000 goroutines
-each incrementing 1000 times results in exactly 1000000. Run
-"go run -race counter.go" in the task2/ directory to verify it outputs "SUCCESS".
-
-## Task 3: Create Files
-1. Create pelican.svg — a valid SVG file with a <title>Pelican</title> element.
-2. Create README.md — a brief document that mentions "pelican".
-
-When all tasks are complete, reply with the single word: ok
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// --- Run the agent ---
+		// --- Run the agent ---
 	rs := startRPCServer(t, m, workDir)
 	reply := rs.promptAndWait(t, "Read task.txt in the workspace and complete all tasks described in it. Verify each task's success criteria before moving on. When done, reply with the single word: ok")
 	if !strings.Contains(reply, "ok") {
 		t.Fatalf("agent did not reply ok, got: %q", reply)
 	}
 
-	// --- Verify Task 1: off-by-one fix ---
+			// --- Verify Task 1: off-by-one fix ---
+	task1Dir := filepath.Join(workDir, "task1")
 	out1, err := exec.Command("go", "run", filepath.Join(task1Dir, "main.go")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("task1 go run failed: %v\n%s", err, out1)
@@ -252,6 +174,7 @@ When all tasks are complete, reply with the single word: ok
 	}
 
 	// --- Verify Task 2: race condition fix ---
+	task2Dir := filepath.Join(workDir, "task2")
 	out2, err := exec.Command("go", "run", "-race", filepath.Join(task2Dir, "counter.go")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("task2 go run -race failed: %v\n%s", err, out2)
@@ -301,6 +224,14 @@ func verifySVG(t *testing.T, data []byte) {
 	if !found {
 		t.Fatalf("SVG does not contain <title>Pelican</title>:\n%s", data)
 	}
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
 }
 
 // --- TestE2E_SlashCommands: full slash-command walkthrough on one server ---
