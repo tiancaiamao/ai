@@ -85,6 +85,35 @@ func TestBuildOpenAIResponsesRequest(t *testing.T) {
 			t.Errorf("model = %q, want 'my-model'", req["model"])
 		}
 	})
+
+	t.Run("user image content uses input_image", func(t *testing.T) {
+		model := Model{ID: "vision-model"}
+		ctx := LLMContext{
+			Messages: []LLMMessage{{
+				Role:    "user",
+				Content: "Describe this image",
+				ContentParts: []ContentPart{{
+					Type: "image_url",
+					ImageURL: &struct {
+						URL string `json:"url"`
+					}{URL: "data:image/jpeg;base64,abc"},
+				}},
+			}},
+		}
+
+		req := buildOpenAIResponsesRequest(model, ctx)
+		input := req["input"].([]map[string]any)
+		content := input[0]["content"].([]map[string]any)
+		if len(content) != 2 {
+			t.Fatalf("expected text and image content, got %d parts", len(content))
+		}
+		if content[0]["type"] != "input_text" || content[0]["text"] != "Describe this image" {
+			t.Errorf("text content = %#v, want input_text with prompt", content[0])
+		}
+		if content[1]["type"] != "input_image" || content[1]["image_url"] != "data:image/jpeg;base64,abc" {
+			t.Errorf("image content = %#v, want input_image with data URL", content[1])
+		}
+	})
 }
 
 // testResponsesItem mirrors the responsesEventChunk.Item inline struct for test

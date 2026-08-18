@@ -636,14 +636,32 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 	for _, msg := range llmCtx.Messages {
 		switch msg.Role {
 		case "user":
-			input = append(input, map[string]any{
-				"role": "user",
-				"content": []map[string]any{
-					{
+			content := make([]map[string]any, 0, len(msg.ContentParts)+1)
+			if msg.Content != "" {
+				content = append(content, map[string]any{
+					"type": "input_text",
+					"text": msg.Content,
+				})
+			}
+			for _, part := range msg.ContentParts {
+				switch part.Type {
+				case "text":
+					content = append(content, map[string]any{
 						"type": "input_text",
-						"text": msg.Content,
-					},
-				},
+						"text": part.Text,
+					})
+				case "image_url":
+					if part.ImageURL != nil && part.ImageURL.URL != "" {
+						content = append(content, map[string]any{
+							"type":      "input_image",
+							"image_url": part.ImageURL.URL,
+						})
+					}
+				}
+			}
+			input = append(input, map[string]any{
+				"role":    "user",
+				"content": content,
 			})
 		case "assistant":
 			// Emit plain text first (if any). Reasoning items are not
