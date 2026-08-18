@@ -174,6 +174,16 @@ func (a *Agent) Prompt(message string) error {
 			for {
 				select {
 				case followUpMsg := <-a.followUpQueue:
+					if ctx.Err() != nil {
+						// This run was cancelled (e.g. Steer) while a follow-up
+						// was queued. Put it back so the next run processes it
+						// with a fresh context instead of running with a dead one.
+						select {
+						case a.followUpQueue <- followUpMsg:
+						default: // queue full — drop rather than block forever
+						}
+						return
+					}
 					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
 					a.processPrompt(ctx, followUpMsg)
 				default:
