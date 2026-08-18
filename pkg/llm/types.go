@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -249,12 +250,15 @@ func (pm *PartialMessage) ToLLMMessage() LLMMessage {
 	}
 
 	if len(pm.ToolCalls) > 0 {
-		toolCalls := make([]ToolCall, 0, len(pm.ToolCalls))
-		// Iterate over map keys in order
-		for i := 0; i < len(pm.ToolCalls)*2; i++ {
-			if tc, ok := pm.ToolCalls[i]; ok {
-				toolCalls = append(toolCalls, *tc)
-			}
+		indices := make([]int, 0, len(pm.ToolCalls))
+		for index := range pm.ToolCalls {
+			indices = append(indices, index)
+		}
+		sort.Ints(indices)
+
+		toolCalls := make([]ToolCall, 0, len(indices))
+		for _, index := range indices {
+			toolCalls = append(toolCalls, *pm.ToolCalls[index])
 		}
 		msg.ToolCalls = toolCalls
 	}

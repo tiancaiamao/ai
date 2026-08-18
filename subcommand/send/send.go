@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -61,7 +62,7 @@ func SendSubcommand() {
 	}
 	baseDir := filepath.Join(home, ".ai")
 
-	meta, err := resolveRunID(baseDir, *idFlag)
+	meta, err := helpers.ResolveRunID(baseDir, *idFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -179,7 +180,7 @@ func waitStreamPretty(scanner *bufio.Scanner) {
 		}
 
 		// On agent_end: the task is complete — exit.
-		if strings.Contains(line, `"agent_end"`) {
+		if tui.IsAgentEnd(line) {
 			fmt.Println()
 			return
 		}
@@ -215,58 +216,6 @@ func waitStreamSummary(scanner *bufio.Scanner) {
 	text := strings.TrimSpace(currentText.String())
 	if text != "" {
 		fmt.Println(text)
-	}
-}
-
-// resolveRunID resolves the target run given an optional ID flag.
-// If id is empty, it auto-selects by cwd. If id is a partial prefix,
-// it uses FindByPrefix.
-func resolveRunID(baseDir, id string) (*tui.RunMeta, error) {
-	if id != "" {
-		// Try exact match first: look for run.json directly.
-		exactPath := tui.RunMetaPath(baseDir, id)
-		if meta, err := tui.LoadRunMeta(exactPath); err == nil && tui.IsRunning(meta) {
-			return meta, nil
-		}
-
-		// Try prefix match.
-		matches, err := tui.FindByPrefix(baseDir, id)
-		if err != nil {
-			return nil, fmt.Errorf("prefix match for %q: %w", id, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("no running run found matching %q", id)
-		}
-		// FindByPrefix returns at most 1 match on success (errors on multiple).
-		m := matches[0]
-		if !tui.IsRunning(&m) {
-			return nil, fmt.Errorf("run %s is not running (status: %s)", m.ID, m.Status)
-		}
-		return &m, nil
-	}
-
-	// Auto-select by cwd.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("get cwd: %w", err)
-	}
-
-	matches, err := tui.FindRunningByCwd(baseDir, cwd)
-	if err != nil {
-		return nil, fmt.Errorf("find running by cwd: %w", err)
-	}
-
-	switch len(matches) {
-	case 0:
-		return nil, fmt.Errorf("no running instances found in %s", cwd)
-	case 1:
-		return &matches[0], nil
-	default:
-		ids := make([]string, len(matches))
-		for i, m := range matches {
-			ids[i] = m.ID
-		}
-		return nil, fmt.Errorf("multiple running instances in %s (IDs: %v), use --id to disambiguate", cwd, ids)
 	}
 }
 

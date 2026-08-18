@@ -380,3 +380,26 @@ func TestSocketAcceptLoopConcurrent(t *testing.T) {
 	srv.Stop()
 	srv.Wait()
 }
+func TestStatusFromProcessState(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "clean exit", args: []string{"-c", "exit 0"}, want: tui.StatusDone},
+		{name: "error exit", args: []string{"-c", "exit 1"}, want: tui.StatusFailed},
+		{name: "signaled", args: []string{"-c", "kill -TERM $$"}, want: tui.StatusKilled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("sh", tt.args...)
+			if err := cmd.Run(); err == nil && tt.want != tui.StatusDone {
+				t.Fatal("expected command to fail")
+			}
+			if got := statusFromProcessState(cmd.ProcessState); got != tt.want {
+				t.Fatalf("statusFromProcessState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -132,6 +132,7 @@ func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 		if replayAll {
 			startSeq = oldest
 		}
+	Replay:
 		for seq := startSeq; seq <= b.seq; seq++ {
 			idx := seq % RingSize
 			if b.ring[idx].seq == seq {
@@ -139,7 +140,7 @@ func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer {
 				case ch <- b.ring[idx].event:
 				default:
 					// Replay buffer full — start live from current position.
-					break
+					break Replay
 				}
 			}
 		}

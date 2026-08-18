@@ -7,27 +7,27 @@ import (
 
 func TestParseSystemPrompt(t *testing.T) {
 	// Test 1: Empty string
-	result := ParseSystemPrompt("")
-	if result != "" {
+	result, err := ParseSystemPrompt("")
+	if err != nil || result != "" {
 		t.Errorf("Expected empty string, got %q", result)
 	}
 
 	// Test 2: Plain text (no @ prefix)
 	plainText := "You are a helpful assistant"
-	result = ParseSystemPrompt(plainText)
-	if result != plainText {
+	result, err = ParseSystemPrompt(plainText)
+	if err != nil || result != plainText {
 		t.Errorf("Expected %q, got %q", plainText, result)
 	}
 
 	// Test 3: @ prefix with empty path
-	result = ParseSystemPrompt("@")
-	if result != "" {
+	result, err = ParseSystemPrompt("@")
+	if err == nil {
 		t.Errorf("Expected empty string for @ with no path, got %q", result)
 	}
 
 	// Test 4: @ prefix with whitespace only
-	result = ParseSystemPrompt("@   ")
-	if result != "" {
+	result, err = ParseSystemPrompt("@   ")
+	if err == nil {
 		t.Errorf("Expected empty string for @ with whitespace, got %q", result)
 	}
 
@@ -37,14 +37,14 @@ func TestParseSystemPrompt(t *testing.T) {
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	result = ParseSystemPrompt("@" + tmpFile)
-	if result != content {
+	result, err = ParseSystemPrompt("@" + tmpFile)
+	if err != nil || result != content {
 		t.Errorf("Expected %q, got %q", content, result)
 	}
 
 	// Test 6: @ prefix with non-existent file
-	result = ParseSystemPrompt("@/nonexistent/path/to/file.md")
-	if result != "" {
+	result, err = ParseSystemPrompt("@/nonexistent/path/to/file.md")
+	if err == nil {
 		t.Errorf("Expected empty string for non-existent file, got %q", result)
 	}
 
@@ -57,8 +57,8 @@ func TestParseSystemPrompt(t *testing.T) {
 	if err := os.WriteFile(largeFile, largeContent, 0644); err != nil {
 		t.Fatalf("Failed to create large temp file: %v", err)
 	}
-	result = ParseSystemPrompt("@" + largeFile)
-	if len(result) != 64*1024 {
+	result, err = ParseSystemPrompt("@" + largeFile)
+	if err != nil || len(result) != 64*1024 {
 		t.Errorf("Expected 64KB, got %d bytes", len(result))
 	}
 
@@ -67,8 +67,8 @@ func TestParseSystemPrompt(t *testing.T) {
 	if err := os.WriteFile(tmpFile2, []byte("Content 2"), 0644); err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	result = ParseSystemPrompt("@   " + tmpFile2)
-	if result != "Content 2" {
+	result, err = ParseSystemPrompt("@   " + tmpFile2)
+	if err != nil || result != "Content 2" {
 		t.Errorf("Expected 'Content 2', got %q", result)
 	}
 }

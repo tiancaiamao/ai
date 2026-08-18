@@ -75,7 +75,11 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 	}
 
 	// Resolve system prompt from --system-prompt only (--role is passed through to rpc).
-	sysPrompt := helpers.ParseSystemPrompt(cfg.systemPrompt)
+	sysPrompt, err := helpers.ParseSystemPrompt(cfg.systemPrompt)
+	if err != nil {
+		slog.Error("invalid system prompt", "error", err)
+		os.Exit(1)
+	}
 
 	// Build RPC flags to forward.
 	rpcFlags := BuildRPCFlags(cfg.session, sysPrompt, cfg.maxTurns, cfg.timeout, cfg.http, cfg.model, id)
@@ -249,22 +253,26 @@ func RunSubcommand(binPath string) {
 	sp.stdinWriter.Close()
 
 	sp.cmd.Process.Signal(syscall.SIGINT)
-	done := make(chan error, 1)
-	go func() { done <- sp.cmd.Wait() }()
+	done := make(chan *os.ProcessState, 1)
+	go func() {
+		state, _ := sp.cmd.Process.Wait()
+		done <- state
+	}()
+	var processState *os.ProcessState
 	select {
-	case <-done:
+	case processState = <-done:
 	case <-time.After(5 * time.Second):
 		sp.cmd.Process.Signal(syscall.SIGTERM)
 		select {
-		case <-done:
+		case processState = <-done:
 		case <-time.After(3 * time.Second):
 			sp.cmd.Process.Kill()
-			<-done
+			processState = <-done
 		}
 	}
 
 	// Update final status.
-	sp.meta.Status = tui.StatusDone
+	sp.meta.Status = statusFromProcessState(processState)
 	sp.meta.FinishedAt = time.Now().Unix()
 	tui.SaveRunMeta(sp.meta, sp.metaPath)
 }
@@ -336,33 +344,36 @@ func ServeSubcommand(binPath string) {
 		}
 	}
 
-	// Wait for subprocess to exit.
-	_ = sp.cmd.Wait()
-
+	// Wait for subprocess to exit. The process-state goroutine is the single
+	// owner of Process.Wait; calling cmd.Wait here would wait on the same
+	// process a second time.
+	//
 	// Wait for the bridge goroutine to finish reading remaining stdout.
 	// pipeWriter was already closed after cmd.Start(), so the bridge goroutine
 	// will see EOF once the child exits and its stdout is closed.
 	<-sp.bridgeDone
 
-	// Determine final status using the captured process state (not cmd.Wait()
-	// error, which is unreliable due to the double-wait).
+	// Determine final status using the captured process state.
 	processState := <-processStateCh
-	status := tui.StatusFailed
-	if processState == nil {
-		status = tui.StatusKilled
-	} else if processState.Success() {
-		status = tui.StatusDone
-	} else {
-		if ws, ok := processState.Sys().(syscall.WaitStatus); ok {
-			if ws.Signaled() {
-				status = tui.StatusKilled
-			}
-		}
-	}
+	status := statusFromProcessState(processState)
 
 	sp.meta.Status = status
 	sp.meta.FinishedAt = time.Now().Unix()
 	tui.SaveRunMeta(sp.meta, sp.metaPath)
+}
+
+// statusFromProcessState maps a child process exit to the persisted run status.
+func statusFromProcessState(state *os.ProcessState) string {
+	if state == nil {
+		return tui.StatusKilled
+	}
+	if state.Success() {
+		return tui.StatusDone
+	}
+	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return tui.StatusKilled
+	}
+	return tui.StatusFailed
 }
 
 // BuildRPCFlags constructs the flag arguments to forward to 'ai rpc'.
