@@ -202,55 +202,6 @@ func TestDetectIncompleteToolCalls(t *testing.T) {
 	}
 }
 
-func TestValidateToolCallArgs(t *testing.T) {
-	tests := []struct {
-		name      string
-		toolName  string
-		args      map[string]any
-		wantError bool
-	}{
-		{
-			name:      "valid read",
-			toolName:  "read",
-			args:      map[string]any{"path": "file.txt"},
-			wantError: false,
-		},
-		{
-			name:      "read missing path",
-			toolName:  "read",
-			args:      map[string]any{},
-			wantError: true,
-		},
-		{
-			name:      "valid bash",
-			toolName:  "bash",
-			args:      map[string]any{"command": "ls -la"},
-			wantError: false,
-		},
-		{
-			name:      "bash missing command",
-			toolName:  "bash",
-			args:      map[string]any{},
-			wantError: true,
-		},
-		{
-			name:      "valid write",
-			toolName:  "write",
-			args:      map[string]any{"path": "file.txt", "content": "hello"},
-			wantError: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateToolCallArgs(tt.toolName, tt.args)
-			if (err != nil) != tt.wantError {
-				t.Errorf("ValidateToolCallArgs() error = %v, wantError %v", err, tt.wantError)
-			}
-		})
-	}
-}
-
 func TestInjectToolCallsFromTaggedText_LooseArgPairsWithToolHint(t *testing.T) {
 	msg := agentctx.AgentMessage{
 		Role: "assistant",
@@ -370,50 +321,6 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
-}
-
-// --- Additional ValidateToolCallArgs tests ---
-
-func TestValidateToolCallArgs_Extended(t *testing.T) {
-	tests := []struct {
-		name      string
-		toolName  string
-		args      map[string]any
-		wantError bool
-	}{
-		// write: missing content
-		{"write missing content", "write", map[string]any{"path": "a.txt"}, true},
-		// edit: valid
-		{"edit valid", "edit", map[string]any{"path": "a.txt", "oldText": "a", "newText": "b"}, false},
-		// edit: missing path
-		{"edit missing path", "edit", map[string]any{"oldText": "a", "newText": "b"}, true},
-		// edit: missing oldText (but has old)
-		{"edit with old alias", "edit", map[string]any{"path": "a.txt", "old": "a", "newText": "b"}, false},
-		// edit: missing newText (but has new)
-		{"edit with new alias", "edit", map[string]any{"path": "a.txt", "oldText": "a", "new": "b"}, false},
-		// edit: missing both old and newText
-		{"edit missing old and newText", "edit", map[string]any{"path": "a.txt"}, true},
-		// grep: valid
-		{"grep valid", "grep", map[string]any{"pattern": "foo"}, false},
-		// grep: with query alias
-		{"grep with query alias", "grep", map[string]any{"query": "foo"}, false},
-		// grep: missing pattern
-		{"grep missing pattern", "grep", map[string]any{}, true},
-		// bash: with cmd alias
-		{"bash with cmd alias", "bash", map[string]any{"cmd": "ls"}, false},
-		// read: missing path
-		{"read missing path", "read", map[string]any{}, true},
-		// unknown tool: always passes
-		{"unknown tool", "unknown_tool", map[string]any{}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateToolCallArgs(tt.toolName, tt.args)
-			if (err != nil) != tt.wantError {
-				t.Errorf("ValidateToolCallArgs(%q) error = %v, wantError %v", tt.toolName, err, tt.wantError)
-			}
-		})
-	}
 }
 
 // --- Additional parseToolTag tests ---

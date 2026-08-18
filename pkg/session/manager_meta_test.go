@@ -35,6 +35,45 @@ func TestSetSessionRole(t *testing.T) {
 	}
 }
 
+func TestSetSessionWorkdir(t *testing.T) {
+	sm := NewSessionManager(t.TempDir())
+	sess, err := sm.CreateSession("work", "Work Session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	id := sess.GetID()
+
+	if err := sm.SetSessionWorkdir("", "/tmp"); err == nil {
+		t.Error("empty id should fail")
+	}
+	if err := sm.SetSessionWorkdir("no-such-session", "/tmp"); err == nil {
+		t.Error("unknown session should fail")
+	}
+
+	if err := sm.SetSessionWorkdir(id, "/tmp/project"); err != nil {
+		t.Fatalf("SetSessionWorkdir: %v", err)
+	}
+	meta, err := sm.GetMeta(id)
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if meta.CurrentWorkdir != "/tmp/project" {
+		t.Errorf("meta.CurrentWorkdir = %q; want /tmp/project", meta.CurrentWorkdir)
+	}
+
+	// Overwrite with a new CWD.
+	if err := sm.SetSessionWorkdir(id, "/tmp/other"); err != nil {
+		t.Fatalf("SetSessionWorkdir (overwrite): %v", err)
+	}
+	meta, err = sm.GetMeta(id)
+	if err != nil {
+		t.Fatalf("GetMeta (overwrite): %v", err)
+	}
+	if meta.CurrentWorkdir != "/tmp/other" {
+		t.Errorf("meta.CurrentWorkdir = %q; want /tmp/other", meta.CurrentWorkdir)
+	}
+}
+
 func TestBuildMetaFromSession(t *testing.T) {
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, "sess-1")

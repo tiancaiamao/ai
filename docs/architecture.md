@@ -162,11 +162,10 @@ Session Directory (~/.ai/sessions/--<git-root>--/)
 │   ├── {"type":"message","id":"abc2","parentId":"abc1",...}
 │   ├── {"type":"truncate","id":"abc3",...}
 │   └── {"type":"compact","id":"abc4",...}
-├── agent_state.json        # Persisted AgentState (turn, CWD, etc.)
 └── compactions/            # Compaction snapshot files
 ```
 
-Recovery: load messages from session JSONL (handles compaction snapshots) → load `agent_state.json` for AgentState → rebuild in-memory state.
+Recovery: load messages from session JSONL (handles compaction snapshots) → restore workspace CWD from `meta.json` → rebuild in-memory state (token counts etc. are recomputed from messages).
 
 ## Key Design Decisions
 

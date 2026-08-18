@@ -346,6 +346,22 @@ func (sm *SessionManager) UpdateSessionName(id, name, title string) error {
 	return sm.saveMeta(id, meta)
 }
 
+// SetSessionWorkdir persists the current working directory in the session's
+// metadata so that resuming the session restores the workspace CWD.
+func (sm *SessionManager) SetSessionWorkdir(id, workdir string) error {
+	id = normalizeSessionID(id)
+	if id == "" {
+		return fmt.Errorf("session id is required")
+	}
+	meta, err := sm.GetMeta(id)
+	if err != nil {
+		return err
+	}
+	meta.CurrentWorkdir = workdir
+	meta.UpdatedAt = time.Now()
+	return sm.saveMeta(id, meta)
+}
+
 // SetSessionRole updates the role field in a session's metadata.
 func (sm *SessionManager) SetSessionRole(id, role string) error {
 	id = normalizeSessionID(id)

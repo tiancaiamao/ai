@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// newToolExecutorWithDuration is like NewToolExecutor but accepts a time.Duration,
+// allowing tests to use sub-second timeouts.
+func newToolExecutorWithDuration(maxConcurrent int, queueTimeout time.Duration) ToolExecutor {
+	return &concurrentToolExecutor{
+		semaphore:    make(chan struct{}, maxConcurrent),
+		queueTimeout: queueTimeout,
+	}
+}
+
 // TestToolExecutorBasic tests basic tool execution.
 func TestToolExecutorBasic(t *testing.T) {
 	executor := NewToolExecutor(2, 10) // maxConcurrent=2, queueTimeout=10s
@@ -79,7 +88,7 @@ func TestToolExecutorConcurrency(t *testing.T) {
 
 // TestToolExecutorQueueTimeout tests queue timeout.
 func TestToolExecutorQueueTimeout(t *testing.T) {
-	executor := NewToolExecutorWithDuration(1, 50*time.Millisecond) // Max 1 concurrent, 50ms queue timeout
+	executor := newToolExecutorWithDuration(1, 50*time.Millisecond) // Max 1 concurrent, 50ms queue timeout
 
 	// Start a slow tool that will occupy the slot
 	// Delay must exceed queue timeout so the second tool times out waiting

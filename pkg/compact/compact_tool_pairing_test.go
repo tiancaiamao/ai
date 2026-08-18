@@ -9,58 +9,6 @@ import (
 )
 
 // TestEnsureToolCallPairing_Bug demonstrates the bug where tool_call is in oldMessages
-// but its tool_result is visible in recentMessages, causing "tool call and result not match"
-func TestEnsureToolCallPairing_Bug(t *testing.T) {
-	// Scenario: tool_call in oldMessages, tool_result in recentMessages
-	// The tool_call will be summarized (not visible), so tool_result should also be hidden
-
-	oldMessages := []agentctx.AgentMessage{
-		{
-			Role: "assistant",
-			Content: []agentctx.ContentBlock{
-				agentctx.ToolCallContent{
-					ID:        "call-123",
-					Type:      "toolCall",
-					Name:      "read",
-					Arguments: map[string]any{"path": "/test.txt"},
-				},
-			},
-		},
-	}
-
-	recentMessages := []agentctx.AgentMessage{
-		{
-			Role:       "toolResult",
-			ToolCallID: "call-123",
-			ToolName:   "read",
-			Content: []agentctx.ContentBlock{
-				agentctx.TextContent{Type: "text", Text: "file content here"},
-			},
-		},
-		agentctx.NewUserMessage("next user message"),
-	}
-
-	result := ensureToolCallPairing(oldMessages, recentMessages)
-
-	// After fix: tool_result should be hidden because its tool_call is in oldMessages (will be summarized)
-	// The bug was that tool_result remained visible, causing "tool call and result not match"
-
-	// Check that tool_result is hidden
-	toolResultFound := false
-	for _, msg := range result {
-		if msg.Role == "toolResult" && msg.ToolCallID == "call-123" {
-			toolResultFound = true
-			if msg.IsAgentVisible() {
-				t.Error("BUG: tool_result should be hidden when its tool_call is in oldMessages (will be summarized)")
-			}
-		}
-	}
-
-	if !toolResultFound {
-		t.Error("tool_result should still be present in messages (just hidden)")
-	}
-}
-
 // TestEnsureToolCallPairing_CorrectPairing tests that correctly paired messages stay visible
 func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 	// Scenario: both tool_call and tool_result in recentMessages - should stay visible
@@ -89,7 +37,7 @@ func TestEnsureToolCallPairing_CorrectPairing(t *testing.T) {
 	// Empty oldMessages - no tool_calls to be summarized
 	oldMessages := []agentctx.AgentMessage{}
 
-	result := ensureToolCallPairing(oldMessages, recentMessages)
+	result := NewCompactor(&Config{}, llm.Model{}, "", "", 0, "").ensureToolCallPairingWithGrace(oldMessages, recentMessages)
 
 	// Both should remain visible
 	if len(result) != 2 {
@@ -121,7 +69,7 @@ func TestEnsureToolCallPairing_NoToolCallsInOldMessages(t *testing.T) {
 		},
 	}
 
-	result := ensureToolCallPairing(oldMessages, recentMessages)
+	result := NewCompactor(&Config{}, llm.Model{}, "", "", 0, "").ensureToolCallPairingWithGrace(oldMessages, recentMessages)
 
 	// Tool_result should stay visible (its call might be in an even older message,
 	// or it's orphaned - either way it's not being summarized)
@@ -177,10 +125,10 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 		},
 	}
 
-	result := ensureToolCallPairing(oldMessages, recentMessages)
+	result := NewCompactor(&Config{}, llm.Model{}, "", "", 0, "").ensureToolCallPairingWithGrace(oldMessages, recentMessages)
 
-	// After fix: the tool_call should be filtered out from the assistant message
-	// and the tool_result should be hidden
+	// The tool_call should be filtered out from the assistant message.
+	// The tool_result is the most recent one, so grace period keeps it visible.
 	if len(result) != 2 {
 		t.Errorf("expected 2 messages, got %d", len(result))
 	}
@@ -212,11 +160,11 @@ func TestEnsureToolCallPairing_AssistantWithOldToolCalls(t *testing.T) {
 		t.Error("assistant message should be present in result")
 	}
 
-	// Check tool_result - should be hidden
+	// Check tool_result - grace period keeps the most recent tool result visible
 	for _, msg := range result {
 		if msg.Role == "toolResult" && msg.ToolCallID == "call-old-1" {
-			if msg.IsAgentVisible() {
-				t.Error("BUG: tool_result should be hidden when its tool_call is in oldMessages")
+			if !msg.IsAgentVisible() {
+				t.Error("most recent tool_result should stay visible under grace period")
 			}
 		}
 	}

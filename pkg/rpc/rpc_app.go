@@ -194,6 +194,10 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 				if err := app.sessionMgr.SaveCurrent(); err != nil {
 					slog.Info("Failed to update session metadata:", "value", err)
 				}
+				// Persist the workspace CWD so session resume restores it.
+				if err := app.sessionMgr.SetSessionWorkdir(app.sessionID, app.ws.GetCWD()); err != nil {
+					slog.Info("Failed to persist session workdir:", "value", err)
+				}
 			}()
 		}
 	}

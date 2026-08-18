@@ -248,8 +248,6 @@ func streamAssistantResponse(
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				finalMessage = *partialMessage
-			} else if e.Message != nil {
-				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
 				finalMessage = agentctx.NewAssistantMessage()
 			}

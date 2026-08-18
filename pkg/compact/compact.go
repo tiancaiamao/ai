@@ -426,12 +426,10 @@ func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (
 
 	slog.Info("[Compact] Generated summary", "chars", len(summary))
 
-	// Ensure tool_call and tool_result pairing is preserved
-	if c.config.GracePeriod > 0 {
-		recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
-	} else {
-		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
-	}
+	// Ensure tool_call and tool_result pairing is preserved.
+	// GracePeriod <= 0 is clamped to 1 inside, so the most recent tool
+	// result is always protected.
+	recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
 
 	// Archive old messages so the agent can access them via read/grep later.
 	archivePath := saveArchivedMessages(c.sessionDir, oldMessages)

@@ -111,6 +111,13 @@ func reachable(url string) bool {
 
 // writeE2EModels writes an isolated models.json for a subprocess HOME.
 func writeE2EModels(path, provider, baseURL, id string) error {
+	return writeE2EModelsWindow(path, provider, baseURL, id, 32768)
+}
+
+// writeE2EModelsWindow is writeE2EModels with a custom contextWindow.
+// A tiny window shrinks the LLMDecide soft/hard compaction thresholds,
+// letting tests reach the auto-compaction path deterministically.
+func writeE2EModelsWindow(path, provider, baseURL, id string, contextWindow int) error {
 	doc := map[string]any{
 		"providers": map[string]any{
 			provider: map[string]any{
@@ -121,7 +128,7 @@ func writeE2EModels(path, provider, baseURL, id string) error {
 						"name":          "e2e-" + id,
 						"api":           "openai-completions",
 						"reasoning":     true,
-						"contextWindow": 32768,
+						"contextWindow": contextWindow,
 						"maxTokens":     8192,
 					},
 				},
