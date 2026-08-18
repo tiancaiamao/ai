@@ -422,11 +422,69 @@ func TestCharacterization_CompactionTrigger(t *testing.T) {
 	}
 }
 
+// TestCharacterization_ManualCompactionRequestRunsInLoop verifies that a queued
+// manual compaction is consumed by the loop and marked as non-automatic.
+func TestCharacterization_ManualCompactionRequestRunsInLoop(t *testing.T) {
+	compactor := &characterizationTriggerCompactor{shouldCompact: false}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseTextResponse("done"))
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	cfg := DefaultLoopConfig()
+	cfg.Compactor = compactor
+
+	model := llm.Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+
+	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
+	agent.RequestCompaction()
+	if !agent.HasPendingCompaction() {
+		t.Fatal("expected manual compaction request to be pending")
+	}
+
+	if err := agent.Prompt("compact at boundary"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	events := collectAgentEvents(t, agent.Events(), 10*time.Second)
+	agent.Wait()
+
+	if compactor.calls != 1 {
+		t.Fatalf("expected compactor.Compact to be called once, got %d", compactor.calls)
+	}
+	var compactEnd AgentEvent
+	foundCompactEnd := false
+	for _, event := range events {
+		if event.Type == EventCompactionEnd {
+			compactEnd = event
+			foundCompactEnd = true
+			break
+		}
+	}
+	if !foundCompactEnd || compactEnd.Compaction == nil {
+		t.Fatal("expected compaction_end event with details")
+	}
+	if compactEnd.Compaction.Auto {
+		t.Error("expected queued manual compaction to be marked non-automatic")
+	}
+	if agent.HasPendingCompaction() {
+		t.Error("expected manual compaction request to be consumed")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test 5: MaxTurns=2 with text final response
 // ---------------------------------------------------------------------------
 
-// TestCharacterization_MaxTurnsStopsExactlyAtLimit verifies the agent stops
+// TestCharacterization_MaxTurnsStopsExactlyAtLimit verifies that the agent stops
 // exactly at the turn limit, even if the LLM switches from tool_calls to text.
 func TestCharacterization_MaxTurnsStopsExactlyAtLimit(t *testing.T) {
 	llmCallCount := 0

@@ -94,6 +94,7 @@ func (s *loopState) performCompaction(
 	trigger string,
 	checkShouldCompact bool,
 	trackRecovery bool,
+	auto bool,
 ) (*agentctx.CompactionResult, error) {
 	c := s.config.Compactor
 	if c == nil {
@@ -107,12 +108,12 @@ func (s *loopState) performCompaction(
 	before := len(s.agentCtx.RecentMessages)
 	compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
 		traceevent.Field{Key: "source", Value: trigger},
-		traceevent.Field{Key: "auto", Value: true},
+		traceevent.Field{Key: "auto", Value: auto},
 		traceevent.Field{Key: "before_messages", Value: before},
 		traceevent.Field{Key: "trigger", Value: trigger},
 	)
 	s.stream.Push(NewCompactionStartEvent(CompactionInfo{
-		Auto:    true,
+		Auto:    auto,
 		Before:  before,
 		Trigger: trigger,
 	}))
@@ -129,7 +130,7 @@ func (s *loopState) performCompaction(
 		}
 		compactionSpan.End()
 		s.stream.Push(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
+			Auto:    auto,
 			Before:  before,
 			Error:   compactErr.Error(),
 			Trigger: trigger,
@@ -141,7 +142,7 @@ func (s *loopState) performCompaction(
 		slog.Info("[Loop] Compactor returned nil result", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
 		compactionSpan.End()
 		s.stream.Push(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
+			Auto:    auto,
 			Before:  before,
 			Trigger: trigger,
 		}))
@@ -170,7 +171,7 @@ func (s *loopState) performCompaction(
 	// avoid sharing the backing array with the loop goroutine.
 	endEvent := NewCompactionEndEvent(CompactionInfo{
 		Type:           compacted.Type,
-		Auto:           true,
+		Auto:           auto,
 		Before:         before,
 		After:          after,
 		Trigger:        trigger,

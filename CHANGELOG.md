@@ -3,6 +3,16 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Queued Manual Compaction at Agent Step Boundaries (2026-08)
+
+**Problem**: `/compact` could compact the shared agent context directly from the RPC handler while the agent loop was running, allowing concurrent mutation of `RecentMessages`.
+
+**What changed**: Running `/compact` requests are now queued atomically on the agent and consumed by the agent loop after `turn_end`, before the next model call or `agent_end`. Manual and automatic compaction use the same loop path and emit correctly marked events; idle requests retain the synchronous path.
+
+**Why**: Serializing context mutation at loop step boundaries prevents concurrent access while preserving the existing compaction event and session persistence flow.
+
+
+
 ## Session Resume: agent_state.json Removed, CWD via meta.json (2026-08)
 
 **Problem**: #314 deleted the checkpoint manager — the only writer of `agent_state.json` — but kept the reader (`LoadAgentState` → `LoadResumeState`). Since then no binary writes the file, so the resume path always ran its `os.IsNotExist` branch and silently did nothing. The consequence was a regression: the workspace CWD (the only AgentState field that cannot be recomputed from messages) was no longer restored on resume. Meanwhile `AgentState` itself carried 7 fields (`ActiveToolCalls`, `LastCheckpoint`, `LastTriggerTurn`, `TurnsSinceLastTrigger`, `TotalTruncations`, `TotalCompactions`, `LastCompactTurn`) plus `SessionID`/`CreatedAt`/`UpdatedAt` with zero production readers or writers — leftovers from the checkpoint era.

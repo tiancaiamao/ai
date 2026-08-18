@@ -80,6 +80,7 @@ type Agent struct {
 	traceDone     chan struct{}
 	shutdownOnce  sync.Once
 	traceSeq      atomic.Uint64
+	manualCompact atomic.Bool
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -145,9 +146,23 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	a.LoopConfig.GetAPIKey = func() string {
 		return a.apiKey
 	}
+	a.LoopConfig.ConsumeManualCompaction = func() bool {
+		return a.manualCompact.Swap(false)
+	}
 
 	go a.runTraceFlusher()
 	return a
+}
+
+// RequestCompaction queues a manual compaction for the running agent loop.
+// The request is consumed at the next safe step boundary.
+func (a *Agent) RequestCompaction() {
+	a.manualCompact.Store(true)
+}
+
+// HasPendingCompaction reports whether a manual compaction is queued.
+func (a *Agent) HasPendingCompaction() bool {
+	return a.manualCompact.Load()
 }
 
 // Prompt sends a user message to the agent and waits for completion.

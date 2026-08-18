@@ -16,6 +16,15 @@ import (
 func (app *rpcApp) handleCompact(args string) (any, error) {
 	_ = args
 	slog.Info("Received compact")
+
+	app.stateMu.Lock()
+	streaming := app.isStreaming
+	app.stateMu.Unlock()
+	if streaming {
+		app.ag.RequestCompaction()
+		return map[string]any{"status": "queued"}, nil
+	}
+
 	agentCtx := app.ag.GetContext()
 	beforeCount := len(agentCtx.RecentMessages)
 
