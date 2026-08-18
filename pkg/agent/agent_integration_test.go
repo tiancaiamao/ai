@@ -53,7 +53,7 @@ func TestExecutorPoolConcurrency(t *testing.T) {
 	})
 
 	t.Run("queue_timeout", func(t *testing.T) {
-		pool := NewToolExecutorWithDuration(1, 50*time.Millisecond)
+		pool := newToolExecutorWithDuration(1, 50*time.Millisecond)
 
 		// Create a slow tool (delay must exceed queue timeout of 50ms)
 		tool := &MockTool{

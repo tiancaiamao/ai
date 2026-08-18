@@ -387,42 +387,6 @@ func DetectIncompleteToolCalls(text string) []string {
 	return issues
 }
 
-// ValidateToolCallArgs validates that required parameters are present for a tool call.
-func ValidateToolCallArgs(toolName string, args map[string]any) error {
-	switch toolName {
-	case "read":
-		if args["path"] == nil {
-			return fmt.Errorf("read tool requires 'path' parameter")
-		}
-	case "write":
-		if args["path"] == nil {
-			return fmt.Errorf("write tool requires 'path' parameter")
-		}
-		if args["content"] == nil {
-			return fmt.Errorf("write tool requires 'content' parameter")
-		}
-	case "edit":
-		if args["path"] == nil {
-			return fmt.Errorf("edit tool requires 'path' parameter")
-		}
-		if args["oldText"] == nil && args["old"] == nil {
-			return fmt.Errorf("edit tool requires 'oldText' parameter")
-		}
-		if args["newText"] == nil && args["new"] == nil {
-			return fmt.Errorf("edit tool requires 'newText' parameter")
-		}
-	case "bash":
-		if args["command"] == nil && args["cmd"] == nil {
-			return fmt.Errorf("bash tool requires 'command' parameter")
-		}
-	case "grep":
-		if args["pattern"] == nil && args["query"] == nil {
-			return fmt.Errorf("grep tool requires 'pattern' parameter")
-		}
-	}
-	return nil
-}
-
 func injectToolCallsFromThinking(msg agentctx.AgentMessage) (agentctx.AgentMessage, bool) {
 	if msg.Role != "assistant" {
 		return msg, false
