@@ -63,9 +63,10 @@ mock server cannot do.
 | `TestE2E_RealTask` | Pre-seeded buggy Go code: fix off-by-one + race condition + create SVG. Verified by `go run` / `go run -race` / XML parse |
 | `TestE2E_SlashCommands` | Full server lifecycle: protocol errors → tool turns → large prompts → `/compact` → `/fork` → `/rewind` → `/new` → `/resume` → `/help` → EOF |
 | `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
+| `TestE2E_SteerAndFollowUp` | `/steer` + `/follow-up` slash handlers — main path while streaming, error branches idle |
 | `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
 | `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
-| `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
+| `TestE2E_Subcommands` | `ai models` (+ filters) / `serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
 | `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
-| `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
+| `TestE2E_Skills` | Skill discovery via `find_skill` + `/skill:` expansion (existing + missing) |
 | `TestLRRepro_SameBatchEvents` | Fast, deterministic log-replay regression repro (no model needed) |

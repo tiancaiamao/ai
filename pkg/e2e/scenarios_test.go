@@ -660,6 +660,48 @@ func TestE2E_BusyAndAbort(t *testing.T) {
 	}
 }
 
+// TestE2E_SteerAndFollowUp exercises the /steer and /follow-up slash handlers
+// (pkg/rpc/rpc_help_handlers.go), which are only reachable while the agent is
+// streaming — a state no other e2e test enters with these command types.
+func TestE2E_SteerAndFollowUp(t *testing.T) {
+	m := requireEndpoint(t)
+	rs := startRPCServer(t, m, "")
+
+	// A streaming prompt we can probe mid-flight.
+	rs.send(t, `{"type":"prompt","message":"Count from 1 to 50, listing every number."}`)
+	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
+		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// /follow-up while streaming: queued, processed by the loop after the current run.
+	rs.rpcAck(t, "follow-up", "After this run, reply with exactly: ok")
+
+	// /steer while streaming: cancels the current run and restarts with the new message.
+	rs.rpcAck(t, "steer", "Reply with exactly: steered")
+
+	// The steered run finishes.
+	if ev := rs.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
+		t.Fatalf("no agent_end after steer. emitted lines:\n%s\nstate: %s",
+			rs.log.History(), rs.log.DebugState())
+	}
+	// The loop then drains the queued follow-up, producing a second agent_end.
+	// Wait for it as well so the server exits cleanly on EOF.
+	if ev := rs.log.waitEvent("agent_end", "", "", 3*time.Minute); ev == "" {
+		t.Fatalf("no agent_end after follow-up. emitted lines:\n%s\nstate: %s",
+			rs.log.History(), rs.log.DebugState())
+	}
+
+	// Idle error branches of the slash handlers.
+	rs.rpcErr(t, "steer", "", "usage")
+	rs.rpcErr(t, "follow-up", "x", "agent is not busy")
+
+	rs.closeStdin()
+	if err := rs.waitExit(15 * time.Second); err != nil {
+		t.Fatalf("server did not shut down cleanly: %v", err)
+	}
+}
+
 func TestE2E_TimeoutWatchdog(t *testing.T) {
 	m := requireEndpoint(t)
 	rs := startRPCServer(t, m, "", "-timeout", "4s")
@@ -808,12 +850,49 @@ func TestE2E_Subcommands(t *testing.T) {
 	)
 
 	// ai models must list the configured model.
-	out, err := exec.Command(binaryPath, "models").CombinedOutput()
+	// NOTE: must carry Env (incl. GOCOVERDIR) or the subprocess coverage
+	// counters are never flushed to the merged profile.
+	cmd := exec.Command(binaryPath, "models")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("ai models failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), m.id) {
 		t.Fatalf("ai models output does not contain %q:\n%s", m.id, out)
+	}
+
+	// --provider filter narrows the listing.
+	cmdProv := exec.Command(binaryPath, "models", "--provider", m.provider)
+	cmdProv.Env = env
+	out, err = cmdProv.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ai models --provider failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), m.id) {
+		t.Fatalf("ai models --provider output does not contain %q:\n%s", m.id, out)
+	}
+
+	// Positional fuzzy filter matches provider/model.
+	cmdFuzzy := exec.Command(binaryPath, "models", strings.ToLower(m.id))
+	cmdFuzzy.Env = env
+	out, err = cmdFuzzy.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ai models fuzzy filter failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), m.id) {
+		t.Fatalf("ai models fuzzy output does not contain %q:\n%s", m.id, out)
+	}
+
+	// A --provider that matches nothing must print a clear message.
+	cmdNone := exec.Command(binaryPath, "models", "--provider", "nonexistent")
+	cmdNone.Env = env
+	out, err = cmdNone.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ai models --provider nonexistent failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "no models for provider") {
+		t.Fatalf("ai models no-match output missing message:\n%s", out)
 	}
 
 	// Start ai serve in background.

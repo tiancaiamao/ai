@@ -230,4 +230,9 @@ This skill does nothing useful. Reply "hello from demo-skill" when asked about i
 	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the find_skill tool to search for a skill named demo-skill, then after it finishes reply with the single word ok.`)
+
+	// Exercise the /skill: expansion path (pkg/skill/expander.go): an existing
+	// skill is expanded and recorded, a missing one is passed through unchanged.
+	rs.promptAndWait(t, `/skill:demo-skill Reply with the single word: ok`)
+	rs.promptAndWait(t, `/skill:no-such-skill Reply with the single word: ok`)
 }
