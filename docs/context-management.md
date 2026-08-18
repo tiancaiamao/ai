@@ -240,7 +240,6 @@ During compaction, when the number of visible tool results exceeds `ToolCallCuto
 | `pkg/context/message.go` | `AgentMessage`, `ContentBlock` types |
 | `pkg/context/agent_state.go` | `AgentState` tracking metadata |
 | `pkg/context/compactor.go` | `Compactor` interface, `CompactionResult` |
-| `pkg/context/checkpoint_io.go` | `SaveAgentState` / `LoadAgentState` |
 | `pkg/agent/loop.go` | Agent loop, compaction trigger orchestration |
 | `pkg/agent/loop_state.go` | `performCompaction`, pre-LLM + recovery paths |
 | `pkg/agent/tool_output.go` | Tool output normalization |

@@ -19,8 +19,7 @@ Sessions persist the full conversation history for an agent instance as append-o
         │   ├── compactions/                 # Compaction snapshot files
     │   │   ├── compaction_00001.jsonl   # Post-compaction messages
     │   │   └── compaction_00002.jsonl
-    │   ├── agent_state.json             # Persisted AgentState (turn, CWD, etc.)
-    │   └── (meta.json managed externally by SessionManager)
+    │   └── meta.json                    # Session metadata incl. current workdir
     ├── <session-uuid-2>/
     │   ├── messages.jsonl
     │   └── ...
@@ -299,19 +298,19 @@ The loader scans backwards from the end of the file to find the most recent comp
 
 ## AgentState Persistence
 
-**Files:** `pkg/context/checkpoint_io.go`, `pkg/agent/checkpoint_manager.go`
-
-`AgentState` (turn count, CWD, token usage, compaction counters) is persisted to `agent_state.json` in the session directory. This file is written after compaction events and loaded on session resume.
-
-Messages are NOT stored in `agent_state.json` — they come from `sess.GetMessages()` which handles compaction snapshot refs internally.
+`AgentState` is an in-memory struct only; it is not persisted. Token counts and
+turn counts are recomputed from messages each turn (`injectRuntimeMeta`). The
+workspace CWD — the only state that cannot be derived — is persisted in
+`meta.json` (`SessionMeta.CurrentWorkdir`, written on `agent_end` via
+`SessionManager.SetSessionWorkdir`).
 
 ### Recovery
 
 On crash or restart:
 
 1. Load messages from `sess.GetMessages()` (handles compaction snapshots)
-2. Load `agent_state.json` for AgentState (CWD, turn count, etc.)
-3. Continue from the recovered state
+2. Restore the workspace CWD from `meta.json` (`SessionMeta.CurrentWorkdir`)
+3. Continue; the remaining AgentState is recomputed from messages
 
 ## Compaction Persistence Flow
 
@@ -347,6 +346,4 @@ Session metadata stored alongside the JSONL, managed by `SessionManager`:
 | `pkg/session/session.go` | `Session` struct, `AppendMessage`, `AppendCompaction`, loading |
 | `pkg/session/entries.go` | `SessionEntry`, `SessionHeader`, entry type constants, `buildSessionContext` |
 | `pkg/session/lazy.go` | Lazy session loading |
-| `pkg/context/checkpoint_io.go` | `SaveAgentState` / `LoadAgentState`, `SplitLines` |
-| `pkg/agent/checkpoint_manager.go` | AgentState persistence lifecycle |
-| `pkg/agent/resume.go` | `LoadResumeState()` — session resume |
+| `pkg/session/manager.go` | `SessionManager`, `SessionMeta` persistence (incl. `SetSessionWorkdir`) |

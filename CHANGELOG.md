@@ -3,6 +3,21 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Session Resume: agent_state.json Removed, CWD via meta.json (2026-08)
+
+**Problem**: #314 deleted the checkpoint manager — the only writer of `agent_state.json` — but kept the reader (`LoadAgentState` → `LoadResumeState`). Since then no binary writes the file, so the resume path always ran its `os.IsNotExist` branch and silently did nothing. The consequence was a regression: the workspace CWD (the only AgentState field that cannot be recomputed from messages) was no longer restored on resume. Meanwhile `AgentState` itself carried 7 fields (`ActiveToolCalls`, `LastCheckpoint`, `LastTriggerTurn`, `TurnsSinceLastTrigger`, `TotalTruncations`, `TotalCompactions`, `LastCompactTurn`) plus `SessionID`/`CreatedAt`/`UpdatedAt` with zero production readers or writers — leftovers from the checkpoint era.
+
+**What changed**:
+
+- Deleted `pkg/context/checkpoint_io.go` (`SaveAgentState`/`LoadAgentState`/`saveAtomic`) and `pkg/agent/resume.go` (`LoadResumeState`) with their tests.
+- Slimmed `AgentState` to the fields that are live: workspace/token stats (recomputed each turn by `injectRuntimeMeta`), `ToolCallsSinceLastTrigger` (LLMDecide ask interval), and the runtime-meta snapshot cache. `NewAgentState(cwd)` dropped the dead `sessionID` parameter.
+- CWD persistence moved to session `meta.json`: `SessionManager.SetSessionWorkdir` writes `SessionMeta.CurrentWorkdir` on `agent_end`; `createBaseContext` restores it before building the system prompt (which embeds the CWD).
+- `ToolCallsSinceLastTrigger` now resets to 0 on resume by design — worst case it delays the next LLM-decide ask; it self-heals.
+
+**Why**: One persistence channel per concern. Messages and session metadata live in the session directory's `messages.jsonl`/`meta.json`; `AgentState` is derived state that should be recomputed, not persisted. Keeping the dead reader around implied a fallback that no longer existed.
+
+
+
 ## Reverted: Executor-Level ToolTimeout Cap (2026-08)
 
 **Problem**: #361 wired up the previously-dead `Concurrency.ToolTimeout` config as an executor-level hard cap (`NewToolExecutorWithTimeout`), wrapping every tool call in `context.WithTimeout(ctx, toolTimeout)`. The cap is fundamentally incompatible with tools that manage their own timeouts:

@@ -90,7 +90,7 @@ func NewAgentContext(systemPrompt string) *AgentContext {
 		RecentMessages: make([]AgentMessage, 0),
 		Tools:          make([]Tool, 0),
 		Skills:         make([]skill.Skill, 0),
-		AgentState:     NewAgentState("", ""),
+		AgentState:     NewAgentState(""),
 	}
 }
 
