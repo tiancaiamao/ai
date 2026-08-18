@@ -1,16 +1,20 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"image/png"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -115,6 +119,13 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	// If it's an image, return ImageContent.
 	if strings.HasPrefix(contentType, "image/") {
+		// stb_image in llama-server cannot decode webp, so convert to png.
+		if contentType == "image/webp" {
+			if pngData, err := webpToPng(data); err == nil {
+				data = pngData
+				contentType = "image/png"
+			}
+		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		return []agentctx.ContentBlock{
 			agentctx.TextContent{
@@ -306,4 +317,20 @@ func IsBinary(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// webpToPng converts webp bytes to png. llama-server decodes images with
+// stb_image, which has no webp support.
+func webpToPng(data []byte) ([]byte, error) {
+	img, err := webp.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
