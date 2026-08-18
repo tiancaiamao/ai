@@ -140,6 +140,18 @@ func TestBashToolAllowsCommandLocalCD(t *testing.T) {
 	assert.Contains(t, result.Text, "/tmp")
 }
 
+func TestBashToolDescriptionWorkspaceGuidance(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	desc := tool.Description()
+	// Guidance must be explicit: change_workspace for persistent/multi-command
+	// switches, cd <dir> && <command> only for one-off commands.
+	for _, want := range []string{"change_workspace", "persist", "worktree", "one-off"} {
+		assert.Contains(t, desc, want, "Description() should mention %q for persistent workspace guidance", want)
+	}
+}
+
 func TestBashToolBlocksTmuxKillServer(t *testing.T) {
 	ws, _ := NewWorkspace("/tmp")
 	tool := NewBashTool(ws)

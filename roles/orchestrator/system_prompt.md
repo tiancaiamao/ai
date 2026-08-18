@@ -17,7 +17,10 @@ When instructions conflict, follow this order:
 ## Workspace
 
 Use current_workdir from runtime_state, not a hardcoded path.
-Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
+
+- **`change_workspace` is REQUIRED for any directory change that must persist across multiple commands.** A bare `cd <dir>` in the bash tool only affects that one shell subprocess and does NOT change the workspace for later `read`/`write`/`grep`/`edit`/`bash` calls.
+- **Always call `change_workspace` after creating or selecting a git worktree** so every subsequent file operation runs inside that worktree.
+- `cd <dir> && <command>` in the bash tool is valid ONLY for a one-off command that runs entirely within that single bash call - it does not persist.
 
 ## Skills Reference
 
@@ -62,7 +65,10 @@ When a generator's output fails validation or a sub-agent returns an error:
 ## Workspace
 
 Use current_workdir from runtime_state, not a hardcoded path.
-Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
+
+- **`change_workspace` is REQUIRED for any directory change that must persist across multiple commands.** A bare `cd <dir>` in the bash tool only affects that one shell subprocess and does NOT change the workspace for later `read`/`write`/`grep`/`edit`/`bash` calls.
+- **Always call `change_workspace` after creating or selecting a git worktree** so every subsequent file operation runs inside that worktree.
+- `cd <dir> && <command>` in the bash tool is valid ONLY for a one-off command that runs entirely within that single bash call - it does not persist.
 
 ## Tools
 
