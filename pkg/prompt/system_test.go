@@ -23,6 +23,24 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	}
 }
 
+// TestPromptWorkspaceGuidance verifies the embedded system prompt clearly
+// states that persistent directory switches require change_workspace while
+// cd <dir> && <command> is only for one-off commands.
+func TestPromptWorkspaceGuidance(t *testing.T) {
+	prompt := NewBuilder("You are a test assistant.", "/workspace").Build()
+	for _, want := range []string{
+		"change_workspace",
+		"REQUIRED",
+		"worktree",
+		"one-off",
+		"does NOT change the workspace",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt should contain %q for persistent workspace guidance", want)
+		}
+	}
+}
+
 func TestABPromptMetricsSmoke(t *testing.T) {
 	legacyRPCBasePrompt := strings.TrimSpace(`You are a helpful AI coding assistant.
 - If you cannot answer the request, return an empty JSON with error field.

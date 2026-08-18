@@ -68,7 +68,12 @@ Examples:
   • Normal: {"command": "ls -la"}
   • Custom timeout: {"command": "go build ./...", "timeout": 300}
   • No timeout: {"command": "go test -race ./...", "timeout": 0}
-  • Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)`
+  - Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)
+
+Workspace:
+  - Use the change_workspace tool for any directory change that must persist across multiple commands (or after creating/selecting a git worktree)
+  - cd <dir> && <command> is valid only for a one-off command - a bare cd does not persist the workspace
+`
 }
 
 // Parameters returns the JSON Schema for tool parameters.
@@ -157,7 +162,7 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	if isBareCDCommand(command) {
-		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
+		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. For directory changes that must span multiple commands (e.g. after creating/selecting a git worktree), use the change_workspace tool. 'cd <dir> && <command>' is valid only for a one-off command")
 	}
 
 	// Transform sudo commands: rewrite to sudo -S -p '' with the password
