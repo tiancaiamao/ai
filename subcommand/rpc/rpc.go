@@ -34,7 +34,11 @@ func RPCSubcommand() {
 		rpc.AgentAbort() // Trigger agent abort in RunRPC
 	}()
 
-	systemPrompt := helpers.ParseSystemPrompt(*systemPromptFlag)
+	systemPrompt, err := helpers.ParseSystemPrompt(*systemPromptFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
 	// during initialization (see logger.NewLogger).

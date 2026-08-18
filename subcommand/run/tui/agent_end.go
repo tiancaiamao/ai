@@ -74,7 +74,7 @@ func FindLastAgentEnd(eventsPath string) *AgentEndInfo {
 			if line == "" {
 				continue
 			}
-			if strings.Contains(line, `"agent_end"`) {
+			if IsAgentEnd(line) {
 				candidates = append(candidates, line)
 			}
 		}
@@ -160,7 +160,7 @@ func FindLastAgentEndFast(eventsPath string) *AgentEndInfo {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.Contains(line, `"agent_end"`) {
+		if IsAgentEnd(line) {
 			lastAgentEndLine = line
 		}
 	}

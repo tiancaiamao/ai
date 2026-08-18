@@ -290,3 +290,16 @@ func TestPartialMessageConcurrentAppends(t *testing.T) {
 		t.Fatalf("expected content len %d, got %d", N, len(msg.Content))
 	}
 }
+func TestPartialMessageToLLMMessageSparseToolCallIndices(t *testing.T) {
+	pm := NewPartialMessage()
+	pm.AppendToolCall(10, &ToolCall{ID: "call-10", Function: FunctionCall{Name: "ten"}})
+	pm.AppendToolCall(100, &ToolCall{ID: "call-100", Function: FunctionCall{Name: "hundred"}})
+
+	msg := pm.ToLLMMessage()
+	if len(msg.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(msg.ToolCalls))
+	}
+	if msg.ToolCalls[0].ID != "call-10" || msg.ToolCalls[1].ID != "call-100" {
+		t.Fatalf("tool calls not sorted by index: %+v", msg.ToolCalls)
+	}
+}
