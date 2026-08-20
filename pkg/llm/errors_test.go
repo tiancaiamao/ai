@@ -253,6 +253,19 @@ func TestRetryAfterOnNonRateLimit(t *testing.T) {
 	}
 }
 
+func TestIsContextLengthExceededZAIMessage(t *testing.T) {
+	// zai returns error code 1261 with this exact message
+	if !IsContextLengthExceeded(errors.New("API error (400): Prompt exceeds max length")) {
+		t.Fatal("expected IsContextLengthExceeded=true for zai 'Prompt exceeds max length'")
+	}
+	if !IsContextLengthExceeded(errors.New("prompt exceeds maximum length")) {
+		t.Fatal("expected IsContextLengthExceeded=true for 'prompt exceeds maximum length'")
+	}
+	if IsContextLengthExceeded(errors.New("request exceeds timeout")) {
+		t.Fatal("expected IsContextLengthExceeded=false for unrelated 'exceeds'")
+	}
+}
+
 func TestIsContextLengthExceededNil(t *testing.T) {
 	if IsContextLengthExceeded(nil) {
 		t.Fatal("IsContextLengthExceeded(nil) should be false")
