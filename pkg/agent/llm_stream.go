@@ -205,11 +205,29 @@ func streamAssistantResponse(
 			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
+
+			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens
 			cachedTokens := 0
-			if e.Usage.PromptTokensDetails != nil {
+			if e.Timings != nil && e.Timings.CacheN > 0 {
+				cachedTokens = e.Timings.CacheN
+			} else if e.Usage.PromptTokensDetails != nil {
 				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
 			}
 			llmSpan.AddField("cache_read", cachedTokens)
+
+			// Additional llama.cpp timing metrics if available
+			if e.Timings != nil {
+				if e.Timings.PromptN > 0 {
+					llmSpan.AddField("prompt_processed_tokens", e.Timings.PromptN)
+				}
+				if e.Timings.PromptMS > 0 {
+					llmSpan.AddField("prompt_ms", e.Timings.PromptMS)
+				}
+				if e.Timings.PromptPerSecond > 0 {
+					llmSpan.AddField("prompt_tokens_per_second", e.Timings.PromptPerSecond)
+				}
+			}
+
 			llmSpan.AddField("stop_reason", e.StopReason)
 			elapsed := time.Since(llmStart)
 			if elapsed > 0 {

@@ -126,6 +126,21 @@ type PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
+// Timings holds llama.cpp-specific timing and cache statistics (from the "timings" field).
+// This is an extension field not present in the standard OpenAI API, but returned by
+// llama.cpp and other OpenAI-compatible servers to provide performance metrics.
+type Timings struct {
+	CacheN           int     `json:"cache_n"`             // Number of cached tokens
+	PromptN          int     `json:"prompt_n"`            // Number of processed tokens
+	PromptMS         float64 `json:"prompt_ms"`           // Prompt processing time in ms
+	PromptPerTokenMS float64 `json:"prompt_per_token_ms"` // Average time per token
+	PromptPerSecond  float64 `json:"prompt_per_second"`   // Tokens per second
+	PredictedN       int     `json:"predicted_n"`         // Number of predicted tokens
+	PredictedMS      float64 `json:"predicted_ms"`        // Prediction time in ms
+	DraftN           int     `json:"draft_n"`             // Draft tokens count
+	DraftNAccepted   int     `json:"draft_n_accepted"`    // Draft tokens accepted
+}
+
 // LLMEvent represents an event from the LLM stream.
 type LLMEvent interface {
 	GetEventType() string
@@ -167,6 +182,7 @@ type LLMDoneEvent struct {
 	Message    *LLMMessage
 	Usage      Usage
 	StopReason string
+	Timings    *Timings // llama.cpp timing extension (optional)
 }
 
 func (e LLMDoneEvent) GetEventType() string { return "done" }
