@@ -379,6 +379,8 @@ func sanitizeMessageForNonSuccessStopReason(msg *agentctx.AgentMessage) bool {
 		errorMsg = "[Rate limit] The request was rate-limited. Please wait a moment and try again."
 	case "timeout":
 		errorMsg = "[Timeout] The request timed out. Please try again."
+	case "sensitive", "content_filter":
+		errorMsg = "[Content filtered] The model provider refused to generate a response (stop_reason: " + stopReason + "), likely due to sensitive content in the conversation such as images or flagged text. Try removing recent attachments or rephrasing the request."
 	case "error":
 		errorMsg = "[Error] The request failed. Please try again."
 	default:
