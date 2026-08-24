@@ -93,6 +93,15 @@ func TestSanitizeMessageForNonSuccessStopReason(t *testing.T) {
 		}
 	})
 
+	t.Run("sensitive content filter", func(t *testing.T) {
+		msg := &agentctx.AgentMessage{StopReason: "sensitive"}
+		sanitizeMessageForNonSuccessStopReason(msg)
+		last := msg.Content[len(msg.Content)-1].(agentctx.TextContent)
+		if !strings.Contains(last.Text, "Content filtered") || !strings.Contains(last.Text, "sensitive") {
+			t.Errorf("expected content filtered message mentioning stop reason, got %q", last.Text)
+		}
+	})
+
 	t.Run("error", func(t *testing.T) {
 		msg := &agentctx.AgentMessage{StopReason: "error"}
 		sanitizeMessageForNonSuccessStopReason(msg)

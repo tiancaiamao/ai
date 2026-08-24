@@ -310,6 +310,22 @@ func streamAssistantResponse(
 				}
 			}
 
+			// Sanitize non-success stopReasons (network error, rate limit,
+			// content filter, ...) BEFORE message_end is emitted, so both
+			// the UI and session persistence carry the explanation instead
+			// of a silent empty assistant message.
+			if sanitized := sanitizeMessageForNonSuccessStopReason(&finalMessage); sanitized {
+				slog.Warn("[Stream] LLM request ended with non-success stopReason", "stopReason", finalMessage.StopReason)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
+					traceevent.Field{Key: "stopReason", Value: finalMessage.StopReason})
+				// Explicitly surface the failure to the UI. Assistant messages
+				// are rendered from streaming deltas only, and a filtered or
+				// failed response produces no deltas — without this event the
+				// user would see a silent empty turn.
+				stream.Push(NewErrorEvent(fmt.Errorf("%s",
+					strings.TrimSpace(finalMessage.ExtractText()))))
+			}
+
 			stream.Push(NewMessageEndEvent(finalMessage))
 			return &finalMessage, nil
 
