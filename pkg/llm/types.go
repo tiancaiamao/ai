@@ -17,6 +17,11 @@ type Model struct {
 	MaxTokens      int    `json:"maxTokens,omitempty"`
 	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
 	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
+	// ReasoningEfforts lists the wire-level reasoning_effort values this model
+	// accepts (from models.json "reasoningEfforts"), e.g. low/high/max. Empty
+	// means no restriction; requested levels outside the list are clamped to
+	// the nearest supported value.
+	ReasoningEfforts []string `json:"-"`
 }
 
 // LLMContext represents the context for an LLM request.

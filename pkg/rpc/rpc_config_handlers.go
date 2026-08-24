@@ -99,14 +99,15 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	}
 
 	app.model = llm.Model{
-		ID:             spec.ID,
-		Provider:       spec.Provider,
-		BaseURL:        spec.BaseURL,
-		API:            spec.API,
-		ContextWindow:  spec.ContextWindow,
-		MaxTokens:      spec.MaxTokens,
-		Reasoning:      spec.Reasoning,
-		SupportsVision: spec.SupportsVision,
+		ID:               spec.ID,
+		Provider:         spec.Provider,
+		BaseURL:          spec.BaseURL,
+		API:              spec.API,
+		ContextWindow:    spec.ContextWindow,
+		MaxTokens:        spec.MaxTokens,
+		Reasoning:        spec.Reasoning,
+		ReasoningEfforts: spec.ReasoningEfforts,
+		SupportsVision:   spec.SupportsVision,
 	}
 	app.apiKey = newAPIKey
 

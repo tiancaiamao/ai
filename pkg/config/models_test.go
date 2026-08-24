@@ -52,6 +52,49 @@ func TestLoadModelSpecs(t *testing.T) {
 	}
 }
 
+func TestLoadModelSpecsReasoningEfforts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "opencode": {
+      "models": [
+        { "id": "always-thinking", "reasoning": true, "reasoningEfforts": ["low", "high", "max"] },
+        { "id": "unrestricted", "reasoning": true }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs error: %v", err)
+	}
+	byID := map[string]ModelSpec{}
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	got, ok := byID["always-thinking"]
+	if !ok {
+		t.Fatal("missing always-thinking spec")
+	}
+	want := []string{"low", "high", "max"}
+	if len(got.ReasoningEfforts) != len(want) {
+		t.Fatalf("reasoningEfforts = %v, want %v", got.ReasoningEfforts, want)
+	}
+	for i := range want {
+		if got.ReasoningEfforts[i] != want[i] {
+			t.Fatalf("reasoningEfforts = %v, want %v", got.ReasoningEfforts, want)
+		}
+	}
+	if got := byID["unrestricted"].ReasoningEfforts; got != nil {
+		t.Errorf("unrestricted reasoningEfforts = %v, want nil", got)
+	}
+}
+
 func TestLoadModelSpecsOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")
