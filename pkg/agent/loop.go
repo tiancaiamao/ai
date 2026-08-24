@@ -249,14 +249,9 @@ func runInnerLoop(
 			return
 		}
 
-		// Check for non-success stopReason and notify user.
-		if sanitized := sanitizeMessageForNonSuccessStopReason(msg); sanitized {
-			slog.Warn("[Loop] LLM request ended with non-success stopReason", "stopReason", msg.StopReason)
-			traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
-				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
-			agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
-			state.newMessages[len(state.newMessages)-1] = *msg
-		}
+		// Non-success stopReasons (network error, rate limit, content filter,
+		// ...) are sanitized in streamAssistantResponse before message_end is
+		// emitted, so no extra handling is needed here.
 
 		hasMore, toolResults := state.processToolCalls(ctx, msg)
 
