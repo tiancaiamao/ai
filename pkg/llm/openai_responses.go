@@ -738,7 +738,7 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 		}
 		if effort != "" {
 			reqBody["reasoning"] = map[string]any{
-				"effort": effort,
+				"effort": clampEffort(model, effort),
 			}
 		}
 	}

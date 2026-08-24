@@ -9,6 +9,7 @@ func TestBuildThinkingParams(t *testing.T) {
 	zaiModel := Model{Provider: "zai", Reasoning: true}
 	dsModel := Model{Provider: "deepseek", Reasoning: true}
 	genericModel := Model{Provider: "openai", Reasoning: true}
+	clampedModel := Model{Provider: "opencode", Reasoning: true, ReasoningEfforts: []string{"low", "high", "max"}}
 	nonReasoning := Model{Provider: "zai", Reasoning: false}
 
 	tests := []struct {
@@ -72,6 +73,15 @@ func TestBuildThinkingParams(t *testing.T) {
 		{"generic minimal", genericModel, "minimal", map[string]any{"reasoning_effort": "minimal"}},
 		{"generic high", genericModel, "high", map[string]any{"reasoning_effort": "high"}},
 		{"generic xhigh", genericModel, "xhigh", map[string]any{"reasoning_effort": "high"}},
+
+		// Model-declared supported efforts (e.g. ox-alpha-free: low/high/max,
+		// always thinking) — unsupported levels are clamped to the nearest
+		// supported value, ties resolving upward.
+		{"clamped medium→high", clampedModel, "medium", map[string]any{"reasoning_effort": "high"}},
+		{"clamped minimal→low", clampedModel, "minimal", map[string]any{"reasoning_effort": "low"}},
+		{"clamped low passthrough", clampedModel, "low", map[string]any{"reasoning_effort": "low"}},
+		{"clamped high passthrough", clampedModel, "high", map[string]any{"reasoning_effort": "high"}},
+		{"clamped xhigh→max", clampedModel, "xhigh", map[string]any{"reasoning_effort": "max"}},
 	}
 
 	for _, tt := range tests {
