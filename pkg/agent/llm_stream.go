@@ -321,9 +321,11 @@ func streamAssistantResponse(
 				// Explicitly surface the failure to the UI. Assistant messages
 				// are rendered from streaming deltas only, and a filtered or
 				// failed response produces no deltas — without this event the
-				// user would see a silent empty turn.
+				// user would see a silent empty turn. Only the error notice is
+				// sent: any partial text before the failure was already rendered
+				// from deltas, so re-sending ExtractText() would duplicate it.
 				stream.Push(NewErrorEvent(fmt.Errorf("%s",
-					strings.TrimSpace(finalMessage.ExtractText()))))
+					nonSuccessStopReasonErrorMessage(finalMessage.StopReason))))
 			}
 
 			stream.Push(NewMessageEndEvent(finalMessage))

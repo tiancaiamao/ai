@@ -344,6 +344,26 @@ func isSuccessfulStopReason(stopReason string) bool {
 	}
 }
 
+// nonSuccessStopReasonErrorMessage returns a user-facing explanation for a
+// non-success stop reason (network error, rate limit, content filter, ...).
+func nonSuccessStopReasonErrorMessage(stopReason string) string {
+	switch stopReason {
+	case "network_error":
+		return "[Network error] The request failed due to a network issue. Please check your connection and try again."
+	case "rate_limit_error", "rate_limit":
+		return "[Rate limit] The request was rate-limited. Please wait a moment and try again."
+	case "timeout":
+		return "[Timeout] The request timed out. Please try again."
+	case "sensitive", "content_filter":
+		return "[Content filtered] The model provider refused to generate a response (stop_reason: " + stopReason + "), likely due to sensitive content in the conversation such as images or flagged text. Try removing recent attachments or rephrasing the request."
+	case "error":
+		return "[Error] The request failed. Please try again."
+	default:
+		// Handle any other unexpected stopReason
+		return fmt.Sprintf("[Request failed] The request ended unexpectedly: %s. Please try again.", stopReason)
+	}
+}
+
 // sanitizeMessageForNonSuccessStopReason modifies the message to notify the user
 // about any non-success stopReason. This ensures the user is informed instead of
 // experiencing a silent failure for network errors, rate limits, timeouts, etc.
@@ -371,22 +391,7 @@ func sanitizeMessageForNonSuccessStopReason(msg *agentctx.AgentMessage) bool {
 	}
 
 	// Generate user-facing error message based on stopReason
-	var errorMsg string
-	switch stopReason {
-	case "network_error":
-		errorMsg = "[Network error] The request failed due to a network issue. Please check your connection and try again."
-	case "rate_limit_error", "rate_limit":
-		errorMsg = "[Rate limit] The request was rate-limited. Please wait a moment and try again."
-	case "timeout":
-		errorMsg = "[Timeout] The request timed out. Please try again."
-	case "sensitive", "content_filter":
-		errorMsg = "[Content filtered] The model provider refused to generate a response (stop_reason: " + stopReason + "), likely due to sensitive content in the conversation such as images or flagged text. Try removing recent attachments or rephrasing the request."
-	case "error":
-		errorMsg = "[Error] The request failed. Please try again."
-	default:
-		// Handle any other unexpected stopReason
-		errorMsg = fmt.Sprintf("[Request failed] The request ended unexpectedly: %s. Please try again.", stopReason)
-	}
+	errorMsg := nonSuccessStopReasonErrorMessage(stopReason)
 
 	filtered = append(filtered, agentctx.TextContent{
 		Type: "text",

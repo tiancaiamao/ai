@@ -423,3 +423,80 @@ func TestStreamAssistantResponse_LengthStopReasonProducesTruncationGuidance(t *t
 		t.Fatalf("expected clear retry guidance for LLM, got: %s", toolMsg)
 	}
 }
+
+// TestStreamAssistantResponse_NonSuccessStopReasonSanitizesBeforeMessageEnd
+// verifies the silent-empty-turn fix: when the LLM stops with a non-success
+// stop reason (e.g. content filter), streamAssistantResponse must (1) emit a
+// message_end whose message carries the sanitized error text, and (2) push an
+// explicit error event containing only the error notice — not the partial
+// text already rendered from deltas.
+func TestStreamAssistantResponse_NonSuccessStopReasonSanitizesBeforeMessageEnd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial ans\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"sensitive\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":0,\"total_tokens\":10}}\n\n")
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("sys")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("describe image"))
+
+	config := &LoopConfig{
+		Model: llm.Model{
+			ID:       "test-model",
+			Provider: "test",
+			BaseURL:  server.URL,
+			API:      "openai-completions",
+		},
+		APIKey: "test-key",
+	}
+
+	stream := newTestAgentEventStream()
+	msg, err := streamAssistantResponse(context.Background(), agentCtx, config, stream)
+	if err != nil {
+		t.Fatalf("streamAssistantResponse returned error: %v", err)
+	}
+
+	if msg.StopReason != "sensitive" {
+		t.Fatalf("expected stop reason 'sensitive' preserved, got %q", msg.StopReason)
+	}
+	text := msg.ExtractText()
+	if !strings.Contains(text, "[Content filtered]") {
+		t.Fatalf("expected sanitized message to carry '[Content filtered]' notice, got %q", text)
+	}
+
+	// Collect events until both targets arrive (earlier events like
+	// message_start / text deltas may precede them).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	it := stream.Iterator(ctx)
+
+	var errorEvt, endEvt *AgentEvent
+	for (errorEvt == nil || endEvt == nil) && ctx.Err() == nil {
+		res, ok := <-it
+		if !ok || res.Done {
+			break
+		}
+		switch res.Value.Type {
+		case EventError:
+			errorEvt = &res.Value
+		case EventMessageEnd:
+			endEvt = &res.Value
+		}
+	}
+	if errorEvt == nil {
+		t.Fatal("expected an error event to be pushed for non-success stop reason")
+	}
+	if !strings.Contains(errorEvt.Error, "[Content filtered]") {
+		t.Fatalf("expected error event to carry '[Content filtered]' notice, got %q", errorEvt.Error)
+	}
+	if strings.Contains(errorEvt.Error, "partial ans") {
+		t.Fatalf("error event must not duplicate partial streamed text, got %q", errorEvt.Error)
+	}
+	if endEvt == nil {
+		t.Fatal("expected a message_end event to be pushed")
+	}
+	if endEvt.Message == nil || !strings.Contains(endEvt.Message.ExtractText(), "[Content filtered]") {
+		t.Fatalf("expected message_end to carry sanitized text, got %+v", endEvt.Message)
+	}
+}
