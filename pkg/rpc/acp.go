@@ -20,8 +20,8 @@ package rpc
 //   - session/update (notify)    -> agent_message_chunk / tool_call /
 //                                   available_commands_update
 //
-// Everything else (fs/*, terminal/*, session/load, image/audio content, MCP
-// transports) is deliberately NOT advertised and rejected as method not found.
+// Everything else (fs/*, terminal/*, image/audio content, MCP transports) is
+// deliberately NOT advertised and rejected as method not found.
 // mcpServers in session/new are accepted and ignored (logged).
 
 import (
@@ -326,6 +326,16 @@ func (s *acpServer) handleSessionLoad(req acpRequest) {
 	}
 	if params.SessionID == "" {
 		s.sendError(req.ID, acpErrInvalidParams, "session/load requires sessionId")
+		return
+	}
+
+	// A load swaps the agent context; doing so while a prompt turn is running
+	// would race with the loop and interleave replay updates into that turn.
+	s.pendingMu.Lock()
+	busy := len(s.pendingPrompt) > 0
+	s.pendingMu.Unlock()
+	if busy {
+		s.sendError(req.ID, acpErrInvalidRequest, "cannot load session while a prompt is in flight")
 		return
 	}
 
