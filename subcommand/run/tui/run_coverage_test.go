@@ -395,10 +395,16 @@ func TestRenderSkills(t *testing.T) {
 
 func TestRenderContext(t *testing.T) {
 	// Minimal valid context data
-	data := `{"state":{"sessionId":"s1","sessionName":"n","sessionFile":"/tmp/s","model":{"id":"m","provider":"p","name":"model"},"messageCount":10,"pendingMessageCount":0,"isStreaming":false,"isCompacting":false,"thinkingLevel":"medium","autoCompactionEnabled":true,"aiPid":1,"aiLogPath":"/tmp/log","aiWorkingDir":"/tmp"},"stats":{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":0,"cost":0.001,"tokens":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"total":150}},"models":{"models":[{"id":"m","provider":"p","name":"model","contextWindow":200000}]}}`
+	data := `{"state":{"sessionId":"s1","sessionName":"n","sessionFile":"/tmp/s","model":{"id":"m","provider":"p","name":"model","contextWindow":200000},"messageCount":10,"pendingMessageCount":0,"isStreaming":false,"isCompacting":false,"thinkingLevel":"medium","autoCompactionEnabled":true,"aiPid":1,"aiLogPath":"/tmp/log","aiWorkingDir":"/tmp"},"stats":{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":0,"cost":0.001,"tokens":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"total":150,"activeWindowTokens":150,"systemPromptTokens":0,"systemToolsTokens":0}},"models":{"models":[{"id":"m","provider":"p","name":"model","contextWindow":200000}]}}`
 	r := renderContext([]byte(data))
 	if r == nil || !strings.Contains(r.Text, "Context Usage") || !strings.Contains(r.Text, "Session Stats") {
 		t.Errorf("unexpected: %+v", r)
+	}
+
+	// Regression test: ensure output is NOT base64-encoded JSON.
+	// This would happen if []byte is passed directly to json.Marshal instead of being unmarshaled first.
+	if strings.Contains(r.Text, "ewogICJzdGF0ZSI6") || strings.Contains(r.Text, "\"state\":") {
+		t.Errorf("output contains raw JSON or base64, expected formatted text: %s", r.Text)
 	}
 
 	// Bad JSON
@@ -413,6 +419,11 @@ func TestRenderSessionState(t *testing.T) {
 	r := renderSessionState([]byte(data))
 	if r == nil || !strings.Contains(r.Text, "Session:") {
 		t.Errorf("unexpected: %+v", r)
+	}
+
+	// Regression test: ensure output is NOT base64-encoded JSON.
+	if strings.Contains(r.Text, "ewogICJzZXNzaW9uSWQi") || strings.Contains(r.Text, "\"sessionId\":") {
+		t.Errorf("output contains raw JSON or base64, expected formatted text: %s", r.Text)
 	}
 
 	// Bad JSON → fallback

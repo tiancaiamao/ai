@@ -223,7 +223,12 @@ func renderSkills(dataJSON []byte) *FormattedEvent {
 
 // renderContext renders /context output using shared renderer.
 func renderContext(dataJSON []byte) *FormattedEvent {
-	if text := rpc.FormatCommandResult("context", dataJSON); text != "" {
+	// Unmarshal to map[string]any before passing to FormatCommandResult
+	var data map[string]any
+	if err := json.Unmarshal(dataJSON, &data); err != nil {
+		return fallbackJSON(dataJSON)
+	}
+	if text := rpc.FormatCommandResult("context", data); text != "" {
 		return &FormattedEvent{Kind: KindMeta, Text: text}
 	}
 	return fallbackJSON(dataJSON)
@@ -231,85 +236,15 @@ func renderContext(dataJSON []byte) *FormattedEvent {
 
 // renderSessionState renders /session output.
 func renderSessionState(dataJSON []byte) *FormattedEvent {
-	var state rpc.SessionState
-	if err := json.Unmarshal(dataJSON, &state); err != nil {
+	// Unmarshal to map[string]any before passing to FormatCommandResult
+	var data map[string]any
+	if err := json.Unmarshal(dataJSON, &data); err != nil {
 		return fallbackJSON(dataJSON)
 	}
-
-	model := "unknown"
-	if state.Model != nil {
-		model = state.Model.ID
-		if state.Model.Provider != "" {
-			model = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
-		}
+	if text := rpc.FormatCommandResult("session", data); text != "" {
+		return &FormattedEvent{Kind: KindMeta, Text: text}
 	}
-
-	compactionContext := orUnknown("")
-	compactionLimit := orUnknown("")
-	compactionReserve := orUnknown("")
-	compactionKeepRecent := orUnknown("")
-	compactionKeepRecentTokens := orUnknown("")
-	if state.Compaction != nil {
-		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
-		compactionLimit = formatTokenLimit(state.Compaction)
-		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
-		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
-		compactionKeepRecentTokens = formatIntOrUnknown(state.Compaction.KeepRecentTokens)
-	}
-
-	aiPID := "unknown"
-	if state.AIPid > 0 {
-		aiPID = fmt.Sprintf("%d", state.AIPid)
-	}
-	aiLogPath := state.AILogPath
-	if aiLogPath == "" {
-		aiLogPath = "unknown"
-	}
-	aiWorkingDir := state.AIWorkingDir
-	if aiWorkingDir == "" {
-		aiWorkingDir = "unknown"
-	}
-
-	text := fmt.Sprintf(`Session:
-  id: %s
-  name: %s
-  file: %s
-  ai-pid: %s
-  ai-log: %s
-  ai-cwd: %s
-  model: %s
-  context-window: %s
-  compaction-limit: %s
-  compaction-reserve: %s
-  compaction-keep-recent: %s
-  compaction-keep-recent-tokens: %s
-  thinking-level: %s
-  auto-compaction: %s
-  messages: %d
-  pending: %d
-  streaming: %s
-  compacting: %s`,
-		orUnknown(state.SessionID),
-		orUnknown(state.SessionName),
-		orUnknown(state.SessionFile),
-		aiPID,
-		aiLogPath,
-		aiWorkingDir,
-		model,
-		compactionContext,
-		compactionLimit,
-		compactionReserve,
-		compactionKeepRecent,
-		compactionKeepRecentTokens,
-		orUnknown(state.ThinkingLevel),
-		onOff(state.AutoCompactionEnabled),
-		state.MessageCount,
-		state.PendingMessageCount,
-		onOff(state.IsStreaming),
-		onOff(state.IsCompacting),
-	)
-
-	return &FormattedEvent{Kind: KindMeta, Text: text}
+	return fallbackJSON(dataJSON)
 }
 
 // renderMessages renders /messages output.

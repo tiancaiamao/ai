@@ -497,7 +497,7 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 		contains    []string
 		notContains []string
 	}{
-				{
+		{
 			name:     "session status line plus details",
 			command:  "session",
 			result:   state,
@@ -655,7 +655,7 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 // through a live ACP server: each answer must arrive as an agent_message_chunk
 // carrying human-readable text (not a raw JSON blob) followed by end_turn.
 func TestACPCommandRenderersOverACP(t *testing.T) {
-		prompts := []struct {
+	prompts := []struct {
 		command  string
 		contains []string
 	}{
