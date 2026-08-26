@@ -497,11 +497,11 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 		contains    []string
 		notContains []string
 	}{
-		{
+				{
 			name:     "session status line plus details",
 			command:  "session",
 			result:   state,
-			contains: []string{"Model: zai/glm-4.6", "Session: abcdefgh", "Streaming: active"},
+			contains: []string{"model: zai/glm-4.6", "id: abcdefgh12345678", "streaming: on"},
 		},
 		{
 			name:    "session enriched fields",
@@ -517,11 +517,12 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 				AutoCompactionEnabled: false,
 			},
 			contains: []string{
-				"Name: fix-bug",
-				"Workspace: /home/user/proj",
-				"Thinking: medium",
-				"Messages: 12 (2 pending)",
-				"Auto-compaction: off",
+				"name: fix-bug",
+				"ai-cwd: /home/user/proj",
+				"thinking-level: medium",
+				"messages: 12",
+				"pending: 2",
+				"auto-compaction: off",
 			},
 		},
 		{
@@ -533,9 +534,11 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 				"models": models,
 			},
 			contains: []string{
-				"Model: zai/glm-4.6",
-				"Messages: 3 user · 2 assistant · 1 tool calls",
-				"Tokens: in 100 · out 50",
+				"Context Usage",
+				"zai/glm-4.6",
+				"Session Stats",
+				"Messages: 0 total (user 3, assistant 2)",
+				"Tools: 1 calls",
 			},
 			notContains: []string{"zai/glm-4.5-air", "marks current"},
 		},
@@ -652,12 +655,12 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 // through a live ACP server: each answer must arrive as an agent_message_chunk
 // carrying human-readable text (not a raw JSON blob) followed by end_turn.
 func TestACPCommandRenderersOverACP(t *testing.T) {
-	prompts := []struct {
+		prompts := []struct {
 		command  string
 		contains []string
 	}{
-		{command: "/session", contains: []string{"Model:", "Session:", "Streaming:"}},
-		{command: "/context", contains: []string{"Tokens:"}},
+		{command: "/session", contains: []string{"model:", "id:", "streaming:"}},
+		{command: "/context", contains: []string{"Context Usage", "Session Stats"}},
 		{command: "/show settings", contains: []string{"model"}},
 		{command: "/help", contains: []string{"Available commands:", "help"}},
 		{command: "/skills", contains: []string{"Available skills:"}},

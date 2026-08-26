@@ -221,95 +221,12 @@ func renderSkills(dataJSON []byte) *FormattedEvent {
 	return &FormattedEvent{Kind: KindMeta, Text: strings.TrimRight(b.String(), "\n")}
 }
 
-// renderContext renders /context output.
+// renderContext renders /context output using shared renderer.
 func renderContext(dataJSON []byte) *FormattedEvent {
-	var payload struct {
-		State  *rpc.SessionState `json:"state"`
-		Stats  *rpc.SessionStats `json:"stats"`
-		Models struct {
-			Models []config.ModelInfo `json:"models"`
-		} `json:"models"`
+	if text := rpc.FormatCommandResult("context", dataJSON); text != "" {
+		return &FormattedEvent{Kind: KindMeta, Text: text}
 	}
-	if err := json.Unmarshal(dataJSON, &payload); err != nil {
-		return fallbackJSON(dataJSON)
-	}
-
-	state := payload.State
-	stats := payload.Stats
-	if state == nil || stats == nil {
-		return fallbackJSON(dataJSON)
-	}
-
-	modelName := "unknown"
-	modelContextWindow := 0
-	if state.Model != nil {
-		modelName = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
-		modelContextWindow = state.Model.ContextWindow
-	}
-
-	tokensMax := modelContextWindow
-	if tokensMax == 0 && state.Compaction != nil {
-		tokensMax = state.Compaction.ContextWindow
-	}
-	if tokensMax == 0 {
-		tokensMax = 200000
-	}
-
-	tokensUsed := stats.Tokens.ActiveWindowTokens
-	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
-	freeTokens := tokensMax - tokensUsed
-
-	systemPromptTokens := stats.Tokens.SystemPromptTokens
-	systemToolsTokens := stats.Tokens.SystemToolsTokens
-	messagesTokens := tokensUsed - systemPromptTokens - systemToolsTokens
-	if messagesTokens < 0 {
-		messagesTokens = 0
-	}
-
-	totalBars := 30
-	usedBars := int(float64(totalBars) * float64(tokensUsed) / float64(tokensMax))
-	if usedBars > totalBars {
-		usedBars = totalBars
-	}
-	freeBars := totalBars - usedBars
-
-	var bar strings.Builder
-	for i := 0; i < usedBars; i++ {
-		bar.WriteString("⛁")
-	}
-	for i := 0; i < freeBars; i++ {
-		bar.WriteString("⛶")
-	}
-
-	var b strings.Builder
-	b.WriteString("  Context Usage\n")
-	b.WriteString(fmt.Sprintf("%s  %s - %dk/%dk tokens (%.0f%%)\n",
-		bar.String(), modelName, tokensUsed/1024, tokensMax/1024, tokensPercent))
-	b.WriteString(fmt.Sprintf("     System prompt: ~%dk tokens (%.1f%%)\n",
-		systemPromptTokens/1024, float64(systemPromptTokens)/float64(tokensMax)*100))
-	b.WriteString(fmt.Sprintf("     System tools: ~%dk tokens (%.1f%%)\n",
-		systemToolsTokens/1024, float64(systemToolsTokens)/float64(tokensMax)*100))
-	b.WriteString(fmt.Sprintf("     Messages: ~%dk tokens (%.1f%%)\n",
-		messagesTokens/1024, float64(messagesTokens)/float64(tokensMax)*100))
-	b.WriteString(fmt.Sprintf("     Free space: %dk (%.1f%%)\n",
-		freeTokens/1024, float64(freeTokens)/float64(tokensMax)*100))
-	b.WriteString("     (Breakdowns are estimates based on string length)\n")
-	b.WriteString("\n")
-	b.WriteString(" Session Stats\n")
-	b.WriteString(fmt.Sprintf(" Messages: %d total (user %d, assistant %d)\n",
-		stats.TotalMessages, stats.UserMessages, stats.AssistantMessages))
-	b.WriteString(fmt.Sprintf(" Tools: %d calls, %d results\n",
-		stats.ToolCalls, stats.ToolResults))
-	b.WriteString(fmt.Sprintf(" Compactions: %d\n", stats.CompactionCount))
-	b.WriteString(fmt.Sprintf(" Cost: $%.4f\n", stats.Cost))
-	b.WriteString(fmt.Sprintf(" Auto-compaction: %s\n", onOff(state.AutoCompactionEnabled)))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf(" Model: %s\n", modelName))
-	b.WriteString(fmt.Sprintf(" Context window: %dk tokens\n", tokensMax/1024))
-	b.WriteString(fmt.Sprintf(" Session total: %dk tokens (all turns)\n", stats.Tokens.Total/1024))
-	b.WriteString(fmt.Sprintf(" Streaming: %s", onOff(state.IsStreaming)))
-
-	return &FormattedEvent{Kind: KindMeta, Text: b.String()}
+	return fallbackJSON(dataJSON)
 }
 
 // renderSessionState renders /session output.

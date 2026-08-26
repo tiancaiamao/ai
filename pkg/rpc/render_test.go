@@ -24,7 +24,7 @@ func TestFormatCommandResultSession(t *testing.T) {
 		SessionID:   "abcdefgh12345678",
 		IsStreaming: true,
 	})
-	for _, want := range []string{"Model: zai/glm-4.6", "Session: abcdefgh", "Streaming: active"} {
+	for _, want := range []string{"model: zai/glm-4.6", "id: abcdefgh12345678", "streaming: on"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
 		}
@@ -43,8 +43,8 @@ func TestFormatCommandResultSession(t *testing.T) {
 	}
 	out = formatData("session", enriched)
 	for _, want := range []string{
-		"Name: fix-bug", "Workspace: /home/user/proj", "Thinking: medium",
-		"Messages: 12 (2 pending)", "Auto-compaction: off",
+		"name: fix-bug", "ai-cwd: /home/user/proj", "thinking-level: medium",
+		"messages: 12", "pending: 2", "auto-compaction: off",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
@@ -73,7 +73,7 @@ func TestFormatCommandResultContext(t *testing.T) {
 		"currentIndex": 1,
 	}
 	out := formatData("context", map[string]any{"state": state, "stats": stats, "models": models})
-	for _, want := range []string{"Model: zai/glm-4.6", "Messages: 3 user · 2 assistant · 1 tool calls", "Tokens: in 100 · out 50"} {
+	for _, want := range []string{"Context Usage", "zai/glm-4.6", "Session Stats", "Messages: 0 total (user 3, assistant 2)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
 		}

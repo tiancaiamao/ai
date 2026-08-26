@@ -140,39 +140,100 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 
 // --- per-command renderers ---
 
-// renderSessionStateEnriched renders /session as a status line plus one
-// detail line per non-empty field: session name, workspace, thinking level,
-// message counts, and compaction status.
+// renderSessionStateEnriched renders /session with all 17 fields of session
+// information, matching the original TUI output format.
 func renderSessionStateEnriched(raw []byte) string {
 	var state SessionState
 	if err := json.Unmarshal(raw, &state); err != nil || state.SessionID == "" {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(sessionStatusLine(&state))
-	if state.SessionName != "" {
-		fmt.Fprintf(&b, "\nName: %s", state.SessionName)
+
+	model := "unknown"
+	if state.Model != nil {
+		model = state.Model.ID
+		if state.Model.Provider != "" {
+			model = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
+		}
 	}
-	if w := state.AIWorkingDir; w != "" {
-		fmt.Fprintf(&b, "\nWorkspace: %s", w)
+
+	compactionContext := orUnknown("")
+	compactionLimit := orUnknown("")
+	compactionReserve := orUnknown("")
+	compactionKeepRecent := orUnknown("")
+	compactionKeepRecentTokens := orUnknown("")
+	if state.Compaction != nil {
+		compactionContext = formatIntOrUnknown(state.Compaction.ContextWindow)
+		compactionLimit = formatTokenLimit(state.Compaction)
+		compactionReserve = formatIntOrUnknown(state.Compaction.ReserveTokens)
+		compactionKeepRecent = formatIntOrUnknown(state.Compaction.KeepRecent)
+		compactionKeepRecentTokens = formatIntOrUnknown(state.Compaction.KeepRecentTokens)
 	}
-	if state.ThinkingLevel != "" {
-		fmt.Fprintf(&b, "\nThinking: %s", state.ThinkingLevel)
+
+	aiPID := "unknown"
+	if state.AIPid > 0 {
+		aiPID = fmt.Sprintf("%d", state.AIPid)
 	}
-	b.WriteString(fmt.Sprintf("\nMessages: %d", state.MessageCount))
-	if state.PendingMessageCount > 0 {
-		fmt.Fprintf(&b, " (%d pending)", state.PendingMessageCount)
+	aiLogPath := state.AILogPath
+	if aiLogPath == "" {
+		aiLogPath = "unknown"
 	}
-	if state.IsCompacting {
-		b.WriteString("\nCompacting: running")
-	} else if !state.AutoCompactionEnabled {
-		b.WriteString("\nAuto-compaction: off")
+	aiWorkingDir := state.AIWorkingDir
+	if aiWorkingDir == "" {
+		aiWorkingDir = "unknown"
 	}
-	return b.String()
+
+	text := fmt.Sprintf(`Session:
+  id: %s
+  name: %s
+  file: %s
+  ai-pid: %s
+  ai-log: %s
+  ai-cwd: %s
+  model: %s
+  context-window: %s
+  compaction-limit: %s
+  compaction-reserve: %s
+  compaction-keep-recent: %s
+  compaction-keep-recent-tokens: %s
+  thinking-level: %s
+  auto-compaction: %s
+  messages: %d
+  pending: %d
+  streaming: %s
+  compacting: %s`,
+		orUnknown(state.SessionID),
+		orUnknown(state.SessionName),
+		orUnknown(state.SessionFile),
+		aiPID,
+		aiLogPath,
+		aiWorkingDir,
+		model,
+		compactionContext,
+		compactionLimit,
+		compactionReserve,
+		compactionKeepRecent,
+		compactionKeepRecentTokens,
+		orUnknown(state.ThinkingLevel),
+		onOff(state.AutoCompactionEnabled),
+		state.MessageCount,
+		state.PendingMessageCount,
+		onOff(state.IsStreaming),
+		onOff(state.IsCompacting),
+	)
+
+	return text
 }
 
-// renderContextCompact renders /context as the session status line followed
-// by message counts and token usage (the model list is /model's job).
+// onOff converts a boolean to "on" or "off".
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+// renderContextCompact renders /context with detailed context usage bar and
+// session stats, matching the original TUI output format.
 func renderContextCompact(raw []byte) string {
 	var payload struct {
 		State *SessionState `json:"state"`
@@ -185,11 +246,81 @@ func renderContextCompact(raw []byte) string {
 	if state == nil || stats == nil || state.SessionID == "" {
 		return ""
 	}
+
+	// Get model info for context window
+	modelName := "unknown"
+	modelContextWindow := 0
+	if state.Model != nil {
+		modelName = fmt.Sprintf("%s/%s", state.Model.Provider, state.Model.ID)
+		modelContextWindow = state.Model.ContextWindow
+	}
+
+	// Determine context window
+	tokensMax := modelContextWindow
+	if tokensMax == 0 && state.Compaction != nil {
+		tokensMax = state.Compaction.ContextWindow
+	}
+	if tokensMax == 0 {
+		tokensMax = 200000
+	}
+
+	tokensUsed := stats.Tokens.ActiveWindowTokens
+	tokensPercent := float64(tokensUsed) / float64(tokensMax) * 100
+	freeTokens := tokensMax - tokensUsed
+
+	// Break down token usage
+	systemPromptTokens := stats.Tokens.SystemPromptTokens
+	systemToolsTokens := stats.Tokens.SystemToolsTokens
+	messagesTokens := tokensUsed - systemPromptTokens - systemToolsTokens
+	if messagesTokens < 0 {
+		messagesTokens = 0
+	}
+
+	// Draw Unicode bar (30 characters total)
+	totalBars := 30
+	usedBars := int(float64(totalBars) * float64(tokensUsed) / float64(tokensMax))
+	if usedBars > totalBars {
+		usedBars = totalBars
+	}
+	freeBars := totalBars - usedBars
+
+	var bar strings.Builder
+	for i := 0; i < usedBars; i++ {
+		bar.WriteString("⛁")
+	}
+	for i := 0; i < freeBars; i++ {
+		bar.WriteString("⛶")
+	}
+
+	// Build detailed output
 	var b strings.Builder
-	b.WriteString(sessionStatusLine(state))
-	fmt.Fprintf(&b, "\nMessages: %d user · %d assistant · %d tool calls",
-		stats.UserMessages, stats.AssistantMessages, stats.ToolCalls)
-	fmt.Fprintf(&b, "\n%s", renderTokenUsageLine(state, stats))
+	b.WriteString("  Context Usage\n")
+	b.WriteString(fmt.Sprintf("%s  %s - %dk/%dk tokens (%.0f%%)\n",
+		bar.String(), modelName, tokensUsed/1024, tokensMax/1024, tokensPercent))
+	b.WriteString(fmt.Sprintf("     System prompt: ~%dk tokens (%.1f%%)\n",
+		systemPromptTokens/1024, float64(systemPromptTokens)/float64(tokensMax)*100))
+	b.WriteString(fmt.Sprintf("     System tools: ~%dk tokens (%.1f%%)\n",
+		systemToolsTokens/1024, float64(systemToolsTokens)/float64(tokensMax)*100))
+	b.WriteString(fmt.Sprintf("     Messages: ~%dk tokens (%.1f%%)\n",
+		messagesTokens/1024, float64(messagesTokens)/float64(tokensMax)*100))
+	b.WriteString(fmt.Sprintf("     Free space: %dk (%.1f%%)\n",
+		freeTokens/1024, float64(freeTokens)/float64(tokensMax)*100))
+	b.WriteString("     (Breakdowns are estimates based on string length)\n")
+	b.WriteString("\n")
+	b.WriteString(" Session Stats\n")
+	b.WriteString(fmt.Sprintf(" Messages: %d total (user %d, assistant %d)\n",
+		stats.TotalMessages, stats.UserMessages, stats.AssistantMessages))
+	b.WriteString(fmt.Sprintf(" Tools: %d calls, %d results\n",
+		stats.ToolCalls, stats.ToolResults))
+	b.WriteString(fmt.Sprintf(" Compactions: %d\n", stats.CompactionCount))
+	b.WriteString(fmt.Sprintf(" Cost: $%.4f\n", stats.Cost))
+	b.WriteString(fmt.Sprintf(" Auto-compaction: %s\n", onOff(state.AutoCompactionEnabled)))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf(" Model: %s\n", modelName))
+	b.WriteString(fmt.Sprintf(" Context window: %dk tokens\n", tokensMax/1024))
+	b.WriteString(fmt.Sprintf(" Session total: %dk tokens (all turns)\n", stats.Tokens.Total/1024))
+	b.WriteString(fmt.Sprintf(" Streaming: %s", onOff(state.IsStreaming)))
+
 	return b.String()
 }
 
