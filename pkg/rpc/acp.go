@@ -41,6 +41,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
@@ -572,24 +573,56 @@ var acpCommandRenderers = map[string]acpCommandRenderer{
 	"context": renderContextText,
 	"help":    renderHelpText,
 	"model":   renderModelListText,
+	"resume":  renderResumeText,
 	"session": renderSessionStateText,
 	"show":    renderShowSettingsText,
 	"skills":  renderSkillsText,
 }
 
-// renderSessionStateText renders /session as a one-line status summary:
+// sessionStatusLine is the shared one-line summary:
 // "Model: <model> · Session: <id[:8]> · Streaming: <status>".
+func sessionStatusLine(state *SessionState) string {
+	return fmt.Sprintf("Model: %s · Session: %s · Streaming: %s",
+		modelDisplayName(state.Model), shortID(state.SessionID), streamingStatus(state))
+}
+
+// renderSessionStateText renders /session as the status line plus one detail
+// line per non-empty field: session name, workspace, thinking level, message
+// counts, and token usage when compaction state is known.
 func renderSessionStateText(result any) string {
 	state, ok := result.(*SessionState)
 	if !ok || state == nil {
 		return ""
 	}
-	return fmt.Sprintf("Model: %s · Session: %s · Streaming: %s",
-		modelDisplayName(state.Model), shortID(state.SessionID), streamingStatus(state))
+	var b strings.Builder
+	b.WriteString(sessionStatusLine(state))
+	if state.SessionName != "" {
+		fmt.Fprintf(&b, "\nName: %s", state.SessionName)
+	}
+	if w := state.AIWorkingDir; w != "" {
+		fmt.Fprintf(&b, "\nWorkspace: %s", w)
+	}
+	if state.ThinkingLevel != "" {
+		fmt.Fprintf(&b, "\nThinking: %s", state.ThinkingLevel)
+	}
+	b.WriteString(fmt.Sprintf("\nMessages: %d", state.MessageCount))
+	if state.PendingMessageCount > 0 {
+		fmt.Fprintf(&b, " (%d pending)", state.PendingMessageCount)
+	}
+	if state.IsCompacting {
+		b.WriteString("\nCompacting: running")
+	} else if !state.AutoCompactionEnabled {
+		b.WriteString("\nAuto-compaction: off")
+	}
+	out := strings.TrimRight(b.String(), "\n")
+	if out == "" {
+		return ""
+	}
+	return out
 }
 
-// renderContextText renders /context as short sections: the session status
-// line, message/token usage lines, then one model per line (current marked *).
+// renderContextText renders /context as the session status line followed by
+// message and token usage (the model list is /model's job).
 func renderContextText(result any) string {
 	m, ok := result.(map[string]any)
 	if !ok || len(m) == 0 {
@@ -602,21 +635,61 @@ func renderContextText(result any) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(renderSessionStateText(state))
+	b.WriteString(sessionStatusLine(state))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "Messages: %d user · %d assistant · %d tool calls\n",
 		statsUserMessages(stats), statsAssistantMessages(stats), stats.ToolCalls)
 	b.WriteString(renderTokenUsageLine(state, stats))
-	models := modelListFromResult(m["models"])
-	if len(models.models) > 0 {
-		b.WriteString("\n")
-		b.WriteString(renderModelTable(models))
-	}
 	out := strings.TrimRight(b.String(), "\n")
 	if out == "" {
 		return ""
 	}
 	return out
+}
+
+// renderResumeText renders both /resume shapes: the no-arg session list as an
+// aligned table (index usable as the /resume <index> argument), or a session
+// switch confirmation.
+func renderResumeText(result any) string {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if id, _ := m["sessionId"].(string); id != "" {
+		name, _ := m["sessionName"].(string)
+		if name != "" {
+			return fmt.Sprintf("Switched to session %s (%s)", name, shortID(id))
+		}
+		return fmt.Sprintf("Switched to session %s", shortID(id))
+	}
+	sessions, ok := m["sessions"].([]session.SessionMeta)
+	if !ok {
+		return ""
+	}
+	rows := make([]nameDesc, 0, len(sessions))
+	for i, s := range sessions {
+		title := s.Title
+		if title == "" {
+			title = s.Name
+		}
+		if title == "" {
+			title = "(untitled)"
+		}
+		rows = append(rows, nameDesc{
+			name: fmt.Sprintf("%d. %s [%s]", i, truncateRunes(title, 48), shortID(s.ID)),
+			desc: fmt.Sprintf("%d msgs, updated %s", s.MessageCount, s.UpdatedAt.Format("2006-01-02 15:04")),
+		})
+	}
+	return renderNameDescTable("Sessions (resume with /resume <index>):", rows)
+}
+
+// truncateRunes caps s at max runes, appending "…" when truncated.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // renderTokenUsageLine renders one line of token usage from session stats,

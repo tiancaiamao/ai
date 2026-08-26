@@ -491,16 +491,38 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 	}
 
 	cases := []struct {
-		name     string
-		command  string
-		result   any
-		contains []string
+		name        string
+		command     string
+		result      any
+		contains    []string
+		notContains []string
 	}{
 		{
-			name:     "session one-line summary",
+			name:     "session status line plus details",
 			command:  "session",
 			result:   state,
 			contains: []string{"Model: zai/glm-4.6", "Session: abcdefgh", "Streaming: active"},
+		},
+		{
+			name:    "session enriched fields",
+			command: "session",
+			result: &SessionState{
+				Model:                 &config.ModelInfo{ID: "glm-4.6", Provider: "zai", Name: "GLM-4.6"},
+				SessionID:             "abcdefgh12345678",
+				SessionName:           "fix-bug",
+				AIWorkingDir:          "/home/user/proj",
+				ThinkingLevel:         "medium",
+				MessageCount:          12,
+				PendingMessageCount:   2,
+				AutoCompactionEnabled: false,
+			},
+			contains: []string{
+				"Name: fix-bug",
+				"Workspace: /home/user/proj",
+				"Thinking: medium",
+				"Messages: 12 (2 pending)",
+				"Auto-compaction: off",
+			},
 		},
 		{
 			name:    "context short sections",
@@ -514,8 +536,32 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 				"Model: zai/glm-4.6",
 				"Messages: 3 user · 2 assistant · 1 tool calls",
 				"Tokens: in 100 · out 50",
-				"* zai/glm-4.6",
-				"  zai/glm-4.5-air",
+			},
+			notContains: []string{"zai/glm-4.5-air", "marks current"},
+		},
+		{
+			name:    "resume session list table",
+			command: "resume",
+			result: map[string]any{
+				"sessions": []session.SessionMeta{
+					{ID: "1111111111111111", Title: "Fix login bug", MessageCount: 42, UpdatedAt: time.Date(2026, 8, 26, 15, 4, 0, 0, time.Local)},
+					{ID: "2222222222222222", Name: "default", MessageCount: 3, UpdatedAt: time.Date(2026, 8, 25, 9, 0, 0, 0, time.Local)},
+				},
+			},
+			contains: []string{
+				"Sessions (resume with /resume <index>):",
+				"0. Fix login bug [11111111]",
+				"42 msgs, updated 2026-08-26 15:04",
+				"1. default [22222222]",
+				"3 msgs, updated 2026-08-25 09:00",
+			},
+		},
+		{
+			name:    "resume switch confirmation",
+			command: "resume",
+			result:  map[string]any{"sessionId": "1111222233334444", "sessionName": "fix-bug"},
+			contains: []string{
+				"Switched to session fix-bug (11112222)",
 			},
 		},
 		{
@@ -570,6 +616,11 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 			for _, want := range tc.contains {
 				if !strings.Contains(out, want) {
 					t.Errorf("output missing %q, got:\n%s", want, out)
+				}
+			}
+			for _, unwanted := range tc.notContains {
+				if strings.Contains(out, unwanted) {
+					t.Errorf("output should not contain %q, got:\n%s", unwanted, out)
 				}
 			}
 		})
