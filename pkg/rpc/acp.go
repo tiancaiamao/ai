@@ -505,7 +505,22 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 // registry entries and need the expansion path in app.handlePrompt.
 func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
 	msg = strings.TrimSpace(msg)
-	if !strings.HasPrefix(msg, "/") || skill.IsSkillCommand(msg) {
+	if !strings.HasPrefix(msg, "/") {
+		// Some hosts prepend their own context blocks to a prompt (e.g. AionUi
+		// injects an "[Assistant Rules]" skills preamble before the user's
+		// first message). Fall back to the final line: if it invokes a
+		// registered command, treat the whole prompt as that command.
+		if idx := strings.LastIndex(msg, "\n"); idx >= 0 {
+			last := strings.TrimSpace(msg[idx+1:])
+			if !strings.HasPrefix(last, "/") {
+				return "", "", false
+			}
+			msg = last
+		} else {
+			return "", "", false
+		}
+	}
+	if skill.IsSkillCommand(msg) {
 		return "", "", false
 	}
 	cmdName, rest, err := command.ParseSlashCommand(msg)

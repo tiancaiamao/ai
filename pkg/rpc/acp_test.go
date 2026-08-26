@@ -713,10 +713,13 @@ func TestACPCommandRenderersOverACP(t *testing.T) {
 
 // TestMatchACPCommand covers the allow-list gate: only registered commands
 // dispatch; unregistered '/', comments and plain text stay raw; skill prompts
-// are excluded from sync dispatch (they need the expansion path).
+// are excluded from sync dispatch (they need the expansion path). Hosts may
+// prepend their own context blocks to a prompt, so a registered command on
+// the final line also dispatches.
 func TestMatchACPCommand(t *testing.T) {
 	srv := NewServer()
 	srv.RegisterSlash("help", "List commands", func(args string) (any, error) { return nil, nil })
+	srv.RegisterSlash("show", "Show settings", func(args string) (any, error) { return nil, nil })
 
 	cases := []struct {
 		msg     string
@@ -731,6 +734,13 @@ func TestMatchACPCommand(t *testing.T) {
 		{msg: "/nosuchcmd hi", wantOK: false},
 		{msg: "/skill:code-review fix bugs", wantOK: false}, // excluded on purpose
 		{msg: "plain text question", wantOK: false},
+		// Host-injected preamble before the command (AionUi first prompt).
+		{msg: "[Assistant Rules]\n## Available Skills\n- aionui-config: cfg\n\n/help", wantOK: true, wantCmd: "help"},
+		{msg: "[Assistant Rules]\nskills...\n\n/show settings", wantOK: true, wantCmd: "show"},
+		// Preamble but last line is NOT a registered command: stays raw.
+		{msg: "[Assistant Rules]\nsee /help for info", wantOK: false},
+		{msg: "preamble\n/nosuchcmd hi", wantOK: false},
+		{msg: "preamble\n/skill:x args", wantOK: false},
 	}
 	for _, c := range cases {
 		name, _, ok := matchACPCommand(srv, c.msg)
