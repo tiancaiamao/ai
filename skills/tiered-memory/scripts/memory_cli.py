@@ -320,7 +320,7 @@ def turso_execute_with_retry(db_url, auth_token, query, params=None, max_retries
             _turso_pool['conn'] = None
 
 # Paths
-WORKSPACE = os.environ.get("WORKSPACE", os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+WORKSPACE = os.environ.get("WORKSPACE", os.path.expanduser("~/.ai"))
 MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 
 def get_agent_paths(agent_id='default'):

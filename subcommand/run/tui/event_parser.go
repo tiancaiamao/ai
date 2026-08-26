@@ -9,6 +9,17 @@ import (
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
+// IsAgentEnd reports whether a JSONL event is an agent_end event.
+func IsAgentEnd(line string) bool {
+	var evt struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(line), &evt); err != nil {
+		return false
+	}
+	return evt.Type == "agent_end"
+}
+
 func ParseEvent(line string) *FormattedEvent {
 	line = strings.TrimSpace(line)
 	if line == "" {

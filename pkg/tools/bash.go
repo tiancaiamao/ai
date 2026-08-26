@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,13 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
+
+// exitGracePeriod is how long the bash tool keeps draining stdout/stderr
+// after the main process has exited and no new output has arrived. A
+// background descendant (e.g. a subshell waiting on a daemon started with
+// `cmd &`) can hold the pipe write ends open, so EOF may never arrive; the
+// grace period bounds the drain without truncating actively-written output.
+const exitGracePeriod = 250 * time.Millisecond
 
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
@@ -60,7 +68,12 @@ Examples:
   • Normal: {"command": "ls -la"}
   • Custom timeout: {"command": "go build ./...", "timeout": 300}
   • No timeout: {"command": "go test -race ./...", "timeout": 0}
-  • Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)`
+  - Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)
+
+Workspace:
+  - Use the change_workspace tool for any directory change that must persist across multiple commands (or after creating/selecting a git worktree)
+  - cd <dir> && <command> is valid only for a one-off command - a bare cd does not persist the workspace
+`
 }
 
 // Parameters returns the JSON Schema for tool parameters.
@@ -149,12 +162,13 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	if isBareCDCommand(command) {
-		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
+		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. For directory changes that must span multiple commands (e.g. after creating/selecting a git worktree), use the change_workspace tool. 'cd <dir> && <command>' is valid only for a one-off command")
 	}
 
-	// Transform sudo commands if SUDO_PASSWORD is available.
-	// This must happen after all safety guards (which check the original
-	// command) and before the exec.CommandContext creation below.
+	// Transform sudo commands: rewrite to sudo -S -p '' with the password
+	// piped when SUDO_PASSWORD is set, or to sudo -n (non-interactive,
+	// never blocks) otherwise. Must happen after all safety guards (which
+	// check the original command) and before exec.CommandContext below.
 	sudoResult := transformSudoCommand(command)
 	execCommand := sudoResult.command
 
@@ -283,6 +297,9 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	var output strings.Builder
 	var outputMu sync.Mutex // Protect output from concurrent writes
 	var outputWG sync.WaitGroup
+	// activity signals that output arrived after the main process exited;
+	// it re-arms the idle grace timer below so we don't truncate a slow tail.
+	activity := make(chan struct{}, 1)
 	streamPipe := func(reader io.Reader) {
 		defer outputWG.Done()
 		bufReader := bufio.NewReader(reader)
@@ -292,14 +309,22 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				outputMu.Lock()
 				output.WriteString(line)
 				outputMu.Unlock()
+				select {
+				case activity <- struct{}{}:
+				default:
+				}
 			}
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				outputMu.Lock()
-				output.WriteString(fmt.Sprintf("stream read error: %v\n", err))
-				outputMu.Unlock()
+				// os.ErrClosed means we closed the read end ourselves (idle
+				// grace / timeout path below) — not a real read error.
+				if !errors.Is(err, os.ErrClosed) {
+					outputMu.Lock()
+					output.WriteString(fmt.Sprintf("stream read error: %v\n", err))
+					outputMu.Unlock()
+				}
 				break
 			}
 		}
@@ -308,14 +333,65 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	outputWG.Add(2)
 	go streamPipe(stdoutRead)
 	go streamPipe(stderrRead)
+	streamDone := make(chan struct{})
+	go func() {
+		outputWG.Wait()
+		close(streamDone)
+	}()
 
 	// Wait for command to finish. Since we use our own os.Pipe(),
 	// cmd.Wait() will NOT close our pipes — we control the lifecycle.
 	err = cmd.Wait()
 
-	// Wait for output streaming to complete (goroutines get EOF after
-	// child's write ends are closed on process exit).
-	outputWG.Wait()
+	// Drain stdout/stderr without hanging on descendant-held pipes.
+	//
+	// After the main shell exits, a background descendant (e.g. a subshell
+	// waiting on a daemon started with `cmd &`) can keep the pipe write ends
+	// open, so EOF never arrives. Blocking on outputWG.Wait() would hang the
+	// tool forever (the deadline check below is only reached after the
+	// drain). Instead, finalize once the pipes fall idle: the grace timer is
+	// re-armed on every chunk, so actively-writing descendants keep us
+	// reading, while a quiet holder of the pipe releases us after the grace
+	// period elapses. The daemon itself is left running — it is not part of
+	// the command.
+	idleTimer := time.NewTimer(exitGracePeriod)
+	defer idleTimer.Stop()
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-streamDone:
+				// Both pipes reached EOF — full output captured.
+				return
+			case <-activity:
+				// Output still arriving — defer finalizing so we don't
+				// truncate the tail.
+				if !idleTimer.Stop() {
+					select {
+					case <-idleTimer.C:
+					default:
+					}
+				}
+				idleTimer.Reset(exitGracePeriod)
+			case <-idleTimer.C:
+				// Pipes idle — release the blocked stream goroutines.
+				stdoutRead.Close()
+				stderrRead.Close()
+				<-streamDone
+				return
+			case <-cmdCtx.Done():
+				// Deadline/cancel fired while draining (e.g. a background
+				// process keeps producing output past the timeout). Release
+				// the pipes so the timeout/cancel handling below proceeds.
+				stdoutRead.Close()
+				stderrRead.Close()
+				<-streamDone
+				return
+			}
+		}
+	}()
+	<-drainDone
 
 	// Close read ends now that goroutines have finished.
 	stdoutRead.Close()

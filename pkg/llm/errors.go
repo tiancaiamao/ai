@@ -231,6 +231,8 @@ func looksLikeContextLengthExceeded(s string) bool {
 		"too many tokens",
 		"maximum number of tokens",
 		"prompt is too long",
+		"prompt exceeds",
+		"exceeds max length",
 		"token limit exceeded",
 		"contextlength",
 		"contextwindowexceeded",

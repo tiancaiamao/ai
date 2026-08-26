@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,18 @@ func TestBashToolAllowsCommandLocalCD(t *testing.T) {
 	assert.Contains(t, result.Text, "/tmp")
 }
 
+func TestBashToolDescriptionWorkspaceGuidance(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	desc := tool.Description()
+	// Guidance must be explicit: change_workspace for persistent/multi-command
+	// switches, cd <dir> && <command> only for one-off commands.
+	for _, want := range []string{"change_workspace", "persist", "worktree", "one-off"} {
+		assert.Contains(t, desc, want, "Description() should mention %q for persistent workspace guidance", want)
+	}
+}
+
 func TestBashToolBlocksTmuxKillServer(t *testing.T) {
 	ws, _ := NewWorkspace("/tmp")
 	tool := NewBashTool(ws)
@@ -182,4 +195,43 @@ func TestBashToolBlocksTmuxKillServer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBashToolParentCancellationStillAborts verifies that canceling the
+// parent context (session abort) kills a running command promptly. The bash
+// tool bridges parent-cancel to its own cmdCtx via a goroutine, so a
+// long-running command must not outlive a real session abort.
+func TestBashToolParentCancellationStillAborts(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	var blocks []agentctx.ContentBlock
+	var execErr error
+	go func() {
+		defer close(done)
+		blocks, execErr = tool.Execute(ctx, map[string]any{
+			"command": "sleep 4",
+			"timeout": float64(10),
+		})
+	}()
+
+	time.Sleep(1 * time.Second)
+	cancel() // session abort
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("command was not killed by parent cancellation within 5s")
+	}
+	assert.NoError(t, execErr)
+	for _, b := range blocks {
+		if tc, ok := b.(agentctx.TextContent); ok && strings.Contains(tc.Text, "Command canceled") {
+			return
+		}
+	}
+	t.Fatalf("expected 'Command canceled' message, got blocks: %+v", blocks)
 }

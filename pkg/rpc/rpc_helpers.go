@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/agent"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/prompt"
 	"github.com/tiancaiamao/ai/pkg/session"
@@ -59,6 +58,19 @@ func (app *rpcApp) buildAgentContextPrefix() string {
 }
 
 func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
+	// Resume path: restore the workspace CWD recorded in the session's
+	// meta.json (persisted on agent_end), before the system prompt is built
+	// (the prompt embeds the current working directory).
+	if app.sess != nil && app.sessionMgr != nil {
+		if meta, err := app.sessionMgr.GetMeta(app.sessionID); err == nil && meta.CurrentWorkdir != "" {
+			if err := app.ws.SetCWD(meta.CurrentWorkdir); err != nil {
+				slog.Warn("Failed to restore session workdir",
+					"cwd", meta.CurrentWorkdir, "error", err)
+			} else {
+				slog.Info("Restored session workdir", "cwd", meta.CurrentWorkdir)
+			}
+		}
+	}
 	app.systemPrompt = app.buildSystemPrompt(app.sess)
 	app.agentContextPrefix = app.buildAgentContextPrefix()
 	// Keep loopCfg in sync if it has been constructed (createBaseContext
@@ -78,35 +90,7 @@ func (app *rpcApp) createBaseContext() *agentctx.AgentContext {
 		ctx.AddTool(tool)
 	}
 	if app.sess != nil {
-		sessionDir := app.sess.GetDir()
 		ctx.RecentMessages = app.sess.GetMessages()
-		if sessionDir != "" {
-			// Resume path: load AgentState from agent_state.json.
-			// Messages come from sess.GetMessages() (source of truth).
-			msgs, agentState, err := agent.LoadResumeState(sessionDir, ctx.RecentMessages)
-			if err != nil {
-				slog.Warn("Resume state load failed, using session messages",
-					"error", err,
-					"session_messages", len(ctx.RecentMessages))
-			} else {
-				ctx.RecentMessages = msgs
-				if agentState != nil {
-					ctx.AgentState = agentState
-					if agentState.CurrentWorkingDir != "" {
-						if err := app.ws.SetCWD(agentState.CurrentWorkingDir); err != nil {
-							slog.Warn("Failed to restore CWD from checkpoint",
-								"cwd", agentState.CurrentWorkingDir, "error", err)
-						}
-					}
-					slog.Info("Restored agent state from checkpoint",
-						"turns", agentState.TotalTurns,
-						"tokens", agentState.TokensUsed,
-						"toolCallsSince", agentState.ToolCallsSinceLastTrigger,
-						"cwd", agentState.CurrentWorkingDir,
-					)
-				}
-			}
-		}
 	}
 	return ctx
 }

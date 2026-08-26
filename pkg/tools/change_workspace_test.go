@@ -33,8 +33,16 @@ func TestChangeWorkspaceTool_Name(t *testing.T) {
 
 func TestChangeWorkspaceTool_Description(t *testing.T) {
 	tool, _ := newChangeWorkspaceTool(t)
-	if tool.Description() == "" {
-		t.Error("Description() should not be empty")
+	desc := tool.Description()
+	if desc == "" {
+		t.Fatal("Description() should not be empty")
+	}
+	// Persistent workspace guidance must be explicit: required for multi-command
+	// directory changes / worktree switches, with the one-off cd caveat.
+	for _, want := range []string{"REQUIRED", "persist", "worktree", "one-off"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("Description() should mention %q for persistent workspace guidance, got: %s", want, desc)
+		}
 	}
 }
 

@@ -35,17 +35,25 @@ func buildThinkingParams(model Model, level string) map[string]any {
 		return map[string]any{"thinking": map[string]string{"type": "disabled"}}
 	}
 
-	// Map level to reasoning_effort for the target provider.
-	effort := level
-	switch {
-	case provider == "deepseek" && level == "xhigh":
-		effort = "max"
-	case provider == "deepseek":
-		// DeepSeek only supports high/max.
-		effort = "high"
-	case provider != "zai" && level == "xhigh":
-		// OpenAI-standard providers don't have xhigh.
-		effort = "high"
+	// Map level to reasoning_effort for the target provider. A model-declared
+	// supported-efforts list takes precedence over the legacy per-provider
+	// mapping: the declaration is authoritative wire-level truth.
+	var effort string
+	if len(model.ReasoningEfforts) > 0 {
+		effort = clampEffort(model, level)
+	} else {
+		switch {
+		case provider == "deepseek" && level == "xhigh":
+			// DeepSeek only supports high/max.
+			effort = "max"
+		case provider == "deepseek":
+			effort = "high"
+		case provider != "zai" && level == "xhigh":
+			// OpenAI-standard providers don't have xhigh.
+			effort = "high"
+		default:
+			effort = level
+		}
 	}
 
 	params := map[string]any{"reasoning_effort": effort}
@@ -53,4 +61,45 @@ func buildThinkingParams(model Model, level string) map[string]any {
 		params["thinking"] = map[string]string{"type": "enabled"}
 	}
 	return params
+}
+
+// effortRank ranks wire-level reasoning efforts by strength for nearest-match
+// clamping. "xhigh" and "max" are synonyms at the top of the scale.
+var effortRank = map[string]int{
+	"minimal": 1,
+	"low":     2,
+	"medium":  3,
+	"high":    4,
+	"xhigh":   5,
+	"max":     5,
+}
+
+// clampEffort returns the supported reasoning effort closest in strength to
+// effort, using model.ReasoningEfforts as the allowed set. Ties resolve
+// upward (more reasoning). When the model declares no efforts, or either the
+// request or every declared value is unknown to the rank table, effort is
+// returned unchanged so provider-specific values pass through untouched.
+func clampEffort(model Model, effort string) string {
+	requested, ok := effortRank[effort]
+	if len(model.ReasoningEfforts) == 0 || !ok {
+		return effort
+	}
+	best, bestRank, bestDist := "", -1, -1
+	for _, candidate := range model.ReasoningEfforts {
+		rank, ok := effortRank[candidate]
+		if !ok {
+			continue
+		}
+		dist := rank - requested
+		if dist < 0 {
+			dist = -dist
+		}
+		if bestDist == -1 || dist < bestDist || (dist == bestDist && rank > bestRank) {
+			best, bestRank, bestDist = candidate, rank, dist
+		}
+	}
+	if best == "" {
+		return effort
+	}
+	return best
 }

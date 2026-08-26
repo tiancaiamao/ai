@@ -56,7 +56,6 @@ type ModelConfig struct {
 // ConcurrencyConfig contains concurrency control settings.
 type ConcurrencyConfig struct {
 	MaxConcurrentTools int `json:"maxConcurrentTools"` // Maximum tools running concurrently
-	ToolTimeout        int `json:"toolTimeout"`        // Tool execution timeout in seconds
 	QueueTimeout       int `json:"queueTimeout"`       // Queue wait timeout in seconds
 }
 
@@ -74,7 +73,6 @@ const (
 func DefaultConcurrencyConfig() *ConcurrencyConfig {
 	return &ConcurrencyConfig{
 		MaxConcurrentTools: 5,
-		ToolTimeout:        30,
 		QueueTimeout:       60,
 	}
 }

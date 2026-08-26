@@ -133,9 +133,8 @@ Config file: `~/.ai/config.json`
         "toolCallCutoff": 10,
     "autoCompact": true
   },
-  "concurrency": {
+    "concurrency": {
     "maxConcurrentTools": 5,
-    "toolTimeout": 30,
     "queueTimeout": 60
   },
   "toolOutput": {

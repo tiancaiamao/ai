@@ -202,55 +202,6 @@ func TestDetectIncompleteToolCalls(t *testing.T) {
 	}
 }
 
-func TestValidateToolCallArgs(t *testing.T) {
-	tests := []struct {
-		name      string
-		toolName  string
-		args      map[string]any
-		wantError bool
-	}{
-		{
-			name:      "valid read",
-			toolName:  "read",
-			args:      map[string]any{"path": "file.txt"},
-			wantError: false,
-		},
-		{
-			name:      "read missing path",
-			toolName:  "read",
-			args:      map[string]any{},
-			wantError: true,
-		},
-		{
-			name:      "valid bash",
-			toolName:  "bash",
-			args:      map[string]any{"command": "ls -la"},
-			wantError: false,
-		},
-		{
-			name:      "bash missing command",
-			toolName:  "bash",
-			args:      map[string]any{},
-			wantError: true,
-		},
-		{
-			name:      "valid write",
-			toolName:  "write",
-			args:      map[string]any{"path": "file.txt", "content": "hello"},
-			wantError: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateToolCallArgs(tt.toolName, tt.args)
-			if (err != nil) != tt.wantError {
-				t.Errorf("ValidateToolCallArgs() error = %v, wantError %v", err, tt.wantError)
-			}
-		})
-	}
-}
-
 func TestInjectToolCallsFromTaggedText_LooseArgPairsWithToolHint(t *testing.T) {
 	msg := agentctx.AgentMessage{
 		Role: "assistant",
@@ -370,4 +321,85 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// --- Additional parseToolTag tests ---
+
+func TestParseToolTag_Extended(t *testing.T) {
+	tests := []struct {
+		name     string
+		tagName  string
+		body     string
+		wantTool string
+		wantOK   bool
+	}{
+		// read_file alias
+		{"read_file alias", "read_file", "<path>/tmp/f.txt</path>", "read", true},
+		// read with offset+limit
+		{"read with offset+limit", "read", "<path>/tmp/f.txt</path><offset>10</offset><limit>5</limit>", "read", true},
+		// read missing path
+		{"read no path", "read", "no tags here", "", false},
+		// write: missing content
+		{"write no content", "write", "<path>/tmp/f.txt</path>", "", false},
+		// write: missing path
+		{"write no path", "write", "<content>hello</content>", "", false},
+		// write: using file alias
+		{"write file alias", "write", "<file>/tmp/f.txt</file><text>hello</text>", "write", true},
+		// edit: missing old
+		{"edit no old", "edit", "<path>a.txt</path><newText>b</newText>", "", false},
+		// edit: missing new
+		{"edit no new", "edit", "<path>a.txt</path><oldText>a</oldText>", "", false},
+		// edit: using old/new aliases
+		{"edit aliases", "edit", "<file>a.txt</file><old>a</old><new>b</new>", "edit", true},
+		// bash: body-only
+		{"bash body only", "bash", "make test", "bash", true},
+		// bash: empty
+		{"bash empty", "bash", "", "", false},
+		// grep: using query alias
+		{"grep query alias", "grep", "<query>func.*Test</query>", "grep", true},
+		// grep: with path
+		{"grep with path", "grep", "<pattern>TODO</pattern><path>/src</path>", "grep", true},
+		// grep: missing pattern
+		{"grep no pattern", "grep", "<path>/src</path>", "", false},
+		// unknown tag
+		{"unknown tag", "unknown", "<arg>val</arg>", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, _, ok := parseToolTag(tt.tagName, tt.body)
+			if ok != tt.wantOK {
+				t.Errorf("parseToolTag(%q) ok = %v, want %v", tt.tagName, ok, tt.wantOK)
+			}
+			if tool != tt.wantTool {
+				t.Errorf("parseToolTag(%q) tool = %q, want %q", tt.tagName, tool, tt.wantTool)
+			}
+		})
+	}
+}
+
+// --- truncateLine tests ---
+
+func TestTruncateLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		limit int
+		want  string
+	}{
+		{"no truncation", "hello", 10, "hello"},
+		{"exact", "hello", 5, "hello"},
+		{"limit 0", "hello", 0, "hello"},
+		{"limit negative", "hello", -1, "hello"},
+		{"limit 3", "hello", 3, "hel"},
+		{"limit 2", "hello", 2, "he"},
+		{"limit 4 with ellipsis", "hello", 4, "h..."},
+		{"limit 6 with ellipsis", "hello world", 6, "hel..."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := truncateLine(tt.value, tt.limit); got != tt.want {
+				t.Errorf("truncateLine(%q, %d) = %q, want %q", tt.value, tt.limit, got, tt.want)
+			}
+		})
+	}
 }

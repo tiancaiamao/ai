@@ -211,7 +211,7 @@ func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error
 	app.ag = ag
 
 	slog.Info("Auto-compact enabled", "maxMessages", app.compactorConfig.MaxMessages, "maxTokens", app.compactorConfig.MaxTokens)
-	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools, "toolTimeout", concurrencyConfig.ToolTimeout)
+	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
 	return ag, sessionWriter, nil

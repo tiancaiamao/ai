@@ -20,7 +20,10 @@ var compactSummarizePrompt string
 //go:embed "compact_check.md"
 var compactCheckPrompt string
 
-// CompactorBasePrompt returns the baseline prompt used by compactor requests.
+// CompactorBasePrompt returns a baseline system prompt used by the compactor
+// for token estimation in CalculateDynamicThreshold. This string is NOT sent
+// to the LLM as a system prompt — the compactor reuses the agent's system prompt
+// for cache-friendliness. The content here only affects token-overhead arithmetic.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }

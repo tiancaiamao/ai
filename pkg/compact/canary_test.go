@@ -47,14 +47,11 @@ func TestInsertCanary(t *testing.T) {
 // canary messages (they are cleaned by Compact instead).
 func TestInsertCanary_NoClean(t *testing.T) {
 	ctx := agentctx.NewAgentContext("test")
-	InsertCanary(ctx)
-	v1 := FindCanaryValue(ctx.RecentMessages)
+	v1 := InsertCanary(ctx)
 
 	// Insert again — old canary should remain.
-	InsertCanary(ctx)
-	v2 := FindCanaryValue(ctx.RecentMessages)
+	v2 := InsertCanary(ctx)
 
-	// Both canary values should be findable (FindCanaryValue returns newest).
 	if v1 == "" || v2 == "" || v1 == v2 {
 		t.Errorf("expected two different canaries, got v1=%q v2=%q", v1, v2)
 	}
@@ -68,21 +65,6 @@ func TestInsertCanary_NoClean(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("expected 2 canary messages, got %d", count)
-	}
-}
-
-// TestFindCanaryValue verifies FindCanaryValue finds the most recent canary.
-func TestFindCanaryValue(t *testing.T) {
-	ctx := agentctx.NewAgentContext("test")
-
-	if v := FindCanaryValue(ctx.RecentMessages); v != "" {
-		t.Errorf("expected empty, got %q", v)
-	}
-
-	v1 := InsertCanary(ctx)
-	found := FindCanaryValue(ctx.RecentMessages)
-	if found != v1 {
-		t.Errorf("expected %q, got %q", v1, found)
 	}
 }
 
@@ -133,16 +115,15 @@ func TestCompactorCanaryLifecycle(t *testing.T) {
 	if c.canaryValue == "" {
 		t.Fatal("expected non-empty canary value")
 	}
-	if FindCanaryValue(ctx.RecentMessages) != val {
-		t.Error("canary should be in RecentMessages")
-	}
 
 	// Simulate compaction.
 	ctx.RecentMessages = RemoveAllCanaries(ctx.RecentMessages)
 	c.canaryValue = ""
 
-	if FindCanaryValue(ctx.RecentMessages) != "" {
-		t.Error("canary should be removed after compaction")
+	for _, msg := range ctx.RecentMessages {
+		if msg.Metadata != nil && msg.Metadata.Kind == CanaryKind {
+			t.Error("canary should be removed after compaction")
+		}
 	}
 	if c.canaryValue != "" {
 		t.Error("tracked canary should be reset after compaction")

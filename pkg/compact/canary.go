@@ -3,7 +3,6 @@ package compact
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"strings"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
@@ -40,31 +39,6 @@ func InsertCanary(agentCtx *agentctx.AgentContext) string {
 
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, msg)
 	return value
-}
-
-// FindCanaryValue returns the value of the most recent <agent:canary> message.
-// Returns empty string if no canary is found.
-func FindCanaryValue(messages []agentctx.AgentMessage) string {
-	const prefix = `value="`
-	const suffix = `"`
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Metadata != nil && msg.Metadata.Kind == CanaryKind {
-			text := msg.ExtractText()
-			p := strings.Index(text, prefix)
-			if p < 0 {
-				continue
-			}
-			start := p + len(prefix)
-			q := strings.Index(text[start:], suffix)
-			if q < 0 {
-				continue
-			}
-			return text[start : start+q]
-		}
-	}
-	return ""
 }
 
 // RemoveAllCanaries returns a new message slice with all canary messages

@@ -933,7 +933,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		// On agent_end: always exit — the task is complete.
 		// The --timeout flag controls maximum wait time for the agent to finish,
 		// not how long to wait after it finishes.
-		if strings.Contains(line, `"agent_end"`) {
+		if tui.IsAgentEnd(line) {
 			fmt.Println()
 			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 			return
@@ -959,7 +959,7 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 		seq++
 
 		// Check for agent_end — always exit when task is complete.
-		if strings.Contains(line, `"agent_end"`) {
+		if tui.IsAgentEnd(line) {
 			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
 				lastAssistantText.Reset()

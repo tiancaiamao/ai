@@ -21,7 +21,7 @@ from pathlib import Path
 import subprocess
 
 # Paths
-WORKSPACE = os.environ.get("WORKSPACE", str(Path(__file__).parent.parent.parent.parent))
+WORKSPACE = os.environ.get("WORKSPACE", os.path.expanduser("~/.ai"))
 MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 METRICS_FILE = os.path.join(MEMORY_DIR, "memory-metrics.jsonl")
 CLI_PATH = os.path.join(Path(__file__).parent, "memory_cli.py")

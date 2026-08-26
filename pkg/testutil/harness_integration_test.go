@@ -524,6 +524,57 @@ func TestHarness_FollowUpDuringStreaming(t *testing.T) {
 	}
 }
 
+// TestHarness_FollowUpSurvivesSteer verifies that a follow-up queued right
+// before a steer is not lost: the cancelled run must return the message to
+// the queue so the steered run processes it with a fresh context.
+func TestHarness_FollowUpSurvivesSteer(t *testing.T) {
+	// call 0: initial prompt (slow, so we can queue+steer mid-flight)
+	// call 1: steered response
+	// call 2: follow-up response
+	srv := testutil.LLMServerFactory(func(i int, r *http.Request) string {
+		switch i {
+		case 0:
+			time.Sleep(200 * time.Millisecond)
+			return testutil.TextResponse("interrupted")
+		case 1:
+			return testutil.TextResponse("steered response")
+		default:
+			return testutil.TextResponse("follow-up processed")
+		}
+	})
+	defer srv.Close()
+
+	model := llm.Model{ID: "test", Provider: "test", API: "openai-completions", BaseURL: srv.URL}
+	a := agent.NewAgent(model, "test-key", "You are helpful.")
+	collector := testutil.NewEventCollector()
+	unsub := collector.Subscribe(a.Events())
+	defer unsub()
+
+	if err := a.Prompt("initial"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+
+	// Queue a follow-up, then steer before the first LLM call finishes.
+	time.Sleep(30 * time.Millisecond)
+	if err := a.FollowUp("do more"); err != nil {
+		t.Fatalf("FollowUp failed: %v", err)
+	}
+	a.Steer("go east")
+
+	waitWithTimeout(t, a, 5*time.Second)
+
+	textDeltas := collectTextDeltas(collector)
+	got := map[string]bool{}
+	for _, d := range textDeltas {
+		got[d] = true
+	}
+	for _, want := range []string{"steered response", "follow-up processed"} {
+		if !got[want] {
+			t.Errorf("expected text delta %q, got deltas: %v", want, textDeltas)
+		}
+	}
+}
+
 // TestHarness_MultipleFollowUps verifies that multiple queued follow-ups
 // are all processed in order.
 func TestHarness_MultipleFollowUps(t *testing.T) {

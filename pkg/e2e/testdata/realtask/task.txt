@@ -1,0 +1,18 @@
+Complete the following tasks in this workspace:
+
+## Task 1: Fix Off-by-One Error
+The file task1/main.go contains a SumRange function with an off-by-one error.
+It should return the sum of numbers from 1 to n (inclusive), but currently
+it only sums from 1 to n-1. Fix the bug, then run "go run main.go" in the
+task1/ directory to verify it outputs "15".
+
+## Task 2: Fix Race Condition
+The file task2/counter.go has a race condition. Fix it so that 1000 goroutines
+each incrementing 1000 times results in exactly 1000000. Run
+"go run -race counter.go" in the task2/ directory to verify it outputs "SUCCESS".
+
+## Task 3: Create Files
+1. Create pelican.svg — a valid SVG file with a <title>Pelican</title> element.
+2. Create README.md — a brief document that mentions "pelican".
+
+When all tasks are complete, reply with the single word: ok

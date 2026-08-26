@@ -63,10 +63,13 @@ Passed through to `pkg/compact.Config`. See `pkg/compact/README.md` for details.
 ```go
 type ConcurrencyConfig struct {
     MaxConcurrentTools int `json:"maxConcurrentTools"` // Max parallel tool executions
-    ToolTimeout        int `json:"toolTimeout"`        // Per-tool timeout in seconds
     QueueTimeout       int `json:"queueTimeout"`       // Wait timeout for executor queue slot
 }
 ```
+
+> `toolTimeout` was removed: tools own their timeout handling (e.g. bash's
+> per-call `timeout` parameter, default 120s). An executor-level cap
+> conflicted with tools that manage their own timeouts — see CHANGELOG.
 
 ## Tool Output
 

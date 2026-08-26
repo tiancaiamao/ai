@@ -2,19 +2,26 @@ package llm
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 )
 
 // Model represents an LLM model configuration.
 type Model struct {
-	ID            string `json:"id"`            // e.g., "gpt-4", "gpt-3.5-turbo"
-	Provider      string `json:"provider"`      // e.g., "zai", "openai"
-	BaseURL       string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
-	API           string `json:"api"`           // e.g., "openai-completions"
-	ContextWindow int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
-	MaxTokens     int    `json:"maxTokens,omitempty"`
-	Reasoning     bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
+	ID             string `json:"id"`            // e.g., "gpt-4", "gpt-3.5-turbo"
+	Provider       string `json:"provider"`      // e.g., "zai", "openai"
+	BaseURL        string `json:"baseUrl"`       // e.g., "https://api.openai.com/v1"
+	API            string `json:"api"`           // e.g., "openai-completions"
+	ContextWindow  int    `json:"contextWindow"` // e.g., 128000, 0 means unknown
+	MaxTokens      int    `json:"maxTokens,omitempty"`
+	Reasoning      bool   `json:"reasoning,omitempty"` // model supports thinking/reasoning control via API
+	SupportsVision bool   `json:"-"`                   // model supports image input (from models.json "input")
+	// ReasoningEfforts lists the wire-level reasoning_effort values this model
+	// accepts (from models.json "reasoningEfforts"), e.g. low/high/max. Empty
+	// means no restriction; requested levels outside the list are clamped to
+	// the nearest supported value.
+	ReasoningEfforts []string `json:"-"`
 }
 
 // LLMContext represents the context for an LLM request.
@@ -124,6 +131,21 @@ type PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
+// Timings holds llama.cpp-specific timing and cache statistics (from the "timings" field).
+// This is an extension field not present in the standard OpenAI API, but returned by
+// llama.cpp and other OpenAI-compatible servers to provide performance metrics.
+type Timings struct {
+	CacheN           int     `json:"cache_n"`             // Number of cached tokens
+	PromptN          int     `json:"prompt_n"`            // Number of processed tokens
+	PromptMS         float64 `json:"prompt_ms"`           // Prompt processing time in ms
+	PromptPerTokenMS float64 `json:"prompt_per_token_ms"` // Average time per token
+	PromptPerSecond  float64 `json:"prompt_per_second"`   // Tokens per second
+	PredictedN       int     `json:"predicted_n"`         // Number of predicted tokens
+	PredictedMS      float64 `json:"predicted_ms"`        // Prediction time in ms
+	DraftN           int     `json:"draft_n"`             // Draft tokens count
+	DraftNAccepted   int     `json:"draft_n_accepted"`    // Draft tokens accepted
+}
+
 // LLMEvent represents an event from the LLM stream.
 type LLMEvent interface {
 	GetEventType() string
@@ -165,6 +187,7 @@ type LLMDoneEvent struct {
 	Message    *LLMMessage
 	Usage      Usage
 	StopReason string
+	Timings    *Timings // llama.cpp timing extension (optional)
 }
 
 func (e LLMDoneEvent) GetEventType() string { return "done" }
@@ -248,12 +271,15 @@ func (pm *PartialMessage) ToLLMMessage() LLMMessage {
 	}
 
 	if len(pm.ToolCalls) > 0 {
-		toolCalls := make([]ToolCall, 0, len(pm.ToolCalls))
-		// Iterate over map keys in order
-		for i := 0; i < len(pm.ToolCalls)*2; i++ {
-			if tc, ok := pm.ToolCalls[i]; ok {
-				toolCalls = append(toolCalls, *tc)
-			}
+		indices := make([]int, 0, len(pm.ToolCalls))
+		for index := range pm.ToolCalls {
+			indices = append(indices, index)
+		}
+		sort.Ints(indices)
+
+		toolCalls := make([]ToolCall, 0, len(indices))
+		for _, index := range indices {
+			toolCalls = append(toolCalls, *pm.ToolCalls[index])
 		}
 		msg.ToolCalls = toolCalls
 	}

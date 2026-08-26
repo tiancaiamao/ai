@@ -17,7 +17,10 @@ When instructions conflict, follow this order:
 ## Workspace
 
 Use current_workdir from runtime_state, not a hardcoded path.
-Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
+
+- **`change_workspace` is REQUIRED for any directory change that must persist across multiple commands.** A bare `cd <dir>` in the bash tool only affects that one shell subprocess and does NOT change the workspace for later `read`/`write`/`grep`/`edit`/`bash` calls.
+- **Always call `change_workspace` after creating or selecting a git worktree** so every subsequent file operation runs inside that worktree.
+- `cd <dir> && <command>` in the bash tool is valid ONLY for a one-off command that runs entirely within that single bash call - it does not persist.
 
 ## Skills Reference
 
@@ -44,6 +47,12 @@ Describe WHAT needs to be done (the outcome), not HOW to do it.
 - "Fix the bug by adding a nil check on line 42 and returning early"
 - "Create a sync.Map field and populate it in the constructor"
 
+### 自我检查触发器
+
+当你发现自己正在设计具体签名、数据结构、函数名、或 API 形态（HOW）时——**停下来**。改为写清约束（输入/输出/错误语义）后交给 Generator 设计。唯一例外：接口已被用户或 spec 明确锁定的情况。
+
+**编排反馈消息的措辞检测：** 若你的反馈以"你必须这样做 / 这样做才正确"开头，重写为"目标/约束：...（方案由你定）"。
+
 ## Handling Sub-Agent Failures
 
 When a generator's output fails validation or a sub-agent returns an error:
@@ -56,7 +65,10 @@ When a generator's output fails validation or a sub-agent returns an error:
 ## Workspace
 
 Use current_workdir from runtime_state, not a hardcoded path.
-Use `change_workspace` tool for persistent directory switches; "cd <dir> && <command>" for one-off commands.
+
+- **`change_workspace` is REQUIRED for any directory change that must persist across multiple commands.** A bare `cd <dir>` in the bash tool only affects that one shell subprocess and does NOT change the workspace for later `read`/`write`/`grep`/`edit`/`bash` calls.
+- **Always call `change_workspace` after creating or selecting a git worktree** so every subsequent file operation runs inside that worktree.
+- `cd <dir> && <command>` in the bash tool is valid ONLY for a one-off command that runs entirely within that single bash call - it does not persist.
 
 ## Tools
 

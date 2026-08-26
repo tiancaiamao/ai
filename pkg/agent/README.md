@@ -141,7 +141,7 @@ The stream supports abort via `Push(agentEndEvent)` and cancellation through con
 | `result.go` | `UsageStats`, `GetTotalUsage()` result types |
 | `resume.go` | `LoadResumeState()` — session resume from agent_state.json |
 | `runtime_meta.go` | Runtime metadata injection for telemetry (`injectRuntimeMeta`) |
-| `conversion.go` | Message type conversions (`ConvertMessagesToLLM`, `ConvertToolsToLLM`) |
+
 
 ## Dependencies
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -35,8 +36,18 @@ func streamAssistantResponse(
 	selectedMessages, _ := selectMessagesForLLM(agentCtx)
 	llmMessages = agentctx.ConvertMessagesToLLM(selectedMessages)
 
-	// Resolve model early — needed for thinking API detection and cache mode.
+	// Resolve model early — needed for thinking API detection, cache mode, and capability filtering.
 	model := getEffectiveModel(config)
+
+	// Filter messages based on model capabilities to avoid API errors.
+	// For example, if model doesn't support vision, remove image_url content parts.
+	if filtered, removed := llm.FilterUnsupportedContent(llmMessages, model.SupportsVision); removed > 0 {
+		slog.Warn("[Loop] Filtering unsupported content for model",
+			"model", model.ID,
+			"removed", removed,
+		)
+		llmMessages = filtered
+	}
 
 	systemPrompt := agentCtx.SystemPrompt
 	// For models that support thinking via API params, skip the text instruction;
@@ -194,11 +205,29 @@ func streamAssistantResponse(
 			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
+
+			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens
 			cachedTokens := 0
-			if e.Usage.PromptTokensDetails != nil {
+			if e.Timings != nil && e.Timings.CacheN > 0 {
+				cachedTokens = e.Timings.CacheN
+			} else if e.Usage.PromptTokensDetails != nil {
 				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
 			}
 			llmSpan.AddField("cache_read", cachedTokens)
+
+			// Additional llama.cpp timing metrics if available
+			if e.Timings != nil {
+				if e.Timings.PromptN > 0 {
+					llmSpan.AddField("prompt_processed_tokens", e.Timings.PromptN)
+				}
+				if e.Timings.PromptMS > 0 {
+					llmSpan.AddField("prompt_ms", e.Timings.PromptMS)
+				}
+				if e.Timings.PromptPerSecond > 0 {
+					llmSpan.AddField("prompt_tokens_per_second", e.Timings.PromptPerSecond)
+				}
+			}
+
 			llmSpan.AddField("stop_reason", e.StopReason)
 			elapsed := time.Since(llmStart)
 			if elapsed > 0 {
@@ -237,10 +266,16 @@ func streamAssistantResponse(
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				finalMessage = *partialMessage
-			} else if e.Message != nil {
-				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
 				finalMessage = agentctx.NewAssistantMessage()
+			}
+
+			// Prefer the authoritative thinking from the DoneEvent message when
+			// available. Providers like the Responses API finalize reasoning via
+			// output_item.done, which can replace the streamed delta buffer with
+			// a cleaner summary than delta concatenation.
+			if e.Message != nil && e.Message.Thinking != "" && e.Message.Thinking != finalMessage.ExtractThinking() {
+				finalMessage.Content = replaceThinkingBlocks(finalMessage.Content, e.Message.Thinking)
 			}
 
 			finalMessage.API = model.API
@@ -273,6 +308,22 @@ func streamAssistantResponse(
 						)
 					}
 				}
+			}
+
+			// Sanitize non-success stopReasons (network error, rate limit,
+			// content filter, ...) BEFORE message_end is emitted, so both
+			// the UI and session persistence carry the explanation instead
+			// of a silent empty assistant message.
+			if sanitized := sanitizeMessageForNonSuccessStopReason(&finalMessage); sanitized {
+				slog.Warn("[Stream] LLM request ended with non-success stopReason", "stopReason", finalMessage.StopReason)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
+					traceevent.Field{Key: "stopReason", Value: finalMessage.StopReason})
+				// Explicitly surface the failure to the UI. Assistant messages
+				// are rendered from streaming deltas only, and a filtered or
+				// failed response produces no deltas — without this event the
+				// user would see a silent empty turn.
+				stream.Push(NewErrorEvent(fmt.Errorf("%s",
+					strings.TrimSpace(finalMessage.ExtractText()))))
 			}
 
 			stream.Push(NewMessageEndEvent(finalMessage))
@@ -314,6 +365,21 @@ func streamAssistantResponse(
 	}
 
 	return partialMessage, nil
+}
+
+// replaceThinkingBlocks swaps any thinking content blocks in content for a
+// single authoritative ThinkingContent holding finalThinking. Non-thinking
+// blocks are preserved in order.
+func replaceThinkingBlocks(content []agentctx.ContentBlock, finalThinking string) []agentctx.ContentBlock {
+	out := make([]agentctx.ContentBlock, 0, len(content)+1)
+	out = append(out, agentctx.ThinkingContent{Type: "thinking", Thinking: finalThinking})
+	for _, block := range content {
+		if _, ok := block.(agentctx.ThinkingContent); ok {
+			continue
+		}
+		out = append(out, block)
+	}
+	return out
 }
 
 func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMessage, string) {

@@ -80,6 +80,7 @@ type Agent struct {
 	traceDone     chan struct{}
 	shutdownOnce  sync.Once
 	traceSeq      atomic.Uint64
+	manualCompact atomic.Bool
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -145,9 +146,23 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	a.LoopConfig.GetAPIKey = func() string {
 		return a.apiKey
 	}
+	a.LoopConfig.ConsumeManualCompaction = func() bool {
+		return a.manualCompact.Swap(false)
+	}
 
 	go a.runTraceFlusher()
 	return a
+}
+
+// RequestCompaction queues a manual compaction for the running agent loop.
+// The request is consumed at the next safe step boundary.
+func (a *Agent) RequestCompaction() {
+	a.manualCompact.Store(true)
+}
+
+// HasPendingCompaction reports whether a manual compaction is queued.
+func (a *Agent) HasPendingCompaction() bool {
+	return a.manualCompact.Load()
 }
 
 // Prompt sends a user message to the agent and waits for completion.
@@ -174,6 +189,16 @@ func (a *Agent) Prompt(message string) error {
 			for {
 				select {
 				case followUpMsg := <-a.followUpQueue:
+					if ctx.Err() != nil {
+						// This run was cancelled (e.g. Steer) while a follow-up
+						// was queued. Put it back so the next run processes it
+						// with a fresh context instead of running with a dead one.
+						select {
+						case a.followUpQueue <- followUpMsg:
+						default: // queue full — drop rather than block forever
+						}
+						return
+					}
 					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
 					a.processPrompt(ctx, followUpMsg)
 				default:

@@ -16,6 +16,11 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+// requestMaxTokensCap bounds the max_tokens sent per request. Providers
+// reserve max_tokens from the context window (prompt + max_tokens <= window),
+// so a full-capability reservation (e.g. 128K on a 200K model) starves the prompt.
+const requestMaxTokensCap = 32768
+
 // StreamLLM streams a completion from LLM.
 func StreamLLM(
 	ctx context.Context,
@@ -27,6 +32,11 @@ func StreamLLM(
 	// Route to Anthropic API if requested
 	if model.API == "anthropic-messages" {
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
+	}
+
+	// Route to OpenAI Responses API if requested
+	if model.API == "openai-responses" {
+		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
 	stream := NewEventStream[LLMEvent, LLMMessage](
@@ -83,8 +93,16 @@ func StreamLLM(
 		// provider use its default. Reasoning models (e.g. via Ollama) can have
 		// their entire token budget consumed by <think> blocks, leaving content
 		// empty — so a generous max_tokens is important.
+		// Providers reserve max_tokens from the context window and reject requests
+		// where prompt + max_tokens exceeds it, so cap the reservation well below
+		// the model's capability limit (e.g. glm-4.7: 204800 window, 131072 max
+		// would leave only ~73K for the prompt).
 		if model.MaxTokens > 0 {
-			reqBody["max_tokens"] = model.MaxTokens
+			mt := model.MaxTokens
+			if mt > requestMaxTokensCap {
+				mt = requestMaxTokensCap
+			}
+			reqBody["max_tokens"] = mt
 		}
 
 		if len(llmCtx.Tools) > 0 {
@@ -179,6 +197,7 @@ func StreamLLM(
 		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		chunkIndex := 0
 		lastUsage := Usage{}
+		var lastTimings *Timings
 
 		for scanner.Scan() {
 			// Update read deadline for each chunk, capped by context deadline.
@@ -220,6 +239,7 @@ func StreamLLM(
 					Message:    &finalMsg,
 					Usage:      lastUsage,
 					StopReason: "stop",
+					Timings:    lastTimings,
 				})
 				return
 			}
@@ -236,8 +256,9 @@ func StreamLLM(
 					} `json:"delta"`
 					FinishReason *string `json:"finish_reason"`
 				} `json:"choices"`
-				Usage *Usage `json:"usage"`
-				Error *struct {
+				Usage   *Usage   `json:"usage"`
+				Timings *Timings `json:"timings"` // llama.cpp extension
+				Error   *struct {
 					Message string `json:"message,omitempty"`
 					Type    string `json:"type,omitempty"`
 				} `json:"error,omitempty"`
@@ -263,6 +284,9 @@ func StreamLLM(
 			choice := chunk.Choices[0]
 			if chunk.Usage != nil {
 				lastUsage = *chunk.Usage
+			}
+			if chunk.Timings != nil {
+				lastTimings = chunk.Timings
 			}
 
 			// Text delta
@@ -330,6 +354,7 @@ func StreamLLM(
 					Message:    &finalMsg,
 					Usage:      usage,
 					StopReason: *choice.FinishReason,
+					Timings:    chunk.Timings, // Use current chunk's timings
 				})
 				return
 			}
@@ -354,6 +379,7 @@ func StreamLLM(
 			Message:    &finalMsg,
 			Usage:      lastUsage,
 			StopReason: "stop",
+			Timings:    lastTimings,
 		})
 	}()
 

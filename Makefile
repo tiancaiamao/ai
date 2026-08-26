@@ -55,6 +55,14 @@ coverage-check:
 		exit 1; \
 	fi
 
+# Run E2E tests against a real OpenAI-compatible model endpoint.
+# NOT part of CI: requires a reachable model. Defaults to the first ollama/*
+# model from ~/.ai/models.json (prefers "laguna"); override with
+# E2E_BASE_URL / E2E_MODEL / E2E_API_KEY. Tests skip when the endpoint is
+# unreachable or unconfigured.
+e2e:
+	go test -tags e2e ./pkg/e2e/ -v -count=1 -timeout 30m
+
 # Format code
 fmt:
 	gofmt -w .

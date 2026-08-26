@@ -96,107 +96,12 @@ func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []
 	return compacted
 }
 
-// ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
-// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
-// Similarly, if an assistant message contains tool_calls that are in oldMessages,
-// those tool_calls must be removed from the assistant message.
-// This prevents "tool call and result not match" errors after compaction.
-
-// ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
-// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
-// Similarly, if an assistant message contains tool_calls that are in oldMessages,
-// those tool_calls must be removed from the assistant message.
-// This prevents "tool call and result not match" errors after compaction.
-func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(recentMessages) == 0 {
-		return recentMessages
-	}
-
-	// Collect all tool_call IDs from oldMessages
-	oldToolCallIDs := make(map[string]bool)
-	for _, msg := range oldMessages {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ExtractToolCalls() {
-				oldToolCallIDs[tc.ID] = true
-			}
-		}
-	}
-
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
-		return recentMessages
-	}
-
-	// Find tool_results in recentMessages whose tool_call is in oldMessages
-	// These need to be hidden (archived) because their tool_calls will be summarized
-	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedToolResultCount := 0
-	filteredToolCallCount := 0
-
-	for _, msg := range recentMessages {
-		if msg.Role == "toolResult" && msg.ToolCallID != "" {
-			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages - hide it to prevent mismatch
-				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				keptMessages = append(keptMessages, archivedMsg)
-				archivedToolResultCount++
-				continue
-			}
-		}
-
-		if msg.Role == "assistant" {
-			// Check if this assistant message contains tool_calls that are in oldMessages
-			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-			hasOldToolCalls := false
-
-			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok {
-					if oldToolCallIDs[tc.ID] {
-						// This tool_call is in oldMessages - skip it
-						hasOldToolCalls = true
-						filteredToolCallCount++
-						continue
-					}
-				}
-				filteredContent = append(filteredContent, block)
-			}
-
-			if hasOldToolCalls {
-				if !hasAgentContent(filteredContent) {
-					// Empty shell! Hide the entire assistant message
-					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
-					continue
-				}
-				// Create a new message with filtered content
-				filteredMsg := msg
-				filteredMsg.Content = filteredContent
-				keptMessages = append(keptMessages, filteredMsg)
-				continue
-			}
-		}
-
-		keptMessages = append(keptMessages, msg)
-	}
-
-	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
-		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived_tool_results", archivedToolResultCount,
-			"filtered_tool_calls", filteredToolCallCount,
-			"kept", len(keptMessages))
-	}
-
-	return keptMessages
-}
-
-// ensureToolCallPairingWithGrace ensures tool call pairing with grace period protection.
+// ensureToolCallPairingWithGrace ensures tool_call and tool_result messages stay paired
+// across the compaction split boundary. Tool results whose tool_call was summarized
+// into oldMessages are archived (hidden from the agent); assistant tool_calls that
+// belong to oldMessages are filtered out, hiding empty thinking-only shells.
 // The grace period protects the N most recent tool results from being archived,
-// allowing tool calls that span compaction boundaries to complete.
-
-// ensureToolCallPairingWithGrace ensures tool call pairing with grace period protection.
-// The grace period protects the N most recent tool results from being archived,
-// allowing tool calls that span compaction boundaries to complete.
+// allowing in-flight tool calls that span compaction boundaries to complete.
 func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
 	if len(recentMessages) == 0 {
 		return recentMessages
