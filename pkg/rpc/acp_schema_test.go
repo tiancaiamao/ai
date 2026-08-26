@@ -67,8 +67,8 @@ func TestACPSchemaResponses(t *testing.T) {
 		// Unknown method -> method not found error.
 		`{"jsonrpc":"2.0","id":5,"method":"fs/read_text_file","params":{}}`,
 	})
-	if len(msgs) != 5 {
-		t.Fatalf("expected 5 messages, got %d: %v", len(msgs), msgs)
+	if len(msgs) != 6 {
+		t.Fatalf("expected 6 messages, got %d: %v", len(msgs), msgs)
 	}
 	for i, m := range msgs {
 		raw, err := json.Marshal(m)

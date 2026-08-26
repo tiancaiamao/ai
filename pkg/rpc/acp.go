@@ -7,11 +7,18 @@ package rpc
 //
 // Implemented surface (minimal, per spec baseline):
 //   - initialize                 -> protocolVersion 1 + capabilities
-//   - session/new                -> session id (maps to the app's single session)
+//   - session/new                -> session id (maps to the app's single session),
+//                                   followed by an available_commands_update
+//                                   notification advertising slash commands
 //   - session/prompt             -> agent turn; responds with StopReason when
-//                                   the turn completes (agent_end event)
+//                                   the turn completes (agent_end event).
+//                                   Text whose first token names a REGISTERED
+//                                   command runs synchronously and answers right
+//                                   away with end_turn; /skill:<name> goes through
+//                                   skill expansion; everything else is raw text.
 //   - session/cancel (notify)    -> aborts the running turn
-//   - session/update (notify)    -> agent_message_chunk / tool_call updates
+//   - session/update (notify)    -> agent_message_chunk / tool_call /
+//                                   available_commands_update
 //
 // Everything else (fs/*, terminal/*, session/load, image/audio content, MCP
 // transports) is deliberately NOT advertised and rejected as method not found.
@@ -30,6 +37,8 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
+	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
 // acpProtocolVersion is the ACP major protocol version this agent implements.
@@ -91,12 +100,21 @@ type acpSessionUpdateParams struct {
 // relevant to the implemented update kinds are modeled; unused ones are
 // omitted via json tags.
 type acpUpdate struct {
-	SessionUpdate string `json:"sessionUpdate"`
-	Content       any    `json:"content,omitempty"`
-	ToolCallID    string `json:"toolCallId,omitempty"`
-	Title         string `json:"title,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	Status        string `json:"status,omitempty"`
+	SessionUpdate string                `json:"sessionUpdate"`
+	Content       any                   `json:"content,omitempty"`
+	ToolCallID    string                `json:"toolCallId,omitempty"`
+	Title         string                `json:"title,omitempty"`
+	Kind          string                `json:"kind,omitempty"`
+	Status        string                `json:"status,omitempty"`
+	Commands      []acpAvailableCommand `json:"commands,omitempty"`
+}
+
+// acpAvailableCommand is one entry of available_commands_update (spec:
+// AvailableCommand). The optional input hint is omitted: our registry has no
+// argument schema.
+type acpAvailableCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // acpContentBlock is a prompt content block (text / embedded resource /
@@ -282,6 +300,7 @@ func (s *acpServer) handleSessionNew(req acpRequest) {
 
 	s.sessionID = s.app.sessionID
 	s.sendResult(req.ID, map[string]string{"sessionId": s.sessionID})
+	s.sendAvailableCommands()
 }
 
 func (s *acpServer) handlePrompt(req acpRequest) {
@@ -303,6 +322,16 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 		return
 	}
 
+	// Slash-command interception is allow-listed: only text whose first token
+	// names a REGISTERED command is dispatched as a command, and it answers
+	// synchronously (no agent turn involved). Skill prompts (/skill:<name>)
+	// are excluded here — they run through the normal prompt path below where
+	// handlePrompt expands them into a full skill block.
+	if name, args, ok := matchACPCommand(s.app.server, message); ok {
+		s.dispatchACPCommand(req.ID, name, args)
+		return
+	}
+
 	// Register the pending prompt; the response is deferred until the turn
 	// completes (agent_end event), see emit.
 	s.pendingMu.Lock()
@@ -310,12 +339,102 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	s.cancelled = false
 	s.pendingMu.Unlock()
 
-	if _, err := s.app.handlePrompt(RPCCommand{Type: "prompt", Message: message}); err != nil {
+	// Everything else stays raw free text: ACP prompts may legitimately start
+	// with '/' without being a command (a Go comment does too), so only an
+	// explicit /skill:<name> prefix opts into skill-command parsing.
+	raw := !skill.IsSkillCommand(message)
+	if _, err := s.app.handlePrompt(RPCCommand{Type: "prompt", Message: message, Raw: raw}); err != nil {
 		s.pendingMu.Lock()
 		s.pendingPrompt = nil
 		s.pendingMu.Unlock()
 		s.sendError(req.ID, acpErrInvalidParams, err.Error())
 	}
+}
+
+// matchACPCommand reports whether msg invokes a slash command REGISTERED in
+// the server's registry, returning its name and argument string. Unregistered
+// '/...' text (e.g. a comment) returns false so the caller keeps treating it
+// as raw free text. Skill prompts are intentionally excluded: they are not
+// registry entries and need the expansion path in app.handlePrompt.
+func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
+	msg = strings.TrimSpace(msg)
+	if !strings.HasPrefix(msg, "/") || skill.IsSkillCommand(msg) {
+		return "", "", false
+	}
+	cmdName, rest, err := command.ParseSlashCommand(msg)
+	if err != nil {
+		return "", "", false
+	}
+	if _, found := server.GetSlashHandler(cmdName); !found {
+		return "", "", false
+	}
+	return cmdName, rest, true
+}
+
+// dispatchACPCommand runs a registered slash command synchronously and answers
+// the session/prompt request immediately: the result is emitted as one
+// agent_message_chunk followed by stopReason "end_turn". No agent turn runs,
+// so no pendingPrompt is registered — the deferred-response path in emit never
+// fires for commands.
+func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
+	handler, _ := s.app.server.GetSlashHandler(name)
+	result, err := handler(args)
+	if err != nil {
+		s.sendError(id, acpErrInvalidParams, fmt.Sprintf("/%s failed: %v", name, err))
+		return
+	}
+	if text := formatACPCommandResult(result); text != "" {
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "agent_message_chunk",
+			Content:       map[string]string{"type": "text", "text": text},
+		})
+	}
+	s.sendResult(id, map[string]string{"stopReason": acpStopEndTurn})
+}
+
+// formatACPCommandResult renders a slash-handler result for display: strings
+// pass through verbatim, everything else is pretty-printed as JSON.
+func formatACPCommandResult(result any) string {
+	switch v := result.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	default:
+		data, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(data)
+	}
+}
+
+// sendAvailableCommands advertises the agent's slash commands via a
+// session/update notification (available_commands_update), sent right after
+// session/new so clients can render their command menu. Registry entries are
+// joined by one item per installed skill (/skill:<name>). Safe to call again
+// later to refresh the list.
+func (s *acpServer) sendAvailableCommands() {
+	listed := s.app.server.ListSlashCommands()
+	commands := make([]acpAvailableCommand, 0, len(listed)+len(s.app.skillCommands))
+	for _, c := range listed {
+		commands = append(commands, acpAvailableCommand{Name: c.Name, Description: c.Description})
+	}
+	// app.skillCommands already carries the /skill:<name> entries (see
+	// registerSkillHandlers); strip the leading slash because ACP clients add
+	// it themselves when rendering the menu.
+	if s.app.skillResult != nil {
+		for _, sk := range s.app.skillResult.Skills {
+			commands = append(commands, acpAvailableCommand{
+				Name:        "skill:" + sk.Name,
+				Description: sk.Description,
+			})
+		}
+	}
+	s.sendUpdate(acpUpdate{
+		SessionUpdate: "available_commands_update",
+		Commands:      commands,
+	})
 }
 
 // handleCancel handles the session/cancel notification: abort the running

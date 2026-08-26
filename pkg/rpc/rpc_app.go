@@ -358,7 +358,8 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 	}
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
-	if skill.IsSkillCommand(message) {
+	// ACP prompts are raw free text: skip both slash and skill parsing.
+	if !cmd.Raw && skill.IsSkillCommand(message) {
 		expandedMessage := app.expandSkillCommands(message)
 		slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
 
@@ -377,8 +378,9 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 		return nil, app.ag.Prompt(expandedMessage)
 	}
 
-	// Intercept slash commands
-	if message[0] == '/' {
+	// Intercept slash commands (raw prompts bypass this: the text may
+	// legitimately start with '/' e.g. a Go comment).
+	if !cmd.Raw && message[0] == '/' {
 		cmdName, args, err := command.ParseSlashCommand(message)
 		if err != nil {
 			return nil, fmt.Errorf("invalid slash command: %w", err)
