@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/command"
-	"github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
@@ -466,191 +464,6 @@ func TestACPSlashHelpOverACP(t *testing.T) {
 	}
 }
 
-// TestFormatACPCommandResultRenderers covers the per-command text renderers
-// invoked through formatACPCommandResult: each registered renderer must emit
-// human-readable text (never JSON) for its handler's result shape, and any
-// shape mismatch must fall back to the JSON representation.
-func TestFormatACPCommandResultRenderers(t *testing.T) {
-	state := &SessionState{
-		Model:       &config.ModelInfo{ID: "glm-4.6", Provider: "zai", Name: "GLM-4.6"},
-		SessionID:   "abcdefgh12345678",
-		IsStreaming: true,
-	}
-	stats := &SessionStats{
-		UserMessages:      3,
-		AssistantMessages: 2,
-		ToolCalls:         1,
-		Tokens:            SessionTokenStats{Input: 100, Output: 50, CacheRead: 10, CacheWrite: 20, Total: 180},
-	}
-	models := map[string]any{
-		"models": []config.ModelInfo{
-			{ID: "glm-4.5-air", Provider: "zai"},
-			{ID: "glm-4.6", Provider: "zai"},
-		},
-		"currentIndex": 1,
-	}
-
-	cases := []struct {
-		name        string
-		command     string
-		result      any
-		contains    []string
-		notContains []string
-	}{
-		{
-			name:     "session status line plus details",
-			command:  "session",
-			result:   state,
-			contains: []string{"model: zai/glm-4.6", "id: abcdefgh12345678", "streaming: on"},
-		},
-		{
-			name:    "session enriched fields",
-			command: "session",
-			result: &SessionState{
-				Model:                 &config.ModelInfo{ID: "glm-4.6", Provider: "zai", Name: "GLM-4.6"},
-				SessionID:             "abcdefgh12345678",
-				SessionName:           "fix-bug",
-				AIWorkingDir:          "/home/user/proj",
-				ThinkingLevel:         "medium",
-				MessageCount:          12,
-				PendingMessageCount:   2,
-				AutoCompactionEnabled: false,
-			},
-			contains: []string{
-				"name: fix-bug",
-				"ai-cwd: /home/user/proj",
-				"thinking-level: medium",
-				"messages: 12",
-				"pending: 2",
-				"auto-compaction: off",
-			},
-		},
-		{
-			name:    "context short sections",
-			command: "context",
-			result: map[string]any{
-				"state":  state,
-				"stats":  stats,
-				"models": models,
-			},
-			contains: []string{
-				"Context Usage",
-				"zai/glm-4.6",
-				"Session Stats",
-				"Messages: 0 total (user 3, assistant 2)",
-				"Tools: 1 calls",
-			},
-			notContains: []string{"zai/glm-4.5-air", "marks current"},
-		},
-		{
-			name:    "resume session list table",
-			command: "resume",
-			result: map[string]any{
-				"sessions": []session.SessionMeta{
-					{ID: "1111111111111111", Title: "Fix login bug", MessageCount: 42, UpdatedAt: time.Date(2026, 8, 26, 15, 4, 0, 0, time.Local)},
-					{ID: "2222222222222222", Name: "default", MessageCount: 3, UpdatedAt: time.Date(2026, 8, 25, 9, 0, 0, 0, time.Local)},
-				},
-			},
-			contains: []string{
-				"Sessions (resume with /resume <index>):",
-				"0. Fix login bug [11111111]",
-				"42 msgs, updated 2026-08-26 15:04",
-				"1. default [22222222]",
-				"3 msgs, updated 2026-08-25 09:00",
-			},
-		},
-		{
-			name:    "resume switch confirmation",
-			command: "resume",
-			result:  map[string]any{"sessionId": "1111222233334444", "sessionName": "fix-bug"},
-			contains: []string{
-				"Switched to session fix-bug (11112222)",
-			},
-		},
-		{
-			name:    "show aligned key/value lines",
-			command: "show",
-			result: map[string]any{
-				"type": "settings",
-				"data": map[string]any{"model": "zai/glm-4.6", "prefix": "on"},
-			},
-			contains: []string{"zai/glm-4.6", "prefix: on"},
-		},
-		{
-			name:    "help command table",
-			command: "help",
-			result: map[string]any{
-				"commands": []command.CommandInfo{
-					{Name: "help", Description: "Show available slash commands"},
-					{Name: "session", Description: "Get the current agent state"},
-				},
-			},
-			contains: []string{
-				"Available commands:",
-				fmt.Sprintf("%-*s  —  %s", len("session"), "help", "Show available slash commands"),
-				fmt.Sprintf("%-*s  —  %s", len("session"), "session", "Get the current agent state"),
-			},
-		},
-		{
-			name:    "skills table",
-			command: "skills",
-			result: map[string]any{
-				"commands": []SlashCommand{{Name: "/skill:review", Description: "Review code"}},
-			},
-			contains: []string{"Available skills:", "/skill:review  —  Review code"},
-		},
-		{
-			name:     "model list with current marker",
-			command:  "model",
-			result:   models,
-			contains: []string{"Available Models", "1: zai/glm-4.6", "[current]", "Usage: /model <index>"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			out := formatACPCommandResult(tc.command, tc.result)
-			if strings.HasPrefix(out, "{") {
-				t.Fatalf("renderer output must not be JSON, got:\n%s", out)
-			}
-			if out == "" {
-				t.Fatal("renderer output is empty")
-			}
-			for _, want := range tc.contains {
-				if !strings.Contains(out, want) {
-					t.Errorf("output missing %q, got:\n%s", want, out)
-				}
-			}
-			for _, unwanted := range tc.notContains {
-				if strings.Contains(out, unwanted) {
-					t.Errorf("output should not contain %q, got:\n%s", unwanted, out)
-				}
-			}
-		})
-	}
-
-	// Shape mismatches and unrendered commands fall back to JSON.
-	fallbacks := []struct {
-		name    string
-		command string
-		result  any
-	}{
-		{name: "wrong shape for session", command: "session", result: map[string]any{"bogus": true}},
-		{name: "context with nil stats", command: "context", result: map[string]any{"state": state}},
-		{name: "wrong shape for model", command: "model", result: map[string]any{"models": "nope"}},
-		{name: "non-settings show payload", command: "show", result: map[string]any{"type": "other"}},
-		{name: "unrendered command keeps JSON", command: "set", result: map[string]any{"setting": "x"}},
-	}
-	for _, tc := range fallbacks {
-		t.Run(tc.name, func(t *testing.T) {
-			out := formatACPCommandResult(tc.command, tc.result)
-			if !strings.HasPrefix(out, "{") {
-				t.Errorf("expected JSON fallback, got:\n%s", out)
-			}
-		})
-	}
-}
-
 // TestACPCommandRenderersOverACP dispatches every rendered read-only command
 // through a live ACP server: each answer must arrive as an agent_message_chunk
 // carrying human-readable text (not a raw JSON blob) followed by end_turn.
@@ -662,8 +475,8 @@ func TestACPCommandRenderersOverACP(t *testing.T) {
 		{command: "/session", contains: []string{"model:", "id:", "streaming:"}},
 		{command: "/context", contains: []string{"Context Usage", "Session Stats"}},
 		{command: "/show settings", contains: []string{"model"}},
-		{command: "/help", contains: []string{"Available commands:", "help"}},
-		{command: "/skills", contains: []string{"Available skills:"}},
+		{command: "/help", contains: []string{"Commands:", "[slash] help"}},
+		{command: "/skills", contains: []string{"Commands:"}},
 		{command: "/model", contains: []string{"Models"}},
 	}
 	lines := make([]string, 0, len(prompts))

@@ -39,19 +39,19 @@ func TestFormatCommandResultParameterTypes(t *testing.T) {
 		// This is the BUGGY way: passing []byte directly
 		// FormatCommandResult will json.Marshal the []byte, resulting in base64
 		result := FormatCommandResult("context", []byte(contextJSON))
-		
+
 		// When []byte is passed, json.Marshal encodes it as base64 string
 		// which then fails to unmarshal to map[string]any
 		if result != "" {
 			// If result is not empty, it should be the fallback (raw JSON)
 			// because the base64 string fails to unmarshal
 			t.Logf("With []byte parameter, result: %s", result)
-			
+
 			// Verify it's NOT formatted output (the bug)
 			if contains(result, "Context Usage") {
 				t.Error("BUG: []byte parameter produced formatted output, this shouldn't happen!")
 			}
-			
+
 			// Verify it's base64-encoded or raw JSON fallback
 			isBase64 := len(result) > 3 && result[0:4] == "ewog"
 			if !isBase64 && !contains(result, `"state":`) {

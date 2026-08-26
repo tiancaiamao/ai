@@ -373,272 +373,182 @@ func TestFormatResponseData(t *testing.T) {
 	}
 }
 
+// renderViaCommand feeds a slash-command response event through the shared
+// pipeline, mirroring how the TUI consumes RPC responses.
+func renderViaCommand(command, dataJSON string) *FormattedEvent {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(dataJSON), &data); err != nil {
+		t := map[string]any{"raw": dataJSON}
+		data = t
+	}
+	return parseResponseEvent(map[string]any{
+		"type":    "response",
+		"success": true,
+		"command": command,
+		"data":    data,
+	})
+}
+
 func TestRenderSkills(t *testing.T) {
 	data := `{"commands":[{"name":"foo","source":"builtin","description":"foo command"},{"name":"bar","source":"user"}]}`
-	r := renderSkills([]byte(data))
+	r := renderViaCommand("skills", data)
 	if r == nil || !strings.Contains(r.Text, "foo") || !strings.Contains(r.Text, "bar") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// Empty
-	r = renderSkills([]byte(`{"commands":[]}`))
+	r = renderViaCommand("skills", `{"commands":[]}`)
 	if r == nil || !strings.Contains(r.Text, "no commands") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Bad JSON
-	r = renderSkills([]byte(`bad json`))
-	if r == nil {
-		t.Error("expected fallback for bad JSON")
 	}
 }
 
 func TestRenderContext(t *testing.T) {
 	// Minimal valid context data
 	data := `{"state":{"sessionId":"s1","sessionName":"n","sessionFile":"/tmp/s","model":{"id":"m","provider":"p","name":"model","contextWindow":200000},"messageCount":10,"pendingMessageCount":0,"isStreaming":false,"isCompacting":false,"thinkingLevel":"medium","autoCompactionEnabled":true,"aiPid":1,"aiLogPath":"/tmp/log","aiWorkingDir":"/tmp"},"stats":{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":0,"cost":0.001,"tokens":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"total":150,"activeWindowTokens":150,"systemPromptTokens":0,"systemToolsTokens":0}},"models":{"models":[{"id":"m","provider":"p","name":"model","contextWindow":200000}]}}`
-	r := renderContext([]byte(data))
+	r := renderViaCommand("context", data)
 	if r == nil || !strings.Contains(r.Text, "Context Usage") || !strings.Contains(r.Text, "Session Stats") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
-	// Regression test: ensure output is NOT base64-encoded JSON.
-	// This would happen if []byte is passed directly to json.Marshal instead of being unmarshaled first.
+	// Regression test: ensure output is NOT base64-encoded or raw JSON.
 	if strings.Contains(r.Text, "ewogICJzdGF0ZSI6") || strings.Contains(r.Text, "\"state\":") {
 		t.Errorf("output contains raw JSON or base64, expected formatted text: %s", r.Text)
-	}
-
-	// Bad JSON
-	r = renderContext([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback for bad JSON")
 	}
 }
 
 func TestRenderSessionState(t *testing.T) {
 	data := `{"sessionId":"s1","sessionName":"name","sessionFile":"/tmp/s","model":{"id":"m","provider":"p","name":"model"},"messageCount":5,"pendingMessageCount":1,"isStreaming":true,"isCompacting":false,"thinkingLevel":"low","autoCompactionEnabled":true,"aiPid":1234,"aiLogPath":"/tmp/log","aiWorkingDir":"/cwd"}`
-	r := renderSessionState([]byte(data))
+	r := renderViaCommand("session", data)
 	if r == nil || !strings.Contains(r.Text, "Session:") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
-	// Regression test: ensure output is NOT base64-encoded JSON.
+	// Regression test: ensure output is NOT base64-encoded or raw JSON.
 	if strings.Contains(r.Text, "ewogICJzZXNzaW9uSWQi") || strings.Contains(r.Text, "\"sessionId\":") {
 		t.Errorf("output contains raw JSON or base64, expected formatted text: %s", r.Text)
-	}
-
-	// Bad JSON → fallback
-	r = renderSessionState([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback for bad JSON")
 	}
 }
 
 func TestRenderSessions(t *testing.T) {
 	data := `{"sessions":[{"id":"s1","name":"First","title":"t1","updatedAt":"2025-01-01","messageCount":5},{"id":"s2","name":"Second","title":"t2","updatedAt":"2025-01-02","messageCount":3}]}`
-	r := renderSessions([]byte(data))
+	r := renderViaCommand("sessions", data)
 	if r == nil || !strings.Contains(r.Text, "First") || !strings.Contains(r.Text, "Second") {
 		t.Errorf("unexpected: %+v", r)
 	}
-
-	// Empty
-	r = renderSessions([]byte(`{"sessions":[]}`))
-	if r == nil || !strings.Contains(r.Text, "No sessions") {
-		t.Errorf("unexpected: %+v", r)
+	if r.Kind != KindResponse {
+		t.Errorf("expected KindResponse for /sessions, got %v", r.Kind)
 	}
 
-	// Bad JSON
-	r = renderSessions([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
+	// Empty
+	r = renderViaCommand("sessions", `{"sessions":[]}`)
+	if r == nil || !strings.Contains(r.Text, "No sessions") {
+		t.Errorf("unexpected: %+v", r)
 	}
 }
 
 func TestRenderModel(t *testing.T) {
 	// CycleModelResult format
 	data := `{"model":{"id":"m","provider":"p","name":"Model","contextWindow":200000},"previousModel":{"id":"old","provider":"p","name":"Old"}}`
-	r := renderModel([]byte(data))
+	r := renderViaCommand("model", data)
 	if r == nil || !strings.Contains(r.Text, "p/Model (m)") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// Fallback {model: {id, name}} format
-	data2 := `{"model":{"id":"m","provider":"p","name":"X"}}`
-	r = renderModel([]byte(data2))
+	r = renderViaCommand("model", `{"model":{"id":"m","provider":"p","name":"X"}}`)
 	if r == nil || !strings.Contains(r.Text, "p/X (m)") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Bad JSON
-	r = renderModel([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
 	}
 }
 
 func TestRenderModelList(t *testing.T) {
 	data := `{"models":[{"id":"m1","provider":"p","name":"Model1"},{"id":"m2","provider":"p","name":"Model2"}],"currentIndex":0}`
-	r := renderModelList([]byte(data))
+	r := renderViaCommand("model", data)
 	if r == nil || !strings.Contains(r.Text, "Model1") || !strings.Contains(r.Text, "[current]") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// With current object instead of index
-	data2 := `{"models":[{"id":"m1","provider":"p","name":"M1"}],"current":{"provider":"p","id":"m1"}}`
-	r = renderModelList([]byte(data2))
+	r = renderViaCommand("model", `{"models":[{"id":"m1","provider":"p","name":"M1"}],"current":{"provider":"p","id":"m1"}}`)
 	if r == nil || !strings.Contains(r.Text, "[current]") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// Empty
-	r = renderModelList([]byte(`{"models":[]}`))
+	r = renderViaCommand("model", `{"models":[]}`)
 	if r == nil || !strings.Contains(r.Text, "no models") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Bad JSON
-	r = renderModelList([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
 	}
 }
 
 func TestRenderSettings(t *testing.T) {
 	data := `{"type":"settings","data":{"model":"m1","show-thinking":true,"unknown-key":"x"}}`
-	r := renderSettings([]byte(data))
+	r := renderViaCommand("show", data)
 	if r == nil || !strings.Contains(r.Text, "Display Settings") || !strings.Contains(r.Text, "m1") {
 		t.Errorf("unexpected: %+v", r)
 	}
-
-	// Bad type
-	r = renderSettings([]byte(`{"type":"other","data":{}}`))
-	if r == nil {
-		t.Error("expected fallback for wrong type")
-	}
-
-	// Bad JSON
-	r = renderSettings([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
+	// Missing keys render as "unknown"
+	if !strings.Contains(r.Text, "prefix: unknown") {
+		t.Errorf("expected unknown placeholder for missing key, got: %s", r.Text)
 	}
 }
 
 func TestRenderSessionStats(t *testing.T) {
 	data := `{"sessionId":"s1","totalMessages":10,"userMessages":4,"assistantMessages":5,"toolCalls":3,"toolResults":3,"compactionCount":1,"tokens":{"input":100,"output":50,"cacheRead":10,"cacheWrite":5,"total":165},"cost":0.002}`
-	r := renderSessionStats([]byte(data))
+	r := renderViaCommand("", data)
 	if r == nil || !strings.Contains(r.Text, "session: s1") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Test with minimal data
-	data2 := `{"sessionId":"s2","totalMessages":1,"userMessages":1,"assistantMessages":0,"toolCalls":0,"toolResults":0,"compactionCount":0,"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0},"cost":0}`
-	r = renderSessionStats([]byte(data2))
-	if r == nil || !strings.Contains(r.Text, "session: s2") {
-		t.Errorf("expected 'session: s2', got %+v", r)
-	}
-
-	// Bad JSON
-	r = renderSessionStats([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
 	}
 }
 
 func TestRenderTraceEvents(t *testing.T) {
-	data := `{"events":["e1","e2"]}`
-	r := renderTraceEvents([]byte(data))
+	r := renderViaCommand("trace-events", `{"events":["e1","e2"]}`)
 	if r == nil || !strings.Contains(r.Text, "e1, e2") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// Empty
-	r = renderTraceEvents([]byte(`{"events":[]}`))
+	r = renderViaCommand("trace-events", `{"events":[]}`)
 	if r == nil || !strings.Contains(r.Text, "<none>") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Bad JSON
-	r = renderTraceEvents([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
 	}
 }
 
 func TestRenderTree(t *testing.T) {
 	data := `{"entries":[{"entryID":"e1","depth":0,"text":"root"},{"entryID":"e2","depth":1,"text":"child"}]}`
-	r := renderTree([]byte(data))
+	r := renderViaCommand("tree", data)
 	if r == nil || !strings.Contains(r.Text, "root") || !strings.Contains(r.Text, "child") {
 		t.Errorf("unexpected: %+v", r)
 	}
 
 	// Empty
-	r = renderTree([]byte(`{"entries":[]}`))
+	r = renderViaCommand("tree", `{"entries":[]}`)
 	if r == nil || !strings.Contains(r.Text, "no entries") {
 		t.Errorf("unexpected: %+v", r)
-	}
-
-	// Bad JSON
-	r = renderTree([]byte(`bad`))
-	if r == nil {
-		t.Error("expected fallback")
 	}
 }
 
 func TestRenderMessages_LegacyArray(t *testing.T) {
-	// Array format fallback
-	data := `[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]`
-	r := renderMessages([]byte(data))
-	if r == nil || !strings.Contains(r.Text, "hi") {
-		t.Errorf("unexpected: %+v", r)
+	// Legacy {messages: [...]} shape via FormatResponseData
+	got := FormatResponseData(map[string]any{"messages": []map[string]any{
+		{"role": "user", "content": "hi"},
+		{"role": "assistant", "content": "hello"},
+	}})
+	if !strings.Contains(got, "hi") {
+		t.Errorf("unexpected: %q", got)
 	}
 }
 
-func TestRenderMessages_AllFormatsBad(t *testing.T) {
-	r := renderMessages([]byte(`bad json`))
-	if r == nil {
-		t.Error("expected fallback for completely bad json")
-	}
-}
-
-func TestFallbackJSON(t *testing.T) {
-	// Invalid JSON
-	r := fallbackJSON([]byte(`bad`))
-	if r == nil || r.Kind != KindMeta {
-		t.Errorf("expected fallback to return raw text, got %+v", r)
-	}
-
-	// Valid JSON object
-	r = fallbackJSON([]byte(`{"a":1,"b":"x"}`))
-	if r == nil || !strings.Contains(r.Text, `"a"`) {
-		t.Errorf("expected pretty-printed, got %+v", r)
-	}
-
-	// Large JSON → truncated
+func TestParseResponseEventFallbackTruncation(t *testing.T) {
+	// Unrecognized payload → pretty-printed JSON, truncated for display.
 	large := make(map[string]any)
 	for i := 0; i < 100; i++ {
 		large[fmt.Sprintf("k%d", i)] = strings.Repeat("x", 20)
 	}
-	data, _ := json.Marshal(large)
-	r = fallbackJSON(data)
+	r := parseResponseEvent(map[string]any{"type": "response", "success": true, "data": large})
 	if r == nil || !strings.Contains(r.Text, "...") {
 		t.Errorf("expected truncation, got %+v", r)
-	}
-}
-
-func TestHelpers(t *testing.T) {
-	if onOff(true) != "on" || onOff(false) != "off" {
-		t.Error("onOff mismatch")
-	}
-	if orUnknown("") != "unknown" || orUnknown("  ") != "unknown" || orUnknown("x") != "x" {
-		t.Error("orUnknown mismatch")
-	}
-	if formatIntOrUnknown(0) != "unknown" || formatIntOrUnknown(5) != "5" {
-		t.Error("formatIntOrUnknown mismatch")
-	}
-}
-
-func TestFormatTokenLimit(t *testing.T) {
-	if got := formatTokenLimit(nil); got != "unknown" {
-		t.Errorf("expected 'unknown', got %q", got)
 	}
 }
 

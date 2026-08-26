@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -92,16 +91,17 @@ func TestFormatCommandResultContext(t *testing.T) {
 func TestFormatCommandResultResume(t *testing.T) {
 	list := map[string]any{
 		"sessions": []session.SessionMeta{
-			{ID: "1111111111111111", Title: "Fix login bug", MessageCount: 42, UpdatedAt: time.Date(2026, 8, 26, 15, 4, 0, 0, time.Local)},
+			{ID: "1111111111111111", Name: "fix-login", MessageCount: 42, UpdatedAt: time.Date(2026, 8, 26, 15, 4, 0, 0, time.Local)},
 			{ID: "2222222222222222", Name: "default", MessageCount: 3, UpdatedAt: time.Date(2026, 8, 25, 9, 0, 0, 0, time.Local)},
 		},
 	}
 	out := formatData("resume", list)
 	for _, want := range []string{
-		"Sessions (resume with /resume <index>):",
-		"0. Fix login bug [11111111]",
-		"42 msgs, updated 2026-08-26 15:04",
-		"1. default [22222222]",
+		"Available Sessions",
+		"0: fix-login (id: 1111111111111111)",
+		"updated: 2026-08-26T15...  messages: 42",
+		"1: default (id: 2222222222222222)",
+		"/resume <index|id|path>",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
@@ -125,8 +125,15 @@ func TestFormatCommandResultShow(t *testing.T) {
 		"type": "settings",
 		"data": map[string]any{"model": "zai/glm-4.6", "prefix": "on"},
 	})
-	if !strings.Contains(out, "zai/glm-4.6") || !strings.Contains(out, "prefix") {
-		t.Errorf("unexpected settings output:\n%s", out)
+	for _, want := range []string{
+		"Display Settings:",
+		"  model: zai/glm-4.6",
+		"  prefix: on",
+		"  thinking-level: unknown",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q, got:\n%s", want, out)
+		}
 	}
 	// Non-settings payload → no render.
 	if out := formatData("show", map[string]any{"type": "other"}); out != "" {
@@ -142,9 +149,9 @@ func TestFormatCommandResultHelpAndSkills(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"Available commands:",
-		fmt.Sprintf("%-*s  —  %s", len("session"), "help", "Show available slash commands"),
-		fmt.Sprintf("%-*s  —  %s", len("session"), "session", "Get the current agent state"),
+		"Commands:",
+		"[slash] help - Show available slash commands",
+		"[slash] session - Get the current agent state",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
@@ -152,10 +159,12 @@ func TestFormatCommandResultHelpAndSkills(t *testing.T) {
 	}
 
 	out = formatData("skills", map[string]any{
-		"commands": []SlashCommand{{Name: "/skill:review", Description: "Review code"}},
+		"commands": []SlashCommand{{Name: "/skill:review", Description: "Review code", Source: "skill"}},
 	})
-	if !strings.Contains(out, "Available skills:") || !strings.Contains(out, "/skill:review  —  Review code") {
-		t.Errorf("unexpected skills output:\n%s", out)
+	for _, want := range []string{"Commands:", "[skill] /skill:review - Review code"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q, got:\n%s", want, out)
+		}
 	}
 	if out := formatData("skills", map[string]any{"commands": []SlashCommand{}}); !strings.Contains(out, "no commands") {
 		t.Errorf("expected 'no commands', got %q", out)

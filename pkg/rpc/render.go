@@ -6,9 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/config"
-	"github.com/tiancaiamao/ai/pkg/session"
+	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 // This file hosts the shared slash-command result renderers. Every UI
@@ -54,8 +53,8 @@ func renderNamedCommand(command string, raw []byte) string {
 	switch command {
 	case "context":
 		return renderContextCompact(raw)
-	case "help":
-		return renderCommandsTable(raw, "Available commands:")
+	case "help", "skills", "get_commands":
+		return renderSkillsTable(raw)
 	case "messages":
 		return renderMessagesText(raw)
 	case "model", "get_available_models", "cycle_model", "set_model":
@@ -68,8 +67,6 @@ func renderNamedCommand(command string, raw []byte) string {
 		return renderSessionsTable(raw)
 	case "show":
 		return renderSettingsSorted(raw)
-	case "skills", "get_commands":
-		return renderSkillsTable(raw)
 	case "trace-events":
 		return renderTraceEventsText(raw)
 	case "tree":
@@ -100,15 +97,34 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 	if _, ok := m["sessions"]; ok {
 		return renderSessionsTable(raw)
 	}
+	// /new → {sessionId, cancelled}: not a displayable state dump. Check both
+	// fields so /fork ({cancelled} but no {sessionId}) still falls through.
+	if _, hasCancelled := m["cancelled"]; hasCancelled {
+		if _, hasSessionID := m["sessionId"]; hasSessionID {
+			return ""
+		}
+	}
+	// Session stats before plain sessionId: SessionStats also carries one,
+	// but no messageCount (which distinguishes a full SessionState).
+	if _, ok := m["totalMessages"]; ok {
+		return renderSessionStatsText(raw)
+	}
+	// Session state before the /model switch: SessionState carries both a
+	// sessionId and a model, so the sessionId must win here.
+	if id, ok := m["sessionId"].(string); ok && id != "" {
+		if _, hasModel := m["model"]; hasModel {
+			return renderSessionStateEnriched(raw)
+		}
+		if _, hasName := m["sessionName"]; hasName {
+			return renderResumeSwitchConfirm(raw)
+		}
+		return renderSessionStateEnriched(raw)
+	}
 	if _, ok := m["models"]; ok {
 		return renderModelList(raw)
 	}
 	if _, ok := m["model"]; ok {
 		return renderModelSwitched(raw)
-	}
-	// Session stats before plain sessionId: SessionStats also carries one.
-	if _, ok := m["totalMessages"]; ok {
-		return renderSessionStatsText(raw)
 	}
 	if level, ok := m["level"].(string); ok {
 		return fmt.Sprintf("Thinking level: %s", level)
@@ -121,19 +137,6 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 	}
 	if _, ok := m["entries"]; ok {
 		return renderTreeText(raw)
-	}
-	// /new → {sessionId, cancelled}: not a displayable state dump. Check both
-	// fields so /fork ({cancelled} but no {sessionId}) still falls through.
-	if _, hasCancelled := m["cancelled"]; hasCancelled {
-		if _, hasSessionID := m["sessionId"]; hasSessionID {
-			return ""
-		}
-	}
-	if id, ok := m["sessionId"].(string); ok && id != "" {
-		if _, hasName := m["sessionName"]; hasName {
-			return renderResumeSwitchConfirm(raw)
-		}
-		return renderSessionStateEnriched(raw)
 	}
 	return ""
 }
@@ -383,11 +386,17 @@ func renderResumeSwitchConfirm(raw []byte) string {
 	return fmt.Sprintf("Switched to session %s", shortID(sw.SessionID))
 }
 
-// renderSessionsTable renders a session list as an aligned table; the index
-// doubles as the /resume <index> argument. Used by /sessions and /resume.
+// renderSessionsTable renders the session list with its index doubling as
+// the /resume <index> argument. Used by /sessions and /resume (no args).
 func renderSessionsTable(raw []byte) string {
 	var payload struct {
-		Sessions []session.SessionMeta `json:"sessions"`
+		Sessions []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			Title        string `json:"title"`
+			UpdatedAt    string `json:"updatedAt"`
+			MessageCount int    `json:"messageCount"`
+		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return ""
@@ -395,41 +404,33 @@ func renderSessionsTable(raw []byte) string {
 	if len(payload.Sessions) == 0 {
 		return "No sessions found"
 	}
-	rows := make([]nameDesc, 0, len(payload.Sessions))
-	for i, s := range payload.Sessions {
-		title := s.Title
-		if title == "" {
-			title = s.Name
+
+	var b strings.Builder
+	b.WriteString("─────────────────────\n")
+	b.WriteString("Available Sessions\n")
+	b.WriteString("─────────────────────\n\n")
+
+	// Data source (ListSessions) sorts by UpdatedAt ascending (oldest first),
+	// so oldest appears at top (index 0), newest at bottom — display matches
+	// the /resume index.
+	for i, sess := range payload.Sessions {
+		name := sess.Name
+		if name == "" {
+			name = sess.ID
 		}
-		if title == "" {
-			title = "(untitled)"
-		}
-		rows = append(rows, nameDesc{
-			name: fmt.Sprintf("%d. %s [%s]", i, truncateRunes(title, 48), shortID(s.ID)),
-			desc: fmt.Sprintf("%d msgs, updated %s", s.MessageCount, s.UpdatedAt.Format("2006-01-02 15:04")),
-		})
+		b.WriteString(fmt.Sprintf("%d: %s (id: %s)\n", i, name, sess.ID))
+		b.WriteString(fmt.Sprintf("    updated: %s  messages: %d\n",
+			truncpkg.TruncateString(sess.UpdatedAt, 16), sess.MessageCount))
 	}
-	return renderNameDescTable("Sessions (resume with /resume <index>):", rows)
+
+	b.WriteString("\n─────────────────────\n")
+	b.WriteString("Usage:\n  - /resume <index|id|path>\n")
+
+	return b.String()
 }
 
-// renderCommandsTable renders /help as "<name>  —  <description>" per command.
-func renderCommandsTable(raw []byte, header string) string {
-	var payload struct {
-		Commands []command.CommandInfo `json:"commands"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
-	}
-	pairs := make([]nameDesc, 0, len(payload.Commands))
-	for _, c := range payload.Commands {
-		pairs = append(pairs, nameDesc{name: c.Name, desc: c.Description})
-	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
-	return renderNameDescTable(header, pairs)
-}
-
-// renderSkillsTable renders /skills in the same table style as /help, with a
-// [source] tag on entries that carry one.
+// renderSkillsTable renders /skills, /get_commands and /help output as
+// "  [source] name - description" lines, grouped by source.
 func renderSkillsTable(raw []byte) string {
 	var payload struct {
 		Commands []SlashCommand `json:"commands"`
@@ -437,28 +438,55 @@ func renderSkillsTable(raw []byte) string {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return ""
 	}
-	if len(payload.Commands) == 0 {
+	commands := payload.Commands
+	if len(commands) == 0 {
 		return "no commands available"
 	}
-	cmds := payload.Commands
-	sort.Slice(cmds, func(i, j int) bool {
-		if cmds[i].Source == cmds[j].Source {
-			return cmds[i].Name < cmds[j].Name
+
+	sort.Slice(commands, func(i, j int) bool {
+		if commands[i].Source == commands[j].Source {
+			return commands[i].Name < commands[j].Name
 		}
-		return cmds[i].Source < cmds[j].Source
+		return commands[i].Source < commands[j].Source
 	})
-	pairs := make([]nameDesc, 0, len(cmds))
-	for _, c := range cmds {
-		name := c.Name
-		if c.Source != "" {
-			name = fmt.Sprintf("[%s] %s", c.Source, name)
+
+	var b strings.Builder
+	b.WriteString("Commands:\n")
+	for _, cmd := range commands {
+		desc := strings.TrimSpace(cmd.Description)
+		source := cmd.Source
+		if source == "" {
+			source = "slash"
 		}
-		pairs = append(pairs, nameDesc{name: name, desc: c.Description})
+		if desc != "" {
+			b.WriteString(fmt.Sprintf("  [%s] %s - %s\n", source, cmd.Name, desc))
+		} else {
+			b.WriteString(fmt.Sprintf("  [%s] %s\n", source, cmd.Name))
+		}
 	}
-	return renderNameDescTable("Available skills:", pairs)
+	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderSettingsSorted renders /show settings as aligned "key: value" lines.
+// settingsDisplayKeys fixes the display order of /show settings keys.
+var settingsDisplayKeys = []string{
+	"model",
+	"show-thinking",
+	"tools",
+	"prefix",
+	"thinking-level",
+	"busy-mode",
+	"auto-compaction",
+	"compaction-context-window",
+	"compaction-reserve-tokens",
+	"compaction-token-limit",
+	"compaction-max-messages",
+	"compaction-max-tokens",
+	"compaction-keep-recent",
+	"compaction-keep-recent-tokens",
+}
+
+// renderSettingsSorted renders /show settings in a fixed key order; keys
+// missing from the payload display as "unknown".
 func renderSettingsSorted(raw []byte) string {
 	var payload struct {
 		Type string         `json:"type"`
@@ -467,23 +495,17 @@ func renderSettingsSorted(raw []byte) string {
 	if err := json.Unmarshal(raw, &payload); err != nil || payload.Type != "settings" {
 		return ""
 	}
-	if len(payload.Data) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(payload.Data))
-	width := 0
-	for k := range payload.Data {
-		keys = append(keys, k)
-		if len(k) > width {
-			width = len(k)
+
+	var sb strings.Builder
+	sb.WriteString("Display Settings:\n")
+	for _, k := range settingsDisplayKeys {
+		v, ok := payload.Data[k]
+		if !ok {
+			v = "unknown"
 		}
+		sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
 	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		fmt.Fprintf(&b, "%-*s: %v\n", width, k, payload.Data[k])
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // renderModelResult dispatches the two /model result shapes: the model list
@@ -710,42 +732,6 @@ func renderTreeText(raw []byte) string {
 }
 
 // --- shared helpers ---
-
-// nameDesc is one row of the shared aligned table rendering.
-type nameDesc struct {
-	name string
-	desc string
-}
-
-// renderNameDescTable aligns names in one column with descriptions after an
-// em dash. Returns "" when there are no rows so callers fall back to JSON.
-func renderNameDescTable(header string, rows []nameDesc) string {
-	if len(rows) == 0 {
-		return ""
-	}
-	width := 0
-	for _, r := range rows {
-		if len(r.name) > width {
-			width = len(r.name)
-		}
-	}
-	var b strings.Builder
-	b.WriteString(header)
-	b.WriteByte('\n')
-	for _, r := range rows {
-		fmt.Fprintf(&b, "%-*s  —  %s\n", width, r.name, r.desc)
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// truncateRunes caps s at max runes, appending "…" when truncated.
-func truncateRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "…"
-}
 
 // shortID truncates a session id to its first 8 characters for summaries.
 func shortID(id string) string {
