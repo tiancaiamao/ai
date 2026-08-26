@@ -600,7 +600,7 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 			name:     "model list with current marker",
 			command:  "model",
 			result:   models,
-			contains: []string{"* zai/glm-4.6", "  zai/glm-4.5-air"},
+			contains: []string{"Available Models", "1: zai/glm-4.6", "[current]", "Usage: /model <index>"},
 		},
 	}
 

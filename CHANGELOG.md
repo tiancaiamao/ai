@@ -3,6 +3,14 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Shared Slash-Command Result Renderers (2026-08)
+
+**Problem**: Slash-command results were rendered twice with diverging output: the TUI shape-sniffed response payloads client-side (`subcommand/run/tui/event_renderer.go`, ~700 lines), while ACP hosts — which have no TUI renderer of their own and just display text — needed server-side formatting (PR #384 added a parallel set of per-command renderers in `acp.go`). Same commands, two code paths, inconsistent formats.
+
+**What changed**: All result rendering now lives in `pkg/rpc/render.go` behind `FormatCommandResult(command, data)`. ACP passes the command name (resolving ambiguous shapes like `/resume` switch-vs-list); the TUI event stream keeps shape sniffing as fallback since slash-typed prompts answer with `command: "prompt"`. Formats are unified per command (`/context`, `/session`, `/resume`, `/show`, `/help`, `/skills` follow PR #384's compact style; the model list keeps its indexed `[current]` format). The TUI dropped its private renderer copies (~1300 net lines removed).
+
+**Why**: One format decision per command, one place to change it. Client-side sniffing could not be shared downward (import cycle) so the canonical implementation moved into `pkg/rpc`, which both consumers already depend on.
+
 ## ACP Agent Mode: `ai acp` (2026-08)
 
 **Problem**: The agent was only reachable through the proprietary `rpc` protocol, which editor integrations must implement by hand. ACP (Agent Client Protocol, agentclientprotocol.com) is an emerging open standard for editor↔agent communication — Emacs agent-shell, Zed, and JetBrains IDEs all speak it as clients. Supporting it makes `ai` a drop-in subprocess agent for any ACP client without writing a per-editor bridge.
