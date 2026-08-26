@@ -80,22 +80,7 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.registerAllHandlers()
 
 	// --- Build skill commands list ---
-	app.skillCommands = make([]SlashCommand, 0)
-	for _, cmd := range server.ListSlashCommands() {
-		if cmd.Hidden {
-			continue
-		}
-		app.skillCommands = append(app.skillCommands, SlashCommand{
-			Name:        cmd.Name,
-			Description: cmd.Description,
-		})
-	}
-	for _, s := range app.skillResult.Skills {
-		app.skillCommands = append(app.skillCommands, SlashCommand{
-			Name:        "/skill:" + s.Name,
-			Description: s.Description,
-		})
-	}
+	app.buildSkillCommands()
 
 	// --- Start event emitter ---
 	shutdownEmitter, eventEmitterDone := app.initEventEmitter(func(ev agent.AgentEvent) {
@@ -231,4 +216,26 @@ func (app *rpcApp) registerAllHandlers() {
 		validFollowUpModes,
 		validThinkingLevels,
 	)
+}
+
+// buildSkillCommands populates app.skillCommands with the server's visible
+// slash commands plus one /skill:<name> entry per installed skill. Shared by
+// RunRPC and RunACP.
+func (app *rpcApp) buildSkillCommands() {
+	app.skillCommands = make([]SlashCommand, 0)
+	for _, cmd := range app.server.ListSlashCommands() {
+		if cmd.Hidden {
+			continue
+		}
+		app.skillCommands = append(app.skillCommands, SlashCommand{
+			Name:        cmd.Name,
+			Description: cmd.Description,
+		})
+	}
+	for _, s := range app.skillResult.Skills {
+		app.skillCommands = append(app.skillCommands, SlashCommand{
+			Name:        "/skill:" + s.Name,
+			Description: s.Description,
+		})
+	}
 }

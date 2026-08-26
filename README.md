@@ -241,23 +241,4 @@ See [docs/architecture.md](docs/architecture.md) for detailed component diagrams
 
 ## License
 
-Consistent with the original project (see [pi-mono](https://github.com/badlogic/pi-mono)).rt: branch conversations from any point
-- Checkpoint + journal: efficient recovery with periodic snapshots
-- Compaction snapshots: post-compaction state saved to `compactions/` files
-- Legacy format auto-migration on load
-
-See [docs/session-format.md](docs/session-format.md) for format details.
-
-## Architecture
-
-See [docs/architecture.md](docs/architecture.md) for detailed component diagrams and data flow.
-
-## Documentation
-
-- [docs/README.md](docs/README.md) — Documentation index and live docs
-- [CHANGELOG.md](CHANGELOG.md) — Functional changes per commit
-- [CLAUDE.md](CLAUDE.md) — Agent guidance for this repository
-
-## License
-
 Consistent with the original project (see [pi-mono](https://github.com/badlogic/pi-mono)).

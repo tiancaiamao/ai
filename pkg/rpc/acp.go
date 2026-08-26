@@ -183,6 +183,7 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	server.SetOutput(io.Discard)
 	app.server = server
 	app.registerAllHandlers()
+	app.buildSkillCommands()
 
 	// --- Start event emitter (state tracking + persistence + ACP translation) ---
 	shutdownEmitter, eventEmitterDone := app.initEventEmitter(srv.emit)
