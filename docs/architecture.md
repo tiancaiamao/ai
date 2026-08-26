@@ -185,7 +185,7 @@ Recovery: load messages from session JSONL (handles compaction snapshots) → re
 
 **Context:** How to expose different operational modes.
 
-**Decision:** Subcommands (`ai rpc`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
+**Decision:** Subcommands (`ai rpc`, `ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
 
 **Rationale:**
 - Clearer semantics (each command does one thing)

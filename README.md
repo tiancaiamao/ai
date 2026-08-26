@@ -25,6 +25,7 @@ ai <subcommand> [flags]
 | `run` | Start agent with interactive TUI (serves + watches in one process) |
 | `serve` | Start agent as a background daemon (foreground process, redirect I/O to files) |
 | `rpc` | Raw JSON-RPC mode over stdin/stdout (for programmatic integration) |
+| `acp` | ACP (Agent Client Protocol) agent over stdio (agent-shell, Zed, etc.) |
 | `ls` | List running and recent agent instances |
 | `watch` | Attach to a running serve instance (TUI) |
 | `send` | Send a message to a running agent instance |

@@ -40,6 +40,82 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		return err
 	}
 
+	// --- Create agent (context, session writer, executor, compactor wiring) ---
+	ag, sessionWriter, err := app.setupAgent(maxTurns)
+	if err != nil {
+		return err
+	}
+	defer sessionWriter.Close()
+	defer ag.Shutdown()
+
+	// --- Create RPC server ---
+	server := NewServer()
+	server.SetOutput(output)
+	app.server = server
+
+	// Start timeout watchdog if timeout is set.
+	// Must be after server creation so server.Cancel() is available.
+	if timeout > 0 {
+		go func() {
+			<-time.After(timeout)
+			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
+			ag.Abort()
+			// Cancel the RPC server so RunWithIO unblocks and the process exits.
+			// Without this, the process lingers forever waiting for stdin.
+			server.Cancel()
+		}()
+	}
+
+	// Watch for external abort signal (e.g., from SIGTERM handler).
+	go func() {
+		slog.Info("[RPC] Abort signal watcher started")
+		<-agentAbortSignal
+		slog.Info("[RPC] External abort signal received, aborting agent")
+		ag.Abort()
+		server.Cancel()
+		slog.Info("[RPC] Abort triggered successfully")
+	}()
+
+	// --- Register all handlers ---
+	app.registerAllHandlers()
+
+	// --- Build skill commands list ---
+	app.buildSkillCommands()
+
+	// --- Start event emitter ---
+	shutdownEmitter, eventEmitterDone := app.initEventEmitter(func(ev agent.AgentEvent) {
+		app.server.EmitEvent(ev)
+	})
+
+	// --- Emit start event ---
+	app.emitStartEvent()
+
+	// --- Start debug server if enabled ---
+	app.startDebugServer()
+
+	// --- Run RPC server ---
+	slog.Info("RPC server started", "model", app.model.ID, "cwd", app.cwd)
+	slog.Info("Waiting for commands...")
+	runErr := server.RunWithIO(input, output)
+
+	// Server stopped, event emitter will exit automatically
+	slog.Info("RPC server stopped, waiting for cleanup...")
+
+	// Wait for agent to complete
+	slog.Info("Waiting for agent to complete...")
+	ag.Wait()
+
+	close(shutdownEmitter)
+	<-eventEmitterDone
+
+	slog.Info("Agent completed, exiting...")
+	return runErr
+}
+
+// setupAgent wires the agent loop: agent context, session writer, tool
+// executor, compactor and LoopConfig. Shared by RunRPC and RunACP.
+// The caller owns the returned sessionWriter (Close) and agent (Shutdown).
+func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
 	// --- Create agent context ---
 	agentCtx := app.createBaseContext()
 
@@ -53,7 +129,6 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// --- Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig ---
 	sessionWriter := newSessionWriter(256)
-	defer sessionWriter.Close()
 	sessionComp := &sessionCompactor{
 		compactor: app.compactor,
 	}
@@ -117,7 +192,6 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 
 	// Create agent with LoopConfig
 	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
-	defer ag.Shutdown()
 	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
 	app.ag = ag
 
@@ -125,35 +199,12 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
 	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
 
-	// --- Create RPC server ---
-	server := NewServer()
-	server.SetOutput(output)
-	app.server = server
+	return ag, sessionWriter, nil
+}
 
-	// Start timeout watchdog if timeout is set.
-	// Must be after server creation so server.Cancel() is available.
-	if timeout > 0 {
-		go func() {
-			<-time.After(timeout)
-			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
-			ag.Abort()
-			// Cancel the RPC server so RunWithIO unblocks and the process exits.
-			// Without this, the process lingers forever waiting for stdin.
-			server.Cancel()
-		}()
-	}
-
-	// Watch for external abort signal (e.g., from SIGTERM handler).
-	go func() {
-		slog.Info("[RPC] Abort signal watcher started")
-		<-agentAbortSignal
-		slog.Info("[RPC] External abort signal received, aborting agent")
-		ag.Abort()
-		server.Cancel()
-		slog.Info("[RPC] Abort triggered successfully")
-	}()
-
-	// --- Register all handlers ---
+// registerAllHandlers registers all protocol + slash command handlers with
+// their validation maps. Shared by RunRPC and RunACP.
+func (app *rpcApp) registerAllHandlers() {
 	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
 	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
 	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
@@ -165,10 +216,14 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 		validFollowUpModes,
 		validThinkingLevels,
 	)
+}
 
-	// --- Build skill commands list ---
+// buildSkillCommands populates app.skillCommands with the server's visible
+// slash commands plus one /skill:<name> entry per installed skill. Shared by
+// RunRPC and RunACP.
+func (app *rpcApp) buildSkillCommands() {
 	app.skillCommands = make([]SlashCommand, 0)
-	for _, cmd := range server.ListSlashCommands() {
+	for _, cmd := range app.server.ListSlashCommands() {
 		if cmd.Hidden {
 			continue
 		}
@@ -183,31 +238,4 @@ func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 			Description: s.Description,
 		})
 	}
-
-	// --- Start event emitter ---
-	shutdownEmitter, eventEmitterDone := app.initEventEmitter()
-
-	// --- Emit start event ---
-	app.emitStartEvent()
-
-	// --- Start debug server if enabled ---
-	app.startDebugServer()
-
-	// --- Run RPC server ---
-	slog.Info("RPC server started", "model", app.model.ID, "cwd", app.cwd)
-	slog.Info("Waiting for commands...")
-	runErr := server.RunWithIO(input, output)
-
-	// Server stopped, event emitter will exit automatically
-	slog.Info("RPC server stopped, waiting for cleanup...")
-
-	// Wait for agent to complete
-	slog.Info("Waiting for agent to complete...")
-	ag.Wait()
-
-	close(shutdownEmitter)
-	<-eventEmitterDone
-
-	slog.Info("Agent completed, exiting...")
-	return runErr
 }

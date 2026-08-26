@@ -122,8 +122,10 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 }
 
 // initEventEmitter starts the goroutine that reads agent events and forwards
-
-func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
+// them to emit. It owns session state tracking and persistence; emit is
+// responsible for protocol-specific forwarding (NDJSON events for RunRPC,
+// ACP session/update notifications for RunACP).
+func (app *rpcApp) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, chan struct{}) {
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
 
@@ -187,7 +189,7 @@ func (app *rpcApp) initEventEmitter() (chan struct{}, chan struct{}) {
 		// needed by stdout consumers (TUI, watch) — they only display tool status.
 		// Session persistence (above) already wrote the full data.
 		stripImageDataFromEvent(&event)
-		app.server.EmitEvent(event)
+		emit(event)
 
 		if event.Type == "agent_end" {
 			go func() {
@@ -360,7 +362,8 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 	}
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
-	if skill.IsSkillCommand(message) {
+	// ACP prompts are raw free text: skip both slash and skill parsing.
+	if !cmd.Raw && skill.IsSkillCommand(message) {
 		expandedMessage := app.expandSkillCommands(message)
 		slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
 
@@ -379,8 +382,9 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 		return nil, app.ag.Prompt(expandedMessage)
 	}
 
-	// Intercept slash commands
-	if message[0] == '/' {
+	// Intercept slash commands (raw prompts bypass this: the text may
+	// legitimately start with '/' e.g. a Go comment).
+	if !cmd.Raw && message[0] == '/' {
 		cmdName, args, err := command.ParseSlashCommand(message)
 		if err != nil {
 			return nil, fmt.Errorf("invalid slash command: %w", err)

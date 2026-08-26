@@ -99,6 +99,12 @@ type SessionWriter struct {
 
 Events are appended as JSON lines for crash-safe recovery.
 
+## ACP Mode
+
+`RunACP()` (in `acp.go`) serves the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio using the same NDJSON framing as the RPC server. It reuses the shared `setupAgent()`/`registerAllHandlers()`/`buildSkillCommands()` machinery from `rpc_handlers.go`, so the agent, tools, sessions, and slash commands are identical to `rpc` mode.
+
+Implemented methods: `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update` (notifications). Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
+
 ## Testing
 
 Run tests with:

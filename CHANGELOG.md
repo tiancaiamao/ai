@@ -3,6 +3,20 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## ACP Agent Mode: `ai acp` (2026-08)
+
+**Problem**: The agent was only reachable through the proprietary `rpc` protocol, which editor integrations must implement by hand. ACP (Agent Client Protocol, agentclientprotocol.com) is an emerging open standard for editor↔agent communication — Emacs agent-shell, Zed, and JetBrains IDEs all speak it as clients. Supporting it makes `ai` a drop-in subprocess agent for any ACP client without writing a per-editor bridge.
+
+**What changed**: Added an `ai acp` subcommand that serves the ACP surface over stdio (JSON-RPC 2.0, newline-delimited — the same framing as `rpc` mode):
+
+- `pkg/rpc/acp.go`: `RunACP()` + `acpServer` implementing `initialize`, `session/new`, `session/prompt`, `session/cancel`, plus `session/update` notifications translated from agent events (`message_update` → `agent_message_chunk`, `tool_execution_start/end` → `tool_call`/`tool_call_update`).
+- Refactored `pkg/rpc/rpc_handlers.go`: extracted `setupAgent()` + `registerAllHandlers()` from `RunRPC` so both modes share one assembly path (agent, tools, sessions, slash commands). `initEventEmitter` now takes an emit callback so ACP can translate events instead of forwarding RPC events.
+- Single-session model: `session/new` returns the app session id; `session/prompt` waits for the next `agent_end` event to answer with `stopReason` (cancellable via `session/cancel` + `ag.Abort()`).
+
+**Deliberately out of scope**: `fs/*`, `terminal/*`, `session/load`, MCP transports, and embedded resources beyond a plain-text `resource_link` hint. Capabilities are not advertised, so conforming clients treat them as unsupported. `mcpServers` in `session/new` are accepted and ignored.
+
+**Why**: Lightweight first — the minimum ACP surface that agent-shell needs to drive the agent in a live Emacs buffer. The agent's own tools (read/write/bash/grep) already cover file and shell work, so proxy tooling via ACP would duplicate machinery without benefit.
+
 ## Queued Manual Compaction at Agent Step Boundaries (2026-08)
 
 **Problem**: `/compact` could compact the shared agent context directly from the RPC handler while the agent loop was running, allowing concurrent mutation of `RecentMessages`.

@@ -13,6 +13,10 @@ type RPCCommand struct {
 	Type    string          `json:"type"`
 	Message string          `json:"message,omitempty"` // For convenience, direct message field
 	Data    json.RawMessage `json:"data,omitempty"`
+	// Raw disables slash-command and skill-command parsing: the message is
+	// sent to the agent verbatim. Used by protocol adapters (e.g. ACP) where
+	// prompts are free text and may legitimately start with '/'.
+	Raw bool `json:"raw,omitempty"`
 }
 
 // PromptRequest captures prompt fields beyond the message body.
