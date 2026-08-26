@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/command"
+	"github.com/tiancaiamao/ai/pkg/config"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
 )
@@ -461,6 +463,199 @@ func TestACPSlashHelpOverACP(t *testing.T) {
 	stop, _ := result["stopReason"].(string)
 	if stop != acpStopEndTurn {
 		t.Errorf("expected stopReason %q, got %v", acpStopEndTurn, result)
+	}
+}
+
+// TestFormatACPCommandResultRenderers covers the per-command text renderers
+// invoked through formatACPCommandResult: each registered renderer must emit
+// human-readable text (never JSON) for its handler's result shape, and any
+// shape mismatch must fall back to the JSON representation.
+func TestFormatACPCommandResultRenderers(t *testing.T) {
+	state := &SessionState{
+		Model:       &config.ModelInfo{ID: "glm-4.6", Provider: "zai", Name: "GLM-4.6"},
+		SessionID:   "abcdefgh12345678",
+		IsStreaming: true,
+	}
+	stats := &SessionStats{
+		UserMessages:      3,
+		AssistantMessages: 2,
+		ToolCalls:         1,
+		Tokens:            SessionTokenStats{Input: 100, Output: 50, CacheRead: 10, CacheWrite: 20, Total: 180},
+	}
+	models := map[string]any{
+		"models": []config.ModelInfo{
+			{ID: "glm-4.5-air", Provider: "zai"},
+			{ID: "glm-4.6", Provider: "zai"},
+		},
+		"currentIndex": 1,
+	}
+
+	cases := []struct {
+		name     string
+		command  string
+		result   any
+		contains []string
+	}{
+		{
+			name:     "session one-line summary",
+			command:  "session",
+			result:   state,
+			contains: []string{"Model: zai/glm-4.6", "Session: abcdefgh", "Streaming: active"},
+		},
+		{
+			name:    "context short sections",
+			command: "context",
+			result: map[string]any{
+				"state":  state,
+				"stats":  stats,
+				"models": models,
+			},
+			contains: []string{
+				"Model: zai/glm-4.6",
+				"Messages: 3 user · 2 assistant · 1 tool calls",
+				"Tokens: in 100 · out 50",
+				"* zai/glm-4.6",
+				"  zai/glm-4.5-air",
+			},
+		},
+		{
+			name:    "show aligned key/value lines",
+			command: "show",
+			result: map[string]any{
+				"type": "settings",
+				"data": map[string]any{"model": "zai/glm-4.6", "prefix": "on"},
+			},
+			contains: []string{"zai/glm-4.6", "prefix: on"},
+		},
+		{
+			name:    "help command table",
+			command: "help",
+			result: map[string]any{
+				"commands": []command.CommandInfo{
+					{Name: "help", Description: "Show available slash commands"},
+					{Name: "session", Description: "Get the current agent state"},
+				},
+			},
+			contains: []string{
+				"Available commands:",
+				fmt.Sprintf("%-*s  —  %s", len("session"), "help", "Show available slash commands"),
+				fmt.Sprintf("%-*s  —  %s", len("session"), "session", "Get the current agent state"),
+			},
+		},
+		{
+			name:    "skills table",
+			command: "skills",
+			result: map[string]any{
+				"commands": []SlashCommand{{Name: "/skill:review", Description: "Review code"}},
+			},
+			contains: []string{"Available skills:", "/skill:review  —  Review code"},
+		},
+		{
+			name:     "model list with current marker",
+			command:  "model",
+			result:   models,
+			contains: []string{"* zai/glm-4.6", "  zai/glm-4.5-air"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := formatACPCommandResult(tc.command, tc.result)
+			if strings.HasPrefix(out, "{") {
+				t.Fatalf("renderer output must not be JSON, got:\n%s", out)
+			}
+			if out == "" {
+				t.Fatal("renderer output is empty")
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(out, want) {
+					t.Errorf("output missing %q, got:\n%s", want, out)
+				}
+			}
+		})
+	}
+
+	// Shape mismatches and unrendered commands fall back to JSON.
+	fallbacks := []struct {
+		name    string
+		command string
+		result  any
+	}{
+		{name: "wrong shape for session", command: "session", result: map[string]any{"bogus": true}},
+		{name: "wrong shape for model", command: "model", result: map[string]any{"models": "nope"}},
+		{name: "non-settings show payload", command: "show", result: map[string]any{"type": "other"}},
+		{name: "unrendered command keeps JSON", command: "set", result: map[string]any{"setting": "x"}},
+	}
+	for _, tc := range fallbacks {
+		t.Run(tc.name, func(t *testing.T) {
+			out := formatACPCommandResult(tc.command, tc.result)
+			if !strings.HasPrefix(out, "{") {
+				t.Errorf("expected JSON fallback, got:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestACPCommandRenderersOverACP dispatches every rendered read-only command
+// through a live ACP server: each answer must arrive as an agent_message_chunk
+// carrying human-readable text (not a raw JSON blob) followed by end_turn.
+func TestACPCommandRenderersOverACP(t *testing.T) {
+	prompts := []struct {
+		command  string
+		contains []string
+	}{
+		{command: "/session", contains: []string{"Model:", "Session:", "Streaming:"}},
+		{command: "/context", contains: []string{"Tokens:"}},
+		{command: "/show settings", contains: []string{"model"}},
+		{command: "/help", contains: []string{"Available commands:", "help"}},
+		{command: "/skills", contains: []string{"Available skills:"}},
+		{command: "/model", contains: []string{"Models"}},
+	}
+	lines := make([]string, 0, len(prompts))
+	for i, p := range prompts {
+		lines = append(lines, fmt.Sprintf(
+			`{"jsonrpc":"2.0","id":%d,"method":"session/prompt","params":{"sessionId":%%q,"prompt":[{"type":"text","text":"%s"}]}}`,
+			i+10, p.command))
+	}
+
+	msgs := runACPSmokeSession(t, t.TempDir(), func(sessionID string) []string {
+		out := make([]string, len(lines))
+		for i, l := range lines {
+			out[i] = fmt.Sprintf(l, sessionID)
+		}
+		return out
+	})
+
+	// init result + new result + advertisement, then chunk+response per prompt.
+	wantCount := 3 + 2*len(prompts)
+	if len(msgs) != wantCount {
+		t.Fatalf("expected %d messages, got %d: %v", wantCount, len(msgs), msgs)
+	}
+
+	for i, p := range prompts {
+		chunk := msgs[3+2*i]
+		params, _ := chunk["params"].(map[string]any)
+		upd, _ := params["update"].(map[string]any)
+		if got, _ := upd["sessionUpdate"].(string); got != "agent_message_chunk" {
+			t.Errorf("/%s: expected agent_message_chunk, got %v", p.command, upd)
+			continue
+		}
+		content, _ := upd["content"].(map[string]any)
+		text, _ := content["text"].(string)
+		if strings.HasPrefix(text, "{") {
+			t.Errorf("/%s: rendered text must not start with '{', got:\n%s", p.command, text)
+		}
+		for _, want := range p.contains {
+			if !strings.Contains(text, want) {
+				t.Errorf("/%s: output missing %q, got:\n%s", p.command, want, text)
+			}
+		}
+
+		resp := msgs[4+2*i]
+		result, _ := resp["result"].(map[string]any)
+		if stop, _ := result["stopReason"].(string); stop != acpStopEndTurn {
+			t.Errorf("/%s: expected stopReason end_turn, got %v", p.command, result)
+		}
 	}
 }
 
