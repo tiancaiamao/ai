@@ -20,8 +20,8 @@ package rpc
 //   - session/update (notify)    -> agent_message_chunk / tool_call /
 //                                   available_commands_update
 //
-// Everything else (fs/*, terminal/*, session/load, image/audio content, MCP
-// transports) is deliberately NOT advertised and rejected as method not found.
+// Everything else (fs/*, terminal/*, image/audio content, MCP transports) is
+// deliberately NOT advertised and rejected as method not found.
 // mcpServers in session/new are accepted and ignored (logged).
 
 import (
@@ -38,6 +38,7 @@ import (
 
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/command"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/skill"
 )
 
@@ -256,6 +257,8 @@ func (s *acpServer) handleRequest(req acpRequest) {
 		s.handleInitialize(req)
 	case "session/new":
 		s.handleSessionNew(req)
+	case "session/load":
+		s.handleSessionLoad(req)
 	case "session/prompt":
 		s.handlePrompt(req)
 	case "session/cancel":
@@ -271,6 +274,8 @@ func (s *acpServer) handleInitialize(req acpRequest) {
 	s.sendResult(req.ID, map[string]any{
 		"protocolVersion": acpProtocolVersion,
 		"agentCapabilities": map[string]any{
+			// Cross-restart resume: session/load replays persisted history.
+			"loadSession": true,
 			// Baseline text + resource_link support is implicit (MUST).
 			// embeddedContext is the one optional prompt capability we honor.
 			"promptCapabilities": map[string]bool{
@@ -302,6 +307,144 @@ func (s *acpServer) handleSessionNew(req acpRequest) {
 	s.sessionID = s.app.sessionID
 	s.sendResult(req.ID, map[string]string{"sessionId": s.sessionID})
 	s.sendAvailableCommands()
+}
+
+// handleSessionLoad resumes a previously persisted session (cross-restart
+// resume). The ACP sessionId is the internal session id (see handleSessionNew),
+// so the session is located on disk via the SessionManager, swapped into the
+// app (agent context, compactor), and its history is replayed to the client as
+// a series of session/update notifications before the response.
+func (s *acpServer) handleSessionLoad(req acpRequest) {
+	var params struct {
+		SessionID  string `json:"sessionId"`
+		CWD        string `json:"cwd"`
+		MCPServers []any  `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		s.sendError(req.ID, acpErrInvalidParams, fmt.Sprintf("invalid session/load params: %v", err))
+		return
+	}
+	if params.SessionID == "" {
+		s.sendError(req.ID, acpErrInvalidParams, "session/load requires sessionId")
+		return
+	}
+
+	// A load swaps the agent context; doing so while a prompt turn is running
+	// would race with the loop and interleave replay updates into that turn.
+	s.pendingMu.Lock()
+	busy := len(s.pendingPrompt) > 0
+	s.pendingMu.Unlock()
+	if busy {
+		s.sendError(req.ID, acpErrInvalidRequest, "cannot load session while a prompt is in flight")
+		return
+	}
+
+	// Existence check first: GetSession silently returns an empty session for
+	// unknown ids (missing messages.jsonl is treated as a fresh session).
+	if _, err := s.app.sessionMgr.GetMeta(params.SessionID); err != nil {
+		s.sendError(req.ID, acpErrInvalidParams, fmt.Sprintf("session not found: %s", params.SessionID))
+		return
+	}
+	newSess, err := s.app.sessionMgr.GetSession(params.SessionID)
+	if err != nil {
+		s.sendError(req.ID, acpErrInvalidParams, fmt.Sprintf("failed to load session %s: %v", params.SessionID, err))
+		return
+	}
+	if err := s.app.sessionMgr.SetCurrent(params.SessionID); err != nil {
+		slog.Info("[ACP] failed to set current session", "id", params.SessionID, "error", err)
+	}
+	if err := s.app.sessionMgr.SaveCurrent(); err != nil {
+		slog.Info("Failed to update session metadata:", "value", err)
+	}
+
+	newName := resolveSessionName(s.app.sessionMgr, params.SessionID)
+	s.sessionID = params.SessionID
+	s.app.setSession(newSess, params.SessionID, newName)
+	slog.Info("[ACP] session loaded", "id", params.SessionID, "messages", len(newSess.GetMessages()))
+
+	s.replayHistory(newSess.GetMessages())
+	s.sendAvailableCommands()
+	s.sendResult(req.ID, map[string]string{"stopReason": acpStopEndTurn})
+}
+
+// replayHistory converts persisted conversation history into ACP session/update
+// notifications: user messages become user_message_chunk, assistant text
+// becomes agent_message_chunk, tool calls become tool_call + tool_call_update.
+// Compaction summaries are internal bookkeeping and are skipped. Tool calls
+// left without a result (e.g. the process died mid-turn) are closed out as
+// completed so clients don't render an endless spinner.
+func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
+	pendingCalls := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == "compactionSummary" {
+			continue
+		}
+		switch msg.Role {
+		case "user":
+			s.sendReplayText("user_message_chunk", msg.Content)
+		case "assistant":
+			s.sendReplayText("agent_message_chunk", msg.Content)
+			for _, block := range msg.Content {
+				tc, ok := block.(agentctx.ToolCallContent)
+				if !ok || tc.ID == "" {
+					continue
+				}
+				pendingCalls[tc.ID] = true
+				s.sendUpdate(acpUpdate{
+					SessionUpdate: "tool_call",
+					ToolCallID:    tc.ID,
+					Title:         tc.Name,
+					Kind:          toolCallKind(tc.Name),
+					Status:        "pending",
+				})
+			}
+		case "toolResult":
+			status := "completed"
+			if msg.IsError {
+				status = "error"
+			}
+			delete(pendingCalls, msg.ToolCallID)
+			u := acpUpdate{
+				SessionUpdate: "tool_call_update",
+				ToolCallID:    msg.ToolCallID,
+				Status:        status,
+			}
+			if text := msg.ExtractText(); text != "" {
+				u.Content = []any{
+					map[string]any{
+						"type": "content",
+						"content": map[string]string{
+							"type": "text",
+							"text": text,
+						},
+					},
+				}
+			}
+			s.sendUpdate(u)
+		}
+	}
+	// Close dangling tool calls from an interrupted turn.
+	for id := range pendingCalls {
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "tool_call_update",
+			ToolCallID:    id,
+			Status:        "completed",
+		})
+	}
+}
+
+// sendReplayText emits one session/update per text content block of a message.
+func (s *acpServer) sendReplayText(updateKind string, blocks []agentctx.ContentBlock) {
+	for _, block := range blocks {
+		tc, ok := block.(agentctx.TextContent)
+		if !ok || tc.Text == "" {
+			continue
+		}
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: updateKind,
+			Content:       map[string]string{"type": "text", "text": tc.Text},
+		})
+	}
 }
 
 func (s *acpServer) handlePrompt(req acpRequest) {
