@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/session"
 )
 
 // runACPSmoke starts RunACP with the given NDJSON lines, returns all
@@ -85,6 +88,9 @@ func TestACPInitialize(t *testing.T) {
 	}
 	if embedded, _ := promptCaps["embeddedContext"].(bool); !embedded {
 		t.Errorf("expected embeddedContext capability true, got %v", promptCaps["embeddedContext"])
+	}
+	if loadSession, _ := caps["loadSession"].(bool); !loadSession {
+		t.Errorf("expected loadSession capability true, got %v", caps["loadSession"])
 	}
 }
 
@@ -179,6 +185,124 @@ func TestACPUnknownMethodAndNotification(t *testing.T) {
 	}
 	if code, _ := errObj["code"].(float64); code != acpErrInvalidRequest {
 		t.Errorf("expected invalid request code %d, got %v", acpErrInvalidRequest, errObj["code"])
+	}
+}
+
+// TestACPSessionLoad seeds a persisted session on disk, then resumes it via
+// session/load: history must be replayed as session/update notifications
+// (user_message_chunk / agent_message_chunk / tool_call / tool_call_update)
+// followed by an available_commands_update and the stopReason response.
+func TestACPSessionLoad(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Seed a second session next to the startup one (the SessionManager in
+	// RunACP is rooted at filepath.Dir(sessionPath)).
+	mgr := session.NewSessionManager(filepath.Dir(tmpDir))
+	sess, err := mgr.CreateSession("acp-load-test", "acp-load-test")
+	if err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	seed := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("list the files"),
+		agentctx.NewAssistantMessage(),
+	}
+	seed[1].Content = []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "sure, checking"},
+		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "ls"}},
+	}
+	for _, m := range seed {
+		if _, err := sess.AppendMessage(m); err != nil {
+			t.Fatalf("append seed message: %v", err)
+		}
+	}
+	if _, err := sess.AppendMessage(agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{
+		agentctx.TextContent{Type: "text", Text: "file1.txt"},
+	}, false)); err != nil {
+		t.Fatalf("append seed tool result: %v", err)
+	}
+
+	msgs := runACPSmoke(t, tmpDir, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		// Unknown id must be rejected.
+		`{"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":"bogus"}}`,
+		// Empty sessionId must be rejected.
+		`{"jsonrpc":"2.0","id":3,"method":"session/load","params":{}}`,
+		// Resume the seeded session.
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"session/load","params":{"sessionId":%q}}`, sess.GetID()),
+	})
+	if len(msgs) != 9 {
+		t.Fatalf("expected 9 messages, got %d: %+v", len(msgs), msgs)
+	}
+
+	// bogus / empty session ids -> invalid params errors
+	for i, wantID := range []float64{2, 3} {
+		m := msgs[i+1]
+		errObj, ok := m["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("message %d: expected error, got %v", i+1, m)
+		}
+		if code, _ := errObj["code"].(float64); code != acpErrInvalidParams {
+			t.Errorf("message %d: expected error code %d, got %v", i+1, acpErrInvalidParams, errObj)
+		}
+		if id, _ := m["id"].(float64); id != wantID {
+			t.Errorf("message %d: expected id %v, got %v", i+1, wantID, m["id"])
+		}
+	}
+
+	// Replay of the seeded history, in order:
+	// user_message_chunk, agent_message_chunk, tool_call(pending),
+	// tool_call_update(completed), available_commands_update.
+	wantUpdates := []string{
+		"user_message_chunk",
+		"agent_message_chunk",
+		"tool_call",
+		"tool_call_update",
+		"available_commands_update",
+	}
+	for i, want := range wantUpdates {
+		m := msgs[3+i]
+		params, ok := m["params"].(map[string]any)
+		if !ok {
+			t.Fatalf("update %d: expected params object, got %v", i, m)
+		}
+		if sid, _ := params["sessionId"].(string); sid != sess.GetID() {
+			t.Errorf("update %d: expected sessionId %q, got %q", i, sess.GetID(), sid)
+		}
+		upd, _ := params["update"].(map[string]any)
+		if got, _ := upd["sessionUpdate"].(string); got != want {
+			t.Errorf("update %d: expected %q, got %q", i, want, upd)
+		}
+	}
+
+	// tool_call carries id/title/kind/status
+	toolCall := msgs[5]["params"].(map[string]any)["update"].(map[string]any)
+	if tcID, _ := toolCall["toolCallId"].(string); tcID != "call-1" {
+		t.Errorf("tool_call: expected toolCallId call-1, got %v", toolCall)
+	}
+	if kind, _ := toolCall["kind"].(string); kind != "execute" {
+		t.Errorf("tool_call: expected kind execute (bash), got %v", kind)
+	}
+	if status, _ := toolCall["status"].(string); status != "pending" {
+		t.Errorf("tool_call: expected pending, got %v", status)
+	}
+
+	// tool_call_update carries the result content
+	toolUpd := msgs[6]["params"].(map[string]any)["update"].(map[string]any)
+	if status, _ := toolUpd["status"].(string); status != "completed" {
+		t.Errorf("tool_call_update: expected completed, got %v", toolUpd)
+	}
+	content, _ := toolUpd["content"].([]any)
+	if len(content) == 0 {
+		t.Errorf("tool_call_update: expected result content, got %v", toolUpd)
+	}
+
+	// Final response: stopReason end_turn
+	result, ok := msgs[8]["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected session/load result, got %v", msgs[8])
+	}
+	if stop, _ := result["stopReason"].(string); stop != "end_turn" {
+		t.Errorf("expected stopReason end_turn, got %v", result)
 	}
 }
 

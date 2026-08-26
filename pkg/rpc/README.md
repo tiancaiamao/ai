@@ -103,7 +103,7 @@ Events are appended as JSON lines for crash-safe recovery.
 
 `RunACP()` (in `acp.go`) serves the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio using the same NDJSON framing as the RPC server. It reuses the shared `setupAgent()`/`registerAllHandlers()`/`buildSkillCommands()` machinery from `rpc_handlers.go`, so the agent, tools, sessions, and slash commands are identical to `rpc` mode.
 
-Implemented methods: `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update` (notifications). Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
+Implemented methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update` (notifications). `initialize` advertises `loadSession: true`; `session/load` reloads a previously persisted session by id (the ACP sessionId is the internal session id) and replays its history as `user_message_chunk` / `agent_message_chunk` / `tool_call` / `tool_call_update` notifications before answering with a stop reason. Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
 
 ## Testing
 
