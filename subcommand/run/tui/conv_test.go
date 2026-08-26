@@ -430,11 +430,11 @@ func TestParseEvent_Response_Sessions_DisplayOrder(t *testing.T) {
 		t.Fatal("expected non-nil event")
 	}
 
-	// Verify sessions appear in data order: oldest at top (index 0), newest at bottom
+		// Verify sessions appear in data order: oldest at top (index 0), newest at bottom
 	lines := strings.Split(evt.Text, "\n")
 	var indices []string
 	for _, line := range lines {
-		if strings.HasPrefix(line, "0.") || strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") {
+		if strings.HasPrefix(line, "0:") || strings.HasPrefix(line, "1:") || strings.HasPrefix(line, "2:") {
 			indices = append(indices, line)
 		}
 	}
