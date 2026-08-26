@@ -582,6 +582,7 @@ func TestFormatACPCommandResultRenderers(t *testing.T) {
 		result  any
 	}{
 		{name: "wrong shape for session", command: "session", result: map[string]any{"bogus": true}},
+		{name: "context with nil stats", command: "context", result: map[string]any{"state": state}},
 		{name: "wrong shape for model", command: "model", result: map[string]any{"models": "nope"}},
 		{name: "non-settings show payload", command: "show", result: map[string]any{"type": "other"}},
 		{name: "unrendered command keeps JSON", command: "set", result: map[string]any{"setting": "x"}},

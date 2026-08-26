@@ -597,17 +597,18 @@ func renderContextText(result any) string {
 	}
 	state, _ := m["state"].(*SessionState)
 	stats, _ := m["stats"].(*SessionStats)
+	if state == nil || stats == nil {
+		return ""
+	}
 
 	var b strings.Builder
-	if state != nil {
-		b.WriteString(renderSessionStateText(state))
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "Messages: %d user · %d assistant · %d tool calls\n",
-			statsUserMessages(stats), statsAssistantMessages(stats), stats.ToolCalls)
-		b.WriteString(renderTokenUsageLine(state, stats))
-	}
+	b.WriteString(renderSessionStateText(state))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "Messages: %d user · %d assistant · %d tool calls\n",
+		statsUserMessages(stats), statsAssistantMessages(stats), stats.ToolCalls)
+	b.WriteString(renderTokenUsageLine(state, stats))
 	models := modelListFromResult(m["models"])
-	if len(models.models) > 0 && state != nil {
+	if len(models.models) > 0 {
 		b.WriteString("\n")
 		b.WriteString(renderModelTable(models))
 	}
