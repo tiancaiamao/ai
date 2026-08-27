@@ -65,8 +65,15 @@ func renderNamedCommand(command string, raw []byte) string {
 		return renderSessionStateEnriched(raw)
 	case "sessions":
 		return renderSessionsTable(raw)
+	case "set":
+		if s := renderSetUsage(raw); s != "" {
+			return s
+		}
+		return renderSetResult(raw)
 	case "show":
 		return renderSettingsSorted(raw)
+	case "toggle":
+		return renderSetResult(raw)
 	case "trace-events":
 		return renderTraceEventsText(raw)
 	case "tree":
@@ -131,6 +138,15 @@ func renderResponseByShape(m map[string]any, raw []byte) string {
 	}
 	if msg, ok := m["message"].(string); ok {
 		return msg
+	}
+	// /set, /toggle → {setting, value}. Checked late: "setting" never
+	// appears in other payloads, but keep generic shapes first.
+	if _, ok := m["setting"]; ok {
+		return renderSetResult(raw)
+	}
+	// /set help → {usage, settings}
+	if _, ok := m["usage"]; ok {
+		return renderSetUsage(raw)
 	}
 	if _, ok := m["events"]; ok {
 		return renderTraceEventsText(raw)
@@ -506,6 +522,40 @@ func renderSettingsSorted(raw []byte) string {
 		sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// renderSetResult renders /set and /toggle confirmations ({setting, value})
+// as a single line, e.g. "thinking-level: low".
+func renderSetResult(raw []byte) string {
+	var payload struct {
+		Setting string `json:"setting"`
+		Value   any    `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Setting == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s: %v", payload.Setting, payload.Value)
+}
+
+// renderSetUsage renders the /set help listing ({usage, settings}).
+func renderSetUsage(raw []byte) string {
+	var payload struct {
+		Usage    string   `json:"usage"`
+		Settings []string `json:"settings"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Usage == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("usage: ")
+	b.WriteString(payload.Usage)
+	b.WriteString("\nsettings:\n")
+	for _, s := range payload.Settings {
+		b.WriteString("  ")
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderModelResult dispatches the two /model result shapes: the model list

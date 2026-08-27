@@ -266,10 +266,34 @@ func TestFormatCommandResultFallbacks(t *testing.T) {
 	if got := FormatCommandResult("", nil); got != "" {
 		t.Errorf("expected empty for nil data, got %q", got)
 	}
-	if got := formatData("set", map[string]any{"setting": "x"}); got != "" {
+	if got := formatData("set", map[string]any{"foo": 1}); got != "" {
 		t.Errorf("unrendered command should yield empty, got:\n%s", got)
 	}
 	if got := formatData("prompt", []string{"not", "a", "map"}); got != "" {
 		t.Errorf("non-map payload should yield empty, got %q", got)
+	}
+}
+
+func TestFormatCommandResultSet(t *testing.T) {
+	// /set <key> <value> confirmation via named dispatch.
+	if got := formatData("set", map[string]any{"setting": "thinking-level", "value": "low"}); got != "thinking-level: low" {
+		t.Errorf("set confirmation mismatch, got %q", got)
+	}
+	// /toggle shares the same shape and renderer.
+	if got := formatData("toggle", map[string]any{"setting": "tools", "value": true}); got != "tools: true" {
+		t.Errorf("toggle confirmation mismatch, got %q", got)
+	}
+	// Unnamed /set answers (command arrives as "prompt") via shape sniffing.
+	if got := formatData("prompt", map[string]any{"setting": "session-name", "value": "bugfix"}); got != "session-name: bugfix" {
+		t.Errorf("shape-sniffed set confirmation mismatch, got %q", got)
+	}
+	// /set help usage listing.
+	got := formatData("set", map[string]any{
+		"usage":    "/set <key> [value]",
+		"settings": []string{"auto-retry <on|off>", "thinking-level <off|low|medium|high>"},
+	})
+	want := "usage: /set <key> [value]\nsettings:\n  auto-retry <on|off>\n  thinking-level <off|low|medium|high>"
+	if got != want {
+		t.Errorf("set usage mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
