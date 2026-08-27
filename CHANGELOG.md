@@ -20,6 +20,14 @@ A companion `multi_edit` tool applies several replacements to one file atomicall
 
 **Validation**: agent-level A/B on benchmark task `020_scm_stress` (10-edit Guile file with deliberately near-duplicate helpers, weak model `ollama/laguna`) reproduced the target behavior with the fixed binary: 7 in-run sentinel rejections with precise line numbers, followed by in-place `newText` correction and recovery via pure edits (zero rewrites) in one PASS run; zero false-positive rejections across both arms. Mechanism-level unit tests pin the behavior deltas (near-duplicate drift rejected, exact/normalized windows hit correctly, indentation drift stays rejected).
 
+## Shared Slash-Command Result Renderers (2026-08)
+
+**Problem**: Slash-command results were rendered twice with diverging output: the TUI shape-sniffed response payloads client-side (`subcommand/run/tui/event_renderer.go`, ~700 lines), while ACP hosts — which have no TUI renderer of their own and just display text — needed server-side formatting (PR #384 added a parallel set of per-command renderers in `acp.go`). Same commands, two code paths, inconsistent formats.
+
+**What changed**: All result rendering now lives in `pkg/rpc/render.go` behind `FormatCommandResult(command, data)`, adopting the TUI's output formats as the single baseline (main-branch display is unchanged). ACP passes the command name (resolving ambiguous shapes like `/resume` switch-vs-list); the TUI event stream keeps shape sniffing as fallback since slash-typed prompts answer with `command: "prompt"`. The TUI dropped its private renderer copies entirely — `event_renderer.go` is now a thin mapping onto the shared renderer.
+
+**Why**: One format decision per command, one place to change it. Client-side sniffing could not be shared downward (import cycle) so the canonical implementation moved into `pkg/rpc`, which both consumers already depend on.
+
 ## ACP Agent Mode: `ai acp` (2026-08)
 
 **Problem**: The agent was only reachable through the proprietary `rpc` protocol, which editor integrations must implement by hand. ACP (Agent Client Protocol, agentclientprotocol.com) is an emerging open standard for editor↔agent communication — Emacs agent-shell, Zed, and JetBrains IDEs all speak it as clients. Supporting it makes `ai` a drop-in subprocess agent for any ACP client without writing a per-editor bridge.

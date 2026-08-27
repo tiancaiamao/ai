@@ -93,6 +93,11 @@ func TestACPSchemaNotifications(t *testing.T) {
 		context.AgentMessage{},
 		agent.AssistantMessageEvent{Type: "text_delta", Delta: "hello "},
 	))
+	// agent_thought_chunk (streaming reasoning)
+	srv.emit(agent.NewMessageUpdateEvent(
+		context.AgentMessage{},
+		agent.AssistantMessageEvent{Type: "thinking_delta", Delta: "let me think..."},
+	))
 	// tool_call (pending)
 	srv.emit(agent.NewToolExecutionStartEvent("tool-1", "bash", map[string]interface{}{"command": "ls"}))
 	// tool_call_update (completed, with tool output)
@@ -105,8 +110,8 @@ func TestACPSchemaNotifications(t *testing.T) {
 	}, true))
 
 	lines := bytes.Split(bytes.TrimRight(buf.Bytes(), "\n"), []byte("\n"))
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 notifications, got %d: %s", len(lines), buf.String())
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 notifications, got %d: %s", len(lines), buf.String())
 	}
 	for i, line := range lines {
 		var m map[string]any
@@ -117,6 +122,36 @@ func TestACPSchemaNotifications(t *testing.T) {
 			t.Errorf("notification %d: expected method session/update, got %v", i, m["method"])
 		}
 		assertACPMessageValid(t, compiler, line)
+	}
+
+	// The thought chunk must carry the delta as an agent_thought_chunk text
+	// content block so hosts like AionUi render it as a thinking card.
+	var thoughtMsg map[string]any
+	if err := json.Unmarshal(lines[1], &thoughtMsg); err != nil {
+		t.Fatalf("notification 1 not valid JSON: %v", err)
+	}
+	thoughtUpd := thoughtMsg["params"].(map[string]any)["update"].(map[string]any)
+	if kind, _ := thoughtUpd["sessionUpdate"].(string); kind != "agent_thought_chunk" {
+		t.Errorf("expected agent_thought_chunk, got %v", thoughtUpd)
+	}
+	content, _ := thoughtUpd["content"].(map[string]any)
+	if text, _ := content["text"].(string); text != "let me think..." || content["type"] != "text" {
+		t.Errorf("agent_thought_chunk: expected text block with delta, got %v", thoughtUpd["content"])
+	}
+
+	// The pending tool_call must surface its arguments as rawInput — hosts
+	// like AionUi read this field to render the invocation parameters.
+	var startMsg map[string]any
+	if err := json.Unmarshal(lines[2], &startMsg); err != nil {
+		t.Fatalf("notification 2 not valid JSON: %v", err)
+	}
+	toolUpd := startMsg["params"].(map[string]any)["update"].(map[string]any)
+	rawInput, ok := toolUpd["rawInput"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_call: expected rawInput object, got %v", toolUpd)
+	}
+	if cmd, _ := rawInput["command"].(string); cmd != "ls" {
+		t.Errorf("tool_call: expected rawInput command \"ls\", got %v", rawInput)
 	}
 }
 

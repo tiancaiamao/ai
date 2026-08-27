@@ -19,6 +19,16 @@ package rpc
 //   - session/cancel (notify)    -> aborts the running turn
 //   - session/update (notify)    -> agent_message_chunk / tool_call /
 //                                   available_commands_update
+//   - session/set_config_option  -> switches the active model (aliases:
+//                                   session/set_config_options,
+//                                   session/set_model, config/set_option);
+//                                   the updated model catalog is returned
+//                                   under configOptions + config_options.
+//
+// The model catalog is advertised in the session/new and session/load results
+// as a category "model" select config option so hosts can render a model
+// selector (also on the cross-restart resume path).
+
 //
 // Everything else (fs/*, terminal/*, image/audio content, MCP transports) is
 // deliberately NOT advertised and rejected as method not found.
@@ -101,13 +111,16 @@ type acpSessionUpdateParams struct {
 // relevant to the implemented update kinds are modeled; unused ones are
 // omitted via json tags.
 type acpUpdate struct {
-	SessionUpdate string                `json:"sessionUpdate"`
-	Content       any                   `json:"content,omitempty"`
-	ToolCallID    string                `json:"toolCallId,omitempty"`
-	Title         string                `json:"title,omitempty"`
-	Kind          string                `json:"kind,omitempty"`
-	Status        string                `json:"status,omitempty"`
-	Commands      []acpAvailableCommand `json:"commands,omitempty"`
+	SessionUpdate string `json:"sessionUpdate"`
+	Content       any    `json:"content,omitempty"`
+	ToolCallID    string `json:"toolCallId,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Status        string `json:"status,omitempty"`
+	// RawInput carries the tool call arguments (spec: ToolCallUpdate.rawInput)
+	// so hosts like AionUi can render the invocation parameters.
+	RawInput map[string]any        `json:"rawInput,omitempty"`
+	Commands []acpAvailableCommand `json:"commands,omitempty"`
 }
 
 // acpAvailableCommand is one entry of available_commands_update (spec:
@@ -263,6 +276,13 @@ func (s *acpServer) handleRequest(req acpRequest) {
 		s.handlePrompt(req)
 	case "session/cancel":
 		s.handleCancel(req)
+	// Model switching requested by the host. session/set_config_option is the
+	// official ACP v1 method; the rest are defensive aliases because the
+	// exact name used by some hosts (e.g. aioncore) is not observable.
+	case "session/set_config_option", "session/set_config_options",
+		"session/set_model", "config/set_option":
+		s.handleSetConfig(req)
+
 	default:
 		s.sendError(req.ID, acpErrMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
 	}
@@ -305,7 +325,16 @@ func (s *acpServer) handleSessionNew(req acpRequest) {
 	}
 
 	s.sessionID = s.app.sessionID
-	s.sendResult(req.ID, map[string]string{"sessionId": s.sessionID})
+	result := map[string]any{"sessionId": s.sessionID}
+	if catalog := s.app.acpModelCatalog(); len(catalog) > 0 {
+		// configOptions is the ACP v1 field; config_options is the snake_case
+		// spelling read by hosts like aioncore (captured into handshake meta).
+		result["configOptions"] = catalog
+		result["config_options"] = catalog
+		result["_meta"] = map[string]any{"config_options": catalog}
+	}
+	s.sendResult(req.ID, result)
+
 	s.sendAvailableCommands()
 }
 
@@ -364,12 +393,15 @@ func (s *acpServer) handleSessionLoad(req acpRequest) {
 
 	s.replayHistory(newSess.GetMessages())
 	s.sendAvailableCommands()
-	s.sendResult(req.ID, map[string]string{"stopReason": acpStopEndTurn})
+	// Same model catalog as session/new: the resume path must keep the host's
+	// model selector (and set_config_option values) discoverable.
+	s.sendResult(req.ID, acpResultWithCatalog(map[string]any{"stopReason": acpStopEndTurn}, s.app.acpModelCatalog()))
 }
 
 // replayHistory converts persisted conversation history into ACP session/update
 // notifications: user messages become user_message_chunk, assistant text
-// becomes agent_message_chunk, tool calls become tool_call + tool_call_update.
+// becomes agent_message_chunk, assistant thinking becomes agent_thought_chunk,
+// tool calls become tool_call + tool_call_update.
 // Compaction summaries are internal bookkeeping and are skipped. Tool calls
 // left without a result (e.g. the process died mid-turn) are closed out as
 // completed so clients don't render an endless spinner.
@@ -396,6 +428,7 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 					Title:         tc.Name,
 					Kind:          toolCallKind(tc.Name),
 					Status:        "pending",
+					RawInput:      tc.Arguments,
 				})
 			}
 		case "toolResult":
@@ -434,16 +467,28 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 }
 
 // sendReplayText emits one session/update per text content block of a message.
+// Thinking blocks of assistant messages are replayed as agent_thought_chunk so
+// hosts can render the reasoning history; user messages never carry them.
 func (s *acpServer) sendReplayText(updateKind string, blocks []agentctx.ContentBlock) {
 	for _, block := range blocks {
-		tc, ok := block.(agentctx.TextContent)
-		if !ok || tc.Text == "" {
-			continue
+		switch cb := block.(type) {
+		case agentctx.TextContent:
+			if cb.Text == "" {
+				continue
+			}
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: updateKind,
+				Content:       map[string]string{"type": "text", "text": cb.Text},
+			})
+		case agentctx.ThinkingContent:
+			if cb.Thinking == "" || updateKind != "agent_message_chunk" {
+				continue
+			}
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				Content:       map[string]string{"type": "text", "text": cb.Thinking},
+			})
 		}
-		s.sendUpdate(acpUpdate{
-			SessionUpdate: updateKind,
-			Content:       map[string]string{"type": "text", "text": tc.Text},
-		})
 	}
 }
 
@@ -502,7 +547,22 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 // registry entries and need the expansion path in app.handlePrompt.
 func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
 	msg = strings.TrimSpace(msg)
-	if !strings.HasPrefix(msg, "/") || skill.IsSkillCommand(msg) {
+	if !strings.HasPrefix(msg, "/") {
+		// Some hosts prepend their own context blocks to a prompt (e.g. AionUi
+		// injects an "[Assistant Rules]" skills preamble before the user's
+		// first message). Fall back to the final line: if it invokes a
+		// registered command, treat the whole prompt as that command.
+		if idx := strings.LastIndex(msg, "\n"); idx >= 0 {
+			last := strings.TrimSpace(msg[idx+1:])
+			if !strings.HasPrefix(last, "/") {
+				return "", "", false
+			}
+			msg = last
+		} else {
+			return "", "", false
+		}
+	}
+	if skill.IsSkillCommand(msg) {
 		return "", "", false
 	}
 	cmdName, rest, err := command.ParseSlashCommand(msg)
@@ -527,7 +587,7 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 		s.sendError(id, acpErrInvalidParams, fmt.Sprintf("/%s failed: %v", name, err))
 		return
 	}
-	if text := formatACPCommandResult(result); text != "" {
+	if text := formatACPCommandResult(name, result); text != "" {
 		s.sendUpdate(acpUpdate{
 			SessionUpdate: "agent_message_chunk",
 			Content:       map[string]string{"type": "text", "text": text},
@@ -536,21 +596,25 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 	s.sendResult(id, map[string]string{"stopReason": acpStopEndTurn})
 }
 
-// formatACPCommandResult renders a slash-handler result for display: strings
-// pass through verbatim, everything else is pretty-printed as JSON.
-func formatACPCommandResult(result any) string {
+// formatACPCommandResult renders a slash-handler result for display. The
+// shared FormatCommandResult renderers produce human-readable text for UI
+// clients; strings pass through verbatim and everything else falls back to
+// pretty-printed JSON.
+func formatACPCommandResult(name string, result any) string {
 	switch v := result.(type) {
 	case nil:
 		return ""
 	case string:
 		return v
-	default:
-		data, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return fmt.Sprintf("%v", v)
-		}
-		return string(data)
 	}
+	if text := FormatCommandResult(name, result); text != "" {
+		return text
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", result)
+	}
+	return string(data)
 }
 
 // sendAvailableCommands advertises the agent's slash commands via a
@@ -607,14 +671,25 @@ func (s *acpServer) markCancelled() {
 func (s *acpServer) emit(event agent.AgentEvent) {
 	switch event.Type {
 	case agent.EventMessageUpdate:
+		// Streaming deltas. Thinking deltas arrive here too, tagged with the
+		// inner AssistantMessageEvent type; they surface as agent_thought_chunk
+		// so hosts like AionUi can render the model's thinking process.
 		ae, ok := event.AssistantMessageEvent.(agent.AssistantMessageEvent)
-		if !ok || ae.Type != "text_delta" || ae.Delta == "" {
+		if !ok || ae.Delta == "" {
 			return
 		}
-		s.sendUpdate(acpUpdate{
-			SessionUpdate: "agent_message_chunk",
-			Content:       map[string]string{"type": "text", "text": ae.Delta},
-		})
+		switch ae.Type {
+		case "text_delta":
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       map[string]string{"type": "text", "text": ae.Delta},
+			})
+		case "thinking_delta":
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				Content:       map[string]string{"type": "text", "text": ae.Delta},
+			})
+		}
 
 	case agent.EventToolExecutionStart:
 		s.sendUpdate(acpUpdate{
@@ -623,6 +698,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 			Title:         event.ToolName,
 			Kind:          toolCallKind(event.ToolName),
 			Status:        "pending",
+			RawInput:      event.Args,
 		})
 
 	case agent.EventToolExecutionEnd:

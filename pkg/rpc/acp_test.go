@@ -190,7 +190,8 @@ func TestACPUnknownMethodAndNotification(t *testing.T) {
 
 // TestACPSessionLoad seeds a persisted session on disk, then resumes it via
 // session/load: history must be replayed as session/update notifications
-// (user_message_chunk / agent_message_chunk / tool_call / tool_call_update)
+// (user_message_chunk / agent_thought_chunk / agent_message_chunk / tool_call /
+// tool_call_update)
 // followed by an available_commands_update and the stopReason response.
 func TestACPSessionLoad(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -207,6 +208,7 @@ func TestACPSessionLoad(t *testing.T) {
 		agentctx.NewAssistantMessage(),
 	}
 	seed[1].Content = []agentctx.ContentBlock{
+		agentctx.ThinkingContent{Type: "thinking", Thinking: "user wants a listing"},
 		agentctx.TextContent{Type: "text", Text: "sure, checking"},
 		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "ls"}},
 	}
@@ -230,8 +232,8 @@ func TestACPSessionLoad(t *testing.T) {
 		// Resume the seeded session.
 		fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"session/load","params":{"sessionId":%q}}`, sess.GetID()),
 	})
-	if len(msgs) != 9 {
-		t.Fatalf("expected 9 messages, got %d: %+v", len(msgs), msgs)
+	if len(msgs) != 10 {
+		t.Fatalf("expected 10 messages, got %d: %+v", len(msgs), msgs)
 	}
 
 	// bogus / empty session ids -> invalid params errors
@@ -250,10 +252,13 @@ func TestACPSessionLoad(t *testing.T) {
 	}
 
 	// Replay of the seeded history, in order:
-	// user_message_chunk, agent_message_chunk, tool_call(pending),
-	// tool_call_update(completed), available_commands_update.
+	// user_message_chunk, then the assistant message's thinking as
+	// agent_thought_chunk, its text as agent_message_chunk, and the
+	// tool_call(pending) / tool_call_update(completed) pair, finished by
+	// available_commands_update.
 	wantUpdates := []string{
 		"user_message_chunk",
+		"agent_thought_chunk",
 		"agent_message_chunk",
 		"tool_call",
 		"tool_call_update",
@@ -274,8 +279,18 @@ func TestACPSessionLoad(t *testing.T) {
 		}
 	}
 
+	// The replayed thinking block must surface as agent_thought_chunk text.
+	thought, _ := msgs[4]["params"].(map[string]any)["update"].(map[string]any)
+	tcContent, _ := thought["content"].(map[string]any)
+	if tcContent == nil {
+		t.Fatalf("agent_thought_chunk: expected content block, got %v", thought)
+	}
+	if txt, _ := tcContent["text"].(string); txt != "user wants a listing" || tcContent["type"] != "text" {
+		t.Errorf("agent_thought_chunk: expected thinking text block, got %v", thought["content"])
+	}
+
 	// tool_call carries id/title/kind/status
-	toolCall := msgs[5]["params"].(map[string]any)["update"].(map[string]any)
+	toolCall := msgs[6]["params"].(map[string]any)["update"].(map[string]any)
 	if tcID, _ := toolCall["toolCallId"].(string); tcID != "call-1" {
 		t.Errorf("tool_call: expected toolCallId call-1, got %v", toolCall)
 	}
@@ -285,9 +300,14 @@ func TestACPSessionLoad(t *testing.T) {
 	if status, _ := toolCall["status"].(string); status != "pending" {
 		t.Errorf("tool_call: expected pending, got %v", status)
 	}
+	// Replayed tool calls must carry the persisted arguments as rawInput.
+	rawInput, _ := toolCall["rawInput"].(map[string]any)
+	if cmd, _ := rawInput["command"].(string); cmd != "ls" {
+		t.Errorf("tool_call: expected rawInput command \"ls\", got %v", toolCall["rawInput"])
+	}
 
 	// tool_call_update carries the result content
-	toolUpd := msgs[6]["params"].(map[string]any)["update"].(map[string]any)
+	toolUpd := msgs[7]["params"].(map[string]any)["update"].(map[string]any)
 	if status, _ := toolUpd["status"].(string); status != "completed" {
 		t.Errorf("tool_call_update: expected completed, got %v", toolUpd)
 	}
@@ -297,12 +317,77 @@ func TestACPSessionLoad(t *testing.T) {
 	}
 
 	// Final response: stopReason end_turn
-	result, ok := msgs[8]["result"].(map[string]any)
+	result, ok := msgs[9]["result"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected session/load result, got %v", msgs[8])
+		t.Fatalf("expected session/load result, got %v", msgs[9])
 	}
 	if stop, _ := result["stopReason"].(string); stop != "end_turn" {
 		t.Errorf("expected stopReason end_turn, got %v", result)
+	}
+}
+
+// TestACPSessionLoadAdvertisesModelCatalog verifies the cross-restart resume
+// path carries the same model catalog as session/new, so hosts keep their
+// model selector after a session/load.
+func TestACPSessionLoadAdvertisesModelCatalog(t *testing.T) {
+	dir, initial, other := setupACPEnv(t)
+
+	// Seed a persisted session the smoke process can resume via session/load.
+	mgr := session.NewSessionManager(filepath.Dir(dir))
+	sess, err := mgr.CreateSession("acp-load-catalog", "acp-load-catalog")
+	if err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	msgs := runACPSmoke(t, dir, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":%q}}`, sess.GetID()),
+	})
+	// init result, available_commands_update, load result.
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if id, _ := msgs[2]["id"].(float64); id != 2 {
+		t.Fatalf("expected load result with id 2, got %v", msgs[2])
+	}
+	result, ok := msgs[2]["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected session/load result, got %v", msgs[2])
+	}
+	if stop, _ := result["stopReason"].(string); stop != "end_turn" {
+		t.Errorf("expected stopReason end_turn, got %v", result)
+	}
+
+	// Same catalog shape as session/new: spec field + snake_case twin +
+	// _meta mirror, all carrying the category=model select option.
+	specOpts, ok := result["configOptions"].([]any)
+	if !ok || len(specOpts) == 0 {
+		t.Fatalf("expected configOptions in session/load result, got %v", result)
+	}
+	snakeOpts, ok := result["config_options"].([]any)
+	if !ok || len(snakeOpts) != len(specOpts) {
+		t.Fatalf("expected parallel config_options array, got %v", result["config_options"])
+	}
+	if meta, ok := result["_meta"].(map[string]any); !ok {
+		t.Errorf("expected _meta mirror in session/load result, got %v", result["_meta"])
+	} else if _, ok := meta["config_options"].([]any); !ok {
+		t.Errorf("expected config_options inside _meta, got %v", meta)
+	}
+
+	opt := findModelOption(t, specOpts)
+	if cv, _ := opt["current_value"].(string); cv != initial {
+		t.Errorf("expected current_value %q, got %q", initial, cv)
+	}
+	if cv, _ := opt["currentValue"].(string); cv != initial {
+		t.Errorf("expected currentValue %q, got %q", initial, cv)
+	}
+	values := map[string]bool{}
+	for _, raw := range opt["options"].([]any) {
+		v, _ := raw.(map[string]any)["value"].(string)
+		values[v] = true
+	}
+	if !values[initial] || !values[other] {
+		t.Errorf("missing registry options: have %v", values)
 	}
 }
 
@@ -464,12 +549,78 @@ func TestACPSlashHelpOverACP(t *testing.T) {
 	}
 }
 
+// TestACPCommandRenderersOverACP dispatches every rendered read-only command
+// through a live ACP server: each answer must arrive as an agent_message_chunk
+// carrying human-readable text (not a raw JSON blob) followed by end_turn.
+func TestACPCommandRenderersOverACP(t *testing.T) {
+	prompts := []struct {
+		command  string
+		contains []string
+	}{
+		{command: "/session", contains: []string{"model:", "id:", "streaming:"}},
+		{command: "/context", contains: []string{"Context Usage", "Session Stats"}},
+		{command: "/show settings", contains: []string{"model"}},
+		{command: "/help", contains: []string{"Commands:", "[slash] help"}},
+		{command: "/skills", contains: []string{"Commands:"}},
+		{command: "/model", contains: []string{"Models"}},
+	}
+	lines := make([]string, 0, len(prompts))
+	for i, p := range prompts {
+		lines = append(lines, fmt.Sprintf(
+			`{"jsonrpc":"2.0","id":%d,"method":"session/prompt","params":{"sessionId":%%q,"prompt":[{"type":"text","text":"%s"}]}}`,
+			i+10, p.command))
+	}
+
+	msgs := runACPSmokeSession(t, t.TempDir(), func(sessionID string) []string {
+		out := make([]string, len(lines))
+		for i, l := range lines {
+			out[i] = fmt.Sprintf(l, sessionID)
+		}
+		return out
+	})
+
+	// init result + new result + advertisement, then chunk+response per prompt.
+	wantCount := 3 + 2*len(prompts)
+	if len(msgs) != wantCount {
+		t.Fatalf("expected %d messages, got %d: %v", wantCount, len(msgs), msgs)
+	}
+
+	for i, p := range prompts {
+		chunk := msgs[3+2*i]
+		params, _ := chunk["params"].(map[string]any)
+		upd, _ := params["update"].(map[string]any)
+		if got, _ := upd["sessionUpdate"].(string); got != "agent_message_chunk" {
+			t.Errorf("/%s: expected agent_message_chunk, got %v", p.command, upd)
+			continue
+		}
+		content, _ := upd["content"].(map[string]any)
+		text, _ := content["text"].(string)
+		if strings.HasPrefix(text, "{") {
+			t.Errorf("/%s: rendered text must not start with '{', got:\n%s", p.command, text)
+		}
+		for _, want := range p.contains {
+			if !strings.Contains(text, want) {
+				t.Errorf("/%s: output missing %q, got:\n%s", p.command, want, text)
+			}
+		}
+
+		resp := msgs[4+2*i]
+		result, _ := resp["result"].(map[string]any)
+		if stop, _ := result["stopReason"].(string); stop != acpStopEndTurn {
+			t.Errorf("/%s: expected stopReason end_turn, got %v", p.command, result)
+		}
+	}
+}
+
 // TestMatchACPCommand covers the allow-list gate: only registered commands
 // dispatch; unregistered '/', comments and plain text stay raw; skill prompts
-// are excluded from sync dispatch (they need the expansion path).
+// are excluded from sync dispatch (they need the expansion path). Hosts may
+// prepend their own context blocks to a prompt, so a registered command on
+// the final line also dispatches.
 func TestMatchACPCommand(t *testing.T) {
 	srv := NewServer()
 	srv.RegisterSlash("help", "List commands", func(args string) (any, error) { return nil, nil })
+	srv.RegisterSlash("show", "Show settings", func(args string) (any, error) { return nil, nil })
 
 	cases := []struct {
 		msg     string
@@ -484,6 +635,13 @@ func TestMatchACPCommand(t *testing.T) {
 		{msg: "/nosuchcmd hi", wantOK: false},
 		{msg: "/skill:code-review fix bugs", wantOK: false}, // excluded on purpose
 		{msg: "plain text question", wantOK: false},
+		// Host-injected preamble before the command (AionUi first prompt).
+		{msg: "[Assistant Rules]\n## Available Skills\n- aionui-config: cfg\n\n/help", wantOK: true, wantCmd: "help"},
+		{msg: "[Assistant Rules]\nskills...\n\n/show settings", wantOK: true, wantCmd: "show"},
+		// Preamble but last line is NOT a registered command: stays raw.
+		{msg: "[Assistant Rules]\nsee /help for info", wantOK: false},
+		{msg: "preamble\n/nosuchcmd hi", wantOK: false},
+		{msg: "preamble\n/skill:x args", wantOK: false},
 	}
 	for _, c := range cases {
 		name, _, ok := matchACPCommand(srv, c.msg)

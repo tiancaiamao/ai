@@ -1,11 +1,11 @@
 ---
-name: planning
+name: todo-writer
 description: >
   任务规划与进度追踪。当任务有 5+ 步骤、多文件改动、或长执行链时使用。
   核心机制：用 checkbox 列表追踪进度，每完成一步立即更新，利用"重写列表"将完整任务清单重新注入 context。
 ---
 
-# Planning — 进度追踪即 Context Recall
+# Todo Writer — 进度追踪即 Context Recall
 
 ## 为什么需要
 
