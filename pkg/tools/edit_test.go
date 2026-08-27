@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 
@@ -459,5 +460,29 @@ func TestEdit_NoMatchErrorSuggestsSimilarContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "handleRequest") || !strings.Contains(err.Error(), "L1") {
 		t.Fatalf("no-match error lacks suggestion, got: %v", err)
+	}
+}
+
+// TestEdit_EmptyOldTextRejected is a regression test: an empty oldText used
+// to hang the tool in exactMatchPositions (strings.Index(x, "") always
+// returns 0 and never advances). Copilot review finding, PR #386.
+func TestEdit_EmptyOldTextRejected(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "hello world\n")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := tool.Execute(t.Context(), map[string]any{
+			"path": "a.txt", "oldText": "", "newText": "X",
+		})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+			t.Fatalf("err = %v, want explicit empty-oldText rejection", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("empty oldText hangs the edit tool (regression)")
 	}
 }

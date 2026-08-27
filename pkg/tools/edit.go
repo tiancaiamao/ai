@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/tiancaiamao/ai/pkg/truncate"
 )
@@ -65,6 +64,9 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	oldText, ok := args["oldText"].(string)
 	if !ok {
 		return nil, fmt.Errorf("oldText must be a string")
+	}
+	if oldText == "" {
+		return nil, fmt.Errorf("oldText cannot be empty")
 	}
 
 	newText, ok := args["newText"].(string)
@@ -487,11 +489,6 @@ func generateDiff(content string, start, end int, newText string) string {
 }
 
 // Helper functions for unicode/whitespace
-
-// isSpace reports whether r is a space character.
-func isSpace(r rune) bool {
-	return unicode.IsSpace(r)
-}
 
 // exactMatchPositions returns the starting offsets of every exact (byte-for-
 // byte) occurrence of oldText in content.

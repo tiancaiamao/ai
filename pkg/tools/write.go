@@ -80,6 +80,8 @@ func (t *WriteTool) Execute(ctx context.Context, args map[string]any) ([]agentct
 		if err := structCheck(path, string(existing), content); err != nil {
 			return nil, err
 		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("cannot read existing file for structural check: %w", err)
 	}
 
 	// Write file

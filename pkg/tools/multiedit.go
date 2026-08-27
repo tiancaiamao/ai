@@ -87,8 +87,14 @@ func (t *MultiEditTool) Execute(ctx context.Context, args map[string]any) ([]age
 		if !ok {
 			return nil, fmt.Errorf("edits[%d] must be an object with oldText/newText", i)
 		}
-		oldText, _ := obj["oldText"].(string)
-		newText, _ := obj["newText"].(string)
+		oldText, ok := obj["oldText"].(string)
+		if !ok {
+			return nil, fmt.Errorf("edits[%d].oldText must be a string", i)
+		}
+		newText, ok := obj["newText"].(string)
+		if !ok {
+			return nil, fmt.Errorf("edits[%d].newText must be a string", i)
+		}
 		if oldText == "" {
 			return nil, fmt.Errorf("edits[%d].oldText cannot be empty", i)
 		}

@@ -24,6 +24,12 @@ func structCheck(fullPath string, before, after string) error {
 	switch ext {
 	case "scm", "ss", "lisp", "el", "cl", "rkt", "sld":
 		bb, ba := lispParens(before), lispParens(after)
+		if bb.errorLine >= 0 || bb.balance != 0 {
+			// The file was already structurally broken before this edit
+			// (unbalanced parens or stray close); blocking would prevent
+			// incremental repair. Same policy as externalSyntaxCheck.
+			return nil
+		}
 		if ba.balance == bb.balance && ba.errorLine < 0 {
 			return nil // no regression introduced
 		}
@@ -98,9 +104,9 @@ func (s lispState) describe() string {
 }
 
 // lispParens scans Lisp source handling: ";" line comments, "#|...|#" block
-// comments, "#;" datum comments (treated like block-open until end of next
-// sexp is not tracked — conservatively we skip just the datum token), string
-// literals with escapes, and character literals like #\( or #\\.
+// comments, string literals with escapes, and character literals like #\( or
+// #\\. Note: "#;" datum comments are NOT tracked; a paren inside a datum
+// comment will be counted (conservative over-approximation).
 func lispParens(src string) lispState {
 	st := lispState{errorLine: -1}
 	line := 1

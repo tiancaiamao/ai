@@ -161,3 +161,67 @@ func TestMultiEdit_FileMustExist(t *testing.T) {
 		t.Fatal("multi_edit must not create files")
 	}
 }
+
+func TestMultiEdit_NonStringNewTextRejected(t *testing.T) {
+	tool, dir := newMultiEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "hello world\n")
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"path":  "a.txt",
+		"edits": []any{map[string]any{"oldText": "hello", "newText": 42}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "newText") {
+		t.Fatalf("err = %v, want explicit newText type rejection", err)
+	}
+	// File untouched.
+	if got := readFile(t, dir, "a.txt"); got != "hello world\n" {
+		t.Fatalf("file modified: %q", got)
+	}
+}
+
+func TestMultiEdit_Metadata(t *testing.T) {
+	tool, _ := newMultiEditToolInTempDir(t)
+	if tool.Name() != "multi_edit" {
+		t.Fatalf("name = %q", tool.Name())
+	}
+	if tool.Description() == "" {
+		t.Fatal("description must not be empty")
+	}
+	params := tool.Parameters()
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("parameters must have properties")
+	}
+	if _, ok := props["path"]; !ok {
+		t.Fatal("missing 'path' property")
+	}
+	if _, ok := props["edits"]; !ok {
+		t.Fatal("missing 'edits' property")
+	}
+}
+
+// expandHome's "~/" branch: run a real edit through a tilde path pointing at
+// a file inside the user's home directory.
+func TestMultiEdit_TildePathExpansion(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	target := filepath.Join(home, ".ai-test-multiedit-tilde.txt")
+	if err := os.WriteFile(target, []byte("AAA\nBBB\n"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	defer os.Remove(target)
+
+	tool, _ := newMultiEditToolInTempDir(t)
+	_, err = tool.Execute(t.Context(), argsFor("~/.ai-test-multiedit-tilde.txt", [][2]string{
+		{"AAA", "ZZZ"},
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "ZZZ\nBBB\n" {
+		t.Fatalf("content = %q", got)
+	}
+}
