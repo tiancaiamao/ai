@@ -3,6 +3,20 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Edit Tool: Progressive Matching + Structural Sentinel (2026-08)
+
+**Problem**: Session analysis of a real weak-model run (tinyactor, 10 edits all "successful", 7 whole-file `write` rewrites) showed the failure chain that destroys codebases: a weak model writes an imprecise `oldText` (indentation drift in Python/YAML, dropped paren in Lisp) → the old Levenshtein-window matcher silently accepts it or picks the wrong near-duplicate window → the edit lands in the wrong place or produces broken structure → the model sees a confusing distant error (or none), gives up on editing, and falls back to rewriting the whole file — which re-rolls the dice on every previously fixed region. The rewrites, not the failed edits, were the actual disaster.
+
+**What changed** (`pkg/tools/edit.go`, new `pkg/tools/structcheck.go`):
+
+1. **Matching layer** — Levenshtein best-window fuzzy matching removed. Replaced by progressive strictness: exact match → normalized match (trailing whitespace + Unicode variants like smart quotes/NBSP). Leading whitespace is never normalized: indentation is semantics in Python/YAML/Lisp. A drifted `oldText` is now rejected with a clear error instead of silently matching the wrong sibling function.
+2. **Structural sentinel** — after computing the edited content (edit) or before overwriting an existing file (write), `structCheck` rejects changes that break language structure: Lisp-family paren balance (`scm/ss/lisp/el/cl/rkt/sld`, aware of char literals like `#\(` and block comments) parsed in-process; Python/YAML via external interpreter when available (silent skip if absent). Errors report the approximate offending line so the model can fix its `newText` locally instead of escalating to a rewrite.
+3. **No-op guard**: `oldText == newText` is rejected up front.
+
+**Why not stricter rejection of fuzzy matches only?** Rejecting imprecise matches without addressing broken-but-well-matched replacements leaves half the failure chain open: syntax-breaking `newText` still lands silently and surfaces as a distant runtime error later. The two layers together cut the chain at both entry points; the "write" gate closes the loop because whole-file rewrites of structural files now hit the same validation.
+
+**Validation**: agent-level A/B on benchmark task `020_scm_stress` (10-edit Guile file with deliberately near-duplicate helpers, weak model `ollama/laguna`) reproduced the target behavior with the fixed binary: 7 in-run sentinel rejections with precise line numbers, followed by in-place `newText` correction and recovery via pure edits (zero rewrites) in one PASS run; zero false-positive rejections across both arms. Mechanism-level unit tests pin the behavior deltas (near-duplicate drift rejected, exact/normalized windows hit correctly, indentation drift stays rejected).
+
 ## ACP Agent Mode: `ai acp` (2026-08)
 
 **Problem**: The agent was only reachable through the proprietary `rpc` protocol, which editor integrations must implement by hand. ACP (Agent Client Protocol, agentclientprotocol.com) is an emerging open standard for editor↔agent communication — Emacs agent-shell, Zed, and JetBrains IDEs all speak it as clients. Supporting it makes `ai` a drop-in subprocess agent for any ACP client without writing a per-editor bridge.
