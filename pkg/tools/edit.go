@@ -191,8 +191,9 @@ func normalizeForMatch(text string) string {
 		leadingWs := leadingWhitespace(line)
 		restOfLine := line[len(leadingWs):]
 
-		// Normalize trailing whitespace and Unicode in the rest
-		lines[i] = leadingWs + normalizeUnicode(strings.TrimRight(restOfLine, " \t"))
+		// Normalize trailing whitespace (including CR from CRLF files) and
+		// Unicode in the rest
+		lines[i] = leadingWs + normalizeUnicode(strings.TrimRight(restOfLine, " \t\r"))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -383,40 +384,18 @@ func findEndPosition(original, normalized string, normStart, normLength int) int
 				endPos += len(origLines[j]) + 1
 			}
 
-			// Handle the last line specially
-			if len(patternLines) == 1 && !patternEndsAtLineBoundary {
-				// Single line, partial match: use character count mapping
-				origLine := origLines[i]
-				patternLine := patternLines[0]
-
-				// Map character positions from normalized to original
-				origRunes := []rune(origLine)
-				normOrigRunes := []rune(normalizeForMatch(origLine))
-				patternRunes := []rune(patternLine)
-
-				// Find how many runes from origLine correspond to patternRunes
-				matchedRunes := 0
-				for k := 0; k < len(patternRunes) && k < len(normOrigRunes); k++ {
-					if patternRunes[k] == normOrigRunes[k] {
-						matchedRunes++
-					} else {
-						break
-					}
-				}
-
-				// Convert rune count to byte count
-				byteCount := 0
-				for k := 0; k < matchedRunes && k < len(origRunes); k++ {
-					byteCount += len(string(origRunes[k]))
-				}
-
-				endPos += byteCount
+			// Handle the last line specially: if the pattern only matched a
+			// prefix of it, include only the matched portion — never consume
+			// trailing text that lies outside oldText.
+			last := len(patternLines) - 1
+			if len(patternLines) == 1 && patternEndsAtLineBoundary {
+				// Whole-line match: include the entire line.
+				endPos += len(origLines[i])
 			} else {
-				// Multi-line or complete line match: include entire lines
-				for j := 0; j < len(patternLines); j++ {
+				for j := 0; j < last; j++ {
 					endPos += len(origLines[i+j]) + 1
 				}
-				endPos-- // -1 because the last newline is not part of the match
+				endPos += byteLenForPrefix(origLines[i+last], patternLines[last])
 			}
 
 			return endPos
@@ -424,6 +403,31 @@ func findEndPosition(original, normalized string, normStart, normLength int) int
 	}
 
 	return -1
+}
+
+// byteLenForPrefix returns how many bytes of origLine correspond to the
+// normalized prefix patternLine. If patternLine covers the whole normalized
+// line, the full original line length is returned.
+func byteLenForPrefix(origLine, patternLine string) int {
+	normOrigRunes := []rune(normalizeForMatch(origLine))
+	patternRunes := []rune(patternLine)
+	if len(patternRunes) >= len(normOrigRunes) {
+		return len(origLine)
+	}
+	matchedRunes := 0
+	for k := 0; k < len(patternRunes) && k < len(normOrigRunes); k++ {
+		if patternRunes[k] == normOrigRunes[k] {
+			matchedRunes++
+		} else {
+			break
+		}
+	}
+	origRunes := []rune(origLine)
+	byteCount := 0
+	for k := 0; k < matchedRunes && k < len(origRunes); k++ {
+		byteCount += len(string(origRunes[k]))
+	}
+	return byteCount
 }
 
 // generateDiff generates a unified diff for the edit.

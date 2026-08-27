@@ -103,3 +103,22 @@ func TestStructCheck_UnrelatedExtensionSkipped(t *testing.T) {
 		t.Fatalf("markdown files must not be struct-checked, got: %v", err)
 	}
 }
+
+// Regression: a file that was already broken before the edit must not be
+// blocked from incremental repair (review finding, PR #386).
+func TestStructCheck_AlreadyBrokenFileRemainsEditable(t *testing.T) {
+	before := "def f(:\n    pass\n" // pre-existing syntax error
+	after := "def f(:\n    return 1\n"
+	if err := structCheck("/tmp/x.py", before, after); err != nil {
+		t.Fatalf("already-broken file should not be blocked: %v", err)
+	}
+}
+
+// Regression: valid-before + invalid-after must still be rejected.
+func TestStructCheck_PythonValidBeforeBrokenAfterRejected(t *testing.T) {
+	before := "def f():\n    return 1\n"
+	after := "def f():\n    return (\n"
+	if err := structCheck("/tmp/x.py", before, after); err == nil {
+		t.Fatal("expected rejection when edit breaks previously-valid python")
+	}
+}

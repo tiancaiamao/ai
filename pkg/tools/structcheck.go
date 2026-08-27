@@ -38,47 +38,48 @@ func structCheck(fullPath string, before, after string) error {
 			bb.balance, ba.balance)
 
 	case "py":
-		return externalSyntaxCheck(fullPath, "python", after,
-			[]string{"-c", "import sys,ast;ast.parse(sys.stdin.read())"})
+		return externalSyntaxCheck(after, before,
+			[]string{"-c", "import sys,ast;ast.parse(sys.stdin.read())"}, "")
 	case "yaml", "yml":
-		return externalSyntaxCheck(fullPath, "python", after,
-			[]string{"-c", "import sys,yaml;yaml.safe_load(sys.stdin)"})
+		return externalSyntaxCheck(after, before,
+			[]string{"-c", "import sys,yaml;list(yaml.safe_load_all(sys.stdin))"}, "yaml")
 	}
 	return nil
 }
 
-// externalSyntaxCheck pipes content to an external syntax checker if the
-// interpreter is available. Missing interpreters silently skip the check.
-func externalSyntaxCheck(fullPath, interp string, content string, extraArgs []string) error {
-	interpreter := interp
-	if _, err := exec.LookPath("python3"); err == nil {
-		interpreter = "python3"
-	} else if _, err := exec.LookPath(interp); err != nil {
-		return nil // no checker available; skip
+// externalSyntaxCheck pipes content to an external syntax checker.
+// Safeguards against false positives:
+//   - missing interpreter or missing third-party module -> skip silently
+//   - if `before` already fails the check, skip: the file was broken before
+//     this edit, and blocking would prevent incremental repair
+func externalSyntaxCheck(after, before string, extraArgs []string, module string) error {
+	python3, err := exec.LookPath("python3")
+	if err != nil {
+		return nil // no interpreter available; skip
+	}
+	if module != "" {
+		probe := exec.Command(python3, "-c", "import "+module)
+		if err := probe.Run(); err != nil {
+			return nil // required module not installed; skip rather than reject valid edits
+		}
 	}
 
-	cmd := exec.Command(interpreter, extraArgs...)
-	cmd.Stdin = strings.NewReader(content)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
+	run := func(content string) error {
+		cmd := exec.Command(python3, extraArgs...)
+		cmd.Stdin = strings.NewReader(content)
+		return cmd.Run()
 	}
-	detail := strings.TrimSpace(string(output))
-	if len(detail) > 500 {
-		detail = detail[:500]
-	}
-	return fmt.Errorf("structural check failed: edited file has invalid %s syntax:\n%s",
-		strings.ToLower(whatLang(fullPath)), detail)
-}
 
-func whatLang(path string) string {
-	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(path), ".")) {
-	case "py":
-		return "Python"
-	case "yaml", "yml":
-		return "YAML"
+	if err := run(before); err != nil {
+		return nil // pre-existing breakage; do not block further edits
 	}
-	return "file"
+	if err := run(after); err != nil {
+		return fmt.Errorf(
+			"structural check failed: this edit makes the file invalid. " +
+				"Run the file's parser or linter to find the exact line; " +
+				"do NOT rewrite the whole file.")
+	}
+	return nil
 }
 
 // lispState reports paren-balance status of Lisp-family source text.

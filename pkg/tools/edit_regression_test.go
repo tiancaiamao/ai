@@ -59,3 +59,28 @@ func TestFindMatch_IndentationDriftRejected(t *testing.T) {
 		t.Fatal("indentation-drifted oldText must be rejected, not fuzzy-matched")
 	}
 }
+
+// Regression: multi-line partial normalized match must NOT consume text
+// beyond the last matched line-prefix (review finding, PR #386).
+func TestFindMatch_MultiLinePartialMatchDoesNotOverconsume(t *testing.T) {
+	content := "alpha beta \ngamma delta\nfinal\n"
+	m, err := findMatch(content, "alpha beta\ngamma")
+	if err != nil {
+		t.Fatalf("expected match: %v", err)
+	}
+	if got := content[m.start:m.end]; got != "alpha beta \ngamma" {
+		t.Fatalf("match consumed text beyond oldText: %q", got)
+	}
+}
+
+// Regression: CRLF files must remain editable via normalized matching
+// (review finding, PR #386).
+func TestFindMatch_CRLFFileMatchable(t *testing.T) {
+	m, err := findMatch("alpha beta\r\ngamma delta\r\n", "alpha beta\ngamma delta")
+	if err != nil {
+		t.Fatalf("CRLF file should be editable via normalized match: %v", err)
+	}
+	if m.strategy != "normalized" {
+		t.Fatalf("expected normalized strategy for CRLF, got %s", m.strategy)
+	}
+}
