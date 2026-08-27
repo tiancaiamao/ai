@@ -111,7 +111,7 @@ func ParseToggleValue(value string, current bool) ToggleResult {
 }
 
 // ParseBoolFromInput extracts a boolean from a JSON object {"key": bool} or
-// from plain text ("true"/"1" → true, anything else → false).
+// from plain text ("true"/"1"/"on" → true, anything else → false).
 func ParseBoolFromInput(value string, jsonKey string) bool {
 	var jsonData map[string]any
 	trimmed := strings.TrimSpace(value)
@@ -125,7 +125,7 @@ func ParseBoolFromInput(value string, jsonKey string) bool {
 		}
 	}
 	lower := strings.ToLower(strings.TrimSpace(value))
-	return lower == "true" || lower == "1"
+	return lower == "true" || lower == "1" || lower == "on"
 }
 
 // ParseModeFromInput extracts a mode string from JSON {"key": "mode"} or plain text,

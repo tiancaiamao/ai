@@ -70,8 +70,11 @@ func TestParseBoolFromInput(t *testing.T) {
 	}{
 		{"true", "flag", true},
 		{"1", "flag", true},
+		{"on", "flag", true},
+		{"ON", "flag", true},
 		{"false", "flag", false},
 		{"0", "flag", false},
+		{"off", "flag", false},
 		{"yes", "flag", false},
 		{`{"flag":true}`, "flag", true},
 		{`{"flag":false}`, "flag", false},
