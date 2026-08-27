@@ -410,6 +410,36 @@ func (rs *rpcServer) rpcAck(t *testing.T, typ, msg string) map[string]any {
 	return nil
 }
 
+// rpcAckWithData sends a command and validates the response data using the provided validator.
+// Unlike rpcAck, this ensures the data field is actually checked.
+func (rs *rpcServer) rpcAckWithData(t *testing.T, typ, msg string, validate func(map[string]any)) {
+	t.Helper()
+	rs.send(t, typedJSON(typ, msg))
+	resp := rs.log.waitEvent("response", "command", typ, 60*time.Second)
+	if resp == "" {
+		t.Fatalf("no response for type %q. stderr:\n%s", typ, rs.logTail())
+	}
+	var r struct {
+		Success bool            `json:"success"`
+		Error   string          `json:"error"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp), &r); err != nil {
+		t.Fatalf("parse response for %q: %v\n%s", typ, err, resp)
+	}
+	if !r.Success {
+		t.Fatalf("command %q failed: %s", typ, r.Error)
+	}
+	if len(r.Data) == 0 {
+		t.Fatalf("command %q returned empty data field", typ)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(r.Data, &m); err != nil {
+		t.Fatalf("unmarshal data for %q: %v\n%s", typ, err, string(r.Data))
+	}
+	validate(m)
+}
+
 // rpcErr sends {"type":typ,"message":msg} and asserts it fails with an error
 // containing wantErr.
 func (rs *rpcServer) rpcErr(t *testing.T, typ, msg, wantErr string) {

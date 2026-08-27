@@ -502,7 +502,22 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 // registry entries and need the expansion path in app.handlePrompt.
 func matchACPCommand(server *Server, msg string) (name, args string, ok bool) {
 	msg = strings.TrimSpace(msg)
-	if !strings.HasPrefix(msg, "/") || skill.IsSkillCommand(msg) {
+	if !strings.HasPrefix(msg, "/") {
+		// Some hosts prepend their own context blocks to a prompt (e.g. AionUi
+		// injects an "[Assistant Rules]" skills preamble before the user's
+		// first message). Fall back to the final line: if it invokes a
+		// registered command, treat the whole prompt as that command.
+		if idx := strings.LastIndex(msg, "\n"); idx >= 0 {
+			last := strings.TrimSpace(msg[idx+1:])
+			if !strings.HasPrefix(last, "/") {
+				return "", "", false
+			}
+			msg = last
+		} else {
+			return "", "", false
+		}
+	}
+	if skill.IsSkillCommand(msg) {
 		return "", "", false
 	}
 	cmdName, rest, err := command.ParseSlashCommand(msg)
@@ -527,7 +542,7 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 		s.sendError(id, acpErrInvalidParams, fmt.Sprintf("/%s failed: %v", name, err))
 		return
 	}
-	if text := formatACPCommandResult(result); text != "" {
+	if text := formatACPCommandResult(name, result); text != "" {
 		s.sendUpdate(acpUpdate{
 			SessionUpdate: "agent_message_chunk",
 			Content:       map[string]string{"type": "text", "text": text},
@@ -536,21 +551,25 @@ func (s *acpServer) dispatchACPCommand(id json.RawMessage, name, args string) {
 	s.sendResult(id, map[string]string{"stopReason": acpStopEndTurn})
 }
 
-// formatACPCommandResult renders a slash-handler result for display: strings
-// pass through verbatim, everything else is pretty-printed as JSON.
-func formatACPCommandResult(result any) string {
+// formatACPCommandResult renders a slash-handler result for display. The
+// shared FormatCommandResult renderers produce human-readable text for UI
+// clients; strings pass through verbatim and everything else falls back to
+// pretty-printed JSON.
+func formatACPCommandResult(name string, result any) string {
 	switch v := result.(type) {
 	case nil:
 		return ""
 	case string:
 		return v
-	default:
-		data, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return fmt.Sprintf("%v", v)
-		}
-		return string(data)
 	}
+	if text := FormatCommandResult(name, result); text != "" {
+		return text
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", result)
+	}
+	return string(data)
 }
 
 // sendAvailableCommands advertises the agent's slash commands via a

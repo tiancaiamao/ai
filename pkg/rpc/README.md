@@ -105,6 +105,10 @@ Events are appended as JSON lines for crash-safe recovery.
 
 Implemented methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update` (notifications). `initialize` advertises `loadSession: true`; `session/load` reloads a previously persisted session by id (the ACP sessionId is the internal session id) and replays its history as `user_message_chunk` / `agent_message_chunk` / `tool_call` / `tool_call_update` notifications before answering with a stop reason. Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
 
+## Slash-Command Result Rendering
+
+`FormatCommandResult(command, data)` (in `render.go`) is the single renderer for slash-command results across all frontends: the RPC TUI event stream (`subcommand/run/tui`), ACP hosts (`formatACPCommandResult` in `acp.go`), and external RPC clients. Known command names dispatch to per-command renderers; unknown shapes fall back to shape detection; unrecognized payloads return `""` so callers fall back to pretty-printed JSON. Renderers are pure formatters — no app/server access, no business logic.
+
 ## Testing
 
 Run tests with:

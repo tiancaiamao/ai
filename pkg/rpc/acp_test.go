@@ -464,12 +464,78 @@ func TestACPSlashHelpOverACP(t *testing.T) {
 	}
 }
 
+// TestACPCommandRenderersOverACP dispatches every rendered read-only command
+// through a live ACP server: each answer must arrive as an agent_message_chunk
+// carrying human-readable text (not a raw JSON blob) followed by end_turn.
+func TestACPCommandRenderersOverACP(t *testing.T) {
+	prompts := []struct {
+		command  string
+		contains []string
+	}{
+		{command: "/session", contains: []string{"model:", "id:", "streaming:"}},
+		{command: "/context", contains: []string{"Context Usage", "Session Stats"}},
+		{command: "/show settings", contains: []string{"model"}},
+		{command: "/help", contains: []string{"Commands:", "[slash] help"}},
+		{command: "/skills", contains: []string{"Commands:"}},
+		{command: "/model", contains: []string{"Models"}},
+	}
+	lines := make([]string, 0, len(prompts))
+	for i, p := range prompts {
+		lines = append(lines, fmt.Sprintf(
+			`{"jsonrpc":"2.0","id":%d,"method":"session/prompt","params":{"sessionId":%%q,"prompt":[{"type":"text","text":"%s"}]}}`,
+			i+10, p.command))
+	}
+
+	msgs := runACPSmokeSession(t, t.TempDir(), func(sessionID string) []string {
+		out := make([]string, len(lines))
+		for i, l := range lines {
+			out[i] = fmt.Sprintf(l, sessionID)
+		}
+		return out
+	})
+
+	// init result + new result + advertisement, then chunk+response per prompt.
+	wantCount := 3 + 2*len(prompts)
+	if len(msgs) != wantCount {
+		t.Fatalf("expected %d messages, got %d: %v", wantCount, len(msgs), msgs)
+	}
+
+	for i, p := range prompts {
+		chunk := msgs[3+2*i]
+		params, _ := chunk["params"].(map[string]any)
+		upd, _ := params["update"].(map[string]any)
+		if got, _ := upd["sessionUpdate"].(string); got != "agent_message_chunk" {
+			t.Errorf("/%s: expected agent_message_chunk, got %v", p.command, upd)
+			continue
+		}
+		content, _ := upd["content"].(map[string]any)
+		text, _ := content["text"].(string)
+		if strings.HasPrefix(text, "{") {
+			t.Errorf("/%s: rendered text must not start with '{', got:\n%s", p.command, text)
+		}
+		for _, want := range p.contains {
+			if !strings.Contains(text, want) {
+				t.Errorf("/%s: output missing %q, got:\n%s", p.command, want, text)
+			}
+		}
+
+		resp := msgs[4+2*i]
+		result, _ := resp["result"].(map[string]any)
+		if stop, _ := result["stopReason"].(string); stop != acpStopEndTurn {
+			t.Errorf("/%s: expected stopReason end_turn, got %v", p.command, result)
+		}
+	}
+}
+
 // TestMatchACPCommand covers the allow-list gate: only registered commands
 // dispatch; unregistered '/', comments and plain text stay raw; skill prompts
-// are excluded from sync dispatch (they need the expansion path).
+// are excluded from sync dispatch (they need the expansion path). Hosts may
+// prepend their own context blocks to a prompt, so a registered command on
+// the final line also dispatches.
 func TestMatchACPCommand(t *testing.T) {
 	srv := NewServer()
 	srv.RegisterSlash("help", "List commands", func(args string) (any, error) { return nil, nil })
+	srv.RegisterSlash("show", "Show settings", func(args string) (any, error) { return nil, nil })
 
 	cases := []struct {
 		msg     string
@@ -484,6 +550,13 @@ func TestMatchACPCommand(t *testing.T) {
 		{msg: "/nosuchcmd hi", wantOK: false},
 		{msg: "/skill:code-review fix bugs", wantOK: false}, // excluded on purpose
 		{msg: "plain text question", wantOK: false},
+		// Host-injected preamble before the command (AionUi first prompt).
+		{msg: "[Assistant Rules]\n## Available Skills\n- aionui-config: cfg\n\n/help", wantOK: true, wantCmd: "help"},
+		{msg: "[Assistant Rules]\nskills...\n\n/show settings", wantOK: true, wantCmd: "show"},
+		// Preamble but last line is NOT a registered command: stays raw.
+		{msg: "[Assistant Rules]\nsee /help for info", wantOK: false},
+		{msg: "preamble\n/nosuchcmd hi", wantOK: false},
+		{msg: "preamble\n/skill:x args", wantOK: false},
 	}
 	for _, c := range cases {
 		name, _, ok := matchACPCommand(srv, c.msg)

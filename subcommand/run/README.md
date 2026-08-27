@@ -87,6 +87,6 @@ Consumers receive events via a ring buffer. Late-joining consumers can replay fr
 | `socket.go` | `SocketServer`, `Command`, `CommandHandler`, Unix domain socket handling |
 | `event_broadcaster.go` | `EventBroadcaster`, `Consumer` — ring-buffer fan-out with replay |
 | `event_parser.go` | `ParseEvent` — parse raw JSONL event lines into `FormattedEvent` |
-| `event_renderer.go` | Event rendering for terminal display |
+| `event_renderer.go` | Maps RPC responses onto display events (rendering lives in `pkg/rpc/render.go`) |
 | `agent_end.go` | `AgentEndInfo`, `FindLastAgentEnd` — locate last agent_end in event log |
 | `types.go` | `EventKind`, `FormattedEvent` — formatted output types |
