@@ -3,11 +3,11 @@ package rpc
 // Model catalog reporting and switching over ACP.
 //
 // ACP hosts (AionUi via aioncore, Zed, agent-shell) render a model selector
-// from the session/new / set_config handshake payloads (aioncore captures
-// them into agent_metadata.handshake). We advertise a single config option —
-// category "model", type "select" — built from the same model registry the
-// RPC slash commands use (loadModelSpecs + filterModelSpecsWithKeys), so the
-// dropdown matches /model exactly.
+// from the session/new, session/load and set_config handshake payloads
+// (aioncore captures them into agent_metadata.handshake). We advertise a
+// single config option — category "model", type "select" — built from the
+// same model registry the RPC slash commands use (loadModelSpecs +
+// filterModelSpecsWithKeys), so the dropdown matches /model exactly.
 //
 // The wire emits BOTH spellings of every field for client compatibility:
 //   - result.configOptions  (official ACP v1 field, required by the schema)
@@ -100,6 +100,21 @@ func (app *rpcApp) acpModelCatalog() []acpConfigOption {
 	}}
 }
 
+// acpResultWithCatalog returns result with the model catalog attached under
+// the spellings hosts read: configOptions (ACP v1 spec field), config_options
+// (the snake_case twin read by hosts like aioncore, captured into handshake
+// meta) and a _meta mirror. An empty catalog leaves result unchanged, so
+// handshake handlers (session/new, session/load) can pass the catalog
+// unconditionally.
+func acpResultWithCatalog(result map[string]any, catalog []acpConfigOption) map[string]any {
+	if len(catalog) > 0 {
+		result["configOptions"] = catalog
+		result["config_options"] = catalog
+		result["_meta"] = map[string]any{"config_options": catalog}
+	}
+	return result
+}
+
 // handleSetConfig switches the active model on behalf of an ACP host.
 // Accepts multiple method aliases (mapped in handleRequest) and tolerant
 // params shapes; see parseSetConfigParams. The response carries the updated
@@ -137,11 +152,7 @@ func (s *acpServer) handleSetConfig(req acpRequest) {
 	slog.Info("[ACP] model switched by host", "provider", provider, "modelId", modelID)
 
 	catalog := s.app.acpModelCatalog()
-	s.sendResult(req.ID, map[string]any{
-		"configOptions":  catalog,
-		"config_options": catalog,
-		"_meta":          map[string]any{"config_options": catalog},
-	})
+	s.sendResult(req.ID, acpResultWithCatalog(map[string]any{}, catalog))
 }
 
 // resolveModelOptionValue maps a dropdown value ("provider/id" or bare

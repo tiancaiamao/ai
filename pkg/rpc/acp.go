@@ -25,8 +25,9 @@ package rpc
 //                                   the updated model catalog is returned
 //                                   under configOptions + config_options.
 //
-// The model catalog is advertised in the session/new result as a category
-// "model" select config option so hosts can render a model selector.
+// The model catalog is advertised in the session/new and session/load results
+// as a category "model" select config option so hosts can render a model
+// selector (also on the cross-restart resume path).
 
 //
 // Everything else (fs/*, terminal/*, image/audio content, MCP transports) is
@@ -389,7 +390,9 @@ func (s *acpServer) handleSessionLoad(req acpRequest) {
 
 	s.replayHistory(newSess.GetMessages())
 	s.sendAvailableCommands()
-	s.sendResult(req.ID, map[string]string{"stopReason": acpStopEndTurn})
+	// Same model catalog as session/new: the resume path must keep the host's
+	// model selector (and set_config_option values) discoverable.
+	s.sendResult(req.ID, acpResultWithCatalog(map[string]any{"stopReason": acpStopEndTurn}, s.app.acpModelCatalog()))
 }
 
 // replayHistory converts persisted conversation history into ACP session/update

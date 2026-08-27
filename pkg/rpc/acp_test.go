@@ -306,6 +306,71 @@ func TestACPSessionLoad(t *testing.T) {
 	}
 }
 
+// TestACPSessionLoadAdvertisesModelCatalog verifies the cross-restart resume
+// path carries the same model catalog as session/new, so hosts keep their
+// model selector after a session/load.
+func TestACPSessionLoadAdvertisesModelCatalog(t *testing.T) {
+	dir, initial, other := setupACPEnv(t)
+
+	// Seed a persisted session the smoke process can resume via session/load.
+	mgr := session.NewSessionManager(filepath.Dir(dir))
+	sess, err := mgr.CreateSession("acp-load-catalog", "acp-load-catalog")
+	if err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	msgs := runACPSmoke(t, dir, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":%q}}`, sess.GetID()),
+	})
+	// init result, available_commands_update, load result.
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if id, _ := msgs[2]["id"].(float64); id != 2 {
+		t.Fatalf("expected load result with id 2, got %v", msgs[2])
+	}
+	result, ok := msgs[2]["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected session/load result, got %v", msgs[2])
+	}
+	if stop, _ := result["stopReason"].(string); stop != "end_turn" {
+		t.Errorf("expected stopReason end_turn, got %v", result)
+	}
+
+	// Same catalog shape as session/new: spec field + snake_case twin +
+	// _meta mirror, all carrying the category=model select option.
+	specOpts, ok := result["configOptions"].([]any)
+	if !ok || len(specOpts) == 0 {
+		t.Fatalf("expected configOptions in session/load result, got %v", result)
+	}
+	snakeOpts, ok := result["config_options"].([]any)
+	if !ok || len(snakeOpts) != len(specOpts) {
+		t.Fatalf("expected parallel config_options array, got %v", result["config_options"])
+	}
+	if meta, ok := result["_meta"].(map[string]any); !ok {
+		t.Errorf("expected _meta mirror in session/load result, got %v", result["_meta"])
+	} else if _, ok := meta["config_options"].([]any); !ok {
+		t.Errorf("expected config_options inside _meta, got %v", meta)
+	}
+
+	opt := findModelOption(t, specOpts)
+	if cv, _ := opt["current_value"].(string); cv != initial {
+		t.Errorf("expected current_value %q, got %q", initial, cv)
+	}
+	if cv, _ := opt["currentValue"].(string); cv != initial {
+		t.Errorf("expected currentValue %q, got %q", initial, cv)
+	}
+	values := map[string]bool{}
+	for _, raw := range opt["options"].([]any) {
+		v, _ := raw.(map[string]any)["value"].(string)
+		values[v] = true
+	}
+	if !values[initial] || !values[other] {
+		t.Errorf("missing registry options: have %v", values)
+	}
+}
+
 func TestBuildACPMessage(t *testing.T) {
 	msg := buildACPMessage([]acpContentBlock{
 		{Type: "text", Text: "Analyze this:"},
