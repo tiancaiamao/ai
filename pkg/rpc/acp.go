@@ -19,6 +19,15 @@ package rpc
 //   - session/cancel (notify)    -> aborts the running turn
 //   - session/update (notify)    -> agent_message_chunk / tool_call /
 //                                   available_commands_update
+//   - session/set_config_option  -> switches the active model (aliases:
+//                                   session/set_config_options,
+//                                   session/set_model, config/set_option);
+//                                   the updated model catalog is returned
+//                                   under configOptions + config_options.
+//
+// The model catalog is advertised in the session/new result as a category
+// "model" select config option so hosts can render a model selector.
+
 //
 // Everything else (fs/*, terminal/*, image/audio content, MCP transports) is
 // deliberately NOT advertised and rejected as method not found.
@@ -263,6 +272,13 @@ func (s *acpServer) handleRequest(req acpRequest) {
 		s.handlePrompt(req)
 	case "session/cancel":
 		s.handleCancel(req)
+	// Model switching requested by the host. session/set_config_option is the
+	// official ACP v1 method; the rest are defensive aliases because the
+	// exact name used by some hosts (e.g. aioncore) is not observable.
+	case "session/set_config_option", "session/set_config_options",
+		"session/set_model", "config/set_option":
+		s.handleSetConfig(req)
+
 	default:
 		s.sendError(req.ID, acpErrMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
 	}
@@ -305,7 +321,16 @@ func (s *acpServer) handleSessionNew(req acpRequest) {
 	}
 
 	s.sessionID = s.app.sessionID
-	s.sendResult(req.ID, map[string]string{"sessionId": s.sessionID})
+	result := map[string]any{"sessionId": s.sessionID}
+	if catalog := s.app.acpModelCatalog(); len(catalog) > 0 {
+		// configOptions is the ACP v1 field; config_options is the snake_case
+		// spelling read by hosts like aioncore (captured into handshake meta).
+		result["configOptions"] = catalog
+		result["config_options"] = catalog
+		result["_meta"] = map[string]any{"config_options": catalog}
+	}
+	s.sendResult(req.ID, result)
+
 	s.sendAvailableCommands()
 }
 
