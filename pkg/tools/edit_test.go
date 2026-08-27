@@ -426,3 +426,38 @@ func TestEditTool_ResolveAbsolutePath(t *testing.T) {
 		t.Errorf("content = %q, want %q", got, "replaced")
 	}
 }
+
+// TestEdit_AmbiguousMatchListsLocations verifies goose-style error reporting:
+// when oldText matches multiple locations, every location is listed with its
+// line number instead of a bare "not found" failure.
+func TestEdit_AmbiguousMatchListsLocations(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "dup here\nmid\ndup here\n")
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"path": "a.txt", "oldText": "dup here", "newText": "X",
+	})
+	if err == nil || !strings.Contains(err.Error(), "matches 2 locations") {
+		t.Fatalf("err = %v, want multiple-match error", err)
+	}
+	if !strings.Contains(err.Error(), "L1") || !strings.Contains(err.Error(), "L3") {
+		t.Fatalf("error should list L1 and L3, got: %v", err)
+	}
+}
+
+// TestEdit_NoMatchErrorSuggestsSimilarContext verifies the not-found error
+// surfaces nearby lines that resemble the requested text.
+func TestEdit_NoMatchErrorSuggestsSimilarContext(t *testing.T) {
+	tool, dir := newEditToolInTempDir(t)
+	writeFile(t, dir, "a.txt", "func handleRequest(w http) {\n\treturn\n}\n")
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"path": "a.txt", "oldText": "func handelRequest(w http) {", "newText": "X",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "handleRequest") || !strings.Contains(err.Error(), "L1") {
+		t.Fatalf("no-match error lacks suggestion, got: %v", err)
+	}
+}

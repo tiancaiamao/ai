@@ -339,6 +339,7 @@ func createWorkspaceAndRegistry(cwd string, cfg *config.Config) (*tools.Workspac
 	registry.Register(tools.NewWriteTool(ws))
 	registry.Register(tools.NewGrepTool(ws))
 	registry.Register(editTool)
+	registry.Register(tools.NewMultiEditTool(ws))
 	registry.Register(tools.NewChangeWorkspaceTool(ws))
 
 	return ws, registry, nil

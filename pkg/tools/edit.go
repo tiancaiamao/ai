@@ -83,9 +83,18 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 
 	fileContent := string(content)
 
+	// Ambiguity guard (goose-style): if oldText matches several exact
+	// locations, refuse to guess and list them all.
+	if positions := exactMatchPositions(fileContent, oldText); len(positions) > 1 {
+		return nil, ambiguousMatchError(fileContent, oldText, positions)
+	}
+
 	// Find match using progressive strategy
 	match, err := findMatch(fileContent, oldText)
 	if err != nil {
+		// Enrich not-found errors with goose-style context hints so the
+		// model can produce a more accurate oldText on retry.
+		err = enrichNoMatchError(fileContent, oldText, err)
 		return nil, err
 	}
 
@@ -482,4 +491,134 @@ func generateDiff(content string, start, end int, newText string) string {
 // isSpace reports whether r is a space character.
 func isSpace(r rune) bool {
 	return unicode.IsSpace(r)
+}
+
+// exactMatchPositions returns the starting offsets of every exact (byte-for-
+// byte) occurrence of oldText in content.
+func exactMatchPositions(content, oldText string) []int {
+	var positions []int
+	for idx := 0; ; {
+		i := strings.Index(content[idx:], oldText)
+		if i < 0 {
+			break
+		}
+		idx += i
+		positions = append(positions, idx)
+		idx += len(oldText)
+	}
+	return positions
+}
+
+// lineOfOffset converts a byte offset into a 1-based line number.
+func lineOfOffset(content string, offset int) int {
+	return strings.Count(content[:offset], "\n") + 1
+}
+
+// ambiguousMatchError renders the goose-style "multiple matches" error that
+// lists every match location with its line number and text snippet.
+func ambiguousMatchError(content, oldText string, positions []int) error {
+	const maxListed = 5
+	var sb strings.Builder
+	fmt.Fprintf(&sb,
+		"oldText matches %d locations. Include more surrounding context so the target is unique:\n",
+		len(positions))
+	for i, pos := range positions {
+		if i == maxListed {
+			fmt.Fprintf(&sb, "  ...and %d more\n", len(positions)-maxListed)
+			break
+		}
+		snippet := oneLineSnippet(oldText)
+		fmt.Fprintf(&sb, "  L%d: %s\n", lineOfOffset(content, pos), snippet)
+	}
+	return fmt.Errorf("%s", sb.String())
+}
+
+// enrichNoMatchError appends goose-style context suggestions to a not-found
+// error: occurrences of lines resembling the start of oldText.
+func enrichNoMatchError(content, oldText string, err error) error {
+	hints := similarContexts(content, oldText, 3)
+	if len(hints) == 0 {
+		return err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%v\n\nSimilar context found — maybe this is what you meant:\n", err)
+	for _, h := range hints {
+		sb.WriteString("  " + h + "\n")
+	}
+	return fmt.Errorf("%s", sb.String())
+}
+
+// similarContexts finds up to max lines in content that share meaningful
+// tokens with the first non-empty line of oldText.
+func similarContexts(content, oldText string, max int) []string {
+	first := ""
+	for _, l := range strings.Split(oldText, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			first = t
+			break
+		}
+	}
+	if first == "" {
+		return nil
+	}
+	var hints []string
+	for i, line := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if sharesKeywords(first, t) {
+			hints = append(hints, fmt.Sprintf("L%d: %s", i+1, truncateSnippet(t)))
+			if len(hints) == max {
+				break
+			}
+		}
+	}
+	return hints
+}
+
+// sharesKeywords reports whether two trimmed lines are close enough to be a
+// useful suggestion: same first token or high short-word overlap.
+func sharesKeywords(a, b string) bool {
+	at := strings.Fields(a)
+	bt := strings.Fields(b)
+	if len(at) == 0 || len(bt) == 0 {
+		return false
+	}
+	headA := strings.TrimLeft(at[0], "( ")
+	headB := strings.TrimLeft(bt[0], "( ")
+	if headA != "" && headA == headB {
+		return true
+	}
+	common := 0
+	seen := map[string]bool{}
+	for _, w := range at {
+		seen[w] = true
+	}
+	for _, w := range bt {
+		if seen[w] {
+			common++
+		}
+	}
+	denom := len(at)
+	if len(bt) > denom {
+		denom = len(bt)
+	}
+	return denom > 0 && common*2 >= denom
+}
+
+func oneLineSnippet(s string) string {
+	s = strings.SplitN(s, "\n", 2)[0]
+	s = strings.TrimSpace(s)
+	if len(s) > 60 {
+		s = s[:57] + "..."
+	}
+	return s
+}
+
+func truncateSnippet(s string) string {
+	if len(s) > 70 {
+		return s[:67] + "..."
+	}
+	return s
 }

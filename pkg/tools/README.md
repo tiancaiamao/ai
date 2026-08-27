@@ -28,6 +28,7 @@ The registry maps tool names to implementations. `ToLLMTools()` converts all reg
 | `read` | `read.go` | Read file contents (supports offset/limit, auto-detects images) |
 | `write` | `write.go` | Write content to files (structural sentinel on overwrite) |
 | `edit` | `edit.go` | Edit files by replacing text ranges (progressive match + structural sentinel) |
+| `multi_edit` | `multiedit.go` | Apply multiple replacements to one file atomically; all ranges resolved against the original content |
 | `grep` | `grep.go` | Search file contents with regex |
 | `find_skill` | `find_skill.go` | Search and load agent skills |
 | `change_workspace` | `change_workspace.go` | Change working directory |
