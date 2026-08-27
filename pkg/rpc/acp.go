@@ -111,13 +111,16 @@ type acpSessionUpdateParams struct {
 // relevant to the implemented update kinds are modeled; unused ones are
 // omitted via json tags.
 type acpUpdate struct {
-	SessionUpdate string                `json:"sessionUpdate"`
-	Content       any                   `json:"content,omitempty"`
-	ToolCallID    string                `json:"toolCallId,omitempty"`
-	Title         string                `json:"title,omitempty"`
-	Kind          string                `json:"kind,omitempty"`
-	Status        string                `json:"status,omitempty"`
-	Commands      []acpAvailableCommand `json:"commands,omitempty"`
+	SessionUpdate string `json:"sessionUpdate"`
+	Content       any    `json:"content,omitempty"`
+	ToolCallID    string `json:"toolCallId,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Status        string `json:"status,omitempty"`
+	// RawInput carries the tool call arguments (spec: ToolCallUpdate.rawInput)
+	// so hosts like AionUi can render the invocation parameters.
+	RawInput map[string]any        `json:"rawInput,omitempty"`
+	Commands []acpAvailableCommand `json:"commands,omitempty"`
 }
 
 // acpAvailableCommand is one entry of available_commands_update (spec:
@@ -397,7 +400,8 @@ func (s *acpServer) handleSessionLoad(req acpRequest) {
 
 // replayHistory converts persisted conversation history into ACP session/update
 // notifications: user messages become user_message_chunk, assistant text
-// becomes agent_message_chunk, tool calls become tool_call + tool_call_update.
+// becomes agent_message_chunk, assistant thinking becomes agent_thought_chunk,
+// tool calls become tool_call + tool_call_update.
 // Compaction summaries are internal bookkeeping and are skipped. Tool calls
 // left without a result (e.g. the process died mid-turn) are closed out as
 // completed so clients don't render an endless spinner.
@@ -424,6 +428,7 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 					Title:         tc.Name,
 					Kind:          toolCallKind(tc.Name),
 					Status:        "pending",
+					RawInput:      tc.Arguments,
 				})
 			}
 		case "toolResult":
@@ -462,16 +467,28 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 }
 
 // sendReplayText emits one session/update per text content block of a message.
+// Thinking blocks of assistant messages are replayed as agent_thought_chunk so
+// hosts can render the reasoning history; user messages never carry them.
 func (s *acpServer) sendReplayText(updateKind string, blocks []agentctx.ContentBlock) {
 	for _, block := range blocks {
-		tc, ok := block.(agentctx.TextContent)
-		if !ok || tc.Text == "" {
-			continue
+		switch cb := block.(type) {
+		case agentctx.TextContent:
+			if cb.Text == "" {
+				continue
+			}
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: updateKind,
+				Content:       map[string]string{"type": "text", "text": cb.Text},
+			})
+		case agentctx.ThinkingContent:
+			if cb.Thinking == "" || updateKind != "agent_message_chunk" {
+				continue
+			}
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				Content:       map[string]string{"type": "text", "text": cb.Thinking},
+			})
 		}
-		s.sendUpdate(acpUpdate{
-			SessionUpdate: updateKind,
-			Content:       map[string]string{"type": "text", "text": tc.Text},
-		})
 	}
 }
 
@@ -654,14 +671,25 @@ func (s *acpServer) markCancelled() {
 func (s *acpServer) emit(event agent.AgentEvent) {
 	switch event.Type {
 	case agent.EventMessageUpdate:
+		// Streaming deltas. Thinking deltas arrive here too, tagged with the
+		// inner AssistantMessageEvent type; they surface as agent_thought_chunk
+		// so hosts like AionUi can render the model's thinking process.
 		ae, ok := event.AssistantMessageEvent.(agent.AssistantMessageEvent)
-		if !ok || ae.Type != "text_delta" || ae.Delta == "" {
+		if !ok || ae.Delta == "" {
 			return
 		}
-		s.sendUpdate(acpUpdate{
-			SessionUpdate: "agent_message_chunk",
-			Content:       map[string]string{"type": "text", "text": ae.Delta},
-		})
+		switch ae.Type {
+		case "text_delta":
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_message_chunk",
+				Content:       map[string]string{"type": "text", "text": ae.Delta},
+			})
+		case "thinking_delta":
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "agent_thought_chunk",
+				Content:       map[string]string{"type": "text", "text": ae.Delta},
+			})
+		}
 
 	case agent.EventToolExecutionStart:
 		s.sendUpdate(acpUpdate{
@@ -670,6 +698,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 			Title:         event.ToolName,
 			Kind:          toolCallKind(event.ToolName),
 			Status:        "pending",
+			RawInput:      event.Args,
 		})
 
 	case agent.EventToolExecutionEnd:
