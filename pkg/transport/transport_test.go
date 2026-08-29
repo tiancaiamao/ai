@@ -13,7 +13,7 @@ import (
 
 func TestStdioRoundTrip(t *testing.T) {
 	// In-memory input so the test is deterministic and never blocks on a pipe.
-		in := strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"pong"}` + "\n")
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"pong"}` + "\n")
 	var out bytes.Buffer
 	conn := NewStdio(in, &out)
 
@@ -157,7 +157,7 @@ func newTestSocket(t *testing.T) (*UnixSocket, string) {
 	path := filepath.Join(dir, "test.sock")
 	sock, err := NewUnixSocket(path)
 	if err != nil {
-				t.Fatalf("new socket: %v", err)
+		t.Fatalf("new socket: %v", err)
 	}
 	return sock, path
 }
