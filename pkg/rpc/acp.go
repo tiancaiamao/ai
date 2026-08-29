@@ -121,6 +121,10 @@ type acpUpdate struct {
 	// so hosts like AionUi can render the invocation parameters.
 	RawInput map[string]any        `json:"rawInput,omitempty"`
 	Commands []acpAvailableCommand `json:"commands,omitempty"`
+	// Meta carries implementation-specific extension data for `_`-prefixed
+	// sessionUpdate values. Per ACP extensibility, custom data lives in _meta;
+	// standard ACP clients ignore it.
+	Meta any `json:"_meta,omitempty"`
 }
 
 // acpAvailableCommand is one entry of available_commands_update (spec:
@@ -725,6 +729,43 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 			}
 		}
 		s.sendUpdate(u)
+
+	case agent.EventCompactionStart, agent.EventCompactionEnd:
+		status := "start"
+		if event.Type == agent.EventCompactionEnd {
+			status = "end"
+		}
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_compaction",
+			Meta:          map[string]any{"status": status, "info": event.Compaction},
+		})
+
+	case agent.EventError:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_error",
+			Meta: map[string]any{
+				"error":      event.Error,
+				"errorStack": event.ErrorStack,
+			},
+		})
+
+	case agent.EventLLMRetry:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_llm_retry",
+			Meta:          event.LLMRetry,
+		})
+
+	case agent.EventLoopGuardTriggered:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_loop_guard",
+			Meta:          event.LoopGuard,
+		})
+
+	case agent.EventToolCallRecovery:
+		s.sendUpdate(acpUpdate{
+			SessionUpdate: "_tool_call_recovery",
+			Meta:          event.ToolCallRecovery,
+		})
 
 	case agent.EventAgentEnd:
 		// A turn completed: answer the pending session/prompt request.
