@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // emitExtEvents drives the translator with the 5 custom kernel events and
@@ -23,7 +24,7 @@ import (
 func emitExtEvents(t *testing.T) []map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
-	srv := &acpServer{out: &buf, sessionID: "sess-ext"}
+	srv := &acpServer{conn: transport.NewStdio(bytes.NewReader(nil), &buf), sessionID: "sess-ext"}
 
 	srv.emit(agent.NewCompactionStartEvent(agent.CompactionInfo{
 		Auto:    true,

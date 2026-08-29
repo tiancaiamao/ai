@@ -18,6 +18,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"github.com/tiancaiamao/ai/pkg/agent"
 	"github.com/tiancaiamao/ai/pkg/context"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 //go:embed testdata/acp_schema_v1.json
@@ -86,7 +87,7 @@ func TestACPSchemaNotifications(t *testing.T) {
 	compiler := newACPSchemaCompiler(t)
 
 	var buf bytes.Buffer
-	srv := &acpServer{out: &buf, sessionID: "sess-test"}
+	srv := &acpServer{conn: transport.NewStdio(strings.NewReader(""), &buf), sessionID: "sess-test"}
 
 	// agent_message_chunk
 	srv.emit(agent.NewMessageUpdateEvent(

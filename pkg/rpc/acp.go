@@ -35,7 +35,6 @@ package rpc
 // mcpServers in session/new are accepted and ignored (logged).
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,6 +49,7 @@ import (
 	"github.com/tiancaiamao/ai/pkg/command"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // acpProtocolVersion is the ACP major protocol version this agent implements.
@@ -154,8 +154,7 @@ type acpServer struct {
 	app    *rpcApp
 	ctx    context.Context
 	cancel context.CancelFunc
-	out    io.Writer
-	mu     sync.Mutex // serializes writes to out
+	conn   transport.Conn
 
 	sessionID string
 
@@ -190,9 +189,10 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	defer ag.Shutdown()
 
 	// --- ACP server ---
-	srv := &acpServer{app: app, out: output}
+	srv := &acpServer{app: app}
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	defer srv.cancel()
+	srv.conn = transport.NewStdio(&contextReader{reader: input, ctx: srv.ctx}, output)
 
 	// Command registry: reuse the NDJSON Server purely for slash-command
 	// registration (handlePrompt dispatches /commands through it). Events go
@@ -229,7 +229,7 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	app.startDebugServer()
 
 	slog.Info("ACP server started", "model", app.model.ID, "cwd", app.cwd)
-	runErr := srv.run(input)
+	runErr := srv.run()
 
 	slog.Info("ACP server stopped, waiting for cleanup...")
 	ag.Wait()
@@ -241,18 +241,20 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	return runErr
 }
 
-// run reads JSON-RPC messages from input until EOF or context cancellation.
-func (s *acpServer) run(input io.Reader) error {
-	cr := &contextReader{reader: input, ctx: s.ctx}
-	scanner := bufio.NewScanner(cr)
-	buf := make([]byte, 0, 4*1024*1024) // 4MB
-	scanner.Buffer(buf, 16*1024*1024)   // 16MB max
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+// run reads JSON-RPC messages from the transport until EOF or context
+// cancellation.
+func (s *acpServer) run() error {
+	for {
+		msg, err := s.conn.ReadMessage()
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 
 		var req acpRequest
-		if err := json.Unmarshal(line, &req); err != nil {
+		if err := json.Unmarshal(msg, &req); err != nil {
 			s.sendError(nil, acpErrInvalidRequest, fmt.Sprintf("failed to parse message: %v", err))
 			continue
 		}
@@ -262,10 +264,6 @@ func (s *acpServer) run(input io.Reader) error {
 		}
 		s.handleRequest(req)
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 func (s *acpServer) handleRequest(req acpRequest) {
@@ -812,9 +810,9 @@ func (s *acpServer) writeMessage(msg any) {
 		slog.Error("[ACP] failed to marshal message", "error", err)
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, _ = s.out.Write(append(data, '\n'))
+	if err := s.conn.WriteMessage(data); err != nil {
+		slog.Error("[ACP] failed to write message", "error", err)
+	}
 }
 
 // buildACPMessage flattens ACP prompt content blocks into the text message
