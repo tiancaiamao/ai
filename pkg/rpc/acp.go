@@ -163,10 +163,12 @@ type acpServer struct {
 	cancelled     bool            // set when the pending turn was cancelled
 }
 
-// RunACP runs the agent as an ACP server over stdin/stdout. Setup mirrors
-// RunRPC: same config, session, tools, compactor and agent; only the protocol
-// layer differs.
-func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+// RunACP runs the agent as an ACP server over the given transport conn. Setup
+// mirrors RunRPC: same config, session, tools, compactor and agent; only the
+// protocol layer differs. The conn may be a stdio channel (NewStdio) or a hub
+// multiplexing several unix-socket peers (NewHub); the ACP core is identical
+// either way.
+func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
@@ -188,11 +190,16 @@ func RunACP(sessionPath string, debugAddr string, input io.Reader, output io.Wri
 	defer sessionWriter.Close()
 	defer ag.Shutdown()
 
-	// --- ACP server ---
-	srv := &acpServer{app: app}
+		// --- ACP server ---
+	srv := &acpServer{app: app, conn: conn}
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	defer srv.cancel()
-	srv.conn = transport.NewStdio(&contextReader{reader: input, ctx: srv.ctx}, output)
+	// Unblock the transport read on shutdown: canceling the ctx closes the conn,
+	// which yields io.EOF from ReadMessage so the run loop exits cleanly.
+	go func() {
+		<-srv.ctx.Done()
+		conn.Close()
+	}()
 
 	// Command registry: reuse the NDJSON Server purely for slash-command
 	// registration (handlePrompt dispatches /commands through it). Events go

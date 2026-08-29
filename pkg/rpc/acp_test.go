@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+		agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/session"
+	"github.com/tiancaiamao/ai/pkg/transport"
 )
 
 // runACPSmoke starts RunACP with the given NDJSON lines, returns all
@@ -51,7 +52,7 @@ func runACPSmoke(t *testing.T, tmpDir string, lines []string) []map[string]any {
 		respCh <- results
 	}()
 
-	_ = RunACP(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh
@@ -449,7 +450,7 @@ func runACPSmokeSession(t *testing.T, tmpDir string, additionalLines func(sessio
 		writer.Close()
 	}()
 
-	_ = RunACP(tmpDir, "", reader, outWriter, "", 0, 5*time.Second, "", "", "acp-smoke")
+	_ = RunACP(transport.NewStdio(reader, outWriter), tmpDir, "", "", 0, 5*time.Second, "", "", "acp-smoke")
 	outWriter.Close()
 
 	return <-respCh
