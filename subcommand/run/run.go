@@ -547,13 +547,8 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.appendContent(errStyle.Render("ai: send failed: " + err.Error()))
 						m.syncIfDirty()
 					} else {
-						// Echo locally: the server only replays
-						// user_message_chunk to reconnecting clients
-						// (session/load), never on the live stream.
-						// The role prefix is added by ensureRole.
-						m.processEvent(&tui.FormattedEvent{
-							Kind: tui.KindText, Role: "user", Text: text,
-						})
+						// The user text arrives via the server's
+						// user_message_chunk broadcast; no local echo needed.
 						m.syncIfDirty()
 					}
 				}

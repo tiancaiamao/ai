@@ -538,6 +538,14 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	s.cancelled = false
 	s.pendingMu.Unlock()
 
+	// Echo the prompt to every attached peer as user_message_chunk so live
+	// watchers (ai watch, TUI) see the user's text — the load-time replay is
+	// not visible to clients that were already attached.
+	s.sendUpdate(acpUpdate{
+		SessionUpdate: "user_message_chunk",
+		Content:       map[string]string{"type": "text", "text": message},
+	})
+
 	// Everything else stays raw free text: ACP prompts may legitimately start
 	// with '/' without being a command (a Go comment does too), so only an
 	// explicit /skill:<name> prefix opts into skill-command parsing.

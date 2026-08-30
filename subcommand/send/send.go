@@ -100,14 +100,9 @@ func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeo
 		os.Exit(1)
 	}
 
-	if !summary {
-		// Echo the prompt: the server only replays user_message_chunk on
-		// session/load, never on the live stream.
-		fmt.Printf("user: %s\n", message)
-	}
-
 	var currentText strings.Builder
 	lastKind := tui.EventKind("")
+	var lastTextRole string
 	for {
 		select {
 		case u, ok := <-updates:
@@ -130,7 +125,7 @@ func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeo
 				currentText.WriteString(evt.Text)
 			}
 			if !summary {
-				printSendEvent(evt, &lastKind)
+				printSendEvent(evt, &lastKind, &lastTextRole)
 			}
 		case <-deadline:
 			fmt.Fprintln(os.Stderr, "--- timeout ---")
@@ -153,14 +148,25 @@ func finishSend(summary bool, text string) {
 
 // printSendEvent prints one formatted agent event. Output mirrors
 // watch --follow --pretty.
-func printSendEvent(evt *tui.FormattedEvent, lastKind *tui.EventKind) {
+func printSendEvent(evt *tui.FormattedEvent, lastKind *tui.EventKind, lastTextRole *string) {
 	// Add line break on kind transitions for readability.
 	if evt.Kind != *lastKind && *lastKind != "" && *lastKind != tui.KindTool {
 		fmt.Println()
 	}
 
 	switch evt.Kind {
-	case tui.KindText, tui.KindThinking:
+	case tui.KindText:
+		// Prefix user text (echo of the sent prompt) so consumers can
+		// distinguish it from the assistant's reply.
+		if evt.Role == "user" && *lastTextRole != "user" {
+			if *lastTextRole != "" {
+				fmt.Println()
+			}
+			fmt.Print("user: ")
+		}
+		fmt.Print(evt.Text)
+		*lastTextRole = evt.Role
+	case tui.KindThinking:
 		fmt.Print(evt.Text)
 	case tui.KindTool:
 		fmt.Printf("  %s\n", evt.Text)

@@ -583,6 +583,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	// No ANSI colors — this output is consumed by agents, not humans.
 	seq := fromSeq
 	lastKind := tui.EventKind("")
+	lastTextRole := ""
 	ended := false
 	for u := range updates {
 		seq++
@@ -599,7 +600,16 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 
 		switch evt.Kind {
 		case tui.KindText:
+			// Prefix user text (echo of the sent prompt) so consumers can
+			// distinguish it from the assistant's reply.
+			if evt.Role == "user" && lastTextRole != "user" {
+				if lastTextRole != "" {
+					fmt.Println()
+				}
+				fmt.Print("user: ")
+			}
 			fmt.Print(evt.Text)
+			lastTextRole = evt.Role
 		case tui.KindThinking:
 			fmt.Print(evt.Text)
 		case tui.KindTool:
@@ -653,12 +663,12 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 			break
 		}
 
-		// Accumulate assistant text only.
+		// Accumulate assistant text only (skip user echo).
 		evt := tui.ParseACPUpdate(u)
 		if evt == nil {
 			continue
 		}
-		if evt.Kind == tui.KindText {
+		if evt.Kind == tui.KindText && evt.Role != "user" {
 			currentAssistantText.WriteString(evt.Text)
 		}
 	}
