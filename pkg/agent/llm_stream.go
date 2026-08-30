@@ -385,8 +385,8 @@ func streamAssistantResponse(
 // cancellation (user steer/abort). It returns nil when the stream was not
 // canceled or the partial has no salvageable content.
 //
-// Incomplete ToolCallContent blocks are stripped: they were never executed,
-// and keeping them would leave dangling tool_calls without tool results.
+// ToolCallContent blocks are stripped: they were never executed, and keeping them would leave
+// dangling tool_calls without tool results.
 func buildAbortedMessage(
 	ctx context.Context,
 	partial *agentctx.AgentMessage,
