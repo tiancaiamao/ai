@@ -454,10 +454,10 @@ func TestStreamAssistantResponse_ContextCanceledMidStreamSalvagesPartial(t *test
 	stream := newTestAgentEventStream()
 
 	done := make(chan *agentctx.AgentMessage, 1)
-	var streamErr error
+	errCh := make(chan error, 1)
 	go func() {
 		msg, err := streamAssistantResponse(ctx, agentCtx, config, stream)
-		streamErr = err
+		errCh <- err
 		done <- msg
 	}()
 
@@ -471,6 +471,7 @@ func TestStreamAssistantResponse_ContextCanceledMidStreamSalvagesPartial(t *test
 	case <-time.After(5 * time.Second):
 		t.Fatal("streamAssistantResponse did not return after context cancel")
 	}
+	streamErr := <-errCh
 	if streamErr != nil {
 		t.Fatalf("expected salvaged partial message, got error: %v", streamErr)
 	}
