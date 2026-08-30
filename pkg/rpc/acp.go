@@ -190,7 +190,7 @@ func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 	defer sessionWriter.Close()
 	defer ag.Shutdown()
 
-		// --- ACP server ---
+	// --- ACP server ---
 	srv := &acpServer{app: app, conn: conn}
 	srv.ctx, srv.cancel = context.WithCancel(context.Background())
 	defer srv.cancel()
@@ -228,6 +228,7 @@ func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 	go func() {
 		<-agentAbortSignal
 		slog.Info("[ACP] External abort signal received, aborting agent")
+		srv.markCancelled()
 		ag.Abort()
 		srv.cancel()
 	}()
@@ -773,6 +774,16 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		})
 
 	case agent.EventAgentEnd:
+		// ACP extension: universal turn-end signal. Emitted before the prompt
+		// result so every client observes it before the response arrives.
+		// Consumers: `ai watch` / `ai send --wait` exit detection, `ai ls`
+		// idle detection (via the mirrored events.jsonl), TUI status.
+		meta := map[string]any{"success": event.Error == ""}
+		if event.Error != "" {
+			meta["error"] = event.Error
+		}
+		s.sendUpdate(acpUpdate{SessionUpdate: "_turn_end", Meta: meta})
+
 		// A turn completed: answer the pending session/prompt request.
 		s.pendingMu.Lock()
 		id := s.pendingPrompt

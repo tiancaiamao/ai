@@ -108,68 +108,6 @@ func TestDirtyFlag_CoalescesMultipleAppends(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Broadcaster disconnects consumer when channel is full.
-//
-// This proves the causal link: if TUI blocks (syncContent slow), consumer
-// channel fills, Push disconnects the consumer, TUI stops receiving events.
-// ---------------------------------------------------------------------------
-
-func TestBroadcaster_SlowConsumerDisconnected(t *testing.T) {
-	b := tui.NewEventBroadcaster()
-	defer b.Close()
-
-	consumer := b.Subscribe(0)
-	if consumer == nil {
-		t.Fatal("expected non-nil consumer")
-	}
-
-	// Push events without reading — simulate fast LLM streaming
-	// while TUI is blocked in syncContent.
-	pushed := 0
-	for i := 0; i < tui.ConsumerChanSize+100; i++ {
-		b.Push([]byte(`{"type":"text_delta","delta":"word"}`))
-		pushed++
-	}
-
-	// Drain the consumer channel and check if it was closed.
-	drained := 0
-	closed := false
-	timeout := time.After(500 * time.Millisecond)
-	for {
-		select {
-		case _, ok := <-consumer.Events():
-			if !ok {
-				closed = true
-			} else {
-				drained++
-			}
-		case <-timeout:
-			goto done
-		}
-	}
-done:
-	if closed {
-		t.Logf("PASS: consumer disconnected after %d pushes without draining (channel size=%d)",
-			pushed, tui.ConsumerChanSize)
-	} else {
-		// With ConsumerChanSize=2048, 2148 pushes should overflow.
-		// If channel still not closed, something is wrong with the test setup.
-		t.Logf("Consumer not disconnected. Pushed=%d, drained=%d, channel_size=%d. "+
-			"Consumer may still be connected if channel was large enough.",
-			pushed, drained, tui.ConsumerChanSize)
-		// This is still informational — the key insight is that
-		// if channel CAN overflow, consumer WILL be disconnected.
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: End-to-end — processEvent + syncIfDirty with accumulated content.
-//
-// Measures processing 200 events with accumulated history to verify that
-// the dirty-flag coalescing (sync once per event, not per append) maintains
-// linear performance regardless of history size.
-// ---------------------------------------------------------------------------
-
 func TestProcessEvent_Performance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping performance test in short mode")

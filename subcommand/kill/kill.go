@@ -1,71 +1,17 @@
 package kill
 
 import (
-	"bufio"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	rpc "github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/subcommand/helpers"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
-
-// resolveRunID resolves the target run given an optional ID flag.
-// If id is empty, it auto-selects by cwd. If id is a partial prefix,
-// it uses FindByPrefix.
-func resolveRunID(baseDir, id string) (*tui.RunMeta, error) {
-	if id != "" {
-		// Try exact match first: look for run.json directly.
-		exactPath := tui.RunMetaPath(baseDir, id)
-		if meta, err := tui.LoadRunMeta(exactPath); err == nil && tui.IsRunning(meta) {
-			return meta, nil
-		}
-
-		// Try prefix match.
-		matches, err := tui.FindByPrefix(baseDir, id)
-		if err != nil {
-			return nil, fmt.Errorf("prefix match for %q: %w", id, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("no running run found matching %q", id)
-		}
-		// FindByPrefix returns at most 1 match on success (errors on multiple).
-		m := matches[0]
-		if !tui.IsRunning(&m) {
-			return nil, fmt.Errorf("run %s is not running (status: %s)", m.ID, m.Status)
-		}
-		return &m, nil
-	}
-
-	// Auto-select by cwd.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("get cwd: %w", err)
-	}
-
-	matches, err := tui.FindRunningByCwd(baseDir, cwd)
-	if err != nil {
-		return nil, fmt.Errorf("find running by cwd: %w", err)
-	}
-
-	switch len(matches) {
-	case 0:
-		return nil, fmt.Errorf("no running instances found in %s", cwd)
-	case 1:
-		return &matches[0], nil
-	default:
-		ids := make([]string, len(matches))
-		for i, m := range matches {
-			ids[i] = m.ID
-		}
-		return nil, fmt.Errorf("multiple running instances in %s (IDs: %v), use --id to disambiguate", cwd, ids)
-	}
-}
 
 func KillSubcommand() {
 	fs := flag.NewFlagSet("kill", flag.ExitOnError)
@@ -91,13 +37,14 @@ func KillSubcommand() {
 		return
 	}
 
-	// Try graceful shutdown via socket first.
-	sockPath := tui.SocketPath(baseDir, meta.ID)
-	killed := trySocketAbort(sockPath)
-	if killed {
-		// Wait briefly for process to exit and update its own state.
+	// Graceful: cancel the in-flight turn via ACP. The serve process
+	// exits on its own after the turn ends and updates run.json.
+	if client, sid, err := rpc.DialACP(tui.SocketPath(baseDir, meta.ID)); err == nil {
+		_ = client.Cancel(sid)
+		client.Close()
+		// Wait briefly for the process to exit.
 		waitForExit(meta.PID, 5*time.Second)
-		// Re-check: if process is still alive, force kill.
+		// If it's still alive, force kill.
 		if processAlive(meta.PID) {
 			killRun(meta, baseDir)
 		} else {
@@ -108,45 +55,6 @@ func KillSubcommand() {
 
 	// Socket not available — fall back to signal-based kill.
 	killRun(meta, baseDir)
-}
-
-// trySocketAbort attempts to send an "abort" command via the Unix socket.
-// Returns true if the socket responded successfully.
-func trySocketAbort(sockPath string) bool {
-	conn, err := net.DialTimeout("unix", sockPath, 3*time.Second)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return false
-	}
-
-	cmd := tui.Command{Type: "abort"}
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return false
-	}
-	data = append(data, '\n')
-
-	if _, err := conn.Write(data); err != nil {
-		return false
-	}
-
-	// Read one line-delimited response.
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		return false
-	}
-
-	var resp tui.Response
-	if err := json.Unmarshal(line, &resp); err != nil {
-		return false
-	}
-
-	return resp.OK
 }
 
 // killRun sends SIGKILL to the run's process and updates run.json.
@@ -163,7 +71,8 @@ func killRun(meta *tui.RunMeta, baseDir string) {
 		os.Exit(1)
 	}
 
-	// Update run.json.
+	// Update run.json (the serve process cannot save its own state after
+	// SIGKILL).
 	meta.Status = tui.StatusKilled
 	meta.FinishedAt = time.Now().Unix()
 	metaPath := tui.RunMetaPath(baseDir, meta.ID)

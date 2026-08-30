@@ -6,10 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -17,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/tiancaiamao/ai/pkg/rpc"
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
@@ -37,155 +36,66 @@ var (
 
 // --- Messages ---
 
-type eventLine struct {
-	line   string
-	offset int64
+// acpEventMsg is a tea.Msg delivered for each ACP session/update received
+// from the agent (via a live ACP client connection).
+type acpEventMsg struct {
+	u rpc.ACPUpdate
 }
 
-type replayDone struct {
-	offset int64
-}
-
-type fileChecked struct {
-	offset int64
-}
-
-type errMsg struct {
-	err error
-}
-
-// broadcasterEvent is a tea.Msg delivered when a new event arrives from
-// the in-memory broadcaster (used by `ai run` embedded TUI).
-type broadcasterEvent struct {
-	line string
-}
-
-// socketEvent is a tea.Msg delivered when a new event arrives from the
-// unix socket stream (used by `ai watch` connecting to `ai serve`).
-type socketEvent struct {
-	line string
-}
-
-// socketConnected is a tea.Msg delivered when socket stream connection is established.
-type socketConnected struct{}
-
-// socketConnectFailed is a tea.Msg delivered when socket stream connection fails.
-type socketConnectFailed struct {
-	err error
-}
+// acpStreamClosedMsg is a tea.Msg delivered when the ACP connection is closed
+// (the agent process exited).
+type acpStreamClosedMsg struct{}
 
 // --- Model ---
 
 type watchModel struct {
-	viewport    viewport.Model
-	eventsPath  string // legacy: for file-based polling (machine mode only)
-	offset      int64  // legacy: current read position in events.jsonl
-	ready       bool
-	err         error
-	width       int
-	height      int
-	mode        string // "replay" or "live"
-	caughtUp    bool   // true when replay phase finishes
-	runID       string
-	statusLine  string
-	sinceFlag   int64 // --since offset for machine-readable mode
-	machineMode bool  // if true, print raw events + cursor and exit
+	viewport   viewport.Model
+	ready      bool
+	err        error
+	width      int
+	height     int
+	mode       string // "live"
+	runID      string
+	statusLine string
+	label      string // "ai run" or "ai watch"
+	p          *tea.Program
 
 	// Content management (line-buffered, incremental wrapping).
 	// - rawParas stores completed raw paragraphs (for resize re-wrap), capped.
 	// - pendingRaw accumulates the current in-progress text_delta stream.
 	// - wrappedLines stores pre-wrapped lines from completed paragraphs.
-	rawParas     []string         // completed raw paragraphs (for resize)
-	pendingRaw   *strings.Builder // current inline text accumulation
-	wrappedLines []string         // pre-wrapped lines from completed paragraphs
-	maxWrapped   int              // max wrapped lines before dropping oldest (0 = unlimited)
+	rawParas     []string
+	pendingRaw   *strings.Builder
+	wrappedLines []string
+	maxWrapped   int // max wrapped lines before dropping oldest (0 = unlimited)
 	// pendingFlushThreshold is the byte size at which pendingRaw is flushed
-	// early to wrappedLines to avoid O(N²) wrapping of a single long paragraph.
-	// 0 = never flush early (flush only on endInline).
+	// early to avoid O(N²) wrapping of a single long paragraph.
 	pendingFlushThreshold int
 
 	// Streaming state: tracks current role prefix for inline content.
 	// Role prefix printed once when role changes, then text appended inline
-	currentRole  string // "", "assistant", "thinking", "tool", "ai"
-	inlineActive bool   // true when we're in the middle of an inline stream
-	dirty        bool   // true when content has changed but viewport not yet updated
-	showPrefixes bool   // whether to show "role: " prefixes (default true)
-	showThinking bool   // whether to show thinking content
-	showTools    bool   // whether to show tool content
-
-	// In-memory event source (used by ai run embedded TUI).
-	broadcaster    *tui.EventBroadcaster
-	broadcasterSub *tui.Consumer
-
-	// Socket stream event source (used by ai watch connecting to ai serve).
-	sockConn    net.Conn
-	sockPath    string
-	sockScanner *bufio.Scanner
+	currentRole  string
+	inlineActive bool
+	dirty        bool
+	showPrefixes bool // whether to show "role: " prefixes (default true)
+	showThinking bool // whether to show thinking content
+	showTools    bool // whether to show tool content
+	quitOnStream bool // quit the TUI when the ACP stream closes (ai watch)
 }
 
-func newWatchModel(eventsPath, runID string, sinceOffset int64, machineMode bool) watchModel {
-	m := watchModel{
-		eventsPath:            eventsPath,
-		runID:                 runID,
-		mode:                  "replay",
-		statusLine:            fmt.Sprintf("ai watch | run %s | replaying...", runID),
-		rawParas:              nil,
-		pendingRaw:            &strings.Builder{},
-		sinceFlag:             sinceOffset,
-		machineMode:           machineMode,
-		showPrefixes:          true,
-		showThinking:          true,
-		showTools:             true,
-		maxWrapped:            5000,
-		pendingFlushThreshold: 2000,
-	}
-	return m
-}
-
-// newWatchModelFromBroadcaster creates a watchModel that reads events from
-// an in-memory EventBroadcaster (used by the `ai run` embedded TUI).
-func newWatchModelFromBroadcaster(b *tui.EventBroadcaster, runID string) watchModel {
-	m := watchModel{
+func newWatchModelForACP(label, runID string) watchModel {
+	return watchModel{
+		label:                 label,
 		runID:                 runID,
 		mode:                  "live",
-		caughtUp:              true,
-		statusLine:            fmt.Sprintf("ai run | run %s | live", runID),
-		rawParas:              nil,
+		statusLine:            fmt.Sprintf("%s | run %s | live", label, runID),
 		pendingRaw:            &strings.Builder{},
 		showPrefixes:          true,
 		showThinking:          true,
 		showTools:             true,
 		maxWrapped:            5000,
 		pendingFlushThreshold: 2000,
-		broadcaster:           b,
 	}
-
-	// Subscribe to broadcaster for live events only (no replay).
-	if b != nil {
-		m.broadcasterSub = b.Subscribe(b.Seq())
-	}
-
-	return m
-}
-
-// newWatchModelFromSocket creates a watchModel that reads events from
-// a unix socket stream (used by `ai watch` connecting to `ai serve`).
-func newWatchModelFromSocket(sockPath, runID string) watchModel {
-	m := watchModel{
-		runID:                 runID,
-		mode:                  "live",
-		caughtUp:              true,
-		statusLine:            fmt.Sprintf("ai watch | run %s | connecting...", runID),
-		rawParas:              nil,
-		pendingRaw:            &strings.Builder{},
-		showPrefixes:          true,
-		showThinking:          true,
-		showTools:             true,
-		maxWrapped:            5000,
-		pendingFlushThreshold: 2000,
-		sockPath:              sockPath,
-	}
-	return m
 }
 
 // scrollStep is the number of columns to scroll horizontally.
@@ -230,9 +140,6 @@ func (m *watchModel) wrapAndAppend(raw string) {
 }
 
 // syncContent pushes the current content to the viewport and scrolls to the bottom.
-// Unlike the old implementation, it does NOT re-wrap all raw content every call.
-// It joins pre-wrapped lines (from completed paragraphs) and only wraps the
-// current in-progress inline text (usually short).
 func (m *watchModel) syncContent() {
 	if !m.ready {
 		return
@@ -244,7 +151,6 @@ func (m *watchModel) syncContent() {
 	}
 
 	// If there's in-progress inline text, wrap it and append.
-	// This is typically short (a few words), so wrapping is cheap.
 	if m.pendingRaw.Len() > 0 {
 		if content != "" {
 			content += "\n"
@@ -419,24 +325,7 @@ func (m *watchModel) rawText() string {
 	return strings.Join(parts, "\n")
 }
 
-func (m watchModel) Init() tea.Cmd {
-	if m.machineMode {
-		return nil
-	}
-
-	// If using broadcaster, start polling the consumer channel.
-	if m.broadcaster != nil && m.broadcasterSub != nil {
-		return pollBroadcaster(m.broadcasterSub)
-	}
-
-	// If using socket stream, connect first.
-	if m.sockPath != "" {
-		return connectSocketStream(m.sockPath)
-	}
-
-	// Legacy: file-based polling.
-	return readAllExisting(m.eventsPath, m.sinceFlag)
-}
+func (m watchModel) Init() tea.Cmd { return nil }
 
 func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -449,6 +338,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "right", "l":
 			m.viewport.ScrollRight(scrollStep)
+			return m, nil
 		case "ctrl+f":
 			m.viewport.PageDown()
 			return m, nil
@@ -471,81 +361,19 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-wrap all content at the new width (one-time cost on resize).
 		m.rebuildWrappedLines()
 
-	case broadcasterEvent:
-		// Event from in-memory broadcaster (ai run).
-		formatted := tui.ParseEvent(msg.line)
+	case acpEventMsg:
+		formatted := tui.ParseACPUpdate(msg.u)
 		if formatted == nil {
-			return m, pollBroadcaster(m.broadcasterSub)
+			return m, nil
 		}
 		m.processEvent(formatted)
 		m.syncIfDirty()
 		m.updateStatus()
-		return m, pollBroadcaster(m.broadcasterSub)
+		return m, nil
 
-	case socketConnected:
-		// Socket stream connected — now read events.
-		// Pick up the scanner stored by connectSocketStream.
-		socketStreamMu.Lock()
-		m.sockConn = socketStreamConn
-		m.sockScanner = socketStreamScanner
-		socketStreamMu.Unlock()
-
-		m.mode = "live"
-		m.caughtUp = true
-		m.updateStatus()
-		return m, readSocketEvent(m.sockScanner)
-
-	case socketConnectFailed:
-		m.appendContent(errStyle.Render(fmt.Sprintf("connection failed: %v", msg.err)))
-		m.syncIfDirty()
+	case acpStreamClosedMsg:
+		// The agent process exited — leave the TUI.
 		return m, tea.Quit
-
-	case socketEvent:
-		// Event from unix socket stream (ai watch → ai serve).
-		formatted := tui.ParseEvent(msg.line)
-		if formatted == nil {
-			return m, readSocketEvent(m.sockScanner)
-		}
-		m.processEvent(formatted)
-		m.syncIfDirty()
-		m.updateStatus()
-		return m, readSocketEvent(m.sockScanner)
-
-	case replayDone:
-		// Finished replaying history, switch to live mode.
-		m.offset = msg.offset
-		m.caughtUp = true
-		m.mode = "live"
-		m.updateStatus()
-		m.syncIfDirty()
-		return m, waitForFile(m.eventsPath, m.offset)
-
-	case replayBatch:
-		// Batch of events from replay phase — render all at full speed.
-		m.offset = msg.offset
-		for _, line := range msg.lines {
-			m.processEvent(tui.ParseEvent(line))
-		}
-		m.endInline()
-		m.syncIfDirty()
-		m.updateStatus()
-		return m, m.nextCmd()
-
-	case eventLine:
-		m.offset = msg.offset
-		formatted := tui.ParseEvent(msg.line)
-		if formatted == nil {
-			return m, m.nextCmd()
-		}
-
-		m.processEvent(formatted)
-		m.syncIfDirty()
-		m.updateStatus()
-		return m, m.nextCmd()
-
-	case fileChecked:
-		m.offset = msg.offset
-		return m, waitForFile(m.eventsPath, m.offset)
 
 	case errMsg:
 		m.err = msg.err
@@ -557,194 +385,20 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *watchModel) nextCmd() tea.Cmd {
-	if m.caughtUp {
-		return waitForFile(m.eventsPath, m.offset)
-	}
-	// Still in replay mode: read as fast as possible.
-	return readAllExisting(m.eventsPath, m.offset)
+// errMsg is a tea.Msg delivered when the TUI hits a fatal error.
+type errMsg struct {
+	err error
 }
 
 func (m *watchModel) updateStatus() {
-	m.statusLine = fmt.Sprintf("ai watch | run %s | %s | %d lines", m.runID, m.mode, len(m.wrappedLines))
+	m.statusLine = fmt.Sprintf("%s | run %s | %s | %d lines", m.label, m.runID, m.mode, len(m.wrappedLines))
 }
 
 func (m watchModel) View() string {
 	if !m.ready {
-		return fmt.Sprintf("ai watch | run %s | loading...\n", m.runID)
+		return fmt.Sprintf("%s | run %s | loading...\n", m.label, m.runID)
 	}
 	return m.viewport.View() + "\n" + statusBar.Render(m.statusLine)
-}
-
-// --- Event source commands ---
-
-// pollBroadcaster reads one event from the broadcaster consumer channel
-// and returns it as a broadcasterEvent tea.Msg.
-func pollBroadcaster(c *tui.Consumer) tea.Cmd {
-	return func() tea.Msg {
-		event, ok := <-c.Events()
-		if !ok {
-			return tea.Quit
-		}
-		return broadcasterEvent{line: string(event)}
-	}
-}
-
-// connectSocketStream connects to the unix socket and starts streaming events.
-func connectSocketStream(sockPath string) tea.Cmd {
-	return func() tea.Msg {
-		conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
-		if err != nil {
-			return socketConnectFailed{err: err}
-		}
-
-		// Send stream command.
-		cmd := tui.Command{Type: "stream", FromSeq: 0}
-		cmdData, err := json.Marshal(cmd)
-		if err != nil {
-			conn.Close()
-			return socketConnectFailed{err: err}
-		}
-		cmdData = append(cmdData, '\n')
-		if _, err := conn.Write(cmdData); err != nil {
-			conn.Close()
-			return socketConnectFailed{err: err}
-		}
-
-		// Read initial response.
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		reader := bufio.NewReader(conn)
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			conn.Close()
-			return socketConnectFailed{err: fmt.Errorf("read stream response: %w", err)}
-		}
-
-		var resp tui.Response
-		if err := json.Unmarshal([]byte(strings.TrimRight(line, "\n")), &resp); err != nil {
-			conn.Close()
-			return socketConnectFailed{err: fmt.Errorf("parse stream response: %w", err)}
-		}
-		if !resp.OK {
-			conn.Close()
-			return socketConnectFailed{err: fmt.Errorf("stream rejected: %s", resp.Error)}
-		}
-
-		// Clear deadline — long-lived connection.
-		conn.SetDeadline(time.Time{})
-
-		// Store connection in a temporary that will be picked up by the model.
-		// We need to thread the scanner back. Use a channel-based approach instead.
-		// Actually, we'll return the scanner through the message and the model will store it.
-		// But we can't modify the model in a Cmd...
-		// Let's use a different approach: store conn and scanner in a package-level var.
-		socketStreamMu.Lock()
-		socketStreamConn = conn
-		socketStreamScanner = bufio.NewScanner(conn)
-		socketStreamScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		socketStreamMu.Unlock()
-
-		return socketConnected{}
-	}
-}
-
-// Package-level state for socket stream (set by connectSocketStream, consumed by readSocketEvent).
-// This is a pragmatic approach since tea.Cmd can't modify the model directly.
-var (
-	socketStreamMu      sync.Mutex
-	socketStreamConn    net.Conn
-	socketStreamScanner *bufio.Scanner
-)
-
-// readSocketEvent reads one event from the socket scanner.
-func readSocketEvent(scanner *bufio.Scanner) tea.Cmd {
-	return func() tea.Msg {
-		if scanner == nil {
-			return socketConnectFailed{err: fmt.Errorf("scanner not initialized")}
-		}
-		if scanner.Scan() {
-			return socketEvent{line: scanner.Text()}
-		}
-		if err := scanner.Err(); err != nil {
-			return socketConnectFailed{err: err}
-		}
-		// Stream ended — broadcaster likely shut down.
-		return tea.Quit
-	}
-}
-
-// --- Legacy file reading commands ---
-
-// replayBatch is returned by readAllExisting when multiple lines are read at once.
-type replayBatch struct {
-	lines  []string
-	offset int64
-}
-
-// readAllExisting reads all available lines from offset without sleeping.
-// Used during replay phase for fast-forward. Reads all available lines in a
-// single file-open pass and returns them as a batch.
-func readAllExisting(path string, offset int64) tea.Cmd {
-	return func() tea.Msg {
-		f, err := os.Open(path)
-		if err != nil {
-			return replayDone{offset: offset}
-		}
-		defer f.Close()
-
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			return replayDone{offset: offset}
-		}
-
-		reader := bufio.NewReader(f)
-		lastOffset := offset
-		var lines []string
-
-		for {
-			line, err := reader.ReadString('\n')
-			if len(line) > 0 {
-				lastOffset += int64(len(line))
-				lines = append(lines, strings.TrimRight(line, "\n"))
-			}
-			if err != nil {
-				break
-			}
-		}
-
-		if len(lines) == 0 {
-			// No more data — we've caught up.
-			return replayDone{offset: lastOffset}
-		}
-
-		return replayBatch{lines: lines, offset: lastOffset}
-	}
-}
-
-// waitForFile polls for a new line with a short sleep. Used in live mode.
-func waitForFile(path string, offset int64) tea.Cmd {
-	return func() tea.Msg {
-		f, err := os.Open(path)
-		if err != nil {
-			time.Sleep(200 * time.Millisecond)
-			return fileChecked{offset: offset}
-		}
-		defer f.Close()
-
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			time.Sleep(200 * time.Millisecond)
-			return fileChecked{offset: offset}
-		}
-
-		reader := bufio.NewReader(f)
-		line, err := reader.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			time.Sleep(100 * time.Millisecond)
-			return fileChecked{offset: offset}
-		}
-
-		newOffset := offset + int64(len(line))
-		return eventLine{line: strings.TrimRight(line, "\n"), offset: newOffset}
-	}
 }
 
 // --- Subcommand entry point ---
@@ -753,8 +407,8 @@ func WatchSubcommand() {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	idFlag := fs.String("id", "", "run ID or prefix (auto-selects by cwd if omitted)")
 	sinceFlag := fs.Int64("since", -1, "start reading from byte offset (machine-readable mode). Use 0 for beginning.")
-	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until agent exits (machine-readable)")
-	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until agent process exits; default without this flag: exit on agent_end)")
+	followFlag := fs.Bool("follow", false, "follow mode: continuously stream events until the turn ends (machine-readable)")
+	watchTimeoutFlag := fs.Duration("timeout", -1, "with --follow: max duration to wait (0 = until the agent process exits; default without this flag: exit on turn end)")
 	prettyFlag := fs.Bool("pretty", false, "with --follow: format output as readable conversation instead of raw JSONL")
 	summaryFlag := fs.Bool("summary", false, "with --follow --pretty: only show final assistant text (no intermediate thinking/tools)")
 	fs.Parse(os.Args[1:])
@@ -762,7 +416,7 @@ func WatchSubcommand() {
 	machineMode := *followFlag || *sinceFlag >= 0
 
 	// Machine-readable modes (--since, --follow) allow completed runs.
-	// TUI mode requires a running agent (for live socket stream).
+	// TUI mode requires a running agent (for the live ACP connection).
 	var meta *tui.RunMeta
 	var err error
 	if machineMode {
@@ -774,12 +428,10 @@ func WatchSubcommand() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-
 	eventsPath := tui.EventsPath("", meta.ID)
 
-	// Follow mode: continuously stream events until agent exits.
+	// Follow mode: continuously stream events until the turn ends.
 	if *followFlag {
-		// --follow requires the agent to be running (uses socket stream).
 		if !tui.IsRunning(meta) {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
@@ -789,23 +441,31 @@ func WatchSubcommand() {
 	}
 
 	// Machine-readable mode: print raw events + final offset.
-	// This still uses file-based polling since machine mode is a one-shot read.
+	// One-shot file read — works for both running and completed runs.
 	if *sinceFlag >= 0 {
 		machineWatch(eventsPath, *sinceFlag)
 		return
 	}
 
-	// Connect via socket stream for live events.
+	// TUI mode: attach to the live ACP agent over its unix socket.
 	sockPath := tui.SocketPath("", meta.ID)
-
-	// Check that the socket exists.
-	if _, err := os.Stat(sockPath); err != nil {
-		fmt.Fprintf(os.Stderr, "error: socket not found: %s\n", sockPath)
+	client, sid, err := rpc.DialACP(sockPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot attach to agent: %v\n", err)
 		os.Exit(1)
 	}
+	defer client.Close()
 
-	model := newWatchModelFromSocket(sockPath, meta.ID)
+	model := newWatchModelForACP("ai watch", meta.ID)
+	model.quitOnStream = true
 	p := tea.NewProgram(model, tea.WithAltScreen())
+	go model.consumeACP(client.Updates(), p)
+
+	// Replay persisted history. The agent rejects the replay while a prompt
+	// is in flight — in that case show live updates only.
+	if err := client.LoadSession(sid); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: history replay unavailable (%v); showing live updates only\n", err)
+	}
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -813,10 +473,20 @@ func WatchSubcommand() {
 	}
 }
 
+// consumeACP pumps ACP updates from the client into the tea program. It runs
+// in a background goroutine and exits when the update stream is closed.
+// Note: tea.Program.Send is safe to call after the program exits.
+func (m *watchModel) consumeACP(updates <-chan rpc.ACPUpdate, p *tea.Program) {
+	for u := range updates {
+		p.Send(acpEventMsg{u: u})
+	}
+	if m.quitOnStream {
+		p.Send(acpStreamClosedMsg{})
+	}
+}
+
 // machineWatch reads events from offset and prints raw lines + final offset.
 // Used for machine-readable incremental consumption.
-// NOTE: machineWatch still uses file-based polling as a fallback for
-// completed runs where no broadcaster is active.
 func machineWatch(eventsPath string, offset int64) {
 	f, err := os.Open(eventsPath)
 	if err != nil {
@@ -846,63 +516,78 @@ func machineWatch(eventsPath string, offset int64) {
 	fmt.Printf("__offset:%d\n", lastOffset)
 }
 
-// followWatch continuously streams events from the agent via socket.
-// It connects to the Unix domain socket and subscribes to the event stream,
-// printing each event line to stdout until the connection closes (agent exits).
+// followWatch streams ACP updates from the agent until the current turn ends
+// (_turn_end update), the connection closes, or the timeout fires.
 func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) {
-	sockPath := tui.SocketPath("", meta.ID)
-
-	client := tui.NewSocketClient(sockPath)
-	conn, _, err := client.Stream(fromSeq)
+	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
+	// watchTimeout == 0: wait forever (until the agent process exits)
+	// watchTimeout > 0: wait up to this duration
+	client, sid, err := rpc.DialACP(tui.SocketPath("", meta.ID))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: cannot connect to agent stream: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: cannot connect to agent: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer client.Close()
 
-	// watchTimeout == -1: flag not set → default behavior (exit on agent_end)
-	// watchTimeout == 0: wait forever (until agent process exits)
-	// watchTimeout > 0: wait up to this duration
 	if watchTimeout > 0 {
-		conn.SetDeadline(time.Now().Add(watchTimeout))
+		go func() {
+			time.Sleep(watchTimeout)
+			client.Close()
+		}()
 	}
 
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Replay history if the agent is idle; the request is rejected while a
+	// prompt is in flight, in which case we only observe live updates.
+	if err := client.LoadSession(sid); err != nil {
+		// Not fatal — continue with live updates only.
+	}
+
+	updates := client.Updates()
+
+	if summary {
+		followWatchSummary(updates, fromSeq)
+		return
+	}
 
 	if !pretty {
-		// Raw JSONL mode (original behavior).
+		// Raw JSONL mode: re-emit updates as ACP session/update envelopes.
 		seq := fromSeq
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
+		ended := false
+		for u := range updates {
+			env, err := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "session/update",
+				"params": map[string]any{
+					"sessionId": sid,
+					"update":    u,
+				},
+			})
+			if err != nil {
 				continue
 			}
-			fmt.Println(line)
+			fmt.Println(string(env))
 			seq++
+			if u.SessionUpdate == "_turn_end" {
+				ended = true
+				break
+			}
+		}
+		if !ended {
+			fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
 		}
 		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 		return
 	}
 
-	// Summary mode: accumulate only the last assistant text, suppress intermediate output.
-	if summary {
-		followWatchSummary(scanner, fromSeq, watchTimeout)
-		return
-	}
-
-	// Pretty mode: stream formatted output in real-time using ParseEvent.
+	// Pretty mode: stream formatted output in real-time using ParseACPUpdate.
 	// No ANSI colors — this output is consumed by agents, not humans.
 	seq := fromSeq
 	lastKind := tui.EventKind("")
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
+	ended := false
+	for u := range updates {
 		seq++
 
-		evt := tui.ParseEvent(line)
+		evt := tui.ParseACPUpdate(u)
 		if evt == nil {
 			continue
 		}
@@ -930,54 +615,46 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			lastKind = evt.Kind
 		}
 
-		// On agent_end: always exit — the task is complete.
-		// The --timeout flag controls maximum wait time for the agent to finish,
-		// not how long to wait after it finishes.
-		if tui.IsAgentEnd(line) {
+		// On _turn_end: always exit — the turn is complete.
+		// The --timeout flag controls maximum wait time for the agent to
+		// finish, not how long to wait after it finishes.
+		if u.SessionUpdate == "_turn_end" {
+			ended = true
 			fmt.Println()
-			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-			return
+			break
 		}
 	}
-	fmt.Fprintf(os.Stderr, "--- agent stream ended without agent_end event ---\n")
+	if !ended {
+		fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
+	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
 // followWatchSummary accumulates events and only prints the final assistant text
-// when agent_end is reached. This avoids flooding tool output with intermediate
+// when _turn_end is reached. This avoids flooding tool output with intermediate
 // thinking, tool calls, and tool results.
-func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout time.Duration) {
+func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 	var lastAssistantText strings.Builder
 	var currentAssistantText strings.Builder
 	seq := fromSeq
+	ended := false
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
+	for u := range updates {
 		seq++
 
-		// Check for agent_end — always exit when task is complete.
-		if tui.IsAgentEnd(line) {
+		if u.SessionUpdate == "_turn_end" {
+			ended = true
 			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
 				lastAssistantText.Reset()
 				lastAssistantText.WriteString(currentAssistantText.String())
 				currentAssistantText.Reset()
 			}
-
-			fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-			// Print the final assistant text and exit.
-			text := strings.TrimSpace(lastAssistantText.String())
-			if text != "" {
-				fmt.Println(text)
-			}
-			return
+			break
 		}
 
-		// Parse and accumulate assistant text only.
-		evt := tui.ParseEvent(line)
+		// Accumulate assistant text only.
+		evt := tui.ParseACPUpdate(u)
 		if evt == nil {
 			continue
 		}
@@ -986,12 +663,17 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 		}
 	}
 
-	// Stream ended without agent_end — print whatever we have.
-	text := strings.TrimSpace(currentAssistantText.String())
-	if text != "" {
-		fmt.Println(text)
+	if ended {
+		text := strings.TrimSpace(lastAssistantText.String())
+		if text != "" {
+			fmt.Println(text)
+		}
 	} else {
-		text = strings.TrimSpace(lastAssistantText.String())
+		// Stream ended without _turn_end — print whatever we have.
+		text := strings.TrimSpace(currentAssistantText.String())
+		if text == "" {
+			text = strings.TrimSpace(lastAssistantText.String())
+		}
 		if text != "" {
 			fmt.Println(text)
 		}
@@ -999,7 +681,8 @@ func followWatchSummary(scanner *bufio.Scanner, fromSeq uint64, watchTimeout tim
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
 }
 
-// resolveRunForWatch resolves a run by ID flag or auto-selection.
+// --- Run resolution ---
+
 func resolveRunForWatch(idFlag string) (*tui.RunMeta, error) {
 	if idFlag != "" {
 		// Try exact match first.
@@ -1125,15 +808,13 @@ func (m *watchModel) processEvent(f *tui.FormattedEvent) {
 			role = "assistant"
 		}
 		if m.ensureRole(role) {
-			text := f.Text
-			m.appendInline(text)
+			m.appendInline(f.Text)
 		}
 
 	case tui.KindThinking:
 		// Thinking delta — stream inline with role prefix
 		if m.ensureRole("thinking") {
-			text := f.Text
-			m.appendInline(thinkingStyle.Render(text))
+			m.appendInline(thinkingStyle.Render(f.Text))
 		}
 
 	case tui.KindTool:

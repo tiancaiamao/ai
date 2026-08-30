@@ -124,3 +124,42 @@ func TestACPCustomEventNotifications(t *testing.T) {
 		t.Errorf("_tool_call_recovery: expected _meta.attempt 1, got %v", trMeta)
 	}
 }
+
+func TestACPTurnEndNotification(t *testing.T) {
+	var buf bytes.Buffer
+	srv := &acpServer{conn: transport.NewStdio(bytes.NewReader(nil), &buf), sessionID: "sess-turn"}
+
+	// Successful turn end.
+	srv.emit(agent.AgentEvent{Type: agent.EventAgentEnd})
+	line, _ := buf.ReadString('\n')
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	upd := m["params"].(map[string]any)["update"].(map[string]any)
+	if upd["sessionUpdate"] != "_turn_end" {
+		t.Fatalf("expected sessionUpdate _turn_end, got %v", upd["sessionUpdate"])
+	}
+	meta := upd["_meta"].(map[string]any)
+	if ok, _ := meta["success"].(bool); !ok {
+		t.Errorf("expected _meta.success true, got %v", meta)
+	}
+	if _, has := meta["error"]; has {
+		t.Errorf("success: unexpected _meta.error, got %v", meta)
+	}
+
+	// Failed turn end carries the error message.
+	srv.emit(agent.AgentEvent{Type: agent.EventAgentEnd, Error: "boom"})
+	line, _ = buf.ReadString('\n')
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	upd = m["params"].(map[string]any)["update"].(map[string]any)
+	meta = upd["_meta"].(map[string]any)
+	if ok, _ := meta["success"].(bool); ok {
+		t.Errorf("expected _meta.success false, got %v", meta)
+	}
+	if e, _ := meta["error"].(string); e != "boom" {
+		t.Errorf("expected _meta.error \"boom\", got %v", meta)
+	}
+}

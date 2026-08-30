@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/rpc"
 	truncpkg "github.com/tiancaiamao/ai/pkg/truncate"
 )
 
@@ -496,4 +497,185 @@ func intFromMap(m map[string]any, key string) int {
 	return 0
 }
 
-// parseResponseEvent handles RPC response events from slash commands.
+// ParseACPUpdate converts an ACP session/update payload into a displayable
+// event. It is the ACP counterpart of ParseEvent (which parses legacy JSONL
+// event lines). The five "_" -prefixed sessionUpdate kinds carry their
+// payload in Meta (a map).
+func ParseACPUpdate(u rpc.ACPUpdate) *FormattedEvent {
+	switch u.SessionUpdate {
+	case "agent_message_chunk":
+		text := acpUpdateText(u.Content)
+		if text == "" {
+			return nil
+		}
+		return &FormattedEvent{Kind: KindText, Role: "assistant", Text: text, Raw: text}
+	case "agent_thought_chunk":
+		text := acpUpdateText(u.Content)
+		if text == "" {
+			return nil
+		}
+		return &FormattedEvent{Kind: KindThinking, Role: "thinking", Text: text, Raw: text}
+	case "user_message_chunk":
+		text := acpUpdateText(u.Content)
+		if text == "" {
+			return nil
+		}
+		return &FormattedEvent{Kind: KindText, Role: "user", Text: "user: " + text}
+	case "tool_call":
+		return &FormattedEvent{
+			Kind: KindTool, Role: "tool",
+			Tool:   u.Kind,
+			Text:   fmt.Sprintf("tool: %s start", u.Title),
+			Detail: acpUpdateText(u.Content),
+		}
+	case "tool_call_update":
+		text := acpUpdateText(u.Content)
+		switch u.Status {
+		case "failed":
+			return &FormattedEvent{Kind: KindTool, Role: "tool", Text: fmt.Sprintf("tool: %s error: %s", u.Title, truncpkg.TruncateString(text, 200))}
+		case "completed":
+			return &FormattedEvent{Kind: KindTool, Role: "tool", Text: fmt.Sprintf("tool: %s done", u.Title)}
+		default:
+			if text == "" {
+				return &FormattedEvent{Kind: KindTool, Role: "tool", Text: fmt.Sprintf("tool: %s", u.Title)}
+			}
+			return &FormattedEvent{Kind: KindTool, Role: "tool", Text: fmt.Sprintf("tool: %s: %s", u.Title, text)}
+		}
+	case "_compaction":
+		return acpCompactionEvent(u.Meta)
+	case "_error":
+		meta, _ := u.Meta.(map[string]any)
+		errMsg, _ := meta["error"].(string)
+		if errMsg == "" {
+			errMsg = "unknown error"
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: error: " + errMsg}
+	case "_llm_retry":
+		return acpLLMRetryEvent(u.Meta)
+	case "_loop_guard":
+		reason := "unknown"
+		if lg, ok := u.Meta.(map[string]any); ok {
+			if r, _ := lg["reason"].(string); r != "" {
+				reason = r
+			}
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: loop guard triggered: " + reason}
+	case "_tool_call_recovery":
+		reason := "malformed tool-call markup"
+		attempt := 0
+		if r, ok := u.Meta.(map[string]any); ok {
+			if s, _ := r["reason"].(string); s != "" {
+				reason = s
+			}
+			attempt = intFromMap(r, "attempt")
+		}
+		if attempt > 0 {
+			return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: recovered malformed tool call (attempt %d): %s", attempt, truncpkg.TruncateString(reason, 220))}
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: recovered malformed tool call: " + truncpkg.TruncateString(reason, 220)}
+	case "_turn_end":
+		if meta, ok := u.Meta.(map[string]any); ok {
+			if errMsg, _ := meta["error"].(string); errMsg != "" {
+				return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: turn failed: " + errMsg}
+			}
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: "ai: turn complete"}
+	}
+	return nil
+}
+
+// acpUpdateText extracts display text from an ACP update's content field,
+// which may be a {type:"text",text} object, a list of {type:"content",
+// content:{...}} items (tool_call_update), or a {type:"tool_result",
+// content:[...]} object.
+func acpUpdateText(content any) string {
+	switch c := content.(type) {
+	case map[string]any:
+		if t, _ := c["text"].(string); t != "" {
+			return t
+		}
+		if tc, _ := c["content"].(string); tc != "" {
+			return tc
+		}
+		if items, ok := c["content"].([]any); ok {
+			var sb strings.Builder
+			for _, it := range items {
+				if t := acpUpdateText(it); t != "" {
+					sb.WriteString(t)
+				}
+			}
+			return sb.String()
+		}
+	case []any:
+		var sb strings.Builder
+		for _, it := range c {
+			if t := acpUpdateText(it); t != "" {
+				sb.WriteString(t)
+			}
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// acpCompactionEvent formats _compaction updates (Meta: {status, info}).
+func acpCompactionEvent(meta any) *FormattedEvent {
+	m, _ := meta.(map[string]any)
+	status, _ := m["status"].(string)
+	info, _ := m["info"].(map[string]any)
+	label := "compaction"
+	if auto, _ := info["auto"].(bool); auto {
+		label = "auto-compaction"
+	}
+
+	if status == "start" {
+		if before := intFromMap(info, "before"); before > 0 {
+			return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s started (%d messages)", label, before)}
+		}
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s started", label)}
+	}
+
+	if errStr, _ := info["error"].(string); errStr != "" {
+		return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s failed: %s", label, errStr)}
+	}
+	if before := intFromMap(info, "before"); before > 0 {
+		if after := intFromMap(info, "after"); after > 0 {
+			return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s done (%d -> %d messages)", label, before, after)}
+		}
+	}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: fmt.Sprintf("ai: %s done", label)}
+}
+
+// acpLLMRetryEvent formats _llm_retry updates (Meta = llmRetry payload).
+func acpLLMRetryEvent(meta any) *FormattedEvent {
+	info, _ := meta.(map[string]any)
+	if info == nil {
+		return nil
+	}
+	attempt := intFromMap(info, "attempt")
+	if attempt <= 0 {
+		return nil
+	}
+	maxRetries := intFromMap(info, "maxRetries")
+	delayNs := int64(0)
+	if d, ok := info["delay"].(float64); ok {
+		delayNs = int64(d)
+	}
+	errorType, _ := info["errorType"].(string)
+	errMsg, _ := info["error"].(string)
+
+	delay := time.Duration(delayNs) * time.Nanosecond
+	delayStr := delay.Round(time.Millisecond).String()
+	if delay >= time.Second {
+		delayStr = fmt.Sprintf("%.1fs", delay.Seconds())
+	}
+	label := errorType
+	if label == "" {
+		label = "unknown"
+	}
+	text := fmt.Sprintf("ai: LLM retry %d/%d (%s, waiting %s)", attempt, maxRetries, label, delayStr)
+	if errMsg != "" {
+		text += ": " + truncpkg.TruncateString(errMsg, 120)
+	}
+	return &FormattedEvent{Kind: KindMeta, Role: "ai", Text: text}
+}
