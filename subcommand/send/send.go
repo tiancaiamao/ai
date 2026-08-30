@@ -100,6 +100,12 @@ func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeo
 		os.Exit(1)
 	}
 
+	if !summary {
+		// Echo the prompt: the server only replays user_message_chunk on
+		// session/load, never on the live stream.
+		fmt.Printf("user: %s\n", message)
+	}
+
 	var currentText strings.Builder
 	lastKind := tui.EventKind("")
 	for {
