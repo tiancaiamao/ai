@@ -281,8 +281,12 @@ func startServeApp(cfg serveConfig) *serveApp {
 
 // mirror consumes the control client's ACP update stream and appends
 // agent_end lines to events.jsonl — the contract `ai ls` uses for idle
-// detection and result display. It also finalizes run status when a turn
-// ends.
+// detection and result display.
+//
+// Serve stays alive across turns (agent_end only means the current prompt
+// finished, not process exit — callers clean up with `ai kill`). Final
+// status is set by the signal handler (killed) or a fatal agent error
+// (failed).
 func (sp *serveApp) mirror() {
 	f, err := os.OpenFile(sp.eventsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -310,11 +314,6 @@ func (sp *serveApp) mirror() {
 		})
 		if err == nil {
 			f.Write(append(line, '\n'))
-		}
-		if success {
-			sp.finish(tui.StatusDone)
-		} else {
-			sp.finish(tui.StatusFailed)
 		}
 	}
 }
@@ -546,6 +545,15 @@ func (m runModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if text != "" {
 					if err := m.client.PromptAsync(m.sessionID, text); err != nil {
 						m.appendContent(errStyle.Render("ai: send failed: " + err.Error()))
+						m.syncIfDirty()
+					} else {
+						// Echo locally: the server only replays
+						// user_message_chunk to reconnecting clients
+						// (session/load), never on the live stream.
+						// The role prefix is added by ensureRole.
+						m.processEvent(&tui.FormattedEvent{
+							Kind: tui.KindText, Role: "user", Text: text,
+						})
 						m.syncIfDirty()
 					}
 				}

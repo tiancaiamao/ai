@@ -520,7 +520,7 @@ func ParseACPUpdate(u rpc.ACPUpdate) *FormattedEvent {
 		if text == "" {
 			return nil
 		}
-		return &FormattedEvent{Kind: KindText, Role: "user", Text: "user: " + text}
+		return &FormattedEvent{Kind: KindText, Role: "user", Text: text}
 	case "tool_call":
 		return &FormattedEvent{
 			Kind: KindTool, Role: "tool",
