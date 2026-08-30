@@ -163,17 +163,11 @@ func failServe(msg string) {
 // control client, then starts the in-process ACP server. The process exits
 // when a turn completes (_turn_end) or a termination signal arrives.
 func startServeApp(cfg serveConfig) *serveApp {
-	// Generate run ID and create directory.
-	id := tui.GenerateID()
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		failServe(fmt.Sprintf("failed to get home directory: %v", err))
 	}
 	baseDir := filepath.Join(homeDir, ".ai")
-	runDir := tui.RunDir(baseDir, id)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		failServe(fmt.Sprintf("failed to create run directory: %v", err))
-	}
 
 	// Resolve system prompt.
 	sysPrompt, err := helpers.ParseSystemPrompt(cfg.systemPrompt)
@@ -187,18 +181,25 @@ func startServeApp(cfg serveConfig) *serveApp {
 		}
 	}
 
+	// Create the run meta first so its ID is fixed before anything else
+	// (run dir, socket, id file) is derived from it.
+	cwd, _ := os.Getwd()
+	meta, err := tui.CreateRun(baseDir, cwd, os.Getpid())
+	if err != nil {
+		failServe(fmt.Sprintf("failed to create run meta: %v", err))
+	}
+	id := meta.ID
+	runDir := tui.RunDir(baseDir, id)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		failServe(fmt.Sprintf("failed to create run directory: %v", err))
+	}
+
 	// Log file for agent errors.
 	logFile, err := os.Create(filepath.Join(runDir, "error.log"))
 	if err != nil {
 		failServe(fmt.Sprintf("failed to create log file: %v", err))
 	}
 
-	// Create the run meta (status: running).
-	cwd, _ := os.Getwd()
-	meta, err := tui.CreateRun(baseDir, cwd, os.Getpid())
-	if err != nil {
-		failServe(fmt.Sprintf("failed to create run meta: %v", err))
-	}
 	if cfg.name != "" {
 		meta.Name = cfg.name
 		if err := tui.SaveRunMeta(meta, tui.RunMetaPath(baseDir, id)); err != nil {
