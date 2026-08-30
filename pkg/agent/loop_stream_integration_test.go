@@ -484,7 +484,7 @@ func TestStreamAssistantResponse_ContextCanceledMidStreamSalvagesPartial(t *test
 		t.Fatalf("expected StopReason=aborted, got %q", msg.StopReason)
 	}
 
-		// message_end event must have been pushed so the rpc layer persists it.
+	// message_end event must have been pushed so the rpc layer persists it.
 	endSeen := false
 	it := stream.Iterator(context.Background())
 drain:
