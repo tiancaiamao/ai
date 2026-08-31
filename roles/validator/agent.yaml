@@ -1,0 +1,25 @@
+version: 1
+system_prompt: ./system_prompt.md
+tools:
+  - name: read
+    enabled: true
+  - name: bash
+    enabled: true
+  - name: grep
+    enabled: true
+  - name: change_workspace
+    enabled: true
+  - name: find_skill
+    enabled: true
+middlewares:
+  - name: destructive_guard
+    enabled: true
+    params:
+      protected_patterns:
+        - "rm -rf"
+        - "rm -r"
+        - "kill -9"
+        - "mkfs"
+        - "dd if="
+context_management:
+  stale_annotation: false

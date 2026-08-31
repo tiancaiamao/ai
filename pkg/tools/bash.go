@@ -3,11 +3,12 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os/exec"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +18,13 @@ import (
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 )
+
+// exitGracePeriod is how long the bash tool keeps draining stdout/stderr
+// after the main process has exited and no new output has arrived. A
+// background descendant (e.g. a subshell waiting on a daemon started with
+// `cmd &`) can hold the pipe write ends open, so EOF may never arrive; the
+// grace period bounds the drain without truncating actively-written output.
+const exitGracePeriod = 250 * time.Millisecond
 
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
@@ -60,7 +68,12 @@ Examples:
   • Normal: {"command": "ls -la"}
   • Custom timeout: {"command": "go build ./...", "timeout": 300}
   • No timeout: {"command": "go test -race ./...", "timeout": 0}
-  • Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)`
+  - Long task with tmux: Use /tmux skill instead (e.g., builds, servers, large tests)
+
+Workspace:
+  - Use the change_workspace tool for any directory change that must persist across multiple commands (or after creating/selecting a git worktree)
+  - cd <dir> && <command> is valid only for a one-off command - a bare cd does not persist the workspace
+`
 }
 
 // Parameters returns the JSON Schema for tool parameters.
@@ -93,6 +106,41 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
 	}
 
+	// Block dangerous tmux commands that can destroy the entire tmux server.
+	// The agent itself runs inside tmux, so kill-server kills the agent too.
+	if isDangerousTmuxKill(command) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: `tmux kill-server` is forbidden. It destroys the ENTIRE tmux server, killing all sessions including your own.\n\n" +
+					"You may only kill sessions you created yourself:\n" +
+					"  ✅ tmux kill-session -t <your-session-name>\n" +
+					"  ❌ tmux kill-server\n" +
+					"  ❌ looping over all sessions and killing them\n\n" +
+					"If you need to clean up, kill only the specific named sessions you spawned.",
+			},
+		}, nil
+	}
+
+	// Block broad filesystem searches (find /, find ~, find $HOME).
+	// These are slow, noisy, and wasteful. The agent should target specific directories.
+	if isBroadFilesystemSearch(command, t.workspace.GetCWD()) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: searching from filesystem root or home directory is forbidden.\n\n" +
+					"Full-tree `find` is slow, noisy, and wasteful.\n\n" +
+					"Instead, search within a specific directory:\n" +
+					"  ❌ find /\n" +
+					"  ❌ find ~\n" +
+					"  ❌ find $HOME\n" +
+					"  ✅ find /path/to/specific/dir -name '*.go'\n" +
+					"  ✅ Use the grep tool for source code search\n\n" +
+					"Either target a known specific directory, or search within the cwd/workspace directory.",
+			},
+		}, nil
+	}
+
 	// Detect sleep commands with duration >= 30 seconds
 	if sleepDuration, hasSleep := detectSleepCommand(command); hasSleep && sleepDuration >= 30 {
 		return []agentctx.ContentBlock{
@@ -114,8 +162,15 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	if isBareCDCommand(command) {
-		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. Use change_workspace for persistent switching, or use 'cd <dir> && <command>' for a one-off command")
+		return nil, fmt.Errorf("bare 'cd' only affects this shell subprocess and does not persist workspace. For directory changes that must span multiple commands (e.g. after creating/selecting a git worktree), use the change_workspace tool. 'cd <dir> && <command>' is valid only for a one-off command")
 	}
+
+	// Transform sudo commands: rewrite to sudo -S -p '' with the password
+	// piped when SUDO_PASSWORD is set, or to sudo -n (non-interactive,
+	// never blocks) otherwise. Must happen after all safety guards (which
+	// check the original command) and before exec.CommandContext below.
+	sudoResult := transformSudoCommand(command)
+	execCommand := sudoResult.command
 
 	// Get current working directory from workspace
 	cwd := t.workspace.GetCWD()
@@ -151,8 +206,8 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}()
 	}
 
-	// Create command
-	cmd := exec.CommandContext(cmdCtx, "/bin/sh", "-c", command)
+	// Create command — use the sudo-transformed version if applicable.
+	cmd := exec.CommandContext(cmdCtx, "/bin/sh", "-c", execCommand)
 	cmd.Dir = cwd
 
 	// Set process group to enable cleanup of entire process tree
@@ -160,20 +215,51 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		Setpgid: true,
 	}
 
-	// Setup pipes for stdout and stderr
-	stdout, err := cmd.StdoutPipe()
+	// When sudo needs a password piped to stdin, set up a pipe.
+	// Declare stdinRead outside the if block so the deferred close
+	// is visible regardless of which path we take.
+	var stdinRead *os.File
+	var stdinPipeWrite *os.File
+	if sudoResult.passwordLines != "" {
+		var pipeErr error
+		stdinRead, stdinPipeWrite, pipeErr = os.Pipe()
+		if pipeErr != nil {
+			return nil, fmt.Errorf("failed to create stdin pipe: %w", pipeErr)
+		}
+		cmd.Stdin = stdinRead
+		defer stdinRead.Close()
+	}
+
+	// Setup pipes for stdout and stderr using os.Pipe() instead of
+	// cmd.StdoutPipe()/StderrPipe() to avoid a race condition:
+	// cmd.Wait() closes pipes returned by StdoutPipe()/StderrPipe(),
+	// which can race with our streaming goroutines that are still reading
+	// from them, causing "file already closed" errors.
+	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	stderr, err := cmd.StderrPipe()
+	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
+		stdoutRead.Close()
+		stdoutWrite.Close()
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
+
+	cmd.Stdout = stdoutWrite
+	cmd.Stderr = stderrWrite
 
 	// Start the command
 	startTime := time.Now()
 	if err := cmd.Start(); err != nil {
+		stdoutRead.Close()
+		stdoutWrite.Close()
+		stderrRead.Close()
+		stderrWrite.Close()
+		if stdinPipeWrite != nil {
+			stdinPipeWrite.Close()
+		}
 		msg := fmt.Sprintf("Failed to start command: %v", err)
 		if cmd.Dir != "" {
 			if _, statErr := os.Stat(cmd.Dir); statErr != nil {
@@ -188,10 +274,32 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		}, nil
 	}
 
+	// If sudo password is needed, write it to stdin on a goroutine to avoid
+	// pipe-buffer deadlocks (the child may not read stdin until its stdout
+	// buffer fills, or vice versa).
+	if stdinPipeWrite != nil {
+		go func() {
+			defer stdinPipeWrite.Close()
+			if _, err := io.WriteString(stdinPipeWrite, sudoResult.passwordLines); err != nil {
+				slog.Debug("[Bash] sudo password write error (child may have exited early)", "error", err)
+			}
+		}()
+	}
+
+	// Close write ends in the parent process. The child process has its own
+	// copies via fork/exec. Closing the parent's write ends ensures:
+	// 1. No fd leak in parent
+	// 2. When child exits, the write end is fully closed → our goroutines get EOF
+	stdoutWrite.Close()
+	stderrWrite.Close()
+
 	// Stream stdout/stderr concurrently to avoid pipe backpressure deadlocks
 	var output strings.Builder
 	var outputMu sync.Mutex // Protect output from concurrent writes
 	var outputWG sync.WaitGroup
+	// activity signals that output arrived after the main process exited;
+	// it re-arms the idle grace timer below so we don't truncate a slow tail.
+	activity := make(chan struct{}, 1)
 	streamPipe := func(reader io.Reader) {
 		defer outputWG.Done()
 		bufReader := bufio.NewReader(reader)
@@ -201,28 +309,93 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 				outputMu.Lock()
 				output.WriteString(line)
 				outputMu.Unlock()
+				select {
+				case activity <- struct{}{}:
+				default:
+				}
 			}
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				outputMu.Lock()
-				output.WriteString(fmt.Sprintf("stream read error: %v\n", err))
-				outputMu.Unlock()
+				// os.ErrClosed means we closed the read end ourselves (idle
+				// grace / timeout path below) — not a real read error.
+				if !errors.Is(err, os.ErrClosed) {
+					outputMu.Lock()
+					output.WriteString(fmt.Sprintf("stream read error: %v\n", err))
+					outputMu.Unlock()
+				}
 				break
 			}
 		}
 	}
 
 	outputWG.Add(2)
-	go streamPipe(stdout)
-	go streamPipe(stderr)
+	go streamPipe(stdoutRead)
+	go streamPipe(stderrRead)
+	streamDone := make(chan struct{})
+	go func() {
+		outputWG.Wait()
+		close(streamDone)
+	}()
 
-	// Wait for command to finish
+	// Wait for command to finish. Since we use our own os.Pipe(),
+	// cmd.Wait() will NOT close our pipes — we control the lifecycle.
 	err = cmd.Wait()
 
-	// Wait for output streaming to complete
-	outputWG.Wait()
+	// Drain stdout/stderr without hanging on descendant-held pipes.
+	//
+	// After the main shell exits, a background descendant (e.g. a subshell
+	// waiting on a daemon started with `cmd &`) can keep the pipe write ends
+	// open, so EOF never arrives. Blocking on outputWG.Wait() would hang the
+	// tool forever (the deadline check below is only reached after the
+	// drain). Instead, finalize once the pipes fall idle: the grace timer is
+	// re-armed on every chunk, so actively-writing descendants keep us
+	// reading, while a quiet holder of the pipe releases us after the grace
+	// period elapses. The daemon itself is left running — it is not part of
+	// the command.
+	idleTimer := time.NewTimer(exitGracePeriod)
+	defer idleTimer.Stop()
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-streamDone:
+				// Both pipes reached EOF — full output captured.
+				return
+			case <-activity:
+				// Output still arriving — defer finalizing so we don't
+				// truncate the tail.
+				if !idleTimer.Stop() {
+					select {
+					case <-idleTimer.C:
+					default:
+					}
+				}
+				idleTimer.Reset(exitGracePeriod)
+			case <-idleTimer.C:
+				// Pipes idle — release the blocked stream goroutines.
+				stdoutRead.Close()
+				stderrRead.Close()
+				<-streamDone
+				return
+			case <-cmdCtx.Done():
+				// Deadline/cancel fired while draining (e.g. a background
+				// process keeps producing output past the timeout). Release
+				// the pipes so the timeout/cancel handling below proceeds.
+				stdoutRead.Close()
+				stderrRead.Close()
+				<-streamDone
+				return
+			}
+		}
+	}()
+	<-drainDone
+
+	// Close read ends now that goroutines have finished.
+	stdoutRead.Close()
+	stderrRead.Close()
 
 	elapsed := time.Since(startTime)
 
@@ -283,9 +456,16 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		"elapsed", elapsed.Seconds(),
 		"outputSize", output.Len())
 
+	// Handle sudo password issues: add helpful hints when sudo fails
+	// in non-interactive contexts.
+	outputText := output.String()
+	if hint := SudoHint(outputText); hint != "" {
+		outputText += hint
+	}
+
 	// Build result
 	var result strings.Builder
-	result.WriteString(output.String())
+	result.WriteString(outputText)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if result.Len() > 0 {
@@ -373,4 +553,63 @@ func detectSleepCommand(command string) (int, bool) {
 	}
 
 	return duration, true
+}
+
+// isBroadFilesystemSearch checks if the command runs `find` against the
+// filesystem root (/), home directory (~), or $HOME — all of which are
+// slow, noisy, and wasteful.
+//
+// Blocked patterns:
+//   - find /            (any position in compound commands)
+//   - find /*           (glob expands to all of root)
+//   - find -- /         (double-dash separator)
+//   - find ~
+//   - find ~/*          (glob expands to all of home)
+//   - find $HOME
+//
+// Allowed:
+//   - find /tmp -name x   (specific subdirectory)
+//   - find ~/project      (specific subdirectory under home)
+//   - find .              (current directory)
+func isBroadFilesystemSearch(command string, cwd string) bool {
+	// find /, find /*, find -- /  — root path or glob of root.
+	// Matches when / is immediately followed by: whitespace, pipe, semicolon,
+	// &, ), * (glob), or end of string. Does NOT match /tmp, /home/user, etc.
+	rootRe := regexp.MustCompile(`\bfind\s+(--\s+)?/([\s|;&)*]|$)`)
+
+	// find ~, find ~/*, find -- ~  — home path or glob of home.
+	// Matches when ~ is followed by a terminator (whitespace, pipe, etc.),
+	// end of string, /* (glob), or a bare trailing slash (~/ at end or ~/ |).
+	// Does NOT match ~/project.
+	homeTildeRe := regexp.MustCompile(`\bfind\s+(--\s+)?~([\s|;&)]|$|/\*|/(?:[\s|;&)]|$))`)
+
+	// find $HOME or find ${HOME}
+	homeEnvRe := regexp.MustCompile(`\bfind\s+\$\{?HOME\}?\b`)
+
+	if rootRe.MatchString(command) ||
+		homeTildeRe.MatchString(command) ||
+		homeEnvRe.MatchString(command) {
+		return true
+	}
+
+	// find /Users/genius — home directory via absolute path.
+	// Same risk as find ~, but bypasses the tilde check. Block it too,
+	// unless the workspace cwd IS the home directory (equivalent to find .).
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" || homeDir == "/" {
+		return false
+	}
+	if cwd != "" && cwd == homeDir {
+		return false
+	}
+	homeEscaped := regexp.QuoteMeta(homeDir)
+	homeAbsRe := regexp.MustCompile(`\bfind\s+(--\s+)?` + homeEscaped + `([\s|;&)]|$|/\*|/(?:[\s|;&)]|$))`)
+
+	return homeAbsRe.MatchString(command)
+}
+
+// isDangerousTmuxKill checks if the command contains tmux kill-server,
+// which destroys the entire tmux server and all sessions (including the agent's own).
+func isDangerousTmuxKill(command string) bool {
+	return regexp.MustCompile(`\btmux\s+kill-server\b`).MatchString(command)
 }

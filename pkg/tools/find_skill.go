@@ -20,6 +20,7 @@ type SkillIndexEntry struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Aliases     []string `json:"aliases"`
+	Keywords    []string `json:"keywords"`
 	UseWhen     []string `json:"use_when"`
 	Categories  []string `json:"categories"`
 }
@@ -129,19 +130,48 @@ type searchResult struct {
 }
 
 const (
-	rankExactName  = 0
-	rankAliasMatch = 1
-	rankCategory   = 2
-	rankUseWhen    = 3
-	rankDescMatch  = 4
-	rankNameMatch  = 5
+	rankExactName    = 0
+	rankAliasMatch   = 1
+	rankKeywordMatch = 2
+	rankCategory     = 3
+	rankUseWhen      = 4
+	rankDescMatch    = 5
+	rankNameMatch    = 6
 )
 
-// executeSearch searches all loaded skills for a case-insensitive substring match
-// on Name and Description, then enriches results from the skill index.
+// matchTokens checks whether any token in tokens is a substring of any
+// string in fields. Returns true if at least one token matches at least one field.
+func matchTokens(tokens []string, fields ...[]string) bool {
+	for _, token := range tokens {
+		for _, field := range fields {
+			for _, v := range field {
+				if strings.Contains(strings.ToLower(v), token) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// fieldContainsAllTokens checks whether every token appears in at least one
+// of the provided field groups. Used for precise multi-token matching on
+// name and description where we want all tokens to match.
+func fieldContainsAllTokens(value string, tokens []string) bool {
+	lower := strings.ToLower(value)
+	for _, token := range tokens {
+		if !strings.Contains(lower, token) {
+			return false
+		}
+	}
+	return true
+}
+
+// executeSearch searches all loaded skills using tokenized query matching,
+// then enriches results from the skill index (including keywords).
 // Returns up to 5 results sorted by relevance.
 func (t *FindSkillTool) executeSearch(query string) ([]agentctx.ContentBlock, error) {
-	lowerQuery := strings.ToLower(query)
+	tokens := strings.Fields(strings.ToLower(query))
 
 	// Phase 1: direct name/description matching on loaded skills
 	directMatches := make(map[string]bool) // names already found
@@ -151,19 +181,22 @@ func (t *FindSkillTool) executeSearch(query string) ([]agentctx.ContentBlock, er
 		lowerName := strings.ToLower(s.Name)
 		lowerDesc := strings.ToLower(s.Description)
 
-		if lowerName == lowerQuery {
+		if lowerName == strings.ToLower(query) {
+			// Exact full query match on name — highest rank
 			results = append(results, searchResult{skill: s, rank: rankExactName})
 			directMatches[s.Name] = true
-		} else if strings.Contains(lowerName, lowerQuery) {
+		} else if fieldContainsAllTokens(lowerName, tokens) {
+			// All tokens match in name
 			results = append(results, searchResult{skill: s, rank: rankNameMatch})
 			directMatches[s.Name] = true
-		} else if strings.Contains(lowerDesc, lowerQuery) {
+		} else if fieldContainsAllTokens(lowerDesc, tokens) {
+			// All tokens match in description
 			results = append(results, searchResult{skill: s, rank: rankDescMatch})
 			directMatches[s.Name] = true
 		}
 	}
 
-	// Phase 2: enrich from skill index
+	// Phase 2: enrich from skill index (aliases, keywords, categories, use_when)
 	idx := loadSkillIndex(t.indexPath)
 	if idx != nil {
 		for _, entry := range idx.Entries {
@@ -173,32 +206,24 @@ func (t *FindSkillTool) executeSearch(query string) ([]agentctx.ContentBlock, er
 
 			matchedRank := -1
 
-			// Check aliases
-			for _, alias := range entry.Aliases {
-				if strings.Contains(strings.ToLower(alias), lowerQuery) {
-					matchedRank = rankAliasMatch
-					break
-				}
+			// Check aliases — any token matches any alias
+			if matchTokens(tokens, entry.Aliases) {
+				matchedRank = rankAliasMatch
+			}
+
+			// Check keywords — any token matches any keyword
+			if matchedRank < 0 && matchTokens(tokens, entry.Keywords) {
+				matchedRank = rankKeywordMatch
 			}
 
 			// Check categories
-			if matchedRank < 0 {
-				for _, cat := range entry.Categories {
-					if strings.Contains(strings.ToLower(cat), lowerQuery) {
-						matchedRank = rankCategory
-						break
-					}
-				}
+			if matchedRank < 0 && matchTokens(tokens, entry.Categories) {
+				matchedRank = rankCategory
 			}
 
 			// Check use_when
-			if matchedRank < 0 {
-				for _, uw := range entry.UseWhen {
-					if strings.Contains(strings.ToLower(uw), lowerQuery) {
-						matchedRank = rankUseWhen
-						break
-					}
-				}
+			if matchedRank < 0 && matchTokens(tokens, entry.UseWhen) {
+				matchedRank = rankUseWhen
 			}
 
 			if matchedRank >= 0 {

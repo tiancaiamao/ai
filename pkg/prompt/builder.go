@@ -14,40 +14,23 @@ import (
 //go:embed "prompt.md"
 var promptTemplate string
 
-
-
-//go:embed "compact_system.md"
-var compactSystemPrompt string
-
 //go:embed "compact_summarize.md"
 var compactSummarizePrompt string
 
-//go:embed "compact_update.md"
-var compactUpdatePrompt string
+//go:embed "compact_check.md"
+var compactCheckPrompt string
 
-//go:embed "context_management.md"
-var contextManagementSystemPrompt string
-
-// CompactorBasePrompt returns the baseline prompt used by compactor requests.
+// CompactorBasePrompt returns a baseline system prompt used by the compactor
+// for token estimation in CalculateDynamicThreshold. This string is NOT sent
+// to the LLM as a system prompt — the compactor reuses the agent's system prompt
+// for cache-friendliness. The content here only affects token-overhead arithmetic.
 func CompactorBasePrompt() string {
 	return "You are a context management assistant. You are called periodically by the system to maintain conversation context health."
 }
 
-
-
-// CompactSystemPrompt returns the system prompt for compaction.
-func CompactSystemPrompt() string {
-	return compactSystemPrompt
-}
-
-// CompactSummarizePrompt returns the prompt for initial summarization.
+// CompactSummarizePrompt returns the prompt for summarization.
 func CompactSummarizePrompt() string {
 	return compactSummarizePrompt
-}
-
-// CompactUpdatePrompt returns the prompt for updating existing summary.
-func CompactUpdatePrompt() string {
-	return compactUpdatePrompt
 }
 
 // ToolInfo describes a tool for prompt generation.
@@ -65,20 +48,17 @@ type Builder struct {
 	// Minimal mode (excludes optional sections like skills, project context)
 	minimal bool
 
-	// No workspace mode (excludes workspace section, for chat bots like claw)
-	noWorkspace bool
-
-	// Workspace notes (optional reminders)
-	workspaceNotes string
-
 	// Available tools (for Tooling section)
 	tools []ToolInfo
 
-		// Skills (for Skills section)
+	// Skills (for Skills section)
 	skills []skill.Skill
 
 	// Skill usage stats (optional, for progressive disclosure)
 	skillStats *skill.SkillStatsFile
+
+	// Custom template (if empty, uses embedded promptTemplate)
+	template string
 
 	// Context meta (for runtime_state telemetry, set by agent loop)
 	contextMeta string
@@ -109,24 +89,6 @@ func (b *Builder) GetCWD() string {
 		return b.workspace.GetCWD()
 	}
 	return b.cwd
-}
-
-// SetMinimal enables/disables minimal mode.
-func (b *Builder) SetMinimal(minimal bool) *Builder {
-	b.minimal = minimal
-	return b
-}
-
-// SetNoWorkspace enables/disables no-workspace mode.
-func (b *Builder) SetNoWorkspace(noWorkspace bool) *Builder {
-	b.noWorkspace = noWorkspace
-	return b
-}
-
-// SetWorkspaceNotes sets optional workspace notes.
-func (b *Builder) SetWorkspaceNotes(notes string) *Builder {
-	b.workspaceNotes = notes
-	return b
 }
 
 // SetTools sets the available tools.
@@ -162,79 +124,39 @@ func (b *Builder) SetSkillStats(stats *skill.SkillStatsFile) *Builder {
 	return b
 }
 
-// SetContextMeta sets the runtime_state telemetry metadata.
-func (b *Builder) SetContextMeta(meta string) *Builder {
-	b.contextMeta = meta
-	return b
-}
-
-// SetTokensPercent sets the current token usage percentage.
-func (b *Builder) SetTokensPercent(pct float64) *Builder {
-	b.tokensPercent = pct
-	return b
-}
-
-// Build builds final system prompt by replacing placeholders in the template.
-func (b *Builder) Build() string {
-	result := promptTemplate
-
-	// Replace workspace section (optional - empty when noWorkspace is true)
-	workspaceSection := ""
-	if !b.noWorkspace {
-		workspaceNotes := ""
-		if b.workspaceNotes != "" {
-			workspaceNotes = "\n" + b.workspaceNotes
-		}
-		workspaceSection = fmt.Sprintf(`## Workspace
-Use current_workdir from runtime_state, not a hardcoded path.
-Use change_workspace for persistent directory switches; "cd <dir> && <command>" for one-off commands.%s`, workspaceNotes)
-	}
-	result = strings.ReplaceAll(result, "%WORKSPACE_SECTION%", workspaceSection)
-
-	// Replace skills (optional section)
-	skills := ""
-	if !b.minimal && len(b.skills) > 0 {
-						if skillsText := skill.FormatForPrompt(b.skills, b.skillStats); skillsText != "" {
-			skills = skillsText
-		}
-	}
-	result = strings.ReplaceAll(result, "%SKILLS%", skills)
-
-	// Replace project context (optional section)
-	projectContext := ""
-	if !b.minimal && !b.noWorkspace {
-		projectContext = b.buildProjectContext()
-	}
-	result = strings.ReplaceAll(result, "%PROJECT_CONTEXT%", projectContext)
-
-	// Remove empty sections (optional sections that were not enabled)
-		result = b.cleanupEmptySections(result)
-
-	return result
-}
-
-// Bootstrap files to search for in workspace.
-var bootstrapFiles = []string{
-	"TOOLS.md",    // Tool usage instructions
-	"IDENTITY.md", // User/owner identity
-	"AGENTS.md",   // Project-level agent instructions
-}
-
-func (b *Builder) buildProjectContext() string {
-	contexts := []string{}
-
-	for _, filename := range bootstrapFiles {
-		content := b.loadBootstrapFile(filename)
-		if content != "" {
-			contexts = append(contexts, fmt.Sprintf("### %s\n\n%s", filename, content))
-		}
-	}
-
-	if len(contexts) == 0 {
+// BuildSkillsMessage formats the skills list as a user message wrapped in
+// <agent:skills> tags, ready for injection as a user message before the
+// last user input on each LLM call. Returns empty string when no skills
+// are available or minimal mode is enabled.
+//
+// This replaces the former %SKILLS% placeholder in the system prompt template.
+// Skills are now injected per-LLM-call as a user-role message (similar to
+// AgentInstructions), keeping the system prompt stable for caching while still
+// providing skill context on every turn.
+func (b *Builder) BuildSkillsMessage() string {
+	if b.minimal || len(b.skills) == 0 {
 		return ""
 	}
+	skillsText := skill.FormatForPrompt(b.skills, b.skillStats)
+	if skillsText == "" {
+		return ""
+	}
+	return fmt.Sprintf("<agent:skills>\n%s\n</agent:skills>", skillsText)
+}
 
-	return "## Project Context\n" + joinLines(contexts)
+// Build builds final system prompt from the template.
+// Skills are no longer included here — use BuildSkillsMessage() to get the
+// skills content for per-LLM-call user message injection.
+func (b *Builder) Build() string {
+	result := promptTemplate
+	if b.template != "" {
+		result = b.template
+	}
+
+	// Remove empty sections (optional sections that were not enabled)
+	result = b.cleanupEmptySections(result)
+
+	return result
 }
 
 func (b *Builder) loadBootstrapFile(filename string) string {
@@ -253,6 +175,28 @@ func (b *Builder) loadBootstrapFile(filename string) string {
 	}
 
 	return ""
+}
+
+// loadAgentInstructions reads AGENTS.md content from the workspace.
+// Lookup order: .ai/AGENTS.md (project-local) → AGENTS.md (workspace root).
+// Returns empty string if not found.
+func (b *Builder) loadAgentInstructions() string {
+	return b.loadBootstrapFile("AGENTS.md")
+}
+
+// BuildInstructionsMessage returns the AGENTS.md content wrapped in
+// <agent:instructions> tags, ready for injection as a user message.
+// Returns empty string when no AGENTS.md is present.
+//
+// Unlike Build() output (which becomes the static system prompt), this content
+// is injected per-LLM-call as a user-role message placed before the user's
+// actual input — matching the codex contextual_user_message pattern.
+func (b *Builder) BuildInstructionsMessage() string {
+	content := b.loadAgentInstructions()
+	if content == "" {
+		return ""
+	}
+	return fmt.Sprintf("<agent:instructions>\n%s\n</agent:instructions>", content)
 }
 
 func (b *Builder) cleanupEmptySections(prompt string) string {
@@ -297,10 +241,6 @@ func (b *Builder) cleanupEmptySections(prompt string) string {
 	return strings.Join(cleaned, "\n")
 }
 
-func joinLines(lines []string) string {
-	return strings.Join(lines, "\n")
-}
-
 // ThinkingInstruction returns the thinking instruction for the given level.
 func ThinkingInstruction(level string) string {
 	level = NormalizeThinkingLevel(level)
@@ -334,7 +274,9 @@ func NormalizeThinkingLevel(level string) string {
 	}
 }
 
-// ContextManagementSystemPrompt returns system prompt for context management.
-func ContextManagementSystemPrompt() string {
-	return contextManagementSystemPrompt
+// CompactCheckPrompt returns the prompt template for asking the LLM
+// whether to compact. Contains a single %s placeholder for the budget
+// percentage (e.g. "40%").
+func CompactCheckPrompt() string {
+	return compactCheckPrompt
 }

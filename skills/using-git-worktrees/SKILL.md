@@ -240,85 +240,73 @@ Ready to implement auth feature
 
 **Pairs with:**
 - **finishing-a-development-branch** - REQUIRED for cleanup after work complete
-- **ag** - Combine for persistent, observable task execution
+- **subagent** - Combine for persistent, observable task execution with ai serve
 
 ## Agent Worktrees
 
-Combine git worktrees with `ag` CLI for persistent, observable task execution in isolated environments.
+Combine git worktrees with `subagent` 技能 for persistent, observable task execution in isolated environments.
 
 ### When to Use
 
 | Scenario | Approach | Why |
 |----------|----------|-----|
-| Long-running analysis | Worktree + ag spawn | Results persist in worktree after completion |
+| Long-running analysis | Worktree + subagent | Results persist in worktree after completion |
 | Parallel feature work | Multiple worktrees | Isolated branches, no conflicts |
-| Code review before merge | Worktree + Explorer profile | Read-only review in isolated environment |
-| Experimental changes | Worktree + Builder profile | Safely iterate without affecting main branch |
+| Code review before merge | Worktree + review agent | Read-only review in isolated environment |
+| Experimental changes | Worktree + coder agent | Safely iterate without affecting main branch |
 
 ### Workflow
 
 ```bash
 # 1. Create worktree for the task
 git worktree add .worktrees/review-auth -b review/auth
-
-# 2. Use ag spawn with --cwd to set workspace
-ag spawn \
-  --id "review-auth" \
-  --cwd "/path/to/project/.worktrees/review-auth" \
-  --system @/path/to/reviewer.md \
-  --input "Review auth changes for security issues" \
-  --timeout 15m
-
-ag wait "review-auth" --timeout 900
-OUTPUT=$(ag output "review-auth")
-ag rm "review-auth"
-
-# 4. Results remain in worktree for inspection
-# Original worktree remains untouched
 ```
+
+2. 用 `subagent` 技能 spawn 子 agent，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@/path/to/reviewer.md` |
+| input | `'Review auth changes for security issues'` |
+| name | `review-auth` |
+| timeout | `15m` |
+
+3. 用 `subagent` 技能 Watch 等待完成
+4. 用 `subagent` 技能 Cleanup 清理 agent
+5. 结果保留在 worktree 中供检查
 
 ### Pattern: Persistent Review Session
 
 ```bash
-# Create a persistent review worktree
 git worktree add .worktrees/review-feature-x -b review/feature-x
-
-# Run reviewer agent in worktree
-ag spawn \
-  --id "review-feature-x" \
-  --cwd "/path/to/project/.worktrees/review-feature-x" \
-  --system @/path/to/reviewer.md \
-  --input "Review changes against main: security, correctness, style" \
-  --timeout 15m
-
-ag wait "review-feature-x" --timeout 900
-ag rm "review-feature-x"
-
-# Worktree stays available for:
-# - Manual inspection of changes
-# - Additional review passes
-# - Testing in isolated environment
 ```
+
+用 `subagent` 技能 spawn + watch，参数：
+
+| 参数 | 值 |
+|------|-----|
+| system-prompt | `@/path/to/reviewer.md` |
+| input | `'Review changes against main: security, correctness, style'` |
+| name | `review-feature-x` |
+| timeout | `15m` |
+
+完成后 Cleanup。Worktree 保留，可用于手动检查、追加 review、测试。
 
 ### Pattern: Parallel Feature Branches
 
 ```bash
-# Create multiple worktrees for parallel work
 git worktree add .worktrees/feature-auth -b feature/auth
 git worktree add .worktrees/feature-api -b feature/api
-
-# Run builders in parallel using ag patterns/parallel.sh
-ag patterns/parallel.sh \
-  2 \
-  @/path/to/builder.md \
-  "Implement feature in current worktree" \
-  /tmp/parallel-results \
-  --cwd-auth="/path/to/project/.worktrees/feature-auth" \
-  --cwd-api="/path/to/project/.worktrees/feature-api"
-
-# Both worktrees have isolated changes
-# Merge independently when ready
 ```
+
+用 `subagent` 技能并行 spawn 2 个 agent（注意并发上限），参数：
+
+| Agent | system-prompt | input | name | timeout |
+|-------|---------------|-------|------|---------|
+| Auth | `@/path/to/builder.md` | `'Implement auth feature in current worktree'` | `build-auth` | `15m` |
+| API | `@/path/to/builder.md` | `'Implement API feature in current worktree'` | `build-api` | `15m` |
+
+> 完整 spawn/watch/cleanup 代码见 `subagent` 技能。每个 worktree 中的改动互不干扰，可独立 merge。
 
 ### Benefits Over Temporary Agents
 
@@ -326,11 +314,11 @@ ag patterns/parallel.sh \
 |----------------|----------------|
 | Results lost after completion | Results persist in worktree |
 | Hard to inspect intermediate state | Full git history available |
-| Difficult to debug failures | Can check ag status and investigate |
+| Difficult to debug failures | Can check worktree state and git diff |
 | Single-shot execution | Can spawn new agents and iterate |
 
 ### Cleanup
 
 After task completion, use the `finishing-a-development-branch` skill to clean up worktrees.
 
-**See also:** `ag` skill for agent orchestration details
+**See also:** `subagent` skill for ai serve/send/watch/kill pattern details

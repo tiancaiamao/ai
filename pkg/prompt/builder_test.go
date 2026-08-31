@@ -3,9 +3,11 @@ package prompt
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tiancaiamao/ai/pkg/skill"
+	"github.com/tiancaiamao/ai/pkg/tools"
 )
 
 // mockTool implements ToolInfo for testing
@@ -76,43 +78,19 @@ func TestBuilderWithSkills(t *testing.T) {
 
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
+
+	// Skills are now in BuildSkillsMessage(), not Build()
 	result := b.Build()
-
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
-	}
-
-	if !contains(result, "A test skill") {
-		t.Error("Skill description missing")
-	}
-}
-
-func TestBuilderMinimalMode(t *testing.T) {
-	cwd := "/workspace"
-
-	tools := []ToolInfo{
-		mockTool{name: "read", description: "Read files"},
-	}
-	skills := []skill.Skill{
-		{Name: "test", Description: "A test skill"},
-	}
-
-	b := NewBuilder("", cwd)
-	b.SetTools(tools).SetSkills(skills).SetMinimal(true)
-	result := b.Build()
-
-	// In minimal mode, skills should be excluded
 	if contains(result, "## Skills") {
-				t.Error("Skills section should not appear in minimal mode")
+		t.Error("Skills section should not appear in Build() output (moved to BuildSkillsMessage)")
 	}
 
-	// But tools and workspace should still be there
-	if !contains(result, "## Tools") {
-		t.Error("Tools section missing in minimal mode")
+	skillsMsg := b.BuildSkillsMessage()
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing from BuildSkillsMessage()")
 	}
-
-	if !contains(result, "## Workspace") {
-		t.Error("Workspace section missing in minimal mode")
+	if !contains(skillsMsg, "A test skill") {
+		t.Error("Skill description missing from BuildSkillsMessage()")
 	}
 }
 
@@ -125,15 +103,15 @@ func TestBuilderSkillsRendering(t *testing.T) {
 
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("skills header missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
-	if !contains(result, "- **wf-issue**: issue workflow (/tmp/wf-issue/SKILL.md)") {
+	if !contains(skillsMsg, "- **wf-issue**: issue workflow") {
 		t.Error("full skill entry missing")
 	}
-	if !contains(result, "- **subagent**: subagent workflow (/tmp/subagent/SKILL.md)") {
+	if !contains(skillsMsg, "- **subagent**: subagent workflow") {
 		t.Error("full skill entry missing")
 	}
 }
@@ -228,57 +206,82 @@ func TestConvertToolsNonSlice(t *testing.T) {
 	}
 }
 
-func TestProjectContextEmbedsAgentsMd(t *testing.T) {
-	cwd := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("agents instructions"), 0644); err != nil {
-		t.Fatalf("write AGENTS.md: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte("claude instructions"), 0644); err != nil {
-		t.Fatalf("write CLAUDE.md: %v", err)
-	}
+func TestBuildInstructionsMessage(t *testing.T) {
+	t.Run("loads AGENTS.md from workspace root", func(t *testing.T) {
+		cwd := t.TempDir()
+		if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("# My Project\n\nSome rules."), 0644); err != nil {
+			t.Fatalf("write AGENTS.md: %v", err)
+		}
 
-	b := NewBuilder("", cwd)
-	result := b.Build()
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
 
-	if contains(result, "## AGENTS.md Convention") {
-		t.Fatalf("AGENTS.md Convention section should not be embedded in prompt")
-	}
-	if !contains(result, "agents instructions") {
-		t.Fatalf("AGENTS.md file content should be embedded in prompt")
-	}
-	if contains(result, "claude instructions") {
-		t.Fatalf("CLAUDE.md file content should not be embedded in prompt")
-	}
+		if !strings.HasPrefix(got, "<agent:instructions>\n") {
+			t.Fatalf("expected <agent:instructions> open tag, got: %q", got)
+		}
+		if !strings.HasSuffix(got, "\n</agent:instructions>") {
+			t.Fatalf("expected </agent:instructions> close tag, got: %q", got)
+		}
+		if !contains(got, "# My Project") || !contains(got, "Some rules.") {
+			t.Fatalf("AGENTS.md content missing from instructions message: %q", got)
+		}
+		// Sanity: the wrapped content must NOT leak into Build().
+		if contains(b.Build(), "<agent:instructions>") {
+			t.Fatalf("Build() should not contain <agent:instructions> tag")
+		}
+	})
+
+	t.Run("prefers .ai/AGENTS.md over root", func(t *testing.T) {
+		cwd := t.TempDir()
+		if err := os.Mkdir(filepath.Join(cwd, ".ai"), 0755); err != nil {
+			t.Fatalf("mkdir .ai: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cwd, ".ai", "AGENTS.md"), []byte("local override"), 0644); err != nil {
+			t.Fatalf("write .ai/AGENTS.md: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("root content"), 0644); err != nil {
+			t.Fatalf("write AGENTS.md: %v", err)
+		}
+
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
+
+		if !contains(got, "local override") {
+			t.Fatalf("expected .ai/AGENTS.md content; got: %q", got)
+		}
+		if contains(got, "root content") {
+			t.Fatalf("root AGENTS.md should be shadowed by .ai/AGENTS.md; got: %q", got)
+		}
+	})
+
+	t.Run("returns empty when no AGENTS.md exists", func(t *testing.T) {
+		cwd := t.TempDir()
+		b := NewBuilder("", cwd)
+		got := b.BuildInstructionsMessage()
+		if got != "" {
+			t.Fatalf("expected empty string, got: %q", got)
+		}
+	})
 }
 
-func TestNoWorkspaceMode(t *testing.T) {
+func TestWorkspaceSectionPresent(t *testing.T) {
 	cwd := t.TempDir()
 
-	// Add minimal tools for both builders
+	// Add minimal tools
 	tools := []ToolInfo{mockTool{name: "read", description: "Read files"}}
 
-	// Test with workspace (default)
-	builderWithWorkspace := NewBuilder("", cwd)
-	builderWithWorkspace.SetTools(tools)
-	resultWith := builderWithWorkspace.Build()
-	if !contains(resultWith, "## Workspace") {
-		t.Error("expected Workspace section when noWorkspace is false")
+	// The Workspace section is hardcoded in the prompt template.
+	builder := NewBuilder("", cwd)
+	builder.SetTools(tools)
+	result := builder.Build()
+	if !contains(result, "## Workspace") {
+		t.Error("expected Workspace section in default build")
 	}
-
-	// Test without workspace (noWorkspace mode)
-	builderNoWorkspace := NewBuilder("", cwd).SetNoWorkspace(true)
-	builderNoWorkspace.SetTools(tools)
-	resultWithout := builderNoWorkspace.Build()
-	if contains(resultWithout, "## Workspace") {
-		t.Error("expected no Workspace section when noWorkspace is true")
+	if !contains(result, "current_workdir") {
+		t.Error("expected current_workdir guidance in Workspace section")
 	}
-	if contains(resultWithout, "Your working directory is:") {
-		t.Error("expected no working directory mention when noWorkspace is true")
-	}
-
-	// Ensure the prompt still has content (it will have Tooling section)
-	if resultWithout == "" {
-		t.Error("expected non-empty prompt even in noWorkspace mode")
+	if result == "" {
+		t.Error("expected non-empty prompt")
 	}
 }
 
@@ -303,10 +306,10 @@ func TestBuilderWithSkillStats(t *testing.T) {
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	b.SetSkillStats(stats)
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
 
 	// With TopN=2 and "popular" ranked highest, "medium" should not appear
@@ -314,15 +317,15 @@ func TestBuilderWithSkillStats(t *testing.T) {
 	// Actually, let's check: popular (ranked), unpopular (ranked) → top 2 from stats.
 	// "medium" has no stats → it gets added as unranked supplement only if room.
 	// TopN=2, ranked=2 → selected has 2 → medium is excluded.
-	if !contains(result, "**popular**") {
+	if !contains(skillsMsg, "**popular**") {
 		t.Error("popular skill should appear")
 	}
-	if contains(result, "**medium**") {
+	if contains(skillsMsg, "**medium**") {
 		t.Error("medium skill should be filtered out (TopN=2, not in top entries)")
 	}
 
 	// Stats present → should include find_skill hint
-	if !contains(result, "find_skill") {
+	if !contains(skillsMsg, "find_skill") {
 		t.Error("find_skill hint should appear when stats are set")
 	}
 }
@@ -337,16 +340,16 @@ func TestBuilderWithSkillStatsNil(t *testing.T) {
 	b := NewBuilder("", cwd)
 	b.SetSkills(skills)
 	// SetSkillStats not called → skillStats is nil → backward compat
-	result := b.Build()
+	skillsMsg := b.BuildSkillsMessage()
 
-	if !contains(result, "## Skills") {
-		t.Error("Skills section missing")
+	if !contains(skillsMsg, "agent:skills") {
+		t.Error("agent:skills wrapper missing")
 	}
-	if !contains(result, "A test skill") {
+	if !contains(skillsMsg, "A test skill") {
 		t.Error("Skill description missing")
 	}
 	// No stats → should NOT show find_skill hint
-	if contains(result, "find_skill") {
+	if contains(skillsMsg, "find_skill") {
 		t.Error("find_skill hint should not appear when stats are nil")
 	}
 }
@@ -363,4 +366,19 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestNewBuilderWithWorkspaceAndGetCWD(t *testing.T) {
+	// With workspace: GetCWD should delegate to workspace.GetCWD()
+	ws := tools.MustNewWorkspace("/custom/cwd")
+	b := NewBuilderWithWorkspace("ignored", ws)
+	if got := b.GetCWD(); got != "/custom/cwd" {
+		t.Errorf("GetCWD with workspace = %q, want %q", got, "/custom/cwd")
+	}
+
+	// Without workspace: GetCWD should fall back to b.cwd
+	b2 := NewBuilder("", "/fallback/cwd")
+	if got := b2.GetCWD(); got != "/fallback/cwd" {
+		t.Errorf("GetCWD without workspace = %q, want %q", got, "/fallback/cwd")
+	}
 }

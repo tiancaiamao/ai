@@ -12,22 +12,27 @@ Provides a unified interface for streaming LLM completions. Routes to Anthropic 
 
 ```go
 type Model struct {
-    ID            string `json:"id"`            // e.g., "gpt-4o", "claude-sonnet-4-20250514"
-    Provider      string `json:"provider"`      // e.g., "zai", "openai"
-    BaseURL       string `json:"baseUrl"`       // API base URL
-    API           string `json:"api"`           // "openai-completions" or "anthropic-messages"
-    ContextWindow int    `json:"contextWindow"` // Token limit (0 = unknown)
-    MaxTokens     int    `json:"maxTokens,omitempty"`
+    ID            string       `json:"id"`                       // e.g., "gpt-4o", "claude-sonnet-4-20250514"
+    Provider      string       `json:"provider"`                 // e.g., "zai", "openai"
+    BaseURL       string       `json:"baseUrl"`                  // API base URL
+    API           string       `json:"api"`                      // "openai-completions" or "anthropic-messages"
+    ContextWindow int          `json:"contextWindow"`            // Token limit (0 = unknown)
+    MaxTokens     int          `json:"maxTokens,omitempty"`
+        Reasoning     bool         `json:"reasoning,omitempty"`      // Model supports thinking/reasoning control
+    SupportsVision bool        `json:"-"`                        // Model supports image input (from models.json "input")
 }
 ```
+
+`SupportsVision` is a runtime-derived field, not part of the JSON model config. It comes from `ModelSpec.SupportsVision`, which is `true` when the model's `input` types in `models.json` include `"image"` or `"vision"` (mirroring the "vision" check on `Model.input`).
 
 ### LLMContext
 
 ```go
 type LLMContext struct {
-    SystemPrompt string       `json:"systemPrompt,omitempty"`
-    Messages     []LLMMessage `json:"messages"`
-    Tools        []LLMTool    `json:"tools,omitempty"`
+    SystemPrompt  string       `json:"systemPrompt,omitempty"`
+    Messages      []LLMMessage `json:"messages"`
+    Tools         []LLMTool    `json:"tools,omitempty"`
+    ThinkingLevel string       `json:"thinkingLevel,omitempty"` // off/minimal/low/medium/high/xhigh
 }
 ```
 
@@ -35,31 +40,67 @@ type LLMContext struct {
 
 ```go
 type LLMMessage struct {
-    Role      string     `json:"role"` // "system", "user", "assistant", "tool"
-    Content   string     `json:"content,omitempty"`
-    ToolCalls []ToolCall `json:"toolCalls,omitempty"`
-    Thinking  string    `json:"thinking,omitempty"` // For reasoning models
-    // ...
+    Role         string        `json:"role"`                  // "system", "user", "assistant", "tool"
+    Content      string        `json:"-"`                     // Custom marshaling
+    ContentParts []ContentPart `json:"-"`                     // Multimodal content (custom marshaling)
+    Thinking     string        `json:"-"`                     // Serialized as reasoning_content
+    ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+    ToolCallID   string        `json:"tool_call_id,omitempty"`
 }
 ```
 
-### LLMTool / ToolCall / ToolCallFunction
+Custom `MarshalJSON`: serializes `Content` or `ContentParts` as `content`, and `Thinking` as `reasoning_content`.
+
+### ContentPart
+
+```go
+type ContentPart struct {
+    Type     string `json:"type"` // "text" or "image_url"
+    Text     string `json:"text,omitempty"`
+    ImageURL *struct {
+        URL string `json:"url"`
+    } `json:"image_url,omitempty"`
+}
+```
+
+### LLMTool / ToolFunction
 
 ```go
 type LLMTool struct {
-    Type     string   `json:"type"`     // "function"
-    Function Function `json:"function"`
+    Type     string       `json:"type"` // "function"
+    Function ToolFunction `json:"function"`
 }
 
+type ToolFunction struct {
+    Name        string         `json:"name"`
+    Description string         `json:"description"`
+    Parameters  map[string]any `json:"parameters"`
+}
+```
+
+### ToolCall / FunctionCall
+
+```go
 type ToolCall struct {
-    ID       string          `json:"id,omitempty"`
-    Type     string          `json:"type"`
-    Function ToolCallFunction `json:"function"`
+    ID       string       `json:"id"`
+    Type     string       `json:"type"` // "function"
+    Function FunctionCall `json:"function"`
 }
 
-type ToolCallFunction struct {
+type FunctionCall struct {
     Name      string `json:"name"`
     Arguments string `json:"arguments"` // JSON string
+}
+```
+
+### Usage
+
+```go
+type Usage struct {
+    InputTokens         int                  `json:"prompt_tokens"`
+    OutputTokens        int                  `json:"completion_tokens"`
+    TotalTokens         int                  `json:"total_tokens"`
+    PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 }
 ```
 
@@ -89,7 +130,7 @@ Returns an `EventStream` that emits `LLMEvent` values. The stream ends with eith
 type EventStream[T any, R any] struct { ... }
 ```
 
-Generic push-based stream. Consumers iterate via `stream.Events()` channel. The final result is available via `stream.Result()` after the events channel closes.
+Generic push-based stream. Consumers iterate via `stream.Iterator(ctx)` channel. The final result is available via `stream.Result()` channel after the events stream closes.
 
 ### LLMEvent (interface)
 
@@ -103,6 +144,7 @@ Implementations:
 
 | Type | Event | Description |
 |------|-------|-------------|
+| `LLMStartEvent` | `start` | Stream started, provides `PartialMessage` |
 | `LLMTextDeltaEvent` | `text_delta` | Text content chunk |
 | `LLMThinkingDeltaEvent` | `thinking_delta` | Thinking/reasoning chunk |
 | `LLMToolCallDeltaEvent` | `tool_call_delta` | Partial tool call |
@@ -116,30 +158,65 @@ Accumulates streaming deltas into a complete `LLMMessage`. Handles:
 - Thinking content accumulation
 - Tool call merging by index (arguments are appended incrementally)
 
+## Capability Filtering
+
+`filter.go` filters message content the active model doesn't support. The only
+case today is stripping `image_url` parts when the model doesn't support vision
+(e.g. resuming a vision session with a text-only model):
+
+```go
+func FilterUnsupportedContent(messages []LLMMessage, supportsVision bool) ([]LLMMessage, int)
+```
+
+`FilterUnsupportedContent` returns the filtered messages and the number of
+removed content parts:
+- Text-only models: all `image_url` content parts are removed
+- Unknown content part types are preserved (forward compatible)
+- A message is dropped only when no text and no content parts remain
+- If `supportsVision` is true, messages are returned unchanged
+
+This filtering is applied in `pkg/agent/llm_stream.go` before calling `StreamLLM`.
+
+## Error Handling
+
+Typed errors in `errors.go`:
+
+```go
+type APIError struct { ... }                   // Generic non-200 response
+type ContextLengthExceededError struct { ... } // Token/context limit
+type RateLimitError struct { ... }             // 429 throttling with Retry-After
+
+func ClassifyAPIError(statusCode int, payload string) error
+func IsContextLengthExceeded(err error) bool
+func IsRateLimit(err error) bool
+func IsRetryableError(err error) bool
+func RetryAfter(err error) time.Duration
+```
+
+## Thinking / Reasoning
+
+`thinking.go` provides `buildThinkingParams` which injects `reasoning_effort` and/or `thinking` object parameters into the request body for reasoning-capable models (ZAI, DeepSeek).
+
 ## Anthropic Support
 
 `StreamAnthropic()` handles the Anthropic Messages API specifics:
-- `x-api-key` header instead of `Bearer` token
+- `Authorization: Bearer` header
 - `anthropic-version` header
 - Different SSE event format (`message_start`, `content_block_start`, `content_block_delta`, `message_delta`)
 - Thinking/reasoning block support
 - Token usage tracking
-
-## Error Handling
-
-The client handles:
-- HTTP status codes (429 rate limit with `Retry-After`, 5xx server errors)
-- Connection timeouts between chunks
-- Premature connection close (no data chunks received)
-- Truncated streams (chunks received but no finish_reason)
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
 | `client.go` | `StreamLLM()` — OpenAI-compatible streaming, SSE parsing, error handling |
-| `types.go` | `Model`, `LLMContext`, `LLMMessage`, `EventStream`, `PartialMessage` |
+| `types.go` | `Model`, `LLMContext`, `LLMMessage`, `ToolCall`, `LLMTool`, `Usage`, `LLMEvent` types, `PartialMessage` |
 | `anthropic.go` | `StreamAnthropic()` — Anthropic Messages API streaming |
+| `errors.go` | `APIError`, `ContextLengthExceededError`, `RateLimitError`, error classification |
+| `eventstream.go` | `EventStream` — generic push-based async event stream |
+| `thinking.go` | `buildThinkingParams` — reasoning/thinking parameter injection |
+| `filter.go` | `FilterUnsupportedContent()` — strips unsupported content (image_url for text-only models) |
 
 ## Dependencies
 

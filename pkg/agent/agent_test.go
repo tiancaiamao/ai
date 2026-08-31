@@ -95,49 +95,6 @@ func TestAgentAbort(t *testing.T) {
 	}
 }
 
-// TestCompactorInterface tests the Compactor interface.
-func TestCompactorInterface(t *testing.T) {
-	// Create a mock compactor
-	mockCompactor := &mockCompactor{
-		shouldCompact: true,
-	}
-
-	agent := NewAgent(llm.Model{}, "test-key", "test")
-	agent.SetCompactor(mockCompactor)
-
-	// Trigger auto-compact check
-	agent.tryAutoCompact(context.Background())
-
-	if !mockCompactor.called {
-		t.Error("Expected compactor to be called")
-	}
-}
-
-// mockCompactor is a test double for Compactor.
-type mockCompactor struct {
-	shouldCompact bool
-	called        bool
-}
-
-func (m *mockCompactor) ShouldCompact(_ context.Context, _ *agentctx.AgentContext) bool {
-	m.called = true
-	return m.shouldCompact
-}
-
-func (m *mockCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
-	// Compactor directly modifies ctx.RecentMessages
-	ctx.RecentMessages = []agentctx.AgentMessage{
-		agentctx.NewUserMessage("[Summary]"),
-	}
-	return &agentctx.CompactionResult{
-		Summary: "[Summary]",
-	}, nil
-}
-
-func (m *mockCompactor) CalculateDynamicThreshold() int {
-	return 100000 // Default threshold for tests
-}
-
 // TestAgentEvents tests the event channel.
 func TestAgentEvents(t *testing.T) {
 	agent := NewAgent(llm.Model{}, "test-key", "test")
@@ -193,17 +150,17 @@ func TestAgentContext(t *testing.T) {
 func TestAgentAutoRetryDefaultsAndToggle(t *testing.T) {
 	ag := NewAgent(llm.Model{}, "test-key", "test")
 
-	if !ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries <= 0 {
 		t.Fatal("expected auto retry enabled by default")
 	}
 
 	ag.SetAutoRetry(false)
-	if ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries > 0 {
 		t.Fatal("expected auto retry disabled")
 	}
 
 	ag.SetAutoRetry(true)
-	if !ag.AutoRetryEnabled() {
+	if ag.LoopConfig.MaxLLMRetries <= 0 {
 		t.Fatal("expected auto retry re-enabled")
 	}
 }
@@ -259,6 +216,53 @@ func TestProcessPromptSyncsMessagesFromAgentEnd(t *testing.T) {
 	}
 	if text := got[0].ExtractText(); text != "compacted history state" {
 		t.Fatalf("expected synced message text, got %q", text)
+	}
+}
+
+// TestProcessPromptSyncsMessagesFromCompactionEnd verifies that compaction
+// results are synced to a.context immediately via EventCompactionEnd, even
+// if EventAgentEnd is never consumed (e.g. Steer cancels the ctx mid-loop).
+func TestProcessPromptSyncsMessagesFromCompactionEnd(t *testing.T) {
+	compactedMessages := []agentctx.AgentMessage{
+		agentctx.NewUserMessage("post-compaction msg 1"),
+		agentctx.NewUserMessage("post-compaction msg 2"),
+	}
+
+	ag := NewAgent(llm.Model{}, "test-key", "test")
+	defer ag.Shutdown()
+	ag.runLoopFn = func(_ context.Context, _ []agentctx.AgentMessage, _ *agentctx.AgentContext, _ *LoopConfig) *llm.EventStream[AgentEvent, []agentctx.AgentMessage] {
+		stream := llm.NewEventStream[AgentEvent, []agentctx.AgentMessage](
+			func(e AgentEvent) bool { return e.Type == EventAgentEnd },
+			func(e AgentEvent) []agentctx.AgentMessage { return e.Messages },
+		)
+		go func() {
+			stream.Push(NewAgentStartEvent())
+			// Simulate compaction: push EventCompactionEnd with post-compaction messages
+			compactionEvent := NewCompactionEndEvent(CompactionInfo{
+				Auto: true, Before: 100, After: 2, Trigger: "pre_llm_threshold",
+			})
+			compactionEvent.Messages = compactedMessages
+			stream.Push(compactionEvent)
+			stream.End(nil) // no EventAgentEnd — simulates steer/interrupt
+		}()
+		return stream
+	}
+
+	ag.SetContext(&agentctx.AgentContext{
+		SystemPrompt: "test",
+		RecentMessages: []agentctx.AgentMessage{
+			agentctx.NewUserMessage("stale-before-compaction"),
+		},
+	})
+
+	ag.processPrompt(context.Background(), "trigger")
+
+	got := ag.GetMessages()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 messages after compaction sync, got %d", len(got))
+	}
+	if text := got[0].ExtractText(); text != "post-compaction msg 1" {
+		t.Fatalf("expected post-compaction msg 1, got %q", text)
 	}
 }
 

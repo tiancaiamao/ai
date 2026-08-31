@@ -1,0 +1,14 @@
+{
+  "iteration": 4,
+  "verdict": "NO_PLAN",
+  "predicted_fixes": [],
+  "actually_fixed": [],
+  "failed_to_fix": [],
+  "predicted_risks": [],
+  "actual_regressions": [],
+  "unexpected_regressions": [
+    "agent_002_rollback",
+    "agent_011_compact_tool_call_mismatch"
+  ],
+  "fix_rate": "N/A"
+}

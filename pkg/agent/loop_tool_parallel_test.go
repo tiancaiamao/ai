@@ -92,7 +92,6 @@ func TestExecuteToolCallsParallelFanInFanOut(t *testing.T) {
 		&assistant,
 		newLoopTestEventStream(),
 		nil,
-		nil,
 		DefaultToolOutputLimits(),
 	)
 	elapsed := time.Since(start)
@@ -127,7 +126,6 @@ func TestExecuteToolCallsPreservesOrderWithImmediateError(t *testing.T) {
 		nil, // allowedTools - nil means all tools allowed
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)
@@ -170,7 +168,6 @@ func TestExecuteToolCallsInjectsCurrentAgentContext(t *testing.T) {
 		&assistant,
 		newLoopTestEventStream(),
 		nil,
-		nil,
 		DefaultToolOutputLimits(),
 	)
 
@@ -204,7 +201,6 @@ func TestExecuteToolCallsReportsMaxTokensTruncationClearly(t *testing.T) {
 		nil,
 		&assistant,
 		newLoopTestEventStream(),
-		nil,
 		nil,
 		DefaultToolOutputLimits(),
 	)

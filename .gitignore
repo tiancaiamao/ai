@@ -1,6 +1,6 @@
 bin/*
 .worktrees/
-.aiclaw/
+
 coverage.out
 /ai
 
@@ -8,11 +8,11 @@ coverage.out
 __pycache__/
 *.pyc
 benchmark/results/progress.json
+
+# Auto-generated role stats
+**/skill-stats.json
 benchmark/tasks/*/setup/
 benchmark/tasks/*/*/setup/
-
-claw/skills/self-improving-agent/.learnings/
-claw/skills/.*
 
 # Symphony workspace files (never commit these)
 WORKPAD.md
@@ -29,3 +29,14 @@ cover.out
 
 # Benchmark results
 benchmark/results/result_*.json
+
+
+# Evolve artifacts (large benchmark data)
+results/
+agent/benchmarks/evolve/iteration-*.json
+agent/benchmarks/evolve/iter-*-artifacts/traces/
+agent/benchmarks/evolve/iter-*-artifacts/agent-snapshot/
+
+# Evolve iteration-*.json files contain full agent traces (100-500MB each).
+# Too large for git. The structured summaries live in iter-*-artifacts/.
+agent/benchmarks/evolve/iteration-*.json

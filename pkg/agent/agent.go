@@ -80,6 +80,7 @@ type Agent struct {
 	traceDone     chan struct{}
 	shutdownOnce  sync.Once
 	traceSeq      atomic.Uint64
+	manualCompact atomic.Bool
 
 	// LoopConfig embedded for unified configuration management
 	LoopConfig
@@ -107,22 +108,7 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	traceBuf.SetTraceID(traceevent.GenerateTraceID("session", 0))
 	traceBuf.SetFlushEvery(traceFlushEvery)
 	traceBuf.SetFlushInterval(traceFlushWindow)
-
-	// Metrics should not depend on the primary trace buffer lifecycle because
-	// the primary buffer is flushed/rotated for trace exporting.
-	metricsBuf := traceevent.NewTraceBuf()
-	metricsBuf.SetMaxEvents(200_000)
-	metrics := NewMetrics(metricsBuf)
-	traceBuf.AddSink(func(event traceevent.TraceEvent) {
-		metricsBuf.Record(event)
-		metrics.InvalidateCache()
-	})
 	traceevent.SetActiveTraceBuf(traceBuf)
-
-	// Ensure Metrics is set in config
-	if cfg.Metrics == nil {
-		cfg.Metrics = metrics
-	}
 
 	// Ensure Executor is set in config
 	if cfg.Executor == nil {
@@ -160,9 +146,23 @@ func NewAgentFromConfigWithContext(model llm.Model, apiKey string, agentCtx *age
 	a.LoopConfig.GetAPIKey = func() string {
 		return a.apiKey
 	}
+	a.LoopConfig.ConsumeManualCompaction = func() bool {
+		return a.manualCompact.Swap(false)
+	}
 
 	go a.runTraceFlusher()
 	return a
+}
+
+// RequestCompaction queues a manual compaction for the running agent loop.
+// The request is consumed at the next safe step boundary.
+func (a *Agent) RequestCompaction() {
+	a.manualCompact.Store(true)
+}
+
+// HasPendingCompaction reports whether a manual compaction is queued.
+func (a *Agent) HasPendingCompaction() bool {
+	return a.manualCompact.Load()
 }
 
 // Prompt sends a user message to the agent and waits for completion.
@@ -189,6 +189,16 @@ func (a *Agent) Prompt(message string) error {
 			for {
 				select {
 				case followUpMsg := <-a.followUpQueue:
+					if ctx.Err() != nil {
+						// This run was cancelled (e.g. Steer) while a follow-up
+						// was queued. Put it back so the next run processes it
+						// with a fresh context instead of running with a dead one.
+						select {
+						case a.followUpQueue <- followUpMsg:
+						default: // queue full — drop rather than block forever
+						}
+						return
+					}
 					slog.Info("[Agent] Processing follow-up", "message", followUpMsg)
 					a.processPrompt(ctx, followUpMsg)
 				default:
@@ -309,19 +319,38 @@ func (a *Agent) processPrompt(ctx context.Context, message string) {
 		if event.Value.Type == EventMessageEnd {
 			msg := event.Value.Message
 			if msg != nil && msg.Role == "user" {
+				a.ctxMu.Lock()
 				a.context.AddMessage(*msg)
+				a.ctxMu.Unlock()
 			}
 		}
 		if event.Value.Type == EventTurnEnd {
 			msg := event.Value.Message
 			if msg != nil {
+				a.ctxMu.Lock()
 				a.context.AddMessage(*msg)
+				a.ctxMu.Unlock()
 			}
 			for _, tr := range event.Value.ToolResults {
+				a.ctxMu.Lock()
 				a.context.AddMessage(tr)
+				a.ctxMu.Unlock()
 			}
 			// Auto-compaction is owned by runInnerLoop pre-LLM checks.
 			// Keeping a second trigger here causes duplicate context management runs.
+		}
+		if event.Value.Type == EventCompactionEnd {
+			// Sync compaction result to the outer context immediately.
+			// Without this, a.context.RecentMessages keeps growing via
+			// AddMessage above while the loop's currentCtx gets compacted.
+			// If EventAgentEnd is never consumed (e.g. Steer cancels ctx),
+			// the next prompt starts with the stale un-compacted messages,
+			// triggering a spurious compaction.
+			if len(event.Value.Messages) > 0 {
+				a.ctxMu.Lock()
+				a.context.RecentMessages = append([]agentctx.AgentMessage(nil), event.Value.Messages...)
+				a.ctxMu.Unlock()
+			}
 		}
 		if event.Value.Type == EventAgentEnd {
 			// Keep in-memory context consistent with loop-side mutations
@@ -429,6 +458,19 @@ func (a *Agent) Steer(message string) {
 	if a.cancel != nil {
 		a.cancel()
 	}
+
+	// Wait for the old loop to fully exit before touching AgentState.
+	// The old loop holds a.mu via Prompt's goroutine; acquiring it
+	// here guarantees the old loop has released all references to the
+	// shared *AgentState.
+	a.mu <- struct{}{}
+
+	// Reset tool-call counter — steer is a fresh start, the new loop
+	// should not inherit the old loop's compaction timing.
+	a.context.AgentState.ToolCallsSinceLastTrigger = 0
+
+	// Release mu — Prompt will re-acquire it.
+	<-a.mu
 
 	// Create new context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -538,21 +580,13 @@ func (a *Agent) GetContext() *agentctx.AgentContext {
 }
 
 // SetCompactor sets the compactor for automatic context compression.
-// Deprecated: Use SetCompactors([]Compactor{...}) for multiple compactors.
 func (a *Agent) SetCompactor(compactor Compactor) {
-	if compactor != nil {
-		a.LoopConfig.Compactors = []Compactor{compactor}
-	}
+	a.LoopConfig.Compactor = compactor
 }
 
 // SetExecutor sets the tool executor for concurrency control.
 func (a *Agent) SetExecutor(executor ToolExecutor) {
 	a.LoopConfig.Executor = executor
-}
-
-// GetExecutor returns the current tool executor.
-func (a *Agent) GetExecutor() ToolExecutor {
-	return a.LoopConfig.Executor
 }
 
 // SetToolOutputLimits sets truncation limits for tool output.
@@ -587,31 +621,6 @@ func (a *Agent) SetAutoRetry(enabled bool) {
 	a.LoopConfig.MaxLLMRetries = 0
 }
 
-// AutoRetryEnabled reports whether LLM auto retry is currently enabled.
-func (a *Agent) AutoRetryEnabled() bool {
-	return a.LoopConfig.MaxLLMRetries > 0
-}
-
-// SetLLMRetryConfig configures LLM retry count and base delay.
-func (a *Agent) SetLLMRetryConfig(maxRetries int, baseDelay time.Duration) {
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
-	if baseDelay <= 0 {
-		baseDelay = defaultRetryBaseDelay
-	}
-	a.LoopConfig.MaxLLMRetries = maxRetries
-	a.LoopConfig.RetryBaseDelay = baseDelay
-}
-
-// SetMaxTurns sets the maximum number of conversation turns.
-func (a *Agent) SetMaxTurns(maxTurns int) {
-	if maxTurns < 0 {
-		maxTurns = 0
-	}
-	a.LoopConfig.MaxTurns = maxTurns
-}
-
 // SetContextWindow sets the context window for the model.
 func (a *Agent) SetContextWindow(contextWindow int) {
 	if contextWindow < 0 {
@@ -623,79 +632,6 @@ func (a *Agent) SetContextWindow(contextWindow int) {
 // GetPendingFollowUps returns the number of queued follow-up messages.
 func (a *Agent) GetPendingFollowUps() int {
 	return len(a.followUpQueue)
-}
-
-// Compact compacts the agent's context using the provided compactor.
-func (a *Agent) Compact(compactor Compactor) error {
-	_, err := compactor.Compact(a.context)
-	if err != nil {
-		return fmt.Errorf("failed to compact: %w", err)
-	}
-
-	// Note: a.context.RecentMessages and a.context.LastCompactionSummary are already
-	// updated by Compactor's Compact() method, so we don't need to set them here.
-
-	return nil
-}
-
-// tryAutoCompact attempts automatic compression if thresholds exceeded.
-func (a *Agent) tryAutoCompact(ctx context.Context) {
-	if len(a.LoopConfig.Compactors) == 0 {
-		return
-	}
-
-	var triggerCompactor Compactor
-	for _, c := range a.LoopConfig.Compactors {
-		if c.ShouldCompact(ctx, a.context) {
-			triggerCompactor = c
-			break
-		}
-	}
-
-	if triggerCompactor == nil {
-		return
-	}
-
-	before := len(a.context.RecentMessages)
-	slog.Info("[Agent] Auto-compacting", "beforeCount", before, "compactor", fmt.Sprintf("%T", triggerCompactor))
-	compactSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-		traceevent.Field{Key: "source", Value: "auto_threshold"},
-		traceevent.Field{Key: "auto", Value: true},
-		traceevent.Field{Key: "before_messages", Value: before},
-		traceevent.Field{Key: "trigger", Value: "threshold"},
-	)
-	a.emitEvent(NewCompactionStartEvent(CompactionInfo{
-		Auto:    true,
-		Before:  before,
-		Trigger: "threshold",
-	}))
-	if err := a.Compact(triggerCompactor); err != nil {
-		err = WithErrorStack(err)
-		slog.Error("[Agent] Auto-compact failed", "error", err)
-		compactSpan.AddField("error", true)
-		compactSpan.AddField("error_message", err.Error())
-		if stack := ErrorStack(err); stack != "" {
-			compactSpan.AddField("error_stack", stack)
-		}
-		compactSpan.End()
-		a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
-			Before:  before,
-			Error:   err.Error(),
-			Trigger: "threshold",
-		}))
-	} else {
-		after := len(a.context.RecentMessages)
-		slog.Info("[Agent] Auto-compact successful", "before", before, "after", after)
-		compactSpan.AddField("after_messages", after)
-		compactSpan.End()
-		a.emitEvent(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
-			Before:  before,
-			After:   after,
-			Trigger: "threshold",
-		}))
-	}
 }
 
 func (a *Agent) emitEvent(event AgentEvent) {
@@ -721,13 +657,20 @@ func (a *Agent) getCurrentStream() *llm.EventStream[AgentEvent, []agentctx.Agent
 
 func (a *Agent) abortCurrentStream() bool {
 	stream := a.getCurrentStream()
-	if stream == nil || stream.IsDone() {
-		return false
+	a.ctxMu.RLock()
+	recent := append([]agentctx.AgentMessage(nil), a.context.RecentMessages...)
+	a.ctxMu.RUnlock()
+
+	agentEnd := NewAgentEndEvent(recent)
+	if stream != nil && !stream.IsDone() {
+		stream.Push(agentEnd)
 	}
-	// Force an agent_end event so UI state can reset even if the iterator stops on ctx cancel.
-	stream.Push(NewAgentEndEvent(a.context.RecentMessages))
-	a.emitEvent(NewAgentEndEvent(a.context.RecentMessages))
-	return true
+	// Always emit directly to the event channel. When ctx is cancelled the
+	// iterator exits on ctx.Done() and processPrompt clears currentStream,
+	// so by the time we get here the stream may be nil or done. Subscribers
+	// (UI, event collectors) still need agent_end to reset their state.
+	a.emitEvent(agentEnd)
+	return stream != nil && !stream.IsDone()
 }
 
 func (a *Agent) clearFollowUps() {
@@ -738,9 +681,4 @@ func (a *Agent) clearFollowUps() {
 			return
 		}
 	}
-}
-
-// GetMetrics returns the agent's metrics collector.
-func (a *Agent) GetMetrics() *Metrics {
-	return a.LoopConfig.Metrics
 }

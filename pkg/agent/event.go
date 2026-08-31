@@ -84,11 +84,14 @@ type CompactionInfo struct {
 	Error   string `json:"error,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
 
-	// Context management specific fields
-	TokensBefore      int  `json:"tokens_before,omitempty"`       // Token count before compaction (mini only)
-	TokensAfter       int  `json:"tokens_after,omitempty"`        // Token count after compaction (mini only)
-	TruncatedCount    int  `json:"truncated_count,omitempty"`     // Number of messages truncated (mini only)
-	LLMContextUpdated bool `json:"llm_context_updated,omitempty"` // Whether LLM context was updated (mini only)
+	// Summary is the compaction summary text, carried so the event consumer
+	// (rpc_app) can persist it to a compaction snapshot + entry.
+	Summary string `json:"summary,omitempty"`
+
+	// Compaction metrics
+	TokensBefore   int `json:"tokens_before,omitempty"`   // Token count before compaction
+	TokensAfter    int `json:"tokens_after,omitempty"`    // Token count after compaction
+	TruncatedCount int `json:"truncated_count,omitempty"` // Number of messages truncated
 }
 
 // LoopGuardInfo describes why tool-loop protection interrupted a turn.

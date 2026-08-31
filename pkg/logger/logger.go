@@ -22,9 +22,3 @@ func NewLogger(cfg *Config) (*slog.Logger, error) {
 	// Create and return logger
 	return slog.New(handler), nil
 }
-
-// NewDefaultLogger creates a logger with default settings.
-func NewDefaultLogger() *slog.Logger {
-	l, _ := NewLogger(&Config{})
-	return l
-}

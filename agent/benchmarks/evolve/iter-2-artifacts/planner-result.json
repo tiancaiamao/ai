@@ -1,0 +1,36 @@
+{
+  "tool_edits": [
+    "system_prompt.md"
+  ],
+  "yaml_config": null,
+  "text_messages": 5,
+  "tool_calls": 20,
+  "has_changes": true,
+  "event_counts": {
+    "server_start": 1,
+    "response": 1,
+    "agent_start": 1,
+    "turn_start": 1,
+    "message_start": 10,
+    "message_end": 10,
+    "message_update": 6945,
+    "tool_execution_start": 20,
+    "tool_execution_end": 20,
+    "turn_end": 9,
+    "agent_end": 1
+  },
+  "change_plan": {
+    "target": "system_prompt.md",
+    "predicted_fixes": [
+      "agent_001_forced_exploration",
+      "003_refactor_duplicated_code"
+    ],
+    "predicted_risks": [
+      "agent_007_misleading",
+      "agent_009_partial_info"
+    ],
+    "rationale": "(from prose)",
+    "change_description": "Edited system_prompt.md",
+    "extraction_method": "strategy_3_prose_summary"
+  }
+}

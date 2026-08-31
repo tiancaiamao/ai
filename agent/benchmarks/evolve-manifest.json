@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "Curated tasks for harness evolution — selected for discriminating power (pass rate 40-80%), speed (<3min), and category diversity",
+  "tasks": [
+    "003_refactor_duplicated_code",
+    "agent_001_forced_exploration",
+    "agent_002_rollback",
+    "agent_005_delayed_signal",
+    "agent_007_misleading",
+    "agent_009_partial_info",
+    "agent_011_compact_tool_call_mismatch",
+    "tbench/code-from-image",
+    "tbench/db-wal-recovery",
+    "tbench/kv-store-grpc",
+    "tbench/portfolio-optimization",
+    "tbench/prove-plus-comm",
+    "tbench/pypi-server",
+    "tbench/password-recovery",
+    "tbench/vulnerable-secret"
+  ]
+}

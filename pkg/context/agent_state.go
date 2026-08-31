@@ -1,96 +1,33 @@
 package context
 
-import "time"
-
 // AgentState represents system-maintained metadata about the agent state.
+// Most fields are recomputed from RecentMessages every turn
+// (see injectRuntimeMeta); persistence is not required.
 type AgentState struct {
 	// Workspace
 	WorkspaceRoot     string
 	CurrentWorkingDir string
 
-	// Statistics
+	// Statistics (recomputed each turn from RecentMessages)
 	TotalTurns  int
 	TokensUsed  int
 	TokensLimit int
 
 	// Tracking
-	LastLLMContextUpdate      int // Last turn when LLMContext was updated
-	LastCheckpoint            int // Last turn when checkpoint was created
-	LastTriggerTurn           int // Last turn when context management was triggered
-	TurnsSinceLastTrigger     int // Turns elapsed since last trigger
-	ToolCallsSinceLastTrigger int // Tool calls elapsed since last trigger
+	// ToolCallsSinceLastTrigger drives the LLMDecide ask interval.
+	ToolCallsSinceLastTrigger int
 
-	// Context management statistics
-	TotalTruncations int // Total number of truncate_messages operations
-	TotalCompactions int // Total number of full compact operations
-	LastCompactTurn  int // Last turn when full compact was executed
-
-	// Active tool calls (for pairing protection)
-	ActiveToolCalls []string
-
-	// Runtime metadata (for telemetry snapshot)
-	RuntimeMetaTurns    int    // Turns since last runtime metadata refresh
-	RuntimeMetaSnapshot string // Cached runtime metadata snapshot
-	RuntimeMetaBand     string // Current token usage band
-
-	// Metadata
-	SessionID string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// Runtime metadata (cached snapshot, rebuilt on band heartbeat)
+	RuntimeMetaTurns    int
+	RuntimeMetaSnapshot string
+	RuntimeMetaBand     string
 }
 
-// NewAgentState creates a new AgentState.
-func NewAgentState(sessionID, cwd string) *AgentState {
-	now := time.Now()
+// NewAgentState creates a new AgentState rooted at cwd.
+func NewAgentState(cwd string) *AgentState {
 	return &AgentState{
 		WorkspaceRoot:             cwd,
 		CurrentWorkingDir:         cwd,
-		TotalTurns:                0,
-		TokensUsed:                0,
-		TokensLimit:               200000,
-		LastLLMContextUpdate:      0,
-		LastCheckpoint:            0,
-		LastTriggerTurn:           0,
-		TurnsSinceLastTrigger:     0,
 		ToolCallsSinceLastTrigger: 0,
-		ActiveToolCalls:           []string{},
-		RuntimeMetaTurns:          0,
-		RuntimeMetaSnapshot:       "",
-		RuntimeMetaBand:           "",
-		SessionID:                 sessionID,
-		CreatedAt:                 now,
-		UpdatedAt:                 now,
-	}
-}
-
-// Clone creates a deep copy of the AgentState.
-func (a *AgentState) Clone() *AgentState {
-	if a == nil {
-		return nil
-	}
-	activeToolCalls := make([]string, len(a.ActiveToolCalls))
-	copy(activeToolCalls, a.ActiveToolCalls)
-
-	return &AgentState{
-		WorkspaceRoot:             a.WorkspaceRoot,
-		CurrentWorkingDir:         a.CurrentWorkingDir,
-		TotalTurns:                a.TotalTurns,
-		TokensUsed:                a.TokensUsed,
-		TokensLimit:               a.TokensLimit,
-		LastLLMContextUpdate:      a.LastLLMContextUpdate,
-		LastCheckpoint:            a.LastCheckpoint,
-		LastTriggerTurn:           a.LastTriggerTurn,
-		TurnsSinceLastTrigger:     a.TurnsSinceLastTrigger,
-		ToolCallsSinceLastTrigger: a.ToolCallsSinceLastTrigger,
-		TotalTruncations:          a.TotalTruncations,
-		TotalCompactions:          a.TotalCompactions,
-		LastCompactTurn:           a.LastCompactTurn,
-		ActiveToolCalls:           activeToolCalls,
-		RuntimeMetaTurns:          a.RuntimeMetaTurns,
-		RuntimeMetaSnapshot:       a.RuntimeMetaSnapshot,
-		RuntimeMetaBand:           a.RuntimeMetaBand,
-		SessionID:                 a.SessionID,
-		CreatedAt:                 a.CreatedAt,
-		UpdatedAt:                 a.UpdatedAt,
 	}
 }

@@ -2,11 +2,9 @@ package session
 
 import (
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-
 )
 
 // BenchmarkLoadSession compares lazy vs full loading performance
@@ -19,7 +17,7 @@ func BenchmarkLoadSession_Lazy(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -51,7 +49,7 @@ func BenchmarkLoadSession_Lazy_1000(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := LoadSessionLazy(sessionDir, DefaultLoadOptions())
+		_, err := LoadSession(sessionDir)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -102,27 +100,4 @@ func createLargeSessionFile(sessionDir string, n int) {
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	data := serializeSessionForTest(sess)
 	os.WriteFile(filePath, data, 0644)
-}
-
-func serializeSessionForBenchmark(s *Session) []byte {
-	var data []byte
-
-	headerLine := map[string]interface{}{
-		"type":      EntryTypeSession,
-		"version":   s.header.Version,
-		"id":        s.header.ID,
-		"timestamp": s.header.Timestamp,
-		"cwd":       s.header.Cwd,
-	}
-	headerBytes, _ := json.Marshal(headerLine)
-	data = append(data, headerBytes...)
-	data = append(data, '\n')
-
-	for _, entry := range s.entries {
-		entryBytes, _ := json.Marshal(entry)
-		data = append(data, entryBytes...)
-		data = append(data, '\n')
-	}
-
-	return data
 }

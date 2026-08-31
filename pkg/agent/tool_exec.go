@@ -22,7 +22,6 @@ func executeToolCalls(
 	assistantMsg *agentctx.AgentMessage,
 	stream *llm.EventStream[AgentEvent, []agentctx.AgentMessage],
 	executor ToolExecutor,
-	_ *Metrics,
 	toolOutputLimits ToolOutputLimits,
 ) []agentctx.AgentMessage {
 	toolCalls := assistantMsg.ExtractToolCalls()
@@ -368,13 +367,4 @@ Alternatively:
 	}
 
 	return msg
-}
-
-func hasToolResultNamed(results []agentctx.AgentMessage, toolName string) bool {
-	for _, r := range results {
-		if r.ToolName == toolName {
-			return true
-		}
-	}
-	return false
 }

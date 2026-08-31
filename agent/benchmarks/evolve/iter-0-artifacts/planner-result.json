@@ -1,0 +1,37 @@
+{
+  "tool_edits": [
+    "system_prompt.md"
+  ],
+  "yaml_config": null,
+  "text_messages": 3,
+  "tool_calls": 7,
+  "has_changes": true,
+  "event_counts": {
+    "server_start": 1,
+    "response": 1,
+    "agent_start": 1,
+    "turn_start": 1,
+    "message_start": 6,
+    "message_end": 6,
+    "message_update": 3643,
+    "tool_execution_start": 7,
+    "tool_execution_end": 7,
+    "turn_end": 5,
+    "agent_end": 1
+  },
+  "change_plan": {
+    "target": "agent/system_prompt.md",
+    "predicted_fixes": [
+      "agent_011_compact_tool_call_mismatch",
+      "agent_005_delayed_signal",
+      "agent_001_forced_exploration",
+      "agent_007_misleading",
+      "agent_002_rollback"
+    ],
+    "predicted_risks": [],
+    "rationale": "(from prose)",
+    "change_description": "Edited agent/system_prompt.md",
+    "extraction_method": "strategy_3_prose_summary",
+    "iteration": 0
+  }
+}

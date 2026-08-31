@@ -16,6 +16,11 @@ import (
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
+// requestMaxTokensCap bounds the max_tokens sent per request. Providers
+// reserve max_tokens from the context window (prompt + max_tokens <= window),
+// so a full-capability reservation (e.g. 128K on a 200K model) starves the prompt.
+const requestMaxTokensCap = 32768
+
 // StreamLLM streams a completion from LLM.
 func StreamLLM(
 	ctx context.Context,
@@ -29,9 +34,15 @@ func StreamLLM(
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
+<<<<<<< HEAD
 	// Route to OpenAI Codex Responses API if requested
 	if model.API == "openai-codex-responses" {
 		return StreamCodex(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
+	}
+
+	// Route to OpenAI Responses API if requested
+	if model.API == "openai-responses" {
+		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
 	stream := NewEventStream[LLMEvent, LLMMessage](
@@ -84,9 +95,30 @@ func StreamLLM(
 			"stream":   true,
 		}
 
+		// Set max_tokens if the model specifies one; otherwise omit and let the
+		// provider use its default. Reasoning models (e.g. via Ollama) can have
+		// their entire token budget consumed by <think> blocks, leaving content
+		// empty — so a generous max_tokens is important.
+		// Providers reserve max_tokens from the context window and reject requests
+		// where prompt + max_tokens exceeds it, so cap the reservation well below
+		// the model's capability limit (e.g. glm-4.7: 204800 window, 131072 max
+		// would leave only ~73K for the prompt).
+		if model.MaxTokens > 0 {
+			mt := model.MaxTokens
+			if mt > requestMaxTokensCap {
+				mt = requestMaxTokensCap
+			}
+			reqBody["max_tokens"] = mt
+		}
+
 		if len(llmCtx.Tools) > 0 {
 			reqBody["tools"] = llmCtx.Tools
 			reqBody["tool_choice"] = "auto"
+		}
+
+		// Inject thinking/reasoning parameters for models that support API control.
+		for k, v := range buildThinkingParams(model, llmCtx.ThinkingLevel) {
+			reqBody[k] = v
 		}
 
 		jsonBody, err := json.Marshal(reqBody)
@@ -171,6 +203,7 @@ func StreamLLM(
 		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		chunkIndex := 0
 		lastUsage := Usage{}
+		var lastTimings *Timings
 
 		for scanner.Scan() {
 			// Update read deadline for each chunk, capped by context deadline.
@@ -212,6 +245,7 @@ func StreamLLM(
 					Message:    &finalMsg,
 					Usage:      lastUsage,
 					StopReason: "stop",
+					Timings:    lastTimings,
 				})
 				return
 			}
@@ -222,13 +256,15 @@ func StreamLLM(
 					Delta struct {
 						Content          string            `json:"content,omitempty"`
 						ReasoningContent string            `json:"reasoning_content,omitempty"`
+						Reasoning        string            `json:"reasoning,omitempty"`
 						Thinking         string            `json:"thinking,omitempty"`
 						ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
 					} `json:"delta"`
 					FinishReason *string `json:"finish_reason"`
 				} `json:"choices"`
-				Usage *Usage `json:"usage"`
-				Error *struct {
+				Usage   *Usage   `json:"usage"`
+				Timings *Timings `json:"timings"` // llama.cpp extension
+				Error   *struct {
 					Message string `json:"message,omitempty"`
 					Type    string `json:"type,omitempty"`
 				} `json:"error,omitempty"`
@@ -255,6 +291,9 @@ func StreamLLM(
 			if chunk.Usage != nil {
 				lastUsage = *chunk.Usage
 			}
+			if chunk.Timings != nil {
+				lastTimings = chunk.Timings
+			}
 
 			// Text delta
 			if choice.Delta.Content != "" {
@@ -272,6 +311,12 @@ func StreamLLM(
 			if choice.Delta.Thinking != "" {
 				partial.AppendThinking(choice.Delta.Thinking)
 				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.Thinking})
+			}
+
+			// Reasoning delta (Ollama OpenAI-compat uses reasoning)
+			if choice.Delta.Reasoning != "" {
+				partial.AppendThinking(choice.Delta.Reasoning)
+				stream.Push(LLMThinkingDeltaEvent{Delta: choice.Delta.Reasoning})
 			}
 
 			// Tool calls
@@ -301,7 +346,8 @@ func StreamLLM(
 					}
 
 					partial.AppendToolCall(tcDelta.Index, toolCall)
-					stream.Push(LLMToolCallDeltaEvent{Index: tcDelta.Index, ToolCall: toolCall})
+					tcCopy := *toolCall
+					stream.Push(LLMToolCallDeltaEvent{Index: tcDelta.Index, ToolCall: &tcCopy})
 				}
 			}
 
@@ -314,6 +360,7 @@ func StreamLLM(
 					Message:    &finalMsg,
 					Usage:      usage,
 					StopReason: *choice.FinishReason,
+					Timings:    chunk.Timings, // Use current chunk's timings
 				})
 				return
 			}
@@ -338,6 +385,7 @@ func StreamLLM(
 			Message:    &finalMsg,
 			Usage:      lastUsage,
 			StopReason: "stop",
+			Timings:    lastTimings,
 		})
 	}()
 

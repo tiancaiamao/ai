@@ -1,10 +1,16 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/version"
 )
 
@@ -14,7 +20,6 @@ const (
 	EntryTypeSession       = "session"
 	EntryTypeMessage       = "message"
 	EntryTypeCompaction    = "compaction"
-	EntryTypeCompactEvent  = "compact_event"
 	EntryTypeBranchSummary = "branch_summary"
 	EntryTypeSessionInfo   = "session_info"
 )
@@ -51,6 +56,12 @@ type SessionEntry struct {
 
 	Message *agentctx.AgentMessage `json:"message,omitempty"`
 
+	// SnapshotRef is the relative path (within session dir) to a file containing
+	// the post-compaction in-memory messages. This is the Proposal B approach:
+	// messages.jsonl is append-only; compaction records reference an external
+	// snapshot file rather than rewriting history.
+	SnapshotRef string `json:"snapshotRef,omitempty"`
+
 	Summary          string `json:"summary,omitempty"`
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
@@ -59,11 +70,6 @@ type SessionEntry struct {
 
 	Name  string `json:"name,omitempty"`
 	Title string `json:"title,omitempty"`
-
-	// CompactEvent records a context management operation (truncate, update_llm_context).
-	// This is appended to messages.jsonl as an immutable event.
-	// The in-memory snapshot applies the operation; messages.jsonl never mutates.
-	CompactEvent *agentctx.CompactEventDetail `json:"compactEvent,omitempty"`
 }
 
 func newSessionHeader(id, cwd, parentSession string) SessionHeader {
@@ -114,7 +120,7 @@ func timestampToMillis(ts string) int64 {
 	return parsed.UnixMilli()
 }
 
-func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry) []agentctx.AgentMessage {
+func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[string]*SessionEntry, sessionDir string) []agentctx.AgentMessage {
 	if len(entries) == 0 {
 		return []agentctx.AgentMessage{}
 	}
@@ -159,23 +165,42 @@ func buildSessionContext(entries []*SessionEntry, leafID *string, byID map[strin
 		switch entry.Type {
 		case EntryTypeMessage:
 			if entry.Message != nil {
-				messages = append(messages, *entry.Message)
+				msg := *entry.Message
+				msg.EntryID = entry.ID
+				messages = append(messages, msg)
 			}
 		case EntryTypeBranchSummary:
 			if entry.Summary != "" {
-				messages = append(messages, branchSummaryMessage(entry.Summary, entry.Timestamp))
+				msg := branchSummaryMessage(entry.Summary, entry.Timestamp)
+				msg.EntryID = entry.ID
+				messages = append(messages, msg)
 			}
 		}
 	}
 
-if compaction != nil {
-		msg := compactionSummaryMessage(compaction)
-		if msg.Role != "" {
-			messages = append(messages, msg)
-		}
-
-		foundFirstKept := false
-		if compaction.FirstKeptEntryID != "" {
+	if compaction != nil {
+		// Proposal B: if SnapshotRef is set, load post-compaction messages from
+		// the external snapshot file. This avoids rewriting messages.jsonl and
+		// makes compaction entries simple pointers.
+		if compaction.SnapshotRef != "" && sessionDir != "" {
+			snapshotPath := filepath.Join(sessionDir, compaction.SnapshotRef)
+			if loaded, err := loadSnapshotMessages(snapshotPath); err == nil {
+				messages = append(messages, loaded...)
+			} else {
+				slog.Warn("[session] Failed to load compaction snapshot, falling back to summary only",
+					"path", snapshotPath, "error", err)
+				msg := compactionSummaryMessage(compaction)
+				if msg.Role != "" {
+					messages = append(messages, msg)
+				}
+			}
+		} else if compaction.FirstKeptEntryID != "" {
+			// Legacy path: reconstruct from FirstKeptEntryID (old sessions)
+			msg := compactionSummaryMessage(compaction)
+			if msg.Role != "" {
+				messages = append(messages, msg)
+			}
+			foundFirstKept := false
 			for i := 0; i < compactionIndex; i++ {
 				entry := path[i]
 				if entry.ID == compaction.FirstKeptEntryID {
@@ -185,59 +210,23 @@ if compaction != nil {
 					appendMessage(entry)
 				}
 			}
+		} else {
+			msg := compactionSummaryMessage(compaction)
+			if msg.Role != "" {
+				messages = append(messages, msg)
+			}
 		}
 
 		for i := compactionIndex + 1; i < len(path); i++ {
 			appendMessage(path[i])
 		}
-		return applyContextManagementEvents(messages, path)
+		return messages
 	}
 
 	for _, entry := range path {
 		appendMessage(entry)
 	}
 
-	return applyContextManagementEvents(messages, path)
-}
-
-// applyCompactEvents replays compact events on the message list.
-// Each compact_event entry records an operation (truncate, update_llm_context).
-// Apply reconstructs the result deterministically from the original message content.
-func applyContextManagementEvents(messages []agentctx.AgentMessage, path []*SessionEntry) []agentctx.AgentMessage {
-	for _, entry := range path {
-		if entry.Type != EntryTypeCompactEvent || entry.CompactEvent == nil {
-			continue
-		}
-		evt := entry.CompactEvent
-		switch evt.Action {
-		case agentctx.CompactActionTruncate:
-			for _, id := range evt.IDs {
-				for i := range messages {
-					msg := &messages[i]
-					if msg.ToolCallID == id && msg.Role == "toolResult" && !msg.Truncated {
-						originalText := msg.ExtractText()
-						msg.Truncated = true
-						msg.OriginalSize = len(originalText)
-						msg.Content = []agentctx.ContentBlock{
-							agentctx.TextContent{
-								Type: "text",
-								Text: agentctx.TruncateWithHeadTail(originalText),
-							},
-						}
-						break
-					}
-				}
-			}
-		case agentctx.CompactActionUpdateLLMContext:
-			// llm_context is stored in a separate file (llm_context.txt), not in messages.jsonl.
-			// This event marks that llm_context was updated at this point in the log.
-			// During replay, llm_context.txt should already be loaded from checkpoint or session.
-			// No action needed here for the messages array.
-		default:
-			// Unknown action types are logged but don't cause replay failures.
-			// This handles future schema extensions or corrupted data gracefully.
-		}
-	}
 	return messages
 }
 
@@ -250,4 +239,40 @@ func decodeSessionHeader(line []byte) (*SessionHeader, error) {
 		return nil, nil
 	}
 	return &header, nil
+}
+
+// loadSnapshotMessages reads a compaction snapshot file (JSONL of AgentMessage).
+func loadSnapshotMessages(path string) ([]agentctx.AgentMessage, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var messages []agentctx.AgentMessage
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	for {
+		var msg agentctx.AgentMessage
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("decode snapshot message: %w", err)
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}
+
+// saveSnapshotMessages writes messages to a compaction snapshot file (JSONL).
+func saveSnapshotMessages(path string, messages []agentctx.AgentMessage) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	for _, msg := range messages {
+		if err := enc.Encode(msg); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte(buf.String()), 0644)
 }

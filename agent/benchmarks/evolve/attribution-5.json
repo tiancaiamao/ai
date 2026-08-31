@@ -1,0 +1,16 @@
+{
+  "target": "multiple",
+  "predicted_fixes": [
+    "files_read_before_fix",
+    "agent_001_forced_exploration",
+    "tbench/cancel-async-tasks",
+    "7619/8192",
+    "5/6",
+    "8191/8192"
+  ],
+  "predicted_risks": [],
+  "rationale": "(from prose)",
+  "change_description": "Edited multiple",
+  "extraction_method": "strategy_3_prose_summary",
+  "iteration": 5
+}

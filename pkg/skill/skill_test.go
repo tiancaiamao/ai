@@ -534,3 +534,194 @@ func TestExpandCommandWithSpecialCharacters(t *testing.T) {
 		t.Error("expected content to be included as-is")
 	}
 }
+
+func TestLoadFromFileNoFrontmatter(t *testing.T) {
+	// Create a temporary skill directory with a SKILL.md that has no frontmatter
+	tmpDir := t.TempDir()
+	skillDir := filepath.Join(tmpDir, "my-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	content := `# My Skill
+
+This is the first line of the skill content.
+More details here.
+`
+	if err := os.WriteFile(skillFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader("/tmp")
+	result := loader.loadFromFile(skillFile, "user")
+
+	if result.Skill == nil {
+		t.Fatal("expected skill to be loaded even without frontmatter, got nil")
+	}
+
+	if result.Skill.Name != "my-skill" {
+		t.Errorf("expected name 'my-skill', got %q", result.Skill.Name)
+	}
+
+	// Description should fall back to first non-heading line
+	if result.Skill.Description != "This is the first line of the skill content." {
+		t.Errorf("expected description from body content, got %q", result.Skill.Description)
+	}
+
+	if result.Skill.FilePath != skillFile {
+		t.Errorf("expected FilePath %q, got %q", skillFile, result.Skill.FilePath)
+	}
+
+	// Should have a "description is required" diagnostic (from validateDescription)
+	// but still load successfully
+	hasDescWarning := false
+	for _, d := range result.Diagnostics {
+		if strings.Contains(d.Message, "description is required") {
+			hasDescWarning = true
+			break
+		}
+	}
+	if !hasDescWarning {
+		t.Error("expected 'description is required' warning diagnostic")
+	}
+}
+
+func TestLoadFromFileFrontmatterNoDescription(t *testing.T) {
+	// Create a skill with frontmatter but no description field
+	tmpDir := t.TempDir()
+	skillDir := filepath.Join(tmpDir, "no-desc-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	content := `---
+name: no-desc-skill
+---
+# No Desc Skill
+
+This skill has no description in frontmatter.
+`
+	if err := os.WriteFile(skillFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader("/tmp")
+	result := loader.loadFromFile(skillFile, "user")
+
+	if result.Skill == nil {
+		t.Fatal("expected skill to be loaded even without description field, got nil")
+	}
+
+	if result.Skill.Name != "no-desc-skill" {
+		t.Errorf("expected name 'no-desc-skill', got %q", result.Skill.Name)
+	}
+
+	// Description should fall back to first non-heading line
+	if result.Skill.Description != "This skill has no description in frontmatter." {
+		t.Errorf("expected description from body, got %q", result.Skill.Description)
+	}
+}
+
+func TestLoadFromFileEmptyBody(t *testing.T) {
+	// Create a skill with no frontmatter and empty/heading-only body
+	tmpDir := t.TempDir()
+	skillDir := filepath.Join(tmpDir, "empty-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	content := `# Just a heading`
+	if err := os.WriteFile(skillFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader("/tmp")
+	result := loader.loadFromFile(skillFile, "user")
+
+	if result.Skill == nil {
+		t.Fatal("expected skill to be loaded even with empty body, got nil")
+	}
+
+	// Description should fall back to directory name
+	if result.Skill.Description != "empty-skill" {
+		t.Errorf("expected description to be directory name 'empty-skill', got %q", result.Skill.Description)
+	}
+}
+
+func TestExtractDescriptionFromBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		expected string
+	}{
+		{
+			name:     "first non-heading line",
+			body:     "# Title\n\nThis is the description.\nMore text.",
+			expected: "This is the description.",
+		},
+		{
+			name:     "only headings",
+			body:     "# Title\n## Subtitle",
+			expected: "",
+		},
+		{
+			name:     "empty body",
+			body:     "",
+			expected: "",
+		},
+		{
+			name:     "leading blank lines",
+			body:     "\n\n\nFirst actual line.",
+			expected: "First actual line.",
+		},
+		{
+			name:     "heading then content",
+			body:     "# My Skill\n## Overview\nUse this for X.",
+			expected: "Use this for X.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractDescriptionFromBody(tt.body)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestLoadFromDirWithNoFrontmatterSkill(t *testing.T) {
+	// Integration: load from directory where a skill has no frontmatter
+	tmpDir := t.TempDir()
+	skillDir := filepath.Join(tmpDir, "bare-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	content := `This skill has no frontmatter at all.`
+	if err := os.WriteFile(skillFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader("/tmp")
+	result := loader.loadFromDir(tmpDir, "user", true)
+
+	if len(result.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(result.Skills))
+	}
+
+	if result.Skills[0].Name != "bare-skill" {
+		t.Errorf("expected name 'bare-skill', got %q", result.Skills[0].Name)
+	}
+
+	// Skill should be expandable via ExpandCommand
+	expanded := ExpandCommand("/skill:bare-skill", result.Skills)
+	if expanded == "/skill:bare-skill" {
+		t.Error("expected skill to be expanded, but got original text")
+	}
+}

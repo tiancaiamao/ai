@@ -93,3 +93,58 @@ If findings found, output:
 
 - "correct" = existing code and tests will not break, patch is free of blocking issues
 - Ignore non-blocking issues (style, formatting, typos, documentation, nits)
+
+## 检查维度
+
+所有 PR 都检查 Bug Criteria 的 8 条规则。以下维度按 PR 类型选用——不是每条都适用，扫一眼选相关的。
+
+**选择方法：** 根据 `--stat` 输出的文件路径自动启用相关维度，不需要全查。
+
+### 权限 / 安全相关
+
+- [ ] 最小权限原则：新权限是否比必需的更宽？
+- [ ] 纵深防御：关键路径是否有 fallback 校验？
+- [ ] 错误信息泄漏：报错是否泄漏了内部状态（表名、权限细节）？
+- [ ] 提权风险：`GRANT ALL` 是否会意外授予新权限？
+- [ ] 绕过路径：新增的权限检查是否覆盖了所有入口（DDL/DML/DCL）？
+
+### DDL / Schema 迁移相关
+
+- [ ] 迁移幂等性：upgrade 函数是否可安全重入（`doReentrantDDL` 或等效）？
+- [ ] 向后兼容：新列/新类型的默认值是否安全？下游系统是否受影响？
+- [ ] 降级风险：降版本后新列/新表是否导致崩溃或功能异常？
+- [ ] Bootstrap 一致性：root 用户 INSERT 语句的列数是否与 schema 定义一致？bootstrap 测试的期望值是否同步更新？
+
+### Parser / Grammar 相关
+
+- [ ] Reserved keyword：新增的 reserved keyword 是否会 break 现有标识符（表名/列名）？
+- [ ] 生成一致性：如果改了 `.y` 文件，对应的 `.go` 是否已重新生成？
+- [ ] Restore round-trip：parse → restore → re-parse 是否一致？
+
+### 并发 / 事务相关
+
+- [ ] 锁范围：是否有 deadlock 风险或锁粒度过大？
+- [ ] 事务边界：异常路径是否正确回滚？
+- [ ] 并发安全：新增的共享状态是否有正确的同步机制？
+
+### 性能相关
+
+- [ ] 热路径影响：变更是否在关键路径上引入了新的 I/O 或内存分配？
+- [ ] 批量场景：大量对象时是否有 N+1 查询或循环内 RPC？
+
+## 大 PR Review 节奏
+
+变更超过 10 个文件或 500 行时，建议分优先级看：
+
+1. **🔴 核心逻辑** — 行为变更的关键路径：新功能入口、权限/安全检查、数据流变更
+2. **🟡 辅助代码** — 类型定义、注册/路由、常量、格式化输出
+3. **🟢 测试** — unit test、integration test（验证核心逻辑是否被测到）
+4. **⬜ 跳过** — 生成文件（见 SKILL.md 生成文件检测表）
+
+先看完 🔴 再看 🟡，🟢 用来验证覆盖度。
+
+### Bug fix PR 额外检查
+
+如果 PR 是 bug fix，额外检查：
+
+- [ ] 是否有回归测试？测试是否能先于 fix 复现问题（fail-before-fix / pass-after-fix）？

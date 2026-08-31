@@ -1,9 +1,9 @@
 package tools
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"context"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"path/filepath"
 )
 
@@ -26,7 +26,7 @@ func (t *ChangeWorkspaceTool) Name() string {
 
 // Description returns the tool description.
 func (t *ChangeWorkspaceTool) Description() string {
-	return "Change the current workspace directory. Use this when working with git worktrees or when you need to operate in a different directory. All subsequent file operations (read, write, grep, edit, bash) will be relative to the new workspace."
+	return "Change the current workspace directory. REQUIRED for any directory change that must persist across multiple commands (multi-command workflows) or after creating/selecting a git worktree. All subsequent file operations (read, write, grep, edit, bash) will be relative to the new workspace. A bare `cd <dir>` in the bash tool only affects that one subprocess and does not persist; `cd <dir> && <command>` is for one-off commands only."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.

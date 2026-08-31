@@ -1,0 +1,32 @@
+{
+  "tool_edits": [
+    "system_prompt.md"
+  ],
+  "yaml_config": null,
+  "text_messages": 5,
+  "tool_calls": 9,
+  "has_changes": true,
+  "event_counts": {
+    "server_start": 1,
+    "response": 1,
+    "agent_start": 1,
+    "turn_start": 1,
+    "message_start": 8,
+    "message_end": 8,
+    "message_update": 7315,
+    "tool_execution_start": 9,
+    "tool_execution_end": 9,
+    "turn_end": 7,
+    "agent_end": 1
+  },
+  "change_plan": {
+    "target": "system_prompt.md",
+    "predicted_fixes": [
+      "agent_002_rollback"
+    ],
+    "predicted_risks": [],
+    "rationale": "Both regressions (agent_002, agent_011) share one root cause \u2014 the agent skipped running the project's canonical test suite before its first edit. In agent_002 it substituted an ad-hoc `python3 -c \"...\"` probe and treated the resulting `ZeroDivisionError` as a bug to fix (it was actually the intended contract). In agent_011 it edited at msg#10 before any test run.",
+    "change_description": "Added a prominent **\u26d4 GATING RULE (test before edit)** block at the very top of the Hard Rules section, before Rule 1. The block:\n1. Makes the test-before-first-edit mandate unmissable (emoji + leading position).\n2. Explicitly enumerates `python3 -c \"...\"` of ANY form as NOT counting \u2014 closing the loophole agent_002 exploited (the old Rule 2 only said `python3 -c \"import X\"`).\n3. Includes the literal `ZeroDivisionError` on `divide(10,0)` example to inoculate against the exact agent_002 failure mode: a probe-raised exception may be the *intended* contract; only a failing test legitimizes a fix.",
+    "extraction_method": "strategy_3_prose_summary"
+  }
+}

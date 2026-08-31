@@ -1,0 +1,2 @@
+warning: running without subcommand is deprecated, use 'ai serve' instead
+2026/06/05 23:38:06 INFO Loaded agent config path=/Users/genius/project/ai/agent/agent.yaml

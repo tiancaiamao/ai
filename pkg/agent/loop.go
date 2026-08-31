@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -41,10 +40,12 @@ type LoopConfig struct {
 	GetStartupPath func() string
 	// GetSessionDir returns the session directory for checkpoint management.
 	GetSessionDir func() string
-	Executor      ToolExecutor // agentctx.Tool executor with concurrency control
-	Metrics       *Metrics     // Metrics collector
-	ToolOutput    ToolOutputLimits
-	Compactors    []agentctx.Compactor // Multiple compactors with priority control (array order determines priority)
+	// RunID is the run ID assigned by the parent ai serve process.
+	// Empty when running standalone (ai --mode rpc without ai serve).
+	RunID      string
+	Executor   ToolExecutor // agentctx.Tool executor with concurrency control
+	ToolOutput ToolOutputLimits
+	Compactor  agentctx.Compactor // Context compression
 	// ToolCallCutoff summarizes the oldest tool outputs when visible tool results exceed this.
 	ToolCallCutoff int
 	// ThinkingLevel: off, minimal, low, medium, high, xhigh.
@@ -65,11 +66,23 @@ type LoopConfig struct {
 	LLMTotalTimeout time.Duration
 	// LLMFirstResponseTimeout is the timeout between streaming chunks (default 2min).
 	LLMFirstResponseTimeout time.Duration
-	// EnableCheckpoint enables automatic checkpoint creation (default true).
-	EnableCheckpoint bool
+
 	// MaxLoopGuardFeedback is the number of feedback rounds the loop guard gives
 	// the LLM before escalating to a hard abort (0=default=2).
 	MaxLoopGuardFeedback int
+	// Hooks is the hook registry for BeforeModel/AfterTool/AfterAgent hooks.
+	// Nil is safe — all Run* methods are no-ops.
+	Hooks *HookRegistry
+	// AgentContextPrefix combines skills and project-level instructions (AGENTS.md)
+	// into a single user message injected before the first user message on each LLM call.
+	// Empty means no injection.
+	// Merging into one message and placing it in the prefix maximizes provider
+	// prefix cache hits — both skills and instructions are stable within a session.
+	AgentContextPrefix string
+
+	// ConsumeManualCompaction reports and consumes a pending manual compaction request.
+	// It is called by the agent loop at a safe step boundary.
+	ConsumeManualCompaction func() bool
 }
 
 // getEffectiveModel returns the current model, using GetModel callback if available.
@@ -99,7 +112,6 @@ func DefaultLoopConfig() *LoopConfig {
 		ToolOutput:              DefaultToolOutputLimits(),
 		LLMTotalTimeout:         defaultLLMTotalTimeout,
 		LLMFirstResponseTimeout: defaultLLMFirstResponseTimeout,
-		EnableCheckpoint:        true,
 	}
 }
 
@@ -138,7 +150,6 @@ func RunLoop(
 			SystemPrompt:   agentCtx.SystemPrompt,
 			RecentMessages: append(agentCtx.RecentMessages, prompts...),
 			Tools:          agentCtx.Tools,
-			LLMContext:     agentCtx.LLMContext,
 			AgentState:     agentCtx.AgentState,
 		}
 
@@ -177,22 +188,22 @@ func runInnerLoop(
 		state.advanceTurn()
 
 		// Pre-LLM compaction: check thresholds and compact if needed.
-		// Save checkpoint BEFORE compaction so progress is preserved if the
-		// compaction LLM call crashes the process.
-		state.savePreCompactionCheckpoint("pre_llm_threshold")
-		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false)
-		if compacted != nil {
-			saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, compacted.LLMContextUpdated, state.turnCount, "pre_llm_threshold")
-		}
+		compacted, _ := state.performCompaction(ctx, "pre_llm_threshold", true, false, true)
+		_ = compacted
+
+		// Run BeforeModel hooks: fan-out, inject additional messages before LLM call.
+		config.Hooks.RunBeforeModel(HookContext{
+			Ctx:      ctx,
+			AgentCtx: agentCtx,
+			Config:   config,
+		}, agentCtx.RecentMessages)
 
 		// Stream assistant response with retry logic.
 		msg, err := streamAssistantResponseWithRetry(ctx, agentCtx, config, stream)
 		if err != nil {
-			if llm.IsContextLengthExceeded(err) && len(config.Compactors) > 0 && state.compactionRecs < maxCompactionRecoveries {
-				recoveryResult, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true)
+			if llm.IsContextLengthExceeded(err) && config.Compactor != nil && state.compactionRecs < maxCompactionRecoveries {
+				_, recoveryErr := state.performCompaction(ctx, "context_limit_recovery", false, true, true)
 				if recoveryErr == nil {
-					recoveryUpdated := recoveryResult != nil && recoveryResult.LLMContextUpdated
-					saveCheckpointAfterCompaction(state.checkpointMgr, agentCtx, recoveryUpdated, state.turnCount, "context_limit_recovery")
 					continue
 				}
 			}
@@ -238,22 +249,35 @@ func runInnerLoop(
 			return
 		}
 
-		// Check for non-success stopReason and notify user.
-		if sanitized := sanitizeMessageForNonSuccessStopReason(msg); sanitized {
-			slog.Warn("[Loop] LLM request ended with non-success stopReason", "stopReason", msg.StopReason)
-			traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
-				traceevent.Field{Key: "stopReason", Value: msg.StopReason})
-			agentCtx.RecentMessages[len(agentCtx.RecentMessages)-1] = *msg
-			state.newMessages[len(state.newMessages)-1] = *msg
-		}
+		// Non-success stopReasons (network error, rate limit, content filter,
+		// ...) are sanitized in streamAssistantResponse before message_end is
+		// emitted, so no extra handling is needed here.
 
 		hasMore, toolResults := state.processToolCalls(ctx, msg)
 
 		stream.Push(NewTurnEndEvent(msg, toolResults))
 
+		// A manual compact requested during a turn runs after the completed
+		// tool step and before the next model call. For a final response, this
+		// also runs before agent_end below.
+		if config.ConsumeManualCompaction != nil && config.ConsumeManualCompaction() {
+			_, _ = state.performCompaction(ctx, "manual_command", false, false, false)
+		}
+
 		// If no more tool calls, end the conversation.
 		if !hasMore {
 			if maybeRecoverMalformedToolCall(ctx, agentCtx, &state.newMessages, stream, msg, &state.malformedRecs) {
+				continue
+			}
+
+			// Loop guard hard-abort recovery: give the LLM one final turn
+			// to produce a text response to the user instead of silently
+			// terminating. The sanitizeMessageForToolLoopGuard has already
+			// replaced tool calls with a textual explanation of the abort,
+			// so the LLM will see it and can respond accordingly.
+			if msg.StopReason == "aborted" && !state.guardAbortRecovery {
+				state.guardAbortRecovery = true
+				slog.Info("[Loop] loop guard hard abort — giving LLM one recovery turn")
 				continue
 			}
 
@@ -273,6 +297,13 @@ func runInnerLoop(
 		}
 	}
 
+	// Run AfterAgent hooks: sequential, no data passing, before AgentEndEvent.
+	config.Hooks.RunAfterAgent(HookContext{
+		Ctx:      ctx,
+		AgentCtx: agentCtx,
+		Config:   config,
+	})
+
 	stream.Push(NewAgentEndEvent(agentCtx.RecentMessages))
 }
 
@@ -283,11 +314,6 @@ func hashAny(value any) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// randFloat64 returns a random float64 in [0, 1)
-func randFloat64() float64 {
-	return rand.Float64()
 }
 
 // isEmptyActionableResponse returns true if the message contains no actionable

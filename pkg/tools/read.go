@@ -1,14 +1,20 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"image/png"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -45,17 +51,11 @@ func getReadLimit() int {
 // ReadTool reads file contents with dynamic workspace support.
 type ReadTool struct {
 	workspace *Workspace
-	hashLines bool // Whether to output with hashline prefixes
 }
 
 // NewReadTool creates a new Read tool with dynamic workspace support.
 func NewReadTool(ws *Workspace) *ReadTool {
 	return &ReadTool{workspace: ws}
-}
-
-// SetHashLines enables or disables hashline output mode.
-func (t *ReadTool) SetHashLines(enabled bool) {
-	t.hashLines = enabled
 }
 
 // Name returns the tool name.
@@ -65,7 +65,7 @@ func (t *ReadTool) Name() string {
 
 // Description returns the tool description.
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Supports text files. Use offset and limit to read specific line ranges. For large or unfamiliar files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially."
+	return "Read the contents of a file. Supports text files and image files. Use offset and limit to read specific line ranges from text files. For large or unfamiliar text files, prefer grep to locate relevant sections first, then read targeted ranges with offset/limit rather than reading the entire file sequentially. For image files, the image content is returned directly and can be seen by multimodal models."
 }
 
 // Parameters returns the JSON Schema for the tool parameters.
@@ -112,6 +112,32 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", path, err)
+	}
+
+	// Detect content type from the file data.
+	contentType := http.DetectContentType(data)
+
+	// If it's an image, return ImageContent.
+	if strings.HasPrefix(contentType, "image/") {
+		// stb_image in llama-server cannot decode webp, so convert to png.
+		if contentType == "image/webp" {
+			if pngData, err := webpToPng(data); err == nil {
+				data = pngData
+				contentType = "image/png"
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Read image file [%s]", contentType),
+			},
+			agentctx.ImageContent{
+				Type:     "image",
+				Data:     encoded,
+				MimeType: contentType,
+			},
+		}, nil
 	}
 
 	// Check if it's a text file
@@ -187,11 +213,6 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 	}
 
 	output = header + output + footer
-
-	// Apply hashline formatting if enabled (overrides line range output format)
-	if t.hashLines {
-		output = FormatHashLines(strings.Join(selectedLines, "\n"), offset)
-	}
 
 	return []agentctx.ContentBlock{
 		agentctx.TextContent{
@@ -298,50 +319,18 @@ func IsBinary(data []byte) bool {
 	return false
 }
 
-// DetectFileType detects the file type based on extension.
-func DetectFileType(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-
-	textExts := map[string]bool{
-		".txt":           true,
-		".md":            true,
-		".json":          true,
-		".xml":           true,
-		".html":          true,
-		".css":           true,
-		".js":            true,
-		".ts":            true,
-		".go":            true,
-		".py":            true,
-		".rs":            true,
-		".c":             true,
-		".cpp":           true,
-		".h":             true,
-		".hpp":           true,
-		".java":          true,
-		".sh":            true,
-		".bash":          true,
-		".zsh":           true,
-		".fish":          true,
-		".yaml":          true,
-		".yml":           true,
-		".toml":          true,
-		".ini":           true,
-		".cfg":           true,
-		".conf":          true,
-		".log":           true,
-		".sql":           true,
-		".graphql":       true,
-		".gql":           true,
-		".proto":         true,
-		".dockerfile":    true,
-		".gitignore":     true,
-		".gitattributes": true,
+// webpToPng converts webp bytes to png. llama-server decodes images with
+// stb_image, which has no webp support.
+func webpToPng(data []byte) ([]byte, error) {
+	img, err := webp.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
 	}
 
-	if textExts[ext] {
-		return "text"
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
 	}
 
-	return "binary"
+	return buf.Bytes(), nil
 }

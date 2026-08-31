@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -98,6 +99,9 @@ type AgentMessage struct {
 	Truncated    bool `json:"truncated,omitempty"`
 	TruncatedAt  int  `json:"truncated_at,omitempty"`
 	OriginalSize int  `json:"original_size,omitempty"`
+
+	// Session entry tracking (set by buildSessionContext)
+	EntryID string `json:"entryId,omitempty"`
 }
 
 // IsTruncated checks if a message is truncated.
@@ -138,6 +142,18 @@ func NewToolResultMessage(toolCallID, toolName string, content []ContentBlock, i
 	}
 }
 
+// NewCompactionSummaryMessage creates a new compaction summary message.
+// This message type is distinct from regular user messages to prevent
+// re-compaction of previous summaries.
+func NewCompactionSummaryMessage(summary string) AgentMessage {
+	return AgentMessage{
+		Role:      "user",
+		Content:   []ContentBlock{TextContent{Type: "text", Text: fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)}},
+		Timestamp: time.Now().UnixMilli(),
+		Metadata:  &MessageMetadata{Kind: "compactionSummary"},
+	}
+}
+
 // ExtractText extracts all text content from a message.
 func (m *AgentMessage) ExtractText() string {
 	var b strings.Builder
@@ -147,6 +163,31 @@ func (m *AgentMessage) ExtractText() string {
 		}
 	}
 	return b.String()
+}
+
+// OutputHash returns a short hash of the tool result text content.
+// Used by the loop guard to detect whether repeated tool calls are
+// producing different output (polling) vs. identical output (stuck loop).
+// Returns empty string for non-toolResult messages.
+func (m AgentMessage) OutputHash() string {
+	if m.Role != "toolResult" {
+		return ""
+	}
+	text := m.ExtractText()
+	if text == "" {
+		return ""
+	}
+	// FNV-1a 32-bit: fast, no crypto import needed.
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for _, b := range text {
+		h ^= uint32(b)
+		h *= prime32
+	}
+	return fmt.Sprintf("%08x", h)
 }
 
 // ExtractThinking extracts all thinking content from a message.

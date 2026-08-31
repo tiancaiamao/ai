@@ -21,6 +21,9 @@ type Config struct {
 	// Model configuration
 	Model ModelConfig `json:"model"`
 
+	// Thinking level: off, minimal, low, medium, high, xhigh
+	ThinkingLevel string `json:"thinkingLevel,omitempty"`
+
 	// Compactor configuration
 	Compactor *compact.Config `json:"compactor,omitempty"`
 
@@ -30,14 +33,8 @@ type Config struct {
 	// Tool output configuration
 	ToolOutput *ToolOutputConfig `json:"toolOutput,omitempty"`
 
-	// Edit tool configuration
-	Edit *EditConfig `json:"edit,omitempty"`
-
 	// Logging configuration
 	Log *LogConfig `json:"log,omitempty"`
-
-	// Workspace is the working directory path (the git repo path bound at startup)
-	Workspace string `json:"workspace,omitempty"`
 }
 
 // LogConfig contains logging configuration.
@@ -59,31 +56,23 @@ type ModelConfig struct {
 // ConcurrencyConfig contains concurrency control settings.
 type ConcurrencyConfig struct {
 	MaxConcurrentTools int `json:"maxConcurrentTools"` // Maximum tools running concurrently
-	ToolTimeout        int `json:"toolTimeout"`        // Tool execution timeout in seconds
 	QueueTimeout       int `json:"queueTimeout"`       // Queue wait timeout in seconds
 }
 
 // ToolOutputConfig contains tool output truncation settings.
 type ToolOutputConfig struct {
-	MaxChars  int  `json:"maxChars,omitempty"`  // Maximum characters to keep (0 = default)
-	HashLines bool `json:"hashLines,omitempty"` // Enable hashline mode for read tool
-}
-
-// EditConfig contains edit tool settings.
-type EditConfig struct {
-	Mode string `json:"mode,omitempty"` // Edit mode: "replace" (default) or "hashline"
+	MaxChars int `json:"maxChars,omitempty"` // Maximum characters to keep (0 = default)
 }
 
 const (
 	defaultToolOutputMaxChars = 10_000
-	maxToolOutputMaxChars     = defaultToolOutputMaxChars
+	maxToolOutputMaxChars     = 30_000
 )
 
 // DefaultConcurrencyConfig returns default concurrency configuration.
 func DefaultConcurrencyConfig() *ConcurrencyConfig {
 	return &ConcurrencyConfig{
 		MaxConcurrentTools: 5,
-		ToolTimeout:        30,
 		QueueTimeout:       60,
 	}
 }
@@ -91,15 +80,7 @@ func DefaultConcurrencyConfig() *ConcurrencyConfig {
 // DefaultToolOutputConfig returns default tool output truncation configuration.
 func DefaultToolOutputConfig() *ToolOutputConfig {
 	return &ToolOutputConfig{
-		MaxChars:  defaultToolOutputMaxChars,
-		HashLines: false,
-	}
-}
-
-// DefaultEditConfig returns default edit tool configuration.
-func DefaultEditConfig() *EditConfig {
-	return &EditConfig{
-		Mode: "replace", // Default to replace mode
+		MaxChars: defaultToolOutputMaxChars,
 	}
 }
 
@@ -135,29 +116,6 @@ func (c *LogConfig) CreateLogger() (*slog.Logger, error) {
 	cfg := &logger.Config{}
 
 	return logger.NewLogger(cfg)
-}
-
-// ResolveLogPath returns the resolved log file path with PID expansion.
-func ResolveLogPath(c *LogConfig) string {
-	return resolveLogPath(c)
-}
-
-func resolveLogPath(c *LogConfig) string {
-	if c == nil {
-		c = DefaultLogConfig()
-	}
-	path := strings.TrimSpace(c.File)
-	if path == "" {
-		return ""
-	}
-	return expandLogPath(path)
-}
-
-func expandLogPath(path string) string {
-	pid := strconv.Itoa(os.Getpid())
-	path = strings.ReplaceAll(path, "{pid}", pid)
-	path = strings.ReplaceAll(path, "{PID}", pid)
-	return path
 }
 
 // LoadConfig loads configuration from file and merges with environment variables.
@@ -220,6 +178,14 @@ func (c *Config) GetLLMModel() llm.Model {
 	}
 }
 
+// ResolveConfigPath returns the config file path, honoring AI_CONFIG_PATH if set.
+func ResolveConfigPath() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("AI_CONFIG_PATH")); override != "" {
+		return override, nil
+	}
+	return GetDefaultConfigPath()
+}
+
 // GetDefaultConfigPath returns the default config file path.
 func GetDefaultConfigPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
@@ -260,10 +226,11 @@ func DefaultConfig() *Config {
 			BaseURL:  "https://api.z.ai/api/coding/paas/v4",
 			API:      "openai-completions",
 		},
-		Compactor:   compact.DefaultConfig(),
-		Concurrency: DefaultConcurrencyConfig(),
-		ToolOutput:  DefaultToolOutputConfig(),
-		Log:         DefaultLogConfig(),
+		ThinkingLevel: "high",
+		Compactor:     compact.DefaultConfig(),
+		Concurrency:   DefaultConcurrencyConfig(),
+		ToolOutput:    DefaultToolOutputConfig(),
+		Log:           DefaultLogConfig(),
 	}
 }
 
@@ -306,21 +273,10 @@ func (c *Config) ToLoopConfig(opts ...LoopConfigOption) *agent.LoopConfig {
 // LoopConfigOption is a functional option for configuring LoopConfig.
 type LoopConfigOption func(*agent.LoopConfig)
 
-// WithCompactor sets a single compactor for context compression.
-// Deprecated: Use WithCompactors([]agent.Compactor{...}) for multiple compactors.
+// WithCompactor sets the compactor for context compression.
 func WithCompactor(compactor agent.Compactor) LoopConfigOption {
 	return func(cfg *agent.LoopConfig) {
-		if compactor != nil {
-			cfg.Compactors = []agent.Compactor{compactor}
-		}
-	}
-}
-
-// WithCompactors sets multiple compactors for context compression.
-// Array order determines execution priority (first trigger wins).
-func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.Compactors = compactors
+		cfg.Compactor = compactor
 	}
 }
 
@@ -328,13 +284,6 @@ func WithCompactors(compactors []agent.Compactor) LoopConfigOption {
 func WithContextWindow(window int) LoopConfigOption {
 	return func(cfg *agent.LoopConfig) {
 		cfg.ContextWindow = window
-	}
-}
-
-// WithThinkingLevel sets the thinking level.
-func WithThinkingLevel(level string) LoopConfigOption {
-	return func(cfg *agent.LoopConfig) {
-		cfg.ThinkingLevel = level
 	}
 }
 

@@ -16,16 +16,20 @@ const maxCompactionRecoveries = 1
 // It replaces multiple local variables and repeated parameter passing
 // between the loop body and its extracted helper functions.
 type loopState struct {
-	config        *LoopConfig
-	agentCtx      *agentctx.AgentContext
-	stream        *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
+	config         *LoopConfig
+	agentCtx       *agentctx.AgentContext
+	stream         *llm.EventStream[AgentEvent, []agentctx.AgentMessage]
 	compactionRecs int
-	turnCount     int
-	loopGuard     *toolLoopGuard
-	checkpointMgr *AgentContextCheckpointManager
+	turnCount      int
+	loopGuard      *toolLoopGuard
+
 	emptyRetries  int
 	malformedRecs int
 	newMessages   []agentctx.AgentMessage
+	// guardAbortRecovery tracks whether we've already given the LLM a
+	// recovery turn after a loop guard hard abort. Prevents re-triggering
+	// if the LLM continues the loop.
+	guardAbortRecovery bool
 }
 
 func newLoopState(
@@ -35,21 +39,17 @@ func newLoopState(
 	newMessages []agentctx.AgentMessage,
 ) *loopState {
 	return &loopState{
-		config:        config,
-		agentCtx:      agentCtx,
-		stream:        stream,
-		loopGuard:     newToolLoopGuard(config),
-		checkpointMgr: initCheckpointManager(config),
-		newMessages:   newMessages,
+		config:    config,
+		agentCtx:  agentCtx,
+		stream:    stream,
+		loopGuard: newToolLoopGuard(config),
+
+		newMessages: newMessages,
 	}
 }
 
-// cleanup closes the checkpoint manager if present.
-func (s *loopState) cleanup() {
-	if s.checkpointMgr != nil {
-		_ = s.checkpointMgr.Close()
-	}
-}
+// cleanup is a no-op now that the checkpoint manager holds no resources.
+func (s *loopState) cleanup() {}
 
 // shouldStop checks for context cancellation and max turns limit.
 // Returns true if the loop should terminate. Pushes AgentEndEvent on stop.
@@ -77,32 +77,6 @@ func (s *loopState) advanceTurn() {
 	s.turnCount++
 }
 
-// savePreCompactionCheckpoint saves a checkpoint before compaction modifies
-// agent context. This ensures progress is preserved if the compaction LLM
-// call crashes the process. Only saves when at least one compactor indicates
-// it should compact, to avoid unnecessary I/O on every turn.
-func (s *loopState) savePreCompactionCheckpoint(trigger string) {
-	if s.checkpointMgr == nil || !s.checkpointMgr.ShouldCheckpoint() {
-		return
-	}
-	// Check if any compactor would trigger before saving checkpoint.
-	shouldCompact := false
-	for _, c := range s.config.Compactors {
-		if c.ShouldCompact(context.Background(), s.agentCtx) {
-			shouldCompact = true
-			break
-		}
-	}
-	if !shouldCompact {
-		return
-	}
-	if _, err := s.checkpointMgr.CreateSnapshot(s.agentCtx, s.agentCtx.LLMContext, s.turnCount); err != nil {
-		slog.Warn("[Loop] Failed to save pre-compaction checkpoint", "error", err, "trigger", trigger, "turn", s.turnCount)
-	} else {
-		slog.Info("[Loop] Pre-compaction checkpoint saved", "trigger", trigger, "turn", s.turnCount)
-	}
-}
-
 // performCompaction executes compaction using the configured compactors.
 // It iterates compactors in priority order, emits trace and stream events,
 // and updates agent context on success.
@@ -120,48 +94,35 @@ func (s *loopState) performCompaction(
 	trigger string,
 	checkShouldCompact bool,
 	trackRecovery bool,
+	auto bool,
 ) (*agentctx.CompactionResult, error) {
-	var compacted *agentctx.CompactionResult
-	var compactErr error
-	var compactionStarted bool
-	var before int
-	var compactionSpan *traceevent.Span
-
-	for _, c := range s.config.Compactors {
-		if checkShouldCompact && !c.ShouldCompact(ctx, s.agentCtx) {
-			continue
-		}
-
-		if !compactionStarted {
-			before = len(s.agentCtx.RecentMessages)
-			compactionSpan = traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
-				traceevent.Field{Key: "source", Value: trigger},
-				traceevent.Field{Key: "auto", Value: true},
-				traceevent.Field{Key: "before_messages", Value: before},
-				traceevent.Field{Key: "trigger", Value: trigger},
-			)
-			s.stream.Push(NewCompactionStartEvent(CompactionInfo{
-				Auto:    true,
-				Before:  before,
-				Trigger: trigger,
-			}))
-			compactionStarted = true
-		}
-
-		slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
-		compacted, compactErr = c.Compact(s.agentCtx)
-		if compactErr == nil {
-			break // First successful compaction wins
-		}
-		slog.Warn("[Loop] Compaction failed", "trigger", trigger, "compactor", fmt.Sprintf("%T", c), "error", compactErr)
-	}
-
-	if !compactionStarted {
+	c := s.config.Compactor
+	if c == nil {
 		return nil, nil
 	}
 
+	if checkShouldCompact && !c.ShouldCompact(ctx, s.agentCtx) {
+		return nil, nil
+	}
+
+	before := len(s.agentCtx.RecentMessages)
+	compactionSpan := traceevent.StartSpan(ctx, "compaction", traceevent.CategoryEvent,
+		traceevent.Field{Key: "source", Value: trigger},
+		traceevent.Field{Key: "auto", Value: auto},
+		traceevent.Field{Key: "before_messages", Value: before},
+		traceevent.Field{Key: "trigger", Value: trigger},
+	)
+	s.stream.Push(NewCompactionStartEvent(CompactionInfo{
+		Auto:    auto,
+		Before:  before,
+		Trigger: trigger,
+	}))
+
+	slog.Info("[Loop] Compaction triggered", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
+	compacted, compactErr := c.Compact(ctx, s.agentCtx)
+
 	if compactErr != nil {
-		slog.Warn("[Loop] Compaction triggered but all compactors failed", "trigger", trigger, "error", compactErr)
+		slog.Warn("[Loop] Compaction failed", "trigger", trigger, "compactor", fmt.Sprintf("%T", c), "error", compactErr)
 		compactionSpan.AddField("error", true)
 		compactionSpan.AddField("error_message", compactErr.Error())
 		if stack := ErrorStack(compactErr); stack != "" {
@@ -169,7 +130,7 @@ func (s *loopState) performCompaction(
 		}
 		compactionSpan.End()
 		s.stream.Push(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
+			Auto:    auto,
 			Before:  before,
 			Error:   compactErr.Error(),
 			Trigger: trigger,
@@ -178,32 +139,53 @@ func (s *loopState) performCompaction(
 	}
 
 	if compacted == nil {
-		slog.Warn("[Loop] Compaction triggered but returned nil result", "trigger", trigger)
+		slog.Info("[Loop] Compactor returned nil result", "trigger", trigger, "compactor", fmt.Sprintf("%T", c))
 		compactionSpan.End()
 		s.stream.Push(NewCompactionEndEvent(CompactionInfo{
-			Auto:    true,
+			Auto:    auto,
 			Before:  before,
 			Trigger: trigger,
 		}))
 		return nil, nil
 	}
 
-	s.agentCtx.LastCompactionSummary = compacted.Summary
 	after := len(s.agentCtx.RecentMessages)
+
+	// Plant a fresh canary for context retention checks in future askLLM
+	// rounds. The canary is appended to the end and stays in RecentMessages
+	// until the next compaction — askLLM never touches RecentMessages.
+	// config.Compactor may be a wrapper (e.g. rpc's sessionCompactor), so we
+	// go through a narrow interface instead of asserting the concrete type.
+	if p, ok := c.(interface {
+		PlantCanary(*agentctx.AgentContext)
+	}); ok {
+		p.PlantCanary(s.agentCtx)
+	}
 
 	compactionSpan.AddField("after_messages", after)
 	compactionSpan.End()
-	s.stream.Push(NewCompactionEndEvent(CompactionInfo{
-		Type:              compacted.Type,
-		Auto:              true,
-		Before:            before,
-		After:             after,
-		Trigger:           trigger,
-		TokensBefore:      compacted.TokensBefore,
-		TokensAfter:       compacted.TokensAfter,
-		TruncatedCount:    compacted.TruncatedCount,
-		LLMContextUpdated: compacted.LLMContextUpdated,
-	}))
+
+	// Carry the summary and a copy of post-compaction messages on the event.
+	// The event consumer (rpc_app) persists these to a compaction snapshot file
+	// and appends a compaction entry to messages.jsonl. We copy the slice to
+	// avoid sharing the backing array with the loop goroutine.
+	endEvent := NewCompactionEndEvent(CompactionInfo{
+		Type:           compacted.Type,
+		Auto:           auto,
+		Before:         before,
+		After:          after,
+		Trigger:        trigger,
+		Summary:        compacted.Summary,
+		TokensBefore:   compacted.TokensBefore,
+		TokensAfter:    compacted.TokensAfter,
+		TruncatedCount: compacted.TruncatedCount,
+	})
+	if len(s.agentCtx.RecentMessages) > 0 {
+		msgs := make([]agentctx.AgentMessage, len(s.agentCtx.RecentMessages))
+		copy(msgs, s.agentCtx.RecentMessages)
+		endEvent.Messages = msgs
+	}
+	s.stream.Push(endEvent)
 
 	if trackRecovery {
 		s.compactionRecs++
@@ -266,7 +248,17 @@ func (s *loopState) processToolCalls(
 	}
 
 	// Dispatch tool calls to the executor.
-	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.Metrics, s.config.ToolOutput)
+	toolResults = executeToolCalls(ctx, s.agentCtx, s.agentCtx.Tools, s.agentCtx.GetAllowedToolsMap(), msg, s.stream, s.config.Executor, s.config.ToolOutput)
+
+	// Run AfterTool hooks: chain-style, each hook's output feeds the next.
+	hookCtx := HookContext{
+		Ctx:      ctx,
+		AgentCtx: s.agentCtx,
+		Config:   s.config,
+	}
+	for i := range toolResults {
+		toolResults[i] = s.config.Hooks.RunAfterTool(hookCtx, toolResults[i].ToolName, toolResults[i])
+	}
 
 	// Append results to conversation state.
 	for _, result := range toolResults {
@@ -274,13 +266,19 @@ func (s *loopState) processToolCalls(
 		s.newMessages = append(s.newMessages, result)
 	}
 
+	// Notify loop guard of tool output so it can detect polling patterns
+	// (same tool+args but changing output = legitimate polling, not stuck loop).
+	if s.loopGuard != nil {
+		for _, result := range toolResults {
+			outputHash := result.OutputHash()
+			if outputHash != "" {
+				s.loopGuard.NotifyToolOutput(outputHash)
+			}
+		}
+	}
+
 	// Increment tool call counter for compactor trigger intervals.
 	s.agentCtx.AgentState.ToolCallsSinceLastTrigger += len(toolResults)
-
-	// Create checkpoint after update_llm_context tool execution.
-	if hasToolResultNamed(toolResults, "update_llm_context") {
-		saveCheckpointAfterToolExecution(s.checkpointMgr, s.agentCtx, s.turnCount, "update_llm_context")
-	}
 
 	return hasMore, toolResults
 }

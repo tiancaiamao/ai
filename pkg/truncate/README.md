@@ -21,24 +21,32 @@ Truncates `text` to fit within `maxChars` bytes with:
 
 Example output:
 ```
-[first 500 chars]...[~1250 tokens truncated]...[last 500 chars]
+[first N chars]…1250 tokens truncated…[last N chars]
 ```
 
-### TruncateWithHeadTail
+### TruncateString
 
 ```go
-func TruncateWithHeadTail(text string) string
+func TruncateString(s string, maxLen int) string
 ```
 
-Convenience wrapper using default limits (1000 head + 1000 tail + 500 marker budget).
+Truncates `s` to at most `maxLen` bytes, appending `"..."` if truncated.
 
-### EstimateTokens
+### TrimRunes
 
 ```go
-func ApproxTokenCount(text string) int
+func TrimRunes(s string, limit int) string
 ```
 
-Rough token estimate (~4 chars per token) for truncation markers.
+Trims `s` to at most `limit` runes (Unicode code points). If `limit <= 0`, `s` is returned unchanged.
+
+### Token Estimation
+
+```go
+func ApproxTokenCount(text string) int   // ~4 chars per token
+func CharsToTokens(chars int) int        // Convert char count to token count
+func TokensToChars(tokens int) int       // Convert token count to char count
+```
 
 ## UTF-8 Safety
 
@@ -54,5 +62,5 @@ If a split would land inside a multi-byte character, it backs up to the previous
 
 | File | Description |
 |------|-------------|
-| `truncate.go` | `Truncate()`, `TruncateWithHeadTail()`, `splitString()` |
-| `estimate.go` | `ApproxTokenCount()` |
+| `truncate.go` | `Truncate()`, `TruncateString()`, `TrimRunes()`, `splitString()` |
+| `estimate.go` | `ApproxTokenCount()`, `CharsToTokens()`, `TokensToChars()`, `ApproxBytesPerToken` |

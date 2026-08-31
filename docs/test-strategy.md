@@ -34,14 +34,14 @@ Test individual functions and methods in isolation.
 | `pkg/agent` | `tool_call_normalize_test.go` | Tool call parsing |
 | `pkg/agent` | `result_test.go` | Result processing |
 | `pkg/agent` | `error_stack_test.go` | Error chain tracking |
-| `pkg/agent` | `checkpoint_manager_test.go` | Checkpoint management |
+| `pkg/agent` | `checkpoint_manager_test.go` | AgentState persistence |
 | `pkg/compact` | `compact_test.go` | Compaction logic |
 | `pkg/compact` | `context_management_test.go` | LLM-driven context management |
 | `pkg/compact` | `compact_tool_pairing_test.go` | Compact tool integration |
 | `pkg/config` | `config_test.go` | Configuration loading |
 | `pkg/config` | `auth_test.go` | API key resolution |
 | `pkg/config` | `models_test.go` | Model spec handling |
-| `pkg/context` | `checkpoint_test.go` | Checkpoint save/load |
+| `pkg/context` | `checkpoint_test.go` | AgentState save/load |
 | `pkg/llm` | `client_test.go` | LLM client |
 | `pkg/llm` | `errors_test.go` | Error classification |
 | `pkg/prompt` | `builder_test.go` | Prompt construction |
@@ -98,7 +98,7 @@ Test component interactions within the agent system.
 | `pkg/agent/llm_context_test.go` | LLM context lifecycle |
 | `pkg/agent/runtime_meta_test.go` | Runtime telemetry |
 | `pkg/agent/metrics_trace_test.go` | Metrics via trace events |
-| `pkg/session/compact_event_test.go` | Session compaction events |
+| `pkg/session/compaction_snapshot_test.go` | Session compaction snapshots |
 | `pkg/skill/integration_test.go` | Skill loading integration |
 | `cmd/ai/integration_test.go` | Full CLI integration |
 | `cmd/ai/session_writer_test.go` | Session writer compaction |
@@ -109,8 +109,6 @@ Test component interactions within the agent system.
 | `pkg/run/conv_test.go` | Run metadata conversion |
 | `pkg/run/socket_test.go` | Socket server |
 | `pkg/run/meta_test.go` | Run metadata |
-| `skills/ag/cmd/backend_integration_test.go` | ag backend integration |
-| `skills/ag/internal/*/...` | ag internal package tests |
 
 ### Running Integration Tests
 
@@ -164,30 +162,70 @@ go test -v -run TestRegression001 ./pkg/agent
 
 **Rule:** All regression tests must pass before merging. 100% pass rate required.
 
-## Layer 4: E2E Benchmark Tests
+## Layer 4: E2E Tests (Real Model)
 
 ### Purpose
 
-Test complete agent behaviors with real LLM interactions.
+Test complete agent behaviors against a **real, OpenAI-compatible model
+endpoint** — the full pipeline: agent loop → streaming LLM client → tool
+execution → multi-turn state. These are the only tests that catch protocol
+drift between the code and an actual model server.
 
 ### Test Suite
 
-Located under `benchmark/`:
+Located under `pkg/e2e/` (opt-in via the `e2e` build tag — **not** part of
+`make test` / CI, since they need a reachable endpoint and a live model).
+Each test spawns the real `ai rpc` binary as a black box and drives it over
+stdin/stdout JSON-RPC:
 
-| Category | Focus |
-|----------|-------|
-| Agent Behavior | Exploration, debugging, memory |
-| Context Management | Overflow, compaction |
-| Tool Usage | Tool traps, misuse |
-| Performance | Budget management |
-| Code Generation | Various scenarios |
+| Test | What It Verifies |
+|------|------------------|
+| `TestE2E_RealTask` | Pre-seeded buggy Go code: fix off-by-one + race condition + create SVG. Verified by `go run` / `go run -race` / XML parse |
+| `TestE2E_SlashCommands` | Full server lifecycle: protocol errors → tool turns → large prompts → `/compact` → `/fork` → `/rewind` → `/new` → `/resume` → `/help` → EOF |
+| `TestE2E_BusyAndAbort` | Streaming-time policies (`reject`/`cancel`/`submit`), abort |
+| `TestE2E_TimeoutWatchdog` | Stall watchdog terminates the agent |
+| `TestE2E_FlagsAndRoles` | CLI flags (`-max-turns`/`-session`) and `--role` wiring |
+| `TestE2E_Subcommands` | `ai serve` / `ls` / `send` / `kill` lifecycle + dead-run reconcile |
+| `TestE2E_DestructiveGuard` | `--role guard` destructive-command middleware reacts to `rm -rf` |
+| `TestE2E_Skills` | Skill discovery from `~/.ai/skills` via `find_skill` |
+| `TestLRRepro_SameBatchEvents` | Fast, deterministic log-replay regression repro (no model needed) |
 
-### Running Benchmark Tests
+### Coverage
+
+The binary is built with `-cover` (in `TestMain`), so every spawned `ai rpc`
+subprocess records coverage of the **whole application** to `GOCOVERDIR`. At
+the end of the run the profiles are merged (`go tool covdata`) and the total
+printed, e.g.:
+
+```
+=== E2E coverage (whole app via `ai rpc` subprocess) ===
+total: (statements) 47.3%
+```
+
+This is real subprocess coverage: `pkg/rpc`, `pkg/session`, `pkg/skill`,
+`cmd/ai` etc. are exercised through the same entry point a user invokes —
+something agent-level tests and mock servers cannot do.
+
+### Running E2E Tests
 
 ```bash
-# Run benchmark suite (requires API key, slow)
-cd benchmark && ./run.sh
+# Default: first ollama/* model from ~/.ai/models.json (prefers "laguna")
+make e2e
+
+# Override endpoint / model via environment variables
+E2E_BASE_URL=http://localhost:11434/v1 E2E_MODEL=qwen3:8b make e2e
 ```
+
+A test **skips** (does not fail) when the endpoint is unreachable or no model
+is configured, so the suite can also be run on machines without the model.
+Use `-v` to see which model each test targets.
+
+### Model Resolution
+
+1. `E2E_BASE_URL` env var wins (with `E2E_MODEL`, `E2E_PROVIDER`, `E2E_API`)
+2. Otherwise the first `ollama/*` model from `~/.ai/models.json` (prefers an
+   ID containing `laguna`)
+3. Otherwise the test skips
 
 ## Test Best Practices
 
@@ -233,7 +271,7 @@ func TestToolNormalization(t *testing.T) {
 1. **Unit tests**: `go test -cover ./...`
 2. **Regression tests**: `go test -run TestRegression ./...`
 3. **Integration tests**: `go test -v ./pkg/agent -run Integration`
-4. **E2E tests**: `cd benchmark && ./run.sh` (scheduled, not per-PR)
+4. **E2E tests**: `make e2e` (manual, not per-PR — requires a live model endpoint)
 
 ### Pre-Commit
 

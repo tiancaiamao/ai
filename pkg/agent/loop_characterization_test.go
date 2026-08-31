@@ -21,8 +21,10 @@ type characterizationTestTool struct {
 	name string
 }
 
-func (t *characterizationTestTool) Name() string        { return t.name }
-func (t *characterizationTestTool) Description() string  { return t.name + " tool for characterization tests" }
+func (t *characterizationTestTool) Name() string { return t.name }
+func (t *characterizationTestTool) Description() string {
+	return t.name + " tool for characterization tests"
+}
 func (t *characterizationTestTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"input": map[string]any{"type": "string"}}}
 }
@@ -153,7 +155,6 @@ func TestCharacterization_MaxTurnsEnforcement(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 2
 	cfg.MaxConsecutiveToolCalls = 100 // don't trigger loop guard
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -224,7 +225,6 @@ func TestCharacterization_ToolLoopGuard(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxConsecutiveToolCalls = 3 // trigger after 3 consecutive identical calls
 	cfg.MaxTurns = 20               // high enough that MaxTurns doesn't kick in first
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -250,13 +250,13 @@ func TestCharacterization_ToolLoopGuard(t *testing.T) {
 
 	// LLM should be called MaxConsecutiveToolCalls + 1 + defaultLoopGuardMaxFeedback times
 	// (3 identical calls allowed, then guard triggers → feedback #1 → LLM retries,
-	//  feedback #2 → LLM retries, then hard abort)
-	// Total: 3 normal + 2 feedback + 1 abort = 6
+	//  feedback #2 → LLM retries, then hard abort → recovery turn → hard abort again)
+	// Total: 3 normal + 2 feedback + 1 hard abort + 1 recovery turn = 7
 	mu.Lock()
 	count := llmCallCount
 	mu.Unlock()
-	if count != 6 { // 3 allowed + 2 feedback + 1 hard abort trigger
-		t.Errorf("expected 6 LLM calls (3 allowed + 2 feedback + 1 hard abort), got %d", count)
+	if count != 7 { // 3 allowed + 2 feedback + 1 hard abort + 1 recovery turn
+		t.Errorf("expected 7 LLM calls (3 allowed + 2 feedback + 1 hard abort + 1 recovery turn), got %d", count)
 	}
 
 	// Must end with agent_end
@@ -291,7 +291,6 @@ func TestCharacterization_ContextCancellation(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 100
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -344,15 +343,15 @@ func (c *characterizationTriggerCompactor) ShouldCompact(_ context.Context, _ *a
 	return c.shouldCompact
 }
 
-func (c *characterizationTriggerCompactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+func (c *characterizationTriggerCompactor) Compact(_ context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	c.calls++
 	ctx.RecentMessages = []agentctx.AgentMessage{
 		agentctx.NewUserMessage("[compacted summary]"),
 		agentctx.NewUserMessage("latest request"),
 	}
 	return &agentctx.CompactionResult{
-		Summary:  "[compacted]",
-		Type:     "major",
+		Summary:      "[compacted]",
+		Type:         "major",
 		TokensBefore: 10000,
 		TokensAfter:  1000,
 	}, nil
@@ -386,8 +385,7 @@ func TestCharacterization_CompactionTrigger(t *testing.T) {
 	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
 
 	cfg := DefaultLoopConfig()
-	cfg.Compactors = []Compactor{compactor}
-	cfg.EnableCheckpoint = false
+	cfg.Compactor = compactor
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -424,11 +422,69 @@ func TestCharacterization_CompactionTrigger(t *testing.T) {
 	}
 }
 
+// TestCharacterization_ManualCompactionRequestRunsInLoop verifies that a queued
+// manual compaction is consumed by the loop and marked as non-automatic.
+func TestCharacterization_ManualCompactionRequestRunsInLoop(t *testing.T) {
+	compactor := &characterizationTriggerCompactor{shouldCompact: false}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseTextResponse("done"))
+	}))
+	defer server.Close()
+
+	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
+	agentCtx.RecentMessages = append(agentCtx.RecentMessages, agentctx.NewUserMessage("hello"))
+	cfg := DefaultLoopConfig()
+	cfg.Compactor = compactor
+
+	model := llm.Model{
+		ID:       "test-model",
+		Provider: "test",
+		BaseURL:  server.URL,
+		API:      "openai-completions",
+	}
+
+	agent := NewAgentFromConfigWithContext(model, "test-key", agentCtx, cfg)
+	agent.RequestCompaction()
+	if !agent.HasPendingCompaction() {
+		t.Fatal("expected manual compaction request to be pending")
+	}
+
+	if err := agent.Prompt("compact at boundary"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	events := collectAgentEvents(t, agent.Events(), 10*time.Second)
+	agent.Wait()
+
+	if compactor.calls != 1 {
+		t.Fatalf("expected compactor.Compact to be called once, got %d", compactor.calls)
+	}
+	var compactEnd AgentEvent
+	foundCompactEnd := false
+	for _, event := range events {
+		if event.Type == EventCompactionEnd {
+			compactEnd = event
+			foundCompactEnd = true
+			break
+		}
+	}
+	if !foundCompactEnd || compactEnd.Compaction == nil {
+		t.Fatal("expected compaction_end event with details")
+	}
+	if compactEnd.Compaction.Auto {
+		t.Error("expected queued manual compaction to be marked non-automatic")
+	}
+	if agent.HasPendingCompaction() {
+		t.Error("expected manual compaction request to be consumed")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test 5: MaxTurns=2 with text final response
 // ---------------------------------------------------------------------------
 
-// TestCharacterization_MaxTurnsStopsExactlyAtLimit verifies the agent stops
+// TestCharacterization_MaxTurnsStopsExactlyAtLimit verifies that the agent stops
 // exactly at the turn limit, even if the LLM switches from tool_calls to text.
 func TestCharacterization_MaxTurnsStopsExactlyAtLimit(t *testing.T) {
 	llmCallCount := 0
@@ -462,7 +518,6 @@ func TestCharacterization_MaxTurnsStopsExactlyAtLimit(t *testing.T) {
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 2
 	cfg.MaxConsecutiveToolCalls = 100
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -517,8 +572,7 @@ func TestCharacterization_NoCompactionWhenNotNeeded(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.Compactors = []Compactor{compactor}
-	cfg.EnableCheckpoint = false
+	cfg.Compactor = compactor
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -588,7 +642,6 @@ func TestCharacterization_SingleTurnEventSequence(t *testing.T) {
 
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",
@@ -656,7 +709,6 @@ func TestCharacterization_ToolExecutionEvents(t *testing.T) {
 	agentCtx := agentctx.NewAgentContext("You are a test assistant.")
 	cfg := DefaultLoopConfig()
 	cfg.MaxTurns = 1
-	cfg.EnableCheckpoint = false
 
 	model := llm.Model{
 		ID:       "test-model",

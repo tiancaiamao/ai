@@ -127,3 +127,26 @@ func trimUTF8ToBytes(s string, maxBytes int) string {
 	}
 	return s[:end]
 }
+
+// TruncateString truncates s to at most maxLen bytes, appending "..." if truncated.
+func TruncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// TrimRunes trims s to at most limit runes. If limit <= 0, s is returned unchanged.
+func TrimRunes(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
+}

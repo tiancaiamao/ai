@@ -1,0 +1,33 @@
+version: 1
+system_prompt: ./system_prompt.md
+memory: ./memory.md
+tools:
+  - name: read
+    enabled: true
+  - name: bash
+    enabled: true
+  - name: write
+    enabled: true
+  - name: grep
+    enabled: true
+  - name: edit
+    enabled: true
+  - name: change_workspace
+    enabled: true
+  - name: find_skill
+    enabled: true
+middlewares:
+  - name: destructive_guard
+    enabled: true
+    params:
+      protected_patterns:
+        - "rm -rf"
+        - "rm -r"
+        - "kill -9"
+        - "mkfs"
+        - "dd if="
+context_management:
+  stale_annotation: false
+  stale_age_investigative: 20
+  stale_age_modification: 30
+  prompt_file: ./context_management.md

@@ -24,6 +24,52 @@ Instead of implementing complex background task management in your application:
 - Persistence - detach and reattach later
 - Isolation - each task in its own session
 
+## ⛔ Safety Rules — READ FIRST
+
+> **Agent 误操作 `tmux kill-server` 曾导致用户丢失全部 tmux session。**
+> 以下规则是硬约束，违反即可能造成不可恢复的数据丢失。
+
+### 绝对禁止
+
+| 禁令 | 原因 |
+|------|------|
+| **禁止 `tmux kill-server`** | 销毁整个 tmux 服务器，所有用户 session 全部消失 |
+| **禁止遍历所有 session 并批量 kill** | 通配符可能命中用户的 session，最后一个 session 被杀后 server 也会退出 |
+| **禁止 kill 不是你创建的 session** | 你不知道其他 session 的用途 |
+| **禁止向唯一 pane 发送 `exit` / `C-d`** | pane 关闭 → window 关闭 → session 关闭，连锁退出 |
+
+### 正确做法
+
+```bash
+# ✅ 只 kill 你自己创建的、有明确名称的 session
+tmux kill-session -t "my-agent-task" 2>/dev/null
+
+# ✅ 需要隔离时，用 -L 创建独立 tmux 服务器（不影响默认服务器）
+tmux -L agent-$$ new-session -d -s "my-task" "..."
+tmux -L agent-$$ kill-session -t "my-task"
+
+# ✅ 清理前先检查 session 是否是你创建的
+tmux list-sessions  # 确认目标名称再操作
+```
+
+### 如果需要"干净环境"
+
+```bash
+# ❌ 错误：kill-server 毁掉一切
+tmux kill-server
+
+# ✅ 正确：只清理你自己的 session，用明确的命名前缀
+for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^my-prefix-'); do
+  tmux kill-session -t "$s" 2>/dev/null
+done
+
+# ✅ 更好：用隔离 socket，完全不影响用户
+TMUX_SOCK="tmux -L agent-$$"
+$TMUX_SOCK new-session -d -s "task" "..."
+# 清理时 kill-session 也不会影响用户
+$TMUX_SOCK kill-session -t "task"
+```
+
 ## Quick Reference
 
 ### Session Management
@@ -34,8 +80,8 @@ tmux new -s build -d            # Create detached (background)
 tmux attach -t <name>           # Attach to session
 tmux detach (Ctrl-b d)          # Detach from session
 tmux ls                         # List sessions
-tmux kill-session -t <name>     # Kill session
-tmux kill-server                # Kill all sessions
+tmux kill-session -t <name>     # Kill specific session
+# ⛔ NEVER: tmux kill-server     # 会销毁所有 session，绝对禁止
 ```
 
 ### Window & Pane Operations
@@ -299,7 +345,7 @@ When you've started a long-running task in tmux, use these commands to check sta
 | View last N lines | `tmux capture-pane -t <name> -p -S -50` |
 | Attach to session | `tmux attach -t <name>` |
 | Send interrupt (Ctrl+C) | `tmux send-keys -t <name> C-c` |
-| Kill session | `tmux kill-session -t <name>` |
+| Kill session | `tmux kill-session -t <name>` ⛔ **禁止 `kill-server`** |
 | Wait for completion | `tmux_wait.sh <name> [timeout]` |
 
 **Example workflow:**

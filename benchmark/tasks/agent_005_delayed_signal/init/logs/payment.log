@@ -1,7 +1,0 @@
-2024-03-18 10:00:03 [INFO] Payment processing started
-2024-03-18 10:00:03 [DEBUG] Subtotal received: $100.00
-2024-03-18 10:00:03 [DEBUG] Discount to apply: 10%
-2024-03-18 10:00:03 [DEBUG] Discount calculation delegated to discount service
-2024-03-18 10:00:03 [INFO] Discounted subtotal: $95.00
-2024-03-18 10:00:03 [INFO] Tax (8%): $7.60
-2024-03-18 10:00:04 [INFO] Final charge amount: $102.60

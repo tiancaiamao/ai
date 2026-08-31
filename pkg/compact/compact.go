@@ -4,27 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
-
-	"log/slog"
 
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"github.com/tiancaiamao/ai/pkg/llm"
 	"github.com/tiancaiamao/ai/pkg/prompt"
-	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
+	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
 // Config contains configuration for context compression.
 type Config struct {
-	MaxMessages         int    // Maximum messages before compression
-	MaxTokens           int    // Approximate token limit before compression
-	KeepRecent          int    // Number of recent messages to keep
-	KeepRecentTokens    int    // Token budget to keep from the recent messages
-	ReserveTokens       int    // Tokens to reserve when using context window
-	ToolCallCutoff      int    // Summarize oldest tool outputs when visible tool calls exceed this
-	ToolSummaryStrategy string // llm, heuristic, off
+	MaxMessages      int // Maximum messages before compression
+	MaxTokens        int // Approximate token limit before compression
+	KeepRecent       int // Number of recent messages to keep
+	KeepRecentTokens int // Token budget to keep from the recent messages
+	ReserveTokens    int // Tokens to reserve when using context window
+	ToolCallCutoff   int // Summarize oldest tool outputs when visible tool calls exceed this
 	// ToolSummaryAutomation controls when background tool-output summary runs:
 	// - off: disable automatic tool-output summary
 	// - fallback: only run when compactor pressure fallback is triggered
@@ -35,6 +35,71 @@ type Config struct {
 	// to complete without their results being hidden. Default is 1 (the most recent).
 	GracePeriod int
 	AutoCompact bool // Whether to automatically compact
+
+	// LLMDecide enables LLM-decides compaction mode for large context windows.
+	// When set, ShouldCompact uses soft/hard thresholds + tool-call intervals,
+	// and asks the LLM whether to compact when an interval is reached.
+	// A hard limit forces compaction without asking.
+	LLMDecide *LLMDecideConfig
+}
+
+// LLMDecideConfig configures the LLM-decides compaction strategy.
+type LLMDecideConfig struct {
+	// SoftThreshold: tokens before periodic checks begin.
+	SoftThreshold int
+	// HardLimit: tokens where compaction is forced without asking.
+	HardLimit int
+	// TierMedium: token level to switch from low to medium interval.
+	TierMedium int
+	// TierHigh: token level to switch from medium to high interval.
+	TierHigh int
+	// IntervalLow/Medium/High: tool calls between checks per tier.
+	IntervalLow    int
+	IntervalMedium int
+	IntervalHigh   int
+}
+
+// DefaultLLMDecideConfig returns tuned thresholds for the given context window.
+//
+// These values are empirically tuned per context-window tier, not derived from
+// a single formula. Update them only when you have usage data to justify it.
+//
+//	1M context:  soft=80K(8%),  tiers=100K/120K,  hard=200K(20%)
+//	200K context: soft=40K(20%), tiers=70K/100K,  hard=150K(75%)
+func DefaultLLMDecideConfig(contextWindow int) LLMDecideConfig {
+	switch {
+	case contextWindow >= 800_000: // 1M-class models
+		return LLMDecideConfig{
+			SoftThreshold:  80_000,
+			HardLimit:      200_000,
+			TierMedium:     100_000,
+			TierHigh:       120_000,
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
+	case contextWindow > 0: // Known context window (e.g. 200K)
+		pct := func(p int) int { return contextWindow * p / 100 }
+		return LLMDecideConfig{
+			SoftThreshold:  pct(25),
+			HardLimit:      pct(75),
+			TierMedium:     pct(35),
+			TierHigh:       pct(50),
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
+	default: // Unknown context window (0 or negative) — use 200K defaults
+		return LLMDecideConfig{
+			SoftThreshold:  50_000,
+			HardLimit:      150_000,
+			TierMedium:     70_000,
+			TierHigh:       100_000,
+			IntervalLow:    15,
+			IntervalMedium: 10,
+			IntervalHigh:   7,
+		}
+	}
 }
 
 // DefaultConfig returns default compression configuration.
@@ -46,7 +111,6 @@ func DefaultConfig() *Config {
 		KeepRecentTokens:      20000, // Keep ~20k tokens from the recent context
 		ReserveTokens:         16384, // Reserve tokens for responses when using context window
 		ToolCallCutoff:        10,    // Summarize tool outputs after 10 visible tool results
-		ToolSummaryStrategy:   "off", // Tool summary strategy (llm, heuristic, off)
 		ToolSummaryAutomation: "off", // Automatic tool-output summary (off, fallback, always)
 		GracePeriod:           1,     // Protect 1 most recent tool result by default
 		AutoCompact:           true,  // Automatic context compression at 75% threshold
@@ -58,12 +122,41 @@ type Compactor struct {
 	config        *Config
 	model         llm.Model
 	apiKey        string
-	systemPrompt  string
+	systemPrompt  string // Used ONLY for token estimation in CalculateDynamicThreshold. Actual LLM calls reuse the agent's system prompt.
 	contextWindow int
+	askPrompt     string // LLM-decide ask template (loaded lazily)
+	// agentContextPrefix is the skills + AGENTS.md prefix, stored at
+	// construction time so it survives agentCtx checkpoint/restore cycles
+	// (AgentContext.AgentContextPrefix has json:"-" and is lost on restore).
+	agentContextPrefix string
+	// thinkingLevel mirrors the agent loop's thinking level so that
+	// askLLM/GenerateSummary requests include the same thinking/reasoning
+	// parameters, keeping them in the same prefix-cache partition.
+	thinkingLevel string
+	// sessionDir is the session directory used for archiving old messages
+	// that are removed during compaction. When empty, archiving is skipped.
+	sessionDir string
+	// askFunc allows tests to inject a fake LLM decision without a real API
+	// call. nil means use the real askLLM method.
+	askFunc func(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error)
+
+	// llmDecideLastAskCount tracks the tool-call counter value at the last
+	// LLM-decide ask, preventing re-asking every turn after a "no".
+	llmDecideLastAskCount int
+
+	// canaryValue is the expected value for the next context retention check.
+	// Set by InsertCanary after compaction, checked by askLLM, reset on compaction.
+	canaryValue string
+}
+
+// SetCanaryValue sets the canary value for context retention checks.
+// Called by the agent loop after compaction, after planting a canary message.
+func (c *Compactor) SetCanaryValue(val string) {
+	c.canaryValue = val
 }
 
 // NewCompactor creates a new Compactor.
-func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int) *Compactor {
+func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, contextWindow int, sessionDir string) *Compactor {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -73,6 +166,7 @@ func NewCompactor(config *Config, model llm.Model, apiKey, systemPrompt string, 
 		apiKey:        apiKey,
 		systemPrompt:  systemPrompt,
 		contextWindow: contextWindow,
+		sessionDir:    sessionDir,
 	}
 }
 
@@ -162,132 +256,6 @@ func estimateStringTokens(s string) int {
 	return int(float64(len(s)) / 4.0)
 }
 
-var (
-	summarizationSystemPrompt = prompt.CompactSystemPrompt()
-	summarizationPrompt       = prompt.CompactSummarizePrompt()
-	updateSummarizationPrompt = prompt.CompactUpdatePrompt()
-)
-
-// GenerateSummary generates a structured summary of messages using the LLM.
-func (c *Compactor) GenerateSummary(messages []agentctx.AgentMessage) (string, error) {
-	return c.GenerateSummaryWithPrevious(messages, "")
-}
-
-// GenerateSummaryWithPrevious generates a structured summary, optionally updating a previous summary.
-// It includes retry logic for transient LLM errors and a total timeout to prevent
-// the compaction path from hanging indefinitely on network failures.
-func (c *Compactor) GenerateSummaryWithPrevious(messages []agentctx.AgentMessage, previousSummary string) (string, error) {
-	if len(messages) == 0 {
-		return "", fmt.Errorf("no messages to summarize")
-	}
-
-	projected := projectMessagesForSummary(messages)
-	if len(projected) == 0 {
-		if strings.TrimSpace(previousSummary) != "" {
-			return previousSummary, nil
-		}
-		return "", fmt.Errorf("no agent-visible messages to summarize")
-	}
-
-	conversationText := serializeConversation(projected)
-
-	// Guard against sending a conversation that exceeds the model's context
-	// window. For large sessions the serialized text can be many megabytes,
-	// which the summarization model cannot process. Truncate oldest messages
-	// until the conversation fits within ~40% of the model's context window
-	// (leaving room for the prompt, system prompt, and response).
-	const maxContextFraction = 0.4
-	if c.contextWindow > 0 {
-		maxTokens := int(float64(c.contextWindow) * maxContextFraction)
-		// Each char is roughly 0.25 tokens, so maxBytes ≈ maxTokens * 4
-		maxChars := maxTokens * 4
-		if len(conversationText) > maxChars {
-			truncated := truncateConversationToCharBudget(projected, maxChars)
-			conversationText = serializeConversation(truncated)
-			slog.Info("[Compact] Truncated conversation for summarization",
-				"original_messages", len(projected),
-				"truncated_messages", len(truncated),
-				"original_chars", len(serializeConversation(projected)),
-				"truncated_chars", len(conversationText),
-				"context_window", c.contextWindow,
-				"max_chars", maxChars)
-		}
-	}
-
-	promptText := fmt.Sprintf("<conversation>\\n%s\\n</conversation>\\n\\n", conversationText)
-	basePrompt := summarizationPrompt
-	if previousSummary != "" {
-		promptText += fmt.Sprintf("<previous-summary>\\n%s\\n</previous-summary>\\n\\n", previousSummary)
-		basePrompt = updateSummarizationPrompt
-	}
-	promptText += basePrompt
-
-	llmMessages := []llm.LLMMessage{
-		{Role: "user", Content: promptText},
-	}
-
-	llmCtx := llm.LLMContext{
-		SystemPrompt: summarizationSystemPrompt,
-		Messages:     llmMessages,
-	}
-
-	const maxRetries = 3
-	const totalTimeout = 5 * time.Minute
-	const chunkTimeout = 2 * time.Minute
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Use a bounded context with timeout instead of context.Background().
-		ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
-
-		llmStream := llm.StreamLLM(ctx, c.model, llmCtx, c.apiKey, chunkTimeout)
-
-		var summary strings.Builder
-		var streamErr error
-		for event := range llmStream.Iterator(ctx) {
-			if event.Done {
-				break
-			}
-
-			switch e := event.Value.(type) {
-			case llm.LLMTextDeltaEvent:
-				summary.WriteString(e.Delta)
-			case llm.LLMErrorEvent:
-				streamErr = e.Error
-			}
-		}
-		cancel()
-
-		if streamErr != nil {
-			lastErr = streamErr
-			if !llm.IsRetryableError(streamErr) {
-				slog.Error("[Compact] Summary generation failed (non-retryable)",
-					"attempt", attempt, "error", streamErr)
-				return "", fmt.Errorf("failed to generate summary: %w", streamErr)
-			}
-			if attempt < maxRetries {
-				backoff := time.Duration(attempt) * 2 * time.Second
-				slog.Warn("[Compact] Summary generation failed (retryable), retrying",
-					"attempt", attempt,
-					"max_retries", maxRetries,
-					"backoff", backoff,
-					"error", streamErr)
-				time.Sleep(backoff)
-			}
-			continue
-		}
-
-		result := summary.String()
-		if strings.TrimSpace(result) == "" {
-			return "", fmt.Errorf("empty summary generated")
-		}
-
-		return result, nil
-	}
-
-	return "", fmt.Errorf("failed to generate summary after %d retries: %w", maxRetries, lastErr)
-}
-
 // ContextWindow returns the configured model context window.
 func (c *Compactor) ContextWindow() int {
 	return c.contextWindow
@@ -298,6 +266,18 @@ func (c *Compactor) SetContextWindow(window int) {
 	c.contextWindow = window
 }
 
+// SetAgentContextPrefix updates the skills + AGENTS.md prefix used for
+// cache-friendly LLM requests (askLLM, GenerateSummary).
+func (c *Compactor) SetAgentContextPrefix(prefix string) {
+	c.agentContextPrefix = prefix
+}
+
+// SetThinkingLevel sets the thinking level used in askLLM/GenerateSummary
+// requests so they match the agent loop's thinking/reasoning parameters.
+func (c *Compactor) SetThinkingLevel(level string) {
+	c.thinkingLevel = level
+}
+
 // ReserveTokens returns the effective reserve tokens setting.
 func (c *Compactor) ReserveTokens() int {
 	if c.config == nil || c.config.ReserveTokens <= 0 {
@@ -306,21 +286,9 @@ func (c *Compactor) ReserveTokens() int {
 	return c.config.ReserveTokens
 }
 
-// KeepRecentMessages returns the effective keep-recent message count.
-func (c *Compactor) KeepRecentMessages() int {
-	return c.keepRecentMessages()
-}
-
 // KeepRecentTokens returns the effective keep-recent token budget.
 func (c *Compactor) KeepRecentTokens() int {
 	return c.effectiveKeepRecentTokens()
-}
-
-func (c *Compactor) keepRecentMessages() int {
-	if c.config == nil || c.config.KeepRecent <= 0 {
-		return DefaultConfig().KeepRecent
-	}
-	return c.config.KeepRecent
 }
 
 func (c *Compactor) effectiveKeepRecentTokens() int {
@@ -369,37 +337,6 @@ func (c *Compactor) EstimateTokens(messages []agentctx.AgentMessage) int {
 	return totalTokens
 }
 
-func lastAssistantUsageTokens(messages []agentctx.AgentMessage) (int, int) {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !msg.IsAgentVisible() {
-			continue
-		}
-		if msg.Role != "assistant" || msg.Usage == nil {
-			continue
-		}
-		stopReason := strings.ToLower(strings.TrimSpace(msg.StopReason))
-		if stopReason == "aborted" || stopReason == "error" {
-			continue
-		}
-		tokens := usageTotalTokens(msg.Usage)
-		if tokens > 0 {
-			return tokens, i
-		}
-	}
-	return 0, -1
-}
-
-func usageTotalTokens(usage *agentctx.Usage) int {
-	if usage == nil {
-		return 0
-	}
-	if usage.TotalTokens > 0 {
-		return usage.TotalTokens
-	}
-	return usage.InputTokens + usage.OutputTokens + usage.CacheRead + usage.CacheWrite
-}
-
 func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	if !msg.IsAgentVisible() {
 		return 0
@@ -433,508 +370,11 @@ func estimateMessageTokens(msg agentctx.AgentMessage) int {
 	return int(math.Ceil(float64(charCount) / 4.0))
 }
 
-// EstimateMessageTokens estimates token usage for a single message.
-func EstimateMessageTokens(msg agentctx.AgentMessage) int {
-	return estimateMessageTokens(msg)
-}
-
-func splitMessagesByTokenBudget(
-	messages []agentctx.AgentMessage,
-	tokenBudget int,
-) ([]agentctx.AgentMessage, []agentctx.AgentMessage) {
-	if len(messages) == 0 {
-		return messages, nil
-	}
-	if tokenBudget <= 0 {
-		return messages[:len(messages)-1], messages[len(messages)-1:]
-	}
-
-	used := 0
-	start := len(messages)
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msgTokens := estimateMessageTokens(messages[i])
-		if used+msgTokens > tokenBudget && start != len(messages) {
-			break
-		}
-		used += msgTokens
-		start = i
-	}
-
-	if start <= 0 {
-		return nil, messages
-	}
-	if start >= len(messages) {
-		return messages[:len(messages)-1], messages[len(messages)-1:]
-	}
-	return messages[:start], messages[start:]
-}
-
-func serializeConversation(messages []agentctx.AgentMessage) string {
-	parts := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		switch msg.Role {
-		case "user":
-			if text := extractText(msg); text != "" {
-				parts = append(parts, "[User]: "+text)
-			}
-		case "assistant":
-			textParts := make([]string, 0)
-			thinkingParts := make([]string, 0)
-			toolCalls := make([]string, 0)
-			for _, block := range msg.Content {
-				switch b := block.(type) {
-				case agentctx.TextContent:
-					if b.Text != "" {
-						textParts = append(textParts, b.Text)
-					}
-				case agentctx.ThinkingContent:
-					if b.Thinking != "" {
-						thinkingParts = append(thinkingParts, b.Thinking)
-					}
-				case agentctx.ToolCallContent:
-					args := ""
-					if b.Arguments != nil {
-						if raw, err := json.Marshal(b.Arguments); err == nil {
-							args = string(raw)
-						}
-					}
-					if args != "" {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s(%s)", b.Name, args))
-					} else {
-						toolCalls = append(toolCalls, fmt.Sprintf("%s()", b.Name))
-					}
-				}
-			}
-			if len(thinkingParts) > 0 {
-				parts = append(parts, "[Assistant thinking]: "+strings.Join(thinkingParts, "\n"))
-			}
-			if len(textParts) > 0 {
-				parts = append(parts, "[Assistant]: "+strings.Join(textParts, "\n"))
-			}
-			if len(toolCalls) > 0 {
-				parts = append(parts, "[Assistant tool calls]: "+strings.Join(toolCalls, "; "))
-			}
-		case "toolResult":
-			if text := extractText(msg); text != "" {
-				toolName := strings.TrimSpace(msg.ToolName)
-				if toolName == "" {
-					parts = append(parts, "[Tool result]: "+text)
-				} else {
-					parts = append(parts, "[Tool result "+toolName+"]: "+text)
-				}
-			}
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// truncateConversationToCharBudget keeps the most recent messages whose
-// serialized text fits within charBudget. It drops oldest messages first.
-func truncateConversationToCharBudget(messages []agentctx.AgentMessage, charBudget int) []agentctx.AgentMessage {
-	if len(messages) == 0 || charBudget <= 0 {
-		return messages
-	}
-
-	// Walk from the end backwards, accumulating size until we exceed the budget.
-	totalChars := 0
-	cutoff := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		msgText := serializeSingleMessage(messages[i])
-		totalChars += len(msgText)
-		if totalChars > charBudget {
-			cutoff = i + 1
-			break
-		}
-	}
-
-	if cutoff >= len(messages) {
-		return messages
-	}
-	return messages[cutoff:]
-}
-
-// serializeSingleMessage returns the serialized text of a single message.
-func serializeSingleMessage(msg agentctx.AgentMessage) string {
-	switch msg.Role {
-	case "user":
-		if text := extractText(msg); text != "" {
-			return "[User]: " + text
-		}
-	case "assistant":
-		parts := make([]string, 0)
-		for _, block := range msg.Content {
-			switch b := block.(type) {
-			case agentctx.TextContent:
-				if b.Text != "" {
-					parts = append(parts, b.Text)
-				}
-			case agentctx.ToolCallContent:
-				args := ""
-				if b.Arguments != nil {
-					if raw, err := json.Marshal(b.Arguments); err == nil {
-						args = string(raw)
-					}
-				}
-				if args != "" {
-					parts = append(parts, fmt.Sprintf("%s(%s)", b.Name, args))
-				} else {
-					parts = append(parts, fmt.Sprintf("%s()", b.Name))
-				}
-			}
-		}
-		if len(parts) > 0 {
-			return "[Assistant]: " + strings.Join(parts, "\n")
-		}
-	case "toolResult":
-		if text := extractText(msg); text != "" {
-			toolName := strings.TrimSpace(msg.ToolName)
-			if toolName == "" {
-				return "[Tool result]: " + text
-			}
-			return "[Tool result " + toolName + "]: " + text
-		}
-	}
-	return ""
-}
-
-func projectMessagesForSummary(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	projected := make([]agentctx.AgentMessage, 0, len(messages))
-	for _, msg := range messages {
-		if !msg.IsAgentVisible() {
-			continue
-		}
-
-		if msg.Role != "toolResult" {
-			projected = append(projected, msg)
-			continue
-		}
-
-		copyMsg := msg
-		toolText := strings.TrimSpace(extractText(msg))
-		if toolText == "" {
-			toolText = "(empty output)"
-		}
-		toolText = trimTextWithTail(toolText, 1800)
-		copyMsg.Content = []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: toolText},
-		}
-		projected = append(projected, copyMsg)
-	}
-	return projected
-}
-
-func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []agentctx.AgentMessage {
-	if cutoff <= 0 || len(messages) == 0 {
-		return messages
-	}
-
-	visibleToolIndexes := make([]int, 0)
-	for i, msg := range messages {
-		if msg.Role == "toolResult" && msg.IsAgentVisible() {
-			visibleToolIndexes = append(visibleToolIndexes, i)
-		}
-	}
-
-	excess := len(visibleToolIndexes) - cutoff
-	if excess <= 0 {
-		return messages
-	}
-	ctx := context.Background()
-	summarySpan := traceevent.StartSpan(ctx, "tool_summary_batch", traceevent.CategoryTool,
-		traceevent.Field{Key: "mode", Value: "compaction_digest"},
-		traceevent.Field{Key: "visible_tool_results", Value: len(visibleToolIndexes)},
-		traceevent.Field{Key: "cutoff", Value: cutoff},
-		traceevent.Field{Key: "archived_count", Value: excess},
-	)
-
-	compacted := append([]agentctx.AgentMessage{}, messages...)
-	archivedToolCallIDs := make(map[string]struct{}, excess)
-
-	// Hide excess tool_results from agent (but keep visible to user).
-	// We also remove corresponding tool_calls from assistant messages below,
-	// otherwise strict APIs reject unmatched assistant/tool sequences.
-	for i := 0; i < excess; i++ {
-		idx := visibleToolIndexes[i]
-		original := compacted[idx]
-		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
-		if strings.TrimSpace(original.ToolCallID) != "" {
-			archivedToolCallIDs[strings.TrimSpace(original.ToolCallID)] = struct{}{}
-		}
-	}
-
-	filteredToolCalls := 0
-	for i := range compacted {
-		if compacted[i].Role != "assistant" || len(archivedToolCallIDs) == 0 {
-			continue
-		}
-		filtered := make([]agentctx.ContentBlock, 0, len(compacted[i].Content))
-		removed := false
-		for _, block := range compacted[i].Content {
-			toolCall, ok := block.(agentctx.ToolCallContent)
-			if ok {
-				if _, drop := archivedToolCallIDs[strings.TrimSpace(toolCall.ID)]; drop {
-					removed = true
-					filteredToolCalls++
-					continue
-				}
-			}
-			filtered = append(filtered, block)
-		}
-		if removed {
-			compacted[i].Content = filtered
-		}
-	}
-
-	summarySpan.AddField("filtered_tool_calls", filteredToolCalls)
-	summarySpan.End()
-	return compacted
-}
-
-func boolPtr(v bool) *bool {
-	b := v
-	return &b
-}
-
-func trimRunes(input string, limit int) string {
-	if limit <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= limit {
-		return input
-	}
-	return string(runes[:limit])
-}
-
-func trimTextWithTail(input string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return input
-	}
-	runes := []rune(input)
-	if len(runes) <= maxRunes {
-		return input
-	}
-
-	head := maxRunes * 2 / 3
-	tail := maxRunes - head
-	if head < 1 {
-		head = 1
-	}
-	if tail < 1 {
-		tail = 1
-	}
-
-	return string(runes[:head]) + "\n... (truncated) ...\n" + string(runes[len(runes)-tail:])
-}
-
-func extractText(msg agentctx.AgentMessage) string {
-	var b strings.Builder
-	for _, block := range msg.Content {
-		if tc, ok := block.(agentctx.TextContent); ok && tc.Text != "" {
-			b.WriteString(tc.Text)
-		}
-	}
-	if b.Len() == 0 {
-		return msg.ExtractText()
-	}
-	return b.String()
-}
-
-// ensureToolCallPairing ensures that tool_call and tool_result messages remain paired.
-// If a tool_result is in recentMessages but its corresponding tool_call is in oldMessages,
-// the tool_result must be hidden (archived) so the API doesn't see a mismatch.
-// Similarly, if an assistant message contains tool_calls that are in oldMessages,
-// those tool_calls must be removed from the assistant message.
-// This prevents "tool call and result not match" errors after compaction.
-func ensureToolCallPairing(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(recentMessages) == 0 {
-		return recentMessages
-	}
-
-	// Collect all tool_call IDs from oldMessages
-	oldToolCallIDs := make(map[string]bool)
-	for _, msg := range oldMessages {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ExtractToolCalls() {
-				oldToolCallIDs[tc.ID] = true
-			}
-		}
-	}
-
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
-		return recentMessages
-	}
-
-	// Find tool_results in recentMessages whose tool_call is in oldMessages
-	// These need to be hidden (archived) because their tool_calls will be summarized
-	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedToolResultCount := 0
-	filteredToolCallCount := 0
-
-	for _, msg := range recentMessages {
-		if msg.Role == "toolResult" && msg.ToolCallID != "" {
-			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages - hide it to prevent mismatch
-				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				keptMessages = append(keptMessages, archivedMsg)
-				archivedToolResultCount++
-				continue
-			}
-		}
-
-		if msg.Role == "assistant" {
-			// Check if this assistant message contains tool_calls that are in oldMessages
-			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-			hasOldToolCalls := false
-
-			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok {
-					if oldToolCallIDs[tc.ID] {
-						// This tool_call is in oldMessages - skip it
-						hasOldToolCalls = true
-						filteredToolCallCount++
-						continue
-					}
-				}
-				filteredContent = append(filteredContent, block)
-			}
-
-			if hasOldToolCalls {
-				// Create a new message with filtered content
-				filteredMsg := msg
-				filteredMsg.Content = filteredContent
-				keptMessages = append(keptMessages, filteredMsg)
-				continue
-			}
-		}
-
-		keptMessages = append(keptMessages, msg)
-	}
-
-	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
-		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived_tool_results", archivedToolResultCount,
-			"filtered_tool_calls", filteredToolCallCount,
-			"kept", len(keptMessages))
-	}
-
-	return keptMessages
-}
-
-// ensureToolCallPairingWithGrace ensures tool call pairing with grace period protection.
-// The grace period protects the N most recent tool results from being archived,
-// allowing tool calls that span compaction boundaries to complete.
-func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
-	if len(recentMessages) == 0 {
-		return recentMessages
-	}
-
-	// Collect all tool_call IDs from oldMessages
-	oldToolCallIDs := make(map[string]bool)
-	for _, msg := range oldMessages {
-		if msg.Role == "assistant" {
-			for _, tc := range msg.ExtractToolCalls() {
-				oldToolCallIDs[tc.ID] = true
-			}
-		}
-	}
-
-	// If no tool_calls in oldMessages, nothing to fix
-	if len(oldToolCallIDs) == 0 {
-		return recentMessages
-	}
-
-	// Collect recent tool result indexes for grace period protection
-	gracePeriod := c.config.GracePeriod
-	if gracePeriod <= 0 {
-		gracePeriod = 1
-	}
-
-	// Find tool result indexes (from end to start) within grace period
-	gracePeriodIndexes := make(map[int]struct{})
-	toolResultCount := 0
-	for i := len(recentMessages) - 1; i >= 0; i-- {
-		msg := recentMessages[i]
-		if msg.Role == "toolResult" && msg.IsAgentVisible() {
-			toolResultCount++
-			if toolResultCount <= gracePeriod {
-				gracePeriodIndexes[i] = struct{}{}
-			}
-		}
-	}
-
-	// Process messages, applying grace period protection
-	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
-	archivedToolResultCount := 0
-	filteredToolCallCount := 0
-
-	for i, msg := range recentMessages {
-		// Check if this tool result is within grace period
-		if _, inGracePeriod := gracePeriodIndexes[i]; inGracePeriod {
-			// Within grace period - keep it visible (don't archive)
-			keptMessages = append(keptMessages, msg)
-			continue
-		}
-
-		if msg.Role == "toolResult" && msg.ToolCallID != "" {
-			if oldToolCallIDs[msg.ToolCallID] {
-				// This tool_result's call is in oldMessages - hide it to prevent mismatch
-				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
-				keptMessages = append(keptMessages, archivedMsg)
-				archivedToolResultCount++
-				continue
-			}
-		}
-
-		if msg.Role == "assistant" {
-			// Check if this assistant message contains tool_calls that are in oldMessages
-			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
-			hasOldToolCalls := false
-
-			for _, block := range msg.Content {
-				if tc, ok := block.(agentctx.ToolCallContent); ok {
-					if oldToolCallIDs[tc.ID] {
-						// This tool_call is in oldMessages - skip it
-						hasOldToolCalls = true
-						filteredToolCallCount++
-						continue
-					}
-				}
-				filteredContent = append(filteredContent, block)
-			}
-
-			if hasOldToolCalls {
-				// Create a new message with filtered content
-				filteredMsg := msg
-				filteredMsg.Content = filteredContent
-				keptMessages = append(keptMessages, filteredMsg)
-				continue
-			}
-		}
-
-		keptMessages = append(keptMessages, msg)
-	}
-
-	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
-		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
-			"archived_tool_results", archivedToolResultCount,
-			"filtered_tool_calls", filteredToolCallCount,
-			"grace_period_protected", gracePeriod,
-			"kept", len(keptMessages))
-	}
-
-	return keptMessages
-}
-
 // Compact compacts context by summarizing old messages using AgentContext.
 // This method implements the context.Compactor interface.
-func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
+// goCtx carries trace context (trace buf + span) so LLM calls within
+// compaction are properly traced.
+func (c *Compactor) Compact(goCtx context.Context, ctx *agentctx.AgentContext) (*agentctx.CompactionResult, error) {
 	if len(ctx.RecentMessages) == 0 {
 		return &agentctx.CompactionResult{
 			TokensBefore: 0,
@@ -942,117 +382,479 @@ func (c *Compactor) Compact(ctx *agentctx.AgentContext) (*agentctx.CompactionRes
 		}, nil
 	}
 
+	// Compact is purely an execution method. The decision (including the
+	// LLM-decides askLLM gate) lives in ShouldCompact.
+
 	tokensBefore := ctx.EstimateTokens()
 
 	keepRecentTokens := c.calculateKeepRecentBudget()
-	var oldMessages []agentctx.AgentMessage
-	var recentMessages []agentctx.AgentMessage
 
-	if keepRecentTokens > 0 {
-		oldMessages, recentMessages = splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
-		if len(oldMessages) == 0 {
-			// Token estimation says all messages fit within budget, but if we have
-			// many messages the estimation is likely inaccurate (rough char/4
-			// heuristic). Force a split when message count is high.
-			const forceSplitMinMessages = 50
-			if len(ctx.RecentMessages) > forceSplitMinMessages {
-				// Keep the last 30% of messages (minimum 10)
-				keepCount := max(10, int(float64(len(ctx.RecentMessages))*0.3))
-				splitIndex := len(ctx.RecentMessages) - keepCount
-				oldMessages = ctx.RecentMessages[:splitIndex]
-				recentMessages = ctx.RecentMessages[splitIndex:]
-				slog.Info("[Compact] Forced split: token budget covered all messages but count exceeds threshold",
-					"count", len(ctx.RecentMessages),
-					"keepCount", keepCount,
-					"keepTokens", keepRecentTokens,
-					"forceSplitMin", forceSplitMinMessages)
-			} else {
-				return &agentctx.CompactionResult{
-					TokensBefore: tokensBefore,
-					TokensAfter:  tokensBefore,
-				}, nil
-			}
-		}
-		slog.Info("[Compact] Compressing messages",
-			"count", len(ctx.RecentMessages),
-			"keepTokens", keepRecentTokens,
-			"threshold", c.CalculateDynamicThreshold(),
-			"contextWindow", c.contextWindow,
-			"hasPreviousSummary", ctx.LastCompactionSummary != "")
-	} else {
-		keepCount := c.keepRecentMessages()
-		if len(ctx.RecentMessages) <= keepCount {
+	oldMessages, recentMessages := splitMessagesByTokenBudget(ctx.RecentMessages, keepRecentTokens)
+	if len(oldMessages) == 0 {
+		// Token estimation says all messages fit within budget, but if we have
+		// many messages the estimation is likely inaccurate (rough char/4
+		// heuristic). Force a split when message count is high.
+		const forceSplitMinMessages = 50
+		if len(ctx.RecentMessages) > forceSplitMinMessages {
+			keepCount := max(10, int(float64(len(ctx.RecentMessages))*0.3))
+			splitIndex := len(ctx.RecentMessages) - keepCount
+			oldMessages = ctx.RecentMessages[:splitIndex]
+			recentMessages = ctx.RecentMessages[splitIndex:]
+			slog.Info("[Compact] Forced split: token budget covered all messages but count exceeds threshold",
+				"count", len(ctx.RecentMessages),
+				"keepCount", keepCount,
+				"keepTokens", keepRecentTokens,
+				"forceSplitMin", forceSplitMinMessages)
+		} else {
 			return &agentctx.CompactionResult{
 				TokensBefore: tokensBefore,
 				TokensAfter:  tokensBefore,
 			}, nil
 		}
-		slog.Info("[Compact] Compressing messages",
-			"count", len(ctx.RecentMessages),
-			"keepRecent", keepCount,
-			"threshold", c.CalculateDynamicThreshold(),
-			"hasPreviousSummary", ctx.LastCompactionSummary != "")
-		splitIndex := len(ctx.RecentMessages) - keepCount
-		oldMessages = ctx.RecentMessages[:splitIndex]
-		recentMessages = ctx.RecentMessages[splitIndex:]
 	}
+	slog.Info("[Compact] Compressing messages",
+		"count", len(ctx.RecentMessages),
+		"keepTokens", keepRecentTokens,
+		"threshold", c.CalculateDynamicThreshold(),
+		"contextWindow", c.contextWindow)
 
 	// Generate summary of old messages (with previous summary for incremental update)
-	summary, err := c.GenerateSummaryWithPrevious(oldMessages, ctx.LastCompactionSummary)
+	summary, err := c.GenerateSummary(goCtx, oldMessages, ctx.SystemPrompt, c.agentContextPrefix, ctx.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	slog.Info("[Compact] Generated summary", "chars", len(summary), "hasPrevious", ctx.LastCompactionSummary != "")
+	slog.Info("[Compact] Generated summary", "chars", len(summary))
 
-	// Ensure tool_call and tool_result pairing is preserved
-	if c.config.GracePeriod > 0 {
-		recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
-	} else {
-		recentMessages = ensureToolCallPairing(oldMessages, recentMessages)
+	// Ensure tool_call and tool_result pairing is preserved.
+	// GracePeriod <= 0 is clamped to 1 inside, so the most recent tool
+	// result is always protected.
+	recentMessages = c.ensureToolCallPairingWithGrace(oldMessages, recentMessages)
+
+	// Archive old messages so the agent can access them via read/grep later.
+	archivePath := saveArchivedMessages(c.sessionDir, oldMessages)
+
+	// Create new recent messages with summary, including archive path note.
+	// The archive note is placed BEFORE the summary so the agent sees it first
+	// and is more likely to use it proactively.
+	recentMessages = RemoveAllCanaries(recentMessages)
+	summaryText := summary
+	if archivePath != "" {
+		summaryText = fmt.Sprintf(archiveNoteTemplate, archivePath) + "\n\n" + summary
 	}
-
-	// Create new recent messages with summary
 	newRecentMessages := []agentctx.AgentMessage{
-		agentctx.NewUserMessage(fmt.Sprintf("[Previous conversation summary]\n\n%s", summary)),
+		agentctx.NewCompactionSummaryMessage(summaryText),
 	}
 
 	recentMessages = compactToolResultsInRecent(recentMessages, c.config.ToolCallCutoff)
+	recentMessages = cleanOldRuntimeState(recentMessages)
 	newRecentMessages = append(newRecentMessages, recentMessages...)
 	messagesBefore := len(ctx.RecentMessages)
 
 	// Update AgentContext directly
 	ctx.RecentMessages = newRecentMessages
-	ctx.LastCompactionSummary = summary
-	// Preserve LLMContext maintained by ContextManager; do not overwrite.
-	// The summary is already stored in ctx.LastCompactionSummary and injected
-	// as [Previous conversation summary] message in newRecentMessages above.
-	// ctx.LLMContext = summary
 
 	tokensAfter := ctx.EstimateTokens()
 	messagesAfter := len(newRecentMessages)
 	slog.Info("[Compact] Compressed context", "messages", messagesAfter)
 
+	// Reset tool-call counter after successful compaction.
+	ctx.AgentState.ToolCallsSinceLastTrigger = 0
+	c.llmDecideLastAskCount = 0
+
+	// Reset canary — after compaction the context is fresh, start a new
+	// retention cycle on the next askLLM.
+	c.canaryValue = ""
+
+	// Append post-compaction hint so the LLM knows to reload skills and
+	// re-read design docs that were lost during compaction.
+	hint := `<agent:hint>
+Context was compacted. The summary above preserves key information, but some details may be lost. You MUST do the following BEFORE responding to the user:
+
+1. **Check "Skills Loaded"** in the compaction summary. Any skills listed there have lost their full content. Reload them via ` + "`" + `find_skill(name="<name>", load=true)` + "`" + ` if you need the full details.
+
+2. **Check "Behavioral Constraints"** — these are process rules from loaded skills. Follow them even though the skill content is gone.
+
+3. **Read the archived conversation** if anything seems unclear: The full pre-compaction conversation is stored at the path mentioned in the <critical> section of the summary. Use the read or grep tool to load it.
+
+4. **Re-read any design docs or planning files** you were working with. Do NOT proceed based on stale memory.
+
+Do NOT skip these steps. If you skip them and produce incorrect work, the user will be frustrated.
+</agent:hint>`
+	ctx.RecentMessages = append(ctx.RecentMessages,
+		agentctx.NewUserMessage(hint).
+			WithKind("compaction_hint").
+			WithVisibility(true, false))
+
 	return &agentctx.CompactionResult{
-		Summary:      summary,
-		TokensBefore: tokensBefore,
-		TokensAfter:  tokensAfter,
+		Summary:        summary,
+		TokensBefore:   tokensBefore,
+		TokensAfter:    tokensAfter,
 		MessagesBefore: messagesBefore,
-		MessagesAfter: messagesAfter,
-		Type:         "major",
+		MessagesAfter:  messagesAfter,
+		Type:           "major",
 	}, nil
 }
 
-// ShouldCompact determines if context should be compressed using AgentContext.
-func (c *Compactor) ShouldCompact(_ context.Context, agentCtx *agentctx.AgentContext) bool {
+// cleanOldRuntimeState removes all but the last runtime_state message from the
+// given slice. During compaction, older runtime_state snapshots are stale — only
+// the most recent one carries useful telemetry. Cleaning them unconditionally
+// keeps pkg/compact independent of cache mode logic.
+func cleanOldRuntimeState(messages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	lastIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Metadata != nil && messages[i].Metadata.Kind == "runtime_state" {
+			lastIdx = i
+			break
+		}
+	}
+
+	if lastIdx == -1 {
+		return messages
+	}
+
+	var result []agentctx.AgentMessage
+	for i, msg := range messages {
+		if msg.Metadata != nil && msg.Metadata.Kind == "runtime_state" && i != lastIdx {
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
+// archiveNoteTemplate is prepended to the compaction summary so the agent knows
+// where to find the full pre-compaction conversation. It uses directive language
+// to encourage proactive recovery of lost context.
+const archiveNoteTemplate = "<critical>\n" +
+	"The full conversation before this summary is archived at `%s`.\n" +
+	"This summary may omit important details — analysis results, intermediate findings, discussion context.\n" +
+	"If anything seems incomplete or you are unsure what was discussed earlier, read this file (use the read or grep tool) BEFORE asking the user.\n" +
+	"</critical>"
+
+// saveArchivedMessages writes old messages removed during compaction to a
+// sequential JSONL file under <sessionDir>/compactions/archived_NNNNN.jsonl.
+// Returns the absolute path, or "" if sessionDir is empty or no messages.
+func saveArchivedMessages(sessionDir string, messages []agentctx.AgentMessage) string {
+	if sessionDir == "" || len(messages) == 0 {
+		return ""
+	}
+	compactionsDir := filepath.Join(sessionDir, "compactions")
+	entries, err := os.ReadDir(compactionsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("[Compact] Failed to read compactions dir for archiving", "error", err)
+			return ""
+		}
+	}
+	count := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "archived_") {
+			count++
+		}
+	}
+	name := fmt.Sprintf("archived_%05d.jsonl", count+1)
+	archivePath := filepath.Join(compactionsDir, name)
+
+	if err := os.MkdirAll(compactionsDir, 0755); err != nil {
+		slog.Warn("[Compact] Failed to create compactions dir for archiving", "error", err)
+		return ""
+	}
+
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	for _, msg := range messages {
+		if err := enc.Encode(msg); err != nil {
+			slog.Warn("[Compact] Failed to encode archived message", "error", err)
+			return ""
+		}
+	}
+	if err := os.WriteFile(archivePath, []byte(buf.String()), 0644); err != nil {
+		slog.Warn("[Compact] Failed to write archived messages", "path", archivePath, "error", err)
+		return ""
+	}
+
+	slog.Info("[Compact] Archived old messages", "path", archivePath, "count", len(messages))
+	return archivePath
+}
+
+// ShouldCompact determines if context should be compressed.
+// In LLMDecide mode, uses soft/hard thresholds + tool-call intervals.
+// In classic mode, uses the dynamic token threshold.
+func (c *Compactor) ShouldCompact(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
 	if !c.config.AutoCompact {
 		return false
 	}
 
-	threshold := c.CalculateDynamicThreshold()
-	if threshold > 0 {
-		tokens := agentCtx.EstimateTokens()
-		return tokens >= threshold
+	// LLMDecide is always enabled (set unconditionally in rpc_setup.go).
+	return c.shouldCompactLLMDecide(ctx, agentCtx)
+}
+
+// shouldCompactLLMDecide implements the LLM-decides threshold check.
+// When an interval is reached, it asks the LLM whether to compact;
+// on error it falls back to compacting.
+func (c *Compactor) shouldCompactLLMDecide(ctx context.Context, agentCtx *agentctx.AgentContext) bool {
+	tokens := agentCtx.EstimateTokens()
+	cfg := c.config.LLMDecide
+
+	if tokens >= cfg.HardLimit {
+		traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+			traceevent.Field{Key: "decision", Value: true},
+			traceevent.Field{Key: "reason", Value: "hard_limit"},
+			traceevent.Field{Key: "tokens", Value: tokens},
+			traceevent.Field{Key: "hard_limit", Value: cfg.HardLimit},
+		)
+		return true
 	}
-	return false
+	if tokens < cfg.SoftThreshold {
+		return false
+	}
+
+	interval := c.llmDecideInterval(tokens)
+	tier := "low"
+	switch {
+	case tokens >= cfg.TierHigh:
+		tier = "high"
+	case tokens >= cfg.TierMedium:
+		tier = "medium"
+	}
+
+	currentCount := agentCtx.AgentState.ToolCallsSinceLastTrigger
+
+	// Don't re-ask until a full interval has elapsed since the last ask.
+	// This prevents asking every turn after a "no".
+	if currentCount-c.llmDecideLastAskCount < interval {
+		return false
+	}
+
+	// Interval reached — ask the LLM whether to compact.
+	// The askLLM span (compact_llm_decide_ask) records cache/token details.
+	ask := c.askFunc
+	if ask == nil {
+		ask = c.askLLM
+	}
+	shouldDo, err := ask(ctx, agentCtx, tokens)
+
+	decision := true
+	reason := "ask_yes"
+	if err != nil {
+		slog.Warn("[Compact] LLM-decide ask failed, compacting as fallback", "error", err)
+		reason = "ask_fallback"
+	} else if !shouldDo {
+		decision = false
+		reason = "ask_no"
+		slog.Info("[Compact] LLM decided not to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	} else {
+		slog.Info("[Compact] LLM decided to compact",
+			"tokens", tokens,
+			"budget_pct", fmt.Sprintf("%.0f%%", float64(tokens)/float64(cfg.HardLimit)*100))
+	}
+
+	// Record the counter when the last ask happened.
+	// llmDecideLastAskCount prevents re-asking until a full interval has elapsed.
+	c.llmDecideLastAskCount = currentCount
+
+	traceevent.Log(ctx, traceevent.CategoryEvent, "compact_llm_decide_check",
+		traceevent.Field{Key: "decision", Value: decision},
+		traceevent.Field{Key: "reason", Value: reason},
+		traceevent.Field{Key: "tokens", Value: tokens},
+		traceevent.Field{Key: "tier", Value: tier},
+		traceevent.Field{Key: "interval", Value: interval},
+	)
+	return decision
+}
+
+func (c *Compactor) llmDecideInterval(tokens int) int {
+	cfg := c.config.LLMDecide
+	switch {
+	case tokens >= cfg.TierHigh:
+		return cfg.IntervalHigh
+	case tokens >= cfg.TierMedium:
+		return cfg.IntervalMedium
+	default:
+		return cfg.IntervalLow
+	}
+}
+
+// buildCacheFriendlyLLMContext builds an LLM request whose prefix matches a
+// normal agent turn, maximising provider prefix-cache hits. Used by both
+// askLLM and GenerateSummary.
+//
+// Message ordering (mirrors the agent loop):
+//
+//	[system_prompt]
+//	[contextPrefix as user message]   ← skills + AGENTS.md, only if non-empty
+//	[...conversation messages...]
+//	[trailingInstruction]             ← ask question or summarisation prompt
+func buildCacheFriendlyLLMContext(
+	messages []agentctx.AgentMessage,
+	systemPrompt string,
+	contextPrefix string,
+	tools []agentctx.Tool,
+	trailingInstruction string,
+	thinkingLevel string,
+	supportsVision bool,
+) llm.LLMContext {
+	llmMessages := agentctx.ConvertMessagesToLLM(messages)
+	// Same capability filtering as the agent loop: a session created with a
+	// vision-capable model can be resumed with a text-only model, in which
+	// case image_url parts must be stripped or the LLM call will error.
+	llmMessages, _ = llm.FilterUnsupportedContent(llmMessages, supportsVision)
+
+	if strings.TrimSpace(contextPrefix) != "" {
+		llmMessages = append([]llm.LLMMessage{{
+			Role:    "user",
+			Content: contextPrefix,
+		}}, llmMessages...)
+	}
+
+	llmMessages = append(llmMessages, llm.LLMMessage{
+		Role:    "user",
+		Content: trailingInstruction,
+	})
+
+	return llm.LLMContext{
+		SystemPrompt:  systemPrompt,
+		Messages:      llmMessages,
+		Tools:         agentctx.ConvertToolsToLLM(tools),
+		ThinkingLevel: thinkingLevel,
+	}
+}
+
+// askLLM sends a lightweight yes/no question to the LLM, reusing the main
+// conversation prefix for cache efficiency. Returns true if the LLM says yes.
+//
+// Canary context retention check:
+//   - A canary message was planted in RecentMessages after the last compaction
+//     (by InsertCanary in performCompaction). It is appended to the end, so the
+//     provider prefix-cache for earlier messages is unaffected.
+//   - On each call, we ask the LLM to report the canary value. The canary
+//     message still exists in RecentMessages, having naturally sunk toward
+//     the middle as new tool call/result messages accumulated.
+//   - An incorrect or missing canary answer indicates context degradation
+//     and forces compaction (returns true).
+//   - The canary is NEVER modified by askLLM — no cleaning, no re-planting.
+//     It stays in RecentMessages until the next compaction cleans it.
+func (c *Compactor) askLLM(ctx context.Context, agentCtx *agentctx.AgentContext, tokens int) (bool, error) {
+	span := traceevent.StartSpan(ctx, "compact_llm_decide_ask", traceevent.CategoryLLM)
+	defer span.End()
+
+	if c.askPrompt == "" {
+		c.askPrompt = prompt.CompactCheckPrompt()
+	}
+
+	cfg := c.config.LLMDecide
+	budgetPct := fmt.Sprintf("%d%% (%d / %d tokens)", tokens*100/cfg.HardLimit, tokens, cfg.HardLimit)
+	askContent := fmt.Sprintf(c.askPrompt, budgetPct)
+
+	span.AddField("tokens", tokens)
+	span.AddField("budget_pct", budgetPct)
+
+	// Canary recall check. The canary was planted after the last compaction
+	// and is never modified by askLLM — zero cache disruption.
+	canaryVal := c.canaryValue
+	hasCanary := canaryVal != ""
+	if hasCanary {
+		// Prepend canary instruction BEFORE the base prompt so the format
+		// override (canary value on line 1, then confirm/reject on line 2)
+		// is seen first and dominates the base prompt's conflicting format.
+		askContent = fmt.Sprintf(
+			"--- Context Retention Check ---\n"+
+				"Report the <agent:canary> value from the conversation.\n"+
+				"Line 1: the canary value only (no backticks, no quotes, no extra text).\n"+
+				"Line 2: \"confirm\" to compact now, or \"reject\" to continue.\n\n---\n\n%s",
+			askContent)
+		span.AddField("canary_expected", canaryVal)
+	}
+
+	llmCtx := buildCacheFriendlyLLMContext(
+		agentCtx.RecentMessages,
+		agentCtx.SystemPrompt,
+		c.agentContextPrefix,
+		agentCtx.Tools,
+		askContent,
+		c.thinkingLevel,
+		c.model.SupportsVision,
+	)
+
+	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	stream := llm.StreamLLM(callCtx, c.model, llmCtx, c.apiKey, 60*time.Second)
+
+	var response strings.Builder
+	var thinking strings.Builder
+	for event := range stream.Iterator(callCtx) {
+		if event.Done {
+			break
+		}
+		switch e := event.Value.(type) {
+		case llm.LLMTextDeltaEvent:
+			response.WriteString(e.Delta)
+		case llm.LLMThinkingDeltaEvent:
+			thinking.WriteString(e.Delta)
+		case llm.LLMDoneEvent:
+			span.AddField("input_tokens", e.Usage.InputTokens)
+			span.AddField("output_tokens", e.Usage.OutputTokens)
+			span.AddField("total_tokens", e.Usage.TotalTokens)
+			if e.Usage.PromptTokensDetails != nil {
+				span.AddField("cache_read", e.Usage.PromptTokensDetails.CachedTokens)
+			}
+		case llm.LLMErrorEvent:
+			span.AddField("error", e.Error.Error())
+			return false, e.Error
+		}
+	}
+
+	// Fall back to reasoning_content if text response is empty.
+	answerText := response.String()
+	if strings.TrimSpace(answerText) == "" && thinking.Len() > 0 {
+		answerText = thinking.String()
+		span.AddField("used_thinking_fallback", true)
+	}
+
+	// Parse the response:
+	//   Without canary: first line = confirm/reject (original behavior)
+	//   With canary:    first line = canary value, second line = confirm/reject
+	answer := strings.ToLower(strings.TrimSpace(answerText))
+	lines := strings.SplitN(answer, "\n", 3)
+
+	confirmed := false
+	canaryOK := true
+
+	if hasCanary {
+		canaryAnswer := strings.TrimSpace(lines[0])
+		// Strip common formatting LLMs add around short values.
+		canaryAnswer = strings.Trim(canaryAnswer, "`\"'“”‘’")
+
+		canaryOK = strings.EqualFold(canaryAnswer, canaryVal) ||
+			strings.Contains(strings.ToLower(canaryAnswer), strings.ToLower(canaryVal))
+
+		if !canaryOK {
+			confirmed = true
+			slog.Warn("[Compact] Canary check failed — context may be degraded, forcing compaction",
+				"expected", canaryVal,
+				"got", canaryAnswer)
+		} else {
+			slog.Info("[Compact] Canary check passed",
+				"value", canaryVal)
+			if len(lines) > 1 {
+				decisionLine := strings.TrimSpace(lines[1])
+				confirmed = strings.Contains(decisionLine, "confirm")
+			}
+		}
+	} else {
+		if len(lines) > 0 {
+			decisionLine := strings.TrimSpace(lines[0])
+			confirmed = strings.Contains(decisionLine, "confirm")
+		}
+	}
+
+	span.AddField("response", answerText)
+	span.AddField("canary_ok", canaryOK)
+	span.AddField("decision", confirmed)
+
+	return confirmed, nil
 }

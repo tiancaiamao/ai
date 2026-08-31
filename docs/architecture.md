@@ -26,15 +26,11 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
                            │ Unix socket (run/serve)
                            ▼
 ┌────────────────────────────────────────────────────────────────┐
-│               cmd/ai — CLI Subcommands                          │
+│               cmd/ai — CLI Entry Point                          │
 │                                                                 │
-│  main.go          — Subcommand dispatch (run/serve/rpc/ls/...)  │
-│  rpc_handlers.go  — RPC server setup, session lifecycle         │
-│  run.go           — run/serve: subprocess + TUI (Bubble Tea)    │
-│  session_writer.go— Session persistence, compaction bridge      │
-│  watch.go         — Event stream TUI renderer                   │
-│  send.go          — Send messages to running agent via socket   │
-│  ls.go / kill.go  — List and terminate agent instances          │
+│  main.go          — Flag parsing, calls app.RunRPC()         │
+│                   Subcommand dispatch (run/serve/rpc/ls/...)    │
+│                   via subcommand/ packages                      │
 └──────────────────────────┬─────────────────────────────────────┘
                            │
                            ▼
@@ -82,7 +78,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 │ - edit           │ │ - Stream │ │ - Checkpoint      │
 │ - grep           │ │ - Retry  │ │ - Journal         │
 │ - change_workspace│ │          │ │ - Compaction      │
-│ - context_mgmt/* │ │          │ │ - Reconstruction  │
+│                  │ │          │ │ - Reconstruction  │
 └──────────────────┘ └──────────┘ └──────────────────┘
 ```
 
@@ -94,7 +90,7 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 | `pkg/session` | Append-only JSONL session storage, fork support, lazy loading |
 | `pkg/prompt` | System prompt construction, skill expansion, thinking instructions |
 | `pkg/skill` | Skill discovery, loading (frontmatter parsing), formatting |
-| `pkg/compact` | Heavyweight LLM summarization + lightweight context management |
+| `pkg/compact` | LLM-driven compaction with cache-friendly summarization (LLMDecide mode) |
 | `pkg/traceevent` | Perfetto-compatible trace event recording and export |
 | `pkg/truncate` | Tool output truncation with head/tail preservation |
 | `pkg/modelselect` | Model selection and spec resolution |
@@ -107,30 +103,16 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│              ag CLI (skills/ag/)                                │
-│  Standalone Go binary for multi-agent orchestration             │
+│  Agent Orchestration (bridge-per-agent via skills)              │
+│  Multi-agent orchestration via skill-defined workflows          │
 │                                                                 │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐ │
-│  │ Agent Lifecycle │  │ Task DAG       │  │ Channels         │ │
-│  │ - spawn         │  │ - import-plan  │  │ - create/send    │ │
-│  │ - steer/abort   │  │ - claim/next   │  │ - recv/wait      │ │
-│  │ - status/output │  │ - done/fail    │  │ - async messages │ │
-│  │ - kill          │  │ - dependencies │  │                  │ │
-│  └───────┬────────┘  └───────┬────────┘  └──────────────────┘ │
-│          │                   │                                  │
-│          ▼                   ▼                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │         Bridge-per-Agent Architecture                     │  │
-│  │                                                           │  │
-│  │  ag bridge <id> (detached process)                        │  │
-│  │  ├── <backend command> (ai rpc / codex exec / ...)        │  │
-│  │  ├── StreamWriter → stream.log (real-time readable)       │  │
-│  │  ├── EventReader → activity.json (structured events)      │  │
-│  │  └── Unix socket → bridge.sock (control plane)            │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  Skills define orchestration patterns using `ai` CLI:           │
+│  - spawn/kill sub-agents via ai serve/send/watch               │
+│  - steer/abort running agents                                   │
+│  - Bridge-per-agent: detached process with socket control      │
 │                                                                 │
-│  Backends: ai (json-rpc), codex (raw), pluggable via config     │
 │  Storage: .ag/ directory (CWD-scoped)                           │
+│  Backends: ai (json-rpc), codex (raw), pluggable via config     │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,19 +139,18 @@ The `ai` project is a Go-based AI coding agent with RPC-first design, optimized 
 ### Context Management Flow
 
 ```
-1. Turn completes → check token usage
-2. If threshold exceeded:
-   a. ContextManager (lightweight): separate LLM call with mgmt tools
-      - truncate_messages: remove stale tool outputs
-      - update_llm_context: update task state summary
-      - compact: trigger full summarization
-      - no_action: skip (context is fine)
-   b. sessionCompactor (heavyweight): full LLM summarization
-      - Generates new summary from conversation
-      - Replaces old messages with summary
-      - Persists via checkpoint + journal
-3. LLMContext (task state) injected into future requests for continuity
+1. Turn completes → check token usage (EstimateTokens)
+2. If SoftThreshold < tokens < HardLimit:
+   a. At interval boundary → askLLM: "compact now?" (cache-friendly yes/no)
+   b. LLM says yes → compact; LLM says no → skip until next interval
+   c. On ask error → compact as fallback
+3. If tokens >= HardLimit: compact immediately (no ask)
+4. Compact(): split messages by token budget, summarize old via LLM,
+   fix tool-call pairing, archive excess tool results, clean stale state
+5. Persist: AppendCompaction → snapshot file + compaction entry in messages.jsonl
 ```
+
+See [context-management.md](context-management.md) for full details.
 
 ### Session Persistence
 
@@ -181,11 +162,10 @@ Session Directory (~/.ai/sessions/--<git-root>--/)
 │   ├── {"type":"message","id":"abc2","parentId":"abc1",...}
 │   ├── {"type":"truncate","id":"abc3",...}
 │   └── {"type":"compact","id":"abc4",...}
-├── checkpoint.jsonl        # Periodic snapshot (full state)
-└── checkpoint-index.json   # Checkpoint lookup index
+└── compactions/            # Compaction snapshot files
 ```
 
-Recovery: load latest checkpoint → replay journal entries after checkpoint → rebuild in-memory state.
+Recovery: load messages from session JSONL (handles compaction snapshots) → restore workspace CWD from `meta.json` → rebuild in-memory state (token counts etc. are recomputed from messages).
 
 ## Key Design Decisions
 
@@ -205,12 +185,12 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 
 **Context:** How to expose different operational modes.
 
-**Decision:** Subcommands (`ai rpc`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
+**Decision:** Subcommands (`ai rpc`, `ai acp`, `ai run`, `ai serve`, `ai ls`, `ai watch`, `ai send`, `ai kill`) instead of `--mode` flags.
 
 **Rationale:**
 - Clearer semantics (each command does one thing)
 - Independent flag sets per subcommand
-- Backward compatibility via deprecated `--mode` dispatch
+- Subcommands fully replace the old `--mode` flag
 - `ai run` = subprocess rpc + TUI in one process
 - `ai serve` = daemon mode with socket control
 
@@ -242,13 +222,13 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 
 **Context:** How to persist conversation state.
 
-**Decision:** Append-only JSONL with periodic checkpoints.
+**Decision:** Append-only JSONL with AgentState persistence.
 
 **Rationale:**
 - Crash-safe (partial writes don't corrupt)
 - Efficient (no rewriting)
 - Fork support (tree structure via parent IDs)
-- Fast recovery (checkpoint + journal replay)
+- Fast recovery (AgentState + compaction snapshots)
 
 ## Performance Characteristics
 
@@ -267,7 +247,7 @@ Recovery: load latest checkpoint → replay journal entries after checkpoint →
 - **Execution timeout**: Configurable per-tool and per-turn timeouts
 - **Resource limits**: Max consecutive tool calls, max turns, token limits
 - **Session isolation**: Sessions scoped by git repository root
-- **Agent isolation**: Each ag agent is an independent process
+- **Agent isolation**: Each sub-agent runs as an independent process
 - **Path protection**: Tools validate file paths within workspace
 - **API key storage**: Support for both env vars and file-based credentials
 
@@ -279,41 +259,34 @@ See [test-strategy.md](test-strategy.md) for detailed testing approach.
 
 ```
 ai/
-├── cmd/ai/           # CLI entry points
-│   ├── main.go       # Subcommand dispatch
-│   ├── rpc_handlers.go
-│   ├── run.go        # run + serve subcommands
-│   ├── watch.go      # TUI event renderer
-│   ├── send.go       # Send to running agent
-│   ├── ls.go         # List runs
-│   └── kill.go       # Terminate agent
-├── pkg/
-│   ├── agent/        # Core agent loop, execution, metrics
-│   ├── compact/      # Compaction strategies
-│   ├── command/      # Slash command registry
-│   ├── config/       # Configuration, auth, model specs
-│   ├── context/      # Agent context, messages, checkpoints
-│   ├── llm/          # LLM client (OpenAI-compatible)
-│   ├── logger/       # Structured logging
-│   ├── modelselect/  # Model selection logic
-│   ├── prompt/       # System prompt builder
-│   ├── rpc/          # RPC server, types
-│   ├── run/          # Run metadata, socket server
-│   ├── session/      # Session persistence (JSONL)
-│   ├── skill/        # Skill loading and formatting
-│   ├── tools/        # Tool implementations
-│   │   └── context_mgmt/  # Context management tools
-│   ├── traceevent/   # Perfetto-compatible tracing
-│   ├── truncate/     # Output truncation
-│   └── version/      # Version info
-├── skills/           # Skill definitions
-│   ├── ag/           # Agent orchestration CLI (separate Go module)
-│   ├── brainstorm/   # Intent exploration
-│   ├── plan/         # Task planning
-│   ├── implement/    # Task execution
-│   ├── review/       # Code review
-│   └── ...           # Other skills
-├── docs/             # Documentation
-├── benchmark/        # E2E benchmark tasks
-└── tests/            # Integration test scripts
+├── cmd/ai/               # CLI entry point
+│   └── main.go           # Flag parsing → app.RunRPC()
+├── pkg/                  # RPC core logic only
+│   ├── agent/            # Core agent loop, execution
+│   ├── agentconfig/      # Agent configuration types
+│   ├── cli/              # CLI subcommand entry points (run/serve/ls/send/kill/watch)
+│   ├── middlewares/      # RPC middleware
+│   ├── compact/          # LLM-driven compaction (LLMDecide mode)
+│   ├── command/          # Slash command registry
+│   ├── config/           # Configuration, auth, model specs
+│   ├── context/          # Agent context, messages, AgentState persistence
+│   ├── llm/              # LLM client (OpenAI-compatible)
+│   ├── logger/           # Structured logging
+│   ├── modelselect/      # Model selection logic
+│   ├── prompt/           # System prompt builder
+│   ├── rpc/              # RPC server, types, handlers (from pkg/app)
+│   ├── session/          # Session persistence (JSONL)
+│   ├── skill/            # Skill loading and formatting
+│   ├── testutil/         # Test utilities
+│   ├── tools/            # Tool implementations (bash, read, write, edit, grep, etc.)
+│   ├── traceevent/       # Perfetto-compatible tracing
+│   ├── truncate/         # Output truncation
+│   └── version/          # Version info
+├── subcommand/           # Subcommand implementations
+│   ├── helpers/          # Shared CLI utilities
+│   └── run/tui/          # TUI shared code (event renderer, socket, metadata)
+├── skills/               # Skill definitions (user-installed and project-level)
+├── docs/                 # Documentation
+├── benchmark/            # E2E benchmark tasks
+└── tests/                # Integration test scripts
 ```

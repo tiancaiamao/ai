@@ -1,146 +1,126 @@
 # pkg/rpc
 
-JSON-RPC server over stdin/stdout for editor and CLI integration.
+RPC server, handlers, and types for the AI agent system.
 
 ## Overview
 
-The RPC server implements a newline-delimited JSON protocol over stdin/stdout. It receives commands, dispatches to registered handlers, and emits events. This is the primary interface for TUI, editor plugins, and external tools to interact with the agent.
+The `rpc` package implements the RPC application layer — JSON-RPC server, request/response handlers, and shared types for agent interactions. This package bridges the CLI layer (`pkg/cli`) and the core agent logic (`pkg/agent`).
 
-## Protocol
+**Key responsibilities:**
 
-### Commands (stdin → agent)
+- JSON-RPC server (stdin/stdout I/O loop)
+- Request routing to handlers (messages, config, session, etc.)
+- Event streaming to clients
+- Session writer for recording agent events
+- Trace event handling for Perfetto integration
 
-Each command is a single JSON line:
+## Core Types
 
-```json
-{
-  "id": "unique-id",
-  "type": "prompt",
-  "message": "Hello, agent",
-  "data": {}
-}
-```
+### RPCApp
 
-**Command types:**
-
-| Type | Description |
-|------|-------------|
-| `prompt` | Send a user message to the agent |
-| `steer` | Inject a system message (mid-conversation guidance) |
-| `follow_up` | Queue a follow-up prompt after current processing |
-| `abort` | Cancel current LLM stream |
-| `get_context` | Retrieve current agent context |
-| `set_context` | Update agent context |
-| `slash_command` | Execute a slash command (e.g., `/model`, `/compact`) |
-| `workflow_init` | Initialize workflow execution |
-| `workflow_start` | Start workflow processing |
-| `workflow_heartbeat` | Periodic workflow status update |
-
-**Prompt-specific data** (`PromptRequest`):
-
-```json
-{
-  "type": "prompt",
-  "data": {
-    "message": "Fix the bug",
-    "streamingBehavior": "full",
-    "images": [{"type":"image","data":"base64..."}]
-  }
-}
-```
-
-### Responses (agent → stdout)
-
-```json
-{
-  "id": "matching-command-id",
-  "type": "response",
-  "command": "prompt",
-  "success": true,
-  "data": {},
-  "error": ""
-}
-```
-
-### Events (agent → stdout)
-
-Events are unsolicited JSON lines emitted during processing:
-
-```json
-{
-  "type": "agent_event",
-  "data": {
-    "type": "text_delta",
-    "message": {"role":"assistant","content":[{"type":"text","text":"Hello"}]}
-  }
-}
-```
-
-**Event types:**
-
-| Type | Description |
-|------|-------------|
-| `agent_event` | Agent lifecycle and stream events (see `pkg/agent` event types) |
-| `session_event` | Session save/load/compact events |
-| `workflow_event` | Workflow state changes |
-| `context_limit_recovery_event` | Context overflow recovery |
-| `compaction_event` | Compaction summary |
-| `ready` | Agent ready for commands |
-
-### Workflow State
-
-```json
-{
-  "type": "workflow_state",
-  "data": {
-    "phase": "worker",
-    "tasksFile": "/path/to/tasks.md",
-    "totalTasks": 5,
-    "pendingTasks": 3,
-    "doneTasks": 2,
-    "failedTasks": 0,
-    "inProgressTask": {"id":"task-1","description":"...","status":"in_progress"}
-  }
-}
-```
-
-## Server
+`RPCApp` is the main application struct that holds all components:
 
 ```go
-type Server struct { ... }
+type RPCApp struct {
+    agent           *agent.Agent
+    agentCtx        *agentctx.AgentContext
+    sessionWriter   *sessionWriter.SessionWriter
+    // ... other fields
+}
 ```
 
-Thread-safe RPC server. Created with `NewServer(ctx)`:
+### Handlers
+
+Request handlers are implemented as methods on `RPCApp`:
+
+| Handler | Purpose |
+|---------|---------|
+| `HandleInit()` | Initialize agent with config |
+| `HandleStream()` | Start agent execution with streaming |
+| `HandleMessages()` | Send messages to agent (without streaming) |
+| `HandleStop()` | Stop current agent turn |
+| `HandleGetConfig()` | Get current configuration |
+| `HandleSetConfig()` | Update configuration |
+| `HandleListSessions()` | List available sessions |
+| `HandleLoadSession()` | Load a previous session |
+
+### Types
+
+| Type | Purpose |
+|------|---------|
+| `AgentConfig` | Agent configuration (model, tools, limits) |
+| `StreamRequest` | Request for streaming agent execution |
+| `StreamResponse` | Response with streaming events |
+| `SessionInfo` | Session metadata |
+
+## Request/Response Flow
+
+```
+Client → JSON-RPC → RPCApp → Agent
+Client ← JSON-RPC ← RPCApp ← Agent
+```
+
+1. Client sends JSON-RPC request (stdin)
+2. `rpc_server` reads and parses request
+3. `rpc_handlers` routes to appropriate handler
+4. Handler calls agent methods (e.g., `Agent.RunTurn`)
+5. Agent emits events (via channel)
+6. `RPCApp` streams events back to client
+
+## Event Streaming
+
+Events are streamed to clients as they're generated:
 
 ```go
-srv := rpc.NewServer(ctx)
-srv.Register("prompt", handlePrompt)
-srv.Register("abort", handleAbort)
-srv.Run() // Blocks, reads stdin, dispatches commands
+for event := range agent.Events() {
+    resp := &types.StreamResponse{
+        Event: event,
+    }
+    rpc.WriteMessage(resp)
+}
 ```
 
-Key methods:
-- `Register(cmdType, handler)` — Register a command handler
-- `Run()` — Start reading stdin and dispatching
-- `EmitEvent(event)` — Send an unsolicited event to stdout
-- `SetOutput(writer)` — Override output (useful for testing)
-- `Context()` — Access the server's context
+Supported event types:
+- Text chunks (LLM output)
+- Tool calls
+- Tool results
+- Status updates
 
-## Handler Type
+## Session Writer
+
+`SessionWriter` records agent events to JSONL format for persistence:
 
 ```go
-type Handler func(cmd RPCCommand) (any, error)
+type SessionWriter struct {
+    file   *os.File
+    encoder *json.Encoder
+}
 ```
 
-Handlers receive the raw `RPCCommand` and return arbitrary data or an error. Parameter parsing is the handler's responsibility.
+Events are appended as JSON lines for crash-safe recovery.
 
-## Key Files
+## ACP Mode
 
-| File | Description |
-|------|-------------|
-| `server.go` | Server struct, command dispatch, Run(), EmitEvent() |
-| `types.go` | Protocol types — RPCCommand, RPCResponse, event types, workflow types |
+`RunACP()` (in `acp.go`) serves the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio using the same NDJSON framing as the RPC server. It reuses the shared `setupAgent()`/`registerAllHandlers()`/`buildSkillCommands()` machinery from `rpc_handlers.go`, so the agent, tools, sessions, and slash commands are identical to `rpc` mode.
 
-## Dependencies
+Implemented methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update` (notifications). `initialize` advertises `loadSession: true`; `session/load` reloads a previously persisted session by id (the ACP sessionId is the internal session id) and replays its history as `user_message_chunk` / `agent_message_chunk` / `tool_call` / `tool_call_update` notifications before answering with a stop reason. Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
 
-- `pkg/command` — Slash command registry (re-exported for backward compatibility)
+## Slash-Command Result Rendering
+
+`FormatCommandResult(command, data)` (in `render.go`) is the single renderer for slash-command results across all frontends: the RPC TUI event stream (`subcommand/run/tui`), ACP hosts (`formatACPCommandResult` in `acp.go`), and external RPC clients. Known command names dispatch to per-command renderers; unknown shapes fall back to shape detection; unrecognized payloads return `""` so callers fall back to pretty-printed JSON. Renderers are pure formatters — no app/server access, no business logic.
+
+## Testing
+
+Run tests with:
+
+```bash
+go test ./pkg/rpc/...
+```
+
+Integration tests (`rpcapp_smoke_test.go`) test end-to-end RPC interactions.
+
+## See Also
+
+- [architecture.md](../../docs/architecture.md) - System architecture
+- [rpc-protocol.md](../../docs/rpc-protocol.md) - RPC protocol specification
+- [pkg/agent](../agent/README.md) - Agent core logic

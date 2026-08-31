@@ -1,0 +1,213 @@
+package compact
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	traceevent "github.com/tiancaiamao/ai/pkg/traceevent"
+)
+
+// hasAgentContent returns true if the content blocks contain any text or tool
+// call — the two content types that carry meaningful information for the LLM.
+// Thinking-only messages are excluded: after compaction removes tool calls,
+// a thinking-only assistant message becomes an empty shell that some APIs reject.
+func hasAgentContent(blocks []agentctx.ContentBlock) bool {
+	for _, block := range blocks {
+		switch block.(type) {
+		case agentctx.TextContent, agentctx.ToolCallContent:
+			return true
+		}
+	}
+	return false
+}
+
+func compactToolResultsInRecent(messages []agentctx.AgentMessage, cutoff int) []agentctx.AgentMessage {
+	if cutoff <= 0 || len(messages) == 0 {
+		return messages
+	}
+
+	visibleToolIndexes := make([]int, 0)
+	for i, msg := range messages {
+		if msg.Role == "toolResult" && msg.IsAgentVisible() {
+			visibleToolIndexes = append(visibleToolIndexes, i)
+		}
+	}
+
+	excess := len(visibleToolIndexes) - cutoff
+	if excess <= 0 {
+		return messages
+	}
+	ctx := context.Background()
+	summarySpan := traceevent.StartSpan(ctx, "tool_summary_batch", traceevent.CategoryTool,
+		traceevent.Field{Key: "mode", Value: "compaction_digest"},
+		traceevent.Field{Key: "visible_tool_results", Value: len(visibleToolIndexes)},
+		traceevent.Field{Key: "cutoff", Value: cutoff},
+		traceevent.Field{Key: "archived_count", Value: excess},
+	)
+
+	compacted := append([]agentctx.AgentMessage{}, messages...)
+	archivedToolCallIDs := make(map[string]struct{}, excess)
+
+	// Hide excess tool_results from agent (but keep visible to user).
+	// We also remove corresponding tool_calls from assistant messages below,
+	// otherwise strict APIs reject unmatched assistant/tool sequences.
+	for i := 0; i < excess; i++ {
+		idx := visibleToolIndexes[i]
+		original := compacted[idx]
+		compacted[idx] = original.WithVisibility(false, original.IsUserVisible()).WithKind("tool_result_archived")
+		if strings.TrimSpace(original.ToolCallID) != "" {
+			archivedToolCallIDs[strings.TrimSpace(original.ToolCallID)] = struct{}{}
+		}
+	}
+
+	filteredToolCalls := 0
+	for i := range compacted {
+		if compacted[i].Role != "assistant" || len(archivedToolCallIDs) == 0 {
+			continue
+		}
+		filtered := make([]agentctx.ContentBlock, 0, len(compacted[i].Content))
+		removed := false
+		for _, block := range compacted[i].Content {
+			toolCall, ok := block.(agentctx.ToolCallContent)
+			if ok {
+				if _, drop := archivedToolCallIDs[strings.TrimSpace(toolCall.ID)]; drop {
+					removed = true
+					filteredToolCalls++
+					continue
+				}
+			}
+			filtered = append(filtered, block)
+		}
+		if removed {
+			// Check if the message still has meaningful content (text or tool calls).
+			// If only thinking blocks remain, hide it to avoid empty assistant shells.
+			if !hasAgentContent(filtered) {
+				compacted[i] = compacted[i].WithVisibility(false, compacted[i].IsUserVisible())
+			} else {
+				compacted[i].Content = filtered
+			}
+		}
+	}
+
+	summarySpan.AddField("filtered_tool_calls", filteredToolCalls)
+	summarySpan.End()
+	return compacted
+}
+
+// ensureToolCallPairingWithGrace ensures tool_call and tool_result messages stay paired
+// across the compaction split boundary. Tool results whose tool_call was summarized
+// into oldMessages are archived (hidden from the agent); assistant tool_calls that
+// belong to oldMessages are filtered out, hiding empty thinking-only shells.
+// The grace period protects the N most recent tool results from being archived,
+// allowing in-flight tool calls that span compaction boundaries to complete.
+func (c *Compactor) ensureToolCallPairingWithGrace(oldMessages, recentMessages []agentctx.AgentMessage) []agentctx.AgentMessage {
+	if len(recentMessages) == 0 {
+		return recentMessages
+	}
+
+	// Collect all tool_call IDs from oldMessages
+	oldToolCallIDs := make(map[string]bool)
+	for _, msg := range oldMessages {
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ExtractToolCalls() {
+				oldToolCallIDs[tc.ID] = true
+			}
+		}
+	}
+
+	// If no tool_calls in oldMessages, nothing to fix
+	if len(oldToolCallIDs) == 0 {
+		return recentMessages
+	}
+
+	// Collect recent tool result indexes for grace period protection
+	gracePeriod := c.config.GracePeriod
+	if gracePeriod <= 0 {
+		gracePeriod = 1
+	}
+
+	// Find tool result indexes (from end to start) within grace period
+	gracePeriodIndexes := make(map[int]struct{})
+	toolResultCount := 0
+	for i := len(recentMessages) - 1; i >= 0; i-- {
+		msg := recentMessages[i]
+		if msg.Role == "toolResult" && msg.IsAgentVisible() {
+			toolResultCount++
+			if toolResultCount <= gracePeriod {
+				gracePeriodIndexes[i] = struct{}{}
+			}
+		}
+	}
+
+	// Process messages, applying grace period protection
+	keptMessages := make([]agentctx.AgentMessage, 0, len(recentMessages))
+	archivedToolResultCount := 0
+	filteredToolCallCount := 0
+
+	for i, msg := range recentMessages {
+		// Check if this tool result is within grace period
+		if _, inGracePeriod := gracePeriodIndexes[i]; inGracePeriod {
+			// Within grace period - keep it visible (don't archive)
+			keptMessages = append(keptMessages, msg)
+			continue
+		}
+
+		if msg.Role == "toolResult" && msg.ToolCallID != "" {
+			if oldToolCallIDs[msg.ToolCallID] {
+				// This tool_result's call is in oldMessages - hide it to prevent mismatch
+				archivedMsg := msg.WithVisibility(false, msg.IsUserVisible()).WithKind("tool_result_archived")
+				keptMessages = append(keptMessages, archivedMsg)
+				archivedToolResultCount++
+				continue
+			}
+		}
+
+		if msg.Role == "assistant" {
+			// Check if this assistant message contains tool_calls that are in oldMessages
+			filteredContent := make([]agentctx.ContentBlock, 0, len(msg.Content))
+			hasOldToolCalls := false
+
+			for _, block := range msg.Content {
+				if tc, ok := block.(agentctx.ToolCallContent); ok {
+					if oldToolCallIDs[tc.ID] {
+						// This tool_call is in oldMessages - skip it
+						hasOldToolCalls = true
+						filteredToolCallCount++
+						continue
+					}
+				}
+				filteredContent = append(filteredContent, block)
+			}
+
+			if hasOldToolCalls {
+				if !hasAgentContent(filteredContent) {
+					// Empty shell! Hide the entire assistant message
+					keptMessages = append(keptMessages, msg.WithVisibility(false, msg.IsUserVisible()))
+					continue
+				}
+				// Create a new message with filtered content
+				filteredMsg := msg
+				filteredMsg.Content = filteredContent
+				keptMessages = append(keptMessages, filteredMsg)
+				continue
+			}
+		}
+
+		keptMessages = append(keptMessages, msg)
+	}
+
+	if archivedToolResultCount > 0 || filteredToolCallCount > 0 {
+		slog.Info("[Compact] Fixed tool_call/tool_result pairing",
+			"archived_tool_results", archivedToolResultCount,
+			"filtered_tool_calls", filteredToolCallCount,
+			"grace_period_protected", gracePeriod,
+			"kept", len(keptMessages))
+	}
+
+	return keptMessages
+}
+
+// Compact compacts context by summarizing old messages using AgentContext.
+// This method implements the context.Compactor interface.

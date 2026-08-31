@@ -1,0 +1,241 @@
+package rpc
+
+import (
+	"io"
+	_ "net/http/pprof"
+	"sync"
+	"time"
+
+	"log/slog"
+
+	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/config"
+)
+
+// Global channel for signal-triggered agent abort.
+// Used by pkg/cli.RPCSubcommand to trigger graceful shutdown.
+var (
+	agentAbortSignal = make(chan struct{}, 1)
+	abortSignalOnce  sync.Once
+)
+
+// AgentAbort triggers the abort signal for RPC subprocess graceful shutdown.
+func AgentAbort() {
+	abortSignalOnce.Do(func() {
+		close(agentAbortSignal)
+	})
+}
+
+func RunRPC(sessionPath string, debugAddr string, input io.Reader, output io.Writer, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
+	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
+		customSystemPrompt: customSystemPrompt,
+		maxTurns:           maxTurns,
+		debugAddr:          debugAddr,
+		role:               role,
+		modelOverride:      modelOverride,
+		runID:              runID,
+	})
+	if err != nil {
+		return err
+	}
+
+	// --- Create agent (context, session writer, executor, compactor wiring) ---
+	ag, sessionWriter, err := app.setupAgent(maxTurns)
+	if err != nil {
+		return err
+	}
+	defer sessionWriter.Close()
+	defer ag.Shutdown()
+
+	// --- Create RPC server ---
+	server := NewServer()
+	server.SetOutput(output)
+	app.server = server
+
+	// Start timeout watchdog if timeout is set.
+	// Must be after server creation so server.Cancel() is available.
+	if timeout > 0 {
+		go func() {
+			<-time.After(timeout)
+			slog.Warn("[RPC] Timeout reached, aborting agent", "timeout", timeout)
+			ag.Abort()
+			// Cancel the RPC server so RunWithIO unblocks and the process exits.
+			// Without this, the process lingers forever waiting for stdin.
+			server.Cancel()
+		}()
+	}
+
+	// Watch for external abort signal (e.g., from SIGTERM handler).
+	go func() {
+		slog.Info("[RPC] Abort signal watcher started")
+		<-agentAbortSignal
+		slog.Info("[RPC] External abort signal received, aborting agent")
+		ag.Abort()
+		server.Cancel()
+		slog.Info("[RPC] Abort triggered successfully")
+	}()
+
+	// --- Register all handlers ---
+	app.registerAllHandlers()
+
+	// --- Build skill commands list ---
+	app.buildSkillCommands()
+
+	// --- Start event emitter ---
+	shutdownEmitter, eventEmitterDone := app.initEventEmitter(func(ev agent.AgentEvent) {
+		app.server.EmitEvent(ev)
+	})
+
+	// --- Emit start event ---
+	app.emitStartEvent()
+
+	// --- Start debug server if enabled ---
+	app.startDebugServer()
+
+	// --- Run RPC server ---
+	slog.Info("RPC server started", "model", app.model.ID, "cwd", app.cwd)
+	slog.Info("Waiting for commands...")
+	runErr := server.RunWithIO(input, output)
+
+	// Server stopped, event emitter will exit automatically
+	slog.Info("RPC server stopped, waiting for cleanup...")
+
+	// Wait for agent to complete
+	slog.Info("Waiting for agent to complete...")
+	ag.Wait()
+
+	close(shutdownEmitter)
+	<-eventEmitterDone
+
+	slog.Info("Agent completed, exiting...")
+	return runErr
+}
+
+// setupAgent wires the agent loop: agent context, session writer, tool
+// executor, compactor and LoopConfig. Shared by RunRPC and RunACP.
+// The caller owns the returned sessionWriter (Close) and agent (Shutdown).
+func (app *rpcApp) setupAgent(maxTurns int) (*agent.Agent, *sessionWriter, error) {
+	// --- Create agent context ---
+	agentCtx := app.createBaseContext()
+
+	// Apply tool filtering from agent.yaml (after skills are loaded & registered).
+	if app.agentConfig != nil {
+		if enabled := app.agentConfig.GetEnabledTools(); enabled != nil {
+			agentCtx.SetAllowedTools(enabled)
+			slog.Info("Applied tool whitelist from agent config", "tools", enabled)
+		}
+	}
+
+	// --- Pre-config: sessionWriter, sessionComp, executor, toolOutputConfig ---
+	sessionWriter := newSessionWriter(256)
+	sessionComp := &sessionCompactor{
+		compactor: app.compactor,
+	}
+	app.sessionWriter = sessionWriter
+	app.sessionComp = sessionComp
+
+	concurrencyConfig := app.cfg.Concurrency
+	if concurrencyConfig == nil {
+		concurrencyConfig = config.DefaultConcurrencyConfig()
+	}
+	executor := agent.NewToolExecutor(
+		concurrencyConfig.MaxConcurrentTools,
+		concurrencyConfig.QueueTimeout,
+	)
+
+	toolOutputConfig := app.cfg.ToolOutput
+	if toolOutputConfig == nil {
+		toolOutputConfig = config.DefaultToolOutputConfig()
+	}
+	app.toolOutputConfig = toolOutputConfig
+
+	// Build LoopConfig with all settings
+	// Note: proactiveCompactor and sessionComp both wrap the same underlying *compact.Compactor
+	// We only need one; sessionComp provides thread-safe swapping capability
+	loopCfg := app.cfg.ToLoopConfig(
+		config.WithCompactor(sessionComp),
+		config.WithContextWindow(app.currentContextWindow),
+		config.WithToolCallCutoff(app.compactorConfig.ToolCallCutoff),
+		config.WithExecutor(executor),
+		config.WithToolOutputLimits(agent.ToolOutputLimits{
+			MaxChars: toolOutputConfig.MaxChars,
+		}),
+	)
+
+	// Set model and apiKey
+	loopCfg.Model = app.model
+	loopCfg.APIKey = app.apiKey
+	loopCfg.GetWorkingDir = app.ws.GetCWD
+	loopCfg.GetStartupPath = app.ws.GetInitialCWD
+	loopCfg.RunID = app.runID
+	loopCfg.AgentContextPrefix = app.agentContextPrefix
+	loopCfg.GetSessionDir = func() string {
+		if app.sess != nil {
+			return app.sess.GetDir()
+		}
+		return ""
+	}
+
+	// Set max turns limit if specified
+	if maxTurns > 0 {
+		loopCfg.MaxTurns = maxTurns
+		slog.Info("Max turns limit set", "max_turns", maxTurns)
+	}
+
+	// Apply agent config hooks if available
+	if app.agentConfig != nil {
+		loopCfg.Hooks = app.agentConfig.BuildHooks()
+	}
+
+	app.loopCfg = loopCfg
+
+	// Create agent with LoopConfig
+	ag := agent.NewAgentFromConfigWithContext(app.model, app.apiKey, agentCtx, loopCfg)
+	ag.SetThinkingLevel(app.cfg.ThinkingLevel)
+	app.ag = ag
+
+	slog.Info("Auto-compact enabled", "maxMessages", app.compactorConfig.MaxMessages, "maxTokens", app.compactorConfig.MaxTokens)
+	slog.Info("Concurrency control enabled", "maxConcurrentTools", concurrencyConfig.MaxConcurrentTools)
+	slog.Info("Tool output truncation", "maxChars", toolOutputConfig.MaxChars)
+
+	return ag, sessionWriter, nil
+}
+
+// registerAllHandlers registers all protocol + slash command handlers with
+// their validation maps. Shared by RunRPC and RunACP.
+func (app *rpcApp) registerAllHandlers() {
+	validToolSummaryAutomations := map[string]bool{"off": true, "fallback": true, "always": true}
+	validSteeringModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
+	validFollowUpModes := map[string]bool{"all": true, "immediate": true, "one-at-a-time": true}
+	validThinkingLevels := map[string]bool{"off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true}
+
+	app.registerHandlers(
+		validToolSummaryAutomations,
+		validSteeringModes,
+		validFollowUpModes,
+		validThinkingLevels,
+	)
+}
+
+// buildSkillCommands populates app.skillCommands with the server's visible
+// slash commands plus one /skill:<name> entry per installed skill. Shared by
+// RunRPC and RunACP.
+func (app *rpcApp) buildSkillCommands() {
+	app.skillCommands = make([]SlashCommand, 0)
+	for _, cmd := range app.server.ListSlashCommands() {
+		if cmd.Hidden {
+			continue
+		}
+		app.skillCommands = append(app.skillCommands, SlashCommand{
+			Name:        cmd.Name,
+			Description: cmd.Description,
+		})
+	}
+	for _, s := range app.skillResult.Skills {
+		app.skillCommands = append(app.skillCommands, SlashCommand{
+			Name:        "/skill:" + s.Name,
+			Description: s.Description,
+		})
+	}
+}

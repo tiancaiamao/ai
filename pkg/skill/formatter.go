@@ -3,6 +3,8 @@ package skill
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tiancaiamao/ai/pkg/truncate"
 )
 
 const (
@@ -93,14 +95,14 @@ func FormatForPrompt(skills []Skill, stats *SkillStatsFile) string {
 
 	lines := []string{
 		"## Skills",
-		"Skills are specialized instructions. Before starting any non-trivial task, scan the list below. If any skill's description matches your task, read the FULL skill file BEFORE acting — not after, not when stuck.",
+		"Skills are specialized instructions. Before starting any non-trivial task, check available skills first. If any skill's description matches your task, read the FULL skill file BEFORE acting — not after, not when stuck.",
 		"Reading a skill costs ~1-2 minutes. Ignoring it and going in the wrong direction costs 30+ minutes. This applies ESPECIALLY under time pressure.",
 		"",
 	}
 
 	for _, skill := range selected {
-		description := trimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
-		lines = append(lines, fmt.Sprintf("- **%s**: %s (%s)", skill.Name, description, skill.FilePath))
+		description := truncate.TrimRunes(strings.TrimSpace(skill.Description), maxSkillDescriptionRunes)
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, description))
 	}
 
 	lines = append(lines, "",
@@ -128,15 +130,4 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "\"", "&quot;")
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
-}
-
-func trimRunes(s string, limit int) string {
-	if limit <= 0 {
-		return s
-	}
-	runes := []rune(s)
-	if len(runes) <= limit {
-		return s
-	}
-	return string(runes[:limit])
 }

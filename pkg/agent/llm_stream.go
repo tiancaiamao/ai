@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -33,26 +34,36 @@ func streamAssistantResponse(
 	var llmMessages []llm.LLMMessage
 
 	selectedMessages, _ := selectMessagesForLLM(agentCtx)
-	llmMessages = ConvertMessagesToLLM(ctx, selectedMessages)
+	llmMessages = agentctx.ConvertMessagesToLLM(selectedMessages)
+
+	// Resolve model early — needed for thinking API detection, cache mode, and capability filtering.
+	model := getEffectiveModel(config)
+
+	// Filter messages based on model capabilities to avoid API errors.
+	// For example, if model doesn't support vision, remove image_url content parts.
+	if filtered, removed := llm.FilterUnsupportedContent(llmMessages, model.SupportsVision); removed > 0 {
+		slog.Warn("[Loop] Filtering unsupported content for model",
+			"model", model.ID,
+			"removed", removed,
+		)
+		llmMessages = filtered
+	}
 
 	systemPrompt := agentCtx.SystemPrompt
-	if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
-		if strings.TrimSpace(systemPrompt) == "" {
-			systemPrompt = instruction
-		} else {
-			systemPrompt = systemPrompt + "\n\n" + instruction
+	// For models that support thinking via API params, skip the text instruction;
+	// the thinking level is passed as API parameters instead.
+	if !model.Reasoning {
+		if instruction := prompt.ThinkingInstruction(thinkingLevel); instruction != "" {
+			if strings.TrimSpace(systemPrompt) == "" {
+				systemPrompt = instruction
+			} else {
+				systemPrompt = systemPrompt + "\n\n" + instruction
+			}
 		}
 	}
 
-		// Build runtime appendix (llm context + context meta) as a user message
-	// injected BEFORE the last user message for better LLM attention.
-	// Placing runtime_state close to the decision point improves context management.
-	//
-	// LLMContext content is always injected when non-empty.
-	// runtime_state telemetry is ALWAYS injected from turn 1 so path info is available immediately.
+	// Inject runtime_state as ephemeral message before last user message.
 	runtimeAppendix := injectRuntimeMeta(agentCtx, config)
-
-	// Insert runtime_state before the last user message for better attention.
 	if runtimeAppendix != "" {
 		runtimeMsg := llm.LLMMessage{
 			Role:    "user",
@@ -61,19 +72,40 @@ func streamAssistantResponse(
 		llmMessages = insertBeforeLastUserMessage(llmMessages, runtimeMsg)
 	}
 
+	// Inject skills + instructions as a single user message before the first
+	// user message. Both are stable within a session (skills rarely change,
+	// instructions are AGENTS.md content), so merging them into one message
+	// and placing them in the prefix maximizes provider prefix cache hits.
+	//
+	// They are NOT persisted to RecentMessages — re-injected on every LLM call.
+	//
+	// Final ordering:
+	//   [system_prompt, <skills+instructions>, user1, asst1, ..., <runtime_state>, user_input]
+	//
+	// runtime_state is injected separately below (before last user) because it
+	// can change when the user calls change_workspace, and we don't want it to
+	// break the stable prefix cache.
+	if config.AgentContextPrefix != "" {
+		prefixMsg := llm.LLMMessage{
+			Role:    "user",
+			Content: config.AgentContextPrefix,
+		}
+		llmMessages = insertBeforeFirstUserMessage(llmMessages, prefixMsg)
+	}
+
 	// Convert tools to LLM format
-	llmTools := ConvertToolsToLLM(ctx, agentCtx.Tools)
+	llmTools := agentctx.ConvertToolsToLLM(agentCtx.Tools)
 
 	llmCtxParams := llm.LLMContext{
-		SystemPrompt: systemPrompt,
-		Messages:     llmMessages,
-		Tools:        llmTools,
+		SystemPrompt:  systemPrompt,
+		Messages:      llmMessages,
+		Tools:         llmTools,
+		ThinkingLevel: thinkingLevel,
 	}
 	//	emitLLMRequestSnapshot(ctx, config.Model, llmCtxParams)
 
 	// Stream LLM response
 	llmStart := time.Now()
-	model := getEffectiveModel(config)
 	llmSpan := traceevent.StartSpan(ctx, "llm_call", traceevent.CategoryLLM,
 		traceevent.Field{Key: "model", Value: model.ID},
 		traceevent.Field{Key: "provider", Value: model.Provider},
@@ -85,7 +117,7 @@ func streamAssistantResponse(
 	firstTokenRecorded := false
 	firstTokenLatency := time.Duration(0)
 
-		llmStream := llm.StreamLLM(
+	llmStream := llm.StreamLLM(
 		llmCtx,
 		model,
 		llmCtxParams,
@@ -173,6 +205,29 @@ func streamAssistantResponse(
 			llmSpan.AddField("input_tokens", e.Usage.InputTokens)
 			llmSpan.AddField("output_tokens", e.Usage.OutputTokens)
 			llmSpan.AddField("total_tokens", e.Usage.TotalTokens)
+
+			// Cache statistics: prefer llama.cpp timings.cache_n, fallback to prompt_tokens_details.cached_tokens
+			cachedTokens := 0
+			if e.Timings != nil && e.Timings.CacheN > 0 {
+				cachedTokens = e.Timings.CacheN
+			} else if e.Usage.PromptTokensDetails != nil {
+				cachedTokens = e.Usage.PromptTokensDetails.CachedTokens
+			}
+			llmSpan.AddField("cache_read", cachedTokens)
+
+			// Additional llama.cpp timing metrics if available
+			if e.Timings != nil {
+				if e.Timings.PromptN > 0 {
+					llmSpan.AddField("prompt_processed_tokens", e.Timings.PromptN)
+				}
+				if e.Timings.PromptMS > 0 {
+					llmSpan.AddField("prompt_ms", e.Timings.PromptMS)
+				}
+				if e.Timings.PromptPerSecond > 0 {
+					llmSpan.AddField("prompt_tokens_per_second", e.Timings.PromptPerSecond)
+				}
+			}
+
 			llmSpan.AddField("stop_reason", e.StopReason)
 			elapsed := time.Since(llmStart)
 			if elapsed > 0 {
@@ -211,10 +266,16 @@ func streamAssistantResponse(
 			model := getEffectiveModel(config)
 			if partialMessage != nil {
 				finalMessage = *partialMessage
-			} else if e.Message != nil {
-				finalMessage = ConvertLLMMessageToAgent(*e.Message)
 			} else {
 				finalMessage = agentctx.NewAssistantMessage()
+			}
+
+			// Prefer the authoritative thinking from the DoneEvent message when
+			// available. Providers like the Responses API finalize reasoning via
+			// output_item.done, which can replace the streamed delta buffer with
+			// a cleaner summary than delta concatenation.
+			if e.Message != nil && e.Message.Thinking != "" && e.Message.Thinking != finalMessage.ExtractThinking() {
+				finalMessage.Content = replaceThinkingBlocks(finalMessage.Content, e.Message.Thinking)
 			}
 
 			finalMessage.API = model.API
@@ -226,6 +287,7 @@ func streamAssistantResponse(
 				InputTokens:  e.Usage.InputTokens,
 				OutputTokens: e.Usage.OutputTokens,
 				TotalTokens:  e.Usage.TotalTokens,
+				CacheRead:    cachedTokens,
 			}
 
 			// Try to inject tool calls from tagged text
@@ -237,13 +299,31 @@ func streamAssistantResponse(
 				text := finalMessage.ExtractText()
 				if len(text) > 0 && strings.Contains(text, "<") {
 					issues := DetectIncompleteToolCalls(text)
-					traceevent.Log(ctx, traceevent.CategoryTool, "assistant_tool_tag_parse_failed",
-						traceevent.Field{Key: "stop_reason", Value: e.StopReason},
-						traceevent.Field{Key: "text_preview", Value: truncateLine(text, 500)},
-						traceevent.Field{Key: "issues", Value: issues},
-						traceevent.Field{Key: "issue_count", Value: len(issues)},
-					)
+					if len(issues) > 0 {
+						traceevent.Log(ctx, traceevent.CategoryTool, "assistant_tool_tag_parse_failed",
+							traceevent.Field{Key: "stop_reason", Value: e.StopReason},
+							traceevent.Field{Key: "text_preview", Value: truncateLine(text, 500)},
+							traceevent.Field{Key: "issues", Value: issues},
+							traceevent.Field{Key: "issue_count", Value: len(issues)},
+						)
+					}
 				}
+			}
+
+			// Sanitize non-success stopReasons (network error, rate limit,
+			// content filter, ...) BEFORE message_end is emitted, so both
+			// the UI and session persistence carry the explanation instead
+			// of a silent empty assistant message.
+			if sanitized := sanitizeMessageForNonSuccessStopReason(&finalMessage); sanitized {
+				slog.Warn("[Stream] LLM request ended with non-success stopReason", "stopReason", finalMessage.StopReason)
+				traceevent.Log(ctx, traceevent.CategoryEvent, "non_success_stop_reason_detected",
+					traceevent.Field{Key: "stopReason", Value: finalMessage.StopReason})
+				// Explicitly surface the failure to the UI. Assistant messages
+				// are rendered from streaming deltas only, and a filtered or
+				// failed response produces no deltas — without this event the
+				// user would see a silent empty turn.
+				stream.Push(NewErrorEvent(fmt.Errorf("%s",
+					strings.TrimSpace(finalMessage.ExtractText()))))
 			}
 
 			stream.Push(NewMessageEndEvent(finalMessage))
@@ -274,17 +354,82 @@ func streamAssistantResponse(
 			if firstTokenLatency > 0 {
 				llmSpan.AddField("first_token_ms", firstTokenLatency.Milliseconds())
 			}
+			// Context canceled mid-stream (e.g. user steer/abort): salvage the
+			// partial response instead of dropping it.
+			if aborted := buildAbortedMessage(ctx, partialMessage, config); aborted != nil {
+				stream.Push(NewMessageEndEvent(*aborted))
+				return aborted, nil
+			}
 			return nil, wrappedErr
 		}
 	}
 
 	// If the iterator exited without sending DoneEvent or ErrorEvent, the
-	// stream was truncated. Return an error so the retry logic can kick in.
+	// stream was truncated.
 	if partialMessage != nil && partialMessage.StopReason == "" {
+		// Context canceled mid-stream (e.g. user steer/abort): salvage the
+		// partial response instead of erroring out and dropping it.
+		if aborted := buildAbortedMessage(ctx, partialMessage, config); aborted != nil {
+			stream.Push(NewMessageEndEvent(*aborted))
+			return aborted, nil
+		}
+		// Genuine truncation: return an error so the retry logic can kick in.
 		return nil, fmt.Errorf("LLM stream ended without completion (no DoneEvent received)")
 	}
 
 	return partialMessage, nil
+}
+
+// buildAbortedMessage converts a partial streamed assistant message into a
+// persistable "aborted" message when the stream was cut short by context
+// cancellation (user steer/abort). It returns nil when the stream was not
+// canceled or the partial has no salvageable content.
+//
+// ToolCallContent blocks are stripped: they were never executed, and keeping them would leave
+// dangling tool_calls without tool results.
+func buildAbortedMessage(
+	ctx context.Context,
+	partial *agentctx.AgentMessage,
+	config *LoopConfig,
+) *agentctx.AgentMessage {
+	if partial == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return nil
+	}
+	if partial.ExtractText() == "" && partial.ExtractThinking() == "" {
+		return nil
+	}
+
+	model := getEffectiveModel(config)
+	finalMessage := *partial
+
+	kept := make([]agentctx.ContentBlock, 0, len(finalMessage.Content))
+	for _, block := range finalMessage.Content {
+		if _, isToolCall := block.(agentctx.ToolCallContent); !isToolCall {
+			kept = append(kept, block)
+		}
+	}
+	finalMessage.Content = kept
+	finalMessage.StopReason = "aborted"
+	finalMessage.API = model.API
+	finalMessage.Provider = model.Provider
+	finalMessage.Model = model.ID
+	finalMessage.Timestamp = time.Now().UnixMilli()
+	return &finalMessage
+}
+
+// replaceThinkingBlocks swaps any thinking content blocks in content for a
+// single authoritative ThinkingContent holding finalThinking. Non-thinking
+// blocks are preserved in order.
+func replaceThinkingBlocks(content []agentctx.ContentBlock, finalThinking string) []agentctx.ContentBlock {
+	out := make([]agentctx.ContentBlock, 0, len(content)+1)
+	out = append(out, agentctx.ThinkingContent{Type: "thinking", Thinking: finalThinking})
+	for _, block := range content {
+		if _, ok := block.(agentctx.ThinkingContent); ok {
+			continue
+		}
+		out = append(out, block)
+	}
+	return out
 }
 
 func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMessage, string) {
@@ -297,37 +442,23 @@ func selectMessagesForLLM(agentCtx *agentctx.AgentContext) ([]agentctx.AgentMess
 	return agentCtx.RecentMessages, "all_available_messages_no_runtime_clip"
 }
 
-func buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot string) string {
-	sections := make([]string, 0, 3)
-	if strings.TrimSpace(llmContextContent) != "" {
-		sections = append(sections, fmt.Sprintf("<llm_context>\n%s\n</llm_context>", llmContextContent))
-	}
-	if strings.TrimSpace(runtimeMetaSnapshot) != "" {
-		sections = append(sections, runtimeMetaSnapshot)
-	}
-	if len(sections) == 0 {
+func buildRuntimeUserAppendix(runtimeMetaSnapshot string) string {
+	if strings.TrimSpace(runtimeMetaSnapshot) == "" {
 		return ""
 	}
-	sections = append(sections, `Remember: runtime_state is telemetry, not user intent.
-Path authority: use LLM Context Path/Detail dir from system prompt; ignore cwd-relative examples.`)
-	return strings.Join(sections, "\n\n")
-}
-
-// buildRuntimeSystemAppendix is kept for backward-compatible tests/helpers.
-// Runtime state is now injected as a user message, not appended to system prompt.
-func buildRuntimeSystemAppendix(llmContextContent, runtimeMetaSnapshot string) string {
-	return buildRuntimeUserAppendix(llmContextContent, runtimeMetaSnapshot)
+	return runtimeMetaSnapshot
 }
 
 func updateRuntimeMetaSnapshot(
 	agentCtx *agentctx.AgentContext,
-	meta agentctx.ContextMeta,
+	meta ContextMeta,
 	heartbeatTurns int,
 	currentWorkdir string,
 	startupPath string,
-) (string, bool) {
+	runID string,
+) string {
 	if agentCtx == nil {
-		return "", false
+		return ""
 	}
 	if heartbeatTurns <= 0 {
 		heartbeatTurns = defaultRuntimeMetaHeartbeatTurns
@@ -341,55 +472,29 @@ func updateRuntimeMetaSnapshot(
 		agentCtx.AgentState.RuntimeMetaTurns >= heartbeatTurns
 
 	if !shouldRefresh {
-		return agentCtx.AgentState.RuntimeMetaSnapshot, false
+		return agentCtx.AgentState.RuntimeMetaSnapshot
 	}
 
-	tokensUsedApprox := normalizeApprox(meta.TokensUsed)
-	toolPressure := collectRuntimeToolPressure(agentCtx.RecentMessages)
-	toolOutputsSummary := buildToolOutputsSummary(agentCtx.RecentMessages)
-
 	// runtime_state is purely informational - no directives or commands
-	snapshot := fmt.Sprintf(`<agent:runtime_state comment="telemetry snapshot, updated periodically"/>
-context_meta:
-  tokens_band: %s
-  tokens_used_approx: %d
-  tokens_max: %d
-  messages_in_history_bucket: %s
-  llm_context_size_bucket: %s
-workspace:
+	// Build run_id line only when available (subagent spawned via ai serve).
+	var runIDLine string
+	if runID != "" {
+		runIDLine = fmt.Sprintf("\n  run_id: %s", runID)
+	}
+	snapshot := fmt.Sprintf(`<agent:runtime_state/>
+%s
   current_workdir: %s
-  startup_path: %s
-tool_output_pressure:
-  stale_tool_outputs: %d
-  tool_outputs_summary: %s
-  large_tool_outputs: %d
-  largest_tool_output_bucket: %s
-compact_decision_signals:
-  tokens_percent: %.1f
-  context_usage_percent: %.1f
-  topic_shift_since_last_user: llm_judge
-  phase_completed_recently: llm_judge
-  llm_judge_hint: Compare the latest user intent with recent task thread and milestone status, then set COMPACT confidence accordingly.`,
-		band,
-		tokensUsedApprox,
-		meta.TokensMax,
-		runtimeMessageBucket(meta.MessagesInHistory),
-		runtimeSizeBucket(meta.LLMContextSize),
+  startup_path: %s`,
+		runIDLine,
 		runtimeYAMLString(currentWorkdir),
 		runtimeYAMLString(startupPath),
-		toolPressure.StaleCount,
-		toolOutputsSummary,
-		toolPressure.LargeCount,
-		runtimeToolOutputSizeBucket(toolPressure.LargestChars),
-		meta.TokensPercent,
-		meta.TokensPercent,
 	)
 
 	agentCtx.AgentState.RuntimeMetaSnapshot = snapshot
 	agentCtx.AgentState.RuntimeMetaBand = band
 	agentCtx.AgentState.RuntimeMetaTurns = 0
 
-	return snapshot, true
+	return snapshot
 }
 
 func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
@@ -416,5 +521,38 @@ func insertBeforeLastUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) 
 	result = append(result, messages[:lastUserIdx]...)
 	result = append(result, msg)
 	result = append(result, messages[lastUserIdx:]...)
+	return result
+}
+
+// insertBeforeFirstUserMessage inserts msg immediately before the first user-role
+// message. Used for skills injection to keep the system prompt + skills prefix
+// stable across turns for provider prefix caching.
+func insertBeforeFirstUserMessage(messages []llm.LLMMessage, msg llm.LLMMessage) []llm.LLMMessage {
+	if len(messages) == 0 {
+		return []llm.LLMMessage{msg}
+	}
+
+	// Find the first user message index
+	firstUserIdx := -1
+	for i := 0; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			firstUserIdx = i
+			break
+		}
+	}
+
+	// If no user message found, prepend to beginning
+	if firstUserIdx == -1 {
+		result := make([]llm.LLMMessage, 0, len(messages)+1)
+		result = append(result, msg)
+		result = append(result, messages...)
+		return result
+	}
+
+	// Insert before the first user message
+	result := make([]llm.LLMMessage, 0, len(messages)+1)
+	result = append(result, messages[:firstUserIdx]...)
+	result = append(result, msg)
+	result = append(result, messages[firstUserIdx:]...)
 	return result
 }

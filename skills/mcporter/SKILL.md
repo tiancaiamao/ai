@@ -59,3 +59,9 @@ Notes
 
 - Config default: `./config/mcporter.json` (override with `--config`).
 - Prefer `--output json` for machine-readable results.
+- **Large output truncation**: MCP tool responses may be truncated (e.g. `webReader` on long pages). For important results, pipe to a temp file first, then read targeted sections:
+  ```bash
+  mcporter call web-reader.webReader url="..." retain_images=false > /tmp/page.json
+  # Then parse with jq/python, read specific sections, etc.
+  ```
+  This avoids re-fetching if parsing is truncated.

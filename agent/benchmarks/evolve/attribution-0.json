@@ -1,0 +1,15 @@
+{
+  "target": "agent/system_prompt.md",
+  "predicted_fixes": [
+    "agent_011_compact_tool_call_mismatch",
+    "agent_005_delayed_signal",
+    "agent_001_forced_exploration",
+    "agent_007_misleading",
+    "agent_002_rollback"
+  ],
+  "predicted_risks": [],
+  "rationale": "(from prose)",
+  "change_description": "Edited agent/system_prompt.md",
+  "extraction_method": "strategy_3_prose_summary",
+  "iteration": 0
+}

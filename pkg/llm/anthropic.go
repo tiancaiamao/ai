@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -72,8 +71,13 @@ func StreamAnthropic(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		// Build URL - Anthropic Messages API uses /v1/messages
-		url := strings.TrimSuffix(model.BaseURL, "/") + "/v1/messages"
+		// Build URL for Anthropic Messages API.
+		// If the base URL already includes the full path (e.g. "https://opencode.ai/zen/go/v1/messages"),
+		// use it directly. Otherwise, append "/v1/messages" (standard Anthropic convention).
+		url := model.BaseURL
+		if !strings.HasSuffix(url, "/v1/messages") {
+			url = strings.TrimSuffix(url, "/") + "/v1/messages"
+		}
 
 		// Create request
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
@@ -83,7 +87,7 @@ func StreamAnthropic(
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
 
 		// Execute request — derive total timeout from context deadline so the HTTP client enforces
@@ -113,7 +117,8 @@ func StreamAnthropic(
 				traceevent.Field{Key: "http_error", Value: true},
 				traceevent.Field{Key: "json", Value: string(body)},
 			)
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))})
+			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
+			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
 			return
 		}
 
@@ -625,21 +630,4 @@ func parseXMLTagStyleArguments(args string) map[string]any {
 		}
 	}
 	return result
-}
-
-func parseRetryAfterHeaderAnthropic(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		d := time.Until(at)
-		if d > 0 {
-			return d
-		}
-	}
-	return 0
 }

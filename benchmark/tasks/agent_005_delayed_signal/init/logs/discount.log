@@ -1,7 +1,0 @@
-2024-03-18 10:00:03 [INFO] Discount service received request
-2024-03-18 10:00:03 [DEBUG] Input: subtotal=$100.00, discount_percent=10%
-2024-03-18 10:00:03 [DEBUG] Raw discount amount: $10.00
-2024-03-18 10:00:03 [WARN] Rounding discount to nearest dollar (BUG!)
-2024-03-18 10:00:03 [DEBUG] Rounded discount: $5.00 (expected: $10.00)
-2024-03-18 10:00:03 [INFO] Returning discount amount: $5.00
-2024-03-18 10:00:03 [WARN] This is incorrect! Should be $10.00 not $5.00

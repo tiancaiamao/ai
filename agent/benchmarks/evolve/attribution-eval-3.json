@@ -1,0 +1,22 @@
+{
+  "iteration": 3,
+  "verdict": "MIXED",
+  "predicted_fixes": [
+    "agent_001_forced_exploration",
+    "003_refactor_duplicated_code"
+  ],
+  "actually_fixed": [
+    "agent_001_forced_exploration",
+    "003_refactor_duplicated_code"
+  ],
+  "failed_to_fix": [],
+  "predicted_risks": [
+    "agent_007_misleading",
+    "agent_009_partial_info"
+  ],
+  "actual_regressions": [],
+  "unexpected_regressions": [
+    "agent_005_delayed_signal"
+  ],
+  "fix_rate": "2/2"
+}

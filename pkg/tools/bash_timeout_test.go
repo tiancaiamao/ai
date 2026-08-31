@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,4 +138,100 @@ func TestBashToolAllowsCommandLocalCD(t *testing.T) {
 	assert.NotEmpty(t, blocks)
 	result := blocks[0].(agentctx.TextContent)
 	assert.Contains(t, result.Text, "/tmp")
+}
+
+func TestBashToolDescriptionWorkspaceGuidance(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	desc := tool.Description()
+	// Guidance must be explicit: change_workspace for persistent/multi-command
+	// switches, cd <dir> && <command> only for one-off commands.
+	for _, want := range []string{"change_workspace", "persist", "worktree", "one-off"} {
+		assert.Contains(t, desc, want, "Description() should mention %q for persistent workspace guidance", want)
+	}
+}
+
+func TestBashToolBlocksTmuxKillServer(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		{"kill-server basic", "tmux kill-server", true},
+		{"kill-server with flags", "tmux kill-server 2>/dev/null || true", true},
+		{"kill-server with comment", "# Kill any remaining tmux sessions\ntmux kill-server 2>/dev/null || true", true},
+		{"kill-server with semicolon", "echo hi; tmux kill-server", true},
+		{"kill-server with &&", "echo hi && tmux kill-server", true},
+		{"kill-session specific", "tmux kill-session -t gen-001", false},
+		{"kill-session multi", "tmux kill-session -t gen-001\ntmux kill-session -t gen-002", false},
+		{"normal tmux", "tmux list-sessions", false},
+		{"no tmux", "echo hello", false},
+		{"kill-server in grep", "grep -r 'kill-server' file.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocks, err := tool.Execute(ctx, map[string]any{"command": tt.command})
+			if tt.blocked {
+				assert.NoError(t, err)
+				assert.NotEmpty(t, blocks)
+				result := blocks[0].(agentctx.TextContent)
+				assert.Contains(t, result.Text, "⛔ Blocked")
+				assert.Contains(t, result.Text, "kill-server")
+			} else if err == nil {
+				// Either got a normal result or was allowed through
+				for _, b := range blocks {
+					if tc, ok := b.(agentctx.TextContent); ok {
+						assert.NotContains(t, tc.Text, "⛔ Blocked")
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBashToolParentCancellationStillAborts verifies that canceling the
+// parent context (session abort) kills a running command promptly. The bash
+// tool bridges parent-cancel to its own cmdCtx via a goroutine, so a
+// long-running command must not outlive a real session abort.
+func TestBashToolParentCancellationStillAborts(t *testing.T) {
+	ws, _ := NewWorkspace("/tmp")
+	tool := NewBashTool(ws)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	var blocks []agentctx.ContentBlock
+	var execErr error
+	go func() {
+		defer close(done)
+		blocks, execErr = tool.Execute(ctx, map[string]any{
+			"command": "sleep 4",
+			"timeout": float64(10),
+		})
+	}()
+
+	time.Sleep(1 * time.Second)
+	cancel() // session abort
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("command was not killed by parent cancellation within 5s")
+	}
+	assert.NoError(t, execErr)
+	for _, b := range blocks {
+		if tc, ok := b.(agentctx.TextContent); ok && strings.Contains(tc.Text, "Command canceled") {
+			return
+		}
+	}
+	t.Fatalf("expected 'Command canceled' message, got blocks: %+v", blocks)
 }

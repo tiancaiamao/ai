@@ -1,10 +1,11 @@
 package session
 
 import (
-	agentctx "github.com/tiancaiamao/ai/pkg/context"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	agentctx "github.com/tiancaiamao/ai/pkg/context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,16 +17,35 @@ import (
 	"github.com/google/uuid"
 )
 
+// splitLines splits byte data by newline, skipping empty lines.
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			if len(data) > 0 {
+				lines = append(lines, data)
+			}
+			break
+		}
+		if i > 0 {
+			lines = append(lines, data[:i])
+		}
+		data = data[i+1:]
+	}
+	return lines
+}
+
 // Session represents a conversation session backed by an append-only JSONL file.
 type Session struct {
-	mu            sync.Mutex
-	sessionDir    string // session directory path
-	header        SessionHeader
-	entries       []*SessionEntry
-	byID          map[string]*SessionEntry
-	leafID        *string
-	flushed       bool
-	persist       bool
+	mu         sync.Mutex
+	sessionDir string // session directory path
+	header     SessionHeader
+	entries    []*SessionEntry
+	byID       map[string]*SessionEntry
+	leafID     *string
+	flushed    bool
+	persist    bool
 }
 
 // ForkMessage represents a user message candidate for forking.
@@ -37,10 +57,10 @@ type ForkMessage struct {
 // NewSession creates a new session with the given directory path.
 func NewSession(sessionDir string) *Session {
 	sess := &Session{
-		sessionDir:    sessionDir,
-		entries:       make([]*SessionEntry, 0),
-		byID:          make(map[string]*SessionEntry),
-		persist:       sessionDir != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
 	id := sessionIDFromDirPath(sessionDir)
@@ -50,12 +70,27 @@ func NewSession(sessionDir string) *Session {
 }
 
 // LoadSession loads a session from the given directory path.
+// It automatically uses lazy loading optimization (loading from the most recent compaction)
+// and falls back to full loading if lazy loading fails.
+// LoadSession loads a session from disk with lazy loading enabled.
+// It reads only the recent messages and compaction entries, falling back to full
+// loading if lazy loading fails (e.g., no compaction entry found).
 func LoadSession(sessionDir string) (*Session, error) {
+	sess, err := loadSessionLazy(sessionDir)
+	if err == nil {
+		return sess, nil
+	}
+	// Lazy loading failed, fall back to full loading
+	return loadSessionFull(sessionDir)
+}
+
+// loadSessionFull loads the entire session file (original LoadSession implementation).
+func loadSessionFull(sessionDir string) (*Session, error) {
 	sess := &Session{
-		sessionDir:    sessionDir,
-		entries:       make([]*SessionEntry, 0),
-		byID:          make(map[string]*SessionEntry),
-		persist:       sessionDir != "",
+		sessionDir: sessionDir,
+		entries:    make([]*SessionEntry, 0),
+		byID:       make(map[string]*SessionEntry),
+		persist:    sessionDir != "",
 	}
 
 	if sessionDir == "" {
@@ -148,7 +183,7 @@ func LoadSession(sessionDir string) (*Session, error) {
 func (s *Session) GetMessages() []agentctx.AgentMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return buildSessionContext(s.entries, s.leafID, s.byID)
+	return buildSessionContext(s.entries, s.leafID, s.byID, s.sessionDir)
 }
 
 // GetDir returns the session directory path.
@@ -156,6 +191,43 @@ func (s *Session) GetDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionDir
+}
+
+// AppendCompaction records a compaction event: saves the post-compaction
+// in-memory messages to an external snapshot file, then appends a compaction
+// entry to messages.jsonl referencing that snapshot. This keeps messages.jsonl
+// append-only — history is never rewritten.
+func (s *Session) AppendCompaction(summary string, messages []agentctx.AgentMessage) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var snapshotRef string
+	if s.sessionDir != "" {
+		// Assign sequential snapshot file name based on existing compaction entries.
+		count := 0
+		for _, e := range s.entries {
+			if e.Type == EntryTypeCompaction {
+				count++
+			}
+		}
+		name := fmt.Sprintf("compaction_%05d.jsonl", count+1)
+		snapshotPath := filepath.Join(s.sessionDir, "compactions", name)
+		if err := saveSnapshotMessages(snapshotPath, messages); err != nil {
+			return "", fmt.Errorf("save compaction snapshot: %w", err)
+		}
+		snapshotRef = filepath.Join("compactions", name)
+	}
+
+	entry := &SessionEntry{
+		Type:        EntryTypeCompaction,
+		ID:          generateEntryID(s.byID),
+		ParentID:    s.leafID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		Summary:     summary,
+		SnapshotRef: snapshotRef,
+	}
+	s.addEntry(entry)
+	return entry.ID, s.persistEntry(entry)
 }
 
 // GetPath returns the messages.jsonl file path of the session.
@@ -241,6 +313,35 @@ func (s *Session) ResetLeaf() {
 	s.leafID = nil
 }
 
+// EnsureFullyLoaded reloads all entries from disk, replacing in-memory state.
+// This is needed when operations (like rewind or fork) need access to entries
+// that were not loaded during lazy loading (e.g., pre-compaction entries).
+// If the session is not persisted or has no directory, this is a no-op.
+func (s *Session) EnsureFullyLoaded() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.persist || s.sessionDir == "" {
+		return nil
+	}
+
+	// Load full session from disk (non-lazy)
+	full, err := loadSessionFull(s.sessionDir)
+	if err != nil {
+		return fmt.Errorf("failed to fully load session: %w", err)
+	}
+
+	// Replace in-memory state with full data.
+	// No lock needed on full — it's a local variable not shared with other goroutines.
+	s.entries = full.entries
+	s.byID = full.byID
+	// Preserve leafID — it may have been changed by the caller.
+	// Preserve header — should be the same.
+	s.flushed = true
+
+	return nil
+}
+
 // AppendMessage appends a message entry and persists it.
 func (s *Session) AppendMessage(message agentctx.AgentMessage) (string, error) {
 	s.mu.Lock()
@@ -276,25 +377,6 @@ func (s *Session) AppendSessionInfo(name, title string) (string, error) {
 	return entry.ID, s.persistEntry(entry)
 }
 
-// AppendCompactEvent appends a compact event to messages.jsonl.
-// The event records a compact operation (truncate, update_llm_context).
-// The in-memory snapshot must be updated separately by the caller.
-func (s *Session) AppendCompactEvent(detail *agentctx.CompactEventDetail) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entry := &SessionEntry{
-		Type:         EntryTypeCompactEvent,
-		ID:           generateEntryID(s.byID),
-		ParentID:     s.leafID,
-		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
-		CompactEvent: detail,
-	}
-
-	s.addEntry(entry)
-	return s.persistEntry(entry)
-}
-
 // GetSessionName returns the latest session name if available.
 func (s *Session) GetSessionName() string {
 	s.mu.Lock()
@@ -318,28 +400,6 @@ func (s *Session) GetSessionTitle() string {
 			return strings.TrimSpace(entry.Title)
 		}
 	}
-	return ""
-}
-
-// GetLastCompactionSummary returns the summary from the most recent compaction entry
-// along the current branch, or empty string if none exists.
-func (s *Session) GetLastCompactionSummary() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Get the current branch path
-	path := s.getBranchLocked("")
-	if len(path) == 0 {
-		return ""
-	}
-
-	// Search backwards for the last compaction entry
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i].Type == EntryTypeCompaction {
-			return path[i].Summary
-		}
-	}
-
 	return ""
 }
 
@@ -754,23 +814,4 @@ func sanitizeSessionPath(cwd string) string {
 		":", "-",
 	).Replace(trimmed)
 	return fmt.Sprintf("--%s--", replaced)
-}
-
-// splitLines splits data into lines.
-func splitLines(data []byte) [][]byte {
-	lines := make([][]byte, 0)
-	start := 0
-
-	for i, b := range data {
-		if b == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
-		}
-	}
-
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-
-	return lines
 }

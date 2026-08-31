@@ -9,7 +9,7 @@ import (
 )
 
 func TestEstimateTokensSkipsAgentInvisibleMessages(t *testing.T) {
-	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0)
+	compactor := NewCompactor(DefaultConfig(), llm.Model{}, "key", "sys", 0, "")
 
 	visible := agentctx.NewUserMessage("short visible text")
 	invisible := agentctx.NewUserMessage(strings.Repeat("X", 8000)).WithVisibility(false, true)
@@ -89,10 +89,11 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 	}
 
 	// Verify tool_call messages are filtered for archived tool_results
-	// so assistant/tool protocol stays valid.
+	// so assistant/tool protocol stays valid. Only count visible messages —
+	// empty assistant shells (toolCall removed) are hidden.
 	toolCallCount := 0
 	for _, msg := range compacted {
-		if msg.Role == "assistant" {
+		if msg.Role == "assistant" && msg.IsAgentVisible() {
 			for _, block := range msg.Content {
 				if _, ok := block.(agentctx.ToolCallContent); ok {
 					toolCallCount++
@@ -102,30 +103,5 @@ func TestCompactToolResultsInRecent(t *testing.T) {
 	}
 	if toolCallCount != 1 {
 		t.Fatalf("expected 1 remaining tool_call after filtering archived pair, got %d", toolCallCount)
-	}
-}
-
-func TestProjectMessagesForSummaryTrimsToolOutputs(t *testing.T) {
-	longText := strings.Repeat("a", 5000)
-	messages := []agentctx.AgentMessage{
-		agentctx.NewToolResultMessage("call-1", "bash", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: longText},
-		}, false),
-		agentctx.NewToolResultMessage("call-2", "grep", []agentctx.ContentBlock{
-			agentctx.TextContent{Type: "text", Text: "hidden"},
-		}, false).WithVisibility(false, true),
-	}
-
-	projected := projectMessagesForSummary(messages)
-	if len(projected) != 1 {
-		t.Fatalf("expected only visible messages in projection, got %d", len(projected))
-	}
-
-	text := projected[0].ExtractText()
-	if len([]rune(text)) > 1850 {
-		t.Fatalf("expected trimmed tool output, got rune length %d", len([]rune(text)))
-	}
-	if !strings.Contains(text, "... (truncated) ...") {
-		t.Fatalf("expected truncation marker, got %q", text)
 	}
 }

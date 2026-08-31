@@ -1,13 +1,17 @@
 ---
 name: debate
-description: Orchestrate a real-time alternating debate between two subagents. Judge controls rounds via prompt, agents signal completion via channel.
+description: Orchestrate a real-time alternating debate between two subagents using ai serve/send. Judge controls rounds by prompting each agent in turn.
 ---
 
 # Debate Skill
 
 ## Overview
 
-Run a structured debate between two agents (proposer FOR, opposer AGAINST). You are the judge — you control rounds by prompting each agent in turn. Agents write to a shared file and signal completion via `ag send`. You block on `ag recv --wait`.
+Run a structured debate between two agents (proposer FOR, opposer AGAINST). You are the judge — you control rounds by prompting each agent in turn. Agents write to a shared file and you read their output.
+
+**子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup。辩论结束后必须 `ai kill` 清理双方 agent。
+
+**⚠️ MUST：在执行任何子 agent 操作前，确认 `subagent` 技能已加载到当前上下文。如果未加载，先调用 `find_skill` 工具（参数 `name="subagent"`, `load=true`）加载它。**
 
 **Key optimization:** R1 gives full context (working directory, file paths, reference links) so the agent doesn't waste time discovering what you already know. R2+ inlines the opponent's argument in the prompt so the agent doesn't re-read the debate file.
 
@@ -22,129 +26,98 @@ ROUNDS=3
 DEBATE_FILE="/tmp/debate-$(date +%s).md"
 SYSTEM_DIR="/Users/genius/.ai/skills/debate/references"
 
-# Clean previous
-ag agent rm proposer --force 2>/dev/null
-ag agent rm opposer --force 2>/dev/null
-ag channel rm judge 2>/dev/null
-
-# Create judge channel
-ag channel create judge
-
-# Spawn agents (non-blocking, returns in ~20ms)
-ag agent spawn proposer --system "@$SYSTEM_DIR/proposer-system.md"
-ag agent spawn opposer --system "@$SYSTEM_DIR/opposer-system.md"
+# Create empty debate file
+touch "$DEBATE_FILE"
 ```
+
+用 `subagent` 技能 spawn 2 个子 agent（并行），参数：
+
+| Agent | system-prompt | name | timeout |
+|-------|---------------|------|---------|
+| Proposer | `@$SYSTEM_DIR/proposer-system.md` | `proposer` | `30m` |
+| Opposer | `@$SYSTEM_DIR/opposer-system.md` | `opposer` | `30m` |
+
+> 完整 spawn 代码（tmux + `--id-file`）见 `subagent` 技能 Spawn 阶段。
 
 ## Debate Loop
 
+遵循 `subagent` 技能 Multi-Turn 模式（`ai send` + `ai watch` 循环）。
+
+每轮的 prompt 构造逻辑：
+
+**Proposer prompt（R1）：**
+```
+Topic: $DEBATE_TOPIC
+
+$DEBATE_CONTEXT
+
+Write your R1 arguments to: $DEBATE_FILE
+Ground every claim in specific code. When done, just stop — the judge will read your output.
+```
+
+**Proposer prompt（R2+）：**
+```
+Round $round. Rebut the opponent's arguments:
+
+$(tail -100 "$DEBATE_FILE")
+
+Append your R${round} rebuttal to: $DEBATE_FILE
+Ground every claim in specific code.
+```
+
+**Opposer prompt（R1）：**
+```
+Topic: $DEBATE_TOPIC
+
+$DEBATE_CONTEXT
+
+Read the proposer's R1 arguments from: $DEBATE_FILE
+Append your R1 rebuttal to: $DEBATE_FILE
+Ground every claim in specific code.
+```
+
+**Opposer prompt（R2+）：**
+```
+Round $round. Rebut the proposer's arguments:
+
+$(tail -100 "$DEBATE_FILE")
+
+Append your R${round} rebuttal to: $DEBATE_FILE
+Ground every claim in specific code.
+```
+
+每轮顺序：Proposer `ai send --wait` → Opposer `ai send --wait`，交替执行。
+
 ```bash
-# ── Round 1: Proposer opens (full context, reads source code) ──
-ag agent prompt proposer "Working directory: /path/to/project
-
-DEBATE TOPIC: $DEBATE_TOPIC
-
-Context:
-$DEBATE_CONTEXT
-
-Write your opening argument FOR feasibility to $DEBATE_FILE.
-Format:
-
-## Round 1 — Proposer
-
-Ground every claim in specific code. When done, run: ag send judge proposer-r1-done"
-
-ag recv judge --wait --timeout 600
-
-# ── Round 1: Opposer counters (reads debate file for proposer argument + source code) ──
-ag agent prompt opposer "Working directory: /path/to/project
-
-DEBATE TOPIC: $DEBATE_TOPIC
-
-Context:
-$DEBATE_CONTEXT
-
-Read $DEBATE_FILE for the proposer's opening argument.
-Then append your counter-argument AGAINST feasibility.
-Format:
-
-## Round 1 — Opposer
-
-Address the proposer's specific claims. When done, run: ag send judge opposer-r1-done"
-
-ag recv judge --wait --timeout 600
-
-# ── Rounds 2+: Inline opponent argument, no file re-read ──
-for ROUND in $(seq 2 $ROUNDS); do
-  # Extract opponent's latest argument from debate file
-  OPPONENT_ARG=$(sed -n "/^## Round $((ROUND-1)) — Opposer/,/^## Round/p" $DEBATE_FILE | head -n -1)
-
-  ag agent prompt proposer "Working directory: /path/to/project
-
-Here is the opposer's Round $((ROUND-1)) argument:
-
-$OPPONENT_ARG
-
----
-
-Rebut directly. Use your earlier code analysis — do NOT re-read source files.
-Append to $DEBATE_FILE:
-
-## Round $ROUND — Proposer
-
-When done, run: ag send judge proposer-r${ROUND}-done"
-
-  ag recv judge --wait --timeout 600
-
-  if [ "$ROUND" -lt "$ROUNDS" ]; then
-    MY_ARG=$(sed -n "/^## Round $ROUND — Proposer/,/^## Round/p" $DEBATE_FILE | head -n -1)
-
-    ag agent prompt opposer "Working directory: /path/to/project
-
-Here is the proposer's Round $ROUND argument:
-
-$MY_ARG
-
----
-
-Counter directly. Use your earlier code analysis — do NOT re-read source files.
-Append to $DEBATE_FILE:
-
-## Round $ROUND — Opposer
-
-When done, run: ag send judge opposer-r${ROUND}-done"
-
-    ag recv judge --wait --timeout 600
-  fi
-done
-
-# ── Read result & cleanup ──
-cat $DEBATE_FILE
-ag agent rm proposer --force
-ag agent rm opposer --force
-ag channel rm judge
+# 完整示例：每轮发送
+ai send --id "$PROP_ID" --wait --timeout 5m "<prompt>"
+ai send --id "$OPP_ID" --wait --timeout 5m "<prompt>"
 ```
 
-## How It Works
+> ⚠️ `--timeout` 使用 Go duration 格式（`5m`、`300s`、`1h`），**不能写裸数字** `300`。
+
+## Cleanup
+
+遵循 `subagent` 技能 Cleanup 阶段（`ai kill` + `rm -f $ID_FILE`），清理 Proposer 和 Opposer。
+
+## Flow Diagram
 
 ```
-Judge                              Proposer              Opposer
-  │                                   │                      │
-  ├── prompt (full ctx + topic) ─────►│                      │
-  │                                   ├── read source (once) │
-  │                                   ├── write R1 to file   │
-  │   recv judge ◄───────────────────┤── ag send "done"     │
-  │                                   │                      │
-  ├── prompt (full ctx + R1 file) ──────────────────────────►│
-  │                                   │                      ├── read R1 + source (once)
-  │                                   │                      ├── append R1 to file
-  │   recv judge ◄──────────────────────────────────────────┤── ag send "done"
-  │                                   │                      │
-  ├── prompt (inline R1 opponent) ──►│                      │
-  │                                   ├── rebut directly     │
-  │   recv judge ◄───────────────────┤── ag send "done"     │
-  │                                   │                      │
-  ├── prompt (inline R2 opponent) ──────────────────────────►│
-  │  ... no file re-read after R1 ... │                      │
+Judge (you)                Proposer              Opposer
+   │                          │                      │
+   ├── send R1 context ──────►│                      │
+   │  (working dir, files)    │ reads source,        │
+   │                          │ writes to debate file│
+   │◄── watch done ───────────│                      │
+   │                          │                      │
+   ├── send R1 rebuttal ────────────────────────────►│
+   │  (inline proposer R1)    │                      │
+   │                          │  reads source,       │
+   │                          │  appends rebuttal    │
+   │◄── watch done ──────────────────────────────────│
+   │                          │                      │
+   ├── send R2 (inline opponent) ──►│                 │
+   │  ... no file re-read after R1 ...│               │
 ```
 
 **R1:** Each agent reads source code once.
@@ -175,3 +148,13 @@ After the debate, read the transcript and synthesize:
 
 - `references/proposer-system.md` — "You argue FOR feasibility"
 - `references/opposer-system.md` — "You argue AGAINST feasibility"
+
+## Common Pitfalls
+
+| ❌ Wrong | ✅ Right |
+|----------|----------|
+| `ai serve` in foreground | 遵循 `subagent` 技能 spawn 模式 |
+| Send before serve is ready | `sleep 1` after spawn, then `cat $ID_FILE` |
+| Both agents write same file simultaneously | Alternate: proposer first, then opposer |
+| Agent re-reads debate file every round | Inline opponent arguments in prompt (R2+) |
+| `--timeout 300` (裸数字) | `--timeout 5m` 或 `--timeout 300s`（Go duration 格式） |

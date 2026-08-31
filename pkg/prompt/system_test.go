@@ -23,7 +23,25 @@ func TestBasePromptsAreDefined(t *testing.T) {
 	}
 }
 
-func TestPromptABMetricsSmoke(t *testing.T) {
+// TestPromptWorkspaceGuidance verifies the embedded system prompt clearly
+// states that persistent directory switches require change_workspace while
+// cd <dir> && <command> is only for one-off commands.
+func TestPromptWorkspaceGuidance(t *testing.T) {
+	prompt := NewBuilder("You are a test assistant.", "/workspace").Build()
+	for _, want := range []string{
+		"change_workspace",
+		"REQUIRED",
+		"worktree",
+		"one-off",
+		"does NOT change the workspace",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt should contain %q for persistent workspace guidance", want)
+		}
+	}
+}
+
+func TestABPromptMetricsSmoke(t *testing.T) {
 	legacyRPCBasePrompt := strings.TrimSpace(`You are a helpful AI coding assistant.
 - If you cannot answer the request, return an empty JSON with error field.
 - Do not hallucinate or add unnecessary commentary.
@@ -66,7 +84,11 @@ func TestPromptABMetricsSmoke(t *testing.T) {
 	if oldTokens <= 0 || newTokens <= 0 {
 		t.Fatalf("expected positive token estimates, old=%d new=%d", oldTokens, newTokens)
 	}
-	if !strings.Contains(newPrompt, "- **skill-00**:") {
-		t.Fatalf("expected full skill entries in prompt, got: %s", newPrompt)
+	// Skills are no longer in Build() output — they are injected separately via
+	// BuildSkillsMessage() as a user message before the first user input.
+	// Verify skills are available via BuildSkillsMessage instead.
+	skillsMsg := NewBuilder(newRPCBasePrompt, "/workspace").SetTools(tools).SetSkills(skills).BuildSkillsMessage()
+	if !strings.Contains(skillsMsg, "- **skill-00**:") {
+		t.Fatalf("expected full skill entries in skills message, got: %s", skillsMsg)
 	}
 }

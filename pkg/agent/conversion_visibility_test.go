@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
@@ -19,7 +18,7 @@ func TestConvertMessagesToLLMFiltersAgentInvisible(t *testing.T) {
 		agentctx.TextContent{Type: "text", Text: "ok"},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{visible, hidden, assistant})
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{visible, hidden, assistant})
 	if len(llmMessages) != 2 {
 		t.Fatalf("expected 2 LLM messages, got %d", len(llmMessages))
 	}
@@ -36,7 +35,7 @@ func TestConvertToolsToLLMDeduplicatesByName(t *testing.T) {
 	t2 := &mockTool{name: "bash"}
 	t3 := &mockTool{name: "read"} // duplicate name
 
-	tools := ConvertToolsToLLM(context.Background(), []agentctx.Tool{t1, t2, t3})
+	tools := agentctx.ConvertToolsToLLM([]agentctx.Tool{t1, t2, t3})
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 unique tools, got %d", len(tools))
 	}
@@ -87,7 +86,7 @@ func TestConvertMessagesToLLMDedupesToolResultsByCallID(t *testing.T) {
 		}, false),
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
+	llmMessages := agentctx.ConvertMessagesToLLM(msgs)
 	// Without deduplication, all 3 messages should pass through
 	if len(llmMessages) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(llmMessages))
@@ -108,7 +107,7 @@ func TestConvertMessagesToLLMDedupesToolSummaryByContent(t *testing.T) {
 	summaryB.Content = []agentctx.ContentBlock{agentctx.TextContent{Type: "text", Text: "summary text"}}
 	summaryB = summaryB.WithVisibility(true, false).WithKind("tool_summary")
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		summaryA,
 		summaryB,
@@ -131,7 +130,7 @@ func TestConvertMessagesToLLMKeepsAssistantToolCallsWhenSetDiffers(t *testing.T)
 		agentctx.ToolCallContent{ID: "call-5", Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "echo two"}},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		a1,
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
@@ -176,7 +175,7 @@ func TestConvertMessagesToLLMDoesNotInjectMetadataForRecent10ToolOutputs(t *test
 	}
 	msgs = append(msgs, agentctx.NewUserMessage("latest turn"))
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), msgs)
+	llmMessages := agentctx.ConvertMessagesToLLM(msgs)
 	for _, m := range llmMessages {
 		if m.Role != "tool" {
 			continue
@@ -206,7 +205,7 @@ func TestConvertMessagesToLLMStripsDanglingAssistantToolCalls(t *testing.T) {
 		false,
 	).WithVisibility(false, true)
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		assistant,
 		hiddenTool,
@@ -225,7 +224,7 @@ func TestConvertMessagesToLLMStripsDanglingAssistantToolCalls(t *testing.T) {
 }
 
 func TestConvertMessagesToLLMDropsOrphanedToolResult(t *testing.T) {
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		agentctx.NewToolResultMessage(
 			"call-orphan",
@@ -274,7 +273,7 @@ func TestConvertMessagesToLLMRetainsResolvedToolCallsWhenPartiallyMatched(t *tes
 		false,
 	).WithVisibility(false, true)
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("start"),
 		assistant,
 		visibleTool,
@@ -315,7 +314,7 @@ func TestConvertMessagesToLLMPreservesThinkingContent(t *testing.T) {
 		agentctx.ToolCallContent{ID: "call-1", Type: "toolCall", Name: "read", Arguments: map[string]any{"path": "a.go"}},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("read a.go"),
 		assistant,
 		agentctx.NewToolResultMessage("call-1", "read", []agentctx.ContentBlock{
@@ -357,7 +356,7 @@ func TestConvertMessagesToLLMThinkingWithoutToolCalls(t *testing.T) {
 		agentctx.TextContent{Type: "text", Text: "The answer is 42."},
 	}
 
-	llmMessages := ConvertMessagesToLLM(context.Background(), []agentctx.AgentMessage{
+	llmMessages := agentctx.ConvertMessagesToLLM([]agentctx.AgentMessage{
 		agentctx.NewUserMessage("What is the answer?"),
 		assistant,
 	})
