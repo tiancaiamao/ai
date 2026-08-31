@@ -112,6 +112,12 @@ func sendAndWait(client *rpc.ACPClient, sid, message string, summary bool, timeo
 				fmt.Fprintln(os.Stderr, "--- agent stream ended ---")
 				return
 			}
+			if u.SessionUpdate == rpc.ACPUpdateRequestError {
+				if e, ok := u.Meta.(rpc.ACPUpdateError); ok {
+					fmt.Fprintf(os.Stderr, "error: %s failed: %s\n", e.Method, e.Message)
+				}
+				return
+			}
 			if u.SessionUpdate == "_turn_end" {
 				finishSend(summary, currentText.String())
 				return

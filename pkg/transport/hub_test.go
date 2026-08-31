@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -138,6 +140,174 @@ func TestHubResponseRouting(t *testing.T) {
 	}
 }
 
+func TestHubLoadRouting(t *testing.T) {
+	sock, path := newTestSocket(t)
+	defer sock.Close()
+	hub := NewHub()
+	defer hub.Close()
+
+	attach := func() Conn {
+		client := newTestClient(t, path)
+		sc, err := sock.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		hub.AddConn(sc)
+		return client
+	}
+	clientA := attach()
+	clientB := attach()
+
+	if err := clientA.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"session/load","params":{}}`)); err != nil {
+		t.Fatalf("load write: %v", err)
+	}
+	loadA, err := hub.ReadMessage()
+	if err != nil {
+		t.Fatalf("read load A: %v", err)
+	}
+	loadIDA, _ := extractRequestID(loadA)
+	if err := clientB.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"session/load","params":{}}`)); err != nil {
+		t.Fatalf("load write B: %v", err)
+	}
+
+	noteA := json.RawMessage(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"a","update":{"sessionUpdate":"user_message_chunk"}}}`)
+	if err := hub.WriteMessage(noteA); err != nil {
+		t.Fatalf("replay A write: %v", err)
+	}
+	if err := hub.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":` + string(loadIDA) + `,"result":{}}`)); err != nil {
+		t.Fatalf("load A response: %v", err)
+	}
+	gotAUpdate := readJSON(t, clientA)
+	if string(msgField(t, gotAUpdate, "method")) != `"session/update"` {
+		t.Fatalf("A did not receive replay update: %s", gotAUpdate)
+	}
+	_ = readJSON(t, clientA)
+
+	loadB, err := hub.ReadMessage()
+	if err != nil {
+		t.Fatalf("read load B: %v", err)
+	}
+	loadIDB, _ := extractRequestID(loadB)
+	noteB := json.RawMessage(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"b","update":{"sessionUpdate":"user_message_chunk"}}}`)
+	if err := hub.WriteMessage(noteB); err != nil {
+		t.Fatalf("replay B write: %v", err)
+	}
+	if err := hub.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":` + string(loadIDB) + `,"result":{}}`)); err != nil {
+		t.Fatalf("load B response: %v", err)
+	}
+	gotBUpdate := readJSON(t, clientB)
+	if string(msgField(t, gotBUpdate, "method")) != `"session/update"` {
+		t.Fatalf("B did not receive replay update: %s", gotBUpdate)
+	}
+	_ = readJSON(t, clientB)
+
+}
+
+func TestHubLoadFailureBroadcastsBufferedUpdates(t *testing.T) {
+	sock, path := newShortSocket(t)
+	defer sock.Close()
+	hub := NewHub()
+	defer hub.Close()
+
+	attach := func() Conn {
+		client := newTestClient(t, path)
+		sc, err := sock.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		hub.AddConn(sc)
+		return client
+	}
+	clientA := attach()
+	clientB := attach()
+	if err := clientA.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"session/load","params":{}}`)); err != nil {
+		t.Fatalf("load write: %v", err)
+	}
+	load, err := hub.ReadMessage()
+	if err != nil {
+		t.Fatalf("read load: %v", err)
+	}
+	loadID, _ := extractRequestID(load)
+	note := json.RawMessage(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk"}}}`)
+	if err := hub.WriteMessage(note); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := hub.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":` + string(loadID) + `,"error":{"code":-32600,"message":"busy"}}`)); err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+	for name, c := range map[string]Conn{"A": clientA, "B": clientB} {
+		got := readJSON(t, c)
+		if string(msgField(t, got, "method")) != `"session/update"` {
+			t.Fatalf("%s did not receive buffered update: %s", name, got)
+		}
+	}
+	if got := readJSON(t, clientA); len(msgField(t, got, "error")) == 0 {
+		t.Fatalf("A did not receive load error: %s", got)
+	}
+}
+
+func TestHubLoadDisconnectDropsReplay(t *testing.T) {
+	sock, path := newShortSocket(t)
+	defer sock.Close()
+	hub := NewHub()
+	defer hub.Close()
+
+	dial := func() (net.Conn, Conn) {
+		client, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		sc, err := sock.Accept()
+		if err != nil {
+			client.Close()
+			t.Fatalf("accept: %v", err)
+		}
+		hub.AddConn(sc)
+		return client, NewNetConn(client)
+	}
+	clientAConn, clientA := dial()
+	defer clientAConn.Close()
+	clientBConn, clientB := dial()
+	defer clientBConn.Close()
+	if err := clientA.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"session/load","params":{}}`)); err != nil {
+		t.Fatalf("load write: %v", err)
+	}
+	load, err := hub.ReadMessage()
+	if err != nil {
+		t.Fatalf("read load: %v", err)
+	}
+	loadID, _ := extractRequestID(load)
+	if err := clientA.Close(); err != nil {
+		t.Fatalf("close A: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		hub.mu.Lock()
+		aborted := hub.activeLoad != nil && hub.activeLoad.aborted
+		hub.mu.Unlock()
+		if aborted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("load route was not marked aborted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	note := json.RawMessage(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk"}}}`)
+	if err := hub.WriteMessage(note); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := hub.WriteMessage(json.RawMessage(`{"jsonrpc":"2.0","id":` + string(loadID) + `,"result":{}}`)); err != nil {
+		t.Fatalf("load response: %v", err)
+	}
+	if err := clientBConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if _, err := clientB.ReadMessage(); err == nil {
+		t.Fatal("B received replay after A disconnected")
+	}
+}
+
 // TestHubBroadcastNotification verifies notifications (no id) fan out to every
 // attached conn.
 func TestHubBroadcastNotification(t *testing.T) {
@@ -169,6 +339,25 @@ func TestHubBroadcastNotification(t *testing.T) {
 			t.Fatalf("%s broadcast method = %s, want session/update", name, m)
 		}
 	}
+}
+
+func newShortSocket(t *testing.T) (*UnixSocket, string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "a")
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "s")
+	sock, err := NewUnixSocket(path)
+	if err != nil {
+		os.RemoveAll(dir)
+		t.Fatalf("new socket: %v", err)
+	}
+	t.Cleanup(func() {
+		sock.Close()
+		os.RemoveAll(dir)
+	})
+	return sock, path
 }
 
 // TestHubCloseUnblocksRead verifies Close makes a blocked ReadMessage return

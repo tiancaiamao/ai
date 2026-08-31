@@ -251,6 +251,37 @@ func TestFollowWatchSummary_ExitsOnTurnEnd(t *testing.T) {
 	}
 }
 
+func TestFollowWatchSummaryUntilTurnEnd_IgnoresReplayCompletion(t *testing.T) {
+	updates := make(chan rpc.ACPUpdate, 3)
+	updates <- rpc.ACPUpdate{SessionUpdate: rpc.ACPUpdateSessionLoadEnd}
+	updates <- textChunk("live")
+	updates <- turnEnd()
+	close(updates)
+
+	stdout, stderrBuf, restore := captureStd(t)
+	done := make(chan bool, 1)
+	go func() {
+		done <- followWatchSummaryWithReplay(updates, 0, false)
+	}()
+	select {
+	case ended := <-done:
+		restore()
+		if !ended {
+			t.Fatal("followWatchSummaryUntilTurnEnd reported an incomplete turn")
+		}
+	case <-time.After(2 * time.Second):
+		restore()
+		t.Fatal("followWatchSummaryUntilTurnEnd did not exit on _turn_end")
+	}
+
+	if !strings.Contains(stdout.String(), "live") {
+		t.Errorf("expected live turn text, got %q", stdout.String())
+	}
+	if !strings.Contains(stderrBuf.String(), "__seq:2") {
+		t.Errorf("expected stderr to contain '__seq:2', got %q", stderrBuf.String())
+	}
+}
+
 func TestFollowWatchSummary_ExitsOnReplayComplete(t *testing.T) {
 	// A successful session/load completes replay without sending _turn_end.
 	updates := updateChan(textChunk("replayed"), rpc.ACPUpdate{SessionUpdate: rpc.ACPUpdateSessionLoadEnd})

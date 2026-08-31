@@ -19,7 +19,7 @@ import (
 // Concurrency model: one read loop owns conn.ReadMessage. Outbound messages
 // (requests + notifications) go through conn.WriteMessage, which serializes.
 // Responses are routed to the matching pending request; session/update
-// notifications are pushed onto the Updates channel for the caller to consume.
+// notifications are queued for the caller without blocking response handling.
 
 // ACPUpdate mirrors the server's session/update payload (pkg/rpc acpUpdate).
 type ACPUpdate struct {
@@ -42,31 +42,49 @@ type ACPUpdate struct {
 // distinguish replay completion from a closed connection.
 const ACPUpdateSessionLoadEnd = "_session_load_end"
 
+const ACPUpdateRequestError = "_request_error"
+
+type ACPUpdateError struct {
+	Method  string `json:"method"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // ACPClient is a single-connection ACP client.
 type pendingRequest struct {
 	ch     chan json.RawMessage
 	method string
+	async  bool
 }
 
 type ACPClient struct {
-	conn     transport.Conn
-	mu       sync.Mutex
-	pending  map[int64]pendingRequest
-	nextID   int64
-	updates  chan ACPUpdate
+	conn       transport.Conn
+	mu         sync.Mutex
+	pending    map[int64]pendingRequest
+	nextID     int64
+	updates    chan ACPUpdate
+	updateMu   sync.Mutex
+	updateQ    []ACPUpdate
+	updateWake chan struct{}
+	updateStop chan struct{}
+	updateOnce sync.Once
+	updateDone chan struct{}
+
 	readDone chan struct{}
+
+	closedOnce sync.Once
 }
 
 // NewACPClient starts the read loop over conn. The caller must Close the
 // client when done.
 func NewACPClient(conn transport.Conn) *ACPClient {
 	c := &ACPClient{
-		conn:     conn,
-		pending:  make(map[int64]pendingRequest),
-		nextID:   1,
-		updates:  make(chan ACPUpdate, 1024),
-		readDone: make(chan struct{}),
+		conn: conn, pending: make(map[int64]pendingRequest), nextID: 1,
+		updates:    make(chan ACPUpdate, 1024),
+		updateWake: make(chan struct{}, 1), updateStop: make(chan struct{}),
+		updateDone: make(chan struct{}), readDone: make(chan struct{}),
 	}
+	go c.updateLoop()
 	go c.readLoop()
 	return c
 }
@@ -77,8 +95,13 @@ func (c *ACPClient) Updates() <-chan ACPUpdate { return c.updates }
 // Close closes the underlying connection; the read loop exits on EOF and the
 // Updates channel is closed. Pending requests fail with "connection closed".
 func (c *ACPClient) Close() error {
-	err := c.conn.Close()
-	<-c.readDone
+	var err error
+	c.closedOnce.Do(func() {
+		c.updateOnce.Do(func() { close(c.updateStop) })
+		err = c.conn.Close()
+		<-c.readDone
+		<-c.updateDone
+	})
 	return err
 }
 
@@ -138,25 +161,13 @@ func (c *ACPClient) Prompt(sessionID, text string) (string, error) {
 	return result.StopReason, nil
 }
 
-// PromptAsync sends a text prompt without waiting for the turn to complete.
-// The deferred response is dropped by the read loop (no pending entry is
-// registered); turn completion is observed via the _turn_end update on the
-// Updates channel.
+// PromptAsync sends a request without waiting for the turn to complete. A
+// server-side error is delivered as an ACPUpdateRequestError update.
 func (c *ACPClient) PromptAsync(sessionID, text string) error {
-	id := atomic.AddInt64(&c.nextID, 1)
-	body, err := json.Marshal(struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      int64  `json:"id"`
-		Method  string `json:"method"`
-		Params  any    `json:"params"`
-	}{JSONRPC: "2.0", ID: id, Method: "session/prompt", Params: map[string]any{
+	return c.requestAsync("session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []acpContentBlock{{Type: "text", Text: text}},
-	}})
-	if err != nil {
-		return err
-	}
-	return c.conn.WriteMessage(body)
+	})
 }
 
 // Cancel aborts the in-flight turn (notification; no response).
@@ -199,12 +210,7 @@ type acpClientResponse struct {
 func (c *ACPClient) request(method string, params any, result *json.RawMessage) error {
 	id := atomic.AddInt64(&c.nextID, 1)
 
-	body, err := json.Marshal(struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      int64  `json:"id"`
-		Method  string `json:"method"`
-		Params  any    `json:"params"`
-	}{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	body, err := c.encodeRequest(id, method, params)
 	if err != nil {
 		return err
 	}
@@ -236,7 +242,33 @@ func (c *ACPClient) request(method string, params any, result *json.RawMessage) 
 		*result = resp.Result
 	}
 	return nil
+}
 
+func (c *ACPClient) requestAsync(method string, params any) error {
+	id := atomic.AddInt64(&c.nextID, 1)
+	body, err := c.encodeRequest(id, method, params)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.pending[id] = pendingRequest{method: method, async: true}
+	c.mu.Unlock()
+	if err := c.conn.WriteMessage(body); err != nil {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (c *ACPClient) encodeRequest(id int64, method string, params any) ([]byte, error) {
+	return json.Marshal(struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int64  `json:"id"`
+		Method  string `json:"method"`
+		Params  any    `json:"params"`
+	}{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 }
 
 // notify sends a fire-and-forget notification.
@@ -252,67 +284,127 @@ func (c *ACPClient) notify(method string, params any) error {
 	return c.conn.WriteMessage(body)
 }
 
-// readLoop reads messages until the connection dies, then closes all pending
-// requests and the Updates channel.
-func (c *ACPClient) readLoop() {
-	defer close(c.readDone)
-	defer close(c.updates)
+func (c *ACPClient) stopUpdates() {
+	c.updateOnce.Do(func() { close(c.updateStop) })
+}
 
-	failPending := func() {
-		c.mu.Lock()
-		chs := c.pending
-		c.pending = make(map[int64]pendingRequest)
-		c.mu.Unlock()
-		for _, pending := range chs {
-			close(pending.ch)
+func (c *ACPClient) enqueueUpdate(update ACPUpdate) {
+	c.updateMu.Lock()
+	c.updateQ = append(c.updateQ, update)
+	c.updateMu.Unlock()
+	select {
+	case c.updateWake <- struct{}{}:
+	default:
+	}
+}
+
+func (c *ACPClient) updateLoop() {
+	defer close(c.updateDone)
+	defer close(c.updates)
+	for {
+		c.updateMu.Lock()
+		if len(c.updateQ) > 0 {
+			u := c.updateQ[0]
+			c.updateQ[0] = ACPUpdate{}
+			c.updateQ = c.updateQ[1:]
+			c.updateMu.Unlock()
+			select {
+			case c.updates <- u:
+			case <-c.readDone:
+				select {
+				case c.updates <- u:
+				default:
+					return
+				}
+			}
+			continue
+		}
+		c.updateMu.Unlock()
+		select {
+		case <-c.updateWake:
+		case <-c.updateStop:
+			<-c.readDone
+			for {
+				c.updateMu.Lock()
+				if len(c.updateQ) == 0 {
+					c.updateMu.Unlock()
+					return
+				}
+				u := c.updateQ[0]
+				c.updateQ[0] = ACPUpdate{}
+				c.updateQ = c.updateQ[1:]
+				c.updateMu.Unlock()
+				select {
+				case c.updates <- u:
+				default:
+					return
+				}
+			}
 		}
 	}
+}
 
+func (c *ACPClient) readLoop() {
+	defer close(c.readDone)
+	defer c.stopUpdates()
+	failPending := func() {
+		c.mu.Lock()
+		pending := c.pending
+		c.pending = make(map[int64]pendingRequest)
+		c.mu.Unlock()
+		for _, p := range pending {
+			if p.ch != nil {
+				close(p.ch)
+			}
+		}
+	}
 	for {
 		msg, err := c.conn.ReadMessage()
 		if err != nil {
 			failPending()
 			return
 		}
-
 		var envelope struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
 		}
-		if err := json.Unmarshal(msg, &envelope); err != nil {
+		if json.Unmarshal(msg, &envelope) != nil {
 			continue
 		}
-
-		// Response: carries an id, no method.
 		if envelope.Method == "" {
 			var id int64
-			if err := json.Unmarshal(envelope.ID, &id); err != nil {
+			if json.Unmarshal(envelope.ID, &id) != nil {
 				continue
 			}
 			c.mu.Lock()
-			pending, ok := c.pending[id]
+			p, ok := c.pending[id]
 			if ok {
 				delete(c.pending, id)
 			}
 			c.mu.Unlock()
-			if ok {
-				if pending.method == "session/load" {
-					var response acpClientResponse
-					if err := json.Unmarshal(msg, &response); err == nil && response.Error == nil {
-						// The server sends replay updates before the session/load response.
-						// Queue the internal boundary after all replay updates in Updates().
-						pending.ch <- msg
-						c.updates <- ACPUpdate{SessionUpdate: ACPUpdateSessionLoadEnd}
-						continue
-					}
-				}
-				pending.ch <- msg
+			if !ok {
+				continue
 			}
+			var response acpClientResponse
+			if json.Unmarshal(msg, &response) != nil {
+				if p.ch != nil {
+					p.ch <- msg
+				}
+				continue
+			}
+			if p.async {
+				if response.Error != nil {
+					c.enqueueUpdate(ACPUpdate{SessionUpdate: ACPUpdateRequestError, Meta: ACPUpdateError{Method: p.method, Code: response.Error.Code, Message: response.Error.Message}})
+				}
+				continue
+			}
+			if p.method == "session/load" && response.Error == nil {
+				c.enqueueUpdate(ACPUpdate{SessionUpdate: ACPUpdateSessionLoadEnd})
+			}
+			p.ch <- msg
 			continue
 		}
-
-		// Notification: session/update.
 		if envelope.Method != "session/update" {
 			continue
 		}
@@ -320,9 +412,8 @@ func (c *ACPClient) readLoop() {
 			SessionID string    `json:"sessionId"`
 			Update    ACPUpdate `json:"update"`
 		}
-		if err := json.Unmarshal(envelope.Params, &params); err != nil {
-			continue
+		if json.Unmarshal(envelope.Params, &params) == nil {
+			c.enqueueUpdate(params.Update)
 		}
-		c.updates <- params.Update
 	}
 }

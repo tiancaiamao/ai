@@ -25,13 +25,14 @@ import (
 // Close, which is what a long-lived serve process needs (clients may attach
 // and detach at any time).
 type Hub struct {
-	mu       sync.Mutex
-	closed   bool
-	conns    []Conn
-	routes   map[int64]route
-	nextID   int64
-	incoming chan inbound
-	done     chan struct{}
+	mu         sync.Mutex
+	closed     bool
+	conns      []Conn
+	routes     map[int64]route
+	activeLoad *loadRoute
+	nextID     int64
+	incoming   chan inbound
+	done       chan struct{}
 }
 
 // route remembers, for a hub-assigned id, which conn to answer on and what the
@@ -39,6 +40,15 @@ type Hub struct {
 type route struct {
 	connIdx int
 	origID  json.RawMessage
+	load    bool
+	aborted bool
+}
+
+type loadRoute struct {
+	uid     int64
+	connIdx int
+	updates []json.RawMessage
+	aborted bool
 }
 
 // inbound is one message read off a peer conn.
@@ -86,6 +96,7 @@ func (h *Hub) readLoop(idx int, c Conn) {
 
 		out := msg
 		if origID, isReq := extractRequestID(msg); isReq {
+			load := requestMethod(msg) == "session/load"
 			h.mu.Lock()
 			if h.closed {
 				h.mu.Unlock()
@@ -93,7 +104,8 @@ func (h *Hub) readLoop(idx int, c Conn) {
 			}
 			h.nextID++
 			uid := h.nextID
-			h.routes[uid] = route{connIdx: idx, origID: origID}
+			h.routes[uid] = route{connIdx: idx, origID: origID, load: load}
+
 			h.mu.Unlock()
 
 			if rewritten, err := rewriteID(msg, uid); err == nil {
@@ -114,7 +126,15 @@ func (h *Hub) readLoop(idx int, c Conn) {
 func (h *Hub) ReadMessage() (json.RawMessage, error) {
 	select {
 	case ib := <-h.incoming:
+		if uid, ok := requestID(ib.msg); ok && requestMethod(ib.msg) == "session/load" {
+			h.mu.Lock()
+			if rt, exists := h.routes[uid]; exists {
+				h.activeLoad = &loadRoute{uid: uid, connIdx: rt.connIdx, aborted: rt.aborted}
+			}
+			h.mu.Unlock()
+		}
 		return ib.msg, nil
+
 	case <-h.done:
 		return nil, io.EOF
 	}
@@ -133,6 +153,9 @@ func (h *Hub) WriteMessage(msg json.RawMessage) error {
 	id := m["id"]
 	switch {
 	case hasMethod:
+		if requestMethod(msg) == "session/update" {
+			return h.routeUpdate(msg)
+		}
 		h.broadcast(msg)
 		return nil
 	case len(id) == 0 || string(id) == "null":
@@ -142,6 +165,28 @@ func (h *Hub) WriteMessage(msg json.RawMessage) error {
 	default:
 		return h.routeResponse(msg, id)
 	}
+}
+
+func (h *Hub) routeUpdate(msg json.RawMessage) error {
+	h.mu.Lock()
+	if h.activeLoad != nil {
+		if h.activeLoad.aborted {
+			h.mu.Unlock()
+			return nil
+		}
+		if h.activeLoad.connIdx < len(h.conns) && h.conns[h.activeLoad.connIdx] != nil {
+			h.activeLoad.updates = append(h.activeLoad.updates, append(json.RawMessage(nil), msg...))
+			h.mu.Unlock()
+			return nil
+		}
+		h.activeLoad.aborted = true
+		h.activeLoad.updates = nil
+		h.mu.Unlock()
+		return nil
+	}
+	h.mu.Unlock()
+	h.broadcast(msg)
+	return nil
 }
 
 // routeResponse sends a server response to the conn that issued the matching
@@ -159,11 +204,35 @@ func (h *Hub) routeResponse(msg json.RawMessage, id json.RawMessage) error {
 		delete(h.routes, uid)
 	}
 	var c Conn
+	var replay []json.RawMessage
+	var aborted bool
+	if ok && rt.load && h.activeLoad != nil && h.activeLoad.uid == uid {
+		replay = h.activeLoad.updates
+		aborted = h.activeLoad.aborted
+		h.activeLoad = nil
+	}
 	if ok && rt.connIdx < len(h.conns) {
 		c = h.conns[rt.connIdx]
 	}
 	h.mu.Unlock()
-	if !ok || c == nil {
+	if !ok {
+		return nil
+	}
+
+	if rt.load {
+		if !aborted && responseHasError(msg) {
+			for _, update := range replay {
+				h.broadcast(update)
+			}
+		} else if !aborted && c != nil {
+			for _, update := range replay {
+				if err := c.WriteMessage(update); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if c == nil {
 		// Stale route (conn already left): nothing to deliver.
 		return nil
 	}
@@ -200,9 +269,19 @@ func (h *Hub) removeConn(idx int) {
 	}
 	for uid, rt := range h.routes {
 		if rt.connIdx == idx {
-			delete(h.routes, uid)
+			if rt.load {
+				rt.aborted = true
+				h.routes[uid] = rt
+			} else {
+				delete(h.routes, uid)
+			}
 		}
 	}
+	if h.activeLoad != nil && h.activeLoad.connIdx == idx {
+		h.activeLoad.aborted = true
+		h.activeLoad.updates = nil
+	}
+
 	h.mu.Unlock()
 }
 
@@ -215,7 +294,7 @@ func (h *Hub) Close() error {
 	}
 	h.closed = true
 	close(h.done)
-	conns := h.conns
+	conns := append([]Conn(nil), h.conns...)
 	h.mu.Unlock()
 
 	for _, c := range conns {
@@ -251,6 +330,27 @@ func extractRequestID(msg json.RawMessage) (json.RawMessage, bool) {
 	return id, true
 }
 
+// requestID returns the hub-assigned numeric request id.
+func requestID(msg json.RawMessage) (int64, bool) {
+	id, ok := extractRequestID(msg)
+	if !ok {
+		return 0, false
+	}
+	uid, err := int64ID(id)
+	return uid, err == nil
+}
+
+// requestMethod returns the JSON-RPC method, if present.
+func requestMethod(msg json.RawMessage) string {
+	m, err := parseObject(msg)
+	if err != nil {
+		return ""
+	}
+	var method string
+	_ = json.Unmarshal(m["method"], &method)
+	return method
+}
+
 // int64ID parses a JSON number id.
 func int64ID(id json.RawMessage) (int64, error) {
 	var n int64
@@ -258,6 +358,11 @@ func int64ID(id json.RawMessage) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+func responseHasError(msg json.RawMessage) bool {
+	m, err := parseObject(msg)
+	return err == nil && len(m["error"]) > 0 && string(m["error"]) != "null"
 }
 
 // rewriteID returns msg with its "id" field replaced by v, preserving all other

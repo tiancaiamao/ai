@@ -42,6 +42,11 @@ func KillSubcommand() {
 	if client, sid, err := rpc.DialACP(tui.SocketPath(baseDir, meta.ID)); err == nil {
 		_ = client.Cancel(sid)
 		client.Close()
+		// Cancel only aborts the current turn. SIGTERM is also required to
+		// stop the serve process' ACP read loop and release its resources.
+		if proc, err := os.FindProcess(meta.PID); err == nil {
+			_ = proc.Signal(syscall.SIGTERM)
+		}
 		// Wait briefly for the process to exit.
 		waitForExit(meta.PID, 5*time.Second)
 		// If it's still alive, force kill.

@@ -577,14 +577,17 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	defer stopTimer()
 
 	updates := client.Updates()
+	replayLoaded := false
 	if err := client.LoadSession(sid); err != nil {
 		// Not fatal — continue with live updates only. This is expected when
 		// the initial prompt is already in flight.
 		fmt.Fprintf(os.Stderr, "warning: session replay failed (%v); showing live updates only\n", err)
+	} else {
+		replayLoaded = true
 	}
 
 	if summary {
-		ended := followWatchSummary(updates, fromSeq)
+		ended := followWatchSummaryWithReplay(updates, fromSeq, replayLoaded)
 		return finish(ended)
 	}
 
@@ -594,8 +597,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		ended := false
 		for u := range updates {
 			if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
-				ended = true
-				break
+				if replayLoaded {
+					ended = true
+					break
+				}
+				continue
 			}
 
 			env, err := json.Marshal(map[string]any{
@@ -631,8 +637,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	ended := false
 	for u := range updates {
 		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
-			ended = true
-			break
+			if replayLoaded {
+				ended = true
+				break
+			}
+			continue
 		}
 
 		seq++
@@ -677,11 +686,9 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		// On _turn_end: always exit — the turn is complete.
 		// The --timeout flag controls maximum wait time for the agent to
 		// finish, not how long to wait after it finishes.
-		if u.SessionUpdate == "_turn_end" || u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+		if u.SessionUpdate == "_turn_end" {
 			ended = true
-			if u.SessionUpdate == "_turn_end" {
-				fmt.Println()
-			}
+			fmt.Println()
 			break
 		}
 	}
@@ -696,7 +703,10 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 // when _turn_end or session/load replay completion is reached. This avoids
 // flooding tool output with intermediate thinking, tool calls, and tool results.
 func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
+	return followWatchSummaryWithReplay(updates, fromSeq, true)
+}
 
+func followWatchSummaryWithReplay(updates <-chan rpc.ACPUpdate, fromSeq uint64, stopOnReplay bool) bool {
 	var lastAssistantText strings.Builder
 	var currentAssistantText strings.Builder
 	seq := fromSeq
@@ -704,9 +714,10 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
 
 	for u := range updates {
 		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+			if !stopOnReplay {
+				continue
+			}
 			ended = true
-
-			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
 				lastAssistantText.Reset()
 				lastAssistantText.WriteString(currentAssistantText.String())
@@ -715,10 +726,8 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
 			break
 		}
 		seq++
-
 		if u.SessionUpdate == "_turn_end" {
 			ended = true
-			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
 				lastAssistantText.Reset()
 				lastAssistantText.WriteString(currentAssistantText.String())
@@ -726,24 +735,17 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
 			}
 			break
 		}
-
-		// Accumulate assistant text only (skip user echo).
 		evt := tui.ParseACPUpdate(u)
-		if evt == nil {
-			continue
-		}
-		if evt.Kind == tui.KindText && evt.Role != "user" {
+		if evt != nil && evt.Kind == tui.KindText && evt.Role != "user" {
 			currentAssistantText.WriteString(evt.Text)
 		}
 	}
 
 	if ended {
-		text := strings.TrimSpace(lastAssistantText.String())
-		if text != "" {
+		if text := strings.TrimSpace(lastAssistantText.String()); text != "" {
 			fmt.Println(text)
 		}
 	} else {
-		// Stream ended without _turn_end — print whatever we have.
 		text := strings.TrimSpace(currentAssistantText.String())
 		if text == "" {
 			text = strings.TrimSpace(lastAssistantText.String())
