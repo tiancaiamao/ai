@@ -60,6 +60,11 @@ func (sp *serveProcess) Close() {
 // startServeProcess launches an RPC subprocess with shared infrastructure:
 // run ID, log file, stdin/stdout pipes, event broadcaster, and socket server.
 func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
+	if err := checkSubagentSpawnAllowed(os.LookupEnv); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Generate run ID and create directory.
 	id := tui.GenerateID()
 	homeDir, err := os.UserHomeDir()
@@ -92,9 +97,10 @@ func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
 		}
 		rpcFlags = append(rpcFlags, "--role", cfg.role)
 	}
-	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cwd, _ := os.Getwd()
+	cmd := exec.Command(binPath, append([]string{"rpc"}, rpcFlags...)...)
 	cmd.Dir = cwd
+	cmd.Env = subagentProcessEnv(os.Environ())
 
 	// Daemon mode: detach from terminal with new process group.
 	if cfg.daemon {

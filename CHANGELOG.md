@@ -3,6 +3,15 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Runtime Guard Against Nested Subagents (2026-08)
+
+**Problem**: A subagent could invoke `ai run` or `ai serve` again, allowing unbounded recursive delegation despite prompt and skill guidance.
+
+**What changed**: `ai run` and `ai serve` now propagate an internal subagent-depth marker to their RPC child. A depth-one subagent is rejected before a new run directory or subprocess is created, while the top-level RPC agent remains able to create one level of subagents.
+
+**Why**: Enforcing the one-level delegation invariant at the process launcher prevents recursive spawning at runtime instead of relying on model behavior.
+
+
 ## Model-Scoped Proxy Routing (2026-08)
 
 **What changed**: Added an optional provider-level `proxy` setting in
