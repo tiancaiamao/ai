@@ -9,18 +9,20 @@ func TestCheckSubagentSpawnAllowed(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     string
+		set     bool
 		allowed bool
 	}{
-		{name: "root", env: "", allowed: true},
-		{name: "top-level agent", env: "0", allowed: true},
-		{name: "child", env: "1", allowed: false},
-		{name: "negative depth is invalid", env: "-1", allowed: false},
-		{name: "invalid marker is still restricted", env: "unexpected", allowed: false},
+		{name: "root", allowed: true},
+		{name: "top-level agent", env: "0", set: true, allowed: false},
+		{name: "child", env: "1", set: true, allowed: false},
+		{name: "empty marker", set: true, allowed: false},
+		{name: "negative depth is invalid", env: "-1", set: true, allowed: false},
+		{name: "invalid marker is still restricted", env: "unexpected", set: true, allowed: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkSubagentSpawnAllowed(func(string) string { return tt.env })
+			err := checkSubagentSpawnAllowed(func(string) (string, bool) { return tt.env, tt.set })
 			if (err == nil) != tt.allowed {
 				t.Fatalf("allowed = %v, error = %v", tt.allowed, err)
 			}

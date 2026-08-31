@@ -8,16 +8,11 @@ import (
 
 const subagentDepthEnv = "AI_SUBAGENT_DEPTH"
 
-// checkSubagentSpawnAllowed prevents a child agent from creating another
+// checkSubagentSpawnAllowed prevents an agent subprocess from creating another
 // agent subprocess. The marker is inherited by commands executed by the RPC
 // child, including nested ai run/serve invocations.
-func checkSubagentSpawnAllowed(getenv func(string) string) error {
-	value := strings.TrimSpace(getenv(subagentDepthEnv))
-	if value == "" {
-		return nil
-	}
-	depth, err := strconv.Atoi(value)
-	if err != nil || depth < 0 || depth > 0 {
+func checkSubagentSpawnAllowed(lookupEnv func(string) (string, bool)) error {
+	if _, set := lookupEnv(subagentDepthEnv); set {
 		return fmt.Errorf("blocked: subagents cannot create nested subagents")
 	}
 	return nil

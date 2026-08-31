@@ -60,7 +60,7 @@ func (sp *serveProcess) Close() {
 // startServeProcess launches an RPC subprocess with shared infrastructure:
 // run ID, log file, stdin/stdout pipes, event broadcaster, and socket server.
 func startServeProcess(binPath string, cfg serveConfig) *serveProcess {
-	if err := checkSubagentSpawnAllowed(os.Getenv); err != nil {
+	if err := checkSubagentSpawnAllowed(os.LookupEnv); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
