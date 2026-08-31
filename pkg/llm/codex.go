@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-		"fmt"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -171,7 +171,7 @@ func StreamCodex(
 		defer resp.Body.Close()
 
 		// Process SSE stream
-				processCodexSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
+		processCodexSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
 
 	return stream
@@ -179,17 +179,17 @@ func StreamCodex(
 
 // codexRequestBody represents the OpenAI Responses API request body.
 type codexRequestBody struct {
-	Model             string           `json:"model"`
-	Stream            bool             `json:"stream"`
-	Store             bool             `json:"store"`
-	Instructions      string           `json:"instructions,omitempty"`
-	Input             []any            `json:"input"`
-	Tools             []codexTool      `json:"tools,omitempty"`
-	ToolChoice        string           `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool             `json:"parallel_tool_calls"`
-	Reasoning         *codexReasoning  `json:"reasoning,omitempty"`
-	Text              *codexText       `json:"text,omitempty"`
-	Include           []string         `json:"include,omitempty"`
+	Model             string          `json:"model"`
+	Stream            bool            `json:"stream"`
+	Store             bool            `json:"store"`
+	Instructions      string          `json:"instructions,omitempty"`
+	Input             []any           `json:"input"`
+	Tools             []codexTool     `json:"tools,omitempty"`
+	ToolChoice        string          `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool            `json:"parallel_tool_calls"`
+	Reasoning         *codexReasoning `json:"reasoning,omitempty"`
+	Text              *codexText      `json:"text,omitempty"`
+	Include           []string        `json:"include,omitempty"`
 }
 
 type codexReasoning struct {
@@ -202,12 +202,7 @@ type codexText struct {
 }
 
 type codexTool struct {
-	Type     string       `json:"type"`
-	Name     string       `json:"name,omitempty"`
-	Function *codexFunc   `json:"function,omitempty"`
-}
-
-type codexFunc struct {
+	Type        string         `json:"type"`
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters"`
@@ -287,9 +282,9 @@ func buildCodexInput(llmCtx LLMContext) []any {
 		case "tool":
 			// Tool results are function_call_output items
 			input = append(input, map[string]any{
-				"type":  "function_call_output",
+				"type":    "function_call_output",
 				"call_id": msg.ToolCallID,
-				"output": msg.Content,
+				"output":  msg.Content,
 			})
 		}
 	}
@@ -306,13 +301,11 @@ func buildCodexTools(tools []LLMTool) []codexTool {
 	result := make([]codexTool, 0, len(tools))
 	for _, t := range tools {
 		result = append(result, codexTool{
-			Type: "function",
-			Function: &codexFunc{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				Parameters:  t.Function.Parameters,
-				Strict:      false,
-			},
+			Type:        "function",
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			Parameters:  t.Function.Parameters,
+			Strict:      false,
 		})
 	}
 	return result
@@ -351,7 +344,7 @@ func processCodexSSE(ctx context.Context, body io.Reader, stream *EventStream[LL
 	textStarted := false
 	thinkingStarted := false
 
-		scanner := bufio.NewScanner(body)
+	scanner := bufio.NewScanner(body)
 	// Increase buffer size for large SSE events
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -380,7 +373,7 @@ func processCodexSSE(ctx context.Context, body io.Reader, stream *EventStream[LL
 			dl.SetReadDeadline(nextDeadline)
 		}
 
-				line := scanner.Text()
+		line := scanner.Text()
 
 		// Check parent context cancellation
 		select {
@@ -679,4 +672,3 @@ func parseRetryAfterHeaderCodex(value string) time.Duration {
 	}
 	return 0
 }
-
