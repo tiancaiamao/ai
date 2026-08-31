@@ -57,9 +57,11 @@ type ModelSpec struct {
 ```
 
 Provider-level `proxy` in `models.json` is inherited by its models. Model
-requests use this configured proxy and ignore standard process proxy variables.
-The `ai login-codex` OAuth flow is separate and may use `ALL_PROXY`,
-`HTTPS_PROXY`, or `HTTP_PROXY` for its token exchange.
+requests use this configured proxy. The existing OpenAI Responses path retains
+its environment-based proxy fallback when no model proxy is configured; other
+model paths use a direct connection. The `ai login-codex` OAuth flow is
+separate and may use `ALL_PROXY`, `HTTPS_PROXY`, or `HTTP_PROXY` for its token
+exchange.
 
 ## Compaction Configuration
 

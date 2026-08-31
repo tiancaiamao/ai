@@ -242,8 +242,8 @@ func RefreshCodexToken(refreshToken string) (*CodexCredentials, error) {
 }
 
 // RefreshCodexTokenWithProxy refreshes an expired access token using proxyURL.
-// An empty proxyURL means a direct connection and ignores proxy environment
-// variables. The model runtime uses this path; login uses loginHTTPClient.
+// An empty proxyURL means a direct connection. The model runtime uses this
+// path; login uses loginHTTPClient.
 func RefreshCodexTokenWithProxy(refreshToken, proxyURL string) (*CodexCredentials, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -431,8 +431,7 @@ func LoadCodexCredentials() (*CodexCredentials, error) {
 }
 
 // LoadCodexCredentialsWithProxy loads credentials and refreshes them using
-// proxyURL. An empty proxyURL means a direct connection and ignores proxy
-// environment variables.
+// proxyURL. An empty proxyURL means a direct connection.
 func LoadCodexCredentialsWithProxy(proxyURL string) (*CodexCredentials, error) {
 	authPath, err := getAuthFilePath()
 	if err != nil {

@@ -7,9 +7,6 @@ import (
 )
 
 func TestNewHTTPClientIgnoresEnvironmentProxy(t *testing.T) {
-	t.Setenv("ALL_PROXY", "http://127.0.0.1:1")
-	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))

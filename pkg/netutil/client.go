@@ -12,8 +12,7 @@ import (
 )
 
 // NewHTTPClient returns an HTTP client that uses proxyURL when non-empty.
-// An empty proxyURL means direct connections; process proxy environment
-// variables are intentionally ignored.
+// An empty proxyURL means a direct connection.
 func NewHTTPClient(proxyURL string) (*http.Client, error) {
 	client := &http.Client{}
 	transport, ok := http.DefaultTransport.(*http.Transport)
@@ -53,14 +52,17 @@ func NewHTTPClient(proxyURL string) (*http.Client, error) {
 }
 
 // NewEnvironmentHTTPClient returns a client using standard proxy variables.
-// It is intended for standalone authentication flows, not model requests.
 func NewEnvironmentHTTPClient() (*http.Client, error) {
+	return NewHTTPClient(environmentProxyURL())
+}
+
+func environmentProxyURL() string {
 	for _, key := range []string{"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return NewHTTPClient(value)
+			return value
 		}
 	}
-	return NewHTTPClient("")
+	return ""
 }
 
 func parseProxyURL(value string) (*url.URL, error) {

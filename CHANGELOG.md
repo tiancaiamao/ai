@@ -6,8 +6,9 @@ Not a git log mirror — focus on what changed at the design level and why.
 ## Model-Scoped Proxy Routing (2026-08)
 
 **What changed**: Added an optional provider-level `proxy` setting in
-`models.json`. Model API requests use that configured proxy and otherwise make
-direct connections, ignoring process-wide proxy environment variables. The
+`models.json`. Model API requests use that configured proxy. The existing OpenAI
+Responses path retains its environment-based proxy fallback when no model
+proxy is configured; other model paths otherwise make direct connections. The
 standalone `ai login-codex` OAuth flow continues to use standard proxy
 environment variables so authentication can be bootstrapped independently.
 

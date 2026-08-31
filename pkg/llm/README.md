@@ -124,10 +124,11 @@ Routes to the correct provider based on `model.API`:
 - `"openai-responses"` → `StreamOpenAIResponses()`
 - All others → OpenAI-compatible SSE streaming
 
-Each model request uses `Model.Proxy` when configured. An empty proxy means a
-direct connection; `ALL_PROXY`, `HTTP_PROXY`, and `HTTPS_PROXY` are not read
-for model requests. The standalone `ai login-codex` OAuth flow has separate
-environment-based proxy handling.
+Each model request uses `Model.Proxy` when configured. Requests through the
+existing OpenAI Responses path retain its environment-based proxy fallback
+when `Model.Proxy` is empty; other paths use a direct connection when unset.
+The standalone `ai login-codex` OAuth flow has separate environment-based
+proxy handling.
 
 Returns an `EventStream` that emits `LLMEvent` values. The stream ends with either `LLMDoneEvent` (success) or `LLMErrorEvent` (failure).
 

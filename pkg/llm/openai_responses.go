@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -83,20 +82,20 @@ type responsesOutputSlot struct {
 	toolName string
 }
 
-// openaiResponsesParser accumulates Responses API stream events into slots.
+// responsesParser accumulates Responses API stream events into slots.
 // It is a pure accumulator (no stream pushing) so it can be unit-tested.
-type openaiResponsesParser struct {
+type responsesParser struct {
 	slots map[int]*responsesOutputSlot
 }
 
-func newOpenAIResponsesParser() *openaiResponsesParser {
-	return &openaiResponsesParser{slots: make(map[int]*responsesOutputSlot)}
+func newResponsesParser() *responsesParser {
+	return &responsesParser{slots: make(map[int]*responsesOutputSlot)}
 }
 
 // getOrCreateSlot returns the slot at outputIndex, creating one of the given
 // kind if it does not exist yet (pi's getOrCreateSlot semantics). The delta
 // events imply their slot kind, so a missing slot can be created lazily.
-func (p *openaiResponsesParser) getOrCreateSlot(outputIndex int, kind responsesSlotKind) *responsesOutputSlot {
+func (p *responsesParser) getOrCreateSlot(outputIndex int, kind responsesSlotKind) *responsesOutputSlot {
 	if s, ok := p.slots[outputIndex]; ok {
 		return s
 	}
@@ -107,7 +106,7 @@ func (p *openaiResponsesParser) getOrCreateSlot(outputIndex int, kind responsesS
 
 // handle processes a single stream event and returns the terminal stop reason
 // ("stop"/"length"/"error") once the response is complete, or "" to continue.
-func (p *openaiResponsesParser) handle(chunk responsesEventChunk) (string, error) {
+func (p *responsesParser) handle(chunk responsesEventChunk) (string, error) {
 	switch chunk.Type {
 	case "response.output_item.added":
 		if chunk.Item == nil {
@@ -206,7 +205,7 @@ func (p *openaiResponsesParser) handle(chunk responsesEventChunk) (string, error
 			}
 		}
 
-	case "response.completed", "response.incomplete":
+	case "response.completed", "response.done", "response.incomplete":
 		status := chunk.Type[len("response."):]
 		var incompleteReason string
 		if chunk.Response != nil {
@@ -265,7 +264,7 @@ func mapResponsesStopReason(status, incompleteReason string) string {
 
 // buildMessage assembles the final LLMMessage from accumulated slots, ordered
 // by output_index. Slots without content (empty text/args) are skipped.
-func (p *openaiResponsesParser) buildMessage() LLMMessage {
+func (p *responsesParser) buildMessage() LLMMessage {
 	indexes := make([]int, 0, len(p.slots))
 	for idx := range p.slots {
 		indexes = append(indexes, idx)
@@ -388,6 +387,9 @@ func StreamOpenAIResponses(
 		// Execute request — derive total timeout from context deadline so the HTTP client enforces
 		// a hard ceiling even when SetReadDeadline is refreshed per-chunk.
 		client, err := netutil.NewHTTPClient(model.Proxy)
+		if strings.TrimSpace(model.Proxy) == "" {
+			client, err = netutil.NewEnvironmentHTTPClient()
+		}
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
 			return
@@ -417,135 +419,9 @@ func StreamOpenAIResponses(
 			return
 		}
 
-		// Parse SSE stream
-		scanner := bufio.NewScanner(resp.Body)
-		// Increase buffer size for large responses (default 64KB, max 1MB)
-		const maxTokenSize = 1024 * 1024
-		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, maxTokenSize)
-
-		// Set read deadline so a stalled upstream (connected but silent)
-		// triggers the chunk interval timeout instead of hanging until the
-		// total request deadline.
-		type deadliner interface {
-			SetReadDeadline(time.Time) error
-		}
-		setReadDeadline := func() {
-			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-				nextDeadline := time.Now().Add(chunkIntervalTimeout)
-				if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
-					nextDeadline = ctxDeadline
-				}
-				dl.SetReadDeadline(nextDeadline)
-			}
-		}
-		setReadDeadline()
-
-		parser := newOpenAIResponsesParser()
-
-		// Signal stream start so the agent layer accepts subsequent deltas.
-		stream.Push(LLMStartEvent{Partial: NewPartialMessage()})
-
-		for scanner.Scan() {
-			setReadDeadline()
-
-			// Check parent context cancellation
-			select {
-			case <-ctx.Done():
-				stream.Push(LLMErrorEvent{Error: ctx.Err()})
-				return
-			default:
-			}
-
-			line := scanner.Text()
-
-			// Skip empty lines and SSE comments
-			if line == "" || strings.HasPrefix(line, ":") {
-				continue
-			}
-
-			// Parse SSE data line
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-
-			// Some proxies terminate with a bare [DONE] sentinel, which is
-			// not valid JSON — check before unmarshal or the break below is
-			// unreachable.
-			if data == "[DONE]" {
-				break
-			}
-
-			var chunk responsesEventChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue // Skip malformed chunks
-			}
-
-			if chunk.Type == "" {
-				continue
-			}
-
-			// Stream deltas to the consumer as they arrive. Slot accumulation
-			// happens exclusively in parser.handle below — do not write to
-			// slots here or deltas will be double-accumulated.
-			switch chunk.Type {
-			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				stream.Push(LLMThinkingDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
-			case "response.reasoning_summary_part.done":
-				stream.Push(LLMThinkingDeltaEvent{Delta: "\n\n", Index: chunk.OutputIndex})
-			case "response.output_text.delta", "response.refusal.delta":
-				stream.Push(LLMTextDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
-			case "response.function_call_arguments.delta":
-				stream.Push(LLMToolCallDeltaEvent{
-					Index: chunk.OutputIndex,
-					ToolCall: &ToolCall{
-						Type:     "function",
-						Function: FunctionCall{Arguments: chunk.Delta},
-					},
-				})
-			case "response.output_item.added":
-				if chunk.Item != nil && chunk.Item.Type == "function_call" {
-					stream.Push(LLMToolCallDeltaEvent{
-						Index: chunk.OutputIndex,
-						ToolCall: &ToolCall{
-							ID:       chunk.Item.CallID,
-							Type:     "function",
-							Function: FunctionCall{Name: chunk.Item.Name},
-						},
-					})
-				}
-			}
-
-			// Feed the accumulator; terminal events end the loop.
-			stopReason, err := parser.handle(chunk)
-			if err != nil {
-				stream.Push(LLMErrorEvent{Error: err})
-				return
-			}
-			if stopReason != "" {
-				msg := parser.buildMessage()
-				usage := extractResponsesUsage(chunk)
-				// A completed response containing tool calls is a tool-use turn
-				// regardless of the provider status (mirrors pi's mapping).
-				// Note: agent's isSuccessfulStopReason whitelist expects
-				// "tool_calls" (OpenAI style), not Anthropic's "tool_use".
-				if len(msg.ToolCalls) > 0 && stopReason == "stop" {
-					stopReason = "tool_calls"
-				}
-				stream.Push(LLMDoneEvent{Message: &msg, Usage: usage, StopReason: stopReason})
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("error reading stream: %w", err)})
-			return
-		}
-
-		// Stream ended without a terminal event (e.g. [DONE] or clean EOF).
-		msg := parser.buildMessage()
-		stream.Push(LLMDoneEvent{Message: &msg, StopReason: "stop"})
+		// Parse the shared Responses API stream. OpenAI and Codex differ in
+		// request/auth details, not in the response event protocol.
+		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
 
 	return stream
