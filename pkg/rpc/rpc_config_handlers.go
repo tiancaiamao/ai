@@ -93,7 +93,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 		return nil, fmt.Errorf("model %s/%s missing baseUrl or api in %s", spec.Provider, spec.ID, modelsPath)
 	}
 
-	newAPIKey, err := config.ResolveAPIKey(spec.Provider)
+	newAPIKey, err := config.ResolveAPIKeyWithProxy(spec.Provider, spec.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +103,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 		Provider:         spec.Provider,
 		BaseURL:          spec.BaseURL,
 		API:              spec.API,
+		Proxy:            spec.Proxy,
 		ContextWindow:    spec.ContextWindow,
 		MaxTokens:        spec.MaxTokens,
 		Reasoning:        spec.Reasoning,
@@ -115,6 +116,7 @@ func (app *rpcApp) handleModelSet(args string) (any, error) {
 	app.cfg.Model.Provider = spec.Provider
 	app.cfg.Model.BaseURL = spec.BaseURL
 	app.cfg.Model.API = spec.API
+	app.cfg.Model.Proxy = spec.Proxy
 	app.cfg.Model.MaxTokens = spec.MaxTokens
 
 	app.ag.SetModel(app.model)

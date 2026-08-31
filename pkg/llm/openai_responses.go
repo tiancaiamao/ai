@@ -1,13 +1,9 @@
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -15,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/traceevent"
-	"golang.org/x/net/proxy"
 )
 
 // responsesEventChunk is the parsed JSON body of a single SSE data line from
@@ -83,20 +78,20 @@ type responsesOutputSlot struct {
 	toolName string
 }
 
-// openaiResponsesParser accumulates Responses API stream events into slots.
+// responsesParser accumulates Responses API stream events into slots.
 // It is a pure accumulator (no stream pushing) so it can be unit-tested.
-type openaiResponsesParser struct {
+type responsesParser struct {
 	slots map[int]*responsesOutputSlot
 }
 
-func newOpenAIResponsesParser() *openaiResponsesParser {
-	return &openaiResponsesParser{slots: make(map[int]*responsesOutputSlot)}
+func newResponsesParser() *responsesParser {
+	return &responsesParser{slots: make(map[int]*responsesOutputSlot)}
 }
 
 // getOrCreateSlot returns the slot at outputIndex, creating one of the given
 // kind if it does not exist yet (pi's getOrCreateSlot semantics). The delta
 // events imply their slot kind, so a missing slot can be created lazily.
-func (p *openaiResponsesParser) getOrCreateSlot(outputIndex int, kind responsesSlotKind) *responsesOutputSlot {
+func (p *responsesParser) getOrCreateSlot(outputIndex int, kind responsesSlotKind) *responsesOutputSlot {
 	if s, ok := p.slots[outputIndex]; ok {
 		return s
 	}
@@ -107,7 +102,7 @@ func (p *openaiResponsesParser) getOrCreateSlot(outputIndex int, kind responsesS
 
 // handle processes a single stream event and returns the terminal stop reason
 // ("stop"/"length"/"error") once the response is complete, or "" to continue.
-func (p *openaiResponsesParser) handle(chunk responsesEventChunk) (string, error) {
+func (p *responsesParser) handle(chunk responsesEventChunk) (string, error) {
 	switch chunk.Type {
 	case "response.output_item.added":
 		if chunk.Item == nil {
@@ -206,7 +201,7 @@ func (p *openaiResponsesParser) handle(chunk responsesEventChunk) (string, error
 			}
 		}
 
-	case "response.completed", "response.incomplete":
+	case "response.completed", "response.done", "response.incomplete":
 		status := chunk.Type[len("response."):]
 		var incompleteReason string
 		if chunk.Response != nil {
@@ -265,7 +260,7 @@ func mapResponsesStopReason(status, incompleteReason string) string {
 
 // buildMessage assembles the final LLMMessage from accumulated slots, ordered
 // by output_index. Slots without content (empty text/args) are skipped.
-func (p *openaiResponsesParser) buildMessage() LLMMessage {
+func (p *responsesParser) buildMessage() LLMMessage {
 	indexes := make([]int, 0, len(p.slots))
 	for idx := range p.slots {
 		indexes = append(indexes, idx)
@@ -350,8 +345,9 @@ func StreamOpenAIResponses(
 			return
 		}
 
-		// Build request body for OpenAI Responses API
-		reqBody := buildOpenAIResponsesRequest(model, llmCtx)
+		// OpenAI and Codex share the Responses transport and parser. Only the
+		// request body, endpoint, and authentication headers differ.
+		reqBody := responsesRequestBody(model, llmCtx)
 
 		jsonBody, err := json.Marshal(reqBody)
 		if err != nil {
@@ -367,44 +363,14 @@ func StreamOpenAIResponses(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		// Build URL for OpenAI Responses API
-		// If the base URL already includes "/responses", use it directly.
-		// Otherwise, append "/responses" to the base URL.
-		url := model.BaseURL
-		if !strings.HasSuffix(url, "/responses") {
-			url = strings.TrimSuffix(url, "/") + "/responses"
-		}
-
-		// Create request
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-		if err != nil {
-			stream.Push(LLMErrorEvent{Error: err})
-			return
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-
-		// Execute request — derive total timeout from context deadline so the HTTP client enforces
-		// a hard ceiling even when SetReadDeadline is refreshed per-chunk.
-		client := &http.Client{}
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining > 0 {
-				client.Timeout = remaining
-			}
-		}
-
-		// Support SOCKS5 proxy via ALL_PROXY or HTTPS_PROXY environment variable
-		// Example: ALL_PROXY=socks5://127.0.0.1:1180
-		// Uses golang.org/x/net/proxy for proper SOCKS5 support
-		if proxyURL := os.Getenv("ALL_PROXY"); proxyURL != "" {
-			applyProxy(client, proxyURL)
-		} else if proxyURL := os.Getenv("HTTPS_PROXY"); proxyURL != "" {
-			applyProxy(client, proxyURL)
-		}
-
-		resp, err := client.Do(req)
+		headers := responsesHeaders(model, apiKey)
+		resp, err := doResponsesRequest(ctx, responsesRequestOptions{
+			Endpoint:            responsesEndpoint(model),
+			Body:                jsonBody,
+			Headers:             headers,
+			Proxy:               model.Proxy,
+			UseEnvironmentProxy: model.API != "openai-codex-responses" && strings.TrimSpace(model.Proxy) == "",
+		})
 		if err != nil {
 			if strings.Contains(err.Error(), "no such host") {
 				stream.Push(LLMErrorEvent{Error: fmt.Errorf("DNS error: cannot resolve API host '%s'.\n\nPossible solutions:\n  1. Check your ZAI_BASE_URL environment variable\n  2. Try standard OpenAI API: export ZAI_BASE_URL=https://api.openai.com/v1\n  3. Verify network connection and VPN settings", model.BaseURL)})
@@ -414,146 +380,20 @@ func StreamOpenAIResponses(
 			return
 		}
 		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
-			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
-			return
-		}
-
-		// Parse SSE stream
-		scanner := bufio.NewScanner(resp.Body)
-		// Increase buffer size for large responses (default 64KB, max 1MB)
-		const maxTokenSize = 1024 * 1024
-		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, maxTokenSize)
-
-		// Set read deadline so a stalled upstream (connected but silent)
-		// triggers the chunk interval timeout instead of hanging until the
-		// total request deadline.
-		type deadliner interface {
-			SetReadDeadline(time.Time) error
-		}
-		setReadDeadline := func() {
-			if dl, ok := resp.Body.(deadliner); ok && chunkIntervalTimeout > 0 {
-				nextDeadline := time.Now().Add(chunkIntervalTimeout)
-				if ctxDeadline, ok := ctx.Deadline(); ok && nextDeadline.After(ctxDeadline) {
-					nextDeadline = ctxDeadline
-				}
-				dl.SetReadDeadline(nextDeadline)
-			}
-		}
-		setReadDeadline()
-
-		parser := newOpenAIResponsesParser()
-
-		// Signal stream start so the agent layer accepts subsequent deltas.
-		stream.Push(LLMStartEvent{Partial: NewPartialMessage()})
-
-		for scanner.Scan() {
-			setReadDeadline()
-
-			// Check parent context cancellation
-			select {
-			case <-ctx.Done():
-				stream.Push(LLMErrorEvent{Error: ctx.Err()})
-				return
-			default:
-			}
-
-			line := scanner.Text()
-
-			// Skip empty lines and SSE comments
-			if line == "" || strings.HasPrefix(line, ":") {
-				continue
-			}
-
-			// Parse SSE data line
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-
-			// Some proxies terminate with a bare [DONE] sentinel, which is
-			// not valid JSON — check before unmarshal or the break below is
-			// unreachable.
-			if data == "[DONE]" {
-				break
-			}
-
-			var chunk responsesEventChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				continue // Skip malformed chunks
-			}
-
-			if chunk.Type == "" {
-				continue
-			}
-
-			// Stream deltas to the consumer as they arrive. Slot accumulation
-			// happens exclusively in parser.handle below — do not write to
-			// slots here or deltas will be double-accumulated.
-			switch chunk.Type {
-			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				stream.Push(LLMThinkingDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
-			case "response.reasoning_summary_part.done":
-				stream.Push(LLMThinkingDeltaEvent{Delta: "\n\n", Index: chunk.OutputIndex})
-			case "response.output_text.delta", "response.refusal.delta":
-				stream.Push(LLMTextDeltaEvent{Delta: chunk.Delta, Index: chunk.OutputIndex})
-			case "response.function_call_arguments.delta":
-				stream.Push(LLMToolCallDeltaEvent{
-					Index: chunk.OutputIndex,
-					ToolCall: &ToolCall{
-						Type:     "function",
-						Function: FunctionCall{Arguments: chunk.Delta},
-					},
-				})
-			case "response.output_item.added":
-				if chunk.Item != nil && chunk.Item.Type == "function_call" {
-					stream.Push(LLMToolCallDeltaEvent{
-						Index: chunk.OutputIndex,
-						ToolCall: &ToolCall{
-							ID:       chunk.Item.CallID,
-							Type:     "function",
-							Function: FunctionCall{Name: chunk.Item.Name},
-						},
-					})
-				}
-			}
-
-			// Feed the accumulator; terminal events end the loop.
-			stopReason, err := parser.handle(chunk)
-			if err != nil {
-				stream.Push(LLMErrorEvent{Error: err})
-				return
-			}
-			if stopReason != "" {
-				msg := parser.buildMessage()
-				usage := extractResponsesUsage(chunk)
-				// A completed response containing tool calls is a tool-use turn
-				// regardless of the provider status (mirrors pi's mapping).
-				// Note: agent's isSuccessfulStopReason whitelist expects
-				// "tool_calls" (OpenAI style), not Anthropic's "tool_use".
-				if len(msg.ToolCalls) > 0 && stopReason == "stop" {
-					stopReason = "tool_calls"
-				}
-				stream.Push(LLMDoneEvent{Message: &msg, Usage: usage, StopReason: stopReason})
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("error reading stream: %w", err)})
-			return
-		}
-
-		// Stream ended without a terminal event (e.g. [DONE] or clean EOF).
-		msg := parser.buildMessage()
-		stream.Push(LLMDoneEvent{Message: &msg, StopReason: "stop"})
+		// Parse the shared Responses API stream. OpenAI and Codex differ in
+		// request/auth details, not in the response event protocol.
+		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
 
 	return stream
+}
+
+func modelURL(model Model) string {
+	url := model.BaseURL
+	if !strings.HasSuffix(url, "/responses") {
+		url = strings.TrimSuffix(url, "/") + "/responses"
+	}
+	return url
 }
 
 // extractResponsesUsage maps Responses API usage to the local Usage struct,
@@ -575,43 +415,6 @@ func extractResponsesUsage(chunk responsesEventChunk) Usage {
 		u.PromptTokensDetails = &PromptTokensDetails{CachedTokens: cached}
 	}
 	return u
-}
-
-// applyProxy configures the HTTP client to route through the given proxy URL.
-// Supports socks5:// (via golang.org/x/net/proxy) and http(s):// schemes.
-func applyProxy(client *http.Client, proxyURL string) {
-	parsed, err := parseProxyURL(proxyURL)
-	if err != nil {
-		return
-	}
-	if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
-		dialer, err := proxy.SOCKS5("tcp", parsed.Host, nil, nil)
-		if err != nil {
-			return
-		}
-		// Keep the standard transport defaults (connection pooling, HTTP/2, etc.)
-		// while replacing only the dialer used for SOCKS5 connections.
-		baseTransport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return
-		}
-		transport := baseTransport.Clone()
-		if cd, ok := dialer.(proxy.ContextDialer); ok {
-			transport.DialContext = cd.DialContext
-		} else {
-			transport.Dial = dialer.Dial
-		}
-		client.Transport = transport
-		return
-	}
-	// HTTP/HTTPS proxy
-	baseTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return
-	}
-	transport := baseTransport.Clone()
-	transport.Proxy = http.ProxyURL(parsed)
-	client.Transport = transport
 }
 
 // buildOpenAIResponsesRequest builds the request body for OpenAI Responses API.
@@ -746,10 +549,8 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 	return reqBody
 }
 
-// parseProxyURL parses a proxy URL string and returns a *url.URL.
-// Supports socks5://, http://, and https:// schemes.
+// parseProxyURL is retained for compatibility with proxy configuration tests.
 func parseProxyURL(proxyURL string) (*url.URL, error) {
-	// Add scheme if not present
 	if !strings.Contains(proxyURL, "://") {
 		proxyURL = "http://" + proxyURL
 	}
