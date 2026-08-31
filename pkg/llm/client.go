@@ -36,7 +36,7 @@ func StreamLLM(
 	}
 
 	// Route to OpenAI Responses API if requested
-	if model.API == "openai-responses" {
+	if model.API == "openai-responses" || model.API == "openai-codex-responses" {
 		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
