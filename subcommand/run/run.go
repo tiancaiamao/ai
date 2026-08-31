@@ -163,6 +163,15 @@ func failServe(msg string) {
 // control client, then starts the in-process ACP server. The process exits
 // when a turn completes (_turn_end) or a termination signal arrives.
 func startServeApp(cfg serveConfig) *serveApp {
+	if err := checkSubagentSpawnAllowed(os.LookupEnv); err != nil {
+		failServe(err.Error())
+	}
+	// Mark this process so agent-launched commands cannot recursively spawn
+	// another subagent.
+	if err := os.Setenv(subagentDepthEnv, "0"); err != nil {
+		failServe(fmt.Sprintf("failed to mark subagent environment: %v", err))
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		failServe(fmt.Sprintf("failed to get home directory: %v", err))

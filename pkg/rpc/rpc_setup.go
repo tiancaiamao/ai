@@ -246,11 +246,6 @@ func loadConfigWithLogger() (*config.Config, string, error) {
 func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec, error) {
 	model := cfg.GetLLMModel()
 
-	apiKey, err := config.ResolveAPIKey(model.Provider)
-	if err != nil {
-		return llm.Model{}, "", config.ModelSpec{}, fmt.Errorf("missing API key: %w", err)
-	}
-
 	slog.Info("Model", "id", model.ID, "provider", model.Provider, "baseURL", model.BaseURL)
 	if cfg.Compactor != nil {
 		slog.Info("Compactor", "maxMessages", cfg.Compactor.MaxMessages, "maxTokens", cfg.Compactor.MaxTokens,
@@ -265,6 +260,10 @@ func resolveModelAndKey(cfg *config.Config) (llm.Model, string, config.ModelSpec
 		slog.Info("Model spec fallback", "error", err)
 	}
 	model = applyModelLimitsFromSpec(model, activeSpec)
+	apiKey, err := config.ResolveAPIKeyWithProxy(model.Provider, model.Proxy)
+	if err != nil {
+		return llm.Model{}, "", config.ModelSpec{}, fmt.Errorf("missing API key: %w", err)
+	}
 
 	return model, apiKey, activeSpec, nil
 }

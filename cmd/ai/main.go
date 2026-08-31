@@ -45,6 +45,8 @@ func main() {
 		send.SendSubcommand()
 	case "kill":
 		kill.KillSubcommand()
+	case "login-codex":
+		loginCodexSubcommand()
 	default:
 		fmt.Fprintf(os.Stderr, "ai: unknown command %q\n\n", subcmd)
 		rpcsubcommand.PrintUsage()

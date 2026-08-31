@@ -50,6 +50,7 @@ type ModelConfig struct {
 	Provider  string `json:"provider"`
 	BaseURL   string `json:"baseUrl"`
 	API       string `json:"api"`
+	Proxy     string `json:"proxy,omitempty"`
 	MaxTokens int    `json:"maxTokens,omitempty"`
 }
 
@@ -174,6 +175,7 @@ func (c *Config) GetLLMModel() llm.Model {
 		Provider:  c.Model.Provider,
 		BaseURL:   c.Model.BaseURL,
 		API:       c.Model.API,
+		Proxy:     c.Model.Proxy,
 		MaxTokens: c.Model.MaxTokens,
 	}
 }

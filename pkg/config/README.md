@@ -27,6 +27,7 @@ type ModelConfig struct {
     Provider  string `json:"provider"`  // Provider (e.g., "zai")
     BaseURL   string `json:"baseUrl"`   // API base URL
     API       string `json:"api"`       // API style: "openai-completions" or "anthropic-messages"
+    Proxy     string `json:"proxy,omitempty"` // Optional proxy for model requests
     MaxTokens int    `json:"maxTokens,omitempty"`
 }
 ```
@@ -47,12 +48,20 @@ type ModelSpec struct {
     Provider      string
     BaseURL       string
     API           string
+    Proxy         string
     Reasoning     bool
     Input         []string
     ContextWindow int
     MaxTokens     int
 }
 ```
+
+Provider-level `proxy` in `models.json` is inherited by its models. Model
+requests use this configured proxy. The existing OpenAI Responses path retains
+its environment-based proxy fallback when no model proxy is configured; other
+model paths use a direct connection. The `ai login-codex` OAuth flow is
+separate and may use `ALL_PROXY`, `HTTPS_PROXY`, or `HTTP_PROXY` for its token
+exchange.
 
 ## Compaction Configuration
 
