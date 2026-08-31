@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildCodexToolsUsesResponsesToolShape(t *testing.T) {
-	tools := buildCodexTools([]LLMTool{{
+	tools := codexTools([]LLMTool{{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "read",

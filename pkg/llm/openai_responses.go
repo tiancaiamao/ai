@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -346,8 +345,9 @@ func StreamOpenAIResponses(
 			return
 		}
 
-		// Build request body for OpenAI Responses API
-		reqBody := buildOpenAIResponsesRequest(model, llmCtx)
+		// OpenAI and Codex share the Responses transport and parser. Only the
+		// request body, endpoint, and authentication headers differ.
+		reqBody := responsesRequestBody(model, llmCtx)
 
 		jsonBody, err := json.Marshal(reqBody)
 		if err != nil {
@@ -363,15 +363,13 @@ func StreamOpenAIResponses(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		headers := make(http.Header)
-		headers.Set("Content-Type", "application/json")
-		headers.Set("Authorization", "Bearer "+apiKey)
+		headers := responsesHeaders(model, apiKey)
 		resp, err := doResponsesRequest(ctx, responsesRequestOptions{
-			Endpoint:            modelURL(model),
+			Endpoint:            responsesEndpoint(model),
 			Body:                jsonBody,
 			Headers:             headers,
 			Proxy:               model.Proxy,
-			UseEnvironmentProxy: strings.TrimSpace(model.Proxy) == "",
+			UseEnvironmentProxy: model.API != "openai-codex-responses" && strings.TrimSpace(model.Proxy) == "",
 		})
 		if err != nil {
 			if strings.Contains(err.Error(), "no such host") {

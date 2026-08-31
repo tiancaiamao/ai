@@ -35,11 +35,6 @@ func StreamLLM(
 		return StreamAnthropic(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
 	}
 
-	// Route to OpenAI Codex Responses API if requested
-	if model.API == "openai-codex-responses" {
-		return StreamCodex(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
-	}
-
 	// Route to OpenAI Responses API if requested
 	if model.API == "openai-responses" {
 		return StreamOpenAIResponses(ctx, model, llmCtx, apiKey, chunkIntervalTimeout)
