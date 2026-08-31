@@ -462,6 +462,10 @@ func formatToolDetail(evt map[string]any, toolName string) string {
 	if args == nil {
 		args, _ = evt["args"].(map[string]any)
 	}
+	return formatToolArgs(args, toolName)
+}
+
+func formatToolArgs(args map[string]any, _ string) string {
 	if args == nil {
 		return ""
 	}
@@ -522,11 +526,16 @@ func ParseACPUpdate(u rpc.ACPUpdate) *FormattedEvent {
 		}
 		return &FormattedEvent{Kind: KindText, Role: "user", Text: text}
 	case "tool_call":
+		detail := formatToolArgs(u.RawInput, u.Title)
+		text := fmt.Sprintf("tool: %s start", u.Title)
+		if detail != "" {
+			text += fmt.Sprintf(" (%s)", strings.TrimSpace(detail))
+		}
 		return &FormattedEvent{
 			Kind: KindTool, Role: "tool",
-			Tool:   u.Kind,
-			Text:   fmt.Sprintf("tool: %s start", u.Title),
-			Detail: acpUpdateText(u.Content),
+			Tool:   u.Title,
+			Text:   text,
+			Detail: strings.TrimSpace(detail),
 		}
 	case "tool_call_update":
 		text := acpUpdateText(u.Content)

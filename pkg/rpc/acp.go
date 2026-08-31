@@ -450,6 +450,7 @@ func (s *acpServer) replayHistory(messages []agentctx.AgentMessage) {
 			u := acpUpdate{
 				SessionUpdate: "tool_call_update",
 				ToolCallID:    msg.ToolCallID,
+				Title:         msg.ToolName,
 				Status:        status,
 			}
 			if text := msg.ExtractText(); text != "" {
@@ -727,6 +728,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		u := acpUpdate{
 			SessionUpdate: "tool_call_update",
 			ToolCallID:    event.ToolCallID,
+			Title:         event.ToolName,
 			Status:        status,
 		}
 		if event.Result != nil {

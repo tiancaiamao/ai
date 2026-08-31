@@ -154,6 +154,15 @@ func TestACPSchemaNotifications(t *testing.T) {
 	if cmd, _ := rawInput["command"].(string); cmd != "ls" {
 		t.Errorf("tool_call: expected rawInput command \"ls\", got %v", rawInput)
 	}
+
+	var endMsg map[string]any
+	if err := json.Unmarshal(lines[3], &endMsg); err != nil {
+		t.Fatalf("notification 3 not valid JSON: %v", err)
+	}
+	endUpd := endMsg["params"].(map[string]any)["update"].(map[string]any)
+	if title, _ := endUpd["title"].(string); title != "bash" {
+		t.Errorf("tool_call_update: expected title bash, got %v", endUpd["title"])
+	}
 }
 
 // TestACPSchemaEmbeddedSchemaSource pins the schema provenance so a stale
