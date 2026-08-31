@@ -1,18 +1,14 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/auth"
-	"github.com/tiancaiamao/ai/pkg/netutil"
 )
 
 const defaultCodexBaseURL = "https://chatgpt.com/backend-api"
@@ -75,105 +71,27 @@ func StreamCodex(
 			return
 		}
 
-		// Resolve URL: baseUrl/codex/responses
-		endpoint := resolveCodexURL(model.BaseURL)
-
-		// Build request
-		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyJson))
-		if err != nil {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("create request: %w", err)})
-			return
-		}
-
-		// Set headers
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
-		req.Header.Set("accept", "text/event-stream")
+		headers := make(http.Header)
+		headers.Set("Content-Type", "application/json")
+		headers.Set("Authorization", "Bearer "+accessToken)
+		headers.Set("OpenAI-Beta", "responses=experimental")
+		headers.Set("Accept", "text/event-stream")
 		if accountID != "" {
-			req.Header.Set("openai-account-id", accountID)
-			req.Header.Set("chatgpt-account-id", accountID)
+			headers.Set("openai-account-id", accountID)
+			headers.Set("chatgpt-account-id", accountID)
 		}
-
-		// Execute request with retry
-		var resp *http.Response
-		var lastErr error
-		const maxRetries = 3
-		const baseDelay = 500 * time.Millisecond
-
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			if ctx.Err() != nil {
-				stream.Push(LLMErrorEvent{Error: ctx.Err()})
-				return
-			}
-
-			// Reset body for retry
-			req.Body = io.NopCloser(bytes.NewReader(bodyJson))
-			req.GetBody = func() (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(bodyJson)), nil
-			}
-
-			httpClient, err := netutil.NewHTTPClient(model.Proxy)
-			if err != nil {
-				stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
-				return
-			}
-			resp, lastErr = httpClient.Do(req)
-			if lastErr != nil {
-				if attempt < maxRetries {
-					delay := baseDelay * time.Duration(1<<uint(attempt))
-					select {
-					case <-time.After(delay):
-					case <-ctx.Done():
-						stream.Push(LLMErrorEvent{Error: ctx.Err()})
-						return
-					}
-					continue
-				}
-				stream.Push(LLMErrorEvent{Error: fmt.Errorf("request failed after retries: %w", lastErr)})
-				return
-			}
-
-			if resp.StatusCode == 200 {
-				break
-			}
-
-			// Read error body
-			errBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			errMsg := string(errBody)
-
-			if isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
-				delay := baseDelay * time.Duration(1<<uint(attempt))
-				if ra := resp.Header.Get("Retry-After"); ra != "" {
-					if d := parseRetryAfterHeaderCodex(ra); d > 0 {
-						delay = d
-					}
-				}
-				if raMs := resp.Header.Get("Retry-After-Ms"); raMs != "" {
-					if ms, err := strconv.Atoi(raMs); err == nil && ms > 0 {
-						delay = time.Duration(ms) * time.Millisecond
-					}
-				}
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					stream.Push(LLMErrorEvent{Error: ctx.Err()})
-					return
-				}
-				continue
-			}
-
-			stream.Push(LLMErrorEvent{Error: ClassifyAPIError(resp.StatusCode, errMsg)})
-			return
-		}
-
-		if resp == nil {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("no response after retries")})
+		resp, err := doResponsesRequest(ctx, responsesRequestOptions{
+			Endpoint:   resolveCodexURL(model.BaseURL),
+			Body:       bodyJson,
+			Headers:    headers,
+			Proxy:      model.Proxy,
+			MaxRetries: 3,
+		})
+		if err != nil {
+			stream.Push(LLMErrorEvent{Error: err})
 			return
 		}
 		defer resp.Body.Close()
-
 		// Process the shared Responses API stream.
 		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
@@ -329,25 +247,4 @@ func resolveCodexURL(baseURL string) string {
 		return raw + "/responses"
 	}
 	return raw + "/codex/responses"
-}
-
-func isRetryableStatus(status int) bool {
-	return status == 429 || status == 500 || status == 502 || status == 503 || status == 504
-}
-
-func parseRetryAfterHeaderCodex(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		d := time.Until(at)
-		if d > 0 {
-			return d
-		}
-	}
-	return 0
 }

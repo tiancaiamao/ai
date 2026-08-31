@@ -182,7 +182,7 @@ func loginHTTPClient() (*http.Client, error) {
 	return netutil.NewEnvironmentHTTPClient()
 }
 
-func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
+func exchangeCode(code, verifier string) (*CodexCredentials, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {CodexClientID},
@@ -190,50 +190,11 @@ func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
 		"code_verifier": {verifier},
 		"redirect_uri":  {CodexRedirectURI},
 	}
-
 	client, err := loginHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("create token exchange client: %w", err)
 	}
-	resp, err := client.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("token exchange request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read token response: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		var tokErr tokenError
-		if json.Unmarshal(body, &tokErr) == nil && tokErr.ErrorDescription != "" {
-			return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, tokErr.ErrorDescription)
-		}
-		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(body))
-	}
-
-	var tokenResp tokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse token response: %w", err)
-	}
-
-	if tokenResp.AccessToken == "" || tokenResp.RefreshToken == "" {
-		return nil, fmt.Errorf("token response missing access_token or refresh_token")
-	}
-
-	accountID, err := extractAccountID(tokenResp.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("extract account ID from token: %w", err)
-	}
-
-	return &CodexCredentials{
-		Access:    tokenResp.AccessToken,
-		Refresh:   tokenResp.RefreshToken,
-		Expires:   time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli(),
-		AccountID: accountID,
-	}, nil
+	return requestCodexToken(client, data, "token exchange")
 }
 
 // RefreshCodexToken refreshes an expired access token using the refresh token.
@@ -250,43 +211,42 @@ func RefreshCodexTokenWithProxy(refreshToken, proxyURL string) (*CodexCredential
 		"refresh_token": {refreshToken},
 		"client_id":     {CodexClientID},
 	}
-
 	client, err := netutil.NewHTTPClient(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("create token refresh client: %w", err)
 	}
+	return requestCodexToken(client, data, "token refresh")
+}
+func requestCodexToken(client *http.Client, data url.Values, operation string) (*CodexCredentials, error) {
 	resp, err := client.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("token refresh request: %w", err)
+		return nil, fmt.Errorf("%s request: %w", operation, err)
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read refresh response: %w", err)
+		return nil, fmt.Errorf("read %s response: %w", operation, err)
 	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("token refresh failed (%d): %s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusOK {
+		var tokErr tokenError
+		if json.Unmarshal(body, &tokErr) == nil && tokErr.ErrorDescription != "" {
+			return nil, fmt.Errorf("%s failed (%d): %s", operation, resp.StatusCode, tokErr.ErrorDescription)
+		}
+		return nil, fmt.Errorf("%s failed (%d): %s", operation, resp.StatusCode, string(body))
 	}
-
 	var tokenResp tokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse refresh response: %w", err)
+		return nil, fmt.Errorf("parse %s response: %w", operation, err)
 	}
-
 	if tokenResp.AccessToken == "" || tokenResp.RefreshToken == "" {
-		return nil, fmt.Errorf("refresh response missing access_token or refresh_token")
+		return nil, fmt.Errorf("%s response missing access_token or refresh_token", operation)
 	}
-
 	accountID, err := extractAccountID(tokenResp.AccessToken)
 	if err != nil {
-		return nil, fmt.Errorf("extract account ID from refreshed token: %w", err)
+		return nil, fmt.Errorf("extract account ID from %s: %w", operation, err)
 	}
-
 	return &CodexCredentials{
-		Access:    tokenResp.AccessToken,
-		Refresh:   tokenResp.RefreshToken,
+		Access: tokenResp.AccessToken, Refresh: tokenResp.RefreshToken,
 		Expires:   time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli(),
 		AccountID: accountID,
 	}, nil

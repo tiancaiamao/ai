@@ -1,11 +1,9 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/netutil"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -366,42 +363,16 @@ func StreamOpenAIResponses(
 			traceevent.Field{Key: "json", Value: string(jsonBody)},
 		)
 
-		// Build URL for OpenAI Responses API
-		// If the base URL already includes "/responses", use it directly.
-		// Otherwise, append "/responses" to the base URL.
-		url := model.BaseURL
-		if !strings.HasSuffix(url, "/responses") {
-			url = strings.TrimSuffix(url, "/") + "/responses"
-		}
-
-		// Create request
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-		if err != nil {
-			stream.Push(LLMErrorEvent{Error: err})
-			return
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-
-		// Execute request — derive total timeout from context deadline so the HTTP client enforces
-		// a hard ceiling even when SetReadDeadline is refreshed per-chunk.
-		client, err := netutil.NewHTTPClient(model.Proxy)
-		if strings.TrimSpace(model.Proxy) == "" {
-			client, err = netutil.NewEnvironmentHTTPClient()
-		}
-		if err != nil {
-			stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
-			return
-		}
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining > 0 {
-				client.Timeout = remaining
-			}
-		}
-
-		resp, err := client.Do(req)
+		headers := make(http.Header)
+		headers.Set("Content-Type", "application/json")
+		headers.Set("Authorization", "Bearer "+apiKey)
+		resp, err := doResponsesRequest(ctx, responsesRequestOptions{
+			Endpoint:            modelURL(model),
+			Body:                jsonBody,
+			Headers:             headers,
+			Proxy:               model.Proxy,
+			UseEnvironmentProxy: strings.TrimSpace(model.Proxy) == "",
+		})
 		if err != nil {
 			if strings.Contains(err.Error(), "no such host") {
 				stream.Push(LLMErrorEvent{Error: fmt.Errorf("DNS error: cannot resolve API host '%s'.\n\nPossible solutions:\n  1. Check your ZAI_BASE_URL environment variable\n  2. Try standard OpenAI API: export ZAI_BASE_URL=https://api.openai.com/v1\n  3. Verify network connection and VPN settings", model.BaseURL)})
@@ -411,20 +382,20 @@ func StreamOpenAIResponses(
 			return
 		}
 		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"))
-			stream.Push(LLMErrorEvent{Error: ClassifyAPIErrorWithRetryAfter(resp.StatusCode, string(body), retryAfter)})
-			return
-		}
-
 		// Parse the shared Responses API stream. OpenAI and Codex differ in
 		// request/auth details, not in the response event protocol.
 		processResponsesSSE(ctx, resp.Body, stream, chunkIntervalTimeout)
 	}()
 
 	return stream
+}
+
+func modelURL(model Model) string {
+	url := model.BaseURL
+	if !strings.HasSuffix(url, "/responses") {
+		url = strings.TrimSuffix(url, "/") + "/responses"
+	}
+	return url
 }
 
 // extractResponsesUsage maps Responses API usage to the local Usage struct,
