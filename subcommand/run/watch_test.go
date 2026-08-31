@@ -231,6 +231,32 @@ func TestFollowWatchSummary_ExitsOnTurnEnd(t *testing.T) {
 	}
 }
 
+func TestFollowWatchSummary_ExitsOnReplayComplete(t *testing.T) {
+	// A successful session/load completes replay without sending _turn_end.
+	updates := updateChan(textChunk("replayed"), rpc.ACPUpdate{SessionUpdate: rpc.ACPUpdateSessionLoadEnd})
+
+	stdout, stderrBuf, restore := captureStd(t)
+	done := make(chan struct{})
+	go func() {
+		followWatchSummary(updates, 0)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		restore()
+		t.Fatal("followWatchSummary did not exit when replay completed")
+	}
+	restore()
+
+	if !strings.Contains(stdout.String(), "replayed") {
+		t.Errorf("expected stdout to contain 'replayed', got %q", stdout.String())
+	}
+	if !strings.Contains(stderrBuf.String(), "__seq:1") {
+		t.Errorf("expected stderr to contain '__seq:1', got %q", stderrBuf.String())
+	}
+}
+
 func TestFollowWatchSummary_StreamEndsWithoutTurnEnd(t *testing.T) {
 	// If the stream ends without _turn_end, should print whatever text was accumulated.
 	updates := updateChan(textChunk("partial"))

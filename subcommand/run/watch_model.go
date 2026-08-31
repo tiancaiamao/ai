@@ -536,13 +536,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		}()
 	}
 
-	// Replay history if the agent is idle; the request is rejected while a
-	// prompt is in flight, in which case we only observe live updates.
+	updates := client.Updates()
 	if err := client.LoadSession(sid); err != nil {
 		// Not fatal — continue with live updates only.
+		fmt.Fprintf(os.Stderr, "warning: session replay failed (%v); showing live updates only\n", err)
 	}
-
-	updates := client.Updates()
 
 	if summary {
 		followWatchSummary(updates, fromSeq)
@@ -554,6 +552,10 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		seq := fromSeq
 		ended := false
 		for u := range updates {
+			if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+				ended = true
+				break
+			}
 			env, err := json.Marshal(map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
@@ -586,6 +588,10 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	lastTextRole := ""
 	ended := false
 	for u := range updates {
+		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+			ended = true
+			break
+		}
 		seq++
 
 		evt := tui.ParseACPUpdate(u)
@@ -628,9 +634,11 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		// On _turn_end: always exit — the turn is complete.
 		// The --timeout flag controls maximum wait time for the agent to
 		// finish, not how long to wait after it finishes.
-		if u.SessionUpdate == "_turn_end" {
+		if u.SessionUpdate == "_turn_end" || u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
 			ended = true
-			fmt.Println()
+			if u.SessionUpdate == "_turn_end" {
+				fmt.Println()
+			}
 			break
 		}
 	}
@@ -641,8 +649,8 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 }
 
 // followWatchSummary accumulates events and only prints the final assistant text
-// when _turn_end is reached. This avoids flooding tool output with intermediate
-// thinking, tool calls, and tool results.
+// when _turn_end or session/load replay completion is reached. This avoids
+// flooding tool output with intermediate thinking, tool calls, and tool results.
 func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 	var lastAssistantText strings.Builder
 	var currentAssistantText strings.Builder
@@ -650,6 +658,16 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 	ended := false
 
 	for u := range updates {
+		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
+			ended = true
+			// Save current assistant text as the "last" one.
+			if currentAssistantText.Len() > 0 {
+				lastAssistantText.Reset()
+				lastAssistantText.WriteString(currentAssistantText.String())
+				currentAssistantText.Reset()
+			}
+			break
+		}
 		seq++
 
 		if u.SessionUpdate == "_turn_end" {

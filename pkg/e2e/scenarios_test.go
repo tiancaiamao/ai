@@ -45,7 +45,7 @@ type e2eModel struct {
 // E2E_MODEL overrides the model id) and skips when nothing is reachable.
 func requireEndpoint(t *testing.T) e2eModel {
 	t.Helper()
-	m := e2eModel{provider: "ollama", id: "laguna"}
+	m := e2eModel{provider: "ollama", id: "qwen"}
 	if v := os.Getenv("E2E_MODEL"); v != "" {
 		m.id = v
 	}
@@ -62,7 +62,7 @@ func requireEndpoint(t *testing.T) e2eModel {
 			} `json:"providers"`
 		}
 		if json.Unmarshal(data, &f) == nil {
-			for _, p := range []string{"ollama", "laguna"} {
+			for _, p := range []string{"ollama", "qwen"} {
 				if pc, ok := f.Providers[p]; ok && len(pc.Models) > 0 {
 					base := pc.Models[0].BaseURL
 					if base == "" {
@@ -954,9 +954,11 @@ func testSubcommandsWithID(t *testing.T, env []string, id string) {
 		t.Fatalf("ai ls failed: %v\n%s", err, out)
 	}
 
-	// ai ls --json: the run must appear as running.
+	// ai ls --json: the run must be listed while the serve process is alive.
+	// Status is "running" while the initial prompt is in flight, "idle" once
+	// it completed — either proves the process is still up.
 	out, err = runCmd("ls", "--json")
-	if err != nil || !strings.Contains(out, "running") {
+	if err != nil || !(strings.Contains(out, `"status": "running"`) || strings.Contains(out, `"status": "idle"`)) {
 		t.Fatalf("ai ls --json failed: %v\n%s", err, out)
 	}
 
@@ -966,8 +968,25 @@ func testSubcommandsWithID(t *testing.T, env []string, id string) {
 		t.Fatalf("ai ls --all --json failed: %v\n%s", err, out)
 	}
 
-	// ai watch --follow (raw): must contain "agent_end" marker.
-	if out, err := runCmd("watch", "--id", id, "--follow", "--timeout", "90s"); err != nil || !strings.Contains(out, "agent_end") {
+	// Wait for the serve to finish its initial prompt (status "idle"). The
+	// watch assertions below rely on session/load replaying the completed
+	// turn; with a slow model the turn can still be in flight here, and
+	// session/load is rejected while a prompt is pending.
+	idle := false
+	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); {
+		out, err = runCmd("ls", "--all", "--json")
+		if err == nil && strings.Contains(out, id) && strings.Contains(out, `"status": "idle"`) {
+			idle = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !idle {
+		t.Fatalf("serve %s never reached idle status:\n%s", id, out)
+	}
+
+	// ai watch --follow (raw): must replay the persisted assistant text.
+	if out, err := runCmd("watch", "--id", id, "--follow", "--timeout", "90s"); err != nil || !strings.Contains(out, `"sessionUpdate":"agent_message_chunk"`) || !strings.Contains(out, "pong") {
 		t.Fatalf("ai watch --follow (raw) failed: %v\n%s", err, out)
 	}
 

@@ -37,11 +37,21 @@ type ACPUpdate struct {
 	Meta any `json:"_meta,omitempty"`
 }
 
+// ACPUpdateSessionLoadEnd is an internal update emitted after a successful
+// session/load response. It is not sent on the wire and lets stream consumers
+// distinguish replay completion from a closed connection.
+const ACPUpdateSessionLoadEnd = "_session_load_end"
+
 // ACPClient is a single-connection ACP client.
+type pendingRequest struct {
+	ch     chan json.RawMessage
+	method string
+}
+
 type ACPClient struct {
 	conn     transport.Conn
 	mu       sync.Mutex
-	pending  map[int64]chan json.RawMessage
+	pending  map[int64]pendingRequest
 	nextID   int64
 	updates  chan ACPUpdate
 	readDone chan struct{}
@@ -52,7 +62,7 @@ type ACPClient struct {
 func NewACPClient(conn transport.Conn) *ACPClient {
 	c := &ACPClient{
 		conn:     conn,
-		pending:  make(map[int64]chan json.RawMessage),
+		pending:  make(map[int64]pendingRequest),
 		nextID:   1,
 		updates:  make(chan ACPUpdate, 1024),
 		readDone: make(chan struct{}),
@@ -201,7 +211,7 @@ func (c *ACPClient) request(method string, params any, result *json.RawMessage) 
 
 	ch := make(chan json.RawMessage, 1)
 	c.mu.Lock()
-	c.pending[id] = ch
+	c.pending[id] = pendingRequest{ch: ch, method: method}
 	c.mu.Unlock()
 
 	if err := c.conn.WriteMessage(body); err != nil {
@@ -254,10 +264,10 @@ func (c *ACPClient) readLoop() {
 	failPending := func() {
 		c.mu.Lock()
 		chs := c.pending
-		c.pending = make(map[int64]chan json.RawMessage)
+		c.pending = make(map[int64]pendingRequest)
 		c.mu.Unlock()
-		for _, ch := range chs {
-			close(ch)
+		for _, pending := range chs {
+			close(pending.ch)
 		}
 	}
 
@@ -284,13 +294,23 @@ func (c *ACPClient) readLoop() {
 				continue
 			}
 			c.mu.Lock()
-			ch, ok := c.pending[id]
+			pending, ok := c.pending[id]
 			if ok {
 				delete(c.pending, id)
 			}
 			c.mu.Unlock()
 			if ok {
-				ch <- msg
+				if pending.method == "session/load" {
+					var response acpClientResponse
+					if err := json.Unmarshal(msg, &response); err == nil && response.Error == nil {
+						// The server sends replay updates before the session/load response.
+						// Queue the internal boundary after all replay updates in Updates().
+						pending.ch <- msg
+						c.updates <- ACPUpdate{SessionUpdate: ACPUpdateSessionLoadEnd}
+						continue
+					}
+				}
+				pending.ch <- msg
 			}
 			continue
 		}
