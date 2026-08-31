@@ -221,25 +221,22 @@ func (c *ACPClient) request(method string, params any, result *json.RawMessage) 
 		return err
 	}
 
-	select {
-	case raw, ok := <-ch:
-		if !ok {
-			return fmt.Errorf("connection closed while waiting for %s", method)
-		}
-		var resp acpClientResponse
-		if err := json.Unmarshal(raw, &resp); err != nil {
-			return err
-		}
-		if resp.Error != nil {
-			return fmt.Errorf("%s failed: %s", method, resp.Error.Message)
-		}
-		if result != nil {
-			*result = resp.Result
-		}
-		return nil
-	case <-c.readDone:
+	raw, ok := <-ch
+	if !ok {
 		return fmt.Errorf("connection closed while waiting for %s", method)
 	}
+	var resp acpClientResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("%s failed: %s", method, resp.Error.Message)
+	}
+	if result != nil {
+		*result = resp.Result
+	}
+	return nil
+
 }
 
 // notify sends a fire-and-forget notification.
