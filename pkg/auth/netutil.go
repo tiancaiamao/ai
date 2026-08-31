@@ -1,5 +1,4 @@
-// Package netutil provides HTTP clients with explicit proxy behavior.
-package netutil
+package auth
 
 import (
 	"fmt"
@@ -26,12 +25,12 @@ func NewHTTPClient(proxyURL string) (*http.Client, error) {
 		client.Transport = transport
 		return client, nil
 	}
-
 	parsed, err := parseProxyURL(proxyURL)
 	if err != nil {
 		return nil, err
 	}
-	if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
+	switch parsed.Scheme {
+	case "socks5", "socks5h":
 		dialer, err := proxy.SOCKS5("tcp", parsed.Host, nil, nil)
 		if err != nil {
 			return nil, fmt.Errorf("create SOCKS5 proxy: %w", err)
@@ -41,12 +40,11 @@ func NewHTTPClient(proxyURL string) (*http.Client, error) {
 		} else {
 			transport.Dial = dialer.Dial
 		}
-	} else if parsed.Scheme == "http" || parsed.Scheme == "https" {
+	case "http", "https":
 		transport.Proxy = http.ProxyURL(parsed)
-	} else {
+	default:
 		return nil, fmt.Errorf("unsupported proxy scheme %q", parsed.Scheme)
 	}
-
 	client.Transport = transport
 	return client, nil
 }

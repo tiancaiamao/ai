@@ -21,8 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tiancaiamao/ai/pkg/netutil"
 )
 
 // CodexOAuth constants following pi-mono's OpenAI Codex implementation.
@@ -179,7 +177,7 @@ type tokenError struct {
 // loginHTTPClient returns a client for the standalone OAuth flow. The login
 // command intentionally follows the standard proxy environment variables.
 func loginHTTPClient() (*http.Client, error) {
-	return netutil.NewEnvironmentHTTPClient()
+	return NewEnvironmentHTTPClient()
 }
 
 func exchangeCode(code, verifier string) (*CodexCredentials, error) {
@@ -211,7 +209,7 @@ func RefreshCodexTokenWithProxy(refreshToken, proxyURL string) (*CodexCredential
 		"refresh_token": {refreshToken},
 		"client_id":     {CodexClientID},
 	}
-	client, err := netutil.NewHTTPClient(proxyURL)
+	client, err := NewHTTPClient(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("create token refresh client: %w", err)
 	}

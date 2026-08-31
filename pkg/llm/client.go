@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/netutil"
+	"github.com/tiancaiamao/ai/pkg/auth"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
 )
 
@@ -145,7 +145,7 @@ func StreamLLM(
 		// Execute request — derive total timeout from context deadline so the
 		// HTTP client enforces a hard ceiling even when SetReadDeadline is
 		// refreshed per-chunk (which can otherwise bypass the context deadline).
-		client, err := netutil.NewHTTPClient(model.Proxy)
+		client, err := auth.NewHTTPClient(model.Proxy)
 		if err != nil {
 			stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
 			return

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tiancaiamao/ai/pkg/netutil"
+	"github.com/tiancaiamao/ai/pkg/auth"
 )
 
 type responsesRequestOptions struct {
@@ -89,9 +89,9 @@ func doResponsesRequest(ctx context.Context, opts responsesRequestOptions) (*htt
 
 func newResponsesHTTPClient(proxyURL string, useEnvironmentProxy bool) (*http.Client, error) {
 	if useEnvironmentProxy {
-		return netutil.NewEnvironmentHTTPClient()
+		return auth.NewEnvironmentHTTPClient()
 	}
-	return netutil.NewHTTPClient(proxyURL)
+	return auth.NewHTTPClient(proxyURL)
 }
 
 func isRetryableStatus(status int) bool {
