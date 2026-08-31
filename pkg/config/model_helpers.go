@@ -40,6 +40,7 @@ func ModelSpecFromConfig(cfg *Config) ModelSpec {
 		Provider:  cfg.Model.Provider,
 		BaseURL:   cfg.Model.BaseURL,
 		API:       cfg.Model.API,
+		Proxy:     cfg.Model.Proxy,
 		Input:     []string{"text"},
 		MaxTokens: cfg.Model.MaxTokens,
 	}
@@ -71,7 +72,7 @@ func LoadModelSpecsFromConfig(cfg *Config) ([]ModelSpec, string, error) {
 func FilterModelSpecsWithKeys(specs []ModelSpec) []ModelSpec {
 	var result []ModelSpec
 	for _, spec := range specs {
-		if _, err := ResolveAPIKey(spec.Provider); err == nil {
+		if _, err := ResolveAPIKeyWithProxy(spec.Provider, spec.Proxy); err == nil {
 			result = append(result, spec)
 		}
 	}
@@ -103,6 +104,9 @@ func ResolveActiveModelSpec(cfg *Config) (ModelSpec, error) {
 // ApplyModelLimitsFromSpec fills in zero-valued model fields from the spec,
 // and caps MaxTokens/ContextWindow when the spec is more restrictive.
 func ApplyModelLimitsFromSpec(model llm.Model, spec ModelSpec) llm.Model {
+	if strings.TrimSpace(model.Proxy) == "" && strings.TrimSpace(spec.Proxy) != "" {
+		model.Proxy = spec.Proxy
+	}
 	if model.ContextWindow <= 0 && spec.ContextWindow > 0 {
 		model.ContextWindow = spec.ContextWindow
 	}
@@ -159,6 +163,7 @@ func ApplyModelOverride(cfg *Config, modelOverride string) {
 			cfg.Model.Provider = spec.Provider
 			cfg.Model.BaseURL = spec.BaseURL
 			cfg.Model.API = spec.API
+			cfg.Model.Proxy = spec.Proxy
 			cfg.Model.MaxTokens = spec.MaxTokens
 			slog.Info("Model override applied", "id", id, "provider", spec.Provider)
 			return
@@ -182,6 +187,7 @@ func ApplyModelOverride(cfg *Config, modelOverride string) {
 				cfg.Model.Provider = spec.Provider
 				cfg.Model.BaseURL = spec.BaseURL
 				cfg.Model.API = spec.API
+				cfg.Model.Proxy = spec.Proxy
 				cfg.Model.MaxTokens = spec.MaxTokens
 				slog.Info("Model override applied", "id", modelOverride, "provider", spec.Provider)
 				return

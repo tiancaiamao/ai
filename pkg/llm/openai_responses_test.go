@@ -257,13 +257,13 @@ func (r testResponse) chunk() responsesEventChunk {
 }
 
 // feed sends a stream event into the parser, ignoring the terminal tuple.
-func feed(p *openaiResponsesParser, chunk responsesEventChunk) {
+func feed(p *responsesParser, chunk responsesEventChunk) {
 	p.handle(chunk)
 }
 
 func TestOpenAIResponsesParser(t *testing.T) {
 	t.Run("thinking and text deltas accumulate", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, testResponsesItem{Type: "reasoning"}.chunk(0))
 		feed(p, testResponsesItem{Type: "message"}.chunk(1))
 		feed(p, responsesEventChunk{Type: "response.reasoning_summary_text.delta", OutputIndex: 0, Delta: "let me "})
@@ -281,7 +281,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("reasoning_summary_part.done appends separator", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, responsesEventChunk{Type: "response.reasoning_summary_text.delta", OutputIndex: 0, Delta: "part1"})
 		feed(p, responsesEventChunk{Type: "response.reasoning_summary_part.done", OutputIndex: 0})
 		feed(p, responsesEventChunk{Type: "response.reasoning_summary_text.delta", OutputIndex: 0, Delta: "part2"})
@@ -292,7 +292,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("tool call with output_item.added and arguments deltas", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, testResponsesItem{Type: "function_call", ID: "call_123", Name: "get_weather"}.chunk(0))
 		feed(p, responsesEventChunk{Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: `{"city":`})
 		feed(p, responsesEventChunk{Type: "response.function_call_arguments.delta", OutputIndex: 0, Delta: `"Beijing"}`})
@@ -314,7 +314,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("function_call_arguments.done fills missing tail", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, testResponsesItem{Type: "function_call", ID: "call_9", Name: "search"}.chunk(0))
 		// Proxy may deliver the whole arguments in the done event without deltas.
 		feed(p, responsesEventChunk{Type: "response.function_call_arguments.done", OutputIndex: 0, Arguments: `{"q":"ai"}`})
@@ -325,7 +325,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("output_item.done finalizes reasoning summary", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, testResponsesItem{Type: "reasoning"}.chunk(0))
 		feed(p, responsesEventChunk{Type: "response.reasoning_summary_text.delta", OutputIndex: 0, Delta: "draft"})
 		feed(p, testResponsesItem{Type: "reasoning", Summary: []testSummaryPart{{Type: "summary_text", Text: "final summary"}}}.chunk(0).outputItemDone())
@@ -337,7 +337,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("output_item.done finalizes message text", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		feed(p, responsesEventChunk{Type: "response.output_text.delta", OutputIndex: 0, Delta: "partial"})
 		feed(p, testResponsesItem{Type: "message", Content: []testContentPart{{Type: "output_text", Text: "complete text"}}}.chunk(0).outputItemDone())
 		msg := p.buildMessage()
@@ -362,7 +362,7 @@ func TestOpenAIResponsesParser(t *testing.T) {
 	})
 
 	t.Run("error and failed events return error", func(t *testing.T) {
-		p := newOpenAIResponsesParser()
+		p := newResponsesParser()
 		_, err := p.handle(responsesEventChunk{Type: "error", Code: "E1", Message: "boom"})
 		if err == nil || !strings.Contains(err.Error(), "E1") {
 			t.Errorf("error event -> %v, want code included", err)

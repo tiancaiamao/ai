@@ -3,6 +3,20 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Model-Scoped Proxy Routing (2026-08)
+
+**What changed**: Added an optional provider-level `proxy` setting in
+`models.json`. Model API requests use that configured proxy. The existing OpenAI
+Responses path retains its environment-based proxy fallback when no model
+proxy is configured; other model paths otherwise make direct connections. The
+standalone `ai login-codex` OAuth flow continues to use standard proxy
+environment variables so authentication can be bootstrapped independently.
+
+**Why**: A global proxy environment affects tool subprocesses and unrelated
+network operations. Keeping proxy selection in the model provider config makes
+runtime routing explicit while preserving a convenient proxy mechanism for the
+interactive login flow.
+
 ## Shared Slash-Command Result Renderers (2026-08)
 
 **Problem**: Slash-command results were rendered twice with diverging output: the TUI shape-sniffed response payloads client-side (`subcommand/run/tui/event_renderer.go`, ~700 lines), while ACP hosts — which have no TUI renderer of their own and just display text — needed server-side formatting (PR #384 added a parallel set of per-command renderers in `acp.go`). Same commands, two code paths, inconsistent formats.

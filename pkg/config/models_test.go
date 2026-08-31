@@ -129,6 +129,40 @@ func TestLoadModelSpecsOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadModelSpecsInheritsProviderProxy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.json")
+	data := `{
+  "providers": {
+    "openai-codex": {
+      "proxy": "socks5://127.0.0.1:1180",
+      "models": [
+        { "id": "gpt-5.6-luna" },
+        { "id": "gpt-5.6-sol" }
+      ]
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	specs, err := LoadModelSpecs(path)
+	if err != nil {
+		t.Fatalf("LoadModelSpecs: %v", err)
+	}
+	byID := map[string]ModelSpec{}
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	if got := byID["gpt-5.6-luna"].Proxy; got != "socks5://127.0.0.1:1180" {
+		t.Errorf("provider proxy = %q", got)
+	}
+	if got := byID["gpt-5.6-sol"].Proxy; got != "socks5://127.0.0.1:1180" {
+		t.Errorf("second model proxy = %q", got)
+	}
+}
+
 func TestLoadModelSpecsDeterministicSort(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "models.json")

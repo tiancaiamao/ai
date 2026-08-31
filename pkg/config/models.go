@@ -16,6 +16,7 @@ type ModelSpec struct {
 	Provider         string
 	BaseURL          string
 	API              string
+	Proxy            string
 	Reasoning        bool
 	ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
 	Input            []string
@@ -31,6 +32,7 @@ type modelsFile struct {
 type providerConfig struct {
 	BaseURL string        `json:"baseUrl,omitempty"`
 	API     string        `json:"api,omitempty"`
+	Proxy   string        `json:"proxy,omitempty"`
 	Models  []modelConfig `json:"models,omitempty"`
 }
 
@@ -84,6 +86,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 		provider = strings.TrimSpace(provider)
 		baseURL := strings.TrimSpace(pcfg.BaseURL)
 		api := strings.TrimSpace(pcfg.API)
+		proxy := strings.TrimSpace(pcfg.Proxy)
 		if provider == "" {
 			continue
 		}
@@ -98,6 +101,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				Provider:         provider,
 				BaseURL:          firstNonEmpty(model.BaseURL, baseURL),
 				API:              firstNonEmpty(model.API, api),
+				Proxy:            proxy,
 				Reasoning:        model.Reasoning,
 				ReasoningEfforts: model.ReasoningEfforts,
 				Input:            model.Input,
