@@ -298,7 +298,7 @@ func TestACPSessionLoad(t *testing.T) {
 	if kind, _ := toolCall["kind"].(string); kind != "execute" {
 		t.Errorf("tool_call: expected kind execute (bash), got %v", kind)
 	}
-		if status, _ := toolCall["status"].(string); status != "pending" {
+	if status, _ := toolCall["status"].(string); status != "pending" {
 		t.Errorf("tool_call: expected pending, got %v", status)
 	}
 	if title, _ := toolCall["title"].(string); title != "bash" {
