@@ -120,7 +120,14 @@ func StreamLLM(
 
 Routes to the correct provider based on `model.API`:
 - `"anthropic-messages"` → `StreamAnthropic()`
+- `"openai-codex-responses"` → `StreamCodex()`
+- `"openai-responses"` → `StreamOpenAIResponses()`
 - All others → OpenAI-compatible SSE streaming
+
+Each model request uses `Model.Proxy` when configured. An empty proxy means a
+direct connection; `ALL_PROXY`, `HTTP_PROXY`, and `HTTPS_PROXY` are not read
+for model requests. The standalone `ai login-codex` OAuth flow has separate
+environment-based proxy handling.
 
 Returns an `EventStream` that emits `LLMEvent` values. The stream ends with either `LLMDoneEvent` (success) or `LLMErrorEvent` (failure).
 

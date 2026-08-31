@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tiancaiamao/ai/pkg/auth"
+	"github.com/tiancaiamao/ai/pkg/netutil"
 )
 
 const defaultCodexBaseURL = "https://chatgpt.com/backend-api"
@@ -49,7 +50,7 @@ func StreamCodex(
 
 		if accessToken == "" {
 			// Try loading from auth.json
-			creds, err := auth.LoadCodexCredentials()
+			creds, err := auth.LoadCodexCredentialsWithProxy(model.Proxy)
 			if err != nil {
 				stream.Push(LLMErrorEvent{Error: fmt.Errorf("no Codex credentials: %w (run 'ai --login-codex' to authenticate)", err)})
 				return
@@ -113,7 +114,11 @@ func StreamCodex(
 				return io.NopCloser(bytes.NewReader(bodyJson)), nil
 			}
 
-			httpClient := &http.Client{}
+			httpClient, err := netutil.NewHTTPClient(model.Proxy)
+			if err != nil {
+				stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
+				return
+			}
 			resp, lastErr = httpClient.Do(req)
 			if lastErr != nil {
 				if attempt < maxRetries {

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/netutil"
 	"github.com/tiancaiamao/ai/pkg/traceevent"
-	"golang.org/x/net/proxy"
 )
 
 // responsesEventChunk is the parsed JSON body of a single SSE data line from
@@ -387,21 +387,16 @@ func StreamOpenAIResponses(
 
 		// Execute request — derive total timeout from context deadline so the HTTP client enforces
 		// a hard ceiling even when SetReadDeadline is refreshed per-chunk.
-		client := &http.Client{}
+		client, err := netutil.NewHTTPClient(model.Proxy)
+		if err != nil {
+			stream.Push(LLMErrorEvent{Error: fmt.Errorf("configure model proxy: %w", err)})
+			return
+		}
 		if deadline, ok := ctx.Deadline(); ok {
 			remaining := time.Until(deadline)
 			if remaining > 0 {
 				client.Timeout = remaining
 			}
-		}
-
-		// Support SOCKS5 proxy via ALL_PROXY or HTTPS_PROXY environment variable
-		// Example: ALL_PROXY=socks5://127.0.0.1:1180
-		// Uses golang.org/x/net/proxy for proper SOCKS5 support
-		if proxyURL := os.Getenv("ALL_PROXY"); proxyURL != "" {
-			applyProxy(client, proxyURL)
-		} else if proxyURL := os.Getenv("HTTPS_PROXY"); proxyURL != "" {
-			applyProxy(client, proxyURL)
 		}
 
 		resp, err := client.Do(req)
@@ -577,43 +572,6 @@ func extractResponsesUsage(chunk responsesEventChunk) Usage {
 	return u
 }
 
-// applyProxy configures the HTTP client to route through the given proxy URL.
-// Supports socks5:// (via golang.org/x/net/proxy) and http(s):// schemes.
-func applyProxy(client *http.Client, proxyURL string) {
-	parsed, err := parseProxyURL(proxyURL)
-	if err != nil {
-		return
-	}
-	if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
-		dialer, err := proxy.SOCKS5("tcp", parsed.Host, nil, nil)
-		if err != nil {
-			return
-		}
-		// Keep the standard transport defaults (connection pooling, HTTP/2, etc.)
-		// while replacing only the dialer used for SOCKS5 connections.
-		baseTransport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return
-		}
-		transport := baseTransport.Clone()
-		if cd, ok := dialer.(proxy.ContextDialer); ok {
-			transport.DialContext = cd.DialContext
-		} else {
-			transport.Dial = dialer.Dial
-		}
-		client.Transport = transport
-		return
-	}
-	// HTTP/HTTPS proxy
-	baseTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return
-	}
-	transport := baseTransport.Clone()
-	transport.Proxy = http.ProxyURL(parsed)
-	client.Transport = transport
-}
-
 // buildOpenAIResponsesRequest builds the request body for OpenAI Responses API.
 func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any {
 	// Convert messages to input format for Responses API
@@ -746,10 +704,8 @@ func buildOpenAIResponsesRequest(model Model, llmCtx LLMContext) map[string]any 
 	return reqBody
 }
 
-// parseProxyURL parses a proxy URL string and returns a *url.URL.
-// Supports socks5://, http://, and https:// schemes.
+// parseProxyURL is retained for compatibility with proxy configuration tests.
 func parseProxyURL(proxyURL string) (*url.URL, error) {
-	// Add scheme if not present
 	if !strings.Contains(proxyURL, "://") {
 		proxyURL = "http://" + proxyURL
 	}

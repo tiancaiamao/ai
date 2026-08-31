@@ -29,6 +29,12 @@ func GetDefaultAuthPath() (string, error) {
 
 // ResolveAPIKey resolves API key from env or auth.json for the provider.
 func ResolveAPIKey(provider string) (string, error) {
+	return ResolveAPIKeyWithProxy(provider, "")
+}
+
+// ResolveAPIKeyWithProxy resolves credentials, using proxyURL for provider
+// authentication operations when supported.
+func ResolveAPIKeyWithProxy(provider, proxyURL string) (string, error) {
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
 	if providerKey == "" {
 		providerKey = "zai"
@@ -36,7 +42,7 @@ func ResolveAPIKey(provider string) (string, error) {
 
 	// For Codex provider, resolve via OAuth tokens
 	if providerKey == "openai-codex" {
-		return resolveCodexAPIKey()
+		return resolveCodexAPIKey(proxyURL)
 	}
 
 	envVar := strings.ToUpper(providerKey) + "_API_KEY"

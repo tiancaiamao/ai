@@ -21,11 +21,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tiancaiamao/ai/pkg/netutil"
 )
 
 // CodexOAuth constants following pi-mono's OpenAI Codex implementation.
 const (
-	CodexClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
+	CodexClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	CodexAuthorizeURL = "https://auth.openai.com/oauth/authorize"
 	CodexTokenURL     = "https://auth.openai.com/oauth/token"
 	CodexRedirectURI  = "http://localhost:1455/auth/callback"
@@ -37,7 +39,7 @@ const (
 type CodexCredentials struct {
 	Access    string `json:"access"`
 	Refresh   string `json:"refresh"`
-	Expires   int64  `json:"expires"`   // Unix timestamp (ms)
+	Expires   int64  `json:"expires"` // Unix timestamp (ms)
 	AccountID string `json:"accountId"`
 }
 
@@ -174,14 +176,10 @@ type tokenError struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-// proxyClient returns an *http.Client that respects HTTP_PROXY/HTTPS_PROXY
-// environment variables via http.ProxyFromEnvironment.
-func proxyClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		},
-	}
+// loginHTTPClient returns a client for the standalone OAuth flow. The login
+// command intentionally follows the standard proxy environment variables.
+func loginHTTPClient() (*http.Client, error) {
+	return netutil.NewEnvironmentHTTPClient()
 }
 
 func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
@@ -193,7 +191,11 @@ func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
 		"redirect_uri":  {CodexRedirectURI},
 	}
 
-	resp, err := proxyClient().Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	client, err := loginHTTPClient()
+	if err != nil {
+		return nil, fmt.Errorf("create token exchange client: %w", err)
+	}
+	resp, err := client.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request: %w", err)
 	}
@@ -236,13 +238,24 @@ func exchangeCode(code string, verifier string) (*CodexCredentials, error) {
 
 // RefreshCodexToken refreshes an expired access token using the refresh token.
 func RefreshCodexToken(refreshToken string) (*CodexCredentials, error) {
+	return RefreshCodexTokenWithProxy(refreshToken, "")
+}
+
+// RefreshCodexTokenWithProxy refreshes an expired access token using proxyURL.
+// An empty proxyURL means a direct connection and ignores proxy environment
+// variables. The model runtime uses this path; login uses loginHTTPClient.
+func RefreshCodexTokenWithProxy(refreshToken, proxyURL string) (*CodexCredentials, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-				"client_id":     {CodexClientID},
+		"client_id":     {CodexClientID},
 	}
 
-	resp, err := proxyClient().Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	client, err := netutil.NewHTTPClient(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("create token refresh client: %w", err)
+	}
+	resp, err := client.Post(CodexTokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request: %w", err)
 	}
@@ -391,10 +404,10 @@ func SaveCodexCredentials(creds *CodexCredentials) error {
 
 	// Set codex credentials
 	data["openai-codex"] = map[string]any{
-		"type":     "oauth",
-		"access":   creds.Access,
-		"refresh":  creds.Refresh,
-		"expires":  creds.Expires,
+		"type":      "oauth",
+		"access":    creds.Access,
+		"refresh":   creds.Refresh,
+		"expires":   creds.Expires,
 		"accountId": creds.AccountID,
 	}
 
@@ -414,6 +427,13 @@ func SaveCodexCredentials(creds *CodexCredentials) error {
 // LoadCodexCredentials loads Codex OAuth credentials from ~/.ai/auth.json.
 // If the access token is expired, it attempts to refresh automatically.
 func LoadCodexCredentials() (*CodexCredentials, error) {
+	return LoadCodexCredentialsWithProxy("")
+}
+
+// LoadCodexCredentialsWithProxy loads credentials and refreshes them using
+// proxyURL. An empty proxyURL means a direct connection and ignores proxy
+// environment variables.
+func LoadCodexCredentialsWithProxy(proxyURL string) (*CodexCredentials, error) {
 	authPath, err := getAuthFilePath()
 	if err != nil {
 		return nil, err
@@ -445,7 +465,7 @@ func LoadCodexCredentials() (*CodexCredentials, error) {
 		return nil, fmt.Errorf("parse openai-codex entry: %w", err)
 	}
 
-			creds := &CodexCredentials{
+	creds := &CodexCredentials{
 		Access:    entry.Access,
 		Refresh:   entry.Refresh,
 		Expires:   entry.Expires,
@@ -461,7 +481,7 @@ func LoadCodexCredentials() (*CodexCredentials, error) {
 	// Auto-refresh if expired
 	if creds.IsExpired() {
 		slog.Info("Codex access token expired, refreshing...")
-		refreshed, err := RefreshCodexToken(creds.Refresh)
+		refreshed, err := RefreshCodexTokenWithProxy(creds.Refresh, proxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("refresh expired token: %w", err)
 		}
