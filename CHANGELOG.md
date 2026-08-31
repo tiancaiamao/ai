@@ -3,6 +3,16 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Runtime Guard Against Nested Subagents (2026-08)
+
+**Problem**: A subagent could invoke `ai run` or `ai serve` again, allowing unbounded recursive delegation despite prompt and skill guidance.
+
+**What changed**: `ai run` and `ai serve` now propagate an internal subagent-depth marker to their RPC child. A depth-one subagent is rejected before a new run directory or subprocess is created, while the top-level RPC agent remains able to create one level of subagents.
+
+**Why**: Enforcing the one-level delegation invariant at the process launcher prevents recursive spawning at runtime instead of relying on model behavior.
+
+
+
 ## Shared Slash-Command Result Renderers (2026-08)
 
 **Problem**: Slash-command results were rendered twice with diverging output: the TUI shape-sniffed response payloads client-side (`subcommand/run/tui/event_renderer.go`, ~700 lines), while ACP hosts — which have no TUI renderer of their own and just display text — needed server-side formatting (PR #384 added a parallel set of per-command renderers in `acp.go`). Same commands, two code paths, inconsistent formats.
