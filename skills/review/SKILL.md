@@ -35,8 +35,11 @@ tools: [bash]
 2. **确定项目目录和变更范围** - 解析出项目路径和需要 review 的变更描述
 3. **启动 review agent** - 用 `ai serve --id-file`（tmux）启动独立 agent，传入 reviewer system prompt 和任务
 4. **发送任务** - 用 `ai send` 发送 review 指令
-5. **等待完成** - 用 `ai watch --follow --pretty` 实时观察直到 agent_end
-6. **读取结果** - agent 将 JSON 输出写到指定文件，读取并格式化展示
+5. **等待完成** - 用 `ai watch --follow --pretty --timeout 5m` 观察；命令返回后必须区分正常完成、超时和连接异常
+6. **超时恢复** - `watch` 超时不等于 reviewer 失败：检查结果文件和 `git diff --stat`，若有输出/变化就继续 watch 下一轮；至少连续两轮无进展才考虑 kill
+7. **读取结果** - 只有在 reviewer 已收到 `_turn_end` 且结果 JSON 文件存在并可解析后，才能读取结果并执行 cleanup
+
+`ai watch --follow` 的退出码是编排信号：0 表示收到当前 turn 的 `_turn_end`，2 表示观察窗口超时且 agent 可能仍在运行，1 表示连接在未收到完成事件时关闭。`_session_load_end` 只表示历史回放完成，不表示当前 turn 完成。退出码为 2 或 1 时不得直接 cleanup；先按 `subagent` 技能检查进展。
 
 ## Diff 策略
 

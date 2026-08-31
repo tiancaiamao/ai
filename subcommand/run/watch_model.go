@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -436,7 +437,13 @@ func WatchSubcommand() {
 			fmt.Fprintf(os.Stderr, "error: run %s is not running (status: %s), --follow requires a live agent\n", meta.ID, meta.Status)
 			os.Exit(1)
 		}
-		followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
+		result := followWatch(meta, 0, *prettyFlag, *summaryFlag, *watchTimeoutFlag)
+		if result.timedOut {
+			fmt.Fprintln(os.Stderr, "--- watch timeout; agent may still be running, continue watching before cleanup ---")
+		}
+		if code := followWatchExitCode(result); code != 0 {
+			os.Exit(code)
+		}
 		return
 	}
 
@@ -516,9 +523,25 @@ func machineWatch(eventsPath string, offset int64) {
 	fmt.Printf("__offset:%d\n", lastOffset)
 }
 
+// followWatchResult describes why a follow watch stopped.
+type followWatchResult struct {
+	ended    bool
+	timedOut bool
+}
+
+func followWatchExitCode(result followWatchResult) int {
+	if result.timedOut {
+		return 2
+	}
+	if !result.ended {
+		return 1
+	}
+	return 0
+}
+
 // followWatch streams ACP updates from the agent until the current turn ends
 // (_turn_end update), the connection closes, or the timeout fires.
-func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) {
+func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, watchTimeout time.Duration) followWatchResult {
 	// watchTimeout == -1: flag not set → default behavior (exit on _turn_end)
 	// watchTimeout == 0: wait forever (until the agent process exits)
 	// watchTimeout > 0: wait up to this duration
@@ -529,22 +552,40 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	}
 	defer client.Close()
 
+	var timedOut atomic.Bool
+	var timeoutTimer *time.Timer
+	timerDone := make(chan struct{})
 	if watchTimeout > 0 {
-		go func() {
-			time.Sleep(watchTimeout)
-			client.Close()
-		}()
+		timeoutTimer = time.AfterFunc(watchTimeout, func() {
+			timedOut.Store(true)
+			_ = client.Close()
+			close(timerDone)
+		})
 	}
+	stopTimer := func() {
+		if timeoutTimer == nil || timeoutTimer.Stop() {
+			return
+		}
+		<-timerDone
+	}
+	finish := func(ended bool) followWatchResult {
+		// Stop and drain the timer before reading timedOut, so a completion
+		// event racing with the deadline is not reported as a timeout.
+		stopTimer()
+		return followWatchResult{ended: ended, timedOut: timedOut.Load()}
+	}
+	defer stopTimer()
 
 	updates := client.Updates()
 	if err := client.LoadSession(sid); err != nil {
-		// Not fatal — continue with live updates only.
+		// Not fatal — continue with live updates only. This is expected when
+		// the initial prompt is already in flight.
 		fmt.Fprintf(os.Stderr, "warning: session replay failed (%v); showing live updates only\n", err)
 	}
 
 	if summary {
-		followWatchSummary(updates, fromSeq)
-		return
+		ended := followWatchSummary(updates, fromSeq)
+		return finish(ended)
 	}
 
 	if !pretty {
@@ -556,6 +597,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 				ended = true
 				break
 			}
+
 			env, err := json.Marshal(map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
@@ -578,7 +620,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
 		}
 		fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
-		return
+		return finish(ended)
 	}
 
 	// Pretty mode: stream formatted output in real-time using ParseACPUpdate.
@@ -592,6 +634,7 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 			ended = true
 			break
 		}
+
 		seq++
 
 		evt := tui.ParseACPUpdate(u)
@@ -646,12 +689,14 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 		fmt.Fprintln(os.Stderr, "--- agent stream ended without _turn_end event ---")
 	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+	return finish(ended)
 }
 
 // followWatchSummary accumulates events and only prints the final assistant text
 // when _turn_end or session/load replay completion is reached. This avoids
 // flooding tool output with intermediate thinking, tool calls, and tool results.
-func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
+func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) bool {
+
 	var lastAssistantText strings.Builder
 	var currentAssistantText strings.Builder
 	seq := fromSeq
@@ -660,6 +705,7 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 	for u := range updates {
 		if u.SessionUpdate == rpc.ACPUpdateSessionLoadEnd {
 			ended = true
+
 			// Save current assistant text as the "last" one.
 			if currentAssistantText.Len() > 0 {
 				lastAssistantText.Reset()
@@ -707,6 +753,7 @@ func followWatchSummary(updates <-chan rpc.ACPUpdate, fromSeq uint64) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "__seq:%d\n", seq)
+	return ended
 }
 
 // --- Run resolution ---

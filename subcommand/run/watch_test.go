@@ -171,8 +171,28 @@ func captureStd(t *testing.T) (*bytes.Buffer, *bytes.Buffer, func()) {
 	return &stdout, &stderrBuf, restore
 }
 
+func TestFollowWatchExitCode(t *testing.T) {
+	tests := []struct {
+		name   string
+		result followWatchResult
+		want   int
+	}{
+		{name: "completed", result: followWatchResult{ended: true}, want: 0},
+		{name: "timeout", result: followWatchResult{timedOut: true}, want: 2},
+		{name: "stream closed", result: followWatchResult{}, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := followWatchExitCode(tt.result); got != tt.want {
+				t.Fatalf("followWatchExitCode(%+v) = %d, want %d", tt.result, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFollowWatchSummary_ExitsOnTurnEnd_IgnoresLaterUpdates(t *testing.T) {
 	// followWatchSummary must stop processing at _turn_end, even if
+
 	// more updates arrive on the channel afterwards.
 	updates := updateChan(
 		textChunk("hello "),
