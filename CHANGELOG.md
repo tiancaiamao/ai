@@ -3,6 +3,21 @@
 Architecture decisions, major feature evolution, and the "why" behind changes.
 Not a git log mirror — focus on what changed at the design level and why.
 
+## Model-Declared `reasoningContext` Capability (2026-08)
+
+**What changed**: Gateways that wrap requests in Codex Responses Lite (e.g. the
+`crs` provider) reject requests whose `reasoning.context` is not `all_turns`.
+This is now a per-model capability in `models.json`
+(`"reasoningContext": "all_turns"`) honored on both the Chat Completions and
+OpenAI Responses request paths. An earlier fix hard-coded it to the provider
+name (`Provider == "work"`), which broke the moment the provider was renamed in
+`models.json`.
+
+**Why**: The provider key is a user-defined routing label; protocol and
+capability requirements belong to the model entry, not to specific provider
+names. Declaring the requirement in the model config keeps behavior stable
+across renames and lets other gateways opt in without code changes.
+
 ## Runtime Guard Against Nested Subagents (2026-08)
 
 **Problem**: A subagent could invoke `ai run` or `ai serve` again, allowing unbounded recursive delegation despite prompt and skill guidance.
@@ -10,7 +25,6 @@ Not a git log mirror — focus on what changed at the design level and why.
 **What changed**: `ai run` and `ai serve` now propagate an internal subagent-depth marker to their RPC child. A depth-one subagent is rejected before a new run directory or subprocess is created, while the top-level RPC agent remains able to create one level of subagents.
 
 **Why**: Enforcing the one-level delegation invariant at the process launcher prevents recursive spawning at runtime instead of relying on model behavior.
-
 
 ## Model-Scoped Proxy Routing (2026-08)
 

@@ -19,6 +19,7 @@ type ModelSpec struct {
 	Proxy            string
 	Reasoning        bool
 	ReasoningEfforts []string // supported reasoning_effort values; empty = unrestricted
+	ReasoningContext string   // reasoning.context value required by the gateway (e.g. "all_turns"); empty = not required
 	Input            []string
 	ContextWindow    int
 	MaxTokens        int
@@ -43,6 +44,7 @@ type modelConfig struct {
 	API              string   `json:"api,omitempty"`
 	Reasoning        bool     `json:"reasoning,omitempty"`
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+	ReasoningContext string   `json:"reasoningContext,omitempty"`
 	Input            []string `json:"input,omitempty"`
 	ContextWindow    int      `json:"contextWindow,omitempty"`
 	MaxTokens        int      `json:"maxTokens,omitempty"`
@@ -104,6 +106,7 @@ func LoadModelSpecs(path string) ([]ModelSpec, error) {
 				Proxy:            proxy,
 				Reasoning:        model.Reasoning,
 				ReasoningEfforts: model.ReasoningEfforts,
+				ReasoningContext: model.ReasoningContext,
 				Input:            model.Input,
 				ContextWindow:    model.ContextWindow,
 				MaxTokens:        model.MaxTokens,
