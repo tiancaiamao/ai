@@ -22,9 +22,9 @@ across renames and lets other gateways opt in without code changes.
 
 **Problem**: A subagent could invoke `ai run` or `ai serve` again, allowing unbounded recursive delegation despite prompt and skill guidance.
 
-**What changed**: `ai run` and `ai serve` now propagate an internal subagent-depth marker to their RPC child. A depth-one subagent is rejected before a new run directory or subprocess is created, while the top-level RPC agent remains able to create one level of subagents.
+**What changed**: Agent initialization now advances a single `AI_SUBAGENT_DEPTH` marker in the shared `pkg/rpc` setup used by both RPC and ACP. A top-level process starts at depth zero, its child becomes depth one, and another nested agent is rejected with a friendly error before setup. Child processes inherit the environment normally.
 
-**Why**: Enforcing the one-level delegation invariant at the process launcher prevents recursive spawning at runtime instead of relying on model behavior.
+**Why**: Enforcing the one-level delegation invariant at the shared agent initialization boundary prevents recursive spawning at runtime without separate launcher markers or relying on model behavior.
 
 ## Model-Scoped Proxy Routing (2026-08)
 

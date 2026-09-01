@@ -28,17 +28,19 @@ const exitGracePeriod = 250 * time.Millisecond
 
 // BashTool executes bash commands with dynamic workspace support.
 type BashTool struct {
-	workspace   *Workspace
-	timeout     time.Duration
-	execTimeout time.Duration
+	workspace     *Workspace
+	timeout       time.Duration
+	execTimeout   time.Duration
+	subagentDepth int
 }
 
 // NewBashTool creates a new Bash tool with dynamic workspace support.
 func NewBashTool(ws *Workspace) *BashTool {
 	return &BashTool{
-		workspace:   ws,
-		timeout:     120 * time.Second, // Default 120s for overall timeout
-		execTimeout: 120 * time.Second, // Default 120s for individual commands (LLM can override)
+		workspace:     ws,
+		timeout:       120 * time.Second, // Default 120s for overall timeout
+		execTimeout:   120 * time.Second, // Default 120s for individual commands (LLM can override)
+		subagentDepth: processSubagentDepth(),
 	}
 }
 
@@ -47,11 +49,29 @@ func (t *BashTool) Name() string {
 	return "bash"
 }
 
+var agentLaunchPattern = regexp.MustCompile(`(?:^|[;&|()\n]\s*)(?:env\s+[^;&|()\n]*\s+)?(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)|["']\s*(?:env\s+[^;&|()\n]*\s+)?(?:[[:alnum:]_./-]+/)?ai[[:space:]]+(?:run|serve|rpc|acp)(?:[[:space:]]|$)`)
+
+func (t *BashTool) isSubagentLaunch(command string) bool {
+	return t.subagentDepth > 0 && agentLaunchPattern.MatchString(command)
+}
+
+func processSubagentDepth() int {
+	value, ok := os.LookupEnv("AI_SUBAGENT_DEPTH")
+	if !ok {
+		return 0
+	}
+	depth, err := strconv.Atoi(value)
+	if err != nil || depth < 0 {
+		return 1
+	}
+	return depth
+}
+
 // Description returns the tool description.
 func (t *BashTool) Description() string {
 	return `Execute bash commands in the current working directory.
 
-Best for quick commands (<2 minutes). For long-running tasks (builds, large test suites, servers), use the /tmux skill instead.
+Best for quick commands (<2 minutes). For long-running tasks (builds, large tests, servers), use the /tmux skill instead.
 
 Timeout behavior:
   • Default: 120 seconds
@@ -106,7 +126,21 @@ func (t *BashTool) Execute(ctx context.Context, args map[string]any) ([]agentctx
 		return nil, fmt.Errorf("invalid command argument: command cannot be empty")
 	}
 
+	// Block commands that would create another ai agent from a subagent. The
+	// process-local depth remains effective even if the shell command tries to
+	// unset the inherited environment marker.
+
+	if t.isSubagentLaunch(command) {
+		return []agentctx.ContentBlock{
+			agentctx.TextContent{
+				Type: "text",
+				Text: "⛔ Blocked: subagents cannot launch another ai agent.",
+			},
+		}, nil
+	}
+
 	// Block dangerous tmux commands that can destroy the entire tmux server.
+
 	// The agent itself runs inside tmux, so kill-server kills the agent too.
 	if isDangerousTmuxKill(command) {
 		return []agentctx.ContentBlock{
