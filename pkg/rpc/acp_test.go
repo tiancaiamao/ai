@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,6 +59,32 @@ func runACPSmoke(t *testing.T, tmpDir string, lines []string) []map[string]any {
 	outWriter.Close()
 
 	return <-respCh
+}
+
+func TestACPContextCancellation(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "test-key")
+	t.Setenv("AI_CONFIG_PATH", filepath.Join(t.TempDir(), "config.json"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	outReader, outWriter := io.Pipe()
+	conn := transport.NewStdio(reader, outWriter)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- RunACPWithContext(ctx, conn, t.TempDir(), "", "", 0, 5*time.Second, "", "", "acp-cancel")
+	}()
+
+	cancel()
+	writer.Close()
+	outWriter.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunACPWithContext did not return after context cancellation")
+	}
+	_ = outReader.Close()
 }
 
 func TestACPInitialize(t *testing.T) {

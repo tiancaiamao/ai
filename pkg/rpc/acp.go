@@ -169,15 +169,27 @@ type acpServer struct {
 // constructs the shared agent kernel (config, session, tools, compactor and
 // agent); only the protocol layer is ACP.
 func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
-	return runACP(conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, "", modelOverride, runID)
+	return RunACPWithContext(context.Background(), conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, modelOverride, runID)
 }
 
 // RunACPWithAgentConfig runs ACP with an explicit agent.yaml configuration.
 func RunACPWithAgentConfig(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
-	return runACP(conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, "", agentConfigPath, modelOverride, runID)
+	return RunACPWithAgentConfigContext(context.Background(), conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, agentConfigPath, modelOverride, runID)
 }
 
-func runACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, agentConfigPath string, modelOverride string, runID string) error {
+// RunACPWithContext runs ACP until the transport closes or ctx is canceled.
+// Canceling ctx aborts the active agent and waits for persistence cleanup.
+func RunACPWithContext(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+	return runACP(ctx, conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, "", modelOverride, runID)
+}
+
+// RunACPWithAgentConfigContext runs ACP with an explicit agent.yaml
+// configuration until the transport closes or ctx is canceled.
+func RunACPWithAgentConfigContext(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+	return runACP(ctx, conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, "", agentConfigPath, modelOverride, runID)
+}
+
+func runACP(ctx context.Context, conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
@@ -202,13 +214,14 @@ func runACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 
 	// --- ACP server ---
 	srv := &acpServer{app: app, conn: conn}
-	srv.ctx, srv.cancel = context.WithCancel(context.Background())
+	srv.ctx, srv.cancel = context.WithCancel(ctx)
 	defer srv.cancel()
 	// Unblock the transport read on shutdown: canceling the ctx closes the conn,
 	// which yields io.EOF from ReadMessage so the run loop exits cleanly.
 	go func() {
 		<-srv.ctx.Done()
-		conn.Close()
+		_ = conn.Close()
+		ag.Abort()
 	}()
 
 	app.registerAllHandlers()
