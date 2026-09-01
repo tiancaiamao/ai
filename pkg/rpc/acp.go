@@ -211,6 +211,7 @@ func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSys
 	app.buildSkillCommands()
 
 	// --- Start event emitter (state tracking + persistence + ACP translation) ---
+	app.emitAgentEvent = srv.emit
 	shutdownEmitter, eventEmitterDone := app.initEventEmitter(srv.emit)
 
 	// --- Timeout watchdog ---
@@ -528,6 +529,15 @@ func (s *acpServer) handlePrompt(req acpRequest) {
 	// are excluded here — they run through the normal prompt path below where
 	// handlePrompt expands them into a full skill block.
 	if name, args, ok := matchACPCommand(s.app.server, message); ok {
+		if name == "compact" {
+			// Compaction can take a while. Emit the command before running the
+			// synchronous handler so clients see an immediate acknowledgement;
+			// the handler's compaction events and result follow when it finishes.
+			s.sendUpdate(acpUpdate{
+				SessionUpdate: "user_message_chunk",
+				Content:       map[string]string{"type": "text", "text": message},
+			})
+		}
 		s.dispatchACPCommand(req.ID, name, args)
 		return
 	}

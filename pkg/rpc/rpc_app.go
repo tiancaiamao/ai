@@ -96,6 +96,10 @@ type rpcApp struct {
 	// --- RPC Server ---
 	server *Server
 
+	// Protocol-specific event sink. This is used by handlers that emit events
+	// outside the agent loop (for example, detached manual compaction).
+	emitAgentEvent func(agent.AgentEvent)
+
 	// --- Mutable state protected by stateMu ---
 	stateMu               sync.Mutex
 	isStreaming           bool
@@ -119,6 +123,17 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 		return json.Unmarshal([]byte(args), target) == nil
 	}
 	return false
+}
+
+// emitEvent forwards an event through the protocol-specific sink when one is
+// configured. Handlers use this for events that are not produced by the agent
+// loop, such as detached manual compaction.
+func (app *rpcApp) emitEvent(event agent.AgentEvent) {
+	if app.emitAgentEvent != nil {
+		app.emitAgentEvent(event)
+		return
+	}
+	app.server.EmitEvent(event)
 }
 
 // initEventEmitter starts the goroutine that reads agent events and forwards
