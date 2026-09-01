@@ -32,10 +32,6 @@ type rpcAppSetupParams struct {
 // config loading, model resolution, session loading/creation, tool registration,
 // compactor creation, and skill loading.
 func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
-	if err := advanceProcessSubagentDepth(); err != nil {
-		return nil, err
-	}
-
 	// --- Home directory (used for role + skills paths) ---
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

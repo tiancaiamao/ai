@@ -200,7 +200,7 @@ func DialACP(sockPath string) (*ACPClient, string, error) {
 	return c, sid, nil
 }
 
-const acpHandshakeTimeout = 5 * time.Second
+const acpHandshakeTimeout = 60 * time.Second
 
 // --- internals ---
 
@@ -248,7 +248,7 @@ func (c *ACPClient) requestWithTimeout(method string, params any, result *json.R
 			c.mu.Lock()
 			delete(c.pending, id)
 			c.mu.Unlock()
-			return fmt.Errorf("timed out waiting for %s response", method)
+			return fmt.Errorf("timed out waiting %s for %s response", timeout, method)
 		}
 	} else {
 		raw, ok = <-ch

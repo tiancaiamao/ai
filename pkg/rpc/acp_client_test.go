@@ -24,7 +24,7 @@ func TestACPClientInitializeTimesOut(t *testing.T) {
 
 	start := time.Now()
 	err := client.initializeWithTimeout(20 * time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "timed out waiting for initialize response") {
+	if err == nil || !strings.Contains(err.Error(), "timed out waiting 20ms for initialize response") {
 		t.Fatalf("initialize error = %v, want timeout", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
