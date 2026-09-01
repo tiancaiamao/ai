@@ -515,7 +515,7 @@ func (app *rpcApp) handleModel(args string) (any, error) {
 		arg = fmt.Sprintf("%s %s", provider, modelID)
 	}
 
-	h, ok := app.server.GetSlashHandler("set_model")
+	h, ok := app.commands.Get("set_model")
 	if !ok {
 		return nil, fmt.Errorf("unknown command: set_model")
 	}
@@ -552,47 +552,47 @@ func (app *rpcApp) handleShow(args string) (any, error) {
 
 // registerConfigHandlers registers configuration-related slash commands.
 func (app *rpcApp) registerConfigHandlers(validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool) {
-	app.server.RegisterSlash("set", "Configure agent settings", func(args string) (any, error) {
+	app.commands.Register("set", "Configure agent settings", func(args string) (any, error) {
 		return app.handleSet(args, validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels)
 	})
 
-	app.server.RegisterHiddenSlash("set_model", "Set the active model by ID (internal, use /model instead)", func(args string) (any, error) {
+	app.commands.RegisterHidden("set_model", "Set the active model by ID (internal, use /model instead)", func(args string) (any, error) {
 		return app.handleModelSet(args)
 	})
 
-	app.server.RegisterSlash("model", "List models or set the active model", func(args string) (any, error) {
+	app.commands.Register("model", "List models or set the active model", func(args string) (any, error) {
 		return app.handleModel(args)
 	})
 
-	app.server.RegisterSlash("thinking", "Set thinking level (off/low/medium/high)", func(args string) (any, error) {
-		h, ok := app.server.GetSlashHandler("set")
+	app.commands.Register("thinking", "Set thinking level (off/low/medium/high)", func(args string) (any, error) {
+		h, ok := app.commands.Get("set")
 		if !ok {
 			return nil, fmt.Errorf("unknown command: set")
 		}
 		return h("thinking-level " + args)
 	})
 
-	app.server.RegisterSlash("trace-events", "Configure trace events", func(args string) (any, error) {
-		h, ok := app.server.GetSlashHandler("set")
+	app.commands.Register("trace-events", "Configure trace events", func(args string) (any, error) {
+		h, ok := app.commands.Get("set")
 		if !ok {
 			return nil, fmt.Errorf("unknown command: set")
 		}
 		return h("trace-events " + args)
 	})
 
-	app.server.RegisterSlash("toggle", "Toggle display settings (thinking, prefix, tools)", func(args string) (any, error) {
+	app.commands.Register("toggle", "Toggle display settings (thinking, prefix, tools)", func(args string) (any, error) {
 		return app.handleToggle(args)
 	})
 
-	app.server.RegisterSlash("show", "Show agent settings or pipeline info", func(args string) (any, error) {
+	app.commands.Register("show", "Show agent settings or pipeline info", func(args string) (any, error) {
 		return app.handleShow(args)
 	})
 
-	app.server.RegisterSlash("context", "Show current state, session stats, and available models", func(args string) (any, error) {
+	app.commands.Register("context", "Show current state, session stats, and available models", func(args string) (any, error) {
 		_ = args
-		stateH, _ := app.server.GetSlashHandler("session")
-		statsH, _ := app.server.GetSlashHandler("get_session_stats")
-		modelsH, _ := app.server.GetSlashHandler("model")
+		stateH, _ := app.commands.Get("session")
+		statsH, _ := app.commands.Get("get_session_stats")
+		modelsH, _ := app.commands.Get("model")
 
 		stateResult, err := stateH("")
 		if err != nil {
@@ -609,12 +609,12 @@ func (app *rpcApp) registerConfigHandlers(validToolSummaryAutomations, validStee
 	})
 
 	// get_session_stats
-	app.server.RegisterHiddenSlash("get_session_stats", "Get session stats (internal)", func(args string) (any, error) {
+	app.commands.RegisterHidden("get_session_stats", "Get session stats (internal)", func(args string) (any, error) {
 		return app.getSessionStats()
 	})
 	// set_* backward-compatible forwarders
-	app.server.RegisterHiddenSlash("set_auto_compaction", "Set auto-compaction (internal)", app.forwardToSet("auto-compaction"))
-	app.server.RegisterHiddenSlash("set_thinking_level", "Set thinking level (internal)", app.forwardToSet("thinking-level"))
-	app.server.RegisterHiddenSlash("set_trace_events", "Set trace events (internal)", app.forwardToSet("trace-events"))
-	app.server.RegisterHiddenSlash("get_trace_events", "Get trace events (internal)", app.forwardToSet("trace-events"))
+	app.commands.RegisterHidden("set_auto_compaction", "Set auto-compaction (internal)", app.forwardToSet("auto-compaction"))
+	app.commands.RegisterHidden("set_thinking_level", "Set thinking level (internal)", app.forwardToSet("thinking-level"))
+	app.commands.RegisterHidden("set_trace_events", "Set trace events (internal)", app.forwardToSet("trace-events"))
+	app.commands.RegisterHidden("get_trace_events", "Get trace events (internal)", app.forwardToSet("trace-events"))
 }

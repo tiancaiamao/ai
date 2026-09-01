@@ -30,6 +30,8 @@ type ACPUpdate struct {
 	Kind          string         `json:"kind,omitempty"`
 	Status        string         `json:"status,omitempty"`
 	RawInput      map[string]any `json:"rawInput,omitempty"`
+	Used          *int           `json:"used,omitempty"`
+	Size          *int           `json:"size,omitempty"`
 	Commands      []struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -149,20 +151,31 @@ func (c *ACPClient) LoadSession(sessionID string) error {
 // Prompt sends a text prompt and blocks until the turn completes, returning
 // the stop reason ("end_turn" or "cancelled").
 func (c *ACPClient) Prompt(sessionID, text string) (string, error) {
+	result, err := c.PromptResult(sessionID, text)
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		StopReason string `json:"stopReason"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil {
+		return "", fmt.Errorf("parse prompt result: %w", err)
+	}
+	return response.StopReason, nil
+}
+
+// PromptResult sends a text prompt and returns the raw ACP session/prompt
+// result. The standard result contains stopReason; implementation-specific
+// slash-command data is carried in its _meta.commandResult field.
+func (c *ACPClient) PromptResult(sessionID, text string) (json.RawMessage, error) {
 	var raw json.RawMessage
 	if err := c.request("session/prompt", map[string]any{
 		"sessionId": sessionID,
 		"prompt":    []acpContentBlock{{Type: "text", Text: text}},
 	}, &raw); err != nil {
-		return "", err
+		return nil, err
 	}
-	var result struct {
-		StopReason string `json:"stopReason"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("parse prompt result: %w", err)
-	}
-	return result.StopReason, nil
+	return raw, nil
 }
 
 // PromptAsync sends a request without waiting for the turn to complete. A

@@ -93,8 +93,11 @@ type rpcApp struct {
 	// is available. Merged into one message for maximum prefix cache stability.
 	agentContextPrefix string
 
-	// --- RPC Server ---
-	server *Server
+	// --- Slash command registry ---
+	commands *command.Registry
+
+	// Agent event sink supplied by the active protocol adapter.
+	emitEvent func(agent.AgentEvent)
 
 	// --- Mutable state protected by stateMu ---
 	stateMu               sync.Mutex
@@ -126,6 +129,8 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 // responsible for protocol-specific forwarding (NDJSON events for RunRPC,
 // ACP session/update notifications for RunACP).
 func (app *rpcApp) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, chan struct{}) {
+	app.emitEvent = emit
+
 	eventEmitterDone := make(chan struct{})
 	shutdownEmitter := make(chan struct{})
 
@@ -309,26 +314,11 @@ func (app *rpcApp) startDebugServer() {
 	}()
 }
 
-// emitStartEvent sends the initial server_start event with model and tool info.
-
-func (app *rpcApp) emitStartEvent() {
-	allTools := app.registry.All()
-	toolNames := make([]string, len(allTools))
-	for i, t := range allTools {
-		toolNames[i] = t.Name()
-	}
-	app.server.EmitEvent(map[string]any{
-		"type":  "server_start",
-		"model": app.model.ID,
-		"tools": toolNames,
-	})
-}
-
 // --- Slash command helpers ---
 
 func (app *rpcApp) forwardToSet(subcmd string) func(string) (any, error) {
 	return func(args string) (any, error) {
-		h, ok := app.server.GetSlashHandler("set")
+		h, ok := app.commands.Get("set")
 		if !ok {
 			return nil, fmt.Errorf("unknown command: set")
 		}
@@ -338,32 +328,14 @@ func (app *rpcApp) forwardToSet(subcmd string) func(string) (any, error) {
 
 // collectSessionUsageFromAgent is a convenience wrapper around collectSessionUsage
 
-func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
-	var data struct {
-		Message           string            `json:"message"`
-		StreamingBehavior string            `json:"streamingBehavior"`
-		Images            []json.RawMessage `json:"images"`
-	}
-	if len(cmd.Data) > 0 {
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
-			return nil, fmt.Errorf("invalid data: %w", err)
-		}
-	}
-	message := cmd.Message
-	if message == "" {
-		message = data.Message
-	}
+func (app *rpcApp) handlePrompt(message string, raw bool, streamingBehavior string) (any, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return nil, fmt.Errorf("empty prompt message")
 	}
-	if len(data.Images) > 0 {
-		return nil, fmt.Errorf("images are not supported in this RPC implementation")
-	}
 
 	// Expand /skill:name commands BEFORE generic slash dispatch.
-	// ACP prompts are raw free text: skip both slash and skill parsing.
-	if !cmd.Raw && skill.IsSkillCommand(message) {
+	if !raw && skill.IsSkillCommand(message) {
 		expandedMessage := app.expandSkillCommands(message)
 		slog.Info("Expanded skill command", "original", message, "skill", skill.ExtractSkillName(message))
 
@@ -382,14 +354,13 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 		return nil, app.ag.Prompt(expandedMessage)
 	}
 
-	// Intercept slash commands (raw prompts bypass this: the text may
-	// legitimately start with '/' e.g. a Go comment).
-	if !cmd.Raw && message[0] == '/' {
+	// Intercept slash commands. Raw prompts may legitimately start with '/'.
+	if !raw && message[0] == '/' {
 		cmdName, args, err := command.ParseSlashCommand(message)
 		if err != nil {
 			return nil, fmt.Errorf("invalid slash command: %w", err)
 		}
-		handler, ok := app.server.GetSlashHandler(cmdName)
+		handler, ok := app.commands.Get(cmdName)
 		if !ok {
 			return nil, fmt.Errorf("unknown command: /%s", cmdName)
 		}
@@ -404,7 +375,7 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 	app.stateMu.Unlock()
 
 	if streaming {
-		behavior := strings.TrimSpace(data.StreamingBehavior)
+		behavior := strings.TrimSpace(streamingBehavior)
 		if behavior == "" {
 			behavior = "steer"
 		}
@@ -439,9 +410,6 @@ func (app *rpcApp) handlePrompt(cmd RPCCommand) (any, error) {
 func (app *rpcApp) registerHandlers(
 	validToolSummaryAutomations, validSteeringModes, validFollowUpModes, validThinkingLevels map[string]bool,
 ) {
-	// === Protocol command handlers ===
-	app.server.SetPromptHandler(app.handlePrompt)
-
 	// === Slash command handlers (topic-specific registration) ===
 	app.registerSessionHandlers()
 	app.registerMessageHandlers()

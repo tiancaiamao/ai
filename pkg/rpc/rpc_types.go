@@ -1,47 +1,8 @@
 package rpc
 
 import (
-	"encoding/json"
-
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
-)
-
-// RPCCommand represents a command received on stdin.
-type RPCCommand struct {
-	ID      string          `json:"id,omitempty"`
-	Type    string          `json:"type"`
-	Message string          `json:"message,omitempty"` // For convenience, direct message field
-	Data    json.RawMessage `json:"data,omitempty"`
-	// Raw disables slash-command and skill-command parsing: the message is
-	// sent to the agent verbatim. Used by protocol adapters (e.g. ACP) where
-	// prompts are free text and may legitimately start with '/'.
-	Raw bool `json:"raw,omitempty"`
-}
-
-// PromptRequest captures prompt fields beyond the message body.
-type PromptRequest struct {
-	Message           string            `json:"message"`
-	StreamingBehavior string            `json:"streamingBehavior,omitempty"`
-	Images            []json.RawMessage `json:"images,omitempty"`
-}
-
-// RPCResponse represents a response sent to stdout.
-type RPCResponse struct {
-	ID      string `json:"id,omitempty"`
-	Type    string `json:"type"`
-	Command string `json:"command"`
-	Success bool   `json:"success"`
-	Data    any    `json:"data,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
-// Protocol command type constants.
-// "prompt" is the only protocol-level command.
-// All other commands (state queries, settings, actions, session management)
-// are handled as slash commands via the prompt channel.
-const (
-	CommandPrompt = "prompt"
 )
 
 // SessionState represents the current session state.

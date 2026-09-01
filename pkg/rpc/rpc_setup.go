@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/agent"
+	"github.com/tiancaiamao/ai/pkg/command"
 	"github.com/tiancaiamao/ai/pkg/compact"
 	"github.com/tiancaiamao/ai/pkg/config"
 	"github.com/tiancaiamao/ai/pkg/llm"
@@ -171,26 +173,29 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 
 	// --- Build rpcApp ---
 	app := &rpcApp{
-		customSystemPrompt:    params.customSystemPrompt,
-		maxTurns:              params.maxTurns,
-		debugAddr:             params.debugAddr,
-		cfg:                   cfg,
-		configPath:            configPath,
-		model:                 model,
-		apiKey:                apiKey,
-		activeSpec:            activeSpec,
-		currentModelInfo:      currentModelInfo,
-		currentContextWindow:  currentContextWindow,
-		cwd:                   cwd,
-		agentDir:              agentDir,
-		role:                  params.role,
-		sessionPath:           sessionPath,
-		sessionMgr:            sessionMgr,
-		sess:                  sess,
-		sessionID:             sessionID,
-		sessionName:           sessionName,
-		ws:                    ws,
-		registry:              registry,
+		customSystemPrompt:   params.customSystemPrompt,
+		maxTurns:             params.maxTurns,
+		debugAddr:            params.debugAddr,
+		cfg:                  cfg,
+		configPath:           configPath,
+		model:                model,
+		apiKey:               apiKey,
+		activeSpec:           activeSpec,
+		currentModelInfo:     currentModelInfo,
+		currentContextWindow: currentContextWindow,
+		cwd:                  cwd,
+		agentDir:             agentDir,
+		role:                 params.role,
+		sessionPath:          sessionPath,
+		sessionMgr:           sessionMgr,
+		sess:                 sess,
+		sessionID:            sessionID,
+		sessionName:          sessionName,
+		ws:                   ws,
+		registry:             registry,
+		commands:             command.New(),
+		emitEvent:            func(event agent.AgentEvent) {},
+
 		compactor:             compactor,
 		compactorConfig:       compactorConfig,
 		traceOutputPath:       traceOutputPath,

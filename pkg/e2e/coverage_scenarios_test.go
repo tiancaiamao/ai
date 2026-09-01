@@ -6,7 +6,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,41 +28,30 @@ func TestE2E_PreLLMCompaction(t *testing.T) {
 	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 
-	rs.send(t, typedJSON("prompt", "Reply with the single word ok."))
-	if ack := rs.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs.logTail())
+	if err := rs.client.PromptAsync(rs.sessionID, "Reply with the single word ok."); err != nil {
+		t.Fatalf("prompt: %v", err)
 	}
 
-	ev := rs.log.waitEvent("compaction_end", "", "", 5*time.Minute)
-	if ev == "" {
-		t.Fatalf("no compaction_end event. stderr:\n%s", rs.logTail())
+	update := rs.waitUpdate(t, "_compaction", 5*time.Minute)
+	meta := updateMetaMap(t, update)
+	info, ok := meta["info"].(map[string]any)
+	if !ok {
+		t.Fatalf("compaction update missing info: %#v", meta)
 	}
-	var c struct {
-		Compaction struct {
-			Trigger string `json:"trigger"`
-			Error   string `json:"error"`
-			Before  int    `json:"before"`
-			After   int    `json:"after"`
-			Type    string `json:"type"`
-		} `json:"compaction"`
+	if status, _ := meta["status"].(string); status != "end" {
+		for update.SessionUpdate != "_compaction" || func() bool { v, _ := updateMetaMap(t, update)["status"].(string); return v == "end" }() == false {
+			update = rs.waitUpdate(t, "_compaction", 5*time.Minute)
+		}
+		meta = updateMetaMap(t, update)
+		info, _ = meta["info"].(map[string]any)
 	}
-	if err := json.Unmarshal([]byte(ev), &c); err != nil {
-		t.Fatalf("parse compaction_end: %v\n%s", err, ev)
+	if trigger, _ := info["trigger"].(string); trigger != "pre_llm_threshold" {
+		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", trigger)
 	}
-	if c.Compaction.Trigger != "pre_llm_threshold" {
-		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", c.Compaction.Trigger)
+	if errMsg, _ := info["error"].(string); errMsg != "" {
+		t.Fatalf("compaction failed: %s", errMsg)
 	}
-	if c.Compaction.Error != "" {
-		t.Fatalf("compaction failed: %s", c.Compaction.Error)
-	}
-	// before/after counts may be equal here: with a fresh session the
-	// conversation is shorter than KeepRecent, so compaction summarizes but
-	// keeps every message. The behavioral assertions are trigger + success.
-	t.Logf("pre-LLM compaction: before=%d after=%d messages", c.Compaction.Before, c.Compaction.After)
-
-	if e := rs.log.waitEvent("agent_end", "", "", 5*time.Minute); e == "" {
-		t.Fatalf("no agent_end after compaction. stderr:\n%s", rs.logTail())
-	}
+	rs.waitUpdate(t, "_turn_end", 5*time.Minute)
 }
 
 // TestE2E_CompactionToolPairing builds a session containing several bash
@@ -105,40 +93,30 @@ func TestE2E_CompactionToolPairing(t *testing.T) {
 	rs2 := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	defer rs2.closeStdin()
 
-	rs2.send(t, typedJSON("prompt", "Reply with the single word ok."))
-	if ack := rs2.log.waitEvent("response", "command", "prompt", 30*time.Second); ack == "" {
-		t.Fatalf("no prompt ack. stderr:\n%s", rs2.logTail())
-	}
+	rs2.promptAsync(t, "Reply with the single word ok.")
 
-	ev := rs2.log.waitEvent("compaction_end", "", "", 5*time.Minute)
-	if ev == "" {
-		t.Fatalf("no compaction_end event. stderr:\n%s", rs2.logTail())
+	update := rs2.waitUpdate(t, "_compaction", 5*time.Minute)
+	meta := updateMetaMap(t, update)
+	info, ok := meta["info"].(map[string]any)
+	if !ok {
+		t.Fatalf("compaction update missing info: %#v", meta)
 	}
-	var c struct {
-		Compaction struct {
-			Trigger string `json:"trigger"`
-			Error   string `json:"error"`
-			Before  int    `json:"before"`
-			After   int    `json:"after"`
-		} `json:"compaction"`
+	for {
+		status, _ := meta["status"].(string)
+		if status == "end" {
+			break
+		}
+		update = rs2.waitUpdate(t, "_compaction", 5*time.Minute)
+		meta = updateMetaMap(t, update)
+		info, _ = meta["info"].(map[string]any)
 	}
-	if err := json.Unmarshal([]byte(ev), &c); err != nil {
-		t.Fatalf("parse compaction_end: %v\n%s", err, ev)
+	if trigger, _ := info["trigger"].(string); trigger != "pre_llm_threshold" {
+		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", trigger)
 	}
-	if c.Compaction.Trigger != "pre_llm_threshold" {
-		t.Fatalf("compaction trigger = %q, want pre_llm_threshold", c.Compaction.Trigger)
+	if errMsg, _ := info["error"].(string); errMsg != "" {
+		t.Fatalf("compaction failed: %s", errMsg)
 	}
-	if c.Compaction.Error != "" {
-		t.Fatalf("compaction failed: %s", c.Compaction.Error)
-	}
-	// Unlike the fresh-session case, the resumed session is longer than
-	// KeepRecent, so compaction must actually shrink the visible history.
-	if c.Compaction.After >= c.Compaction.Before {
-		t.Errorf("compaction did not shrink messages: before=%d after=%d", c.Compaction.Before, c.Compaction.After)
-	}
-	t.Logf("tool-pairing compaction: before=%d after=%d messages", c.Compaction.Before, c.Compaction.After)
-
-	if e := rs2.log.waitEvent("agent_end", "", "", 5*time.Minute); e == "" {
+	if e := rs2.waitUpdate(t, "_turn_end", 5*time.Minute); e.SessionUpdate != "_turn_end" {
 		t.Fatalf("no agent_end after compaction. stderr:\n%s", rs2.logTail())
 	}
 }

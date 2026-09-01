@@ -7,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/tiancaiamao/ai/pkg/rpc"
 	"github.com/tiancaiamao/ai/pkg/transport"
@@ -27,17 +25,10 @@ func ACPSubcommand() {
 	modelFlag := fs.String("model", "", `Override LLM model ID. Use "provider/id" for exact match (e.g. opencode/deepseek-v4-flash). Run "ai models" to list available options.`)
 	fs.Parse(os.Args[1:])
 
-	// Setup signal handling for graceful shutdown.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		fmt.Fprintf(os.Stderr, "[acp] received signal: %v, aborting agent\n", sig)
-		rpc.AgentAbort() // Trigger agent abort in RunACP
-	}()
-
+	// Use fmt.Fprintf for startup errors because slog writes to io.Discard
+	// during initialization (see logger.NewLogger).
 	systemPrompt, err := helpers.ParseSystemPrompt(*systemPromptFlag)
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tiancaiamao/ai/pkg/command"
 	agentctx "github.com/tiancaiamao/ai/pkg/context"
+
 	"github.com/tiancaiamao/ai/pkg/session"
 	"github.com/tiancaiamao/ai/pkg/transport"
 )
@@ -627,9 +629,9 @@ func TestACPCommandRenderersOverACP(t *testing.T) {
 // prepend their own context blocks to a prompt, so a registered command on
 // the final line also dispatches.
 func TestMatchACPCommand(t *testing.T) {
-	srv := NewServer()
-	srv.RegisterSlash("help", "List commands", func(args string) (any, error) { return nil, nil })
-	srv.RegisterSlash("show", "Show settings", func(args string) (any, error) { return nil, nil })
+	commands := command.New()
+	commands.Register("help", "List commands", func(args string) (any, error) { return nil, nil })
+	commands.Register("show", "Show settings", func(args string) (any, error) { return nil, nil })
 
 	cases := []struct {
 		msg     string
@@ -653,7 +655,8 @@ func TestMatchACPCommand(t *testing.T) {
 		{msg: "preamble\n/skill:x args", wantOK: false},
 	}
 	for _, c := range cases {
-		name, _, ok := matchACPCommand(srv, c.msg)
+		name, _, ok := matchACPCommand(commands, c.msg)
+
 		if ok != c.wantOK || name != c.wantCmd {
 			t.Errorf("matchACPCommand(%q) = (%q,%v), want (%q,%v)", c.msg, name, ok, c.wantCmd, c.wantOK)
 		}
