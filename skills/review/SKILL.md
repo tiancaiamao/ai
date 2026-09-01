@@ -6,6 +6,8 @@ tools: [bash]
 
 # Review Skill
 
+**Role boundary:** This file describes how a parent/orchestrator delegates a review. If you are already running as the `reviewer` subagent (for example, with `--role reviewer` or the reviewer system prompt), do the review directly. Do not invoke `/skill:review`, read this skill to delegate, or start another subagent.
+
 使用 codex-rs 的 review 方法论执行代码审查。通过 `ai serve` + `ai send` + `ai watch` 运行独立的 review agent。
 
 **子 agent 生命周期遵循 `subagent` 技能：** spawn → watch → cleanup（`ai kill`）。本技能不重复定义 spawn/watch/kill 流程。

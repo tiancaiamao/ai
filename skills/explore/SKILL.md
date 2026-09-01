@@ -5,6 +5,8 @@ description: Explore codebases, repositories, or topics and collect key informat
 
 # Explore Skill
 
+**Role boundary:** This file describes how a parent/orchestrator delegates exploration. If you are already running as the explorer subagent with `explorer.md` as your system prompt, explore directly. Do not invoke `/skill:explore`, read this skill to delegate, or start another subagent.
+
 使用 `ai serve` 派生 **独立子 agent** 探索代码库、仓库或主题，收集关键信息供后续阶段使用。
 
 ## ⚠️ MANDATORY: 必须使用子 agent 执行
