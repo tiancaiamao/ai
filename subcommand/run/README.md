@@ -1,92 +1,47 @@
 # pkg/run
 
-Run metadata, Unix domain socket server, and event broadcasting for `ai serve`/`ai run`.
+Run metadata and Unix-socket lifecycle support for `ai serve` and `ai run`.
 
 ## Overview
 
-A "run" is a single invocation of `ai rpc` — a background agent process. This package manages run lifecycle metadata, inter-process communication via Unix domain sockets, and event broadcasting to attached watchers.
+A run is a background ACP server instance. This package manages run metadata, process detection, socket lifecycle, and discovery of running or completed instances.
 
 ## RunMeta
 
 ```go
 type RunMeta struct {
-    ID           string `json:"id"`             // 6-char hex ID (crypto/rand)
-    PID          int    `json:"pid"`             // Process ID
-    CWD          string `json:"cwd"`             // Working directory
-    Status       string `json:"status"`          // "running", "done", "failed", "killed"
-    StartedAt    int64  `json:"started_at"`      // Unix timestamp
-    FinishedAt   int64  `json:"finished_at"`     // 0 if running
-    Name         string `json:"name"`            // Optional human-readable name
-    ParentRun    string `json:"parent_run"`      // Parent run ID (subagents)
-    PidStartTime int64  `json:"pid_start_time"`  // Process start epoch (PID reuse detection)
+    ID           string `json:"id"`
+    PID          int    `json:"pid"`
+    CWD          string `json:"cwd"`
+    Status       string `json:"status"`
+    StartedAt    int64  `json:"started_at"`
+    FinishedAt   int64  `json:"finished_at"`
+    Name         string `json:"name"`
+    ParentRun    string `json:"parent_run"`
+    PidStartTime int64  `json:"pid_start_time"`
 }
 ```
 
-### File Layout
+### File layout
 
 ```
 ~/.ai/runs/<id>/
-├── run.json          # RunMeta JSON
-├── events.jsonl      # Event log (replay for late-attaching watchers)
-└── control.sock      # Unix domain socket for commands
+├── run.json
+├── events.jsonl
+└── control.sock
 ```
 
-### Process Detection
+The control socket carries ACP JSON-RPC messages. `ai watch`, `ai send`, and the `ai run` TUI connect as ACP clients; the server emits `session/update` notifications for live events and history replay.
 
-`IsRunning(meta)` checks:
-1. Status is `"running"`
-2. Process with `meta.PID` exists
-3. PID start time matches `meta.PidStartTime` (prevents false positives from PID reuse)
-
-### Discovery
-
-```go
-func FindRunningByCwd(baseDir, cwd string) ([]RunMeta, error)
-func FindByPrefix(baseDir, prefix string) ([]RunMeta, error)
-```
-
-## SocketServer
-
-Unix domain socket server for run control and event streaming.
-
-```go
-type SocketServer struct { ... }
-
-func NewSocketServer(sockPath string, handler CommandHandler) *SocketServer
-```
-
-### Commands
-
-```go
-type Command struct {
-    Type    string `json:"type"`              // "prompt", "steer", "abort", "stream"
-    Message string `json:"message"`
-    FromSeq uint64 `json:"from_seq,omitempty"` // For "stream": replay from this sequence
-}
-```
-
-### Event Broadcasting
-
-`EventBroadcaster` provides fan-out event delivery:
-
-```go
-type EventBroadcaster struct { ... }
-
-func (b *EventBroadcaster) Push(event []byte)       // Send to all subscribers
-func (b *EventBroadcaster) Subscribe(fromSeq uint64) *Consumer  // Create subscriber
-```
-
-Consumers receive events via a ring buffer. Late-joining consumers can replay from a sequence number.
-
-## Key Files
+## Key files
 
 | File | Description |
-|------|-------------|
-| `meta.go` | `RunMeta`, `GenerateID`, discovery functions, `IsRunning` process detection |
-| `meta_linux.go` | Linux-specific process start time detection (build tag: linux) |
-| `socket.go` | `SocketServer`, `Command`, `CommandHandler`, Unix domain socket handling |
-| `event_broadcaster.go` | `EventBroadcaster`, `Consumer` — ring-buffer fan-out with replay |
-| `event_parser.go` | `ParseEvent` — parse raw JSONL event lines into `FormattedEvent` |
-| `event_renderer.go` | Maps RPC responses onto display events (rendering lives in `pkg/rpc/render.go`) |
-| `agent_end.go` | `AgentEndInfo`, `FindLastAgentEnd` — locate last agent_end in event log |
-| `types.go` | `EventKind`, `FormattedEvent` — formatted output types |
+|---|---|
+| `meta.go` | Run metadata, IDs, discovery, and process detection |
+| `meta_linux.go` | Linux process start-time detection |
+| `socket.go` | Unix socket lifecycle and ACP connection handling |
+| `event_broadcaster.go` | Event fan-out and replay support |
+| `event_parser.go` | ACP update parsing for display |
+| `event_renderer.go` | Display rendering helpers |
+| `agent_end.go` | Locate the last completed agent turn |
+| `types.go` | Display event types |

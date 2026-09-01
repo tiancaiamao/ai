@@ -16,9 +16,9 @@ import (
 	tui "github.com/tiancaiamao/ai/subcommand/run/tui"
 )
 
-// TestE2E_ACPSocketLifecycle verifies the real serve/socket lifecycle without
-// using the legacy flat NDJSON RPC protocol: one ACP client drives a prompt,
-// a second client observes live updates, and a fresh client replays history.
+// TestE2E_ACPSocketLifecycle verifies the real serve/socket lifecycle: one ACP
+// client drives a prompt, a second client observes live updates, and a fresh
+// client replays history.
 func TestE2E_ACPSocketLifecycle(t *testing.T) {
 	m := requireEndpoint(t)
 	home, err := os.MkdirTemp("", "ai-e2e-h")

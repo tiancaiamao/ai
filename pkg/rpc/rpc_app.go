@@ -125,9 +125,8 @@ func (app *rpcApp) parseJSONArgs(args string, target any) bool {
 }
 
 // initEventEmitter starts the goroutine that reads agent events and forwards
-// them to emit. It owns session state tracking and persistence; emit is
-// responsible for protocol-specific forwarding (NDJSON events for RunRPC,
-// ACP session/update notifications for RunACP).
+// them to emit. It owns session state tracking and persistence; emit forwards
+// the events as ACP session/update notifications.
 func (app *rpcApp) initEventEmitter(emit func(agent.AgentEvent)) (chan struct{}, chan struct{}) {
 	app.emitEvent = emit
 

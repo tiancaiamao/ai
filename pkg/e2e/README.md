@@ -1,9 +1,9 @@
 # pkg/e2e
 
-Black-box end-to-end tests for the `ai` agent, driven over the real RPC
-boundary. Each test spawns the actual `ai rpc` binary (built from `cmd/ai`)
-as a subprocess and talks to it over stdin/stdout JSON-RPC — the same
-interface an editor or `ai serve` client uses.
+Black-box end-to-end tests for the `ai` agent, driven over the real ACP
+boundary. Each test spawns the actual `ai acp` binary (built from `cmd/ai`)
+as a subprocess and talks to it over stdio ACP JSON-RPC — the same
+protocol used by editors and by `ai serve` clients.
 
 Unlike `pkg/testutil` (mock LLM server, in-process harness), these tests
 exercise the **whole application** against a **real OpenAI-compatible model
@@ -42,13 +42,13 @@ deterministic. Stray state from a previous run cannot leak in.
 
 ## Coverage
 
-The binary is built with `-cover` in `TestMain`, so every spawned `ai rpc`
+The binary is built with `-cover` in `TestMain`, so every spawned `ai acp`
 subprocess records coverage of the **whole application** to `GOCOVERDIR`
 (`-coverpkg=./...`). At the end of the run the profiles are merged
 (`go tool covdata`) and the total is printed, e.g.:
 
 ```
-=== E2E coverage (whole app via `ai rpc` subprocess) ===
+=== E2E coverage (whole app via `ai acp` subprocess) ===
 total: (statements) 47.3%
 ```
 

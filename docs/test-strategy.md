@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the testing strategy for the `ai` project, covering unit tests, integration tests, regression tests, and E2E benchmark tests.
+This document outlines the testing strategy for the `ai` project, covering unit tests, integration tests, regression tests, and E2E benchmark tests. ACP is the public protocol; direct protocol tests use `ai acp`, while Unix-socket lifecycle tests use `ai serve`, `ai watch`, and `ai send`.
 
 ## Test Pyramid
 
@@ -45,7 +45,7 @@ Test individual functions and methods in isolation.
 | `pkg/llm` | `client_test.go` | LLM client |
 | `pkg/llm` | `errors_test.go` | Error classification |
 | `pkg/prompt` | `builder_test.go` | Prompt construction |
-| `pkg/rpc` | `server_test.go` | RPC server |
+| `pkg/rpc` | `acp_test.go` and related tests | ACP protocol server and client |
 | `pkg/session` | `session_test.go` | Session CRUD |
 | `pkg/session` | `lazy_test.go` | Lazy loading |
 | `pkg/session` | `compaction_test.go` | Session compaction |
@@ -175,8 +175,8 @@ drift between the code and an actual model server.
 
 Located under `pkg/e2e/` (opt-in via the `e2e` build tag — **not** part of
 `make test` / CI, since they need a reachable endpoint and a live model).
-Each test spawns the real `ai rpc` binary as a black box and drives it over
-stdin/stdout JSON-RPC:
+Each test spawns the real `ai acp` binary as a black box and drives it over
+stdio ACP JSON-RPC:
 
 | Test | What It Verifies |
 |------|------------------|
@@ -192,19 +192,17 @@ stdin/stdout JSON-RPC:
 
 ### Coverage
 
-The binary is built with `-cover` (in `TestMain`), so every spawned `ai rpc`
+The binary is built with `-cover` (in `TestMain`), so every spawned `ai acp`
 subprocess records coverage of the **whole application** to `GOCOVERDIR`. At
 the end of the run the profiles are merged (`go tool covdata`) and the total
 printed, e.g.:
 
 ```
-=== E2E coverage (whole app via `ai rpc` subprocess) ===
+=== E2E coverage (whole app via `ai acp` subprocess) ===
 total: (statements) 47.3%
 ```
 
-This is real subprocess coverage: `pkg/rpc`, `pkg/session`, `pkg/skill`,
-`cmd/ai` etc. are exercised through the same entry point a user invokes —
-something agent-level tests and mock servers cannot do.
+The `ai` package is exercised through the same ACP entry point a user invokes.
 
 ### Running E2E Tests
 

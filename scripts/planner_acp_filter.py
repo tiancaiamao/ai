@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Filter ai --mode rpc JSONL output: drop high-frequency streaming events,
+Filter ACP JSON-RPC output: drop high-frequency streaming updates,
 extract planner artifacts (tool edits, YAML, text summary) in one pass.
 
 Usage:
-    python3 prompt.py | ai --mode rpc | python3 planner_rpc_filter.py \
+    python3 prompt.py | ai acp | python3 planner_acp_filter.py \
         --iteration N \
         --summary-output iter-N-artifacts/planner-summary.md \
         --result-output iter-N-artifacts/planner-result.json
@@ -12,9 +12,9 @@ Usage:
 
 import json, sys, os, argparse, re
 
-# Events to completely drop (high-frequency streaming chunks)
-DROP_EVENTS = frozenset({
-    'message_update', 'text_delta', 'thinking_delta', 'tool_call_delta'
+# Updates to completely drop (high-frequency streaming chunks).
+DROP_UPDATES = frozenset({
+    'agent_message_chunk', 'agent_thought_chunk'
 })
 
 
@@ -25,8 +25,8 @@ def _parse_field(line: str, field: str) -> str | None:
     by stripping the leading bullet (but not bold markers).
     """
     line = line.strip()
-    # Strip a single leading bullet ('-', '*', or '+') followed by whitespace.
-        # Do NOT use lstrip('-*') — that would eat the bold markers too.
+            # Strip a single leading bullet ('-', '*', or '+') followed by whitespace.
+    # Do NOT use lstrip('-*') — that would eat the bold markers too.
     if line and line[0] in '-*+' and len(line) > 1 and line[1] in ' \t':
         line = line[1:].lstrip()
     marker = f'**{field}**:'
@@ -553,13 +553,13 @@ def main():
     parser.add_argument('--summary-output', required=True, help='Path for planner-summary.md')
     parser.add_argument('--result-output', required=True, help='Path for planner-result.json')
     parser.add_argument('--manifest', default=None,
-                        help='Path to evolve-manifest.json — used to expand short task IDs '
+                                                help='Path to evolve-manifest.json — used to expand short task IDs '
                              '(e.g. agent_011 → agent_011_compact_tool_call_mismatch)')
     args = parser.parse_args()
 
     text_parts = []
     tool_calls = []
-    current_tool_idx = -1
+    tool_call_indexes = {}
     event_counts = {}
 
     for line in sys.stdin:
@@ -571,39 +571,45 @@ def main():
         except Exception:
             continue
 
-        event_type = ev.get('type', '')
+        # ACP streams updates as JSON-RPC notifications.
+        if ev.get('method') != 'session/update':
+            continue
+        update = ev.get('params', {}).get('update', {})
+        event_type = update.get('sessionUpdate', '')
         event_counts[event_type] = event_counts.get(event_type, 0) + 1
 
-        # Drop high-frequency events entirely
-        if event_type in DROP_EVENTS:
+        # Drop high-frequency text updates after retaining their content.
+        if event_type in DROP_UPDATES:
+            content = update.get('content', {})
+            if isinstance(content, dict) and content.get('type') == 'text':
+                text = content.get('text', '').strip()
+                if text:
+                    text_parts.append(text)
             continue
 
-                # Extract assistant text messages from message_end (message_start has empty content)
-        if event_type == 'message_end':
-            msg = ev.get('message', {})
-            if msg.get('role') == 'assistant':
-                content = msg.get('content', '')
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get('type') == 'text':
-                            text = part.get('text', '').strip()
-                            if text:
-                                text_parts.append(text)
-                elif isinstance(content, str) and content.strip():
-                    text_parts.append(content.strip())
-
-        # Track tool calls
-        if event_type == 'tool_execution_start':
+        # Track tool calls and their final output.
+        if event_type == 'tool_call':
+            tool_call_id = update.get('toolCallId', '')
             tool_calls.append({
-                'name': ev.get('toolName', ''),
-                'args': ev.get('args', {}),
+                'name': update.get('title', ''),
+                'args': update.get('rawInput', {}),
                 'output': None
             })
-            current_tool_idx = len(tool_calls) - 1
+            tool_call_indexes[tool_call_id] = len(tool_calls) - 1
 
-        if event_type == 'tool_execution_end':
-            if current_tool_idx >= 0 and tool_calls[current_tool_idx].get('output') is None:
-                tool_calls[current_tool_idx]['output'] = ev.get('output', '')
+        if event_type == 'tool_call_update':
+            idx = tool_call_indexes.get(update.get('toolCallId', ''))
+            if idx is not None:
+                content = update.get('content', [])
+                output = ''
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            nested = part.get('content', part)
+                            if isinstance(nested, dict) and nested.get('type') == 'text':
+                                output += nested.get('text', '')
+                tool_calls[idx]['output'] = output
+
 
     # ─── Extract tool edits (harness file modifications) ───
     harness_basenames = {'system_prompt.md', 'memory.md', 'context_management.md', 'agent.yaml'}
@@ -737,8 +743,8 @@ def main():
     lines.append('## Event Statistics')
     lines.append('')
     lines.append(f'- Total events received: {sum(event_counts.values())}')
-    lines.append(f'- Dropped (streaming): {sum(event_counts.get(e, 0) for e in DROP_EVENTS)}')
-    lines.append(f'- Retained: {sum(v for k, v in event_counts.items() if k not in DROP_EVENTS)}')
+    lines.append(f'- Dropped (streaming): {sum(event_counts.get(e, 0) for e in DROP_UPDATES)}')
+    lines.append(f'- Retained: {sum(v for k, v in event_counts.items() if k not in DROP_UPDATES)}')
     lines.append('')
 
     os.makedirs(os.path.dirname(os.path.abspath(args.summary_output)), exist_ok=True)

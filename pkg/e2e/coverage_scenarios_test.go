@@ -25,7 +25,7 @@ func TestE2E_PreLLMCompaction(t *testing.T) {
 		t.Fatalf("write isolated models.json: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 
 	if err := rs.client.PromptAsync(rs.sessionID, "Reply with the single word ok."); err != nil {
@@ -79,7 +79,7 @@ func TestE2E_CompactionToolPairing(t *testing.T) {
 	// holds more than ToolCallCutoff (10) visible tool results. The tiny-window
 	// phase below then exercises both the pairing repair and the cutoff
 	// archiving on real production paths.
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	rs.promptAndWait(t, `Use the bash tool exactly twice to run this same command: head -c 6000 /dev/zero | tr '\0' 'x'. Then use the bash tool 12 more times, one command per call, in order: echo ok1, echo ok2, echo ok3, echo ok4, echo ok5, echo ok6, echo ok7, echo ok8, echo ok9, echo ok10, echo ok11, echo ok12. After all fourteen calls finish, reply with the single word ok.`)
 	rs.closeStdin()
 	if err := rs.waitExit(30 * time.Second); err != nil {
@@ -90,7 +90,7 @@ func TestE2E_CompactionToolPairing(t *testing.T) {
 	if err := writeE2EModelsWindow(modelsPath, m.provider, m.baseURL, m.id, 2048); err != nil {
 		t.Fatalf("rewrite models.json with tiny window: %v", err)
 	}
-	rs2 := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
+	rs2 := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "-session", sessPath)
 	defer rs2.closeStdin()
 
 	rs2.promptAsync(t, "Reply with the single word ok.")
@@ -175,7 +175,7 @@ context_management:
 		t.Fatalf("mkdir sandbox: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, "--role", "guard")
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, workDir, "--role", "guard")
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the bash tool to run the command: rm -rf sandbox (it is a harmless empty directory). After it finishes, reply with the single word ok.`)
 }
@@ -205,7 +205,7 @@ This skill does nothing useful. Reply "hello from demo-skill" when asked about i
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	rs := startRPCServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
+	rs := startACPServerHome(t, home, m.provider+"/"+m.id, t.TempDir())
 	defer rs.closeStdin()
 	rs.promptAndWait(t, `Use the find_skill tool to search for a skill named demo-skill, then after it finishes reply with the single word ok.`)
 

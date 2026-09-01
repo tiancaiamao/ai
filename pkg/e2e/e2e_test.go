@@ -106,7 +106,7 @@ func reportCoverage(tmp string) {
 
 // --- Black-box subprocess driver ---
 
-type rpcServer struct {
+type acpServer struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	client    *rpc.ACPClient
@@ -205,18 +205,18 @@ func (b *syncBuffer) String() string {
 // startACPServer launches `ai acp` as a subprocess with an isolated HOME.
 // The subprocess speaks ACP over stdio; the driver uses the same ACP client as
 // production callers.
-func startRPCServer(t *testing.T, m e2eModel, workDir string, flags ...string) *rpcServer {
+func startACPServer(t *testing.T, m e2eModel, workDir string, flags ...string) *acpServer {
 	t.Helper()
 	home := t.TempDir()
 	if err := writeE2EModels(filepath.Join(home, ".ai", "models.json"), m.provider, m.baseURL, m.id); err != nil {
 		t.Fatalf("write isolated models.json: %v", err)
 	}
-	return startRPCServerHome(t, home, m.provider+"/"+m.id, workDir, flags...)
+	return startACPServerHome(t, home, m.provider+"/"+m.id, workDir, flags...)
 }
 
-// startRPCServerHome is like startRPCServer but lets the caller seed an
+// startACPServerHome is like startACPServer but lets the caller seed an
 // isolated HOME directory first (roles, agent.yaml, sessions, ...).
-func startRPCServerHome(t *testing.T, home, defaultPath, workDir string, flags ...string) *rpcServer {
+func startACPServerHome(t *testing.T, home, defaultPath, workDir string, flags ...string) *acpServer {
 	t.Helper()
 	if workDir == "" {
 		workDir = t.TempDir()
@@ -255,7 +255,7 @@ func startRPCServerHome(t *testing.T, home, defaultPath, workDir string, flags .
 		t.Fatalf("ACP session/new: %v\nstderr:\n%s", err, stderrBuf.String())
 	}
 
-	rs := &rpcServer{
+	rs := &acpServer{
 		cmd: cmd, stdin: stdin, client: client, sessionID: sessionID,
 		log: newACPLog(client), stderrBuf: stderrBuf, stop: make(chan struct{}),
 	}
@@ -273,14 +273,14 @@ func mustStdout(cmd *exec.Cmd) io.Reader {
 }
 
 // run reaps the subprocess and closes the stop channel.
-func (rs *rpcServer) run() {
+func (rs *acpServer) run() {
 	rs.cmd.Wait()
 	close(rs.stop)
 }
 
 // kill closes the ACP client (graceful EOF shutdown) and, if the process
 // lingers, force-kills it.
-func (rs *rpcServer) kill() {
+func (rs *acpServer) kill() {
 	rs.once.Do(func() {
 		_ = rs.client.Close()
 		select {
@@ -292,21 +292,21 @@ func (rs *rpcServer) kill() {
 	})
 }
 
-func (rs *rpcServer) promptAsync(t *testing.T, msg string) {
+func (rs *acpServer) promptAsync(t *testing.T, msg string) {
 	t.Helper()
 	if err := rs.client.PromptAsync(rs.sessionID, msg); err != nil {
 		t.Fatalf("prompt %q failed: %v", msg, err)
 	}
 }
 
-func (rs *rpcServer) waitUpdate(t *testing.T, kind string, timeout time.Duration) rpc.ACPUpdate {
+func (rs *acpServer) waitUpdate(t *testing.T, kind string, timeout time.Duration) rpc.ACPUpdate {
 	t.Helper()
 	return rs.log.waitUpdate(t, func(update rpc.ACPUpdate) bool {
 		return kind == "" || update.SessionUpdate == kind
 	}, timeout)
 }
 
-func (rs *rpcServer) waitRequestError(t *testing.T, method string, timeout time.Duration) rpc.ACPUpdateError {
+func (rs *acpServer) waitRequestError(t *testing.T, method string, timeout time.Duration) rpc.ACPUpdateError {
 	t.Helper()
 	update := rs.log.waitUpdate(t, func(update rpc.ACPUpdate) bool {
 		return update.SessionUpdate == rpc.ACPUpdateRequestError
@@ -332,14 +332,14 @@ func updateMetaMap(t *testing.T, update rpc.ACPUpdate) map[string]any {
 
 // send writes a raw ACP message to the subprocess stdin. It is retained for
 // protocol-level tests; normal requests should use the typed ACP client.
-func (rs *rpcServer) send(t *testing.T, raw string) {
+func (rs *acpServer) send(t *testing.T, raw string) {
 	t.Helper()
 	if _, err := fmt.Fprintf(rs.stdin, "%s\n", raw); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
 }
 
-func (rs *rpcServer) command(t *testing.T, name, args string) map[string]any {
+func (rs *acpServer) command(t *testing.T, name, args string) map[string]any {
 	t.Helper()
 	text := "/" + name
 	if args != "" {
@@ -372,12 +372,13 @@ func commandResult(t *testing.T, name string, raw json.RawMessage) map[string]an
 	return data
 }
 
-func (rs *rpcServer) rpcAck(t *testing.T, typ, msg string) map[string]any {
+// commandAck sends a slash command through ACP and returns its result.
+func (rs *acpServer) commandAck(t *testing.T, typ, msg string) map[string]any {
 	t.Helper()
 	return rs.command(t, typ, msg)
 }
 
-func (rs *rpcServer) rpcAckWithData(t *testing.T, typ, msg string, validate func(map[string]any)) {
+func (rs *acpServer) commandWithData(t *testing.T, typ, msg string, validate func(map[string]any)) {
 	t.Helper()
 	data := rs.command(t, typ, msg)
 	if data == nil {
@@ -386,7 +387,7 @@ func (rs *rpcServer) rpcAckWithData(t *testing.T, typ, msg string, validate func
 	validate(data)
 }
 
-func (rs *rpcServer) rpcErr(t *testing.T, typ, msg, wantErr string) {
+func (rs *acpServer) commandErr(t *testing.T, typ, msg, wantErr string) {
 	t.Helper()
 	text := "/" + typ
 	if msg != "" {
@@ -400,7 +401,7 @@ func (rs *rpcServer) rpcErr(t *testing.T, typ, msg, wantErr string) {
 // promptAndWait sends a user prompt and blocks until the turn completes,
 // returning the assistant's persisted final text. The ACP log is the sole
 // consumer of session/update notifications.
-func (rs *rpcServer) promptAndWait(t *testing.T, msg string) string {
+func (rs *acpServer) promptAndWait(t *testing.T, msg string) string {
 	t.Helper()
 	if err := rs.client.PromptAsync(rs.sessionID, msg); err != nil {
 		t.Fatalf("prompt %q failed: %v", msg, err)
@@ -409,7 +410,7 @@ func (rs *rpcServer) promptAndWait(t *testing.T, msg string) string {
 	return rs.lastAssistantText(t)
 }
 
-func (rs *rpcServer) lastAssistantText(t *testing.T) string {
+func (rs *acpServer) lastAssistantText(t *testing.T) string {
 	t.Helper()
 	data := rs.command(t, "get_last_assistant_text", "")
 	if data == nil {
@@ -420,7 +421,7 @@ func (rs *rpcServer) lastAssistantText(t *testing.T) string {
 }
 
 // logTail returns the accumulated subprocess stderr.
-func (rs *rpcServer) logTail() string {
+func (rs *acpServer) logTail() string {
 	return rs.stderrBuf.String()
 }
 

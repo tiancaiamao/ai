@@ -1,7 +1,24 @@
 # Changelog
 
 Architecture decisions, major feature evolution, and the "why" behind changes.
-Not a git log mirror — focus on what changed at the design level and why.
+Not a git log mirror — focus on what changed at the design level, not just what the commit did.
+
+## ACP-Only Public Control Surface (2026-08)
+
+**What changed**: Retired the public `ai rpc` command and its flat command/event
+protocol. `ai acp` is now the only public protocol entry point; `pkg/rpc`
+remains the shared ACP kernel, while `pkg/transport` owns stdio and Unix-socket
+connections. The planner and test helpers now use ACP, including explicit
+`--agent-config` support for the planner's existing tool, middleware, and model
+configuration semantics.
+
+**Why**: A single public protocol avoids maintaining parallel request and event
+models. Separating ACP handling from transport lets local TUI, daemon clients,
+and external ACP hosts share the same agent lifecycle and persistence behavior.
+
+
+
+
 
 ## Model-Declared `reasoningContext` Capability (2026-08)
 

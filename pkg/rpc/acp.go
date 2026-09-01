@@ -1,9 +1,9 @@
 package rpc
 
-// ACP (Agent Client Protocol) agent over stdio.
+// ACP (Agent Client Protocol) agent over the configured transport.
 //
-// Framing is newline-delimited JSON-RPC 2.0 (the same NDJSON transport used
-// by `ai rpc`), so the read loop is structurally identical to Server.
+// Framing is newline-delimited JSON-RPC 2.0. The same handler is used for
+// stdio and Unix-socket transports.
 //
 // Implemented surface (minimal, per spec baseline):
 //   - initialize                 -> protocolVersion 1 + capabilities
@@ -166,17 +166,25 @@ type acpServer struct {
 }
 
 // RunACP runs the agent as an ACP server over the given transport conn. Setup
-// mirrors RunRPC: same config, session, tools, compactor and agent; only the
-// protocol layer differs. The conn may be a stdio channel (NewStdio) or a hub
-// multiplexing several unix-socket peers (NewHub); the ACP core is identical
-// either way.
+// constructs the shared agent kernel (config, session, tools, compactor and
+// agent); only the protocol layer is ACP.
 func RunACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, modelOverride string, runID string) error {
+	return runACP(conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, role, "", modelOverride, runID)
+}
+
+// RunACPWithAgentConfig runs ACP with an explicit agent.yaml configuration.
+func RunACPWithAgentConfig(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, agentConfigPath string, modelOverride string, runID string) error {
+	return runACP(conn, sessionPath, debugAddr, customSystemPrompt, maxTurns, timeout, "", agentConfigPath, modelOverride, runID)
+}
+
+func runACP(conn transport.Conn, sessionPath string, debugAddr string, customSystemPrompt string, maxTurns int, timeout time.Duration, role string, agentConfigPath string, modelOverride string, runID string) error {
 	// --- Construct rpcApp (config, model, session, tools, compactor, skills) ---
 	app, err := newRPCApp(sessionPath, rpcAppSetupParams{
 		customSystemPrompt: customSystemPrompt,
 		maxTurns:           maxTurns,
 		debugAddr:          debugAddr,
 		role:               role,
+		agentConfigPath:    agentConfigPath,
 		modelOverride:      modelOverride,
 		runID:              runID,
 	})

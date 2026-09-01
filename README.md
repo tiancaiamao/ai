@@ -1,6 +1,6 @@
 # ai — AI Coding Agent (Go)
 
-`ai` is a Go-based AI coding agent with an RPC-first architecture, designed for editor and CLI integration. It features a subcommand-based CLI, session persistence, LLM-driven context management, and a pluggable skills system.
+`ai` is a Go-based AI coding agent with an ACP-first architecture, designed for editor and CLI integration. It features a subcommand-based CLI, session persistence, LLM-driven context management, and a pluggable skills system.
 
 ## Build & Install
 
@@ -24,7 +24,6 @@ ai <subcommand> [flags]
 |------------|-------------|
 | `run` | Start agent with interactive TUI (serves + watches in one process) |
 | `serve` | Start agent as a background daemon (foreground process, redirect I/O to files) |
-| `rpc` | Raw JSON-RPC mode over stdin/stdout (for programmatic integration) |
 | `acp` | ACP (Agent Client Protocol) agent over stdio (agent-shell, Zed, etc.) |
 | `ls` | List running and recent agent instances |
 | `watch` | Attach to a running serve instance (TUI) |
@@ -45,8 +44,8 @@ ai watch
 ai send "what about error handling?"
 ai kill
 
-# RPC mode (for editor/tool integration)
-ai rpc < commands.jsonl
+# ACP protocol (for editor/tool integration)
+ai acp < commands.jsonl
 
 # List runs
 ai ls
@@ -147,36 +146,9 @@ Config file: `~/.ai/config.json`
 }
 ```
 
-## RPC Protocol
+## ACP Protocol
 
-In `rpc` mode, `ai` reads JSON-RPC commands from stdin and writes responses/events to stdout. See [docs/rpc-protocol.md](docs/rpc-protocol.md) for full details.
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `prompt` | Send a user message |
-| `steer` | Inject mid-turn guidance |
-| `follow_up` | Queue a follow-up message |
-| `abort` | Cancel current turn |
-| `ping` | Health check |
-
-### Events
-
-| Event | Description |
-|-------|-------------|
-| `server_start` | Server initialized |
-| `agent_start` / `agent_end` | Agent processing lifecycle |
-| `turn_start` / `turn_end` | Turn boundaries |
-| `message_start` / `message_update` / `message_end` | Streaming message chunks |
-| `tool_execution_start` / `tool_execution_end` | Tool invocations |
-| `compaction_start` / `compaction_end` | Context compaction |
-| `llm_retry` | LLM API retry (rate limit, etc.) |
-| `loop_guard_triggered` | Loop guard protection |
-| `tool_call_recovery` | Tool call recovery |
-| `error` | Error event |
-
-`message_update` types: `text_start`, `text_delta`, `text_end`, `toolcall_delta`, `thinking_delta`.
+`ai` exposes ACP (Agent Client Protocol) as its programmatic interface. ACP uses JSON-RPC 2.0 messages framed as newline-delimited JSON. See [docs/rpc-protocol.md](docs/rpc-protocol.md) for the protocol reference.
 
 ## Built-in Tools
 

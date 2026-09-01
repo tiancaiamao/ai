@@ -85,7 +85,7 @@ func ParseEvent(line string) *FormattedEvent {
 // ExtractTextDelta extracts just the text delta from a message_update event.
 // Returns empty string if the event has no text content.
 func ExtractTextDelta(evt map[string]any) string {
-	// Format 1: assistantMessageEvent.delta (actual ai RPC output)
+	// Format 1: assistantMessageEvent.delta (ACP output)
 	if ame, ok := evt["assistantMessageEvent"].(map[string]any); ok {
 		ameType, _ := ame["type"].(string)
 		if ameType == "text_delta" || ameType == "text_start" {
@@ -105,7 +105,7 @@ func ExtractTextDelta(evt map[string]any) string {
 
 // ExtractToolName extracts the tool name from a tool_execution_start event.
 func ExtractToolName(evt map[string]any) string {
-	// Format 1: top-level toolName (actual ai RPC)
+	// Format 1: top-level toolName (ACP output)
 	toolName, _ := evt["toolName"].(string)
 	if toolName != "" {
 		return toolName
@@ -122,7 +122,7 @@ func ExtractToolName(evt map[string]any) string {
 }
 
 func parseMessageUpdate(evt map[string]any) *FormattedEvent {
-	// Format 1: assistantMessageEvent (actual ai RPC output)
+	// Format 1: assistantMessageEvent (ACP output)
 	if ame, ok := evt["assistantMessageEvent"].(map[string]any); ok {
 		ameType, _ := ame["type"].(string)
 		delta, _ := ame["delta"].(string)

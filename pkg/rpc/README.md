@@ -1,126 +1,36 @@
 # pkg/rpc
 
-RPC server, handlers, and types for the AI agent system.
+ACP protocol server, client, handlers, and shared application types for the AI agent.
 
-## Overview
+## Responsibilities
 
-The `rpc` package implements the RPC application layer — JSON-RPC server, request/response handlers, and shared types for agent interactions. This package bridges the CLI layer (`pkg/cli`) and the core agent logic (`pkg/agent`).
+- Implement the ACP request/notification surface
+- Route session and configuration requests to the agent
+- Translate agent events into ACP `session/update` notifications
+- Load and replay persisted sessions
+- Render slash-command results for local and external clients
+- Record session and trace events through the shared application layer
 
-**Key responsibilities:**
+`pkg/rpc` is the ACP kernel. It is protocol-focused and does not own the wire transport; `pkg/transport` provides stdio and Unix-socket connections.
 
-- JSON-RPC server (stdin/stdout I/O loop)
-- Request routing to handlers (messages, config, session, etc.)
-- Event streaming to clients
-- Session writer for recording agent events
-- Trace event handling for Perfetto integration
+## ACP methods
 
-## Core Types
+The server implements `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, and `session/set_config_option`. Session updates are emitted as JSON-RPC notifications. Unsupported ACP methods return method-not-found.
 
-### RPCApp
+`session/load` restores a persisted session and replays its history. Diagnostic events use ACP's `_`-prefixed session-update extension mechanism, including `_compaction`, `_error`, `_llm_retry`, `_loop_guard`, and `_tool_call_recovery`.
 
-`RPCApp` is the main application struct that holds all components:
+## Shared rendering
 
-```go
-type RPCApp struct {
-    agent           *agent.Agent
-    agentCtx        *agentctx.AgentContext
-    sessionWriter   *sessionWriter.SessionWriter
-    // ... other fields
-}
-```
-
-### Handlers
-
-Request handlers are implemented as methods on `RPCApp`:
-
-| Handler | Purpose |
-|---------|---------|
-| `HandleInit()` | Initialize agent with config |
-| `HandleStream()` | Start agent execution with streaming |
-| `HandleMessages()` | Send messages to agent (without streaming) |
-| `HandleStop()` | Stop current agent turn |
-| `HandleGetConfig()` | Get current configuration |
-| `HandleSetConfig()` | Update configuration |
-| `HandleListSessions()` | List available sessions |
-| `HandleLoadSession()` | Load a previous session |
-
-### Types
-
-| Type | Purpose |
-|------|---------|
-| `AgentConfig` | Agent configuration (model, tools, limits) |
-| `StreamRequest` | Request for streaming agent execution |
-| `StreamResponse` | Response with streaming events |
-| `SessionInfo` | Session metadata |
-
-## Request/Response Flow
-
-```
-Client → JSON-RPC → RPCApp → Agent
-Client ← JSON-RPC ← RPCApp ← Agent
-```
-
-1. Client sends JSON-RPC request (stdin)
-2. `rpc_server` reads and parses request
-3. `rpc_handlers` routes to appropriate handler
-4. Handler calls agent methods (e.g., `Agent.RunTurn`)
-5. Agent emits events (via channel)
-6. `RPCApp` streams events back to client
-
-## Event Streaming
-
-Events are streamed to clients as they're generated:
-
-```go
-for event := range agent.Events() {
-    resp := &types.StreamResponse{
-        Event: event,
-    }
-    rpc.WriteMessage(resp)
-}
-```
-
-Supported event types:
-- Text chunks (LLM output)
-- Tool calls
-- Tool results
-- Status updates
-
-## Session Writer
-
-`SessionWriter` records agent events to JSONL format for persistence:
-
-```go
-type SessionWriter struct {
-    file   *os.File
-    encoder *json.Encoder
-}
-```
-
-Events are appended as JSON lines for crash-safe recovery.
-
-## ACP Mode
-
-`RunACP()` (in `acp.go`) serves the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio using the same NDJSON framing as the RPC server. It reuses the shared `setupAgent()`/`registerAllHandlers()`/`buildSkillCommands()` machinery from `rpc_handlers.go`, so the agent, tools, sessions, and slash commands are identical to `rpc` mode.
-
-Implemented methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update` (notifications). `initialize` advertises `loadSession: true`; `session/load` reloads a previously persisted session by id (the ACP sessionId is the internal session id) and replays its history as `user_message_chunk` / `agent_message_chunk` / `tool_call` / `tool_call_update` notifications before answering with a stop reason. Unsupported methods (fs/*, terminal/*, MCP transports) are rejected with `-32601` method-not-found. `mcpServers` in `session/new` are accepted and ignored.
-
-## Slash-Command Result Rendering
-
-`FormatCommandResult(command, data)` (in `render.go`) is the single renderer for slash-command results across all frontends: the RPC TUI event stream (`subcommand/run/tui`), ACP hosts (`formatACPCommandResult` in `acp.go`), and external RPC clients. Known command names dispatch to per-command renderers; unknown shapes fall back to shape detection; unrecognized payloads return `""` so callers fall back to pretty-printed JSON. Renderers are pure formatters — no app/server access, no business logic.
+`FormatCommandResult` in `render.go` is the pure formatter used for slash-command results by the ACP server and local TUI.
 
 ## Testing
-
-Run tests with:
 
 ```bash
 go test ./pkg/rpc/...
 ```
 
-Integration tests (`rpcapp_smoke_test.go`) test end-to-end RPC interactions.
+## See also
 
-## See Also
-
-- [architecture.md](../../docs/architecture.md) - System architecture
-- [rpc-protocol.md](../../docs/rpc-protocol.md) - RPC protocol specification
-- [pkg/agent](../agent/README.md) - Agent core logic
+- [ACP protocol reference](../../docs/rpc-protocol.md)
+- [System architecture](../../docs/architecture.md)
+- [Agent core](../agent/README.md)

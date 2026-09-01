@@ -28,6 +28,7 @@ type rpcAppSetupParams struct {
 	modelOverride      string
 	runID              string
 	role               string
+	agentConfigPath    string
 }
 
 // newRPCApp constructs a fully initialized rpcApp by performing all setup:
@@ -84,9 +85,17 @@ func newRPCApp(sessionPath string, params rpcAppSetupParams) (*rpcApp, error) {
 		}
 	}
 
-	// --- Role-based agent config ---
 	var agentCfg *agentconfig.AgentConfig
-	if params.role != "" {
+	if params.agentConfigPath != "" {
+		agentCfg, err = agentconfig.Load(params.agentConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load agent config: %w", err)
+		}
+		slog.Info("Loaded agent config", "path", params.agentConfigPath)
+		if params.modelOverride == "" && agentCfg.Model != "" {
+			applyModelOverride(cfg, agentCfg.Model)
+		}
+	} else if params.role != "" {
 		roleDir := filepath.Join(agentDir, "roles", params.role)
 		roleConfigPath := filepath.Join(roleDir, "agent.yaml")
 
