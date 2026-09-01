@@ -36,12 +36,12 @@ func (app *rpcApp) handleCompact(args string) (any, error) {
 	app.stateMu.Lock()
 	app.isCompacting = true
 	app.stateMu.Unlock()
-	app.server.EmitEvent(agent.NewCompactionStartEvent(compactionInfo))
+	app.emitEvent(agent.NewCompactionStartEvent(compactionInfo))
 	defer func() {
 		app.stateMu.Lock()
 		app.isCompacting = false
 		app.stateMu.Unlock()
-		app.server.EmitEvent(agent.NewCompactionEndEvent(compactionInfo))
+		app.emitEvent(agent.NewCompactionEndEvent(compactionInfo))
 	}()
 
 	var response *CompactResult
