@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -558,15 +559,21 @@ func followWatch(meta *tui.RunMeta, fromSeq uint64, pretty bool, summary bool, w
 	if watchTimeout > 0 {
 		timeoutTimer = time.AfterFunc(watchTimeout, func() {
 			timedOut.Store(true)
-			_ = client.Close()
+			// Signal timer completion before closing the client. Close waits for
+			// the read/update loops, so waiting for timerDone first would deadlock
+			// when the deadline races with normal completion.
 			close(timerDone)
+			_ = client.Close()
 		})
 	}
+	var stopTimerOnce sync.Once
 	stopTimer := func() {
-		if timeoutTimer == nil || timeoutTimer.Stop() {
-			return
-		}
-		<-timerDone
+		stopTimerOnce.Do(func() {
+			if timeoutTimer == nil || timeoutTimer.Stop() {
+				return
+			}
+			<-timerDone
+		})
 	}
 	finish := func(ended bool) followWatchResult {
 		// Stop and drain the timer before reading timedOut, so a completion

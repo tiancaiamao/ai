@@ -129,8 +129,19 @@ func TestACPTurnEndNotification(t *testing.T) {
 	var buf bytes.Buffer
 	srv := &acpServer{conn: transport.NewStdio(bytes.NewReader(nil), &buf), sessionID: "sess-turn"}
 
-	// Successful turn end.
+	// Successful turn end clears the in-flight prompt before publishing the
+	// notification, so a concurrent session/load sees the completed turn.
+	srv.pendingMu.Lock()
+	srv.pendingPrompt = json.RawMessage(`1`)
+	srv.pendingMu.Unlock()
 	srv.emit(agent.AgentEvent{Type: agent.EventAgentEnd})
+	srv.pendingMu.Lock()
+	pending := len(srv.pendingPrompt)
+	srv.pendingMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("expected pending prompt to be cleared at turn end")
+	}
+
 	line, _ := buf.ReadString('\n')
 	var m map[string]any
 	if err := json.Unmarshal([]byte(line), &m); err != nil {
@@ -148,9 +159,14 @@ func TestACPTurnEndNotification(t *testing.T) {
 		t.Errorf("success: unexpected _meta.error, got %v", meta)
 	}
 
+	if _, err := buf.ReadString('\n'); err != nil {
+		t.Fatalf("failed to read prompt response: %v", err)
+	}
+
 	// Failed turn end carries the error message.
 	srv.emit(agent.AgentEvent{Type: agent.EventAgentEnd, Error: "boom"})
 	line, _ = buf.ReadString('\n')
+
 	if err := json.Unmarshal([]byte(line), &m); err != nil {
 		t.Fatalf("not valid JSON: %v", err)
 	}

@@ -784,6 +784,17 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		})
 
 	case agent.EventAgentEnd:
+		// A turn completed: clear the pending prompt before publishing the
+		// _turn_end update. The serve mirror uses that update to mark the run
+		// idle; clearing first keeps session/load from seeing a stale in-flight
+		// prompt after ls reports idle.
+		s.pendingMu.Lock()
+		id := s.pendingPrompt
+		cancelled := s.cancelled
+		s.pendingPrompt = nil
+		s.cancelled = false
+		s.pendingMu.Unlock()
+
 		// ACP extension: universal turn-end signal. Emitted before the prompt
 		// result so every client observes it before the response arrives.
 		// Consumers: `ai watch` / `ai send --wait` exit detection, `ai ls`
@@ -795,12 +806,6 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 		s.sendUpdate(acpUpdate{SessionUpdate: "_turn_end", Meta: meta})
 
 		// A turn completed: answer the pending session/prompt request.
-		s.pendingMu.Lock()
-		id := s.pendingPrompt
-		cancelled := s.cancelled
-		s.pendingPrompt = nil
-		s.cancelled = false
-		s.pendingMu.Unlock()
 		if len(id) > 0 {
 			stopReason := acpStopEndTurn
 			if cancelled {
@@ -808,6 +813,7 @@ func (s *acpServer) emit(event agent.AgentEvent) {
 			}
 			s.sendResult(id, map[string]string{"stopReason": stopReason})
 		}
+
 	}
 }
 
