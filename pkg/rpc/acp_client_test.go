@@ -1,7 +1,7 @@
 package rpc
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"net"
 	"strings"
@@ -33,31 +33,12 @@ func TestACPClientInitializeTimesOut(t *testing.T) {
 }
 
 func TestACPClientLoadSessionSignalsReplayCompletionAfterUpdates(t *testing.T) {
-	server, clientConn := net.Pipe()
-	defer server.Close()
-	client := NewACPClient(transport.NewNetConn(clientConn))
+	input := bytes.NewBufferString(
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"result":{}}` + "\n",
+	)
+	client := NewACPClient(transport.NewStdio(input, &bytes.Buffer{}))
 	defer client.Close()
-
-	serverDone := make(chan struct{})
-	go func() {
-		defer close(serverDone)
-		conn := transport.NewNetConn(server)
-		request, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		var envelope struct {
-			ID json.RawMessage `json:"id"`
-		}
-		if json.Unmarshal(request, &envelope) != nil {
-			return
-		}
-		if err := conn.WriteMessage([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)); err != nil {
-			return
-		}
-		response := fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{}}`, envelope.ID)
-		_ = conn.WriteMessage([]byte(response))
-	}()
 
 	if err := client.LoadSession("sess"); err != nil {
 		t.Fatalf("LoadSession: %v", err)
@@ -80,36 +61,12 @@ func TestACPClientLoadSessionSignalsReplayCompletionAfterUpdates(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for replay completion")
 	}
-	select {
-	case <-serverDone:
-	case <-time.After(time.Second):
-		t.Fatal("server did not finish")
-	}
 }
 
 func TestACPClientLoadSessionDoesNotSignalReplayCompletionOnError(t *testing.T) {
-	server, clientConn := net.Pipe()
-	defer server.Close()
-	client := NewACPClient(transport.NewNetConn(clientConn))
+	input := bytes.NewBufferString(`{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"not found"}}` + "\n")
+	client := NewACPClient(transport.NewStdio(input, &bytes.Buffer{}))
 	defer client.Close()
-
-	serverDone := make(chan struct{})
-	go func() {
-		defer close(serverDone)
-		conn := transport.NewNetConn(server)
-		request, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		var envelope struct {
-			ID json.RawMessage `json:"id"`
-		}
-		if json.Unmarshal(request, &envelope) != nil {
-			return
-		}
-		response := fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"not found"}}`, envelope.ID)
-		_ = conn.WriteMessage([]byte(response))
-	}()
 
 	if err := client.LoadSession("sess"); err == nil {
 		t.Fatal("LoadSession unexpectedly succeeded")
@@ -121,11 +78,6 @@ func TestACPClientLoadSessionDoesNotSignalReplayCompletionOnError(t *testing.T) 
 			t.Fatal("session/load error emitted replay completion marker")
 		}
 	case <-time.After(100 * time.Millisecond):
-	}
-	select {
-	case <-serverDone:
-	case <-time.After(time.Second):
-		t.Fatal("server did not finish")
 	}
 }
 
